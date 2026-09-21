@@ -129,6 +129,26 @@ QPushButton:hover {
     border-color: #3c526d;
     color: %23;
 }
+/* A checkable QPushButton had no checked state in this sheet at all -- only
+   the tab variant below did -- so BYPASS, Record and Play rendered identically
+   latched and unlatched, and the operator could not tell whether the voice
+   chain was bypassed. This is the same amber the gate's Mode pair and the
+   compressor's makeup handle use for "this is on and doing something".
+   Tokens, not literals: every caller of this sheet routes it through
+   ThemeManager::applyStyleSheet(), which substitutes them. The tab rule
+   further down is an attribute selector and therefore more specific, so tabs
+   are unaffected.
+   Placed ABOVE :disabled deliberately: the two tie on specificity (one
+   pseudo-class each on the same type), so the later rule wins, and a button
+   that is both checked and disabled must read as disabled rather than as "on
+   and doing something". No live state reaches that combination today, but
+   this is shared chrome and the next checkable button added under it may
+   not be so lucky. */
+QPushButton:checked {
+    color: {{color.meter.gainReduction}};
+    background: {{color.background.tx}};
+    border: 1px solid {{color.meter.gainReduction}};
+}
 QPushButton:disabled {
     color: %11;
     border-color: #1d2a3c;

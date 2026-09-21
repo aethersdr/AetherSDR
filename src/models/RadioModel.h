@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/TxGrantManager.h"
+#include "core/backends/IndependentTxControl.h"
+
 #include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
 #include "core/RadioSettingsScope.h"  // RFC #4603 radio-scoped feature documents
@@ -7,6 +10,7 @@
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
+#include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
 #include "core/backends/OfflineHealthSource.h" // health that survives disconnection
@@ -60,6 +64,8 @@
 
 namespace AetherSDR {
 class TxController;
+class IAutoRfGainControl;
+
 
 inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabilities)
 {
@@ -87,7 +93,14 @@ class RadioModel : public QObject {
     Q_PROPERTY(QString model       READ model       NOTIFY infoChanged)
     Q_PROPERTY(QString version     READ version     NOTIFY infoChanged)
     Q_PROPERTY(bool    connected   READ isConnected NOTIFY connectionStateChanged)
-    Q_PROPERTY(float   txPower     READ txPower     NOTIFY metersChanged)
+    // NO txPower PROPERTY. There was one — READ txPower NOTIFY metersChanged —
+    // over a member nothing in the tree ever assigned, so it advertised a
+    // freshness it could not have: metersChanged fired and the value behind it
+    // never moved. A property declaring NOTIFY over a constant is the specific
+    // thing #4533 settled against. The measured quantity lives in MeterModel
+    // and reaches automation as `get radio`.txPower through
+    // MeterModel::fwdPowerIfLive(); the operator's REQUEST lives in
+    // TransmitModel as `get transmit`.rfPower. (#5499 item 1)
 
 public:
     explicit RadioModel(QObject* parent = nullptr);
@@ -207,7 +220,6 @@ public:
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
     bool transmitFrequencyCheck() const { return m_transmitFrequencyCheck; }
     void setTransmitFrequencyCheck(bool on);
-    float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
     // True when the interlock's tx_client_handle is this client (or has
     // never been reported) — false only when another client provably owns
@@ -469,6 +481,32 @@ public:
     // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
     // reasoning as hasManualNotch(): it can only add the NB button.
     bool hasHostNoiseBlanker() const;
+    // The connected backend's own automatic receive-gain control, or nullptr
+    // when there is no radio or it has none. See AutoRfGainControl.h.
+    //
+    // ONE ACCESSOR RATHER THAN A FAMILY OF FORWARDERS. This class is shared
+    // infrastructure and docs/HERMES.md asks that family bring-up not grow it;
+    // an interface handle keeps the whole vocabulary of the control on the
+    // backend's side of the seam, so adding a law or a bound to some future
+    // family's loop does not touch this header at all. It also means the
+    // armed state is a TYPED read rather than a string key looked up in a
+    // health snapshot, which is what two callers were doing.
+    //
+    // NOT PERMISSIVE ON DISCONNECT, for the same reason hasHostNoiseBlanker()
+    // is not: it can only ever ADD a control, so answering with no backend
+    // attached would show an Auto checkbox on a family that never claims one.
+    //
+    // BORROWED, NEVER CACHED — the pointer dies with the backend.
+    IAutoRfGainControl* autoRfGain() const;
+
+    // The last front-end state the backend published, for a view that is built
+    // or shown after the radio has already said something. Default-constructed
+    // (Unobserved) before any radio speaks and after a disconnect, which is the
+    // honest answer rather than a stale Clean.
+    [[nodiscard]] AetherSDR::FrontEndOverload frontEndOverload() const
+    {
+        return m_frontEndOverload;
+    }
     // The filter widths the radio declares, narrowest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a
@@ -905,6 +943,13 @@ public:
     // Snapshot for engine-owned deferred release. This is not a credential or
     // an invitation to borrow whichever operation happens to be current later.
     TxCoordinator::Operation transmitOperation() const { return m_txOperation; }
+    // Trusted daemon composition, sharing the desktop arbiter. Radio-owned;
+    // authentication and explicit grant issuance remain the caller's job.
+    TxGrantManager* independentTxGrants();
+    bool independentTxReady() const;
+    bool transmitRecovering() const { return m_txCoordinator.recovering(); }
+    bool transmitOwnershipPending() const { return m_txCoordinator.hasOwnership(); }
+    void emergencyTransmitStop();
     // Trusted composition only. A producer is a lifetime, not an actor grant.
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
     // Plain engine protocol objects invalidate this handle in their destructor.
@@ -913,6 +958,10 @@ public:
     // keyboard/MIDI toggles share this producer; external clients must bring
     // their own lifetime instead of borrowing it.
     std::shared_ptr<TxController> localTxController();
+    // Trusted composition can wrap only an already acquired independent MOX
+    // input for this exact radio/operation. This neither grants nor keys TX.
+    bool canBindGrantedPtt(const TxCoordinator::Request& request,
+                           const TxCoordinator::Operation& operation) const;
     void setTxProducerAdmissionObserver(const TxCoordinator::Producer& producer,
                                         std::function<void()> observer);
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Producer& producer) const;
@@ -1149,9 +1198,18 @@ public:
     void setPanNoiseFloorEnable(bool on);
 
 signals:
+    // RFC #5535's visibility condition, republished for the GUI. See
+    // core/backends/FrontEndOverload.h.
+    void frontEndOverloadChanged(const AetherSDR::FrontEndOverload& state);
+    // IRadioBackend::autoRfGainArmSettled, republished for the GUI: an arm
+    // request on autoRfGain() settled -- armed, refused, or disarmed -- from
+    // whichever route asked.
+    void autoRfGainArmSettled(bool armed);
+
     void infoChanged();
     void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
+    void transmitSessionInvalidated();
     // The connected backend's self-declared RadioCapabilities changed, or a
     // connect/disconnect changed which backend is answering. Relays
     // IRadioBackend::capabilitiesChanged and also fires on every
@@ -1938,6 +1996,7 @@ private:
     static constexpr int kBackendDefaultWfRate = 100;
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;
+    AetherSDR::FrontEndOverload m_frontEndOverload;
     // Epoch ms of the last arrival of each class; 0 = never. Written on the
     // hot path, so they are plain scalars rather than anything that allocates.
     qint64 m_lastSpectrumMs{0};
@@ -1945,12 +2004,14 @@ private:
     TunerModel       m_tunerModel;
     TransmitModel    m_transmitModel;
     // Transitional desktop actor: existing integrations still enter through
-    // the desktop methods. Per-client authority is a subsequent Stage 4 step;
-    // no daemon client can register or obtain this actor.
+    // the desktop methods. Independent daemon clients use separate granted
+    // actors on the same coordinator and cannot obtain this desktop actor.
     TxCoordinator m_txCoordinator;
     std::shared_ptr<TxController> m_localTxController;
     TxCoordinator::Actor m_desktopTxActor;
     TxCoordinator::Operation m_txOperation;
+    std::unique_ptr<TxGrantManager> m_independentTxGrants;
+    TxCoordinator::StopRequest m_independentStop;
     TxCoordinator::Producer m_backendTxProducer;
     using TxActivity = TxCoordinator::Activity;
     // One handle per existing compatibility entry point, not per client yet.
@@ -1984,6 +2045,8 @@ private:
     bool hasOtherPttHolds(const TxCoordinator::Operation& operation,
                           const TxCoordinator::Intent& excluded) const;
     void completeLocalTxIfDrained();
+    void requestIndependentTxStop(const TxCoordinator::Operation& operation);
+    void acknowledgeIndependentTxStop(const TxStopEvidence& evidence);
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
     void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
@@ -2053,7 +2116,6 @@ private:
     QString     m_version;          // software version from discovery (e.g. "4.1.5")
     QString     m_versionLabel;     // display-only word for it (Gateware on an HL2)
     QString     m_protocolVersion;  // protocol version from V line (e.g. "1.4.0.0")
-    float       m_txPower{0.0f};
     QString     m_chassisSerial;
     QString     m_callsign;
     QString     m_nickname;

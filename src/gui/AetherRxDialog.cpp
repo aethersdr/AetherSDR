@@ -5,6 +5,8 @@
 #include "EditorFramelessTitleBar.h"
 #include "CompactMetrics.h"
 #include "ModemChrome.h"
+#include "StagePage.h"
+#include "StageTabBar.h"
 #include "RxStageReorder.h"
 #include "StripCompPanel.h"
 #include "StripEqPanel.h"
@@ -14,6 +16,7 @@
 #include "StripTubePanel.h"
 #include "StripWaveformPanel.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -21,11 +24,13 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFrame>
+#include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QStackedWidget>
@@ -33,6 +38,7 @@
 #include <QVBoxLayout>
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/TxKeyingMarker.h"
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
@@ -46,95 +52,6 @@ namespace {
 
 // The size this window opens at, every time — see showEvent().
 constexpr QSize kLaunchSize(720, 480);
-
-// One tab in the left-hand bar. Same chrome as the method strip inside the
-// AetherNR page -- checkable, property-selected, sized by the layout -- but
-// left-aligned, because a column of centred labels of different lengths reads
-// as ragged where a row of them reads as even.
-QPushButton* makeStageTab(const QString& text)
-{
-    auto* b = new QPushButton(text);
-    b->setProperty("chrome", "tab");
-    b->setCheckable(true);
-    b->setFlat(true);
-    b->setStyleSheet(QStringLiteral("text-align: left;"));
-    b->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    b->setMinimumHeight(36);
-    return b;
-}
-
-// Carried by a row drag: the Stage the grip belongs to, as an int.
-constexpr const char* kStageMime = "application/x-aethersdr-rxstage";
-
-// The grab handle at the left of a chain-stage row. Two columns of dots, the
-// conventional "this moves" mark, and the drag it starts carries a picture of
-// the whole row so what follows the cursor is what was grabbed.
-class StageGrip final : public QWidget {
-public:
-    explicit StageGrip(int stage, QWidget* parent = nullptr)
-        : QWidget(parent)
-        , m_stage(stage)
-    {
-        setCursor(Qt::OpenHandCursor);
-        setFixedWidth(kGripWidth);
-        setToolTip(QObject::tr(
-            "Drag to move this stage in the receive chain. The order of the "
-            "bar is the order the audio passes through."));
-    }
-
-    static constexpr int kGripWidth = 12;
-
-protected:
-    void paintEvent(QPaintEvent*) override
-    {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor(0x5a, 0x6a, 0x7a));
-        constexpr int kRows = 4;
-        constexpr qreal kStep = 4.0;
-        constexpr qreal kDot = 1.1;
-        const qreal spanY = (kRows - 1) * kStep;
-        const qreal x0 = width() / 2.0 - kStep / 2.0;
-        const qreal y0 = height() / 2.0 - spanY / 2.0;
-        for (int r = 0; r < kRows; ++r) {
-            for (int c = 0; c < 2; ++c) {
-                p.drawEllipse(QPointF(x0 + c * kStep, y0 + r * kStep),
-                              kDot, kDot);
-            }
-        }
-    }
-
-    void mousePressEvent(QMouseEvent* ev) override
-    {
-        if (ev->button() == Qt::LeftButton) m_press = ev->pos();
-    }
-
-    void mouseMoveEvent(QMouseEvent* ev) override
-    {
-        if (!(ev->buttons() & Qt::LeftButton)) return;
-        if ((ev->pos() - m_press).manhattanLength()
-            < QApplication::startDragDistance()) {
-            return;
-        }
-        auto* mime = new QMimeData;
-        mime->setData(QLatin1String(kStageMime), QByteArray::number(m_stage));
-
-        auto* drag = new QDrag(this);
-        drag->setMimeData(mime);
-        if (QWidget* row = parentWidget()) {
-            drag->setPixmap(row->grab());
-            drag->setHotSpot(mapTo(row, ev->pos()));
-        }
-        setCursor(Qt::ClosedHandCursor);
-        drag->exec(Qt::MoveAction);
-        setCursor(Qt::OpenHandCursor);
-    }
-
-private:
-    int    m_stage;
-    QPoint m_press;
-};
 
 // Stage <-> RxChainStage. Only five of the seven tabs are chain stages; the
 // rest have no place in the order and are pinned at the ends.
@@ -169,117 +86,6 @@ AetherRxDialog::Stage fromChainStage(AudioEngine::RxChainStage s)
     }
 }
 
-// The embedded panels each ship their own window chrome -- a title bar with a
-// min/max/close trio, and a legacy band colour from when they were floating
-// editors. Inside a host window the trio does nothing, so strip it, the same
-// way the Aetherial strip does for its own embedded panels.
-//
-// `keepTitle` decides whether the name plate goes too. A page showing one panel
-// has already named it in the tab, and a second copy of "EQ" above the graph is
-// a row of pixels saying nothing; a page stacking two panels keeps both plates,
-// because there the titles are what tell them apart.
-void tidyEmbeddedPanel(QWidget* panel, bool keepTitle = false)
-{
-    if (!panel) return;
-    const auto recolour = [](QWidget* w) {
-        QString sheet = w->styleSheet();
-        if (sheet.contains(QLatin1String("#08121d"))) {
-            sheet.replace(QLatin1String("#08121d"),
-                          QLatin1String(ModemChrome::Colour::Background));
-            // Through the theme, not setStyleSheet(): the replacement is a
-            // {{token}} placeholder and nothing else would resolve it.
-            AetherSDR::ThemeManager::instance().applyStyleSheet(w, sheet);
-        }
-    };
-    recolour(panel);
-
-    for (QObject* child : panel->children()) {
-        // dynamic_cast rather than findChild: EditorFramelessTitleBar has no
-        // Q_OBJECT macro.
-        if (auto* tb = dynamic_cast<EditorFramelessTitleBar*>(child)) {
-            if (keepTitle) {
-                tb->setControlsVisible(false);
-                recolour(tb);
-            } else {
-                tb->hide();
-            }
-            break;
-        }
-    }
-}
-
-// Holds one stage panel and shrinks its graphics until it fits the page.
-//
-// These panels were drawn for a window twice the size of this one, and they
-// spend that space on knobs, curves and meters rather than on text. So the
-// page keeps every label at the size it was meant to be read at and takes the
-// graphics down instead (CompactMetrics), rather than scaling the panel whole
-// and shrinking the type with it.
-//
-// Nothing scrolls: whatever is on this page is all of it.
-class StagePage final : public QWidget {
-public:
-    explicit StagePage(QWidget* panel, QWidget* parent = nullptr)
-        : QWidget(parent)
-        , m_panel(panel)
-        , m_metrics(panel)
-        , m_designed(panel->size().expandedTo(panel->minimumSizeHint()))
-    {
-        auto* col = new QVBoxLayout(this);
-        col->setContentsMargins(0, 0, 0, 0);
-        col->setSpacing(0);
-        col->addWidget(panel);
-    }
-
-protected:
-    void resizeEvent(QResizeEvent* event) override
-    {
-        QWidget::resizeEvent(event);
-        refit();
-    }
-
-    void showEvent(QShowEvent* event) override
-    {
-        QWidget::showEvent(event);
-        // Panels finish sizing themselves in showForRx(), which runs after
-        // this page is built, so the first honest measurement is here.
-        refit();
-    }
-
-private:
-    void refit()
-    {
-        if (!m_panel || m_metrics.isEmpty() || m_refitting) return;
-        const QSize room = size();
-        if (room.isEmpty() || m_designed.isEmpty()) return;
-
-        m_refitting = true;
-        // Start from what the designed size asks for, then walk down until the
-        // panel's own minimum fits the page. A couple of passes settles it:
-        // the graphics do not shrink linearly, because the text between them
-        // does not shrink at all.
-        qreal factor = std::min({qreal(1.0),
-                                 qreal(room.width()) / m_designed.width(),
-                                 qreal(room.height()) / m_designed.height()});
-        for (int pass = 0; pass < 4; ++pass) {
-            m_metrics.apply(factor);
-            m_panel->ensurePolished();
-            const QSize needs = m_panel->minimumSizeHint();
-            if ((needs.width() <= room.width() && needs.height() <= room.height())
-                || factor <= CompactMetrics::kMinFactor) {
-                break;
-            }
-            factor *= 0.9;
-        }
-        m_refitting = false;
-    }
-
-    QWidget*       m_panel{nullptr};
-    CompactMetrics m_metrics;
-    QSize          m_designed;
-    bool           m_refitting{false};
-};
-
 } // namespace
 
 AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
@@ -307,35 +113,47 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     body->setSpacing(8);
 
     // -- Left tab column ------------------------------------------------
-    m_tabsFrame = new QFrame(this);
-    m_tabsFrame->setObjectName(QStringLiteral("TabsFrame"));
-    m_tabsFrame->setAttribute(Qt::WA_StyledBackground, true);
-    // The chrome sheet lives on the tab column rather than on the window. A
-    // Qt stylesheet cascades to every descendant, and its 14 px base font
-    // reaches inside the stage panels, which were drawn against the
-    // application font: three points more is enough to push the minus sign
-    // out of a knob's 76 px value editor. The AetherNR body applies the same
-    // sheet to itself, so the only thing that loses by this is nothing.
-    AetherSDR::ThemeManager::instance().applyStyleSheet(
-        m_tabsFrame, ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
-    // Wide enough for the longest label with a grip on one side of it and a
-    // checkbox on the other.
-    m_tabsFrame->setFixedWidth(180);
-    m_tabsFrame->setAcceptDrops(true);
-    m_tabsFrame->installEventFilter(this);
-    auto* tabsBox = new QVBoxLayout(m_tabsFrame);
-    tabsBox->setContentsMargins(6, 6, 6, 6);
-    tabsBox->setSpacing(2);
-    body->addWidget(m_tabsFrame);
-
-    m_tabGroup = new QButtonGroup(this);
-    m_tabGroup->setExclusive(true);
+    m_tabs = new StageTabBar(QStringLiteral("aetherRx"), this);
+    StageTabBar::Host host;
+    host.isChainStage = [](int id) {
+        return isChainStage(static_cast<Stage>(id));
+    };
+    host.stageEnabled = [this](int id) {
+        return stageEnabled(static_cast<Stage>(id));
+    };
+    host.setStageEnabled = [this](int id, bool on) {
+        setStageEnabled(static_cast<Stage>(id), on);
+    };
+    host.chainOrder = [this]() {
+        QVector<int> ids;
+        if (!m_audio) return ids;
+        for (auto s : m_audio->rxChainStages()) {
+            const Stage row = fromChainStage(s);
+            if (row < StageCount) ids.append(static_cast<int>(row));
+        }
+        return ids;
+    };
+    host.commitChainOrder = [this](const QVector<int>& ids) {
+        if (!m_audio) return;
+        QVector<AudioEngine::RxChainStage> stages;
+        stages.reserve(ids.size());
+        for (int id : ids) {
+            const auto s = toChainStage(static_cast<Stage>(id));
+            if (s != AudioEngine::RxChainStage::None) stages.append(s);
+        }
+        // Persists on its own — setRxChainStages writes ClientRxChainStages.
+        m_audio->setRxChainStages(stages);
+    };
+    m_tabs->setHost(host);
+    body->addWidget(m_tabs);
 
     m_stack = new QStackedWidget(this);
     body->addWidget(m_stack, 1);
 
-    connect(m_tabGroup, &QButtonGroup::idClicked,
+    connect(m_tabs, &StageTabBar::stageSelected,
             m_stack, &QStackedWidget::setCurrentIndex);
+    connect(m_tabs, &StageTabBar::footerButtonClicked,
+            this, &AetherRxDialog::showSettings);
 
     // -- AetherNR: the noise-reduction body, method strip and all --------
     m_widget = new AetherDspWidget(audio, this);
@@ -379,40 +197,102 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         addStage(Output, QStringLiteral("Final Output"), page);
     }
 
-    tabsBox->addStretch(1);
+    // REC / PLAY on one row above BYPASS, as in AetherTX -- but recording
+    // the receive audio itself, through the same path as the VFO flag's
+    // record and play buttons. A click reports the state the button now
+    // shows; MainWindow answers with what the recorder actually did (a
+    // capture can be refused: PC audio off, unwritable directory), so the
+    // button follows the recorder rather than the click.
+    const auto pair = m_tabs->addFooterToggleRow({
+        {tr("REC"), QStringLiteral("aetherRxRecord"),
+         tr("Record the receive audio to a WAV file, as the VFO flag's record "
+            "button does. Click again to stop."),
+         StageTabBar::Accent::Red},
+        {tr("PLAY"), QStringLiteral("aetherRxPlay"),
+         tr("Play back the last recording. Click again to stop."),
+         StageTabBar::Accent::Green},
+    });
+    m_recBtn  = pair.at(0);
+    m_playBtn = pair.at(1);
+    // The short labels fit the row; the spoken names stay whole words
+    // (#4896).
+    m_recBtn->setAccessibleName(tr("Record"));
+    m_playBtn->setAccessibleName(tr("Play"));
+    connect(m_recBtn, &QPushButton::clicked, this, [this](bool checked) {
+        emit recordToggled(checked);
+    });
+    connect(m_playBtn, &QPushButton::clicked, this, [this](bool checked) {
+        if (m_txPlaybackActive) {
+            // PLAY remains enabled to stop an active transmission. A normal
+            // click must never start speaker playback while TX owns the file.
+            QSignalBlocker block(m_playBtn);
+            m_playBtn->setChecked(false);
+            emit txPlaybackTriggered();
+            return;
+        }
+        emit playToggled(checked);
+    });
+    setPlayEnabled(false);
 
-    // Settings sits under the stretch, at the foot of the column: it is not a
-    // stage, so it is not in the run of tabs, and the gap says so.
-    {
-        auto* settings = new QPushButton(tr("Settings"));
-        settings->setObjectName(QStringLiteral("aetherRxSettingsButton"));
-        settings->setAccessibleName(tr("AetherRX settings"));
-        settings->setToolTip(tr("Profiles: save, load, import and export the "
-                                "receive chain."));
-        settings->setFlat(true);
-        settings->setProperty("chrome", "tab");
-        settings->setStyleSheet(QStringLiteral("text-align: left;"));
-        settings->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        settings->setMinimumHeight(36);
-        connect(settings, &QPushButton::clicked,
-                this, &AetherRxDialog::showSettings);
+    // Right-click on PLAY: one entry, "TX Playback", which sends the last
+    // recording out over the air instead of to the speakers. A keying
+    // control, so it carries the marker the automation bridge refuses to
+    // invoke without AETHER_AUTOMATION_ALLOW_TX; MainWindow registers the
+    // real keying action on it once the radio is known.
+    m_txPlaybackAction = new QAction(tr("TX Playback"), this);
+    m_txPlaybackAction->setObjectName(QStringLiteral("aetherRxTxPlayback"));
+    m_txPlaybackAction->setCheckable(true);
+    m_txPlaybackAction->setToolTip(
+        tr("Transmit the last recording over the active slice. Select again "
+           "to stop."));
+    m_txPlaybackAction->setProperty(kTxKeyingProperty, true);
+    connect(m_txPlaybackAction, &QAction::triggered, this, [this] {
+        // A checkable action flips itself; the host says what really
+        // happened through setTxPlaybackActive.
+        QSignalBlocker block(m_txPlaybackAction);
+        m_txPlaybackAction->setChecked(m_txPlaybackActive);
+        emit txPlaybackTriggered();
+    });
+    m_playBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_playBtn, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        // Reachable whenever there is something to send or something to
+        // stop: setPlayEnabled() keeps the button enabled while a transmit
+        // playback runs, so this handler can still open the menu to stop it.
+        m_txPlaybackAction->setEnabled(m_playEnabled || m_txPlaybackActive);
+        QMenu menu(m_playBtn);
+        menu.setObjectName(QStringLiteral("aetherRxPlayMenu"));
+        menu.addAction(m_txPlaybackAction);
+        menu.exec(m_playBtn->mapToGlobal(pos));
+    });
 
-        // Indented like every other label, so the column has one left edge.
-        auto* row = new QWidget;
-        auto* rowBox = new QHBoxLayout(row);
-        rowBox->setContentsMargins(0, 0, 0, 0);
-        rowBox->setSpacing(4);
-        auto* pad = new QWidget;
-        pad->setFixedWidth(StageGrip::kGripWidth);
-        rowBox->addWidget(pad);
-        rowBox->addWidget(settings, 1);
-        tabsBox->addWidget(row);
+    // BYPASS beside the Settings gear, where AetherTX keeps its own. The
+    // engine owns the snapshot-and-restore, and the docked chain applet's RX
+    // BYPASS drives the same state, so this button follows the engine back
+    // rather than remembering anything itself. The engine takes AetherNR
+    // down with the chain, so a bypassed receive path is truly unprocessed.
+    m_bypassBtn = m_tabs->addFooterToggle(
+        tr("BYPASS"), QStringLiteral("aetherRxBypass"),
+        tr("Suppress every receive stage at once, AetherNR included, so audio "
+           "reaches you unprocessed. Click again to restore what was on."));
+    connect(m_bypassBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_audio) m_audio->setRxBypassed(on);
+    });
+    if (m_audio) {
+        {
+            QSignalBlocker block(m_bypassBtn);
+            m_bypassBtn->setChecked(m_audio->isRxBypassed());
+        }
+        connect(m_audio, &AudioEngine::rxBypassChanged, this, [this](bool on) {
+            if (!m_bypassBtn) return;
+            QSignalBlocker block(m_bypassBtn);
+            m_bypassBtn->setChecked(on);
+        });
     }
 
-    // Out has no box; give its label the same start as every other.
-    if (m_outIndent && m_stageChecks[Gate]) {
-        m_outIndent->setFixedWidth(m_stageChecks[Gate]->sizeHint().width());
-    }
+    // The gear leads BYPASS's row.
+    m_tabs->addFooterGearButton(
+        tr("Settings"), QStringLiteral("aetherRxSettingsButton"),
+        tr("Settings: save, load, import and export receive chain profiles."));
 
     // Pin every panel to its RX engine instance. Without this the EQ canvas
     // has no engine to enumerate bands for and collapses to its "(no EQ
@@ -437,23 +317,18 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     tidyEmbeddedPanel(m_output, /*keepTitle=*/true);
     tidyEmbeddedPanel(m_waveform, /*keepTitle=*/true);
 
-    if (auto* first = m_tabGroup->button(Nr)) {
-        first->setChecked(true);
-    }
+    m_tabs->setCurrentStage(Nr);
     m_stack->setCurrentIndex(Nr);
 
     // The Client* stages are plain classes with no change signal, and the RX
     // chain strip toggles the same flags from outside this window, so the
     // boxes are polled rather than driven. Five times a second is far below
     // what a human notices and nowhere near what six bool reads cost.
-    refreshStageChecks();
-    relayoutStageRows();
+    m_tabs->refreshFromHost();
     m_checkTimer = new QTimer(this);
     m_checkTimer->setInterval(200);
     connect(m_checkTimer, &QTimer::timeout, this, [this]() {
-        refreshStageChecks();
-        // The chain strip can reorder from outside this window too.
-        relayoutStageRows();
+        m_tabs->refreshFromHost();
     });
 
     // Forward every parameter-change signal so existing connections to
@@ -503,61 +378,15 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
 // edge of the page.
 QWidget* AetherRxDialog::buildStagePage(QWidget* panel)
 {
-    return new StagePage(panel);
+    return makeStagePage(panel);
 }
 
 void AetherRxDialog::addStage(Stage stage, const QString& label, QWidget* page)
 {
-    auto* tab = makeStageTab(label);
-    tab->setObjectName(QStringLiteral("aetherRxTab") + label);
-    tab->setAccessibleName(label + QStringLiteral(" receive stage"));
-    m_tabGroup->addButton(tab, stage);
-
-    // One row: grip, the tab that selects the page, then the stage's on/off
-    // box at the right-hand end. Three separate widgets on purpose — grabbing
-    // the grip must not change pages, clicking the tab must not switch the
-    // stage off, and neither must start a drag.
-    auto* row = new QWidget;
-    m_stageRows[stage] = row;
-    auto* rowBox = new QHBoxLayout(row);
-    rowBox->setContentsMargins(0, 0, 0, 0);
-    rowBox->setSpacing(4);
-
-    if (isChainStage(stage)) {
-        auto* grip = new StageGrip(stage);
-        grip->setObjectName(QStringLiteral("aetherRxGrip") + label);
-        grip->setAccessibleName(label + QStringLiteral(" chain position"));
-        rowBox->addWidget(grip);
-    } else {
-        // Not in the chain, so nothing to drag — but the label still starts
-        // where every other label starts.
-        auto* pad = new QWidget;
-        pad->setFixedWidth(StageGrip::kGripWidth);
-        rowBox->addWidget(pad);
-    }
-
-    rowBox->addWidget(tab, 1);
-
-    if (stage == Output) {
-        // Nothing to bypass here, so no box — but the row still ends where
-        // the others end rather than running past them. Sized from a real
-        // checkbox once they all exist.
-        m_outIndent = new QWidget;
-        rowBox->addWidget(m_outIndent);
-    } else {
-        auto* box = new QCheckBox;
-        box->setObjectName(QStringLiteral("aetherRxEnable") + label);
-        box->setAccessibleName(label + QStringLiteral(" receive stage enabled"));
-        box->setToolTip(tr("Enable the %1 stage. Unchecked, the receive chain "
-                           "passes straight through it.").arg(label));
-        m_stageChecks[stage] = box;
-        connect(box, &QCheckBox::toggled, this, [this, stage](bool on) {
-            setStageEnabled(stage, on);
-        });
-        rowBox->addWidget(box);
-    }
-
-    qobject_cast<QVBoxLayout*>(m_tabsFrame->layout())->addWidget(row);
+    // Out is a meter and a waveform, not a stage: no checkbox, and the bar
+    // gives it no grip either because it is not in the chain.
+    m_tabs->addStage(static_cast<int>(stage), label,
+                     /*wantsCheckbox=*/stage != Output);
 
     const int index = m_stack->addWidget(page);
     Q_ASSERT(index == stage);   // ids double as stack indices
@@ -578,8 +407,7 @@ void AetherRxDialog::showEvent(QShowEvent* event)
     if (size() != kLaunchSize) {
         resize(kLaunchSize);
     }
-    refreshStageChecks();
-    relayoutStageRows();
+    m_tabs->refreshFromHost();
     if (m_checkTimer) m_checkTimer->start();
 }
 
@@ -617,7 +445,7 @@ bool AetherRxDialog::stageEnabled(Stage stage) const
 
 void AetherRxDialog::setStageEnabled(Stage stage, bool on)
 {
-    if (!m_audio || m_syncingChecks) return;
+    if (!m_audio) return;
     switch (stage) {
         case Nr: {
             // The same gesture the chain strip's DSP tile makes: switching the
@@ -692,116 +520,9 @@ void AetherRxDialog::setStageEnabled(Stage stage, bool on)
     }
 }
 
-bool AetherRxDialog::eventFilter(QObject* watched, QEvent* event)
-{
-    if (watched != m_tabsFrame) {
-        return PersistentDialog::eventFilter(watched, event);
-    }
-    switch (event->type()) {
-        case QEvent::DragEnter:
-        case QEvent::DragMove: {
-            auto* ev = static_cast<QDragMoveEvent*>(event);
-            if (ev->mimeData()->hasFormat(QLatin1String(kStageMime))) {
-                ev->acceptProposedAction();
-                return true;
-            }
-            break;
-        }
-        case QEvent::Drop: {
-            auto* ev = static_cast<QDropEvent*>(event);
-            if (!ev->mimeData()->hasFormat(QLatin1String(kStageMime))) break;
-            const int raw =
-                ev->mimeData()->data(QLatin1String(kStageMime)).toInt();
-            if (raw >= 0 && raw < StageCount) {
-                dropStageAt(static_cast<Stage>(raw),
-                            ev->position().toPoint().y());
-            }
-            ev->acceptProposedAction();
-            return true;
-        }
-        default:
-            break;
-    }
-    return PersistentDialog::eventFilter(watched, event);
-}
 
-void AetherRxDialog::dropStageAt(Stage moved, int y)
-{
-    if (!m_audio || !isChainStage(moved)) return;
 
-    const QVector<AudioEngine::RxChainStage> stages = m_audio->rxChainStages();
 
-    // Hand the rule the order and the row middles and let it do the
-    // arithmetic — see RxStageReorder, which exists so this is testable.
-    QVector<int> order;
-    QVector<int> midpoints;
-    for (auto s : stages) {
-        const Stage rowStage = fromChainStage(s);
-        if (rowStage >= StageCount) continue;
-        QWidget* row = m_stageRows[rowStage];
-        if (!row) continue;
-        order.append(static_cast<int>(s));
-        midpoints.append(row->y() + row->height() / 2);
-    }
-
-    const QVector<int> next = RxStageReorder::dropped(
-        order, static_cast<int>(toChainStage(moved)), midpoints, y);
-    if (next == order) return;
-
-    QVector<AudioEngine::RxChainStage> reordered;
-    reordered.reserve(next.size());
-    for (int id : next) {
-        reordered.append(static_cast<AudioEngine::RxChainStage>(id));
-    }
-
-    // Persists on its own — setRxChainStages writes ClientRxChainStages.
-    m_audio->setRxChainStages(reordered);
-    relayoutStageRows();
-}
-
-void AetherRxDialog::relayoutStageRows()
-{
-    if (!m_audio || !m_tabsFrame) return;
-
-    // AetherNR first, the chain in engine order, Out last.
-    QVector<int> wanted;
-    wanted.append(Nr);
-    for (auto s : m_audio->rxChainStages()) {
-        const Stage rowStage = fromChainStage(s);
-        if (rowStage < StageCount) wanted.append(rowStage);
-    }
-    // A stage the engine did not list still needs a row; keep it in the order
-    // it was declared in, after the ones that were listed.
-    for (int i = 0; i < StageCount; ++i) {
-        if (i != Nr && i != Output && !wanted.contains(i)) wanted.append(i);
-    }
-    wanted.append(Output);
-
-    if (wanted == m_rowOrder) return;
-    m_rowOrder = wanted;
-
-    auto* box = qobject_cast<QVBoxLayout*>(m_tabsFrame->layout());
-    if (!box) return;
-    for (int i = 0; i < wanted.size(); ++i) {
-        QWidget* row = m_stageRows[wanted[i]];
-        if (!row) continue;
-        box->removeWidget(row);
-        box->insertWidget(i, row);
-    }
-}
-
-void AetherRxDialog::refreshStageChecks()
-{
-    if (!m_audio) return;
-    m_syncingChecks = true;
-    for (int i = 0; i < StageCount; ++i) {
-        QCheckBox* box = m_stageChecks[i];
-        if (!box) continue;
-        const bool on = stageEnabled(static_cast<Stage>(i));
-        if (box->isChecked() != on) box->setChecked(on);
-    }
-    m_syncingChecks = false;
-}
 
 void AetherRxDialog::showSettings()
 {
@@ -812,10 +533,51 @@ void AetherRxDialog::showSettings()
         // A profile can reorder the chain and flip every enable, so the whole
         // window re-reads the engine rather than waiting for the poll.
         syncFromEngine();
-        refreshStageChecks();
-        relayoutStageRows();
+        m_tabs->refreshFromHost();
     });
     dlg.exec();
+}
+
+void AetherRxDialog::setRecordOn(bool on)
+{
+    if (!m_recBtn) return;
+    QSignalBlocker block(m_recBtn);
+    m_recBtn->setChecked(on);
+}
+
+void AetherRxDialog::setPlayOn(bool on)
+{
+    if (!m_playBtn) return;
+    QSignalBlocker block(m_playBtn);
+    m_playBtn->setChecked(on);
+}
+
+void AetherRxDialog::setPlayEnabled(bool enabled)
+{
+    m_playEnabled = enabled;
+    if (!m_playBtn) return;
+    // A disabled widget gets no context-menu event, so the menu that stops
+    // a transmit playback would vanish with it. While one is transmitting
+    // the button stays enabled whatever the host says; the host's answer is
+    // kept and applied once the transmit ends.
+    const bool effective = enabled || m_txPlaybackActive;
+    m_playBtn->setEnabled(effective);
+    // Why it is greyed out has to reach the accessible channel too, not
+    // just the tooltip (#4896).
+    m_playBtn->setAccessibleDescription(
+        effective ? tr("Play back the last recording. Click again to stop.")
+                  : tr("Unavailable until something has been recorded. "
+                       "Use REC first."));
+}
+
+void AetherRxDialog::setTxPlaybackActive(bool on)
+{
+    m_txPlaybackActive = on;
+    if (m_txPlaybackAction) {
+        QSignalBlocker block(m_txPlaybackAction);
+        m_txPlaybackAction->setChecked(on);
+    }
+    setPlayEnabled(m_playEnabled);
 }
 
 void AetherRxDialog::syncFromEngine()
@@ -839,7 +601,7 @@ void AetherRxDialog::selectTab(const QString& name)
         if (name.compare(QLatin1String(entry.label), Qt::CaseInsensitive) != 0) {
             continue;
         }
-        if (auto* tab = m_tabGroup->button(entry.stage)) tab->setChecked(true);
+        m_tabs->setCurrentStage(entry.stage);
         if (m_stack) m_stack->setCurrentIndex(entry.stage);
         return;
     }
@@ -847,7 +609,7 @@ void AetherRxDialog::selectTab(const QString& name)
     // Not a stage name, so it is a noise-reduction method: show the NR tab and
     // let the body pick the method. Every caller that predates this window
     // passes one of these.
-    if (auto* tab = m_tabGroup->button(Nr)) tab->setChecked(true);
+    m_tabs->setCurrentStage(Nr);
     if (m_stack) m_stack->setCurrentIndex(Nr);
     if (m_widget) m_widget->selectTab(name);
 }

@@ -26,10 +26,16 @@ class ClientCompThresholdFader;
 // row at the foot.
 //   ┌─ Limiter: [ON] ──────────── Ceiling: ──●── -1.0 dB ─┐
 //   │ │Th│        [transfer curve + live ball]      │GR│Out│
-//   │ │  │                                          │  │   │
+//   │ │  │                                          │  │◄─│ makeup
 //   ├──────────────────────────────────────────────────────┤
-//   │ (Ratio) (Attack) (Release) (Knee) (Makeup) …         │
+//   │ (Ratio) (Attack) (Release) (Knee) …                  │
 //   └──────────────────────────────────────────────────────┘
+//
+// Makeup is not a knob: it is a fader on the Out meter, -12 dB at the
+// foot of the bar through a 0 dB detent to +24 dB at the top, with its
+// own tick scale in the left gutter.  It is an output-side gain, so it
+// belongs where the output level is read, and the foot row was too full
+// to hold it legibly.
 //
 // The canvas (center) owns the threshold chevron + curve + live ball.
 // Meter strips and limiter controls are separate child widgets wired to
@@ -102,7 +108,6 @@ private:
     ClientCompKnob*          m_attack{nullptr};
     ClientCompKnob*          m_release{nullptr};
     ClientCompKnob*          m_knee{nullptr};
-    ClientCompKnob*          m_makeup{nullptr};
     QSlider*                 m_ceiling{nullptr};
     QLabel*                  m_ceilingValue{nullptr};
     ClientCompKnob*          m_drive{nullptr};

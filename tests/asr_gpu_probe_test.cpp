@@ -202,6 +202,160 @@ int main()
                     "explicit choices untouched)\n");
     }
 
+    // ---- #5190 whisper/ggml log routing policy --------------------------------
+    // Pure: what reaches the log file out of the callback stream. Level numbers
+    // are ggml_log_level's (the .cpp static_asserts the mirror).
+    {
+        using Asm = AsrLibLogAssembler;
+        constexpr int kInfo = 2; // GGML_LOG_LEVEL_INFO
+
+        // MEASURED (09-16 ballast bench, Linux RTX 5060, main 85fdf816, the
+        // stderr capture of the run that then segfaulted): emitted by
+        // GGML_LOG_ERROR at ggml-alloc.c:1133.
+        const char* allocFailed =
+            "alloc_tensor_range: failed to allocate Vulkan1 buffer of size 551900160\n";
+        // MEASURED (same capture): one of the INFO lines a load prints.
+        const char* infoLine = "whisper_init_with_params_no_state: use gpu    = 1\n";
+
+        Asm a;
+        std::vector<Asm::Line> got = a.feed(Asm::kLevelError, allocFailed);
+        if (got.size() != 1 || !got[0].error
+            || got[0].text
+                != QStringLiteral("alloc_tensor_range: failed to allocate Vulkan1 "
+                                  "buffer of size 551900160")) {
+            std::fprintf(stderr, "[FAIL] a ggml ERROR line was not forwarded whole, "
+                                 "as an error, without its newline (#5190)\n");
+            return 1;
+        }
+        got = a.feed(kInfo, infoLine);
+        if (!got.empty()) {
+            std::fprintf(stderr, "[FAIL] an INFO line was forwarded - a model load "
+                                 "prints dozens of them (#5190)\n");
+            return 1;
+        }
+        // CONSTRUCTED from here on: transformation logic only (fragment joining),
+        // no claim that whisper emits these shapes.
+        got = a.feed(Asm::kLevelCont, " continuation of an INFO message\n");
+        if (!got.empty()) {
+            std::fprintf(stderr, "[FAIL] a CONT fragment of a dropped message was "
+                                 "forwarded (#5190)\n");
+            return 1;
+        }
+        got = a.feed(Asm::kLevelWarn, "first half,");
+        if (!got.empty()) {
+            std::fprintf(stderr, "[FAIL] an unterminated fragment was forwarded "
+                                 "before its line completed (#5190)\n");
+            return 1;
+        }
+        got = a.feed(Asm::kLevelCont, " second half\nnext line\n");
+        if (got.size() != 2 || got[0].error
+            || got[0].text != QStringLiteral("first half, second half")
+            || got[1].text != QStringLiteral("next line")) {
+            std::fprintf(stderr, "[FAIL] CONT fragments were not joined onto the "
+                                 "WARN message and split into whole lines (#5190)\n");
+            return 1;
+        }
+        // Two same-level fragments are two messages, not one: the vendored
+        // whisper/ggml repeat the level for multi-part output instead of using
+        // CONT, and only CONT joins.
+        got = a.feed(Asm::kLevelWarn, "part one\n");
+        std::vector<Asm::Line> second = a.feed(Asm::kLevelWarn, "part two\n");
+        if (got.size() != 1 || second.size() != 1
+            || got[0].text != QStringLiteral("part one")
+            || second[0].text != QStringLiteral("part two")) {
+            std::fprintf(stderr, "[FAIL] two same-level messages were not kept as "
+                                 "two lines (#5190)\n");
+            return 1;
+        }
+        // An unterminated message is finished by the next message, not lost and
+        // not glued onto it.
+        a.feed(Asm::kLevelError, "no newline");
+        got = a.feed(kInfo, "unrelated info\n");
+        if (got.size() != 1 || !got[0].error || got[0].text != QStringLiteral("no newline")) {
+            std::fprintf(stderr, "[FAIL] an unterminated ERROR was lost or merged "
+                                 "into the next message (#5190)\n");
+            return 1;
+        }
+        std::printf("[ok] #5190 whisper/ggml log routing "
+                    "(WARN+ERROR forwarded whole, INFO dropped, CONT joined)\n");
+    }
+
+    // VRAM gate on the automatic raise to the GPU-default tier (#4972): "a GPU
+    // exists" must not be enough to select a 1.6 GB model.
+    {
+        constexpr quint64 kMiB = 1024ull * 1024ull;
+        // Copy of the "large-v3-turbo" sizeBytes in AsrModelCatalog.cpp (this
+        // target does not link the catalog) — keep the two in step.
+        constexpr qint64 kTurboBytes = 1624555275;
+
+        // MEASURED (#4972 bench, RTX 5060 Laptop 8151 MiB under VRAM ballast,
+        // 2026-09-16): the app logged "VRAM free 1126 of 8151 MB" and enabling
+        // the auto-raised tier took SIGSEGV in the whisper model load.
+        if (asrTierFitsVram(1126 * kMiB, 8151 * kMiB, kTurboBytes)) {
+            std::fprintf(stderr, "[FAIL] 1126 MB free was judged enough for the "
+                                 "1.6 GB tier (#4972)\n");
+            return 1;
+        }
+        // MEASURED (#5730 reporter log, GTX 1050, 2026-09-15): "VRAM free 1809
+        // of 2176 MB". The tier occupies 1818 MiB once loaded (same bench), so
+        // a 2 GB-class card is never auto-raised; choosing it stays possible.
+        if (asrTierFitsVram(1809 * kMiB, 2176 * kMiB, kTurboBytes)) {
+            std::fprintf(stderr, "[FAIL] a 2 GB-class card (1809 MB free) was "
+                                 "judged to fit the 1.6 GB tier (#4972)\n");
+            return 1;
+        }
+        // MEASURED (same bench, no ballast): "VRAM free 7360 of 8151 MB".
+        if (!asrTierFitsVram(7360 * kMiB, 8151 * kMiB, kTurboBytes)) {
+            std::fprintf(stderr, "[FAIL] an 8 GB card with 7360 MB free was "
+                                 "refused the GPU-default tier (#4972)\n");
+            return 1;
+        }
+        // CONSTRUCTED: the boundary itself — weights + headroom fits, one byte
+        // less does not.
+        const quint64 need = static_cast<quint64>(kTurboBytes) + kAsrTierVramHeadroomBytes;
+        if (!asrTierFitsVram(need, 4096 * kMiB, kTurboBytes)
+            || asrTierFitsVram(need - 1, 4096 * kMiB, kTurboBytes)) {
+            std::fprintf(stderr, "[FAIL] VRAM gate boundary is not weights + "
+                                 "headroom (#4972)\n");
+            return 1;
+        }
+        // CONSTRUCTED input on a MEASURED total (2176 MB, #5730 reporter log):
+        // ggml-vulkan reports free == total for a device without
+        // VK_EXT_memory_budget (ggml_backend_vk_get_device_memory), so the same
+        // card can present as 2176 of 2176 MB free. No capture of a driver in
+        // that mode exists; the row pins that the answer does not depend on it.
+        if (asrTierFitsVram(2176 * kMiB, 2176 * kMiB, kTurboBytes)) {
+            std::fprintf(stderr, "[FAIL] a 2 GB-class card reporting free == total "
+                                 "was judged to fit the 1.6 GB tier (#4972)\n");
+            return 1;
+        }
+        // CONSTRUCTED: the total boundary — need + desktop reserve fits, one
+        // byte less does not, with free memory ample in both.
+        const quint64 needTotal = need + kAsrTierVramDesktopReserveBytes;
+        if (!asrTierFitsVram(needTotal, needTotal, kTurboBytes)
+            || asrTierFitsVram(needTotal - 1, needTotal - 1, kTurboBytes)) {
+            std::fprintf(stderr, "[FAIL] VRAM gate total boundary is not weights + "
+                                 "headroom + desktop reserve (#4972)\n");
+            return 1;
+        }
+        // CONSTRUCTED: memory unknown (AsrGpuDevice leaves both 0 when the
+        // device could not be asked) is not "too small" — previous behaviour.
+        if (!asrTierFitsVram(0, 0, kTurboBytes)) {
+            std::fprintf(stderr, "[FAIL] unknown VRAM was treated as too small "
+                                 "(#4972)\n");
+            return 1;
+        }
+        // CONSTRUCTED: an unknown tier size cannot refuse a device.
+        if (!asrTierFitsVram(64 * kMiB, 2048 * kMiB, 0)) {
+            std::fprintf(stderr, "[FAIL] an unknown tier size refused a device "
+                                 "(#4972)\n");
+            return 1;
+        }
+        std::printf("[ok] #4972 VRAM gate on the GPU-default tier "
+                    "(weights + headroom, total clears a desktop reserve, "
+                    "unknown memory passes)\n");
+    }
+
     QElapsedTimer timer;
 
 #ifdef Q_OS_MACOS

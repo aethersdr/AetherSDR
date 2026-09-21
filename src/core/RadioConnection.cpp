@@ -1,7 +1,9 @@
 #include "RadioConnection.h"
+#include "backends/flex/FlexPttWireSession.h"
 #include "LogManager.h"
 #include "core/backends/sim/SimBackend.h"
 
+#include <algorithm>
 #include <QEventLoop>
 #include <QNetworkProxy>
 #include <QTimer>
@@ -74,6 +76,15 @@ RadioConnection::~RadioConnection()
 
 void RadioConnection::init()
 {
+    m_independentPtt = std::make_unique<FlexPttWireSession>(
+        [this](quint32 seq, const QString& command) { return writeSocketCommand(seq, command); },
+        [this](const TxStopEvidence& evidence) { emit independentPttStopped(evidence); });
+    m_independentPttTimer = new QTimer(this);
+    m_independentPttTimer->setInterval(25);
+    connect(m_independentPttTimer, &QTimer::timeout, this, [this] {
+        m_independentPtt->poll(TxCoordinator::monotonicMs());
+        updateIndependentPttTimer();
+    });
     m_socket = new QTcpSocket(this);
     // LAN radio uses a proprietary CAT/VITA stream on port 4992; an OS or
     // application HTTP/SOCKS proxy can never tunnel it sensibly.  SmartSDR
@@ -284,6 +295,11 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 
 void RadioConnection::resetSessionState()
 {
+    m_pttProtocol.store(PttProtocol::Unknown);
+    if (m_independentPtt) {
+        m_independentPtt->disconnect();
+        updateIndependentPttTimer();
+    }
     // Partial lines and ping replies belong to exactly one TCP session.
     //
     // FlexLib does this explicitly too, and for the same reason: its
@@ -502,7 +518,59 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
         emit commandResponse(seq, 0, QString());
         return;
     }
-    if (!isConnected() || !m_socket) return;
+    if (m_independentPtt) {
+        m_independentPtt->otherCommand(command, TxCoordinator::monotonicMs());
+    }
+    (void)writeSocketCommand(seq, command);
+}
+
+bool RadioConnection::independentPttSupported() const
+{
+    return isConnected() && !isSyntheticDemo()
+        && m_pttProtocol.load() == PttProtocol::Supported;
+}
+
+bool RadioConnection::independentPttReady() const
+{
+    return independentPttSupported() && m_independentPtt && m_independentPtt->ready();
+}
+
+void RadioConnection::writeIndependentPtt(quint32 seq, const TxCoordinator::Command& command)
+{
+    if (independentPttSupported() && m_independentPtt) {
+        m_independentPtt->key(seq, command, TxCoordinator::monotonicMs());
+        updateIndependentPttTimer();
+    } else {
+        command.completion.finish();
+    }
+}
+
+void RadioConnection::stopIndependentPtt(quint32 seq, const TxCoordinator::Operation& operation,
+                                         const TxCoordinator::StopRequest& request)
+{
+    if (isConnected() && !isSyntheticDemo() && m_independentPtt) {
+        m_independentPtt->stop(seq, operation, request, TxCoordinator::monotonicMs());
+        updateIndependentPttTimer();
+    }
+}
+
+void RadioConnection::updateIndependentPttTimer()
+{
+    if (!m_independentPttTimer || !m_independentPtt) {
+        return;
+    }
+    if (!m_independentPtt->needsPolling()) {
+        m_independentPttTimer->stop();
+    } else if (!m_independentPttTimer->isActive()) {
+        m_independentPttTimer->start();
+    }
+}
+
+bool RadioConnection::writeSocketCommand(quint32 seq, const QString& command)
+{
+    if (!isConnected() || !m_socket || isSyntheticDemo()) {
+        return false;
+    }
 
     const QByteArray data = CommandParser::buildCommand(seq, command);
     if (command.startsWith("ping")) {
@@ -511,8 +579,9 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
     } else {
         qCDebug(lcConnection) << "TX:" << data.trimmed();
     }
-    m_socket->write(data);
+    const bool written = m_socket->write(data) == data.size();
     m_socket->flush();   // force immediate kernel send for keepalive reliability
+    return written;
 }
 
 void RadioConnection::onSocketConnected()
@@ -564,10 +633,16 @@ void RadioConnection::onReadyRead()
     }
     int newlinePos;
     while ((newlinePos = m_readBuffer.indexOf('\n')) >= 0) {
-        const QString line = QString::fromUtf8(m_readBuffer.left(newlinePos)).trimmed();
+        // Strip the line terminator only. The evidence path must see malformed
+        // whitespace; CommandParser separately trims for legacy presentation.
+        QString line = QString::fromUtf8(m_readBuffer.left(newlinePos));
+        if (line.endsWith(u'\r')) {
+            line.chop(1);
+        }
         m_readBuffer.remove(0, newlinePos + 1);
-        if (!line.isEmpty())
+        if (!QStringView(line).trimmed().isEmpty()) {
             processLine(line);
+        }
     }
 }
 
@@ -577,6 +652,10 @@ void RadioConnection::onHeartbeat()
 
 void RadioConnection::processLine(const QString& line)
 {
+    if (m_independentPtt && !isSyntheticDemo()) {
+        m_independentPtt->observe(line, TxCoordinator::monotonicMs());
+        updateIndependentPttTimer();
+    }
     // GPS coordinates are never useful in a support log. Drop the raw status
     // at the source; AsyncLogWriter also scrubs coordinate-shaped fields as a
     // defense against future logging paths.
@@ -600,16 +679,47 @@ void RadioConnection::processLine(const QString& line)
     emit messageReceived(msg);
 
     switch (msg.type) {
-    case MessageType::Version:
+    case MessageType::Version: {
+        // Inspect the raw prologue, not the tolerant presentation parser's
+        // trimmed value. A duplicate/late V cannot renegotiate TX authority.
+        const bool supported = m_pttProtocol.load() == PttProtocol::Unknown
+            && !isConnected() && clientHandle() == 0 && line.startsWith(u'V')
+            && FlexPttWireSession::supportsProtocol(QStringView(line).mid(1));
+        m_pttProtocol.store(supported ? PttProtocol::Supported : PttProtocol::Rejected);
+        if (!supported && m_independentPtt) {
+            m_independentPtt->rejectProtocol();
+        }
         emit versionReceived(msg.object);
         break;
-    case MessageType::Handle:
+    }
+    case MessageType::Handle: {
+        const bool firstHandle = clientHandle() == 0;
         m_handle = msg.handle;
+        if (m_independentPtt && !isSyntheticDemo()) {
+            // The evidence parser must not accept the presentation parser's
+            // default-zero or partially parsed identity.
+            bool ok = false;
+            const quint32 handle = line.mid(1).toUInt(&ok, 16);
+            const QStringView digits = QStringView(line).mid(1);
+            const bool hexOnly = digits.size() == 8 && std::all_of(digits.begin(), digits.end(), [](QChar ch) {
+                return (ch >= u'0' && ch <= u'9') || (ch >= u'a' && ch <= u'f')
+                    || (ch >= u'A' && ch <= u'F');
+            });
+            if (m_pttProtocol.load() == PttProtocol::Supported && firstHandle
+                && ok && line.size() == 9 && line.startsWith(u'H')
+                && hexOnly && handle != 0 && clientHandle() == handle) {
+                m_independentPtt->reset(m_sessionGeneration, handle);
+            } else {
+                m_pttProtocol.store(PttProtocol::Rejected);
+                m_independentPtt->rejectProtocol();
+            }
+        }
         qCDebug(lcConnection) << "RadioConnection: assigned handle" << QString::number(m_handle, 16);
         setState(ConnectionState::Connected);
         if (m_heartbeat) m_heartbeat->start();
         emit connected();
         break;
+    }
     case MessageType::Response:
         emit commandResponse(msg.sequence, msg.resultCode, msg.object);
         break;

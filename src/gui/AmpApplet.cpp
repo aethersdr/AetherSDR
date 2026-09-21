@@ -277,9 +277,7 @@ void AmpApplet::buildUI()
     m_fwdGauge = new HGauge(0.0f, 2000.0f, 1500.0f, "", "",
         {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1.5K"}, {2000, "2K"}},
         this, 1000.0f);
-    // Slow release: bar rises quickly on RF bursts but decays over ~800 ms
-    // so brief transmissions remain visible — matches S-meter peak-hold feel.
-    m_fwdGauge->setBallistics({0.030f, 0.800f});
+    m_fwdGauge->setWindowPeakEnabled(true);
     m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     // Zero margins, like every other nested layout here. A QLayout that is
@@ -311,7 +309,6 @@ void AmpApplet::buildUI()
     m_drvGauge = new HGauge(0.0f, 100.0f, 75.0f, "", "",
         {{0, "0"}, {25, "25"}, {50, "50"}, {75, "75"}, {100, "100"}},
         this, 50.0f);
-    m_drvGauge->setBallistics({0.030f, 0.800f});
     m_drvGauge->setAccessibleName(tr("Drive power"));
     auto* drvRow = new QHBoxLayout;
     drvRow->setContentsMargins(0, 0, 0, 0);
@@ -540,14 +537,6 @@ void AmpApplet::buildUI()
     connect(&m_labelTimer, &QTimer::timeout, this, &AmpApplet::updateValueLabels);
     m_labelTimer.start();
 
-    // Peak hold: clear the white tick 2.5 s after the last new peak.
-    m_peakTimer = new QTimer(this);
-    m_peakTimer->setSingleShot(true);
-    m_peakTimer->setInterval(2500);
-    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
-        m_peakFwd = 0.0f;
-        m_fwdGauge->clearPeak();
-    });
 
     applyDensityAtScale(1.0);
     updatePortRows();
@@ -1139,11 +1128,7 @@ void AmpApplet::setFwdPower(float watts)
         m_swrGauge->setValue(1.0f);   // clear bar — SWR is unmeasurable at idle
     else if (isPowered && !wasPowered)
         m_swrGauge->setValue(m_swrVal); // power resumed — restore cached value
-    if (watts > m_peakFwd) {
-        m_peakFwd = watts;
-        m_fwdGauge->setPeakValue(watts);
-        m_peakTimer->start();  // restart hold window on each new peak
-    }
+    // Peak marker: HGauge's sliding window, fed by setValue above (canon).
     // Label text is updated by the 100 ms timer (updateValueLabels).
 }
 

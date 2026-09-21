@@ -19,6 +19,7 @@
 
 #include "MainWindow.h"
 #include "models/CwDecodeSettings.h"
+#include "core/backends/AutoRfGainControl.h"
 #include "core/ClientDisplaySettings.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include <QHBoxLayout>
@@ -5477,6 +5478,54 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(rfGainSettingsKey(sw), QString::number(gain));
         s.save();
     });
+
+    // AUTO RF GAIN. Through the model, for the same reason the gain itself is:
+    // a backend that owns the loop in its own state is the only thing that can
+    // arm it, and there is no wire text for this on any family.
+    //
+    // NOTHING IS PERSISTED HERE, unlike the RF Gain slider immediately above.
+    // The switch is the BACKEND's to remember, in its own operating state --
+    // docs/HERMES.md asks that a value the radio cannot store be persisted in
+    // the family's OperatingState path and "never in a flat AppSettings key",
+    // and a preference recorded per-family in shared GUI settings was exactly
+    // that. So this lambda commands and reflects, and owns no storage.
+    connect(menu, &SpectrumOverlayMenu::autoRfGainChanged,
+            this, [this, sw](bool on) {
+        auto* autoGain = m_radioModel.autoRfGain();
+        if (autoGain) {
+            // The backend settles the request -- armed, or refused with a
+            // reason -- and says so through RadioModel::autoRfGainArmSettled.
+            // onAutoRfGainArmSettled turns that into the checkbox state, the
+            // card and the accessible description, and it is the one place all
+            // three routes to an arm meet: this click, the backend's own
+            // connect-time restore, and a bridge verb (#5817).
+            autoGain->setArmed(on);
+        }
+        // READ BACK WHAT ACTUALLY HAPPENED, regardless. The backend may DECLINE
+        // to arm -- the HL2 refuses from a gain baseline inside the register
+        // region where #5354 measured +48 dB reading identically to +18 dB --
+        // and a checkbox that stayed ticked over a control that is not running
+        // would be the #5395 defect exactly: a UI reporting one state while the
+        // radio is in another. The settled signal normally lands first, inside
+        // setArmed(); this is the guard for a backend that settled silently.
+        if (auto* m = sw->overlayMenu()) {
+            m->setAutoRfGainEnabled(autoGain && autoGain->isArmed());
+        }
+    });
+    // THE READOUT HALF. RFC #5535 approved the loop above on the condition that
+    // both the clipping and the loop's OWN ACTION are visible, so this is not
+    // optional decoration: without it the control is not the one that was
+    // approved. Pushed on change from the model rather than polled, and seeded
+    // immediately below so a panadapter opened after the radio has already
+    // spoken does not sit blank.
+    connect(&m_radioModel, &RadioModel::frontEndOverloadChanged,
+            menu, [sw](const AetherSDR::FrontEndOverload& state) {
+        if (auto* m = sw->overlayMenu()) {
+            m->setFrontEndOverload(state);
+        }
+    });
+    menu->setFrontEndOverload(m_radioModel.frontEndOverload());
+
     connect(menu, &SpectrumOverlayMenu::loopAToggled,
             this, [this, applet](bool on) {
         m_radioModel.sendCommand(
@@ -5501,6 +5550,70 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // live exclusively in the AetherDSP applet; the spectrum overlay menu
     // no longer surfaces them.
     refreshKiwiSdrWaterfallAvailability();
+}
+
+// AN ARM REQUEST SETTLED, from whichever route asked. Reflect it on every pan's
+// copy of the control, and if it was a refusal, say why.
+//
+// ONE HANDLER FOR ALL ROUTES. The Auto checkbox used to learn the outcome only
+// by reading isArmed() back after its own click. That covers the click and
+// nothing else: the HL2 arms (or refuses) from its stored preference inside its
+// own link-up handler, after it has already emitted connected(), and a bridge
+// `pan autorfgain on` arms without going near a widget. On both, the checkbox
+// reported the wrong state and a refusal was silent -- the #5817 springback,
+// just not on a click (#5395 is the same defect seen from the other side).
+//
+// WHAT GOES WHERE. The armed state and the refusal DESCRIPTION go on every
+// pan's checkbox, because the control is radio-wide and each pan carries a
+// copy: the description is state, and a copy left saying "declined" over a
+// running loop would be read out as such. setAutoRfGainEnabled(true) is what
+// clears a standing description. The card and the spoken announcement go
+// ONCE, on the active pan, where the operator is looking.
+//
+// ON THE PANADAPTER, NOT THE STATUS BAR, and not a dialog either. Not a dialog
+// because #4227 is stacked unclosable message boxes, and a refusal the
+// operator asked for by clicking does not warrant one. Not the status bar
+// because of #4649: any non-empty temporary message hides m_statusBarContainer
+// wholesale for its whole duration, taking the TX indicator, PA temperature
+// and supply voltage with it -- MainWindow.cpp and MainWindow_Controllers.cpp
+// both route away from it for the same reason. The card takes its OWN id
+// rather than riding on the interlock's "interlock.active" latest-wins: a
+// gain refusal must not evict a live "Transmit disabled" card, nor be evicted
+// by one.
+void MainWindow::onAutoRfGainArmSettled(bool armed)
+{
+    if (!m_panStack) {
+        return;
+    }
+    auto* autoGain = m_radioModel.autoRfGain();
+    const QString why = (!armed && autoGain) ? autoGain->lastArmRefusalReason()
+                                             : QString();
+    const QStringList panIds = m_panStack->panIds();
+    for (const QString& panId : panIds) {
+        SpectrumWidget* sw = m_panStack->spectrum(panId);
+        auto* m = sw ? sw->overlayMenu() : nullptr;
+        if (!m) {
+            continue;
+        }
+        m->setAutoRfGainEnabled(armed);
+        if (!why.isEmpty()) {
+            m->setAutoRfGainRefusalDescription(why);
+        }
+    }
+    if (why.isEmpty()) {
+        return;
+    }
+    SpectrumWidget* where = m_panStack->activeSpectrum();
+    if (!where && !panIds.isEmpty()) {
+        where = m_panStack->spectrum(panIds.first());
+    }
+    if (!where) {
+        return;
+    }
+    where->showNoticeCard(why, QStringLiteral("autorfgain.refused"), 10000);
+    if (auto* m = where->overlayMenu()) {
+        m->announceAutoRfGainRefusal(why);
+    }
 }
 
 MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
@@ -5866,6 +5979,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 sl->setRecordOn(on);
         }
     });
+    // A capture can start from AetherRX's REC (or the bridge) as well as
+    // from this flag, and the one recorder serves them all, so the flag
+    // follows the recorder's own start rather than only its own click.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStarted, w, [w](const QString&) {
+        w->setRecordOn(true);
+    });
     // A stopped recording may have failed to write/finalize; only enable
     // playback when the recorder has a successfully finalized file.
     connect(m_qsoRecorder, &QsoRecorder::recordingStopped, w, [this, w]() {
@@ -5900,6 +6019,11 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(s, &SliceModel::recordOnChanged, w, &VfoWidget::setRecordOn);
     connect(s, &SliceModel::playOnChanged, w, &VfoWidget::setPlayOn);
     connect(s, &SliceModel::playEnabledChanged, w, &VfoWidget::setPlayEnabled);
+    // The AetherRX window's REC / PLAY follow the active slice's radio-side
+    // state through the same three signals; the sync reads which is active.
+    connect(s, &SliceModel::recordOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
+    connect(s, &SliceModel::playOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
+    connect(s, &SliceModel::playEnabledChanged, this, &MainWindow::syncAetherRxRecordButtons);
     connect(w, &VfoWidget::autotuneRequested, this, [this, sliceId](bool intermittent) {
         if (m_radioModel.slice(sliceId))
             m_radioModel.cwAutoTune(sliceId, intermittent);

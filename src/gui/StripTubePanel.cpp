@@ -120,32 +120,6 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
         m_modelC = addModelBtn("C", 2);
     }
 
-    // RN2 is a switch, so it belongs with the switches now that there is a
-    // toolbar to hold them — it used to be tucked under a shortened meter for
-    // want of anywhere better. TX only; showForRx() hides it. (#2813)
-    toolbar->addSpacing(16);
-    m_rn2Btn = new QPushButton("RN2");
-    m_rn2Btn->setObjectName(QStringLiteral("tubeRn2"));
-    m_rn2Btn->setCheckable(true);
-    m_rn2Btn->setFixedHeight(22);
-    m_rn2Btn->setVisible(false);  // flipped on by showForTx()
-    m_rn2Btn->setToolTip(tr(
-        "Toggle RNNoise neural denoiser on the mic input.  Runs before "
-        "any DSP chain stage so noise is suppressed before it can be "
-        "amplified by gate / compressor / saturator.  Voice modes only — "
-        "digital modes (RADE, DAX, RTTY, FT8, FDV, CW) bypass this stage.  "
-        "Saved per Channel Strip profile, and suppressed by the strip's "
-        "BYPASS button alongside every other voice stage."));
-    // Reuse the A/B/C model-button stylesheet so all four compact
-    // buttons in this panel share one visual idiom.  (#2813)
-    m_rn2Btn->setStyleSheet(kModelStyle);
-    connect(m_rn2Btn, &QPushButton::toggled, this, [this](bool on) {
-        if (m_audio) m_audio->setRn2TxEnabled(on);
-        // Direct setter call is the single source of truth — engine
-        // emits rn2TxEnabledChanged for any cross-widget observer.
-    });
-    toolbar->addWidget(m_rn2Btn);
-
     toolbar->addStretch(1);
 
     // Dry/Wet is the mix, not a shaping control: it reads as a slider at the
@@ -194,8 +168,7 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
     body->addWidget(m_curve, 1);
 
     // Output level meter — far-right column, mirrors the EQ editor. It keeps
-    // its default Expanding policy and now fills the full column on both
-    // sides, the RN2 button that used to shorten it having moved up.
+    // its default Expanding policy and fills the full column on both sides.
     m_outMeter = new ClientLevelMeter;
     {
         auto* meterCol = new QVBoxLayout;
@@ -333,15 +306,6 @@ void StripTubePanel::showForTx()
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
-    // RN2 toggle is TX-only; it sits in the toolbar, so the meter keeps
-    // the full column height on both sides now.  (#2813)
-    if (m_rn2Btn) {
-        m_rn2Btn->setVisible(true);
-        if (m_audio) {
-            QSignalBlocker block(m_rn2Btn);
-            m_rn2Btn->setChecked(m_audio->rn2TxEnabled());
-        }
-    }
     syncControlsFromEngine();
     restoreGeometryFromSettings();
     show();
@@ -363,9 +327,6 @@ void StripTubePanel::showForRx()
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
-    // RX side has its own RN2 toggle elsewhere (AetherDspWidget /
-    // ClientRxChainWidget).  Hide our copy.  (#2813)
-    if (m_rn2Btn) m_rn2Btn->setVisible(false);
     syncControlsFromEngine();
     restoreGeometryFromSettings();
     show();

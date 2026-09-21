@@ -298,6 +298,16 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                 m_fwdPower = watts;
                 meters = true;
             }
+            // The device's rolling peak. Measured on a live transmission it
+            // holds for about a second after the last peak, then re-arms --
+            // a window, not a latch (`max` is the latch, and nothing here
+            // reads it). Our poll is slower than that window, so this is
+            // read every time it arrives rather than tracked for changes.
+            if (kvs.contains("peak")) {
+                float dBm = kvs.value("peak").toFloat();
+                m_fwdPeak = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+                meters = true;
+            }
             if (kvs.contains("swr")) {
                 float rl = kvs.value("swr").toFloat();  // return loss in dB (negative from TGXL)
                 float rho = std::pow(10.0f, rl / 20.0f);  // rl is already negative
@@ -305,7 +315,7 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                 m_swr = ratio;
                 meters = true;
             }
-            if (meters) emit metersChanged(m_fwdPower, m_swr);
+            if (meters) emit metersChanged(m_fwdPower, m_swr, m_fwdPeak);
         });
         // Also parse antA + meters + the per-port block from 1/sec status
         // poll responses. The port fields appear only in `status`, never in
@@ -358,6 +368,16 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                 m_fwdPower = watts;
                 meters = true;
             }
+            // The device's rolling peak. Measured on a live transmission it
+            // holds for about a second after the last peak, then re-arms --
+            // a window, not a latch (`max` is the latch, and nothing here
+            // reads it). Our poll is slower than that window, so this is
+            // read every time it arrives rather than tracked for changes.
+            if (kvs.contains("peak")) {
+                float dBm = kvs.value("peak").toFloat();
+                m_fwdPeak = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+                meters = true;
+            }
             if (kvs.contains("swr")) {
                 float rl = kvs.value("swr").toFloat();  // return loss in dB (negative from TGXL)
                 float rho = std::pow(10.0f, rl / 20.0f);  // rl is already negative
@@ -365,7 +385,7 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                 m_swr = ratio;
                 meters = true;
             }
-            if (meters) emit metersChanged(m_fwdPower, m_swr);
+            if (meters) emit metersChanged(m_fwdPower, m_swr, m_fwdPeak);
         });
     }
 }

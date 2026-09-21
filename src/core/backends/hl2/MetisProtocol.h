@@ -596,6 +596,47 @@ struct Hl2Telemetry {
     std::optional<int>  biasCurrentRaw;
     bool ptt = false;
 
+    // ---- ADC OVERLOAD AS A RATE, WITH ITS DENOMINATOR --------------------
+    //
+    // `adcOverload` above is the LAST value seen. That is a ~10 Hz sample of a
+    // bit the radio sets and clears up to ~190 times a second, because
+    // MetisClient coalesces telemetryUpdated at kTelemetryMinIntervalMs -- so
+    // as a measure of how hard the front end is being hit it is decimated
+    // roughly 19:1 and always was.
+    //
+    // These three are accumulated by MetisClient's receive loop across the
+    // publish interval, which is the only place the per-frame rate still
+    // exists. `adcSamples` counts response-address-0 responses actually seen;
+    // `adcOverloadSamples` counts how many of those carried the bit.
+    //
+    // THE DENOMINATOR IS NOT A CONSTANT AND MUST BE CARRIED. It varies with the
+    // sample rate and the receiver count, and the radio also DISPLACES the slot
+    // that carries this response whenever it has a command response to send --
+    // at up to half of them -- so it varies with what the application is doing
+    // too. A numerator without it is not a rate.
+    //
+    // A WINDOW WITH TOO FEW OBSERVATIONS IS NOT A CLEAN ONE. See
+    // adcClipRatePercent below: it returns nothing rather than zero, and the
+    // difference is the whole value of the reading.
+    //
+    // And note what these can and cannot see: the counter behind this bit is
+    // cleared only by the EP6 response cycle, which runs only while the radio
+    // is streaming. There is no idle poll for it. When the stream stops these
+    // simply stop arriving -- which is honest, and is why nothing downstream
+    // may read their absence as "clean".
+    //
+    // WHAT THE BIT ACTUALLY MEANS, corrected on aethersdr/AetherSDR#5354 after
+    // this row was first written: DATA[24] is `(&clip_cnt)`, the reduction AND
+    // of a TWO-BIT SATURATING counter cleared on each `resp_rqst`. It is true
+    // only when that counter saturated, so it means "at least THREE clip
+    // events in one reporting interval" -- not "a sample railed". A window
+    // with the bit clear is therefore NOT a window with no clipping, and this
+    // rate must not be labelled or read as one. Hl2AutoGainPolicy.h carries
+    // the full consequence.
+    int adcSamples = 0;
+    int adcOverloadSamples = 0;
+    int adcWindowMs = 0;
+
     // Merge a decoded response in, leaving untouched fields alone.
     //
     // IGNORES ACK responses apart from their PTT bit, and that is load-bearing
@@ -771,6 +812,29 @@ inline constexpr int kMinForwardCountsForSwr = 320;
 // use it to correct a reading — it is a lower bound on what the gate has to
 // tolerate, and it is used for exactly that.
 inline constexpr double kMeasuredReverseFloorCounts = 3.41;
+
+// The clip rate for a window, as a whole percent, or NOTHING when the window
+// did not carry enough observations to have a rate at all.
+//
+// The nullopt is the point. "Three of three responses carried the overload bit"
+// is not 100 % clipping, it is three responses; reporting it as 100 would turn
+// a thin window into the most alarming reading the row can produce. Returning
+// nothing renders as "not reported", which is the same distinction the health
+// snapshot already makes between "the radio never told us" and "the value is
+// zero" -- and the same one that stops a control loop releasing gain into a
+// stalled stream.
+[[nodiscard]] constexpr std::optional<int> adcClipRatePercent(
+    int samples, int overloadSamples, int minSamples = 4) noexcept
+{
+    if (samples <= 0 || samples < minSamples) {
+        return std::nullopt;
+    }
+    const int over = overloadSamples < 0 ? 0
+                   : (overloadSamples > samples ? samples : overloadSamples);
+    // Rounded to nearest, in integer arithmetic: a rate quoted to two
+    // significant figures would be precision this observation does not have.
+    return (over * 200 + samples) / (samples * 2);
+}
 
 // Standing-wave ratio from raw forward/reverse counts.
 //
@@ -984,7 +1048,9 @@ inline constexpr int         kEp4FullScale        = 2048;
 //
 // RESTORED IN REBASE: this constant was authored on this branch and carried by
 // the EP4 commits that #5650 superseded; the squash that landed #5650 did not
-// keep it, and Hl2Backend's wideband converter view is its consumer here.
+// keep it. Two things read it now: Hl2Backend's wideband converter view, and
+// Hl2BandscopeHeadroom.h's gatedPeakBiasDbForPeriod(), whose full-rate
+// reference IS this number.
 inline constexpr double      kAdcSampleRateHz     = 76.8e6;
 // `ep4_seq_no` is declared `logic [19:0]`: byte 4 of the header is a hardwired
 // 8'h00 and byte 5 masks to a nibble. It wraps at 1,048,576 — about 46 minutes
@@ -1150,6 +1216,24 @@ struct Ep4Stats {
     int    samples        = 0;
     int    peakAbs        = 0;    // 0..kEp4FullScale
     double sumSquares     = 0.0;  // of raw codes, so rms shares peak's scale
+    // Signed sum of the same raw codes, so the MEAN can be removed from the
+    // RMS. Without it there is no way to tell a converter DC offset from
+    // signal, and the offset is carried at full weight: for a record with mean
+    // m and standard deviation s, an about-zero RMS reports sqrt(m^2 + s^2)
+    // rather than s. That inflates rms, and since adcCrestDb is peak - rms it
+    // DEFLATES the crest — pushing a broadband noise floor (11-12 dB over 2048
+    // samples) toward the ~3 dB a discrete carrier gives, which is the one
+    // distinction this statistic exists to make. It cost a diagnosis: a
+    // terminated port read 3.71 dB and was called a near-sinusoidal carrier,
+    // when a DC pedestal fits that number exactly as well. (#5802.)
+    //
+    // Signed and not magnitude: a magnitude sum is not the mean and would
+    // remove nothing. Plain `double` for the same reason sumSquares is one —
+    // 2048 codes of at most 2048 accumulate to ~4.2e6 (their SQUARES to
+    // ~8.6e9), and both are exact integers far inside a double's exact-integer
+    // range, so the variance difference below cannot cancel catastrophically
+    // at any level a 12-bit converter can produce.
+    double sum            = 0.0;
     // Codes at either converter rail, counted with the gateware's OWN
     // predicate rather than a symmetric one: ad9866.v fires rxclipp at
     // 12'b011111111111 (+2047) and rxclipn at 12'b100000000000 (-2048). A
@@ -1161,10 +1245,48 @@ struct Ep4Stats {
     // nothing else — not with an S-meter, not with the WDSP ADC peak, and not
     // with any antenna-referred level. Nothing has compared it against a real
     // band; do not present it as an absolute.
+    //
+    // peakDbfs() is ABSOLUTE and rmsDbfs() is AC-COUPLED: the peak is the
+    // largest |code| seen, the RMS is the deviation about this record's own
+    // mean. Their difference is therefore a crest measured from the DC
+    // pedestal to the excursion, which is what makes a rail-ward peak legible
+    // while still refusing to let a converter offset masquerade as signal.
+    // MIXED REFERENCE ON PURPOSE, and RULED: the maintainer settled #5802
+    // question 1 on 2026-09-20 -- peakAbs STAYS absolute. So this pairing is a
+    // decision, not an omission, and nothing here should be read as having
+    // pre-empted it. A signed pedestal row to sit beside these is tracked at
+    // #5856, which is where a reader should go next rather than to #5802 --
+    // including for the bench evidence that the removed mean tracks analog
+    // gain, so it is not a converter offset on at least one radio.
     [[nodiscard]] double peakDbfs() const noexcept;
     [[nodiscard]] double rmsDbfs()  const noexcept;
+    // Peak-to-RMS in dB, or nullopt when the record cannot support one.
+    //
+    // kEp4FloorDbfs is a SENTINEL and not a level: it exists to say "below the
+    // smallest code this converter has" WITHOUT inventing one. Subtracting it
+    // invents one anyway, and the subtraction is the whole of adcCrestDb.
+    //
+    // Before the RMS became AC-referred the case could not arise: an
+    // about-zero RMS is at the floor only when the peak is too, and the
+    // difference was a harmless zero. Now a record can have a large, real,
+    // absolute peak and NO representable AC deviation at all — a DC pedestal
+    // with a wobble under half a code — and peak - floor would publish sixty
+    // to ninety dB of "crest" for a record whose crest is undefined. That is
+    // the reading a script thresholding "crest > 10 dB means broadband noise"
+    // gets exactly backwards.
+    //
+    // So the predicate is that BOTH terms are real levels, which also covers
+    // an RMS computed below the floor: a deviation smaller than half a code is
+    // quantisation residue, not a measurement to take a ratio against. The
+    // peak and RMS rows still report what they each computed; only the derived
+    // ratio declines to exist. (#5802, and the floor nit on PR #5832.)
+    [[nodiscard]] std::optional<double> crestDb() const noexcept;
     // Fold another packet's statistics in. Peak takes the max, everything else
     // sums — which is what makes a block's stats the same shape as a packet's.
+    // `sum` sums for exactly the reason sumSquares does: both are linear in
+    // the record, so the mean and variance of a merged block are the mean and
+    // variance of the 2048-sample concatenation and not an average of four
+    // packet-sized answers.
     void merge(const Ep4Stats& other) noexcept;
 };
 

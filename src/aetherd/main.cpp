@@ -1,4 +1,6 @@
 #include "DiscoveryStartup.h"
+#include "CredentialStartup.h"
+#include "GrantAdminClient.h"
 #include "core/control/LocalControlServer.h"
 #include "core/control/RadioResourceAdapter.h"
 #include "core/control/RadioCatalogue.h"
@@ -6,13 +8,35 @@
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QLockFile>
 #include <QTextStream>
 
 #include <utility>
 
 int main(int argc, char* argv[])
 {
+#ifdef Q_OS_MAC
+    // QtKeychain's Apple backend delivers completions on the native main
+    // dispatch queue. Qt's default QCoreApplication UNIX dispatcher does not
+    // service that queue. Select CoreFoundation only for credential runs;
+    // ordinary observe/control runs and worker threads keep their defaults.
+    const bool credentialDispatcher = AetherSDR::aetherd::credentialDispatcherRequested(argc, argv);
+    const bool hadDispatcherSetting = qEnvironmentVariableIsSet("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
+    const QByteArray dispatcherSetting = qgetenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
+    if (credentialDispatcher) {
+        qputenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION", "1");
+    }
+#endif
     QCoreApplication app(argc, argv);
+#ifdef Q_OS_MAC
+    if (credentialDispatcher) {
+        if (hadDispatcherSetting) {
+            qputenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION", dispatcherSetting);
+        } else {
+            qunsetenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
+        }
+    }
+#endif
     QCoreApplication::setApplicationName(QStringLiteral("aetherd"));
     QCoreApplication::setApplicationVersion(QStringLiteral(AETHERSDR_VERSION));
 
@@ -38,7 +62,35 @@ int main(int argc, char* argv[])
         QStringLiteral("allow-local-control"),
         QStringLiteral("Grant current-user local clients non-TX connection and receive control."));
     parser.addOption(controlOption);
+    const QCommandLineOption transmitOption(QStringLiteral("allow-local-tx"),
+        QStringLiteral("Enable explicit credential-bound TX grants; never arms a client at startup."));
+    parser.addOption(transmitOption);
+    AetherSDR::aetherd::addCredentialOptions(parser);
+    AetherSDR::aetherd::addGrantAdminOptions(parser);
     parser.process(app);
+    if (parser.isSet(QStringLiteral("tx-admin"))) {
+        return AetherSDR::aetherd::runGrantAdmin(parser);
+    }
+    for (const auto& option : {QStringLiteral("admin-credential"), QStringLiteral("tx-client"),
+                              QStringLiteral("tx-grant"), QStringLiteral("radio-generation"),
+                              QStringLiteral("tx-operation-ms"), QStringLiteral("tx-lifetime-ms"),
+                              QStringLiteral("tx-keepalive-ms")}) {
+        if (parser.isSet(option)) {
+            QTextStream(stderr) << "aetherd: grant administration options require --tx-admin\n";
+            return 1;
+        }
+    }
+
+    const auto credentialOptions = AetherSDR::aetherd::credentialOptions(parser);
+    if (!credentialOptions.error.isEmpty()) {
+        QTextStream(stderr) << "aetherd: " << credentialOptions.error << '\n';
+        return 1;
+    }
+    if (parser.isSet(transmitOption) && (credentialOptions.authorityId.isEmpty()
+        || credentialOptions.operation || !parser.isSet(controlOption))) {
+        QTextStream(stderr) << "aetherd: local TX requires a serving credential authority and local control\n";
+        return 1;
+    }
 
     AetherSDR::control::LocalControlServer server(
         nullptr, {}, nullptr, parser.isSet(controlOption));
@@ -47,6 +99,26 @@ int main(int argc, char* argv[])
         QTextStream(stderr) << "aetherd: cannot listen on local socket '"
                             << parser.value(socketOption) << "'\n";
         return 1;
+    }
+    std::unique_ptr<QLockFile> authorityReservation;
+    AetherSDR::control::ControlCredentials credentials;
+    if (!credentialOptions.authorityId.isEmpty()) {
+        // The authority reservation is independent of --socket: using another
+        // endpoint cannot race provisioning or keep an old verifier alive.
+        authorityReservation = AetherSDR::control::LocalControlServer::reserveCredentialAuthority(
+            credentialOptions.authorityId);
+        if (!authorityReservation) {
+            QTextStream(stderr) << "aetherd: credential authority is unavailable or already in use\n";
+            return 1;
+        }
+        AetherSDR::control::ControlCredentialVault vault(credentialOptions.authorityId);
+        if (credentialOptions.operation) {
+            return AetherSDR::aetherd::provisionCredentials(credentialOptions, vault);
+        }
+        if (!AetherSDR::aetherd::loadCredentials(vault, credentials) || !server.bindCredentials(&credentials)) {
+            QTextStream(stderr) << "aetherd: cannot load the requested OS-vault authority; service remains closed\n";
+            return 1;
+        }
     }
     // Claim the endpoint before settings or model construction: even the
     // AppSettings singleton constructor can create directories/migrate paths.
@@ -62,6 +134,7 @@ int main(int argc, char* argv[])
     std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;
     std::unique_ptr<AetherSDR::control::SliceFrequencyTarget> frequencyTarget;
     std::unique_ptr<AetherSDR::control::ReceiveControlTarget> receiveTarget;
+    std::unique_ptr<AetherSDR::control::TransmitControlTarget> transmitTarget;
     if (parser.isSet(controlOption)) {
         connectionTarget = AetherSDR::control::makeModelRadioConnectionTarget(&radioSession.radioModel());
         if (!connectionTarget || !server.bindConnectionTarget(connectionTarget.get())) {
@@ -78,6 +151,13 @@ int main(int argc, char* argv[])
             &radioSession.radioModel(), connectionTarget.get());
         if (!receiveTarget || !server.bindReceiveTarget(receiveTarget.get())) {
             QTextStream(stderr) << "aetherd: cannot initialize receive control\n";
+            return 1;
+        }
+    }
+    if (parser.isSet(transmitOption)) {
+        transmitTarget = AetherSDR::control::makeModelTransmitControlTarget(&radioSession.radioModel());
+        if (!transmitTarget || !server.bindTransmitTarget(transmitTarget.get())) {
+            QTextStream(stderr) << "aetherd: cannot initialize transmit control\n";
             return 1;
         }
     }

@@ -5,9 +5,11 @@
 #include "TestSettingsProfile.h"
 
 #include "core/AppSettings.h"
+#include "core/SettingsBootstrap.h"
 #include "gui/CopyAssistSettingsDialog.h"
 #include "gui/FramelessWindowTitleBar.h"
 
+#include "asr/AsrCrashMarker.h"    // fault-record decision (header-inline, whisper-free)
 #include "asr/WhisperAsrBackend.h" // asrLanguageOrDefault (header-inline, whisper-free)
 #include "gui/CopyAssistSettings.h" // foldLegacyKeys + value/setValue
 
@@ -16,10 +18,12 @@
 #include <QJsonObject>
 #include <QComboBox>
 #include <QLabel>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
 
 #include <cstdio>
+#include <optional>
 
 using namespace AetherSDR;
 
@@ -306,6 +310,272 @@ int main(int argc, char** argv)
         }
 
         dlg.setBoundaryOverlapMs(0); // restore the default (off)
+    }
+
+    // ---- #5190: surviving an uncatchable ASR fault ---------------------------
+    // The decision is pure, so every branch is pinned here without staging a
+    // crash. All attempts below are CONSTRUCTED: they exercise the decision
+    // table, and claim nothing about which faults occur in the field.
+    {
+        const QString ver = QStringLiteral("26.9.3+abc12345");
+        AsrAttempt gpuLoad;
+        gpuLoad.stage = QString::fromLatin1(kAsrStageLoad);
+        gpuLoad.device = 1;
+        gpuLoad.deviceName = QStringLiteral("GPU One");
+        gpuLoad.tier = QStringLiteral("large-v3-turbo");
+        gpuLoad.vramFreeMb = 1383;
+        gpuLoad.vramTotalMb = 8151;
+        gpuLoad.appVersion = ver;
+        gpuLoad.startedUtc = QStringLiteral("2026-09-17T17:40:42Z");
+
+        expect(asrFaultAction(AsrAttempt(), ver, std::nullopt) == AsrFaultAction::None,
+               "no fault record -> run normally");
+        expect(asrFaultAction(gpuLoad, ver, std::nullopt) == AsrFaultAction::AwaitDevices,
+               "GPU load fault before discovery has run -> decided later, not guessed");
+        expect(asrFaultAction(gpuLoad, ver, QStringLiteral("GPU One")) == AsrFaultAction::RetireGpu,
+               "GPU load fault, same device at that index -> retire that GPU");
+        expect(asrFaultAction(gpuLoad, ver, QStringLiteral("Other GPU")) == AsrFaultAction::Forget,
+               "GPU load fault, different hardware at that index -> forget it");
+        expect(asrFaultAction(gpuLoad, ver, QString()) == AsrFaultAction::Forget,
+               "GPU load fault, no device at that index any more -> forget it");
+        expect(asrFaultAction(gpuLoad, QStringLiteral("26.9.4+def67890"), QStringLiteral("GPU One"))
+                   == AsrFaultAction::Forget,
+               "fault recorded by another app version -> forget it (new whisper/ggml build)");
+
+        AsrAttempt cpuLoad = gpuLoad;
+        cpuLoad.device = -1;
+        cpuLoad.deviceName.clear();
+        expect(asrFaultAction(cpuLoad, ver, std::nullopt) == AsrFaultAction::DisableAsr,
+               "load fault already on CPU -> local engine off (forcing CPU cannot help)");
+
+        // #5190 review (NF0T): load() retries on CPU inside the same call after a
+        // CAUGHT GPU failure. A death in that retry is a CPU death; the marker the
+        // fallback hook persists must classify like one.
+        {
+            const AsrAttempt fellBack = asrAttemptOnCpuFallback(gpuLoad);
+            expect(fellBack.device == -1 && fellBack.deviceName.isEmpty()
+                       && fellBack.vramFreeMb == 0 && fellBack.vramTotalMb == 0,
+                   "CPU fallback re-aims a GPU load marker at the CPU");
+            expect(fellBack.stage == gpuLoad.stage && fellBack.tier == gpuLoad.tier
+                       && fellBack.appVersion == gpuLoad.appVersion
+                       && fellBack.startedUtc == gpuLoad.startedUtc,
+                   "CPU fallback keeps what the attempt was (tier, version, start)");
+            expect(asrFaultAction(fellBack, ver, std::nullopt) == AsrFaultAction::DisableAsr
+                       && asrFaultAction(fellBack, ver, QStringLiteral("GPU One"))
+                           == AsrFaultAction::DisableAsr,
+                   "caught GPU failure then a death in the CPU retry -> local engine off, "
+                   "not RetireGpu");
+            expect(asrMarkerJsonOnCpuFallback(QString()).isEmpty()
+                       && asrMarkerJsonOnCpuFallback(QStringLiteral("not json")).isEmpty(),
+                   "CPU fallback with nothing armed leaves the field empty");
+        }
+
+        AsrAttempt discovery;
+        discovery.stage = QString::fromLatin1(kAsrStageDiscovery);
+        discovery.appVersion = ver;
+        expect(asrFaultAction(discovery, ver, std::nullopt) == AsrFaultAction::DisableAsr,
+               "discovery fault -> local engine off, never 'force CPU'");
+        expect(asrFaultAction(discovery, QStringLiteral("other"), std::nullopt)
+                   == AsrFaultAction::Forget,
+               "discovery fault from another version -> forget it");
+
+        // Round trip, and the rule that a damaged field never stands anything down.
+        const AsrAttempt back = asrAttemptFromJson(asrAttemptToJson(gpuLoad));
+        expect(back.isValid() && back.stage == gpuLoad.stage && back.device == 1
+                   && back.deviceName == gpuLoad.deviceName && back.tier == gpuLoad.tier
+                   && back.vramFreeMb == 1383 && back.vramTotalMb == 8151
+                   && back.appVersion == ver && back.startedUtc == gpuLoad.startedUtc,
+               "attempt survives a JSON round trip field for field");
+        expect(!asrAttemptFromJson(QStringLiteral("{not json")).isValid()
+                   && !asrAttemptFromJson(QStringLiteral("[]")).isValid()
+                   && !asrAttemptFromJson(QStringLiteral("{\"stage\":\"decode\"}")).isValid()
+                   && !asrAttemptFromJson(QString()).isValid(),
+               "unparseable / unknown-stage / empty marker reads as no attempt");
+        expect(asrAttemptToJson(AsrAttempt()).isEmpty(),
+               "an invalid attempt serialises to nothing (never arms an empty marker)");
+
+        // The record ACCUMULATES. Without the merge, two faulting GPUs hand the
+        // decode back and forth forever: launch 3 would retire only the newest
+        // one and walk straight back onto the first.
+        {
+            AsrAttempt gpu0 = gpuLoad;
+            gpu0.device = 0;
+            gpu0.deviceName = QStringLiteral("GPU Zero");
+            const AsrAttempt afterFirst = asrMergeFault(AsrAttempt(), gpu0);
+            expect(afterFirst.device == 0 && afterFirst.retired.isEmpty(),
+                   "first fault: the record names that GPU, nothing carried yet");
+            const AsrAttempt afterSecond = asrMergeFault(afterFirst, gpuLoad); // GPU One dies next
+            expect(afterSecond.device == 1 && afterSecond.retired.size() == 1
+                       && afterSecond.retired[0].device == 0
+                       && afterSecond.retired[0].name == QStringLiteral("GPU Zero"),
+                   "second fault on another GPU: the first GPU stays retired");
+            const AsrAttempt back2 = asrAttemptFromJson(asrAttemptToJson(afterSecond));
+            expect(back2.retired.size() == 1 && back2.retired[0].device == 0
+                       && back2.retired[0].name == QStringLiteral("GPU Zero"),
+                   "the retired set survives the JSON round trip");
+            const AsrAttempt afterCpu = asrMergeFault(afterSecond, cpuLoad);
+            expect(afterCpu.device == -1 && afterCpu.retired.size() == 2
+                       && asrFaultAction(afterCpu, ver, std::nullopt) == AsrFaultAction::DisableAsr,
+                   "third fault on CPU: both GPUs carried, and the ladder ends at engine-off");
+            const AsrAttempt again = asrMergeFault(afterSecond, gpuLoad);
+            expect(again.retired.size() == 1,
+                   "the same GPU faulting again is not carried as its own predecessor");
+            AsrAttempt otherVersion = gpu0;
+            otherVersion.appVersion = QStringLiteral("26.9.4+def67890");
+            expect(asrMergeFault(afterSecond, otherVersion).retired.isEmpty(),
+                   "a fault under another app version starts a clean slate");
+            expect(!asrMergeFault(afterSecond, AsrAttempt()).isValid(),
+                   "merging nothing yields no record");
+        }
+
+        // Marker bookkeeping — the two rules a read of the controller got wrong
+        // before they were pinned here.
+        {
+            AsrMarkerState st;
+            expect(st.armDiscovery() && st.discoveryArmed(), "discovery arms its own slot");
+            expect(st.armLoad(), "a load arms while discovery is still running (timed-out probe)");
+            const bool loadCleared = st.loadSettled();
+            expect(loadCleared && st.discoveryArmed(),
+                   "the load settling clears ITS slot and leaves discovery armed");
+            expect(st.discoveryFinished() && !st.discoveryArmed(),
+                   "discovery finishing clears its slot");
+            expect(!st.discoveryFinished(), "a second finish has nothing to clear");
+
+            AsrMarkerState two;
+            two.armLoad();
+            two.armLoad(); // tier changed mid-load: a second load queues behind the first
+            expect(!two.loadSettled(), "first of two queued loads settling does NOT clear");
+            expect(two.loadSettled(), "the last outstanding load clears");
+            expect(!two.loadSettled(), "a stray settle (remote/sherpa ready) clears nothing");
+
+            AsrMarkerState torn;
+            torn.armLoad();
+            torn.armLoad();
+            expect(torn.engineTornDown() && torn.loadsInFlight() == 0,
+                   "engine teardown clears once and forgets the queued loads");
+            expect(!torn.engineTornDown(), "teardown with nothing armed writes nothing");
+        }
+
+        // Both fields live inside the ONE CopyAssist document (Principle V) and
+        // persist through the same accessor the controller uses.
+        CopyAssistSettings::setValue(QStringLiteral("AsrInFlight"), asrAttemptToJson(gpuLoad));
+        const QJsonObject doc =
+            QJsonDocument::fromJson(AppSettings::instance()
+                                        .value(CopyAssistSettings::rootKey())
+                                        .toString()
+                                        .toUtf8())
+                .object();
+        expect(doc.contains(QStringLiteral("AsrInFlight"))
+                   && !AppSettings::instance().contains(QStringLiteral("AsrInFlight")),
+               "the marker is a field of the CopyAssist document, not a flat key");
+        expect(asrAttemptFromJson(
+                   CopyAssistSettings::value(QStringLiteral("AsrInFlight")).toString())
+                       .deviceName
+                   == QStringLiteral("GPU One"),
+               "the marker reads back through CopyAssistSettings");
+        // The transform the controller's CPU-fallback hook installs, applied by
+        // updateValue() to a GPU load marker in the real store (#5190 review).
+        // This pins the store write, not the call sites inside load() — those
+        // need a GPU load to fail and are covered on the bench.
+        {
+            CopyAssistSettings::setValue(QStringLiteral("AsrCpuFallbackProbe"), QStringLiteral("kept"));
+            QString seenByUpdate;
+            CopyAssistSettings::updateValue(QStringLiteral("AsrInFlight"),
+                                            [&seenByUpdate](const QString& current) {
+                                                seenByUpdate = current;
+                                                return asrMarkerJsonOnCpuFallback(current);
+                                            });
+            expect(asrAttemptFromJson(seenByUpdate).device == 1,
+                   "updateValue hands the update the field's current value");
+            const AsrAttempt stored = asrAttemptFromJson(
+                CopyAssistSettings::value(QStringLiteral("AsrInFlight")).toString());
+            expect(stored.isValid() && stored.device == -1 && stored.tier == gpuLoad.tier,
+                   "the persisted GPU marker is re-aimed at the CPU");
+            expect(asrFaultAction(stored, ver, QStringLiteral("GPU One")) == AsrFaultAction::DisableAsr,
+                   "a death after the CPU fallback reads back as DisableAsr, not RetireGpu");
+            expect(CopyAssistSettings::value(QStringLiteral("AsrCpuFallbackProbe")).toString()
+                       == QStringLiteral("kept"),
+                   "updateValue leaves the document's other fields in place");
+        }
+        CopyAssistSettings::setValue(QStringLiteral("AsrInFlight"), QString());
+        expect(!asrAttemptFromJson(
+                    CopyAssistSettings::value(QStringLiteral("AsrInFlight")).toString())
+                    .isValid(),
+               "a cleared marker reads as no attempt");
+
+        // Adopt through the production store seam, and inspect a separate
+        // read-only database connection rather than the in-memory settings.
+        {
+            AsrAttempt older = gpuLoad;
+            older.device = 0;
+            older.deviceName = QStringLiteral("GPU Zero");
+            CopyAssistSettings::setValue(QStringLiteral("AsrLastFault"), asrAttemptToJson(older));
+            CopyAssistSettings::setValue(QStringLiteral("AsrInFlight"), asrAttemptToJson(gpuLoad));
+            CopyAssistSettings::setValue(QStringLiteral("AsrInFlightDiscovery"), asrAttemptToJson(discovery));
+            const auto diskDocument = [] {
+                return QJsonDocument::fromJson(
+                    SettingsBootstrap::readValue(CopyAssistSettings::rootKey()).toUtf8()).object();
+            };
+            const QJsonObject before = diskDocument();
+            expect(!before.value(QStringLiteral("AsrInFlight")).toString().isEmpty(),
+                   "the recovery input is durable before adoption");
+            const AsrAttempt adopted = CopyAssistSettings::adoptSurvivingFault();
+            const QJsonObject after = diskDocument();
+            const AsrAttempt persisted = asrAttemptFromJson(
+                after.value(QStringLiteral("AsrLastFault")).toString());
+            expect(adopted.device == 1 && persisted.device == 1
+                       && persisted.retired.size() == 1 && persisted.retired[0].device == 0,
+                   "adoption durably merges the load fault with earlier retired GPUs");
+            expect(after.value(QStringLiteral("AsrInFlight")).toString().isEmpty()
+                       && after.value(QStringLiteral("AsrInFlightDiscovery")).toString().isEmpty(),
+                   "the same adoption consumes both marker slots");
+            expect(after.value(QStringLiteral("AsrCpuFallbackProbe"))
+                       == before.value(QStringLiteral("AsrCpuFallbackProbe")),
+                   "adoption preserves unrelated CopyAssist fields");
+            expect(!CopyAssistSettings::adoptSurvivingFault().isValid()
+                       && diskDocument() == after,
+                   "repeated adoption does not erase or change the adopted fault");
+
+            // A save refused during reset must leave the OLD durable document
+            // intact, with its marker available for a subsequent process.
+            CopyAssistSettings::setValue(QStringLiteral("AsrInFlightDiscovery"), asrAttemptToJson(discovery));
+            const QJsonObject beforeRefusal = diskDocument();
+            app.setProperty("AetherSettingsResetInProgress", true);
+            CopyAssistSettings::adoptSurvivingFault();
+            expect(diskDocument() == beforeRefusal,
+                   "a refused adoption commit retains the complete durable marker document");
+            app.setProperty("AetherSettingsResetInProgress", false);
+            AppSettings::instance().save();
+            expect(asrAttemptFromJson(diskDocument().value(QStringLiteral("AsrLastFault")).toString()).stage
+                       == QLatin1String(kAsrStageDiscovery),
+                   "retrying the pending save publishes the complete discovery fault");
+            CopyAssistSettings::setValue(QStringLiteral("AsrLastFault"), QString());
+        }
+
+        // The undo control: hidden by default, shown with the reason, one click
+        // asks for another attempt.
+        expect(!dlg.faultStandDownVisible(), "fault row is hidden when nothing is stood down");
+        auto* retry = dlg.findChild<QPushButton*>(QStringLiteral("CopyAssistFaultRetryButton"));
+        auto* reason = dlg.findChild<QLabel*>(QStringLiteral("CopyAssistFaultReason"));
+        expect(retry != nullptr && reason != nullptr, "fault row has its reason label and button");
+        if (retry != nullptr && reason != nullptr) {
+            expect(!retry->accessibleName().isEmpty(), "retry button has an accessible name");
+            dlg.setFaultStandDown(QStringLiteral("GPU One stopped AetherSDR"));
+            expect(dlg.faultStandDownVisible() && reason->text().contains(QStringLiteral("GPU One")),
+                   "setFaultStandDown shows the row with the reason");
+            QSignalSpy retrySpy(&dlg, &CopyAssistSettingsDialog::retryAfterFaultRequested);
+            retry->click();
+            expect(retrySpy.count() == 1, "clicking the button requests another attempt once");
+            expect(retry->accessibleDescription().contains(QStringLiteral("GPU One")),
+                   "the reason is on the button for a screen reader (a tooltip is never announced)");
+            dlg.setFaultRetryPending();
+            expect(dlg.faultStandDownVisible() && !retry->isEnabled()
+                       && reason->text().contains(QStringLiteral("next time")),
+                   "after a retry request the row stays, says next launch, and the button is off");
+            dlg.clearFaultStandDown();
+            expect(!dlg.faultStandDownVisible() && reason->text().isEmpty(),
+                   "clearFaultStandDown hides the row and drops the reason");
+        }
     }
 
     dlg.resize(520, 360);

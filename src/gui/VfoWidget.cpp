@@ -1973,9 +1973,10 @@ void VfoWidget::buildTabContent()
         connect(m_aetherDspBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherDspRequested);
 
-        // AetherTX launcher — opens the transmit chain window.
-        // 2 columns wide (cols 2-3 of the same row that hosts AetherRX).
+        // AetherTX launcher — opens the transmit chain window. Placed by
+        // relayoutDspGrid() beside AetherRX, always at the same width.
         m_aetherVoiceBtn = new QPushButton("AetherTX");
+        m_aetherVoiceBtn->setObjectName("aetherVoiceBtn");
         m_aetherVoiceBtn->setCheckable(false);
         m_aetherVoiceBtn->setFixedHeight(26);
         m_aetherVoiceBtn->setStyleSheet(kDspToggle);
@@ -1983,6 +1984,17 @@ void VfoWidget::buildTabContent()
         m_aetherVoiceBtn->setToolTip("Open AetherTX — the transmit chain: gate, EQ, compressor, de-esser, tube, voice processor, reverb, output");
         connect(m_aetherVoiceBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherVoiceRequested);
+
+        // The pair share one row container so they can split whatever width
+        // the toggles leave on their row -- three cells as readily as four or
+        // two -- with no empty cell at the end. Same gap between them as the
+        // grid keeps between its cells.
+        m_aetherLauncherRow = new QWidget;
+        auto* launcherBox = new QHBoxLayout(m_aetherLauncherRow);
+        launcherBox->setContentsMargins(0, 0, 0, 0);
+        launcherBox->setSpacing(m_dspGrid->spacing());
+        launcherBox->addWidget(m_aetherDspBtn, 1);
+        launcherBox->addWidget(m_aetherVoiceBtn, 1);
 
         // Radio-side DSP buttons only \u2014 client-side modules (NR2 / NR4 /
         // MNR / BNR / DFNR / RN2 / NNR) live in the spectrum overlay menu and
@@ -5354,10 +5366,8 @@ void VfoWidget::relayoutDspGrid()
                           m_mnBtn};
     for (auto* btn : all)
         m_dspGrid->removeWidget(btn);
-    if (m_aetherDspBtn)
-        m_dspGrid->removeWidget(m_aetherDspBtn);
-    if (m_aetherVoiceBtn)
-        m_dspGrid->removeWidget(m_aetherVoiceBtn);
+    if (m_aetherLauncherRow)
+        m_dspGrid->removeWidget(m_aetherLauncherRow);
 
     // Re-add only non-hidden buttons in 4-column rows
     int col = 0, row = 0;
@@ -5367,14 +5377,14 @@ void VfoWidget::relayoutDspGrid()
             if (++col >= 4) { col = 0; ++row; }
         }
     }
-    // Client-side launchers: ADSP (1 col) + AetherVoice (2 cols spanning
-    // the rightmost 2 columns) live on the same row.  If ADSP would land
-    // beyond col 1, wrap the pair to a fresh row first so AetherVoice
-    // always occupies cols 2-3.
-    if (m_aetherDspBtn && m_aetherVoiceBtn) {
-        if (col > 1) { col = 0; ++row; }
-        m_dspGrid->addWidget(m_aetherDspBtn, row, col);
-        m_dspGrid->addWidget(m_aetherVoiceBtn, row, 2, 1, 2);
+    // Client-side launchers, AetherRX then AetherTX, side by side and always
+    // the same width. Their row container spans every column the toggles
+    // left free on this row and the pair split it evenly, so a three-cell
+    // remainder is filled edge to edge rather than leaving a cell empty. A
+    // row with fewer than two cells left wraps to a fresh one first.
+    if (m_aetherLauncherRow) {
+        if (col > 2) { col = 0; ++row; }
+        m_dspGrid->addWidget(m_aetherLauncherRow, row, col, 1, 4 - col);
     }
 }
 

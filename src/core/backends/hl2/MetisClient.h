@@ -353,6 +353,20 @@ public:
     // A second request while one is outstanding is ignored: the caller already
     // has an answer coming.
     Q_INVOKABLE void requestBandscopeFrame();
+
+    // The gate's sampling period, for a consumer that has to reason about what
+    // the duty cycle costs the reading.
+    //
+    // EXPOSED BECAUSE THE BIAS DEPENDS ON IT. A peak taken over one block per
+    // period understates the full-rate peak by an amount that is a function of
+    // exactly this number (Hl2BandscopeHeadroom.h::gatedPeakBiasDbForPeriod),
+    // and a consumer that hard-coded the resulting decibels would silently stop
+    // matching the gate the moment this changed. Reading it here is what keeps
+    // the two in step.
+    [[nodiscard]] static constexpr int bandscopeSamplePeriodMs() noexcept
+    {
+        return kBandscopeSampleMs;
+    }
     // Whether the GATE is running — the operator's standing intent, which is the
     // only bandscope state that is stable long enough to report. The run byte
     // itself is up for only ~29 ms in every kBandscopeSampleMs — the 11 packets
@@ -852,6 +866,19 @@ private:
     // publishTelemetry() does not flood the GUI thread. (#4449 review)
     QElapsedTimer m_telemetryEmitClock;
     static constexpr qint64 kTelemetryMinIntervalMs = 100;
+    // ADC-overload numerator and denominator for the CURRENT publish window.
+    //
+    // They live here rather than in Hl2Telemetry because they are window
+    // accumulators owned by this loop, while Hl2Telemetry::apply() is a
+    // per-response merge that has no idea where a window begins. They are
+    // stamped onto the telemetry struct and zeroed at each emit.
+    //
+    // THIS IS THE ONLY PLACE THE RATE STILL EXISTS. Everything downstream sees
+    // the coalesced ~10 Hz emit, which samples a bit that cycles up to ~190
+    // times a second -- so a consumer that counted overloads there would be
+    // measuring its own sampling phase. See Hl2Telemetry's own comment.
+    int m_adcWindowSamples = 0;
+    int m_adcWindowOverload = 0;
 
     // ---- transport counters (see LinkCounters) ----
     LinkCounters  m_link;

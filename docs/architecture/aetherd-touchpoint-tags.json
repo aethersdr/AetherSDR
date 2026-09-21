@@ -23,6 +23,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/AetherTxProfiles.h": {
+  "tag": "universal",
+  "note": "Named-profile save/recall/import-export for the transmit DSP chain; operates on core-profile DSP state only. Mirror of core/AetherRxProfiles.h, and shares ChannelStripPresets' TX capture/apply.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AetherRxProfiles.h": {
   "tag": "universal",
   "note": "Named-profile save/recall/import-export for the receive DSP chain; operates on core-profile DSP state only, same precedent as core/ChannelStripPresets.h, whose RX capture/apply it shares.",
@@ -1130,6 +1136,18 @@
  "core/backends/IRadioBackend.h": {
   "tag": "universal",
   "note": "THE radio seam (RFC §5.5) — the canonical intent verbs, typed deltas and normalized signals every family implements. Universal by definition: the UI reaching this header is the seam working as designed, not coupling. Everything below it in core/backends/<family>/ is family-private.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/FrontEndOverload.h": {
+  "tag": "universal",
+  "note": "What the receive front end is doing, as seam vocabulary: an already-classified level, whether an automatic loop is armed, how far below the operator's setting it is holding, and the backend's own words for why. Universal because no family name and no wire concept appear above the seam \u2014 a family that cannot observe its converter never emits frontEndOverloadChanged and the indicator never appears, the same shape as autoRfGainControl() returning nullptr. Carries the ANSWER rather than the evidence: deciding when a converter is clipping 'occasionally' rather than 'most of the time' depends on what the flag means on a particular front end (on the HL2 a three-event threshold sampled at 10 Hz, not a rate), so that judgement stays in the family beside the register it reads. Exists because RFC #5535 approved an automatic RF-gain loop only on the condition that both the clipping and the regulator's own action are visible.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/AutoRfGainControl.h": {
+  "tag": "universal",
+  "note": "A backend's own automatic receive-gain control, as seam vocabulary — the switch, the floor bound, and the choice of law. Universal because no family name appears above the seam: a family that has such a control returns one from IRadioBackend::autoRfGainControl(), a family that does not returns nullptr and never learns the concept exists. Carries no wire concept at all, deliberately; the moment it carried one it would be describing a particular front end. An interface rather than a RadioCapabilities bool because that population is frozen shrink-only (#5262 M2) and because a bool fissions — the first GUI to draw the control needs the bound and the law set too.",
   "split": "",
   "confidence": "high"
  },

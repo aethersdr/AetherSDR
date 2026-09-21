@@ -890,6 +890,12 @@ void RadioModel::setupBackend(const QString& family)
                    "was unavailable when AetherSDR was compiled."));
             return;
         }
+        connect(m_backend.get(), &IRadioBackend::independentTxStopped, this,
+                [this, generation](const TxStopEvidence& evidence) {
+            if (generation == m_backendReceiverGeneration && !m_txSessionClosing) {
+                acknowledgeIndependentTxStop(evidence);
+            }
+        });
         // Hand the backend the offline health source this model owns, if the
         // family declared one. A BORROW, not a transfer: the source must
         // outlive every backend, because its job is answering when there is no
@@ -920,6 +926,7 @@ void RadioModel::setupBackend(const QString& family)
                 sendSliceCommand(nullptr, cmd);   // guard looks up the slice from cmd
             });
             flex->setModelProvider([this]{ return m_model; });
+            flex->setIndependentTxSequenceProvider([this] { return m_seqCounter.fetch_add(1); });
             m_connection = flex->connection();   // non-owning; the backend owns it
             m_panStream  = flex->panStream();    // non-owning; the backend owns it
             m_flexBackend = flex;                // transitional alias (2.3)
@@ -1285,6 +1292,20 @@ void RadioModel::setupBackend(const QString& family)
     // dropped on the floor — the HL2 S-meter was correct for a while before
     // anyone noticed it never reached the UI.
     //
+    // Straight through, and deliberately not stored beyond the last value: the
+    // indicator is a live readout of what the radio is doing NOW, and a stale
+    // copy surviving a disconnect would show a reassuring green for a radio
+    // that is no longer there. resetFrontEndOverload() below clears it.
+    connect(m_backend.get(), &IRadioBackend::frontEndOverloadChanged, this,
+            [this](const AetherSDR::FrontEndOverload& s) {
+        m_frontEndOverload = s;
+        emit frontEndOverloadChanged(s);
+    });
+    // Nothing cached: the control itself answers isArmed() and
+    // lastArmRefusalReason(), and a view that arrives late asks it directly.
+    connect(m_backend.get(), &IRadioBackend::autoRfGainArmSettled,
+            this, &RadioModel::autoRfGainArmSettled);
+
     // meterId is "SOURCE:NAME" (e.g. "TX:FWDPWR"), matching MeterDef's own
     // source/name pair rather than inventing a second naming scheme.
     connect(m_backend.get(), &IRadioBackend::meterUpdate, this,
@@ -1940,6 +1961,13 @@ void RadioModel::teardownBackend()
     }
     expirePendingCallbacks(QStringLiteral("the radio connection was replaced"));
     m_sliceLifecycleCommandSinkForTest = {};
+    // Back to "no reading" rather than whatever the last radio said. A lamp
+    // left showing Clean for a radio that is gone is worse than one showing
+    // nothing, because it answers a question nobody can currently ask.
+    if (m_frontEndOverload != AetherSDR::FrontEndOverload {}) {
+        m_frontEndOverload = {};
+        emit frontEndOverloadChanged(m_frontEndOverload);
+    }
     m_memoryRefreshActive = false;
     m_memoryImportFailures = 0;
     // Drop the backend and everything it owns (RadioConnection, PanadapterStream
@@ -2188,6 +2216,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateTuneAvailability);
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateTuneAvailability);
     qRegisterMetaType<PcmFrame>();
+    qRegisterMetaType<TxCoordinator::StopRequest>();
+    qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
@@ -2822,6 +2852,7 @@ RadioModel::~RadioModel()
     blockSignals(true);
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
+    m_independentTxGrants.reset(); // stop while every model member is still alive
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
             m_backend->setTune(false, m_transmitModel.tunePower(), m_txCoordinator.cleanupFence());
@@ -4427,6 +4458,20 @@ bool RadioModel::hasManualNotch() const
     return backendCapabilities().hasManualNotch;
 }
 
+AetherSDR::IAutoRfGainControl* RadioModel::autoRfGain() const
+{
+    // NOT permissive, for the same reason hasHostNoiseBlanker() is not: this
+    // can only ADD the Auto checkbox, so answering with no backend attached
+    // would show it on a family that never claims one.
+    //
+    // The backend decides the rest. This function names no family and knows
+    // nothing about what a law is.
+    if (!m_backend || !isConnected()) {
+        return nullptr;
+    }
+    return m_backend->autoRfGainControl();
+}
+
 bool RadioModel::hasHostNoiseBlanker() const
 {
     // NOT permissive, for the same reason hasManualNotch() is not: this flag
@@ -4981,8 +5026,13 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
             return true;
         }
     }
+    // Grant cancellation also arrives through the unscoped model stop route.
+    // Retain its original operation so the backend uses the qualified stop
+    // writer, not a legacy unkey that would invalidate the stop certificate.
     const TxCoordinator::Operation cleanup = tx ? TxCoordinator::Operation{}
-        : request ? m_txCoordinator.requestOperation(*request) : m_txCoordinator.cleanupFence();
+        : request ? m_txCoordinator.requestOperation(*request)
+        : m_txOperation.independent() && m_txOperation.permitsCleanup()
+            ? m_txOperation : m_txCoordinator.cleanupFence();
     if (tx) {
         // F2 (#4448): refuse keying on a backend that cannot transmit. The
         // guard is a capability test, not a family test — HL2 is TX-capable

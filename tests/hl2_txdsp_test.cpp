@@ -196,6 +196,142 @@ static double binPower(const std::vector<std::complex<float>>& iq, double hz,
     return std::abs(acc) / static_cast<double>(count);
 }
 
+// ── THE INSTRUMENT'S OWN NUMERICAL FLOOR ─────────────────────────────────
+//
+// THIS FILE HAS TWO FLOORS AND ONLY ONE OF THEM WAS EVER WRITTEN DOWN.
+// wholeCycles() above documents the first: the analysis window's LEAKAGE
+// floor, 60-75 dB at these capture lengths, and it disposes of that one by
+// truncating to a whole number of cycles so the Dirichlet term nulls exactly.
+// What is left standing after that null is the NUMERICAL floor, and in the TXA
+// build it is what EVERY figure this file prints is actually reporting.
+//
+// WHERE IT COMES FROM. binPower accumulates in double, but the samples it
+// accumulates are float. A capture at amplitude 0.5 carries a float32 rounding
+// error near 0.5 * 2^-24 per sample, uncorrelated with the probe, so it sums
+// as sqrt(N) and lands in the image bin around 0.5 * 2^-24 / sqrt(3N) -- about
+// 9e-11 for the ~35000-sample captures here, a ratio near 195 dB for ONE tone,
+// and lower than that for a capture carrying more than one. NOTHING IN THE
+// MODULATOR HAS TO BE IMPERFECT FOR THAT NUMBER TO APPEAR. It is the
+// representation, not the chain.
+//
+// MEASURED RATHER THAN ARGUED. A standalone replica of binPower() and
+// wholeCycles(), fed signals whose image bin is ZERO BY CONSTRUCTION, reports:
+//
+//   capture (image is zero by construction)   150 Hz    1 kHz    2 kHz
+//   a bare float exponential                   334.6    321.3    291.7
+//   + a DC term at 0.01                        171.4    164.8    158.6
+//   + four harmonics at -26 dB and that DC     171.3    166.9    186.9
+//   + sixteen harmonics at -14 dB, DC 0.05     191.0    171.0    176.8
+//
+// So: 290-335 dB for a numerically clean exponential, and 158-191 dB for a
+// capture carrying ANY realistic structure. The replica predicts 321.28 dB for
+// the clean 1 kHz case and the USB headline below measures 320.71, which is
+// what ties the replica to this test instead of leaving it an argument on
+// paper.
+//
+// WHAT THAT MEANS FOR THE TXA BUILD. Every TXA figure in this file bar one
+// group -- 167 to 332 dB -- sits at or above that floor, and NONE OF THOSE IS
+// A MEASUREMENT OF THE MODULATOR. Each is UNRESOLVED: the true suppression may
+// be higher or lower and this file cannot say which.
+//
+// AN EARLIER VERSION OF THIS COMMENT CALLED THEM LOWER BOUNDS. That was wrong,
+// and the error is worth keeping because it is seductive. The reasoning was
+// "the instrument's noise ADDS to the image bin, so the measured image can
+// only be larger than the real one". That is scalar thinking about a COMPLEX
+// quantity. The correlation error e is a complex vector added to the true
+// image I, and |I + e| < |I| whenever e opposes I -- which needs only
+// 0 < |e| < 2|I| and then happens for cos(theta) < -|e|/(2|I|).
+// The reported ratio then EXCEEDS the true one.
+//
+// @jensenpat demonstrated it numerically on #5810 rather than arguing it: at
+// 48 kHz, a 1 kHz tone over 34992 float samples with a tiny imaginary
+// perturbation on sample zero, the double correlation reports 316.9406 dB
+// while a 60-digit DFT of THE SAME float samples reports 316.8410 dB. The
+// instrument overstated by 0.0996 dB. A bound that a counterexample exceeds is
+// not a bound.
+//
+// So these figures are floor-limited ESTIMATES with no error bar. Giving them
+// one would need a real uncertainty analysis of the correlation, which this
+// file does not have and does not pretend to. (The exception is the bottom of a WIDE passband,
+// where a TXA skirt is still resolvable and the sweep does measure it -- 59.37
+// dB at 100 Hz on {0, 4000}. That paragraph is in the sweep's own comment.)
+//
+// The phasing build's figures (7.87 to 115.75 dB) are all well under the floor
+// and are real measurements, which is why the characterisation sweep's
+// baseline table belongs to the phasing build and is not a property of "the
+// modulator".
+//
+// AND THE SWEEP BELOW CONFIRMS IT FROM INSIDE THIS TEST. In the TXA build its
+// in-band rows do not form a curve, they alternate between the two regimes the
+// replica predicts: USB reads 174.04 dB at 500 Hz, 173.67 at 700, then 322.33
+// at 1000, 331.53 at 1500, 318.24 at 2000, then 171.98 again at 2500. A filter
+// does not do that. What separates the ~170 dB rows from the ~320 dB ones is
+// whether that tone's whole-cycle window happens to make the float samples a
+// numerically clean exponential -- the top row of the table above -- or leaves
+// structure in them. The raggedness IS the floor, showing its two faces.
+//
+// Set at the LOW end of the structured-capture range, so a figure is flagged
+// as floor-limited whenever it might be rather than only when it certainly is.
+static constexpr double kInstrumentFloorDb = 158.0;
+
+// Mark a printed figure that is at or past that floor. A reader should not
+// have to know this file's arithmetic to know which of its numbers are
+// measurements and which are the arithmetic talking to itself.
+static const char* floorMark(double suppDb)
+{
+    return suppDb >= kInstrumentFloorDb
+        ? "  [>= instrument floor: UNRESOLVED, neither bound nor measurement]"
+        : "";
+}
+
+// ── The divide guard for every opposite-sideband RATIO in this file ──────
+//
+// IT HAS TO SIT FAR BELOW THE INSTRUMENT'S FLOOR OR IT BECOMES THE
+// MEASUREMENT, and at 1e-12 it did not. Three blocks -- the USB headline, the
+// LSB headline and the mode-change case -- divided with 1e-12 while the TXA
+// build's image bin lands near 1e-17, so all three printed
+// 20*log10(0.5/1e-12) = 233.98 dB. A CONSTANT. They could not distinguish an
+// image of exactly zero from an image of 5e-13, and what they reported was the
+// value of their own guard. The DIGU low-edge block and the mode loop already
+// used 1e-30 and were correct; this is that shape, applied everywhere.
+//
+// At 1e-30 the guard is thirteen decades under the smallest image bin this
+// instrument can produce, so it perturbs no printed figure, and an image that
+// really is zero prints 20*log10(0.5/1e-30) = 574 dB -- far above even the
+// clean-exponential floor, so it reads unmistakably as "no image at all"
+// rather than as a suppression figure.
+//
+// The LEVEL-domain guards elsewhere in this file keep their own 1e-12 on
+// purpose. Those quantities are amplitudes near 0.1-1.0, where 1e-12 is
+// already 240 dB down and cannot reach the result.
+static constexpr double kSidebandEps = 1e-30;
+
+// ── What the TXA build is entitled to assert about a subject it cannot
+//    measure ─────────────────────────────────────────────────────────────
+//
+// This is a regression threshold on the computed ratio, not a measurement
+// of true suppression or an uncertainty bound. It can detect an image that
+// rises far enough above numerical error to reduce the ratio below 140 dB.
+// Passing does not prove that the image is unresolved: a resolvable 150 dB
+// ratio passes too, below the 158 dB diagnostic floor. Correlation error can
+// either increase or decrease the ratio, as documented above.
+//
+// WHERE 140 COMES FROM, and it is not from any TXA run -- a bound copied off a
+// run is a test that agrees with itself:
+//
+//   24 dB ABOVE THE INCUMBENT'S BEST MEASURED POINT ANYWHERE IN THIS FILE
+//   (115.75 dB, USB at 1500 Hz in the sweep below; its 1 kHz figure of
+//   87.15 dB is the one usually quoted and is not its ceiling). That keeps the
+//   old 100.0's policy -- "TXA's worst asserted point still beats the
+//   incumbent's best one" -- with the incumbent's real ceiling in it.
+//
+//   19 dB BELOW THE WORST STRUCTURED-CAPTURE FLOOR measured above (158.6 dB).
+//   A gate at or near the floor is not stronger, it is FLAKY: the floor moves
+//   between 158 and 334 dB with how much structure a capture happens to carry,
+//   so a line drawn through that band goes red on a capture's harmonics rather
+//   than on the modulator.
+static constexpr double kFloorLimitedSuppDb = 140.0;
+
 // ── The opposite-sideband floor this build is held to ────────────────────
 //
 // THE ONE NUMBER THE MIGRATION WAS MADE ON, so it is stated here once and
@@ -221,9 +357,14 @@ static double binPower(const std::vector<std::complex<float>>& iq, double hz,
 // is deliberately not "30 dB like the others": 255 taps cannot do 30 dB at
 // 150 Hz and never could, and a floor the incumbent cannot meet would be a
 // failing test rather than a record of why it was replaced.
+//
+// Both TXA assertions use the same computed-ratio regression threshold.
+// The reported ratios can exceed the empirical numerical floor; that does
+// not make them bounds on true suppression. See kFloorLimitedSuppDb for the
+// distinction between the 140 dB gate and the 158 dB diagnostic marker.
 #if AETHER_HL2_TX_TXA
-static constexpr double kMinSuppDb = 100.0;
-static constexpr double kMinLowEdgeSuppDb = 100.0;
+static constexpr double kMinSuppDb = kFloorLimitedSuppDb;
+static constexpr double kMinLowEdgeSuppDb = kFloorLimitedSuppDb;
 static constexpr const char* kModulator = "wdsp-txa";
 #else
 static constexpr double kMinSuppDb = 30.0;
@@ -547,12 +688,13 @@ int main(int argc, char** argv)
             auto sidebandDb = [&]() {
                 const double up = binPower(cap, +kTone, kFsOut, true);
                 const double lo = binPower(cap, -kTone, kFsOut, true);
-                return 20.0 * std::log10((lo + 1e-12) / (up + 1e-12));
+                return 20.0 * std::log10((lo + kSidebandEps) / (up + kSidebandEps));
             };
 
             run(1.0);
             const double usbDb = sidebandDb();     // + means energy on the LOWER wire bin
-            std::fprintf(stderr, "mode change: as USB %.1f dB (lower-over-upper)\n", usbDb);
+            std::fprintf(stderr, "mode change: as USB %.2f dB (lower-over-upper)%s\n",
+                         usbDb, floorMark(std::fabs(usbDb)));
             check(usbDb > 0.0,
                   "mode change: a fresh USB modulator puts energy on the LOWER wire bin");
 
@@ -561,8 +703,9 @@ int main(int argc, char** argv)
             cap.clear();
             run(1.0);
             const double lsbDb = sidebandDb();
-            std::fprintf(stderr, "mode change: after setMode(Lsb) %.1f dB "
-                                 "(lower-over-upper)\n", lsbDb);
+            std::fprintf(stderr, "mode change: after setMode(Lsb) %.2f dB "
+                                 "(lower-over-upper)%s\n",
+                         lsbDb, floorMark(std::fabs(lsbDb)));
             check(lsbDb < 0.0,
                   "mode change: setMode(Lsb) on a RUNNING modulator moves the "
                   "sideband to the UPPER wire bin");
@@ -581,9 +724,15 @@ int main(int argc, char** argv)
         if (!iq.empty()) {
             const double upper = binPower(iq, +kTone, kFsOut, true);
             const double lower = binPower(iq, -kTone, kFsOut, true);
-            const double ratioDb = 20.0 * std::log10((upper + 1e-12) / (lower + 1e-12));
-            std::fprintf(stderr, "USB: +1kHz %.6f, -1kHz %.6f, suppression %.1f dB\n",
-                         upper, lower, ratioDb);
+            const double ratioDb =
+                20.0 * std::log10((upper + kSidebandEps) / (lower + kSidebandEps));
+            // The bins print in scientific notation because an image at 1e-17
+            // and an image of exactly zero are the same six decimal places, and
+            // telling them apart is the whole point of this block. Suppression
+            // prints POSITIVE, which is what the word means and what the
+            // assertion below tests; it used to print as a negative ratio.
+            std::fprintf(stderr, "USB: +1kHz %.9e, -1kHz %.9e, suppression %.2f dB%s\n",
+                         upper, lower, -ratioDb, floorMark(-ratioDb));
             // The WIRE-FACING sign, and it is the same assertion in both
             // builds although the two modulators reach it by opposite routes:
             // the phasing modulator emits the analytic signal and CONJUGATES
@@ -603,9 +752,10 @@ int main(int argc, char** argv)
         if (!iq.empty()) {
             const double upper = binPower(iq, +kTone, kFsOut, true);
             const double lower = binPower(iq, -kTone, kFsOut, true);
-            const double ratioDb = 20.0 * std::log10((lower + 1e-12) / (upper + 1e-12));
-            std::fprintf(stderr, "LSB: +1kHz %.6f, -1kHz %.6f, suppression %.1f dB\n",
-                         upper, lower, ratioDb);
+            const double ratioDb =
+                20.0 * std::log10((lower + kSidebandEps) / (upper + kSidebandEps));
+            std::fprintf(stderr, "LSB: +1kHz %.9e, -1kHz %.9e, suppression %.2f dB%s\n",
+                         upper, lower, -ratioDb, floorMark(-ratioDb));
             check(upper > lower,
                   "LSB: wire-facing IQ puts energy on the UPPER side (conjugated)");
             check(-ratioDb > kMinSuppDb, "LSB: opposite sideband suppressed");
@@ -632,9 +782,17 @@ int main(int argc, char** argv)
     //
     // The floor differs per build on purpose -- see kMinLowEdgeSuppDb. In the
     // phasing build this is #5741's characterisation bound and records why the
-    // chain was replaced; in the TXA build it is the same 100 dB the mid-band
-    // rows are held to, which sits above the phasing modulator's BEST measured
-    // point anywhere.
+    // chain was replaced; in the TXA build it is the same computed-ratio
+    // regression threshold as the mid-band rows (kFloorLimitedSuppDb).
+    // Passing does not establish true suppression or an unresolved image.
+    //
+    // THAT SENTENCE USED TO SAY "the same 100 dB ... which sits above the
+    // phasing modulator's BEST measured point anywhere", AND IT WAS NOT TRUE
+    // ON THIS TREE. The phasing sweep below reaches 115.75 dB at 1500 Hz on
+    // {300, 2700}; its 87 dB at 1 kHz is the figure usually quoted and is not
+    // its ceiling. The claim was checked against the wrong row of the sweep
+    // this very file prints. kFloorLimitedSuppDb is 140.0 and the claim is
+    // true of it.
     {
         const double diguBand[2] = {150.0, 3000.0};
         for (const double toneHz : {150.0, 200.0, 300.0, 1000.0}) {
@@ -647,11 +805,12 @@ int main(int argc, char** argv)
             const double wanted = binPower(iq, -toneHz, kFsOut, true);
             const double image  = binPower(iq, +toneHz, kFsOut, true);
             const double suppDb =
-                20.0 * std::log10((wanted + 1e-30) / (image + 1e-30));
+                20.0 * std::log10((wanted + kSidebandEps) / (image + kSidebandEps));
             std::fprintf(stderr,
                          "%s DIGU {150,3000} tone %.0f Hz: "
-                         "wanted %.9f  image %.9e  suppression %.2f dB\n",
-                         kModulator, toneHz, wanted, image, suppDb);
+                         "wanted %.9f  image %.9e  suppression %.2f dB%s\n",
+                         kModulator, toneHz, wanted, image, suppDb,
+                         floorMark(suppDb));
             check(wanted > image,
                   "DIGU low edge: the sideband is on the expected wire bin");
             check(suppDb > kMinLowEdgeSuppDb,
@@ -710,11 +869,12 @@ int main(int argc, char** argv)
             const double wanted = c.wireUpper ? upper : lower;
             const double other  = c.wireUpper ? lower : upper;
             const double suppDb =
-                20.0 * std::log10((wanted + 1e-30) / (other + 1e-30));
+                20.0 * std::log10((wanted + kSidebandEps) / (other + kSidebandEps));
             std::fprintf(stderr,
-                         "%-4s (passband %.0f..%.0f): +1kHz %.9f, -1kHz %.9f, "
-                         "suppression %.2f dB\n",
-                         c.name, c.band[0], c.band[1], upper, lower, suppDb);
+                         "%-4s (passband %.0f..%.0f): +1kHz %.9e, -1kHz %.9e, "
+                         "suppression %.2f dB%s\n",
+                         c.name, c.band[0], c.band[1], upper, lower, suppDb,
+                         floorMark(suppDb));
             check(wanted > other, "sideband is correct for this mode");
             check(suppDb > kMinSuppDb, "opposite sideband suppressed");
         }
@@ -958,6 +1118,33 @@ int main(int argc, char** argv)
     // why a single "worst point in the sweep" assertion would have been
     // decoration.
     //
+    // WHOSE CHARACTERISATION THIS IS, AND WHOSE IT IS NOT. Every baseline
+    // figure in this comment and every bound in the table below is the PHASING
+    // modulator's. Those are real measurements: 7.87 to 115.75 dB, all of it
+    // far under the instrument's numerical floor (kInstrumentFloorDb).
+    //
+    // IN THE TXA BUILD THIS SWEEP CHARACTERISES ALMOST NOTHING, AND THE
+    // EXCEPTION IS THE INTERESTING PART. With the settle corrected, every row
+    // of the five passbands whose low edge is 100 Hz or above prints a figure
+    // at or above the numerical floor -- flagged as such in the table -- so
+    // the shape of the curve THERE is this file's double arithmetic and not
+    // WDSP's filter. Those rows are UNRESOLVED rather than a curve -- not
+    // lower bounds: the correlation error is complex and can oppose the image,
+    // so a floor-limited ratio can read high as easily as low.
+    //
+    // The exception is the 0 Hz low edge, where a TXA skirt is still
+    // resolvable and this sweep measures it: on {0, 4000} the 100 Hz row reads
+    // 59.37 dB on a wanted bin of 4.995e-01 and an image of 5.372e-04 -- real
+    // numbers, four decades clear of the noise -- and the 150 Hz row reads
+    // 142.26 dB. Nothing else in this file measures that. It is the one place
+    // the TXA rows below are a characterisation and not a bound, and it is
+    // exactly where an operator who widens the low edge all the way would
+    // live.
+    //
+    // Elsewhere the TXA sweep checks the computed ratio against a regression
+    // threshold. floorMark() separately flags ratios at the empirical
+    // numerical floor; neither the gate nor the marker gives an error bound.
+    //
     // NOT MEASURED HERE: nothing in this block touches a radio. No transmitter
     // is keyed, no simulator runs, no network socket opens. These are the
     // modulator's own emitted IQ read directly in wire order, which is a
@@ -966,8 +1153,60 @@ int main(int argc, char** argv)
     // receiver, because it cannot see anything the PA or the wire does.
     {
         constexpr double kSweepSeconds   = 0.75;
-        constexpr std::size_t kSettle    = 4096;   // IQ samples dropped for the FIR
         constexpr double kSettledFromHz  = 500.0;
+
+        // ── THE SETTLE IS kSettleSamples, THE SAME ONE THE ASSERTED BLOCKS
+        //    USE, and until this change it was not.
+        //
+        // This block declared its own local `kSettle = 4096`. kSettleSamples'
+        // comment, two hundred lines up, already said why that is wrong -- the
+        // census walks 0, 0, 7.8e-14, 2.2e-04, 4.3e-02 and only settles at
+        // block 5, so "a 4096-sample skip lands inside the ramp and the
+        // residual amplitude modulation held the image bin at 4.4e-05, an
+        // 81 dB figure that is the ENVELOPE, not the filter" -- and then
+        // claimed "Applied in BOTH builds", which this block made false. The
+        // sweep read 5.9e-05 and 78.41 dB -- the same artefact, within 2.6 dB
+        // of the census's own figure for it.
+        //
+        // WHAT THE SWEEP WAS ACTUALLY MEASURING IN THE TXA BUILD, measured on
+        // the tree before this change. Three independent proofs it was WDSP's
+        // create_slews T/R mute ramp and not a sideband:
+        //
+        //   PASSBAND INDEPENDENCE. From 500 Hz up, USB (low edge 300 Hz), DIGU
+        //   (150), eSSB (100) and wide (0) printed IDENTICAL figures: 72.39,
+        //   75.31, 78.41, 81.90, 84.35, 86.22. A filter's image ratio cannot
+        //   be independent of the filter.
+        //
+        //   A 1/f SIGNATURE, WHICH IS A TRUNCATED TRANSIENT AND NOT A SKIRT.
+        //   Slope of the suppression curve across the widest decade each
+        //   passband admits (USB 300->2700 Hz, the rest 300->3000 Hz):
+        //
+        //                 TXA at 4096      the phasing control
+        //     USB           19.75              30.55   dB/decade
+        //     DIGU          19.77              55.11
+        //     eSSB          19.80              72.87
+        //     wide          19.80              79.48
+        //
+        //   The TXA column is 20.00 dB/decade -- an exact 1/f -- to within
+        //   0.25 dB, and it is THE SAME SLOPE for four different filters. The
+        //   control's slope varies by 49 dB/decade with the passband, because
+        //   a real skirt is a property of the filter that made it.
+        //
+        //   THE CONTROL IS UNMOVED BY THIS CHANGE. The phasing modulator's
+        //   priming is its 255-tap delay line filling -- "about 5 ms" by
+        //   kSettleSamples' own reckoning, 240 output samples -- so 4096
+        //   already cleared it and 12288 clears it by more. The whole 84-row
+        //   sweep table is byte-identical either way, DIGU at 150 Hz included
+        //   (22.06 dB, which is #5741 exactly).
+        //
+        // The same cell moves 215.8 dB between the two settles: this sweep's
+        // DIGU row at 1 kHz reads 78.41 dB at 4096 and 294.19 dB at 12288.
+        //
+        // And the cost of leaving it was that the tightest TXA margin in this
+        // file was 2.39 dB -- 72.39 dB against the 70.0 dB settled floor --
+        // resting on the shape of a mute ramp. A change to create_slews would
+        // have turned this sweep red for a reason that has nothing to do with
+        // sideband suppression.
 
         // THE FLOORS BELONG TO THE PASSBAND, NOT TO THE MODULATOR, so each row
         // carries its own. An earlier revision hoisted one pair of constants
@@ -977,6 +1216,9 @@ int main(int argc, char** argv)
         // nothing about the modulator has changed. Caught by aethersdr-agent on
         // #5741, who ran the eSSB case and got 11.86 dB -- under the 15.0 a
         // single hoisted floor would have asserted.
+        // These values originate in the phasing characterisation. Both builds
+        // retain sweepFloorDb, including the resolvable low-edge wide rows.
+        // settledFloor() selects the stronger TXA regression threshold.
         struct Band { const char* name; WdspChannel::Mode mode;
                       double lo; double hi; bool wireUpper;
                       double sweepFloorDb; double settledFloorDb; };
@@ -1019,6 +1261,25 @@ int main(int argc, char** argv)
               "sweep baseline: the USB default passband is still 300..2700");
         check(digi == std::pair<int, int>{150, 3000},
               "sweep baseline: the DIGU default passband is still 150..3000");
+        // ── THE SETTLED FLOOR IS NOT THE SAME KIND OF STATEMENT IN THE
+        //    TWO BUILDS ──────────────────────────────────────────────────
+        //
+        // b.settledFloorDb is a real bound on a real measurement: 70 dB is a
+        // statement about a 255-tap Blackman design's sidelobes, and the
+        // mutation table above is what earns it.
+        //
+        // TXA uses the stronger computed-ratio regression threshold instead
+        // of the phasing bound. It detects regressions that the old threshold
+        // missed, but does not assert that the image is unresolved or provide
+        // a lower bound on true suppression; see kFloorLimitedSuppDb.
+        //
+        // Written as a runtime ternary rather than an #if so both arms keep
+        // compiling in both builds, the same reason AETHER_HL2_TX_TXA is
+        // defined in both directions.
+        const auto settledFloor = [](const Band& b) {
+            return AETHER_HL2_TX_TXA ? kMinSuppDb : b.settledFloorDb;
+        };
+
         // Integer hertz, so wholeCycles() can null the analysis leakage exactly.
         // 100 Hz and 3000 Hz sit outside the voice passband on purpose: the
         // curve either side of an edge is part of what is being characterised.
@@ -1028,7 +1289,8 @@ int main(int argc, char** argv)
 
         std::fprintf(stderr,
             "\n=== TX opposite-sideband characterisation sweep "
-            "(phasing modulator, ALC off, %.2f s per point) ===\n", kSweepSeconds);
+            "(%s modulator, ALC off, %.2f s per point) ===\n",
+            kModulator, kSweepSeconds);
         std::fprintf(stderr, "%-5s %-11s %7s %13s %13s %9s\n",
                      "mode", "passband", "tone", "wanted", "image", "supp dB");
 
@@ -1039,7 +1301,7 @@ int main(int argc, char** argv)
                 const double band[2] = {b.lo, b.hi};
                 const auto raw = modulate(b.mode, t, 0.5, 1.0, kSweepSeconds,
                                           nullptr, false, band);
-                const auto iq = wholeCycles(raw, t, kFsOut, kSettle);
+                const auto iq = wholeCycles(raw, t, kFsOut, kSettleSamples);
                 char what[160];
                 if (iq.empty()) {
                     std::snprintf(what, sizeof(what),
@@ -1053,14 +1315,7 @@ int main(int argc, char** argv)
                 const double wanted = b.wireUpper ? upper : lower;
                 const double image  = b.wireUpper ? lower : upper;
                 const double suppDb =
-                    20.0 * std::log10((wanted + 1e-30) / (image + 1e-30));
-                std::fprintf(stderr, "%-5s %4.0f..%-6.0f %7.0f %13.6e %13.6e %9.2f\n",
-                             b.name, b.lo, b.hi, t, wanted, image, suppDb);
-
-                std::snprintf(what, sizeof(what),
-                              "sweep %s @ %.0f Hz: sideband is on the expected wire bin",
-                              b.name, t);
-                check(wanted > image, what);
+                    20.0 * std::log10((wanted + kSidebandEps) / (image + kSidebandEps));
 
                 // The dB floors apply IN-BAND only. Below the low edge the
                 // filter is attenuating the WANTED signal as hard as the image
@@ -1071,6 +1326,45 @@ int main(int argc, char** argv)
                 // out-of-band rows are printed because the shape either side of
                 // an edge is part of the characterisation.
                 const bool inBand = (t >= b.lo && t <= b.hi);
+
+                // ── AND THE WIRE-BIN CHECK NEEDS A SIGNAL TO CHECK ──────────
+                //
+                // A row whose WANTED bin has itself been filtered down into the
+                // capture's own float noise has no sideband left to have an
+                // orientation, and `wanted > image` there is a coin toss. It
+                // was decided by a coin until this sweep used the right settle:
+                // TXA at 100 Hz on {300, 2700} reads wanted 3.949e-11 against
+                // image 4.362e-11 and the check goes RED, while at the old
+                // 4096-sample settle the same row read wanted 9.553e-08 --
+                // T/R-ramp energy, not signal -- and the check passed on it.
+                // Passing on ramp energy is not better than failing on noise;
+                // both are the instrument talking to itself.
+                //
+                // In-band rows always qualify: the wanted bin is at or near the
+                // 0.5 drive. Out of band this is what decides. 1e-6 is 54 dB
+                // under that drive and ~500x above the largest bin-noise this
+                // instrument produces at it (2.1e-9), so it separates "the
+                // filter removed the tone" from "the filter left a sideband to
+                // check". IT DROPS NOTHING IN THE PHASING BUILD -- the smallest
+                // wanted bin anywhere in that build's sweep is 1.97e-2, four
+                // decades clear -- so the control keeps every assertion it had.
+                constexpr double kResolvableBin = 1e-6;
+                const bool orientable = inBand || wanted > kResolvableBin;
+
+                std::fprintf(stderr, "%-5s %4.0f..%-6.0f %7.0f %13.6e %13.6e %9.2f%s%s\n",
+                             b.name, b.lo, b.hi, t, wanted, image, suppDb,
+                             floorMark(suppDb),
+                             orientable ? ""
+                                        : "  [wanted bin filtered into the noise:"
+                                          " no sideband to orient]");
+
+                if (orientable) {
+                    std::snprintf(what, sizeof(what),
+                                  "sweep %s @ %.0f Hz: sideband is on the expected wire bin",
+                                  b.name, t);
+                    check(wanted > image, what);
+                }
+
                 if (inBand) {
                     std::snprintf(what, sizeof(what),
                                   "sweep %s @ %.0f Hz: %.2f dB is above the %.0f dB passband floor",
@@ -1079,13 +1373,19 @@ int main(int argc, char** argv)
                 }
 
                 if (inBand && t >= kSettledFromHz) {
+                    const double floorDb = settledFloor(b);
                     std::snprintf(what, sizeof(what),
                                   "sweep %s @ %.0f Hz: %.2f dB is above the %.0f dB settled floor",
-                                  b.name, t, suppDb, b.settledFloorDb);
-                    check(suppDb > b.settledFloorDb, what);
+                                  b.name, t, suppDb, floorDb);
+                    check(suppDb > floorDb, what);
                 }
 
-                if (suppDb < worstDb) { worstDb = suppDb; worstHz = t; }
+                // ORIENTABLE ROWS ONLY. A row whose wanted bin is in the
+                // noise has no figure to be the worst of: in the TXA build the
+                // USB 100 Hz row reads -0.86 dB, and reporting that as "the
+                // worst point across the sweep" would put a noise ratio at the
+                // top of the summary the reader looks at first.
+                if (orientable && suppDb < worstDb) { worstDb = suppDb; worstHz = t; }
             }
             std::fprintf(stderr, "%-5s worst point across the sweep: %.2f dB at %.0f Hz\n",
                          b.name, worstDb, worstHz);
@@ -1109,14 +1409,20 @@ int main(int argc, char** argv)
             // numerical floor, that is measuring noise against noise.
             const double out = binPower(iq, -5000.0, kFsOut);
             const double in  = binPower(ref, -kTone, kFsOut);
-            const double rejDb = 20.0 * std::log10((in + 1e-12) / (out + 1e-12));
+            // The SAME guard as the sideband ratios, and for the same
+            // reason: `out` is a spectral bin, not a level. At 1e-12 against
+            // TXA's out of ~2.6e-11 the guard was worth 0.3 dB of the printed
+            // rejection -- not dominant the way it was in the headline blocks,
+            // but it was the guard and not the chain.
+            const double rejDb =
+                20.0 * std::log10((in + kSidebandEps) / (out + kSidebandEps));
             double mxOut = 0.0, mxRef = 0.0;
             for (const auto& v : iq)  mxOut = std::max(mxOut, static_cast<double>(std::abs(v)));
             for (const auto& v : ref) mxRef = std::max(mxRef, static_cast<double>(std::abs(v)));
             // Probe where the 5 kHz energy actually went.
-            std::fprintf(stderr, "passband: 1 kHz %.6f vs 5 kHz %.6f, rejection %.1f dB "
-                                 "| max|IQ| ref %.4f out %.4f | out@-5k %.6f out@19k %.6f out@1k %.6f\n",
-                         in, out, rejDb, mxRef, mxOut,
+            std::fprintf(stderr, "passband: 1 kHz %.6f vs 5 kHz %.6e, rejection %.2f dB%s "
+                                 "| max|IQ| ref %.4f out %.4f | out@-5k %.6e out@19k %.6e out@1k %.6e\n",
+                         in, out, rejDb, floorMark(rejDb), mxRef, mxOut,
                          binPower(iq, -5000.0, kFsOut), binPower(iq, 19000.0, kFsOut),
                          binPower(iq, 1000.0, kFsOut));
             check(rejDb > 30.0, "audio above the TX passband is filtered out");

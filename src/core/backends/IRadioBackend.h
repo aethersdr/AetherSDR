@@ -1,5 +1,7 @@
 #pragma once
 
+#include "IndependentTxControl.h"
+
 #include "core/RadioSettingsIdentity.h"
 #include "core/TxCoordinator.h"
 #include "core/PcmFrame.h"
@@ -21,6 +23,7 @@
 #include "core/backends/MeterDef.h"
 #include "core/backends/NotchDelta.h"
 #include "core/backends/ProfileDelta.h"
+#include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
@@ -30,6 +33,9 @@
 #include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR {
+
+// Borrowed handle returned by autoRfGainControl(); see AutoRfGainControl.h.
+class IAutoRfGainControl;
 
 // Neutral, family-agnostic connect descriptor. Core fields cover the common
 // case; vendor-specific parameters (SmartLink token, Kiwi endpoint path, …)
@@ -357,6 +363,18 @@ public:
         Q_UNUSED(gainDb);
     }
 
+    // The backend's own automatic receive-gain control, or nullptr when it has
+    // none. See AutoRfGainControl.h for the vocabulary and for why this is a
+    // borrowed interface pointer rather than a capability bool and three verbs.
+    //
+    // BORROWED AND NOT TO BE CACHED: valid only for the duration of the call
+    // that obtained it.
+    //
+    // Default nullptr AND that default is the point: a family with no such
+    // control never learns the concept exists, and shared code does not have to
+    // know which families do.
+    virtual IAutoRfGainControl* autoRfGainControl() { return nullptr; }
+
     // The discrete front-end stages above. `step` indexes the label list the
     // backend published; a backend clamps rather than refuses, exactly as
     // setPanRfGain does.
@@ -561,6 +579,14 @@ public:
     // (command verb, in-stream bit, hardware line). A backend whose
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) = 0;
+    virtual IndependentTxControl independentTxControl() const { return {}; }
+    virtual bool independentTxReady() const { return false; }
+    virtual void stopIndependentTx(const TxCoordinator::Operation& operation,
+                                   const TxCoordinator::StopRequest& request)
+    {
+        Q_UNUSED(operation);
+        Q_UNUSED(request);
+    }
 
     // Trusted engine composition supplies the admitted operation for backend-
     // owned producers (e.g. a TUNE tone). Copy it when starting that producer;
@@ -1056,6 +1082,7 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // ---- connection state UP ----
     void connected();
     void disconnected();
@@ -1114,6 +1141,27 @@ signals:
     void sliceLifecycleFailed(const QString& operation, int sliceId,
                               const QString& reason);
     void meterUpdate(const QString& meterId, double value);
+
+    // WHAT THE RECEIVE FRONT END IS DOING, for families that can observe their
+    // own converter. A family that cannot never emits this, and the indicator
+    // above the seam never appears -- the same shape as autoRfGainControl()
+    // returning nullptr.
+    //
+    // RFC #5535 made this visibility a CONDITION of shipping an automatic
+    // gain loop, not a nicety: a regulator with 18 dB of room and a 3-5 dB
+    // knee will sometimes be wrong, and wrong-and-invisible is a radio that
+    // behaves strangely. See FrontEndOverload.h.
+    void frontEndOverloadChanged(const AetherSDR::FrontEndOverload& state);
+
+    // AN ARM REQUEST ON autoRfGainControl() HAS SETTLED: `armed` is what the
+    // control is now doing. Emitted after EVERY outcome of setArmed() --
+    // refused (armed stays false; lastArmRefusalReason() says why), armed, and
+    // disarmed -- and not for a request that changed nothing. This is how a
+    // view learns about an arm it did not ask for: the connect-time restore
+    // inside the backend and a bridge `pan autorfgain on` both settle without
+    // passing through any GUI click, and a checkbox that only read isArmed()
+    // back after its own click reported the wrong state on both (#5817).
+    void autoRfGainArmSettled(bool armed);
 
     // Normalized transmit-status delta (aetherd RFC 2.3 — TransmitModel
     // touchpoint). Typed + compiler-checked; the backend populates only the
