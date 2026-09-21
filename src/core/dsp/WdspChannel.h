@@ -317,14 +317,48 @@ public:
     // path writes the shift stage or the database's copy of it, so re-asserting
     // either after this call would be ceremony.
     //
-    // Cost, and it is not free: RXASetNC internally stops and restarts the
-    // channel (SetChannelState 0 then restore) and re-plans six FIR cores, so
-    // the operator hears the mute ramp and a filter refill. That is acceptable
-    // at a moment the operator initiated and is not acceptable per block.
+    // COST, AND IT IS NOT FREE. setFilterTaps() stops the channel, re-plans
+    // six FIR cores under the process-global FFTW planner lock, and starts it
+    // again. MEASURED on this tree (macOS arm64, RelWithDebInfo, 48 kHz):
+    // 1.8-28.8 ms held on that lock per call. It is acceptable at a moment
+    // the operator initiated and is not acceptable per block, and a caller must
+    // not poll it.
     //
-    // `taps` must be positive and not smaller than dspBlockSize -- WDSP's
-    // fircore requires nc >= size and divides by the ratio, so a shorter
-    // filter than one block silently produces nfor == 0 and no output at all.
+    // The stop is taken HERE, outside the lock, rather than left to the one
+    // inside RXASetNC -- see the block comment on the implementation. Left to
+    // RXASetNC it is a dmode-1 stop whose drain can never complete while the
+    // control fence is up, so it spins out its full 100-count Sleep(1) timeout
+    // WITH THE PLANNER LOCK HELD. That is 100 ms only where Sleep(1) costs
+    // 1 ms; the port routes it to nanosleep(), which on this machine lands
+    // nearer 1.6-2.3 ms, and the call measured 155-227 ms. Hl2Spectrum's
+    // constructor and destructor take the same lock on the EP2-pacing I/O
+    // thread (#5424), so this is not merely someone else's latency.
+    //
+    // WHAT THE OPERATOR ACTUALLY HEARS is the up-slew and a filter refill, NOT
+    // a mute ramp down. The down-ramp is armed and then cancelled unclocked by
+    // flush_slews() on the restore (AetherSDR patch 7). An earlier draft of
+    // this comment claimed the mute ramp plays; it does not, and it did not
+    // before this change either -- RXASetNC's timeout path force-cleared
+    // downflag just the same.
+    //
+    // `taps` MUST BE A POWER OF TWO IN [256, 16384] AND AN EXACT MULTIPLE OF
+    // dspBlockSize. nc >= size is only half of WDSP's requirement: fircore
+    // partitions into nfor = nc / size and walks the ring with nfor - 1 as a
+    // POWER-OF-TWO MASK, so an nfor that is not a power of two silently skips
+    // partitions and a non-multiple silently truncates the impulse -- wrong
+    // audio, no error. firmin.h says it outright: `int nc; // number of filter
+    // coefficients, power of two, >= size`. The same predicate now guards
+    // Config::filterTaps in validateConfig(), so create() and reconfigure()
+    // cannot reach what this refuses.
+    //
+    // THREADING, FOR WHOEVER WRITES THE GATE. These setters make
+    // Config::filterTaps MUTABLE ON AN OPEN CHANNEL, and minimumNotchWidthHz()
+    // reads it without taking anything. There is no cross-thread reader today
+    // -- every caller of both is on the control thread -- so this is sound as
+    // it stands. It stops being sound the moment the gate publishes a tap
+    // count that another thread reads: whoever adds that must either make the
+    // field atomic or take the lock in the getter. Recording it here so it is
+    // not rediscovered from a torn read.
     //
     // setMinimumPhase() trades linear phase for latency: the same length of
     // filter, its energy front-loaded, so the group delay collapses while the

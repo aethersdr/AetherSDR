@@ -1447,6 +1447,79 @@ bool runFilterTapsGroupDelayTest()
                      "setFilterTaps accepted a filter shorter than one DSP block")
              && result;
 
+    // AND THE HALF nc >= size DOES NOT COVER. fircore walks its overlap-save
+    // ring with idxmask = nfor - 1 used as a POWER-OF-TWO MASK (firmin.c,
+    // xfircore), and firmin.h states the contract on the field itself: "number
+    // of filter coefficients, power of two, >= size". The first three below all
+    // satisfy nc >= size, all used to return true, and all corrupt the filter
+    // silently.
+    //
+    // dspBlockSize is 1024 here, so: 3072 gives nfor 3 and mask 2, at which
+    // buffidx is pinned at 0 and one partition is never written or read; 6144
+    // gives nfor 6 and mask 5, at which half the ring is skipped; 1536 is not a
+    // multiple of the block at all, so nfor truncates to 1 and a third of the
+    // impulse is discarded.
+    //
+    // MEASURED before the guard existed, dspBlockSize 1024, a 0.1-amplitude
+    // tone in a 150-3000 Hz passband, steady-state peak in band (1500 Hz) and
+    // out of band (6000 Hz):
+    //
+    //   1024 taps  0.39807 / 0.00000  = 139 dB rejection   sound
+    //   1536 taps  0.39723 / 0.00032  =  62 dB             impulse truncated
+    //   2048 taps  0.39807 / 0.00000  = 149 dB             sound
+    //   3072 taps  0.00008 / 0.00044  = -15 dB             ring broken
+    //   6144 taps  0.19966 / 0.03989  =  14 dB             ring broken
+    //   8192 taps  0.39807 / 0.00000  = 161 dB             sound
+    //
+    // At 3072 the wanted signal comes out 74 dB down and the out-of-band tone
+    // comes out LOUDER than it. The truncating counts keep their passband and
+    // lose their stopband -- audio that sounds right and no longer filters,
+    // which is the worse of the two failures because nothing sounds wrong.
+    result = require(!channel->setFilterTaps(3072),
+                     "setFilterTaps accepted 3072 taps, whose nfor of 3 is not a "
+                     "power of two") && result;
+    result = require(!channel->setFilterTaps(6144),
+                     "setFilterTaps accepted 6144 taps, whose nfor of 6 is not a "
+                     "power of two") && result;
+    result = require(!channel->setFilterTaps(1536),
+                     "setFilterTaps accepted 1536 taps, which is not a multiple "
+                     "of the DSP block size") && result;
+    result = require(!channel->setFilterTaps(128),
+                     "setFilterTaps accepted 128 taps, below WDSP's own "
+                     "min_notch_width divisor of 256") && result;
+    // Refused and INERT: a rejected count must not have moved the channel.
+    result = require(std::abs(channel->minimumNotchWidthHz() - 200.0) < 0.5,
+                     "a refused setFilterTaps still moved the notch width floor")
+             && result;
+
+    // THE SAME DOOR THROUGH open(). validateConfig() did not look at filterTaps
+    // at all, so create() and reconfigure() reached every corruption above
+    // while the setter refused it. One predicate now guards both.
+    for (const int bad : {3072, 6144, 1536, 128, 0, -8192}) {
+        WdspChannel::Config badConfig;
+        badConfig.filterTaps = bad;
+        std::string badError;
+        result = require(WdspChannel::create(badConfig, &badError) == nullptr,
+                         "create() accepted a filter length fircore cannot "
+                         "partition") && result;
+    }
+    // ... and the sound ones still open, across four tap/block pairings. 2048
+    // at dspBlockSize 2048 and 256 at 256 are both nfor == 1, the tightest case
+    // in the tree and the one runUnderrunTest already relies on.
+    for (const auto [taps, block] : {std::pair<int, std::size_t>{2048, 1024},
+                                     {8192, 256},
+                                     {2048, 2048},
+                                     {256, 256}}) {
+        WdspChannel::Config goodConfig;
+        goodConfig.filterTaps = taps;
+        goodConfig.dspBlockSize = block;
+        goodConfig.inputBlockSize = block;
+        std::string goodError;
+        result = require(WdspChannel::create(goodConfig, &goodError) != nullptr,
+                         "create() refused a filter length fircore can "
+                         "partition") && result;
+    }
+
     // Transmit has none of the six cores RXASetNC and RXASetMP address.
     WdspChannel::Config txConfig;
     txConfig.direction = WdspChannel::Direction::Transmit;
