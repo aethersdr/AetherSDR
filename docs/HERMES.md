@@ -1181,14 +1181,19 @@ A GUI stall therefore stops EP2 and the radio stops streaming on its own. We
 measured a 21–82 second main-thread stall on first connect (FFTW wisdom) — see
 §22, which fixed that one. The wire and the DSP now live on their own I/O
 thread, so the class this warned about is narrower than it was. ONE path still
-blocks the GUI thread, in §22.4: **backend teardown**, which waits out an
-in-flight DSP build — `~Hl2Backend()` joins `m_dspBuildThread` before it stops
-the wire, so a teardown during a rate change waits too. The **span change** no
-longer does. #5783 (merged 2026-09-18) moved the N-chain rebuild onto
-`m_dspBuildThread`: `applyPanBandwidth()` leaves the GUI thread only the
-per-receiver `Config` snapshot and hands off through queued connections alone —
-there is no `BlockingQueuedConnection` left in it — while the old chains keep
-producing audio until the swap.
+blocks the GUI thread unconditionally, in §22.4: **backend teardown**, which
+waits out an in-flight DSP build — `~Hl2Backend()` joins `m_dspBuildThread`
+before it stops the wire, so a teardown during a rate change waits too. The
+**span change** no longer does, with one conditional residue: a receiver opened
+*during* a crossing is rebuilt by `Hl2Backend::finishRateChange()`
+synchronously — one `configure()` over a `Qt::BlockingQueuedConnection` onto the
+I/O thread, so one open that both blocks the GUI thread and holds EP2's pacer,
+and only when the operator opened a receiver mid-zoom. #5783 (merged
+2026-09-18) moved the N-chain rebuild onto `m_dspBuildThread`:
+`applyPanBandwidth()` leaves the GUI thread only the per-receiver `Config`
+snapshot and hands off through queued connections alone — there is no
+`BlockingQueuedConnection` left in it — while the old chains keep producing
+audio until the swap.
 
 ### 11.4 Absent subsystems, in rough value order
 
@@ -1474,7 +1479,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | ~~8~~ | ~~Move HL2 wire + DSP off the GUI thread~~ **DONE** | O §2 | `Hl2Backend` runs `MetisClient` and both DSP chains on a dedicated `hl2-io` thread. Note the consequence: EP2 pacing, EP6 ingest, WDSP and the panadapter FFT now share ONE thread, so per-sample cost there scales with the span (§15.2) | — |
 | ~~9~~ | ~~`SetChannelState` for start/stop; `CloseChannel` only for teardown~~ | A3 §2 | **DONE — and half of it was never broken.** `WdspChannel::open`/`close` have used `SetChannelState` since #4448 (2026-07-25): open STOPPED, configure, start; stop-and-flush before `CloseChannel`. §12.3's "`SetChannelState` is never used" was a misreading of code that already did it — the same commit that A3 was audited against. **No `CloseChannel` in this tree has ever been a stop**: the only one is `WdspChannel::close`, reached from the destructor and from `reconfigure()`. What WAS missing is the runtime verb, and `WdspChannel::setRunning` is it — it stops and starts a live channel, preserving the notch database, the FFTW plans and the AGC/shift/blanker state a close discards (pinned by `runStartStopTest`, which contrasts it against `reconfigure()`). It HAS production callers now, but not the one the audit meant: `Hl2RxDsp` and `AnanRxDsp` stop the channel before they destroy or replace it, which is 9b. The T/R caller the audit was actually after is still 9a | — |
 | 9a | Decide whether the T/R mute should become `setRunning(false)` | ours, from 9 | **OPEN.** This is the half of item 9 that "needed before T/R" was actually about, and it is the ONLY place in the tree where a stop can be taken with the audio path still feeding the channel — so it is also the only place WDSP's mute ramp would actually run (9b's teardown stops never drain). `Hl2RxDsp::setAudioMuted` and `AnanRxDsp::setAudioMuted` both stop the chain by clocking ZEROS through it, so item 1's anti-click envelope is never applied on a T/R edge — it only ever runs at channel open. Switching them to the real stop is not free: WDSP flushes on stop, so the output ring refills from empty and there is a genuine hole at the head of every receive period. NOT DECIDABLE FROM THE SOURCE. Whether the ramp beats the hole depends on how the slew time compares with the actual keying turnaround on the bench, and that is a hardware keying measurement that has not been authorised — nothing here has been measured on the air. Note the two families are not the same case — ANAN's mute is a rate-change settle, not T/R at all. ONE TRAP THAT WOULD HAVE BITTEN THIS CALLER IS NOW GONE: a T/R edge produces stop/start pairs spaced by the keying turnaround, not by 96 blocks, and upstream WDSP's `SetChannelState` case 1 armed the up-slew without clearing `slew.downflag`. A start taken before the host had clocked the down-ramp out left it pending on a channel WDSP considered running; the next few blocks finished it, and `downslew2`'s completion arm clears `ch[].exchange`, after which `fexchange2` returns having touched nothing — permanent silence with `isRunning()` reporting true, recoverable only by a `reconfigure()`. Found in review of #5628, fixed as AetherSDR patch 7 to the vendored WDSP (`third_party/wdsp/AETHERSDR-PATCHES.md`): case 1 now cancels a pending ramp under `csEXCH`. **AND THAT WAS ONLY HALF THE WINDOW, WHICH THIS ROW ASSERTED OTHERWISE FOR A DAY.** It said `setRunning` had no clocking precondition and that stop/start pairs were safe at any spacing including none; that was true for the regime we had tested — restarts *inside* the ramp — and false immediately outside it (K5PTB, second review of #5628). A ramp that has COMPLETED has already released `Sem_Flush`, and WDSP's `flushChannel` thread sets `exec_bypass` whenever it is next scheduled, possibly after case 1 cleared it; `wdspmain` then skips `dexchange`/`xrxa` and the channel produces nothing, or, in the blocking form, parks the host in `fexchange2` on a `Sem_OutReady` the bypassed worker will never release. MEASURED HERE, restarting with no gap across spacings 0-10 blocks at 256/48 kHz: 42 of 440 non-blocking trials dead (24 at spacing 3, 18 at spacing 4, none at 0-2), against 0 of 440 for a control that sleeps 20 ms before each start; and 20 of 20 blocking trials hung at spacing 3. AetherSDR patch 8 adds a bounded wait for that flush before arming, and both go to 0. WHAT IS ACTUALLY SAFE NOW: any spacing including none, at the cost of a start that may wait for the flush thread — bounded by WDSP's 100 ms, measured under 3 ms, and zero unless the previous stop's ramp was clocked out. **AND A THIRD TRAP UNDER THE SAME THREAD, WHICH IS THE ONE THAT COULD HAVE CORRUPTED A LIVE RADIO'S HEAP.** A stop that IS clocked out — which is precisely what this row contemplates, and what `WdspChannel.h` documents as correct usage — releases `Sem_Flush` and leaves WDSP's `flushChannel` thread runnable. `CloseChannel` waited for the `wdspmain` worker (AetherSDR patch 4) and for nothing else; upstream's own `flushChannel` handshake sat in `destroy_iobuffs`, i.e. AFTER `destroy_main`. So `destroy_main` -> `destroy_rxa` freed the RXA chain while `flushChannel` was inside `flush_rxa` on it. MEASURED HERE, one trial per process, non-blocking (what both owners use): stop-then-clock-then-destroy CRASHED 30 of 30, against clean 15 of 15 for both never-stopped-then-destroy and stop-then-destroy-with-nothing-clocked, and clean 30 of 30 for a control that sleeps 50 ms before the destroy. Found by ten9876 in review of #5628; fixed as AetherSDR patch 9, which moves upstream's handshake into `pre_main_destroy`. Note what this means for the order of work on this row: the T/R mute could not have been landed safely before it, and the teardown stops of 9b were on the safe shape only because they clock nothing after the stop — an assumption that was stated and not enforced. `runCloseAfterStoppedClockingTest` drives the crashing shape and goes red, as a signal rather than a message, in 5 of 5 runs with patch 9 reverted. NOT MEASURED ON HARDWARE: the probe is synthetic and no radio has run it. `runRestartDuringRampTest` now straddles the ramp — spacings 0 and 1 inside it, 3, 4 and 5 at and past its completion — and goes red on one of the past-the-ramp rows in 5 of 5 runs with patch 8 reverted. Bench decision, per family | S |
-| ~~9b~~ | ~~`WdspChannel::close`'s `SetChannelState(0, 1)` always burns its full 100 ms~~ | ours, from 9 | **DONE.** First, the mechanism as written here was one hop off: the flush flag is NOT cleared by `fexchange2`. `fexchange0`/`fexchange2` run the down-slew and release the channel's `Sem_Flush` when it completes (the `ReleaseSemaphore` calls at the tail of each); WDSP's per-channel `flushChannel` thread wakes on that semaphore and clears `flushflag` (the tail of `flushChannel`). The conclusion survives: only a host still calling `fexchange*` can satisfy the wait, and `close()` runs behind the control fence, so it always ran to the 100 ms timeout. Two changes. (a) `close()` now takes `g_setupMutex` only for `CloseChannel`, not across the wait — `SetChannelState` touches nothing but `ch[channel]`/`ch[channel].iob`, and no `fftw_plan`/`fftw_destroy_plan` is reachable from `flush_main` either, so the planner lock was never protecting it. (b) The owners stop the channel BEFORE they let it go — `Hl2RxDsp`'s destructor and pre-swap in `configure()`, `AnanRxDsp`'s destructor and `installChannel()` — so `SetChannelState` no-ops at close and the wait is skipped. WHICH PATHS BENEFIT: the rate change (every receiver; since #5783 this runs on `m_dspBuildThread`, not the GUI thread through a `BlockingQueuedConnection` — see §22.4), `removePanadapter`, `releaseReceiverDsps` on connect, and the backend destructor. WHAT IS NOT BOUGHT: a clean down-slew. Every one of those paths has already withdrawn the chain from the sample fan-out, or the wire was never started, so nothing feeds the channel and WDSP's ramp does not run — the saving is the skipped wait only. The drain needs 9a. **AND THAT "NOTHING FEEDS THE CHANNEL" IS A CORRECTNESS PRECONDITION, NOT A PERFORMANCE NOTE** — it was written here and in both destructors as the reason the ramp does not run, and it was also, unremarked, the only thing keeping these paths off a use-after-free. Skipping the 100 ms removes a barrier as well as a wait: a stop that IS clocked out wakes WDSP's `flushChannel` thread, and nothing in `CloseChannel` waited for it. The three owner paths above are safe because they clock nothing after the stop; the T/R mute of 9a would not have been. Fixed in the vendored tree as AetherSDR patch 9 so the barrier is explicit and covers every caller — see 9a for the measurement, and note that the RTL backend's `WdspReceiver` (`src/core/backends/rtl/RtlReceiverRegistry.cpp`) is a THIRD `WdspChannel` owner that this row's change does not cover: it retires a bank on the registry's executor thread rather than on the thread that drives `processIq()`, so the fence argument does not carry across and it still pays the 100 ms per channel. Raised by ten9876 in review of #5628. Pinned by `runCloseSetupLockTest` (no stopwatch: the run flag is observed clearing while the test holds the setup lock), `runStoppedCloseTest` and `runCloseAfterStoppedClockingTest`. The "~0.4 s of serialised disconnect for four receivers" this row used to claim was always an INFERENCE from the 100 ms constant, never a measurement, and nothing here has been measured on hardware | XS |
+| ~~9b~~ | ~~`WdspChannel::close`'s `SetChannelState(0, 1)` always burns its full 100 ms~~ | ours, from 9 | **DONE.** First, the mechanism as written here was one hop off: the flush flag is NOT cleared by `fexchange2`. `fexchange0`/`fexchange2` run the down-slew and release the channel's `Sem_Flush` when it completes (the `ReleaseSemaphore` calls at the tail of each); WDSP's per-channel `flushChannel` thread wakes on that semaphore and clears `flushflag` (the tail of `flushChannel`). The conclusion survives: only a host still calling `fexchange*` can satisfy the wait, and `close()` runs behind the control fence, so it always ran to the 100 ms timeout. Two changes. (a) `close()` now takes `g_setupMutex` only for `CloseChannel`, not across the wait — `SetChannelState` touches nothing but `ch[channel]`/`ch[channel].iob`, and no `fftw_plan`/`fftw_destroy_plan` is reachable from `flush_main` either, so the planner lock was never protecting it. (b) The owners stop the channel BEFORE they let it go — `Hl2RxDsp`'s destructor and pre-swap in `configure()`, `AnanRxDsp`'s destructor and `installChannel()` — so `SetChannelState` no-ops at close and the wait is skipped. WHICH PATHS BENEFIT: the rate change (every receiver; since #5783 the N opens run on `m_dspBuildThread` and the N closes on the I/O thread at the swap, in `Hl2RxDsp::installChannel()`, which runs on the same thread that calls `processIq()` — no longer from the GUI thread through a `BlockingQueuedConnection`; see §22.4), `removePanadapter`, `releaseReceiverDsps` on connect, and the backend destructor. WHAT IS NOT BOUGHT: a clean down-slew. Every one of those paths has already withdrawn the chain from the sample fan-out, or the wire was never started, so nothing feeds the channel and WDSP's ramp does not run — the saving is the skipped wait only. The drain needs 9a. **AND THAT "NOTHING FEEDS THE CHANNEL" IS A CORRECTNESS PRECONDITION, NOT A PERFORMANCE NOTE** — it was written here and in both destructors as the reason the ramp does not run, and it was also, unremarked, the only thing keeping these paths off a use-after-free. Skipping the 100 ms removes a barrier as well as a wait: a stop that IS clocked out wakes WDSP's `flushChannel` thread, and nothing in `CloseChannel` waited for it. The three owner paths above are safe because they clock nothing after the stop; the T/R mute of 9a would not have been. Fixed in the vendored tree as AetherSDR patch 9 so the barrier is explicit and covers every caller — see 9a for the measurement, and note that the RTL backend's `WdspReceiver` (`src/core/backends/rtl/RtlReceiverRegistry.cpp`) is a THIRD `WdspChannel` owner that this row's change does not cover: it retires a bank on the registry's executor thread rather than on the thread that drives `processIq()`, so the fence argument does not carry across and it still pays the 100 ms per channel. Raised by ten9876 in review of #5628. Pinned by `runCloseSetupLockTest` (no stopwatch: the run flag is observed clearing while the test holds the setup lock), `runStoppedCloseTest` and `runCloseAfterStoppedClockingTest`. The "~0.4 s of serialised disconnect for four receivers" this row used to claim was always an INFERENCE from the 100 ms constant, never a measurement, and nothing here has been measured on hardware | XS |
 | ~~10~~ | ~~RADE null-deref at `MainWindow_DigitalModes.cpp:461`~~ **DONE** | ours, gap 9 | Fixed, and §18.3 already records it. `activateRADE()` guards `panStream()` at its top and declines with a message; the bare `connect` further down is inside that guarded region | — |
 | 11 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured~~ | ours, gap 10 | **Withdrawn.** The variable was removed application-wide; nothing reads it. See gap 10 and the §10 recipe | — |
 | ~~12~~ | ~~One dB-reference object per slice (LNA + calibration + AGC threshold)~~ **DONE** — but **NOT per slice**, see below | A2 §A3 | `Hl2DbReference` now owns all three terms. The display half (LNA + calibration) was already built; what landed here is the AGC-T half, which the operator HEARS rather than sees. **The row's "per slice" was wrong on this radio**: the LNA is one AD9866 field in front of all four DDCs and `fullScaleDbm` is a property of the board, so two of the three terms physically cannot differ between slices and N copies of them would be the very drift the class exists to prevent. Only the AGC-T is per receiver; it stays in `Receiver::agcThresholdDb` and is an ARGUMENT to `agcCeilingDb()`, not a copy inside it. **One of this row's two remaining holes is closed and the other is narrowed.** The absolute term WAS simply absent — `fullScaleDbm` 0.0, no constant invented — and it is now DERIVED rather than per-unit: full scale is +3 dBm at 0 dB LNA gain, from the AD9866 datasheet and the HL2's own input network, so the displayed floor sits on a figure that can be checked instead of on an arbitrary zero. **`isCalibrated()` is still false, deliberately.** It reports whether a MEASUREMENT was applied — `setFullScaleDbm` has no caller in `src/` — and a datasheet derivation does not earn `PanAmplitudeModel::calibratedDbm`, which is the licence to compare this radio's levels with another station's. What would close it is a known level into the antenna port at a known APPLIED gain, read against the ADC clip counter; receive-only, and it wants a calibrated source this station does not have. **The caveat this row named is still open, and this change does not close it.** The row warned that the reference subtracts the COMMANDED gain while the AD9866 may fold `code & 0x1F` above code 31, over-shooting the correction by up to 32 dB. #5752 examined exactly that and declined to treat the fold as general: it clamped connect parameters without changing the native range, left −12…+48 and the +20 dB default standing, and recorded that the single-unit observation in softerhardware/Hermes-Lite2 #177 **remains unresolved against the native bit-6-selected RTL path**. `kLnaGainMaxDb` is therefore still +48. One board measured here at gateware 74 does fold (code 31 at −53.20 dBFS, code 32 at −97.75, all seven wrapped codes on their mod-32 twins within 0.52 dB), but one board is not the family, and the evidence bar #5752 set — reconcile against the RTL, or replicate on a second unit — is the right one. **The derivation in this row does not rest on it either way**: `kFullScaleDbmAtZeroGain` is a figure at 0 dB LNA gain, where no fold is in play | — |
@@ -1517,7 +1522,7 @@ radio. See §18 for the full audit and the proposed seam.
 | Divergence | Reference does | We do | Why ours is defensible |
 |---|---|---|---|
 | `output_samplerate` | 48000 | 24000 | AudioEngine's native rate; avoids a resample. Legitimate, but it IS a divergence in the area that produced our worst bug — keep it labelled |
-| Rate change | `SetAllRates` | Rebuild the channel | Dodges the intermediate-inconsistent-state hazard entirely. Heavier, but NOT because of FFTW — a rebuild at a new rate re-plans almost nothing (§22.4). It is heavier because it is a close+open per receiver — though since #5783 that work is on `m_dspBuildThread` and no longer blocks the GUI thread |
+| Rate change | `SetAllRates` | Rebuild the channel | Dodges the intermediate-inconsistent-state hazard entirely. Heavier, but NOT because of FFTW — a rebuild at a new rate re-plans almost nothing (§22.4). It is heavier because it is a close+open per receiver — though since #5783 the opens run on `m_dspBuildThread` and the closes on the I/O thread at the swap, so neither blocks the GUI thread |
 | Spectrum | WDSP analyzer (returns pixels) | Own `Hl2Spectrum` FFT | A3 §4 recommends exactly this for our architecture. **If it ever looks noisy, the lever is a detector/averaging mode, not a bigger FFT** |
 | FFTW wisdom | `WDSPwisdom(dir)` | Own `fftw_import_wisdom_from_filename` + eager export | `WDSPwisdom` is Windows-console-only. First-run slowness is expected; the fix was getting the wisdom to actually persist (§22) plus telling the operator what the wait is — in a modal dialog, because the panadapter label that first carried it was drawn behind the Connect Radio window and never seen (#5052). Tests bound the planner instead of paying it; see "AM/SAM hand back a DC pedestal" |
 
@@ -4150,11 +4155,18 @@ The operation now spans three threads, each for a stated reason:
 - **GUI thread** — snapshot every per-receiver `Config`. `m_rx` is
   GUI-thread-only, so every decision that needs it is made and copied here.
 - **Build thread** (`m_dspBuildThread`) — construct a **complete set of N** new
-  chains while the old set keeps running and keeps producing audio. N rather
-  than one because the DDC rate register is radio-wide; that is the single way
-  this differs from `AnanBackend`, which has one DDC and one chain to rebuild.
+  chains while the old set keeps running and keeps producing audio, frozen at
+  its pre-zoom settings: while a rebuild is in flight
+  `Hl2RxDsp::canPushToChannel()` is false, so mode, filter, AGC, shift, notch
+  and blanker go to the mirrors and are replayed at the swap, not applied to
+  the running channel. N rather than one because the DDC rate register is
+  radio-wide; that is the single way this differs from `AnanBackend`, which has
+  one DDC and one chain to rebuild.
 - **I/O thread** — if all N built, swap them in and write the rate register, in
-  one turn. The swap is pointer writes.
+  one turn. The swap itself is pointer writes; the same turn also stops and
+  destroys the N outgoing channels (N × `WdspChannel::close` → `CloseChannel`
+  under WDSP's setup mutex) and replays the verbs deferred during the build, all
+  in `Hl2RxDsp::installChannel()`, on the thread that paces EP2.
 
 **The roll-back this subsection called the hard part was not solved — it ceased
 to exist.** Until every one of the N builds has succeeded the register is
@@ -4164,13 +4176,19 @@ they were. The roll-back was only ever needed because the old code changed live
 state before it knew whether it could.
 
 What did need new machinery is the receiver a crossing never knew about. The
-snapshot is taken on the GUI thread and the build then runs for some hundreds of
-milliseconds; a receiver opened inside that window is not in the covered set,
+snapshot is taken on the GUI thread and the build then runs for as long as N
+opens take; a receiver opened inside that window is not in the covered set,
 and was deliberately built for the rate the radio was still producing. A
 `Hl2RateCommit` ledger records the *committed* rate as distinct from the
 *attempted* one, and `Hl2Backend::finishRateChange()` reconciles any such chain
-afterwards. `hl2_rate_commit_test` and `hl2_rxdsp_async_rebuild_test` cover
-both, socket-free.
+afterwards — **synchronously**: one `configure()` over a
+`Qt::BlockingQueuedConnection` onto the I/O thread per such chain, so an open
+that holds EP2's pacer with the GUI thread waiting. `Hl2Backend.cpp` calls that
+"the honest cost", and it is bounded by what an operator managed to open during
+a zoom rather than by N — but it is the one synchronous open the rate change
+still has. `hl2_rate_commit_test` pins the ledger and
+`hl2_rxdsp_async_rebuild_test` the mirror replay, both socket-free; neither
+constructs an `Hl2Backend`, so the reconcile itself has no test.
 
 Two things this was never about are unchanged, and both are still not bugs:
 
@@ -4181,13 +4199,26 @@ Two things this was never about are unchanged, and both are still not bugs:
 - **A 150 ms coalescing throttle** (`kBandwidthThrottleMs`, #4470), because a
   drag delivers ~30 span changes a second and each one is a full rebuild.
 
+And one thing that is a known cost, left open on purpose: there is **no mute
+across the latch window** between the register write and the radio actually
+producing the new rate. For that one C&C round the new chains are fed IQ still
+arriving at the old rate — a moment of wrong-pitch audio and a mis-scaled
+spectrum, not an error. `AnanBackend` mutes its single chain across a settle
+timer; doing the same for N chains here would have to share `setAudioMuted()`
+with the transmit path, whose mute must not be lifted by a zoom that lands
+mid-transmission, so it was left undone deliberately rather than done unsafely
+(`finishRateChange()`'s header). How long that window actually is has not been
+measured.
+
 **The 0.6–1.1 s figure is derived, not observed.** This subsection used to state
 that four panadapters open cost "roughly 0.6–1.1 s of frozen UI per boundary
 crossing". That number is arithmetic over §22.3 — four receivers × (an open of
-40–175 ms, which *is* measured, plus a close bounded by WDSP's own 100 ms
-timeout) gives 560–1100 ms — and the end-to-end freeze it describes was never
-measured directly. No run, no radio and no operator is attached to it anywhere.
-It is repeated widely enough to be worth labelling here rather than propagating
+40–175 ms, which *was* measured, though §11.3 labels that run historical rather
+than a current cold-open estimate and notes the later bench observations were
+substantially slower, plus a close bounded by WDSP's own 100 ms timeout) gives
+560–1100 ms — and the end-to-end freeze it describes was never measured
+directly. No run, no radio and no operator is attached to it anywhere. It is
+repeated widely enough to be worth labelling here rather than propagating
 quietly.
 
 Post-#5783 it is not a freeze at all: the same span of wall clock is now a
@@ -4202,7 +4233,8 @@ back VOID on its positive control, and nothing from it was quoted.
 
 So treat 0.6–1.1 s as an order-of-magnitude build duration inherited from a
 superseded design. Whether a zoom now keeps the audio clean is **open**, and
-closing it needs hardware.
+closing it needs hardware — as does the length of the unmuted latch window
+above.
 
 The opt-in TXA modulator and its offline evidence are described in
 [HL2 TXA configuration and lifecycle](hl2-txa-configuration-diff.md).
