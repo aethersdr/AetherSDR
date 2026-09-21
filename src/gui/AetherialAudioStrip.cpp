@@ -59,26 +59,6 @@
 namespace AetherSDR {
 
 namespace {
-// The monitor pair at the foot of the stage column. Tab-shaped like the rows
-// above them (StageTabBar::addFooterToggle draws them), recoloured from its
-// amber: Record is red and Play is green, as on the docked chain applet, so
-// a running capture and a running playback are told apart at a glance.
-constexpr const char* kMonTabBase =
-    "QPushButton { text-align: left; }"
-    "QPushButton:disabled { color: #4a5260; }";
-constexpr const char* kRecTab =
-    "QPushButton:enabled { color: #a05050; }"
-    "QPushButton:hover:enabled { color: #ff4040; border-color: #ff4040; }"
-    "QPushButton:checked { color: #ff4040; border-color: #ff4040;"
-    "                      background: rgba(255,50,50,50); }";
-constexpr const char* kPlayTab =
-    "QPushButton:enabled { color: #509050; }"
-    "QPushButton:hover:enabled { color: #40e060; border-color: #40e060; }"
-    "QPushButton:checked { color: #40e060; border-color: #40e060;"
-    "                      background: rgba(50,200,80,50); }";
-} // namespace
-
-namespace {
 // The size this window opens at, every time — see showEvent().
 constexpr QSize kLaunchSize(720, 480);
 }  // namespace
@@ -382,9 +362,11 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         {tr("REC"), QStringLiteral("aetherTxMonitorRecord"),
          tr("Record up to 30 s of processed transmit audio (MIC must be set "
             "to PC and DAX off). Click again to stop; playback starts by "
-            "itself.")},
+            "itself."),
+         StageTabBar::Accent::Red},
         {tr("PLAY"), QStringLiteral("aetherTxMonitorPlay"),
-         tr("Play back the captured audio. Click again to cancel.")},
+         tr("Play back the captured audio. Click again to cancel."),
+         StageTabBar::Accent::Green},
     });
     m_monRecBtn  = pair.at(0);
     m_monPlayBtn = pair.at(1);
@@ -392,8 +374,6 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     // (#4896).
     m_monRecBtn->setAccessibleName(tr("Record"));
     m_monPlayBtn->setAccessibleName(tr("Play"));
-    m_monRecBtn->setStyleSheet(QString::fromLatin1(kMonTabBase) + kRecTab);
-    m_monPlayBtn->setStyleSheet(QString::fromLatin1(kMonTabBase) + kPlayTab);
     // A checkable button flips itself on click. Put it back and let the
     // monitor's own started/stopped signals light it, so a capture the
     // monitor declined (already playing, say) never shows as running.

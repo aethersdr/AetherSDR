@@ -3359,11 +3359,69 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
                 {s->diguOffset(), s->diglOffset(), s->rttyShift()});
             s->setFilterWidth(edges.lo, edges.hi);
         });
-        // Seed the page with the filter it is looking at right now, rather than
-        // leaving it blank until the next slice change pushes one.
-        pushRxFilterCutoffsToEq();
+        // REC / PLAY: the same routing as the VFO flag's record and play
+        // buttons (MainWindow_Wiring.cpp, wireVfoWidget) -- client-side to
+        // the QSO recorder, radio-side to the slice -- except this window is
+        // not pinned to one slice, so radio-side goes to whichever slice is
+        // active. The recorder can refuse to start (#4629), so the button is
+        // set from what it actually did, never from the click.
+        const auto clientSide = [] {
+            return AppSettings::instance().value("RecordingMode", "Client")
+                       .toString() == "Client";
+        };
+        connect(m_rxDialog, &AetherRxDialog::recordToggled,
+                this, [this, clientSide](bool on) {
+            if (clientSide()) {
+                if (on) m_qsoRecorder->startRecording();
+                else    m_qsoRecorder->stopRecording();
+            } else if (auto* sl = activeSlice()) {
+                sl->setRecordOn(on);
+            }
+            syncAetherRxRecordButtons();
+        });
+        connect(m_rxDialog, &AetherRxDialog::playToggled,
+                this, [this, clientSide](bool on) {
+            if (clientSide()) {
+                if (on) m_qsoRecorder->startPlayback();
+                else    m_qsoRecorder->stopPlayback();
+            } else if (auto* sl = activeSlice()) {
+                sl->setPlayOn(on);
+            }
+            syncAetherRxRecordButtons();
+        });
+        // Every recorder transition, including the error path that never
+        // emits recordingStopped, re-reads the recorder rather than trusting
+        // the last click.
+        connect(m_qsoRecorder, &QsoRecorder::recordingStarted, m_rxDialog,
+                [this](const QString&) { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::recordingStopped, m_rxDialog,
+                [this](const QString&, int) { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::recordingError, m_rxDialog,
+                [this](const QString&) { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::playbackStarted, m_rxDialog,
+                [this]() { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::playbackStopped, m_rxDialog,
+                [this]() { syncAetherRxRecordButtons(); });
+        syncAetherRxRecordButtons();
     }
     return m_rxDialog.data();
+}
+
+void MainWindow::syncAetherRxRecordButtons()
+{
+    if (!m_rxDialog) return;
+    const bool clientSide =
+        AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+    if (clientSide) {
+        m_rxDialog->setRecordOn(m_qsoRecorder && m_qsoRecorder->isRecording());
+        m_rxDialog->setPlayOn(m_qsoRecorder && m_qsoRecorder->isPlaying());
+        m_rxDialog->setPlayEnabled(m_qsoRecorder && m_qsoRecorder->hasLastRecording());
+        return;
+    }
+    auto* sl = activeSlice();
+    m_rxDialog->setRecordOn(sl && sl->recordOn());
+    m_rxDialog->setPlayOn(sl && sl->playOn());
+    m_rxDialog->setPlayEnabled(sl && sl->playEnabled());
 }
 
 void MainWindow::toggleAetherRxDialog()
@@ -8539,6 +8597,8 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 
     // QSO recorder: track active slice for frequency/mode metadata (#1297)
     m_qsoRecorder->setSlice(s);
+    // Radio-side recording is per slice, and AetherRX shows the active one.
+    syncAetherRxRecordButtons();
 
     // Re-wire applet panel, overlay menu to the new active slice
     if (m_panStack) {

@@ -69,6 +69,13 @@ public:
     // The profile library: save, load, import, export the receive chain.
     void showSettings();
 
+    // The REC / PLAY pair, driven back by MainWindow with what the recorder
+    // (or the radio) actually did -- the same three setters VfoWidget has,
+    // so the wiring reads the same. Blocked, so a readback is never a click.
+    void setRecordOn(bool on);
+    void setPlayOn(bool on);
+    void setPlayEnabled(bool enabled);
+
     // Jump to a named tab. Understands both this window's stage names
     // ("Gate", "Tube") and the noise-reduction method names ("NR2", "MNR"),
     // which select the AetherNR tab and then the method inside it — callers
@@ -86,6 +93,13 @@ public:
     StripEqPanel* eqPanel() const { return m_eq; }
 
 signals:
+    // REC / PLAY clicked, with the state the button now shows. Same shape as
+    // VfoWidget::recordToggled / playToggled, and MainWindow routes them the
+    // same way: to the client-side QSO recorder or the active slice's
+    // radio-side recorder, then calls the setters with what really happened.
+    void recordToggled(bool on);
+    void playToggled(bool on);
+
     // The AetherNR checkbox re-enabling NR2. Goes out rather than straight to
     // the engine because NR2 needs MainWindow's FFTW-wisdom prep first (#2275)
     // — the same reason AetherDspWidget and the chain strip both raise it.
@@ -144,6 +158,11 @@ private:
     // the same spot AetherTX keeps its own. Owned by the StageTabBar; routes
     // through AudioEngine::setRxBypassed and follows rxBypassChanged.
     QPushButton*        m_bypassBtn{nullptr};
+    // REC / PLAY on one row above BYPASS, as in AetherTX. These record the
+    // receive audio itself, through the QSO recorder the VFO flag's pair
+    // drives; the transmit window's pair captures the processed TX chain.
+    QPushButton*        m_recBtn{nullptr};
+    QPushButton*        m_playBtn{nullptr};
     QStackedWidget*     m_stack{nullptr};
     QTimer*             m_checkTimer{nullptr};
 

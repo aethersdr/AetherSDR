@@ -74,12 +74,17 @@ public:
                                  const QString& tooltip);
 
     // Several such toggles side by side on one row, sharing its width
-    // equally — the transmit window's REC / PLAY pair. Returned in call
-    // order.
+    // equally — the REC / PLAY pair in both windows. Returned in call order.
+    //
+    // The accent is the toggle's colour family: amber is the warning look
+    // BYPASS wears, red and green are the docked chain applet's record and
+    // play, so the same state looks the same wherever it appears.
+    enum class Accent { Amber, Red, Green };
     struct FooterToggle {
         QString label;
         QString objectName;
         QString tooltip;
+        Accent  accent{Accent::Amber};
     };
     QVector<QPushButton*> addFooterToggleRow(const QVector<FooterToggle>& toggles);
 

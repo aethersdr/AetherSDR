@@ -6001,6 +6001,11 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(s, &SliceModel::recordOnChanged, w, &VfoWidget::setRecordOn);
     connect(s, &SliceModel::playOnChanged, w, &VfoWidget::setPlayOn);
     connect(s, &SliceModel::playEnabledChanged, w, &VfoWidget::setPlayEnabled);
+    // The AetherRX window's REC / PLAY follow the active slice's radio-side
+    // state through the same three signals; the sync reads which is active.
+    connect(s, &SliceModel::recordOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
+    connect(s, &SliceModel::playOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
+    connect(s, &SliceModel::playEnabledChanged, this, &MainWindow::syncAetherRxRecordButtons);
     connect(w, &VfoWidget::autotuneRequested, this, [this, sliceId](bool intermittent) {
         if (m_radioModel.slice(sliceId))
             m_radioModel.cwAutoTune(sliceId, intermittent);

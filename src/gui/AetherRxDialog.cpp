@@ -194,6 +194,35 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         addStage(Output, QStringLiteral("Final Output"), page);
     }
 
+    // REC / PLAY on one row above BYPASS, as in AetherTX -- but recording
+    // the receive audio itself, through the same path as the VFO flag's
+    // record and play buttons. A click reports the state the button now
+    // shows; MainWindow answers with what the recorder actually did (a
+    // capture can be refused: PC audio off, unwritable directory), so the
+    // button follows the recorder rather than the click.
+    const auto pair = m_tabs->addFooterToggleRow({
+        {tr("REC"), QStringLiteral("aetherRxRecord"),
+         tr("Record the receive audio to a WAV file, as the VFO flag's record "
+            "button does. Click again to stop."),
+         StageTabBar::Accent::Red},
+        {tr("PLAY"), QStringLiteral("aetherRxPlay"),
+         tr("Play back the last recording. Click again to stop."),
+         StageTabBar::Accent::Green},
+    });
+    m_recBtn  = pair.at(0);
+    m_playBtn = pair.at(1);
+    // The short labels fit the row; the spoken names stay whole words
+    // (#4896).
+    m_recBtn->setAccessibleName(tr("Record"));
+    m_playBtn->setAccessibleName(tr("Play"));
+    connect(m_recBtn, &QPushButton::clicked, this, [this](bool checked) {
+        emit recordToggled(checked);
+    });
+    connect(m_playBtn, &QPushButton::clicked, this, [this](bool checked) {
+        emit playToggled(checked);
+    });
+    setPlayEnabled(false);
+
     // BYPASS directly above Settings, where AetherTX keeps its own. The
     // engine owns the snapshot-and-restore, and the docked chain applet's RX
     // BYPASS drives the same state, so this button follows the engine back
@@ -465,6 +494,32 @@ void AetherRxDialog::showSettings()
         m_tabs->refreshFromHost();
     });
     dlg.exec();
+}
+
+void AetherRxDialog::setRecordOn(bool on)
+{
+    if (!m_recBtn) return;
+    QSignalBlocker block(m_recBtn);
+    m_recBtn->setChecked(on);
+}
+
+void AetherRxDialog::setPlayOn(bool on)
+{
+    if (!m_playBtn) return;
+    QSignalBlocker block(m_playBtn);
+    m_playBtn->setChecked(on);
+}
+
+void AetherRxDialog::setPlayEnabled(bool enabled)
+{
+    if (!m_playBtn) return;
+    m_playBtn->setEnabled(enabled);
+    // Why it is greyed out has to reach the accessible channel too, not
+    // just the tooltip (#4896).
+    m_playBtn->setAccessibleDescription(
+        enabled ? tr("Play back the last recording. Click again to stop.")
+                : tr("Unavailable until something has been recorded. "
+                     "Use REC first."));
 }
 
 void AetherRxDialog::syncFromEngine()

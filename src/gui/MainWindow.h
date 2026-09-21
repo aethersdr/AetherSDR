@@ -850,6 +850,9 @@ private:
     // just raises the existing instance.  Returns nullptr only if construction
     // failed (e.g. allocation failure).
     AetherRxDialog* ensureAetherRxDialog();
+    // Push the record/play state the AetherRX window should show: the QSO
+    // recorder's in client-side mode, the active slice's in radio-side mode.
+    void syncAetherRxRecordButtons();
 
     // Toggle helper for the AetherDSP Settings dialog: open it when hidden,
     // close it when visible.  Gives the per-slice DSP-tab ADSP button the same

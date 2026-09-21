@@ -113,6 +113,37 @@ private:
 // page — checkable, property-selected, sized by the layout — but left-aligned,
 // because a column of centred labels of different lengths reads as ragged
 // where a row of them reads as even.
+// Idle text is the dimmed family colour; hover and checked are the bright
+// one, checked also filling the tab. Disabled goes to the column's grey so a
+// PLAY with nothing to play does not read as "off" in its own colour.
+QString footerToggleStyle(StageTabBar::Accent accent)
+{
+    const char* dim   = "#c8a070";
+    const char* lit   = "#f2c14e";
+    const char* fill  = "#4a3818";
+    const char* hover = "#5a4a28";
+    switch (accent) {
+    case StageTabBar::Accent::Amber:
+        break;
+    case StageTabBar::Accent::Red:
+        dim = "#a05050"; lit = "#ff4040";
+        fill = "rgba(255,50,50,50)"; hover = "rgba(255,50,50,80)";
+        break;
+    case StageTabBar::Accent::Green:
+        dim = "#509050"; lit = "#40e060";
+        fill = "rgba(50,200,80,50)"; hover = "rgba(50,200,80,80)";
+        break;
+    }
+    return QStringLiteral(
+        "QPushButton { text-align: left; color: %1; }"
+        "QPushButton:disabled { color: #4a5260; }"
+        "QPushButton:hover:enabled { color: %2; border-color: %2; }"
+        "QPushButton:checked { color: %2; border-color: %2; background: %3; }"
+        "QPushButton:checked:hover { background: %4; }")
+        .arg(QLatin1String(dim), QLatin1String(lit),
+             QLatin1String(fill), QLatin1String(hover));
+}
+
 QPushButton* makeStageTab(const QString& text)
 {
     auto* b = new QPushButton(text);
@@ -277,16 +308,9 @@ QVector<QPushButton*> StageTabBar::addFooterToggleRow(const QVector<FooterToggle
         // Not in m_group: checking it must not deselect the current stage
         // page, and the page tabs must not uncheck it. Its own checked
         // colour, too -- the tab sheet's checked state reads as "this page
-        // is showing", and an engaged bypass has to read as a warning
-        // instead. Amber, like the docked chain applet's BYPASS, so the same
-        // state looks the same in both places; a caller wanting another
-        // colour restyles the button it gets back.
-        button->setStyleSheet(QStringLiteral(
-            "QPushButton { text-align: left; color: #c8a070; }"
-            "QPushButton:hover { color: #f2c14e; border-color: #f2c14e; }"
-            "QPushButton:checked { color: #f2c14e; border-color: #f2c14e;"
-            "                      background: #4a3818; }"
-            "QPushButton:checked:hover { background: #5a4a28; }"));
+        // is showing", and an engaged bypass or a running capture has to
+        // read as a state instead.
+        button->setStyleSheet(footerToggleStyle(t.accent));
         // Equal shares of the row: a short label must not shrink its half.
         rowBox->addWidget(button, 1);
         made.append(button);
