@@ -485,8 +485,26 @@ void Hl2RxDsp::setAudioMuted(bool muted)
     // triggers on a RATIO — magnitude against a running average magnitude — so
     // a transmit period of silence drags that average toward zero and the first
     // real sample afterwards looks like an enormous impulse. The blanker would
-    // then gate the start of every receive period. Holding it freezes the
-    // average instead; WdspChannel flushes it on release.
+    // then gate the start of every receive period.
+    //
+    // Holding it makes WdspChannel::processIq SKIP the stage entirely rather
+    // than feed it, so its running average still holds the pre-transmit signal
+    // level and it is already armed for the first receive sample. NOTHING IS
+    // FLUSHED, here or on release — this sentence used to say "WdspChannel
+    // flushes it on release", which is the opposite of what that branch does
+    // and of what its own comment argues at length. The only flush_anbEXT call
+    // in the tree is in WdspChannel::setNoiseBlanker, on ENABLE. A flush on
+    // release would leave the blanker unarmed for ~200 ms at backtau 0.05 s —
+    // measured as a blanked/unblanked impulse peak ratio of 1.000, bit
+    // identical to the blanker being switched off. (#5499 item 3)
+    //
+    // With the blanker OFF this does nothing at all: processIq's m_nbHold check
+    // sits inside the m_nbActive gate, so the hold gates a stage that is not
+    // running. Off is the default, and it is the configuration #5497's unkey
+    // transient was measured in — so whatever this mitigation is worth, it is
+    // not in the path there. Noted rather than "fixed": hoisting the hold out
+    // of the m_nbActive block would be a behaviour change to a real-time path
+    // with no reported problem behind it.
     if (m_channel)
         m_channel->setNoiseBlankerHold(muted);
 }

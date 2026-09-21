@@ -963,8 +963,15 @@ void WdspChannel::setNoiseBlankerHold(bool hold) noexcept
 {
     // No beginControlOperation(): this is called from the same thread that
     // drives processIq() on a transmit edge, and taking the control handshake
-    // there would deadlock against a callback in flight. Both stores are
-    // atomic and the flush they schedule happens inside processIq() itself.
+    // there would deadlock against a callback in flight. The store is atomic
+    // and processIq() reads it on its next block.
+    //
+    // IT SCHEDULES NO FLUSH. This used to say "the flush they schedule happens
+    // inside processIq() itself"; no flush is scheduled and none happens. The
+    // hold makes processIq SKIP the blanker stage, which is what preserves its
+    // running average across the transmit — see the branch there, which argues
+    // the measurement. The only flush_anbEXT call in this file is in
+    // setNoiseBlanker, on enable. (#5499 item 3)
     m_nbHold.store(hold, std::memory_order_relaxed);
 }
 
