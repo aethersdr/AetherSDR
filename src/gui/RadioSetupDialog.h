@@ -35,6 +35,7 @@ class KiwiSdrManager;
 class AcomConnection;
 class SpeConnection;
 class VkampConnection;
+class Kpa1500Connection;
 class LpMeterConnection;
 
 // Radio Setup dialog — searchable, category-based configuration window.
@@ -51,6 +52,7 @@ public:
                               SpeConnection* spe = nullptr,
                               VkampConnection* vkamp = nullptr,
                               LpMeterConnection* lpMeter = nullptr,
+                              Kpa1500Connection* kpa1500 = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
@@ -176,6 +178,7 @@ private:
     SpeConnection* m_spe{nullptr};
     VkampConnection* m_vkamp{nullptr};
     LpMeterConnection* m_lpMeter{nullptr};
+    Kpa1500Connection* m_kpa1500{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};

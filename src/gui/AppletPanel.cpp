@@ -15,6 +15,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "Kpa1500Applet.h"
 #include "LpMeterApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
@@ -868,6 +869,21 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                                m_drawer, m_drawerLayout);
         m_vkampBtn = entry.btn;
         markHardwareConditional("VKAMP");
+        m_appletOrder.append(entry);
+    }
+
+    // Elecraft KPA1500 — independent of AMP (PGXL), ACOM, SPE and VKAMP
+    // for the same reason they are independent of each other: a station can
+    // have any combination of them connected at once. Deliberately NOT in
+    // kDefaultOrder: the KPA1500 has no discovery path, so the stored
+    // Peripherals configuration is the only thing that can ever reveal it.
+    // See docs/architecture/kpa1500-amplifier-design.md.
+    m_kpa1500Applet = new Kpa1500Applet;
+    {
+        auto entry = makeEntry("KPA1500", "Elecraft KPA1500", m_kpa1500Applet, false,
+                               m_drawer, m_drawerLayout);
+        m_kpa1500Btn = entry.btn;
+        markHardwareConditional("KPA1500");
         m_appletOrder.append(entry);
     }
 
@@ -1816,6 +1832,12 @@ void AppletPanel::setSpeVisible(bool visible)
 void AppletPanel::setVkampVisible(bool visible)
 {
     updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setKpa1500Visible(bool visible)
+{
+    updateHardwareAvailability("KPA1500", "Applet_KPA1500", visible);
     applyBarLayout();
 }
 

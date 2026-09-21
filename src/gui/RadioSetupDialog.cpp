@@ -37,6 +37,7 @@
 #include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
+#include "core/Kpa1500Connection.h"
 #include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
@@ -709,12 +710,14 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    SpeConnection* spe,
                                    VkampConnection* vkamp,
                                    LpMeterConnection* lpMeter,
+                                   Kpa1500Connection* kpa1500,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter),
+      m_kpa1500(kpa1500)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);
@@ -8923,6 +8926,108 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         });
     }
 
+    // Elecraft KPA1500 amplifier — a plain host/port pair (#4097). The amp
+    // exposes TCP and UDP servers on the same port and defaults to 1500, but
+    // the port is movable with `^CP`, so it is an editable field rather than
+    // a fixed label. See docs/architecture/kpa1500-amplifier-design.md.
+    if (m_kpa1500) {
+        const int row = grid->rowCount();
+
+        auto* devLbl = new QLabel("Elecraft KPA1500");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(devLbl, kLabelStyle);
+        grid->addWidget(devLbl, row, 0);
+
+        auto* ipEdit = new QLineEdit;
+        ipEdit->setPlaceholderText("e.g. 192.168.1.60");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(ipEdit, kEditStyle);
+        ipEdit->setText(PeripheralSettings::deviceString("Kpa1500", "ManualIp"));
+        // Name answers "what is this?", description answers "what do I type?"
+        // — docs/a11y.md §2's rule for input widgets.
+        ipEdit->setAccessibleName(tr("KPA1500 address"));
+        ipEdit->setAccessibleDescription(
+            tr("IP address or host name of the Elecraft KPA1500 amplifier"));
+        grid->addWidget(ipEdit, row, 1);
+
+        auto* portSpin = new QSpinBox;
+        portSpin->setRange(1, 65535);
+        portSpin->setValue(PeripheralSettings::deviceInt(
+            "Kpa1500", "ManualPort", AetherSDR::Kpa1500::kDefaultPort));
+        portSpin->setAccessibleName(tr("KPA1500 control port"));
+        portSpin->setAccessibleDescription(
+            tr("TCP control port, 1 to 65535, default 1500"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(portSpin,
+            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
+        grid->addWidget(portSpin, row, 2);
+
+        static const QString kKpaConnectedStyle = "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
+        static const QString kKpaDisconnectedStyle = "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
+        static const QString kKpaErrorStyle = "QLabel { color: {{color.accent.danger}}; font-size: 11px; }";
+        static const QString kKpaConnectingStyle = "QLabel { color: {{color.accent.warning}}; font-size: 11px; }";
+
+        auto* statusLbl = new QLabel(m_kpa1500->isConnected() ? "Connected" : "Not connected");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+            m_kpa1500->isConnected() ? kKpaConnectedStyle : kKpaDisconnectedStyle);
+        statusLbl->setAccessibleName(tr("KPA1500 connection status"));
+        grid->addWidget(statusLbl, row, 4);
+
+        auto* kpaBtn = new QPushButton(m_kpa1500->isConnected() ? "Disconnect" : "Connect");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(kpaBtn, kBtnStyle);
+        kpaBtn->setAccessibleName(tr("Connect or disconnect the Elecraft KPA1500"));
+        grid->addWidget(kpaBtn, row, 3);
+
+        auto updateKpaState = [this, kpaBtn, statusLbl]() {
+            const bool conn = m_kpa1500->isConnected();
+            kpaBtn->setText(conn ? "Disconnect" : "Connect");
+            statusLbl->setText(conn ? "Connected" : "Not connected");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                conn ? kKpaConnectedStyle : kKpaDisconnectedStyle);
+        };
+        connect(m_kpa1500, &Kpa1500Connection::connected, this, updateKpaState);
+        connect(m_kpa1500, &Kpa1500Connection::disconnected, this, updateKpaState);
+        connect(m_kpa1500, &Kpa1500Connection::connectionFailed, this,
+                [statusLbl](const QString& err) {
+            statusLbl->setText("Error: " + err);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kKpaErrorStyle);
+        });
+
+        connect(kpaBtn, &QPushButton::clicked, this, [=, this]() {
+            if (m_kpa1500->isConnected()) {
+                m_kpa1500->disconnect();
+                return;
+            }
+            const QString ip = ipEdit->text().trimmed();
+            if (ip.isEmpty()) return;
+            const int port = portSpin->value();
+            PeripheralSettings::setDeviceString("Kpa1500", "ManualIp", ip);
+            PeripheralSettings::setDeviceInt("Kpa1500", "ManualPort", port);
+            // Immediate feedback — the connection has its own multi-second
+            // timeout, and without this the label sits on "Not connected"
+            // for the whole attempt, which reads as unresponsive rather
+            // than in progress. Overwritten by updateKpaState()/the
+            // connectionFailed handler as soon as the real outcome lands.
+            statusLbl->setText("Connecting…");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kKpaConnectingStyle);
+            m_kpa1500->connectNetwork(ip, static_cast<quint16>(port));
+        });
+
+        // Save-on-close: same "user cleared the field and closed the dialog
+        // without clicking Connect/Disconnect" handling as the ACOM/VK3AMP
+        // rows above.
+        m_peripheralRowSavers.append([ipEdit, this]() {
+            if (!ipEdit) return;
+            const QString ip = ipEdit->text().trimmed();
+            if (!ip.isEmpty()) return;
+            const QString savedIp = PeripheralSettings::deviceString("Kpa1500", "ManualIp");
+            if (savedIp.isEmpty()) return;
+            PeripheralSettings::clearDeviceField("Kpa1500", "ManualIp");
+            PeripheralSettings::clearDeviceField("Kpa1500", "ManualPort");
+            if (m_kpa1500->isConnected() && m_kpa1500->description().startsWith(savedIp + ":")) {
+                m_kpa1500->disconnect();
+            }
+        });
+    }
+
     for (auto* lbl : group->findChildren<QLabel*>())
         if (lbl->styleSheet().isEmpty()) lbl->setStyleSheet(kLabelStyle);
 
@@ -8955,6 +9060,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
         if (m_lpMeter) {
             m_lpMeter->setAutoReconnect(on);
+        }
+        if (m_kpa1500) {
+            m_kpa1500->setAutoReconnect(on);
         }
         // NOTE: m_vkamp is deliberately NOT propagated here, and that is a
         // pre-existing gap from #4919 rather than an intentional omission --
