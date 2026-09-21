@@ -1,10 +1,14 @@
 #include "asr/WhisperAsrBackend.h"
 
+#include "asr/AsrStageTrace.h"
+
 #include <QFileInfo>
 #include <QLoggingCategory>
 #include <QThread>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include <exception>
 #include <mutex>
 #include <set>
@@ -21,6 +25,10 @@ namespace AetherSDR {
 Q_LOGGING_CATEGORY(lcAsrWhisper, "aether.asr.whisper")
 
 namespace {
+// Set when the first model load begins; read by the whisper/ggml log callback.
+// See asrLibLogCallback for why stderr treats DEBUG differently after it.
+std::atomic<bool> g_asrModelLoadBegun{false};
+
 // Whisper is chunk-based; on HF audio a single over is well under 30 s, so we
 // cap inference threads modestly to leave the box responsive (esp. on a Pi).
 int chooseThreadCount()
@@ -155,6 +163,27 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
     cparams.use_gpu = useGpu;
     cparams.gpu_device = useGpu ? m_gpuDevice : 0;
 
+    // Opened after the asrGpuAvailable() pass above, which writes its own
+    // discovery record, so the two never nest and the last begin record in a
+    // crashed session's log names the stage that was actually running. The file
+    // name only: a custom model's directory is the operator's business.
+    g_asrModelLoadBegun.store(true);
+    const QFileInfo modelFile(modelPath);
+    AsrStageTrace stage("asr.model_load",
+                        QStringLiteral("model=%1 size_mb=%2 device=%3 threads=%4")
+                            .arg(modelFile.fileName())
+                            .arg(modelFile.size() / (1024 * 1024))
+                            .arg(useGpu ? QStringLiteral("gpu%1").arg(m_gpuDevice)
+                                        : QStringLiteral("cpu"))
+                            .arg(m_threads));
+
+    // Aimed at a GPU but not entering it (the device is latched, or no GPU
+    // backend answered): this load runs on CPU, and the attempt marker the
+    // controller armed may still name the GPU (#5190).
+    if (m_gpuDevice >= 0 && !useGpu) {
+        asrNotifyCpuFallback();
+    }
+
     const QByteArray pathUtf8 = modelPath.toUtf8();
     QString failure;
     m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
@@ -181,6 +210,13 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
                                 << "- retrying on CPU";
         if (modelPlausible) {
             asrMarkGpuDeviceFailed(m_gpuDevice);
+            // After the latch, before the retry: from here a death is a CPU
+            // death, and the persisted marker must say so, or the next launch
+            // retires the GPU and walks straight back into this same CPU load
+            // (#5190). Only when the device was latched: an unlatched GPU may
+            // be entered by a load already queued behind this one, and its
+            // marker must keep naming that GPU.
+            asrNotifyCpuFallback();
         } else {
             qCWarning(lcAsrWhisper)
                 << "model file is empty or unreadable - not latching device"
@@ -193,9 +229,14 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
         // null would otherwise be reported with the GPU's Vulkan exception
         // text — blaming the driver for, say, a truncated model file.
         failure.clear();
+        // The log says so too, flushed, whatever the latch decided above: the
+        // begin record named the GPU, and a death from here on is on the CPU.
+        stage.note("cpu_retry", QStringLiteral("device=cpu"));
         m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
     }
     if (m_ctx == nullptr) {
+        // `useGpu` here means a CPU retry ran above and failed as well.
+        stage.fail(useGpu ? "gpu_and_cpu_failed" : "load_failed");
         if (error != nullptr) {
             *error = failure.isEmpty()
                 ? QStringLiteral("whisper failed to load model: %1").arg(modelPath)
@@ -213,6 +254,9 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
     // latching. That is the safe direction: an over-latch costs a session of
     // GPU speed, an under-latch costs the process (#4502).
     m_ctxOnGpu = cparams.use_gpu;
+    if (useGpu && !m_ctxOnGpu) {
+        stage.fail("gpu_failed_cpu_ok"); // loaded, but only after the CPU retry
+    }
 
     qCInfo(lcAsrWhisper) << "Loaded model" << modelPath << "(" << m_threads << "threads )";
     return true;
@@ -402,6 +446,54 @@ std::function<std::unique_ptr<IAsrBackend>()> whisperAsrBackendFactory(const QSt
 
 namespace {
 
+static_assert(AsrLibLogAssembler::kLevelWarn == GGML_LOG_LEVEL_WARN
+                  && AsrLibLogAssembler::kLevelError == GGML_LOG_LEVEL_ERROR
+                  && AsrLibLogAssembler::kLevelCont == GGML_LOG_LEVEL_CONT,
+              "AsrLibLogAssembler's level constants must mirror ggml_log_level");
+
+// Runs on whichever thread whisper/ggml logged from (the ASR worker, the
+// discovery pool thread). Log and return — nothing else belongs here.
+void asrLibLogCallback(ggml_log_level level, const char* text, void*)
+{
+    if (text == nullptr) {
+        return;
+    }
+    // stderr first, so a terminal session reads as it did before routing
+    // existed. That is two regimes, not one: until whisper's first backend init,
+    // ggml logs through its own default callback, which prints every level —
+    // that is where the Vulkan device inventory ("Found N Vulkan devices", a
+    // DEBUG line) comes from, during discovery. whisper_backend_init_gpu() then
+    // installs whisper's default into ggml, and that one drops DEBUG — which
+    // keeps Metal's per-kernel DEBUG lines off the compute path. One callback
+    // now stands in for both, so it switches where they did: DEBUG reaches
+    // stderr only until the first model load begins.
+    if (level != GGML_LOG_LEVEL_DEBUG || !g_asrModelLoadBegun.load()) {
+        fputs(text, stderr);
+        fflush(stderr);
+    }
+
+    // Never destroyed, same reason as LogManager::instance(): the callback stays
+    // installed for the life of the process, and ggml can log from teardown
+    // that runs after function-local statics have been destroyed.
+    static auto* const mutex = new std::mutex;
+    static auto* const assembler = new AsrLibLogAssembler;
+    std::vector<AsrLibLogAssembler::Line> lines;
+    {
+        const std::lock_guard<std::mutex> lock(*mutex);
+        lines = assembler->feed(static_cast<int>(level), text);
+    }
+    if (lines.empty()) {
+        return;
+    }
+    for (const AsrLibLogAssembler::Line& line : lines) {
+        qCWarning(lcAsrWhisper).noquote()
+            << (line.error ? "whisper/ggml error:" : "whisper/ggml warning:") << line.text;
+    }
+    if (asrStageOpen()) {
+        asrFlushLog();
+    }
+}
+
 // Devices whose model load failed this run. Whisper loads happen on the ASR
 // worker thread while enumeration runs on a QtConcurrent pool thread, so the
 // set is mutex-guarded. Never cleared: see asrMarkGpuDeviceFailed's contract.
@@ -468,6 +560,12 @@ bool asrDeviceUsableForDecode(ggml_backend_dev_t dev)
 
 } // namespace
 
+void asrInstallLogRouting()
+{
+    // whisper_log_set() installs the callback for ggml as well.
+    whisper_log_set(asrLibLogCallback, nullptr);
+}
+
 void asrMarkGpuDeviceFailed(int index)
 {
     if (index < 0) {
@@ -518,6 +616,12 @@ std::vector<AsrGpuDevice> asrGpuDevices()
     // (CPU-only) instead; a partial enumeration is discarded rather than
     // returned, so an index never points at a device other than the one
     // whisper would pick.
+    //
+    // The record sits here rather than at the GUI call site because this
+    // function has a second caller: load() reaches it through asrGpuAvailable()
+    // on the ASR worker thread, a full enumerate-and-probe pass outside any
+    // window the controller could bracket (#5190 triage).
+    AsrStageTrace stage("asr.device_discovery");
     std::vector<AsrGpuDevice> devices;
     try {
         int index = 0;
@@ -601,9 +705,11 @@ std::vector<AsrGpuDevice> asrGpuDevices()
         }
     } catch (const std::exception& e) {
         qCWarning(lcAsrWhisper) << "GPU device enumeration failed:" << e.what();
+        stage.fail("enumeration_threw");
         devices.clear();
     } catch (...) {
         qCWarning(lcAsrWhisper) << "GPU device enumeration failed: unknown exception";
+        stage.fail("enumeration_threw");
         devices.clear();
     }
     return devices;

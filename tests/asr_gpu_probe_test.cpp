@@ -202,6 +202,84 @@ int main()
                     "explicit choices untouched)\n");
     }
 
+    // ---- #5190 whisper/ggml log routing policy --------------------------------
+    // Pure: what reaches the log file out of the callback stream. Level numbers
+    // are ggml_log_level's (the .cpp static_asserts the mirror).
+    {
+        using Asm = AsrLibLogAssembler;
+        constexpr int kInfo = 2; // GGML_LOG_LEVEL_INFO
+
+        // MEASURED (09-16 ballast bench, Linux RTX 5060, main 85fdf816, the
+        // stderr capture of the run that then segfaulted): emitted by
+        // GGML_LOG_ERROR at ggml-alloc.c:1133.
+        const char* allocFailed =
+            "alloc_tensor_range: failed to allocate Vulkan1 buffer of size 551900160\n";
+        // MEASURED (same capture): one of the INFO lines a load prints.
+        const char* infoLine = "whisper_init_with_params_no_state: use gpu    = 1\n";
+
+        Asm a;
+        std::vector<Asm::Line> got = a.feed(Asm::kLevelError, allocFailed);
+        if (got.size() != 1 || !got[0].error
+            || got[0].text
+                != QStringLiteral("alloc_tensor_range: failed to allocate Vulkan1 "
+                                  "buffer of size 551900160")) {
+            std::fprintf(stderr, "[FAIL] a ggml ERROR line was not forwarded whole, "
+                                 "as an error, without its newline (#5190)\n");
+            return 1;
+        }
+        got = a.feed(kInfo, infoLine);
+        if (!got.empty()) {
+            std::fprintf(stderr, "[FAIL] an INFO line was forwarded - a model load "
+                                 "prints dozens of them (#5190)\n");
+            return 1;
+        }
+        // CONSTRUCTED from here on: transformation logic only (fragment joining),
+        // no claim that whisper emits these shapes.
+        got = a.feed(Asm::kLevelCont, " continuation of an INFO message\n");
+        if (!got.empty()) {
+            std::fprintf(stderr, "[FAIL] a CONT fragment of a dropped message was "
+                                 "forwarded (#5190)\n");
+            return 1;
+        }
+        got = a.feed(Asm::kLevelWarn, "first half,");
+        if (!got.empty()) {
+            std::fprintf(stderr, "[FAIL] an unterminated fragment was forwarded "
+                                 "before its line completed (#5190)\n");
+            return 1;
+        }
+        got = a.feed(Asm::kLevelCont, " second half\nnext line\n");
+        if (got.size() != 2 || got[0].error
+            || got[0].text != QStringLiteral("first half, second half")
+            || got[1].text != QStringLiteral("next line")) {
+            std::fprintf(stderr, "[FAIL] CONT fragments were not joined onto the "
+                                 "WARN message and split into whole lines (#5190)\n");
+            return 1;
+        }
+        // Two same-level fragments are two messages, not one: the vendored
+        // whisper/ggml repeat the level for multi-part output instead of using
+        // CONT, and only CONT joins.
+        got = a.feed(Asm::kLevelWarn, "part one\n");
+        std::vector<Asm::Line> second = a.feed(Asm::kLevelWarn, "part two\n");
+        if (got.size() != 1 || second.size() != 1
+            || got[0].text != QStringLiteral("part one")
+            || second[0].text != QStringLiteral("part two")) {
+            std::fprintf(stderr, "[FAIL] two same-level messages were not kept as "
+                                 "two lines (#5190)\n");
+            return 1;
+        }
+        // An unterminated message is finished by the next message, not lost and
+        // not glued onto it.
+        a.feed(Asm::kLevelError, "no newline");
+        got = a.feed(kInfo, "unrelated info\n");
+        if (got.size() != 1 || !got[0].error || got[0].text != QStringLiteral("no newline")) {
+            std::fprintf(stderr, "[FAIL] an unterminated ERROR was lost or merged "
+                                 "into the next message (#5190)\n");
+            return 1;
+        }
+        std::printf("[ok] #5190 whisper/ggml log routing "
+                    "(WARN+ERROR forwarded whole, INFO dropped, CONT joined)\n");
+    }
+
     // VRAM gate on the automatic raise to the GPU-default tier (#4972): "a GPU
     // exists" must not be enough to select a 1.6 GB model.
     {

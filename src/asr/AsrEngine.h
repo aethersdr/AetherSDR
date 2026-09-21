@@ -8,6 +8,7 @@
 #include <QString>
 #include <QVector>
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -71,6 +72,11 @@ public slots:
     // Opt-in (RFC #4818), see IAsrBackend::setContextCarryEnabled.
     void setContextCarryEnabled(bool on);
     void clearContext();   // flush carried context (long gap / Clear button)
+    // The engine dropped audio between the previous chunk and the next one
+    // (backlog ceiling, #5730): close out the partial segment and the carried
+    // text/context so a segment never splices audio from either side of the
+    // gap. Narrower than reset() — speaker labels and the resampler survive.
+    void markDiscontinuity();
     void reset();
 
 signals:
@@ -86,6 +92,10 @@ private:
     // Resample arbitrary-rate mono to 16 kHz mono (returns the input unchanged
     // when already 16 kHz). Builds/rebuilds the r8brain resampler on rate change.
     std::vector<float> toSixteenK(const QVector<float>& monoSamples, int sampleRate);
+    // Transcribe closed segments in order and emit their text (overlap de-dup,
+    // speaker label). Requires a loaded backend. Shared by processAudio() and
+    // markDiscontinuity().
+    void decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segments);
 
     AsrBackendFactory m_factory;
     AsrSpeakerEmbedderFactory m_speakerEmbedderFactory;
@@ -143,6 +153,13 @@ public:
     // Feed mono audio at its native sampleRate (e.g. the 24 kHz RX pipeline).
     // Ignored unless enabled. Cheap — copies and posts to the worker, which
     // resamples to 16 kHz. No work happens on the caller/audio thread.
+    //
+    // Bounded (#5730): the worker's transcribe() blocks per segment, so a
+    // model/device slower than real time would otherwise queue audio without
+    // limit. Once the backlog reaches asrBacklogHighWaterMs() incoming chunks
+    // are dropped (counted, see droppedAudioChanged) until it drains to half
+    // that or less, and the worker is told to start a fresh segment at the
+    // resume point.
     void pushAudio(const QVector<float>& monoSamples, int sampleRate);
 
     // Segmentation tuning (applied on the worker thread):
@@ -178,6 +195,9 @@ signals:
     // Transcription backlog: seconds of received audio not yet handled by the
     // worker (grows when it can't keep up with real time).
     void backlogChanged(double seconds);
+    // Seconds of audio dropped at the backlog ceiling since the last reset()
+    // (0.1 s resolution, emitted only when it moves). 0 = keeping up.
+    void droppedAudioChanged(double seconds);
     void error(const QString& error);
 
     // Internal: engine -> worker (queued). Not part of the public contract.
@@ -192,6 +212,7 @@ signals:
     void requestSetSpeakerThreshold(float threshold);
     void requestSetContextCarryEnabled(bool on);
     void requestClearContext();
+    void requestMarkDiscontinuity();
     void requestReset();
 
 private:
@@ -199,6 +220,7 @@ private:
                      AsrSpeakerEmbedderFactory speakerEmbedderFactory);
 
     void updateBacklog(); // recompute lag = pushed − processed, emit if it moved
+    void updateDropped(); // emit droppedAudioChanged if the total moved
 
     QThread* m_thread = nullptr;
     AsrWorker* m_worker = nullptr;
@@ -209,6 +231,31 @@ private:
     double m_pushedMs = 0.0;         // audio handed to the engine (main thread)
     double m_processedMs = 0.0;      // audio the worker reports as handled
     double m_lastBacklogTenths = -1; // last emitted backlog (0.1 s units) — dedup
+    // Audio that was queued at the last reset(): the worker still reports each
+    // of those chunks as processed (in order, once each) after the counters
+    // were zeroed, so those reports pay this down instead of driving
+    // m_processedMs past m_pushedMs — which would read as a negative lag and
+    // raise the ceiling by the stale amount (#5730 review).
+    double m_staleMs = 0.0;
+    // Backlog ceiling (#5730). The decode buffer is mirrored here because the
+    // ceiling scales with it; the worker holds the copy the segmenter uses.
+    int m_decodeBufferMs = AsrSegmenter::Config{}.maxSegmentMs;
+    bool m_dropping = false;         // above the ceiling; pushAudio drops chunks
+    double m_droppedMs = 0.0;        // audio dropped since the last reset()
+    double m_droppedAtEntryMs = 0.0; // m_droppedMs when the current episode began
+    double m_lastDroppedTenths = -1; // last emitted dropped total — dedup
 };
+
+// Backlog ceiling for a given decode buffer (#5730): twice the buffer, never
+// below 10 s. A decode of one full buffer legitimately shows a backlog of its
+// own wall time — twice the buffer leaves room for a slower-than-realtime CPU
+// that still catches up in the next silence; the floor keeps a 1 s buffer from
+// being cut at every decode. Dropping stops once the backlog has drained to
+// half the ceiling or less. Pure so the test can pin the shape.
+inline int asrBacklogHighWaterMs(int decodeBufferMs)
+{
+    constexpr int kFloorMs = 10000;
+    return std::max(kFloorMs, 2 * std::max(0, decodeBufferMs));
+}
 
 } // namespace AetherSDR

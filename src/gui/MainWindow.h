@@ -40,6 +40,7 @@
 #include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
+#include "RxPlaybackTransmitter.h"
 #include "core/ClientPuduMonitor.h"
 #include "core/AudioOutputRouter.h"
 #include "core/DxClusterClient.h"
@@ -763,6 +764,9 @@ private:
     void showPanadapterInterlockNotification(const QString& message,
                                              const QString& key = QString(),
                                              const QString& panId = QString());
+    // RadioModel::autoRfGainArmSettled: reflect the outcome on every pan's copy
+    // of the Auto checkbox, and explain a refusal once, on the active pan.
+    void onAutoRfGainArmSettled(bool armed);
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();
     // Show a decoder panel on exactly one applet — the current decoder target —
@@ -847,6 +851,13 @@ private:
     // just raises the existing instance.  Returns nullptr only if construction
     // failed (e.g. allocation failure).
     AetherRxDialog* ensureAetherRxDialog();
+    // Push the record/play state the AetherRX window should show: the QSO
+    // recorder's in client-side mode, the active slice's in radio-side mode.
+    void syncAetherRxRecordButtons();
+    // AetherRX's "TX Playback": transmit the last Client-Side recording over
+    // the active slice under `input`, the operator's request captured at the
+    // click; a second choice while one is transmitting stops it.
+    void toggleRxPlaybackTransmit(const TxCoordinator::Request& input);
 
     // Toggle helper for the AetherDSP Settings dialog: open it when hidden,
     // close it when visible.  Gives the per-slice DSP-tab ADSP button the same
@@ -1113,6 +1124,7 @@ private:
     // the heartbeat does; the dialog resets it when it starts reading.
     std::unique_ptr<UiTickLagMeter> m_uiTickLagMeter;
     QsoRecorder*      m_qsoRecorder{nullptr};
+    std::unique_ptr<RxPlaybackTransmitter> m_rxPlaybackTx;  // AetherRX "TX Playback"
     // The one live QSO-recorder notice, if any (#4629 review). Held so a
     // repeating condition raises the existing dialog instead of stacking a new
     // one on top — QMessageBox::warning() spins a nested event loop, so a

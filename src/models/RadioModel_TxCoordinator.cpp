@@ -17,7 +17,7 @@ TxCoordinator::Producer RadioModel::registerTxProducer(QObject* lifetime, bool c
     if (!lifetime || QThread::currentThread() != thread()) {
         return {};
     }
-    const TxCoordinator::Producer producer = m_txCoordinator.registerProducer(continuousMicrophone);
+    const TxCoordinator::Producer producer = m_txCoordinator.registerProducer(m_desktopTxActor, continuousMicrophone);
     connect(lifetime, &QObject::destroyed, this, [producer] {
         producer.invalidate();
     }, Qt::DirectConnection); // atomic invalidation; never touches a model
@@ -26,7 +26,8 @@ TxCoordinator::Producer RadioModel::registerTxProducer(QObject* lifetime, bool c
 
 TxCoordinator::Producer RadioModel::registerTxProducer()
 {
-    return QThread::currentThread() == thread() ? m_txCoordinator.registerProducer() : TxCoordinator::Producer{};
+    return QThread::currentThread() == thread()
+        ? m_txCoordinator.registerProducer(m_desktopTxActor) : TxCoordinator::Producer{};
 }
 
 std::shared_ptr<TxController> RadioModel::localTxController()
@@ -38,6 +39,19 @@ std::shared_ptr<TxController> RadioModel::localTxController()
         m_localTxController = std::make_shared<TxController>(this);
     }
     return m_localTxController;
+}
+
+bool RadioModel::canBindGrantedPtt(const TxCoordinator::Request& request,
+                                  const TxCoordinator::Operation& operation) const
+{
+    if (QThread::currentThread() != thread() || m_txSessionClosing || !m_backend
+        || !m_txCoordinator.isIndependentRequest(request)) {
+        return false;
+    }
+    const TxCoordinator::Intent intent = m_txCoordinator.requestIntent(request);
+    return intent.pending() && intent.isActivity(TxActivity::Mox)
+        && m_txCoordinator.requestOperation(request).sameAuthority(operation)
+        && operation.permitsDispatch(txMonotonicMs());
 }
 
 void RadioModel::setTxProducerAdmissionObserver(const TxCoordinator::Producer& producer,
@@ -261,15 +275,25 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     if (transmitStartBlockedByInhibit(gate)) {
         return false;
     }
-    if (!m_backendTxProducer.valid()) {
+    const bool independent = request && m_txCoordinator.isIndependentRequest(*request);
+    if (independent
+        && (!(m_backend->independentTxControl().activities & static_cast<unsigned>(activity))
+            || (!m_txCoordinator.requestOperation(*request).sameOperation(m_txOperation)
+                && !m_backend->independentTxReady()))) {
+        return false;
+    }
+    if (!independent && !m_backendTxProducer.valid()) {
         m_backendTxProducer = registerTxProducer(m_backend.get());
     }
-    if (!m_backendTxProducer.valid()) {
+    if (!independent && !m_backendTxProducer.valid()) {
         emitInterlockNotification(tr("Transmit producer capacity is exhausted."),
                                   QStringLiteral("tx-producer-capacity"));
         return false;
     }
-    const TxCoordinator::Admission admission = m_txCoordinator.acquire(m_desktopTxActor, txMonotonicMs());
+    // Captured inputs retain their trusted actor. An unbound/invalid input
+    // must never fall back to the desktop compatibility actor.
+    const TxCoordinator::Actor actor = request ? m_txCoordinator.requestActor(*request) : m_desktopTxActor;
+    const TxCoordinator::Admission admission = m_txCoordinator.acquire(actor, txMonotonicMs());
     if (!admission.accepted()) {
         // One message per reason. Only Recovering is reachable while a single
         // desktop actor exists, but the others become reachable as soon as a
@@ -340,8 +364,12 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
         m_cwxCommandOperation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
     }
     m_txOperationActivities |= static_cast<unsigned>(activity);
-    m_backend->setTransmitContext(m_txCoordinator.mediaContext(m_backendTxProducer,
-        request ? m_txCoordinator.requestOperation(*request) : m_txOperation));
+    // Independent backend-generated media belongs to this captured grant's
+    // input. The shared desktop producer cannot carry another actor's audio.
+    // Keep desktop's compatible multi-contributor context unchanged.
+    m_backend->setTransmitContext(independent ? m_txCoordinator.mediaContext(*request)
+        : m_txCoordinator.mediaContext(m_backendTxProducer,
+            request ? m_txCoordinator.requestOperation(*request) : m_txOperation));
     if (request) {
         // Arm source-specific policing before a backend command or synchronous
         // UI notification can enter a nested event loop. Recheck after it:
@@ -557,6 +585,53 @@ void RadioModel::completeLocalTxIfDrained()
         // The coordinator retains this actor's ownership until qualified
         // acknowledgment; only this same compatibility actor can reengage.
         (void)m_txCoordinator.finishLocalIntent(m_txOperation);
+        requestIndependentTxStop(m_txOperation);
+    }
+}
+
+TxGrantManager* RadioModel::independentTxGrants()
+{
+    if (QThread::currentThread() != thread()) {
+        return nullptr;
+    }
+    if (!m_independentTxGrants) {
+        m_independentTxGrants = std::make_unique<TxGrantManager>(m_txCoordinator, [this] {
+            return !m_txSessionClosing && m_backend
+                ? m_backend->independentTxControl().activities : 0U;
+        });
+    }
+    return m_independentTxGrants.get();
+}
+
+bool RadioModel::independentTxReady() const
+{
+    return QThread::currentThread() == thread() && !m_txSessionClosing && m_backend
+        && m_backend->independentTxReady() && !m_txCoordinator.hasOwnership()
+        && !m_txCoordinator.recovering();
+}
+
+void RadioModel::requestIndependentTxStop(const TxCoordinator::Operation& operation)
+{
+    if (!operation.independent() || !operation.permitsCleanup()
+        || !m_backend || m_independentStop.matchesOperation(operation)) {
+        return;
+    }
+    m_independentStop = m_txCoordinator.requestStopConfirmation(operation);
+    if (m_independentStop.valid()) {
+        m_backend->stopIndependentTx(operation, m_independentStop);
+    }
+}
+
+void RadioModel::acknowledgeIndependentTxStop(const TxStopEvidence& evidence)
+{
+    if (!evidence.valid() || !evidence.request.sameRequest(m_independentStop)) {
+        return;
+    }
+    if (!m_txCoordinator.confirmStopped(evidence.request)
+        && m_txCoordinator.hasInFlightDispatches()) {
+        // Recheck the ORIGINAL revocable certificate after the writer exits.
+        // The timer never supplies radio evidence or a replacement token.
+        QTimer::singleShot(1, this, [this, evidence] { acknowledgeIndependentTxStop(evidence); });
     }
 }
 
@@ -809,6 +884,13 @@ void RadioModel::stopTxOperation(const TxCoordinator::Operation& operation,
     Q_UNUSED(reason);
     // TxCoordinator has already invalidated the keying fence and entered
     // recovery. All cleanup below is key-up/bypass/abort; never re-admit it.
+    if (operation.independent() && !m_txOperation.sameOperation(operation)) {
+        // Acquiring a lease does not key or adopt it into the model. Canceling
+        // such a lease still requires an exact, transport-local no-write proof.
+        m_txOperation = operation;
+        m_txOperationActivities = 0;
+        m_pendingTxDeliveries = 0;
+    }
     requestTransmitStop(operation);
     m_localTxIntents.clear();
     m_txOperation = operation;
@@ -862,6 +944,9 @@ void RadioModel::requestTransmitStop(const TxCoordinator::Operation& operation)
         // ATU relay configuration unless this operation actually requested ATU.
         m_transmitModel.setMox(false);
     }
+    if (current()) {
+        requestIndependentTxStop(operation);
+    }
 }
 
 void RadioModel::cancelLocalTransmit()
@@ -898,12 +983,26 @@ void RadioModel::cancelLocalTransmit()
     }
 }
 
+void RadioModel::emergencyTransmitStop()
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    m_txCoordinator.emergencyStop();
+    cancelLocalTransmit();
+}
+
 void RadioModel::resetTxOperations()
 {
     // Even an idle coordinator must refuse new intent while the session dies.
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    if (m_independentTxGrants) {
+        m_independentTxGrants->invalidateRadio();
+    }
+    emit transmitSessionInvalidated();
+    m_independentStop = {};
     m_pendingTxDeliveries = 0;
     m_cwInputSession.fetch_add(1, std::memory_order_release);
     m_cwInputNotBefore = std::chrono::steady_clock::now();

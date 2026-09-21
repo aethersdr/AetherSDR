@@ -175,7 +175,13 @@ int main()
 
     // ---- 5 · Ep4Stats arithmetic, on the converter's own scale ----
     {
-        const auto half = ep4Stats(makeEp4(0, {1024}));
+        // ALTERNATING and not a constant +1024. This case asserts that a
+        // constant-MAGNITUDE record has zero crest, and since #5802 the RMS is
+        // taken about the mean — so a record that never changes sign is not a
+        // constant-magnitude signal at all, it is a DC pedestal with no AC
+        // content, and its RMS is the floor. The fixture now says what the
+        // assertions below have always claimed it said.
+        const auto half = ep4Stats(makeEp4(0, {1024, -1024}));
         check(half.has_value(), "ep4Stats accepts a well-formed packet");
         check(half->samples == static_cast<int>(kEp4SamplesPerPacket), "512 samples counted");
         check(half->peakAbs == 1024, "peak is the code, not the wire word");
@@ -248,6 +254,11 @@ int main()
             // The same numbers accumulated as one long record.
             whole.samples += s->samples;
             whole.sumSquares += s->sumSquares;
+            // `sum` alongside `sumSquares`, because rmsDbfs() removes the mean
+            // and a `whole` that forgot the signed sum would claim a mean of
+            // zero for a record that has one — making the comparison below
+            // pass for the wrong reason.
+            whole.sum += s->sum;
             whole.clippedSamples += s->clippedSamples;
             if (s->peakAbs > whole.peakAbs)
                 whole.peakAbs = s->peakAbs;
@@ -255,6 +266,7 @@ int main()
         check(merged.samples == whole.samples, "merge sums the sample count");
         check(merged.peakAbs == whole.peakAbs, "merge takes the max peak, not the sum");
         check(approx(merged.sumSquares, whole.sumSquares), "merge sums the energy");
+        check(approx(merged.sum, whole.sum), "merge sums the signed codes too");
         check(approx(merged.rmsDbfs(), whole.rmsDbfs()),
               "a block's rms is the rms of the concatenation");
     }
@@ -300,6 +312,204 @@ int main()
         check(kD94Ep4Seq48k[0] == 0 && kD94Ep4Seq48k[1] == 1 && kD94Ep4Seq48k[2] == 2
                   && kD94Ep4Seq48k[3] == 0,
               "the recorded rewind is the 0,1,2 -> 0 the gateware forces");
+    }
+
+    // ---- 10 · rmsDbfs() measures about the MEAN, so converter DC cannot
+    //            masquerade as signal (#5802) ----
+    //
+    // The defect this replaces computed sqrt(sumSquares / samples), which for
+    // a record with mean m and deviation s is sqrt(m^2 + s^2) and not s. It is
+    // not a rounding-grade error: a terminated antenna port read adcCrestDb =
+    // 3.71 dB and was diagnosed as a near-sinusoidal carrier, when a DC
+    // pedestal fits that number exactly as well. Crest is the one surface that
+    // separates broadband noise (11-12 dB over 2048 samples) from a discrete
+    // carrier (~3 dB), and an inflated RMS deflates it toward the carrier end
+    // whatever the RF is doing.
+    {
+        // A full-period square wave: mean exactly zero, deviation exactly its
+        // amplitude, both independent of how the 512 samples divide between
+        // the phases. Nothing here is a production constant — kAc and kDc are
+        // fixture amplitudes, and every expectation below is derived from the
+        // radio's own kEp4FullScale rather than from a retyped number.
+        constexpr int kAc = 400;    // codes of AC excursion
+        constexpr int kDc = 300;    // codes of pedestal laid underneath it
+
+        const auto ac   = ep4Stats(makeEp4(0, {kAc, -kAc}));
+        const auto acDc = ep4Stats(makeEp4(0, {kAc + kDc, -kAc + kDc}));
+        const auto pure = ep4Stats(makeEp4(0, {kDc}));       // pedestal, no AC
+        // Guarded HERE, where the dereferencing starts, and for all of them at
+        // once. A guard further down protects nothing: the first unguarded
+        // dereference is the one that crashes, and a crash loses every check
+        // that would have run after it -- a worse diagnostic than the failure
+        // it replaces.
+        check(ac.has_value() && acDc.has_value() && pure.has_value(),
+              "the DC fixtures parse");
+        if (!ac.has_value() || !acDc.has_value() || !pure.has_value()) {
+            return 1;
+        }
+
+        // THE PROPERTY. Same AC excursion, one of them sitting on a pedestal:
+        // the RMS is a statement about the excursion and must not move.
+        check(approx(ac->rmsDbfs(), acDc->rmsDbfs(), 1e-9),
+              "a DC pedestal does not change the reported RMS");
+        // And the pedestal alone has nothing to report. -inf is the true
+        // answer; the floor is how this type says so.
+        check(approx(pure->rmsDbfs(), kEp4FloorDbfs),
+              "a record that is pure DC has no AC content and reads the floor");
+
+        // POSITIVE CONTROL 1 · the fixture really does carry the offset, so
+        // the equality above is not passing because both blocks are the same
+        // block. The peak, which stays absolute, moves by the whole pedestal.
+        check(acDc->peakAbs == kAc + kDc, "the offset block peaks a pedestal higher");
+        check(acDc->peakDbfs() > ac->peakDbfs() + 1.0,
+              "...and that is visible in peakDbfs, which is deliberately NOT mean-referred");
+
+        // POSITIVE CONTROL 2 · the discarded statistic, computed here from the
+        // struct's own accumulators, DOES separate the two blocks — and by the
+        // exact amount the variance identity predicts. This is what the old
+        // rmsDbfs() returned, so it measures how far apart an implementation
+        // that regressed would put the two answers: a blind assertion cannot
+        // produce this number.
+        auto aboutZeroDbfs = [](const Ep4Stats& s) {
+            return 20.0 * std::log10(std::sqrt(s.sumSquares / static_cast<double>(s.samples))
+                                     / static_cast<double>(kEp4FullScale));
+        };
+        const double predicted =
+            20.0 * std::log10(std::hypot(static_cast<double>(kAc), static_cast<double>(kDc))
+                              / static_cast<double>(kAc));
+        check(predicted > 1.0, "the fixture's pedestal is large enough to be a real error");
+        check(approx(aboutZeroDbfs(*acDc) - aboutZeroDbfs(*ac), predicted, 1e-9),
+              "measuring about zero would report the pedestal as sqrt(m^2 + s^2)");
+
+        // POSITIVE CONTROL 3 · and the correction is not a blanket subtraction
+        // that would drag every reading down. With no mean to remove, the two
+        // definitions must agree to the last bit.
+        check(approx(ac->rmsDbfs(), aboutZeroDbfs(*ac), 1e-12),
+              "on a zero-mean record, removing the mean changes nothing");
+
+        // THE CONSEQUENCE THE ISSUE IS ABOUT, on a DC-dominated record: the
+        // old reading collapses the crest toward zero because the RMS grows
+        // with the pedestal almost as fast as the peak does.
+        constexpr int kSmallAc = 100;
+        constexpr int kBigDc   = 1200;
+        const auto swamped = ep4Stats(makeEp4(0, {kSmallAc + kBigDc, -kSmallAc + kBigDc}));
+        check(swamped.has_value(), "the swamped fixture parses");
+        if (!swamped.has_value()) {
+            // Not `g_failures == 0 ? 0 : 1`: the check above has just failed,
+            // so that expression is only ever 1 written the long way.
+            return 1;
+        }
+        check(swamped->peakDbfs() - aboutZeroDbfs(*swamped) < 1.0,
+              "about zero, a pedestal twelve times the excursion reads as under 1 dB of crest");
+        check(swamped->peakDbfs() - swamped->rmsDbfs() > 10.0,
+              "about the mean, the same record is nowhere near a carrier's crest");
+
+        // Mean removal belongs to the BLOCK, not to the packet. Each packet
+        // carries its OWN pedestal, because that is the only way the two
+        // answers differ: with one pedestal shared by all four, centring per
+        // packet and centring over the concatenation give the SAME variance
+        // and the check passes either way. Verified by mutation — with
+        // ep4Stats() patched to subtract its own mean, the shared-pedestal
+        // form still passed while claiming to catch exactly that.
+        //
+        // With distinct pedestals the block's variance is the AC variance plus
+        // the variance of the four pedestals, and a per-packet subtraction
+        // reports the AC variance alone.
+        Ep4Stats block;
+        double dcSum = 0.0;
+        double dcSumSquares = 0.0;
+        for (int p = 0; p < kEp4PacketsPerBlock; ++p) {
+            const int dc = kDc * (p + 1);
+            const auto pkt =
+                ep4Stats(makeEp4(static_cast<std::uint32_t>(p), {kAc + dc, -kAc + dc}));
+            check(pkt.has_value(), "the per-packet pedestal fixtures parse");
+            if (!pkt.has_value()) {
+                return 1;
+            }
+            block.merge(*pkt);
+            dcSum += dc;
+            dcSumSquares += static_cast<double>(dc) * static_cast<double>(dc);
+        }
+        const double packets = static_cast<double>(kEp4PacketsPerBlock);
+        const double dcVar =
+            dcSumSquares / packets - (dcSum / packets) * (dcSum / packets);
+        check(dcVar > 0.0, "the four pedestals really do differ");
+        const double expectedRms =
+            std::sqrt(static_cast<double>(kAc) * static_cast<double>(kAc) + dcVar);
+        check(block.samples == kEp4BlockSamples, "four offset packets make a block");
+        check(approx(block.rmsDbfs(),
+                     20.0 * std::log10(expectedRms / static_cast<double>(kEp4FullScale)),
+                     1e-9),
+              "the mean is removed once, over the merged block, not per packet");
+    }
+
+    // ---- 11 · crestDb() declines to exist rather than subtracting a sentinel
+    //            (#5802; the floor nit on PR #5832) ----
+    //
+    // adcCrestDb is peak - rms, and kEp4FloorDbfs is not a level: it is the
+    // marker this type uses to say "below the smallest code this converter
+    // has" WITHOUT inventing one. Making the RMS AC-referred is what made the
+    // pairing reachable — before it, an about-zero RMS sat at the floor only
+    // when the peak did too, and the difference was a harmless zero. Now a DC
+    // pedestal has a real peak and no representable deviation, and the naive
+    // subtraction publishes tens of dB of "crest" for a record that has none.
+    {
+        constexpr int kDc = 1200;
+
+        // A normal record: crest exists and is exactly the two rows'
+        // difference, so this is a guard and not a reinterpretation.
+        const auto ac = ep4Stats(makeEp4(0, {400, -400}));
+        check(ac.has_value(), "the AC fixture parses");
+        if (!ac.has_value()) {
+            return 1;
+        }
+        const std::optional<double> acCrest = ac->crestDb();
+        check(acCrest.has_value(), "a record with AC content has a crest");
+        check(acCrest.has_value()
+                  && approx(*acCrest, ac->peakDbfs() - ac->rmsDbfs(), 1e-12),
+              "...and it is peak - rms, unchanged");
+
+        // PURE PEDESTAL. The peak is real and large; there is no AC at all.
+        const auto pure = ep4Stats(makeEp4(0, {kDc}));
+        check(pure.has_value(), "the pedestal fixture parses");
+        if (!pure.has_value()) {
+            return 1;
+        }
+        check(approx(pure->rmsDbfs(), kEp4FloorDbfs), "the pedestal's RMS is the floor");
+        check(pure->peakDbfs() > kEp4FloorDbfs + 40.0,
+              "...while its peak is a real level tens of dB above the floor");
+        check(!pure->crestDb().has_value(),
+              "a pedestal with no AC content has no crest to report");
+        // POSITIVE CONTROL: the number the naive subtraction would have
+        // published, derived here rather than retyped, so the assertion above
+        // is measured against the size of the error it prevents.
+        check(pure->peakDbfs() - pure->rmsDbfs() > 60.0,
+              "peak - floor would have fabricated over 60 dB of crest");
+
+        // SUB-FLOOR AC. One code of wobble on a 512-sample pedestal is a
+        // deviation of sqrt(511)/512 ~ 0.044 codes — under half a code, so
+        // below the floor rather than at it. A ratio against quantisation
+        // residue is not a measurement.
+        std::vector<int> wobble(kEp4SamplesPerPacket, kDc);
+        wobble[0] = kDc + 1;
+        const auto lsb = ep4Stats(makeEp4(0, wobble));
+        check(lsb.has_value(), "the one-LSB-wobble fixture parses");
+        if (!lsb.has_value()) {
+            return 1;
+        }
+        check(lsb->rmsDbfs() < kEp4FloorDbfs,
+              "a sub-half-code deviation computes BELOW the floor, not at it");
+        check(!lsb->crestDb().has_value(),
+              "and it has no crest either, for the same reason");
+
+        // An all-zero block: both terms are the floor. The naive form gives a
+        // harmless zero, so this one is about the rule, not the damage.
+        const auto silent = ep4Stats(makeEp4(0, {0}));
+        check(silent.has_value(), "the all-zero fixture parses");
+        if (!silent.has_value()) {
+            return 1;
+        }
+        check(!silent->crestDb().has_value(), "an all-zero block reports no crest");
     }
 
     if (g_failures == 0)

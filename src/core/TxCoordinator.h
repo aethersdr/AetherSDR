@@ -22,12 +22,26 @@ class TxCoordinator final {
     struct IntentState;
     struct ProducerState;
     struct RequestState;
+    struct StopState;
 
 public:
     enum class Activity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
+    static constexpr unsigned kAllActivities = 63;
     class Operation;
     class Context;
     class Request;
+    // Opaque stop-attempt identity for qualified backend readback. Echoing a
+    // token is not itself evidence: only a backend with a documented causal
+    // stop/readback contract may return it. Teardown uses the operation API.
+    class StopRequest {
+    public:
+        [[nodiscard]] bool valid() const;
+        [[nodiscard]] bool sameRequest(const StopRequest& other) const;
+        [[nodiscard]] bool matchesOperation(const Operation& operation) const;
+    private:
+        friend class TxCoordinator;
+        std::shared_ptr<StopState> m_state;
+    };
     // A producer is a trusted in-process lifetime, not a client-supplied ID
     // or an independent TX actor. Copies cannot renew an invalidated lifetime.
     class Producer {
@@ -52,6 +66,7 @@ public:
     class Actor {
     public:
         Actor() = default;
+        [[nodiscard]] bool permitsDispatch(qint64 monotonicMs) const;
     private:
         friend class TxCoordinator;
         std::shared_ptr<ActorState> m_state;
@@ -89,6 +104,7 @@ public:
         [[nodiscard]] bool permitsCleanup() const;
         [[nodiscard]] bool sameOperation(const Operation& other) const;
         [[nodiscard]] bool sameAuthority(const Operation& other) const;
+        [[nodiscard]] bool independent() const;
         // Restrict an existing grant with a producer's immutable cancellation
         // predicate. The trusted caller captures only worker-safe state; the
         // predicate cannot authorize a command or extend the operation.
@@ -212,6 +228,17 @@ public:
         // Zero means no new timeout for an existing local operator workflow.
         // A bounded actor cannot extend a transmission by repeating acquire().
         qint64 maximumOperationMs{0};
+        // Absolute engine-monotonic deadline, independent of operation starts.
+        // Zero is reserved for the transitional desktop compatibility policy.
+        qint64 expiresAtMs{0};
+        unsigned allowedActivities{kAllActivities};
+        // Independent actors require bounded policies and actor-bound inputs.
+        // Their authority also dies on reset; desktop producers may reconnect.
+        bool independent{false};
+        // Optional immutable credential/lifetime fence from trusted composition.
+        // Worker-safe, read-only and nonthrowing; capture atomic state, never a
+        // QObject or callback-time identity. It can only restrict authority.
+        std::function<bool()> authorizationCurrent{};
     };
 
     enum class Refusal { None, WrongThread, InvalidActor, Denied, Busy, Recovering };
@@ -223,19 +250,27 @@ public:
 
     enum class StopReason { OwnerCancelled, ActorRevoked, Expired, Reset, Emergency };
     using StopHandler = std::function<void(const Operation&, StopReason)>;
+    using Clock = std::function<qint64()>;
     static constexpr int kMaximumActors = 64;
     static constexpr int kMaximumIntents = 256;
     static constexpr int kMaximumProducers = 256;
     static constexpr int kMaximumRequests = 256;
 
-    explicit TxCoordinator(StopHandler stopHandler);
+    explicit TxCoordinator(StopHandler stopHandler, Clock clock = {});
     [[nodiscard]] static qint64 monotonicMs();
+    [[nodiscard]] qint64 currentTimeMs() const;
     ~TxCoordinator();
     TxCoordinator(const TxCoordinator&) = delete;
     TxCoordinator& operator=(const TxCoordinator&) = delete;
 
     [[nodiscard]] Actor registerActor(ActorPolicy policy);
+    // Liveness may shorten the absolute grant deadline, never extend it. A
+    // late keepalive cannot revive an expired actor. Owner-thread only.
+    [[nodiscard]] bool refreshLiveness(const Actor& actor, qint64 now, qint64 deadline);
     [[nodiscard]] Producer registerProducer(bool continuousMicrophone = false);
+    [[nodiscard]] Producer registerProducer(const Actor& actor, bool continuousMicrophone = false);
+    [[nodiscard]] Actor requestActor(const Request& request) const;
+    [[nodiscard]] bool isIndependentRequest(const Request& request) const;
     [[nodiscard]] bool ownsRequest(const Request& request) const;
     [[nodiscard]] std::vector<Request> producerRequests(const Producer& producer) const;
     void setProducerAdmissionObserver(const Producer& producer, std::function<void()> observer);
@@ -291,25 +326,21 @@ public:
     //
     // INVARIANT: every stop source needs a matching acknowledgment, because an
     // unacknowledged stop keeps admission closed forever — recovering() stays
-    // true and every later acquire() is refused Recovering. Today the only
-    // stop source that FIRES in production is reset(), and
-    // teardownBackend()/onDisconnected() acknowledge it, so the barrier always
-    // clears with the session.
-    //
-    // expire() is NOT uncalled — acquire() calls it on every admission. It is
-    // inert only because every actor registered in production today carries
-    // maximumOperationMs == 0 (RadioModel's desktop compatibility actor), and
-    // maximumMs == 0 short-circuits the deadline arm of permitsDispatch(). The
-    // increment that registers a BOUNDED actor therefore turns this comment
-    // into a live hazard: it must land expire()'s acknowledgment path in the
-    // same change, not after it. cancel(), revoke() and emergencyStop() have
-    // no production callers at all yet and carry the same obligation.
+    // true and every later acquire() is refused Recovering. Independent client
+    // release, expiry, revocation and emergency stop use exact stop-attempt
+    // tokens and backend-qualified evidence. An ambiguous or expired proof
+    // deliberately leaves this barrier closed until transport teardown.
+    // teardownBackend()/onDisconnected() acknowledge completed teardown; they
+    // never infer physical idle merely from a queued unkey or a timer.
     //
     // RadioModel logs a warning when it hits this refusal outside a
     // disconnect gap.
     [[nodiscard]] bool acknowledgeStopped(const Operation& operation);
+    [[nodiscard]] StopRequest requestStopConfirmation(const Operation& operation);
+    [[nodiscard]] bool confirmStopped(const StopRequest& request);
     [[nodiscard]] bool owns(const Actor& actor, const Operation& operation) const;
     [[nodiscard]] bool recovering() const;
+    [[nodiscard]] bool hasOwnership() const;
     [[nodiscard]] bool hasInFlightDispatches() const;
 
 private:
@@ -322,16 +353,21 @@ private:
         // RX microphone media cannot hold up a fresh PTT intent. Teardown,
         // unlike operation admission, must account for these writes too.
         std::atomic<quint64> continuousDispatches{0};
+        std::atomic<bool> independentOperation{false};
         std::atomic<bool> alive{true};
         std::atomic<int> requests{0};
+        Clock clock; // immutable after construction; test clocks must be worker-safe
     };
     struct ActorState {
         std::weak_ptr<Identity> coordinator;
         ActorPolicy policy;
-        bool revoked{false};
+        std::atomic<bool> revoked{false};
+        std::atomic<qint64> livenessDeadlineMs{0};
+        quint64 session{0};
     };
     struct ProducerState {
         std::weak_ptr<Identity> coordinator;
+        std::shared_ptr<ActorState> actor;
         std::atomic<bool> valid{true};
         std::atomic<quint64> inputEpoch{0};
         bool continuousMicrophone{false};
@@ -373,9 +409,16 @@ private:
         std::shared_ptr<IntentState> intent;
         std::atomic<bool> bound{false};
     };
+    struct StopState {
+        Operation operation;
+        std::weak_ptr<Identity> coordinator;
+        quint64 session{0};
+        std::atomic<bool> retired{false};
+    };
 
     [[nodiscard]] bool onThread() const;
     [[nodiscard]] bool validActor(const Actor& actor) const;
+    [[nodiscard]] Producer makeProducer(const Actor& actor, bool continuousMicrophone);
     void stop(StopReason reason);
     void endIntents(const Operation& operation);
     [[nodiscard]] Intent beginIntent(const Operation& operation, const Intent& previous,
@@ -391,6 +434,7 @@ private:
     Operation m_active;
     Operation m_unconfirmed;
     Operation m_stopping;
+    StopRequest m_stopRequest;
     StopHandler m_stopHandler;
     bool m_inStopHandler{false};
 };
@@ -399,3 +443,4 @@ private:
 
 Q_DECLARE_METATYPE(AetherSDR::TxCoordinator::Context)
 Q_DECLARE_METATYPE(AetherSDR::TxCoordinator::Request)
+Q_DECLARE_METATYPE(AetherSDR::TxCoordinator::StopRequest)

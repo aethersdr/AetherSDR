@@ -565,6 +565,9 @@ QJsonObject describeWidget(const QWidget* w)
             range[QStringLiteral("yellowStart")] = w->property("gaugeYellowStart").toDouble();
             o[QStringLiteral("gaugeRange")] = range;
             o[QStringLiteral("gaugeTicks")] = w->property("gaugeTicks").toString();
+            o[QStringLiteral("gaugePeak")] = w->property("gaugePeak").toDouble();
+            o[QStringLiteral("gaugePeakEnabled")] =
+                w->property("gaugePeakEnabled").toBool();
         }
     }
 
@@ -1851,6 +1854,21 @@ QJsonObject vfoFlagSnapshot(QWidget* vfo, RadioModel* radio)
     return flag;
 }
 
+// EVALUATE THE OPTIONAL ONCE. Both …IfLive() accessors read the clock INSIDE
+// themselves and compare against a staleness window, so calling one twice --
+// once to test it, once to dereference it -- can find it engaged and then
+// disengaged, and dereferencing a disengaged optional is undefined behaviour.
+//
+// The window is sub-microsecond and was reasoned from the code rather than
+// observed. That is precisely the kind of race that is cheaper to remove than
+// to argue about, and a caller cannot be expected to know the accessor reads a
+// clock. (#5499 review)
+template <typename T>
+static QJsonValue jsonOrNull(std::optional<T> v)
+{
+    return v ? QJsonValue(*v) : QJsonValue();
+}
+
 QJsonObject radioSnapshot(const RadioModel* r)
 {
     // Multi-Flex slot occupancy across the radio's whole slice capacity: each
@@ -1884,7 +1902,24 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("connectState"), r->connectState()},
         {QStringLiteral("fullDuplex"),   r->fullDuplexEnabled()},
         {QStringLiteral("transmitting"), r->isRadioTransmitting()},
-        {QStringLiteral("txPower"),      r->txPower()},
+        // Qualified, not a dead scalar. This published RadioModel::m_txPower
+        // — declared, given a getter and a Q_PROPERTY(float txPower READ
+        // txPower NOTIFY metersChanged), and ASSIGNED NOWHERE IN THE TREE, from
+        // the commit that introduced it onwards. It answered 0 at every drive,
+        // keyed or not: with rfPower 10, the relay thrown and 0.153-0.184 W
+        // measurably entering a dummy load, every sample of this field read 0.
+        // A bench run then gated a transmit on setting a drive and reading it
+        // back here — the right shape of gate, and incapable of failing,
+        // because it compared 0 against 0.
+        //
+        // The member, its getter and its property are gone. The live quantity
+        // is the forward-power meter, which is what a field called txPower
+        // hanging off metersChanged always meant; `get transmit`.rfPower
+        // remains the REQUESTED drive, a different quantity that no longer
+        // claims to be this one. The freshness duration matches
+        // `get meters`.txMetersFresh, but this checks FWDPWR's own timestamp:
+        // fresh SWR or REFPWR cannot revive expired watts. (#5499 item 1)
+        {QStringLiteral("txPower"), jsonOrNull(r->meterModel().fwdPowerIfLive())},
         // Qualified, not the scalar: an absent or stale sensor reads null here
         // exactly as it does in `get meters`.
         //
@@ -2359,8 +2394,14 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         // the fwdPower/reflectedPower pair above — a client reading this scalar
         // must not get a different answer from the one reading the array
         // (#4533). swrAgeMs is still reported so a consumer can see WHY.
-        {QStringLiteral("swr"),
-         m->swrIfLive() ? QJsonValue(*m->swrIfLive()) : QJsonValue()},
+        // THE SAME DOUBLE EVALUATION, and the one the other two were copied
+        // from. swrIfLive() reads the clock inside itself like its two
+        // siblings, so testing and dereferencing are two different instants
+        // and a sample on the staleness edge can be engaged for the first and
+        // disengaged for the second. Pre-dates #5499 and is fixed with them
+        // rather than left one line away from two corrections, which is how a
+        // pattern gets copied forward.
+        {QStringLiteral("swr"), jsonOrNull(m->swrIfLive())},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          temperature.value(QStringLiteral("value"))},
         {QStringLiteral("supplyVolts"),     voltage.value(QStringLiteral("value"))},
@@ -2375,7 +2416,15 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("compPeak"),        m->compPeak()},           // dB compression (peak)
         {QStringLiteral("compLevel"),       m->compLevel()},          // dB compression
         {QStringLiteral("hasCompression"),  m->hasCompressionMeterValue()},
-        {QStringLiteral("sLevel"),          m->sLevel()},             // dBm
+        // Null rather than a fabricated floor, for the same reason and under the
+        // same rule as swr above (#4533). MeterModel::m_sLevel was written in
+        // exactly one place — clear(), to -130.0f — so this field answered
+        // -130 dBm for 1304 consecutive samples while the SLC:LEVEL row in
+        // `all`, the same quantity in the same reply, moved around a median of
+        // -83.9. sLevelIfLive() declines when more than one receiver declares a
+        // LEVEL meter, because then the scalar has no single answer and `all`
+        // is where a client names the receiver it means. (#5499 item 2)
+        {QStringLiteral("sLevel"), jsonOrNull(m->sLevelIfLive())},           // dBm
         // Same constant the SWR gate uses, so "the TX meters are fresh" and "the
         // SWR is live" cannot drift apart as two different literals.
         {QStringLiteral("txMetersFresh"),
@@ -2863,6 +2912,8 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
         // nothing. The `tooltip ... cell` form stays outside: it scrolls the
         // view and raises a tip.
         QStringLiteral("cell"),
+        // Reads a meter's published state; moves nothing.
+        QStringLiteral("gauge"), QStringLiteral("gauges"),
     };
     if (kSafe.contains(name)) {
         return true;
@@ -3076,6 +3127,24 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("floors", {}, "per-pan measured noise + display floor (dBm)",
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doFloors(); });
+
+        // Monitoring a meter means sampling it repeatedly, and dumpTree is
+        // the whole widget tree -- hundreds of kilobytes for four numbers.
+        // This is the same state, for one gauge or all of them.
+        add("gauge", {QStringLiteral("gauges")},
+            "gauge [<target>] — value, peak and painted fraction of one gauge, "
+            "or every gauge when no target is given",
+            // Joins the rest of the line rather than taking one token: these
+            // are addressed by accessible name, and an accessible name is a
+            // phrase ("Forward power"). A single-token parse silently
+            // truncates it to "Forward" and reports the widget missing.
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                a.target = vjoin(p, 1);
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doGauge(a.target);
+            });
 
         add("text", {QStringLiteral("getText")},
             "text <target> — full plain text of a QTextEdit/QPlainTextEdit view",
@@ -4127,6 +4196,70 @@ QJsonObject AutomationServer::doGrab(const QString& target, const QString& path)
                             QStringLiteral("widget not found: ") + target}};
     }
     return saveWidgetGrab(w, target, path);
+}
+
+// One JSON object per gauge. gaugeValue is what was last set; gaugeFraction
+// is what is actually painted, and the two disagree for the whole length of a
+// ballistics animation -- a monitor that reads only the former will report a
+// settled meter while the bar is still travelling (#3845).
+static QJsonObject gaugeStateOf(QWidget* w, const QString& name)
+{
+    QJsonObject o;
+    o[QStringLiteral("target")]   = name;
+    o[QStringLiteral("label")]    = w->property("gaugeLabel").toString();
+    o[QStringLiteral("unit")]     = w->property("gaugeUnit").toString();
+    o[QStringLiteral("value")]    = w->property("gaugeValue").toDouble();
+    o[QStringLiteral("fraction")] = w->property("gaugeFraction").toDouble();
+    o[QStringLiteral("peak")]     = w->property("gaugePeak").toDouble();
+    o[QStringLiteral("peakHeld")] = w->property("gaugePeakEnabled").toBool();
+    QJsonObject range;
+    range[QStringLiteral("min")]         = w->property("gaugeMin").toDouble();
+    range[QStringLiteral("max")]         = w->property("gaugeMax").toDouble();
+    range[QStringLiteral("redStart")]    = w->property("gaugeRedStart").toDouble();
+    range[QStringLiteral("yellowStart")] = w->property("gaugeYellowStart").toDouble();
+    o[QStringLiteral("range")] = range;
+    o[QStringLiteral("visible")] = w->isVisible();
+    return o;
+}
+
+QJsonObject AutomationServer::doGauge(const QString& target) const
+{
+    // A gauge is identified by carrying the published state, not by class:
+    // HGauge has no Q_OBJECT, so there is nothing to qobject_cast to, and a
+    // future meter that publishes the same properties should answer here too.
+    const auto isGauge = [](QWidget* w) {
+        return w->property("gaugeLabel").isValid();
+    };
+
+    if (!target.isEmpty()) {
+        QWidget* w = resolveWidget(target);
+        if (!w)
+            return err(QStringLiteral("widget not found: ") + target);
+        if (!isGauge(w))
+            return err(QStringLiteral("not a gauge: ") + target
+                       + QStringLiteral(" (") + shortClassName(w) + QLatin1Char(')'));
+        QJsonObject o = gaugeStateOf(w, target);
+        o[QStringLiteral("ok")] = true;
+        o[QStringLiteral("class")] = shortClassName(w);
+        return o;
+    }
+
+    // No target: every gauge currently constructed, named by whatever a
+    // driver could address it by. Accessible name first -- the object name is
+    // often unset on these, and the accessible name is what the a11y tree and
+    // the invoke verb already use.
+    QJsonArray all;
+    const auto widgets = QApplication::allWidgets();
+    for (QWidget* w : widgets) {
+        if (!w || !isGauge(w)) continue;
+        QString name = w->accessibleName();
+        if (name.isEmpty()) name = w->objectName();
+        if (name.isEmpty()) name = shortClassName(w);
+        all.append(gaugeStateOf(w, name));
+    }
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("count"), all.size()},
+                       {QStringLiteral("gauges"), all}};
 }
 
 // Full document for one resolved text view. dumpTree carries only a capped
@@ -11399,10 +11532,16 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         }
         const QString v = raw.toLower();
         if (v.isEmpty()) {
-            return QJsonObject{{QStringLiteral("ok"), true},
+            auto* status = radio->autoRfGain();
+            QJsonObject report{{QStringLiteral("ok"), true},
                                {QStringLiteral("pan"), QStringLiteral("autorfgain")},
-                               {QStringLiteral("available"), radio->autoRfGain() != nullptr},
+                               {QStringLiteral("available"), status != nullptr},
                                {QStringLiteral("requested"), false}};
+            if (status) {
+                report.insert(QStringLiteral("armed"), status->isArmed());
+                report.insert(QStringLiteral("refusal"), status->lastArmRefusalReason());
+            }
+            return report;
         }
         const bool on = (v == QLatin1String("on") || v == QLatin1String("true")
                          || v == QLatin1String("1"));
@@ -11418,13 +11557,16 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                 "pan autorfgain: this radio has no automatic RF gain control"));
         }
         ag->setArmed(on);
-        // DELIBERATELY NOT AN ECHO OF THE ARMED STATE. The backend may decline
-        // to arm and log why; reporting "requested" rather than "on" keeps this
-        // verb honest about the difference. Read `health` for what actually
-        // happened -- that is the row that comes from the backend.
+        // `requested` is what was asked and `armed` is what the backend did;
+        // they differ when it declined, and `refusal` then carries the same
+        // sentence the GUI shows (#5817). The verb used to report only the
+        // request, so a headless caller had to scrape the log to learn the
+        // arm never took.
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("pan"), QStringLiteral("autorfgain")},
-                           {QStringLiteral("requested"), on}};
+                           {QStringLiteral("requested"), on},
+                           {QStringLiteral("armed"), ag->isArmed()},
+                           {QStringLiteral("refusal"), ag->lastArmRefusalReason()}};
     }
 
     if (action == QLatin1String("float") || action == QLatin1String("dock")) {

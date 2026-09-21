@@ -1,6 +1,8 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/AmpApplet.h"
+#include <QDateTime>
+#include <QtTest>
 #include "gui/HGauge.h"
 
 #include <QAbstractItemView>
@@ -246,6 +248,15 @@ QString rowLabel(const AmpApplet& applet, const QString& prefix)
 
 // The gauges take their value synchronously; the row LABELS are refreshed by
 // a 100 ms timer, so a test that reads a number wants the gauge.
+HGauge* gaugeNamed(const AmpApplet& applet, const QString& accessibleName)
+{
+    for (QWidget* w : applet.findChildren<QWidget*>()) {
+        if (w->accessibleName() != accessibleName) continue;
+        if (auto* g = dynamic_cast<HGauge*>(w)) return g;
+    }
+    return nullptr;
+}
+
 float gaugeValue(const AmpApplet& applet, const QString& accessibleName)
 {
     // HGauge declares no Q_OBJECT, so findChildren cannot select it directly;
@@ -608,6 +619,43 @@ void testReadoutWidthIsStable()
 
 } // namespace
 
+// Project canon is SmartMTR's extremes engine: a sliding-window max with a
+// constant-velocity glide and no hold phase. Asserts the shape -- the marker
+// glides rather than jumping, and retires itself when the peak leaves the
+// window -- not the constants.
+void testPeakMarkerUsesTheSlidingWindow()
+{
+    resetSettings();
+    AmpApplet applet;
+    HGauge* g = gaugeNamed(applet, QStringLiteral("Forward power"));
+    report("the forward-power gauge exists", g != nullptr, QString());
+    if (!g) return;
+
+    applet.setDeviceMeters(1000.0f, 1.2f);
+    QTest::qWait(80);
+    const float early = g->peakValue();
+    report("the marker glides toward the peak rather than snapping to it",
+           early < 1000.0f, QString::number(early));
+
+    const qint64 upDeadline = QDateTime::currentMSecsSinceEpoch() + 6000;
+    while (g->peakValue() < 900.0f
+           && QDateTime::currentMSecsSinceEpoch() < upDeadline) {
+        QTest::qWait(50);
+    }
+    report("it reaches the peak given time", g->peakValue() >= 900.0f,
+           QString::number(g->peakValue()));
+
+    // No hold timer: the window rolling past the peak is what brings it down.
+    applet.setDeviceMeters(100.0f, 1.2f);
+    const qint64 downDeadline = QDateTime::currentMSecsSinceEpoch() + 9000;
+    while (g->peakValue() > 900.0f
+           && QDateTime::currentMSecsSinceEpoch() < downDeadline) {
+        QTest::qWait(50);
+    }
+    report("it comes back down once the peak leaves the window",
+           g->peakValue() < 900.0f, QString::number(g->peakValue()));
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(QStringLiteral("aether-amp-applet-test"));
@@ -640,6 +688,7 @@ int main(int argc, char** argv)
     testWithdrawnDriveHidesTheRow();
     testFanControlStaysOperableWithoutTheSetupGroup();
     testRelayedMeffaReadsOutButStaysInert();
+    testPeakMarkerUsesTheSlidingWindow();
 
     std::printf("\n%s\n",
                 g_failed == 0

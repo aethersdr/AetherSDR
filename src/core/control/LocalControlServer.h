@@ -45,6 +45,12 @@ public:
     [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
     [[nodiscard]] bool bindFrequencyTarget(SliceFrequencyTarget* target);
     [[nodiscard]] bool bindReceiveTarget(ReceiveControlTarget* target);
+    [[nodiscard]] bool bindCredentials(ControlCredentials* credentials);
+    [[nodiscard]] bool bindTransmitTarget(TransmitControlTarget* target);
+    // Current-user lock only (no additional listener), shared by serving and
+    // offline provisioning across socket names. Hold through daemon shutdown.
+    [[nodiscard]] static std::unique_ptr<QLockFile> reserveCredentialAuthority(const QString& authorityId);
+    [[nodiscard]] static QString clientEndpoint(const QString& logicalName);
     void close();
     [[nodiscard]] bool isListening() const { return m_server.isListening(); }
     [[nodiscard]] QString fullServerName() const { return m_server.fullServerName(); }
@@ -71,6 +77,7 @@ private:
     std::unordered_map<QLocalSocket*, std::unique_ptr<Client>> m_clients;
     std::unique_ptr<QLockFile> m_lock;
     bool m_serving{false};
+    bool m_closing{false};
 };
 
 } // namespace AetherSDR::control

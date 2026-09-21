@@ -250,6 +250,10 @@ public:
     IAutoRfGainControl* autoRfGainControl() override { return this; }
     void setArmed(bool on) override { setAutoRfGain(on); }
     [[nodiscard]] bool isArmed() const override { return m_autoRfGainEnabled; }
+    [[nodiscard]] QString lastArmRefusalReason() const override
+    {
+        return m_autoRfGainRefusal;
+    }
     void setFloorDb(int floorDb) override { setAutoRfGainFloorDb(floorDb); }
     [[nodiscard]] int floorDb() const override { return autoRfGainFloorDb(); }
     [[nodiscard]] int maxFloorDb() const override { return kAutoRfGainFloorMaxDb; }
@@ -1037,6 +1041,10 @@ private:
     // the control stays off, and the next connect from a baseline it trusts
     // honours the operator without them having to ask twice.
     bool m_autoRfGainWanted = false;
+    // Why the last arm attempt was declined, empty when it was not. See
+    // setAutoRfGain: composed where the refusal happens, cleared on a
+    // successful arm so it can never describe a different failure.
+    QString m_autoRfGainRefusal;
     AetherSDR::hl2::AutoGainState m_autoGainState;
     AetherSDR::hl2::AutoGainConfig m_autoGainConfig;
 

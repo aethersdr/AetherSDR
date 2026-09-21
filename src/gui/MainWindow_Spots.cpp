@@ -47,6 +47,24 @@
 #include <cmath>
 #include <memory>
 
+namespace {
+// Normalizes a callsign before a "calling me?" comparison. Applied to BOTH
+// the message token and the configured/radio callsign so portable suffixes
+// (/P, /QRP, /M …) and angle-bracket hashed calls (<K1ABC>) match correctly
+// on both sides. Without this, a configured callsign like VE3ABC/P would stop
+// matching after stripping only the message side (#5823 review blocker).
+QString normalizeCallForMatch(QString c)
+{
+    c = c.trimmed();
+    if (c.size() > 2 && c.startsWith(QLatin1Char('<')) && c.endsWith(QLatin1Char('>')))
+        c = c.mid(1, c.size() - 2);
+    const int slash = c.indexOf(QLatin1Char('/'));
+    if (slash > 0)
+        c = c.left(slash);
+    return c;
+}
+} // namespace
+
 namespace AetherSDR {
 
 void MainWindow::wireSpotSubsystem()
@@ -695,10 +713,21 @@ void MainWindow::wireSpotSubsystem()
         bool isPOTA = msg.contains("CQ POTA");
         bool isCallingMe = false;
         {
-            QString myCall = as.value("DxClusterCallsign").toString();
+            // Prefer the explicit cluster login callsign; fall back to the
+            // radio's own callsign so operators who never configure a DX
+            // cluster login still get "calling me" spots (#5823).
+            // RadioModel::callsign() already trims, so no .trimmed() needed.
+            QString myCall = as.value("DxClusterCallsign").toString().trimmed();
+            if (myCall.isEmpty())
+                myCall = m_radioModel.callsign();
+            // Normalize BOTH sides through the same helper before comparing so
+            // a configured call like VE3ABC/P matches the stripped message token
+            // VE3ABC, and a hashed <K1ABC> in the decode matches K1ABC on file.
+            myCall = normalizeCallForMatch(myCall);
             if (!myCall.isEmpty()) {
                 QStringList parts = msg.split(' ', Qt::SkipEmptyParts);
-                if (parts.size() >= 2 && parts[0] == myCall)
+                if (parts.size() >= 2 &&
+                    normalizeCallForMatch(parts[0]).compare(myCall, Qt::CaseInsensitive) == 0)
                     isCallingMe = true;
             }
         }
