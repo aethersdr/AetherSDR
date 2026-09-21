@@ -4,14 +4,14 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 229 touchpoint headers (193 core, 36 models) — 229/229 tagged, 0/229 converted.
+**Totals:** 230 touchpoint headers (193 core, 37 models) — 230/230 tagged, 0/230 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
 | `core/AcomConnection.h` | 2 | peripheral(acom) — Direct serial/ser2net client for the ACOM S-series amplifier line (600S primary target, protocol shared across 500S/700S/1200S/2020S) — a standalone RS-232 accessory with no FlexRadio awareness at all, same precedent as core/PgxlConnection.h and core/TgxlConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/acom-600s-amplifier-design.md. | unconverted |
 | `core/AcomProtocol.h` | 1 | peripheral(acom) — ACOM S-series RS-232 amplifier wire protocol (framing, checksums, per-model power scaling) — the codec half of core/AcomConnection.h. A standalone accessory's own transport with no radio-family awareness, same precedent as the Tgxl/Pgxl direct sockets: peripheral, NOT behind the IRadioBackend radio seam. Authority: the manufacturer's published 600S serial-protocol spec. | unconverted |
 | `core/AdaptiveFilterEngine.h` | 1 | universal — GUI-thread adaptive RX passband coordinator over SliceModel/spectrum frames; canonical radio state, no vendor ties. | unconverted |
-| `core/AetherClockEngine.h` | 2 | universal — WWV/WWVB time-signal decode engine bound to an operator-chosen RX slice. Deliberately source-agnostic: the wiring layer injects a DAX-hold provider and any 24 kHz float32-stereo feed drives it, so the engine never touches a vendor stream class (its own header documents this as EB3 discipline). Canonical engine state. | unconverted |
+| `core/AetherClockEngine.h` | 2 | universal — WWV/WWVB time-signal decode engine bound to an operator-chosen RX slice. The wiring layer injects DAX holds and typed producer PCM; a private adapter preserves the decoder's fixed24 domain and source timing. The engine never touches a vendor stream class. Canonical engine state. | unconverted |
 | `core/AetherClockSettings.h` | 1 | ui-support — AetherClock persistence — one nested JSON blob under a single AppSettings key (Principle V). Client-side config plumbing; radio-authoritative state (slice frequency, mode, AGC) is deliberately never persisted here. | unconverted |
 | `core/AetherDspModePolicy.h` | 2 | universal — Pure policy deciding when AetherDSP must disable for a given mode or slice audio mix. Operates on canonical mode/mute/gain state only; no vendor ties. | unconverted |
 | `core/AetherRxProfiles.h` | 1 | universal — Named-profile save/recall/import-export for the receive DSP chain; operates on core-profile DSP state only, same precedent as core/ChannelStripPresets.h, whose RX capture/apply it shares. | unconverted |
@@ -213,6 +213,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/CwxModel.h` | 1 | universal — CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name. | unconverted |
 | `models/DStarModel.h` | 1 | universal — D-STAR configuration and session state (callsigns, RPT1/RPT2 routing, modem/serial paths). Digital-voice state any backend carrying DV would present. | unconverted |
 | `models/DaxIqModel.h` | 1 | vendor(flex) — Flex DAX IQ streams: dax_iq stream create/rate cmds, 4-ch DAX model, pipes to SDR apps — DAX is Flex-only | unconverted |
+| `models/DecoderAudioModel.h` | 1 | mixed(flex) — Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry. | unconverted |
 | `models/DigitalVoiceWaveformHistory.h` | 1 | mixed(flex) — Rolling health history for the DV waveform path (sample rate, turnaround, deficits). Generic rate/latency telemetry fused with Flex VITA sequence-gap counters. | unconverted |
 | `models/DvkModel.h` | 1 | mixed(flex) — Voice keyer slots/commands are core-profile; status parsing + FlexLib SsdrErrors mapping are flex. | unconverted |
 | `models/EqualizerModel.h` | 3 | universal — 8-band TX/RX audio EQ state (enable + band gains) — core capability; SmartSDR wire parsing/cmds move to flex adapter | unconverted |

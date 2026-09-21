@@ -10188,7 +10188,7 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
 }
 
 void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
-                                   const QString& family)
+                                   const QString& family, PanadapterStream* panStream)
 {
     // THROUGH teardownBackend(), not over the top of the previous pointer.
     // A bare `m_backend = std::move(...)` destroys the old backend while this
@@ -10199,6 +10199,7 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     dropAllSessionModelsForFamilySwitch();
     teardownBackend();
     m_backend = std::move(backend);
+    m_panStream = panStream;
     m_family = family;
     wireBackendPcm();
     wireRxDemodAudioBus();

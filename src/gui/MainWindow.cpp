@@ -9220,9 +9220,7 @@ void MainWindow::setActivePanApplet(PanadapterApplet* applet)
 // so decoded text appears in the correct pan's CW widget (#864).
 void MainWindow::routeCwDecoderOutput()
 {
-#ifdef HAVE_DEEPFIST
-    refreshCwRxContext();
-#endif
+    if (m_cwAudio) { m_cwAudio->setSlice(activeSlice()); }
     // Determine which applet should receive CW decoder output:
     // the pan that owns the active audio slice (whose audio feeds the decoder).
     PanadapterApplet* target = nullptr;
@@ -9248,7 +9246,7 @@ void MainWindow::routeCwDecoderOutput()
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
                    this, &MainWindow::cwRxModelAction);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                   &m_cwDecoder, &CwRxModel::stop);
+                   this, &MainWindow::stopCwRx);
 #endif
         disconnect(&m_cwDecoder, &CwRxModel::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwText);
@@ -9267,7 +9265,7 @@ void MainWindow::routeCwDecoderOutput()
         disconnect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
                    &m_cwDecoder, &CwRxModel::setSpeedRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                   &m_cwDecoder, &CwRxModel::stop);
+                   this, &MainWindow::stopCwRx);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                    &m_cwDecoderTx, &CwDecoder::stop);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
@@ -9310,12 +9308,13 @@ void MainWindow::routeCwDecoderOutput()
         m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(),
                                   m_cwDecoderApplet->speedRangeHigh());
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                &m_cwDecoder, &CwRxModel::stop);
+                this, &MainWindow::stopCwRx);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                 &m_cwDecoderTx, &CwDecoder::stop);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
                 &m_cwCallsignSpotter, &CwCallsignSpotter::feedText);
     }
+    refreshCwInputStatus();
 }
 
 // Recompute the CW decoder run state, panel visibility, and the
@@ -9363,6 +9362,10 @@ void MainWindow::refreshCwDecodeState()
     refreshCwRxBackend();
 #endif
     const bool shouldRunRx = isCw && rxOn;
+    if (m_cwAudio) {
+        m_cwAudio->setSlice(s);
+        m_cwAudio->setEnabled(shouldRunRx);
+    }
     if (shouldRunRx && !m_cwDecoder.isRunning())
         m_cwDecoder.start();
     else if (!shouldRunRx && m_cwDecoder.isRunning())

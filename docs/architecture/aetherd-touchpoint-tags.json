@@ -973,7 +973,7 @@
  },
  "core/AetherClockEngine.h": {
   "tag": "universal",
-  "note": "WWV/WWVB time-signal decode engine bound to an operator-chosen RX slice. Deliberately source-agnostic: the wiring layer injects a DAX-hold provider and any 24 kHz float32-stereo feed drives it, so the engine never touches a vendor stream class (its own header documents this as EB3 discipline). Canonical engine state.",
+  "note": "WWV/WWVB time-signal decode engine bound to an operator-chosen RX slice. The wiring layer injects DAX holds and typed producer PCM; a private adapter preserves the decoder's fixed24 domain and source timing. The engine never touches a vendor stream class. Canonical engine state.",
   "split": "",
   "confidence": "high"
  },
@@ -1413,6 +1413,12 @@
   "tag": "universal",
   "note": "Receive CW backend catalog and lifecycle over typed PCM; decoder workers remain private and TX is separate.",
   "split": "",
+  "confidence": "high"
+ },
+ "models/DecoderAudioModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry.",
+  "split": "Core: receiver selection, epochs, bounded backlog, rate conversion and decoder resets. Flex compatibility: DAX channel selection and central consumer holds; no wire commands are generated here.",
   "confidence": "high"
  }
 }
