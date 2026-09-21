@@ -1692,6 +1692,7 @@ private:
     // SliceModel — see the definition for why that is not a style preference.
     void wireSliceAudioIntentsToBackend(SliceModel* s);
     void wireSliceReceiveIntentsToBackend(SliceModel* s);
+    bool m_stagingReceiveModels{false};
     SliceModel* receiveCommandSource() const;
     void dispatchSliceTune(const SliceTuneRequest& request);
     void dispatchSliceMode(const QString& mode);
