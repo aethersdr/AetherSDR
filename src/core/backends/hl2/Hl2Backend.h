@@ -1247,11 +1247,12 @@ private:
     bool m_rxAudioMuted = false;
     // HOW LONG THE MUTE OUTLIVES THE UNKEY, in milliseconds.
     //
-    // A member rather than a literal for two reasons: a test has to be able to
-    // set it to ZERO (that is the only arrangement in which "still muted after
-    // one event-loop turn" can ONLY mean the hold, and not a dropped
-    // invokeMethod, a renamed slot or an unattached DSP), and the value itself
-    // is a one-station measurement that a second station may have to move.
+    // A member rather than a literal so a TEST can set it to ZERO — that is the
+    // only arrangement in which "still muted after one event-loop turn" can
+    // ONLY mean the hold, and not a dropped invokeMethod, a renamed slot or an
+    // unattached DSP. There is no setting behind it and none is proposed: a
+    // second station that needs a different value needs a new measurement and a
+    // rebuild, which is the honest cost of a one-station constant.
     //
     // MEASURED, not chosen. #5497 measures W — the interval from the
     // demodulator's unmute to the last sample of our own transmitter reaching

@@ -38,10 +38,39 @@
 //      have pushed the whole hold into the engine as digital ZEROS; gating both
 //      on m_rxAudioMuted makes it a continued GAP instead.
 //
+//   5. THE HOLD IS ARMED BY AN EDGE, NOT BY A STATE. A second setKeying(false)
+//      arriving with the backend ALREADY unkeyed started no T/R turnaround, so
+//      it has none of its own to cover. It used to restart the single-shot
+//      timer from zero, which put the mute up to TWICE the hold past the real
+//      MOX-off -- and this change's own accounting charges every one of those
+//      milliseconds to #5498. This leg MEASURES the mute, so the number in the
+//      report is read off the run rather than reasoned about.
+//
+//   6. THE MONITOR IS A DIAGNOSTIC AND `on` HAS TWO VALUES. Turning the
+//      monitor ON inside an armed hold asks to HEAR the receiver, and must be
+//      answered now; turning it OFF inside one asks for nothing, and must not
+//      cancel the hold. Both directions are asserted, because the branch that
+//      protects the second used to swallow the first as well.
+//
 // WHAT IT DOES NOT ASSERT, said here rather than left to be discovered: any
 // audio level, anything about the HL2's actual T/R turnaround, and whether 70
 // ms is the right number. Those are bench questions and #5497 carries the
 // measurements. This is an ordering test with a clock in it.
+//
+// THE CLOCK, AND WHERE IT IS WALL-CLOCK. Legs 1, 2, 4 and the monitor
+// directions assert on state at a named instant and hold no stopwatch. The
+// re-key leg, the redundant-unkey leg and the monitor-off control DO run on
+// wall-clock time: they pump a real event loop and read a real QTimer, so they
+// carry generous margins (a hold of 200-400 ms where the shipped value is 70,
+// and a 10x ceiling on every deadline) rather than tight ones. If one of them
+// ever flakes, that is where to look first -- the margins, not the logic.
+//
+// ONE GUARD IS DELIBERATELY UNCOVERED. The hold timer's callback opens with
+// `if (m_keyed && !m_txMonitor) return;`. A re-key inside the window stops the
+// timer, so that callback is NEVER EXPECTED TO FIRE while keyed and no leg
+// here provokes it. It is belt and braces with the stop in applyKeying(), kept
+// because "should be impossible" is how a hold turns into an unmute in the
+// middle of a transmission. Nobody should go hunting for its coverage.
 //
 // NO WDSP, NO SOCKET, NO RADIO. The probe Hl2RxDsp is never configure()d, so it
 // owns no WDSP channel; setAudioMuted() on an unconfigured chain is a plain
@@ -387,11 +416,132 @@ int main(int argc, char** argv)
         // hold that never expires would produce. Wait the hold out: it must
         // release on its own, which proves the timer was still running rather
         // than merely that nothing unmuted.
-        pumpFor(Hl2UnkeyHoldTestAccess::holdMs(backend) + 40);
+        //
+        // ON A DEADLINE, NOT ON A FIXED SLEEP. This used to pump for exactly
+        // holdMs + 40 and then assert unmuted -- 40 ms of slack on a 70 ms
+        // timer, which is the #4703 flake shape under the sanitizer lane. The
+        // proof does not need a tight wait: "still muted" is already asserted
+        // above, BEFORE the expiry, so all this leg owes is that the release
+        // arrives on its own. The same 10x ceiling the other legs use gives
+        // that without the coin toss (ten9876, #5850 review).
+        pumpUntilUnmutedOr(backend,
+                           10 * Hl2UnkeyHoldTestAccess::holdMs(backend) + 500);
         check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
               "POSITIVE CONTROL: the hold was still RUNNING and expires on its "
               "own -- so the assertion above measured a live hold, not a dead "
               "call");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+
+    // -- A REDUNDANT UNKEY MUST NOT RESTART THE HOLD -----------------------
+    //
+    // Found in review (ten9876, #5850). The hold used to be armed by a STATE
+    // -- "we are unkeyed and still muted" -- rather than by the key-up EDGE,
+    // so every further setKeying(false) that arrived inside the window
+    // re-entered the release and restarted the single-shot timer from zero.
+    //
+    // WHY THAT IS NOT ACADEMIC. applyKeying() is reached with key=false more
+    // than once per over on real paths: a tune release followed by the TX
+    // coordinator's cleanup unkey, and the automation TX watchdog's forced
+    // unkey, both land a second setKeying(false) with m_keyed ALREADY false.
+    // The mute could therefore outlive the real MOX-off by up to twice the
+    // hold -- and this change's own body charges every millisecond of hold to
+    // #5498's post-unkey dropout, so the defect overstates that cost as well
+    // as causing it.
+    //
+    // THIS LEG MEASURES rather than merely asserts, because the number belongs
+    // in the report. A long hold keeps "one hold" and "one and a half holds"
+    // far apart on a loaded machine.
+    {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+        const int hold = 200;
+        Hl2UnkeyHoldTestAccess::setHoldMs(backend, hold);
+
+        backend.setKeying(true, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "double-unkey: keyed and muted");
+
+        // THE REAL KEY-UP EDGE. The stopwatch starts here because this is the
+        // MOX-off the hold exists to cover; everything after it is the cost.
+        QElapsedTimer sinceRealUnkey;
+        backend.setKeying(false, tx.operation);
+        sinceRealUnkey.start();
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "double-unkey: the real edge armed the hold");
+
+        // THE REDUNDANT ONE, half way in, with m_keyed already false. It
+        // started no transmission and ends none; it must change nothing.
+        pumpFor(hold / 2);
+        backend.setKeying(false, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "double-unkey: still muted immediately after the redundant unkey");
+
+        pumpUntilUnmutedOr(backend, 10 * hold + 500);
+        const qint64 mutedForMs = sinceRealUnkey.elapsed();
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "double-unkey: the hold does expire");
+        std::printf("      MEASURED: the mute lasted %lld ms past the real "
+                    "MOX-off (hold %d ms; a restarted hold would land near "
+                    "%d ms)\n",
+                    static_cast<long long>(mutedForMs), hold, hold + hold / 2);
+        check(mutedForMs >= hold - (hold / 4),
+              "double-unkey: and it lasted at least the hold, so the hold ran "
+              "at all");
+        check(mutedForMs < hold + (hold / 4),
+              "double-unkey: a redundant unkey does NOT restart the hold -- the "
+              "mute ends one hold after the REAL key-up edge, not one hold "
+              "after the last redundant one");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+
+    // -- TURNING THE MONITOR ON INSIDE AN ARMED HOLD MUST BE ANSWERED NOW ---
+    //
+    // The other half of the monitor branch, and the half it used to swallow
+    // (ten9876, #5850). The guard that stops a monitor-OFF from cancelling an
+    // armed hold was written on (!m_keyed && hold armed) alone, so it was
+    // taken for BOTH values of `on`: a diagnostic that asked to HEAR the
+    // receiver inside the window got silence until the timer expired.
+    //
+    // ASKING TO HEAR IS ASKING FOR SOMETHING. Only asking for OFF is asking
+    // for nothing, and only that one may be answered by doing nothing.
+    {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+        const int hold = 400;   // wide, so "inside the window" is not a race
+        Hl2UnkeyHoldTestAccess::setHoldMs(backend, hold);
+
+        backend.setKeying(true, tx.operation);
+        backend.setKeying(false, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "monitor-on-in-window: the unkey armed the hold");
+
+        backend.setTxAudioMonitor(true);
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "monitor ON inside an armed hold unmutes IMMEDIATELY, it does "
+              "not wait the hold out");
+        check(!Hl2UnkeyHoldTestAccess::mixerGateClosed(backend),
+              "...and opens the mixer gate, which is what actually feeds the "
+              "capture");
+
+        // AND THE HOLD IS CANCELLED, not merely overridden. A key-down with
+        // the monitor on takes the `!muteWhileKeyed` path, so a mute left
+        // standing here would be re-armed into a FRESH hold on a KEY-DOWN --
+        // the second half of the same defect.
+        backend.setKeying(true, tx.operation);
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "a key-down with the monitor on finds no stale mute to re-arm a "
+              "hold from");
+        pumpFor(hold / 4);
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "...and stays unmuted, which is what the monitor was turned on "
+              "for");
 
         Hl2UnkeyHoldTestAccess::tearDown(backend);
     }

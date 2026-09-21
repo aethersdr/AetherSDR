@@ -29,6 +29,7 @@
 #include <QHostAddress>
 #include <QLoggingCategory>
 #include <QPointer>
+#include <QThread>
 
 #include <algorithm>
 #include <cstddef>
@@ -1450,16 +1451,38 @@ void Hl2Backend::publishWideState()
         emit panWideChanged(ids.panId, spanned);
 }
 
+// AFFINITY, ENFORCED RATHER THAN TRUSTED — AND IN THE BUILD THAT SHIPS.
+//
+// Every caller of the two helpers below was traced to the backend's own thread:
+// applyKeying(), setTxAudioMonitor(), pushInitialState(), and the unkey timer,
+// which is parented to the backend and therefore fires there. The check exists
+// because the cost of being wrong is SILENT: m_rxAudioMuted is read by
+// mixReceiverAudio() with no synchronisation, on the strength of both being on
+// this thread, and a caller arriving from the I/O thread would produce a torn
+// gate that only misbehaves under load.
+//
+// WHY NOT Q_ASSERT ALONE, which is what this was. Qt defines QT_NO_DEBUG for
+// every non-Debug configuration, so Q_ASSERT compiles to nothing in
+// RelWithDebInfo — the configuration this project builds, measures and ships.
+// A check that disappears in exactly the build where it matters makes the
+// paragraph above true of the check as well as of the defect (ten9876, #5850
+// review). So: a warning in every build, and Q_ASSERT_X on top of it so a debug
+// run stops AT the offending call instead of logging past it.
+static void hl2RequireBackendThread(const QObject* owner, const char* what)
+{
+    if (owner->thread() == QThread::currentThread())
+        return;
+    qCWarning(lcHl2) << "HL2:" << what
+                     << "was called from a thread that does not own the "
+                        "backend. m_rxAudioMuted is read without "
+                        "synchronisation by mixReceiverAudio(), so this is a "
+                        "torn receive-audio gate, not a style point.";
+    Q_ASSERT_X(false, what, "called off the Hl2Backend's own thread");
+}
+
 void Hl2Backend::applyRxAudioMute(bool muted)
 {
-    // AFFINITY, ENFORCED RATHER THAN TRUSTED. Every caller of this was traced
-    // to this object's thread — applyKeying(), setTxAudioMonitor(), and the
-    // unkey timer, which is parented here and therefore fires here. The assert
-    // is here because the cost of being wrong is silent: m_rxAudioMuted is read
-    // by mixReceiverAudio() with no synchronisation, on the strength of both
-    // being on this thread, and a caller that arrived from the I/O thread would
-    // produce a torn gate that only misbehaves under load.
-    Q_ASSERT(thread() == QThread::currentThread());
+    hl2RequireBackendThread(this, "applyRxAudioMute");
     m_rxAudioMuted = muted;
     // Record the moment sampling is asked to RESUME at the site that actually
     // asks for it, which since #5497 is HERE and not at the top of
@@ -1479,7 +1502,7 @@ void Hl2Backend::applyRxAudioMute(bool muted)
 
 void Hl2Backend::releaseRxAudioMuteAfterHold()
 {
-    Q_ASSERT(thread() == QThread::currentThread());
+    hl2RequireBackendThread(this, "releaseRxAudioMuteAfterHold");
     if (!m_rxAudioMuted) {
         // Nothing is being held, so there is nothing to defer. This is the
         // ordinary path when the TX audio monitor is on: the key edge never
@@ -4531,11 +4554,63 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     // The hold then covers what the ordering alone cannot — the control-packet
     // wait, the network hop, the HL2's T/R relay and the PA's decay.
     //
-    // Reached on BOTH edges on purpose. On key-down with the TX audio monitor
-    // on, `muteWhileKeyed` was false and nothing was muted, and this is the
-    // no-op the helper's first branch describes.
-    if (!muteWhileKeyed)
-        releaseRxAudioMuteAfterHold();
+    // ARMED BY THE KEY-UP EDGE, NOT BY THE UNKEYED STATE — and that distinction
+    // is worth the three branches below.
+    //
+    // A hold covers ONE T/R turnaround: the one the MOX-off just above started.
+    // A second setKeying(false) arriving with m_keyed ALREADY false started no
+    // turnaround and so has none of its own to cover; it inherits the one
+    // already being covered. This used to be a bare `if (!muteWhileKeyed)`,
+    // which re-entered releaseRxAudioMuteAfterHold() with the mute still set
+    // and RESTARTED the single-shot timer from zero — measured at 311 ms of
+    // mute past the real MOX-off for a 200 ms hold, against the 200 ms the
+    // operator is owed. Every one of those milliseconds is charged to #5498's
+    // post-unkey dropout by this change's own accounting, so the defect
+    // overstated that cost as well as causing it (ten9876, #5850 review).
+    //
+    // THE REDUNDANT UNKEY IS NOT HYPOTHETICAL, and the paths were traced rather
+    // than assumed. RadioModel::requestTransmitStop() calls
+    // TransmitModel::stopTune() — which reaches setTune(false) and its
+    // setKeying(false) — and then, in the same function, an unconditional
+    // TransmitModel::setMox(false). setMox's off edge is not edge-guarded: the
+    // `m_transmitting != on` block is skipped on an already-unkeyed model but
+    // the trailing moxCommandIssued(on) still fires, so a second
+    // setKeying(false) lands. pushInitialState() below is the same shape by
+    // construction — it assigns m_keyed = false and then calls setKeying(false).
+    //
+    // Nothing upstream filters it either: on the off edge
+    // TxCoordinator::Command::permitsDispatch degrades to
+    // Operation::permitsCleanup(), which tests liveness and generation and has
+    // no notion of key state, and every local unkey uses a cleanupFence() built
+    // to satisfy exactly that.
+    //
+    // keyChanged is already computed above, for m_sinceUnkey and for
+    // transmitChanged. The hold simply has to consult it too.
+    if (!muteWhileKeyed) {
+        if (key) {
+            // KEY DOWN WITH THE TX AUDIO MONITOR ON. muteWhileKeyed is false
+            // only because the monitor asked to HEAR the transmitter. There is
+            // no turnaround at a key-down and so nothing to wait for: anything
+            // still held is released NOW rather than deferred into a fresh
+            // hold. Normally a no-op, because the monitor path already
+            // unmuted; it is here so that it stays a no-op.
+            if (m_unkeyUnmuteTimer)
+                m_unkeyUnmuteTimer->stop();
+            if (m_rxAudioMuted)
+                applyRxAudioMute(false);
+        } else if (keyChanged) {
+            // THE ONE TRUE KEY-UP EDGE, and the only site allowed to arm a
+            // hold.
+            releaseRxAudioMuteAfterHold();
+        } else if (!m_unkeyUnmuteTimer || !m_unkeyUnmuteTimer->isActive()) {
+            // A redundant unkey with no hold running — an unmuted chain, or one
+            // whose hold has already expired. Kept going through the helper so
+            // both settle exactly as they always did.
+            releaseRxAudioMuteAfterHold();
+        }
+        // else: a redundant unkey INSIDE a running hold. Leave the timer
+        // exactly as the real edge armed it; restarting it is the defect above.
+    }
     if (!key) {
         // Drop buffered audio on unkey so the next transmission does not open
         // with the tail of the previous one. BOTH stages hold audio and both
@@ -4908,26 +4983,36 @@ void Hl2Backend::setTxAudioMonitor(bool on)
         if (m_unkeyUnmuteTimer)
             m_unkeyUnmuteTimer->stop();
         applyRxAudioMute(true);
-    } else if (!m_keyed && m_unkeyUnmuteTimer && m_unkeyUnmuteTimer->isActive()) {
-        // AN ARMED HOLD IS NOT AN OVERTAKEN ONE, and this branch used to treat
-        // it as such. It is taken for (keyed, monitor on) AND for (UNKEYED,
-        // monitor off) -- and the second is exactly the state an unkey has just
-        // left behind, with the hold running and the PA still up.
+    } else if (!on && !m_keyed && m_unkeyUnmuteTimer && m_unkeyUnmuteTimer->isActive()) {
+        // AN ARMED HOLD IS NOT AN OVERTAKEN ONE, and the else branch below used
+        // to treat it as one. (UNKEYED, monitor OFF) is exactly the state an
+        // unkey has just left behind, with the hold running and the PA still
+        // up; cancelling it there unmutes inside the T/R turnaround -- the
+        // defect this whole change exists to remove, let back in through
+        // another door.
         //
-        // Cancelling it there unmutes inside the T/R turnaround: the defect
-        // this whole change exists to remove, let back in through another door.
-        // Not hypothetical -- RadioCertification's run() epilogue calls
+        // Not hypothetical: RadioCertification's run() epilogue calls
         // keyViaOperatorPath(false) and then setTxAudioMonitor(false) in the
         // same synchronous unwind, which is the one path in the tree that
         // deliberately listens to its own transmitter.
         //
-        // So: leave the timer running and stay muted. The monitor is already
-        // off, the operator is asking for nothing, and the hold expires on its
-        // own a few tens of milliseconds later.
+        // AND IT SPLITS ON `on`, WHICH IS THE CORRECTION. This guard was first
+        // written without the `!on`, so it was taken for BOTH values and
+        // swallowed setTxAudioMonitor(TRUE) inside the window as well: a
+        // diagnostic that asked to HEAR the receiver got silence until the
+        // timer expired, and a following key-down -- muteWhileKeyed false
+        // because the monitor is on -- then re-armed a fresh hold off the mute
+        // that was still set. ASKING TO HEAR IS ASKING FOR SOMETHING; only
+        // asking for OFF is asking for nothing, and only that one may be
+        // answered by doing nothing (ten9876, #5850 review).
+        //
+        // So: monitor OFF inside an armed hold leaves the timer running and
+        // stays muted, and the hold expires on its own a few tens of
+        // milliseconds later. Monitor ON falls through to the immediate path.
     } else {
         applyRxAudioMute(false);
         if (m_unkeyUnmuteTimer)
-            m_unkeyUnmuteTimer->stop();   // an armed hold has been overtaken
+            m_unkeyUnmuteTimer->stop();   // overtaken, or answered on purpose
     }
 }
 
@@ -7693,19 +7778,32 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission.
     m_keyed = false;
     m_tuning = false;
-    // AND THE RECEIVE-AUDIO HOLD WITH IT. While the mixer gated on m_keyed the
-    // line above was enough; since #5497 it gates on m_rxAudioMuted, which the
-    // line above does not touch. A session that ended mid-transmission would
-    // otherwise hand the new one a closed gate — and the setKeying(false) below
-    // is conditional, so on the path where it is skipped nothing would ever
-    // reopen it. Cleared rather than deferred: the T/R turnaround this hold
-    // exists to cover belonged to a transport that no longer exists.
-    if (m_unkeyUnmuteTimer)
-        m_unkeyUnmuteTimer->stop();
-    applyRxAudioMute(false);
     if (m_lastTxOperation.permitsCleanup()) {
         setKeying(false, m_lastTxOperation);
     }
+    // AND THE RECEIVE-AUDIO HOLD WITH IT — AFTER the cleanup unkey above, never
+    // before it.
+    //
+    // While the mixer gated on m_keyed, clearing m_keyed above was enough;
+    // since #5497 it gates on m_rxAudioMuted, which that line does not touch. A
+    // session that ended mid-transmission would otherwise hand the new one a
+    // closed gate — and the setKeying(false) above is conditional, so on the
+    // path where it is skipped nothing would ever reopen it. Hence
+    // unconditional, and cleared rather than deferred: the T/R turnaround this
+    // hold exists to cover belonged to a transport that no longer exists.
+    //
+    // THE ORDER IS THE POINT, AND IT USED TO BE THE WRONG WAY ROUND. This block
+    // stood ABOVE the setKeying(false) — posting the unmute ahead of a queued
+    // MOX-off, which is the exact posting order this change removes from
+    // applyKeying(), reproduced on the relink path. It was not a live
+    // regression: EP2 stops when the link drops, the gateware's own watchdog
+    // halts the transmission, and the PA is long down before a relink runs. But
+    // ordering is what #5497 is about, and a counter-example sitting in the
+    // same file is what a future reader copies (ten9876, #5850 review). Costs
+    // nothing to put right.
+    if (m_unkeyUnmuteTimer)
+        m_unkeyUnmuteTimer->stop();
+    applyRxAudioMute(false);
     // A fresh transport starts unkeyed by construction; an old connection's
     // stop must not be queued into it with a newly acquired operation.
 }
