@@ -86,6 +86,7 @@ signals:
     void spectrumFrameReady(int panId, const QByteArray& bins);
 
 private:
+    friend struct SimReceiveContractTestAccess;
     PcmProducer m_speakerPcm;
     PcmProducer m_slicePcm;
     void onTick();

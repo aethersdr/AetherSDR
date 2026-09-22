@@ -90,6 +90,11 @@ public:
     void setPanPreamp(const QString& panId, int step) override;
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
+    ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
+    ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
+    ReceiveDispatch requestSliceLock(int sliceId, bool locked) override;
     void setRadioDialLock(bool locked) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;

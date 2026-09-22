@@ -282,6 +282,21 @@ public:
             setSliceAgc(sliceId, request.mode, request.threshold);
         }
     }
+    // Desktop adapters. These deliberately do not consult the daemon's
+    // receiveAudioControl record: its authorization/readback contract is
+    // narrower than the existing desktop controls. Unsupported is explicit,
+    // never acceptance through an inherited empty implementation hook.
+    virtual ReceiveDispatch requestSliceDsp(int, const SliceDspRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceAudio(int, const SliceAudioRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceSquelch(int, const SliceSquelchRequest&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceRxAntenna(int, const QString&)
+    { return ReceiveDispatch::Unsupported; }
+    virtual ReceiveDispatch requestSliceLock(int, bool)
+    { return ReceiveDispatch::LocalOnly; }
+
     // Compatibility implementation hooks for backend-internal callers and
     // existing paired AGC users. New receive routing uses the adapters above.
     virtual void setSliceFrequency(int sliceId, double hz) = 0;

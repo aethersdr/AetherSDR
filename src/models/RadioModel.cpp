@@ -1796,29 +1796,6 @@ void RadioModel::wireBackendReceiverState()
             }
             s = new SliceModel(sliceId, this);
             wireSliceReceiveIntentsToBackend(s);
-            // Receive DSP the radio runs. Same reasoning as AGC above: the
-            // applet toggles drive SliceModel, whose Flex wire text a non-Flex
-            // backend never sees, so without these the controls move and the
-            // radio's own NR/NB/notch/squelch keep whatever state they had.
-            connect(s, &SliceModel::noiseReductionCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceNoiseReduction(s->sliceId(), on, level);
-            });
-            connect(s, &SliceModel::noiseBlankerCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceNoiseBlanker(s->sliceId(), on, level);
-            });
-            connect(s, &SliceModel::autoNotchCommandIssued, this, [this, s](bool on) {
-                if (m_backend) m_backend->setSliceAutoNotch(s->sliceId(), on);
-            });
-            connect(s, &SliceModel::manualNotchCommandIssued, this,
-                    [this, s](bool on, int position) {
-                if (m_backend) m_backend->setSliceManualNotch(s->sliceId(), on, position);
-            });
-            connect(s, &SliceModel::squelchCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceSquelch(s->sliceId(), on, level);
-            });
             // FM repeater controls are distinct neutral intents. Flex
             // continues to use SliceModel's wire text; every other backend gets
             // the same operator action through the seam instead of silently
@@ -2197,6 +2174,9 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceTuneRequest>();
     qRegisterMetaType<SliceFilterRequest>();
     qRegisterMetaType<SliceAgcRequest>();
+    qRegisterMetaType<SliceDspRequest>();
+    qRegisterMetaType<SliceAudioRequest>();
+    qRegisterMetaType<SliceSquelchRequest>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
@@ -10100,6 +10080,16 @@ void RadioModel::wireSliceReceiveIntentsToBackend(SliceModel* s)
             this, &RadioModel::dispatchSliceFilter, type);
     connect(s, &SliceModel::receiveAgcRequested,
             this, &RadioModel::dispatchSliceAgc, type);
+    connect(s, &SliceModel::receiveDspRequested,
+            this, &RadioModel::dispatchSliceDsp, type);
+    connect(s, &SliceModel::receiveAudioRequested,
+            this, &RadioModel::dispatchSliceAudio, type);
+    connect(s, &SliceModel::receiveSquelchRequested,
+            this, &RadioModel::dispatchSliceSquelch, type);
+    connect(s, &SliceModel::receiveRxAntennaRequested,
+            this, &RadioModel::dispatchSliceRxAntenna, type);
+    connect(s, &SliceModel::receiveLockRequested,
+            this, &RadioModel::dispatchSliceLock, type);
 }
 
 SliceModel* RadioModel::receiveCommandSource() const
@@ -10145,6 +10135,57 @@ void RadioModel::dispatchSliceAgc(const SliceAgcRequest& request)
     }
 }
 
+void RadioModel::reportReceiveDispatch(ReceiveDispatch result, const QString& operation)
+{
+    if (result == ReceiveDispatch::Unsupported) {
+        qCWarning(lcProtocol) << "Backend refused receive operation" << operation;
+        emit commandDropped(operation);
+    }
+}
+
+void RadioModel::dispatchSliceDsp(const SliceDspRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        reportReceiveDispatch(m_backend->requestSliceDsp(source->sliceId(), request),
+                              QStringLiteral("receive DSP"));
+    }
+}
+
+void RadioModel::dispatchSliceAudio(const SliceAudioRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        reportReceiveDispatch(m_backend->requestSliceAudio(source->sliceId(), request),
+                              QStringLiteral("receive audio"));
+    }
+}
+
+void RadioModel::dispatchSliceSquelch(const SliceSquelchRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        reportReceiveDispatch(m_backend->requestSliceSquelch(source->sliceId(), request),
+                              QStringLiteral("receive squelch"));
+    }
+}
+
+void RadioModel::dispatchSliceRxAntenna(const QString& antenna)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        const QStringList ports = source->rxAntennaList();
+        const ReceiveDispatch result = !ports.isEmpty() && !ports.contains(antenna)
+            ? ReceiveDispatch::Unsupported
+            : m_backend->requestSliceRxAntenna(source->sliceId(), antenna);
+        reportReceiveDispatch(result, QStringLiteral("receive antenna"));
+    }
+}
+
+void RadioModel::dispatchSliceLock(bool locked)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        reportReceiveDispatch(m_backend->requestSliceLock(source->sliceId(), locked),
+                              QStringLiteral("receive lock"));
+    }
+}
+
 void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
 {
     if (!s)
@@ -10156,43 +10197,9 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
         s->applyChanges(delta);
     }
 
-    // ONE place, called from EVERY site that constructs a SliceModel.
-    //
-    // These were originally written inline in the backend's slice-materialising
-    // branch, which is the path a real radio takes — and only that path. A slice
-    // built any other way (the automation slice fixture, a session restore) got
-    // none of them, so its mute, level, balance and TX-slice requests were
-    // silently dropped while every other slice's worked. That is the failure
-    // mode `wirePanStreamRxAudioSinks()` was retired for in #4537: a sink added
-    // at one construction site and missed at another is a dead feature nobody
-    // can see is dead.
-    //
-    // A Flex applies mute/level/pan ON THE RADIO and sends one mixed stream, so
-    // these no-op there (m_backend's defaults). A backend that demodulates every
-    // receiver on this host has to apply them in its own mixer.
-    connect(s, &SliceModel::audioMuteCommandIssued, this,
-            [this, s](bool mute) {
-        if (m_backend) m_backend->setSliceAudioMute(s->sliceId(), mute);
-    });
-    connect(s, &SliceModel::audioGainCommandIssued, this,
-            [this, s](int gainPercent) {
-        if (m_backend) m_backend->setSliceAudioGain(s->sliceId(), gainPercent);
-    });
-    connect(s, &SliceModel::audioPanCommandIssued, this,
-            [this, s](int panPercent) {
-        if (m_backend) m_backend->setSliceAudioPan(s->sliceId(), panPercent);
-    });
-    connect(s, &SliceModel::rxAntennaCommandIssued, this,
-            [this, s](const QString& antenna) {
-        if (m_backend && !usesFlexCommandPlane())
-            m_backend->setSliceRxAntenna(s->sliceId(), antenna);
-    });
-    connect(s, &SliceModel::lockCommandIssued, this,
-            [this](bool locked) {
-        if (m_backend && backendCapabilities().hasRadioDialLock) {
-            m_backend->setRadioDialLock(locked);
-        }
-    });
+    // Both construction sites still call this helper for global lock readback
+    // and the selection intents below. Receive audio/antenna/lock now share
+    // wireSliceReceiveIntentsToBackend's identity-guarded, unique bindings.
     // "Make this the transmit slice." On a radio with one transmitter the
     // backend MOVES transmit rather than setting a flag, and republishes both
     // the old and the new slice so the indicator follows — which is why nothing

@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <functional>
 #include <thread>
+#include <array>
+#include <limits>
 
 namespace AetherSDR {
 class RadioModelSliceLifecycleTestAccess {
@@ -37,6 +39,12 @@ public:
     QList<SliceFilterRequest> filters;
     QList<SliceAgcRequest> agcs;
     QStringList modes;
+    QList<SliceDspRequest> dsps;
+    QList<SliceAudioRequest> audio;
+    QList<SliceSquelchRequest> squelch;
+    QStringList antennas;
+    QList<bool> locks;
+    ReceiveDispatch receiveResult = ReceiveDispatch::Dispatched;
     int pairedAgcCalls = 0;
     int keyCalls = 0;
     std::function<void(int)> observe;
@@ -72,6 +80,38 @@ public:
         if (observe) { observe(id); }
     }
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    ReceiveDispatch requestSliceDsp(int id, const SliceDspRequest& request) override
+    {
+        dsps.append(request);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    ReceiveDispatch requestSliceAudio(int id, const SliceAudioRequest& request) override
+    {
+        audio.append(request);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    ReceiveDispatch requestSliceSquelch(int id, const SliceSquelchRequest& request) override
+    {
+        squelch.append(request);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    ReceiveDispatch requestSliceRxAntenna(int id, const QString& antenna) override
+    {
+        antennas.append(antenna);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    ReceiveDispatch requestSliceLock(int id, bool locked) override
+    {
+        locks.append(locked);
+        if (observe) { observe(id); }
+        return receiveResult;
+    }
+    int receiveCalls() const
+    { return dsps.size() + audio.size() + squelch.size() + antennas.size() + locks.size(); }
     void setKeying(bool, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override
     {
         ++keyCalls;
@@ -167,6 +207,183 @@ void creationPaths()
         s->tuneAndRecenter(14.5);
         check(f.backend->calls() == calls, "locked slice refuses both tune presentations");
     }
+}
+
+void receiveControls()
+{
+    for (bool commandPlane : {false, true}) {
+        Fixture f(commandPlane);
+        SliceModel* s = f.slice();
+        RadioModelSliceLifecycleTestAccess::wire(f.radio, s);
+        RadioModelSliceLifecycleTestAccess::wire(f.radio, s);
+        QSignalSpy raw(s, &SliceModel::commandReady);
+        // Every desktop feature, not merely one representative setter.
+        const std::array toggles{&SliceModel::setNb, &SliceModel::setNr, &SliceModel::setAnf,
+            &SliceModel::setMn, &SliceModel::setApf, &SliceModel::setNrl, &SliceModel::setNrs,
+            &SliceModel::setRnn, &SliceModel::setNrf, &SliceModel::setAnfl, &SliceModel::setAnft};
+        for (std::size_t i = 0; i < toggles.size(); ++i) {
+            (s->*toggles[i])(true);
+            check(f.backend->dsps.size() == int(i + 1)
+                      && int(f.backend->dsps.last().feature) == int(i)
+                      && f.backend->dsps.last().field == SliceDspRequest::Field::Enabled
+                      && f.backend->dsps.last().enabled,
+                  "every DSP enable routes exactly once from both creation paths");
+        }
+        const std::array levels{&SliceModel::setNbLevel, &SliceModel::setNrLevel,
+            &SliceModel::setAnfLevel, &SliceModel::setMnLevel, &SliceModel::setApfLevel,
+            &SliceModel::setNrlLevel, &SliceModel::setNrsLevel, &SliceModel::setNrfLevel,
+            &SliceModel::setAnflLevel};
+        for (const auto setter : levels) {
+            const int before = f.backend->dsps.size();
+            (s->*setter)(123);
+            check(f.backend->dsps.size() == before + 1
+                      && f.backend->dsps.last().field == SliceDspRequest::Field::Level
+                      && f.backend->dsps.last().level == 100 && f.backend->dsps.last().enabled,
+                  "DSP levels clamp and preserve the paired enabled value");
+        }
+        s->setAudioGain(39.5f);
+        s->setAudioMute(true);
+        s->setAudioPan(81);
+        check(f.backend->audio.size() == 3 && f.backend->audio[0].value == 39
+                  && f.backend->audio[1].field == SliceAudioRequest::Field::Mute
+                  && f.backend->audio[2].field == SliceAudioRequest::Field::Pan,
+              "audio dispatch does not require a daemon audio capability record");
+        s->setAudioGain(std::numeric_limits<float>::quiet_NaN());
+        check(f.backend->audio.size() == 3, "non-finite gain is refused before integer conversion");
+        s->setSquelch(true, 37);
+        s->setSquelch(true, 37);
+        check(f.backend->squelch.size() == 2 && f.backend->squelch[0].enabledChanged
+                  && f.backend->squelch[0].levelChanged && !f.backend->squelch[1].enabledChanged
+                  && !f.backend->squelch[1].levelChanged,
+              "squelch retains field mask and repeated paired intent without duplicate bindings");
+        s->setRxAntenna(QStringLiteral("ANT2"));
+        s->setLocked(true);
+        s->setLocked(false);
+        check(f.backend->antennas == QStringList{"ANT2"} && f.backend->locks == QList<bool>{true, false},
+              "antenna and slice lock are not gated on radio-wide dial-lock support");
+        const int before = f.backend->receiveCalls();
+        SliceDelta delta;
+        delta.nb = false; delta.nbLevel = 32; delta.nr = false; delta.anf = false;
+        delta.audioGain = 31; delta.audioMute = false; delta.audioPan = 22;
+        delta.squelchOn = false; delta.squelchLevel = 19;
+        delta.rxAntenna = QStringLiteral("ANT1"); delta.locked = true;
+        emit f.backend->sliceChanged(0, delta);
+        check(f.backend->receiveCalls() == before && s->audioGain() == 31 && !s->nbOn()
+                  && s->rxAntenna() == QStringLiteral("ANT1") && s->isLocked(),
+              "independent receive observations correct state without echoing commands");
+        QSignalSpy refused(&f.radio, &RadioModel::commandDropped);
+        f.backend->receiveResult = ReceiveDispatch::Unsupported;
+        s->setNr(true);
+        check(refused.size() == 1, "unsupported receive request reaches the existing refusal notification");
+        f.backend->receiveResult = ReceiveDispatch::LocalOnly;
+        s->setLocked(false);
+        check(refused.size() == 1 && !s->isLocked(), "local-only lock remains useful without a false refusal");
+        check(raw.isEmpty() && f.backend->keyCalls == 0, "whole migrated group sends no raw wire text or TX request");
+    }
+}
+
+void receiveReentrancyAndLifecycle()
+{
+    Fixture f;
+    SliceModel* s = f.slice();
+    float displayed = 0;
+    QObject::connect(s, &SliceModel::audioGainChanged, s, [&](float value) { displayed = value; });
+    f.backend->observe = [&](int id) {
+        SliceDelta delta; delta.audioGain = 21; delta.nb = false;
+        emit f.backend->sliceChanged(id, delta);
+    };
+    s->setAudioGain(67);
+    s->setNb(true);
+    check(s->audioGain() == 21 && displayed == 21 && !s->nbOn()
+              && f.backend->audio.size() == 1 && f.backend->dsps.size() == 1,
+          "synchronous receive corrections win over optimistic notifications and do not echo");
+    f.backend->observe = {};
+    auto connection = QObject::connect(s, &SliceModel::nbChanged, s, [s](bool on) {
+        if (on) { s->setNbLevel(73); }
+    });
+    s->setNb(true);
+    check(f.backend->dsps.size() == 3 && f.backend->dsps.last().enabled
+              && f.backend->dsps.last().level == 73,
+          "nested companion DSP edit preserves both fields with the current pair");
+    QObject::disconnect(connection);
+    connection = QObject::connect(s, &SliceModel::squelchChanged, s, [s](bool on, int level) {
+        if (on && level == 38) { s->setSquelch(true, 61); }
+    });
+    s->setSquelch(true, 38);
+    check(f.backend->squelch.size() == 1 && f.backend->squelch.last().enabledChanged
+              && f.backend->squelch.last().levelChanged && f.backend->squelch.last().level == 61,
+          "nested squelch edit retains the outer enable field in the newest paired request");
+    QObject::disconnect(connection);
+    connection = QObject::connect(s, &SliceModel::nbChanged, s, [s](bool on) {
+        if (!on) { s->setNb(true); }
+    });
+    s->setNb(false);
+    check(f.backend->dsps.size() == 4 && f.backend->dsps.last().enabled,
+          "nested same-field DSP edit supersedes the outer request");
+    QObject::disconnect(connection);
+    connection = QObject::connect(s, &SliceModel::audioGainChanged, s, [&](float value) {
+        if (value == 51) {
+            f.radio.stageSessionModelsForReconnectForTest();
+            emit f.backend->sliceChanged(0, report());
+        }
+    });
+    s->setAudioGain(51);
+    check(f.backend->audio.size() == 1, "reconnect during receive notification cancels prior-session audio intent");
+    QObject::disconnect(connection);
+
+    auto all = [](SliceModel* source) {
+        emit source->receiveDspRequested({SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled, true, 50});
+        emit source->receiveAudioRequested({SliceAudioRequest::Field::Mute, 1});
+        emit source->receiveSquelchRequested({true, 42, true, true});
+        emit source->receiveRxAntennaRequested(QStringLiteral("ANT1"));
+        emit source->receiveLockRequested(true);
+    };
+    const int before = f.backend->receiveCalls();
+    f.backend->connected = false;
+    all(s);
+    f.backend->connected = true;
+    f.radio.stageSessionModelsForReconnectForTest();
+    all(s);
+    emit f.backend->sliceChanged(0, report());
+    std::thread worker([&] { all(s); });
+    worker.join();
+    QCoreApplication::sendPostedEvents(&f.radio, QEvent::MetaCall);
+    check(f.backend->receiveCalls() == before, "all receive groups refuse disconnected, staged and off-thread intents");
+    all(s);
+    check(f.backend->receiveCalls() == before + 5, "reclaimed slice keeps exactly one receive binding per group");
+    emit f.backend->sliceRemoved(0);
+    emit f.backend->sliceChanged(0, report());
+    all(s);
+    check(f.backend->receiveCalls() == before + 5, "retired object cannot control replacement with the same slice id");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+    auto* doomed = new SliceModel(9);
+    int requests = 0;
+    QObject::connect(doomed, &SliceModel::receiveAudioRequested, &f.radio, [&](const SliceAudioRequest&) { ++requests; });
+    QObject::connect(doomed, &SliceModel::audioGainChanged, &f.radio, [doomed](float) { delete doomed; });
+    doomed->setAudioGain(43);
+    check(requests == 0, "deletion during receive notification cancels dispatch safely");
+}
+
+void profileRestore()
+{
+    SliceModel slice(0);
+    QSignalSpy requests(&slice, &SliceModel::receiveDspRequested);
+    QSignalSpy raw(&slice, &SliceModel::commandReady);
+    slice.setNrsLevel(72);
+    SliceDelta recalled; recalled.nrsLevel = 50;
+    slice.applyChanges(recalled);
+    check(requests.size() == 2 && slice.nrsLevel() == 72
+              && qvariant_cast<SliceDspRequest>(requests.last().at(0)).origin == SliceDspRequest::Origin::ProfileRestore,
+          "NRS firmware-default recall preserves explicit operator level with tagged restore intent");
+    recalled.nrsLevel = 63;
+    slice.applyChanges(recalled);
+    check(requests.size() == 2 && slice.nrsLevel() == 63, "ordinary NRS readback is passive");
+    slice.setNrsLevel(50);
+    recalled.nrsLevel = 50;
+    slice.applyChanges(recalled);
+    check(requests.size() == 3 && slice.nrsLevel() == 50 && raw.isEmpty(),
+          "explicit operator default disables NRS reassertion and no path emits raw wire text");
 }
 
 void synchronousObservations()
@@ -288,6 +505,9 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 1; }
     creationPaths();
+    receiveControls();
+    receiveReentrancyAndLifecycle();
+    profileRestore();
     synchronousObservations();
     lifetimeAndReentrancy();
     return failures == 0 ? 0 : 1;

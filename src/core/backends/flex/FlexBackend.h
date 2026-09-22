@@ -84,6 +84,11 @@ public:
     void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
     void requestSliceFilter(int sliceId, const SliceFilterRequest& request) override;
     void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
+    ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
+    ReceiveDispatch requestSliceRxAntenna(int sliceId, const QString& antenna) override;
+    ReceiveDispatch requestSliceLock(int sliceId, bool locked) override;
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;

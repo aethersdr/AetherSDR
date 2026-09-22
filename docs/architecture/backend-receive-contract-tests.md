@@ -64,3 +64,48 @@ These tests are unconditional default CTests, registered in
 `tests/tests.cmake`; they run in the main full-suite and sanitizer lanes.
 The frozen per-PR CI allowlist is unchanged. None opens a network session,
 synthesizes third-party firmware or invokes keying.
+
+## Consolidated slice receive controls (#5917)
+
+The next M4 group uses typed DSP, audio and squelch requests plus slice-aware
+antenna and lock intents. `RadioModel` binds them once on both slice creation
+paths, checks the exact active object and owner thread, and rejects staged,
+disconnected or retired senders. Desktop notifications precede dispatch so a
+synchronous backend correction remains the final visible value. Nested edits
+retain the newest value, including the paired DSP state and squelch field mask.
+
+| Backend | Existing desktop behavior retained | Explicitly not added |
+| --- | --- | --- |
+| Flex | Independent DSP enable/level fields, AF gain/mute/balance, separate squelch writes, RX port and per-slice lock through the guarded sink | Slice manual notch (TNF is separate), new daemon audio capability |
+| Icom | Paired NB/NR, ANF enable, manual-notch position, AF gain, squelch threshold, profile-supported RX port and global dial lock | AF mute/balance, Flex extended DSP |
+| HL2 | Existing RX-worker NB and receiver mixer gain/mute/balance | Radio-side NR/ANF/manual notch or squelch |
+| RTL (optional) | Existing DDC gain/mute/balance | DSP or radio antenna controls; tests only cover cold refusal without USB |
+| Demo | NB and ANF affect the existing production signal generator | Independent AF mixer or new advertised DSP capabilities |
+| ANAN | Existing client-only tune lock | NB from separate #5824, new mixer or other receive controls |
+
+`ReceiveDispatch` distinguishes a dispatched operation, a client-only lock, and
+an unsupported operation. It is not hardware acknowledgement. Unsupported
+requests feed the existing one-shot unsupported-control notice and log. Icom's
+global lock is distinct from Flex's slice lock; a family with neither retains
+the local tune lock. No `RadioCapabilities` fields or serialized feature records
+change. In particular, Flex and Icom desktop AF support does not authorize the
+daemon's guarded receive-audio methods.
+
+Kiwi replacement volume/balance/mute and squelch remain local. Its primary-Flex
+suppression mute, band-recall release and reassertion use an explicit compatibility
+origin. NRS firmware-default profile recall likewise carries a restore origin;
+normal observations remain passive. Existing Kiwi/squelch/APF/antenna tests now
+observe the typed dispatch surface, not retired raw-command signals.
+
+The extended backend contract test checks all Flex field encodings and separate
+readback, Icom scheduler output, actual HL2 worker NB configuration and mixer
+configuration, and Demo's worker blanker state and ANF effect on generated
+samples. The Demo worker is read through a test-only friend on its own thread;
+this is not a fake firmware peer. New model tests cover both construction paths,
+unique wiring, stale IDs, reconnect, off-thread refusal, nested edits, deletion,
+explicit unsupported results and NRS restore. These remain in the existing
+unconditional CTest targets; the frozen PR gate is unchanged.
+
+TX controls, RIT/XIT, FM repeater and digital offsets, diversity, panadapter
+commands and DAX/PCM transport are outside this batch. The separate audio-path
+migration is not duplicated here.
