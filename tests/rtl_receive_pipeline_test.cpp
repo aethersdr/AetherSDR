@@ -50,8 +50,9 @@ int main(int argc, char** argv)
     for (int id = 0; id < 4; ++id) {
         state.receivers.push_back({{id, 100000000 + offsets[id], -15000, 15000, 0, 3000, 3000}, T::Mode::Fm});
     }
+    state.receivers[0].audioGain = 0;
+    state.receivers[0].audioMute = true;
     check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(), "four real independent WDSP receivers prepare and adopt");
-    pipeline->setMonitor(0, 0, 50, true);
     constexpr std::size_t total = 1440000;
     std::vector<std::complex<float>> iq(total);
     for (std::size_t n = 0; n < total; ++n) {

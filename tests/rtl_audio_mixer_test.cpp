@@ -56,7 +56,7 @@ int main()
     check(sink.next == 512 && sink.samples[768] == 0.8f, "removal cannot reset survivor audio history");
     inputs[1] = {3, 3, 2};
     mixer->configure(1, 1, inputs, 0);
-    check(!mixer->push(3, 2, 1, 512, left, right), "reused slot rejects previous instance");
+    check(!mixer->push(3, 2, 2, 512, left, right), "reused slot rejects previous instance even with current epoch");
     check(!mixer->push(3, 3, 1, 512, left, right), "new receiver rejects old format epoch");
     left[4] = std::numeric_limits<float>::quiet_NaN();
     check(!mixer->push(3, 3, 2, 512, left, right), "nonfinite block refused atomically");
