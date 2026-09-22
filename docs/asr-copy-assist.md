@@ -50,14 +50,20 @@ Design + decision record: RFC **#4333** (accepted). Engine: **whisper.cpp**
 - The status line shows a **`Queue: N s`** backlog — seconds of received audio not
   yet transcribed. It stays near 0 when the engine keeps up and climbs
   (amber→red) when it can't (e.g. whisper on a Raspberry Pi), so you can see ASR
-  falling behind. If it grows without bound, use a smaller model, the remote
-  backend, or faster hardware.
+  falling behind. It cannot grow without bound: once the backlog reaches twice
+  the **Buffer** setting (never less than 10 s) the engine drops incoming audio
+  until it has drained to half that, and the label reads **`Queue: N s · dropped
+  M s`** in red — those seconds were never transcribed, so the transcript has
+  gaps. A retune or Disable resets both numbers. If you see it, use a smaller
+  model, the remote backend, a longer Buffer, or faster hardware.
 
 ### Settings (⚙)
 
 The **⚙ button** (next to Enabled) opens a small modeless **settings dialog**
 holding the **model** and **compute-device** (GPU/CPU) pickers, with room for
-more options. It floats over the app and can stay open while you operate.
+more options. It floats over the app and can stay open while you operate. If a
+device is being kept out after a fault, the reason and a **Try again next
+launch** button appear under **Compute** (see *GPU acceleration*).
 
 - **Save transcript to a file** — when ticked, every finished utterance is
   appended as one timestamped line (`2026-07-21T14:30:05<TAB>text`). You name a
@@ -158,6 +164,28 @@ The selected model runs on the **GPU when one is available**, else CPU
 
 Without the toolchain the build is CPU-only, unchanged. A GPU-enabled binary
 still runs on GPU-less hosts.
+
+### When the speech engine takes AetherSDR down
+
+A few faults inside the speech engine cannot be caught — the app simply closes
+(an out-of-memory GPU load on some drivers, a CPU the engine build does not
+support). Copy Assist notes which step it was in before it starts one, so the
+**next** launch knows:
+
+- **It closed while loading a model on a GPU** → that GPU is left out and the
+  model runs on the next device (another GPU, else CPU). The compute picker shows
+  it as *(unavailable)*. If a second GPU does the same, both stay out.
+- **It closed while starting the engine, or while loading on the CPU** → local
+  Copy Assist stays off for that session and says so; a **Remote server** tier
+  still works. This includes a load that was aimed at a GPU, failed there in a
+  way the app could catch, and closed during the CPU retry that follows.
+
+Either way the **⚙ settings dialog** shows the reason under **Compute**, with a
+**Try again next launch** button — use it after a driver update, or if the app
+was really closed by something else (a power cut, a crash elsewhere). An
+AetherSDR update clears the note by itself. The details (step, device, model,
+free memory, version) are also written to the log and carried in a support
+bundle's `settings.txt` as `AsrLastFault`.
 
 ### Not shipped on the Intel macOS DMG
 

@@ -179,20 +179,22 @@ void P2Client::setDdc0FrequencyHz(double hz)
 
 void P2Client::setStepAttenuationDb(int adcIndex, int db)
 {
-    if (adcIndex == 0)
+    if (adcIndex == 0) {
         m_adc0AttenuationDb = db;
-    else if (adcIndex == 1)
+    } else if (adcIndex == 1) {
         m_adc1AttenuationDb = db;
-    else
+    } else {
         return;
+    }
     // Now rather than on the next keepalive: the operator is moving a
     // control and should hear the change, not wait up to 100 ms for it.
-    if (m_running && m_socket)
+    if (m_running && m_socket) {
         sendTo(*m_socket,
               buildHighPriority(true, sharedFreqWords(),
                                 m_bypassAdc0Filters, m_bypassAdc1Filters,
                                 m_adc0AttenuationDb, m_adc1AttenuationDb),
               m_host, kHighPriorityPort);
+    }
 }
 
 bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)

@@ -79,6 +79,22 @@ signals:
     void profilesChanged();
 
 private:
+
+    // One-time import of the retired channel-strip library.
+    //
+    // ChannelStripPresets stored both directions in one preset, and the window
+    // that was its only UI is gone. Rather than strand what an operator saved,
+    // each preset is split: its transmit half lands here, its receive half in
+    // AetherRxProfiles, both under the preset's own name. The legacy file is
+    // read, never written or deleted -- if this goes wrong the original is
+    // still there, and a future version can try again.
+    //
+    // Runs once. The flag lives in this library's own root rather than in
+    // AppSettings so the decision travels with the file: re-importing after
+    // the operator has deliberately deleted a migrated profile would be worse
+    // than not importing at all.
+    void migrateLegacyPresets();
+
     QString filePath() const;
     bool    loadFromDisk();
     // Atomically replace the library file with `root`. False on any failure,

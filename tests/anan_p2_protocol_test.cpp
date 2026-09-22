@@ -214,7 +214,7 @@ int main()
         check(readU16(hpNoBypass, 1430) == 0,
               "bypassAdc1Filters=false: Alex1 stays zero");
 
-        // Step attenuators (p.17): byte 1443 = ADC0, byte 1442 = ADC1,
+        // Step attenuators (pp.34,36): byte 1443 = ADC0, byte 1442 = ADC1,
         // 0-31 dB. Default is none; values land on the right ADC's byte and
         // are clamped to the spec range at both ends.
         check(hp[1443] == 0 && hp[1442] == 0,

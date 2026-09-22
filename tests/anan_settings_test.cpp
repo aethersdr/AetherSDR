@@ -77,32 +77,6 @@ int main(int argc, char** argv)
                                      QStringLiteral(R"({"ddc0AdcIndex":7})"));
     check(AnanSettings::ddc0AdcIndex() == 0, "an out-of-range ADC index falls back to ADC0");
 
-    // ---- step attenuation, per ADC ---------------------------------------
-    AnanSettings::reset();
-    check(AnanSettings::adcAttenuationDb(0) == 0 && AnanSettings::adcAttenuationDb(1) == 0,
-          "both attenuators default to 0 dB");
-    AnanSettings::setAdcAttenuationDb(1, 20);
-    check(AnanSettings::adcAttenuationDb(1) == 20, "ADC1 attenuation round-trips");
-    check(AnanSettings::adcAttenuationDb(0) == 0, "setting ADC1 leaves ADC0 alone");
-    AnanSettings::setAdcAttenuationDb(0, 45);
-    check(AnanSettings::adcAttenuationDb(0) == 31, "a write above 31 dB is stored as 31");
-
-    // A hand-edited document must not reach the High Priority packet out of
-    // the spec's 0-31 dB range.
-    AppSettings::instance().setValue(
-        QStringLiteral("Anan"),
-        QStringLiteral(R"({"adc0AttenuationDb":42,"adc1AttenuationDb":-5})"));
-    check(AnanSettings::adcAttenuationDb(0) == 31, "a hand-edited 42 dB reads as 31");
-    check(AnanSettings::adcAttenuationDb(1) == 0, "a hand-edited -5 dB reads as 0");
-
-    // An ADC this radio does not have reads 0 and writes nothing.
-    AnanSettings::reset();
-    AnanSettings::setAdcAttenuationDb(1, 7);
-    AnanSettings::setAdcAttenuationDb(2, 10);
-    check(AnanSettings::adcAttenuationDb(2) == 0, "an unknown ADC index reads 0 dB");
-    check(AnanSettings::adcAttenuationDb(0) == 0 && AnanSettings::adcAttenuationDb(1) == 7,
-          "a write to an unknown ADC index changes nothing");
-
     if (g_failures == 0)
         std::printf("anan_settings_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

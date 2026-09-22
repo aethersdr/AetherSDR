@@ -165,7 +165,7 @@ std::array<std::uint8_t, 1444> buildHighPriority(bool run,
     // bit 12 "HF Bypass 2" (p.90-91's own Alex1 bit table).
     if (bypassAdc1Filters)
         writeU16be(&pkt[1430], std::uint16_t{1} << 12);
-    // Step attenuators, p.17: byte 1443 = ADC0, byte 1442 = ADC1, 0-31 dB.
+    // Step attenuators, pp.34,36: byte 1443 = ADC0, byte 1442 = ADC1, 0-31 dB.
     pkt[1443] = static_cast<std::uint8_t>(
         std::clamp(adc0AttenuationDb, 0, kMaxStepAttenuationDb));
     pkt[1442] = static_cast<std::uint8_t>(

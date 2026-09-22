@@ -4,6 +4,7 @@
 #include "PcmFrame.h"
 #include "QsoRecordingFormat.h"
 #include "QsoPcmConverter.h"
+#include "QsoWavPlayback.h"
 
 #include <QAudio>
 #include <QAudioDevice>
@@ -102,6 +103,14 @@ public:
     bool isRecording() const { return m_recording; }
     bool isPlaying() const { return m_playing; }
     bool hasLastRecording() const { return !m_lastRecordingPath.isEmpty(); }
+    // The last finalized recording decoded to `format` -- what "TX Playback"
+    // sends to the transmitter. The recorder owns its file layout, so the
+    // caller never opens the WAV itself. Empty, with `error` filled, when
+    // there is no recording or it cannot be read.
+    std::optional<QByteArray> lastRecordingPcm(const QAudioFormat& format,
+                                               QString* error = nullptr,
+                                               qint64 maxFrames = kQsoPlaybackMaxFrames,
+                                               bool prefixOnly = false) const;
 
     // Answers "does the connected backend demodulate in-process?"
     // (IRadioBackend::ownsRxAudio) for the start policy. A CALLBACK, not a

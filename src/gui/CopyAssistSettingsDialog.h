@@ -42,6 +42,18 @@ public:
     void setGpuSelectorVisible(bool on);
     void setGpuSelectorEnabled(bool on);
 
+    // Fault stand-down row (#5190). Shown only while a fault record is standing
+    // a device — or the whole local speech engine — down, with `reason` saying
+    // which and why; the button asks for the attempt to be made again. Hidden
+    // (the default) the dialog looks exactly as it did before.
+    void setFaultStandDown(const QString& reason);
+    // The operator asked for another attempt: the record is gone, but this
+    // session is still stood down (the latch is one-way, #4502). Keep the row,
+    // say the retry happens at the next start, and disable the button.
+    void setFaultRetryPending();
+    void clearFaultStandDown();
+    bool faultStandDownVisible() const;
+
     // Transcription-language selector (code + human label, e.g. "en"/"English").
     // The controller populates it from the whisper backend's supported list;
     // whisper-free here, same as the tier/GPU combos. Only applies to the
@@ -88,6 +100,7 @@ public:
 signals:
     void tierChanged(const QString& tierId);
     void gpuChanged(int index);
+    void retryAfterFaultRequested();
     void languageChanged(const QString& code);
     void logToFileToggled(bool on);
     void browseLogFileRequested();
@@ -102,6 +115,9 @@ private:
     QComboBox* m_tier = nullptr;
     QComboBox* m_gpu = nullptr;
     QLabel* m_gpuLabel = nullptr;   // paired with m_gpu so both hide together
+    QWidget* m_faultRow = nullptr;  // reason + "Try again" (hidden unless a fault stands something down)
+    QLabel* m_faultReason = nullptr;
+    QPushButton* m_faultRetry = nullptr;
     QComboBox* m_language = nullptr;
     QLabel* m_languageLabel = nullptr; // paired with m_language so both hide together
     QCheckBox* m_logToFile = nullptr;

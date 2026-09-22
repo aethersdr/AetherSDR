@@ -1,7 +1,6 @@
 #include "core/backends/anan/AnanBackend.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/AnanDroopDefaults.h"
-#include "core/backends/anan/AnanSettings.h"
 #include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
 
@@ -32,6 +31,24 @@ namespace {
 // Named and zero rather than silently absent, so the next reader finds a
 // TODO instead of an unexplained 1:1 dBFS/dBm mapping.
 constexpr float kUncalibratedDbfsToDbmOffset = 0.0f;
+
+// One FFT AVG slider step as analyzer averaging time. deskHPSDR sets its
+// analyzer's averaging as a time in 10 ms steps (default 250 ms), so 0 = none,
+// 25 = deskHPSDR's default, 100 = one second. Published in capabilities()
+// as BackendPanAveraging::msPerAverageStep.
+constexpr int kMsPerAverageStep = 10;
+
+// S-meter: WDSP's RXA_S_AV is 10*log10 of the mean I^2+Q^2 on samples scaled
+// to the P2 wire's 24-bit full scale (P2Protocol's kFullScale24Bit), so it is
+// dBFS. deskHPSDR reads the same meter on the same scaling (1/2^23 per
+// sample) and ships a 0 dB offset for ANAN, making dBFS read as dBm out of the
+// box; this follows it. onDspMeter() adds the selected ADC attenuation
+// before smoothing, matching the panadapter's input-referred compensation.
+// A per-radio correction (deskHPSDR's rx_gain_calibration, set against a
+// -73 dBm generator) is not offered yet. Deliberately separate from
+// kUncalibratedDbfsToDbmOffset: that one labels the PANADAPTER axis, whose bin
+// levels depend on the FFT's window and normalisation, not on this meter.
+constexpr double kSMeterDbmOffset = 0.0;
 
 QByteArray floatBytes(const std::vector<float>& v)
 {
@@ -150,12 +167,6 @@ AnanBackend::AnanBackend(QObject* parent)
     m_client = new P2Client(nullptr);   // nullptr parent: moveToThread requires it
     m_dsp = new AnanRxDsp(nullptr);
 
-    m_attenuationSaveTimer = new QTimer(this);
-    m_attenuationSaveTimer->setSingleShot(true);
-    connect(m_attenuationSaveTimer, &QTimer::timeout, this, [this] {
-        AnanSettings::setAdcAttenuationDb(m_pendingParams.ddc0AdcIndex, m_attenuationDb);
-    });
-
     // Leading+trailing throttle for setSliceFrequency()'s expensive side
     // effects -- see scheduleTuneApply()'s comment. Lives on this object
     // (the GUI thread), same as the backend itself; not moved to m_ioThread.
@@ -206,8 +217,13 @@ AnanBackend::AnanBackend(QObject* parent)
         // zoom, so connected() is suppressed for that one round trip.
         const bool wasRateChange = m_rateChanging;
         m_rateChanging = false;
-        if (!wasRateChange)
+        if (!wasRateChange) {
             emit connected();
+            defineMeters();
+            // A new session's needle starts from its first reading, not from
+            // where the last session's left off.
+            m_sMeter.reset();
+        }
         emitSliceState();
         emitPanState();
         // A rate change suppresses connected(), but a page opened during
@@ -341,19 +357,17 @@ AnanBackend::AnanBackend(QObject* parent)
         // signal keeps its level when the operator attenuates, and only the
         // part of the floor that was the ADC overloading actually drops.
         const float attenuation = static_cast<float>(m_attenuationDb);
-        for (std::size_t i = 0; i < binsDbfs.size(); ++i)
+        for (std::size_t i = 0; i < binsDbfs.size(); ++i) {
             dbm[i] = binsDbfs[i] + kUncalibratedDbfsToDbmOffset + attenuation;
+        }
         m_droopCalibrator.onSpectrumFrame(dbm);
         emit spectrumFrameReady(kSliceId, floatBytes(dbm));
     });
-    // Deliberately do not publish AnanRxDsp::meterUpdate yet. It is WDSP
-    // SignalPeak in uncalibrated dBFS; registering it as SLC:LEVEL would feed
-    // the shared S-meter, whose scale and S-unit labels require real dBm.
+    connect(m_dsp, &AnanRxDsp::meterUpdate, this, &AnanBackend::onDspMeter);
 }
 
 AnanBackend::~AnanBackend()
 {
-    flushAttenuationSave();
     m_droopCalibrator.stop(false);
     ++m_connectGeneration;   // orphan any in-flight finishDspSetup/rebuild callback
 
@@ -395,9 +409,12 @@ RadioCapabilities AnanBackend::capabilities() const
     // words twice over. kUncalibratedDbfsToDbmOffset is 0.0f, carrying a TODO
     // that calls it "an unexplained 1:1 dBFS/dBm mapping", and the spectrum path
     // emits `binsDbfs[i] + kUncalibratedDbfsToDbmOffset` -- the bins ARE the
-    // dBFS, relabelled. The SignalPeak comment states the consequence directly:
-    // registering it as SLC:LEVEL "would feed the shared S-meter, whose scale
-    // and S-unit labels require real dBm".
+    // dBFS, relabelled, and a bin's level also depends on the FFT's window and
+    // normalisation: not verified against a known input level.
+    //
+    // This is the PANADAPTER axis only. The S-meter is published in dBm
+    // (kSMeterDbmOffset): it reads WDSP's signal meter, whose scaling matches
+    // deskHPSDR's for this radio family.
     //
     // The numbers stay internally consistent; what is denied is COMPARISON. A
     // level from this radio may not be published as a spot, held against another
@@ -473,8 +490,9 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasAudioPeakingFilter = false; // no firmware APF verb on this path
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
+    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep}; // AnanPanAnalyzer
     c.persistsMemories = false;    // default; stated explicitly
-    c.clientSettingsDomains = {};  // no applyRestoredState()/currentOperatingState() yet
+    c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::RfGain;
     c.hostDroopCalibration = true; // AnanDroopCorrection.h -- real DDC0 CIC droop,
                                     // corrected client-side via AnanDroopCalibrator
     c.extensionNamespaces = {QStringLiteral("anan")};  // "droop.apply" -- see invokeExtension()
@@ -499,6 +517,29 @@ RadioCapabilities AnanBackend::capabilities() const
         c.extensions[QStringLiteral("anan")] = anan;
     }
     return c;
+}
+
+void AnanBackend::applyRestoredState(const RestoredRadioState& state)
+{
+    // A missing document resets both ADCs on a same-family radio swap.
+    // RadioStateMemory owns persistence; validate its opaque extension here.
+    const QJsonObject gain = state.extension.value(QStringLiteral("rfGain")).toObject();
+    m_pendingParams.adc0AttenuationDb = std::clamp(
+        gain.value(QStringLiteral("adc0AttenuationDb")).toInt(0), 0, kMaxStepAttenuationDb);
+    m_pendingParams.adc1AttenuationDb = std::clamp(
+        gain.value(QStringLiteral("adc1AttenuationDb")).toInt(0), 0, kMaxStepAttenuationDb);
+    m_attenuationDb = m_pendingParams.ddc0AdcIndex == 1
+        ? m_pendingParams.adc1AttenuationDb : m_pendingParams.adc0AttenuationDb;
+}
+
+RestoredRadioState AnanBackend::currentOperatingState() const
+{
+    RestoredRadioState state;
+    state.extensionSchemaVersion = 1;
+    state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
+        {QStringLiteral("adc0AttenuationDb"), m_pendingParams.adc0AttenuationDb},
+        {QStringLiteral("adc1AttenuationDb"), m_pendingParams.adc1AttenuationDb}}}};
+    return state;
 }
 
 void AnanBackend::connectRadio(const RadioConnectRequest& request)
@@ -583,24 +624,13 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         request.params.value(QStringLiteral("anan.bypassAdc0Filters"), true).toBool();
     m_pendingParams.bypassAdc1Filters =
         request.params.value(QStringLiteral("anan.bypassAdc1Filters"), true).toBool();
-    // The operator's last attenuation, per ADC. Live, unlike the options
-    // above: setPanRfGain() changes it mid-session.
-    m_pendingParams.adc0AttenuationDb = AnanSettings::adcAttenuationDb(0);
-    m_pendingParams.adc1AttenuationDb = AnanSettings::adcAttenuationDb(1);
+    // applyRestoredState() seeds both ADC values before this connect.
     m_attenuationDb = m_pendingParams.ddc0AdcIndex == 1
         ? m_pendingParams.adc1AttenuationDb
         : m_pendingParams.adc0AttenuationDb;
 
-    // The frequency this session comes up on. Mirrors Hl2Backend's own
-    // startFreqHz fallback (10 MHz -- WWV, a live signal on any HF antenna,
-    // useful for exactly this kind of first-connect bring-up test) minus the
-    // restored-state branch: capabilities().clientSettingsDomains is empty
-    // for this backend (it restores no operating state; only AnanSettings'
-    // connect options and the step attenuation persist), so applyRestoredState()
-    // is never called and there is no prior session to prefer. Without this,
-    // m_sliceFreqHz stays at its 0.0 member default, finishDspSetup()'s
-    // `m_sliceFreqHz > 0.0` guard never fires, and DDC0 stays parked at the
-    // phase word P2Client::start() sends by default (0 -- baseband/DC).
+    // Tuning is not a declared persistence domain. Keep the explicit
+    // connect frequency, or start at WWV (10 MHz) on a first connect.
     m_sliceFreqHz = request.params.contains(QStringLiteral("anan.rxFrequencyHz"))
         ? request.params.value(QStringLiteral("anan.rxFrequencyHz")).toDouble()
         : 10'000'000.0;
@@ -609,7 +639,10 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     m_pendingDspConfig.inputSampleRateHz = m_pendingParams.ddc0RateKsps * 1000;
     m_pendingDspConfig.audioSampleRateHz = 24000;
     m_pendingDspConfig.dspBlockSize = 1024;
-    m_pendingDspConfig.fftSize = 1024;
+    // One point per droop-table entry; the analyzer's FFT behind them is
+    // larger (see AnanPanAnalyzer). spectrumFps keeps Config's default until
+    // RadioModel pushes the operator's rate through setPanFrameRate().
+    m_pendingDspConfig.panPoints = static_cast<int>(kDroopCorrectionFftSize);
     m_pendingDspConfig.mode = modeFromString(m_mode);
     m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
     m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
@@ -738,7 +771,6 @@ void AnanBackend::startP2ClientSession(quint64 generation)
 
 void AnanBackend::disconnectRadio()
 {
-    flushAttenuationSave();
     retirePcmStreams();
     m_droopCalibrator.stop(false);
     m_droopCalibrator.setLandedRate(0);
@@ -822,9 +854,7 @@ void AnanBackend::setSliceFrequency(int sliceId, double hz)
     // frequency, always") -- so unthrottled, EVERY one of those events would
     // retune the actual DDC0 hardware and re-broadcast the pan's geometry.
     scheduleTuneApply();
-    // No operatingStateChanged() emit: that signal is documented as "emitted
-    // only by backends with a non-empty clientSettingsDomains declaration"
-    // (IRadioBackend.h), and this backend's is empty in this phase.
+    // Tuning is not part of this backend's declared persistence domains.
 }
 
 void AnanBackend::setSliceMode(int sliceId, const QString& mode)
@@ -1167,38 +1197,50 @@ void AnanBackend::setPanRfGain(const QString& panId, int gainDb)
 {
     Q_UNUSED(panId);   // one pan in this phase
     // The G2 has no gain stage the host drives, only the step attenuator in
-    // front of each ADC (spec p.17, High Priority bytes 1442/1443). deskHPSDR
-    // offers it as a 0-31 dB attenuation control; here it rides the RF Gain
+    // front of each ADC (Protocol v4.4 pp.34,36, HP bytes 1442/1443).
+    // deskHPSDR offers it as a 0-31 dB attenuation control; here it rides the RF Gain
     // slider, negated, so "more gain" still means "slider right". Clamped
     // rather than refused, per the seam's contract.
-    const int attenuation = std::clamp(-gainDb, 0, kMaxStepAttenuationDb);
+    const int attenuation = -std::clamp(gainDb, -kMaxStepAttenuationDb, 0);
     m_attenuationDb = attenuation;
     // Kept in the params too: a rate change that restarts the session
     // resends everything from m_pendingParams.
-    if (m_pendingParams.ddc0AdcIndex == 1)
+    if (m_pendingParams.ddc0AdcIndex == 1) {
         m_pendingParams.adc1AttenuationDb = attenuation;
-    else
+    } else {
         m_pendingParams.adc0AttenuationDb = attenuation;
-    if (m_client)
+    }
+    if (m_client) {
         QMetaObject::invokeMethod(m_client, "setStepAttenuationDb", Qt::QueuedConnection,
                                   Q_ARG(int, m_pendingParams.ddc0AdcIndex),
                                   Q_ARG(int, attenuation));
-    // Saved only for a live session: the next connect reloads the saved
-    // value into m_pendingParams, so a move with no radio attached changes
-    // nothing worth keeping.
-    if (m_connected)
-        m_attenuationSaveTimer->start(kAttenuationSaveDebounceMs);
+    }
     emit panRfGainChanged(kPanId, -attenuation);
+    emit operatingStateChanged();
 }
 
-void AnanBackend::flushAttenuationSave()
+void AnanBackend::setPanAverage(const QString& panId, int average)
 {
-    // A slider move inside the debounce window must not be lost to a
-    // disconnect or an app close.
-    if (m_attenuationSaveTimer && m_attenuationSaveTimer->isActive()) {
-        m_attenuationSaveTimer->stop();
-        AnanSettings::setAdcAttenuationDb(m_pendingParams.ddc0AdcIndex, m_attenuationDb);
-    }
+    Q_UNUSED(panId);   // one pan in this phase
+    // The operator's FFT AVG slider, which otherwise reaches nothing on this
+    // radio: the panadapter is averaged inside WDSP's analyzer, as a TIME --
+    // see kMsPerAverageStep.
+    if (m_dsp)
+        QMetaObject::invokeMethod(m_dsp, "setSpectrumAverageMs", Qt::QueuedConnection,
+                                  Q_ARG(int, std::max(0, average) * kMsPerAverageStep));
+}
+
+void AnanBackend::setPanWeightedAverage(const QString& panId, bool on)
+{
+    Q_UNUSED(panId);   // one pan in this phase
+    // deskHPSDR offers the analyzer's averaging MODE alongside its time. The
+    // toggle picks between the two recursive modes: on = log-recursive
+    // (deskHPSDR's default, the smoother look), off = linear-recursive (an
+    // average of power, which reads noise and weak signals at their true
+    // level).
+    if (m_dsp)
+        QMetaObject::invokeMethod(m_dsp, "setSpectrumLogAverage", Qt::QueuedConnection,
+                                  Q_ARG(bool, on));
 }
 
 void AnanBackend::setCwPitch(int hz)
@@ -1355,6 +1397,35 @@ void AnanBackend::invokeExtension(const QString& ns, const QString& verb,
         emit extensionError(requestId, QStringLiteral("ANAN: unknown extension verb '%1.%2'")
                                            .arg(ns, verb));
     }
+}
+
+void AnanBackend::defineMeters()
+{
+    // Index is ours to choose -- nothing on a P2 radio assigns meter ids. Same
+    // name, unit and range as Hl2Backend::defineMeters()'s receive meter, the
+    // bare "SLC:LEVEL" MeterModel binds to the S-meter. Receive-only: no TX
+    // meters until this backend can transmit.
+    MeterDef d;
+    d.index = 1;
+    d.source = QStringLiteral("SLC");
+    d.name = QStringLiteral("LEVEL");
+    d.unit = QStringLiteral("dBm");
+    d.low = -140.0;
+    d.high = 0.0;
+    d.description = QStringLiteral("Receive signal level");
+    emit meterDefined(d);
+}
+
+void AnanBackend::onDspMeter(float dbfs)
+{
+    const double dbm = static_cast<double>(dbfs) + kSMeterDbmOffset + m_attenuationDb;
+    // Smooth EVERY reading, publish only on the tick -- the same smoother,
+    // and the same reasons, as Hl2Backend's receive meter (SMeterSmoother).
+    // AnanRxDsp reads the tap at one DSP-rate block's cadence whatever the
+    // DDC0 rate (WdspSMeter::emitEveryBlocks), so this sees ~47 readings a
+    // second at 48 and at 1536 ksps alike.
+    if (const auto out = m_sMeter.feed(dbm))
+        emit meterUpdate(QStringLiteral("SLC:LEVEL"), *out);
 }
 
 void AnanBackend::emitSliceState()

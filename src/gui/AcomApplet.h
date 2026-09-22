@@ -104,8 +104,6 @@ private:
     QPushButton* m_offBtn{nullptr};
 
     QTimer m_labelTimer;
-    QTimer* m_peakTimer{nullptr};
-    float m_peakFwd{0.0f};
 
     float m_fwdWatts{0.0f};
     float m_reflectedWatts{0.0f};

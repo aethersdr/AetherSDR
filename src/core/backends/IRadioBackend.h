@@ -1,5 +1,7 @@
 #pragma once
 
+#include "IndependentTxControl.h"
+
 #include "core/RadioSettingsIdentity.h"
 #include "core/TxCoordinator.h"
 #include "core/PcmFrame.h"
@@ -414,6 +416,29 @@ public:
         Q_UNUSED(fps);
     }
 
+    // The operator's FFT-average setting (Display -> FFT AVG), 0..100:
+    // 0 = no time averaging; what one step means is the backend's call.
+    // Same situation as setPanFrameRate(): a backend
+    // that computes its own spectrum has no radio-side display engine to
+    // ask, so the setting reaches it here or not at all.
+    //
+    // Default no-op: a Flex radio averages on the radio, and a host-computed
+    // backend that does not override this keeps its own fixed behaviour.
+    virtual void setPanAverage(const QString& panId, int average)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(average);
+    }
+
+    // The operator's weighted-average toggle (Display -> FFT). Same routing
+    // and same default as setPanAverage(); what the two states mean for a
+    // host-computed spectrum is the backend's call.
+    virtual void setPanWeightedAverage(const QString& panId, bool on)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(on);
+    }
+
     // ---- per-slice audio ----
     //
     // A Flex mixes its slices ON THE RADIO, so these are wire commands to it and
@@ -554,6 +579,14 @@ public:
     // (command verb, in-stream bit, hardware line). A backend whose
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) = 0;
+    virtual IndependentTxControl independentTxControl() const { return {}; }
+    virtual bool independentTxReady() const { return false; }
+    virtual void stopIndependentTx(const TxCoordinator::Operation& operation,
+                                   const TxCoordinator::StopRequest& request)
+    {
+        Q_UNUSED(operation);
+        Q_UNUSED(request);
+    }
 
     // Trusted engine composition supplies the admitted operation for backend-
     // owned producers (e.g. a TUNE tone). Copy it when starting that producer;
@@ -1049,6 +1082,7 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // ---- connection state UP ----
     void connected();
     void disconnected();
@@ -1118,6 +1152,16 @@ signals:
     // knee will sometimes be wrong, and wrong-and-invisible is a radio that
     // behaves strangely. See FrontEndOverload.h.
     void frontEndOverloadChanged(const AetherSDR::FrontEndOverload& state);
+
+    // AN ARM REQUEST ON autoRfGainControl() HAS SETTLED: `armed` is what the
+    // control is now doing. Emitted after EVERY outcome of setArmed() --
+    // refused (armed stays false; lastArmRefusalReason() says why), armed, and
+    // disarmed -- and not for a request that changed nothing. This is how a
+    // view learns about an arm it did not ask for: the connect-time restore
+    // inside the backend and a bridge `pan autorfgain on` both settle without
+    // passing through any GUI click, and a checkbox that only read isArmed()
+    // back after its own click reported the wrong state on both (#5817).
+    void autoRfGainArmSettled(bool armed);
 
     // Normalized transmit-status delta (aetherd RFC 2.3 — TransmitModel
     // touchpoint). Typed + compiler-checked; the backend populates only the

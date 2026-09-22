@@ -14,15 +14,20 @@
 // (commit 5).
 
 #include "TestSettingsProfile.h"
-
+#include "SeamThreadAffinityProbe.h"
+#include "core/AppSettings.h"
+#include "core/RadioStateMemory.h"
 #include "core/backends/anan/AnanBackend.h"
 
 #include <QCoreApplication>
+#include <QProcess>
 #include <QSignalSpy>
 #include <QVariantList>
 #include <QVariantMap>
 
 #include <cstdio>
+#include <limits>
+#include <memory>
 #include <optional>
 
 using namespace AetherSDR;
@@ -39,11 +44,28 @@ static void check(bool cond, const char* what)
 
 int main(int argc, char** argv)
 {
-    // BEFORE QCoreApplication and before the first AppSettings touch: the
-    // backend reads and writes AnanSettings (step attenuation), and this
-    // keeps those off the developer's real settings file.
-    TestSettingsProfile profile(QStringLiteral("anan-backend-test"));
+    // The child inherits the parent's isolated store to prove disk persistence.
+    const bool restoreChild = argc == 2 && QByteArray(argv[1]) == "--restore-check";
+    std::unique_ptr<TestSettingsProfile> profile;
+    if (!restoreChild) {
+        profile = std::make_unique<TestSettingsProfile>(QStringLiteral("anan-backend-test"));
+        if (!profile->isValid()) {
+            return 1;
+        }
+    }
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
+    if (restoreChild) {
+        AnanBackend backend;
+        const RadioSettingsScope radioA(QStringLiteral("anan"), QStringLiteral("G2-A"));
+        backend.applyRestoredState(RadioStateMemory::load(radioA, backend.capabilities()));
+        const QJsonObject gain = backend.currentOperatingState().extension
+                                     .value(QStringLiteral("rfGain")).toObject();
+        check(gain.value(QStringLiteral("adc0AttenuationDb")).toInt() == 12
+                  && gain.value(QStringLiteral("adc1AttenuationDb")).toInt() == 20,
+              "both ADC attenuations survive a process boundary");
+        return g_failures == 0 ? 0 : 1;
+    }
 
     // ---- mode string parsing ----
     {
@@ -109,10 +131,13 @@ int main(int argc, char** argv)
               "ANAN explicitly declares tuner matching and tuner memories absent");
         check(c.hasDdcPanEdgeRolloff,
               "hasDdcPanEdgeRolloff true -- ANAN's DDC has a real edge roll-off");
+        check(c.backendPanAveraging.has_value()
+                  && c.backendPanAveraging->msPerAverageStep == 10,
+              "backendPanAveraging engaged, 10 ms per FFT AVG step -- the WDSP analyzer averages");
         check(c.tuningMinHz == 0.0 && c.tuningMaxHz == 0.0,
               "tuning range not reported -- no verified G2 range yet, not a guess");
-        check(c.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
-              "no restore support declared in this phase");
+        check(c.clientSettingsDomains == RadioCapabilities::ClientSettingsDomain::RfGain,
+              "only RF gain restore is declared");
         check(c.sampleRatesHz.size() == 6, "six DDC rates advertised");
         check(!backend.isConnected(), "not connected before connectRadio() is ever called");
     }
@@ -241,6 +266,9 @@ int main(int argc, char** argv)
         // attenuation, clamped to the spec's 0-31 dB, and echoed back as the
         // gain actually applied.
         AnanBackend backend;
+        test::SeamThreadAffinityProbe probe(&backend);
+        test::attachAllSeamSignals(probe);
+        QSignalSpy changes(&backend, &IRadioBackend::operatingStateChanged);
         QSignalSpy spy(&backend, &IRadioBackend::panRfGainChanged);
         backend.setPanRfGain(QStringLiteral("anan-0"), -12);
         check(backend.attenuationDbForTest() == 12, "RF gain -12 dB -> 12 dB attenuation");
@@ -252,6 +280,126 @@ int main(int argc, char** argv)
               "the clamped gain (-31), not the request, is echoed");
         backend.setPanRfGain(QStringLiteral("anan-0"), 8);
         check(backend.attenuationDbForTest() == 0, "positive gain clamps to 0 dB attenuation");
+        backend.setPanRfGain(QStringLiteral("anan-0"), std::numeric_limits<int>::min());
+        check(backend.attenuationDbForTest() == 31, "INT_MIN gain clamps to maximum attenuation");
+        backend.setPanRfGain(QStringLiteral("anan-0"), std::numeric_limits<int>::max());
+        check(backend.attenuationDbForTest() == 0, "INT_MAX gain clamps to zero attenuation");
+        check(changes.count() == 5, "RF gain changes notify the operating-state capture pipeline");
+        check(probe.violations().isEmpty(), "RF gain and capture signals stay on the owner thread");
+    }
+
+    {
+        // S-meter: WDSP's dBFS reading is published as SLC:LEVEL in dBm with
+        // deskHPSDR's 0 dB ANAN offset, the first reading at once, later ones
+        // smoothed with SMeterSmoother's ballistics.
+        AnanBackend backend;
+        QSignalSpy spy(&backend, &IRadioBackend::meterUpdate);
+        backend.feedMeterForTest(-73.0f);
+        check(spy.count() == 1, "first S-meter reading is published at once");
+        if (spy.count() == 1) {
+            check(spy.at(0).at(0).toString() == QStringLiteral("SLC:LEVEL"),
+                  "S-meter is published as SLC:LEVEL");
+            check(qAbs(spy.at(0).at(1).toDouble() - (-73.0)) < 1e-9,
+                  "-73 dBFS reads -73 dBm (0 dB offset, as deskHPSDR ships for ANAN)");
+        }
+        check(qAbs(backend.sMeterDbmForTest() - (-73.0)) < 1e-9,
+              "the first reading is taken whole, not smoothed against a zero start");
+
+        backend.feedMeterForTest(-53.0f);
+        // Whether that second reading was published is NOT asserted here: it
+        // would ride on fewer than 100 ms of wall clock passing between two
+        // calls. The publish tick is pinned deterministically, against an
+        // injected clock, in wdsp_smeter_test.
+        // Ballistics pinned on the smoothed value rather than on whatever the
+        // 100 ms tick happened to publish: attack 0.5 on a rise, decay 0.15 on
+        // a fall, which is what "HL2's ballistics" means here. Replacing the
+        // EMA with a plain assignment moves both numbers, so the claim is now
+        // covered rather than merely stated.
+        check(qAbs(backend.sMeterDbmForTest() - (-63.0)) < 1e-9,
+              "a rise is smoothed with attack 0.5: -73 then -53 reads -63 dBm");
+        backend.feedMeterForTest(-83.0f);
+        check(qAbs(backend.sMeterDbmForTest() - (-66.0)) < 1e-9,
+              "a fall is smoothed with decay 0.15: -66 dBm, so the needle falls "
+              "more slowly than it rises");
+    }
+
+    {
+        AnanBackend backend;
+        test::SeamThreadAffinityProbe probe(&backend);
+        test::attachAllSeamSignals(probe);
+        QSignalSpy meter(&backend, &IRadioBackend::meterUpdate);
+        backend.setPanRfGain(QStringLiteral("anan-0"), -12);
+        backend.feedMeterForTest(-85.0f);
+        check(meter.count() == 1 && qAbs(meter.at(0).at(1).toDouble() + 73.0) < 1e-9,
+              "12 dB attenuation is added back to the first S-meter publication");
+        backend.feedMeterForTest(-65.0f);
+        check(qAbs(backend.sMeterDbmForTest() + 63.0) < 1e-9,
+              "attenuation compensation precedes attack smoothing");
+        backend.setPanRfGain(QStringLiteral("anan-0"), -31);
+        backend.feedMeterForTest(-114.0f);
+        check(qAbs(backend.sMeterDbmForTest() + 66.0) < 1e-9,
+              "changed attenuation compensation precedes decay smoothing");
+        check(probe.violations().isEmpty(), "compensated meters stay on the owner thread");
+    }
+
+    {
+        AnanBackend backend;
+        const RadioCapabilities caps = backend.capabilities();
+        const RadioSettingsScope radioA(QStringLiteral("anan"), QStringLiteral("G2-A"));
+        const RadioSettingsScope radioB(QStringLiteral("anan"), QStringLiteral("G2-B"));
+        RestoredRadioState state;
+        state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
+            {QStringLiteral("adc0AttenuationDb"), 7},
+            {QStringLiteral("adc1AttenuationDb"), 20}}}};
+        backend.applyRestoredState(state);
+        backend.setPanRfGain(QStringLiteral("anan-0"), -12);
+        check(RadioStateMemory::store(radioA, caps, backend.currentOperatingState()),
+              "ANAN capture persists through OperatingState");
+        backend.applyRestoredState(RadioStateMemory::load(radioB, caps));
+        const QJsonObject emptyGain = backend.currentOperatingState().extension
+                                          .value(QStringLiteral("rfGain")).toObject();
+        check(emptyGain.value(QStringLiteral("adc0AttenuationDb")).toInt() == 0
+                  && emptyGain.value(QStringLiteral("adc1AttenuationDb")).toInt() == 0,
+              "a radio with no document resets both ADCs rather than inheriting radio A");
+        backend.setPanRfGain(QStringLiteral("anan-0"), -5);
+        check(RadioStateMemory::store(radioB, caps, backend.currentOperatingState()),
+              "radio B gets its own operating-state document");
+        backend.applyRestoredState(RadioStateMemory::load(radioA, caps));
+        const QJsonObject gain = backend.currentOperatingState().extension
+                                     .value(QStringLiteral("rfGain")).toObject();
+        check(gain.value(QStringLiteral("adc0AttenuationDb")).toInt() == 12
+                  && gain.value(QStringLiteral("adc1AttenuationDb")).toInt() == 20,
+              "radio A preserves both ADC values independently of radio B");
+        check(!AppSettings::instance().contains(QStringLiteral("Anan")),
+              "live attenuation never writes the global connect-options document");
+        QProcess child;
+        child.start(QCoreApplication::applicationFilePath(), {QStringLiteral("--restore-check")});
+        const bool finished = child.waitForFinished(30000);
+        const QByteArray output = child.readAllStandardOutput() + child.readAllStandardError();
+        std::fprintf(stderr, "%s", output.constData());
+        check(finished && child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
+              "a fresh process restores the persisted ADC values");
+
+        state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
+            {QStringLiteral("adc0AttenuationDb"), 42},
+            {QStringLiteral("adc1AttenuationDb"), -5}}}};
+        backend.applyRestoredState(state);
+        const QJsonObject clamped = backend.currentOperatingState().extension
+                                        .value(QStringLiteral("rfGain")).toObject();
+        check(clamped.value(QStringLiteral("adc0AttenuationDb")).toInt() == 31
+                  && clamped.value(QStringLiteral("adc1AttenuationDb")).toInt() == 0,
+              "restored attenuation is clamped at both protocol bounds");
+        state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
+            {QStringLiteral("adc0AttenuationDb"), QStringLiteral("bad")},
+            {QStringLiteral("adc1AttenuationDb"), 1e30}}}};
+        backend.applyRestoredState(state);
+        const QJsonObject malformed = backend.currentOperatingState().extension
+                                          .value(QStringLiteral("rfGain")).toObject();
+        check(malformed.value(QStringLiteral("adc0AttenuationDb")).toInt() == 0
+                  && malformed.value(QStringLiteral("adc1AttenuationDb")).toInt() == 0,
+              "malformed attenuation restores both zero defaults");
+        backend.applyRestoredState({});
+        check(backend.attenuationDbForTest() == 0, "empty restore clears live attenuation");
     }
 
     if (g_failures == 0)

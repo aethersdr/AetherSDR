@@ -294,8 +294,8 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(std::span<const DdcConfig> ddcs,
 // params to apply to.
 //
 // `adc0AttenuationDb` / `adc1AttenuationDb` set the receive step attenuators,
-// byte 1443 (ADC0) and byte 1442 (ADC1), 0-31 dB in 1 dB steps (p.17's
-// "Step Attenuator 0/1 (0 - 31dB)" rows). Clamped to that range. 0 -- the
+// byte 1443 (ADC0) and byte 1442 (ADC1), 0-31 dB in 1 dB steps (v4.4 p.34
+// table, p.36 byte descriptions). Clamped to that range. 0 -- the
 // default, and the value every caller sent before these existed -- is no
 // attenuation.
 std::array<std::uint8_t, 1444> buildHighPriority(bool run, std::uint32_t ddc0FreqWord,
@@ -324,7 +324,7 @@ std::array<std::uint8_t, 1444> buildHighPriority(bool run,
                                                   int adc0AttenuationDb = 0,
                                                   int adc1AttenuationDb = 0) noexcept;
 
-// The step attenuators' range (spec p.17), shared by the encoder's clamp and
+// The step attenuators' range (spec pp.34,36), shared by the encoder's clamp and
 // by the backend that offers the control.
 inline constexpr int kMaxStepAttenuationDb = 31;
 

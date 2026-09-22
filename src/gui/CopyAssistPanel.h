@@ -36,6 +36,9 @@ public:
     // Set the always-visible transcription backlog (seconds of received audio not
     // yet transcribed). Colour escalates amber→red as it grows.
     void setBacklog(double seconds);
+    // Seconds of audio the engine dropped at its backlog ceiling (#5730); shown
+    // beside the queue while non-zero so a gapped transcript is never silent.
+    void setDroppedAudio(double seconds);
     // Show/hide the indeterminate loading indicator (model download/verify/load).
     void setBusy(bool on);
     bool isAsrEnabled() const;
@@ -110,6 +113,10 @@ private:
     QPushButton* m_settings = nullptr; // ⚙: opens the modeless settings dialog
     QLabel* m_status = nullptr;
     QLabel* m_backlog = nullptr; // always-visible transcription backlog (seconds)
+    double m_backlogSeconds = 0.0;
+    double m_droppedSeconds = 0.0;
+    QString m_backlogColor;      // last applied label colour ("" = theme default)
+    void renderBacklog(); // m_backlog text + colour from the two values above
     QPushButton* m_clear = nullptr;
     QSlider* m_buffer = nullptr;
     QLabel* m_bufferValue = nullptr;

@@ -100,6 +100,12 @@ private:
     ClientCompKnob*       m_hold{nullptr};
     ClientCompKnob*       m_release{nullptr};
     ClientCompKnob*       m_floor{nullptr};
+    // TX mic pre-amp RN2 toggle.  It denoises the mic ahead of every
+    // chain stage, so it lives on the gate — the default head of the
+    // chain — rather than on the tube at the far end of it.  Created
+    // hidden; only showForTx() reveals it, because RX has its own RN2
+    // toggle elsewhere.  (#2813)
+    QPushButton*          m_rn2Btn{nullptr};
     QPushButton*          m_gateBtn{nullptr};
     QPushButton*          m_expanderBtn{nullptr};
     QSlider*              m_lookahead{nullptr};

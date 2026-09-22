@@ -58,6 +58,20 @@ QColor getColorForLiveParent(const QColor& initial, DxClusterDialog* parent,
     return parentGuard ? color : QColor();
 }
 
+// Normalizes a callsign before a "calling me?" comparison — same logic as
+// MainWindow_Spots.cpp. Applied to both the message token and the configured
+// callsign so /P-style suffixes and <hash> calls match on both sides (#5823).
+QString normalizeCallForMatch(QString c)
+{
+    c = c.trimmed();
+    if (c.size() > 2 && c.startsWith(QLatin1Char('<')) && c.endsWith(QLatin1Char('>')))
+        c = c.mid(1, c.size() - 2);
+    const int slash = c.indexOf(QLatin1Char('/'));
+    if (slash > 0)
+        c = c.left(slash);
+    return c;
+}
+
 } // namespace
 
 // GuardedSlider variant that resets to a stored default on left
@@ -509,10 +523,13 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         bool isPOTA = msg.contains("CQ POTA");
         bool isCallingMe = false;
         {
-            QString myCall = as.value("DxClusterCallsign").toString();
+            // Same fallback and normalization as MainWindow_Spots.cpp (#5823).
+            QString myCall = normalizeCallForMatch(
+                as.value("DxClusterCallsign").toString());
             if (!myCall.isEmpty()) {
                 QStringList parts = msg.split(' ', Qt::SkipEmptyParts);
-                if (parts.size() >= 2 && parts[0] == myCall)
+                if (parts.size() >= 2 &&
+                    normalizeCallForMatch(parts[0]).compare(myCall, Qt::CaseInsensitive) == 0)
                     isCallingMe = true;
             }
         }
