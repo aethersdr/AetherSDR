@@ -32,11 +32,8 @@ namespace AetherSDR::anan {
 // AnanBackend owns one and runs it on the backend's I/O thread. Mirrors
 // Hl2RxDsp's shape closely -- same WdspChannel, same "owns a DSP chain"
 // branch of the seam already proven there -- but scoped to exactly what
-// aetherd ANAN P2 Phase 1b needs (see 02-working-plan.md Step 2): no noise
-// blanker, no manual notch filters. Both are real HL2 features and neither
-// is speculative to add later; they are simply not part of this phase's
-// one-DDC, RX-only scope, matching Hl2RxDsp's OWN history -- its notch/NB
-// machinery arrived in later commits, not its first one.
+// the one-DDC, RX-only ANAN path needs. The existing WDSP impulse blanker
+// runs ahead of demodulation; manual notch filters are not implemented here.
 //
 // *** READ HERMES.md §16 ("Receive handedness and tuning — the two-error
 // trap") BEFORE TOUCHING processIqBlock(). *** It documents the most
@@ -102,6 +99,13 @@ public:
         // output block (deterministic for an offline/burst feed -- what the
         // handedness test uses).
         bool blockForOutput = false;
+        // WDSP's impulse noise blanker (ANB), run on the raw IQ ahead of the
+        // channel -- see WdspChannel::setNoiseBlanker(). In Config so a
+        // rate-change rebuild opens the new channel with the operator's
+        // blanker, the same way it carries mode, filter and AGC. Level is
+        // 0..100 in the slice model's units.
+        bool noiseBlankerEnabled = false;
+        int noiseBlankerLevel = 50;
     };
 
     // Synchronous convenience used by deterministic tests. Production first
@@ -184,6 +188,24 @@ public:
     // RX frequency shift in Hz relative to the NCO -- how a single-DDC
     // backend tunes the slice inside the passband without moving the DDC.
     Q_INVOKABLE void setShift(double shiftHz);
+    // Noise blanker on/off and level (0..100). Deferred like setMode() while a
+    // rebuild is in flight; installChannel() re-applies it at the swap.
+    Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    struct NoiseBlankerState {
+        bool hasChain = false;
+        bool on = false;
+        int level = 0;
+    };
+    // One atomic snapshot of the installed channel, safe to query from the
+    // backend's thread. Deferred or refused requests do not change this value.
+    [[nodiscard]] NoiseBlankerState noiseBlankerState() const noexcept
+    {
+        const int state = m_nbAppliedState.load(std::memory_order_relaxed);
+        if (state < 0) {
+            return {};
+        }
+        return {true, state >= kNbEnabledOffset, state % kNbEnabledOffset};
+    }
     // Cap how often a panadapter frame is produced, in frames per second.
     // Also re-sizes the analyzer's overlap and averaging weights for the new
     // rate, so one FFT still completes per display frame.
@@ -359,6 +381,9 @@ signals:
     void meterUpdate(float dbfs);
 
 private:
+    void publishNoiseBlankerState();
+    static constexpr int kNbEnabledOffset = 128; // levels occupy 0..100
+    std::atomic<int> m_nbAppliedState{-1};       // -1: no installed channel
     PcmProducer m_pcmProducer;
     bool spectrumFrameDue();
 

@@ -112,6 +112,8 @@ AnanRxDsp::RebuildResult AnanRxDsp::buildChannel(const Config& config)
     wc.agcMode = config.agcMode;
     wc.maximumAgcGainDb = config.maximumAgcGainDb;
     wc.blockForOutput = config.blockForOutput;
+    wc.noiseBlankerEnabled = config.noiseBlankerEnabled;
+    wc.noiseBlankerLevel = config.noiseBlankerLevel;
     // filterTaps left at WdspChannel::Config's own default (2048): this
     // phase has no manual notch filter, so there is no narrow-notch floor to
     // widen it for (contrast Hl2RxDsp::kRxFilterTaps, which exists solely
@@ -218,6 +220,15 @@ void AnanRxDsp::installChannel(RebuildResult result)
     // slice offset rather than silently snapping the slice to centre.
     if (m_shiftHz != 0.0)
         result.channel->setShift(m_shiftHz);
+    // Sent even when it matches what the channel was built with: the operator
+    // may have moved the NB button while the background build ran.
+    if (!result.channel->setNoiseBlanker(m_config.noiseBlankerEnabled,
+                                         m_config.noiseBlankerLevel)) {
+        qCWarning(lcAnanRxDsp) << "noise blanker refused by the rebuilt channel";
+    }
+    // The hold flag belongs to the channel, so a rebuild loses it. A rate
+    // change swaps the channel while audio is muted for its settle window.
+    result.channel->setNoiseBlankerHold(m_audioMuted);
 
     // Stop the OUTGOING channel before the assignment below destroys it, so
     // close() finds the state already 0 and skips WDSP's 100 ms stop-and-flush
@@ -249,6 +260,7 @@ void AnanRxDsp::installChannel(RebuildResult result)
     // releases the id -- see RebuildResult.
     m_analyzer = std::move(result.analyzer);
     m_channel = std::move(result.channel);
+    publishNoiseBlankerState();
 }
 
 void AnanRxDsp::setMode(WdspChannel::Mode mode)
@@ -289,6 +301,41 @@ void AnanRxDsp::setAudioMuted(bool muted)
     if (m_audioMuted && !muted)
         armMeterSettle();
     m_audioMuted = muted;
+    // Muted, the channel is clocked with ZEROS. The noise blanker triggers on
+    // magnitude against a running average magnitude, so silence would drag
+    // that average toward zero and the first real block afterwards would look
+    // like one long impulse and be blanked. Holding the stage freezes the
+    // average at the pre-mute level; see WdspChannel::setNoiseBlankerHold().
+    if (m_channel)
+        m_channel->setNoiseBlankerHold(muted);
+}
+
+void AnanRxDsp::setNoiseBlanker(bool on, int level)
+{
+    m_config.noiseBlankerEnabled = on;
+    m_config.noiseBlankerLevel = std::clamp(level, 0, 100);
+    if (!m_channel || m_rebuildInFlight)
+        return;
+    // WdspChannel refuses, rather than blocks on, a control call that races
+    // another one. Logged so a refused toggle is not silent; m_config keeps
+    // the request and the next rebuild applies it.
+    if (!m_channel->setNoiseBlanker(m_config.noiseBlankerEnabled,
+                                    m_config.noiseBlankerLevel)) {
+        qCWarning(lcAnanRxDsp) << "noise blanker" << (on ? "on" : "off")
+                               << "level" << m_config.noiseBlankerLevel
+                               << "refused by the channel";
+    }
+    publishNoiseBlankerState();
+}
+
+void AnanRxDsp::publishNoiseBlankerState()
+{
+    // Read the applied channel even after refusal, never the requested config.
+    const int state = m_channel
+        ? (m_channel->noiseBlankerEnabled() ? kNbEnabledOffset : 0)
+              + m_channel->config().noiseBlankerLevel
+        : -1;
+    m_nbAppliedState.store(state, std::memory_order_relaxed);
 }
 
 void AnanRxDsp::setSpectrumRateFps(int fps)

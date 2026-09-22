@@ -488,6 +488,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasAmplifier = false;
     c.hasRadioSideDsp = false;     // DSP is engine-side (AnanRxDsp), not firmware
     c.hasAudioPeakingFilter = false; // no firmware APF verb on this path
+    c.hasHostNoiseBlanker = true;  // WDSP ANB on the raw IQ, in AnanRxDsp
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep}; // AnanPanAnalyzer
@@ -659,6 +660,10 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     // raising the default does not risk clipping a loud signal the way a
     // fixed gain increase would.
     m_pendingDspConfig.maximumAgcGainDb = 60.0;
+    // This backend retains the NB request across reconnects. emitSliceState()
+    // also supplies that pair if a different radio requires a fresh slice.
+    m_pendingDspConfig.noiseBlankerEnabled = m_nbOn;
+    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
 
     ++m_connectGeneration;
     beginDspSetup();
@@ -911,6 +916,17 @@ void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     emitSliceState();
 }
 
+void AnanBackend::setSliceNoiseBlanker(int sliceId, bool on, int level)
+{
+    Q_UNUSED(sliceId);   // one slice in this phase
+    m_nbOn = on;
+    m_nbLevel = std::clamp(level, 0, 100);
+    if (m_dsp) {
+        QMetaObject::invokeMethod(m_dsp, "setNoiseBlanker", Qt::QueuedConnection,
+            Q_ARG(bool, m_nbOn), Q_ARG(int, m_nbLevel));
+    }
+}
+
 void AnanBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent intent)
 {
     Q_UNUSED(panId);   // one pan in this phase
@@ -1047,6 +1063,8 @@ void AnanBackend::beginRateChange(int newRateKsps)
     m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
     m_pendingDspConfig.agcMode = m_agcMode;
     m_pendingDspConfig.maximumAgcGainDb = m_agcCeilingDb;
+    m_pendingDspConfig.noiseBlankerEnabled = m_nbOn;
+    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
 
     m_rateChanging = true;
     ++m_connectGeneration;   // orphans any in-flight prior connect/reconfigure/rebuild
@@ -1349,6 +1367,27 @@ void AnanBackend::invokeExtension(const QString& ns, const QString& verb,
                                   quint64 requestId, const QVariant& arg)
 {
     Q_UNUSED(arg);
+    if (ns == QLatin1String("anan") && verb == QLatin1String("nb.get")) {
+        if (requestId != 0) {
+            const AnanRxDsp::NoiseBlankerState applied = m_dsp
+                ? m_dsp->noiseBlankerState() : AnanRxDsp::NoiseBlankerState{};
+            const QVariantMap receiver{
+                {QStringLiteral("ddc"), 0},
+                {QStringLiteral("panId"), kPanId},
+                {QStringLiteral("on"), applied.on},
+                {QStringLiteral("level"), applied.level},
+                {QStringLiteral("requestedOn"), m_nbOn},
+                {QStringLiteral("requestedLevel"), m_nbLevel},
+                {QStringLiteral("hasChain"), applied.hasChain},
+                {QStringLiteral("threshold"),
+                 WdspChannel::noiseBlankerThresholdForLevel(applied.level)},
+            };
+            emit extensionResult(requestId, QVariantMap{
+                {QStringLiteral("receivers"), QVariantList{receiver}},
+            });
+        }
+        return;
+    }
     if (ns == QLatin1String("anan") && verb.startsWith(QLatin1String("droop."))) {
         if (!capabilities().hostDroopCalibration || !m_connected || m_radioSerial.isEmpty()) {
             emit extensionError(requestId, QStringLiteral("connect an ANAN before calibrating"));
@@ -1436,6 +1475,10 @@ void AnanBackend::emitSliceState()
     d.filterLow = m_filterLowHz;
     d.filterHigh = m_filterHighHz;
     d.active = true;
+    // A different radio replaces the slice model but retains this backend.
+    // Publish the retained NB request so that fresh model agrees with the DSP.
+    d.nb = m_nbOn;
+    d.nbLevel = m_nbLevel;
     // Without this, RadioModel::sliceChanged's handler never assigns the
     // slice a panId (SliceDelta::panId is std::optional and SliceModel::
     // applyChanges() only touches it when set) -- the slice materialised by

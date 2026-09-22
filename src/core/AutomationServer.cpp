@@ -5238,7 +5238,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         IRadioBackend* backend = radio->backend();
         if (!backend)
             return err(QStringLiteral("no backend attached"));
-        // Same synchronous-extension contract doCiv documents: the HL2 answers
+        // Same synchronous-extension contract doCiv documents: the backend answers
         // inside invokeExtension, so a direct connection lands before the call
         // returns, and anything that does not answer is reported as unsupported
         // rather than as an empty success.
@@ -5260,7 +5260,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             failed = true;
             failure = msg;
         }, Qt::DirectConnection);
-        backend->invokeExtension(QStringLiteral("hl2"), QStringLiteral("nb.get"),
+        backend->invokeExtension(radio->backendCapabilities().family, QStringLiteral("nb.get"),
                                  rid, QVariant());
         disconnect(okConn);
         disconnect(errConn);

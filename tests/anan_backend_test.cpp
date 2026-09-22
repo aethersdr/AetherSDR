@@ -139,7 +139,25 @@ int main(int argc, char** argv)
         check(c.clientSettingsDomains == RadioCapabilities::ClientSettingsDomain::RfGain,
               "only RF gain restore is declared");
         check(c.sampleRatesHz.size() == 6, "six DDC rates advertised");
+        check(c.hasHostNoiseBlanker,
+              "hasHostNoiseBlanker true -- WDSP ANB runs in AnanRxDsp, so the "
+              "VFO's NB button has something to drive");
         check(!backend.isConnected(), "not connected before connectRadio() is ever called");
+    }
+
+    // ---- setSliceNoiseBlanker: live state for connect and rate change ----
+    // Same reason as the AGC block below: connectRadio() and
+    // beginRateChange() build the DSP config from these members.
+    {
+        AnanBackend backend;
+        check(!backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 50,
+              "noise blanker defaults match AnanRxDsp::Config's");
+        backend.setSliceNoiseBlanker(0, true, 70);
+        check(backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 70,
+              "setSliceNoiseBlanker() stores the operator's NB state");
+        backend.setSliceNoiseBlanker(0, false, -5);
+        check(!backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 0,
+              "NB off stored, level clamped to 0");
     }
 
     // ---- setSliceMode: passband reset only on an ACTUAL mode change ----

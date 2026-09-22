@@ -877,6 +877,14 @@ target_include_directories(anan_backend_test PRIVATE src tests)
 target_link_libraries(anan_backend_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_backend_test COMMAND anan_backend_test)
 
+# Socket-free NB publication/readback: actual backend and DSP, injected model
+# connection receipts and direct bridge dispatch; no transport is started.
+add_executable(anan_noise_blanker_readback_test tests/anan_noise_blanker_readback_test.cpp)
+target_include_directories(anan_noise_blanker_readback_test PRIVATE src tests)
+target_link_libraries(anan_noise_blanker_readback_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME anan_noise_blanker_readback_test COMMAND anan_noise_blanker_readback_test)
+set_tests_properties(anan_noise_blanker_readback_test PROPERTIES TIMEOUT 120)
+
 # IcomCIV wire layers — pure encode/decode, standalone (no Qt / aethercore).
 # An Icom networked radio is two protocols stacked: CI-V is the command plane
 # and RS-BA1 is the UDP transport it travels inside. Both halves unit-test
@@ -6411,6 +6419,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     anan_backend_test
+    anan_noise_blanker_readback_test
     tci_rx_audio_test
     bandscope_trace_render_test
     decoder_audio_routing_test
@@ -6545,6 +6554,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    anan_noise_blanker_readback_test
     automation_cell_test
     automation_gauge_verb_test
     automation_persist_diagnostics_test

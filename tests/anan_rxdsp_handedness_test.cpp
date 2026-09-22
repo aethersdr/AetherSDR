@@ -45,6 +45,7 @@
 #include <QElapsedTimer>
 #include <QThread>
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <complex>
@@ -600,12 +601,19 @@ int main(int argc, char** argv)
         cfg.agcMode = 3;
         cfg.maximumAgcGainDb = 40.0;
         cfg.blockForOutput = true;
+        cfg.noiseBlankerEnabled = true;
+        cfg.noiseBlankerLevel = 50;
 
         AnanRxDsp dsp;
         dsp.beginInitialBuild(cfg);
         AnanRxDsp::RebuildResult initial = AnanRxDsp::buildChannel(cfg);
         check(initial.channel != nullptr,
               initial.error.empty() ? "initial background build succeeds" : initial.error.c_str());
+        // Read BEFORE the install: installChannel() re-applies m_config's
+        // blanker anyway, so only the built channel shows buildChannel() did.
+        check(initial.channel && initial.channel->noiseBlankerEnabled()
+                  && initial.channel->config().noiseBlankerLevel == 50,
+              "buildChannel() opens the channel with the requested noise blanker");
         check(dsp.installRebuiltChannel(std::move(initial)),
               "first-connect installs its asynchronously built channel");
         check(dsp.channelForTest()->config().mode == cfg.mode,
@@ -638,6 +646,9 @@ int main(int argc, char** argv)
               "a failed install does not disturb the operator's mode change either");
 
         dsp.beginRebuild();
+        // The operator moves the NB button WHILE the background build runs.
+        // Deferred, not pushed: the swap below has to apply it.
+        dsp.setNoiseBlanker(false, 80);
 
         // buildChannel() is static and thread-agnostic -- built here from a
         // config that does NOT reflect the operator's LSB/filter/AGC change
@@ -661,6 +672,120 @@ int main(int argc, char** argv)
         check(installed->config().agcMode == 2
               && installed->config().maximumAgcGainDb == 25.0,
               "installRebuiltChannel() re-applies the operator's CURRENT AGC setting");
+        check(!installed->noiseBlankerEnabled()
+                  && installed->config().noiseBlankerLevel == 80,
+              "installRebuiltChannel() re-applies a noise blanker change made "
+              "during the build, not buildChannel()'s (stale) NB-on snapshot");
+
+        // Live, with no rebuild in flight, the change reaches the channel.
+        dsp.setNoiseBlanker(true, 120);
+        check(dsp.channelForTest()->noiseBlankerEnabled()
+                  && dsp.channelForTest()->config().noiseBlankerLevel == 100,
+              "setNoiseBlanker() reaches the live channel, level clamped to 100");
+    }
+
+    // ---- Group 4b: a mute must not de-arm the noise blanker ----
+    // setAudioMuted() clocks the channel with zeros (a rate change's settle
+    // window), and the blanker triggers on a RATIO against a running average
+    // magnitude. Unheld, that average decays to nothing during the silence and
+    // the first real audio afterwards is gated as if it were an impulse.
+    // Mirrors hl2_noise_blanker_test's section 5 and measures it the same way:
+    // blanker-on recovery against blanker-off recovery, in blocks, so the
+    // pipeline's own settling (paid by both arms) cancels out.
+    {
+        constexpr int kEdgeBlock = 256;   // short, so a ~7 ms hole spans blocks
+        constexpr double kToneHz = 1000.0;
+        constexpr double kToneAmp = 0.02;
+        constexpr int kNbLevel = 80;
+
+        // WIRE-convention tone, demodulated in LSB -- Group 2's geometry.
+        auto tone = [&](int samples, int phaseOffset) {
+            std::vector<std::complex<float>> out(static_cast<std::size_t>(samples));
+            for (int n = 0; n < samples; ++n) {
+                const double ph = 2.0 * kPi * kToneHz * (n + phaseOffset) / kInputRate;
+                out[static_cast<std::size_t>(n)] = {
+                    static_cast<float>(kToneAmp * std::cos(ph)),
+                    static_cast<float>(kToneAmp * std::sin(ph))
+                };
+            }
+            return out;
+        };
+        auto feed = [&](AnanRxDsp& dsp, const std::vector<std::complex<float>>& s) {
+            for (std::size_t off = 0; off < s.size(); off += kEdgeBlock) {
+                const std::size_t n = std::min<std::size_t>(kEdgeBlock, s.size() - off);
+                dsp.processIqBlock(std::vector<std::complex<float>>(
+                    s.begin() + static_cast<std::ptrdiff_t>(off),
+                    s.begin() + static_cast<std::ptrdiff_t>(off + n)));
+            }
+        };
+
+        int recoveryBlockOff = -1;
+        int recoveryBlockOn = -1;
+        for (int pass = 0; pass < 2; ++pass) {
+            const bool blankerOn = (pass == 1);
+            AnanRxDsp::Config cfg;
+            cfg.inputSampleRateHz = kInputRate;
+            cfg.audioSampleRateHz = kAudioRate;
+            cfg.dspBlockSize = kEdgeBlock;
+            cfg.panPoints = 256;
+            cfg.mode = WdspChannel::Mode::Lsb;
+            cfg.filterLowHz = -3000.0;
+            cfg.filterHighHz = -150.0;
+            cfg.agcMode = 0;               // AGC off: it would hide the hole
+            cfg.maximumAgcGainDb = 40.0;
+            cfg.blockForOutput = true;
+            AnanRxDsp dsp;
+            std::string err;
+            check(dsp.configure(cfg, &err),
+                  err.empty() ? "AnanRxDsp configures for the mute-edge case" : err.c_str());
+            if (blankerOn)
+                dsp.setNoiseBlanker(true, kNbLevel);
+
+            std::vector<double> blockRms;
+            bool collecting = false;
+            const auto conn = QObject::connect(&dsp, &AnanRxDsp::audioReady, &dsp,
+                [&](const std::vector<float>& pcm) {
+                    if (!collecting)
+                        return;
+                    double sum = 0.0;
+                    std::size_t count = 0;
+                    for (std::size_t k = 0; k < pcm.size(); k += 2) {
+                        sum += static_cast<double>(pcm[k]) * pcm[k];
+                        ++count;
+                    }
+                    blockRms.push_back(count > 0 ? std::sqrt(sum / static_cast<double>(count))
+                                                 : 0.0);
+                });
+
+            feed(dsp, tone(kInputRate, 0));            // arm on real signal
+            dsp.setAudioMuted(true);
+            feed(dsp, tone(kInputRate / 2, kInputRate)); // muted: channel sees zeros
+            dsp.setAudioMuted(false);
+            collecting = true;
+            feed(dsp, tone(kInputRate / 2, kInputRate + kInputRate / 2));
+            QObject::disconnect(conn);
+
+            double steady = 0.0;
+            const std::size_t tail = std::min<std::size_t>(10, blockRms.size());
+            for (std::size_t k = blockRms.size() - tail; k < blockRms.size(); ++k)
+                steady += blockRms[k];
+            steady = tail > 0 ? steady / static_cast<double>(tail) : 0.0;
+            int recovered = -1;
+            for (std::size_t k = 0; k < blockRms.size(); ++k) {
+                if (blockRms[k] > steady * 0.5) {
+                    recovered = static_cast<int>(k);
+                    break;
+                }
+            }
+            (blankerOn ? recoveryBlockOn : recoveryBlockOff) = recovered;
+        }
+
+        std::fprintf(stderr, "post-mute recovery block off=%d on=%d (%d samples each)\n",
+                     recoveryBlockOff, recoveryBlockOn, kEdgeBlock);
+        check(recoveryBlockOff >= 0, "the blanker-off arm recovers audio after a mute");
+        check(recoveryBlockOn >= 0, "the blanker-on arm recovers audio after a mute");
+        check(recoveryBlockOn >= 0 && recoveryBlockOn <= recoveryBlockOff,
+              "the noise blanker adds NO delay to the return of audio after a mute");
     }
 
     // ---- Group 5: droop-correction insertion point ----

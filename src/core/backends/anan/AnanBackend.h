@@ -69,6 +69,7 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     void setPanCenter(const QString& panId, double hz, PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanFrameRate(const QString& panId, int fps) override;
@@ -121,6 +122,8 @@ public:
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
     [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
+    [[nodiscard]] bool noiseBlankerOnForTest() const noexcept { return m_nbOn; }
+    [[nodiscard]] int noiseBlankerLevelForTest() const noexcept { return m_nbLevel; }
     // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
     // smoothing and publish tick can be tested without a live radio.
     void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
@@ -131,6 +134,7 @@ public:
     [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeter.value(); }
 
 private:
+    friend class AnanNoiseBlankerTestAccess;
     void beginDspSetup();
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
     // The "restart P2Client with m_pendingParams, then retune" half of what
@@ -330,6 +334,15 @@ private:
     // Defaults match connectRadio()'s own connect-time defaults.
     int m_agcMode = 3;
     double m_agcCeilingDb = 60.0;
+    // Noise blanker as setSliceNoiseBlanker() last stored it. Both
+    // connectRadio() and beginRateChange() build the DSP config from it. This
+    // differs from the AGC pair, which only beginRateChange() reads:
+    // connectRadio() re-defaults AGC, but carries the blanker across a
+    // reconnect. emitSliceState() also publishes the pair when a different
+    // radio gets a fresh slice, keeping its NB button in agreement with the
+    // retained setting. Defaults match AnanRxDsp::Config's.
+    bool m_nbOn = false;
+    int m_nbLevel = 50;
 
     // Fixed identifiers -- Phase 1b is exactly one slice, one pan.
     static constexpr int kSliceId = 0;
