@@ -1,6 +1,6 @@
 // Production line assembly with in-memory transport injection. No descriptor,
 // listener, network peer, discovery, or radio is used by this test.
-#include "core/RadioConnection.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "core/backends/flex/FlexPttWireSession.h"
 
 #include <QSignalSpy>
@@ -80,6 +80,73 @@ public:
 class RadioConnectionSessionTest final : public QObject {
     Q_OBJECT
 private slots:
+    void demoIdentitySelectsSyntheticConnection()
+    {
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        QSignalSpy connected(&connection, &RadioConnection::connected);
+        QSignalSpy statuses(&connection, &RadioConnection::statusReceived);
+        RadioInfo info;
+        // Independent compatibility expectation: do not obtain the input from
+        // the production constant, which would hide an accidental serial change.
+        info.serial = QStringLiteral("DEMO-0001");
+        info.address = QHostAddress(QHostAddress::LocalHost);
+        connection.connectToRadio(info);
+        QTRY_COMPARE_WITH_TIMEOUT(connected.size(), 1, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(statuses.size() >= 4, 1000);
+        QCOMPARE(socket->connectAttempts, 0);
+        QCOMPARE(socket->socketDescriptor(), qintptr(-1));
+        QVERIFY(connection.isSyntheticDemo());
+
+        int waterfalls = 0;
+        int pans = 0;
+        for (const QList<QVariant>& status : statuses) {
+            const QString line = status.at(0).toString();
+            const QMap<QString, QString> fields = status.at(1).value<QMap<QString, QString>>();
+            if (line.startsWith(QStringLiteral("display waterfall "))) {
+                // 100 is a rate; replacing it with Demo's 48 ms cadence must fail.
+                QCOMPARE(fields.value(QStringLiteral("line_duration")), QStringLiteral("100"));
+                ++waterfalls;
+            } else if (line.startsWith(QStringLiteral("display pan "))) {
+                // The pan span reaches the wire as TEXT, so the constant alone
+                // is not the contract — the rendered form is, and this pins it.
+                // Independent literal on purpose: widening the span back to the
+                // old 40 kHz fails here. It does NOT pin the 'g'/6 format choice,
+                // which only diverges from 'f'/3 at a value the demo does not use
+                // yet; that reasoning lives at the call site.
+                QCOMPARE(fields.value(QStringLiteral("bandwidth")), QStringLiteral("0.008"));
+                ++pans;
+            }
+        }
+        QCOMPARE(waterfalls, 1);
+        QCOMPARE(pans, 1);
+        connection.disconnectFromRadio();
+    }
+
+    void nonDemoIdentityUsesInjectedTransport_data()
+    {
+        QTest::addColumn<QString>("serial");
+        QTest::newRow("empty") << QString();
+        QTest::newRow("different-demo") << QStringLiteral("DEMO-0002");
+        QTest::newRow("case-sensitive") << QStringLiteral("demo-0001");
+        QTest::newRow("other-radio") << QStringLiteral("TEST-RADIO");
+    }
+
+    void nonDemoIdentityUsesInjectedTransport()
+    {
+        QFETCH(QString, serial);
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        RadioInfo info;
+        info.serial = serial;
+        info.address = QHostAddress(QHostAddress::LocalHost);
+        connection.connectToRadio(info);
+        QCOMPARE(socket->connectAttempts, 1);
+        QCOMPARE(socket->socketDescriptor(), qintptr(-1));
+        QVERIFY(!connection.isSyntheticDemo());
+        connection.disconnectFromRadio();
+    }
+
     void whitespaceOnlyLinesAreIgnored()
     {
         RadioConnection connection;
@@ -233,6 +300,7 @@ private slots:
             QCOMPARE(socket->socketDescriptor(), qintptr(-1));
         }
     }
+
     void partialLineAcrossDisconnect_data()
     {
         QTest::addColumn<QByteArray>("partial");

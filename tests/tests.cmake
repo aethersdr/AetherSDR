@@ -3346,7 +3346,7 @@ add_test(NAME frequency_entry_parser_test COMMAND frequency_entry_parser_test)
 
 add_executable(radio_status_ownership_test
     tests/radio_status_ownership_test.cpp
-    src/core/CommandParser.cpp
+    src/core/backends/flex/CommandParser.cpp
 )
 target_include_directories(radio_status_ownership_test PRIVATE src)
 target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
@@ -5757,7 +5757,7 @@ add_test(NAME transmit_model_test COMMAND transmit_model_test)
 
 add_executable(transmit_inhibit_policy_test
     tests/transmit_inhibit_policy_test.cpp
-    src/core/CommandParser.cpp
+    src/core/backends/flex/CommandParser.cpp
 )
 target_include_directories(transmit_inhibit_policy_test PRIVATE src)
 target_link_libraries(transmit_inhibit_policy_test PRIVATE Qt6::Core)

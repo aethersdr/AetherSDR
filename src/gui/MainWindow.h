@@ -33,8 +33,8 @@
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
 #endif
-#include "core/SmartLinkClient.h"
-#include "core/WanConnection.h"
+#include "core/backends/flex/SmartLinkClient.h"
+#include "core/backends/flex/WanConnection.h"
 #include "core/CwDecoder.h"
 #include "models/CwRxModel.h"
 #include "core/CwCallsignSpotter.h"

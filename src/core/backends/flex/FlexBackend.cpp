@@ -6,8 +6,8 @@
 #include <QThread>
 
 #include "core/LogManager.h"
-#include "core/RadioConnection.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexKvCarry.h"
 #include "models/ModelCapabilities.h"
