@@ -108,7 +108,7 @@ constexpr qint64 kDssFftPixelScaleSettleMs = 750;
 // std140 float count of the waterfall UBO — must match the Uniforms block in
 // texturedquad.frag AND texturedquad_rowframes.frag, the buffer allocs in
 // initWaterfallPipeline(), and the uniforms[] writer in renderGpuFrame().
-constexpr int kWaterfallUboFloats = 8;
+constexpr int kWaterfallUboFloats = 12;
 
 QSize evenAlignedRhiSize(QSize size)
 {
@@ -5825,7 +5825,10 @@ static void remapHistoryRowInto(
                 curCenterMhz, curBwMhz, x, preservePeaks)];
             continue;
         }
-        dst[x] = qRgb(0, 0, 0);
+        // No frame covers this column. Palette floor, not a black gap -- same
+        // reasoning as reprojectWaterfallImage()'s fill; colorLut[0] is
+        // waterfallFloorRgb() by construction.
+        dst[x] = colorLut[0];
     }
 }
 
@@ -6062,7 +6065,7 @@ void SpectrumWidget::paintWaterfallRowsFromHistory(
 
         // Label the pixels that were actually written. Claiming supplemental
         // coverage the image does not hold sends the shader sampling rows the
-        // fill() above left black.
+        // fill() above left at the palette floor.
         m_wfVisibleRowCenterMhz[destinationRow] =
             recolorPlan.primaryFrame.centerMhz;
         m_wfVisibleRowBwMhz[destinationRow] =
@@ -7367,7 +7370,7 @@ void SpectrumWidget::resetGpuResources()
 // Horizontally reproject a waterfall image from one frequency frame
 // (oldCenter/oldBw) to another (newCenter/newBw). Overlapping spectrum is
 // remapped to its new pixel columns; newly-exposed columns become floorRgb.
-// Shared by the live waterfall (per pan step) and the deferred history flush.
+// Called from reprojectWaterfall() on each pan step of the Legacy pipeline.
 // floorRgb is threaded in rather than read from the widget because this is a
 // file-static free function with no `this` — see SpectrumWidget::waterfallFloorRgb().
 static void reprojectWaterfallImage(QImage& image,
@@ -12499,7 +12502,10 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
                 + (static_cast<double>(x) / static_cast<double>(destWidth))
                     * effectiveBw;
             if (freqMhz < txMaskLowMhz || freqMhz > txMaskHighMhz) {
-                scanline[x] = qRgb(0, 0, 0);
+                // Outside the TX passband reads as "no signal here", so it
+                // takes the palette floor like every other cleared pixel --
+                // not a hard-black notch beside a non-black floor (#5670).
+                scanline[x] = colorLut[0];
                 continue;
             }
         }
@@ -13998,6 +14004,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
             && m_wfFrameTexReady
             && m_wfSupplementalGpuTex != nullptr ? 1.0f : 0.0f;
+    const QRgb wfFloorRgb = waterfallFloorRgb();
     float uniforms[] = {
         rowOffset,
         waterfallTargetCenterOffsetMhz,
@@ -14007,6 +14014,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         m_wfGpuTexH > 0 ? 1.0f / static_cast<float>(m_wfGpuTexH) : 0.0f,
         static_cast<float>(m_wfGpuTexH),
         0.0f,
+        // floorColor -- the palette's t=0 colour, so the shader's "no data
+        // here" exits match the CPU fills (waterfallFloorRgb()) instead of
+        // hardcoding black. No-op for every preset that is #000000 at zero.
+        static_cast<float>(qRed(wfFloorRgb)) / 255.0f,
+        static_cast<float>(qGreen(wfFloorRgb)) / 255.0f,
+        static_cast<float>(qBlue(wfFloorRgb)) / 255.0f,
+        1.0f,
     };
     static_assert(sizeof(uniforms) == kWaterfallUboFloats * sizeof(float),
                   "waterfall UBO writer must match kWaterfallUboFloats, the "
