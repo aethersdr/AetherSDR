@@ -3,6 +3,7 @@
 #include "core/backends/AutoRfGainControl.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/dsp/WdspChannel.h"
+#include "core/dsp/WdspSMeter.h"
 
 #include <QElapsedTimer>
 #include <QPointer>
@@ -654,12 +655,10 @@ private:
         // finishRateChange() reconciles the difference on the success path.
         int configuredRateHz = 0;
 
-        // Per-receiver S-meter ballistics. Deliberately NOT shared: a strong
-        // signal on receiver 1 must not move receiver 3's needle, which is what
-        // a single set of these members would have done.
-        QElapsedTimer sMeterClock;
-        double sMeterDbm = 0.0;
-        bool   haveSMeter = false;
+        // Per-receiver S-meter ballistics (SMeterSmoother). Deliberately NOT
+        // shared: a strong signal on receiver 1 must not move receiver 3's
+        // needle, which is what a single smoother would have done.
+        SMeterSmoother sMeter;
     };
 
     // ---- CW BFO ----
@@ -1322,28 +1321,13 @@ private:
 
     // ---- Meter pacing / ballistics ----
     //
-    // WDSP hands us a signal-strength reading once per demodulated block, which
-    // at 24 kHz output is ~47 a second and scales with the span. Every one of
-    // them crossed the thread boundary into MeterModel and repainted the
-    // S-meter, so the needle was being driven far faster than it can be read
-    // and far faster than a Flex drives the same widget.
-    //
-    // Two separate things fix that and they are NOT interchangeable:
-    //   - the RATE gate below decides how often a value is published;
-    //   - the EMA decides what value gets published when it is.
-    // Dropping samples without smoothing would alias — the meter would show
-    // whichever instant happened to land on the tick.
-    //
-    // 100 ms is the cadence MetisClient already publishes radio telemetry at
-    // (kTelemetryMinIntervalMs), so every HL2 meter now updates on one clock.
-    static constexpr qint64 kMeterPublishIntervalMs = 100;
-    // Flex's own meter ballistics, from MeterModel's forward-power smoothing:
-    // fast attack so a peak is not missed, slow decay so the needle settles.
-    // Reused rather than re-invented so an operator moving between a Flex and
-    // an HL2 sees meters that behave the same way.
-    static constexpr double kMeterAttackAlpha = 0.5;
-    static constexpr double kMeterDecayAlpha  = 0.15;
-    // The S-meter's clock and EMA are PER RECEIVER (Receiver::sMeter*). Sharing
+    // The S-meter's rate gate and EMA are SMeterSmoother's (WdspSMeter.h),
+    // shared with AnanBackend so the two receivers' needles move alike by
+    // construction: 100 ms publish tick, attack 0.5, decay 0.15, and the
+    // reasons for each are written there. Hl2RxDsp reads the tap at one
+    // DSP-rate block's cadence whatever the sample rate, so the smoother sees
+    // ~47 readings a second at 48 and at 384 ksps alike.
+    // The S-meter's clock and EMA are PER RECEIVER (Receiver::sMeter). Sharing
     // them would let a strong signal on one receiver drive every other
     // receiver's needle, and the 100 ms rate gate would publish whichever
     // receiver's block happened to land on the tick.

@@ -17,6 +17,11 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      # ninja reads this on the two cmake --build steps below and stamps
+      # elapsed seconds per line, so the long-pole targets are visible in
+      # the log; the other steps ignore it.
+      NINJA_STATUS: "[%f/%t %es] "
     outputs:
       publish-flight: ${{ steps.store-plan.outputs.publishFlight }}
 
@@ -204,19 +209,18 @@ jobs:
           # didn't stage the runtimes). REQUIRE_ASR_GPU=ON does the same for the
           # whisper Vulkan (ggml-vulkan) GPU backend.
           #
-          # ASR_USE_PREBUILT_WHISPER_GPU=ON: consume the pinned whisper/ggml/
-          # ggml-vulkan static libs from the whisper-gpu-<ver> release asset
-          # instead of compiling from source. MSVC's ~1 h Release compile of the
-          # ~1 MB ggml-vulkan.cpp translation unit exceeds windows-latest's step
-          # timeout regardless of parallelism; the prebuilt path skips it and
-          # the CI-cache producer (scripts/build/build-whisper-vulkan-windows.ps1)
-          # cuts a fresh asset whenever whisper.cpp / Vulkan SDK / MSVC bumps.
+          # whisper/ggml/ggml-vulkan compile from the vendored tree here, the
+          # same as the AppImage and Apple-Silicon macOS legs, so a patch under
+          # third_party/whisper.cpp reaches the Windows release without a
+          # separately rebuilt release asset. ASR_USE_PREBUILT_WHISPER_GPU is
+          # left at its default (OFF); it remains in CMakeLists.txt as the
+          # fallback if the from-source compile does not fit this runner.
           #
-          # Vulkan is still needed at link time: CMAKE_PREFIX_PATH points
-          # find_package(Vulkan) at the SDK's loader import lib (vulkan-1.lib).
-          # glslc + SPIRV-Headers are NOT required on the prebuilt path (their
-          # only job is compiling ggml-vulkan's own shaders, which are already
-          # baked into the shipped .lib). The runtime vulkan-1.dll is bundled
+          # CMAKE_PREFIX_PATH points find_package(Vulkan COMPONENTS glslc) and
+          # find_package(SPIRV-Headers CONFIG) at the SDK staged by
+          # setup-vulkan-sdk.ps1: glslc compiles ggml-vulkan's shaders and
+          # vulkan-1.lib is the loader import lib. REQUIRE_ASR_GPU=ON makes a
+          # miss on any of the three fatal. The runtime vulkan-1.dll is bundled
           # in the Deploy step.
           #
           # AETHER_GPU_SPECTRUM=ON is stated explicitly even though it is the
@@ -235,7 +239,7 @@ jobs:
           # native command), so a configure failure still fails this step —
           # the reason the bash legs need `set -o pipefail` and this one does
           # not.
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DASR_USE_PREBUILT_WHISPER_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" | Tee-Object -FilePath configure.log
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" | Tee-Object -FilePath configure.log
 
       # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake flips it
       # back OFF without failing when Qt6GuiPrivate can't be located, and
@@ -295,25 +299,39 @@ jobs:
         # any Ninja parallel-build ordering edge cases with IMPORTED targets.
         run: cmake --build build --target build_opus -j $env:NUMBER_OF_PROCESSORS
 
-      # NOTE: the previous "Build ggml-vulkan (isolated, low parallelism)" step
-      # was removed. Under ASR_USE_PREBUILT_WHISPER_GPU=ON ggml-vulkan is an
-      # IMPORTED target with no build rule, so `--target ggml-vulkan` would
-      # fail with "unknown target". If you disable the prebuilt option to
-      # bisect, restore that step from git history and expect the historical
-      # timeout risk to come back with it.
+      - name: Build whisper + ggml-vulkan (vendored ASR engine)
+        # Its own step so the vendored engine's compile time is a separate line
+        # in the run summary and a slow compile fails HERE with its log kept
+        # (see the timeout note on Build below). Measured on windows-latest
+        # with the /O1 override in effect: this step took 2 min 15 s at full
+        # -j (run 35660187303, 2026-09-21), and the ggml-vulkan target alone
+        # 2-3 min at -j 2 (ci/test-windows-gpu, 2026-07-22, runs 29904473886
+        # and 29924632118). Most of it is the 132 per-shader glslc edges,
+        # which are small and parallel, so full -j is safe here; the ~1 MB
+        # ggml-vulkan.cpp TU is 15 CPU-s under /O1. The 16 GB thrash on
+        # Build is about app TUs, not these. `whisper` pulls in ggml,
+        # ggml-base, ggml-cpu and ggml-vulkan. If this step cannot fit the
+        # runner, -DASR_USE_PREBUILT_WHISPER_GPU=ON in Configure restores the
+        # prebuilt-asset path (and this step must then go: the targets become
+        # IMPORTED, with no build rule) -- but the pinned whisper-gpu-1.9.1
+        # pack predates the #5773 whisper.cpp load-check patch, so that
+        # fallback ships the unpatched loader until the pack is rebuilt.
+        # 60 min is 20x the measured step, and setup + 60 + Build's 240 +
+        # packaging still fits under GitHub's 360 min job cancel, which
+        # discards logs -- a step timeout keeps them.
+        timeout-minutes: 60
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target whisper
 
       - name: Build
-        # -j 2 (not full -j): even with ggml-vulkan pre-built, the main build was
+        # -j 2 (not full -j): even with ggml-vulkan already built, the main build was
         # thrashing 4-wide on the 16 GB runner — the ASR headers (ONNX C++ API /
         # whisper / vulkan-hpp) make many app TUs memory-heavy, so 4 concurrent
         # MSVC processes exceed RAM and swap. Halving parallelism gives each ~8 GB.
         # timeout-minutes fails the STEP (which preserves its log — unlike the
         # job-level 6 h cancel, which discards logs), so a still-slow build is
-        # finally diagnosable; NINJA_STATUS stamps elapsed seconds per line to
-        # expose the long-pole targets.
+        # finally diagnosable; the job-level NINJA_STATUS stamps elapsed
+        # seconds per line to expose the long-pole targets.
         timeout-minutes: 240
-        env:
-          NINJA_STATUS: "[%f/%t %es] "
         # Only --target AetherSDR (+ its aether-dv-waveform helper dependency)
         # ships; the default `all` also built ~200 unit-test exes the installer
         # never packages or runs — wasted time, and their links contend with the

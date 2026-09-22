@@ -2349,19 +2349,30 @@ void MainWindow::wireRxDemodAudioSinks()
                 m_qsoRecorder, &QsoRecorder::feedRxFrame);
     }
 
-    // CW decoder RX feed — gated live on the toggle (#2417).
-    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_cwDecoder, [this](const PcmFrame& frame) {
-                if (CwDecodeSettings::rxEnabled()) { m_cwDecoder.feed(frame); }
-            });
+    // A5: both RX backends consume the selected pre-monitor source. The facade
+    // dispatches native PCM to DeepFist and converted mono24 to GGMorse.
+    m_cwAudio = std::make_unique<DecoderAudioModel>(
+        m_radioModel, DecoderAudioModel::Consumer::Cw);
+    connect(m_cwAudio.get(), &DecoderAudioModel::routeStatusChanged,
+            this, &MainWindow::refreshCwInputStatus);
+    connect(m_cwAudio.get(), &DecoderAudioModel::nativePcmReady,
+            &m_cwDecoder, &CwRxModel::feed);
+    connect(m_cwAudio.get(), &DecoderAudioModel::pcmReady,
+            &m_cwDecoder, &CwRxModel::feedFixed24);
+    connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
+            &m_cwDecoder, &CwRxModel::reset);
+    connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
+            &m_cwCallsignSpotter, &CwCallsignSpotter::clear);
 
-    // RTTY decoder RX feed — gated on the decoder being running.
-    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_rttyDecoder, [this](const PcmFrame& frame) {
-                const QByteArray pcm = frame.legacyStereo24();
-                if (!pcm.isEmpty() && m_rttyDecoder.isRunning())
-                    m_rttyDecoder.feedAudio(pcm);
-            });
+    // RFC #5468 A5: selected receiver/DAX tap, before speaker gain/mute/mix.
+    m_rttyAudio = std::make_unique<DecoderAudioModel>(
+        m_radioModel, DecoderAudioModel::Consumer::Rtty);
+    connect(m_rttyAudio.get(), &DecoderAudioModel::routeStatusChanged,
+            this, &MainWindow::refreshRttyInputStatus);
+    connect(m_rttyAudio.get(), &DecoderAudioModel::pcmReady,
+            &m_rttyDecoder, &RttyDecoder::feedPcmBlock);
+    connect(m_rttyAudio.get(), &DecoderAudioModel::sourceReset,
+            &m_rttyDecoder, &RttyDecoder::resetInput);
 }
 
 // TX VITA-49 packets → the registered PanadapterStream socket. Flex-only (the

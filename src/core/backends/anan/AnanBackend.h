@@ -4,6 +4,7 @@
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/P2Client.h"
+#include "core/dsp/WdspSMeter.h"
 
 #include <QMap>
 #include <QString>
@@ -69,6 +70,8 @@ public:
     void setPanCenter(const QString& panId, double hz, PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanFrameRate(const QString& panId, int fps) override;
+    void setPanAverage(const QString& panId, int average) override;
+    void setPanWeightedAverage(const QString& panId, bool on) override;
     void setCwPitch(int hz) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
@@ -112,6 +115,14 @@ public:
     // seam.
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
+    // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
+    // smoothing and publish tick can be tested without a live radio.
+    void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
+    // The smoothed value itself, whether or not the publish tick has come
+    // round. Without this the ballistics can only be observed through the
+    // tick, which makes the assertion depend on wall-clock timing and lets a
+    // test pass with the smoothing replaced by a plain assignment.
+    [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeter.value(); }
 
 private:
     void beginDspSetup();
@@ -130,6 +141,14 @@ private:
     AnanRxDsp::Config m_pendingDspConfig;
     void emitSliceState();
     void emitPanState();
+    // Declares SLC:LEVEL to the meter seam; on every connect, before the
+    // first reading can arrive. See its definition.
+    void defineMeters();
+    // One WDSP S-meter reading (dBFS) -> dBm, smoothed, published on a tick.
+    void onDspMeter(float dbfs);
+    // The same smoother Hl2Backend publishes through, so the two receivers'
+    // needles move alike by construction -- see WdspSMeter.h.
+    SMeterSmoother m_sMeter;
     // Leading+trailing throttle around applyTuneToRadioAndPan() -- see
     // setSliceFrequency()'s comment for why an unthrottled click/drag-tune
     // gesture is a problem for this backend specifically.

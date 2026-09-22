@@ -110,6 +110,25 @@ struct PanSpanModel {
 // answers — which is exactly why consumers must go through
 // RadioCapabilities::dbmAxisIsCalibrated() and ::panBinsAbsolute() rather than
 // reach in here and pick a default for themselves.
+// The backend averages its own panadapter frames per the operator's FFT AVG
+// before they leave it (ANAN: WDSP's display analyzer, AnanPanAnalyzer).
+// ENGAGED means it does, so the widget's fixed client-side EMA
+// (SpectrumWidget::SMOOTH_ALPHA) would average a second time -- at 25 fps
+// roughly another 90 ms of lag even at FFT AVG 0 -- and is skipped
+// (MainWindow::onConnectionStateChanged() ->
+// SpectrumWidget::setClientFftSmoothingEnabled(), beside the edge crop).
+// ABSENT means the widget keeps its EMA, as on Flex, HL2, Icom and Sim.
+struct BackendPanAveraging {
+    // What one FFT AVG slider step means to this backend, as an averaging
+    // time. ANAN follows deskHPSDR's unit: 10 ms per step, 0 = off.
+    //
+    // DELIBERATELY NO DEFAULT. Absent record = no backend has been read;
+    // inside the record every field is a considered answer, so a backend
+    // that engages this has to state its own unit rather than inherit
+    // ANAN's by forgetting to.
+    int msPerAverageStep;
+};
+
 struct PanAmplitudeModel {
     // The numbers on the axis are ABSOLUTE dBm at the antenna. True for a radio
     // that carries a per-unit factory calibration — a Flex reports true dBm —
@@ -328,6 +347,8 @@ struct RadioCapabilities {
     // than unwrapping it at the call site.
     std::optional<PanSpanModel> panSpanModel;
     std::optional<PanAmplitudeModel> panAmplitude;
+    // See BackendPanAveraging. Absent = the widget averages client-side.
+    std::optional<BackendPanAveraging> backendPanAveraging;
 
     // A backend nobody has read labelled its axis dBm and was consumed as
     // though it meant it. ABSENT KEEPS THAT CLAIM, so this is the legacy shape

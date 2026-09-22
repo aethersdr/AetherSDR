@@ -411,6 +411,19 @@ public:
         markOverlayDirty();
     }
 
+    // Skip the fixed client-side EMA (SMOOTH_ALPHA) on the spectrum trace
+    // when the backend already averages per the operator's FFT AVG
+    // (RadioCapabilities::backendPanAveraging). m_smoothed then simply
+    // tracks the latest frame, so its readers (trace, noise floor) keep
+    // working unchanged.
+    void setClientFftSmoothingEnabled(bool enabled)
+    {
+        if (m_clientFftSmoothing == enabled)
+            return;
+        m_clientFftSmoothing = enabled;
+        m_resetFftSmoothingOnNextFrame = true;
+    }
+
     // Enable/disable the "S"/"B" (segment/band zoom) buttons and explain why
     // when disabled. Both send FlexLib wire text (band_zoom=/segment_zoom=,
     // see togglePanZoomModeForPan()) that only a Flex radio's command plane
@@ -2105,6 +2118,8 @@ private:
 
     // See setPanEdgeTaperEnabled()'s own comment.
     bool m_edgeTaperEnabled{false};
+    // See setClientFftSmoothingEnabled()'s own comment.
+    bool m_clientFftSmoothing{true};
     bool m_kiwiSdrDisplaySourceKiwi{false};
 
 #ifdef AETHER_GPU_SPECTRUM

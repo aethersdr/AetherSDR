@@ -956,8 +956,7 @@ void Hl2Backend::buildReceivers(int count)
         }
         r.dsp = nullptr;             // never inherited; recreated below
         r.audioMuted = false;
-        r.haveSMeter = false;
-        r.sMeterClock = QElapsedTimer{};
+        r.sMeter.reset();
 
         std::string err;
         if (!openReceiverDsp(i, &err)) {
@@ -1063,25 +1062,11 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         // change while the trace stayed put would be its own kind of lie.
         const double dbm = m_dbRef.toDbm(dbfs);
 
-        // Smooth EVERY sample, publish only on the tick. Both halves matter:
-        // smoothing all of them is what makes the published value represent
-        // the whole interval rather than one arbitrary instant inside it,
-        // and the tick is what stops ~47 cross-thread emits a second
-        // repainting a widget nobody can read that fast. Per receiver, so a
-        // strong signal on one does not drive another's needle.
-        if (!r->haveSMeter) {
-            r->sMeterDbm = dbm;
-            r->haveSMeter = true;
-        } else {
-            const double alpha = (dbm > r->sMeterDbm) ? kMeterAttackAlpha
-                                                      : kMeterDecayAlpha;
-            r->sMeterDbm = alpha * dbm + (1.0 - alpha) * r->sMeterDbm;
-        }
-        if (r->sMeterClock.isValid()
-            && r->sMeterClock.elapsed() < kMeterPublishIntervalMs)
-            return;
-        r->sMeterClock.restart();
-        emit meterUpdate(sliceMeterName(ui), r->sMeterDbm);
+        // Smooth EVERY sample, publish only on the tick -- SMeterSmoother,
+        // per receiver so a strong signal on one does not drive another's
+        // needle.
+        if (const auto out = r->sMeter.feed(dbm))
+            emit meterUpdate(sliceMeterName(ui), *out);
     });
 
     // Recorded, not published. m_rx is this thread's, so this is a plain store;

@@ -1110,6 +1110,10 @@ public:
     // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
     // See core/WaterfallRate.h. (#4606)
     bool requestPanAverage(const QString& panId, int average);
+    // Weighted-average toggle for a backend that shapes its own spectrum:
+    // straight down to that backend. Returns false on Flex, where the caller
+    // sends the weighted_average= wire command itself.
+    bool requestLocalPanWeightedAverage(const QString& panId, bool on);
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
@@ -1923,8 +1927,11 @@ public:
     }
 
     // Install a socket-free backend with the same normalized receiver-state
-    // bindings used by production. Replacement drops old session models.
-    void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
+    // bindings used by production. Replacement drops old session models. An
+    // optional unopened PanadapterStream must be owned by that backend and
+    // live on the model's thread; it exercises the normal DAX holder/PCM path.
+    void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family,
+                           PanadapterStream* panStream = nullptr);
     // The production family switch WITHOUT the dial that follows it: calls the
     // same rebuildBackendForFamily() connectToRadio() calls, so the two cannot
     // drift. Builds the REAL backend for `family` through makeBackend(), so a
