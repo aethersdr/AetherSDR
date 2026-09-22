@@ -51,6 +51,36 @@ RtlSdrDdc::~RtlSdrDdc()
     }
 }
 
+void RtlSdrDdc::applyCapture(double rateHz, double centerHz, double sliceHz,
+                              RtlCaptureTransaction::Mode mode, int lowHz, int highHz)
+{
+    if (m_sampleRateHz.load() != rateHz || m_centerHz.load() != centerHz
+        || m_sliceHz.load() != sliceHz || m_mode.load() != mode) {
+        m_ncoPhase = 0;
+        m_ncoPhasor = {1, 0};
+        m_ncoNormalizeCounter = 0;
+        m_decimAcc = {};
+        m_decimCount = 0;
+        m_prevDecimIq = {};
+        m_deemphState = 0;
+        m_audioDecimAcc = 0;
+        m_audioDecimCounter = 0;
+        m_audioResamplePhase = 0;
+        // Unemitted PCM belongs to the old capture/receiver. The accumulator
+        // is private after append (emitted buffers are cleared in processAudio),
+        // so truncation retains its capacity and performs no allocation.
+        m_audioBuffer.truncate(0);
+        m_firstAudioEmitted = false;
+        m_firstSpectrumEmitted = false;
+        m_spectrumCounter = 0;
+    }
+    setSampleRate(rateHz);
+    setCenterFrequency(centerHz);
+    setSliceFrequency(sliceHz);
+    m_mode.store(mode, std::memory_order_relaxed);
+    setSliceFilter(lowHz, highHz);
+}
+
 void RtlSdrDdc::setSampleRate(double sampleRateHz)
 {
     if (sampleRateHz > 0) {

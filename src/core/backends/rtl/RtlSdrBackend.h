@@ -2,6 +2,7 @@
 
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/RestoredRadioState.h"
+#include "core/backends/rtl/RtlCaptureTransaction.h"
 
 #include <QObject>
 #include <QHash>
@@ -92,9 +93,15 @@ private:
     // Parse device index or serial from connect request params.
     int deviceIndexFromParams(const QVariantMap& params) const;
     QString serialFromParams(const QVariantMap& params) const;
-    void handleControlApplied(const QString& control, qint64 value);
-    void handleControlFailed(const QString& control, const QString& message);
-    void queueExtensionRequest(const QString& control, quint64 requestId);
+    friend struct RtlCaptureBackendTestAccess;
+    void startCapture(std::unique_ptr<RtlSdrWorker> worker);
+    void serviceCapture();
+    bool requestCapture(const RtlCaptureTransaction::Desired& desired,
+                        const QString& extension = {}, quint64 requestId = 0);
+    void publishCapture();
+    void finishExtensions(bool success, RtlCaptureTransaction::Token token = {});
+    bool acceptsFrame(quint64 session, quint64 revision) const;
+
 
     // ---- State ----
     bool m_connected{false};
@@ -120,7 +127,16 @@ private:
     int m_ppmCorrection{0};
     int m_directSampling{0};
     QVector<int> m_tunerGainsTenths;
-    QHash<QString, QVector<quint64>> m_pendingExtensionRequests;
+    struct PendingExtension {
+        quint64 requestId;
+        RtlCaptureTransaction::Token token;
+    };
+    QHash<QString, PendingExtension> m_pendingExtensionRequests; // one promise per control
+    RtlCaptureTransaction m_capture{{1, 1}};
+    RtlCaptureTransaction::Desired m_requested;
+    QTimer m_captureTimer;
+    RtlCaptureTransaction::Token m_published;
+    bool m_connecting{false};
     QString m_pendingPanId{QStringLiteral("0xe1000000")};
 
     // Non-owning while connected; RtlSdrWorker closes the handle after its

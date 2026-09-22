@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/backends/rtl/RtlCaptureTransaction.h"
+
 #include <QObject>
 #include <QByteArray>
 #include <QVector>
@@ -23,6 +25,10 @@ public:
     ~RtlSdrDdc() override;
 
     // Parameter configuration (thread-safe setters called from main thread)
+    // Acquisition-context only, at a block boundary. Prepared numeric values;
+    // no parsing, planning, allocation or destruction here.
+    void applyCapture(double rateHz, double centerHz, double sliceHz,
+                      RtlCaptureTransaction::Mode mode, int lowHz, int highHz);
     void setSampleRate(double sampleRateHz);
     void setCenterFrequency(double centerHz);
     void setSliceFrequency(double sliceHz);
@@ -48,17 +54,7 @@ signals:
     void audioFrameReady(const QByteArray& pcm);
 
 private:
-    enum class DemodMode {
-        Am,
-        Sam,
-        Fm,
-        Fmn,
-        Wfm,
-        Usb,
-        Lsb,
-        Cw,
-        Cwr,
-    };
+    using DemodMode = RtlCaptureTransaction::Mode;
 
     void processSpectrum(const QVector<std::complex<float>>& samples);
     void processAudio(const QVector<std::complex<float>>& samples);

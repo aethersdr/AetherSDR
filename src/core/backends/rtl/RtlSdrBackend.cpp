@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace AetherSDR::rtl {
 
@@ -45,6 +46,26 @@ int nearestGainTenths(const QVector<int>& gains, int requested)
     });
 }
 
+RtlCaptureTransaction::Mode captureMode(const QString& mode)
+{
+    using Mode = RtlCaptureTransaction::Mode;
+    if (mode == QLatin1String("AM")) { return Mode::Am; }
+    if (mode == QLatin1String("SAM")) { return Mode::Sam; }
+    if (mode == QLatin1String("FM")) { return Mode::Fm; }
+    if (mode == QLatin1String("FMN")) { return Mode::Fmn; }
+    if (mode == QLatin1String("WFM")) { return Mode::Wfm; }
+    if (mode == QLatin1String("LSB")) { return Mode::Lsb; }
+    if (mode == QLatin1String("CW")) { return Mode::Cw; }
+    if (mode == QLatin1String("CWR")) { return Mode::Cwr; }
+    return Mode::Usb;
+}
+QString modeName(RtlCaptureTransaction::Mode mode)
+{
+    static const QStringList names{QStringLiteral("AM"), QStringLiteral("SAM"),
+        QStringLiteral("FM"), QStringLiteral("FMN"), QStringLiteral("WFM"),
+        QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("CW"), QStringLiteral("CWR")};
+    return names.at(static_cast<int>(mode));
+}
 } // namespace
 
 // Static convenience — returns the family string used by RadioModel::makeBackend().
@@ -78,11 +99,13 @@ uint32_t RtlSdrBackend::clampSampleRate(uint32_t requestedHz)
 RtlSdrBackend::RtlSdrBackend(QObject* parent)
     : IRadioBackend(parent)
 {
+    m_captureTimer.setInterval(10);
+    connect(&m_captureTimer, &QTimer::timeout, this, &RtlSdrBackend::serviceCapture);
 }
 
 RtlSdrBackend::~RtlSdrBackend()
 {
-    if (m_connected) {
+    if (m_worker) {
         disconnectRadio();
     }
 }
@@ -211,7 +234,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
 
 void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
 {
-    if (m_connected) {
+    if (m_worker) {
         disconnectRadio();
     }
 
@@ -290,17 +313,6 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
     }
     m_device = devHandle;
 
-    const auto failConfiguration = [this, devHandle](const QString& message) {
-        rtlsdr_close(devHandle);
-        m_device = nullptr;
-        m_modelName.clear();
-        m_vendor.clear();
-        m_product.clear();
-        m_serial.clear();
-        m_tunerGainsTenths.clear();
-        emit connectionError(message);
-    };
-
     char vendorBuf[256] = {0};
     char productBuf[256] = {0};
     char serialBuf[256] = {0};
@@ -314,174 +326,119 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
         m_serial.clear(); // Enumeration indices are connection locators, never serials.
     }
 
-    // ── Configure initial frequency, direct sampling, and gain ───────────────
-    if (request.params.contains("initialFrequencyHz")) {
-        m_panCenterHz = clampFrequency(request.params["initialFrequencyHz"].toDouble());
-    } else if (m_panCenterHz <= 0) {
-        m_panCenterHz = 101'700'000.0;
+    // All capture controls are requested together; only the worker touches
+    // them, and only its confirmed result is exposed as connected state.
+    m_requested = {};
+    m_requested.hardware.centerHz = static_cast<std::uint32_t>(m_panCenterHz);
+    m_requested.hardware.sampleRateHz = m_sampleRateHz;
+    m_requested.hardware.ppm = m_ppmCorrection;
+    if (params.contains("initialFrequencyHz")) {
+        const double hz = params.value("initialFrequencyHz").toDouble();
+        if (!std::isfinite(hz)) {
+            rtlsdr_close(devHandle); m_device = nullptr;
+            emit connectionError(tr("Invalid RTL-SDR initial frequency")); return;
+        }
+        m_requested.hardware.centerHz = static_cast<std::uint32_t>(clampFrequency(hz));
     }
-    m_sliceFreqHz = m_panCenterHz;
-
-    // Direct sampling mode MUST be configured before tuning center frequency,
-    // because HF (< 24 MHz) requires direct sampling mode 2 before setting frequency.
-    m_directSampling = m_panCenterHz < 24'000'000.0 ? 2 : 0;
-    rc = rtlsdr_set_direct_sampling(devHandle, m_directSampling);
-    if (rc < 0) {
-        failConfiguration(tr("Failed to configure RTL-SDR direct sampling: error %1").arg(rc));
-        return;
+    if (params.contains("sampleRateHz")) {
+        m_requested.hardware.sampleRateHz = clampSampleRate(params.value("sampleRateHz").toUInt());
     }
-
-    rc = rtlsdr_set_center_freq(devHandle, static_cast<uint32_t>(m_panCenterHz));
-    if (rc < 0) {
-        failConfiguration(tr("Failed to tune RTL-SDR to %1 Hz: error %2")
-                              .arg(m_panCenterHz, 0, 'f', 0).arg(rc));
-        return;
-    }
-
-    // Apply tuner gain (from request params or restored state)
-    if (request.params.contains("gainDb")) {
-        m_panRfGainDb = request.params["gainDb"].toInt();
-    }
+    const int requestedGain = std::clamp(params.value("gainDb", m_panRfGainDb).toInt(), -100, 100);
     m_tunerGainsTenths.clear();
     const int gainCount = rtlsdr_get_tuner_gains(devHandle, nullptr);
-    if (gainCount > 0) {
+    if (gainCount > 0 && gainCount <= 256) {
         m_tunerGainsTenths.resize(gainCount);
         if (rtlsdr_get_tuner_gains(devHandle, m_tunerGainsTenths.data()) < 0) {
             m_tunerGainsTenths.clear();
         }
     }
-    const int gainTenths = nearestGainTenths(m_tunerGainsTenths, m_panRfGainDb * 10);
-    m_panRfGainDb = qRound(gainTenths / 10.0);
-    rc = rtlsdr_set_tuner_gain_mode(devHandle, 1);
-    if (rc < 0) {
-        failConfiguration(tr("Failed to enable manual RTL-SDR tuner gain: error %1").arg(rc));
-        return;
-    }
-    rc = rtlsdr_set_tuner_gain(devHandle, gainTenths);
-    if (rc < 0) {
-        failConfiguration(tr("Failed to configure RTL-SDR tuner gain: error %1").arg(rc));
-        return;
-    }
-    // The RTL2832 digital AGC is independent of the tuner's gain mode. Keep it
-    // disabled so it cannot ride on top of the operator's manual RF gain.
-    rc = rtlsdr_set_agc_mode(devHandle, 0);
-    if (rc < 0) {
-        failConfiguration(tr("Failed to disable RTL-SDR digital AGC: error %1").arg(rc));
-        return;
-    }
-
-    // ── Set sample rate (default 2.4 MSPS) ──────────────────────────────────
-    uint32_t sampleRate = m_sampleRateHz;
-    if (request.params.contains("sampleRateHz")) {
-        sampleRate = request.params["sampleRateHz"].toUInt();
-    }
-    sampleRate = clampSampleRate(sampleRate);
-    rc = rtlsdr_set_sample_rate(devHandle, sampleRate);
-    if (rc < 0) {
-        failConfiguration(tr("Failed to set RTL-SDR sample rate to %1 Hz: error %2")
-                              .arg(sampleRate).arg(rc));
-        return;
-    }
-    m_sampleRateHz = rtlsdr_get_sample_rate(devHandle);
-    if (m_sampleRateHz == 0) {
-        failConfiguration(tr("Failed to read back the applied RTL-SDR sample rate"));
-        return;
-    }
-
-    // ── Set PPM frequency correction ────────────────────────────────────────
-    if (m_ppmCorrection != 0) {
-        rc = rtlsdr_set_freq_correction(devHandle, m_ppmCorrection);
-        if (rc < 0) {
-            failConfiguration(tr("Failed to set RTL-SDR frequency correction: error %1").arg(rc));
-            return;
-        }
-    }
-
-    // ── Identify tuner IC for model name ────────────────────────────────────
+    m_requested.hardware.gainTenths = nearestGainTenths(m_tunerGainsTenths, requestedGain * 10);
+    m_requested.receivers = {{{0, double(m_requested.hardware.centerHz),
+        double(m_sliceFilterLow), double(m_sliceFilterHigh), 0, 0, 0}, captureMode(m_sliceMode)}};
     m_modelName = m_product;
+    startCapture(std::make_unique<RtlSdrWorker>(m_device));
+}
 
-    // ── Instantiate Worker (owns RtlSdrDdc processing engine) ─────────────
-    m_worker = std::make_unique<RtlSdrWorker>(m_device);
-    // A new DDC starts at unity/unmuted. Do not publish the old worker's
-    // mixer observation across a reconnect.
+void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
+{
+    m_worker = std::move(worker);
+    m_capture.beginSession();
+    m_published = {};
+    m_connecting = true;
+    m_pendingPanId = QStringLiteral("0xe1000000");
     m_receiveGain = 100;
     m_receiveMuted = false;
-
-    if (RtlSdrDdc* ddcEngine = m_worker->ddc()) {
-        ddcEngine->setSampleRate(m_sampleRateHz);
-        ddcEngine->setCenterFrequency(m_panCenterHz);
-        ddcEngine->setSliceFrequency(m_sliceFreqHz);
-        ddcEngine->setSliceMode(m_sliceMode);
-        ddcEngine->setSliceFilter(m_sliceFilterLow, m_sliceFilterHigh);
-    }
-
-    // Relay worker/DDC signals to IRadioBackend outputs via cross-thread queued connection
-    connect(m_worker.get(), &RtlSdrWorker::spectrumFrameReady,
-            this, &IRadioBackend::spectrumFrameReady);
-    connect(m_worker.get(), &RtlSdrWorker::waterfallRowReady,
-            this, &IRadioBackend::waterfallRowReady);
-    connect(m_worker.get(), &RtlSdrWorker::audioFrameReady,
-            this, [this, producer = QPointer<RtlSdrWorker>(m_worker.get())](const QByteArray& pcm) {
-                if (!producer || producer.data() != m_worker.get()) {
-                    return;
-                }
+    const QPointer<RtlSdrWorker> producer(m_worker.get());
+    connect(m_worker.get(), &RtlSdrWorker::spectrumFrameReady, this,
+        [this, producer](quint64 session, quint64 revision, int panId, const QByteArray& frame) {
+            if (producer && producer.data() == m_worker.get() && acceptsFrame(session, revision)) {
+                emit spectrumFrameReady(panId, frame);
+            }
+        });
+    connect(m_worker.get(), &RtlSdrWorker::waterfallRowReady, this,
+        [this, producer](quint64 session, quint64 revision, int panId, const QByteArray& frame) {
+            if (producer && producer.data() == m_worker.get() && acceptsFrame(session, revision)) {
+                emit waterfallRowReady(panId, frame);
+            }
+        });
+    connect(m_worker.get(), &RtlSdrWorker::audioFrameReady, this,
+        [this, producer](quint64 session, quint64 revision, const QByteArray& pcm) {
+            if (producer && producer.data() == m_worker.get() && acceptsFrame(session, revision)) {
                 publishLegacyAudio(pcm);
                 publishLegacySliceAudio(0, pcm);
-            });
-    connect(m_worker.get(), &RtlSdrWorker::readError,
-            this, [this](const QString& err) {
-                emit connectionError(err);
-                disconnectRadio();
-            });
-    connect(m_worker.get(), &RtlSdrWorker::controlApplied,
-            this, &RtlSdrBackend::handleControlApplied);
-    connect(m_worker.get(), &RtlSdrWorker::controlFailed,
-            this, &RtlSdrBackend::handleControlFailed);
-
+            }
+        });
+    connect(m_worker.get(), &RtlSdrWorker::readError, this,
+        [this, producer](const QString& error) {
+            if (!producer || producer.data() != m_worker.get()) { return; }
+            emit connectionError(error);
+            if (producer && producer.data() == m_worker.get()) { disconnectRadio(); }
+        });
+    if (!requestCapture(m_requested)) {
+        emit connectionError(tr("RTL-SDR initial capture could not be prepared"));
+        disconnectRadio();
+        return;
+    }
+    m_captureTimer.start();
     m_worker->startReading();
-
-    // ── Mark connected, emit signals ────────────────────────────────────────
-    m_connected = true;
-    emit connected();
-    emitInitialState();
 }
 
 void RtlSdrBackend::disconnectRadio()
 {
     retirePcmStreams();
-    if (!m_connected) {
-        return;
-    }
-
-    for (auto it = m_pendingExtensionRequests.cbegin();
-         it != m_pendingExtensionRequests.cend(); ++it) {
-        for (quint64 requestId : it.value()) {
-            emit extensionError(requestId, tr("RTL-SDR disconnected before the control completed"));
-        }
-    }
-    m_pendingExtensionRequests.clear();
-
-    // The worker owns the device handle and closes it only after read_async has
-    // exited. If a broken USB stack ignores cancellation, leave the worker
-    // alive until QThread::finished rather than destroying a live QThread or
-    // closing a handle underneath libusb.
-    if (m_worker) {
-        if (m_worker->stopReading()) {
-            m_worker.reset();
-        } else {
-            RtlSdrWorker* stranded = m_worker.release();
-            connect(stranded, &QThread::finished, stranded, &QObject::deleteLater);
-        }
-        m_device = nullptr;
-    }
-
+    m_captureTimer.stop();
+    m_capture.endSession();
+    m_published = {};
+    if (!m_worker && !m_connected && !m_connecting) { return; }
     m_connected = false;
+    m_connecting = false;
+    const auto retiredSession = m_capture.requested().session;
+    const auto requests = std::exchange(m_pendingExtensionRequests, {});
+    auto worker = std::move(m_worker);
+    m_device = nullptr;
     m_modelName.clear();
     m_vendor.clear();
     m_product.clear();
     m_serial.clear();
     m_tunerGainsTenths.clear();
 
+    // Detach before notifying observers. A reentrant reconnect must never have
+    // its new worker stopped by this old session's teardown.
+    if (worker) {
+        // Install retirement before waiting: the reader can finish immediately
+        // after the bounded wait expires. Connecting afterwards can miss that
+        // final signal and strand the device forever. Normal joined teardown
+        // deletes the QObject below, also removing any deferred-delete event.
+        connect(worker.get(), &QThread::finished, worker.get(), &QObject::deleteLater);
+        if (!worker->stopReading()) {
+            worker.release();
+        }
+    }
+    worker.reset();
+    for (auto it = requests.cbegin(); it != requests.cend(); ++it) {
+        emit extensionError(it.value().requestId, tr("RTL-SDR disconnected before the control completed"));
+        if (m_capture.requested().session != retiredSession) { return; }
+    }
     emit disconnected();
 }
 
@@ -496,92 +453,30 @@ bool RtlSdrBackend::isConnected() const
 
 void RtlSdrBackend::setSliceFrequency(int sliceId, double hz)
 {
-    Q_UNUSED(sliceId);  // Single slice
-
-    if (!m_connected) {
-        return;
-    }
-
-    m_sliceFreqHz = clampFrequency(hz);
-
-    // Check if the requested slice frequency is outside the current 2.4 MHz panadapter window (±1.0 MHz)
-    const double spanMarginHz = m_sampleRateHz * 0.45;
-    if (std::abs(m_sliceFreqHz - m_panCenterHz) > spanMarginHz) {
-        m_panCenterHz = m_sliceFreqHz;
-        if (m_worker) {
-            const int requiredDs = (m_panCenterHz < 24'000'000.0) ? 2 : 0;
-            if (m_directSampling != requiredDs) {
-                m_directSampling = requiredDs;
-                m_worker->setDirectSampling(requiredDs);
-            }
-            m_worker->setCenterFrequency(static_cast<uint32_t>(m_panCenterHz));
-        }
-        if (RtlSdrDdc* ddcEngine = ddc()) {
-            ddcEngine->setCenterFrequency(m_panCenterHz);
-        }
-        emit panCenterBandwidthChanged(QStringLiteral("0xe1000000"), m_panCenterHz / 1e6,
-                                       m_sampleRateHz / 1e6);
-    }
-
-    if (RtlSdrDdc* ddcEngine = ddc()) {
-        ddcEngine->setSliceFrequency(m_sliceFreqHz);
-    }
-
-    SliceDelta delta;
-    delta.frequency = m_sliceFreqHz / 1e6;
-    delta.mode = m_sliceMode;
-    emit sliceChanged(0, delta);
-    emit operatingStateChanged();
+    if (!m_connected || sliceId != 0 || !std::isfinite(hz)) { return; }
+    auto desired = m_requested;
+    desired.receivers[0].passband.carrierHz = clampFrequency(hz);
+    desired.automaticDirectSampling = true;
+    requestCapture(desired);
 }
 
 void RtlSdrBackend::setSliceMode(int sliceId, const QString& mode)
 {
-    Q_UNUSED(sliceId);
-
-    if (!m_connected) {
-        return;
-    }
-
-    const QString canonicalMode = mode.trimmed().toUpper();
-    if (!isKnownMode(canonicalMode)) {
-        return;
-    }
-    m_sliceMode = canonicalMode;
-    if (RtlSdrDdc* ddcEngine = ddc()) {
-        ddcEngine->setSliceMode(canonicalMode);
-    }
-
-    SliceDelta delta;
-    delta.frequency = m_sliceFreqHz / 1e6;
-    delta.mode = canonicalMode;
-    emit sliceChanged(0, delta);
-    emit operatingStateChanged();
+    const QString canonical = mode.trimmed().toUpper();
+    if (!m_connected || sliceId != 0 || !isKnownMode(canonical)) { return; }
+    auto desired = m_requested;
+    desired.receivers[0].mode = captureMode(canonical);
+    requestCapture(desired);
 }
 
 void RtlSdrBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 {
-    Q_UNUSED(sliceId);
-
-    if (!m_connected) {
-        return;
-    }
-
-    if (lowHz >= highHz || lowHz < -100'000 || highHz > 100'000) {
-        return;
-    }
-    m_sliceFilterLow = lowHz;
-    m_sliceFilterHigh = highHz;
-    if (RtlSdrDdc* ddcEngine = ddc()) {
-        ddcEngine->setSliceFilter(lowHz, highHz);
-    }
-
-    SliceDelta delta;
-    delta.frequency = m_sliceFreqHz / 1e6;
-    delta.mode = m_sliceMode;
-    delta.filterLow = lowHz;
-    delta.filterHigh = highHz;
-    emit sliceChanged(0, delta);
-    emit operatingStateChanged();
+    if (!m_connected || sliceId != 0 || lowHz >= highHz
+        || lowHz < -100'000 || highHz > 100'000) { return; }
+    auto desired = m_requested;
+    desired.receivers[0].passband.filterLowHz = lowHz;
+    desired.receivers[0].passband.filterHighHz = highHz;
+    requestCapture(desired);
 }
 
 void RtlSdrBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
@@ -597,54 +492,29 @@ void RtlSdrBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdD
 // IRadioBackend — pan control
 // ──────────────────────────────────────────────────────────────────────────────
 
-void RtlSdrBackend::setPanCenter(const QString& panId, double hz,
-                                  PanCenterIntent intent)
+void RtlSdrBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent intent)
 {
     Q_UNUSED(intent);
-    if (!m_connected) {
-        return;
+    if (!m_connected || !std::isfinite(hz)) { return; }
+    auto desired = m_requested;
+    desired.hardware.centerHz = static_cast<std::uint32_t>(clampFrequency(hz));
+    // Retain the existing single-slice pan behavior until viewport work lands.
+    desired.receivers[0].passband.carrierHz = desired.hardware.centerHz;
+    desired.automaticDirectSampling = true;
+    if (requestCapture(desired)) {
+        m_pendingPanId = panId.isEmpty() ? QStringLiteral("0xe1000000") : panId;
     }
-
-    hz = clampFrequency(hz);
-    m_panCenterHz = hz;
-    if (RtlSdrDdc* ddcEngine = ddc()) {
-        ddcEngine->setCenterFrequency(hz);
-    }
-
-    // Dispatch blocking USB control transfer to worker thread (§ Hazards #2)
-    if (m_worker) {
-        const int requiredDs = (hz < 24'000'000.0) ? 2 : 0;
-        if (m_directSampling != requiredDs) {
-            m_directSampling = requiredDs;
-            m_worker->setDirectSampling(requiredDs);
-        }
-        m_worker->setCenterFrequency(static_cast<uint32_t>(hz));
-    }
-
-    const QString effectivePanId = panId.isEmpty() ? QStringLiteral("0xe1000000") : panId;
-    emit panCenterBandwidthChanged(effectivePanId, hz / 1e6, m_sampleRateHz / 1e6);
-    // Update slice frequency to track pan center (single-slice design)
-    m_sliceFreqHz = hz;
-    if (RtlSdrDdc* ddcEngine = ddc()) {
-        ddcEngine->setSliceFrequency(hz);
-    }
-
-    SliceDelta delta;
-    delta.frequency = hz / 1e6;
-    delta.mode = m_sliceMode;
-    emit sliceChanged(0, delta);
-    emit operatingStateChanged();
 }
 
 void RtlSdrBackend::setPanBandwidth(const QString& panId, double hz)
 {
-    if (!m_connected || !m_worker) {
-        return;
+    if (!m_connected || !std::isfinite(hz)) { return; }
+    auto desired = m_requested;
+    desired.hardware.sampleRateHz = clampSampleRate(static_cast<std::uint32_t>(
+        std::clamp(hz, 1.0, double(UINT32_MAX))));
+    if (requestCapture(desired)) {
+        m_pendingPanId = panId.isEmpty() ? QStringLiteral("0xe1000000") : panId;
     }
-    const uint32_t rate = clampSampleRate(
-        static_cast<uint32_t>(std::clamp(hz, 1.0, static_cast<double>(UINT32_MAX))));
-    m_pendingPanId = panId.isEmpty() ? QStringLiteral("0xe1000000") : panId;
-    m_worker->setSampleRate(rate);
 }
 
 void RtlSdrBackend::setPanFrameRate(const QString& panId, int fps)
@@ -692,23 +562,14 @@ void RtlSdrBackend::setSliceAudioPan(int sliceId, int panPercent)
 
 void RtlSdrBackend::setPanRfGain(const QString& panId, int gainDb)
 {
-    if (!m_connected) {
-        return;
+    if (!m_connected) { return; }
+    auto desired = m_requested;
+    desired.hardware.gainTenths = nearestGainTenths(m_tunerGainsTenths,
+                                                   std::clamp(gainDb, -100, 100) * 10);
+    if (requestCapture(desired)) {
+        m_pendingPanId = panId.isEmpty() ? QStringLiteral("0xe1000000") : panId;
     }
-
-    const int gainTenths = nearestGainTenths(m_tunerGainsTenths, gainDb * 10);
-    m_pendingPanId = panId.isEmpty() ? QStringLiteral("0xe1000000") : panId;
-
-    // Dispatch blocking USB control transfer to worker thread (§ Hazards #2)
-    if (m_worker) {
-        m_worker->setTunerGain(gainTenths);
-    }
-
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// IRadioBackend — transmit (guarded — RX-only)
-// ──────────────────────────────────────────────────────────────────────────────
 
 void RtlSdrBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
@@ -726,86 +587,33 @@ void RtlSdrBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operatio
 void RtlSdrBackend::invokeExtension(const QString& ns, const QString& verb,
                                     quint64 requestId, const QVariant& arg)
 {
-    if (ns != "rtl") {
-        emit extensionError(requestId, tr("Unknown namespace %1").arg(ns));
-        return;
+    if (ns != QLatin1String("rtl") || !m_connected || !m_worker) {
+        emit extensionError(requestId, tr("RTL-SDR is unavailable")); return;
     }
-
-    if (!m_connected || !m_device) {
-        emit extensionError(requestId, tr("Not connected"));
-        return;
+    if (verb == QLatin1String("gain.list")) {
+        emit extensionResult(requestId, QVariant::fromValue(m_tunerGainsTenths)); return;
     }
-
-    if (verb == "gain.set") {
-        bool ok = false;
-        const int gain = arg.toInt(&ok);
-        if (!ok) {
-            emit extensionError(requestId, tr("gain.set requires an integer dB value"));
-            return;
-        }
-        queueExtensionRequest(QStringLiteral("gain"), requestId);
-        setPanRfGain(QStringLiteral("0xe1000000"), gain);
-
-    } else if (verb == "gain.list") {
-        emit extensionResult(requestId, QVariant::fromValue(m_tunerGainsTenths));
-
-    } else if (verb == "ppm.set") {
-        bool ok = false;
-        int ppm = arg.toInt(&ok);
-        if (!ok || ppm < -1000 || ppm > 1000) {
-            emit extensionError(requestId, tr("ppm.set requires an integer from -1000 to 1000"));
-            return;
-        }
-        queueExtensionRequest(QStringLiteral("ppm"), requestId);
-        if (m_worker) {
-            m_worker->setPpmCorrection(ppm);
-        }
-
-    } else if (verb == "direct_sampling.set") {
-        // Mode 0 = Off (tuner), Mode 1 = I-branch, Mode 2 = Q-branch (HF direct)
-        bool ok = false;
-        int mode = arg.toInt(&ok);
-        if (!ok || mode < 0 || mode > 2) {
-            emit extensionError(requestId, tr("direct_sampling.set requires 0, 1, or 2"));
-            return;
-        }
-        queueExtensionRequest(QStringLiteral("direct_sampling"), requestId);
-        if (m_worker) {
-            m_worker->setDirectSampling(mode);
-        }
-
-    } else if (verb == "offset_tuning.set") {
-        bool ok = false;
-        int enable = arg.toInt(&ok);
-        if (!ok || (enable != 0 && enable != 1)) {
-            emit extensionError(requestId, tr("offset_tuning.set requires 0 or 1"));
-            return;
-        }
-        queueExtensionRequest(QStringLiteral("offset_tuning"), requestId);
-        if (m_worker) {
-            m_worker->setOffsetTuning(enable);
-        }
-
-    } else if (verb == "sample_rate.set") {
-        bool ok = false;
-        uint32_t rate = clampSampleRate(arg.toUInt(&ok));
-        if (!ok) {
-            emit extensionError(requestId, tr("sample_rate.set requires an integer Hz value"));
-            return;
-        }
-        queueExtensionRequest(QStringLiteral("sample_rate"), requestId);
-        if (m_worker) {
-            m_worker->setSampleRate(rate);
-        }
-
+    bool ok = false;
+    const qint64 value = arg.toLongLong(&ok);
+    auto desired = m_requested;
+    if (ok && verb == QLatin1String("gain.set") && value >= -100 && value <= 100) {
+        desired.hardware.gainTenths = nearestGainTenths(m_tunerGainsTenths, int(value) * 10);
+    } else if (ok && verb == QLatin1String("ppm.set") && value >= -1000 && value <= 1000) {
+        desired.hardware.ppm = int(value);
+    } else if (ok && verb == QLatin1String("direct_sampling.set") && value >= 0 && value <= 2) {
+        desired.hardware.directSampling = int(value);
+        desired.automaticDirectSampling = false;
+    } else if (ok && verb == QLatin1String("offset_tuning.set") && (value == 0 || value == 1)) {
+        desired.hardware.offsetTuning = int(value);
+    } else if (ok && verb == QLatin1String("sample_rate.set") && value > 0 && value <= UINT32_MAX) {
+        desired.hardware.sampleRateHz = clampSampleRate(static_cast<std::uint32_t>(value));
     } else {
-        emit extensionError(requestId, tr("Unknown RTL extension %1").arg(verb));
+        emit extensionError(requestId, tr("Invalid RTL-SDR control or value")); return;
+    }
+    if (!requestCapture(desired, verb, requestId)) {
+        emit extensionError(requestId, tr("Requested RTL-SDR capture does not fit or is invalid"));
     }
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// IRadioBackend — client-side state memory
-// ──────────────────────────────────────────────────────────────────────────────
 
 void RtlSdrBackend::applyRestoredState(const RestoredRadioState& state)
 {
@@ -855,6 +663,7 @@ void RtlSdrBackend::applyRestoredState(const RestoredRadioState& state)
 RestoredRadioState RtlSdrBackend::currentOperatingState() const
 {
     RestoredRadioState state;
+    if (m_connecting) { return state; }
     state.rfFrequencyHz = m_panCenterHz;
     state.mode = m_sliceMode;
     state.filterLowHz = m_sliceFilterLow;
@@ -871,78 +680,177 @@ RestoredRadioState RtlSdrBackend::currentOperatingState() const
 // Private helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-void RtlSdrBackend::queueExtensionRequest(const QString& control, quint64 requestId)
+bool RtlSdrBackend::requestCapture(const RtlCaptureTransaction::Desired& desired,
+                                  const QString& extension, quint64 requestId)
 {
-    m_pendingExtensionRequests[control].append(requestId);
-}
-
-void RtlSdrBackend::handleControlApplied(const QString& control, qint64 value)
-{
-    if (!m_connected) {
-        return;
+    const auto submitted = m_capture.submit(desired);
+    if (!submitted) {
+        qWarning() << "RTL-SDR capture request refused by whole-set validation";
+        return false;
     }
-
-    QVariant result = value;
-    if (control == QLatin1String("gain")) {
-        m_panRfGainDb = qRound(value / 10.0);
-        result = m_panRfGainDb;
-        emit panRfGainChanged(m_pendingPanId, m_panRfGainDb);
-        emit operatingStateChanged();
-    } else if (control == QLatin1String("sample_rate")) {
-        m_sampleRateHz = static_cast<uint32_t>(value);
-        result = m_sampleRateHz;
-        emit panCenterBandwidthChanged(m_pendingPanId, m_panCenterHz / 1e6,
-                                       m_sampleRateHz / 1e6);
-        emit operatingStateChanged();
-    } else if (control == QLatin1String("center_frequency")) {
-        m_panCenterHz = static_cast<double>(value);
-        if (RtlSdrDdc* ddcEngine = ddc()) {
-            ddcEngine->setCenterFrequency(m_panCenterHz);
+    QVector<quint64> superseded;
+    const auto& old = m_requested.hardware;
+    const auto& next = desired.hardware;
+    for (auto it = m_pendingExtensionRequests.begin(); it != m_pendingExtensionRequests.end();) {
+        const QString& key = it.key();
+        const bool changed = key == extension
+            || (key == QLatin1String("gain.set") && old.gainTenths != next.gainTenths)
+            || (key == QLatin1String("ppm.set") && old.ppm != next.ppm)
+            || (key == QLatin1String("sample_rate.set") && old.sampleRateHz != next.sampleRateHz)
+            || (key == QLatin1String("offset_tuning.set") && old.offsetTuning != next.offsetTuning)
+            || (key == QLatin1String("direct_sampling.set")
+                && (old.directSampling != next.directSampling
+                    || desired.automaticDirectSampling != m_requested.automaticDirectSampling));
+        if (changed) {
+            superseded.append(it.value().requestId);
+            it = m_pendingExtensionRequests.erase(it);
+        } else {
+            it.value().token = submitted.token;
+            ++it;
         }
-        emit panCenterBandwidthChanged(m_pendingPanId, m_panCenterHz / 1e6,
-                                       m_sampleRateHz / 1e6);
-        emit operatingStateChanged();
-    } else if (control == QLatin1String("direct_sampling")) {
-        m_directSampling = static_cast<int>(value);
-    } else if (control == QLatin1String("ppm")) {
-        m_ppmCorrection = static_cast<int>(value);
     }
+    if (!extension.isEmpty()) {
+        m_pendingExtensionRequests.insert(extension, {requestId, submitted.token});
+    }
+    m_requested = desired;
+    // Dispatch only; completion is serviced by the timer to avoid reentering
+    // publication while an extension promise is still being attached.
+    if (const auto work = m_capture.takeWork()) {
+        if (!m_worker->submit(*work)) {
+            qFatal("RTL-SDR transaction mailbox ownership violated");
+        }
+    }
+    for (quint64 id : superseded) {
+        emit extensionError(id, tr("RTL-SDR request superseded"));
+    }
+    return true;
+}
 
-    const QVector<quint64> requests = m_pendingExtensionRequests.take(control);
-    for (quint64 requestId : requests) {
-        emit extensionResult(requestId, result);
+bool RtlSdrBackend::acceptsFrame(quint64 session, quint64 revision) const
+{
+    return m_connected && m_published == RtlCaptureTransaction::Token{session, revision};
+}
+
+void RtlSdrBackend::serviceCapture()
+{
+    if (!m_worker) { return; }
+    const QPointer<RtlSdrWorker> producer(m_worker.get());
+    m_worker->serviceCancellation();
+    if (const auto result = m_worker->takeResult()) {
+        const auto completion = m_capture.complete(*result);
+        if (completion == RtlCaptureTransaction::Completion::Invalidated) {
+            finishExtensions(false);
+            if (!producer || producer.data() != m_worker.get()) { return; }
+            emit connectionError(tr("RTL-SDR capture lost: configuration or rollback could not be verified"));
+            if (producer && producer.data() == m_worker.get()) { disconnectRadio(); }
+            return;
+        }
+        if (completion == RtlCaptureTransaction::Completion::Published) {
+            publishCapture();
+            finishExtensions(true, result->token);
+        } else if (completion == RtlCaptureTransaction::Completion::Failed && !m_capture.busy()) {
+            const auto& state = *m_capture.confirmed();
+            m_requested.hardware = state.hardware;
+            m_requested.receivers = state.receivers;
+            m_requested.automaticDirectSampling = state.automaticDirectSampling;
+            finishExtensions(false);
+            qWarning() << "RTL-SDR capture request failed; previous capture restored";
+        }
+    }
+    if (m_worker) {
+        if (const auto work = m_capture.takeWork()) {
+            if (!m_worker->submit(*work)) { qFatal("RTL-SDR transaction mailbox ownership violated"); }
+        }
     }
 }
 
-void RtlSdrBackend::handleControlFailed(const QString& control, const QString& message)
+void RtlSdrBackend::publishCapture()
 {
-    if (!m_connected) {
-        return;
+    const auto state = *m_capture.confirmed();
+    m_published = state.token;
+    m_panCenterHz = state.hardware.centerHz;
+    m_sampleRateHz = state.hardware.sampleRateHz;
+    m_directSampling = state.hardware.directSampling;
+    m_ppmCorrection = state.hardware.ppm;
+    m_panRfGainDb = qRound(state.hardware.gainTenths / 10.0);
+    m_sliceFreqHz = state.receivers[0].passband.carrierHz;
+    m_sliceMode = modeName(state.receivers[0].mode);
+    m_sliceFilterLow = int(state.receivers[0].passband.filterLowHz);
+    m_sliceFilterHigh = int(state.receivers[0].passband.filterHighHz);
+    m_requested.hardware = state.hardware;
+    m_requested.receivers = state.receivers;
+    m_requested.automaticDirectSampling = state.automaticDirectSampling;
+    const auto current = [this, token = state.token] {
+        return acceptsFrame(token.session, token.revision);
+    };
+    if (m_connecting) {
+        m_connecting = false;
+        m_connected = true;
+        emit connected();
+        if (!current()) { return; }
+        emitInitialState();
+    } else {
+        emit panCenterBandwidthChanged(m_pendingPanId, m_panCenterHz / 1e6, m_sampleRateHz / 1e6);
+        if (!current()) { return; }
+        emit panRfGainChanged(m_pendingPanId, m_panRfGainDb);
+        if (!current()) { return; }
+        SliceDelta delta;
+        delta.frequency = m_sliceFreqHz / 1e6;
+        delta.mode = m_sliceMode;
+        delta.filterLow = m_sliceFilterLow;
+        delta.filterHigh = m_sliceFilterHigh;
+        emit sliceChanged(0, delta);
     }
+    if (current()) { emit operatingStateChanged(); }
+}
 
-    const QVector<quint64> requests = m_pendingExtensionRequests.take(control);
-    for (quint64 requestId : requests) {
-        emit extensionError(requestId, message);
+void RtlSdrBackend::finishExtensions(bool success, RtlCaptureTransaction::Token token)
+{
+    QHash<QString, PendingExtension> requests;
+    for (auto it = m_pendingExtensionRequests.begin(); it != m_pendingExtensionRequests.end();) {
+        if (!success || it.value().token == token) {
+            requests.insert(it.key(), it.value());
+            it = m_pendingExtensionRequests.erase(it);
+        } else { ++it; }
     }
-    if (requests.isEmpty()) {
-        emit connectionError(message);
+    // Snapshot before any signal can reenter the backend. Newly submitted
+    // promises remain in the bounded map and cannot consume this completion.
+    const auto confirmed = m_capture.confirmed();
+    for (auto it = requests.cbegin(); it != requests.cend(); ++it) {
+        if (!success || !confirmed || confirmed->token != token) {
+            emit extensionError(it.value().requestId, tr("RTL-SDR capture transaction failed")); continue;
+        }
+        const auto& hardware = confirmed->hardware;
+        qint64 value = 0;
+        if (it.key() == QLatin1String("gain.set")) { value = qRound(hardware.gainTenths / 10.0); }
+        else if (it.key() == QLatin1String("ppm.set")) { value = hardware.ppm; }
+        else if (it.key() == QLatin1String("direct_sampling.set")) { value = hardware.directSampling; }
+        else if (it.key() == QLatin1String("offset_tuning.set")) { value = hardware.offsetTuning; }
+        else if (it.key() == QLatin1String("sample_rate.set")) { value = hardware.sampleRateHz; }
+        emit extensionResult(it.value().requestId, value);
     }
 }
 
 void RtlSdrBackend::emitInitialState()
 {
+    const auto token = m_published;
+    const auto current = [this, token] { return acceptsFrame(token.session, token.revision); };
+    if (!current()) { return; }
     // Emit the signals the UI expects from a freshly-connected radio.
     // Mirrors what the Flex backend does with initial status echoes.
     RadioDelta rDelta;
     rDelta.model = m_modelName;
     rDelta.nickname = m_product;
     emit radioChanged(rDelta);
+    if (!current()) { return; }
 
     const QString kPanId = QStringLiteral("0xe1000000");
 
     // Pan 0 FIRST — center frequency and bandwidth limits so PanadapterModel materialises
     emit panCenterBandwidthChanged(kPanId, m_panCenterHz / 1e6, m_sampleRateHz / 1e6);
+    if (!current()) { return; }
     emit panBandwidthLimitsChanged(kPanId, 0.225001, 3.0);
+    if (!current()) { return; }
 
     // Tuner RF gain info
     if (!m_tunerGainsTenths.isEmpty()) {
@@ -951,8 +859,10 @@ void RtlSdrBackend::emitInitialState()
         emit panRfGainInfoChanged(kPanId, qFloor(*minIt / 10.0), qCeil(*maxIt / 10.0), 1);
     }
 
+    if (!current()) { return; }
     // RF gain
     emit panRfGainChanged(kPanId, m_panRfGainDb);
+    if (!current()) { return; }
 
     // Slice 0 — initial frequency, mode, and filters
     SliceDelta sDelta;

@@ -170,6 +170,16 @@ add_test(NAME rx_client_effects_test COMMAND rx_client_effects_test)
 set_tests_properties(rx_client_effects_test PROPERTIES TIMEOUT 30)
 
 # Pure shared-capture geometry policy: no sockets, settings, DSP or hardware.
+# Socket-free complete capture transaction, including injected USB failures.
+add_executable(rtl_capture_transaction_test
+    tests/rtl_capture_transaction_test.cpp
+    src/core/backends/rtl/RtlCaptureTransaction.cpp
+    src/core/SharedCapturePolicy.cpp
+)
+target_include_directories(rtl_capture_transaction_test PRIVATE src)
+set_target_properties(rtl_capture_transaction_test PROPERTIES AUTOMOC OFF)
+add_test(NAME rtl_capture_transaction_test COMMAND rtl_capture_transaction_test)
+
 add_executable(shared_capture_policy_test
     tests/shared_capture_policy_test.cpp
     src/core/SharedCapturePolicy.cpp
@@ -1305,6 +1315,13 @@ add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
 ]==]
 
 if(AETHER_BACKEND_RTL)
+    # Injected device operations; no sockets, USB enumeration or RF.
+    add_executable(rtl_capture_worker_test tests/rtl_capture_worker_test.cpp)
+    target_include_directories(rtl_capture_worker_test PRIVATE src tests)
+    target_link_libraries(rtl_capture_worker_test PRIVATE aethercore Qt6::Core Qt6::Test)
+    add_test(NAME rtl_capture_worker_test COMMAND rtl_capture_worker_test)
+    set_tests_properties(rtl_capture_worker_test PROPERTIES TIMEOUT 20)
+
     # Socket-free RTL-SDR backend seam, DSP, and discovery contract.
     add_executable(rtl_backend_test tests/rtl_backend_test.cpp)
     target_include_directories(rtl_backend_test PRIVATE src)
