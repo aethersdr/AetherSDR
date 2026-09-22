@@ -64,8 +64,9 @@ public:
     [[nodiscard]] static Curve medianPowerCurve(const QVector<Curve>& captures);
 
     // Median of the curve over a central window (default: center +/- 15% of
-    // the bins), not the exact center bin -- avoids any residual DC-region
-    // artifact even though AnanSpectrum already DC-removes before windowing.
+    // the bins), not the exact center bin -- WDSP's analyzer does no DC
+    // removal, so the centre point can carry a DC spike; the median over the
+    // window ignores it.
     [[nodiscard]] static float referenceLevel(const Curve& curve,
                                               float windowFraction = 0.15f);
 
@@ -170,7 +171,12 @@ private:
     static constexpr int kSamplesPerRate = 8;
     static constexpr int kSampleSpacingMs = 300;
     static constexpr int kRateWaitTimeoutMs = 90'000;  // "~a minute cold" + margin
-    static constexpr int kPostLandSettleMs = 500;      // EMA (kSpectrumSmoothAlpha) convergence
+    // The analyzer is rebuilt on every rate change and seeds its running
+    // average from the first frame at the new rate (AnanPanAnalyzer), so this
+    // does not have to cover an averaging time constant -- the operator's FFT
+    // AVG is anywhere in 0-1000 ms -- only the first frames landing. 500 ms
+    // is a dozen frames at 25 fps.
+    static constexpr int kPostLandSettleMs = 500;
     static constexpr int kPollIntervalMs = 200;
     // Sampling needs its own bound. Only the rate wait used to have one, so a
     // feed that simply stopped -- a hidden or paused panadapter, a frame size

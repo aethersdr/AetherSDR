@@ -1110,6 +1110,10 @@ public:
     // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
     // See core/WaterfallRate.h. (#4606)
     bool requestPanAverage(const QString& panId, int average);
+    // Weighted-average toggle for a backend that shapes its own spectrum:
+    // straight down to that backend. Returns false on Flex, where the caller
+    // sends the weighted_average= wire command itself.
+    bool requestLocalPanWeightedAverage(const QString& panId, bool on);
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 

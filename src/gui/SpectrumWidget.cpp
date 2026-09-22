@@ -8422,7 +8422,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         }
     }
 
-    if (m_resetFftSmoothingOnNextFrame) {
+    if (m_resetFftSmoothingOnNextFrame || !m_clientFftSmoothing) {
         m_smoothed = *spectrumBins;
         m_resetFftSmoothingOnNextFrame = false;
         m_fftFallbackSeedMask.clear();

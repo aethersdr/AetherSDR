@@ -3164,6 +3164,11 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         }
         m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
                                             sw->wfLineDuration());
+        // Same for the averaging controls: without these the backend runs at
+        // its built-in averaging until the operator touches a slider, whatever
+        // the saved setting says.
+        m_radioModel.requestPanAverage(panId, sw->fftAverage());
+        m_radioModel.requestLocalPanWeightedAverage(panId, sw->fftWeightedAvg());
     }
 
     // Reclaimed pans already hold their latest status and do not necessarily
@@ -3293,9 +3298,12 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         // weighted-average still needs this guard on its raw command path.
         if (!targetPanId.isEmpty()) {
             m_radioModel.requestPanAverage(targetPanId, src->fftAverage());
-            m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
-                                         .arg(targetPanId)
-                                         .arg(src->fftWeightedAvg() ? 1 : 0));
+            if (!m_radioModel.requestLocalPanWeightedAverage(targetPanId,
+                                                             src->fftWeightedAvg())) {
+                m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
+                                             .arg(targetPanId)
+                                             .arg(src->fftWeightedAvg() ? 1 : 0));
+            }
         }
         dst->setFftAverage(src->fftAverage());
         dst->setFftWeightedAvg(src->fftWeightedAvg());
@@ -4621,8 +4629,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::fftWeightedAverageChanged,
             this, [this, applet, sw](bool on) {
         sw->setFftWeightedAvg(on);
-        m_radioModel.sendCommand(
-            QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), on)) {
+            m_radioModel.sendCommand(
+                QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        }
     });
     connect(menu, &SpectrumOverlayMenu::wfColorSchemeChanged,
             sw, &SpectrumWidget::setWfColorScheme,
@@ -4901,8 +4911,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // values above (sw->setFftFps / sw->setWfLineDuration) are already updated,
         // so they become the new restore targets when the throttle lifts.
         m_radioModel.requestPanAverage(applet->panId(), 0);
-        m_radioModel.sendCommand(
-            QString("display pan set %1 weighted_average=0").arg(applet->panId()));
+        if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), false)) {
+            m_radioModel.sendCommand(
+                QString("display pan set %1 weighted_average=0").arg(applet->panId()));
+        }
         // fps + line_duration go through the dispatcher rather than as Flex wire
         // text: on a backend that shapes its own display rate the reset updated
         // the widget only, leaving the backend cap and the pan's stored line

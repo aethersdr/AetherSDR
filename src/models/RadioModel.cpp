@@ -6303,12 +6303,13 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     // which nothing ever set. The model write is also what the automation
     // readback and RadioResourceAdapter's snapshot read.
     //
-    // IT DOES NOT MAKE AVERAGING HAPPEN, and no comment here should be read as
-    // saying it does. On a raw-spectrum backend nothing consumes m_fftAverage
-    // in a render path: onBackendSpectrumFrame is a pass-through, and ANAN's
-    // smoothSpectrumBins uses a fixed kSpectrumSmoothAlpha rather than this
-    // value. Client-side averaging for these backends is #5678 row 2.1's other
-    // half -- "port + new" -- and is not written yet.
+    // THE MODEL WRITE ALONE DOES NOT MAKE AVERAGING HAPPEN. On a raw-spectrum
+    // backend nothing consumes m_fftAverage in a render path:
+    // onBackendSpectrumFrame is a pass-through. What averages is the backend
+    // call below -- ANAN turns the value into WDSP analyzer averaging time
+    // (AnanPanAnalyzer); a backend that does not override setPanAverage()
+    // (HL2, RTL) still does no averaging. Client-side averaging for those is
+    // #5678 row 2.1's other half -- "port + new" -- and is not written yet.
     //
     // Mechanism corrected by @ten9876 on #5678: m_fftAverage IS read (by the
     // persistence snapshot and the overlay menu), so the fault is this missing
@@ -6318,6 +6319,9 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
             return false;
         }
         pan->setLocalAverage(average);
+        // And down to the backend, which may average its own spectrum -- the
+        // same path setPanFrameRate() takes in requestPanDisplayRates().
+        m_backend->setPanAverage(backendPanIdFor(panId), average);
         return true;
     }
 
@@ -6329,6 +6333,25 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     if (pan) {
         pan->setRequestedFftSettings(average, -1);
     }
+    return true;
+}
+
+bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
+{
+    // Local-shaping backends only. On Flex the caller still sends the
+    // weighted_average= wire text itself: moving it in here would add a raw
+    // command above the seam (tools/check_command_plane.py, #5262 M4).
+    if (panId.isEmpty() || !shapesDisplayRatesLocally()) {
+        return false;
+    }
+    // The model write mirrors requestPanAverage()'s setLocalAverage(): no
+    // radio echo is coming, so the value is authoritative here and the
+    // automation readback / resource snapshot see it (a missing pan is not
+    // an error -- the backend still gets the setting).
+    if (PanadapterModel* pan = panadapter(panId)) {
+        pan->setLocalWeightedAverage(on);
+    }
+    m_backend->setPanWeightedAverage(backendPanIdFor(panId), on);
     return true;
 }
 

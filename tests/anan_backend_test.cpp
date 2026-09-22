@@ -103,6 +103,9 @@ int main(int argc, char** argv)
               "ANAN explicitly declares tuner matching and tuner memories absent");
         check(c.hasDdcPanEdgeRolloff,
               "hasDdcPanEdgeRolloff true -- ANAN's DDC has a real edge roll-off");
+        check(c.backendPanAveraging.has_value()
+                  && c.backendPanAveraging->msPerAverageStep == 10,
+              "backendPanAveraging engaged, 10 ms per FFT AVG step -- the WDSP analyzer averages");
         check(c.tuningMinHz == 0.0 && c.tuningMaxHz == 0.0,
               "tuning range not reported -- no verified G2 range yet, not a guess");
         check(c.clientSettingsDomains == RadioCapabilities::ClientSettingsDomains{},
