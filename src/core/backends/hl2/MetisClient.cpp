@@ -777,8 +777,20 @@ void MetisClient::submitSpeakerAudio(const QByteArray& interleavedInt16)
     }
     // DROP THE OLDEST, not the newest. This queue is a speaker feed: falling
     // behind and then playing a quarter-second-old block is worse than a short
-    // gap, and keeping the newest is what lets the stream recover on its own
-    // after a stall instead of staying permanently late.
+    // gap, so after a STALL — the consumer briefly starved, then catching up —
+    // keeping the newest is what lets the stream come back to real time.
+    //
+    // THAT ONLY HOLDS IN ONE DIRECTION, and the other one is worth naming. The
+    // producer is clocked by the radio (EP6 -> the DSP chain -> the mixer) and
+    // the consumer by the host's wall clock (m_ep2Clock), so the two drift.
+    // When the producer runs the faster of the two, this loop drops one sample
+    // per submitted sample and the queue sits pinned AT the cap: a permanent
+    // quarter-second of latency with a steady trickle of single-sample drops,
+    // which is not a state it recovers from on its own. Nothing here corrects
+    // for that yet. If it turns out to be audible, the fix is to drain to a
+    // low-water mark instead of to the cap so the queue regains headroom —
+    // deliberately not done blind, since the drift depends on two crystals
+    // nobody has measured together.
     //
     // Trimmed to an EVEN count so the drop cannot land between a left and a
     // right sample — an odd trim would swap the channels of everything after
