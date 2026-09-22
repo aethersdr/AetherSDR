@@ -1,5 +1,6 @@
 #include "core/backends/anan/AnanDroopCorrection.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -197,6 +198,29 @@ int testResampleToDroopGridReadsAnyCountOntoTheTableGrid()
     return 0;
 }
 
+int testResampleToDroopGridAveragesAWiderFrame()
+{
+    // Twice the table's points, alternating +1/-1: noise the table grid
+    // cannot resolve. Averaged over each table cell it cancels; sampled at
+    // the cell centre it would come back at up to full size.
+    std::vector<float> frame(2 * kDroopCorrectionFftSize);
+    for (std::size_t i = 0; i < frame.size(); ++i)
+        frame[i] = (i % 2 == 0) ? 1.0f : -1.0f;
+    DroopCorrectionTable out{};
+    if (!resampleToDroopGrid(frame, out))
+        return fail("resampleToDroopGrid must accept a 2048-point frame");
+    // The two end points have no room for a cell and are sampled as they are.
+    float worst = 0.0f;
+    for (std::size_t k = 1; k + 1 < out.size(); ++k)
+        worst = std::max(worst, std::fabs(out[k]));
+    std::printf("anan_droop_correction_test: alternating 2048-point frame, "
+                "largest table value %.4f\n", static_cast<double>(worst));
+    if (worst > 0.01f)
+        return fail("a frame wider than the table must be averaged over each table cell, "
+                    "not sampled at its centre");
+    return 0;
+}
+
 }  // namespace
 
 int main()
@@ -224,6 +248,8 @@ int main()
     if (const int result = testResampledApplyFollowsTheCurveAtOtherCounts(); result != 0)
         return result;
     if (const int result = testResampleToDroopGridReadsAnyCountOntoTheTableGrid(); result != 0)
+        return result;
+    if (const int result = testResampleToDroopGridAveragesAWiderFrame(); result != 0)
         return result;
     std::printf("anan_droop_correction_test: all checks passed\n");
     return 0;

@@ -88,23 +88,55 @@ inline void applyDroopCorrectionDbResampled(std::vector<float>& pointsDb,
         pointsDb[i] += droopCurveAt(table, i, n);
 }
 
+// The mean of the straight line through `v`'s points over [a, b], with
+// 0 <= a <= b <= v.size() - 1 and v.size() >= 2. Exact per segment (the
+// trapezoid of a straight line is its integral), so a straight-line input
+// comes back as its value at the window's centre. a == b gives that point.
+inline double lineMeanOver(const std::vector<float>& v, double a, double b) noexcept
+{
+    const std::size_t n = v.size();
+    const auto at = [&](double x) {
+        const auto j = std::min(static_cast<std::size_t>(x), n - 2);
+        const double t = x - static_cast<double>(j);
+        return static_cast<double>(v[j]) + t * (static_cast<double>(v[j + 1]) - v[j]);
+    };
+    if (b <= a)
+        return at(a);
+    double sum = 0.0;
+    for (double x0 = a; x0 < b;) {
+        const double x1 = std::min(b, std::floor(x0) + 1.0);
+        sum += 0.5 * (at(x0) + at(x1)) * (x1 - x0);
+        x0 = x1;
+    }
+    return sum / (b - a);
+}
+
 // The reverse direction, for the calibrator: a frame of any point count read
-// onto the kDroopCorrectionFftSize grid the tables are stored on. Each table
-// point takes the frame's value at the same fraction of the span, by linear
-// interpolation. Returns false, leaving `out` untouched, for a frame with
-// fewer than two points.
+// onto the kDroopCorrectionFftSize grid the tables are stored on. Returns
+// false, leaving `out` untouched, for a frame with fewer than two points.
+//
+// A frame WIDER than the table is averaged over each table point's cell, not
+// sampled at its centre. Each analyzer point averages fewer FFT bins as the
+// count grows (about 8 at 2083 points, 16 at 1024), so a point sample would
+// store that extra noise in the calibration; the cell average spends the
+// frame's extra points on getting the averaging back. At the table's size or
+// narrower each table point takes the frame's value at the same fraction of
+// the span, by linear interpolation -- a straight copy at exactly that size.
+// The cell is narrowed symmetrically at the span's two ends, so it stays
+// centred on its table point.
 inline bool resampleToDroopGrid(const std::vector<float>& pointsDb,
                                 DroopCorrectionTable& out) noexcept
 {
     const std::size_t n = pointsDb.size();
     if (n < 2)
         return false;
+    const double last = static_cast<double>(n - 1);
+    const double step = last / (kDroopCorrectionFftSize - 1);
+    const double half = n > kDroopCorrectionFftSize ? step / 2.0 : 0.0;
     for (std::size_t k = 0; k < kDroopCorrectionFftSize; ++k) {
-        const double x = static_cast<double>(k) * static_cast<double>(n - 1)
-            / (kDroopCorrectionFftSize - 1);
-        const auto j = std::min(static_cast<std::size_t>(x), n - 2);
-        const float frac = static_cast<float>(x - static_cast<double>(j));
-        out[k] = pointsDb[j] + frac * (pointsDb[j + 1] - pointsDb[j]);
+        const double x = static_cast<double>(k) * step;
+        const double h = std::min({half, x, last - x});
+        out[k] = static_cast<float>(lineMeanOver(pointsDb, x - h, x + h));
     }
     return true;
 }
