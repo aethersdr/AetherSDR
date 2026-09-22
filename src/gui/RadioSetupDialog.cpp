@@ -4072,8 +4072,8 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
                          "high-pass already rides the per-band filter selection."));
     };
 
-    // ── Clock and tuner ──────────────────────────────────────────────────────
-    auto* miscGroup = new QGroupBox("Reference Clock and Tuner");
+    // ── Antenna tuner ────────────────────────────────────────────────────────
+    auto* miscGroup = new QGroupBox("Antenna Tuner");
     themed(miscGroup, kGroup);
     auto* mvb = new QVBoxLayout(miscGroup);
     mvb->setSpacing(6);
