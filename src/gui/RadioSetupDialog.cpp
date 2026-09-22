@@ -851,17 +851,29 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
             m_calibrationReseed();
     });
     // HL2 Hardware page — which variant of the board is actually connected.
-    // Gated on the FAMILY, not on a capability: "is there an AK4951 companion
-    // board in this box" is not something the wire can be asked, which is the
-    // whole reason these are settings. See buildHl2HardwareTab().
+    //
+    // GATED ON THE DECLARATION, not on the family string. What the wire cannot
+    // answer is the VALUE — "is there an AK4951 in this box" — and that is why
+    // these are settings. It is not what this gate asks. This gate asks which
+    // backend ANSWERS hw.get and hw.set, and the backend says so itself in
+    // capabilities().extensionNamespaces; asking its name instead excludes any
+    // future backend that answers the same verbs without carrying that name.
+    //
+    // AGENTS.md's #5554 notice bars new family-string branches outright, and
+    // the Calibration page one entry above gates the same shape of problem
+    // (the CLIENT owns the correction, the radio knows nothing about it) on a
+    // capability rather than on "is this an HL2". #5262 M1 converted the
+    // invokeExtension pre-checks onto backendDeclaresExtension() for exactly
+    // this reason — the page's own reseed already uses it.
     QTreeWidgetItem* hwItem = addPage(radioCategory, QStringLiteral("HL2 Hardware"),
         QStringLiteral("hermes lite hl2 squaresdr square sdr codec ak4951 dither band volts "
                        "speaker random filter board n2adr hpf atu tuner"),
         [this] { return buildHl2HardwareTab(); });
     m_hl2HardwarePageIndex = m_pageIndexes.value(QStringLiteral("HL2 Hardware"));
-    setNavigationItemHidden(hwItem, !isHl2Family());
+    setNavigationItemHidden(hwItem, !declaresHl2Extension());
     connect(m_model, &RadioModel::connectionStateChanged, this, [this, hwItem] {
-        settleNavigationLayout(m_navigation, setNavigationItemHidden(hwItem, !isHl2Family()));
+        settleNavigationLayout(m_navigation,
+                               setNavigationItemHidden(hwItem, !declaresHl2Extension()));
         // A different HL2 may now be connected — re-read ITS options, or the
         // next click would write the previous radio's board into this one.
         if (m_hl2HardwareReseed)
@@ -971,7 +983,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
                     || (droopRow && !droopCalibrationAvailable(m_model->backend()))
-                    || (hl2HwRow && !isHl2Family());
+                    || (hl2HwRow && !declaresHl2Extension());
                 if (!gated) {
                     navigationChanged |= setNavigationItemHidden(item, !matches);
                 }
@@ -1062,13 +1074,19 @@ void RadioSetupDialog::showEvent(QShowEvent* event)
         reseed();
 }
 
-bool RadioSetupDialog::isHl2Family() const
+bool RadioSetupDialog::declaresHl2Extension() const
 {
-    // Case-insensitive because the family string is compared against what the
-    // backend registered, and nothing in the seam promises its casing — the
-    // extension namespace this page writes to is the lowercase "hl2".
-    return m_model
-        && m_model->family().compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0;
+    // The backend that ANSWERS hw.get / hw.set is the one whose page this is,
+    // so ask what it declares rather than what it is called. Exactly the check
+    // the page's reseed already makes before it invokes, kept in one place so
+    // the two cannot disagree — a visible page whose reseed dims itself is the
+    // failure mode a second spelling would produce.
+    //
+    // No backend means no answer, so the page hides rather than showing a
+    // dimmed shell. That matches backendCapabilities(), which hands out a
+    // default-constructed record when nothing is connected and which is what
+    // hides the Calibration and Droop pages in the same state.
+    return m_model && m_model->backendDeclaresExtension(QStringLiteral("hl2"));
 }
 
 bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const

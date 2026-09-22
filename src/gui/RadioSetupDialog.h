@@ -137,15 +137,19 @@ private:
     // the gateware ATU. Protocol 1 exposes none of it, so the operator is the
     // only source — see Hl2HardwareOptions.
     //
-    // Gated on the FAMILY and not on a capability, unlike the two pages above,
-    // and that is the honest gate here: "does this radio have an AK4951
-    // companion board" is not something any backend can answer, so there is no
-    // capability to key off. Every control writes through the hl2 extension
-    // namespace, which refuses anything else.
+    // Gated on the backend's DECLARED extension namespace, like the two pages
+    // above are gated on declared capabilities. What no backend can answer is
+    // the value — "does this radio have an AK4951 companion board" — which is
+    // why these are settings; that is a different question from which backend
+    // answers the verbs, and the backend states the latter itself. Every
+    // control writes through the hl2 extension namespace, which refuses
+    // anything else.
     QWidget* buildHl2HardwareTab();
-    // True when the connected radio is a Hermes-Lite 2 (or an HL2-compatible
-    // board such as the SquareSDR 2, which is indistinguishable on the wire).
-    bool isHl2Family() const;
+    // Whether the connected backend declares the "hl2" extension namespace —
+    // i.e. whether anything will answer the hw.get / hw.set verbs this page is
+    // built on. NOT a family-string check: #5554 bars new ones, and the name a
+    // backend carries is a different question from the verbs it answers.
+    bool declaresHl2Extension() const;
     QWidget* buildAudioTab();
     QWidget* buildFiltersTab();
     QWidget* buildXvtrTab();
