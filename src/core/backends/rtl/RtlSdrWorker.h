@@ -2,6 +2,7 @@
 
 #include "core/backends/rtl/RtlSdrDdc.h"
 #include "core/backends/rtl/RtlCaptureTransaction.h"
+#include "core/backends/rtl/RtlReceivePipeline.h"
 
 #include <QThread>
 #include <QVector>
@@ -30,8 +31,8 @@ public:
         virtual void cancelAsync() = 0; // only cross-thread device operation
     };
 
-    explicit RtlSdrWorker(struct rtlsdr_dev* dev, QObject* parent = nullptr);
-    explicit RtlSdrWorker(std::unique_ptr<Device> device, QObject* parent = nullptr);
+    explicit RtlSdrWorker(struct rtlsdr_dev* dev, QObject* parent = nullptr, std::size_t capacity = 1);
+    explicit RtlSdrWorker(std::unique_ptr<Device> device, QObject* parent = nullptr, std::size_t capacity = 1);
     ~RtlSdrWorker() override;
     void startReading();
     bool stopReading();
@@ -42,23 +43,27 @@ public:
     bool submit(const Transaction::Work& work);
     std::optional<Transaction::Result> takeResult();
     void serviceCancellation();
+    bool takeAudio(RtlReceivePipeline::Packet& packet) { return m_pipeline->takePacket(packet); }
+    bool needsRepair() const { return m_pipeline->needsRepair(); }
+    void setMonitor(int slot, int gain, int pan, bool mute) { m_pipeline->setMonitor(slot, gain, pan, mute); }
 
 signals:
     void readError(const QString& message);
     // Stamp at production, never infer identity on delivery to the backend.
     void spectrumFrameReady(quint64 session, quint64 revision, int panId, const QByteArray& frame);
     void waterfallRowReady(quint64 session, quint64 revision, int panId, const QByteArray& row);
-    void audioFrameReady(quint64 session, quint64 revision, const QByteArray& pcm);
+    void audioFrameReady(quint64 session, quint64 revision, const QByteArray& pcm, const QByteArray& preMonitor);
 
 protected:
     void run() override;
 
 private:
-    enum class Command { Idle, Receiver, Hardware, Applying, Complete };
+    enum class Command { Idle, Preparing, Receiver, Hardware, Applying, Complete };
     static void rtlsdrCallback(unsigned char* buf, std::uint32_t len, void* ctx);
     void handleCallback(unsigned char* buf, std::uint32_t len);
     void applyDdc(const Transaction::State& state);
     void applyHardware();
+    bool prepareHardwareResult();
 
     std::unique_ptr<Device> m_device;
     std::atomic<bool> m_readerRunning{false};
@@ -68,7 +73,11 @@ private:
     // touched by the backend again until it acquires Complete in takeResult().
     std::optional<Transaction::Work> m_work;
     std::optional<Transaction::Result> m_result;
+    bool m_preparationSubmitted = false; // backend thread only
+    unsigned m_prepareAttempts = 0;
     Transaction::Token m_applied; // acquisition-context only
+    std::unique_ptr<RtlReceivePipeline> m_pipeline;
+    std::uint64_t m_firstSample = 0;
     RtlSdrDdc m_ddc;
     QVector<std::complex<float>> m_iqBuffer;
 };

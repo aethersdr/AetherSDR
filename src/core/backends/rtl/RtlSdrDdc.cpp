@@ -70,6 +70,7 @@ void RtlSdrDdc::applyCapture(double rateHz, double centerHz, double sliceHz,
         // is private after append (emitted buffers are cleared in processAudio),
         // so truncation retains its capacity and performs no allocation.
         m_audioBuffer.truncate(0);
+        m_tapBuffer.truncate(0);
         m_firstAudioEmitted = false;
         m_firstSpectrumEmitted = false;
         m_spectrumCounter = 0;
@@ -159,14 +160,26 @@ void RtlSdrDdc::setAudioPan(int panPercent)
                             std::memory_order_relaxed);
 }
 
-void RtlSdrDdc::processIqData(const QVector<std::complex<float>>& samples)
+void RtlSdrDdc::applyMonitor(int gain, int pan, bool mute)
+{
+    if (m_audioGain.load() != std::clamp(gain, 0, 100) / 100.0f
+        || m_audioPanPercent.load() != std::clamp(pan, 0, 100) || m_audioMuted.load() != mute) {
+        // Buffered speaker samples were rendered with the old monitor state.
+        // Keep demodulator history, but never publish that batch under the new
+        // acknowledged controls. Both taps retain the same chunk boundary.
+        m_audioBuffer.truncate(0); m_tapBuffer.truncate(0); m_firstAudioEmitted = false;
+    }
+    setAudioGain(gain); setAudioPan(pan); setAudioMute(mute);
+}
+
+void RtlSdrDdc::processIqData(const QVector<std::complex<float>>& samples, bool audio)
 {
     if (samples.isEmpty()) {
         return;
     }
 
     processSpectrum(samples);
-    processAudio(samples);
+    if (audio) { processAudio(samples); }
 }
 
 void RtlSdrDdc::processSpectrum(const QVector<std::complex<float>>& samples)
@@ -234,10 +247,6 @@ void RtlSdrDdc::processAudio(const QVector<std::complex<float>>& samples)
     audioGain = m_audioGain.load(std::memory_order_relaxed);
     audioPanPercent = m_audioPanPercent.load(std::memory_order_relaxed);
 
-    if (audioMuted) {
-        return;
-    }
-
     const double ncoStep = 2.0 * std::numbers::pi * (sliceHz - centerHz) / sampleRateHz;
     const std::complex<float> ncoStepPhasor(
         static_cast<float>(std::cos(-ncoStep)),
@@ -245,6 +254,8 @@ void RtlSdrDdc::processAudio(const QVector<std::complex<float>>& samples)
     );
 
     QByteArray pcm;
+    QByteArray tap;
+    tap.reserve(static_cast<int>((samples.size() / 100 + 1) * sizeof(float) * 2));
     pcm.reserve(static_cast<int>((samples.size() / 100 + 1) * sizeof(float) * 2));
 
     // Target ~240 kSPS intermediate IQ sample rate for Stage 1 decimation
@@ -320,7 +331,11 @@ void RtlSdrDdc::processAudio(const QVector<std::complex<float>>& samples)
                 m_audioDecimAcc = 0.0f;
                 m_audioDecimCounter = 0;
 
-                finalAudio = std::clamp(finalAudio * audioGain, -1.0f, 1.0f);
+                // Preserve the existing demodulator and its unmodified tap.
+                // Monitor mute must keep clocking its history and consumers.
+                tap.append(reinterpret_cast<const char*>(&finalAudio), sizeof(float));
+                tap.append(reinterpret_cast<const char*>(&finalAudio), sizeof(float));
+                finalAudio = audioMuted ? 0.0f : std::clamp(finalAudio * audioGain, -1.0f, 1.0f);
                 const float pan = audioPanPercent / 100.0f;
                 float audioLeftOut = finalAudio * std::min(1.0f, 2.0f * (1.0f - pan));
                 float audioRight = finalAudio * std::min(1.0f, 2.0f * pan);
@@ -333,11 +348,13 @@ void RtlSdrDdc::processAudio(const QVector<std::complex<float>>& samples)
 
     if (!pcm.isEmpty()) {
         m_audioBuffer.append(pcm);
+        m_tapBuffer.append(tap);
         // Batch audio dispatches to ~50 ms chunks (9600 bytes = 1200 stereo float samples @ 24kHz).
         if (!m_firstAudioEmitted || m_audioBuffer.size() >= 9600) {
             m_firstAudioEmitted = true;
-            emit audioFrameReady(m_audioBuffer);
+            emit audioFrameReady(m_audioBuffer, m_tapBuffer);
             m_audioBuffer.clear();
+            m_tapBuffer.clear();
         }
     }
 }

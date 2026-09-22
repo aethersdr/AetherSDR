@@ -26,6 +26,9 @@ public:
     struct Receiver {
         SharedCapturePolicy::SliceDescriptor passband;
         Mode mode = Mode::Wfm;
+        int audioGain = 100;
+        int audioPan = 50;
+        bool audioMute = false;
         bool operator==(const Receiver&) const = default;
     };
     struct Desired {

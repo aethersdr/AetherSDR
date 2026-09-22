@@ -343,6 +343,7 @@ void SetDisplayNormOneHz(int disp, int pixout, int norm);
 
 int GetWDSPVersion(void);
 
+uint64_t wdspPortThreadAllocationSequence(void);
 uint64_t wdspPortAllocationSequence(void);
 uint64_t wdspPortOutstandingAllocations(void);
 

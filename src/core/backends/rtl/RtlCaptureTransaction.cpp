@@ -98,7 +98,9 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
         return {{}, Policy::Error::InvalidNumber};
     }
     for (const Receiver& receiver : desired.receivers) {
-        if (receiver.mode < Mode::Am || receiver.mode > Mode::Cwr) {
+        if (receiver.mode < Mode::Am || receiver.mode > Mode::Cwr
+            || receiver.audioGain < 0 || receiver.audioGain > 100
+            || receiver.audioPan < 0 || receiver.audioPan > 100) {
             return {{}, Policy::Error::InvalidNumber};
         }
     }

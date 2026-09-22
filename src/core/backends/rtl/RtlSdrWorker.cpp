@@ -1,7 +1,9 @@
 #include "core/backends/rtl/RtlSdrWorker.h"
 
 #include <QDebug>
+#include <QElapsedTimer>
 #include <rtl-sdr.h>
+#include <aether_wdsp.h>
 
 namespace AetherSDR::rtl {
 namespace {
@@ -58,13 +60,13 @@ private:
 };
 } // namespace
 
-RtlSdrWorker::RtlSdrWorker(struct rtlsdr_dev* dev, QObject* parent)
-    : RtlSdrWorker(std::make_unique<UsbDevice>(dev), parent)
+RtlSdrWorker::RtlSdrWorker(struct rtlsdr_dev* dev, QObject* parent, std::size_t capacity)
+    : RtlSdrWorker(std::make_unique<UsbDevice>(dev), parent, capacity)
 {
 }
 
-RtlSdrWorker::RtlSdrWorker(std::unique_ptr<Device> device, QObject* parent)
-    : QThread(parent), m_device(std::move(device))
+RtlSdrWorker::RtlSdrWorker(std::unique_ptr<Device> device, QObject* parent, std::size_t capacity)
+    : QThread(parent), m_device(std::move(device)), m_pipeline(std::make_unique<RtlReceivePipeline>(capacity))
 {
     m_iqBuffer.resize(kRtlBufLength / 2);
     // The DDC emits synchronously inside acquisition. Stamp there, then queue
@@ -78,8 +80,8 @@ RtlSdrWorker::RtlSdrWorker(std::unique_ptr<Device> device, QObject* parent)
             emit waterfallRowReady(m_applied.session, m_applied.revision, panId, frame);
         }, Qt::DirectConnection);
     connect(&m_ddc, &RtlSdrDdc::audioFrameReady, this,
-        [this](const QByteArray& pcm) {
-            emit audioFrameReady(m_applied.session, m_applied.revision, pcm);
+        [this](const QByteArray& pcm, const QByteArray& preMonitor) {
+            emit audioFrameReady(m_applied.session, m_applied.revision, pcm, preMonitor);
         }, Qt::DirectConnection);
 }
 
@@ -106,21 +108,22 @@ bool RtlSdrWorker::stopReading()
         qWarning() << "RtlSdrWorker: USB reader did not stop after repeated cancellation";
         return false;
     }
+    m_pipeline->stop();
     return true;
 }
 
 bool RtlSdrWorker::submit(const Transaction::Work& work)
 {
-    // M1a deliberately keeps the legacy single DDC. The complete-set owner
-    // already supports admission for future banks, but this adapter does not.
-    if (work.target.receivers.size() != 1
+    if (work.target.receivers.empty()
         || m_command.load(std::memory_order_acquire) != Command::Idle) { return false; }
     m_work = work;
-    // Receiver-only result storage is prepared off the callback. At the block
-    // boundary only the numeric DDC configuration and release flag change.
     m_result = Transaction::Result{work.token, Transaction::ResultCode::Applied, work.target, work.operation};
-    m_command.store(work.hardwareChanged ? Command::Hardware : Command::Receiver,
-                    std::memory_order_release);
+    if (work.hardwareChanged) {
+        m_command.store(Command::Hardware, std::memory_order_release);
+    } else {
+        m_preparationSubmitted = false; m_prepareAttempts = 0;
+        m_command.store(Command::Preparing, std::memory_order_release);
+    }
     serviceCancellation();
     return true;
 }
@@ -137,6 +140,28 @@ std::optional<RtlSdrWorker::Transaction::Result> RtlSdrWorker::takeResult()
 
 void RtlSdrWorker::serviceCancellation()
 {
+    const Command command = m_command.load(std::memory_order_acquire);
+    if (command == Command::Idle || command == Command::Complete) {
+        (void)m_pipeline->service(); // reap acknowledged banks even without another request
+    }
+    if (m_command.load(std::memory_order_acquire) == Command::Preparing) {
+        (void)m_pipeline->service();
+        if (!m_preparationSubmitted) {
+            // A just-removed slot remains charged until its off-thread
+            // destructor finishes. Keep one bounded request while it retires;
+            // never resurrect its old handle to make reuse appear immediate.
+            m_preparationSubmitted = m_pipeline->prepare(m_work->target, false, m_work->compensation);
+            if (!m_preparationSubmitted && ++m_prepareAttempts < 100) { return; }
+        }
+        const auto status = m_preparationSubmitted ? m_pipeline->service() : RtlReceivePipeline::Preparation::Failed;
+        if (status == RtlReceivePipeline::Preparation::Ready) {
+            m_command.store(Command::Receiver, std::memory_order_release);
+        } else if (status == RtlReceivePipeline::Preparation::Failed) {
+            m_result = Transaction::Result{m_work->token, Transaction::ResultCode::Restored,
+                m_work->before, m_work->operation};
+            m_command.store(Command::Complete, std::memory_order_release);
+        }
+    }
     // Also called by the backend timer: retry across the narrow readAsync entry
     // race, including a device that never delivers its first callback.
     if (m_command.load(std::memory_order_acquire) == Command::Hardware
@@ -152,20 +177,53 @@ void RtlSdrWorker::applyDdc(const Transaction::State& state)
                       receiver.passband.carrierHz, receiver.mode,
                       static_cast<int>(receiver.passband.filterLowHz),
                       static_cast<int>(receiver.passband.filterHighHz));
+    m_ddc.applyMonitor(receiver.audioGain, receiver.audioPan, receiver.audioMute);
     m_applied = state.token;
 }
 
+bool RtlSdrWorker::prepareHardwareResult()
+{
+    if (!m_result->actual || !m_pipeline->prepare(*m_result->actual, true,
+        m_work->compensation || m_result->code == Transaction::ResultCode::Restored)) { return false; }
+    QElapsedTimer deadline; deadline.start();
+    while (!m_stopRequested.load(std::memory_order_acquire) && deadline.elapsed() < 30000) {
+        const auto status = m_pipeline->service();
+        if (status == RtlReceivePipeline::Preparation::Ready) { return m_pipeline->adopt(); }
+        if (status == RtlReceivePipeline::Preparation::Failed) { return false; }
+        QThread::msleep(1); // USB is quiesced; never executed by its callback
+    }
+    return false;
+}
 void RtlSdrWorker::applyHardware()
 {
     m_command.store(Command::Applying, std::memory_order_release);
     m_result = Transaction::execute(*m_work, *m_device);
-    if (m_result->actual) { applyDdc(*m_result->actual); }
+    if (!prepareHardwareResult()) {
+        // Planning/admission can fail after hardware readback. Compensate the
+        // complete device before reporting refusal, exactly as for a USB error.
+        bool restored = false;
+        if (m_work->before && !m_stopRequested.load(std::memory_order_acquire)) {
+            Transaction::Work rollback = *m_work;
+            rollback.target = *m_work->before; rollback.hardwareChanged = true;
+            const auto result = Transaction::execute(rollback, *m_device);
+            if (result.code == Transaction::ResultCode::Applied) {
+                m_result = Transaction::Result{m_work->token, Transaction::ResultCode::Restored,
+                    result.actual, m_work->operation};
+                restored = prepareHardwareResult();
+            }
+        }
+        if (!restored) { m_result = Transaction::Result{m_work->token, Transaction::ResultCode::Invalid, {}, m_work->operation}; }
+    }
+    if (m_result->actual) { applyDdc(*m_result->actual); m_firstSample = 0; }
     else { m_applied = {}; }
     m_command.store(Command::Complete, std::memory_order_release);
 }
 
 void RtlSdrWorker::run()
 {
+    // Materialize platform TLS outside USB callbacks (macOS may allocate its
+    // thread-local backing on first access).
+    (void)wdspPortThreadAllocationSequence();
     if (!m_device) { emit readError(QStringLiteral("Device handle is null")); return; }
     while (!m_stopRequested.load(std::memory_order_acquire)) {
         if (m_command.load(std::memory_order_acquire) == Command::Hardware) {
@@ -198,11 +256,13 @@ void RtlSdrWorker::rtlsdrCallback(unsigned char* buf, std::uint32_t len, void* c
         worker->m_device->cancelAsync();
         return;
     }
-    if (command == Command::Receiver) {
-        worker->applyDdc(worker->m_work->target);
-        worker->m_command.store(Command::Complete, std::memory_order_release);
-    }
+    if (!buf || len == 0 || len % 2 != 0 || len > kRtlBufLength) { return; }
+    const bool adopting = command == Command::Receiver && worker->m_pipeline->adopt();
+    if (adopting) { worker->applyDdc(worker->m_work->target); }
     worker->handleCallback(buf, len);
+    // Complete is the release of ALL references into m_work, including DSP
+    // output during this block. The control side may destroy it immediately.
+    if (adopting) { worker->m_command.store(Command::Complete, std::memory_order_release); }
 }
 
 void RtlSdrWorker::handleCallback(unsigned char* buf, std::uint32_t len)
@@ -216,6 +276,8 @@ void RtlSdrWorker::handleCallback(unsigned char* buf, std::uint32_t len)
         m_iqBuffer[i] = {(float(buf[2 * i]) - 127.5f) / 127.5f,
                          (float(buf[2 * i + 1]) - 127.5f) / 127.5f};
     }
-    m_ddc.processIqData(m_iqBuffer);
+    m_pipeline->process(m_firstSample, std::span(m_iqBuffer.constData(), m_iqBuffer.size()));
+    m_firstSample += count;
+    m_ddc.processIqData(m_iqBuffer, m_pipeline->legacy());
 }
 } // namespace AetherSDR::rtl

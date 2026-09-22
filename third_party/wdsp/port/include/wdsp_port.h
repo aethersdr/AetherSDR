@@ -103,6 +103,7 @@ BOOL AvRevertMmThreadCharacteristics(HANDLE task);
 
 void* wdspAlignedAllocate(size_t size, size_t alignment);
 void wdspAlignedFree(void* pointer);
+uint64_t wdspPortThreadAllocationSequence(void);
 uint64_t wdspPortAllocationSequence(void);
 uint64_t wdspPortOutstandingAllocations(void);
 

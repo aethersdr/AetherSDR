@@ -431,7 +431,7 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
         return ProcessResult::Busy;
     }
 
-    const uint64_t allocationsBefore = wdspPortAllocationSequence();
+    const uint64_t allocationsBefore = wdspPortThreadAllocationSequence();
     int wdspError = 0;
 
     // ── Noise blanker, ahead of the channel ───────────────────────────────
@@ -509,7 +509,7 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
                const_cast<float*>(channelI),
                const_cast<float*>(channelQ),
                outputLeft.data(), outputRight.data(), &wdspError);
-    const uint64_t allocationsAfter = wdspPortAllocationSequence();
+    const uint64_t allocationsAfter = wdspPortThreadAllocationSequence();
     m_callbacksInFlight.fetch_sub(1, std::memory_order_seq_cst);
 
     if (allocationsAfter != allocationsBefore) {

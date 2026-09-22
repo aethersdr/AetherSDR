@@ -3,6 +3,7 @@
 #include "IndependentTxControl.h"
 
 #include "core/RadioSettingsIdentity.h"
+#include "core/RadioSettingsScope.h"
 #include "core/TxCoordinator.h"
 #include "core/PcmFrame.h"
 
@@ -241,6 +242,17 @@ public:
     virtual bool ownsRxAudio() const { return false; }
 
     // ---- connection lifecycle ----
+    // Model-owned identity handoff for feature-document owners. A backend
+    // must not reconstruct this scope from a later USB/discovery observation.
+    virtual void configureSettingsScope(const RadioSettingsScope& scope, const RadioSerialIdentity& identity)
+    { Q_UNUSED(scope); Q_UNUSED(identity); }
+    // nullopt retains generic OperatingState ownership. A feature owner
+    // returns its atomic-write result, including refusal, so a failed write
+    // never falls through into a second overlapping writer.
+    virtual std::optional<bool> storeOperatingState(const RadioSettingsScope& scope,
+                                                   const RestoredRadioState& state)
+    { Q_UNUSED(scope); Q_UNUSED(state); return std::nullopt; }
+
     // Typed restore handoff (RFC #4603 proposal B): called by RadioModel
     // BEFORE connectRadio(), and only when this backend's declared
     // clientSettingsDomains is non-empty. The backend stashes what it wants
@@ -256,7 +268,7 @@ public:
     // declared clientSettingsDomains is non-empty reports its operating state
     // here on demand, and emits operatingStateChanged() (see signals) when it
     // moves. RadioModel debounces the signal and persists the snapshot via
-    // RadioStateMemory::store — the backend never touches the settings store.
+    // storeOperatingState when handled, otherwise RadioStateMemory::store.
     virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;

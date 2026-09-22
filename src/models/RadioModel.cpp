@@ -472,7 +472,9 @@ void RadioModel::persistOperatingState(bool force)
             RadioCapabilities::ClientSettingsDomain::Cw)) {
         captureClientOwnedCwState(state);
     }
-    RadioStateMemory::store(settingsScope(), caps, state);
+    if (!m_backend->storeOperatingState(settingsScope(), state).has_value()) {
+        RadioStateMemory::store(settingsScope(), caps, state);
+    }
 }
 
 void RadioModel::scheduleOperatingStateSave()
@@ -652,6 +654,7 @@ void RadioModel::handRestoredStateToBackend()
     if (!m_backend) {
         return;
     }
+    m_backend->configureSettingsScope(settingsScope(), m_lastInfo.serialIdentity);
     const RadioCapabilities caps = m_backend->capabilities();
     if (!RadioStateMemory::shouldEngage(caps)) {
         return;

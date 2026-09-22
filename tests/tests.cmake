@@ -1314,7 +1314,34 @@ target_link_libraries(hl2_link_stats_model_test PRIVATE aethercore Qt6::Core Qt6
 add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
 ]==]
 
+add_executable(wdsp_allocation_scope_test tests/wdsp_allocation_scope_test.cpp)
+target_link_libraries(wdsp_allocation_scope_test PRIVATE aether_wdsp Threads::Threads)
+add_test(NAME wdsp_allocation_scope_test COMMAND wdsp_allocation_scope_test)
+
+add_executable(rtl_receive_pipeline_test tests/rtl_receive_pipeline_test.cpp)
+target_include_directories(rtl_receive_pipeline_test PRIVATE src)
+target_link_libraries(rtl_receive_pipeline_test PRIVATE aethercore aether_wdsp Qt6::Core)
+add_test(NAME rtl_receive_pipeline_test COMMAND rtl_receive_pipeline_test)
+set_tests_properties(rtl_receive_pipeline_test PROPERTIES TIMEOUT 45)
+
+add_executable(rtl_audio_mixer_test tests/rtl_audio_mixer_test.cpp
+    src/core/backends/rtl/RtlAudioMixer.cpp)
+target_include_directories(rtl_audio_mixer_test PRIVATE src)
+add_test(NAME rtl_audio_mixer_test COMMAND rtl_audio_mixer_test)
+
+# Generated IQ, no USB or socket peer; also built with RTL disabled.
+add_executable(rtl_rf_extractor_test tests/rtl_rf_extractor_test.cpp
+    src/core/backends/rtl/RtlRfExtractor.cpp src/core/SharedCapturePolicy.cpp src/core/Resampler.cpp)
+target_include_directories(rtl_rf_extractor_test PRIVATE src third_party/r8brain)
+target_link_libraries(rtl_rf_extractor_test PRIVATE Qt6::Core)
+add_test(NAME rtl_rf_extractor_test COMMAND rtl_rf_extractor_test)
+
 if(AETHER_BACKEND_RTL)
+    add_executable(rtl_runtime_settings_test tests/rtl_runtime_settings_test.cpp)
+    target_include_directories(rtl_runtime_settings_test PRIVATE src tests)
+    target_link_libraries(rtl_runtime_settings_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_runtime_settings_test COMMAND rtl_runtime_settings_test)
+
     # Injected device operations; no sockets, USB enumeration or RF.
     add_executable(rtl_capture_worker_test tests/rtl_capture_worker_test.cpp)
     target_include_directories(rtl_capture_worker_test PRIVATE src tests)
@@ -6469,6 +6496,7 @@ set(AETHER_SETTINGS_CONSUMERS
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
+    rtl_runtime_settings_test
     automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test

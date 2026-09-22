@@ -92,6 +92,7 @@ public:
         // 0..100, the seam's units. Mapped to WDSP's threshold by
         // noiseBlankerThresholdForLevel().
         int noiseBlankerLevel = 50;
+        bool operator==(const Config&) const = default;
     };
 
     enum class ProcessResult

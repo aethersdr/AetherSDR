@@ -36,12 +36,13 @@ public:
     void setSliceFilter(int lowHz, int highHz);
     void setSpectrumRateFps(int fps);
     void setAudioMute(bool mute);
+    void applyMonitor(int gain, int pan, bool mute); // acquisition boundary only
     void setAudioGain(int gainPercent);
     void setAudioPan(int panPercent);
 
 public slots:
     // Process incoming complex float IQ samples (runs on worker thread)
-    void processIqData(const QVector<std::complex<float>>& samples);
+    void processIqData(const QVector<std::complex<float>>& samples, bool audio = true);
 
 signals:
     // Emits raw spectrum FFT magnitude data for PanadapterWidget (~30 FPS)
@@ -51,7 +52,7 @@ signals:
     void waterfallRowReady(int panId, const QByteArray& row);
 
     // Emits 24 kHz float32 PCM audio data for AudioEngine
-    void audioFrameReady(const QByteArray& pcm);
+    void audioFrameReady(const QByteArray& pcm, const QByteArray& preMonitor);
 
 private:
     using DemodMode = RtlCaptureTransaction::Mode;
@@ -96,6 +97,7 @@ private:
     int m_audioDecimCounter{0};
     double m_audioResamplePhase{0.0};
     QByteArray m_audioBuffer;
+    QByteArray m_tapBuffer;
     bool m_firstAudioEmitted{false};
 };
 

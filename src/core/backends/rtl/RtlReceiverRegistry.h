@@ -40,10 +40,17 @@ public:
         std::int32_t slot = -1;
         bool operator==(const Handle&) const = default;
     };
+    struct SampleBlock;
+    class AudioSink;
     struct ReceiverSpec {
         Handle handle;
         SharedCapturePolicy::SliceDescriptor passband;
         WdspChannel::Config dsp;
+        // Filled by submit(), never borrowed from the backend during preparation.
+        Capture capture;
+        bool extractRf = false;
+        std::uint64_t epoch = 0; // reprepare on a gap without reusing DSP history
+        bool operator==(const ReceiverSpec&) const = default;
     };
 
     // Prepared fixed-block DSP, with no allocating setters exposed. M1 owns
@@ -56,6 +63,13 @@ public:
             std::span<const float> q) noexcept = 0;
         virtual std::span<const float> left() const noexcept = 0;
         virtual std::span<const float> right() const noexcept = 0;
+        virtual bool processCapture(const SampleBlock&, AudioSink&) noexcept { return false; }
+    };
+    class AudioSink {
+    public:
+        virtual ~AudioSink() = default;
+        virtual void audioBlock(const ReceiverSpec& spec, std::uint64_t firstSample,
+            std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept = 0;
     };
     // Injection is for deterministic preparation failures/delays. The default
     // constructs real WDSP channels and output buffers on the Qt worker pool.
@@ -95,7 +109,12 @@ public:
         SampleReader& operator=(const SampleReader&) = delete;
         // No locks, allocation, shared_ptr copies/releases, or destruction.
         // Publication and explicit retirement acknowledgment occur at entry.
-        bool processBlock(const SampleBlock& block, BlockProcessor& processor) noexcept;
+        bool processBlock(const SampleBlock& block, BlockProcessor& processor,
+                          std::uint64_t adoptionRevision = 0) noexcept;
+        std::uint64_t activeRevision() const noexcept;
+        // Acquisition context only (or its owner while acquisition is stopped).
+        bool adoptPrepared(std::uint64_t session, const Capture& capture,
+                           std::uint64_t revision) noexcept;
         // Call AFTER the acquisition context has stopped, outside its callback.
         // This is the acknowledgment path when no next sample block will arrive.
         void stop();
@@ -142,14 +161,19 @@ public:
     std::uint64_t beginSession(const Capture& capture);
     std::optional<Handle> reserveSlot(std::optional<int> preferred = std::nullopt);
     Result cancelReservation(Handle handle);
+    std::optional<Handle> currentHandle(int slot) const;
     Result submit(const Capture& capture, std::span<const ReceiverSpec> desired);
+    // Only after the transaction owner verified a complete hardware rollback.
+    Result submitVerifiedRollback(const Capture& capture, std::span<const ReceiverSpec> desired);
     void cancelSession();
+    void cancelPending(); // keeps the currently adopted bank alive
     SampleReader attachReader(); // at most one, acquired off the sample path
     // Call from the control event loop while active. Reaps acknowledged banks
     // off-thread and advances a coalesced request after publication pressure.
     Status service();
 
 private:
+    Result submitImpl(const Capture&, std::span<const ReceiverSpec>, bool verifiedRollback);
     static std::shared_ptr<Executor> executor();
     std::shared_ptr<State> m_state;
 };

@@ -626,6 +626,7 @@ struct RadioCapabilities {
         TxSetpoints = 1u << 4,  // TX drive setpoints (per band); never keying
         Memories    = 1u << 5,  // host-side memory bank documents (#4590 fold-in)
         Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
+        RtlSlices   = 1u << 8,  // accepted RTL capture and stable receiver documents
         Cw          = 1u << 7,  // client-side keyer/sidetone setpoints; never keying
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)

@@ -3,6 +3,7 @@
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include "core/backends/rtl/RtlSdrWorker.h"
 #include "SeamThreadAffinityProbe.h"
+#include "RtlInjectedDevice.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -18,11 +19,16 @@ using namespace AetherSDR;
 using T = rtl::RtlCaptureTransaction;
 namespace AetherSDR::rtl {
 struct RtlCaptureBackendTestAccess {
-    static void start(RtlSdrBackend& backend, std::unique_ptr<RtlSdrWorker::Device> device)
+    static void start(RtlSdrBackend& backend, std::unique_ptr<RtlSdrWorker::Device> device, int capacity = 1)
     {
         backend.m_requested.hardware = {100'000'000, 2'400'000, 0, 0, 0, 240};
         backend.m_requested.receivers = {{{0, 100'000'000, -100'000, 100'000, 0, 0, 0}, T::Mode::Wfm}};
-        backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device)));
+        if (capacity > 1) {
+            backend.m_receiverCapacity = capacity;
+            backend.m_capture = RtlCaptureTransaction({8, static_cast<std::size_t>(capacity)});
+            backend.m_requested.receivers = {{{0, 100'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
+        }
+        backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device), nullptr, capacity));
     }
     static std::size_t pending(const RtlSdrBackend& backend) { return backend.m_capture.pendingCount(); }
 };
@@ -32,83 +38,8 @@ static void check(bool value, const char* message)
 {
     if (!value) { ++failures; std::fprintf(stderr, "FAIL: %s\n", message); }
 }
-struct DeviceState {
-    std::mutex mutex;
-    std::condition_variable changed;
-    bool canceled = false;
-    bool holdReadback = true;
-    bool inReadback = false;
-    int blocks = 0;
-    std::atomic<int> starts{0}, cancels{0}, writes{0}, callbacks{0};
-    std::atomic<bool> badReadback{false};
-    std::atomic<bool> destroyed{false};
-    T::Hardware hardware;
-    void releaseReadback()
-    {
-        std::lock_guard lock(mutex); holdReadback = false; changed.notify_all();
-    }
-    void block()
-    {
-        std::lock_guard lock(mutex); ++blocks; changed.notify_all();
-    }
-};
-class InjectedDevice final : public rtl::RtlSdrWorker::Device {
-public:
-    explicit InjectedDevice(std::shared_ptr<DeviceState> state) : m_state(std::move(state)) {}
-    ~InjectedDevice() override { m_state->destroyed = true; }
-    bool set(T::Control control, std::int64_t value) override
-    {
-        ++m_state->writes;
-        switch (control) {
-        case T::Control::DirectSampling: m_state->hardware.directSampling = int(value); break;
-        case T::Control::SampleRate: m_state->hardware.sampleRateHz = std::uint32_t(value); break;
-        case T::Control::Ppm: m_state->hardware.ppm = int(value); break;
-        case T::Control::OffsetTuning: m_state->hardware.offsetTuning = int(value); break;
-        case T::Control::Center: m_state->hardware.centerHz = std::uint32_t(value); break;
-        case T::Control::Gain: m_state->hardware.gainTenths = int(value); break;
-        }
-        return true;
-    }
-    std::optional<T::Hardware> read() override
-    {
-        std::unique_lock lock(m_state->mutex);
-        m_state->inReadback = true;
-        m_state->changed.notify_all();
-        m_state->changed.wait(lock, [&] { return !m_state->holdReadback; });
-        m_state->inReadback = false;
-        auto actual = m_state->hardware;
-        if (m_state->badReadback) { actual.sampleRateHz = 0; }
-        return actual;
-    }
-    bool resetBuffer() override { return true; }
-    int readAsync(Callback callback, void* context) override
-    {
-        std::unique_lock lock(m_state->mutex);
-        m_state->canceled = false;
-        ++m_state->starts;
-        std::array<unsigned char, 16384> iq;
-        iq.fill(130);
-        while (!m_state->canceled) {
-            m_state->changed.wait(lock, [&] { return m_state->canceled || m_state->blocks > 0; });
-            if (m_state->canceled) { break; }
-            --m_state->blocks;
-            lock.unlock();
-            callback(iq.data(), static_cast<std::uint32_t>(iq.size()), context);
-            ++m_state->callbacks;
-            lock.lock();
-        }
-        return 0;
-    }
-    void cancelAsync() override
-    {
-        ++m_state->cancels;
-        std::lock_guard lock(m_state->mutex);
-        m_state->canceled = true;
-        m_state->changed.notify_all();
-    }
-private:
-    std::shared_ptr<DeviceState> m_state;
-};
+using DeviceState = AetherSDR::test::DeviceState;
+using InjectedDevice = AetherSDR::test::InjectedDevice;
 template<class Predicate> bool waitFor(Predicate predicate)
 {
     QElapsedTimer timer; timer.start();
@@ -140,12 +71,12 @@ int main(int argc, char** argv)
     backend.setSliceFrequency(0, 100'200'000);
     check(changes == initialChanges, "in-window request waits for callback adoption");
     state->block();
-    check(waitFor([&] { return changes > initialChanges; }), "in-window receiver adoption acknowledged");
+    check(waitFor([&] { state->block(); QThread::msleep(5); return changes > initialChanges; }), "in-window receiver adoption acknowledged");
     check(state->starts == 1 && state->cancels == 0 && state->writes == 6,
           "receiver-only change never cancels/restarts/writes USB");
     const int noOpChanges = changes;
     backend.setSliceFrequency(0, 100'200'000); state->block();
-    check(waitFor([&] { return changes > noOpChanges; }), "no-op acknowledged");
+    check(waitFor([&] { state->block(); QThread::msleep(5); return changes > noOpChanges; }), "no-op acknowledged");
     check(state->starts == 1 && state->cancels == 0, "no-op does not restart USB");
 
     // Hold the device readback, supersede a rate change, then release it. Old
@@ -171,9 +102,13 @@ int main(int argc, char** argv)
     check(state->cancels >= 3, "each of the three hardware transitions cancels acquisition");
     const int startsBeforeReceiver = state->starts;
     const int cancelsBeforeReceiver = state->cancels;
+    const int beforeFilter = changes;
+    backend.setSliceFilter(0, -8000, 8000);
+    check(waitFor([&] { state->block(); QThread::msleep(5); return changes > beforeFilter; }),
+          "narrow filter accepted before selecting narrow demodulation");
     const int beforeMode = changes;
-    backend.setSliceMode(0, QStringLiteral("FM")); state->block();
-    check(waitFor([&] { return changes > beforeMode; }), "mode adopted at callback boundary");
+    backend.setSliceMode(0, QStringLiteral("FM"));
+    check(waitFor([&] { state->block(); QThread::msleep(5); return changes > beforeMode; }), "mode adopted at callback boundary");
     check(state->starts == startsBeforeReceiver && state->cancels == cancelsBeforeReceiver,
           "mode-only change preserves USB acquisition");
     for (int i = 0; i < 16; ++i) { state->block(); }
@@ -199,7 +134,7 @@ int main(int argc, char** argv)
         }
     });
     backend.setSliceFilter(0, -8000, 8000); state->block();
-    check(waitFor([&] { std::lock_guard lock(state->mutex); return state->inReadback; }),
+    check(waitFor([&] { state->block(); QThread::msleep(5); std::lock_guard lock(state->mutex); return state->inReadback; }),
           "reentrant extension reached its own readback");
     check(!prematureExtension && !extensionFinished, "extension cannot complete on an older publication");
     state->releaseReadback();
@@ -227,6 +162,39 @@ int main(int argc, char** argv)
         check(waitFor([&] { return sawConnect; }), "reentrant connect cancellation reached");
         QCoreApplication::processEvents();
         check(cancelProbe.afterDisconnect().isEmpty(), "reentrant cancellation fences initial publication");
+    }
+    // Full backend slice lifecycle, with explicit offline test admission.
+    // This does not raise the production architecture profile.
+    {
+        auto device = std::make_shared<DeviceState>();
+        rtl::RtlSdrBackend multiple;
+        QSet<int> live;
+        QMap<int, PcmFrame> frames;
+        QObject::connect(&multiple, &IRadioBackend::sliceChanged, [&](int id, const SliceDelta&) { live.insert(id); });
+        QObject::connect(&multiple, &IRadioBackend::sliceRemoved, [&](int id) { live.remove(id); });
+        QObject::connect(&multiple, &IRadioBackend::sliceAudioFrameReady, [&](int id, const PcmFrame& frame) { frames[id] = frame; });
+        rtl::RtlCaptureBackendTestAccess::start(multiple, std::make_unique<InjectedDevice>(device), 4);
+        device->releaseReadback();
+        check(waitFor([&] { return multiple.isConnected(); }), "multi-receiver backend starts on accepted capture");
+        const auto pump = [&] { device->block(); QThread::msleep(5); };
+        check(multiple.createSlice({}, 100200000), "second receiver admitted in fixed capture");
+        check(waitFor([&] { pump(); return live.contains(1); }), "second receiver publishes after preparation and adoption");
+        check(multiple.createSlice({}, 99800000), "third receiver admitted");
+        check(waitFor([&] { pump(); return live.contains(2) && frames.contains(0) && frames.contains(1); }), "independent native PCM reaches actual backend seam");
+        const PcmFrame survivor = frames[0];
+        const PcmFrame removed = frames[1];
+        check(removed.stream().format.sampleRateHz == 48000, "upgraded backend publishes truthful 48 kHz format");
+        check(multiple.removeSlice(1), "middle receiver removal requested");
+        check(waitFor([&] { pump(); return !live.contains(1); }), "accepted middle removal preserves sparse IDs");
+        check(!removed.current() && survivor.current(), "removal revokes old tap without resetting sibling producer");
+        QThread::msleep(30); QCoreApplication::processEvents();
+        check(multiple.createSlice({}, 100300000), "lowest retired slot can be reused");
+        check(waitFor([&] { pump(); return live.contains(1) && frames[1].stream().receiverInstance != removed.stream().receiverInstance; }),
+            "reused stable ID receives a fresh instance and cannot inherit stale audio");
+        check(device->starts == 1 && device->cancels == 0, "add remove and reuse never restart USB acquisition");
+        const PcmFrame reconnect = frames[0];
+        multiple.disconnectRadio();
+        check(!reconnect.current(), "disconnect revokes native PCM immediately");
     }
     // Cancellation cannot interrupt an in-progress device control. Timeout
     // must retain the device; its later thread exit must still retire it.
