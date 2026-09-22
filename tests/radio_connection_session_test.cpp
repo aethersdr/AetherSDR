@@ -99,15 +99,27 @@ private slots:
         QVERIFY(connection.isSyntheticDemo());
 
         int waterfalls = 0;
+        int pans = 0;
         for (const QList<QVariant>& status : statuses) {
-            if (status.at(0).toString().startsWith(QStringLiteral("display waterfall "))) {
-                const QMap<QString, QString> fields = status.at(1).value<QMap<QString, QString>>();
+            const QString line = status.at(0).toString();
+            const QMap<QString, QString> fields = status.at(1).value<QMap<QString, QString>>();
+            if (line.startsWith(QStringLiteral("display waterfall "))) {
                 // 100 is a rate; replacing it with Demo's 48 ms cadence must fail.
                 QCOMPARE(fields.value(QStringLiteral("line_duration")), QStringLiteral("100"));
                 ++waterfalls;
+            } else if (line.startsWith(QStringLiteral("display pan "))) {
+                // The pan span reaches the wire as TEXT, so the constant alone
+                // is not the contract — the rendered form is, and this pins it.
+                // Independent literal on purpose: widening the span back to the
+                // old 40 kHz fails here. It does NOT pin the 'g'/6 format choice,
+                // which only diverges from 'f'/3 at a value the demo does not use
+                // yet; that reasoning lives at the call site.
+                QCOMPARE(fields.value(QStringLiteral("bandwidth")), QStringLiteral("0.008"));
+                ++pans;
             }
         }
         QCOMPARE(waterfalls, 1);
+        QCOMPARE(pans, 1);
         connection.disconnectFromRadio();
     }
 

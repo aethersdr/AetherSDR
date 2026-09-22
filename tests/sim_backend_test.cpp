@@ -5,6 +5,7 @@
 // disconnect removes the slice + reconnect works, and TX stays fail-closed.
 
 #include "core/backends/sim/SimBackend.h"
+#include "core/backends/sim/DemoRadioConstants.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -43,6 +44,12 @@ void testConnectEmitsInitialState()
     report("starts disconnected", !sim.isConnected());
     report("Demo serial remains compatible with saved selections",
            SimBackend::demoSerial() == QStringLiteral("DEMO-0001"));
+    // The pan span and the spectrum span are one value with two units; if they
+    // ever stop agreeing the demo birdie lands outside the RX passband.
+    report("Demo pan span is 8 kHz, stated in MHz",
+           AetherSDR::DemoRadio::kPanBandwidthMhz == 0.008);
+    report("the spectrum span is that same 8 kHz, stated in Hz",
+           AetherSDR::DemoRadio::kAudioSpanHz == 8000.0);
 
     sim.connectRadio(RadioConnectRequest{});
 

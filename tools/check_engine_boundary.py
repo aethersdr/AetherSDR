@@ -30,9 +30,11 @@ Guards the dependency direction the aetherd RFC
        This is RFC step 2.4's ratchet: the interface already exists, so
        no new code should reach around it — existing includers are
        decoupled subsystem-by-subsystem (each routed through the seam)
-       and their rows driven to empty. Ratchet-only: the vendor files
-       are NOT relocated in this step; EB3 makes the boundary
-       enforceable in place. The vendor vocabulary is derived at runtime
+       and their rows driven to empty. Relocation does not convert a
+       touchpoint: the five Flex wire classes now live under
+       src/core/backends/flex/ (#5554 §2.6 slice 1) and their callers
+       use those explicit paths, still tracked by EB3. Matching is by
+       header STEM, so a move changes no baseline row. The vendor vocabulary is derived at runtime
        from the touchpoint audit (docs/architecture/
        aetherd-touchpoint-tags.json) so the audit is the single source
        of truth — a header newly tagged vendor there is enforced without

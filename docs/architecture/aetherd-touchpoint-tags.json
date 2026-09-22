@@ -179,12 +179,6 @@
   "split": "",
   "confidence": "high"
  },
- "core/backends/DemoRadioConstants.h": {
-  "tag": "vendor(sim)",
-  "note": "Backend-only Demo identity and synthetic Flex waterfall rate; shared compatibility data, not a general engine API.",
-  "split": "",
-  "confidence": "high"
- },
  "core/backends/flex/CommandParser.h": {
   "tag": "vendor(flex)",
   "note": "Stateless parser/builder for SmartSDR TCP wire lines (V/H/C/R/S/M, FlexLib semantics) — pure Flex protocol.",
@@ -1178,6 +1172,12 @@
  "core/backends/sim/NoiseMixer.h": {
   "tag": "vendor(sim)",
   "note": "Demo-mode synthetic AUDIO engine (RFC #4288 Phase 2b) — additive HF-noise and signal channels feeding SimBackend's audioFrameReady. Backend-internal generator reached from DemoApplet.cpp; family-specific below-seam code, frozen into the EB3 baseline. Demo-mode controls should reach it through an extension namespace, not the concrete type.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/sim/DemoRadioConstants.h": {
+  "tag": "vendor(sim)",
+  "note": "Backend-only Demo identity, synthetic Flex waterfall rate and pan span; shared compatibility data, not a general engine API.",
   "split": "",
   "confidence": "high"
  },
