@@ -66,6 +66,7 @@ enum class WfColorScheme : int {
     Fire,          // black → red → orange → yellow → white
     Plasma,        // black → purple → magenta → orange → yellow
     Purple,        // SmartSDR "Add Purple": black→blue→green→yellow→red→purple→white
+    Glacier,       // deep blue → blue → ice blue → white (first preset not black at t=0)
     Count          // sentinel — number of schemes
 };
 
@@ -86,6 +87,7 @@ inline const char* wfSchemeName(WfColorScheme scheme)
     case WfColorScheme::Fire:      return "Fire";
     case WfColorScheme::Plasma:    return "Plasma";
     case WfColorScheme::Purple:    return "Purple";
+    case WfColorScheme::Glacier:   return "Glacier";
     default:                       return "Default";
     }
 }
@@ -1403,6 +1405,11 @@ private:
     float kiwiSdrWaterfallLevel(float level) const;
     float intensityToWaterfallLevel(float intensity) const;
     QRgb waterfallLevelToRgb(float level) const;
+    // The colour a cleared / not-yet-painted waterfall pixel takes: the current
+    // palette's floor, not Qt::black. Every preset through Purple is #000000 at
+    // t=0, so this is a no-op for them; Glacier is the first palette with a
+    // non-black floor.
+    QRgb waterfallFloorRgb() const;
     static quint8 encodeWaterfallLevel(float level);
     std::array<QRgb, 256> waterfallHistoryColorLut() const;
     // 3DSS surface colour for a normalised strength s in [0,1] across the stable
