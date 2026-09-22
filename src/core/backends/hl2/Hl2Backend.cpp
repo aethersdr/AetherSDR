@@ -4772,8 +4772,31 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
     const Hl2HardwareOptions before = m_hw;
     m_hw = next;
     if (persist) {
-        Hl2HardwareOptions::save(
-            RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), m_hw);
+        // NEVER WRITE AN EMPTY radio_id ROW, and RadioSettingsScope::isValid()
+        // is NOT that guard: it only requires a non-empty FAMILY, which "hl2"
+        // always is, so a still-empty serial does not fail the write — it
+        // silently targets the family-wide default row (AGENTS.md: "An empty
+        // radio_id row is the family-wide default; guard against writing one by
+        // accident"). Every HL2 without a row of its own then inherits it.
+        //
+        // That is precisely the failure this document exists to prevent. See
+        // Hl2HardwareOptions' opening note: an operator with an HL2 on the
+        // bench and a SquareSDR 2 in the shack must not have one's codec choice
+        // applied to the other, because the dither bit means different things
+        // on the two. A family-wide row does exactly that, to every HL2 at once.
+        //
+        // Reachable before connect: hw.set arrives through invokeExtension, and
+        // backendDeclaresExtension() gates on the NAMESPACE, not on whether a
+        // radio is attached. The dialog does check, but the dialog is not the
+        // authority here — same reasoning as applyFreqCalPpb() below, whose
+        // guard this mirrors deliberately rather than by coincidence.
+        if (m_radioSerial.isEmpty()) {
+            qCWarning(lcHl2) << "HL2: not persisting hardware options —"
+                             << "no radio identity yet; applying for this session only";
+        } else {
+            Hl2HardwareOptions::save(
+                RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), m_hw);
+        }
     }
     if (!m_metis)
         return;
