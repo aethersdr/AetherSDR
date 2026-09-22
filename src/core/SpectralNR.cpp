@@ -407,7 +407,7 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate, int overlap,
     // ONE PROCESS, ONE PLANNER, ONE LOCK. This class used to guard these two
     // plans with a private static mutex of its own (#467, filed when "all
     // FFTW usage is in SpectralNR.cpp" was still true). It stopped being true
-    // when WDSP was vendored: WdspChannel, Hl2Spectrum and AnanSpectrum all
+    // when WDSP was vendored: WdspChannel, Hl2Spectrum and AnanPanAnalyzer all
     // reach the same process-global, double-precision planner, and two
     // mutexes over one planner serialise nothing (#5895). See
     // core/dsp/FftwPlannerLock.h — the lock is FFTW's, not any one class's.

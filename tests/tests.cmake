@@ -772,6 +772,13 @@ add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
 
+# Socket-free lifetime checks for the two process-global FFTW planners.
+# Uses real NR2/NR4/RTL constructors and destructors, without radio sockets.
+add_executable(fftw_planner_lock_test tests/fftw_planner_lock_test.cpp)
+target_link_libraries(fftw_planner_lock_test PRIVATE aethercore Qt6::Core)
+add_test(NAME fftw_planner_lock_test COMMAND fftw_planner_lock_test)
+set_tests_properties(fftw_planner_lock_test PROPERTIES TIMEOUT 30)
+
 # Socket-free shared-pool admission and injected receiver lifetime tests. These
 # foundations are compiled/tested even when the optional RTL USB driver is off.
 add_executable(wdsp_channel_reservation_test tests/wdsp_channel_reservation_test.cpp)
@@ -2727,6 +2734,7 @@ if(ENABLE_SPECBLEACH)
     add_executable(specbleach_rate_domain_test
         tests/specbleach_rate_domain_test.cpp
         src/core/SpecbleachFilter.cpp
+        src/core/dsp/FftwPlannerLock.cpp
         src/core/MonoDspStereoAdapter.cpp
         ${SPECBLEACH_SOURCES}
     )

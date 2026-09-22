@@ -39,4 +39,15 @@ std::unique_lock<std::mutex> fftwPlannerLock()
     return std::unique_lock<std::mutex>(fftwPlannerMutex());
 }
 
+std::mutex& fftwfPlannerMutex()
+{
+    static std::mutex m;
+    return m;
+}
+
+std::unique_lock<std::mutex> fftwfPlannerLock()
+{
+    return std::unique_lock<std::mutex>(fftwfPlannerMutex());
+}
+
 } // namespace AetherSDR

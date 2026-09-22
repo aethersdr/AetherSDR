@@ -181,7 +181,7 @@ private:
     // DECLARED HERE: every site in the .cpp that plans, allocates, frees or
     // moves wisdom takes AetherSDR::fftwPlannerLock() from
     // core/dsp/FftwPlannerLock.h, because the planner it guards is
-    // process-global and WDSP, Hl2Spectrum and AnanSpectrum reach the same
+    // process-global and WDSP, Hl2Spectrum and AnanPanAnalyzer reach the same
     // one in the same double-precision family. This class used to keep a
     // private static mutex here (#467, written when SpectralNR.cpp held all
     // the FFTW in the tree); two mutexes over one planner serialise nothing

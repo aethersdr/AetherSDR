@@ -24,13 +24,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace AetherSDR {
 
-// THE LOCK BELONGS TO FFTW, NOT TO ANY ONE CLASS.
+// THE LOCKS BELONG TO FFTW, NOT TO ANY ONE CLASS.
 //
-// FFTW's planner is PROCESS-GLOBAL and not thread-safe. So is its wisdom
-// store, and so — per the ThreadSanitizer report in #5424 — is the pairing of
+// Each precision has its own PROCESS-GLOBAL planner. Neither is thread-safe.
+// The double-precision wisdom store is process-global too. So, per the
+// ThreadSanitizer report in #5424, is the pairing of
 // fftw_malloc/fftw_alloc_* against fftw_free across threads. Every plan,
-// destroy, wisdom import/export and FFTW allocation in this process must be
-// serialised, and NOT by a mutex each subsystem keeps to itself.
+// destroy, wisdom import/export and FFTW allocation must be serialised with
+// the lock for its precision, not by a mutex each subsystem keeps to itself.
 //
 // This header exists because that lock used to live inside WdspChannel, which
 // made it look like a property of the WDSP channel. It is not. SpectralNR
@@ -57,7 +58,7 @@ namespace AetherSDR {
 
 // DOUBLE PRECISION (fftw_*). Held by WdspChannel (open/close and every
 // control call that can re-plan: RXASetNC and RXASetMP both do), Hl2Spectrum,
-// AnanSpectrum and SpectralNR.
+// AnanPanAnalyzer and SpectralNR.
 //
 // WIDTH: hold it over the ALLOCATIONS as well as the plan. The two frames
 // TSan named in #5424 are fftw_malloc_plain's memalign on one thread and a
@@ -77,27 +78,14 @@ namespace AetherSDR {
 // need to compose it. Prefer fftwPlannerLock().
 [[nodiscard]] std::mutex& fftwPlannerMutex();
 
-// TODO(#5895): SINGLE PRECISION (fftwf_*) IS NOT COVERED BY ANYTHING.
-//
-// fftwf_ is a SEPARATE planner with separate global state, so the lock above
-// does not reach it. Two call sites plan in single precision and hold no lock
-// against each other, both linked into aethercore, both reached from a
-// connect-path thread:
-//
-//   - RtlSdrDdc::RtlSdrDdc / ~RtlSdrDdc — fftwf_malloc, fftwf_plan_dft_1d,
-//     fftwf_destroy_plan, fftwf_free, all unguarded.
-//   - third_party/libspecbleach's fft_transform.c — fft_transform_initialize's
-//     fftwf_malloc and fftwf_plan_r2r_1d, and fft_transform_free's
-//     fftwf_destroy_plan / fftwf_free — reached through SpecbleachFilter,
-//     constructed in AudioEngine::createNr4Filter. Vendored, so the lock goes
-//     around the SpecbleachFilter construction and destruction rather than
-//     into the vendored C.
-//
-// NO fftwfPlannerLock() IS DECLARED HERE, DELIBERATELY. An exported symbol
-// with no callers reads as "something takes this" and guards nothing; it is a
-// promise in a header, which is the shape this PR argues against. The lock
-// lands in the same commit as its first caller. This note exists so that the
-// next person to touch either site adds it here rather than inventing a third
-// mutex, which is exactly how this bug was born.
+// SINGLE PRECISION (fftwf_*). This is a separate planner and needs its own
+// mutex. RtlSdrDdc holds it across allocation, plan creation, destruction and
+// frees. SpecbleachFilter holds it across specbleach_initialize/free, which
+// reach the vendored fft_transform.c's FFTW operations. Guarding in the
+// wrapper covers every caller, including AudioEngine's direct automation
+// probe and all of its filter teardown paths, without editing vendored C.
+// Neither fftw_execute nor fftwf_execute takes a planner lock.
+[[nodiscard]] std::unique_lock<std::mutex> fftwfPlannerLock();
+[[nodiscard]] std::mutex& fftwfPlannerMutex();
 
 } // namespace AetherSDR

@@ -45,7 +45,7 @@ std::mutex g_channelMutex;
 // a second mutex of its own over the same planner (#467, #5895). It now
 // binds the single lock in FftwPlannerLock.h, so every scope below reads
 // unchanged while actually serialising against SpectralNR, Hl2Spectrum and
-// AnanSpectrum.
+// AnanPanAnalyzer.
 //
 // A REFERENCE bound during this file's dynamic initialisation is safe only
 // because fftwPlannerMutex() is a function-local static (constructed on
@@ -227,7 +227,13 @@ void exportWisdomNow()
 void armWisdomExportOnce()
 {
     static std::once_flag flag;
-    std::call_once(flag, [] { std::atexit([] { exportWisdomNow(); }); });
+    std::call_once(flag, [] {
+        std::atexit([] {
+            // The exit export reads FFTW's process-global wisdom store too.
+            auto lock = AetherSDR::fftwPlannerLock();
+            exportWisdomNow();
+        });
+    });
 }
 
 void releaseChannelId(int channel)
@@ -861,7 +867,7 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
 
 std::unique_lock<std::mutex> WdspChannel::fftwSetupLock()
 {
-    // Forwards, and keeps its name so Hl2Spectrum, AnanSpectrum and
+    // Forwards, and keeps its name so Hl2Spectrum, AnanPanAnalyzer and
     // wdsp_channel_test need no churn. The lock itself lives in
     // FftwPlannerLock.h; new code outside this class should take
     // fftwPlannerLock() directly rather than reaching through WDSP.
