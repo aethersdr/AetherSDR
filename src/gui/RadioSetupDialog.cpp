@@ -856,7 +856,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // whole reason these are settings. See buildHl2HardwareTab().
     QTreeWidgetItem* hwItem = addPage(radioCategory, QStringLiteral("HL2 Hardware"),
         QStringLiteral("hermes lite hl2 squaresdr square sdr codec ak4951 dither band volts "
-                       "speaker random filter board n2adr hpf cl1 reference clock gpsdo atu tuner"),
+                       "speaker random filter board n2adr hpf atu tuner"),
         [this] { return buildHl2HardwareTab(); });
     m_hl2HardwarePageIndex = m_pageIndexes.value(QStringLiteral("HL2 Hardware"));
     setNavigationItemHidden(hwItem, !isHl2Family());
@@ -4060,19 +4060,6 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     auto* mvb = new QVBoxLayout(miscGroup);
     mvb->setSpacing(6);
 
-    auto* cl1Chk = new QCheckBox("External 10 MHz reference at CL1");
-    cl1Chk->setObjectName(QStringLiteral("hl2HwCl1"));
-    themed(cl1Chk, QStringLiteral(
-        "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }"));
-    cl1Chk->setToolTip(QStringLiteral(
-        "Reprograms the on-board VersaClock to lock to a 10 MHz reference fed into\n"
-        "the CL1 jack — a GPSDO, typically — instead of the radio's own crystal.\n\n"
-        "The radio boots on its crystal every time, so this is re-sent on every\n"
-        "connect. With a reference locked, the frequency calibration on the\n"
-        "Calibration page should be zero."));
-    mvb->addWidget(cl1Chk);
-    controls->append(cl1Chk);
-
     auto* atuChk = new QCheckBox("Antenna tuner driven by the HL2 gateware");
     atuChk->setObjectName(QStringLiteral("hl2HwAtu"));
     themed(atuChk, QStringLiteral(
@@ -4101,7 +4088,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     // rather than into a no-op.
     const QPointer<QComboBox> codecGuard(codecCombo);
     m_hl2HardwareReseed = [this, codecGuard, codecCombo, ditherChk, randomChk,
-                           filterCombo, hpfChk, cl1Chk, atuChk, spkSlider,
+                           filterCombo, hpfChk, atuChk, spkSlider,
                            noRadioLbl, controls, refreshDither, refreshHpf,
                            refreshSpeaker] {
         if (!codecGuard)
@@ -4150,8 +4137,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             const QSignalBlocker b3(randomChk);
             const QSignalBlocker b4(filterCombo);
             const QSignalBlocker b5(hpfChk);
-            const QSignalBlocker b6(cl1Chk);
-            const QSignalBlocker b7(atuChk);
+            const QSignalBlocker b6(atuChk);
             codecCombo->setCurrentIndex(
                 codecCombo->findData(m.value(QStringLiteral("codec")).toInt()));
             ditherChk->setChecked(m.value(QStringLiteral("ditherBit")).toBool());
@@ -4159,7 +4145,6 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             filterCombo->setCurrentIndex(
                 filterCombo->findData(m.value(QStringLiteral("filterBoard")).toInt()));
             hpfChk->setChecked(m.value(QStringLiteral("n2adrHpf")).toBool());
-            cl1Chk->setChecked(m.value(QStringLiteral("cl1RefClock")).toBool());
             atuChk->setChecked(m.value(QStringLiteral("atuGateware")).toBool());
             // Clamped here too, not only in the backend: this arrives as a
             // QVariant off a generic seam, and a slider given a value outside
@@ -4241,9 +4226,6 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     });
     connect(hpfChk, &QCheckBox::toggled, this, [apply](bool on) {
         apply(QVariantMap{{QStringLiteral("n2adrHpf"), on}});
-    });
-    connect(cl1Chk, &QCheckBox::toggled, this, [apply](bool on) {
-        apply(QVariantMap{{QStringLiteral("cl1RefClock"), on}});
     });
     connect(atuChk, &QCheckBox::toggled, this, [apply](bool on) {
         apply(QVariantMap{{QStringLiteral("atuGateware"), on}});

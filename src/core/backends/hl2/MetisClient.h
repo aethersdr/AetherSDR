@@ -95,11 +95,6 @@ public:
         // so whether the EP2 audio slot may carry samples at all. FALSE is not
         // "no audio", it is "that slot is EADDR" — see ep2WriteTxAudio().
         bool hasCodec = false;
-
-        // Whether the VersaClock should be locked to an external 10 MHz
-        // reference at CL1. Carried here so start() can re-send the sequence:
-        // the radio boots on its crystal, so every connect is a change.
-        bool cl1RefClock = false;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -265,11 +260,6 @@ public:
     // kSpeakerAudioCapSamples — because this is fed from the audio thread and a
     // stalled EP2 pacer must not grow a queue without limit.
     Q_INVOKABLE void submitSpeakerAudio(const QByteArray& interleavedInt16);
-
-    // Lock the VersaClock to an external 10 MHz reference at CL1, or return it
-    // to the onboard crystal. Queues the twenty-four-bank reprogramming
-    // sequence; see versaClockCl1Banks().
-    Q_INVOKABLE void setCl1RefClock(bool externalRef);
 
     // Raise or clear the gateware's ATU tune request (0x09[20]). Rides the
     // drive-level bank, so this restates the current drive rather than being a
@@ -778,13 +768,6 @@ private:
     // array of banks rather than one bank with a varying payload.
     std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
-    // Queue (or re-queue) the twenty-four VersaClock banks, and remove any
-    // still waiting. Private because the ORDER and the replace-don't-append
-    // rule are part of the contract and a caller outside this class cannot
-    // honour them; setCl1RefClock() is the way in.
-    void queueCl1Sequence(bool externalRef);
-    void dropQueuedCl1Banks();
-
     Cc m_ccTxDrive{};
     // The ATU tune request's standing state, held because it shares 0x09 with
     // the drive level: setTxDriveLevel() has to re-assert it or a drive change

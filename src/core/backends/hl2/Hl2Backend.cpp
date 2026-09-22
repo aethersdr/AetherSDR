@@ -2244,7 +2244,6 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
                       << "random=" << m_hw.randomBit
                       << "filterBoard=" << static_cast<int>(m_hw.filterBoard)
                       << "n2adrHpf=" << m_hw.n2adrHpf
-                      << "cl1=" << m_hw.cl1RefClock
                       << "atuGateware=" << m_hw.atuGateware;
 
     // Notches are SESSION state, and the same call is true on both sides of the
@@ -2458,7 +2457,6 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.ditherBit   = m_hw.ditherBitOnWire();
     mp.randomBit   = m_hw.randomBit;
     mp.hasCodec    = m_hw.hasLocalCodec();
-    mp.cl1RefClock = m_hw.cl1RefClock;
     qCInfo(lcHl2).nospace()
         << "HL2 band filter: " << QString::asprintf("0x%02X", m_ocFilterByte)
         << " (" << ocFilterName(mp.ocFilterByte) << ") for "
@@ -4783,8 +4781,8 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
     // EACH FIELD PUSHED ONLY IF IT MOVED, and through the setter that owns it
     // rather than by rebuilding the session. Every one of these is live-
     // changeable on a running stream: the config register rides every EP2
-    // frame, the drive bank is a one-shot, the VersaClock sequence is a queue
-    // of one-shots, and the codec gate is a flag the packet builder reads.
+    // frame, the drive bank is a one-shot, and the codec gate is a flag the
+    // packet builder reads.
     // Reconnecting to apply them would drop the operator's audio to change a
     // checkbox.
     if (m_hw.ditherBitOnWire() != before.ditherBitOnWire()
@@ -4799,10 +4797,6 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
         m_codecHavePrev = false;
         QMetaObject::invokeMethod(m_metis, "setLocalCodec", Qt::QueuedConnection,
                                   Q_ARG(bool, m_hw.hasLocalCodec()));
-    }
-    if (m_hw.cl1RefClock != before.cl1RefClock) {
-        QMetaObject::invokeMethod(m_metis, "setCl1RefClock", Qt::QueuedConnection,
-                                  Q_ARG(bool, m_hw.cl1RefClock));
     }
     if (m_hw.atuGateware != before.atuGateware) {
         // Turning the option OFF mid-tune has to clear a request that is
@@ -5519,7 +5513,6 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("randomBit"), m_hw.randomBit},
                     {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},
                     {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
-                    {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
                     {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
                 });
@@ -5546,7 +5539,6 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             next.ditherBit   = boolOr("ditherBit", next.ditherBit);
             next.randomBit   = boolOr("randomBit", next.randomBit);
             next.n2adrHpf    = boolOr("n2adrHpf", next.n2adrHpf);
-            next.cl1RefClock = boolOr("cl1RefClock", next.cl1RefClock);
             next.atuGateware = boolOr("atuGateware", next.atuGateware);
             if (in.contains(QStringLiteral("speakerLevelPercent")))
                 next.speakerLevelPercent = Hl2HardwareOptions::clampSpeakerLevel(
@@ -5560,7 +5552,6 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("randomBit"), m_hw.randomBit},
                     {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},
                     {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
-                    {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
                     {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
                 });

@@ -133,9 +133,9 @@ private:
     // the family; a m_droopReseed lambda re-synced the same two ways).
     QWidget* buildDroopCalibrationTab();
     // Which Hermes-Lite 2 variant is on the other end: local audio codec, the
-    // dither bit's three incompatible meanings, the companion filter board, the
-    // CL1 reference clock and the gateware ATU. Protocol 1 exposes none of it,
-    // so the operator is the only source — see Hl2HardwareOptions.
+    // dither bit's three incompatible meanings, the companion filter board and
+    // the gateware ATU. Protocol 1 exposes none of it, so the operator is the
+    // only source — see Hl2HardwareOptions.
     //
     // Gated on the FAMILY and not on a capability, unlike the two pages above,
     // and that is the honest gate here: "does this radio have an AK4951
