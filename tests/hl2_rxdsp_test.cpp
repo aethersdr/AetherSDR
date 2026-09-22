@@ -80,7 +80,12 @@ int main(int argc, char** argv)
     // every demodulated sideband.
     const int fs = 48000;
     const double f = 1000.0;
-    const int total = fs / 2;                 // ~0.5 s
+    // ~0.5 s, and NOT SHORTER: Hl2RxDsp holds the S-meter tap for a settle
+    // window after a channel install (~15 blocks of 1024 at 48 kHz, ~0.3 s), so
+    // the first blocks of this feed publish nothing and the meter assertions
+    // below rest on the ~8 emissions that follow. Trim this and they fail with
+    // maxMeter still at its sentinel, looking like a dead demodulator.
+    const int total = fs / 2;
     std::vector<std::complex<float>> stream(static_cast<std::size_t>(total));
     for (int n = 0; n < total; ++n) {
         const double ph = 2.0 * kPi * f * n / fs;

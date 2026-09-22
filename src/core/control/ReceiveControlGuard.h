@@ -81,7 +81,7 @@ public:
             return refusal("request.conflict", "radio connection is not ready");
         }
         if (caps.canTransmit
-            && (!m_confirmedIdle || m_radio->isRadioTransmitting()
+            && (!m_confirmedIdle || m_radio->transmitOwnershipPending() || m_radio->isRadioTransmitting()
                 || m_radio->transmitModel().isTransmitting()
                 || m_radio->transmitModel().isMox()
                 || m_radio->transmitModel().isTuning())) {

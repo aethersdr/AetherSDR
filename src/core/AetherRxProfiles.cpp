@@ -74,6 +74,7 @@ AetherRxProfiles::AetherRxProfiles(AudioEngine* engine, QObject* parent)
     m_root["version"]  = kSchemaVersion;
     m_root["profiles"] = QJsonObject{};
     loadFromDisk();
+    migrateLegacyPresets();
 }
 
 QString AetherRxProfiles::filePath() const
@@ -82,6 +83,58 @@ QString AetherRxProfiles::filePath() const
     const QString dir = SettingsPaths::configDir();
     QDir().mkpath(dir);
     return dir + "/AetherRxProfiles.json";
+}
+
+void AetherRxProfiles::migrateLegacyPresets()
+{
+    static const QString kFlag = QStringLiteral("migratedFromChannelStrip");
+    if (m_root.value(kFlag).toBool()) return;
+
+    QFile f(ChannelStripPresets::legacyLibraryPath());
+    if (!f.exists() || !f.open(QIODevice::ReadOnly)) {
+        // Nothing to import. The flag is set in memory only -- writing it
+        // would create an empty library file for every operator who never
+        // had a preset, to record an absence. The cost is that a launch
+        // with no legacy file re-checks, which is one stat() and is also
+        // the behaviour you want if a preset file is later restored from
+        // a backup.
+        m_root[kFlag] = true;
+        return;
+    }
+    const auto doc = QJsonDocument::fromJson(f.readAll());
+    f.close();
+    if (!doc.isObject()) { m_root[kFlag] = true; return; }
+
+    const QJsonObject presets = doc.object().value(QStringLiteral("presets")).toObject();
+    QJsonObject candidate = m_root;
+    QJsonObject profiles  = candidate.value(QStringLiteral("profiles")).toObject();
+
+    int imported = 0;
+    for (auto it = presets.begin(); it != presets.end(); ++it) {
+        if (!it.value().isObject()) continue;
+        // A profile the operator already has under that name wins: this is a
+        // one-way import, not a restore.
+        if (profiles.contains(it.key())) continue;
+        const QJsonObject preset = it.value().toObject();
+        // The receive half is the nested block. A preset saved before the
+        // RX chain existed has none, and simply does not migrate.
+        if (!preset.contains(QStringLiteral("rx"))
+            || !preset.value(QStringLiteral("rx")).isObject()) {
+            continue;
+        }
+        QJsonObject profile = preset.value(QStringLiteral("rx")).toObject();
+        for (const auto& k : {QStringLiteral("createdBy"), QStringLiteral("createdAt")}) {
+            if (preset.contains(k) && !profile.contains(k)) profile[k] = preset.value(k);
+        }
+        profiles[it.key()] = profile;
+        ++imported;
+    }
+
+    candidate[QStringLiteral("profiles")] = profiles;
+    candidate[kFlag] = true;
+    if (!writeDocument(candidate)) return;   // try again next launch
+    m_root = candidate;
+    if (imported > 0) emit profilesChanged();
 }
 
 bool AetherRxProfiles::loadFromDisk()
@@ -238,6 +291,19 @@ QJsonObject AetherRxProfiles::readFile(const QString& path,
         return fail(QObject::tr("The file does not contain a JSON object."));
     }
     const QJsonObject root = doc.object();
+
+    // Honour "kind" when it is there. The sniffing below deliberately does not
+    // require it, so a hand-written file still imports -- but the two windows'
+    // exports overlap almost completely (same stage keys, overlapping chain
+    // names), so without this check an AetherTX export imports cleanly here and
+    // writes receive-side values into the transmit chain.
+    {
+        const QString kind = root.value(QStringLiteral("kind")).toString();
+        if (!kind.isEmpty() && kind != QStringLiteral("AetherRX profile")) {
+            return fail(QObject::tr("%1 holds a \u201c%2\u201d, not an AetherRX profile.")
+                            .arg(QFileInfo(path).fileName(), kind));
+        }
+    }
 
     // A library: take its first profile.
     if (root.value("profiles").isObject()) {

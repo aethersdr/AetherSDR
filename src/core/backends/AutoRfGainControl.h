@@ -56,8 +56,28 @@ public:
     // A backend may DECLINE to arm — the HL2 refuses above a baseline where its
     // gain axis is not trustworthy — so a caller must read `isArmed()` back
     // rather than assuming the request took.
+    //
+    // AND THE BACKEND MUST EMIT IRadioBackend::autoRfGainArmSettled after every
+    // outcome, refusal included. A reader that polls isArmed() only after its
+    // own click never learns about an arm settled elsewhere -- the backend's
+    // own connect-time restore, a bridge verb -- and reports a control as off
+    // while it holds the operator's gain down (#5817).
     virtual void setArmed(bool on) = 0;
     [[nodiscard]] virtual bool isArmed() const = 0;
+
+    // WHY IT DECLINED, in a sentence meant for the operator rather than a log.
+    //
+    // Reading `isArmed()` back tells a caller THAT the request did not take.
+    // It cannot tell them why, and without the why the operator sees a checkbox
+    // spring back to unticked with no explanation -- which on the HL2 is what
+    // every fresh install does on its first tick of Auto, because a stored gain
+    // is absent and the constructed baseline sits above the ceiling that gates
+    // arming (#5817).
+    //
+    // Empty when the last attempt succeeded, or when a backend has no reason to
+    // give. A caller shows it only after a readback has already shown the
+    // request failed; it is not a status line.
+    [[nodiscard]] virtual QString lastArmRefusalReason() const { return {}; }
 
     // How far below the operator's own gain the control may go, in dB. The
     // second of exactly two numbers the operator owns; the first is the switch.

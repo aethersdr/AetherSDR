@@ -27,6 +27,7 @@
 // The session harness is `hl2_gain_restore_test`'s, deliberately: same
 // socket-free connect, same "no event loop is pumped" constraint.
 
+#include "SeamThreadAffinityProbe.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"
@@ -71,6 +72,19 @@ RestoredRadioState rememberedGain()
     return state;
 }
 
+// IRadioBackend contract rule 2 for autoRfGainArmSettled, observed rather
+// than tabled: this binary is the only socket-free test that makes the
+// signal fire, so every backend it drives carries the seam probe and the
+// label names the offending emission when one crosses a thread.
+void checkSeam(const test::SeamThreadAffinityProbe& seam, const char* where)
+{
+    const QStringList v = seam.violations();
+    check(v.isEmpty(),
+          qPrintable(QStringLiteral("%1: every seam signal arrived on the backend's thread (rule 2)%2")
+                         .arg(QLatin1String(where),
+                              v.isEmpty() ? QString() : QStringLiteral(" -- ") + v.join(QStringLiteral("; ")))));
+}
+
 // Exercise synchronous connect seeding without starting transport, exactly as
 // hl2_gain_restore_test does: boardMaxRx skips the unicast discovery socket and
 // no event loop is pumped, so finishDspSetup never runs.
@@ -79,9 +93,11 @@ public:
     QString panId;
     int echoedGain = 999;
     hl2::Hl2Backend backend;
+    test::SeamThreadAffinityProbe seam{&backend};   // after backend: torn down first
 
     explicit Session(const RestoredRadioState& state)
     {
+        test::attachAllSeamSignals(seam);
         QObject::connect(&backend, &IRadioBackend::panCenterBandwidthChanged,
                          &backend, [this](const QString& id, double, double) {
             panId = id;
@@ -98,7 +114,11 @@ public:
         backend.connectRadio(request);
         backend.setSliceFrequency(0, state.rfFrequencyHz);
     }
-    ~Session() { backend.disconnectRadio(); }
+    ~Session()
+    {
+        backend.disconnectRadio();
+        checkSeam(seam, "session");
+    }
 
     int healthLive() const
     {
@@ -434,6 +454,89 @@ int main(int argc, char** argv)
               "and the reason is arithmetic: the shipped LNA default is above "
               "the baseline the loop will arm from, so default-on would only "
               "ever warn");
+    }
+
+    // ---- A DECLINED ARM MUST BE ABLE TO EXPLAIN ITSELF (#5817) ----
+    //
+    // Reading isArmed() back tells a caller THAT the request failed. Until now
+    // the only account of WHY went to a qWarning, so the operator saw a
+    // checkbox spring back to unticked in silence -- and on a fresh install
+    // that is what the very first tick of Auto does, because no stored gain for
+    // the band leaves the constructed baseline above the ceiling that gates
+    // arming.
+    {
+        hl2::Hl2Backend fresh;
+        check(fresh.lastArmRefusalReason().isEmpty(),
+              "a backend that has not been asked to arm has no refusal to give");
+
+        fresh.setAutoRfGain(true);
+        const QString why = fresh.lastArmRefusalReason();
+        check(!fresh.autoRfGainEnabled(),
+              "arming from the constructed baseline is declined, as #5817 found");
+        check(!why.isEmpty(),
+              "and the refusal now carries a reason rather than only a log line");
+        // The sentence has to name the two numbers the operator needs, or it is
+        // not actionable: what their baseline is, and what it has to be below.
+        check(why.contains(QString::number(AetherSDR::hl2::kLnaDefaultGainDb)),
+              "the reason names the baseline that was refused");
+        check(why.contains(QString::number(hl2::Hl2Backend::kAutoRfGainMaxBaselineDb)),
+              "and the ceiling it has to be at or below");
+        // AND NOTHING THE OPERATOR CANNOT USE. This sentence stopped being a
+        // log line when it started being shown on the panadapter and read out
+        // by a screen reader; an issue number is provenance for us and noise to
+        // them. The citation stays on the qWarning, where it is still useful.
+        check(!why.contains(QLatin1Char('#')),
+              "and cites no issue number at the operator");
+
+        // AND IT MUST NOT OUTLIVE THE REFUSAL IT DESCRIBES. Lower the baseline
+        // under the ceiling, arm for real, and the reason has to go -- otherwise
+        // a later unrelated failure would be shown this text.
+        fresh.setPanRfGain(QString(), hl2::Hl2Backend::kAutoRfGainMaxBaselineDb - 1);
+        fresh.setAutoRfGain(true);
+        // ASSERTED, NOT SKIPPED. A guarded "[skip]" here would let a later
+        // change that stops an unconnected backend from arming turn the
+        // clear-on-success half green without ever running it.
+        check(fresh.autoRfGainEnabled(),
+              "lowering the baseline under the ceiling arms for real");
+        check(fresh.lastArmRefusalReason().isEmpty(),
+              "a successful arm clears the reason");
+
+        // AND A RADIO SWAP TAKES IT WITH IT. applyRestoredState() is the reset
+        // every new radio's document runs through; a reason composed about
+        // radio A's baseline must not be what radio B's control reports before
+        // it has been asked anything.
+        hl2::Hl2Backend swapped;
+        swapped.setAutoRfGain(true);
+        check(!swapped.lastArmRefusalReason().isEmpty(),
+              "precondition: the previous radio declined and said why");
+        swapped.applyRestoredState(RestoredRadioState{});
+        check(swapped.lastArmRefusalReason().isEmpty(),
+              "a radio swap clears a reason composed about the previous radio");
+
+        // AND EVERY OUTCOME IS ANNOUNCED. A view that only reads isArmed() back
+        // after its own click never hears about the connect-time restore or a
+        // bridge verb; autoRfGainArmSettled is what lets one handler cover all
+        // three. Counted, so a no-op request is seen NOT to fire.
+        hl2::Hl2Backend spoken;
+        test::SeamThreadAffinityProbe seam(&spoken);   // rule 2, see checkSeam()
+        test::attachAllSeamSignals(seam);
+        int settled = 0;
+        bool lastArmed = true;
+        QObject::connect(&spoken, &IRadioBackend::autoRfGainArmSettled,
+                         [&](bool armed) { ++settled; lastArmed = armed; });
+        spoken.setAutoRfGain(true);
+        check(settled == 1 && !lastArmed,
+              "a refusal settles the request as not armed, so a view hears it");
+        spoken.setPanRfGain(QString(), hl2::Hl2Backend::kAutoRfGainMaxBaselineDb - 1);
+        spoken.setAutoRfGain(true);
+        check(settled == 2 && lastArmed, "an arm settles as armed");
+        spoken.setAutoRfGain(false);
+        check(settled == 3 && !lastArmed, "a disarm settles as not armed");
+        spoken.setAutoRfGain(false);
+        check(settled == 3, "a request that changes nothing settles nothing");
+        check(seam.count(QStringLiteral("autoRfGainArmSettled")) == 3,
+              "the probe saw every emission the direct handler counted");
+        checkSeam(seam, "spoken");
     }
 
     if (failures == 0) {

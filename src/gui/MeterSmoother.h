@@ -46,9 +46,15 @@ public:
     // opt into different behaviour (e.g. a GR bar with a slower
     // release) while still reading off the same central name.
     struct Ballistics {
-        float attackSeconds  = 0.030f;
-        float releaseSeconds = 0.180f;
-        float snapEpsilon    = 0.001f;
+        // SmartMTR's analog ballistics are project canon: a fast attack and
+        // a ~15x slower, lazy decay giving the d'Arsonval "jumps up, sags
+        // down" envelope-follower feel. Ported from the SmartMTR macOS app;
+        // tau from per-tick fractions k=0.60/0.06 at 60 Hz,
+        // tau = -(1/60)/ln(1-k). Every meter inherits these by doing nothing;
+        // override only with a reason, and say what it is.
+        float attackSeconds  = 0.01818f;   // ~18.2 ms
+        float releaseSeconds = 0.26940f;   // ~269 ms
+        float snapEpsilon    = 0.0005f;
     };
 
     MeterSmoother() = default;

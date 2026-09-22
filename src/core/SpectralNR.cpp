@@ -29,6 +29,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "SpectralNR.h"
 #include "LogManager.h"
+#include "core/dsp/FftwPlannerLock.h"
 #include <QByteArray>
 #include <QCryptographicHash>
 #include <algorithm>
@@ -41,8 +42,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <numeric>
 
 namespace AetherSDR {
-
-std::mutex SpectralNR::s_fftwMutex;
 
 namespace {
 
@@ -265,6 +264,17 @@ std::string wisdomTempPathForDirectory(const std::string& directory)
 }
 
 #ifdef HAVE_FFTW3
+// DELIBERATELY NOT SELF-GUARDING — do not "fix" this by taking
+// fftwPlannerLock() here. fftw_export_wisdom_to_filename touches the
+// process-global wisdom store and does need the lock, but EVERY caller
+// already holds it, and one of them holds it ACROSS this call: the Windows
+// Thetis branch of generateWisdom() invokes this from inside its own lock
+// scope. fftwPlannerLock() hands out a plain std::mutex, which is not
+// recursive, so making this helper acquire the lock itself would deadlock on
+// Windows and nowhere else — a platform this tree does not build in CI.
+// Neither half of that was written down before #5895; it is written down now.
+//
+// CALLER MUST HOLD fftwPlannerLock().
 bool exportWisdomAtomically(const std::string& directory)
 {
     const std::string wisdomFile = wisdomPathForDirectory(directory);
@@ -390,16 +400,47 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate, int overlap,
     m_gainIm.resize(m_msize);
 
 #ifdef HAVE_FFTW3
-    // FFTW-allocated complex arrays (16-byte aligned)
-    m_fftOut = fftw_alloc_complex(m_msize);
-    m_ifftIn = fftw_alloc_complex(m_msize);
-
     // Create plans — uses wisdom if available for optimal performance.
     // FFTW_MEASURE is used here: fast enough for the NR2 working sizes without
     // prior wisdom, and will use wisdom when it's been generated.
-    // Lock: FFTW plan creation is NOT thread-safe (#467)
+    //
+    // ONE PROCESS, ONE PLANNER, ONE LOCK. This class used to guard these two
+    // plans with a private static mutex of its own (#467, filed when "all
+    // FFTW usage is in SpectralNR.cpp" was still true). It stopped being true
+    // when WDSP was vendored: WdspChannel, Hl2Spectrum and AnanPanAnalyzer all
+    // reach the same process-global, double-precision planner, and two
+    // mutexes over one planner serialise nothing (#5895). See
+    // core/dsp/FftwPlannerLock.h — the lock is FFTW's, not any one class's.
+    //
+    // The window is one connect, and the two sides are on DIFFERENT threads
+    // whichever way this is reached. Hl2RxDsp::buildChannel runs
+    // WdspChannel::create() and then constructs Hl2Spectrum on the HL2 DSP
+    // build thread. createNr2Filter runs HERE, and which thread that is
+    // depends on the CALL SITE, because MainWindow moves AudioEngine to the
+    // audio worker thread (#502) and thread affinity does not redirect a
+    // DIRECT method call:
+    //
+    //   queued, audio worker thread — MainWindow.cpp's invokeMethod sites
+    //   direct, GUI thread          — AetherDspWidget's NR2 checkbox and
+    //                                 MainWindow_DspApplets, the two direct
+    //                                 sites that can pass TRUE and therefore
+    //                                 build a filter
+    //
+    // The other direct sites (AetherRxDialog, ClientRxChainWidget,
+    // MainWindow_Shortcuts) only ever pass false, so they reach the
+    // DESTRUCTOR on the GUI thread — microseconds of held work, but the same
+    // wait if another thread has the planner.
+    //
+    // The lock covers the ALLOCATIONS as well as the plans, the same width
+    // Hl2Spectrum's constructor uses and for the same reason: the two frames
+    // TSan named in #5424 are fftw_malloc_plain's memalign and a free on the
+    // WDSP thread, not the planner, so a plan-only lock leaves the reported
+    // edge unsynchronised. fftw_execute() stays unguarded.
     {
-        std::lock_guard<std::mutex> lock(s_fftwMutex);
+        auto lock = fftwPlannerLock();
+        // FFTW-allocated complex arrays (16-byte aligned)
+        m_fftOut = fftw_alloc_complex(m_msize);
+        m_ifftIn = fftw_alloc_complex(m_msize);
         m_planFwd = fftw_plan_dft_r2c_1d(fftSize, m_fftIn.data(),
                                           m_fftOut, FFTW_MEASURE);
         m_planRev = fftw_plan_dft_c2r_1d(fftSize, m_ifftIn,
@@ -470,11 +511,12 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate, int overlap,
 SpectralNR::~SpectralNR()
 {
 #ifdef HAVE_FFTW3
-    {
-        std::lock_guard<std::mutex> lock(s_fftwMutex);
-        if (m_planFwd) fftw_destroy_plan(m_planFwd);
-        if (m_planRev) fftw_destroy_plan(m_planRev);
-    }
+    // Same lock as the constructor, and over the frees for the same reason:
+    // the race #5424 reported was a free on one thread against an allocation
+    // on another, so guarding only destroy_plan leaves the teardown half open.
+    auto lock = fftwPlannerLock();
+    if (m_planFwd) fftw_destroy_plan(m_planFwd);
+    if (m_planRev) fftw_destroy_plan(m_planRev);
     if (m_fftOut)  fftw_free(m_fftOut);
     if (m_ifftIn)  fftw_free(m_ifftIn);
 #endif
@@ -676,7 +718,20 @@ bool SpectralNR::loadWisdom(const std::string& directory)
 {
 #ifdef HAVE_FFTW3
     const std::string wisdomFile = wisdomPathForDirectory(directory);
-    std::lock_guard<std::mutex> lock(s_fftwMutex);
+    // The wisdom store is process-global and shared with WdspChannel's own
+    // cache at a different path, so an import mutates state the WDSP planner
+    // reads — and, because fftw_export_wisdom_to_filename writes the WHOLE
+    // accumulated store, each side's file already carries the other's
+    // entries. NOT RECURSIVE: generateWisdom() calls this before it takes the
+    // lock itself, and fftwPlannerLock() hands out a plain std::mutex.
+    //
+    // REACHED FROM THE GUI THREAD. AudioEngine's constructor
+    // (logNr2WisdomSummary) and AudioEngine::needsWisdomGeneration(), which
+    // MainWindow::enableNr2WithWisdom() calls before every NR2 enable, both
+    // land here. The import itself is well under a millisecond; what is new
+    // with a shared lock is the WAIT, bounded by whatever FFTW work another
+    // thread is holding the planner for.
+    auto lock = fftwPlannerLock();
     return fftw_import_wisdom_from_filename(wisdomFile.c_str()) != 0;
 #else
     (void)directory;
@@ -713,7 +768,7 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
         if (!appData.isEmpty()) {
             std::string thetisWisdom = std::string(appData.constData())
                 + "\\OpenHPSDR\\Thetis-x64\\wdspWisdom00";
-            std::lock_guard<std::mutex> lock(s_fftwMutex);
+            auto lock = fftwPlannerLock();
             if (fftw_import_wisdom_from_filename(thetisWisdom.c_str())) {
                 if (cancelled())
                     return WisdomResult::Cancelled;
@@ -735,11 +790,41 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
     // This takes several minutes on first run.  FFTW_PATIENT produces
     // highly optimised plans for each size.
     constexpr int maxSize = 262144;
-    auto* cbuf = fftw_alloc_complex(maxSize);
-    auto* rbuf = static_cast<double*>(fftw_malloc(maxSize * sizeof(double)));
-    if (!cbuf || !rbuf) {
+    // Allocated and released under the planner lock, like the constructor's
+    // buffers: fftw_malloc_plain is one half of the edge #5424 names. 6 MB
+    // here, so the hold is a memalign and nothing else.
+    fftw_complex* cbuf = nullptr;
+    double* rbuf = nullptr;
+    {
+        auto lock = fftwPlannerLock();
+        cbuf = fftw_alloc_complex(maxSize);
+        rbuf = static_cast<double*>(fftw_malloc(maxSize * sizeof(double)));
+    }
+    // fftw_free(nullptr) is a no-op, so this is safe on the allocation-failure
+    // path too. NEVER call it while already holding the lock —
+    // fftwPlannerLock() hands out a plain std::mutex and std::mutex is not
+    // recursive. The same rule is why exportWisdomAtomically() above does not
+    // lock itself; see its comment.
+    //
+    // IDEMPOTENT BY CONSTRUCTION, not by call-site discipline. It nulls what
+    // it frees. No second call is reachable today — all seven call sites
+    // below return before reaching another — but "today" is the whole of the
+    // guarantee, and the shape that would break it is a copy-paste: this
+    // function has thirteen loop iterations of four near-identical blocks,
+    // each ending freeBuffers() / remove() / return, and a fifth plan type or
+    // a new cancel point added by copying one of them is exactly the edit
+    // that drops the return. Nulling does not make that edit correct — it
+    // would then plan on a null buffer — but it turns silent heap corruption
+    // into a deterministic failure at the point of the mistake.
+    const auto freeBuffers = [&cbuf, &rbuf] {
+        auto lock = fftwPlannerLock();
         fftw_free(rbuf);
+        rbuf = nullptr;
         fftw_free(cbuf);
+        cbuf = nullptr;
+    };
+    if (!cbuf || !rbuf) {
+        freeBuffers();
         std::remove(wisdomTempPathForDirectory(directory).c_str());
         qCWarning(lcDsp) << "SpectralNR: failed to allocate buffers for FFTW wisdom";
         return WisdomResult::Failed;
@@ -757,14 +842,13 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
 
         // 1. Complex forward
         if (cancelled()) {
-            fftw_free(rbuf);
-            fftw_free(cbuf);
+            freeBuffers();
             std::remove(wisdomTempPathForDirectory(directory).c_str());
             return WisdomResult::Cancelled;
         }
         if (progress) progress(step, totalSteps,
             "Computing COMPLEX FORWARD FFT size " + std::to_string(psize) + "...");
-        {   std::lock_guard<std::mutex> lock(s_fftwMutex);
+        {   auto lock = fftwPlannerLock();
             fftw_plan p = fftw_plan_dft_1d(psize, cbuf, cbuf,
                                             FFTW_FORWARD, FFTW_PATIENT);
             if (p) fftw_destroy_plan(p);
@@ -773,14 +857,13 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
 
         // 2. Complex backward (same size)
         if (cancelled()) {
-            fftw_free(rbuf);
-            fftw_free(cbuf);
+            freeBuffers();
             std::remove(wisdomTempPathForDirectory(directory).c_str());
             return WisdomResult::Cancelled;
         }
         if (progress) progress(step, totalSteps,
             "Computing COMPLEX BACKWARD FFT size " + std::to_string(psize) + "...");
-        {   std::lock_guard<std::mutex> lock(s_fftwMutex);
+        {   auto lock = fftwPlannerLock();
             fftw_plan p = fftw_plan_dft_1d(psize, cbuf, cbuf,
                                             FFTW_BACKWARD, FFTW_PATIENT);
             if (p) fftw_destroy_plan(p);
@@ -789,14 +872,13 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
 
         // 3. Real-to-complex forward
         if (cancelled()) {
-            fftw_free(rbuf);
-            fftw_free(cbuf);
+            freeBuffers();
             std::remove(wisdomTempPathForDirectory(directory).c_str());
             return WisdomResult::Cancelled;
         }
         if (progress) progress(step, totalSteps,
             "Computing REAL-TO-COMPLEX FFT size " + std::to_string(psize) + "...");
-        {   std::lock_guard<std::mutex> lock(s_fftwMutex);
+        {   auto lock = fftwPlannerLock();
             fftw_plan p = fftw_plan_dft_r2c_1d(psize, rbuf, cbuf, FFTW_PATIENT);
             if (p) fftw_destroy_plan(p);
         }
@@ -804,14 +886,13 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
 
         // 4. Complex-to-real inverse
         if (cancelled()) {
-            fftw_free(rbuf);
-            fftw_free(cbuf);
+            freeBuffers();
             std::remove(wisdomTempPathForDirectory(directory).c_str());
             return WisdomResult::Cancelled;
         }
         if (progress) progress(step, totalSteps,
             "Computing COMPLEX-TO-REAL FFT size " + std::to_string(psize) + "...");
-        {   std::lock_guard<std::mutex> lock(s_fftwMutex);
+        {   auto lock = fftwPlannerLock();
             fftw_plan p = fftw_plan_dft_c2r_1d(psize, cbuf, rbuf, FFTW_PATIENT);
             if (p) fftw_destroy_plan(p);
         }
@@ -819,19 +900,17 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
     }
 
     if (cancelled()) {
-        fftw_free(rbuf);
-        fftw_free(cbuf);
+        freeBuffers();
         std::remove(wisdomTempPathForDirectory(directory).c_str());
         return WisdomResult::Cancelled;
     }
 
     bool exported = false;
     {
-        std::lock_guard<std::mutex> lock(s_fftwMutex);
+        auto lock = fftwPlannerLock();
         exported = exportWisdomAtomically(directory);
     }
-    fftw_free(rbuf);
-    fftw_free(cbuf);
+    freeBuffers();
     if (cancelled()) {
         std::remove(wisdomPathForDirectory(directory).c_str());
         std::remove(wisdomTempPathForDirectory(directory).c_str());

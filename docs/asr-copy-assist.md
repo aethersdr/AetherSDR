@@ -50,8 +50,12 @@ Design + decision record: RFC **#4333** (accepted). Engine: **whisper.cpp**
 - The status line shows a **`Queue: N s`** backlog — seconds of received audio not
   yet transcribed. It stays near 0 when the engine keeps up and climbs
   (amber→red) when it can't (e.g. whisper on a Raspberry Pi), so you can see ASR
-  falling behind. If it grows without bound, use a smaller model, the remote
-  backend, or faster hardware.
+  falling behind. It cannot grow without bound: once the backlog reaches twice
+  the **Buffer** setting (never less than 10 s) the engine drops incoming audio
+  until it has drained to half that, and the label reads **`Queue: N s · dropped
+  M s`** in red — those seconds were never transcribed, so the transcript has
+  gaps. A retune or Disable resets both numbers. If you see it, use a smaller
+  model, the remote backend, a longer Buffer, or faster hardware.
 
 ### Settings (⚙)
 

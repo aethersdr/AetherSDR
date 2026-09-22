@@ -124,7 +124,16 @@ signals:
     void stateChanged();               // any property changed
     void tuningChanged(bool tuning);   // tuning started/stopped
     void antennaAChanged(int antA);    // antenna port changed (0-indexed)
-    void metersChanged(float fwdPower, float swr);  // fwd power/SWR from direct TGXL
+    // fwd power / SWR / peak power from a direct TGXL connection.
+    //
+    // fwdPeak is the device's own peak, not ours. The TGXL is poll-response
+    // only and `fwd` is an instantaneous sample, so on SSB most polls land
+    // between syllables at the noise floor -- measured on a live voice
+    // transmission, roughly three samples in four read 0.14 W while the
+    // envelope was hitting 82 W. A peak taken from those samples is a peak of
+    // the silences. `peak` is computed on the device's own timebase, where
+    // the envelope is actually visible.
+    void metersChanged(float fwdPower, float swr, float fwdPeak);
     // Alert text from the tuner; empty means cleared. See TgxlConnection.
     void alertChanged(const QString& text);
     // Either port's reported source/frequency/keying moved.
@@ -161,6 +170,7 @@ private:
     int     m_relayC2{0};
     int     m_antennaA{-1};   // 0-indexed antenna port (-1 = unknown)
     float   m_fwdPower{0.0f};  // forward power in watts (from direct TGXL status)
+    float   m_fwdPeak{0.0f};   // device-side peak power in watts (TGXL `peak`)
     float   m_swr{1.0f};      // SWR ratio (from direct TGXL status)
     bool    m_oneByThree{false}; // true for TGXL 3x1 model (from one_by_three=1)
 

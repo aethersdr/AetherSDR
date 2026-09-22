@@ -186,7 +186,10 @@ CopyAssistPanel::CopyAssistPanel(QWidget* parent)
     m_backlog = new QLabel(this);
     m_backlog->setObjectName(QStringLiteral("CopyAssistBacklog"));
     m_backlog->setAccessibleName(tr("Transcription backlog"));
-    m_backlog->setToolTip(tr("Seconds of received audio still waiting to be transcribed"));
+    m_backlog->setToolTip(tr("Seconds of received audio still waiting to be transcribed. "
+                             "When the model cannot keep up, audio beyond the queue "
+                             "ceiling (twice the Buffer, at least 10 s) is dropped; the "
+                             "dropped total since the last retune or Disable is shown here."));
     m_backlog->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     setBacklog(0.0);
     statusRow->addWidget(m_backlog);
@@ -289,21 +292,45 @@ void CopyAssistPanel::setBusy(bool on)
 
 void CopyAssistPanel::setBacklog(double seconds)
 {
-    if (seconds < 0.0) {
-        seconds = 0.0;
+    m_backlogSeconds = std::max(0.0, seconds);
+    renderBacklog();
+}
+
+void CopyAssistPanel::setDroppedAudio(double seconds)
+{
+    m_droppedSeconds = std::max(0.0, seconds);
+    renderBacklog();
+}
+
+void CopyAssistPanel::renderBacklog()
+{
+    const double seconds = m_backlogSeconds;
+    if (m_droppedSeconds > 0.0) {
+        // The engine hit its backlog ceiling (#5730): audio is being (or was)
+        // discarded, so the transcript has gaps — say so next to the queue.
+        m_backlog->setText(tr("Queue: %1 s · dropped %2 s")
+                               .arg(seconds, 0, 'f', 1)
+                               .arg(m_droppedSeconds, 0, 'f', 1));
+    } else {
+        m_backlog->setText(tr("Queue: %1 s").arg(seconds, 0, 'f', 1));
     }
-    m_backlog->setText(tr("Queue: %1 s").arg(seconds, 0, 'f', 1));
     // Escalate colour as it falls behind: theme-default when keeping up, amber,
-    // then red once badly behind (e.g. on a Pi that can't hit real time).
+    // then red once badly behind (e.g. on a Pi that can't hit real time) or
+    // once anything has been dropped.
     QString color;
-    if (seconds > 10.0) {
+    if (seconds > 10.0 || m_droppedSeconds > 0.0) {
         color = QStringLiteral("#ff6060");
     } else if (seconds > 2.0) {
         color = QStringLiteral("#e0a020");
     }
-    m_backlog->setStyleSheet(color.isEmpty()
-                                 ? QString()
-                                 : QStringLiteral("QLabel { color: %1; }").arg(color));
+    // Two 0.1 s-resolution signals drive this while saturated; restyle only on
+    // a colour change, not on every tick.
+    if (color != m_backlogColor) {
+        m_backlogColor = color;
+        m_backlog->setStyleSheet(color.isEmpty()
+                                     ? QString()
+                                     : QStringLiteral("QLabel { color: %1; }").arg(color));
+    }
 }
 
 void CopyAssistPanel::setStatus(const QString& text)

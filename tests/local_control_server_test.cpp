@@ -8,6 +8,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalSocket>
+#include <QLockFile>
+#include "core/control/LocalCredentialHandshake.h"
 #include <QProcess>
 #include <QThread>
 #include <QTextStream>
@@ -109,6 +111,53 @@ bool contains(const QJsonArray& values, const QString& expected)
         }
     }
     return false;
+}
+
+bool runCredentialBindingTest()
+{
+    using namespace AetherSDR::control;
+    const QString authority = QUuid::createUuid().toString(QUuid::Id128);
+    auto reservation = LocalControlServer::reserveCredentialAuthority(authority);
+    if (!check(reservation && !LocalControlServer::reserveCredentialAuthority(authority)
+                   && !LocalControlServer::reserveCredentialAuthority(QStringLiteral("invalid/path")),
+               "one authority reservation must exclude other endpoints/provisioners")) { return false; }
+    reservation.reset();
+    reservation = LocalControlServer::reserveCredentialAuthority(authority);
+    if (!check(bool(reservation), "releasing an authority reservation must permit explicit restart")) { return false; }
+    ControlCredentials credentials;
+    const auto record = ControlCredentials::generate(ControlCredentials::Role::GrantAdmin);
+    LocalControlServer server;
+    if (!check(credentials.replace({record})
+                   && server.listen(uniqueName(QStringLiteral("aetherd-credential-")), LocalControlServer::ListenMode::ReserveEndpoint)
+                   && server.bindCredentials(&credentials) && server.startServing()
+                   && !server.bindCredentials(&credentials),
+               "credential binding must finish while endpoint is reserved, never after serving")) { return false; }
+    QLocalSocket client;
+    if (!connectSocket(&client, server)) { return false; }
+    const QJsonObject auth{{QStringLiteral("scheme"), QStringLiteral("bearer")},
+                          {QStringLiteral("token"), QString::fromLatin1(record.secret.toHex())}};
+    const auto verifiedHello = exchangeCredentialHello(record.secret,
+        [&client] { return localServerIsCurrentUser(client.socketDescriptor()); },
+        [&client](const QJsonObject& request) { return exchange(&client, request); });
+    if (!check(verifiedHello.has_value(), "real local socket must verify its current-user server before sending credentials")) {
+        return false;
+    }
+    const QJsonObject welcome = *verifiedHello;
+    if (!check(errorCode(welcome).isEmpty()
+                   && welcome.value(QStringLiteral("result")).toObject().value(QStringLiteral("grants")).toArray()
+                       == QJsonArray{QStringLiteral("observe")}
+                   && !QJsonDocument(welcome).toJson().contains(record.secret.toHex()),
+               "verified admin hello over real local transport must remain non-TX and redact secrets")) { return false; }
+    if (!check(credentials.revoke(record.id)
+                   && waitUntil([&] { return client.state() == QLocalSocket::UnconnectedState; }),
+               "credential retirement must abort its real local transport")) { return false; }
+    QLocalSocket rejected;
+    if (!connectSocket(&rejected, server)) { return false; }
+    if (!check(errorCode(exchange(&rejected, helloRequest({{QStringLiteral("auth"), auth}}))) == QStringLiteral("auth.invalid"),
+               "retired credential cannot fall back to implicit observer on reconnect")) { return false; }
+    QLocalSocket observer;
+    return check(connectSocket(&observer, server) && errorCode(exchange(&observer, helloRequest())).isEmpty(),
+                 "credential revocation must preserve unrelated anonymous local observation");
 }
 
 bool runProtocolTest()
@@ -609,6 +658,7 @@ int main(int argc, char* argv[])
         return app.exec();
     }
     return runProtocolTest()
+        && runCredentialBindingTest()
         && runHelloValidationTest()
         && runMalformedInputTest()
         && runHandshakeTimeoutTest()

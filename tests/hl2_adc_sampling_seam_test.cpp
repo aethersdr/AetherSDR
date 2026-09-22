@@ -73,6 +73,28 @@ static void feedOneBlock(Hl2RxDsp& dsp, double& phase)
 // The bound is what keeps a chain that has genuinely stopped from hanging the
 // test: it returns false and the caller asserts on that.
 static constexpr int kMaxBlocksForOneSample = 16;
+// Comfortably more than Hl2RxDsp's post-unmute S-meter settle window, which is
+// ~15 blocks at this rate and block size. DELIBERATELY NOT the same arithmetic
+// the implementation uses: a test that recomputes the window it is measuring
+// agrees with itself whatever the window is actually doing. This only has to be
+// "enough blocks that the meter has had its say"; what is asserted is the VALUE
+// that comes out, which no amount of extra feeding can fake.
+static constexpr int kBlocksPastSettle = 40;
+// An over, in blocks: 235 blocks of 1024 samples at 48 kHz is ~5 s, which is a
+// short over and already ~50 time constants of the meter's 0.1 s average. If
+// the settle window were sized wrong this is long enough to bury the needle.
+static constexpr int kBlocksPerOver = 235;
+// How close the first reading published after an over has to be to the last one
+// published before it. The tone is unchanged across the over, so the honest
+// answer is "the same", and three decibels is slack rather than a target: the
+// settle window is three time constants of the meter's average, but the RXA
+// bandpass's group delay spends about 85 ms of that still carrying the mute's
+// zeros, which leaves the average a little over two taus and ~0.5 dB of
+// residual. The measured gap is printed next to this check so a drift toward
+// the bound is visible rather than merely still passing. Before the settle
+// window existed the gap was ~214 dB, so this bound is nowhere near tight
+// enough to be the thing that fails first if the fix is wrong.
+static constexpr float kMeterResumeToleranceDb = 3.0f;
 static bool feedUntilNewPeak(Hl2RxDsp& dsp, double& phase, std::int64_t previousStamp)
 {
     for (int i = 0; i < kMaxBlocksForOneSample; ++i) {
@@ -101,6 +123,26 @@ int main(int argc, char** argv)
 
     double phase = 0.0;
     SliceSamplingGate gate;
+
+    // THE S-METER TAP, WATCHED FROM ONE CONNECTION FOR THE WHOLE TEST.
+    //
+    // Every assertion about the meter below reads this recorder, so the
+    // negative ones ("nothing was published") and the positive ones ("this
+    // value was published") are statements about the same wire. A connection
+    // that was never made, a renamed signal or a chain that stopped producing
+    // blocks cannot satisfy the negatives while the positives still hold — that
+    // is what makes an assertion about an absence mean anything here.
+    int meterEmissions = 0;
+    float firstMeterDbfs = 0.0f;
+    float lastMeterDbfs = 0.0f;
+    QObject::connect(&dsp, &Hl2RxDsp::meterUpdate, &dsp, [&](float dbfs) {
+        // Re-armed by setting meterEmissions back to 0, which every section
+        // below does before the window it cares about.
+        if (meterEmissions == 0)
+            firstMeterDbfs = dbfs;
+        ++meterEmissions;
+        lastMeterDbfs = dbfs;
+    });
 
     // The backend's two call sites, reproduced. `requested` is the predicted
     // input as it stood before this gate existed — `!(keyed && !monitor)` — and
@@ -139,6 +181,38 @@ int main(int argc, char** argv)
     const std::int64_t frozen = dsp.adcPeakObservedAtNs();
     check(!feedUntilNewPeak(dsp, phase, frozen),
           "a muted chain holds its peak and its stamp for as long as it is fed");
+
+    // ── AND THE S-METER MUST FREEZE WITH IT ──────────────────────────────
+    //
+    // The muted branch of processIqBlock clocks the channel with literal zeros
+    // on purpose. The ADC peak above is guarded against that; the S-meter tap
+    // was not, so `avg` measured the silence this code fed it and published it
+    // as a level. Because the mute is the TRANSMIT mute, that dropped the
+    // needle to the floor on every key-down.
+    //
+    // Asserted on the same muted chain the peak assertion just used, so the two
+    // cannot disagree about what "muted" meant.
+    //
+    // THE POSITIVE CONTROL FOR THIS ABSENCE IS NOT HERE — it is the unkey-edge
+    // section at the end of this file, which unmutes the same chain through the
+    // same recorder and requires the emissions to start. It used to sit inline,
+    // and ten9876 caught what that cost: the sixteen unmuted blocks it fed
+    // advanced adcPeakObservedAtNs() past `frozen`, so the "the chain resumes
+    // sampling" assertion further down became true from its first block whether
+    // or not the unmute had landed. Re-capturing `frozen` afterwards would have
+    // repaired that assertion; moving the control out of this window instead
+    // means nothing has to be repaired, and the mute never gets released inside
+    // a stretch of the test whose whole subject is what a MUTED chain does.
+    {
+        const int emissionsBefore = meterEmissions;
+        for (int i = 0; i < kMaxBlocksForOneSample; ++i) {
+            feedOneBlock(dsp, phase);
+        }
+        app.processEvents();
+        check(meterEmissions == emissionsBefore,
+              "a muted chain publishes NO S-meter level — it is not a signal, "
+              "it is the silence we clocked in");
+    }
 
     // ── Key up, short. THE BUG. ──────────────────────────────────────────
     //
@@ -221,6 +295,78 @@ int main(int argc, char** argv)
     {
         SliceSamplingGate g;
         check(!g.applied(0), "a chain that has never produced a block is not sampling");
+    }
+
+    // ── THE UNKEY EDGE: what the mute leaves BEHIND inside WDSP ──────────
+    //
+    // Not publishing while muted is only half of it, and on its own it moves
+    // the artefact rather than removing it. WDSP's S_AV is an EMA over
+    // I*I + Q*Q with a 0.100 s time constant (meter.c, tau from RXA.c), it
+    // integrated every zero Hl2RxDsp clocked in for the whole over, and there
+    // is no flush that helps — flush_meter sets the accumulator to 0, which is
+    // the -400 dB floor. So the first block after the unmute reads the silence
+    // at full depth, and the needle dives on UNKEY instead of on key-down.
+    // ten9876 measured that on this branch's head: -224.5 dBFS against a
+    // pre-mute -10.5, which Hl2Backend's attack/decay EMA turns into a ~32 dB
+    // step at the instant of unkey and ~300 ms of climb back.
+    //
+    // This is the assertion that pins the whole fix, because it is the only one
+    // stated in the units an operator sees: the FIRST number published after an
+    // over, against the last number published before it, with the input signal
+    // unchanged across the over. It cannot be satisfied by a guard alone and it
+    // cannot be satisfied by suppressing everything — the positive control one
+    // line above it requires the publishing to have restarted.
+    //
+    // It is also the positive control the muted-chain assertion earlier in this
+    // file needs: same dsp, same recorder, same connection.
+    {
+        // Back on air, and let the meter settle onto the tone.
+        keyed = false;
+        monitor = false;
+        queueMute();
+        app.processEvents();
+        meterEmissions = 0;
+        for (int i = 0; i < kBlocksPastSettle; ++i)
+            feedOneBlock(dsp, phase);
+        app.processEvents();
+        check(meterEmissions > 0,
+              "an UNMUTED chain publishes — so every 'nothing was published' in "
+              "this file is a guard firing, not a dead connection");
+        const float beforeTheOver = lastMeterDbfs;
+
+        // Key down and hold it for an over.
+        keyed = true;
+        queueMute();
+        app.processEvents();
+        meterEmissions = 0;
+        for (int i = 0; i < kBlocksPerOver; ++i)
+            feedOneBlock(dsp, phase);
+        app.processEvents();
+        check(meterEmissions == 0,
+              "nothing is published for the length of the over, however long it is");
+
+        // Unkey. The tone never went away; only our own mute did.
+        keyed = false;
+        queueMute();
+        app.processEvents();
+        meterEmissions = 0;
+        for (int i = 0; i < kBlocksPastSettle; ++i)
+            feedOneBlock(dsp, phase);
+        app.processEvents();
+        check(meterEmissions > 0, "and publishing resumes after the over");
+        // Only once it has resumed: firstMeterDbfs is whatever the recorder
+        // last captured, so comparing it after a failed resume would print a
+        // reading nothing published and turn one cause into two failures.
+        if (meterEmissions > 0) {
+            std::printf("  S-meter across an over: %.1f dBFS before, %.1f dBFS on the "
+                        "first reading after (%+.1f dB)\n",
+                        static_cast<double>(beforeTheOver),
+                        static_cast<double>(firstMeterDbfs),
+                        static_cast<double>(firstMeterDbfs - beforeTheOver));
+            check(std::fabs(firstMeterDbfs - beforeTheOver) <= kMeterResumeToleranceDb,
+                  "THE FIRST READING AFTER AN OVER IS A READING OF THE BAND, not of "
+                  "the silence we clocked into WDSP's average while we transmitted");
+        }
     }
 
     if (g_failures == 0) {

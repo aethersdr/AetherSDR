@@ -107,7 +107,7 @@ SpeApplet::SpeApplet(QWidget* parent)
     m_pwrLabel->setText("PWR");
     m_pwrGauge = new HGauge(0.0f, 1600.0f, 1500.0f, "", "",
         evenTicks(1600.0f), this, 1450.0f);
-    m_pwrGauge->setBallistics({0.030f, 0.800f});
+    m_pwrGauge->setWindowPeakEnabled(true);
     m_pwrGauge->setAccessibleName(tr("Output power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setSpacing(4);
@@ -362,14 +362,6 @@ SpeApplet::SpeApplet(QWidget* parent)
     connect(&m_labelTimer, &QTimer::timeout, this, &SpeApplet::updateValueLabels);
     m_labelTimer.start();
 
-    m_peakTimer = new QTimer(this);
-    m_peakTimer->setSingleShot(true);
-    m_peakTimer->setInterval(2500);
-    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
-        m_peakFwd = 0.0f;
-        m_pwrGauge->clearPeak();
-    });
-
     applyDensity();
     setConnected(false);
 }
@@ -493,11 +485,7 @@ void SpeApplet::setForwardPower(float watts)
 {
     m_fwdWatts = watts;
     m_pwrGauge->setValue(watts);
-    if (watts > m_peakFwd) {
-        m_peakFwd = watts;
-        m_pwrGauge->setPeakValue(watts);
-        m_peakTimer->start();
-    }
+    // Peak marker: HGauge's sliding window, fed by setValue (canon).
 }
 
 void SpeApplet::setSwrAnt(float swr)
@@ -697,11 +685,9 @@ void SpeApplet::clearTelemetry()
     m_fwdWatts = 0.0f;
     m_swrAntVal = 1.0f;
     m_swrAtuVal = 1.0f;
-    // Clear the forward-power peak hold too — a stale peak would
-    // otherwise survive into the next session (same fix AcomApplet
-    // carries in its setConnected).
-    m_peakFwd = 0.0f;
-    if (m_peakTimer) m_peakTimer->stop();
+    // Clear the forward-power peak too — a stale marker would otherwise
+    // survive into the next session. clearPeak() drops the gauge's sliding
+    // window as well, which is what actually retires it now.
     m_pwrGauge->setValueImmediate(0.0f);
     m_pwrGauge->clearPeak();
     m_swrAntGauge->setValueImmediate(1.0f);

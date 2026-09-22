@@ -422,6 +422,10 @@ private:
     QJsonObject doGrab(const QString& target, const QString& path) const;
     // Full plain text of one QTextEdit/QPlainTextEdit view (#5078). Read-only.
     QJsonObject doGetText(const QString& target) const;
+    // gauge [<target>]: one meter's value, peak and painted fraction, or all
+    // of them. Read-only; exists because monitoring a meter means sampling it
+    // and dumpTree is the whole tree.
+    QJsonObject doGauge(const QString& target) const;
     // grab pan <index> [path]: capture the raw SpectrumWidget framebuffer for a
     // specific pan (by SpectrumWidget::panIndex) in a multi-pan layout — plain
     // `grab SpectrumWidget` only ever resolves the first one (#3646).

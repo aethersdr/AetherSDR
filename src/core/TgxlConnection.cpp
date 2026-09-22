@@ -11,7 +11,10 @@ TgxlConnection::TgxlConnection(QObject* parent)
     connect(&m_socket, &QTcpSocket::readyRead, this, &TgxlConnection::onReadyRead);
     connect(&m_socket, &QTcpSocket::errorOccurred, this, &TgxlConnection::onError);
 
-    m_pollTimer.setInterval(1000);
+    // Starts at the receive rate; status frames move it. See the header
+    // for where these two numbers come from -- both are measured, not
+    // chosen for comfort.
+    m_pollTimer.setInterval(kPollRxMs);
     connect(&m_pollTimer, &QTimer::timeout, this, &TgxlConnection::pollStatus);
 
     // Retries every 5s indefinitely until the device returns or the user disconnects.
@@ -33,6 +36,7 @@ void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
     m_reconnectTimer.stop();
     // Abort any pending or active connection before starting a new one (#1039)
     m_pollTimer.stop();
+    m_pollInFlight = false;
     m_connected = false;
     m_gotVersion = false;
     m_version.clear();
@@ -48,6 +52,7 @@ void TgxlConnection::disconnect()
     m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
     m_pollTimer.stop();
+    m_pollInFlight = false;
     m_connected = false;
     m_socket.disconnectFromHost();
 }
@@ -62,6 +67,7 @@ void TgxlConnection::onDisconnected()
 {
     qCDebug(lcTuner) << "TgxlConnection: disconnected";
     m_pollTimer.stop();
+    m_pollInFlight = false;
     m_connected = false;
     emit disconnected();
     if (!m_deliberateDisconnect && m_autoReconnect && !m_lastHost.isEmpty()) {
@@ -148,8 +154,11 @@ void TgxlConnection::processLine(const QString& line)
                     if (eq > 0)
                         kvs.insert(part.left(eq), part.mid(eq + 1));
                 }
-                if (!kvs.isEmpty())
+                if (!kvs.isEmpty()) {
+                    m_pollInFlight = false;   // reply landed
+                    applyPollRateFor(kvs);
                     emit statusUpdated(kvs);
+                }
             }
         }
         return;
@@ -185,10 +194,36 @@ void TgxlConnection::processLine(const QString& line)
         if (object == "state") {
             emit stateUpdated(kvs);
         } else if (object == "status") {
+            m_pollInFlight = false;   // reply landed
+                    applyPollRateFor(kvs);
             emit statusUpdated(kvs);
         }
         return;
     }
+}
+
+// Either port keyed counts: the tuner is passing power on one of them, and
+// that is what the meter is reading.
+void TgxlConnection::applyPollRateFor(const QMap<QString, QString>& kvs)
+{
+    if (!kvs.contains("pttA") && !kvs.contains("pttB")) return;
+    const bool tx = kvs.value("pttA").toInt() != 0 || kvs.value("pttB").toInt() != 0;
+    setTransmitting(tx);
+}
+
+void TgxlConnection::setTransmitting(bool tx)
+{
+    if (m_transmitting == tx) return;
+    m_transmitting = tx;
+    const int interval = tx ? kPollTxMs : kPollRxMs;
+    if (m_pollTimer.interval() != interval) {
+        m_pollTimer.setInterval(interval);
+        // Restart so the new rate takes effect now rather than after the
+        // remainder of a 250 ms receive tick -- which is most of the first
+        // syllable.
+        if (m_pollTimer.isActive()) m_pollTimer.start();
+    }
+    qCDebug(lcTuner) << "TgxlConnection: poll rate ->" << interval << "ms (tx" << tx << ")";
 }
 
 quint32 TgxlConnection::sendCommand(const QString& cmd)
@@ -216,8 +251,14 @@ void TgxlConnection::requestAutotune()
 
 void TgxlConnection::pollStatus()
 {
-    if (m_connected)
-        sendCommand("status");
+    if (!m_connected) return;
+    if (m_pollInFlight && m_pollSent.isValid()
+        && m_pollSent.elapsed() < kPollStaleMs) {
+        return;   // previous poll still outstanding
+    }
+    m_pollInFlight = true;
+    m_pollSent.restart();
+    sendCommand("status");
 }
 
 } // namespace AetherSDR

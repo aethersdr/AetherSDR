@@ -1093,6 +1093,7 @@ void CopyAssistController::buildEngine()
         }
     });
     connect(m_asr, &AsrEngine::backlogChanged, m_panel, &CopyAssistPanel::setBacklog);
+    connect(m_asr, &AsrEngine::droppedAudioChanged, m_panel, &CopyAssistPanel::setDroppedAudio);
     connect(m_asr, &AsrEngine::speakerModelLoaded, this,
             &CopyAssistController::onSpeakerModelLoaded);
 

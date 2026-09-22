@@ -137,7 +137,7 @@ VkampApplet::VkampApplet(QWidget* parent)
     m_pwrLabel->setText("PWR");
     m_pwrGauge = new HGauge(0.0f, Vkamp::meterFullScaleWatts(m_variant), Vkamp::ratedWatts(m_variant),
         "", "", evenTicks(Vkamp::meterFullScaleWatts(m_variant)), this);
-    m_pwrGauge->setBallistics({0.030f, 0.800f});
+    m_pwrGauge->setWindowPeakEnabled(true);
     m_pwrGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setSpacing(4);
@@ -342,14 +342,6 @@ VkampApplet::VkampApplet(QWidget* parent)
     connect(&m_labelTimer, &QTimer::timeout, this, &VkampApplet::updateValueLabels);
     m_labelTimer.start();
 
-    m_peakTimer = new QTimer(this);
-    m_peakTimer->setSingleShot(true);
-    m_peakTimer->setInterval(2500);
-    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
-        m_peakFwd = 0.0f;
-        m_pwrGauge->clearPeak();
-    });
-
     setConnected(false);
 }
 
@@ -369,8 +361,6 @@ void VkampApplet::clearTelemetry()
     m_reflectedWatts = 0.0f;
     m_swrVal = 1.0f;
     m_currentAmps = 0.0f;
-    m_peakFwd = 0.0f;
-    if (m_peakTimer) { m_peakTimer->stop(); }
     m_pwrGauge->setValue(0.0f);
     m_pwrGauge->clearPeak();
     m_refGauge->setValue(0.0f);
@@ -383,11 +373,7 @@ void VkampApplet::setForwardPower(float watts)
 {
     m_fwdWatts = watts;
     m_pwrGauge->setValue(watts);
-    if (watts > m_peakFwd) {
-        m_peakFwd = watts;
-        m_pwrGauge->setPeakValue(watts);
-        m_peakTimer->start();
-    }
+    // Peak marker: HGauge's sliding window, fed by setValue (canon).
     m_valuesDirty = true;
 }
 
@@ -588,8 +574,6 @@ void VkampApplet::setConnected(bool connected)
         m_fwdWatts = 0.0f;
         m_reflectedWatts = 0.0f;
         m_swrVal = 1.0f;
-        m_peakFwd = 0.0f;
-        if (m_peakTimer) { m_peakTimer->stop(); }
         m_pwrGauge->setValueImmediate(0.0f);
         m_pwrGauge->clearPeak();
         m_refGauge->setValueImmediate(0.0f);
