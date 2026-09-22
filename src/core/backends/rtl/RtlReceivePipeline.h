@@ -15,6 +15,16 @@ class RtlReceivePipeline final : private RtlReceiverRegistry::BlockProcessor,
                                  private RtlAudioMixer::Sink {
 public:
     using Transaction = RtlCaptureTransaction;
+    struct Diagnostics {
+        bool observed = false;
+        std::uint64_t droppedPackets = 0;
+        std::uint64_t mixerLateFrames = 0;
+        std::uint64_t mixerRejectedBlocks = 0;
+        std::uint64_t mixerConfigurationFailures = 0;
+    };
+    // Independently sampled lifetime counters, not one atomic point-in-time
+    // transaction. The control owner caches these for healthSnapshot().
+    Diagnostics diagnostics() const noexcept;
     struct Packet {
         Transaction::Token token;
         std::uint64_t captureEpoch = 0;
@@ -40,6 +50,7 @@ public:
     std::uint64_t droppedPackets() const noexcept { return m_drops.load(std::memory_order_relaxed); }
     bool legacy() const noexcept { return m_legacy; }
 private:
+    friend struct RtlReceivePipelineTestAccess;
     void process(const RtlReceiverRegistry::SampleBlock&, std::span<const RtlReceiverRegistry::ReceiverView>) noexcept override;
     void audioBlock(const RtlReceiverRegistry::ReceiverSpec&, std::uint64_t,
                     std::span<const float>, std::span<const float>, bool) noexcept override;
@@ -72,5 +83,9 @@ private:
     alignas(64) std::atomic<unsigned> m_write{0};
     alignas(64) std::atomic<unsigned> m_read{0};
     std::atomic<std::uint64_t> m_drops{0};
+    std::atomic<std::uint64_t> m_mixerLate{0};
+    std::atomic<std::uint64_t> m_mixerRejected{0};
+    std::atomic<std::uint64_t> m_mixerConfigurationFailures{0};
+    std::atomic<bool> m_observed{false};
 };
 } // namespace AetherSDR::rtl

@@ -613,20 +613,6 @@ RtlReceiverRegistry::Result RtlReceiverRegistry::submitImpl(const Capture& captu
     return Result::Accepted;
 }
 
-void RtlReceiverRegistry::cancelPending()
-{
-    if (!m_state) { return; }
-    const std::shared_ptr<Executor> controller = executor();
-    const std::scoped_lock lock(controller->mutex);
-    if (m_state->revision.load() == std::numeric_limits<std::uint64_t>::max()) {
-        controller->invalidateLocked(*m_state);
-    } else {
-        m_state->revision.fetch_add(1, std::memory_order_release);
-        if (controller->pending && controller->pending->state == m_state) { controller->pending.reset(); }
-    }
-    controller->kickLocked();
-}
-
 void RtlReceiverRegistry::cancelSession()
 {
     if (m_state) {

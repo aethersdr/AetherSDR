@@ -3,11 +3,32 @@
 #include <QElapsedTimer>
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"
+#include "models/RadioModel.h"
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include <QCoreApplication>
 #include <QJsonObject>
 #include <cstdio>
 using namespace AetherSDR;
+namespace AetherSDR {
+class RadioModelSliceLifecycleTestAccess {
+public:
+    static void forcePendingFlush(RadioModel& model)
+    {
+        // Normal never-published sessions have no pending timer. Explicitly
+        // inject a pending flush to exercise the defensive owner refusal too.
+        model.m_operatingStateSaveTimer.start();
+        model.flushPendingOperatingState();
+    }
+    static void queueDisconnectFlush(RadioModel& model)
+    { model.m_operatingStateSaveTimer.start(10000); }
+    static void restore(RadioModel& model, const QString& serial)
+    {
+        model.m_lastInfo.serial = serial;
+        model.m_lastInfo.serialIdentity = {serial, false};
+        model.handRestoredStateToBackend();
+    }
+};
+}
 namespace AetherSDR::rtl {
 struct RtlCaptureBackendTestAccess {
     static void accepted(RtlSdrBackend& backend, int id, double hz)
@@ -101,6 +122,34 @@ int main(int argc, char** argv)
             "unsupported saved hardware rate preserves valid initial capture without integer overflow or document rewrite");
     }
     {
+        // Exercise setupBackend's actual disconnect-flush ownership route.
+        const RadioSettingsScope unconfirmedScope("rtl", "never-published");
+        check(unconfirmedScope.setFeature("OperatingState", 2, legacy()), "pre-connect snapshot seeded");
+        RadioModel model;
+        check(model.rebuildBackendForTest("rtl"), "real model builds RTL without opening USB");
+        RadioModelSliceLifecycleTestAccess::restore(model, "never-published");
+        auto* unconfirmed = static_cast<rtl::RtlSdrBackend*>(model.backend());
+        auto device = std::make_shared<test::DeviceState>();
+        rtl::RtlCaptureBackendTestAccess::start(*unconfirmed, std::make_unique<test::InjectedDevice>(device));
+        check(model.settingsScope().radioId() == unconfirmedScope.radioId(), "model owns the expected unconfirmed radio scope");
+        RadioModelSliceLifecycleTestAccess::forcePendingFlush(model);
+        check(unconfirmedScope.featureExact("OperatingState") == legacy()
+            && unconfirmedScope.featureExact("RtlSlices").isEmpty(),
+            "forced flush during unconfirmed connect preserves saved state without claiming ownership");
+        bool disconnected = false;
+        QObject::connect(unconfirmed, &IRadioBackend::disconnected, [&] { disconnected = true; });
+        RadioModelSliceLifecycleTestAccess::queueDisconnectFlush(model);
+        device->badReadback = true; device->releaseReadback();
+        QElapsedTimer deadline; deadline.start();
+        while (!disconnected && deadline.elapsed() < 3000) {
+            QCoreApplication::processEvents(); QThread::msleep(1);
+        }
+        check(disconnected && !unconfirmed->isConnected(), "invalid initial capture reaches production disconnect");
+        check(unconfirmedScope.featureExact("OperatingState") == legacy()
+            && unconfirmedScope.featureExact("RtlSlices").isEmpty(),
+            "disconnect flush refuses speculative fallback before first accepted capture");
+    }
+    {
         const RadioSettingsScope liveScope("rtl", "restore-live");
         RtlSliceSettings::Slice first;
         first.id = 1; first.frequencyHz = 99700000; first.mode = "FM"; first.filterLowHz = -8000; first.filterHighHz = 8000;
@@ -108,8 +157,19 @@ int main(int argc, char** argv)
         auto second = first; second.id = 3; second.frequencyHz = 100600000;
         auto outside = first; outside.id = 5; outside.frequencyHz = 120000000;
         check(RtlSliceSettings(liveScope).patch(100000000, 2400000, {outside, second, first}), "unordered saved slices seeded");
-        rtl::RtlSdrBackend live;
-        live.configureSettingsScope(liveScope, {"restore-live", false}); live.applyRestoredState({});
+        RadioModel model;
+        check(model.rebuildBackendForTest("rtl"), "live owner test uses production capability relay");
+        RadioModelSliceLifecycleTestAccess::restore(model, "restore-live");
+        auto& live = *static_cast<rtl::RtlSdrBackend*>(model.backend());
+        bool ownershipRepublished = false;
+        QObject::connect(&model, &RadioModel::capabilitiesChanged,
+            [&](bool, const RadioCapabilities& caps) {
+                if (caps.clientSettingsDomains.testFlag(D::RtlSlices)) {
+                    ownershipRepublished = !caps.clientSettingsDomains.testFlag(D::Tuning)
+                        && !caps.clientSettingsDomains.testFlag(D::Passband)
+                        && !caps.clientSettingsDomains.testFlag(D::SpanRate);
+                }
+            });
         auto device = std::make_shared<test::DeviceState>();
         rtl::RtlCaptureBackendTestAccess::start(live, std::make_unique<test::InjectedDevice>(device));
         device->releaseReadback();
@@ -118,9 +178,11 @@ int main(int argc, char** argv)
             device->block(); QCoreApplication::processEvents(); QThread::msleep(5);
         }
         check(rtl::RtlCaptureBackendTestAccess::restored(live), "actual backend restores fitting sparse IDs after readback and adoption");
+        check(ownershipRepublished && model.backendCapabilities().clientSettingsDomains.testFlag(D::RtlSlices),
+            "live settings ownership reaches model consumers through capabilitiesChanged");
         check(device->starts == 1 && device->writes == 6 && device->cancels == 0,
             "fitting restore never retunes or restarts the accepted capture");
-        check(live.storeOperatingState(liveScope, live.currentOperatingState()).value_or(false), "restored accepted set persists through owner hook");
+        model.flushPendingOperatingState();
         const auto document = RtlSliceSettings(liveScope).load().document;
         check(document.slices.size() == 3 && document.slices[1].audioMute && document.slices[1].audioGain == 22
             && document.slices[1].audioPan == 11 && document.slices[5].frequencyHz == 120000000,

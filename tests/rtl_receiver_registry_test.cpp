@@ -676,12 +676,15 @@ void retainedRfHistoryAndAdoption()
     ++desired[0].epoch;
     registry.submit(capture(), std::span(desired).first(1));
     check(ready(registry, 4) && stats->calls == 3, "fault epoch forces fresh receiver history");
-    registry.cancelPending();
-    check(deliver(reader, probe, block(capture(), 192)) && reader.activeRevision() == 3,
-        "canceled preparation cannot replace live receiver");
-    auto stale = block(capture(), 256); stale.session = session + 1;
+    // A prepared bank still cannot cross the transaction adoption fence.
+    delivery = block(capture(), 192); delivery.session = session;
+    check(reader.processBlock(delivery, probe, 3)
+        && reader.activeRevision() == 3, "unacknowledged preparation cannot replace live receiver");
+    check(deliver(reader, probe, block(capture(), 256)) && reader.activeRevision() == 4,
+        "matching acknowledgment adopts the fresh receiver history");
+    auto stale = block(capture(), 320); stale.session = session + 1;
     check(!deliver(reader, probe, stale), "old acquisition identity refused");
-    check(deliver(reader, probe, block(capture(), 256)) && !probe.discontinuity,
+    check(deliver(reader, probe, block(capture(), 320)) && !probe.discontinuity,
         "stale delivery cannot withdraw healthy receiver history");
     reader.stop();
     check(until(registry, [&](const auto&) { return stats->live == 0; }), "all shared receiver owners retire");

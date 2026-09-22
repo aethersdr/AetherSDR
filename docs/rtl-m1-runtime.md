@@ -106,3 +106,22 @@ The shared model's accepted-intent routing also depends on PR #5919. This
 implementation adds only the neutral persistence handoff there; it does not copy
 that PR's pending routing changes. Refresh and integrate the dependency before
 claiming end-to-end model acceptance or release readiness.
+
+
+### Runtime diagnostic readback
+
+The existing backend `health` snapshot exposes cumulative per-connection
+`rtlQueueDrops`, `rtlMixerLateFrames`, `rtlMixerRejectedBlocks` and
+`rtlMixerConfigurationFailures`. The acquisition callback publishes only atomic
+counter mirrors; the backend's existing service timer samples them into its
+owner-thread cache. Counters are independently sampled, not a coherent event
+trace. Legacy-only sessions leave the FM pipeline values unreported until that
+pipeline has actually processed a callback; disconnected snapshots are empty.
+A mixer configuration rejection discards its old buffered audio and requests
+repair through the existing transaction owner before any receiver processing.
+
+These counters do not measure callback p99/max, USB control latency, RF extractor
+group delay, or the frozen 1/2/4-receiver hardware workload. Those qualification
+gates remain open. The shared-model dependency also needs an explicit deferred
+acceptance contract: #5919's typed dispatch is not acknowledgment, and its RTL
+audio adapter must preserve sparse stable receiver IDs during integration.

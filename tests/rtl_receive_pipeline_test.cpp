@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <limits>
 #include <numbers>
 #include <thread>
 #include <vector>
@@ -15,6 +16,33 @@
 using Pipeline = AetherSDR::rtl::RtlReceivePipeline;
 using T = AetherSDR::rtl::RtlCaptureTransaction;
 using namespace std::chrono_literals;
+namespace AetherSDR::rtl {
+struct RtlReceivePipelineTestAccess {
+    static void exhaustEpoch(RtlReceivePipeline& pipeline)
+    { pipeline.m_nextEpoch = std::numeric_limits<std::uint64_t>::max(); }
+    static std::uint64_t requested(RtlReceivePipeline& pipeline)
+    { return pipeline.m_registry.service().requested; }
+    static bool rejectMalformedMixer(RtlReceivePipeline& pipeline)
+    {
+        pipeline.m_legacy = false; pipeline.m_token = {1, 1}; pipeline.m_captureEpoch = 1;
+        pipeline.m_capture = {1, 1, 100000000, 2400000, 1080000, 1080000};
+        const std::array<RtlAudioMixer::Input, 1> inputs{{{0, 1, 1}}};
+        std::array<float, 128> audio; audio.fill(0.75f);
+        if (!pipeline.m_mixer.configure(1, 1, inputs, 0)
+            || !pipeline.m_mixer.push(0, 1, 1, 0, audio, audio)) { return false; }
+        RtlReceiverRegistry::ReceiverSpec malformed;
+        malformed.handle.slot = 0; malformed.handle.instance = 0;
+        const std::array<RtlReceiverRegistry::ReceiverView, 1> views{{{&malformed, nullptr}}};
+        inCallback = true;
+        pipeline.process(RtlReceiverRegistry::SampleBlock{}, views);
+        pipeline.m_mixer.drain(4096, pipeline);
+        inCallback = false;
+        RtlReceivePipeline::Packet packet;
+        return !pipeline.takePacket(packet) && pipeline.needsRepair()
+            && pipeline.diagnostics().mixerConfigurationFailures == 1;
+    }
+};
+}
 static int failures = 0;
 static void check(bool value, const char* message)
 { if (!value) { ++failures; std::fprintf(stderr, "FAIL: %s\n", message); } }
@@ -41,6 +69,39 @@ static double magnitude(const std::vector<float>& input, double tone)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    {
+        auto candidate = std::make_unique<Pipeline>();
+        T::State accepted;
+        accepted.token = {7, 1};
+        accepted.capture = {7, 1, 100000000, 2400000, 1080000, 1080000};
+        accepted.receivers = {{{2, 100000000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
+        check(candidate->prepare(accepted, true) && ready(*candidate), "valid pending bank prepared before refusal tests");
+        using Access = AetherSDR::rtl::RtlReceivePipelineTestAccess;
+        const auto revision = Access::requested(*candidate);
+        for (int bad = 0; bad < 5; ++bad) {
+            auto invalid = accepted; invalid.token.revision = 2;
+            if (bad == 0) { invalid.receivers[0].audioGain = -1; }
+            if (bad == 1) { invalid.receivers[0].audioPan = 101; }
+            if (bad == 2) { invalid.receivers[0].passband.stableId = 8; }
+            if (bad == 3) { invalid.receivers.push_back(invalid.receivers[0]); }
+            if (bad == 4) { invalid.receivers[0].mode = T::Mode::Wfm; invalid.receivers[0].audioGain = 101; }
+            check(!candidate->prepare(invalid), "invalid complete input refused before submission");
+            check(Access::requested(*candidate) == revision, "refused input cannot replace the pending registry request");
+        }
+        check(ready(*candidate) && candidate->adopt(), "original pending bank still adopts after malformed attempts");
+        Access::exhaustEpoch(*candidate);
+        check(!candidate->prepare(accepted, true) && Access::requested(*candidate) == revision,
+            "capture epoch exhaustion refuses before registry submission");
+        candidate->stop();
+    }
+    check(QThreadPool::globalInstance()->waitForDone(15000), "refusal test receivers retired");
+    {
+        auto failed = std::make_unique<Pipeline>();
+        check(AetherSDR::rtl::RtlReceivePipelineTestAccess::rejectMalformedMixer(*failed),
+            "rejected mixer configuration discards old queued audio, counts failure and requests repair");
+        check(failed->diagnostics().observed && callbackAllocations == 0,
+            "mixer failure path is observable and allocation-free");
+    }
     auto pipeline = std::make_unique<Pipeline>(4); // measurement workload, not advertised capacity
     T::State state;
     state.token = {42, 1}; state.hardware.centerHz = 100000000;

@@ -192,9 +192,34 @@ int main(int argc, char** argv)
         check(waitFor([&] { pump(); return live.contains(1) && frames[1].stream().receiverInstance != removed.stream().receiverInstance; }),
             "reused stable ID receives a fresh instance and cannot inherit stale audio");
         check(device->starts == 1 && device->cancels == 0, "add remove and reuse never restart USB acquisition");
+        // Deliberately stop servicing the owner while the injected acquisition
+        // produces real FM packets. This is queue saturation, not a fake counter.
+        const int targetCallbacks = device->callbacks + 200;
+        { std::lock_guard lock(device->mutex); device->blocks += 200; device->changed.notify_all(); }
+        QElapsedTimer stalledOwner; stalledOwner.start();
+        while (device->callbacks < targetCallbacks && stalledOwner.elapsed() < 3000) { QThread::msleep(1); }
+        check(device->callbacks >= targetCallbacks, "injected acquisition reaches bounded queue saturation");
+        check(waitFor([&] {
+            return multiple.healthSnapshot().values.value("rtlQueueDrops").toULongLong() > 0;
+        }), "actual pipeline drop counter reaches existing backend health diagnostics");
+        const auto health = multiple.healthSnapshot();
+        check(health.values.contains("rtlMixerLateFrames") && health.values.contains("rtlMixerRejectedBlocks")
+            && health.values.value("rtlMixerConfigurationFailures").toULongLong() == 0,
+            "observed mixer diagnostics have explicit values without an invariant failure");
         const PcmFrame reconnect = frames[0];
-        multiple.disconnectRadio();
+        bool invalidationObserved = false;
+        bool reentrantCreate = true;
+        QObject::connect(&multiple, &IRadioBackend::connectionError, [&] {
+            invalidationObserved = multiple.isConnected();
+            reentrantCreate = multiple.createSlice({}, 100400000);
+        });
+        device->badReadback = true;
+        multiple.setPanBandwidth({}, 2000000);
+        check(waitFor([&] { return !multiple.isConnected(); }), "multi-receiver capture invalidation disconnects");
+        check(invalidationObserved && !reentrantCreate,
+            "reentrant creation refuses the invalidated capture before disconnect notification");
         check(!reconnect.current(), "disconnect revokes native PCM immediately");
+        check(multiple.healthSnapshot().isEmpty(), "disconnected health cannot report stale live counters");
     }
     // Cancellation cannot interrupt an in-progress device control. Timeout
     // must retain the device; its later thread exit must still retire it.

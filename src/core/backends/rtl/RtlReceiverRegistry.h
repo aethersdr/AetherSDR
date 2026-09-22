@@ -166,7 +166,6 @@ public:
     // Only after the transaction owner verified a complete hardware rollback.
     Result submitVerifiedRollback(const Capture& capture, std::span<const ReceiverSpec> desired);
     void cancelSession();
-    void cancelPending(); // keeps the currently adopted bank alive
     SampleReader attachReader(); // at most one, acquired off the sample path
     // Call from the control event loop while active. Reaps acknowledged banks
     // off-thread and advances a coalesced request after publication pressure.

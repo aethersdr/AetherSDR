@@ -30,6 +30,7 @@ public:
     };
     bool configure(std::uint64_t session, std::uint64_t captureGeneration,
                    std::span<const Input> inputs, std::uint64_t firstSample) noexcept;
+    void reset() noexcept; // discard buffered audio; retain lifetime diagnostics
     bool push(int slot, std::uint64_t instance, std::uint64_t epoch,
               std::uint64_t firstSample, std::span<const float> left,
               std::span<const float> right) noexcept;

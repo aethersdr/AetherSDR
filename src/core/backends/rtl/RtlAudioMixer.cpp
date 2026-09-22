@@ -31,6 +31,11 @@ bool RtlAudioMixer::configure(std::uint64_t session, std::uint64_t captureGenera
     m_count = inputs.size();
     return true;
 }
+void RtlAudioMixer::reset() noexcept
+{
+    m_session = 0; m_capture = 0; m_count = 0; m_first = true;
+    for (Slot& slot : m_slots) { slot.active = false; }
+}
 bool RtlAudioMixer::push(int index, std::uint64_t instance, std::uint64_t epoch,
     std::uint64_t firstSample, std::span<const float> left, std::span<const float> right) noexcept
 {

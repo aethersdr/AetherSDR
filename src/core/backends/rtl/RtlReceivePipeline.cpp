@@ -31,12 +31,26 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
         return receiver.mode != Transaction::Mode::Fm && receiver.mode != Transaction::Mode::Fmn;
     });
     if (legacy && state.receivers.size() != 1) { return false; }
+    // Refusal must not replace an already prepared bank or consume its epoch.
+    // Validate the complete input before registry/session mutations, including
+    // the legacy path (which submits an empty receiver bank).
+    std::array<bool, 8> validated{};
+    for (const auto& receiver : state.receivers) {
+        const int id = receiver.passband.stableId;
+        if (id < 0 || id >= 8 || validated[id] || receiver.audioGain < 0
+            || receiver.audioGain > 100 || receiver.audioPan < 0 || receiver.audioPan > 100) { return false; }
+        validated[id] = true;
+    }
+    const bool advanceCaptureEpoch = resetCapture || legacy != m_legacy;
+    if (advanceCaptureEpoch && m_nextEpoch == std::numeric_limits<std::uint64_t>::max()) { return false; }
+    auto epochs = m_epochs;
+    auto specs = m_specs;
     if (!m_session) {
         m_session = m_registry.beginSession(state.capture);
         m_reader = m_registry.attachReader();
         if (!m_session || !m_reader) { return false; }
     }
-    const unsigned faults = m_faults.exchange(0, std::memory_order_acq_rel);
+    const unsigned faults = m_faults.load(std::memory_order_acquire);
     std::array<RtlReceiverRegistry::ReceiverSpec, 8> desired;
     std::array<bool, 8> used{};
     std::size_t count = 0;
@@ -57,11 +71,11 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
             spec.dsp.filterHighHz = receiver.passband.filterHighHz;
             if (resetCapture || (faults & (1u << id)) || m_specs[id].handle != spec.handle
                 || m_specs[id].passband != spec.passband || m_specs[id].dsp != spec.dsp) {
-                if (m_epochs[id] == std::numeric_limits<std::uint64_t>::max()) { return false; }
-                ++m_epochs[id];
+                if (epochs[id] == std::numeric_limits<std::uint64_t>::max()) { return false; }
+                ++epochs[id];
             }
-            spec.epoch = m_epochs[id];
-            m_specs[id] = spec;
+            spec.epoch = epochs[id];
+            specs[id] = spec;
             desired[count++] = spec;
         }
     }
@@ -70,18 +84,15 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
         : m_registry.submit(state.capture, std::span(desired).first(count));
     if (result != RtlReceiverRegistry::Result::Accepted) { return false; }
     for (std::size_t i = 0; i < used.size(); ++i) { if (!used[i]) { m_handles[i].reset(); } }
+    m_epochs = epochs;
+    m_specs = specs;
     m_prepared = m_registry.service().requested;
     for (const auto& receiver : state.receivers) {
-        if (receiver.passband.stableId < 0 || receiver.passband.stableId >= 8
-            || receiver.audioGain < 0 || receiver.audioGain > 100 || receiver.audioPan < 0 || receiver.audioPan > 100) { return false; }
         m_nextMonitor[receiver.passband.stableId] = static_cast<unsigned>(receiver.audioGain
             | (receiver.audioPan << 8) | (receiver.audioMute ? 1 << 16 : 0));
     }
     m_nextToken = state.token; m_nextCapture = state.capture; m_nextLegacy = legacy;
-    if (resetCapture || legacy != m_legacy) {
-        if (m_nextEpoch == std::numeric_limits<std::uint64_t>::max()) { return false; }
-        ++m_nextEpoch;
-    }
+    if (advanceCaptureEpoch) { ++m_nextEpoch; }
     return true;
 }
 RtlReceivePipeline::Preparation RtlReceivePipeline::service()
@@ -128,13 +139,33 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
     const auto clock = [this](std::uint64_t sample) {
         return static_cast<std::uint64_t>(static_cast<long double>(sample) * 48000 / m_capture.achievedSampleRateHz);
     };
-    m_mixer.configure(m_token.session, m_captureEpoch, std::span(inputs).first(views.size()), clock(block.firstSample));
+    if (!m_mixer.configure(m_token.session, m_captureEpoch,
+            std::span(inputs).first(views.size()), clock(block.firstSample))) {
+        // No stale map/audio may survive a rejected configuration. This is a
+        // defensive invariant failure: normal registry handles and validated
+        // transaction tokens cannot reach it. Repair through the existing owner.
+        m_mixer.reset();
+        m_mixerConfigurationFailures.fetch_add(1, std::memory_order_relaxed);
+        m_observed.store(true, std::memory_order_release);
+        m_faults.fetch_or(0xff, std::memory_order_release);
+        return;
+    }
     for (const auto& view : views) {
         if (!view.receiver->processCapture(block, *this)) {
             m_faults.fetch_or(1u << view.spec->handle.slot, std::memory_order_release);
         }
     }
     m_mixer.drain(clock(block.firstSample + block.samples.size()), *this);
+    m_mixerLate.store(m_mixer.lateFrames(), std::memory_order_relaxed);
+    m_mixerRejected.store(m_mixer.rejectedBlocks(), std::memory_order_relaxed);
+    m_observed.store(true, std::memory_order_release);
+}
+RtlReceivePipeline::Diagnostics RtlReceivePipeline::diagnostics() const noexcept
+{
+    return {m_observed.load(std::memory_order_acquire),
+        m_drops.load(std::memory_order_relaxed), m_mixerLate.load(std::memory_order_relaxed),
+        m_mixerRejected.load(std::memory_order_relaxed),
+        m_mixerConfigurationFailures.load(std::memory_order_relaxed)};
 }
 void RtlReceivePipeline::audioBlock(const RtlReceiverRegistry::ReceiverSpec& spec, std::uint64_t first,
     std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept

@@ -5,6 +5,7 @@
 #include "core/RtlSliceSettings.h"
 #include <QSet>
 #include "core/backends/rtl/RtlCaptureTransaction.h"
+#include "core/backends/rtl/RtlReceivePipeline.h"
 
 #include <QObject>
 #include <QHash>
@@ -52,6 +53,7 @@ public:
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
+    HealthSnapshot healthSnapshot() const override;
 
     bool createSlice(const QString& panId, double frequencyHz) override;
     bool removeSlice(int sliceId) override;
@@ -186,6 +188,7 @@ private:
 
     // Worker thread (owns async USB reader & RtlSdrDdc engine)
     std::unique_ptr<RtlSdrWorker> m_worker;
+    RtlReceivePipeline::Diagnostics m_diagnostics; // owner-thread health cache
     RtlSdrDdc* ddc();
 };
 

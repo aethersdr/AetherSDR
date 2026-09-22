@@ -358,6 +358,7 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
 void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
 {
     m_worker = std::move(worker);
+    m_diagnostics = {};
     m_capture.beginSession();
     m_published = {};
     m_lastPublished.reset();
@@ -445,13 +446,37 @@ bool RtlSdrBackend::isConnected() const
     return m_connected;
 }
 
+IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
+{
+    if (!m_connected) { return {}; }
+    HealthSnapshot snapshot;
+    snapshot.order = {QStringLiteral("rtlQueueDrops"), QStringLiteral("rtlMixerLateFrames"),
+        QStringLiteral("rtlMixerRejectedBlocks"), QStringLiteral("rtlMixerConfigurationFailures")};
+    snapshot.sections.insert(snapshot.order.front(), tr("RTL receive pipeline (since connect)"));
+    snapshot.labels = {{snapshot.order[0], tr("Audio queue dropped packets")},
+        {snapshot.order[1], tr("Mixer missing receiver frames at deadline")},
+        {snapshot.order[2], tr("Mixer rejected audio blocks")},
+        {snapshot.order[3], tr("Mixer configuration failures")}};
+    // Legacy-only sessions have not observed this pipeline. Missing values
+    // report "not reported", never a fabricated successful zero measurement.
+    if (m_diagnostics.observed) {
+        const std::array<std::uint64_t, 4> counters{m_diagnostics.droppedPackets,
+            m_diagnostics.mixerLateFrames, m_diagnostics.mixerRejectedBlocks,
+            m_diagnostics.mixerConfigurationFailures};
+        for (int i = 0; i < snapshot.order.size(); ++i) {
+            snapshot.values.insert(snapshot.order[i], QVariant::fromValue<qulonglong>(counters[i]));
+        }
+    }
+    return snapshot;
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // IRadioBackend — slice control
 // ──────────────────────────────────────────────────────────────────────────────
 
 bool RtlSdrBackend::createSlice(const QString& panId, double frequencyHz)
 {
-    if (!m_connected || !std::isfinite(frequencyHz) || m_capture.busy()
+    if (!m_connected || !m_capture.confirmed() || !std::isfinite(frequencyHz) || m_capture.busy()
         || (panId != QStringLiteral("0xe1000000") && !panId.isEmpty())
         || m_requested.receivers.size() >= static_cast<std::size_t>(m_receiverCapacity)
         || std::ranges::any_of(m_requested.receivers, [](const auto& receiver) { return receiver.mode != RtlCaptureTransaction::Mode::Fm && receiver.mode != RtlCaptureTransaction::Mode::Fmn; })) { return false; }
@@ -689,6 +714,9 @@ QVector<RtlSliceSettings::Slice> RtlSdrBackend::acceptedSettings() const
 std::optional<bool> RtlSdrBackend::storeOperatingState(const RadioSettingsScope& scope,
     const RestoredRadioState& state)
 {
+    // A failed/canceled initial capture has no accepted state to save. Keep
+    // even the forced disconnect flush handled: generic fallback would replace
+    // the operator's saved document with speculative defaults/restored intent.
     if (!m_lastPublished && m_settingsScope.isValid()) { return false; }
     if (!m_settingsActive) { return std::nullopt; }
     if (scope.family() != m_settingsScope.family() || scope.radioId() != m_settingsScope.radioId()
@@ -892,6 +920,7 @@ void RtlSdrBackend::serviceCapture()
     if (!m_worker) { return; }
     const QPointer<RtlSdrWorker> producer(m_worker.get());
     m_worker->serviceCancellation();
+    m_diagnostics = m_worker->diagnostics();
     if (const auto result = m_worker->takeResult()) {
         const auto completion = m_capture.complete(*result);
         if (completion == RtlCaptureTransaction::Completion::Invalidated) {
