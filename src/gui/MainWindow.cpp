@@ -4127,8 +4127,12 @@ void MainWindow::changeEvent(QEvent* event)
     // event filter — the flag would stay set and TX would stay keyed. Force the
     // whole family back to RX on deactivation. (Belt-and-suspenders for the
     // app-backgrounded case lives in eventFilter via ApplicationStateChange.)
-    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow()) {
         failSafeMomentaryKeyingToRx("window-deactivate");
+        // A held Monitor TX key loses its KeyRelease exactly the same way, and
+        // would leave the split's audio rearranged with nothing to release.
+        endSplitMonitor();
+    }
 
     // A DIALOG DOES NOT FOLLOW ITS PARENT INTO A FULL-SCREEN SPACE (#5788).
     //
@@ -9053,6 +9057,11 @@ void MainWindow::disableSplit()
 
     m_splitActive = false;
 
+    // Learn this split's audio arrangement and put the RX pan back, BEFORE the
+    // TX slice is destroyed below — once it is gone its values are unreadable
+    // (which is also why the mirror exists at all). (#2242)
+    recordSplitAudioMirror();
+
     // Move TX back to the RX slice
     if (auto* rxSlice = m_radioModel.slice(m_splitRxSliceId))
         rxSlice->setTxSlice(true);
@@ -9068,20 +9077,319 @@ void MainWindow::disableSplit()
     updateSplitState();
 }
 
-void MainWindow::updateSplitState()
-{
-    // Derive the split-pair visualization from model truth so the panadapter
-    // reflects split regardless of who initiated it — GUI button, rigctld, CAT,
-    // TCI, or front panel. A slice is "TX-in-split" when it is the TX slice and a
-    // distinct RX slice shares its panadapter; that RX slice is "RX-in-split".
-    // (#3726) This drops the rendering dependence on the GUI-only m_splitActive/
-    // m_splitTxSliceId/m_splitRxSliceId flags — those still drive the SWAP/teardown
-    // *actions*, which need the GUI-created TX slice id. Consistent with RFC #3715:
-    // consumers derive from the model, not per-consumer state.
+// ─── Split audio memory (#2242) ──────────────────────────────────────────────
+//
+// The operator teaches this by operating: unmute the TX slice, pan it right,
+// pan the RX slice left, drop the TX gain, work the station. When the split
+// ends, what they did is what comes back next time. Nothing is configured.
+//
+// Every value is learned from the *CommandIssued signals, never from the
+// *Changed ones. SliceModel.h spells out why: the Changed signals also fire
+// when radio status is applied, so learning from them would record the radio's
+// own state as the operator's preference and replay it — a client re-asserting
+// state it does not own (Principle II). It would also mean another client's
+// pan, or a profile load, silently became "what the operator likes".
 
+AetherSDR::SplitAudioProfile MainWindow::loadSplitAudioProfile() const
+{
+    const QString raw = AppSettings::instance()
+        .value(QLatin1String(AetherSDR::SplitAudioProfile::kSettingsKey)).toString();
+    if (raw.isEmpty())
+        return {};
+    const auto doc = QJsonDocument::fromJson(raw.toUtf8());
+    if (!doc.isObject())
+        return {};
+    return AetherSDR::SplitAudioProfile::fromJson(doc.object());
+}
+
+void MainWindow::saveSplitAudioProfile(const AetherSDR::SplitAudioProfile& p)
+{
+    AppSettings::instance().setValue(
+        QLatin1String(AetherSDR::SplitAudioProfile::kSettingsKey),
+        QString::fromUtf8(QJsonDocument(p.toJson()).toJson(QJsonDocument::Compact)));
+}
+
+void MainWindow::applySplitAudioProfile(SliceModel* rx, SliceModel* tx)
+{
+    if (!tx) return;
+    const auto profile = loadSplitAudioProfile();
+
+    // Everything below is OUR write, not the operator's. The flag is what keeps
+    // the mirror from recording the restore as a fresh preference.
+    m_splitAudioApplying = true;
+
+    // A slice whose receive audio another subsystem has replaced (DAX, TCI,
+    // KiwiSDR) is not ours to arrange: setAudioPan()/setAudioGain() there write
+    // only the replacement state and emit no *CommandIssued, so an apply would
+    // be half-applied and would never be re-learned. Fall back to the historic
+    // mute, which is the one thing that still means what it says.
+    const bool txArrangeable = !tx->externalReceiveReplacementActive();
+
+    if (!profile.hasLearnedState() || !txArrangeable) {
+        tx->setAudioMute(true);   // pre-#2242 behaviour, byte for byte
+        m_splitAudioApplying = false;
+        return;
+    }
+
+    // Gain and pan before mute, so unmuting never lands as a blast at the
+    // previous slice's level or in the wrong ear.
+    if (profile.hasTxGain) tx->setAudioGain(static_cast<float>(profile.txGain));
+    if (profile.hasTxPan)  tx->setAudioPan(profile.txPan);
+    tx->setAudioMute(profile.hasTxMute ? profile.txMuted : true);
+
+    if (rx && profile.hasRxPan && !rx->externalReceiveReplacementActive())
+        rx->setAudioPan(profile.rxPan);
+
+    m_splitAudioApplying = false;
+
+    // Say it once. A feature that silently rearranges audio is indistinguishable
+    // from a bug, and this is the only place that can name what just happened
+    // and where to change it.
+    if (!m_splitAudioNoticeShown) {
+        m_splitAudioNoticeShown = true;
+        statusBar()->showMessage(
+            tr("Split audio restored from your last split. "
+               "Right-click SPLIT to change or forget it."),
+            8000);
+    }
+}
+
+void MainWindow::armSplitAudioMirror(SliceModel* rx, SliceModel* tx)
+{
+    disarmSplitAudioMirror();
+    if (!tx) return;
+
+    m_splitAudioRxSliceId = rx ? rx->sliceId() : -1;
+    // flexAudio*() and not audio*(): the plain accessors return the REPLACEMENT
+    // values while DAX/TCI own a slice's audio, so a seed taken through them
+    // would capture another subsystem's routing and hand it back to the
+    // operator next split as their own preference.
+    m_splitAudioRecorder.arm(rx ? rx->flexAudioPan() : -1,
+                             tx->flexAudioMute(),
+                             static_cast<int>(tx->flexAudioGain()),
+                             tx->flexAudioPan());
+
+    m_splitAudioConns.append(connect(tx, &SliceModel::audioMuteCommandIssued, this,
+        [this](bool mute) {
+            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxMute(mute);
+        }));
+    m_splitAudioConns.append(connect(tx, &SliceModel::audioGainCommandIssued, this,
+        [this](int gain) {
+            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxGain(gain);
+        }));
+    m_splitAudioConns.append(connect(tx, &SliceModel::audioPanCommandIssued, this,
+        [this](int pan) {
+            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxPan(pan);
+        }));
+    if (rx) {
+        // RX pan only. Its volume and mute are the operator's everyday listening
+        // level and stay out of this entirely (#2242) — a split must not come
+        // back later and change how the radio sounds the rest of the time.
+        m_splitAudioConns.append(connect(rx, &SliceModel::audioPanCommandIssued, this,
+            [this](int pan) {
+                if (!m_splitAudioApplying) m_splitAudioRecorder.noteRxPan(pan);
+            }));
+    }
+}
+
+void MainWindow::disarmSplitAudioMirror()
+{
+    for (const auto& c : m_splitAudioConns)
+        disconnect(c);
+    m_splitAudioConns.clear();
+    m_splitAudioRecorder.disarm();
+    m_splitAudioRxSliceId = -1;
+}
+
+void MainWindow::recordSplitAudioMirror()
+{
+    if (!m_splitAudioRecorder.armed()) return;
+
+    // A momentary hold is not an arrangement. Unwind it first so ending the
+    // split mid-monitor records what the operator set up, not what the hold
+    // was temporarily doing to it.
+    endSplitMonitor();
+
+    saveSplitAudioProfile(m_splitAudioRecorder.merge(loadSplitAudioProfile()));
+
+    // Put the RX slice's pan back. The operator panned it left FOR the split,
+    // not for everything they do afterwards.
+    if (const int restore = m_splitAudioRecorder.rxPanToRestore(); restore >= 0) {
+        if (auto* rxSlice = m_radioModel.slice(m_splitAudioRxSliceId);
+            rxSlice && !rxSlice->externalReceiveReplacementActive()) {
+            m_splitAudioApplying = true;
+            rxSlice->setAudioPan(restore);
+            m_splitAudioApplying = false;
+        }
+    }
+
+    disarmSplitAudioMirror();
+}
+
+// ─── Momentary Monitor TX ────────────────────────────────────────────────────
+//
+// The Icom XFC / Kenwood TF-SET / Yaesu TXW control: hold to hear where you are
+// about to transmit. On a single-receiver rig that means the receiver MOVES,
+// which is what Solo reproduces (mute RX, unmute TX). Both leaves the RX slice
+// audible instead — the sub-receiver convention, for operators who have already
+// arranged the two slices across the stereo field.
+//
+// The pre-hold mute of BOTH slices is snapshotted rather than assumed, so a
+// release restores exactly what was there even if the operator had already
+// customised this split by hand.
+
+void MainWindow::beginSplitMonitor()
+{
+    if (m_splitMonitorActive) return;
+    SliceModel* rx = nullptr;
+    SliceModel* tx = nullptr;
+    if (!activeSplitPair(rx, tx)) return;
+    if (tx->externalReceiveReplacementActive()) return;
+
+    m_splitMonitorActive       = true;
+    m_splitMonitorRxId         = rx->sliceId();
+    m_splitMonitorTxId         = tx->sliceId();
+    m_splitMonitorRxMuteBefore = rx->flexAudioMute();
+    m_splitMonitorTxMuteBefore = tx->flexAudioMute();
+
+    const bool solo =
+        loadSplitAudioProfile().monitor == AetherSDR::SplitAudioProfile::Monitor::Solo;
+
+    m_splitAudioApplying = true;
+    tx->setAudioMute(false);
+    if (solo && !rx->externalReceiveReplacementActive())
+        rx->setAudioMute(true);
+    m_splitAudioApplying = false;
+}
+
+void MainWindow::endSplitMonitor()
+{
+    if (!m_splitMonitorActive) return;
+    m_splitMonitorActive = false;
+
+    m_splitAudioApplying = true;
+    if (auto* tx = m_radioModel.slice(m_splitMonitorTxId))
+        tx->setAudioMute(m_splitMonitorTxMuteBefore);
+    if (auto* rx = m_radioModel.slice(m_splitMonitorRxId))
+        rx->setAudioMute(m_splitMonitorRxMuteBefore);
+    m_splitAudioApplying = false;
+
+    m_splitMonitorRxId = -1;
+    m_splitMonitorTxId = -1;
+}
+
+// ─── Split Up N kHz (#311) ───────────────────────────────────────────────────
+
+void MainWindow::applySplitOffsetKHz(double offsetKHz)
+{
+    SliceModel* rx = nullptr;
+    SliceModel* tx = nullptr;
+    if (!activeSplitPair(rx, tx)) return;
+    // The TX slice moves, never the RX slice — the whole point of the control is
+    // that the frequency you are listening to stays put (#311).
+    applyTuneRequest(tx, rx->frequency() + offsetKHz / 1000.0,
+                     TuneIntent::IncrementalTune, "split-offset");
+}
+
+void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
+{
+    Q_UNUSED(sliceId);
+    SliceModel* rx = nullptr;
+    SliceModel* tx = nullptr;
+    const bool paired = activeSplitPair(rx, tx);
+
+    QMenu menu(this);
+
+    // ── One-touch pileup offsets (#311) ──────────────────────────────────
+    const double offsets[] = {1.0, 5.0, 10.0};
+    for (double khz : offsets) {
+        QAction* a = menu.addAction(tr("Split Up %1 kHz").arg(khz, 0, 'g', 2));
+        a->setEnabled(paired);
+        connect(a, &QAction::triggered, this,
+                [this, khz]() { applySplitOffsetKHz(khz); });
+    }
+
+    // ── Monitor TX ───────────────────────────────────────────────────────
+    menu.addSeparator();
+    QMenu* monitorMenu = menu.addMenu(tr("Monitor TX"));
+
+    // Surface the binding here rather than only in the shortcut editor: this is
+    // a hold control, so an operator who finds it in this menu still needs to
+    // be told there is nothing to hold until they bind one.
+    QString keyText;
+    if (auto* act = m_shortcutManager.action(QLatin1String(kSplitMonitorActionId)))
+        keyText = act->currentKey.toString(QKeySequence::NativeText);
+    QAction* keyRow = monitorMenu->addAction(
+        keyText.isEmpty() ? tr("Not bound — set a key in Keyboard Shortcuts")
+                          : tr("Hold %1").arg(keyText));
+    keyRow->setEnabled(false);
+    monitorMenu->addSeparator();
+
+    auto profile = loadSplitAudioProfile();
+    using Monitor = AetherSDR::SplitAudioProfile::Monitor;
+    auto* group = new QActionGroup(&menu);
+    struct { Monitor mode; const char* label; } modes[] = {
+        {Monitor::Solo, QT_TR_NOOP("Solo TX frequency")},
+        {Monitor::Both, QT_TR_NOOP("Hear both")},
+    };
+    for (const auto& m : modes) {
+        QAction* a = monitorMenu->addAction(tr(m.label));
+        a->setCheckable(true);
+        a->setChecked(profile.monitor == m.mode);
+        group->addAction(a);
+        const Monitor mode = m.mode;
+        connect(a, &QAction::triggered, this, [this, mode]() {
+            // Read-modify-write: the learned half of the profile is not this
+            // menu's business and must survive a monitor-mode change.
+            auto p = loadSplitAudioProfile();
+            p.monitor = mode;
+            saveSplitAudioProfile(p);
+        });
+    }
+
+    // ── The remembered arrangement ───────────────────────────────────────
+    menu.addSeparator();
+    // Name what is stored, in operating terms. A remembered arrangement the
+    // operator cannot see is the difference between a feature and a haunting.
+    auto panWord = [this](int pan) {
+        if (pan <= 33) return tr("left");
+        if (pan >= 67) return tr("right");
+        return tr("centre");
+    };
+    QString summaryText;
+    if (!profile.hasLearnedState()) {
+        summaryText = tr("Nothing remembered yet");
+    } else {
+        QStringList parts;
+        if (profile.hasTxMute)
+            parts << (profile.txMuted ? tr("TX muted") : tr("TX unmuted"));
+        if (profile.hasTxPan)  parts << tr("TX %1").arg(panWord(profile.txPan));
+        if (profile.hasTxGain) parts << tr("TX %1%").arg(profile.txGain);
+        if (profile.hasRxPan)  parts << tr("RX %1").arg(panWord(profile.rxPan));
+        summaryText = tr("Remembered: %1").arg(parts.join(tr(", ")));
+    }
+    QAction* summary = menu.addAction(summaryText);
+    summary->setEnabled(false);
+
+    QAction* forget = menu.addAction(tr("Forget remembered audio"));
+    forget->setEnabled(profile.hasLearnedState());
+    connect(forget, &QAction::triggered, this, [this]() {
+        auto p = loadSplitAudioProfile();
+        p.forgetLearnedState();   // keeps the chosen monitor mode
+        saveSplitAudioProfile(p);
+        // Let the notice fire again: after a forget the next restore is news.
+        m_splitAudioNoticeShown = false;
+    });
+
+    menu.exec(globalPos);
+}
+
+void MainWindow::resolveSplitPairs(QHash<QString, SliceModel*>& txByPan,
+                                   QHash<QString, SliceModel*>& rxByPan) const
+{
     // Resolve, per pan, the TX slice and its RX partner.
-    QHash<QString, SliceModel*> txByPan;     // panId -> TX slice
-    QHash<QString, SliceModel*> rxByPan;     // panId -> chosen RX partner
+    txByPan.clear();
+    rxByPan.clear();
     for (auto* s : m_radioModel.slices())
         if (s && s->isTxSlice())
             txByPan.insert(s->panId(), s);
@@ -9109,6 +9417,50 @@ void MainWindow::updateSplitState()
         else if (s->sliceId() == m_splitRxSliceId) chosen = s;
         else if (s->sliceId() == m_activeSliceId)  chosen = s;
     }
+}
+
+bool MainWindow::activeSplitPair(SliceModel*& rx, SliceModel*& tx) const
+{
+    // The pair on the pan the operator is looking at. Falls back to the sole
+    // pair when the active slice is on a pan that has none, so Monitor TX and
+    // the Split Up offsets still act on the split the operator can see rather
+    // than doing nothing.
+    rx = nullptr; tx = nullptr;
+    QHash<QString, SliceModel*> txByPan, rxByPan;
+    resolveSplitPairs(txByPan, rxByPan);
+
+    QString panId;
+    if (auto* a = m_radioModel.slice(m_activeSliceId))
+        panId = a->panId();
+    if (!panId.isEmpty() && txByPan.contains(panId) && rxByPan.contains(panId)) {
+        tx = txByPan.value(panId);
+        rx = rxByPan.value(panId);
+        return tx && rx;
+    }
+    for (auto it = txByPan.cbegin(); it != txByPan.cend(); ++it) {
+        if (auto* partner = rxByPan.value(it.key(), nullptr)) {
+            tx = it.value();
+            rx = partner;
+            return tx && rx;
+        }
+    }
+    return false;
+}
+
+void MainWindow::updateSplitState()
+{
+    // Derive the split-pair visualization from model truth so the panadapter
+    // reflects split regardless of who initiated it — GUI button, rigctld, CAT,
+    // TCI, or front panel. A slice is "TX-in-split" when it is the TX slice and a
+    // distinct RX slice shares its panadapter; that RX slice is "RX-in-split".
+    // (#3726) This drops the rendering dependence on the GUI-only m_splitActive/
+    // m_splitTxSliceId/m_splitRxSliceId flags — those still drive the SWAP/teardown
+    // *actions*, which need the GUI-created TX slice id. Consistent with RFC #3715:
+    // consumers derive from the model, not per-consumer state.
+
+    QHash<QString, SliceModel*> txByPan;     // panId -> TX slice
+    QHash<QString, SliceModel*> rxByPan;     // panId -> chosen RX partner
+    resolveSplitPairs(txByPan, rxByPan);
 
     auto applyToSpectrum = [&](SpectrumWidget* sw) {
         if (!sw) return;

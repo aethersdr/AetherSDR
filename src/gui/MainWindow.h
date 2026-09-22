@@ -20,6 +20,7 @@
 #include "core/AppSettings.h"
 #include "core/AetherDspModePolicy.h"
 #include "core/KiwiSdrTxMutePolicy.h"  // optimistic-unkey Kiwi mute latch
+#include "core/SplitAudioProfile.h"   // remembered split audio arrangement (#2242)
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
@@ -532,6 +533,30 @@ private:
     void syncTxWaterfallSliceToSpectrums();
     void updateSplitState();
     void disableSplit();
+    // The split pair, derived from model truth (#3726) rather than from the
+    // GUI-only m_split*SliceId triple, so everything below works on a split
+    // that rigctld, CAT, TCI or the front panel started. Shared with
+    // updateSplitState(), which is where the pairing rules are explained.
+    void resolveSplitPairs(QHash<QString, SliceModel*>& txByPan,
+                           QHash<QString, SliceModel*>& rxByPan) const;
+    bool activeSplitPair(SliceModel*& rx, SliceModel*& tx) const;
+    // Split audio memory (#2242): learn the arrangement the operator left, put
+    // it back next split. armSplitAudioMirror() subscribes; the mirror IS the
+    // record, because by the time the TX slice is torn down its model object is
+    // already gone (onSliceRemoved) and cannot be read.
+    void armSplitAudioMirror(SliceModel* rx, SliceModel* tx);
+    void applySplitAudioProfile(SliceModel* rx, SliceModel* tx);
+    void recordSplitAudioMirror();
+    void disarmSplitAudioMirror();
+    AetherSDR::SplitAudioProfile loadSplitAudioProfile() const;
+    void saveSplitAudioProfile(const AetherSDR::SplitAudioProfile& p);
+    // Momentary Monitor TX — the Icom XFC / Kenwood TF-SET / Yaesu TXW control.
+    bool handleSplitMonitorShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    void beginSplitMonitor();
+    void endSplitMonitor();
+    // Split Up N kHz: retunes the TX slice, never the RX slice (#311).
+    void applySplitOffsetKHz(double offsetKHz);
+    void showSplitBadgeMenu(int sliceId, const QPoint& globalPos);
     // One status-bar notice per connect session for a control this radio
     // cannot honor. Shared by the commandDropped path and by the
     // capability gates that refuse BEFORE the send (M0, #5263).
@@ -1680,6 +1705,28 @@ private:
     bool m_splitActive{false};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
+    // Split audio memory (#2242). The recorder holds what the operator did to
+    // the two slices during this split and outlives the TX slice model, which
+    // onSliceRemoved has already destroyed by the time it runs. It is fed ONLY
+    // from the *CommandIssued signals — those do not fire for radio status
+    // echoes, so a pan moved by another client never becomes a preference
+    // (Principle II). See core/SplitAudioProfile.h.
+    AetherSDR::SplitAudioRecorder m_splitAudioRecorder;
+    QVector<QMetaObject::Connection> m_splitAudioConns;
+    int m_splitAudioRxSliceId{-1};
+    // True while WE are moving slice audio (applying a profile, or a Monitor TX
+    // hold). Suppresses mirror recording so the app's own writes are never
+    // mistaken for the operator's choices.
+    bool m_splitAudioApplying{false};
+    bool m_splitAudioNoticeShown{false};
+    // Momentary Monitor TX. The pre-hold mute of both slices is snapshotted
+    // rather than assumed, so a release restores exactly what was there even if
+    // the operator had already customised the split.
+    bool m_splitMonitorActive{false};
+    int  m_splitMonitorRxId{-1};
+    int  m_splitMonitorTxId{-1};
+    bool m_splitMonitorRxMuteBefore{false};
+    bool m_splitMonitorTxMuteBefore{true};
     int  m_pendingMemoryRevealSliceId{-1};
     double m_pendingMemoryRevealTargetMhz{0.0};
     int  m_pendingSpectrumTargetSliceId{-1};

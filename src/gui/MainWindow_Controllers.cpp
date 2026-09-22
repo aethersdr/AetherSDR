@@ -541,6 +541,13 @@ void MainWindow::handleFlexControlButton(int button, int action,
     } else if (actionControlsWheel) {
         m_flexWheelMode = requestedWheelMode;
         setFlexControlHardwareIndicator(button);
+    } else if (actionName == "SplitMonitorTx") {
+        // Monitor TX — hear where you are about to transmit. The controller
+        // layer delivers presses only, with no release edge, so this TOGGLES
+        // where the keyboard's "Monitor TX (Hold)" holds. Both drive the same
+        // begin/end pair, so the two can be mixed without getting out of step.
+        if (m_splitMonitorActive) endSplitMonitor();
+        else                      beginSplitMonitor();
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
             // Same gate the CwxF* macros carry below: split creates its TX
@@ -1072,6 +1079,13 @@ void MainWindow::dispatchHidAction(const QString& actionName,
             AppSettings::instance().value("MasterVolume","100").toInt() - 5, 0, 100);
         if (m_titleBar) m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
+    } else if (actionName == "SplitMonitorTx") {
+        // Monitor TX — hear where you are about to transmit. The controller
+        // layer delivers presses only, with no release edge, so this TOGGLES
+        // where the keyboard's "Monitor TX (Hold)" holds. Both drive the same
+        // begin/end pair, so the two can be mixed without getting out of step.
+        if (m_splitMonitorActive) endSplitMonitor();
+        else                      beginSplitMonitor();
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
             // Same refusal as the FlexControl split above: no command plane,
@@ -1339,6 +1353,7 @@ void MainWindow::refreshStreamDeckLabels()
         {QStringLiteral("VolumeUp"),         QColor(40, 20, 60)},
         {QStringLiteral("VolumeDown"),       QColor(40, 20, 60)},
         {QStringLiteral("SplitActiveSlice"), QColor(60, 40, 10)},
+        {QStringLiteral("SplitMonitorTx"),   QColor(60, 40, 10)},
     };
     static const QHash<QString, QString> kKeyShortLabels{
         {QStringLiteral("None"),             {}},
@@ -1361,6 +1376,7 @@ void MainWindow::refreshStreamDeckLabels()
         {QStringLiteral("VolumeUp"),         QStringLiteral("VOL +")},
         {QStringLiteral("VolumeDown"),       QStringLiteral("VOL -")},
         {QStringLiteral("SplitActiveSlice"), QStringLiteral("SPLIT")},
+        {QStringLiteral("SplitMonitorTx"),   QStringLiteral("MON\nTX")},
     };
     const QColor kDefaultKeyBg(20, 28, 45);
 

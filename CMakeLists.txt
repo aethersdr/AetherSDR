@@ -939,6 +939,7 @@ set(CORE_SOURCES
     src/core/MemoryTelemetry.cpp
     src/core/RigctlProtocol.cpp
     src/core/SmartCatProtocol.cpp
+    src/core/SplitAudioProfile.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
     src/core/KiwiSdrProtocol.cpp

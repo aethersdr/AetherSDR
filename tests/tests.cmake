@@ -1441,6 +1441,18 @@ target_include_directories(slice_model_squelch_memory_test PRIVATE src)
 target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
 
+# Split audio memory (#2242) — the parsing rules for the one stored SplitAudio
+# object: the has*/value distinction that keeps an un-learned field from being
+# replayed onto live slice audio, the version gate, and clamping.
+add_executable(split_audio_profile_test
+    tests/split_audio_profile_test.cpp
+    src/core/SplitAudioProfile.cpp
+)
+target_include_directories(split_audio_profile_test PRIVATE src)
+target_link_libraries(split_audio_profile_test PRIVATE Qt6::Core)
+add_test(NAME split_audio_profile_test COMMAND split_audio_profile_test)
+set_tests_properties(split_audio_profile_test PROPERTIES TIMEOUT 30)
+
 # ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.

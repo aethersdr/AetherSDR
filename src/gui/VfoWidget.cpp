@@ -895,6 +895,14 @@ void VfoWidget::buildUI()
         else
             emit splitToggled();
     });
+    // Right-click is where the split offsets, Monitor TX and the remembered
+    // audio arrangement live. Without it the arrangement is learned and applied
+    // with nothing anywhere to show it exists or to clear it. (#2242, #311)
+    m_splitBadge->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_splitBadge, &QPushButton::customContextMenuRequested,
+            this, [this](const QPoint& pos) {
+        emit splitBadgeMenuRequested(m_splitBadge->mapToGlobal(pos));
+    });
     hdr->addWidget(m_splitBadge);
 
     m_txBadge = new QPushButton("TX");

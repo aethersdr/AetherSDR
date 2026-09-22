@@ -337,6 +337,56 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
 }
 
 
+bool MainWindow::handleSplitMonitorShortcut(QKeyEvent* keyEvent,
+                                            QEvent::Type eventType)
+{
+    // Monitor TX (Hold) — the XFC/TF-SET/TXW control. Same shape as
+    // handlePttHoldShortcut(), and for the same reason: QShortcut has no
+    // "released" signal, so a hold control cannot be one and has to be driven
+    // from the app-level event filter, resolving its rebindable key through
+    // ShortcutManager rather than hardcoding one.
+    if (!keyEvent || keyEvent->isAutoRepeat())
+        return false;   // a held key must not re-issue the mute pair per repeat
+    if (eventType != QEvent::KeyPress && eventType != QEvent::KeyRelease)
+        return false;
+
+    const QKeySequence seq = shortcutSequenceFromKeyEvent(keyEvent);
+    const auto* action = m_shortcutManager.actionForKey(seq);
+    bool isMonitor = action && action->id == QLatin1String(kSplitMonitorActionId);
+
+    // Modifier-tolerant release (Principle VI), exactly as PTT-hold: a combo
+    // binding released modifier-first delivers the base key on KeyRelease, so
+    // `seq` no longer matches the binding. Without this the restore never runs
+    // and the split is left monitoring — the operator hears the wrong slice,
+    // with nothing on screen to say why.
+    if (!isMonitor && eventType == QEvent::KeyRelease && m_splitMonitorActive)
+        isMonitor = keyEventMatchesActionBaseKey(kSplitMonitorActionId, keyEvent);
+
+    if (!isMonitor)
+        return false;
+
+    // Release is unconditional while a hold is live. Unlike the press below it
+    // is never gated on focus or on the shortcuts-enabled flag: whatever became
+    // true mid-hold, the audio has to go back.
+    if (eventType == QEvent::KeyRelease) {
+        if (!m_splitMonitorActive)
+            return false;
+        endSplitMonitor();
+        return true;
+    }
+
+    // Don't steal the key from a text field, and honour the global disable.
+    // textEntryCaptured() (not textInputCaptured()) for the same reason
+    // PTT-hold uses it: a focused non-editable combo keeps focus after its
+    // popup closes (#3908) and would otherwise swallow the first press.
+    if (textEntryCaptured() || !m_keyboardShortcutsEnabled)
+        return false;
+
+    beginSplitMonitor();
+    return true;   // consume the bound key so it can't also activate a button
+}
+
+
 bool MainWindow::keyEventMatchesActionBaseKey(const char* actionId,
                                               const QKeyEvent* ev)
 {
@@ -457,6 +507,10 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         auto* stateEvent = static_cast<QApplicationStateChangeEvent*>(event);
         if (stateEvent->applicationState() != Qt::ApplicationActive)
             failSafeMomentaryKeyingToRx("app-deactivate");
+            // A Monitor TX hold whose KeyRelease went to another application
+            // would otherwise leave the split's audio rearranged with no key
+            // left to release. Same fail-safe reasoning as the line above.
+            endSplitMonitor();
     }
 
     if (auto* slider = qobject_cast<QAbstractSlider*>(obj)) {
@@ -526,6 +580,11 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         // rather than a hardcoded Space, so reassigning it actually moves the
         // transmit key (#3879).
         if (handlePttHoldShortcut(ke, event->type()))
+            return true;
+
+        // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
+        // same missing-released-signal reason.
+        if (handleSplitMonitorShortcut(ke, event->type()))
             return true;
 
         // MeterSlider (TCI/DAX gain) handles its own arrow stepping, badge,
@@ -1123,6 +1182,22 @@ void MainWindow::registerShortcutActions()
                 disableSplit();
             }
         });
+    // Monitor TX (Hold) is driven by the app-level event filter
+    // (handleSplitMonitorShortcut) because QShortcut has no "released" signal.
+    // Registered with a null handler so the keyboard map lists it as bindable
+    // — the same arrangement PTT (Hold) uses, and the place operators look for
+    // hold-style controls. No default key: it is opt-in, and every unmodified
+    // letter is already spoken for.
+    m_shortcutManager.registerAction(kSplitMonitorActionId, "Monitor TX (Hold)",
+        "Slice", QKeySequence(), nullptr);
+    // Split Up N — the one-touch pileup offsets every modern rig has (#311).
+    // These tune the TX slice; the RX slice does not move.
+    m_shortcutManager.registerAction("split_up_1", "Split Up 1 kHz", "Slice",
+        QKeySequence(), [this]() { applySplitOffsetKHz(1.0); });
+    m_shortcutManager.registerAction("split_up_5", "Split Up 5 kHz", "Slice",
+        QKeySequence(), [this]() { applySplitOffsetKHz(5.0); });
+    m_shortcutManager.registerAction("split_up_10", "Split Up 10 kHz", "Slice",
+        QKeySequence(), [this]() { applySplitOffsetKHz(10.0); });
     m_shortcutManager.registerAction("cycle_tx_slice", "Cycle TX Slice", "Slice",
         QKeySequence(), [this]() {
             const auto slices = m_radioModel.slices();

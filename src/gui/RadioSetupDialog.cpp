@@ -7537,6 +7537,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             "BandZoom", "SegmentZoom",
             "NextSlice", "PrevSlice",
             "SplitActiveSlice",
+            "SplitMonitorTx",
             "ToggleAgc", "VolumeUp", "VolumeDown",
             "WheelFrequency", "WheelVolume", "WheelPower",
             "WheelRit", "WheelXit",
@@ -7650,6 +7651,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             {"VolumeUp",         "Volume Up (+5)"},
             {"VolumeDown",       "Volume Down (-5)"},
             {"SplitActiveSlice", "Toggle Split"},
+            {"SplitMonitorTx",   "Monitor TX Frequency"},
         };
 
         // 8 keys laid out as 2 columns of 4
@@ -7834,6 +7836,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             {"VolumeUp",         "Volume Up (+5)"},
             {"VolumeDown",       "Volume Down (-5)"},
             {"SplitActiveSlice", "Toggle Split"},
+            {"SplitMonitorTx",   "Monitor TX Frequency"},
         };
 
         static const char* kTMate2KeyDefaults[6] = {

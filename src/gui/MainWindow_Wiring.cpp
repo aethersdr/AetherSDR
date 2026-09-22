@@ -2305,7 +2305,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
     if (m_splitActive && m_splitTxSliceId < 0 && s->sliceId() != m_splitRxSliceId) {
         m_splitTxSliceId = s->sliceId();
         s->setTxSlice(true);
-        s->setAudioMute(true);  // TX slice in split has no audio output
+        // Apply the remembered arrangement, then start learning this split's.
+        // With nothing remembered applySplitAudioProfile() just mutes the TX
+        // slice, which is what this line used to do unconditionally. (#2242)
+        // Arm AFTER applying: the mirror must not record our own restore.
+        auto* splitRx = m_radioModel.slice(m_splitRxSliceId);
+        applySplitAudioProfile(splitRx, s);
+        armSplitAudioMirror(splitRx, s);
         // TX slice frequency is already set by the slice create command
         // (with mode-dependent offset), so do NOT override it here (#789).
         if (auto* sw = spectrum()) sw->setSplitPair(m_splitRxSliceId, m_splitTxSliceId);
@@ -2508,6 +2514,10 @@ void MainWindow::onSliceRemoved(int id)
         // never reclaimed) or, if a third slice was focused, the WRONG slice,
         // which would be keyed via the radio command "slice set N tx=1".
         const int rxId = m_splitRxSliceId;   // capture before reset
+        // Same learn-and-restore as disableSplit(). The TX slice model is
+        // already gone here, so everything recorded comes from the mirror —
+        // the reason it is kept live for the whole split. (#2242)
+        recordSplitAudioMirror();
         m_splitActive = false;
         m_splitRxSliceId = -1;
         m_splitTxSliceId = -1;
@@ -6084,6 +6094,13 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         double txFreq = tx->frequency();
         applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune, "split-swap-rx");
         applyTuneRequest(tx, rxFreq, TuneIntent::IncrementalTune, "split-swap-tx");
+    });
+
+    // Right-click the SPLIT/SWAP badge — offsets, Monitor TX mode, and the
+    // remembered audio arrangement (#2242, #311).
+    connect(w, &VfoWidget::splitBadgeMenuRequested, this,
+            [this, sliceId](const QPoint& globalPos) {
+        showSplitBadgeMenu(sliceId, globalPos);
     });
 
     // Split toggle — per-widget, slice-aware (#328)
