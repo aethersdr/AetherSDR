@@ -1,7 +1,7 @@
 #include "RadioConnection.h"
-#include "backends/flex/FlexPttWireSession.h"
-#include "LogManager.h"
-#include "core/backends/sim/SimBackend.h"
+#include "FlexPttWireSession.h"
+#include "core/LogManager.h"
+#include "core/backends/sim/DemoRadioConstants.h"
 
 #include <algorithm>
 #include <QEventLoop>
@@ -123,7 +123,7 @@ void RadioConnection::connectToRadio(const RadioInfo& info)
 
 bool RadioConnection::isDemoTarget(const RadioInfo& info)
 {
-    return info.serial == SimBackend::demoSerial();
+    return info.serial == DemoRadio::serial();
 }
 
 void RadioConnection::startSyntheticDemoConnect()
@@ -172,17 +172,16 @@ void RadioConnection::startSyntheticDemoConnect()
             if (!m_syntheticDemo || generation != m_sessionGeneration)
                 return;   // disconnected, or a newer demo session took over
             emitSyntheticStatus(QStringLiteral(
-                // 8 kHz span — this MUST equal SimBackend's spectrum span
-                // (kAudioSpanHz), because the demo's spectrum row IS the ±4 kHz
-                // audio scene: AE stretches that row across the pan bandwidth, so
-                // if the pan is wider than the data (the old 40 kHz vs 8 kHz), the
-                // birdie renders at the wrong frequency and lands outside the RX
-                // passband. Matching the two makes the on-screen birdie position
-                // and the demodulated audio pitch agree. (RFC #4288 — birdie fix.)
+                // The 8 kHz span is kPanBandwidthMhz — the same constant
+                // SimBackend and SimSignalSource publish, so the pan width and
+                // the spectrum row cannot drift apart. 'g'/6 renders 0.008 as
+                // "0.008" and keeps a future 0.0125 intact; 'f'/3 would round it
+                // to "0.013". (RFC #4288 — birdie fix.)
                 "SDE300001|display pan 0x40000000 client_handle=0xDE300001 "
-                "waterfall=0x42000000 center=14.100 bandwidth=0.008 "
+                "waterfall=0x42000000 center=14.100 bandwidth=%1 "
                 "min_dbm=-140 max_dbm=-20 x_pixels=1024 y_pixels=700 fps=25 "
-                "ant_list=ANT1"));
+                "ant_list=ANT1")
+                .arg(QString::number(DemoRadio::kPanBandwidthMhz, 'g', 6)));
             // line_duration carries the 1..100 waterfall RATE, not milliseconds
             // (core/WaterfallRate.h). #4425 made it load-bearing: the renderer
             // interpolates the waterfall/3D scroll position over one row interval,
@@ -197,7 +196,7 @@ void RadioConnection::startSyntheticDemoConnect()
                 "SDE300001|display waterfall 0x42000000 client_handle=0xDE300001 "
                 "panadapter=0x40000000 line_duration=%1 auto_black=1 "
                 "black_level=15 color_gain=50")
-                .arg(AetherSDR::SimBackend::kWaterfallRate));
+                .arg(DemoRadio::kWaterfallRate));
             emitSyntheticStatus(QStringLiteral(
                 "SDE300001|slice 0 client_handle=0xDE300001 pan=0x40000000 "
                 "RF_frequency=14.100000 mode=USB filter_lo=100 filter_hi=2900 "

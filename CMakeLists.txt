@@ -825,6 +825,11 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
+    src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
+    src/core/backends/flex/CommandParser.cpp    # SmartSDR wire line parse/build
+    src/core/backends/flex/PanadapterStream.cpp # SmartSDR VITA-49 UDP receiver (DAX/IQ)
+    src/core/backends/flex/SmartLinkClient.cpp  # SmartLink WAN auth + radio list
+    src/core/backends/flex/WanConnection.cpp    # SmartLink TLS transport (#5554 §2.6)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
@@ -879,10 +884,8 @@ set(CORE_SOURCES
     src/core/OccupiedRegion.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
-    src/core/RadioConnection.cpp
     src/core/NetworkPathResolver.cpp
     src/core/TgxlConnection.cpp
-    src/core/CommandParser.cpp
     src/core/AudioSummaryLogger.cpp
     src/core/AudioFormatNegotiator.cpp
     src/core/AudioDeviceNegotiator.cpp
@@ -922,7 +925,6 @@ set(CORE_SOURCES
     src/core/TxGrantManager.cpp
     src/core/SpectralNR.cpp
     src/core/MonoDspStereoAdapter.cpp
-    src/core/PanadapterStream.cpp
     src/core/TimeFrameVoter.cpp
     src/core/WwvDecoder.cpp
     src/core/WwvbDecoder.cpp
@@ -938,7 +940,6 @@ set(CORE_SOURCES
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
-    src/core/SmartLinkClient.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
     src/core/KiwiSdrCredentialStore.cpp
@@ -946,7 +947,6 @@ set(CORE_SOURCES
     src/core/KiwiSdrManager.cpp
     src/core/ReceivePresentationSync.cpp
     src/core/KiwiPublicDirectory.cpp
-    src/core/WanConnection.cpp
     src/core/DxClusterClient.cpp
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp

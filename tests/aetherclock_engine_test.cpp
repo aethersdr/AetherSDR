@@ -17,7 +17,7 @@
 
 #include "core/AetherClockEngine.h"
 #include "core/ClockSampleTimeline.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/TimeFrameVoter.h"
 #include "models/SliceModel.h"
 

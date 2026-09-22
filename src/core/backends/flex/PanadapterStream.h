@@ -3,8 +3,8 @@
 #include "core/PcmFrame.h"
 #include <map>
 
-#include "PacketLossConcealment.h"
-#include "VitaBinCoverage.h"
+#include "core/PacketLossConcealment.h"
+#include "core/VitaBinCoverage.h"
 
 #include <QObject>
 #include <QUdpSocket>
