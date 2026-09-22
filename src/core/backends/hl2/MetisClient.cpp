@@ -383,6 +383,35 @@ bool MetisClient::start(const Params& params)
     m_connectWatchdog->start(kConnectTimeoutMs);
     m_startAttempts = 1;
     m_startRetryTimer->start(kStartRetryMs);
+
+    // A CONNECT IS A CHANGE only for a radio that is meant to be ON CL1. The
+    // HL2 powers up on its own crystal whatever it was doing when we last let
+    // go of it, so an operator running a GPSDO into CL1 needs the VersaClock
+    // reprogrammed here and not only when they tick the box. Queued AFTER the
+    // priming burst so the stream is already up and the twenty-four banks ride
+    // ordinary EP2 frames rather than the burst's hand-sent packets.
+    //
+    // THE OFF TABLE IS NOT SENT SPECULATIVELY, and the reason is the same fact
+    // that makes the on-table necessary: the radio boots on its crystal. A
+    // board that has never been switched in this process is therefore already
+    // where the off-table would put it, and writing it anyway would mean every
+    // connect of every HL2 — bare boards whose operator has never heard of CL1
+    // included — putting twenty-four writes on the bus that clocks the AD9866.
+    // That bus gets touched when there is a reason to touch it.
+    //
+    // m_cl1EnabledForRadio is the one case that is not covered by "it booted on
+    // its crystal": WE switched THIS radio to CL1 earlier in this process, the
+    // operator disconnected without power-cycling it, and then cleared the box.
+    // The radio is still on CL1 and only we know it, so that one gets the off
+    // table on reconnect.
+    //
+    // Matched on the SERIAL, not merely on "we did this once" — see the
+    // member's comment. An unknown serial matches nothing, which is the right
+    // way to fail: not writing the clock bus is always the safe answer.
+    const bool mayStillBeOnCl1 = !m_cl1EnabledForRadio.isEmpty()
+                              && m_cl1EnabledForRadio == m_params.radioSerial;
+    if (m_params.cl1RefClock || mayStillBeOnCl1)
+        queueCl1Sequence(m_params.cl1RefClock);
     return true;
 }
 
@@ -512,6 +541,12 @@ void MetisClient::stop()
             && bank[2] == (kI2cStopAtEnd | kIoBoardI2cAddr);
     });
     m_ioBoardTxFreqSent = false;
+    // Same rule, higher stakes: a half-sent VersaClock sequence finishing in
+    // the NEXT session would configure the part from the middle of a table
+    // whose earlier writes never happened — that is not a wrong band relay,
+    // it is a converter with no usable clock. start() re-queues the whole
+    // sequence, so nothing is lost by dropping the remainder here.
+    dropQueuedCl1Banks();
     // Whatever was still queued for the speaker describes a session that has
     // ended, and on a radio with no codec the same bytes would be EADDR writes.
     m_speakerAudio.clear();
@@ -810,6 +845,40 @@ void MetisClient::submitSpeakerAudio(const QByteArray& interleavedInt16)
                   "the cap counts samples, so it must hold whole L/R frames");
     while (m_speakerAudio.size() > kSpeakerAudioCapSamples)
         m_speakerAudio.pop_front();
+}
+
+void MetisClient::setCl1RefClock(bool externalRef)
+{
+    m_params.cl1RefClock = externalRef;
+    if (!m_running)
+        return;        // start() re-sends the sequence; see its call site
+    queueCl1Sequence(externalRef);
+}
+
+void MetisClient::queueCl1Sequence(bool externalRef)
+{
+    // Replace rather than append. Two sequences in the queue would apply the
+    // older one LAST — an operator who toggled the setting twice would end on
+    // the state they toggled away from.
+    dropQueuedCl1Banks();
+    // Latched on the way in, released on the way out: once this process has put
+    // a radio on CL1, later connects to THAT radio have to be able to put it
+    // back, and once the off table has gone out there is nothing left to undo.
+    // See start() and the member's comment.
+    m_cl1EnabledForRadio = externalRef ? m_params.radioSerial : QString();
+    for (const Cc& bank : versaClockCl1Banks(externalRef))
+        m_oneShot.push_back(bank);
+    qCInfo(lcHl2) << "HL2: CL1 reference clock ->"
+                  << (externalRef ? "external 10 MHz" : "onboard crystal")
+                  << "— queued" << kVersaClockCl1Banks << "VersaClock writes";
+}
+
+void MetisClient::dropQueuedCl1Banks()
+{
+    std::erase_if(m_oneShot, [](const Cc& bank) {
+        return bank[0] == kC0I2c1 && bank[1] == kI2cCookieWrite
+            && bank[2] == (kI2cStopAtEnd | kVersaClockI2cAddr);
+    });
 }
 
 void MetisClient::setAtuTuneRequest(bool request)

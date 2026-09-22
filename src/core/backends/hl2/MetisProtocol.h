@@ -491,6 +491,42 @@ inline constexpr std::uint8_t kIoBoardRegTxFreqLsb = 4;   // DATA bits  7:0, COM
 // wiki advises for forward compatibility.
 Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept;
 
+// The same, on the INTERNAL bus (I2C1, addr 0x3c). Different bus, different
+// hazard: I2C2 reaches a companion board that can be absent, while I2C1
+// reaches the board's own VersaClock — the part that clocks the AD9866. A
+// wrong write here does not fail to switch a relay, it stops the radio
+// sampling. There is exactly one caller, versaClockCl1Banks() below.
+Cc ccI2c1Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept;
+
+// ---- CL1 external 10 MHz reference (VersaClock 5P49V5923, I2C1 chip 0x6A) ----
+//
+// WHAT THIS IS. The HL2 runs from a 38.4 MHz crystal multiplied to 76.8 MHz by
+// an on-board VersaClock. Feeding a GPSDO into the CL1 jack does not switch
+// anything by itself: the VersaClock has to be REPROGRAMMED to take its
+// reference from that input instead of the crystal, and going back means
+// reprogramming it again. There is no single "external reference" bit.
+//
+// THE TABLES ARE NOT DERIVED AND CANNOT BE. They are the register/value pairs
+// piHPSDR and deskHPSDR both carry verbatim, which in turn came from the
+// Hermes-Lite 2 project; the 5P49V5923's PLL dividers, input mux and
+// feedback configuration are a solved layout for this one board and nothing
+// in the datasheet would let a reader re-derive these twenty-four pairs
+// without the board's schematic and its loop filter. They are reproduced
+// rather than re-computed for exactly that reason, and they are the reason
+// this is a fixed table rather than a function of anything.
+//
+// SENT ON CHANGE AND ON CONNECT, never re-asserted. The radio boots on its
+// crystal every time, so connecting is a change; and twenty-four banks in the
+// one-shot queue at every rotation would starve the NCO refresh.
+//
+// ORDER MATTERS. The pairs configure the input mux before the PLL that locks
+// to it; sending them out of order can leave the part running from a reference
+// that is not there yet. They go out in the order given, one bank per EP2
+// frame, which is ~63 ms for the whole sequence at 48 kHz.
+inline constexpr std::uint8_t kVersaClockI2cAddr = 0x6A;
+inline constexpr std::size_t kVersaClockCl1Banks = 24;
+std::array<Cc, kVersaClockCl1Banks> versaClockCl1Banks(bool externalRef) noexcept;
+
 // The five C&C banks that write `hz` into the IO board's transmit-frequency
 // registers, ALREADY IN THE ORDER THEY MUST BE SENT: most significant byte
 // first, LSB last because that write is what commits the value.

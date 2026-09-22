@@ -175,7 +175,30 @@ Not worth it. The scalar is exact for tuning, which is the whole requirement.
 
 ---
 
-## 4. A later, different feature: CL1 external 10 MHz
+## 4. CL1 external 10 MHz — built, and what it had to satisfy
+
+> **Status: implemented.** This section was written while CL1 was still a
+> proposal and is kept as the record of what was required of it. The three
+> requirements below were merge conditions, not suggestions; where a claim here
+> has since been settled or contradicted by the implementation, that is said
+> inline rather than by quietly editing the original text.
+>
+> **Exercised on hardware, 2026-09-22.** On a Hermes-Lite 2 with a GPSDO's
+> 10 MHz sine on CL1 — fed straight in, no attenuator — the setting was toggled
+> fourteen times between the external reference and the crystal inside eighty
+> seconds, and the session carried on afterwards through band-filter switches,
+> tuning and a TUNE. The converter never lost its clock in either direction, so
+> both tables are good on a production board and the switch is reversible
+> without a power cycle. Two things this does *not* settle, because Protocol 1
+> cannot: that the part is LOCKED to the reference rather than free-running —
+> that is the operator's own frequency check, not something the host can read —
+> and anything at all about boards other than the HL2 itself.
+>
+> The sine is worth recording separately. The project wiki says the HL2
+> "requires a 3.3V square wave input"; a sine locked the part anyway, which is
+> what the divider argument below predicted and now has a second board behind
+> it.
+
 
 **A GPSDO does not require CL1 to be useful here.** Its 10 MHz output is a
 calibration *signal* — receive it, read where it lands, enter the number. That
@@ -200,14 +223,119 @@ modelling it once. Worth doing for all-day WSPR/FT8; not needed for "the dial
 should read right." Separate PR — it needs the I2C write path at `0x3c`, the
 switch-without-stopping sequence, and a lock indicator.
 
+**How that landed.** The I2C write path is `ccI2c1Write()` and the sequence is
+`versaClockCl1Banks()`, twenty-four register/value pairs in send order
+(`MetisProtocol.h`). It is queued one bank per EP2 frame, ~63 ms for the whole
+table at 48 kHz, and `MetisClient::stop()` drops any remainder rather than
+letting a half-written table finish in the next session.
+
+**The lock indicator was not built, and cannot be from the host.** Protocol 1
+has no readback for the VersaClock — no status register, no I2C read path, and
+the discovery reply carries nothing about the clock source. The host therefore
+cannot distinguish "locked to CL1" from "reprogrammed for CL1 with no cable
+attached". Anything drawn as a lock indicator would be an echo of the setting,
+which is worse than no indicator because it looks like evidence. What exists
+instead is the frequency readout: an operator confirms the lock by watching a
+known carrier, which is the same check §5 already describes.
+
 Two hard constraints if we build it:
 
 - **Hardware damage risk.** Many GPSDOs put out a 5 V sine; CL1 wants a 3.3 V
   square wave. The wiki requires ≥6 dB of 50 Ω SMA attenuation. Any UI that
   offers this must say so, in the UI, not just the release notes.
+  → **Met.** A persistent warning label sits under the checkbox on the HL2
+  Hardware page (`hl2HwCl1Warning`), not in a tooltip and not gated on the
+  checkbox's state — by the time the box is ticked the cable is already on.
+  **Keep the two cautions in this section apart when writing that text.** The
+  ≥6 dB figure is the CL1 jack, a clock input feeding the VersaClock; the
+  ≥30 dB figure two paragraphs up is the ANTENNA input, where a GPSDO's
+  +7…+13 dBm reaches the AD9866. A first draft of this label welded them
+  together — "≥6 dB, or it overloads the AD9866" — which names the wrong port
+  for the hazard and under-specs the antenna case by roughly 24 dB. A warning
+  carrying the wrong number for the danger it names is worse than no warning.
+
+  The wiki states both halves plainly, and since the HL2 is open hardware there
+  was never a reason to infer either: *"a 50 ohm SMA attenuator of at least
+  6 dB will reduce the voltage from a 5V source to a level that will not damage
+  the chip"*, and *"Care must be used to not overdrive the CL1 input to the
+  VersaClock chip otherwise it may be damaged."*
 - When CL1 is locked, the manual ppb from this feature must be forced to zero
   and the control disabled — otherwise we would correct an already-correct
   clock.
+  → **Met, in three places.** `Hl2Backend::applyHardwareOptions()` zeroes and
+  persists the ppb when CL1 is engaged; `freqcal.set` and `freqcal.set_live`
+  refuse a non-zero value while it is engaged, with the reason in the error;
+  and the Calibration page disables the spin box and the trim buttons, with the
+  reason in their accessible description.
+
+**The CL1 input is not a bare pin, and that matters twice.** The schematic path
+is SMA → **B58**, an AC coupling cap → an **R39/R40 divider** → the VersaClock's
+`CLKIN`. The divider takes a 3.3 V LVCMOS clock down to roughly 1 Vpp, which is
+what `CLKIN` wants per the VersaClock datasheet. So the "3.3 V square wave"
+figure is the spec **at the connector**, with that divider already in the path.
+
+1. *For the warning text.* **"Requires a 3.3 V square wave" is the wiki's
+   simplification and should not be reproduced.** With the divider in the path
+   3.3 V is the DESIGN POINT — the value R39/R40 are scaled to land at ~1 Vpp
+   on `CLKIN` — not something the input demands. A source below it still works
+   if enough amplitude arrives, and it does not need a square wave at all: a
+   10 MHz sine through this path lands as a ~1 Vpp sine and the VersaClock
+   locks to it. What actually needs saying is the one-sided case — a source
+   **hotter** than the design point wants padding.
+
+   State the design point and the pad; do not narrate a mechanism. With the divider in place a 5 V sine reaches CLKIN at roughly
+   1.5 Vpp, not 5 V — so "5 V damages the chip" overstates what is actually
+   known. Whether 1.5 Vpp exceeds the part's limit or only its recommendation
+   is a number we do not have: the **5P49V5923** datasheet's CLKIN absolute
+   maximum could not be obtained, and the one figure easily found (1.2 Vpp)
+   belongs to the **5P49V6965**, a different part. The wiki does warn of damage,
+   and its authors designed the board the divider sits on — but four drafts of
+   this label each asserted a mechanism and each was wrong differently (the
+   AD9866; an unnamed "rating"; a direct feed to the VersaClock; 5 V at the
+   chip). The label now says "mind the input level" and gives the two numbers
+   that are the wiki's own and are actionable. §4 asks for the attenuator
+   guidance to be in the UI — it is, and nothing beyond it is claimed.
+
+   **If someone gets the datasheet figure**, this is worth revisiting: a warning
+   that can say "above X Vpp at the connector" beats one that says "mind it".
+
+2. *For boards where those parts are absent.* **Production HL2 units ship with
+   the divider populated** — confirmed by the maintainer, who owns the hardware;
+   the project wiki does not state it either way. So for the units this feature
+   will actually meet, CL1 is wired through and works.
+
+   The exception is early hand-built hardware: on a Hermes-Lite 2 beta2 build,
+   CL1, B58, R39 and R40 all had to be installed by the owner. On such a board
+   the jack reaches nothing — and enabling CL1 anyway is not inert. The ON table
+   switches the VersaClock's input mux to `CLKIN`, so the part is told to lock
+   to a reference that cannot arrive, and the radio is left without a usable
+   76.8 MHz clock. That is precisely the "converter with no usable clock" §3
+   warns about, reached without any mis-write: every register value is correct,
+   the signal simply is not there.
+
+   **Recovery is a power cycle**, since the radio boots on its crystal. Clearing
+   the setting sends the OFF table, but only if the host can still talk to a
+   radio whose converter has stopped — which is not something to rely on.
+
+   This is recorded rather than warned about in the UI: it applies to a class of
+   board the operator built themselves and therefore knows about, and a caveat
+   shown to every production owner about a part every production board has is
+   noise that trains people to skim the warning that matters.
+
+**The part number, settled.** An earlier draft of this section recorded a
+conflict — §3 names the part the **5P49V5923** while the first implementation
+named it the 5P49V6901 — and said not to resolve it until somebody read the
+silicon. That turned out to be unnecessary caution: **the Hermes-Lite 2 is open
+hardware**, so the answer is published. The project wiki's External-Clocks page
+states that CL1 feeds a **VersaClock 5P49V5923**, and the clock chain is
+documented as a 38.4 MHz TCXO into `XIN_REF` with the VersaClock as a doubler,
+or 10 MHz into `CLKIN` multiplied by 192/25. §3 was right; the code now says
+5P49V5923 too.
+
+Worth keeping as a lesson rather than deleting: the reflex was to treat an
+unverifiable discrepancy as permanently unverifiable. For a project whose
+schematics, gateware and wiki are all public, that reflex is wrong — check the
+upstream source before writing "cannot be confirmed".
 
 This is also the natural HL2 counterpart to the Flex **10 MHz Reference** group
 that already exists in `RadioSetupDialog::buildRxTab()`.

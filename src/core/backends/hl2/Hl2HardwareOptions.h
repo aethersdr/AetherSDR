@@ -178,6 +178,18 @@ struct Hl2HardwareOptions {
     // turns it on and hears why.
     bool n2adrHpf = false;
 
+    // A 10 MHz reference (a GPSDO, typically) fed into the CL1 jack, with the
+    // VersaClock reprogrammed to lock to it instead of the onboard crystal.
+    //
+    // THIS IS NOT A REGISTER, it is twenty-four of them: switching CL1 means
+    // rewriting the VersaClock 5P49V5923's PLL configuration over I2C-1, and
+    // switching back means rewriting all twenty-four again. See
+    // versaClockCl1Banks() in MetisProtocol.h. It therefore takes effect on a
+    // change rather than being re-asserted, and it does not survive a power
+    // cycle of the radio — the HL2 boots on its crystal every time, which is
+    // why this is sent on connect as well as on change.
+    bool cl1RefClock = false;
+
     // The HL2 gateware's own ATU tune request, 0x09[20]. Raised only while
     // TUNE is running, and only for an ATU that the GATEWARE drives (the AH-4
     // protocol on the CL2/J16 pins). An ATU hanging off the N2ADR IO board is

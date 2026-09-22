@@ -777,9 +777,9 @@ add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
 # HL2 hardware-variant options — which board is on the other end (bare HL2,
 # HL2+ with the AK4951 codec, SquareSDR 2), the dither bit's three
-# incompatible meanings, the companion filter board's receive/transmit split
-# and the EP2 audio slot. Same shape as the target above: pure policy plus
-# pure wire, no Qt, no aethercore, no socket.
+# incompatible meanings, the companion filter board's receive/transmit split,
+# the CL1 VersaClock sequence and the EP2 audio slot. Same shape as the target
+# above: pure policy plus pure wire, no Qt, no aethercore, no socket.
 add_executable(hl2_hardware_options_test
     tests/hl2_hardware_options_test.cpp
     src/core/backends/hl2/MetisProtocol.cpp)

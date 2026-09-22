@@ -4,16 +4,17 @@
 //
 // WHY THIS TEST EXISTS. The three radios are indistinguishable over Protocol 1
 // and NONE of what this file pins is readable back from any of them: the
-// dither bit, the open-collector filter byte and the ATU request are all
-// write-only. A wrong value is therefore not a failed command that reports
-// itself — it is a loudspeaker nailed on, a codec the gateware stops believing
-// in, or a receive path with relays engaged that are not in it. There is no
-// runtime evidence to fall back on, so the evidence has to be here.
+// dither bit, the open-collector filter byte, the ATU request and the
+// VersaClock sequence are all write-only. A wrong value is therefore not a
+// failed command that reports itself — it is a loudspeaker nailed on, a codec
+// the gateware stops believing in, a receive path with relays engaged that are
+// not in it, or a converter with no usable clock. There is no runtime evidence
+// to fall back on, so the evidence has to be here.
 //
 // The reference values are deskHPSDR's, which carries them from piHPSDR and
 // the Hermes-Lite 2 project. They are compared against, not re-derived: the
-// N2ADR band groupings are a property of that board and nothing in a datasheet
-// would let a reader recompute them.
+// N2ADR band groupings and the twenty-four VersaClock pairs are properties of
+// those boards and nothing in a datasheet would let a reader recompute them.
 //
 // Pure policy and pure wire — no Qt, no sockets, no hardware.
 
@@ -317,6 +318,50 @@ static void testAtuBit()
 }
 
 // ---------------------------------------------------------------------------
+// The CL1 VersaClock sequence.
+// ---------------------------------------------------------------------------
+static void testVersaClock()
+{
+    const auto on = versaClockCl1Banks(true);
+    const auto off = versaClockCl1Banks(false);
+    check(on.size() == 24 && off.size() == 24, "24 banks each way");
+
+    // Every bank is an I2C-1 write to chip 0x6A with the stop bit set — the
+    // 0x78 0x06 0xEA prefix deskHPSDR emits. I2C-1 is the INTERNAL bus: a bank
+    // that went to I2C-2 (0x7A) by a transposed constant would be addressed at
+    // a companion board that is probably not there, and the radio would keep
+    // running from its crystal with nothing to say so.
+    for (std::size_t i = 0; i < on.size(); ++i) {
+        check(on[i][0] == 0x78 && off[i][0] == 0x78, "C0 = I2C-1 (0x3c << 1)");
+        check(on[i][1] == 0x06 && off[i][1] == 0x06, "C1 = write cookie");
+        check(on[i][2] == 0xEA && off[i][2] == 0xEA, "C2 = stop | 0x6A");
+    }
+
+    // Spot-checks against deskHPSDR's HL2CL1on / HL2CL1off tables, at the two
+    // ends and at the pair that differs most visibly between them.
+    check(on[0][3] == 0x10 && on[0][4] == 0xC0, "on[0] = 0x10,0xC0");
+    check(on[1][3] == 0x13 && on[1][4] == 0x03, "on[1] = 0x13,0x03");
+    check(on[12][3] == 0x18 && on[12][4] == 0x00, "on[12] = 0x18,0x00");
+    check(on[23][3] == 0x63 && on[23][4] == 0x01, "on[23] = 0x63,0x01");
+    check(off[0][3] == 0x10 && off[0][4] == 0xC0, "off[0] = 0x10,0xC0");
+    check(off[1][3] == 0x13 && off[1][4] == 0x00, "off[1] = 0x13,0x00");
+    check(off[12][3] == 0x18 && off[12][4] == 0x40, "off[12] = 0x18,0x40");
+    check(off[23][3] == 0x63 && off[23][4] == 0x00, "off[23] = 0x63,0x00");
+
+    // REGISTER ORDER IS IDENTICAL in both tables and only the values differ.
+    // That is what makes "send the other table" a complete switch rather than
+    // a partial reconfiguration leaving stale registers from the previous one.
+    for (std::size_t i = 0; i < on.size(); ++i)
+        check(on[i][3] == off[i][3], "both tables address the same registers in the same order");
+
+    // The two tables are not the same table.
+    bool differs = false;
+    for (std::size_t i = 0; i < on.size(); ++i)
+        differs = differs || (on[i][4] != off[i][4]);
+    check(differs, "the on and off tables carry different values");
+}
+
+// ---------------------------------------------------------------------------
 // The EP2 audio slot.
 // ---------------------------------------------------------------------------
 static void testEp2Audio()
@@ -376,6 +421,7 @@ int main()
     testClamps();
     testConfigDitherRandom();
     testAtuBit();
+    testVersaClock();
     testEp2Audio();
     if (g_failures == 0)
         std::printf("hl2_hardware_options_test: all checks passed\n");

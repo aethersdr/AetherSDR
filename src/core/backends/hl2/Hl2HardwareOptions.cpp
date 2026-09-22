@@ -17,6 +17,7 @@ constexpr const char* kFieldDither      = "ditherBit";
 constexpr const char* kFieldRandom      = "randomBit";
 constexpr const char* kFieldFilterBoard = "filterBoard";
 constexpr const char* kFieldN2adrHpf    = "n2adrHpf";
+constexpr const char* kFieldCl1         = "cl1RefClock";
 constexpr const char* kFieldAtu         = "atuGateware";
 constexpr const char* kFieldSpeaker     = "speakerLevelPercent";
 
@@ -60,6 +61,7 @@ Hl2HardwareOptions Hl2HardwareOptions::load(const RadioSettingsScope& scope)
     opts.filterBoard = clampFilterBoard(
         intField(doc, kFieldFilterBoard, static_cast<int>(opts.filterBoard)));
     opts.n2adrHpf    = boolField(doc, kFieldN2adrHpf, opts.n2adrHpf);
+    opts.cl1RefClock = boolField(doc, kFieldCl1, opts.cl1RefClock);
     opts.atuGateware = boolField(doc, kFieldAtu, opts.atuGateware);
     opts.speakerLevelPercent = clampSpeakerLevel(
         intField(doc, kFieldSpeaker, opts.speakerLevelPercent));
@@ -79,6 +81,7 @@ void Hl2HardwareOptions::save(const RadioSettingsScope& scope,
     doc[QLatin1String(kFieldRandom)]      = opts.randomBit;
     doc[QLatin1String(kFieldFilterBoard)] = static_cast<int>(opts.filterBoard);
     doc[QLatin1String(kFieldN2adrHpf)]    = opts.n2adrHpf;
+    doc[QLatin1String(kFieldCl1)]         = opts.cl1RefClock;
     doc[QLatin1String(kFieldAtu)]         = opts.atuGateware;
     doc[QLatin1String(kFieldSpeaker)]     = clampSpeakerLevel(opts.speakerLevelPercent);
     // Checked, like Hl2FreqCal::savePpb: setFeature() refuses while the store is
