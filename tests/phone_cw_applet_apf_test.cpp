@@ -41,6 +41,7 @@
 
 using AetherSDR::PhoneCwApplet;
 using AetherSDR::SliceModel;
+using AetherSDR::SliceDspRequest;
 
 static int g_failures = 0;
 

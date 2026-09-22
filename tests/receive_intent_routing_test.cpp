@@ -154,6 +154,32 @@ struct Fixture {
     SliceModel* slice() { return radio.slice(0); }
 };
 
+void externalReceiveHandoffOrdering()
+{
+    Fixture f;
+    SliceModel* s = f.slice();
+    QSignalSpy raw(s, &SliceModel::commandReady);
+    s->setExternalReceiveAudioReplacementMute(true, false);
+    check(f.backend->audio.size() == 1 && f.backend->audio.last().value == 1
+              && f.backend->audio.last().origin == SliceAudioRequest::Origin::ExternalReceiveSuppression,
+          "Kiwi suppression reaches the neutral backend route");
+    QStringList order;
+    f.backend->observe = [&](int) { order.append(QStringLiteral("restore primary mute")); };
+    QObject::connect(&f.radio, &RadioModel::panBandAboutToDispatch, s, [&](const QString&) {
+        // Same synchronous handoff as MainWindow_KiwiSdr. The injected backend
+        // has no command plane: this proves ordering up to the band attempt,
+        // not delivery of a band command to radio firmware.
+        s->prepareExternalReceiveAudioReplacementBandRecall(false);
+        order.append(QStringLiteral("continue band attempt"));
+    });
+    f.radio.requestPanBand(QStringLiteral("receiver"), QStringLiteral("20"));
+    check(order == QStringList{"restore primary mute", "continue band attempt"}
+              && f.backend->audio.size() == 2 && f.backend->audio.last().value == 0
+              && f.backend->audio.last().origin == SliceAudioRequest::Origin::ExternalReceiveSuppression
+              && raw.isEmpty(),
+          "typed Kiwi mute handoff completes before band dispatch continues, without a raw bypass");
+}
+
 void creationPaths()
 {
     for (bool commandPlane : {false, true}) {
@@ -505,6 +531,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 1; }
     creationPaths();
+    externalReceiveHandoffOrdering();
     receiveControls();
     receiveReentrancyAndLifecycle();
     profileRestore();

@@ -412,6 +412,36 @@ void receiveControlContracts()
                   && IcomCivBackendTestAccess::firstDispatched(backend) == expected[operation],
               "Icom AF gain, squelch-off threshold and global lock retain native encoding");
     }
+    {
+        IcomCivBackend backend;
+        IcomCivBackendTestAccess::prepare(backend);
+        check(backend.requestSliceRxAntenna(0, QStringLiteral("RX-ANT")) == ReceiveDispatch::Unsupported,
+              "Icom profile without a selectable RX antenna refuses the intent");
+        // Select the evidenced MK2 dialect. The unstarted session deliberately
+        // retains the fixture's A4 address; dialect and destination are separate.
+        IcomCivBackendTestAccess::selectModel(backend, *modelForId(0xB6));
+        QSignalSpy observations(&backend, &IRadioBackend::sliceChanged);
+        check(backend.requestSliceRxAntenna(0, QStringLiteral("RX-ANT")) == ReceiveDispatch::Dispatched,
+              "Icom selectable RX antenna accepts the canonical port name");
+        IcomCivBackendTestAccess::pump(backend);
+        check(IcomCivBackendTestAccess::firstDispatched(backend) == QStringLiteral("fe fe a4 e0 12 00 01 fd")
+                  && observations.isEmpty(),
+              "Icom RX antenna retains native encoding without manufacturing readback");
+        const std::uint64_t queued = IcomCivBackendTestAccess::queuedCount(backend);
+        check(backend.requestSliceRxAntenna(0, QStringLiteral("ANT2")) == ReceiveDispatch::Unsupported
+                  && backend.requestSliceRxAntenna(1, QStringLiteral("ANT1")) == ReceiveDispatch::Unsupported
+                  && IcomCivBackendTestAccess::queuedCount(backend) == queued,
+              "unsupported Icom ports and slice identities enqueue no RX antenna command");
+        CivFrame antenna;
+        antenna.cmd = 0x12;
+        antenna.hasSub = true;
+        antenna.sub = 0;
+        antenna.data = {0};
+        IcomCivBackendTestAccess::observe(backend, antenna);
+        check(last(observations).rxAntenna == QStringLiteral("ANT1")
+                  && IcomCivBackendTestAccess::queuedCount(backend) == queued,
+              "independent Icom antenna readback corrects the requested port without echo");
+    }
     for (const Family& family : kFamilies) {
         if (!family.make) { continue; }
         std::unique_ptr<IRadioBackend> backend = family.make();
