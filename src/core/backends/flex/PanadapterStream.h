@@ -148,6 +148,8 @@ public:
         Tci    = 1,   // TCI server audio clients (WSJT-X etc.)
         Rade   = 2,   // RADE digital-voice engine
         Clock  = 3,   // AetherClock time-signal decode engine
+        CwDecoder = 4, // selected receiver CW decoder (pre-monitor DAX)
+        RttyDecoder = 5, // selected receiver RTTY decoder (pre-monitor DAX)
     };
     static const char* daxConsumerName(DaxConsumer who);
 

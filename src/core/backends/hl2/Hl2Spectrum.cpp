@@ -43,17 +43,17 @@ Hl2Spectrum::Hl2Spectrum(int fftSize) : m_fftSize(fftSize < 2 ? 2 : fftSize)
         //   Previous write     by thread T4:  memalign <- fftw_malloc_plain
         //                                       <- make_unique<Hl2Spectrum>
         //
-        // AnanSpectrum, the sibling of this class, has taken this same lock since
-        // it hit the same problem; this one never did.
+        // AnanSpectrum, this class's former ANAN sibling (since replaced by WDSP's
+        // analyzer), took this same lock after hitting the same problem; this
+        // one never did.
         //
         // The lock covers the ALLOCATIONS as well as the plan, which is wider
-        // than AnanSpectrum's — deliberately. AnanSpectrum's comment records the
+        // than AnanSpectrum's was — deliberately. Its comment recorded the
         // mallocs as safe unguarded, but the two frames TSan actually names here
         // are fftw_malloc_plain and free, not the planner, so a plan-only lock
         // would leave the reported edge unsynchronised. It costs nothing: this
         // runs once per spectrum construction, never on the audio path.
-        // execute() below stays unguarded, same as AnanSpectrum and
-        // WdspChannel::processIq().
+        // execute() below stays unguarded, same as WdspChannel::processIq().
         //
         // The evidence came from radiomodel_pan_id_mapping_test, which failed
         // this way in 4 of 4 sanitizer runs and has since been removed as

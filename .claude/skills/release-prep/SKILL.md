@@ -1,12 +1,12 @@
 ---
 name: release-prep
-description: 'The AetherSDR release-cut pass — takes a CalVer version and drives the release from "main is where we want to cut" to "the GitHub release exists with every asset signed". Maps the range through the commit-to-PR API, writes the CHANGELOG section from PR bodies, refreshes README and ROADMAP, edits the six release files, validates, opens the prep PR, folds in what merges after the cutoff, tags the squash-merge commit on main, creates the release and verifies the signed asset set. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/release-prep 26.9.4", "/release-prep v26.9.4", "prep the release", "cut v26.9.4", "tag the release", "release prep", or otherwise wants a version cut.'
+description: 'The AetherSDR release-prep pass — takes a CalVer version and drives the release from "main is where we want to cut" to "the prep PR is merged on main and ready to tag". Maps the range through the commit-to-PR API, writes the CHANGELOG section from PR bodies, refreshes README and ROADMAP, edits the six release files, validates, opens the prep PR, folds in what merges after the cutoff, and hands the merged squash commit to /tag-release for the tag, the release and the asset verification. Every judgment call goes to the maintainer through AskUserQuestion. Use when the user says "/release-prep 26.9.4", "/release-prep v26.9.4", "prep the release", "release prep", "write the changelog for 26.9.4", or otherwise wants a version prepped; the cut itself is "/tag-release".'
 ---
 
-# Cut the release — prep, land, tag, verify
+# Prep the release — map, write, validate, land
 
 Work the version given in `$ARGUMENTS` (`26.9.4` or `v26.9.4`; if absent, ask
-which). Eight deliverables, in this order:
+which). Six deliverables, in this order:
 
 1. **A commit-to-PR mapping** of everything since the previous tag, saved.
 2. **The six release files edited** — version spots, a new CHANGELOG section
@@ -14,12 +14,9 @@ which). Eight deliverables, in this order:
 3. **The validation list run and printed** — all of it, every time.
 4. **The prep PR**, on a `release/vX.Y.Z` branch of the org repo, kept current
    with `main` until it merges.
-5. **A signed annotated tag on the squash-merge commit on `main`.**
-6. **The GitHub release**, created before CI attaches assets, with the house
-   notes.
-7. **The signed asset set verified** — and the signing workflow dispatched by
-   hand if its trigger did not fire.
-8. **A markdown report to the operator** (step 9).
+5. **The merged squash commit handed to `/tag-release`** (step 7) — the tag,
+   the release and the asset verification are that skill's deliverables.
+6. **A markdown report to the operator** (step 9).
 
 Where `gh` is unavailable — Claude Code Remote and web sessions have no `gh`
 CLI — use the GitHub MCP tools (`mcp__github__*`) for the reads and writes. The
@@ -139,8 +136,8 @@ what it means and what it costs. Then implement the answer and carry on.
   component is a hotfix: `packaging/windows/get-store-build-plan.ps1` marks it
   `storeEligible = false`, so the Windows job still attaches the installer and
   portable ZIP but produces **no `.msixupload`** and stages nothing for the
-  Store (`docs/WINDOWS-STORE-MSIX.md` § "Version discipline"). Expect one asset
-  fewer in step 8 and say so.
+  Store (`docs/WINDOWS-STORE-MSIX.md` § "Version discipline"). `/tag-release`
+  expects one asset fewer; say so in the PR body.
 - **Refuse a version that already exists.** `git ls-remote --tags origin
   refs/tags/vX.Y.Z` must print nothing and `gh release view vX.Y.Z` must fail.
   A published tag is never moved (v26.9.1's maintainer decision, #5325).
@@ -422,119 +419,48 @@ one. Never claim a build, test or hardware result the pass did not produce.
   question, never an admin-merge on your own authority. Do not tag while the
   PR is open.
 
-## 7. Cut — tag on `main`, not the branch
+## 7. Cut — hand off to `/tag-release`
 
-After the prep PR merges:
+After the prep PR merges, the cut is `/tag-release vX.Y.Z`
+(`.claude/skills/tag-release/SKILL.md`). It finds the squash-merge commit of
+this PR on `origin/main`, re-checks the six files and CI at that SHA, tags
+it with a signed annotated tag, creates the release before CI attaches
+anything, watches the three build workflows and the signing runs, verifies
+the asset set on the files, reads the Store step, drafts the website post and
+writes its own report. The tag, the release and the asset verification are
+that skill's deliverables, not this one's; the tag-message shape and the
+release-notes footer stay recorded in `references/changelog-style.md`, which
+`/tag-release` reads.
 
-```sh
-git fetch origin
-SHA=$(gh pr view <PR> --json mergeCommit --jq .mergeCommit.oid)
-git merge-base --is-ancestor "$SHA" origin/main && echo ok    # assert, do not assume
-git show -s --format=%cs "$SHA"                                # the day the merge landed
-```
-
-- **The tag target is the squash-merge commit on `origin/main`.** If the
-  assertion fails, stop: something else merged or the SHA is wrong.
-- **The date still has to match.** If the merge landed on a day other than
-  the one in the CHANGELOG heading and the metainfo entry, both change on
-  `main` first (gate; it is another PR), and the tag waits.
-- **Signed annotated tag**, message in the v26.9.3 shape
-  (`references/changelog-style.md`): first line `AetherSDR vX.Y.Z — <first
-  clause of the headline>`, blank line, one summary paragraph, blank line,
-  `N merged changes from M human contributors, AetherClaude and Dependabot.`
-  and `Cut by <name> <callsign>.`
-
-  ```sh
-  git tag -s vX.Y.Z "$SHA" -F tagmsg.txt
-  git tag -v vX.Y.Z
-  git push origin vX.Y.Z          # the tag alone — never with a branch
-  ```
-
-- **Create the release immediately**, before the tag-triggered workflows
-  attach anything, so they attach to the release you wrote rather than to a
-  bare one the first upload creates:
-
-  ```sh
-  gh release create vX.Y.Z --verify-tag \
-    --title "AetherSDR vX.Y.Z — <first clause of the headline>" \
-    --notes-file notes.md
-  ```
-
-  `notes.md` is the CHANGELOG section minus its `## [vX.Y.Z]` line and its
-  `### <headline>` line, followed by the `### Downloads` paragraph, the
-  `**Full diff:** [v<prev>...vX.Y.Z](…/compare/v<prev>...vX.Y.Z)` line with the
-  link to `docs/VERIFYING-RELEASES.md` at the tag, and the `73,` sign-off —
-  wording verbatim from the v26.9.3 release, reproduced in
-  `references/changelog-style.md`. Then confirm: not a draft, not a
-  pre-release, `target_commitish` is `main`, and `gh api
-  repos/aethersdr/AetherSDR/releases/latest` names this tag.
-
-## 8. Post-tag verification — Principle XI applies to releases too
-
-The tag push starts three workflows on `push: tags: ['v*']` — **AppImage**,
-**Windows Installer**, **macOS DMG**. **Sign Release Artifacts** runs on
-`workflow_run` after AppImage and Windows Installer each complete
-successfully (two runs, serialised per tag; the second re-signs the same set),
-waits up to 30 minutes for the four signable assets, GPG-signs them, generates
-the source tarball from the tag and `SHA256SUMS.txt`, and uploads with
-`--clobber`.
+Do not tag from here. The one thing to carry across is the PR number:
 
 ```sh
-gh run list --branch vX.Y.Z --json workflowName,event,status,conclusion,url
-gh run list --workflow sign-release.yml --limit 5 --json event,status,conclusion,createdAt,url
+gh pr view <PR> --json mergeCommit,mergedAt --jq '"\(.mergeCommit.oid) \(.mergedAt)"'
 ```
 
-The signing runs execute on the default branch — `gh run list --branch
-vX.Y.Z` does not show them — so read the workflow's own list and match by
-`createdAt` against the build completions. v26.8.2 shipped unsigned because the
-`workflow_run` trigger carried a `branches: [main]` filter a tag build can
-never satisfy, and no one checked; the trigger was fixed in #5029 and the
-runs have fired for every tag since — check anyway. **If no signing run has
-started within a few minutes of both builds succeeding, dispatch it:**
+If the merge landed on a day other than the one in the CHANGELOG heading and
+the metainfo entry, that is `/tag-release`'s first gate question and it
+comes back here as a second prep PR; do not pre-empt it.
 
-```sh
-gh workflow run sign-release.yml -f tag=vX.Y.Z
-```
+## 8. Post-tag verification — done by `/tag-release`
 
-Wait for the runs to conclude (read `conclusion`, not `status`), then list
-the assets:
+Step 4 of `/tag-release` (`scripts/check_release_assets.py`) verifies the
+fifteen-asset set (fourteen for a hotfix), the `.asc` timing, the
+`.msixupload` version, `SHA256SUMS.txt` coverage, the downloaded signatures
+and the Store step, and its report carries the result. Nothing here
+duplicates it.
 
-```sh
-gh release view vX.Y.Z --json isDraft,isPrerelease,targetCommitish,assets \
-  --jq '{isDraft,isPrerelease,targetCommitish, assets: [.assets[] | "\(.name) \(.createdAt)"]}'
-```
-
-**The expected set is fifteen** (v26.9.3 had exactly these):
-
-- `AetherSDR-vX.Y.Z-x86_64.AppImage` and `AetherSDR-vX.Y.Z-aarch64.AppImage`, each with `.asc`
-- `AetherSDR-vX.Y.Z-macOS-apple-silicon.dmg` and `AetherSDR-vX.Y.Z-macOS-intel.dmg` (Apple-notarized, no `.asc`)
-- `AetherSDR-vX.Y.Z-Windows-x64-setup.exe` and `AetherSDR-vX.Y.Z-Windows-x64-portable.zip`, each with `.asc`
-- `AetherSDR-vX.Y.Z-source.tar.gz` with `.asc`
-- `SHA256SUMS.txt` with `.asc`
-- `AetherSDR-X.Y.Z.0-Windows-x64.msixupload` — absent for a hotfix version (fourteen assets then)
-
-Check every `.asc` postdates the binary it signs, and that the `.msixupload`
-version is the release version with a `.0` fourth component. v26.9.2's read
-`26.9.205.0` because the workflow run counter had been applied to production
-packages (#5346); #5467 fixed it, and it is checked every time.
-
-**Microsoft Store.** On a `v*` tag push the Windows workflow stages at most a
-*draft* submission (`--noCommit`), and only when the
-`AETHERSDR_STORE_PRODUCT_ID` repository variable is set. A maintainer clicks
-**Submit to Store** in Partner Center. Say so in the report; the skill never
-does it, and never runs the developer-flight dispatch.
-
-Then clean up: `git worktree remove` the prep worktree, `git worktree prune`,
-and delete the local `release/vX.Y.Z` branch (the remote one auto-deletes on
-merge).
+What remains for this skill after the merge: clean up. `git worktree remove`
+the prep worktree, `git worktree prune`, and delete the local
+`release/vX.Y.Z` branch (the remote one auto-deletes on merge).
 
 ## 9. Report (markdown, to the operator)
 
 ```markdown
-## vX.Y.Z — cut
+## vX.Y.Z — prepped
 
-**Tag:** `vX.Y.Z` → `<sha>` (squash-merge of #<PR> on `main`, verified ancestor), signed, `git tag -v` OK.
-**Release:** <url> — title "AetherSDR vX.Y.Z — …", not draft, not pre-release, target `main`, marked Latest.
+**Prep PR:** #<PR> <url> — merged as `<sha>` on `main` at <time> / open, awaiting <what>.
+**Next:** `/tag-release vX.Y.Z` tags `<sha>`; nothing is tagged or published by this pass.
 
 ### Contents
 N merged changes (P PRs, J direct commits) from M human contributors, AetherClaude (A), Dependabot (K); first-time: @a, @b / none. Range `v<prev>..<cutoff>`; folded in after the cutoff: #NNNN, #NNNN / none. Previous tag on main: yes / no (duplicate #NNNN excluded).
@@ -545,24 +471,8 @@ Each decision put through AskUserQuestion and the answer. "None." if so.
 ### Validation
 The step-5 output, or the lines that changed since the PR body's copy. Configure run: yes (`CMAKE_PROJECT_VERSION=X.Y.Z`) / no. Build and tests: not run — metadata only.
 
-### Workflows on the tag
-| workflow | run | conclusion |
-|---|---|---|
-| AppImage | <url> | success |
-| Windows Installer | <url> | success |
-| macOS DMG | <url> | success |
-| Sign Release Artifacts | <url> (workflow_run / dispatched by hand at <time>) | success |
-
-### Assets (15 / 14 for a hotfix)
-- [x] AetherSDR-vX.Y.Z-x86_64.AppImage  - [x] .asc (created after the binary)
-- … one line per expected asset, ticked or **missing** …
-- [x] AetherSDR-X.Y.Z.0-Windows-x64.msixupload (version checked)
-
-### Store
-Draft submission staged: yes / no (`AETHERSDR_STORE_PRODUCT_ID` unset). Submit to Store is the maintainer's click in Partner Center.
-
-### Failed or done by hand
-Anything red, anything dispatched manually, anything unverified and why.
+### Date
+CHANGELOG heading and metainfo entry say YYYY-MM-DD; the merge landed on YYYY-MM-DD. Same day / differs — `/tag-release` will ask before tagging.
 
 ### Cleanup
 Worktree removed, branch deleted / what remains and why.
@@ -576,17 +486,16 @@ State current state, not the churn.
   below it.
 - Blanket-replace the previous version string; never touch a historical
   mention.
-- Tag the prep branch, tag before the PR merges, tag a commit that is not an
-  ancestor of `origin/main`, or move a published tag.
+- Tag anything from this pass — the tag is `/tag-release`'s, on the merged
+  squash commit, never on the prep branch.
 - Cite a PR the range does not contain, leave one uncited, or invent a
   count — every number in the intro, the Contributors paragraph and the PR
   body is computed from the mapping.
 - Take a contributor handle from a display name or a callsign.
 - Claim a build, test or hardware result the pass did not produce.
-- Push to `main` directly, edit `.github/workflows/`, submit to the Store, or
-  run the developer-flight dispatch.
+- Push to `main` directly or edit `.github/workflows/`.
 - Decide anything in the "Always ask" list without asking; admin-merge a
   stalled review on your own authority.
 - Work, build or `git stash` in the invoking checkout.
-- Call the pass finished before the signed asset set has been listed and
-  checked.
+- Call the pass finished before the prep PR is merged and the squash commit
+  is named in the report for `/tag-release`.

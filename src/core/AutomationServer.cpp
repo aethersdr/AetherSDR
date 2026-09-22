@@ -1854,6 +1854,21 @@ QJsonObject vfoFlagSnapshot(QWidget* vfo, RadioModel* radio)
     return flag;
 }
 
+// EVALUATE THE OPTIONAL ONCE. Both …IfLive() accessors read the clock INSIDE
+// themselves and compare against a staleness window, so calling one twice --
+// once to test it, once to dereference it -- can find it engaged and then
+// disengaged, and dereferencing a disengaged optional is undefined behaviour.
+//
+// The window is sub-microsecond and was reasoned from the code rather than
+// observed. That is precisely the kind of race that is cheaper to remove than
+// to argue about, and a caller cannot be expected to know the accessor reads a
+// clock. (#5499 review)
+template <typename T>
+static QJsonValue jsonOrNull(std::optional<T> v)
+{
+    return v ? QJsonValue(*v) : QJsonValue();
+}
+
 QJsonObject radioSnapshot(const RadioModel* r)
 {
     // Multi-Flex slot occupancy across the radio's whole slice capacity: each
@@ -1887,7 +1902,24 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("connectState"), r->connectState()},
         {QStringLiteral("fullDuplex"),   r->fullDuplexEnabled()},
         {QStringLiteral("transmitting"), r->isRadioTransmitting()},
-        {QStringLiteral("txPower"),      r->txPower()},
+        // Qualified, not a dead scalar. This published RadioModel::m_txPower
+        // — declared, given a getter and a Q_PROPERTY(float txPower READ
+        // txPower NOTIFY metersChanged), and ASSIGNED NOWHERE IN THE TREE, from
+        // the commit that introduced it onwards. It answered 0 at every drive,
+        // keyed or not: with rfPower 10, the relay thrown and 0.153-0.184 W
+        // measurably entering a dummy load, every sample of this field read 0.
+        // A bench run then gated a transmit on setting a drive and reading it
+        // back here — the right shape of gate, and incapable of failing,
+        // because it compared 0 against 0.
+        //
+        // The member, its getter and its property are gone. The live quantity
+        // is the forward-power meter, which is what a field called txPower
+        // hanging off metersChanged always meant; `get transmit`.rfPower
+        // remains the REQUESTED drive, a different quantity that no longer
+        // claims to be this one. The freshness duration matches
+        // `get meters`.txMetersFresh, but this checks FWDPWR's own timestamp:
+        // fresh SWR or REFPWR cannot revive expired watts. (#5499 item 1)
+        {QStringLiteral("txPower"), jsonOrNull(r->meterModel().fwdPowerIfLive())},
         // Qualified, not the scalar: an absent or stale sensor reads null here
         // exactly as it does in `get meters`.
         //
@@ -2362,8 +2394,14 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         // the fwdPower/reflectedPower pair above — a client reading this scalar
         // must not get a different answer from the one reading the array
         // (#4533). swrAgeMs is still reported so a consumer can see WHY.
-        {QStringLiteral("swr"),
-         m->swrIfLive() ? QJsonValue(*m->swrIfLive()) : QJsonValue()},
+        // THE SAME DOUBLE EVALUATION, and the one the other two were copied
+        // from. swrIfLive() reads the clock inside itself like its two
+        // siblings, so testing and dereferencing are two different instants
+        // and a sample on the staleness edge can be engaged for the first and
+        // disengaged for the second. Pre-dates #5499 and is fixed with them
+        // rather than left one line away from two corrections, which is how a
+        // pattern gets copied forward.
+        {QStringLiteral("swr"), jsonOrNull(m->swrIfLive())},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          temperature.value(QStringLiteral("value"))},
         {QStringLiteral("supplyVolts"),     voltage.value(QStringLiteral("value"))},
@@ -2378,7 +2416,15 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("compPeak"),        m->compPeak()},           // dB compression (peak)
         {QStringLiteral("compLevel"),       m->compLevel()},          // dB compression
         {QStringLiteral("hasCompression"),  m->hasCompressionMeterValue()},
-        {QStringLiteral("sLevel"),          m->sLevel()},             // dBm
+        // Null rather than a fabricated floor, for the same reason and under the
+        // same rule as swr above (#4533). MeterModel::m_sLevel was written in
+        // exactly one place — clear(), to -130.0f — so this field answered
+        // -130 dBm for 1304 consecutive samples while the SLC:LEVEL row in
+        // `all`, the same quantity in the same reply, moved around a median of
+        // -83.9. sLevelIfLive() declines when more than one receiver declares a
+        // LEVEL meter, because then the scalar has no single answer and `all`
+        // is where a client names the receiver it means. (#5499 item 2)
+        {QStringLiteral("sLevel"), jsonOrNull(m->sLevelIfLive())},           // dBm
         // Same constant the SWR gate uses, so "the TX meters are fresh" and "the
         // SWR is live" cannot drift apart as two different literals.
         {QStringLiteral("txMetersFresh"),

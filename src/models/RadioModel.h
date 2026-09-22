@@ -93,7 +93,14 @@ class RadioModel : public QObject {
     Q_PROPERTY(QString model       READ model       NOTIFY infoChanged)
     Q_PROPERTY(QString version     READ version     NOTIFY infoChanged)
     Q_PROPERTY(bool    connected   READ isConnected NOTIFY connectionStateChanged)
-    Q_PROPERTY(float   txPower     READ txPower     NOTIFY metersChanged)
+    // NO txPower PROPERTY. There was one — READ txPower NOTIFY metersChanged —
+    // over a member nothing in the tree ever assigned, so it advertised a
+    // freshness it could not have: metersChanged fired and the value behind it
+    // never moved. A property declaring NOTIFY over a constant is the specific
+    // thing #4533 settled against. The measured quantity lives in MeterModel
+    // and reaches automation as `get radio`.txPower through
+    // MeterModel::fwdPowerIfLive(); the operator's REQUEST lives in
+    // TransmitModel as `get transmit`.rfPower. (#5499 item 1)
 
 public:
     explicit RadioModel(QObject* parent = nullptr);
@@ -213,7 +220,6 @@ public:
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
     bool transmitFrequencyCheck() const { return m_transmitFrequencyCheck; }
     void setTransmitFrequencyCheck(bool on);
-    float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
     // True when the interlock's tx_client_handle is this client (or has
     // never been reported) — false only when another client provably owns
@@ -1104,6 +1110,10 @@ public:
     // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
     // See core/WaterfallRate.h. (#4606)
     bool requestPanAverage(const QString& panId, int average);
+    // Weighted-average toggle for a backend that shapes its own spectrum:
+    // straight down to that backend. Returns false on Flex, where the caller
+    // sends the weighted_average= wire command itself.
+    bool requestLocalPanWeightedAverage(const QString& panId, bool on);
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
@@ -1917,8 +1927,11 @@ public:
     }
 
     // Install a socket-free backend with the same normalized receiver-state
-    // bindings used by production. Replacement drops old session models.
-    void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
+    // bindings used by production. Replacement drops old session models. An
+    // optional unopened PanadapterStream must be owned by that backend and
+    // live on the model's thread; it exercises the normal DAX holder/PCM path.
+    void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family,
+                           PanadapterStream* panStream = nullptr);
     // The production family switch WITHOUT the dial that follows it: calls the
     // same rebuildBackendForFamily() connectToRadio() calls, so the two cannot
     // drift. Builds the REAL backend for `family` through makeBackend(), so a
@@ -2106,7 +2119,6 @@ private:
     QString     m_version;          // software version from discovery (e.g. "4.1.5")
     QString     m_versionLabel;     // display-only word for it (Gateware on an HL2)
     QString     m_protocolVersion;  // protocol version from V line (e.g. "1.4.0.0")
-    float       m_txPower{0.0f};
     QString     m_chassisSerial;
     QString     m_callsign;
     QString     m_nickname;

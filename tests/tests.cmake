@@ -73,6 +73,28 @@ target_link_libraries(pcm_frame_test PRIVATE Qt6::Core)
 add_test(NAME pcm_frame_test COMMAND pcm_frame_test)
 set_tests_properties(pcm_frame_test PROPERTIES TIMEOUT 30)
 
+# Fixed decoder domains and selected receiver routes; no transport peer/device.
+add_executable(decoder_pcm_adapter_test tests/decoder_pcm_adapter_test.cpp)
+target_link_libraries(decoder_pcm_adapter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME decoder_pcm_adapter_test COMMAND decoder_pcm_adapter_test)
+set_tests_properties(decoder_pcm_adapter_test PROPERTIES TIMEOUT 30)
+
+add_executable(decoder_audio_routing_test tests/decoder_audio_routing_test.cpp)
+target_link_libraries(decoder_audio_routing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME decoder_audio_routing_test COMMAND decoder_audio_routing_test)
+set_tests_properties(decoder_audio_routing_test PROPERTIES TIMEOUT 30)
+
+# CW waveform at the selected pre-monitor boundary; no decoder, socket or TX.
+add_executable(cw_pcm_consumer_test tests/cw_pcm_consumer_test.cpp)
+target_link_libraries(cw_pcm_consumer_test PRIVATE aethercore Qt6::Core)
+add_test(NAME cw_pcm_consumer_test COMMAND cw_pcm_consumer_test)
+set_tests_properties(cw_pcm_consumer_test PROPERTIES TIMEOUT 60)
+
+add_executable(rtty_decoder_pcm_test tests/rtty_decoder_pcm_test.cpp)
+target_link_libraries(rtty_decoder_pcm_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtty_decoder_pcm_test COMMAND rtty_decoder_pcm_test)
+set_tests_properties(rtty_decoder_pcm_test PROPERTIES TIMEOUT 30)
+
 # Actual backend/model/audio/parser wiring with injected PCM; binds no sockets.
 add_executable(pcm_compatibility_test tests/pcm_compatibility_test.cpp)
 target_link_libraries(pcm_compatibility_test PRIVATE aethercore Qt6::Core)
@@ -92,11 +114,30 @@ target_link_libraries(cw_decoder_parameters_test PRIVATE Qt6::Core)
 add_test(NAME cw_decoder_parameters_test COMMAND cw_decoder_parameters_test)
 set_tests_properties(cw_decoder_parameters_test PROPERTIES TIMEOUT 60)
 
+# Real worker decoding and typed lease retirement, without sockets or hardware.
+add_executable(cw_decoder_pcm_lifecycle_test
+    tests/cw_decoder_pcm_lifecycle_test.cpp
+    src/core/CwDecoder.cpp
+    ${GGMORSE_SOURCES}
+)
+target_include_directories(cw_decoder_pcm_lifecycle_test PRIVATE
+    src src/core third_party/ggmorse/include third_party/ggmorse/src)
+target_link_libraries(cw_decoder_pcm_lifecycle_test PRIVATE Qt6::Core)
+add_test(NAME cw_decoder_pcm_lifecycle_test COMMAND cw_decoder_pcm_lifecycle_test)
+set_tests_properties(cw_decoder_pcm_lifecycle_test PROPERTIES TIMEOUT 60)
+
 # Socket/device-free production RX queue, processing-domain and output checks.
 add_executable(audio_engine_rates_test tests/audio_engine_rates_test.cpp)
 target_link_libraries(audio_engine_rates_test PRIVATE aethercore Qt6::Core)
 add_test(NAME audio_engine_rates_test COMMAND audio_engine_rates_test)
 set_tests_properties(audio_engine_rates_test PROPERTIES TIMEOUT 120)
+
+# RX BYPASS snapshots and restores the running AetherNR method along with the
+# chain stages (#5913); enable flags only, no sockets/devices.
+add_executable(audio_engine_rx_bypass_nr_test tests/audio_engine_rx_bypass_nr_test.cpp)
+target_link_libraries(audio_engine_rx_bypass_nr_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_rx_bypass_nr_test COMMAND audio_engine_rx_bypass_nr_test)
+set_tests_properties(audio_engine_rx_bypass_nr_test PROPERTIES TIMEOUT 120)
 
 # Production auxiliary ingress/retirement versus DSP initialization; no sockets/devices.
 add_executable(audio_engine_pcm_lifetime_test tests/audio_engine_pcm_lifetime_test.cpp)
@@ -811,7 +852,7 @@ add_executable(anan_p2_protocol_test
 target_include_directories(anan_p2_protocol_test PRIVATE src)
 add_test(NAME anan_p2_protocol_test COMMAND anan_p2_protocol_test)
 
-# ANAN RX DSP — IQ -> WdspChannel demod + AnanSpectrum. Links aethercore
+# ANAN RX DSP — IQ -> WdspChannel demod + AnanPanAnalyzer (WDSP analyzer). Links aethercore
 # (WDSP+FFTW), unlike anan_p2_protocol_test above. *** READ HERMES.md §16
 # and this file's own header comment before touching expected values here —
 # the handedness pin is bench-confirmed (2026-08-21, radiocert rx +
@@ -1117,6 +1158,16 @@ add_executable(wdsp_process_tally_test tests/wdsp_process_tally_test.cpp)
 target_include_directories(wdsp_process_tally_test PRIVATE src)
 target_link_libraries(wdsp_process_tally_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME wdsp_process_tally_test COMMAND wdsp_process_tally_test)
+
+# WdspSMeter.h -- the S-meter arithmetic both host-DSP receive stages and both
+# publishers share: the settle window after the backend's own silence, the
+# read cadence that keeps the reading rate at ~47/s whatever the input rate,
+# and the publish-side attack/decay/tick. Pure header, clock injected, so the
+# tick is pinned without waiting on one. No WDSP chain, no socket.
+add_executable(wdsp_smeter_test tests/wdsp_smeter_test.cpp)
+target_include_directories(wdsp_smeter_test PRIVATE src)
+target_link_libraries(wdsp_smeter_test PRIVATE Qt6::Core)
+add_test(NAME wdsp_smeter_test COMMAND wdsp_smeter_test)
 
 # The RX DSP must demodulate at every IQ rate the operator can select by zooming.
 add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
@@ -4315,6 +4366,26 @@ target_compile_definitions(meter_surfaces_test PRIVATE
 target_link_libraries(meter_surfaces_test PRIVATE Qt6::Core)
 add_test(NAME meter_surfaces_test COMMAND meter_surfaces_test)
 
+# #5499 item 2: socket-free rigctl STRENGTH. Two slice fixtures, two SLC:LEVEL
+# meters carrying different values, and an injected backend that only reports a
+# connection state — nothing is bound, opened or keyed.
+add_executable(rigctl_strength_slevel_test tests/rigctl_strength_slevel_test.cpp)
+target_include_directories(rigctl_strength_slevel_test PRIVATE src tests)
+target_link_libraries(rigctl_strength_slevel_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME rigctl_strength_slevel_test COMMAND rigctl_strength_slevel_test)
+
+# #5499 item 3: the noise-blanker hold invariant, read out of WdspChannel.cpp as
+# TEXT (same limitation, and same reason, as meter_surfaces_test above — the
+# facts never meet at compile time). Links nothing but Qt6::Core: it opens the
+# source file, it does not run the DSP.
+add_executable(wdsp_nb_hold_invariant_test tests/wdsp_nb_hold_invariant_test.cpp)
+target_include_directories(wdsp_nb_hold_invariant_test PRIVATE src)
+target_compile_definitions(wdsp_nb_hold_invariant_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(wdsp_nb_hold_invariant_test PRIVATE Qt6::Core)
+add_test(NAME wdsp_nb_hold_invariant_test COMMAND wdsp_nb_hold_invariant_test)
+
 add_executable(health_applet_test
     tests/health_applet_test.cpp
     src/gui/HealthApplet.cpp
@@ -6100,6 +6171,35 @@ add_test(NAME rx_applet_squelch_reconciliation_test
 set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The VFO flag's AetherRX / AetherTX launchers stay the same width on every
+# mode's DSP grid. Same socket-free build as the squelch test above.
+add_executable(vfo_dsp_launcher_width_test
+    tests/vfo_dsp_launcher_width_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(vfo_dsp_launcher_width_test PRIVATE src)
+target_link_libraries(vfo_dsp_launcher_width_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME vfo_dsp_launcher_width_test
+         COMMAND vfo_dsp_launcher_width_test)
+set_tests_properties(vfo_dsp_launcher_width_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Socket-free production-widget lifetime regression coverage (#5568).
 add_executable(gui_nested_lifetime_test
     tests/gui_nested_lifetime_test.cpp
@@ -6304,6 +6404,8 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 set(AETHER_SETTINGS_CONSUMERS
     tci_rx_audio_test
     bandscope_trace_render_test
+    decoder_audio_routing_test
+    cw_pcm_consumer_test
     noise_floor_auto_adjust_gate_test
     qso_recorder_rates_test
     qso_recorder_playback_lifecycle_test
