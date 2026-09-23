@@ -70,6 +70,7 @@ int main(int argc, char** argv)
     saved.id = 3; saved.frequencyHz = 99'900'000; saved.mode = "FM";
     saved.filterLowHz = -8000; saved.filterHighHz = 8000;
     saved.audioGain = 22; saved.audioPan = 11; saved.audioMute = false;
+    saved.squelchEnabled = true; saved.squelchLevel = 33;
     check(RtlSliceSettings(scope).patch(100'000'000, 2'400'000, {saved}), "sparse saved receiver seeded");
     RadioModel model;
     check(model.rebuildBackendForTest("rtl"), "real model backend initialized");
@@ -84,6 +85,8 @@ int main(int argc, char** argv)
     }), "capacity-one restore materializes stable ID 3 instead of zero");
     QPointer<SliceModel> slice = model.slice(3);
     if (!slice) { backend.disconnectRadio(); return 1; }
+    check(slice->squelchOn() && slice->squelchLevel() == 33 && slice->squelchStateKnown(),
+          "accepted sparse receiver restores squelch enabled and threshold");
     int observed = 0, commands = 0;
     QVector<double> frequencies;
     QObject::connect(slice, &SliceModel::frequencyChanged, &model, [&](double mhz) { ++observed; frequencies.append(mhz); });
@@ -92,6 +95,7 @@ int main(int argc, char** argv)
     QObject::connect(slice, &SliceModel::audioGainChanged, &model, [&] { ++observed; });
     QObject::connect(slice, &SliceModel::audioMuteChanged, &model, [&] { ++observed; });
     QObject::connect(slice, &SliceModel::audioPanChanged, &model, [&] { ++observed; });
+    QObject::connect(slice, &SliceModel::squelchChanged, &model, [&] { ++observed; });
     QObject::connect(slice, &SliceModel::commandReady, &model, [&] { ++commands; });
     RadioModelSliceLifecycleTestAccess::flush(model);
     const auto initial = scope.featureExact("RtlSlices");
@@ -100,6 +104,7 @@ int main(int argc, char** argv)
         slice->setFrequency(110.0); slice->setMode("AM");
         slice->setFilterWidth(-6000, 6000); slice->setAudioGain(88);
         slice->setAudioPan(88); slice->setAudioMute(true);
+        slice->setSquelch(false, 88);
         emit slice->frequencyCommandIssued(111.0);
     });
     foreign.join();
@@ -110,9 +115,11 @@ int main(int argc, char** argv)
     slice->setFrequency(100.1);
     slice->setFilterWidth(-7000, 7000);
     slice->setAudioGain(37); slice->setAudioPan(73); slice->setAudioMute(true);
+    slice->setSquelch(true, 61);
     check(slice->frequency() == 99.9 && slice->reportedFrequency() == 99.9
         && slice->filterLow() == -8000 && slice->filterHigh() == 8000
-        && slice->audioGain() == 22 && slice->audioPan() == 11 && !slice->audioMute(),
+        && slice->audioGain() == 22 && slice->audioPan() == 11 && !slice->audioMute()
+        && slice->squelchOn() && slice->squelchLevel() == 33,
         "pending sparse receiver edits do not change observed getters");
     check(observed == before && commands == 0, "pending edits emit neither observations nor Flex wire text");
     RadioModelSliceLifecycleTestAccess::flush(model);
@@ -121,11 +128,14 @@ int main(int argc, char** argv)
         device->block();
         return rtl::RtlCaptureBackendTestAccess::idle(backend) && slice->frequency() == 100.1
             && slice->filterLow() == -7000 && slice->audioGain() == 37 && slice->audioMute()
-            && slice->audioPan() == 73;
+            && slice->audioPan() == 73 && slice->squelchLevel() == 61;
     }), "callback adoption publishes all sparse-ID tuning/filter/audio edits");
     RadioModelSliceLifecycleTestAccess::flush(model);
     check(RtlSliceSettings(scope).load().document.slices[3].audioPan == 73,
           "accepted sparse receiver audio reaches persistence");
+    check(RtlSliceSettings(scope).load().document.slices[3].squelchEnabled
+        && RtlSliceSettings(scope).load().document.slices[3].squelchLevel == 61,
+          "only accepted squelch threshold reaches persistence");
     const auto accepted = scope.featureExact("RtlSlices");
     const int refusedBefore = observed;
     slice->setFilterWidth(9000, -9000); slice->setMode("not-a-mode");
@@ -201,6 +211,7 @@ int main(int argc, char** argv)
     RadioModelSliceLifecycleTestAccess::stage(model);
     const int stagedWrites = device->writes;
     slice->setFrequency(108.0); slice->setAudioGain(90);
+    slice->setSquelch(false, 90);
     check(rtl::RtlCaptureBackendTestAccess::idle(backend) && device->writes == stagedWrites
         && slice->frequency() == 107.0 && slice->audioGain() == 37,
         "staged slice cannot mutate accepted state or dispatch controls");
@@ -215,15 +226,39 @@ int main(int argc, char** argv)
           "accepted state reclaims the staged object and adopts a reentrant edit");
     check(reentrantEdits == 1, "reclaimed binding publishes the accepted tune once");
     QObject::disconnect(reentrant);
+    slice->setMode("WFM");
+    check(waitFor([&] { device->block(); return slice->mode() == "WFM"
+        && rtl::RtlCaptureBackendTestAccess::idle(backend); }),
+          "legacy WFM mode adopted before unsupported filter request");
+    const int wfmLow = slice->filterLow();
+    const int wfmHigh = slice->filterHigh();
+    const int wfmObserved = observed;
+    RadioModelSliceLifecycleTestAccess::flush(model);
+    const auto wfmSettings = scope.featureExact("RtlSlices");
+    slice->setFilterWidth(-90'000, 90'000);
+    slice->setSquelch(true, 75);
+    check(rtl::RtlCaptureBackendTestAccess::idle(backend)
+        && slice->filterLow() == wfmLow && slice->filterHigh() == wfmHigh
+        && observed == wfmObserved && !slice->squelchOn(),
+          "unsupported WFM filter neither queues work nor changes observed state");
+    RadioModelSliceLifecycleTestAccess::flush(model);
+    check(scope.featureExact("RtlSlices") == wfmSettings,
+          "unsupported WFM filter does not persist a cosmetic passband");
+    slice->setMode("FMN");
+    check(waitFor([&] { device->block(); return slice->mode() == "FMN"
+        && rtl::RtlCaptureBackendTestAccess::idle(backend); }),
+          "FMN restored after legacy WFM refusal check");
     RadioModelSliceLifecycleTestAccess::flush(model);
     const auto beforeDisconnect = scope.featureExact("RtlSlices");
     slice->setFrequency(107.2); slice->setAudioGain(80);
+    slice->setSquelch(true, 80);
     backend.disconnectRadio();
     check(!frequencies.contains(107.2) && scope.featureExact("RtlSlices") == beforeDisconnect,
           "disconnect discards pending receiver edits and flushes only accepted state");
     const int disconnectedBefore = observed;
     if (slice) {
         slice->setFrequency(109.0); slice->setMode("AM"); slice->setAudioMute(false);
+        slice->setSquelch(true, 90);
         check(observed == disconnectedBefore && slice->frequency() == 107.1 && slice->mode() == "FMN",
               "disconnected retained model never publishes unaccepted edits");
     }
@@ -241,10 +276,12 @@ int main(int argc, char** argv)
         check(radio.createSlice({}, 100'300'000), "second receiver creation admitted");
         radio.setSliceFrequency(1, 100'400'000); radio.setSliceFilter(1, -6000, 6000);
         radio.setSliceAudioGain(1, 12); radio.setSliceAudioPan(1, 25); radio.setSliceAudioMute(1, true);
+        radio.setSliceSquelch(1, true, 75);
         check(waitFor([&] { usb->block(); return multi.slice(1) && rtl::RtlCaptureBackendTestAccess::idle(radio); }),
               "pending receiver adopted");
         check(multi.slice(1) && multi.slice(1)->frequency() == 100.3 && multi.slice(1)->filterLow() == -8000
-            && multi.slice(1)->audioGain() == 100 && multi.slice(1)->audioPan() == 50 && !multi.slice(1)->audioMute(),
+            && multi.slice(1)->audioGain() == 100 && multi.slice(1)->audioPan() == 50 && !multi.slice(1)->audioMute()
+            && !multi.slice(1)->squelchOn(),
             "unaccepted membership cannot receive tuning/filter/audio commands");
         QPointer<SliceModel> retired = multi.slice(0);
         const auto retainRetired = QObject::connect(&radio, &IRadioBackend::sliceRemoved, &multi, [&](int id) {
@@ -261,6 +298,7 @@ int main(int argc, char** argv)
         check(retired && multi.slice(0) != retired, "retired object retained until deferred deletion, with a distinct replacement");
         if (retired) {
             retired->setFrequency(100.7); retired->setFilterWidth(-4000, 4000); retired->setAudioGain(9);
+            retired->setSquelch(true, 90);
         }
         check(rtl::RtlCaptureBackendTestAccess::idle(radio) && multi.slice(0)->frequency() == 100.5,
               "retired object cannot dispatch into replacement with same ID");

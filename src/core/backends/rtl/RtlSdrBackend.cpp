@@ -190,6 +190,9 @@ RadioCapabilities RtlSdrBackend::capabilities() const
         {{QStringLiteral("FM"), -21600, -1, 1, 21600, 2, 43200},
          {QStringLiteral("FMN"), -21600, -1, 1, 21600, 2, 43200}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    c.receiveSquelchModel = ReceiveSquelchModel{
+        {QStringLiteral("FM"), QStringLiteral("FMN")},
+        RtlSquelchGate::kReferenceDb, RtlSquelchGate::kStepDb, QStringLiteral("dBFS/bin")};
     c.receivePanCenterControl = std::nullopt; // setPanCenter also retunes slice 0
     c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
                                                          225'001, 3'000'000};
@@ -540,6 +543,7 @@ void RtlSdrBackend::setSliceMode(int sliceId, const QString& mode)
         receiver->passband.filterLowHz = -8000; receiver->passband.filterHighHz = 8000;
     }
     receiver->mode = modeValue;
+    if (!narrowFm) { receiver->squelchEnabled = false; }
     receiver->passband.guardLowHz = narrowFm ? 3000 : 0;
     receiver->passband.guardHighHz = narrowFm ? 3000 : 0;
     requestCapture(desired);
@@ -551,6 +555,11 @@ void RtlSdrBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
     auto desired = m_requested;
     const auto receiver = std::ranges::find_if(desired.receivers, [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end()) { return; }
+    if (receiver->mode == RtlCaptureTransaction::Mode::Wfm) {
+        // Legacy WFM does not consume these edges. Do not acknowledge or save
+        // a cosmetic filter change while its qualified DSP path is deferred.
+        return;
+    }
     receiver->passband.filterLowHz = lowHz;
     receiver->passband.filterHighHz = highHz;
     requestCapture(desired);
@@ -563,6 +572,20 @@ void RtlSdrBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdD
     Q_UNUSED(thresholdDb);
     // Phase 1: AGC is engine-side DSP, not hardware.
     // The DDC will apply AGC in Phase 2.
+}
+
+void RtlSdrBackend::setSliceSquelch(int sliceId, bool enabled, int level)
+{
+    if (!hasAcceptedSlice(sliceId) || level < 0 || level > 100) { return; }
+    auto desired = m_requested;
+    const auto receiver = std::ranges::find_if(desired.receivers,
+        [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
+    if (receiver == desired.receivers.end()
+        || (receiver->mode != RtlCaptureTransaction::Mode::Fm
+            && receiver->mode != RtlCaptureTransaction::Mode::Fmn)) { return; }
+    if (receiver->squelchEnabled == enabled && receiver->squelchLevel == level) { return; }
+    receiver->squelchEnabled = enabled; receiver->squelchLevel = level;
+    requestCapture(desired);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -712,9 +735,9 @@ QVector<RtlSliceSettings::Slice> RtlSdrBackend::acceptedSettings() const
         if (m_savedSettings.document.slices.contains(id)) {
             const auto& saved = m_savedSettings.document.slices[id];
             slice.agcMode = saved.agcMode; slice.agcThreshold = saved.agcThreshold;
-            slice.squelchEnabled = saved.squelchEnabled; slice.squelchLevel = saved.squelchLevel;
         }
         slice.audioGain = m_monitors[id].gain; slice.audioMute = m_monitors[id].mute; slice.audioPan = m_monitors[id].pan;
+        slice.squelchEnabled = receiver.squelchEnabled; slice.squelchLevel = receiver.squelchLevel;
         output.append(slice);
     }
     return output;
@@ -777,7 +800,8 @@ void RtlSdrBackend::restoreAcceptedSlices()
             || (wide && !desired.receivers.empty())
             || (!desired.receivers.empty() && desired.receivers.front().mode != RtlCaptureTransaction::Mode::Fm
                 && desired.receivers.front().mode != RtlCaptureTransaction::Mode::Fmn)) { continue; }
-        desired.receivers.push_back({descriptor, captureMode(slice.mode), slice.audioGain, slice.audioPan, slice.audioMute});
+        desired.receivers.push_back({descriptor, captureMode(slice.mode), slice.audioGain, slice.audioPan,
+            slice.audioMute, !wide && slice.squelchEnabled, slice.squelchLevel});
     }
     // No fitting saved receiver keeps the valid initial capture and preserves
     // every omitted document entry. No recenter, rate change or filter resize.
@@ -1024,6 +1048,7 @@ void RtlSdrBackend::emitSliceState(const RtlCaptureTransaction::Receiver& receiv
     delta.mode = modeName(receiver.mode); delta.filterLow = static_cast<int>(receiver.passband.filterLowHz);
     delta.filterHigh = static_cast<int>(receiver.passband.filterHighHz);
     delta.audioGain = m_monitors[id].gain; delta.audioMute = m_monitors[id].mute; delta.audioPan = m_monitors[id].pan;
+    delta.squelchOn = receiver.squelchEnabled; delta.squelchLevel = receiver.squelchLevel;
     delta.panId = QStringLiteral("0xe1000000"); delta.active = id == m_requested.receivers.front().passband.stableId;
     delta.modeList = capabilities().receiveModeControl->modes;
     emit sliceChanged(id, delta);

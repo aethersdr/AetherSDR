@@ -49,6 +49,12 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
+    // ControlAvailabilityRegistry resolves the unavailable theme token into
+    // the widget palette. Custom-painted traces must consume that treatment
+    // too; disabling mouse input alone leaves the passband looking usable.
+    const auto controlColor = [this](const QColor& enabled) {
+        return isEnabled() ? enabled : palette().color(QPalette::Disabled, foregroundRole());
+    };
 
     const int w = width();
     const int h = height();
@@ -70,13 +76,13 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
     constexpr int SKIRT = 16;
 
     // Filter shape: left skirt, flat top, right skirt (no bottom, no fill)
-    p.setPen(QPen(QColor(0x00, 0xb4, 0xd8), 1.5));
+    p.setPen(QPen(controlColor(QColor(0x00, 0xb4, 0xd8)), 1.5));
     p.drawLine(loX, botY, loX + SKIRT, topY);          // left skirt
     p.drawLine(loX + SKIRT, topY, hiX - SKIRT, topY);  // flat top
     p.drawLine(hiX - SKIRT, topY, hiX, botY);           // right skirt
 
     // Dashed vertical lines at filter edges (8px inside the skirt vertices)
-    p.setPen(QPen(QColor(0x00, 0xb4, 0xd8, 120), 1, Qt::DashLine));
+    p.setPen(QPen(controlColor(QColor(0x00, 0xb4, 0xd8, 120)), 1, Qt::DashLine));
     p.drawLine(loX + SKIRT + 8, 2, loX + SKIRT + 8, h - 2);
     p.drawLine(hiX - SKIRT - 8, 2, hiX - SKIRT - 8, h - 2);
 
@@ -90,7 +96,7 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
     int bw = std::abs(m_hi - m_lo);
     QString bwText = bw >= 1000 ? QString("%1.%2K").arg(bw / 1000).arg((bw % 1000) / 100)
                                 : QString::number(bw);
-    p.setPen(QColor(0xc8, 0xd8, 0xe8));
+    p.setPen(controlColor(QColor(0xc8, 0xd8, 0xe8)));
     p.drawText((loX + hiX) / 2 - fm.horizontalAdvance(bwText) / 2, botY + 12, bwText);
 
     // Passband center offset (distance from carrier to filter center, below top line)
@@ -103,12 +109,12 @@ void FilterPassbandWidget::paintEvent(QPaintEvent*)
                               .arg(std::abs(center) / 1000)
                               .arg((std::abs(center) % 1000) / 100)
         : QString::number(center);
-    p.setPen(QColor(0x90, 0xa0, 0xb0));
+    p.setPen(controlColor(QColor(0x90, 0xa0, 0xb0)));
     p.drawText((loX + hiX) / 2 - fm.horizontalAdvance(centerText) / 2, topY + 12, centerText);
 
     // Lo label (centered on left slant bottom point)
     QString loText = QString::number(m_lo);
-    p.setPen(QColor(0x80, 0x90, 0xa0));
+    p.setPen(controlColor(QColor(0x80, 0x90, 0xa0)));
     p.drawText(loX - fm.horizontalAdvance(loText) / 2, botY + 12, loText);
 
     // Hi label (centered on right slant bottom point)

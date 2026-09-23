@@ -68,6 +68,16 @@ are in [local receive control](../aetherd-local-receive-control.md#qualified-bac
 `control_receive_test` pins declarations and action-time admission; the optional
 RTL declaration check runs only when the RTL backend is built.
 
+### Native squelch
+
+`receiveSquelchModel` describes native desktop squelch modes and the threshold's
+reference, step and displayed unit. RTL declares FM/FM-N and dBFS/bin; RxApplet
+and VfoWidget gate unsupported modes with accessible reasons, and MainWindow
+passes the scale to SpectrumWidget's Auto estimator and threshold overlay.
+The native `setSliceSquelch` verb applies through RTL's confirmed transaction.
+Absence preserves the legacy desktop shape for other backends. This record
+grants no headless squelch verb or calibrated-power claim.
+
 ### Wideband converter view
 
 `widebandConverterView` is the optional record for *"this radio can deliver the

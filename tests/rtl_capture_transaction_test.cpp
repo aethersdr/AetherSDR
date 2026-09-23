@@ -201,6 +201,12 @@ int main()
         check(!tx.submit(next) && !tx.takeWork(), "nonfinite request refused before device work");
         next = desired(); next.receivers.push_back(next.receivers.front());
         check(!tx.submit(next), "duplicate stable receiver identity refused");
+        for (int level : {-1, 101}) {
+            next = desired(); next.receivers[0].squelchLevel = level;
+            check(!tx.submit(next) && !tx.takeWork(), "out-of-range squelch refused before work");
+        }
+        next = desired(); next.receivers[0].squelchEnabled = true;
+        check(!tx.submit(next) && !tx.takeWork(), "legacy WFM cannot acknowledge an unimplemented squelch");
         next = desired(); tx.submit(next); auto job = tx.takeWork(); auto result = T::execute(*job, usb);
         result.actual->capture.generation++;
         check(tx.complete(result) == T::Completion::Invalidated, "mismatched capture generation never publishes");

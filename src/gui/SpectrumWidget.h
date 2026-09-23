@@ -319,6 +319,7 @@ public:
     // (0-100), mapped to absolute dBm via the radio's fixed scale:
     // dBm = -160 + level. (Empirically verified on FLEX-8600 fw 4.1.5.)
     void setSquelchLine(bool visible, int level);
+    void setSquelchScale(double referenceDb, double stepDb, const QString& unit);
     // KiwiSDR SQL is a dB margin above Kiwi's median noise-floor estimate.
     // marginDb is the server margin, not the UI slider value.
     void setKiwiSdrSquelchLine(bool visible, int marginDb, bool floorRelative);
@@ -1578,6 +1579,9 @@ private:
     // state because they can be controlled from different receive surfaces.
     bool  m_flexSquelchLineVisible{false};
     int   m_flexSquelchLevel{0};
+    double m_squelchReferenceDb{-160.0};
+    double m_squelchStepDb{1.0};
+    QString m_squelchUnit;
     bool  m_kiwiSdrSquelchLineVisible{false};
     int   m_kiwiSdrSquelchLevel{0};
     bool  m_kiwiSdrSquelchLineFloorRelative{false};

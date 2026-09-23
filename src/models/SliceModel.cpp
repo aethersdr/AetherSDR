@@ -69,7 +69,8 @@ bool SliceModel::filterPolarityLsbFamily(const QString& mode)
 bool SliceModel::filterCarrierStraddlingFamily(const QString& mode)
 {
     return mode == "AM" || mode == "SAM" || mode == "DSB" || mode == "DRM"
-        || mode == "FM" || mode == "NFM" || mode == "WFM" || mode == "WBFM";
+        || mode == "FM" || mode == "NFM" || mode == "FMN"
+        || mode == "WFM" || mode == "WBFM";
 }
 
 bool SliceModel::normalizeFilterPolarity()
@@ -690,6 +691,10 @@ void SliceModel::setSquelch(bool on, int level)
     }
 
     level = qBound(0, level, 100);
+    if (confirmsControls()) {
+        emit squelchCommandIssued(on, level);
+        return;
+    }
     const bool onChanged = (m_squelchOn != on);
     const bool levelChanged = (m_squelchLevel != level);
 

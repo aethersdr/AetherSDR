@@ -1825,10 +1825,6 @@ void RadioModel::wireBackendReceiverState()
                     [this, s](bool on, int position) {
                 if (m_backend) m_backend->setSliceManualNotch(s->sliceId(), on, position);
             });
-            connect(s, &SliceModel::squelchCommandIssued, this,
-                    [this, s](bool on, int level) {
-                if (m_backend) m_backend->setSliceSquelch(s->sliceId(), on, level);
-            });
             // FM repeater controls are distinct neutral intents. Flex
             // continues to use SliceModel's wire text; every other backend gets
             // the same operator action through the seam instead of silently
@@ -10171,6 +10167,12 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThro
     connect(s, &SliceModel::audioMuteCommandIssued, this,
             [this, s, canDispatch](bool mute) {
         if (canDispatch()) { m_backend->setSliceAudioMute(s->sliceId(), mute); }
+    }, Qt::DirectConnection);
+    connect(s, &SliceModel::squelchCommandIssued, this,
+            [this, s, geometryThroughBackend, canDispatch](bool on, int level) {
+        if (canDispatch() && (geometryThroughBackend || s->confirmsControls())) {
+            m_backend->setSliceSquelch(s->sliceId(), on, level);
+        }
     }, Qt::DirectConnection);
     connect(s, &SliceModel::audioGainCommandIssued, this,
             [this, s, canDispatch](int gainPercent) {

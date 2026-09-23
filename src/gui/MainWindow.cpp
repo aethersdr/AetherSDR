@@ -7771,6 +7771,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         for (SpectrumWidget* spectrum : spectra) {
             spectrum->setRadioOwnsDbmScale(radioOwnsScale);
             spectrum->setPanBinsAbsolute(binsAbsolute);
+            const auto sql = connected ? caps.receiveSquelchModel : std::nullopt;
+            spectrum->setSquelchScale(sql ? sql->referenceDb : -160.0,
+                sql ? sql->stepDb : 1.0, sql ? sql->unit : QString());
         }
     }
 

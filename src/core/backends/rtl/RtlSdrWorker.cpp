@@ -228,8 +228,10 @@ void RtlSdrWorker::handleCallback(unsigned char* buf, std::uint32_t len)
         m_iqBuffer[i] = {(float(buf[2 * i]) - 127.5f) / 127.5f,
                          (float(buf[2 * i + 1]) - 127.5f) / 127.5f};
     }
+    m_ddc.processIqData(m_iqBuffer, m_pipeline->legacy());
+    const auto spectrum = m_ddc.takeSquelchSpectrum();
+    if (!spectrum.empty()) { m_pipeline->observeSpectrum(spectrum, m_firstSample); }
     m_pipeline->process(m_firstSample, std::span(m_iqBuffer.constData(), m_iqBuffer.size()));
     m_firstSample += count;
-    m_ddc.processIqData(m_iqBuffer, m_pipeline->legacy());
 }
 } // namespace AetherSDR::rtl

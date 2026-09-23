@@ -1323,6 +1323,13 @@ target_include_directories(rtl_receive_pipeline_test PRIVATE src)
 target_link_libraries(rtl_receive_pipeline_test PRIVATE aethercore aether_wdsp Qt6::Core)
 add_test(NAME rtl_receive_pipeline_test COMMAND rtl_receive_pipeline_test)
 set_tests_properties(rtl_receive_pipeline_test PROPERTIES TIMEOUT 45)
+add_executable(rtl_fm_audio_test tests/rtl_fm_audio_test.cpp)
+target_link_libraries(rtl_fm_audio_test PRIVATE aethercore)
+add_test(NAME rtl_fm_audio_test COMMAND rtl_fm_audio_test)
+set_tests_properties(rtl_fm_audio_test PROPERTIES TIMEOUT 90)
+add_executable(rtl_squelch_test tests/rtl_squelch_test.cpp)
+target_include_directories(rtl_squelch_test PRIVATE src)
+add_test(NAME rtl_squelch_test COMMAND rtl_squelch_test)
 
 add_executable(rtl_audio_mixer_test tests/rtl_audio_mixer_test.cpp
     src/core/backends/rtl/RtlAudioMixer.cpp)
@@ -6223,6 +6230,7 @@ add_test(NAME client_display_settings_test COMMAND client_display_settings_test)
 add_executable(rx_applet_squelch_reconciliation_test
     tests/rx_applet_squelch_reconciliation_test.cpp
     src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
@@ -6247,11 +6255,42 @@ add_test(NAME rx_applet_squelch_reconciliation_test
 set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# FM filter capability and edge routing through the real RX and VFO widgets.
+# Injects capability data; no socket, USB access or synthetic firmware peer.
+add_executable(fm_filter_controls_test
+    tests/fm_filter_controls_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(fm_filter_controls_test PRIVATE src)
+target_link_libraries(fm_filter_controls_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME fm_filter_controls_test
+         COMMAND fm_filter_controls_test)
+set_tests_properties(fm_filter_controls_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The VFO flag's AetherRX / AetherTX launchers stay the same width on every
 # mode's DSP grid. Same socket-free build as the squelch test above.
 add_executable(vfo_dsp_launcher_width_test
     tests/vfo_dsp_launcher_width_test.cpp
     src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
@@ -6280,6 +6319,7 @@ set_tests_properties(vfo_dsp_launcher_width_test PROPERTIES
 add_executable(gui_nested_lifetime_test
     tests/gui_nested_lifetime_test.cpp
     src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
@@ -6511,6 +6551,7 @@ set(AETHER_SETTINGS_CONSUMERS
     client_display_settings_test
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
+    fm_filter_controls_test
     rtl_slice_settings_test
     rtl_runtime_settings_test
     rtl_model_acceptance_test

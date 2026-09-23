@@ -74,6 +74,7 @@ void RtlSdrDdc::applyCapture(double rateHz, double centerHz, double sliceHz,
         m_firstAudioEmitted = false;
         m_firstSpectrumEmitted = false;
         m_spectrumCounter = 0;
+        m_detectorCounter = 0; m_firstDetectorEmitted = false; m_squelchSpectrumFresh = false;
     }
     setSampleRate(rateHz);
     setCenterFrequency(centerHz);
@@ -189,13 +190,12 @@ void RtlSdrDdc::processSpectrum(const QVector<std::complex<float>>& samples)
     }
 
     m_spectrumCounter += samples.size();
-    if (m_spectrumCounter < m_spectrumSampleStride.load(std::memory_order_relaxed)
-        && m_firstSpectrumEmitted) {
-        return;
-    }
-
-    m_spectrumCounter = 0;
-    m_firstSpectrumEmitted = true;
+    m_detectorCounter += samples.size();
+    const bool displayDue = !m_firstSpectrumEmitted
+        || m_spectrumCounter >= m_spectrumSampleStride.load(std::memory_order_relaxed);
+    const bool detectorDue = !m_firstDetectorEmitted
+        || m_detectorCounter >= m_sampleRateHz.load(std::memory_order_relaxed) / 30.0;
+    if (!displayDue && !detectorDue) { return; }
 
     const size_t numToCopy = std::min(static_cast<size_t>(samples.size()), kFftSize);
     for (size_t i = 0; i < numToCopy; ++i) {
@@ -211,10 +211,6 @@ void RtlSdrDdc::processSpectrum(const QVector<std::complex<float>>& samples)
     // Run FFTW 1D forward transform
     fftwf_execute(m_fftPlan);
 
-    QByteArray frame;
-    frame.resize(static_cast<int>(kFftSize * sizeof(float)));
-    float* magOut = reinterpret_cast<float*>(frame.data());
-
     for (size_t k = 0; k < kFftSize; ++k) {
         const float re = m_fftOut[k][0];
         const float im = m_fftOut[k][1];
@@ -222,11 +218,20 @@ void RtlSdrDdc::processSpectrum(const QVector<std::complex<float>>& samples)
         const float db = 20.0f * std::log10(std::max(mag, 1e-6f));
         // Shift zero-frequency component to center
         size_t outIdx = (k + kFftSize / 2) % kFftSize;
-        magOut[outIdx] = db;
+        m_spectrumBins[outIdx] = db;
     }
 
-    emit spectrumFrameReady(0, frame);
-    emit waterfallRowReady(0, frame);
+    if (detectorDue) {
+        m_detectorCounter = 0; m_firstDetectorEmitted = true;
+        m_squelchSpectrumFresh = true;
+    }
+    if (displayDue) {
+        m_spectrumCounter = 0; m_firstSpectrumEmitted = true;
+        const QByteArray frame(reinterpret_cast<const char*>(m_spectrumBins.data()),
+            static_cast<int>(m_spectrumBins.size() * sizeof(float)));
+        emit spectrumFrameReady(0, frame);
+        emit waterfallRowReady(0, frame);
+    }
 }
 
 void RtlSdrDdc::processAudio(const QVector<std::complex<float>>& samples)

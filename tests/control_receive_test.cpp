@@ -475,9 +475,21 @@ void productionCapabilityContracts()
 #ifdef AETHER_BACKEND_RTL
     rtl::RtlSdrBackend rtl;
     const auto rtlCaps = rtl.capabilities();
-    check(rtlCaps.receiveModeControl && !rtlCaps.receiveFilterControl && rtlCaps.receiveAudioControl
+    check(rtlCaps.receiveModeControl && rtlCaps.receiveFilterControl && rtlCaps.receiveAudioControl
         && !rtlCaps.receivePanCenterControl && rtlCaps.receivePanBandwidthControl,
-        "RTL exposes real mixer/bandwidth controls, not unused filter edges or retuning center");
+        "RTL exposes implemented FM filter/mixer/bandwidth controls, not a retuning center");
+    check(rtlCaps.receiveFilterControl && rtlCaps.receiveFilterControl->modes.size() == 2
+        && rtlCaps.receiveFilterControl->modes[0].mode == QStringLiteral("FM")
+        && rtlCaps.receiveFilterControl->modes[1].mode == QStringLiteral("FMN")
+        && rtlCaps.receiveFilterControl->modes[0].minimumLowHz == -21600
+        && rtlCaps.receiveFilterControl->modes[1].maximumHighHz == 21600,
+        "RTL adjustable filter qualification excludes legacy WFM");
+    check(rtlCaps.receiveSquelchModel
+        && rtlCaps.receiveSquelchModel->modes == QStringList{"FM", "FMN"}
+        && rtlCaps.receiveSquelchModel->referenceDb == -120
+        && rtlCaps.receiveSquelchModel->stepDb == 1.2
+        && rtlCaps.receiveSquelchModel->unit == QStringLiteral("dBFS/bin"),
+        "RTL desktop squelch declares the implemented detector's modes and units");
 #endif
 }
 } // namespace

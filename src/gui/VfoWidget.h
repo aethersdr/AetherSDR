@@ -39,6 +39,7 @@ namespace AetherSDR {
 class SliceModel;
 class TransmitModel;
 class RadioModel;
+class ControlAvailabilityRegistry;
 class PhaseKnob;
 class RxApplet;
 class KiwiSdrManager;
@@ -434,6 +435,12 @@ private:
     SliceModel*    m_slice{nullptr};
     TransmitModel* m_txModel{nullptr};
     RadioModel*    m_radioModel{nullptr};
+    ControlAvailabilityRegistry* m_filterAvailability{nullptr};
+    std::optional<ReceiveFilterControl> m_receiveFilterControl;
+    std::optional<ReceiveSquelchModel> m_receiveSquelchModel;
+    QPushButton* m_filterUnavailable{nullptr};
+    QVector<int> defaultFilterWidths(const QString& mode) const;
+    bool acceptsFilterEdges(int low, int high) const;
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
     QStringList    m_antList;
     bool           m_updatingFromModel{false};

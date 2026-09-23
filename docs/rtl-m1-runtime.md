@@ -39,6 +39,13 @@ All FM receivers use the same fixed-rate graph/filter length and retain its
 common causal delay; output positions label that common output timeline.
 Generated late-join comparisons check alignment after startup transients.
 
+FM explicitly uses 5 kHz deviation and FMN 2.5 kHz. The opt-in WDSP receive
+recipe sets unity panel gain and enables its FM limiter at 0 dB maximum gain.
+The main RX AGC is bypassed by WDSP in FM. Previously, the unconfigured panel's
+gain of four and disabled limiter caused about 75% hard clipping at unity
+monitor gain for a settled 1 kHz, 2.5 kHz-deviation input. The recipe applies
+before the independent tap. Other WDSP owners retain their existing settings.
+
 Each independent slice tap precedes monitor gain, mute and balance. The mixer
 retains independent left/right channels and indexes fixed queues by sample
 position. It emits 128-frame stereo quanta. A missing slice has a 2048-frame
@@ -57,6 +64,32 @@ with an incompatible inherited wide/sideband filter chooses a 16 kHz passband;
 ordinary filter requests and saved restores are never resized. This mode
 transition needs maintainer UX review. WFM stereo and normalization qualification
 remain S1/S2; no replacement WFM claim is made here.
+The desktop FM/FM-N presets use the existing DFM width ladder intersected with
+the backend's declared filter range; FMN and NFM share symmetric edge rules.
+Fixed radio filter lists retain precedence. WFM filter and squelch controls
+are unavailable with accessible reasons, and the backend refuses those edits.
+
+## FM squelch
+
+FM/FM-N have independent, acquisition-owned signal-level gates before both the
+receiver tap and monitor mix. The detector is the peak FFT bin in the receive
+passband, including edge bins, using the existing 2048-point Blackman-Harris
+capture FFT normalized by FFT size. These are **dBFS/bin**, not calibrated dBm
+or integrated channel power. This coarse gate does not distinguish two signals
+inside the same passband. Its scale is `-120 + 1.2 * level`, for levels 0–100.
+The display and Auto estimator consume the same bin scale. Auto retains its
+trimmed noise-floor estimate, 0.1 EMA and operator-selected 5–20 dB margin;
+enabling Auto never misuses that margin as an absolute threshold.
+
+The gate has 3 dB hysteresis, a 150 ms hang and 5 ms audio ramps. It starts
+closed until measured and closes after 100 ms without detector input. The
+detector runs at 30 Hz independently of display throttling, sharing the FFT
+and a fixed buffer without allocating a detector frame. Threshold changes
+travel in the existing capture transaction and preserve the receiver's DSP
+epoch/history. Capture/receiver changes reset detector history. Legacy modes
+remain unsquelched; changing into one confirms squelch Off. No RF test or
+calibration is implied by these offline semantics. The scale, presets and FM
+recipe remain subject to maintainer review under RFC #5468.
 
 ## Accepted-state persistence
 
@@ -74,8 +107,11 @@ sibling. Omitted entries survive reduced admission and out-of-window restore;
 explicit accepted removal is separate. No fitting entry retains the valid
 initial receiver. Pending or refused requests never feed the document writer.
 Monitor controls are prepared with the bank and applied before its first block.
-Existing stored AGC/squelch fields remain preserved; M1 does not claim new controls for those legacy
-capability gaps. Real numeric USB serials remain identities; synthetic indices
+Accepted FM/FM-N enabled/threshold values are restored and saved in `RtlSlices`.
+The desktop separately owns `ReceiveSquelchIntent-<stable ID>` (schema 1), which
+retains the manual choice and Auto preference for an identified radio. Accepted
+Off wins over an old Auto preference. AGC fields remain preserved without a new
+AGC implementation claim. Real numeric USB serials remain identities; synthetic indices
 use the model's anonymous family scope. Duplicate real serials still share one
 settings identity and cannot be distinguished by this schema.
 
@@ -103,7 +139,7 @@ TSan, affected A-series tests and real receive convergence are distinct evidence
 Linux ARM needs representative native hardware; macOS ARM is not a substitute.
 
 The shared model opts into `IRadioBackend::receiveControlPolicy()` for RTL.
-`Confirmed` keeps slice frequency, mode, filter and monitor gain/pan/mute at the
+`Confirmed` keeps slice frequency, mode, filter, squelch and monitor gain/pan/mute at the
 last backend observation until capture/DSP adoption publishes a new report.
 Pan center and bandwidth likewise wait for the backend geometry report; a
 dispatch returns false to gesture callers so they cannot advance the view on

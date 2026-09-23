@@ -38,7 +38,9 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
     for (const auto& receiver : state.receivers) {
         const int id = receiver.passband.stableId;
         if (id < 0 || id >= 8 || validated[id] || receiver.audioGain < 0
-            || receiver.audioGain > 100 || receiver.audioPan < 0 || receiver.audioPan > 100) { return false; }
+            || receiver.audioGain > 100 || receiver.audioPan < 0 || receiver.audioPan > 100
+            || receiver.squelchLevel < 0 || receiver.squelchLevel > 100
+            || (legacy && receiver.squelchEnabled)) { return false; }
         validated[id] = true;
     }
     const bool advanceCaptureEpoch = resetCapture || legacy != m_legacy;
@@ -67,6 +69,8 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
             spec.handle = *m_handles[id]; spec.passband = receiver.passband;
             spec.capture = state.capture; spec.extractRf = true;
             spec.dsp.mode = dspMode(receiver.mode);
+            spec.dsp.fmReceive = WdspChannel::FmReceive{
+                receiver.mode == Transaction::Mode::Fmn ? 2500.0 : 5000.0};
             spec.dsp.filterLowHz = receiver.passband.filterLowHz;
             spec.dsp.filterHighHz = receiver.passband.filterHighHz;
             if (resetCapture || (faults & (1u << id)) || m_specs[id].handle != spec.handle
@@ -88,6 +92,7 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
     m_specs = specs;
     m_prepared = m_registry.service().requested;
     for (const auto& receiver : state.receivers) {
+        m_nextSquelch[receiver.passband.stableId] = {receiver.squelchEnabled, receiver.squelchLevel};
         m_nextMonitor[receiver.passband.stableId] = static_cast<unsigned>(receiver.audioGain
             | (receiver.audioPan << 8) | (receiver.audioMute ? 1 << 16 : 0));
     }
@@ -104,9 +109,13 @@ RtlReceivePipeline::Preparation RtlReceivePipeline::service()
 bool RtlReceivePipeline::adopt() noexcept
 {
     if (!m_reader.adoptPrepared(m_session, m_nextCapture, m_prepared)) { return false; }
+    const bool resetSquelch = m_captureEpoch != m_nextEpoch;
     for (std::size_t slot = 0; slot < m_monitor.size(); ++slot) {
         m_monitor[slot].store(m_nextMonitor[slot], std::memory_order_relaxed);
+        m_squelchConfig[slot] = m_nextSquelch[slot];
+        m_squelch[slot].configure(m_nextSquelch[slot].enabled, m_nextSquelch[slot].level, resetSquelch);
     }
+    if (resetSquelch) { m_spectrumFresh = false; m_squelchEpoch.fill(0); }
     m_token = m_nextToken; m_capture = m_nextCapture;
     m_captureEpoch = m_nextEpoch; m_legacy = m_nextLegacy;
     m_faults.store(0, std::memory_order_release); // old bank faults cannot request a second reset
@@ -119,6 +128,12 @@ bool RtlReceivePipeline::process(std::uint64_t firstSample,
         m_reader.activeRevision());
 }
 void RtlReceivePipeline::stop() { m_reader.stop(); }
+void RtlReceivePipeline::observeSpectrum(std::span<const float> bins, std::uint64_t firstSample) noexcept
+{
+    if (bins.size() != m_spectrum.size()) { return; }
+    std::copy(bins.begin(), bins.end(), m_spectrum.begin());
+    m_spectrumFirstSample = firstSample; m_spectrumFresh = true;
+}
 void RtlReceivePipeline::setMonitor(int slot, int gain, int pan, bool mute) noexcept
 {
     if (slot < 0 || slot >= 8) { return; }
@@ -151,10 +166,34 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
         return;
     }
     for (const auto& view : views) {
+        const int slot = view.spec->handle.slot;
+        auto& gate = m_squelch[slot];
+        if (m_squelchEpoch[slot] != view.spec->epoch) {
+            gate.configure(m_squelchConfig[slot].enabled, m_squelchConfig[slot].level, true);
+            m_squelchEpoch[slot] = view.spec->epoch;
+        }
+        if (m_spectrumFresh) {
+            const auto& passband = view.spec->passband;
+            const double binHz = m_capture.achievedSampleRateHz / m_spectrum.size();
+            const double offset = passband.carrierHz - m_capture.centerHz;
+            // Include the nearest bin for sub-bin passbands. This is a coarse
+            // signal-level gate, not a claim of calibrated in-channel power.
+            const int low = std::clamp(static_cast<int>(std::floor(
+                (offset + passband.filterLowHz) / binHz + 1024)), 0, 2047);
+            const int high = std::clamp(static_cast<int>(std::ceil(
+                (offset + passband.filterHighHz) / binHz + 1024)), low, 2047);
+            float peak = -120.0f;
+            for (int bin = low; bin <= high; ++bin) {
+                if (!std::isfinite(m_spectrum[bin])) { peak = std::numeric_limits<float>::quiet_NaN(); break; }
+                peak = std::max(peak, m_spectrum[bin]);
+            }
+            gate.observe(peak, clock(m_spectrumFirstSample));
+        }
         if (!view.receiver->processCapture(block, *this)) {
             m_faults.fetch_or(1u << view.spec->handle.slot, std::memory_order_release);
         }
     }
+    m_spectrumFresh = false;
     m_mixer.drain(clock(block.firstSample + block.samples.size()), *this);
     m_mixerLate.store(m_mixer.lateFrames(), std::memory_order_relaxed);
     m_mixerRejected.store(m_mixer.rejectedBlocks(), std::memory_order_relaxed);
@@ -176,11 +215,15 @@ void RtlReceivePipeline::audioBlock(const RtlReceiverRegistry::ReceiverSpec& spe
     packet.slot = spec.handle.slot; packet.firstSample = first;
     packet.frames = left.size(); packet.discontinuity = discontinuity;
     if (left.size() != right.size() || left.size() > 1024) { return; }
+    std::array<float, 1024> gatedLeft{}, gatedRight{};
     for (std::size_t i = 0; i < left.size(); ++i) {
-        packet.samples[2 * i] = left[i]; packet.samples[2 * i + 1] = right[i];
+        const float gain = m_squelch[packet.slot].gain(first + i);
+        gatedLeft[i] = left[i] * gain; gatedRight[i] = right[i] * gain;
+        packet.samples[2 * i] = gatedLeft[i]; packet.samples[2 * i + 1] = gatedRight[i];
     }
     enqueue(packet); // independent tap, before gain/mute/pan
-    m_mixer.push(packet.slot, packet.instance, packet.receiverEpoch, first, left, right);
+    m_mixer.push(packet.slot, packet.instance, packet.receiverEpoch, first,
+        std::span(gatedLeft).first(left.size()), std::span(gatedRight).first(right.size()));
 }
 void RtlReceivePipeline::speakerBlock(std::uint64_t first, std::span<const float> samples, bool discontinuity) noexcept
 {

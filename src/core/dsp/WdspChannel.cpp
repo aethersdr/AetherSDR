@@ -612,6 +612,9 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
 
 bool WdspChannel::setMode(Mode mode) noexcept
 {
+    // An opt-in FM channel changes family through a complete reconfiguration;
+    // otherwise its panel normalization would leak into another demodulator.
+    if (m_config.fmReceive && mode != Mode::Fm) { return false; }
     if (!beginControlOperation()) {
         return false;
     }
@@ -901,6 +904,12 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         setError(error, "WDSP filter edges are invalid");
         return false;
     }
+    if (config.fmReceive && (config.direction != Direction::Receive || config.mode != Mode::Fm
+        || !std::isfinite(config.fmReceive->deviationHz) || config.fmReceive->deviationHz <= 0.0
+        || config.fmReceive->deviationHz >= config.dspSampleRate / 2.0)) {
+        setError(error, "WDSP receive FM deviation is invalid for this channel");
+        return false;
+    }
     if (config.direction == Direction::Transmit && config.mode == Mode::Wbfm) {
         setError(error, "WDSP TX does not define a WBFM mode");
         return false;
@@ -1025,6 +1034,16 @@ void WdspChannel::open() noexcept
                 m_config.blockForOutput ? 1 : 0);
     if (m_config.direction == Direction::Receive) {
         SetRXAMode(m_channelId, wdspMode(m_config.mode));
+        if (m_config.fmReceive) {
+            SetRXAFMDeviation(m_channelId, m_config.fmReceive->deviationHz);
+            // Upstream RX panel gain defaults to 4 and the FM limiter is off.
+            // Together with FM de-emphasis this clips valid modulation at
+            // unity monitor gain. Normalize inside the FM chain, including
+            // pre-monitor taps. FM bypasses the main RX AGC.
+            SetRXAPanelGain1(m_channelId, 1.0);
+            SetRXAFMLimGain(m_channelId, 0.0);
+            SetRXAFMLimRun(m_channelId, 1);
+        }
         SetRXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
         RXANBPSetFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
         applyRxAgc(m_channelId, m_config.agcMode, m_config.maximumAgcGainDb,

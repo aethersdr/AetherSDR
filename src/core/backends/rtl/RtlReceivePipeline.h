@@ -2,6 +2,7 @@
 #include "RtlAudioMixer.h"
 #include "RtlCaptureTransaction.h"
 #include "RtlReceiverRegistry.h"
+#include "RtlSquelchGate.h"
 #include <array>
 #include <atomic>
 #include <optional>
@@ -43,6 +44,9 @@ public:
     Preparation service();
     bool adopt() noexcept;
     bool process(std::uint64_t firstSample, std::span<const std::complex<float>> samples) noexcept;
+    // Acquisition only, before process() for this capture block. Shares the
+    // display's existing FFT; the caller supplies capture-sample identity.
+    void observeSpectrum(std::span<const float> bins, std::uint64_t firstSample) noexcept;
     void stop(); // after acquisition joined
     bool takePacket(Packet& output) noexcept;
     void setMonitor(int slot, int gain, int pan, bool mute) noexcept;
@@ -76,6 +80,14 @@ private:
     std::atomic<unsigned> m_faults{0};
     std::array<std::atomic<unsigned>, 8> m_monitor;
     std::array<unsigned, 8> m_nextMonitor{};
+    struct SquelchConfig { bool enabled = false; int level = 20; };
+    std::array<SquelchConfig, 8> m_nextSquelch{};
+    std::array<SquelchConfig, 8> m_squelchConfig{};
+    std::array<RtlSquelchGate, 8> m_squelch;
+    std::array<std::uint64_t, 8> m_squelchEpoch{};
+    std::array<float, 2048> m_spectrum{};
+    std::uint64_t m_spectrumFirstSample = 0;
+    bool m_spectrumFresh = false;
     // SPSC queue. Overflow drops the new packet; the consumer observes the
     // sample-position gap and marks its next typed frame discontinuous.
     static constexpr unsigned kPackets = 128;

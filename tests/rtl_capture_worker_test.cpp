@@ -31,6 +31,7 @@ struct RtlCaptureBackendTestAccess {
         backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device), nullptr, capacity));
     }
     static std::size_t pending(const RtlSdrBackend& backend) { return backend.m_capture.pendingCount(); }
+    static bool busy(const RtlSdrBackend& backend) { return backend.m_capture.busy(); }
 };
 }
 static int failures = 0;
@@ -104,8 +105,8 @@ int main(int argc, char** argv)
     const int cancelsBeforeReceiver = state->cancels;
     const int beforeFilter = changes;
     backend.setSliceFilter(0, -8000, 8000);
-    check(waitFor([&] { state->block(); QThread::msleep(5); return changes > beforeFilter; }),
-          "narrow filter accepted before selecting narrow demodulation");
+    check(changes == beforeFilter && !rtl::RtlCaptureBackendTestAccess::busy(backend),
+          "unimplemented WFM filter request neither publishes nor queues work");
     const int beforeMode = changes;
     backend.setSliceMode(0, QStringLiteral("FM"));
     check(waitFor([&] { state->block(); QThread::msleep(5); return changes > beforeMode; }), "mode adopted at callback boundary");

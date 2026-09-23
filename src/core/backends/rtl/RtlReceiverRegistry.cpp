@@ -39,6 +39,9 @@ bool validCapture(const Registry::Capture& capture)
 
 bool boundedDsp(const WdspChannel::Config& config)
 {
+    if (config.fmReceive && (config.mode != WdspChannel::Mode::Fm
+        || !std::isfinite(config.fmReceive->deviationHz) || config.fmReceive->deviationHz <= 0
+        || config.fmReceive->deviationHz >= config.dspSampleRate / 2.0)) { return false; }
     const auto blockSize = [](std::size_t value) {
         return value >= 64 && value <= 16384 && (value & (value - 1)) == 0;
     };

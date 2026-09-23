@@ -40,6 +40,12 @@ int DiscardTXAChannelData(int channel);
 void fexchange2(int channel, float* inputI, float* inputQ,
                 float* outputLeft, float* outputRight, int* error);
 void SetRXAMode(int channel, int mode);
+// Receive FM construction/control only: these take WDSP's DSP lock and the
+// limiter gain setter rebuilds its state. Never call from acquisition/audio.
+void SetRXAFMDeviation(int channel, double deviationHz);
+void SetRXAFMLimGain(int channel, double maximumGainDb);
+void SetRXAFMLimRun(int channel, int run);
+void SetRXAPanelGain1(int channel, double gain);
 void SetRXABandpassFreqs(int channel, double lowHz, double highHz);
 // Canonical passband setter. RXASetPassband() is what both reference clients
 // (Thetis, pihpsdr) call: it sets the bandpass AND the SNBA output bandwidth

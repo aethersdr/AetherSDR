@@ -29,6 +29,8 @@ public:
         int audioGain = 100;
         int audioPan = 50;
         bool audioMute = false;
+        bool squelchEnabled = false;
+        int squelchLevel = 20;
         bool operator==(const Receiver&) const = default;
     };
     struct Desired {

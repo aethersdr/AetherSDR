@@ -1,4 +1,6 @@
 #pragma once
+#include <array>
+#include <span>
 
 #include "core/backends/rtl/RtlCaptureTransaction.h"
 
@@ -39,6 +41,15 @@ public:
     void applyMonitor(int gain, int pan, bool mute); // acquisition boundary only
     void setAudioGain(int gainPercent);
     void setAudioPan(int panPercent);
+    // Acquisition-only borrowed view, consumed before the next IQ block.
+    // Detector cadence is independent of display throttling and allocates no
+    // frame. Empty means the previous measurement has already been consumed.
+    std::span<const float> takeSquelchSpectrum() noexcept
+    {
+        if (!m_squelchSpectrumFresh) { return {}; }
+        m_squelchSpectrumFresh = false;
+        return m_spectrumBins;
+    }
 
 public slots:
     // Process incoming complex float IQ samples (runs on worker thread)
@@ -70,6 +81,10 @@ private:
     std::atomic<int> m_filterLowHz{-100000};
     std::atomic<int> m_filterHighHz{100000};
     std::atomic<int> m_spectrumFps{30};
+    size_t m_detectorCounter = 0;
+    bool m_firstDetectorEmitted = false;
+    bool m_squelchSpectrumFresh = false;
+    std::array<float, 2048> m_spectrumBins{};
     std::atomic<bool> m_audioMuted{false};
     std::atomic<float> m_audioGain{1.0f};
     std::atomic<int> m_audioPanPercent{50};

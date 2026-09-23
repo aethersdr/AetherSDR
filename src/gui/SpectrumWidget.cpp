@@ -1,4 +1,5 @@
 #include "SpectrumWidget.h"
+#include "SpectrumSquelchLogic.h"
 #include "ScopedChildWidget.h"
 
 #include "SliceToneCues.h"
@@ -4603,7 +4604,6 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
 
 void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
 {
-    constexpr float kSqlMinDbm = -160.0f;
     float squelchDbm = 0.0f;
     float pinnedDisplayNorm = 0.0f;
     bool usePinnedDisplayNorm = false;
@@ -4637,8 +4637,9 @@ void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
         if (!m_flexSquelchLineVisible || m_flexSquelchLevel <= 0) {
             return;
         }
-        squelchDbm = kSqlMinDbm + static_cast<float>(m_flexSquelchLevel);
-        label = QStringLiteral("SQL %1").arg(m_flexSquelchLevel);
+        squelchDbm = m_squelchReferenceDb + m_squelchStepDb * m_flexSquelchLevel;
+        label = m_squelchUnit.isEmpty() ? QStringLiteral("SQL %1").arg(m_flexSquelchLevel)
+            : QStringLiteral("SQL %1 %2").arg(squelchDbm, 0, 'f', 1).arg(m_squelchUnit);
     }
 
     const float norm = usePinnedDisplayNorm
@@ -4673,6 +4674,15 @@ void SpectrumWidget::setAutoSquelchEnable(bool on)
     }
 }
 
+void SpectrumWidget::setSquelchScale(double referenceDb, double stepDb, const QString& unit)
+{
+    if (!std::isfinite(referenceDb) || !std::isfinite(stepDb) || stepDb <= 0) { return; }
+    if (m_squelchReferenceDb == referenceDb && m_squelchStepDb == stepDb && m_squelchUnit == unit) { return; }
+    m_squelchReferenceDb = referenceDb; m_squelchStepDb = stepDb; m_squelchUnit = unit;
+    m_sqlNoiseFloorDbm = -999.0f; m_lastAutoSquelchLevel = -1;
+    markOverlayDirty();
+}
+
 void SpectrumWidget::setAutoSqlMarginDb(int dBm)
 {
     m_autoSqlMarginDb      = std::clamp(dBm, 5, 20);
@@ -4697,37 +4707,11 @@ void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
         return;
     }
 
-    float sum1 = 0.0f;
-    int cnt1 = 0;
-    for (int j = 0; j < binsDbm.size(); j += 4) {
-        sum1 += binsDbm[j];
-        ++cnt1;
-    }
-    if (cnt1 <= 0) {
-        return;
-    }
-    const float mean1 = sum1 / static_cast<float>(cnt1);
-
-    float sum2 = 0.0f;
-    int cnt2 = 0;
-    for (int j = 0; j < binsDbm.size(); j += 4) {
-        if (binsDbm[j] <= mean1) {
-            sum2 += binsDbm[j];
-            ++cnt2;
-        }
-    }
-    const float frameFloor =
-        (cnt2 > 0) ? sum2 / static_cast<float>(cnt2) : mean1;
-    m_sqlNoiseFloorDbm =
-        (m_sqlNoiseFloorDbm <= -500.0f)
-            ? frameFloor
-            : 0.1f * frameFloor + 0.9f * m_sqlNoiseFloorDbm;
-
-    constexpr float kSqlMinDbm = -160.0f;
-    const float targetDbm =
-        m_sqlNoiseFloorDbm + static_cast<float>(m_autoSqlMarginDb);
-    const int level = std::clamp(
-        static_cast<int>(targetDbm - kSqlMinDbm + 0.5f), 1, 100);
+    const auto suggestion = SpectrumSquelchLogic::suggest(
+        std::span(binsDbm.constData(), binsDbm.size()), m_sqlNoiseFloorDbm,
+        m_squelchReferenceDb, m_squelchStepDb, m_autoSqlMarginDb);
+    if (!suggestion) { return; }
+    const int level = *suggestion;
     if (level != m_lastAutoSquelchLevel) {
         m_lastAutoSquelchLevel = level;
         emit autoSquelchLevelSuggested(level);
