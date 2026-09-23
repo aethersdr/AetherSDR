@@ -1,6 +1,8 @@
 #ifdef HAVE_HIDAPI
 #include "HidDeviceParser.h"
 
+#include <algorithm>
+
 namespace AetherSDR {
 
 static const HidDeviceId kSupportedDevices[] = {
@@ -120,6 +122,8 @@ HidEvent ContourShuttleParser::parse(const uint8_t* buf, size_t len)
     // Need all 5 bytes: m_buf is reused across reads, so a short report
     // would otherwise leave a stale buf[4] from the previous one.
     if (len < 5) return {};
+
+    m_shuttle = std::clamp(static_cast<int>(static_cast<int8_t>(buf[0])), -7, 7);
 
     // Queue every edge: dropping one can lose a release and leave a button held.
     const uint16_t btns = buttonMask(buf);
