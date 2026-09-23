@@ -62,7 +62,7 @@ WFM and the other existing non-FM modes retain their exclusive legacy DDC and
 an independent pre-monitor tap. They cannot join a multi-FM bank. Selecting FM
 with an incompatible inherited wide/sideband filter chooses a 16 kHz passband;
 ordinary filter requests and saved restores are never resized. This mode
-transition needs maintainer UX review. WFM stereo and normalization qualification
+transition was approved in [the #5924 maintainer ruling](https://github.com/aethersdr/AetherSDR/pull/5924#issuecomment-5787852269). WFM stereo and normalization qualification
 remain S1/S2; no replacement WFM claim is made here.
 The desktop FM/FM-N presets use the existing DFM width ladder intersected with
 the backend's declared filter range; FMN and NFM share symmetric edge rules.
@@ -210,8 +210,10 @@ fixture; it does not raise production admission.
 This implementation is local to this PR and does not import PR #5919 or its
 stack. Reconciliation with that routing work remains a later integration task:
 typed dispatch alone is not acknowledgment, and every adapter must preserve
-sparse stable IDs. The new publication-policy seam, settings hooks/domain and
-FM passband transition still need explicit maintainer ratification. Offline
+sparse stable IDs. The publication-policy seam, RTL-owned settings hooks/domain
+transfer and FM passband transition were ratified in the ruling linked above.
+A second backend adopting the settings takeover must justify it separately.
+The new DC placement and joint tune/view intents still need ratification. Offline
 model acceptance does not establish live receive convergence or release readiness.
 
 

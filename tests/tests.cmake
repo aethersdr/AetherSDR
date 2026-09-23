@@ -1329,6 +1329,11 @@ target_include_directories(rtl_receive_pipeline_test PRIVATE src)
 target_link_libraries(rtl_receive_pipeline_test PRIVATE aethercore aether_wdsp Qt6::Core)
 add_test(NAME rtl_receive_pipeline_test COMMAND rtl_receive_pipeline_test)
 set_tests_properties(rtl_receive_pipeline_test PROPERTIES TIMEOUT 45)
+add_executable(flex_slice_mode_intent_test tests/flex_slice_mode_intent_test.cpp)
+target_include_directories(flex_slice_mode_intent_test PRIVATE src tests)
+target_link_libraries(flex_slice_mode_intent_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME flex_slice_mode_intent_test COMMAND flex_slice_mode_intent_test)
+set_tests_properties(flex_slice_mode_intent_test PROPERTIES TIMEOUT 30)
 add_executable(rtl_fm_audio_test tests/rtl_fm_audio_test.cpp)
 target_link_libraries(rtl_fm_audio_test PRIVATE aethercore)
 add_test(NAME rtl_fm_audio_test COMMAND rtl_fm_audio_test)
@@ -6562,6 +6567,7 @@ set(AETHER_SETTINGS_CONSUMERS
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     fm_filter_controls_test
+    flex_slice_mode_intent_test
     rtl_slice_settings_test
     rtl_runtime_settings_test
     rtl_model_acceptance_test
