@@ -12,6 +12,7 @@
 #include <QElapsedTimer>
 #include <QPointer>
 #include <cstdio>
+#include <cmath>
 #include <limits>
 #include <thread>
 
@@ -45,6 +46,9 @@ struct RtlCaptureBackendTestAccess {
         backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device), nullptr, capacity));
     }
     static bool idle(const RtlSdrBackend& backend) { return !backend.m_capture.busy(); }
+    static T::State state(const RtlSdrBackend& backend) { return *backend.m_capture.confirmed(); }
+    static void spectrum(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
+    { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
 };
 }
 static int failures = 0;
@@ -180,32 +184,103 @@ int main(int argc, char** argv)
     check(waitFor([&] { device->block(); return rtl::RtlCaptureBackendTestAccess::idle(backend) && slice->frequency() == 107.0; }),
           "latest hardware state publishes after compensation");
     check(!frequencies.contains(106.0), "superseded hardware state never publishes");
-    // Pan requests share the capture transaction and must not move the view
-    // or tell a caller to move it before the new capture is adopted.
+    // Display geometry must never become a hardware/sample-rate/slice command.
     PanadapterModel* pan = model.panadapter(slice->panId());
     check(pan != nullptr, "accepted receiver resolves its model pan");
     if (pan) {
-        const double oldCenter = pan->centerMhz();
+        const int beforeWrites = device->writes;
+        RadioModelSliceLifecycleTestAccess::flush(model);
+        const double captureCenter = RtlSliceSettings(scope).load().document.captureCenterHz;
+        model.requestPanCenter(pan->panId(), 107.0, 0.2);
+        check(pan->bandwidthMhz() < 0.201 && pan->bandwidthMhz() > 0.198,
+              "zoom publishes a genuine narrow display window");
+        check(rtl::RtlCaptureBackendTestAccess::idle(backend) && device->writes == beforeWrites,
+              "display zoom performs no capture transaction or USB writes");
+        model.requestPanCenter(pan->panId(), 106.5, -1.0, IRadioBackend::PanCenterIntent::Drag);
+        check(pan->centerMhz() < 106.9 && slice->frequency() == 107.0,
+              "panning can put a receiving slice offscreen without retuning it");
+        check(device->writes == beforeWrites && rtl::RtlCaptureBackendTestAccess::idle(backend),
+              "display drag does not stop acquisition");
+        RadioModelSliceLifecycleTestAccess::flush(model);
+        check(RtlSliceSettings(scope).load().document.captureCenterHz == captureCenter,
+              "display geometry cannot overwrite persisted capture context");
+        // The same two intents used by a typed frequency entry: receiver first,
+        // then commanded display centering. Wait for receiver adoption.
+        slice->setFrequency(107.05);
+        model.requestPanCenter(pan->panId(), 107.05);
+        check(slice->frequency() == 107.0, "typed frequency waits for receiver adoption");
+        check(waitFor([&] { device->block(); return slice->frequency() == 107.05
+            && rtl::RtlCaptureBackendTestAccess::idle(backend); }), "typed in-window tune adopted");
+        check(std::abs(pan->centerMhz() - 107.05) < 0.002 && device->writes == beforeWrites,
+              "typed centering moves only the view when capture already fits");
+        check(model.requestConfirmedReceiveTune(3, 107.08, IRadioBackend::ReceiveTuneView::Center),
+              "confirmed GUI tune admits receiver and view as one intent");
+        check(slice->frequency() == 107.05, "joint typed intent remains unobserved until adoption");
+        check(waitFor([&] { device->block(); return slice->frequency() == 107.08
+            && rtl::RtlCaptureBackendTestAccess::idle(backend); }), "joint typed intent adopted");
+        check(std::abs(pan->centerMhz() - 107.08) < 0.002 && device->writes == beforeWrites,
+              "joint in-window typed intent centers display without USB writes");
+        const double acceptedView = pan->centerMhz();
+        check(model.requestConfirmedReceiveTune(3, 107.2, IRadioBackend::ReceiveTuneView::Center)
+            && model.requestConfirmedReceiveTune(3, 107.08, IRadioBackend::ReceiveTuneView::Preserve),
+              "newer preserve-view tune supersedes an unadopted centering intent");
+        check(waitFor([&] { device->block(); return rtl::RtlCaptureBackendTestAccess::idle(backend); })
+            && slice->frequency() == 107.08 && pan->centerMhz() == acceptedView,
+              "superseded frequency and centering never become observations");
+        check(!model.requestConfirmedReceiveTune(3, 3000.0, IRadioBackend::ReceiveTuneView::Center)
+            && pan->centerMhz() == acceptedView,
+              "refused typed frequency cannot move the accepted display");
         {
             std::lock_guard lock(device->mutex); device->holdReadback = true;
         }
-        check(!model.requestPanCenter(pan->panId(), 108.0), "pending pan request does not report convergence");
-        check(pan->centerMhz() == oldCenter && slice->frequency() == 107.0,
-              "pending pan capture leaves both models at accepted geometry");
+        device->failWriteAt = device->writes + 5;
+        check(model.requestConfirmedReceiveTune(3, 115.0, IRadioBackend::ReceiveTuneView::Center),
+              "out-of-capture typed intent admitted provisionally");
         check(waitFor([&] { std::lock_guard lock(device->mutex); return device->inReadback; }),
-              "pan request reaches held hardware readback");
-        // Return to the observed geometry; the abandoned center must not leak.
-        model.requestPanCenter(pan->panId(), oldCenter);
+              "typed retune failure reaches held compensation");
+        check(slice->frequency() == 107.08 && pan->centerMhz() == acceptedView,
+              "pending typed hardware change moves neither slice nor view");
         device->releaseReadback();
+        check(waitFor([&] { return rtl::RtlCaptureBackendTestAccess::idle(backend); }),
+              "typed retune rollback completed");
+        check(slice->frequency() == 107.08 && pan->centerMhz() == acceptedView,
+              "typed retune rollback preserves both accepted observations");
+        const auto captured = rtl::RtlCaptureBackendTestAccess::state(backend);
+        check(model.requestConfirmedReceiveTune(3, captured.capture.centerHz / 1e6,
+            IRadioBackend::ReceiveTuneView::Center), "operator can tune onto DC without an implicit capture retune");
         check(waitFor([&] { device->block(); return rtl::RtlCaptureBackendTestAccess::idle(backend); }),
-              "corrected pan request settles after compensation");
-        check(pan->centerMhz() == oldCenter && slice->frequency() == oldCenter
-            && !frequencies.contains(108.0), "superseded pan geometry never publishes");
-        // The existing single-receiver pan operation tunes to that center.
-        // Restore the prior offset tune before testing model staging below.
+              "on-DC receiver tune adopted");
+        check(!backend.healthSnapshot().values.value("rtlCaptureDcClear").toBool(),
+              "DC overlap is operator-visible rather than hidden by a removed bin");
+        check(model.requestReceiveCaptureRecenter(pan->panId()), "explicit DC placement admitted");
+        check(waitFor([&] { device->block(); return rtl::RtlCaptureBackendTestAccess::idle(backend); }),
+              "explicit DC placement adopted");
+        const auto displaced = rtl::RtlCaptureBackendTestAccess::state(backend);
+        check(displaced.hardware.centerHz != captured.hardware.centerHz
+            && slice->frequency() == captured.capture.centerHz / 1e6
+            && backend.healthSnapshot().values.value("rtlCaptureDcClear").toBool(),
+              "explicit placement moves capture while preserving receiver RF and reporting DC clearance");
+        QVector<float> observedBins;
+        int frames = 0;
+        const auto frameConnection = QObject::connect(&model, &RadioModel::panFeedSpectrumReady,
+            &model, [&](quint32, const QVector<float>& bins, qint64) { observedBins = bins; ++frames; });
+        QVector<float> input(2048);
+        for (int i = 0; i < input.size(); ++i) { input[i] = -120.0f + i * 0.02f; }
+        input[1024] = -12.0f;
+        const QByteArray raw(reinterpret_cast<const char*>(input.constData()), input.size() * sizeof(float));
+        model.requestPanCenter(pan->panId(), displaced.capture.centerHz / 1e6, 0.01875);
+        rtl::RtlCaptureBackendTestAccess::spectrum(backend, raw, displaced.token);
+        check(observedBins.size() == 16 && observedBins[8] == -12.0f
+            && observedBins.front() == input[1016] && observedBins.back() == input[1031],
+              "display crop preserves the genuine DC bin and unchanged neighboring amplitudes");
+        const int acceptedFrames = frames;
+        rtl::RtlCaptureBackendTestAccess::spectrum(backend, raw, {displaced.token.session, displaced.token.revision + 1});
+        rtl::RtlCaptureBackendTestAccess::spectrum(backend, raw.left(17), displaced.token);
+        check(frames == acceptedFrames, "stale and malformed spectra cannot populate the current view");
+        QObject::disconnect(frameConnection);
         slice->setFrequency(107.0);
         check(waitFor([&] { device->block(); return slice->frequency() == 107.0
-            && rtl::RtlCaptureBackendTestAccess::idle(backend); }), "offset tune restored after pan correction");
+            && rtl::RtlCaptureBackendTestAccess::idle(backend); }), "test receiver returned after viewport checks");
     }
     // A staged object cannot control an otherwise-connected backend.
     RadioModelSliceLifecycleTestAccess::stage(model);
@@ -296,6 +371,14 @@ int main(int argc, char** argv)
         check(waitFor([&] { usb->block(); return multi.slice(0) && rtl::RtlCaptureBackendTestAccess::idle(radio); }),
               "replacement receiver adopted");
         check(retired && multi.slice(0) != retired, "retired object retained until deferred deletion, with a distinct replacement");
+        auto* multiPan = multi.panadapter(multi.slice(1)->panId());
+        const double multiView = multiPan->centerMhz();
+        const int multiWrites = usb->writes;
+        check(!multi.requestConfirmedReceiveTune(1, 105.0, IRadioBackend::ReceiveTuneView::Center)
+            && multi.slice(1)->frequency() == 100.3 && multi.slice(0)->frequency() == 100.5
+            && multiPan->centerMhz() == multiView && usb->writes == multiWrites
+            && rtl::RtlCaptureBackendTestAccess::idle(radio),
+              "impossible whole-set typed tune preserves both receivers, display, and capture");
         if (retired) {
             retired->setFrequency(100.7); retired->setFilterWidth(-4000, 4000); retired->setAudioGain(9);
             retired->setSquelch(true, 90);

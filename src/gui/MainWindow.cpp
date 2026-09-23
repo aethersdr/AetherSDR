@@ -8468,6 +8468,21 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
 #endif
     }
 
+    if (m_radioModel.confirmsReceiveControls()) {
+        if (m_radioModel.slice(slice->sliceId()) != slice) { return; }
+        IRadioBackend::ReceiveTuneView view = IRadioBackend::ReceiveTuneView::Preserve;
+        if (intent == TuneIntent::CommandedTargetCenter || centerLockActiveForSlice(slice)) {
+            view = IRadioBackend::ReceiveTuneView::Center;
+        } else if (intent != TuneIntent::IncrementalTune || panFollowEnabled()) {
+            view = IRadioBackend::ReceiveTuneView::Reveal;
+        }
+        // Receiver and display intent are admitted together. A refusal leaves
+        // both observations intact; pending hardware/DSP never moves a flag.
+        m_radioModel.requestConfirmedReceiveTune(slice->sliceId(), mhz, view);
+        pushSliceFrequencyToOverlays(slice, slice->frequency());
+        return;
+    }
+
     holdCenterLockTuneTarget(slice, mhz);
     pushSliceFrequencyToOverlays(slice, mhz);
 

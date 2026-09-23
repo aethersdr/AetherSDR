@@ -22,6 +22,14 @@ namespace {
 constexpr double kMinTuneHz = 24'000.0;
 constexpr double kMaxTuneHz = 1'766'000'000.0;
 
+bool hasNarrowFm(const std::vector<RtlCaptureTransaction::Receiver>& receivers)
+{
+    return std::ranges::any_of(receivers, [](const auto& receiver) {
+        return receiver.mode == RtlCaptureTransaction::Mode::Fm
+            || receiver.mode == RtlCaptureTransaction::Mode::Fmn;
+    });
+}
+
 double clampFrequency(double hz)
 {
     return std::clamp(hz, kMinTuneHz, kMaxTuneHz);
@@ -193,9 +201,16 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.receiveSquelchModel = ReceiveSquelchModel{
         {QStringLiteral("FM"), QStringLiteral("FMN")},
         RtlSquelchGate::kReferenceDb, RtlSquelchGate::kStepDb, QStringLiteral("dBFS/bin")};
-    c.receivePanCenterControl = std::nullopt; // setPanCenter also retunes slice 0
+    c.panSpanModel = PanSpanModel{false, false};
+    if (m_lastPublished && hasNarrowFm(m_lastPublished->receivers)) {
+        c.receiveCapturePlacement = ReceiveCapturePlacement{
+            qint64(RtlCaptureTransaction::kDcSeparationHz)};
+    }
+    c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
+                                                       0, 1'766'000'000};
     c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
-                                                         225'001, 3'000'000};
+        m_viewport ? qFloor(m_viewport->minimumSpanHz) : 1757,
+        m_viewport ? qCeil(m_viewport->maximumSpanHz) : 2'700'000};
 
     // Sample rates — non-contiguous legal windows for R820T
     c.sampleRatesHz = {
@@ -365,6 +380,10 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
     m_capture.beginSession();
     m_published = {};
     m_lastPublished.reset();
+    m_viewport.reset();
+    m_pendingViewport = {};
+    m_viewCenterRequestHz = m_requested.receivers.front().passband.carrierHz;
+    m_viewSpanRequestHz = m_requested.hardware.sampleRateHz;
     m_monitors.fill({});
     m_connecting = true;
     m_pendingPanId = QStringLiteral("0xe1000000");
@@ -374,13 +393,15 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
     connect(m_worker.get(), &RtlSdrWorker::spectrumFrameReady, this,
         [this, producer](quint64 session, quint64 revision, int panId, const QByteArray& frame) {
             if (producer && producer.data() == m_worker.get() && acceptsFrame(session, revision)) {
-                emit spectrumFrameReady(panId, frame);
+                const QByteArray cropped = viewportFrame(frame);
+                if (!cropped.isEmpty()) { emit spectrumFrameReady(panId, cropped); }
             }
         });
     connect(m_worker.get(), &RtlSdrWorker::waterfallRowReady, this,
         [this, producer](quint64 session, quint64 revision, int panId, const QByteArray& frame) {
             if (producer && producer.data() == m_worker.get() && acceptsFrame(session, revision)) {
-                emit waterfallRowReady(panId, frame);
+                const QByteArray cropped = viewportFrame(frame);
+                if (!cropped.isEmpty()) { emit waterfallRowReady(panId, cropped); }
             }
         });
     connect(m_worker.get(), &RtlSdrWorker::audioFrameReady, this,
@@ -411,6 +432,7 @@ void RtlSdrBackend::disconnectRadio()
     m_captureTimer.stop();
     m_capture.endSession();
     m_published = {};
+    m_pendingViewport = {};
     if (!m_worker && !m_connected && !m_connecting) { return; }
     m_connected = false;
     m_connecting = false;
@@ -470,6 +492,28 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
             snapshot.values.insert(snapshot.order[i], QVariant::fromValue<qulonglong>(counters[i]));
         }
     }
+    if (m_lastPublished) {
+        const auto& capture = m_lastPublished->capture;
+        const QStringList keys{QStringLiteral("rtlCaptureCenterHz"), QStringLiteral("rtlCaptureRateHz"),
+            QStringLiteral("rtlCaptureLowHz"), QStringLiteral("rtlCaptureHighHz"),
+            QStringLiteral("rtlCaptureDcClear"), QStringLiteral("rtlCaptureRequest")};
+        snapshot.sections.insert(keys.front(), tr("RTL accepted capture"));
+        snapshot.order.append(keys);
+        snapshot.labels.insert(keys[0], tr("Capture center / converter DC (Hz)"));
+        snapshot.labels.insert(keys[1], tr("Captured IQ sample rate (Hz)"));
+        snapshot.labels.insert(keys[2], tr("Usable capture low edge (Hz)"));
+        snapshot.labels.insert(keys[3], tr("Usable capture high edge (Hz)"));
+        snapshot.labels.insert(keys[4], tr("FM receivers clear of converter DC"));
+        snapshot.labels.insert(keys[5], tr("Last capture request"));
+        snapshot.values.insert(keys[0], capture.centerHz);
+        snapshot.values.insert(keys[1], capture.achievedSampleRateHz);
+        snapshot.values.insert(keys[2], std::max(0.0, capture.centerHz - capture.usableLeftHz));
+        snapshot.values.insert(keys[3], capture.centerHz + capture.usableRightHz);
+        snapshot.values.insert(keys[4], hasNarrowFm(m_lastPublished->receivers)
+            ? QVariant(RtlCaptureTransaction::dcClear(*m_lastPublished))
+            : QVariant(tr("Not applied to legacy demodulators")));
+        snapshot.values.insert(keys[5], m_captureStatus);
+    }
     return snapshot;
 }
 
@@ -516,13 +560,43 @@ bool RtlSdrBackend::hasAcceptedSlice(int sliceId) const
 
 void RtlSdrBackend::setSliceFrequency(int sliceId, double hz)
 {
-    if (!hasAcceptedSlice(sliceId) || !std::isfinite(hz)) { return; }
+    requestReceiveTune(sliceId, hz, ReceiveTuneView::Preserve);
+}
+
+bool RtlSdrBackend::requestReceiveTune(int sliceId, double hz, ReceiveTuneView view)
+{
+    if (!hasAcceptedSlice(sliceId) || !std::isfinite(hz) || hz < kMinTuneHz || hz > kMaxTuneHz
+        || view < ReceiveTuneView::Preserve || view > ReceiveTuneView::Center) { return false; }
     auto desired = m_requested;
     const auto receiver = std::ranges::find_if(desired.receivers, [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
-    if (receiver == desired.receivers.end()) { return; }
-    receiver->passband.carrierHz = clampFrequency(hz);
+    if (receiver == desired.receivers.end()) { return false; }
+    receiver->passband.carrierHz = hz;
     desired.automaticDirectSampling = true;
-    requestCapture(desired);
+    if (!requestCapture(desired) || !m_connected) { return false; }
+    const bool outsideView = !m_viewport || hz < m_viewport->centerHz - m_viewport->spanHz / 2
+        || hz > m_viewport->centerHz + m_viewport->spanHz / 2;
+    if (view == ReceiveTuneView::Center || (view == ReceiveTuneView::Reveal && outsideView)) {
+        m_viewCenterRequestHz = hz;
+    } else if (m_viewport) {
+        // A later tune supersedes an unadopted centering request together with
+        // its receiver frequency. Preserve refers to the accepted view.
+        m_viewCenterRequestHz = m_viewport->centerHz;
+    }
+    requestViewport();
+    return true;
+}
+
+bool RtlSdrBackend::recenterReceiveCapture(const QString& panId)
+{
+    if (!m_connected || !m_lastPublished
+        || (!panId.isEmpty() && panId != QLatin1String("0xe1000000"))) { return false; }
+    if (m_capture.busy() || !hasNarrowFm(m_lastPublished->receivers)) {
+        emit configurationWarning(tr("Capture DC placement requires an idle FM or FM-N receiver."));
+        return false;
+    }
+    auto desired = m_requested;
+    desired.avoidDc = true;
+    return requestCapture(desired);
 }
 
 void RtlSdrBackend::setSliceMode(int sliceId, const QString& mode)
@@ -543,6 +617,7 @@ void RtlSdrBackend::setSliceMode(int sliceId, const QString& mode)
         receiver->passband.filterLowHz = -8000; receiver->passband.filterHighHz = 8000;
     }
     receiver->mode = modeValue;
+    desired.avoidDc = narrowFm;
     if (!narrowFm) { receiver->squelchEnabled = false; }
     receiver->passband.guardLowHz = narrowFm ? 3000 : 0;
     receiver->passband.guardHighHz = narrowFm ? 3000 : 0;
@@ -595,26 +670,47 @@ void RtlSdrBackend::setSliceSquelch(int sliceId, bool enabled, int level)
 void RtlSdrBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent intent)
 {
     Q_UNUSED(intent);
-    if (!m_connected || !std::isfinite(hz)) { return; }
-    auto desired = m_requested;
-    desired.hardware.centerHz = static_cast<std::uint32_t>(clampFrequency(hz));
-    // Retain the existing single-slice pan behavior until viewport work lands.
-    desired.receivers[0].passband.carrierHz = desired.hardware.centerHz;
-    desired.automaticDirectSampling = true;
-    if (requestCapture(desired)) {
-        m_pendingPanId = panId.isEmpty() ? QStringLiteral("0xe1000000") : panId;
-    }
+    if (!m_connected || !std::isfinite(hz)
+        || (!panId.isEmpty() && panId != QLatin1String("0xe1000000"))) { return; }
+    m_viewCenterRequestHz = hz;
+    requestViewport();
 }
 
 void RtlSdrBackend::setPanBandwidth(const QString& panId, double hz)
 {
-    if (!m_connected || !std::isfinite(hz)) { return; }
-    auto desired = m_requested;
-    desired.hardware.sampleRateHz = clampSampleRate(static_cast<std::uint32_t>(
-        std::clamp(hz, 1.0, double(UINT32_MAX))));
-    if (requestCapture(desired)) {
-        m_pendingPanId = panId.isEmpty() ? QStringLiteral("0xe1000000") : panId;
+    if (!m_connected || !std::isfinite(hz) || hz <= 0
+        || (!panId.isEmpty() && panId != QLatin1String("0xe1000000"))) { return; }
+    m_viewSpanRequestHz = hz;
+    requestViewport();
+}
+
+void RtlSdrBackend::requestViewport()
+{
+    if (m_capture.busy()) {
+        // Typed tuning sends its slice intent first. Its display intent must
+        // wait for that capture's adoption, including coalescing and rollback.
+        m_pendingViewport = m_capture.requested();
+        return;
     }
+    publishViewport();
+}
+
+void RtlSdrBackend::publishViewport()
+{
+    if (!m_connected || !m_capture.confirmed()) { return; }
+    const auto viewport = RtlViewport::fit(m_capture.confirmed()->capture,
+        RtlSdrDdc::kSpectrumBinCount, m_viewCenterRequestHz, m_viewSpanRequestHz);
+    if (!viewport) { return; }
+    m_viewport = viewport;
+    emit panCenterBandwidthChanged(QStringLiteral("0xe1000000"),
+                                    viewport->centerHz / 1e6, viewport->spanHz / 1e6);
+}
+
+QByteArray RtlSdrBackend::viewportFrame(const QByteArray& frame) const
+{
+    if (!m_viewport || frame.size() != m_viewport->sourceBinCount * int(sizeof(float))) { return {}; }
+    return frame.sliced(m_viewport->firstBin * int(sizeof(float)),
+                         m_viewport->binCount * int(sizeof(float)));
 }
 
 void RtlSdrBackend::setPanFrameRate(const QString& panId, int fps)
@@ -880,7 +976,7 @@ RestoredRadioState RtlSdrBackend::currentOperatingState() const
 {
     RestoredRadioState state;
     if (m_connecting) { return state; }
-    state.rfFrequencyHz = m_panCenterHz;
+    state.rfFrequencyHz = m_sliceFreqHz;
     state.mode = m_sliceMode;
     state.filterLowHz = m_sliceFilterLow;
     state.filterHighHz = m_sliceFilterHigh;
@@ -902,8 +998,13 @@ bool RtlSdrBackend::requestCapture(const RtlCaptureTransaction::Desired& desired
     const auto submitted = m_capture.submit(desired);
     if (!submitted) {
         qWarning() << "RTL-SDR capture request refused by whole-set validation";
+        m_captureStatus = desired.avoidDc
+            ? tr("Refused: no legal DC-clear capture fits every receiver passband.")
+            : tr("Refused: the requested receiver set does not fit a legal capture.");
+        if (m_connected) { emit configurationWarning(m_captureStatus); }
         return false;
     }
+    m_captureStatus = tr("Preparing; displayed capture remains the last accepted state.");
     QVector<quint64> superseded;
     const auto& old = m_requested.hardware;
     const auto& next = desired.hardware;
@@ -929,6 +1030,8 @@ bool RtlSdrBackend::requestCapture(const RtlCaptureTransaction::Desired& desired
         m_pendingExtensionRequests.insert(extension, {requestId, submitted.token});
     }
     m_requested = desired;
+    m_requested.avoidDc = false;
+    if (m_pendingViewport.revision) { m_pendingViewport = submitted.token; }
     // Dispatch only; completion is serviced by the timer to avoid reentering
     // publication while an extension promise is still being attached.
     if (const auto work = m_capture.takeWork()) {
@@ -970,9 +1073,18 @@ void RtlSdrBackend::serviceCapture()
             m_requested.hardware = state.hardware;
             m_requested.receivers = state.receivers;
             m_requested.automaticDirectSampling = state.automaticDirectSampling;
+            m_pendingViewport = {};
+            if (m_viewport) {
+                m_viewCenterRequestHz = m_viewport->centerHz;
+                m_viewSpanRequestHz = m_viewport->spanHz;
+            }
             if (m_restoreToken == result->token) { m_restoreToken = {}; }
             finishExtensions(false);
             qWarning() << "RTL-SDR capture request failed; previous capture restored";
+            if (producer && producer.data() == m_worker.get()) {
+                m_captureStatus = tr("Failed: previous capture and receiver state restored.");
+                emit configurationWarning(m_captureStatus);
+            }
         }
     }
     if (m_worker) {
@@ -1111,6 +1223,15 @@ void RtlSdrBackend::publishCapture()
     m_requested.hardware = state.hardware;
     m_requested.receivers = state.receivers;
     m_requested.automaticDirectSampling = state.automaticDirectSampling;
+    m_requested.avoidDc = false;
+    m_captureStatus = tr("Accepted");
+    if (!m_pendingViewport.revision && m_viewport) {
+        m_viewCenterRequestHz = m_viewport->centerHz;
+        m_viewSpanRequestHz = m_viewport->spanHz;
+    }
+    m_pendingViewport = {};
+    m_viewport = RtlViewport::fit(state.capture, RtlSdrDdc::kSpectrumBinCount,
+                                 m_viewCenterRequestHz, m_viewSpanRequestHz);
     const auto current = [this, token = state.token] {
         return acceptsFrame(token.session, token.revision);
     };
@@ -1121,8 +1242,13 @@ void RtlSdrBackend::publishCapture()
         if (!current()) { return; }
         emitInitialState();
     } else {
-        emit panCenterBandwidthChanged(m_pendingPanId, m_panCenterHz / 1e6, m_sampleRateHz / 1e6);
+        publishViewport();
         if (!current()) { return; }
+        if (m_viewport) {
+            emit panBandwidthLimitsChanged(m_pendingPanId, m_viewport->minimumSpanHz / 1e6,
+                                           m_viewport->maximumSpanHz / 1e6);
+            if (!current()) { return; }
+        }
         emit panRfGainChanged(m_pendingPanId, m_panRfGainDb);
         if (!current()) { return; }
         if (prior) {
@@ -1141,10 +1267,16 @@ void RtlSdrBackend::publishCapture()
     }
     if (current()) {
         const bool activated = activateSettings();
-        if (activated) { emit capabilitiesChanged(); }
+        if (activated || (prior && (prior->capture != state.capture
+            || hasNarrowFm(prior->receivers) != hasNarrowFm(state.receivers)))) { emit capabilitiesChanged(); }
         if (!current()) { return; }
         restoreAcceptedSlices();
         if (current()) { emit operatingStateChanged(); }
+        if (current() && hasNarrowFm(state.receivers) && !RtlCaptureTransaction::dcClear(state)
+            && (!prior || RtlCaptureTransaction::dcClear(*prior))) {
+            emit configurationWarning(tr("An FM receiver overlaps converter DC. Its frequency is preserved. "
+                "Use Move capture away from DC in the spectrum menu; Radio Health shows the accepted capture."));
+        }
     }
 }
 
@@ -1191,9 +1323,12 @@ void RtlSdrBackend::emitInitialState()
     const QString kPanId = QStringLiteral("0xe1000000");
 
     // Pan 0 FIRST — center frequency and bandwidth limits so PanadapterModel materialises
-    emit panCenterBandwidthChanged(kPanId, m_panCenterHz / 1e6, m_sampleRateHz / 1e6);
+    publishViewport();
     if (!current()) { return; }
-    emit panBandwidthLimitsChanged(kPanId, 0.225001, 3.0);
+    if (m_viewport) {
+        emit panBandwidthLimitsChanged(kPanId, m_viewport->minimumSpanHz / 1e6,
+                                       m_viewport->maximumSpanHz / 1e6);
+    }
     if (!current()) { return; }
 
     // Tuner RF gain info

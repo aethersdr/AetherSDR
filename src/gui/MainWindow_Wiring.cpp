@@ -39,6 +39,7 @@
 #include "OwnedSingleShotTimer.h"
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
+#include "ReceiveCaptureAction.h"
 #include "PanadapterMessageOverlay.h"
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
@@ -1969,7 +1970,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         const bool dragTargetSlice =
             m_sliceDragTargetSliceId >= 0
             && (s->sliceId() == m_sliceDragTargetSliceId || dragDiversityPartner);
-        if (dragEchoHoldActive && dragTargetSlice
+        const bool confirmedControls = m_radioModel.confirmsReceiveControls();
+        if (!confirmedControls && dragEchoHoldActive && dragTargetSlice
             && m_sliceDragTargetMhz > 0.0 && !memoryRevealPending) {
             const int sliceId = s->sliceId();
             QTimer::singleShot(0, this, [this, sliceId]() {
@@ -1989,7 +1991,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
             });
             return;
         }
-        if (activeTuning
+        if (!confirmedControls && activeTuning
             && (s->sliceId() == m_activeSliceId || activeDiversityPartner)
             && !memoryRevealPending) {
             return;
@@ -3625,6 +3627,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
+    if (!sw->capturePlacementAction()) {
+        sw->setCapturePlacementAction(new ReceiveCaptureAction(m_radioModel,
+            [applet] { return applet->panId(); }, sw));
+    }
     if (profileLoadRadioStateWritesHeld()) {
         // Profile recall briefly rebuilds pan topology and pixel dimensions.
         // Keep auto noise-floor from sliding the client-side dBm scale during

@@ -331,6 +331,21 @@ public:
     virtual void setPanCenter(const QString& panId, double hz,
                               PanCenterIntent intent) = 0;
 
+    // A confirmed-control backend admits the receiver and its display intent
+    // together. False means neither intent was accepted; true is admission,
+    // not completion. Observations still arrive only after capture adoption.
+    enum class ReceiveTuneView { Preserve, Reveal, Center };
+    virtual bool requestReceiveTune(int sliceId, double hz, ReceiveTuneView view)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz); Q_UNUSED(view);
+        return false;
+    }
+    virtual bool recenterReceiveCapture(const QString& panId)
+    {
+        Q_UNUSED(panId);
+        return false;
+    }
+
     // Change the panadapter's SPAN — how much spectrum the window covers.
     //
     // The sibling of setPanCenter, and it exists for the same reason. A backend

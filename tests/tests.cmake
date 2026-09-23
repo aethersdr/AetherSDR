@@ -180,6 +180,12 @@ target_include_directories(rtl_capture_transaction_test PRIVATE src)
 set_target_properties(rtl_capture_transaction_test PROPERTIES AUTOMOC OFF)
 add_test(NAME rtl_capture_transaction_test COMMAND rtl_capture_transaction_test)
 
+# Genuine FFT-bin viewport geometry, no sockets, settings or hardware.
+add_executable(rtl_viewport_test tests/rtl_viewport_test.cpp)
+target_include_directories(rtl_viewport_test PRIVATE src)
+set_target_properties(rtl_viewport_test PROPERTIES AUTOMOC OFF)
+add_test(NAME rtl_viewport_test COMMAND rtl_viewport_test)
+
 add_executable(shared_capture_policy_test
     tests/shared_capture_policy_test.cpp
     src/core/SharedCapturePolicy.cpp
@@ -1327,6 +1333,10 @@ add_executable(rtl_fm_audio_test tests/rtl_fm_audio_test.cpp)
 target_link_libraries(rtl_fm_audio_test PRIVATE aethercore)
 add_test(NAME rtl_fm_audio_test COMMAND rtl_fm_audio_test)
 set_tests_properties(rtl_fm_audio_test PROPERTIES TIMEOUT 90)
+add_executable(rtl_dc_audio_test tests/rtl_dc_audio_test.cpp)
+target_link_libraries(rtl_dc_audio_test PRIVATE aethercore)
+add_test(NAME rtl_dc_audio_test COMMAND rtl_dc_audio_test)
+set_tests_properties(rtl_dc_audio_test PROPERTIES TIMEOUT 180)
 add_executable(rtl_squelch_test tests/rtl_squelch_test.cpp)
 target_include_directories(rtl_squelch_test PRIVATE src)
 add_test(NAME rtl_squelch_test COMMAND rtl_squelch_test)

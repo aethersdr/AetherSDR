@@ -78,6 +78,13 @@ struct ReceivePanRangeControl {
     // bandwidth support promises no slice creation/removal or retune.
 };
 
+// Desktop capture-placement control. It preserves every receiver's RF and
+// passband while relocating the shared capture away from converter DC. This
+// record alone grants no headless-control verb or hardware acknowledgement.
+struct ReceiveCapturePlacement {
+    qint64 minimumDcSeparationHz = 0;
+};
+
 // What the panadapter's SPAN is made of. Absent means NO BACKEND HAS BEEN READ
 // on the question — not "no". That distinction is the whole reason this is a
 // record and not two bools (#5262 M2): a bool that nobody set reports a
@@ -355,6 +362,7 @@ struct RadioCapabilities {
     // answers when it is absent, so read it through the accessors below rather
     // than unwrapping it at the call site.
     std::optional<PanSpanModel> panSpanModel;
+    std::optional<ReceiveCapturePlacement> receiveCapturePlacement;
     std::optional<PanAmplitudeModel> panAmplitude;
     // See BackendPanAveraging. Absent = the widget averages client-side.
     std::optional<BackendPanAveraging> backendPanAveraging;

@@ -78,6 +78,19 @@ The native `setSliceSquelch` verb applies through RTL's confirmed transaction.
 Absence preserves the legacy desktop shape for other backends. This record
 grants no headless squelch verb or calibrated-power claim.
 
+### Receive capture placement
+
+`receiveCapturePlacement` is an optional desktop feature record with its minimum
+carrier-to-converter-DC separation in Hz. RTL declares 48 kHz only for accepted
+FM/FM-N receivers. `ReceiveCaptureAction` consumes the live record through the
+availability registry; `RadioModel::requestReceiveCaptureRecenter` rechecks it,
+connection and pan ownership before the neutral `recenterReceiveCapture` verb.
+The backend validates the whole receiver set and preserves every absolute RF.
+Absence leaves the action dimmed on a connected backend. No headless placement
+method or grant is added. Confirmed desktop frequency entry separately uses
+`requestReceiveTune` to admit receiver and display intent together; unsupported
+backends default to refusal. See [the runtime contract](../rtl-m1-runtime.md).
+
 ### Wideband converter view
 
 `widebandConverterView` is the optional record for *"this radio can deliver the
@@ -260,6 +273,9 @@ experimental family does not duplicate or stale the main cross-family table.
 | `family` / `model` / `manufacturer` | `"rtl"` / USB product / USB vendor (fallback `"Realtek"`) | Identifies the local device in the shared radio model and status bar |
 | `tuningMinHz` / `tuningMaxHz` | 24 kHz / 1.766 GHz | Bounds tune requests; frequencies below 24 MHz select Q-branch direct sampling |
 | `sampleRatesHz` | 225001, 250000, 300000, 1000000, 1536000, 1843200, 2000000, 2400000, 3000000 | Publishes only legal `librtlsdr` detents |
+| `panSpanModel` | false / false | Center and span crop genuine FFT bins inside accepted capture; neither changes hardware rate nor receiver RF |
+| `receivePanCenterControl` / `receivePanBandwidthControl` | engine; capture-clamped center / sixteen-bin floor through usable capture span | Backend reports the actual quantized geometry; existing receive-control authority checks still apply |
+| `receiveCapturePlacement` | 48 kHz when an accepted FM/FM-N receiver exists | Capability-gated explicit whole-set DC placement, keeping absolute receiver RF |
 | `canTransmit` / `txPowerMaxWatts` / `hostModulates` | false / 0 / false | Fails closed on every transmit path and never opens the microphone |
 | `maxSlices` / `maxPanadapters` | 1 / 1 | Current qualified admission remains one; FM/FMN use the prepared 48 kHz receiver pipeline, other modes the exclusive legacy DDC |
 | `persistsMemories` / `hasSupplyVoltageTelemetry` / `hasMultiClientSessions` | false / false / false | Avoids fabricating radio-side services or telemetry |
@@ -626,8 +642,8 @@ the bin expression quoted in their own `capabilities()`.
 
 | Field | Flex | HL2 | RTL | Question it answers |
 |---|:--:|:--:|:--:|---|
-| `panSpanModel->followsSampleRate` | — (absent) | ✅ | — (absent) | Is `sampleRatesHz` the complete set of spans, floor included? |
-| `panSpanModel->radioWide` | — (absent) | ✅ | — (absent) | Does changing one pan's span change every receiver's? |
+| `panSpanModel->followsSampleRate` | — (absent) | ✅ | ❌ | Is `sampleRatesHz` the complete set of spans, floor included? |
+| `panSpanModel->radioWide` | — (absent) | ✅ | ❌ | Does changing one pan's span change every receiver's? |
 
 Both live in one `std::optional<PanSpanModel> panSpanModel`. Absent is *not* a
 pair of `false`s: it means no backend has been read, and a client that needs the
@@ -637,6 +653,9 @@ Both are declared and nothing reads them yet — the behaviour they describe is
 already implemented, by `Hl2Backend::applyPanBandwidth` snapping through
 `nearestIqSampleRateHz` and by `panBandwidthLimitsChanged` clamping the zoom
 control. What was missing was the **claim**, so a client had no way to ask.
+RTL now explicitly declares both false because its display crops the already
+captured FFT; zooming does not request another sample rate. Its existing
+`panBandwidthLimitsChanged` report carries the actual display limits.
 
 On the HL2 the pan span *is* the DDC sample rate, so `sampleRatesHz` is not a
 list of stream rates that happens to exist alongside a span control: it is every

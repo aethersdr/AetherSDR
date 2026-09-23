@@ -23,6 +23,7 @@ class RtlSdrDdc : public QObject {
     Q_OBJECT
 
 public:
+    static constexpr int kSpectrumBinCount = 2048;
     explicit RtlSdrDdc(QObject* parent = nullptr);
     ~RtlSdrDdc() override;
 
@@ -90,7 +91,7 @@ private:
     std::atomic<int> m_audioPanPercent{50};
 
     // FFT state & rate limiter
-    static constexpr size_t kFftSize = 2048;
+    static constexpr size_t kFftSize = kSpectrumBinCount;
     std::vector<std::complex<float>> m_fftAccumulator;
     std::vector<float> m_fftWindow;
     fftwf_complex* m_fftIn{nullptr};

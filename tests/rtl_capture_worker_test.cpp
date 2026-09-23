@@ -85,11 +85,13 @@ int main(int argc, char** argv)
     {
         std::lock_guard lock(state->mutex); state->holdReadback = true;
     }
-    backend.setPanBandwidth({}, 2'000'000);
+    backend.invokeExtension(QStringLiteral("rtl"), QStringLiteral("sample_rate.set"), 1000, 2'000'000);
     check(waitFor([&] { std::lock_guard lock(state->mutex); return state->inReadback; }), "rate change quiesced");
     check(backend.currentOperatingState().sampleRateHz == 2'400'000,
           "pending rate does not reach OperatingState");
-    for (int i = 0; i < 100; ++i) { backend.setPanBandwidth({}, 1'536'000); }
+    for (int i = 0; i < 100; ++i) {
+        backend.invokeExtension(QStringLiteral("rtl"), QStringLiteral("sample_rate.set"), 1001 + i, 1'536'000);
+    }
     check(rtl::RtlCaptureBackendTestAccess::pending(backend) == 1, "backend pending work stays bounded");
     bool obsoletePublished = false;
     QObject::connect(&backend, &IRadioBackend::operatingStateChanged, [&] {
@@ -142,7 +144,7 @@ int main(int argc, char** argv)
     check(waitFor([&] { return extensionFinished; }), "extension resolved after its own transaction");
 
     state->badReadback = true;
-    backend.setPanBandwidth({}, 2'400'000);
+    backend.invokeExtension(QStringLiteral("rtl"), QStringLiteral("sample_rate.set"), 2000, 2'400'000);
     check(waitFor([&] { return !backend.isConnected(); }), "bad apply and rollback withdraw connection");
     check(probe.violations().isEmpty(), "backend seam signals stay on owner thread");
     QCoreApplication::processEvents();
@@ -215,7 +217,7 @@ int main(int argc, char** argv)
             reentrantCreate = multiple.createSlice({}, 100400000);
         });
         device->badReadback = true;
-        multiple.setPanBandwidth({}, 2000000);
+        multiple.invokeExtension(QStringLiteral("rtl"), QStringLiteral("sample_rate.set"), 3000, 2000000);
         check(waitFor([&] { return !multiple.isConnected(); }), "multi-receiver capture invalidation disconnects");
         check(invalidationObserved && !reentrantCreate,
             "reentrant creation refuses the invalidated capture before disconnect notification");

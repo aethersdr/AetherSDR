@@ -32,6 +32,7 @@
 
 class QVariantAnimation;
 class QSoundEffect;
+class QAction;
 
 #ifdef AETHER_GPU_SPECTRUM
 #include "SpectrumRhiFailureState.h"
@@ -456,6 +457,8 @@ public:
 
     // Access the floating overlay menu (for wiring signals).
     SpectrumOverlayMenu* overlayMenu() const { return m_overlayMenu; }
+    void setCapturePlacementAction(QAction* action);
+    QAction* capturePlacementAction() const;
 
     // Access VFO info widgets (one per slice).
     VfoWidget* vfoWidget() const { return m_vfoWidget; }  // active slice (compat)
@@ -2116,6 +2119,7 @@ private:
 
     // Floating overlay menu (child widget, anchored top-left)
     SpectrumOverlayMenu* m_overlayMenu{nullptr};
+    QPointer<QAction> m_capturePlacementAction;
     // VFO info widgets (one per slice, attached to VFO markers)
     QMap<int, VfoWidget*> m_vfoWidgets;
     VfoWidget* m_vfoWidget{nullptr};  // alias to active slice widget (compat)

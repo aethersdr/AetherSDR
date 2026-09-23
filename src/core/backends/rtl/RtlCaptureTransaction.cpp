@@ -1,6 +1,8 @@
 #include "core/backends/rtl/RtlCaptureTransaction.h"
 
 #include <array>
+#include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace AetherSDR::rtl {
@@ -29,6 +31,49 @@ std::vector<Policy::SliceDescriptor> passbands(const std::vector<T::Receiver>& r
         result.push_back(receiver.passband);
     }
     return result;
+}
+
+bool narrowFm(const T::Receiver& receiver)
+{
+    return receiver.mode == T::Mode::Fm || receiver.mode == T::Mode::Fmn;
+}
+
+Policy::Interval dcExclusion(const T::Receiver& receiver)
+{
+    const auto occupied = Policy::occupiedInterval(receiver.passband);
+    const double carrier = receiver.passband.carrierHz + receiver.passband.translationHz;
+    return {std::min(occupied.interval->lowHz, carrier - T::kDcSeparationHz),
+            std::max(occupied.interval->highHz, carrier + T::kDcSeparationHz)};
+}
+
+std::vector<Policy::CenterDomain> dcClearDomains(const T::State& state)
+{
+    std::vector<Policy::Interval> excluded;
+    for (const T::Receiver& receiver : state.receivers) {
+        if (narrowFm(receiver)) { excluded.push_back(dcExclusion(receiver)); }
+    }
+    std::ranges::sort(excluded, {}, &Policy::Interval::lowHz);
+    double low = 24'000;
+    double high = 1'766'000'000;
+    // Placement alone must not cross the automatic front-end mode boundary.
+    // A tune that already requires crossing it is handled by ordinary selection.
+    if (state.automaticDirectSampling) {
+        if (state.capture.centerHz < 24'000'000) { high = 23'999'999; }
+        else { low = 24'000'000; }
+    }
+    std::vector<Policy::CenterDomain> domains;
+    const auto append = [&domains](double first, double last) {
+        first = std::ceil(first); last = std::floor(last);
+        if (first <= last) { domains.push_back({first, last, 0, 1}); }
+    };
+    for (const Policy::Interval& interval : excluded) {
+        if (interval.highHz <= low || interval.lowHz >= high) { continue; }
+        append(low, std::min(interval.lowHz, high));
+        low = std::max(low, interval.highHz);
+        if (low > high) { break; }
+    }
+    append(low, high);
+    return domains;
 }
 
 bool apply(const T::Hardware& hardware, T::DeviceOperations& device, bool compensate)
@@ -118,6 +163,25 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
                                                  kDomains, m_limits);
     if (!selection.capture) { return {{}, selection.error}; }
     target.capture = *selection.capture;
+    const bool recentered = target.capture.centerHz != desired.hardware.centerHz;
+    const bool hasFm = std::ranges::any_of(target.receivers, narrowFm);
+    if (hasFm && (!m_confirmed || recentered || desired.avoidDc)) {
+        // Preserve an already-clear established capture for an explicit repeat
+        // or a mode entry. A required retune instead leaves useful view room on
+        // both sides of the wanted carrier, rather than pinning it to an edge.
+        if (!m_confirmed || recentered || !dcClear(target)) {
+            const auto domains = dcClearDomains(target);
+            if (domains.empty()) { return {{}, Policy::Error::NoLegalCenter}; }
+            const auto receiver = std::ranges::find_if(target.receivers, narrowFm);
+            auto preferred = target.capture;
+            preferred.centerHz = receiver->passband.carrierHz
+                + receiver->passband.translationHz + target.hardware.sampleRateHz / 4.0;
+            const auto displaced = Policy::selectCenter(preferred, passbands(target.receivers),
+                                                        domains, m_limits);
+            if (!displaced.capture) { return {{}, displaced.error}; }
+            target.capture = *displaced.capture;
+        }
+    }
     target.hardware.centerHz = static_cast<std::uint32_t>(target.capture.centerHz);
     if (desired.automaticDirectSampling) {
         target.hardware.directSampling = target.hardware.centerHz < 24'000'000 ? 2 : 0;
@@ -129,6 +193,19 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
     m_revision = target.token.revision;
     m_pending = std::move(target);
     return {{m_session, m_revision}, Policy::Error::None};
+}
+
+bool RtlCaptureTransaction::dcClear(const State& state)
+{
+    for (const Receiver& receiver : state.receivers) {
+        if (!narrowFm(receiver)) { continue; }
+        if (!Policy::occupiedInterval(receiver.passband).interval) { return false; }
+        const Policy::Interval interval = dcExclusion(receiver);
+        if (state.capture.centerHz > interval.lowHz && state.capture.centerHz < interval.highHz) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::optional<RtlCaptureTransaction::Work> RtlCaptureTransaction::takeWork()

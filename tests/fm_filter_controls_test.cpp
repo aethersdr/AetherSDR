@@ -5,6 +5,7 @@
 #include "core/backends/SliceDelta.h"
 #include "gui/RxApplet.h"
 #include "gui/FilterPassbandWidget.h"
+#include "gui/ReceiveCaptureAction.h"
 #include "gui/VfoWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -28,6 +29,8 @@ namespace {
 class FilterBackend final : public IRadioBackend {
 public:
     RadioCapabilities caps;
+    int captureRequests = 0;
+    QString lastCapturePan;
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return true; }
     ReceiveControlPolicy receiveControlPolicy() const override { return ReceiveControlPolicy::Confirmed; }
@@ -38,6 +41,8 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    bool recenterReceiveCapture(const QString& pan) override
+    { ++captureRequests; lastCapturePan = pan; return true; }
     void setKeying(bool, const TxCoordinator::Operation&,
                    const TxCoordinator::Completion&) override {}
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
@@ -66,6 +71,33 @@ QPushButton* button(QWidget& widget, const QString& text)
 class FmFilterControlsTest : public QObject {
     Q_OBJECT
 private slots:
+    void captureActionUsesLiveCapabilityAndModelIntent()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<FilterBackend>();
+        FilterBackend* source = backend.get();
+        model.setBackendForTest(std::move(backend), QStringLiteral("test"));
+        emit source->panCenterBandwidthChanged(QStringLiteral("0xe1000000"), 100.0, 1.0);
+        ReceiveCaptureAction action(model, [] { return QStringLiteral("0xe1000000"); }, &model);
+        QVERIFY(!action.isEnabled());
+        QVERIFY(!action.statusTip().isEmpty());
+        action.trigger();
+        QCOMPARE(source->captureRequests, 0);
+        source->caps.receiveCapturePlacement = ReceiveCapturePlacement{48'000};
+        // The injection seam wires receiver state only; deliver the same
+        // capability event that setupBackend publishes in a real session.
+        emit model.capabilitiesChanged(true, source->caps);
+        QVERIFY(action.isEnabled());
+        action.trigger();
+        QCOMPARE(source->captureRequests, 1);
+        QCOMPARE(source->lastCapturePan, QStringLiteral("0xe1000000"));
+        source->caps.receiveCapturePlacement.reset();
+        emit model.capabilitiesChanged(true, source->caps);
+        QVERIFY(!action.isEnabled());
+        QVERIFY(!model.requestReceiveCaptureRecenter(QStringLiteral("0xe1000000")));
+        QCOMPARE(source->captureRequests, 1);
+    }
+
     void squelchUsesDeclaredModesAndAbsoluteAutoThreshold()
     {
         RadioModel model;

@@ -91,6 +91,53 @@ remain unsquelched; changing into one confirms squelch Off. No RF test or
 calibration is implied by these offline semantics. The scale, presets and FM
 recipe remain subject to maintainer review under RFC #5468.
 
+## Capture placement and display geometry
+
+FM/FM-N establishment and necessary capture recentering prefer a hardware
+center one quarter of the capture rate above the first FM carrier. The existing
+receiver NCO translates the unchanged absolute RF to baseband. Placement must
+fit every receiver's full passband and guards and keep converter DC at least
+48 kHz from each FM carrier (or outside its guarded passband, whichever is
+wider). Legal integer-Hz tuner bounds and the automatic 24 MHz direct-sampling
+boundary constrain this preference. No legal whole-set placement means refusal,
+with no receiver or capture changes. This does not enable librtlsdr offset
+tuning, alter the R82xx guard, erase FFT bins, subtract a signal mean, or notch
+demodulated audio. WFM and other legacy demodulators do not gain this policy.
+
+Ordinary in-window frequency changes keep the existing legal capture, including
+when the operator tunes near converter DC. A transition into overlap produces
+an existing configuration warning. The spectrum context menu's **Move capture
+away from DC** action explicitly requests a whole-set placement while preserving
+every absolute receiver RF. It is dimmed with an accessible reason unless the
+backend declares support. A busy or impossible request refuses. Radio Health
+reports accepted capture center/rate, usable RF edges, FM DC-clear status and
+the last request outcome. This is geometry and converter-relative evidence,
+not a measurement of a physical dongle's DC bias or calibrated RF power.
+
+RTL pan and zoom are independent display operations: they crop contiguous
+original bins from the 2048-point capture FFT and clamp to its usable interval.
+The sixteen-bin zoom floor is 18.75 kHz at 2.4 MS/s; neither interpolation nor
+additional resolution is claimed. Display operations cannot change sample rate,
+hardware center, receiver RF or squelch detection. An offscreen receiver keeps
+receiving while its full passband remains captured. The existing explicit
+`rtl/sample_rate.set` extension remains the hardware sample-rate control.
+
+The neutral confirmed-tune intent admits receiver RF and Preserve/Reveal/Center
+display intent together. Typed entry requests centering; publication waits for
+DSP/capture adoption. Refusal, supersession, failed hardware application and
+rollback preserve accepted receiver and view observations. Centering is quantized
+to real bins and clamped when the full visible span cannot center on the target.
+Other backends retain their existing policy. These desktop verbs add no headless
+control grant. The placement preference, separation, zoom floor and explicit
+action are scoped UX choices requiring maintainer ratification.
+
+Synthetic DC regression compares clean and biased eight-bit IQ through the
+production RF extractor and WDSP FM channel at quarter-rate and both minimum
+separation edges, including low modulation index, bias steps and arbitrary
+callback chunks. Centered biased IQ and blind mean subtraction are negative
+controls. This is offline DSP evidence; actual hardware convergence remains
+a separate authorized receive test.
+
 ## Accepted-state persistence
 
 RadioModel supplies its settings scope and reported-serial identity through a

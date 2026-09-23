@@ -211,6 +211,70 @@ int main()
         result.actual->capture.generation++;
         check(tx.complete(result) == T::Completion::Invalidated, "mismatched capture generation never publishes");
     }
+    // A new FM capture places converter DC away from the wanted RF carrier.
+    // Removing capture displacement must fail without changing any DSP samples.
+    for (const T::Mode mode : {T::Mode::Fm, T::Mode::Fmn}) {
+        T tx({8, 4}); Device usb; tx.beginSession();
+        auto next = desired();
+        next.receivers = {{{3, 100'000'000, -8000, 8000, 0, 3000, 3000}, mode}};
+        check(bool(tx.submit(next)), "initial narrow FM capture admitted");
+        auto job = tx.takeWork();
+        check(job && job->target.hardware.centerHz == 100'600'000,
+              "initial FM capture prefers quarter-rate displacement");
+        if (!job) { continue; }
+        check(job->target.receivers == next.receivers,
+              "DC avoidance preserves absolute RF, passband, and stable identity");
+        check(job->target.hardware.offsetTuning == 0,
+              "DC avoidance does not enable librtlsdr offset tuning");
+        check(tx.complete(T::execute(*job, usb)) == T::Completion::Published,
+              "displaced capture waits for verified readback");
+        const int before = usb.writes;
+        next.hardware = tx.confirmed()->hardware;
+        next.receivers[0].passband.carrierHz = 100'600'000;
+        check(bool(tx.submit(next)), "ordinary in-window move remains available near DC");
+        job = tx.takeWork();
+        check(job && !job->hardwareChanged,
+              "ordinary in-window move never secretly relocates capture");
+        if (job) {
+            tx.complete(T::execute(*job, usb));
+            check(usb.writes == before, "in-window move preserves USB configuration");
+        }
+    }
+    {
+        T tx({8, 4}); Device usb; tx.beginSession();
+        auto next = desired(); next.hardware.sampleRateHz = 225'001;
+        check(bool(tx.submit(next)), "small legacy capture admitted");
+        auto job = tx.takeWork(); tx.complete(T::execute(*job, usb));
+        next.receivers = {
+            {{0, 99'960'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm},
+            {{3, 100'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fmn},
+            {{7, 100'040'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
+        // Fixed-capture restore may retain an overlapping receiver. Placement
+        // cannot pretend the same crowded set has a DC-clear legal center.
+        check(bool(tx.submit(next)), "complete restored receiver set fits existing capture");
+        job = tx.takeWork(); tx.complete(T::execute(*job, usb));
+        const auto before = *tx.confirmed(); const int writesBefore = usb.writes;
+        check(!T::dcClear(before), "DC overlap is reported for crowded receiver set");
+        next.avoidDc = true;
+        check(!tx.submit(next) && !tx.takeWork(), "impossible DC-clear whole set is refused");
+        check(tx.confirmed()->hardware == before.hardware
+            && tx.confirmed()->receivers == before.receivers && usb.writes == writesBefore,
+              "DC refusal preserves every sibling passband and USB state");
+    }
+    for (const double carrier : {24'000.0, 23'990'000.0, 1'765'950'000.0}) {
+        T tx({8, 1}); Device usb; tx.beginSession();
+        auto next = desired(); next.hardware.centerHz = static_cast<std::uint32_t>(carrier);
+        next.receivers = {{{3, carrier, -8000, 8000, 0, 3000, 3000}, T::Mode::Fmn}};
+        check(bool(tx.submit(next)), "DC placement finds a legal band-edge alternative");
+        auto job = tx.takeWork();
+        check(job && T::dcClear(job->target), "band-edge alternative is DC-clear");
+        if (!job) { continue; }
+        check(job->target.hardware.centerHz >= 24'000 && job->target.hardware.centerHz <= 1'766'000'000,
+              "band-edge alternative remains within hardware tuning limits");
+        check((job->target.hardware.directSampling != 0) == (carrier < 24'000'000),
+              "DC placement does not switch automatic front-end mode across 24 MHz");
+        check(job->target.receivers == next.receivers, "band-edge placement never rewrites RF or filters");
+    }
     std::fprintf(stderr, "rtl_capture_transaction_test: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

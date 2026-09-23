@@ -37,6 +37,8 @@ public:
         Hardware hardware;
         std::vector<Receiver> receivers;
         bool automaticDirectSampling = true;
+        // One-shot operator/mode-entry intent. Display pan/zoom never sets it.
+        bool avoidDc = false;
     };
     struct Token {
         std::uint64_t session = 0;
@@ -94,6 +96,10 @@ public:
     // complete() validates the session/revision on the backend thread. A failed
     // apply restores and verifies the ENTIRE previous hardware configuration.
     static Result execute(const Work& work, DeviceOperations& device);
+    // Two 48 kHz extraction Nyquist widths separate an FM carrier from the
+    // converter's DC. This is capture placement, not an IQ/DC subtraction.
+    static constexpr double kDcSeparationHz = 48'000;
+    static bool dcClear(const State& state);
 
 private:
     SharedCapturePolicy::ReceiverLimits m_limits;

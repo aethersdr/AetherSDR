@@ -6154,6 +6154,32 @@ QString describePanWrites(const AetherSDR::PanWrites& writes)
 
 } // namespace
 
+bool RadioModel::confirmsReceiveControls() const
+{
+    return m_backend && m_backend->receiveControlPolicy() == ReceiveControlPolicy::Confirmed;
+}
+
+bool RadioModel::requestConfirmedReceiveTune(int sliceId, double mhz, IRadioBackend::ReceiveTuneView view)
+{
+    if (QThread::currentThread() != thread() || !confirmsReceiveControls() || !isConnected()
+        || !std::isfinite(mhz)) { return false; }
+    const auto* receiver = slice(sliceId);
+    if (!receiver || receiver->isLocked() || !sliceMayBelongToUs(sliceId)
+        || !receiveControlPanId(receiver->panId())) { return false; }
+    const auto control = backendCapabilities().sliceFrequencyControl;
+    if (control.authority == SliceFrequencyControl::Authority::Unknown
+        || mhz * 1e6 < control.minimumHz || mhz * 1e6 > control.maximumHz) { return false; }
+    return m_backend->requestReceiveTune(sliceId, mhz * 1e6, view);
+}
+
+bool RadioModel::requestReceiveCaptureRecenter(const QString& panId)
+{
+    if (QThread::currentThread() != thread() || !isConnected() || !m_backend
+        || !backendCapabilities().receiveCapturePlacement) { return false; }
+    const auto backendPan = receiveControlPanId(panId);
+    return backendPan && m_backend->recenterReceiveCapture(*backendPan);
+}
+
 bool RadioModel::requestPanCenter(const QString& panId,
                                   double centerMhz,
                                   double bandwidthMhz,

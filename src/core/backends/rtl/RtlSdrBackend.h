@@ -6,6 +6,7 @@
 #include <QSet>
 #include "core/backends/rtl/RtlCaptureTransaction.h"
 #include "core/backends/rtl/RtlReceivePipeline.h"
+#include "core/backends/rtl/RtlViewport.h"
 
 #include <QObject>
 #include <QHash>
@@ -59,6 +60,8 @@ public:
     bool createSlice(const QString& panId, double frequencyHz) override;
     bool removeSlice(int sliceId) override;
     void setSliceFrequency(int sliceId, double hz) override;
+    bool requestReceiveTune(int sliceId, double hz, ReceiveTuneView view) override;
+    bool recenterReceiveCapture(const QString& panId) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
@@ -124,6 +127,9 @@ private:
     QVector<RtlSliceSettings::Slice> acceptedSettings() const;
     void finishExtensions(bool success, RtlCaptureTransaction::Token token = {});
     bool acceptsFrame(quint64 session, quint64 revision) const;
+    void requestViewport();
+    void publishViewport();
+    QByteArray viewportFrame(const QByteArray& frame) const;
 
 
     // ---- State ----
@@ -146,6 +152,11 @@ private:
     // Pan & Hardware state — default to 95.2 MHz
     double m_panCenterHz{95'200'000.0};
     uint32_t m_sampleRateHz{2'400'000};
+    std::optional<RtlViewport> m_viewport;
+    double m_viewCenterRequestHz = 0;
+    double m_viewSpanRequestHz = 0;
+    RtlCaptureTransaction::Token m_pendingViewport;
+    QString m_captureStatus;
     int m_panRfGainDb{kDefaultRfGainDb};
     int m_ppmCorrection{0};
     int m_directSampling{0};

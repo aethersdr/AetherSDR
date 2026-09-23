@@ -8222,6 +8222,16 @@ void SpectrumWidget::setSliceOverlayAdaptiveActive(int sliceId, bool active)
     markOverlayDirty();
 }
 
+void SpectrumWidget::setCapturePlacementAction(QAction* action)
+{
+    m_capturePlacementAction = action;
+}
+
+QAction* SpectrumWidget::capturePlacementAction() const
+{
+    return m_capturePlacementAction.data();
+}
+
 void SpectrumWidget::setCenterLockSliceId(int sliceId)
 {
     if (m_centerLockSliceId == sliceId) {
@@ -10250,6 +10260,9 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         }
 
         if (hitTnf < 0) {
+            if (m_capturePlacementAction) {
+                menu.addAction(m_capturePlacementAction);
+            }
             addCenterLockControls(menu);
             addSliceLinkControls(menu);
 

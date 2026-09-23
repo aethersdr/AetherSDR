@@ -1098,6 +1098,9 @@ public:
                           IRadioBackend::PanCenterIntent intent =
                               IRadioBackend::PanCenterIntent::Range);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
+    bool confirmsReceiveControls() const;
+    bool requestConfirmedReceiveTune(int sliceId, double mhz, IRadioBackend::ReceiveTuneView view);
+    bool requestReceiveCaptureRecenter(const QString& panId);
     // The operator's Display→FFT FPS / Display→Waterfall Rate intent.
     //
     // On a Flex these are radio settings and this sends the wire text, exactly

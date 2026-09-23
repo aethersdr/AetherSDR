@@ -476,8 +476,9 @@ void productionCapabilityContracts()
     rtl::RtlSdrBackend rtl;
     const auto rtlCaps = rtl.capabilities();
     check(rtlCaps.receiveModeControl && rtlCaps.receiveFilterControl && rtlCaps.receiveAudioControl
-        && !rtlCaps.receivePanCenterControl && rtlCaps.receivePanBandwidthControl,
-        "RTL exposes implemented FM filter/mixer/bandwidth controls, not a retuning center");
+        && rtlCaps.receivePanCenterControl && rtlCaps.receivePanBandwidthControl
+        && rtlCaps.panSpanModel && !rtlCaps.panSpanModel->followsSampleRate,
+        "RTL exposes independent display center/span alongside implemented FM filter and mixer controls");
     check(rtlCaps.receiveFilterControl && rtlCaps.receiveFilterControl->modes.size() == 2
         && rtlCaps.receiveFilterControl->modes[0].mode == QStringLiteral("FM")
         && rtlCaps.receiveFilterControl->modes[1].mode == QStringLiteral("FMN")
