@@ -1,19 +1,23 @@
 // Contour ShuttleXpress / ShuttlePro v2 report decoding (#5927), including
-// several edges in one report.
+// several edges in one report, and the shuttle ring (#5928): its position
+// decoding and the rate integrator that turns a held position into steps.
 //
 // The ShuttleXpress byte sequences are real captures from a ShuttleXpress
 // (VID 0B33 / PID 0020) read with hid_read() on Windows 11. The ShuttlePro v2
 // layout is inferred from them (the Xpress uses the Pro's button 5-9 bits).
 
 #include "core/HidDeviceParser.h"
+#include "core/ShuttleRateIntegrator.h"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
 using AetherSDR::HidEvent;
 using AetherSDR::ShuttleProV2Parser;
+using AetherSDR::ShuttleRateIntegrator;
 using AetherSDR::ShuttleXpressParser;
 
 namespace {
@@ -189,6 +193,138 @@ void testSimultaneousEdges()
     }
 }
 
+// Ring position from byte 0, from the captured sweep 0 -> +7 -> 0 -> -7.
+void testShuttlePosition()
+{
+    ShuttleXpressParser p;
+    report("Shuttle: no ring before the first report", p.hasShuttle() && p.shuttlePosition() == 0);
+
+    bool ok = true;
+    for (int pos = -7; pos <= 7; ++pos) {
+        p.parse(Report{static_cast<uint8_t>(static_cast<int8_t>(pos)), 0xc8, 0x00, 0x00, 0x00}.data(), 5);
+        ok = ok && p.shuttlePosition() == pos;
+    }
+    report("Shuttle: 0xf9..0x07 decode as -7..+7", ok);
+
+    p.parse(Report{0x7f, 0xc8, 0x00, 0x00, 0x00}.data(), 5);
+    const bool clampHigh = p.shuttlePosition() == 7;
+    p.parse(Report{0x80, 0xc8, 0x00, 0x00, 0x00}.data(), 5);
+    report("Shuttle: out-of-range byte clamps to +/-7", clampHigh && p.shuttlePosition() == -7);
+
+    // The ring keeps its position when a button changes in the same report.
+    p.parse(Report{0x03, 0xc8, 0x00, 0x20, 0x00}.data(), 5);
+    report("Shuttle: position survives a simultaneous button edge", p.shuttlePosition() == 3);
+
+    ShuttleProV2Parser pro;
+    pro.parse(Report{0xfd, 0x10, 0x00, 0x00, 0x00}.data(), 5);
+    report("Shuttle: ShuttlePro v2 decodes the ring too", pro.hasShuttle() && pro.shuttlePosition() == -3);
+}
+
+// Integrate one second of 40 ms ticks at a fixed position.
+int stepsInOneSecond(ShuttleRateIntegrator& r, int stepHz, double speed = 1.0,
+                     double maxRate = 1e9)
+{
+    int total = 0;
+    for (int i = 0; i < 25; ++i)
+        total += r.tick(0.040, stepHz, speed, maxRate);
+    return total;
+}
+
+void testRateIntegrator()
+{
+    // Every new deflection held for 60 ms applies one step (the jog-like
+    // response), so the per-second counts below include that one step.
+    {
+        ShuttleRateIntegrator r;
+        r.setPosition(1);
+        const int t1 = r.tick(0.040, 10, 1.0, 1e9);
+        const int t2 = r.tick(0.040, 10, 1.0, 1e9);
+        report("Rate: leaving centre steps once held 60 ms (second 40 ms tick)",
+               t1 == 0 && t2 == 1);
+    }
+    {
+        // Measured release: the spring overshoots through -1/-2 for 30-35 ms.
+        ShuttleRateIntegrator r;
+        r.setPosition(-1);
+        const int overshoot = r.tick(0.035, 10, 1.0, 1e9);
+        r.setPosition(0);
+        report("Rate: 35 ms snap-back overshoot never steps backwards",
+               overshoot == 0 && r.tick(0.040, 10, 1.0, 1e9) == 0);
+    }
+    {
+        // The rate is in Hz/s: full deflection moves ~100 kHz per second at
+        // any step size (the review point on #5928).
+        ShuttleRateIntegrator r10, r1k;
+        r10.setPosition(7);
+        r1k.setPosition(7);
+        const int s10 = stepsInOneSecond(r10, 10) - 1;
+        const int s1k = stepsInOneSecond(r1k, 1000) - 1;
+        report("Rate: +7 is ~100 kHz/s at a 10 Hz step",
+               std::abs(s10 * 10 - 100'000) <= 10);
+        report("Rate: +7 is ~100 kHz/s at a 1 kHz step",
+               std::abs(s1k * 1000 - 100'000) <= 1000);
+    }
+    {
+        // Slow creep: 20 Hz/s at a 10 Hz step is 2 steps per second, carried
+        // across ticks rather than lost as a fraction every 40 ms.
+        ShuttleRateIntegrator r;
+        r.setPosition(1);
+        report("Rate: +1 creeps 2 steps/s at a 10 Hz step (remainder carried)",
+               stepsInOneSecond(r, 10) == 1 + 2);
+    }
+    {
+        // With a large step the (|pos| + 1) steps/s floor keeps the first
+        // detents moving and distinct instead of taking tens of seconds.
+        ShuttleRateIntegrator r1, r2;
+        r1.setPosition(1);
+        r2.setPosition(2);
+        report("Rate: 1 kHz step, +1 still moves 2 steps/s",
+               stepsInOneSecond(r1, 1000) == 1 + 2);
+        report("Rate: 1 kHz step, +2 moves faster than +1 (3 steps/s)",
+               stepsInOneSecond(r2, 1000) == 1 + 3);
+    }
+    {
+        ShuttleRateIntegrator r;
+        r.setPosition(-4);
+        report("Rate: negative position tunes down",
+               stepsInOneSecond(r, 100) == -(1 + 20));   // 2 kHz/s at 100 Hz
+    }
+    {
+        ShuttleRateIntegrator r;
+        r.setPosition(7);
+        report("Rate: Slow/Fast multiplier and the max-rate cap",
+               stepsInOneSecond(r, 10, 2.0, 1000.0) == 1 + 100);   // capped at 1 kHz/s
+    }
+    {
+        // Moving further out on the same side is not a new deflection.
+        ShuttleRateIntegrator r;
+        r.setPosition(2);
+        r.tick(0.080, 10, 1.0, 1e9);     // first step + 8 Hz carried
+        r.setPosition(3);
+        report("Rate: 2 -> 3 on the same side does not add a first step",
+               r.tick(0.040, 10, 1.0, 1e9) == 2);   // 8 + 20 Hz = 2 steps
+    }
+    {
+        // A remainder built up in one direction must not leak into the other.
+        ShuttleRateIntegrator r;
+        r.setPosition(1);
+        r.tick(0.080, 10, 1.0, 1e9);     // first step, 1.6 Hz carried
+        r.setPosition(-1);
+        int total = 0;
+        for (int i = 0; i < 12; ++i)     // first step, then 12 * 0.8 Hz < one step
+            total += r.tick(0.040, 10, 1.0, 1e9);
+        report("Rate: reversal drops the remainder", total == -1);
+    }
+    {
+        ShuttleRateIntegrator r;
+        r.setPosition(3);
+        r.setPosition(0);
+        report("Rate: centred ring produces nothing", r.tick(0.040, 10, 1.0, 1e9) == 0);
+        r.setPosition(5);
+        report("Rate: bad step size produces nothing", r.tick(0.040, 0, 1.0, 1e9) == 0);
+    }
+}
+
 } // namespace
 
 int main()
@@ -198,6 +334,8 @@ int main()
     testXpressJogAndRing();
     testProButtons();
     testSimultaneousEdges();
+    testShuttlePosition();
+    testRateIntegrator();
 
     if (g_failed) {
         std::printf("%d check(s) failed\n", g_failed);

@@ -2828,7 +2828,8 @@ if(HIDAPI_FOUND)
         src/core/HidDeviceParser.cpp
         src/core/HidDeviceParser.h
         src/core/Ctr2HidapiPort.cpp
-        src/core/Ctr2HidapiPort.h)
+        src/core/Ctr2HidapiPort.h
+        src/core/ShuttleRateIntegrator.h)
     target_sources(AetherSDR PRIVATE
         src/gui/RC28MappingDialog.cpp
         src/gui/RC28MappingDialog.h)
