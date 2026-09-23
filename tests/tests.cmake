@@ -3876,6 +3876,12 @@ target_link_libraries(automation_cell_test PRIVATE aethercore Qt6::Widgets)
 add_test(NAME automation_cell_test COMMAND automation_cell_test)
 set_tests_properties(automation_cell_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(automation_menu_lookup_test tests/automation_menu_lookup_test.cpp)
+target_include_directories(automation_menu_lookup_test PRIVATE src tests)
+target_link_libraries(automation_menu_lookup_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME automation_menu_lookup_test COMMAND automation_menu_lookup_test)
+set_tests_properties(automation_menu_lookup_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(automation_gauge_verb_test
     tests/automation_gauge_verb_test.cpp
     # HGauge.h's hover popup is header-inline and calls into this.
@@ -6571,6 +6577,7 @@ endforeach()
 set(AETHER_AUTOMATION_SERVER_TESTS
     anan_noise_blanker_readback_test
     automation_cell_test
+    automation_menu_lookup_test
     automation_gauge_verb_test
     automation_persist_diagnostics_test
     automation_server_gesture_test
