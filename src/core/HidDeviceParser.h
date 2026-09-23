@@ -31,6 +31,12 @@ public:
     // report can carry several edges (e.g. two buttons changing together)
     // while parse() keeps returning a single event. Default: none.
     virtual HidEvent nextPending() { return {}; }
+    // Spring-return shuttle ring (Contour devices, #5928). The position is
+    // state rather than an event: it is updated by every parse() and read by
+    // the caller after draining events, so it is never lost to the one-event
+    // contract above.
+    virtual bool hasShuttle() const { return false; }
+    virtual int shuttlePosition() const { return 0; }  // -7..+7, 0 = centred
     // ⚠ KEEP THIS <= 64. It is not just a description of the device: it is
     // passed straight to hid_read() as the length bound on a write into
     // HidEncoderManager::m_buf, which is a fixed uint8_t[64]. A parser that
@@ -85,6 +91,8 @@ public:
     HidEvent parse(const uint8_t* buf, size_t len) override;
     HidEvent nextPending() override;
     size_t reportSize() const override { return 5; }
+    bool hasShuttle() const override { return true; }
+    int shuttlePosition() const override { return m_shuttle; }
 protected:
     // Buttons packed into bits 0..buttonCount()-1 (1-based button = bit + 1).
     virtual uint16_t buttonMask(const uint8_t* buf) const = 0;
@@ -97,6 +105,7 @@ private:
     uint16_t m_prevButtons{0};
     uint8_t m_prevJog{0};
     bool m_firstReport{true};
+    int m_shuttle{0};
 };
 
 // Contour ShuttleXpress (VID 0x0B33, PID 0x0020)

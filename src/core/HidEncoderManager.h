@@ -73,6 +73,13 @@ public:
     static QString rc28MappingField(const QString& field, const QString& dflt);
     static void setRc28MappingField(const QString& field, const QString& value);
 
+    // Contour shuttle ring settings, same single-JSON-key pattern under
+    // "ShuttleMapping" (Principle V, #5928). Fields: action
+    // (WheelFrequency / WheelRit / WheelXit / None), speed (Slow / Normal /
+    // Fast). Direction follows the shared HidEncoderInvertDir flag.
+    static QString shuttleMappingField(const QString& field, const QString& dflt);
+    static void setShuttleMappingField(const QString& field, const QString& value);
+
     // Active-low LED byte constant for setRC28Leds(). updateRC28Leds() in
     // MainWindow builds the full byte bitwise; RC28_LEDS_OFF is the reset value.
     static constexpr uint8_t RC28_LEDS_OFF = 0x0F;  // all LEDs off
@@ -137,6 +144,10 @@ signals:
     void tuneSteps(int encoderIndex, int steps);
     void buttonPressed(int button, int action);
     void connectionChanged(bool connected, const QString& deviceName);
+    // Contour shuttle ring position, -7..+7 (0 = released), with the invert
+    // flag applied. Emitted on change only; always returns to 0 before the
+    // device is closed, so a deflected ring can never leave the radio tuning.
+    void shuttleChanged(int position);
     // Emitted when open() finds more than one device with the same VID/PID.
     // The device is not opened; hotplug will retry until only one remains.
     void multipleDevicesDetected(const QString& deviceName);
@@ -170,6 +181,9 @@ private:
     std::atomic<uint16_t> m_openVid{0};
     std::atomic<uint16_t> m_openPid{0};
     bool m_invertDirection{false};
+    // Last emitted shuttleChanged() value. Held here, not in the parser,
+    // because close() destroys the parser but must still emit the return to 0.
+    int m_lastShuttle{0};
 
     // Persistent LCDVector state for TMate 2 (44 bytes).  All output functions
     // modify this buffer then send the full 64-byte report so that backlight,
