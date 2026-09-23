@@ -1077,6 +1077,8 @@ public:
     // deferred or could not be dispatched. Callers that also advance view
     // state optimistically must gate that on the return value, or they will
     // re-create the black-waterfall divergence.
+    // A Confirmed receive backend returns false for dispatch: its later
+    // geometry report drives the model and view after capture adoption.
     //
     // THE INTENT IS THE CALLER'S TO STATE, not something to infer here. On a
     // backend whose scope window is slaved to the VFO (every networked Icom)
@@ -1964,10 +1966,10 @@ private:
     quint64 m_backendReceiverGeneration = 0;
     std::function<bool(const QString&, ResponseCallback)> m_sliceLifecycleCommandSinkForTest;
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
-    // Connect a slice's operator-issued AUDIO and TX-slice intents to the
-    // backend seam. Must be called from EVERY site that constructs a
-    // SliceModel — see the definition for why that is not a style preference.
-    void wireSliceAudioIntentsToBackend(SliceModel* s);
+    // Connect operator-issued geometry, audio and TX-slice intents to the
+    // backend seam and select its receive publication policy. Called at every
+    // SliceModel construction site — see the definition for why.
+    void wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThroughBackend = false);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend

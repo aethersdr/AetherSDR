@@ -3,6 +3,7 @@
 #include "core/DtcsCodes.h"
 #include "core/KiwiSdrProtocol.h"
 #include <QDebug>
+#include <QThread>
 
 #include <cmath>
 
@@ -113,8 +114,14 @@ bool SliceModel::normalizeFilterPolarity()
 
 void SliceModel::setFrequency(double mhz)
 {
+    if (QThread::currentThread() != thread()) { return; }
     if (m_locked) {
         notifyTuneBlockedByLock();
+        return;
+    }
+    if (confirmsControls()) {
+        // Even the observed value is an intent: it can cancel a pending tune.
+        emit frequencyCommandIssued(mhz);
         return;
     }
     if (qFuzzyCompare(m_frequency, mhz)) return;
@@ -128,8 +135,14 @@ void SliceModel::setFrequency(double mhz)
 
 void SliceModel::tuneAndRecenter(double mhz)
 {
+    if (QThread::currentThread() != thread()) { return; }
     if (m_locked) {
         notifyTuneBlockedByLock();
+        return;
+    }
+    if (confirmsControls()) {
+        // Even the observed value is an intent: it can cancel a pending tune.
+        emit frequencyCommandIssued(mhz);
         return;
     }
     if (qFuzzyCompare(m_frequency, mhz)) return;
@@ -143,6 +156,11 @@ void SliceModel::tuneAndRecenter(double mhz)
 
 void SliceModel::setMode(const QString& mode)
 {
+    if (QThread::currentThread() != thread()) { return; }
+    if (confirmsControls()) {
+        emit modeChangeRequested(mode);
+        return;
+    }
     const std::optional<DigitalVoiceModeId> requestedMode =
         DigitalVoiceModeRegistry::modeForRadioMode(mode);
     if (m_mode == mode) {
@@ -212,6 +230,12 @@ void SliceModel::setMode(const QString& mode)
 
 void SliceModel::setFilterWidth(int low, int high)
 {
+    if (QThread::currentThread() != thread()) { return; }
+    if (confirmsControls()) {
+        ++m_userFilterEpoch;
+        emit filterCommandIssued(low, high);
+        return;
+    }
     m_filterLow  = low;
     m_filterHigh = high;
     // Boundary defense (#3434): client-side callers can replay values captured
@@ -303,6 +327,11 @@ void SliceModel::setAdaptiveActive(bool on)
 
 void SliceModel::applyAdaptiveFilter(int low, int high)
 {
+    if (QThread::currentThread() != thread()) { return; }
+    if (confirmsControls()) {
+        emit filterCommandIssued(low, high);
+        return;
+    }
     // Identical wire effect to setFilterWidth() — the radio stays
     // authoritative and we never persist the edges. Kept as a separate entry
     // point so the engine can distinguish its own writes from a user's
@@ -948,6 +977,8 @@ void SliceModel::setFmDeviation(int hz)
 
 void SliceModel::setAudioGain(float gain)
 {
+    if (QThread::currentThread() != thread()) { return; }
+    if (confirmsControls() && !std::isfinite(gain)) { return; }
     gain = qBound(0.0f, gain, 100.0f);
     if (m_externalReceiveAudioReplacement) {
         if (m_externalReceiveAudioGain == gain) {
@@ -958,6 +989,10 @@ void SliceModel::setAudioGain(float gain)
         return;
     }
 
+    if (confirmsControls()) {
+        emit audioGainCommandIssued(static_cast<int>(gain));
+        return;
+    }
     if (m_audioGain == gain) return;
     m_audioGain = gain;
     emit commandReady(QString("slice set %1 audio_level=%2")
@@ -976,6 +1011,7 @@ void SliceModel::setRfGain(float gain)
 
 void SliceModel::setAudioMute(bool mute)
 {
+    if (QThread::currentThread() != thread()) { return; }
     const bool previousVisibleMute = audioMute();
     if (m_externalReceiveAudioReplacement) {
         if (m_externalReceiveAudioMute == mute) {
@@ -988,6 +1024,10 @@ void SliceModel::setAudioMute(bool mute)
         return;
     }
 
+    if (confirmsControls()) {
+        emit audioMuteCommandIssued(mute);
+        return;
+    }
     if (m_audioMute == mute) return;
     m_audioMute = mute;
     sendCommand(QString("slice set %1 audio_mute=%2").arg(m_id).arg(mute ? 1 : 0));
@@ -1141,6 +1181,7 @@ void SliceModel::setEscPhaseShift(float deg)
 
 void SliceModel::setAudioPan(int pan)
 {
+    if (QThread::currentThread() != thread()) { return; }
     pan = qBound(0, pan, 100);
     if (m_externalReceiveAudioReplacement) {
         if (m_externalReceiveAudioPan == pan) {
@@ -1151,6 +1192,10 @@ void SliceModel::setAudioPan(int pan)
         return;
     }
 
+    if (confirmsControls()) {
+        emit audioPanCommandIssued(pan);
+        return;
+    }
     if (m_audioPan == pan) return;
     m_audioPan = pan;
     sendCommand(QString("slice set %1 audio_pan=%2").arg(m_id).arg(pan));
@@ -1289,7 +1334,7 @@ void SliceModel::applyChanges(const SliceDelta& d)
         // normalizeFilterPolarity()'s mirror preserves both edges (#3434).
         m_filterLow  = *d.filterLow;
         m_filterHigh = *d.filterHigh;
-        normalizeFilterPolarity();
+        if (!confirmsControls()) { normalizeFilterPolarity(); }
         filterChanged_ = true;
     } else if (d.filterLow.has_value() || d.filterHigh.has_value()) {
         // One edge without the other. The stored form can legitimately differ
@@ -1303,9 +1348,9 @@ void SliceModel::applyChanges(const SliceDelta& d)
         // mirror exactly, so it is a strict generalization.
         const bool haveLo = d.filterLow.has_value();
         const int v = haveLo ? *d.filterLow : *d.filterHigh;
-        const bool wrongForm =
-            (filterPolarityLsbFamily(m_mode) && v > 0)
-            || (filterPolarityUsbFamily(m_mode) && v < 0);
+        const bool wrongForm = !confirmsControls()
+            && ((filterPolarityLsbFamily(m_mode) && v > 0)
+                || (filterPolarityUsbFamily(m_mode) && v < 0));
         if (wrongForm) {
             if (haveLo) {
                 m_filterHigh = -v;
@@ -1320,7 +1365,7 @@ void SliceModel::applyChanges(const SliceDelta& d)
             }
         }
         filterChanged_ = true;
-    } else if (modeChanged_) {
+    } else if (modeChanged_ && !confirmsControls()) {
         // Mode changed with NO filter keys in the same delta (a second client
         // flipping FDVU→FDVL mid-session — the reporter's MultiFlex setup).
         // The stored polarity may now be wrong for the new mode; the mirror is

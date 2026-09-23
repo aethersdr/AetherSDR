@@ -1337,6 +1337,13 @@ target_link_libraries(rtl_rf_extractor_test PRIVATE Qt6::Core)
 add_test(NAME rtl_rf_extractor_test COMMAND rtl_rf_extractor_test)
 
 if(AETHER_BACKEND_RTL)
+    # Real model/worker; injected USB and generated callbacks, no socket peer.
+    add_executable(rtl_model_acceptance_test tests/rtl_model_acceptance_test.cpp)
+    target_include_directories(rtl_model_acceptance_test PRIVATE src tests)
+    target_link_libraries(rtl_model_acceptance_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_model_acceptance_test COMMAND rtl_model_acceptance_test)
+    set_tests_properties(rtl_model_acceptance_test PROPERTIES TIMEOUT 60)
+
     # Inject the C API into the private adapter; no USB, sockets or driver load.
     add_executable(rtl_usb_controls_test tests/rtl_usb_controls_test.cpp
         src/core/backends/rtl/RtlCaptureTransaction.cpp src/core/SharedCapturePolicy.cpp)
@@ -6506,6 +6513,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
     rtl_runtime_settings_test
+    rtl_model_acceptance_test
     automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test

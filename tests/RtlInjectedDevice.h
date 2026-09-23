@@ -17,6 +17,7 @@ struct DeviceState {
     int blocks = 0;
     std::atomic<int> starts{0}, cancels{0}, writes{0}, callbacks{0};
     std::atomic<bool> badReadback{false};
+    std::atomic<int> failWriteAt{0};
     std::atomic<bool> destroyed{false};
     T::Hardware hardware;
     void releaseReadback()
@@ -34,7 +35,8 @@ public:
     ~InjectedDevice() override { m_state->destroyed = true; }
     bool set(T::Control control, std::int64_t value) override
     {
-        ++m_state->writes;
+        const int write = ++m_state->writes;
+        if (write == m_state->failWriteAt.load()) { return false; }
         switch (control) {
         case T::Control::DirectSampling: m_state->hardware.directSampling = int(value); break;
         case T::Control::SampleRate: m_state->hardware.sampleRateHz = std::uint32_t(value); break;

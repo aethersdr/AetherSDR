@@ -42,6 +42,7 @@ public:
 
     // Demodulates in-process (DDC); there is no VITA-49 stream.
     bool ownsRxAudio() const override { return true; }
+    ReceiveControlPolicy receiveControlPolicy() const override { return ReceiveControlPolicy::Confirmed; }
 
     // RTL-SDR has no radio-side memory; the client owns frequency, mode,
     // passband, gain, PPM, etc.
@@ -99,6 +100,7 @@ public:
     static constexpr int kQualifiedReceiverCapacity = 1;
 
 private:
+    bool hasAcceptedSlice(int sliceId) const;
     // Emit the initial snapshot a freshly-connected device would report.
     void emitInitialState();
 

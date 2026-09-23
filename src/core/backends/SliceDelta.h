@@ -8,6 +8,11 @@
 
 namespace AetherSDR {
 
+// Desktop setter publication contract. Confirmed backends own both requested
+// state and asynchronous adoption; only their slice/pan reports are live.
+// Existing backends retain their historical optimistic setter behavior.
+enum class ReceiveControlPolicy { Optimistic, Confirmed };
+
 // Normalized, vendor-neutral slice-status delta (aetherd RFC 2.3 — SliceModel
 // touchpoint). A backend populates only the fields the wire reported
 // (std::optional engaged == "present"); SliceModel::applyChanges applies exactly

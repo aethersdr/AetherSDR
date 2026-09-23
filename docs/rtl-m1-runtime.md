@@ -102,10 +102,34 @@ planning. Native Mac/Linux/Windows RTL-on/off builds, ASan/UBSan, instrumented-Q
 TSan, affected A-series tests and real receive convergence are distinct evidence.
 Linux ARM needs representative native hardware; macOS ARM is not a substitute.
 
-The shared model's accepted-intent routing also depends on PR #5919. This
-implementation adds only the neutral persistence handoff there; it does not copy
-that PR's pending routing changes. Refresh and integrate the dependency before
-claiming end-to-end model acceptance or release readiness.
+The shared model opts into `IRadioBackend::receiveControlPolicy()` for RTL.
+`Confirmed` keeps slice frequency, mode, filter and monitor gain/pan/mute at the
+last backend observation until capture/DSP adoption publishes a new report.
+Pan center and bandwidth likewise wait for the backend geometry report; a
+dispatch returns false to gesture callers so they cannot advance the view on
+that basis. Other backends retain their existing optimistic policy by default.
+This policy grants no capabilities and adds no duplicate requested-state store.
+
+Control routing checks the current model object's identity and connected
+backend, and RTL admits controls only for published stable receiver IDs. A
+pending new member, staged/disconnected object or retired object whose numeric
+ID was reused cannot address a live replacement. Returning a control to its
+observed value still supersedes an earlier pending request. Accepted filter
+edges are applied exactly rather than normalized again by SliceModel.
+
+The injected full-model regression covers sparse ID 3 at production admission
+one, pending/refused/superseded requests, compensation failure, persistence,
+pan geometry, reentrant edits, foreign-thread refusal and object/ID reuse. It
+uses the real model, backend and worker with an injected USB device, without
+opening hardware or sockets. Multiple membership is admitted only by its test
+fixture; it does not raise production admission.
+
+This implementation is local to this PR and does not import PR #5919 or its
+stack. Reconciliation with that routing work remains a later integration task:
+typed dispatch alone is not acknowledgment, and every adapter must preserve
+sparse stable IDs. The new publication-policy seam, settings hooks/domain and
+FM passband transition still need explicit maintainer ratification. Offline
+model acceptance does not establish live receive convergence or release readiness.
 
 
 ### Runtime diagnostic readback
@@ -122,9 +146,8 @@ repair through the existing transaction owner before any receiver processing.
 
 These counters do not measure callback p99/max, USB control latency, RF extractor
 group delay, or the frozen 1/2/4-receiver hardware workload. Those qualification
-gates remain open. The shared-model dependency also needs an explicit deferred
-acceptance contract: #5919's typed dispatch is not acknowledgment, and its RTL
-audio adapter must preserve sparse stable receiver IDs during integration.
+gates remain open. The model publication contract above must survive later
+integration with other receive-control routing changes.
 
 ### Driver-specific prerequisites
 

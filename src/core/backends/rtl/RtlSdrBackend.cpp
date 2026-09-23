@@ -503,9 +503,17 @@ bool RtlSdrBackend::removeSlice(int sliceId)
     return count != 0 && requestCapture(desired);
 }
 
+bool RtlSdrBackend::hasAcceptedSlice(int sliceId) const
+{
+    return m_connected && m_capture.confirmed() && m_lastPublished
+        && std::ranges::any_of(m_lastPublished->receivers, [sliceId](const auto& receiver) {
+            return receiver.passband.stableId == sliceId;
+        });
+}
+
 void RtlSdrBackend::setSliceFrequency(int sliceId, double hz)
 {
-    if (!m_connected || !std::isfinite(hz)) { return; }
+    if (!hasAcceptedSlice(sliceId) || !std::isfinite(hz)) { return; }
     auto desired = m_requested;
     const auto receiver = std::ranges::find_if(desired.receivers, [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end()) { return; }
@@ -517,7 +525,7 @@ void RtlSdrBackend::setSliceFrequency(int sliceId, double hz)
 void RtlSdrBackend::setSliceMode(int sliceId, const QString& mode)
 {
     const QString canonical = mode.trimmed().toUpper();
-    if (!m_connected || !isKnownMode(canonical)) { return; }
+    if (!hasAcceptedSlice(sliceId) || !isKnownMode(canonical)) { return; }
     auto desired = m_requested;
     const auto receiver = std::ranges::find_if(desired.receivers, [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end()) { return; }
@@ -539,7 +547,7 @@ void RtlSdrBackend::setSliceMode(int sliceId, const QString& mode)
 
 void RtlSdrBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 {
-    if (!m_connected || lowHz >= highHz || lowHz < -100'000 || highHz > 100'000) { return; }
+    if (!hasAcceptedSlice(sliceId) || lowHz >= highHz || lowHz < -100'000 || highHz > 100'000) { return; }
     auto desired = m_requested;
     const auto receiver = std::ranges::find_if(desired.receivers, [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end()) { return; }
@@ -605,7 +613,7 @@ void RtlSdrBackend::updateMonitor(int sliceId)
 }
 void RtlSdrBackend::setSliceAudioMute(int sliceId, bool mute)
 {
-    if (!m_connected) { return; }
+    if (!hasAcceptedSlice(sliceId)) { return; }
     auto desired = m_requested;
     const auto receiver = std::ranges::find_if(desired.receivers, [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end()) { return; }
@@ -613,7 +621,7 @@ void RtlSdrBackend::setSliceAudioMute(int sliceId, bool mute)
 }
 void RtlSdrBackend::setSliceAudioGain(int sliceId, int gainPercent)
 {
-    if (!m_connected) { return; }
+    if (!hasAcceptedSlice(sliceId)) { return; }
     auto desired = m_requested;
     const auto receiver = std::ranges::find_if(desired.receivers, [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end()) { return; }
@@ -621,7 +629,7 @@ void RtlSdrBackend::setSliceAudioGain(int sliceId, int gainPercent)
 }
 void RtlSdrBackend::setSliceAudioPan(int sliceId, int panPercent)
 {
-    if (!m_connected) { return; }
+    if (!hasAcceptedSlice(sliceId)) { return; }
     auto desired = m_requested;
     const auto receiver = std::ranges::find_if(desired.receivers, [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end()) { return; }

@@ -275,6 +275,12 @@ public:
 
     // ---- intents DOWN: canonical core-profile verbs (grow per burndown) ----
     // The backend translates each to its vendor wire protocol.
+    // Opt-in for slice frequency/mode/filter, monitor gain/pan/mute and pan
+    // center/bandwidth. Dispatch is never acknowledgment: Confirmed backends
+    // publish accepted values through sliceChanged/panCenterBandwidthChanged,
+    // including after deferred DSP adoption. Refusal/rollback leaves the last
+    // observation intact. This does not grant any capability.
+    virtual ReceiveControlPolicy receiveControlPolicy() const { return ReceiveControlPolicy::Optimistic; }
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;

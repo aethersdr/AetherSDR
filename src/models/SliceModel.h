@@ -563,6 +563,10 @@ public:
     static bool filterCarrierStraddlingFamily(const QString& mode);
 
 private:
+    friend class RadioModel;
+    void setControlPolicy(ReceiveControlPolicy policy) { m_controlPolicy = policy; }
+    bool confirmsControls() const { return m_controlPolicy == ReceiveControlPolicy::Confirmed; }
+    ReceiveControlPolicy m_controlPolicy = ReceiveControlPolicy::Optimistic;
     // Sign-guarded, idempotent (lo,hi)→(-hi,-lo) mirror of the stored filter
     // when its polarity is wrong for m_mode; true if it changed anything.
     bool normalizeFilterPolarity();
