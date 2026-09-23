@@ -601,16 +601,22 @@ void HidEncoderManager::poll()
         }
         if (res == 0) break;  // no more data
 
-        auto event = m_parser->parse(m_buf, static_cast<size_t>(res));
-        switch (event.type) {
-        case HidEvent::Rotate:
-            emit tuneSteps(event.encoderIndex, m_invertDirection ? -event.steps : event.steps);
-            break;
-        case HidEvent::Button:
-            emit buttonPressed(event.button, event.action);
-            break;
-        case HidEvent::None:
-            break;
+        // One report can carry several events (e.g. two Contour buttons
+        // changing together): parse() returns the first, nextPending() the
+        // rest, in report order.
+        for (auto event = m_parser->parse(m_buf, static_cast<size_t>(res));
+             event.type != HidEvent::None;
+             event = m_parser->nextPending()) {
+            switch (event.type) {
+            case HidEvent::Rotate:
+                emit tuneSteps(event.encoderIndex, m_invertDirection ? -event.steps : event.steps);
+                break;
+            case HidEvent::Button:
+                emit buttonPressed(event.button, event.action);
+                break;
+            case HidEvent::None:
+                break;
+            }
         }
     }
 }

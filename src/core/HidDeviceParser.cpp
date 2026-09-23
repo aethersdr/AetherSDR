@@ -112,92 +112,64 @@ HidEvent GriffinPowerMateParser::parse(const uint8_t* buf, size_t len)
     return {};
 }
 
-// ── Contour ShuttleXpress ───────────────────────────────────────────────────
+// ── Contour ShuttleXpress / ShuttlePro v2 ───────────────────────────────────
 // 5-byte reports. Byte 0 = shuttle position (signed, -7..+7).
 // Byte 1 = jog counter (wrapping uint8). Byte 2 unused.
-// The 5 buttons sit at the ShuttlePro v2 button 5-9 positions: byte 3
-// bits 4-7 = buttons 1-4, byte 4 bit 0 = button 5 (verified by capture, #5927).
+// Byte 3 = ShuttlePro v2 buttons 1-8, byte 4 bits 0-6 = buttons 9-15.
+// The ShuttleXpress uses the Pro's button 5-9 positions: byte 3 bits 4-7 =
+// buttons 1-4, byte 4 bit 0 = button 5 (verified by capture, #5927; the Pro
+// layout is inferred from it).
 
-HidEvent ShuttleXpressParser::parse(const uint8_t* buf, size_t len)
+HidEvent ContourShuttleParser::parse(const uint8_t* buf, size_t len)
 {
+    m_pendingHead = 0;
+    m_pendingCount = 0;
+
     // Need all 5 bytes: m_buf is reused across reads, so a short report
     // would otherwise leave a stale buf[4] from the previous one.
     if (len < 5) return {};
 
-    uint8_t jog = buf[1];
-    // Pack into bits 0-4 so the scan below reports buttons 1-5.
-    uint8_t btns = static_cast<uint8_t>((buf[3] >> 4) | ((buf[4] & 0x01) << 4));
-
-    // Buttons
-    if (btns != m_prevButtons) {
-        for (int b = 0; b < 5; ++b) {
-            uint8_t mask = 1 << b;
-            if ((btns & mask) != (m_prevButtons & mask)) {
-                m_prevButtons = btns;
-                return {HidEvent::Button, 0, b + 1, (btns & mask) ? 0 : 1};
-            }
-        }
-        m_prevButtons = btns;
+    // Queue every button edge, not just the first: two buttons changing in
+    // one report must both be reported, or a release can be lost and leave
+    // a button logically held.
+    const uint16_t btns = buttonMask(buf);
+    const uint16_t changed = static_cast<uint16_t>(btns ^ m_prevButtons);
+    for (int b = 0; b < buttonCount(); ++b) {
+        const uint16_t mask = static_cast<uint16_t>(1u << b);
+        if (changed & mask)
+            m_pending[m_pendingCount++] = {HidEvent::Button, 0, b + 1, (btns & mask) ? 0 : 1};
     }
+    m_prevButtons = btns;
 
-    // Jog wheel (relative, wrapping)
+    // Jog wheel (relative, wrapping). The first report only primes it.
+    const uint8_t jog = buf[1];
     if (m_firstReport) {
         m_firstReport = false;
-        m_prevJog = jog;
-        return {};
-    }
-
-    if (jog != m_prevJog) {
+    } else if (jog != m_prevJog) {
         int delta = static_cast<int>(jog) - static_cast<int>(m_prevJog);
         if (delta > 128) delta -= 256;
         if (delta < -128) delta += 256;
-        m_prevJog = jog;
-        return {HidEvent::Rotate, delta, 0, 0};
+        m_pending[m_pendingCount++] = {HidEvent::Rotate, delta, 0, 0};
     }
+    m_prevJog = jog;
 
-    return {};
+    return nextPending();
 }
 
-// ── Contour ShuttlePro v2 ──────────────────────────────────────────────────
-// Same layout as ShuttleXpress, 15 buttons: byte 3 = buttons 1-8,
-// byte 4 bits 0-6 = buttons 9-15 (inferred from the ShuttleXpress capture
-// in #5927, which uses the button 5-9 positions of this layout).
-
-HidEvent ShuttleProV2Parser::parse(const uint8_t* buf, size_t len)
+HidEvent ContourShuttleParser::nextPending()
 {
-    if (len < 5) return {};
+    if (m_pendingHead >= m_pendingCount) return {};
+    return m_pending[m_pendingHead++];
+}
 
-    uint8_t jog = buf[1];
-    uint16_t btns = static_cast<uint16_t>(buf[3] | (buf[4] << 8));
+uint16_t ShuttleXpressParser::buttonMask(const uint8_t* buf) const
+{
+    return static_cast<uint16_t>((buf[3] >> 4) | ((buf[4] & 0x01) << 4));
+}
 
-    // Buttons
-    if (btns != m_prevButtons) {
-        for (int b = 0; b < 15; ++b) {
-            uint16_t mask = 1 << b;
-            if ((btns & mask) != (m_prevButtons & mask)) {
-                m_prevButtons = btns;
-                return {HidEvent::Button, 0, b + 1, (btns & mask) ? 0 : 1};
-            }
-        }
-        m_prevButtons = btns;
-    }
-
-    // Jog wheel
-    if (m_firstReport) {
-        m_firstReport = false;
-        m_prevJog = jog;
-        return {};
-    }
-
-    if (jog != m_prevJog) {
-        int delta = static_cast<int>(jog) - static_cast<int>(m_prevJog);
-        if (delta > 128) delta -= 256;
-        if (delta < -128) delta += 256;
-        m_prevJog = jog;
-        return {HidEvent::Rotate, delta, 0, 0};
-    }
-
-    return {};
+uint16_t ShuttleProV2Parser::buttonMask(const uint8_t* buf) const
+{
+    return static_cast<uint16_t>(buf[3] | ((buf[4] & 0x7F) << 8));
 }
 
 // ── Elgato StreamDeck+ ─────────────────────────────────────────────────────
