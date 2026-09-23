@@ -114,14 +114,19 @@ HidEvent GriffinPowerMateParser::parse(const uint8_t* buf, size_t len)
 
 // ── Contour ShuttleXpress ───────────────────────────────────────────────────
 // 5-byte reports. Byte 0 = shuttle position (signed, -7..+7).
-// Byte 1 = jog counter (wrapping uint8). Bytes 2-3 = button bitmask (5 btns).
+// Byte 1 = jog counter (wrapping uint8). Byte 2 unused.
+// The 5 buttons sit at the ShuttlePro v2 button 5-9 positions: byte 3
+// bits 4-7 = buttons 1-4, byte 4 bit 0 = button 5 (verified by capture, #5927).
 
 HidEvent ShuttleXpressParser::parse(const uint8_t* buf, size_t len)
 {
-    if (len < 4) return {};
+    // Need all 5 bytes: m_buf is reused across reads, so a short report
+    // would otherwise leave a stale buf[4] from the previous one.
+    if (len < 5) return {};
 
     uint8_t jog = buf[1];
-    uint8_t btns = buf[3];
+    // Pack into bits 0-4 so the scan below reports buttons 1-5.
+    uint8_t btns = static_cast<uint8_t>((buf[3] >> 4) | ((buf[4] & 0x01) << 4));
 
     // Buttons
     if (btns != m_prevButtons) {
@@ -154,14 +159,16 @@ HidEvent ShuttleXpressParser::parse(const uint8_t* buf, size_t len)
 }
 
 // ── Contour ShuttlePro v2 ──────────────────────────────────────────────────
-// Same layout as ShuttleXpress but 15 buttons across bytes 2-3.
+// Same layout as ShuttleXpress, 15 buttons: byte 3 = buttons 1-8,
+// byte 4 bits 0-6 = buttons 9-15 (inferred from the ShuttleXpress capture
+// in #5927, which uses the button 5-9 positions of this layout).
 
 HidEvent ShuttleProV2Parser::parse(const uint8_t* buf, size_t len)
 {
-    if (len < 4) return {};
+    if (len < 5) return {};
 
     uint8_t jog = buf[1];
-    uint16_t btns = static_cast<uint16_t>(buf[3] << 8 | buf[2]);
+    uint16_t btns = static_cast<uint16_t>(buf[3] | (buf[4] << 8));
 
     // Buttons
     if (btns != m_prevButtons) {
