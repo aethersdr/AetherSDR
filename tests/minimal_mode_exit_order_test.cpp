@@ -43,6 +43,11 @@ void report(const char* name, bool ok, const std::string& detail = {})
         ++g_failed;
 }
 
+void report(const std::string& name, bool ok, const std::string& detail = {})
+{
+    report(name.c_str(), ok, detail);
+}
+
 std::string sizeText(const QSize& s)
 {
     return std::to_string(s.width()) + "x" + std::to_string(s.height());
@@ -170,6 +175,72 @@ void checkQtPremises()
     }
 }
 
+// Comments are not code. A plain indexOf accepts a DISABLED statement: comment
+// out the production `sw->hide();` and a raw text search still finds it, so the
+// order checks below pass while the gate no longer holds anything back. Review
+// of #5916 (Ozy311) demonstrated exactly that, with mutated source fixtures.
+QByteArray codeOnly(const QByteArray& src)
+{
+    QByteArray out;
+    out.reserve(src.size());
+    enum { Code, Line, Block } st = Code;
+    for (qsizetype i = 0; i < src.size(); ++i) {
+        const char c = src[i];
+        const char n = (i + 1 < src.size()) ? src[i + 1] : '\0';
+        if (st == Code && c == '/' && n == '/') { st = Line; ++i; continue; }
+        if (st == Code && c == '/' && n == '*') { st = Block; ++i; continue; }
+        if (st == Line && c == '\n') { st = Code; out.append(c); continue; }
+        if (st == Block && c == '*' && n == '/') { st = Code; ++i; continue; }
+        if (st == Code)
+            out.append(c);
+    }
+    return out;
+}
+
+// The order the exit must keep, as a predicate, so the same rules can be run
+// against deliberately broken copies of the source below.
+bool exitOrderHolds(const QByteArray& branchSource, std::string* why = nullptr)
+{
+    const QByteArray b = codeOnly(branchSource);
+    auto at = [&b](const char* needle) { return b.indexOf(needle); };
+    const qsizetype hold = at("sw->hide();");
+    const qsizetype splitterShow = at("m_splitter->show();");
+    const qsizetype firstResize = at("setFixedWidth(QWIDGETSIZE_MAX);");
+    const qsizetype reanchor = at("reanchorCustomFrameGeometry(geom);");
+    const qsizetype deferred = at("QTimer::singleShot(0, this, [this, heldSpectra]");
+    const qsizetype release = at("sw->show();");
+    const qsizetype resume = at("setUpdatesEnabled(true)");
+    const qsizetype canvas = at("toggleWorkspaceCanvas(true)");
+    const qsizetype explicitHide = at("WA_WState_ExplicitShowHide");
+
+    struct Rule { const char* name; bool ok; };
+    const Rule rules[] = {
+        {"spectra held before the splitter is shown", hold >= 0 && splitterShow > hold},
+        {"held before the first geometry step", firstResize > splitterShow},
+        {"the whole splitter is not hidden (empty-window flash)", at("m_splitter->hide()") < 0},
+        {"released in a deferred turn after the re-anchor",
+         reanchor > firstResize && deferred > reanchor && release > deferred},
+        {"rendering resumes inside that deferred turn", resume > deferred},
+        // QRhiWidget draws its first frame from the resize the show delivers; a
+        // render-to-texture widget shown with updates still off drops that frame
+        // and does not repaint on a later update() (the spectrum stayed blank on
+        // Linux until something grabbed it). Offscreen has no QRhi, so the order
+        // is pinned here rather than exercised.
+        {"rendering resumes BEFORE the held spectra are shown", release > resume},
+        {"the deferred show is queued before the canvas re-entry", canvas > release},
+        {"a never-shown spectrum is not treated as explicitly hidden",
+         explicitHide >= 0 && explicitHide < hold},
+    };
+    for (const Rule& r : rules) {
+        if (!r.ok) {
+            if (why)
+                *why = r.name;
+            return false;
+        }
+    }
+    return true;
+}
+
 void checkMainWindowOrder()
 {
     QFile source(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow.cpp"));
@@ -182,37 +253,37 @@ void checkMainWindowOrder()
     report("toggleMinimalMode exit branch located",
            fn >= 0 && exitStart > fn && exitEnd > exitStart);
     const QByteArray exitBranch = text.mid(exitStart, exitEnd - exitStart);
-    auto at = [&exitBranch](const char* needle) { return exitBranch.indexOf(needle); };
 
-    const qsizetype hold = at("sw->hide();");
-    const qsizetype splitterShow = at("m_splitter->show();");
-    const qsizetype firstResize = at("setFixedWidth(QWIDGETSIZE_MAX);");
-    const qsizetype reanchor = at("reanchorCustomFrameGeometry(geom);");
-    const qsizetype deferred = at("QTimer::singleShot(0, this, [this, heldSpectra]");
-    const qsizetype release = at("sw->show();");
-    const qsizetype resume = at("setUpdatesEnabled(true)");
-    const qsizetype canvas = at("toggleWorkspaceCanvas(true)");
+    std::string why;
+    report("the exit branch keeps the order the fix depends on",
+           exitOrderHolds(exitBranch, &why), why.empty() ? "" : "first broken rule: " + why);
 
-    report("spectra are held before the splitter is shown",
-           hold >= 0 && splitterShow > hold);
-    report("...and before the first geometry step of the exit",
-           firstResize > splitterShow);
-    report("the whole splitter is not hidden on exit (empty-window flash)",
-           at("m_splitter->hide()") < 0);
-    report("spectra are released in a deferred turn after the re-anchor",
-           reanchor > firstResize && deferred > reanchor && release > deferred);
-    report("rendering resumes only inside that deferred turn",
-           resume > deferred);
-    // QRhiWidget draws its first frame from the resize the show delivers; a
-    // render-to-texture widget shown with updates still off drops that frame
-    // and does not repaint on a later update() (the spectrum stayed blank on
-    // Linux until grabbed). Offscreen has no QRhi, so this is pinned here.
-    report("rendering resumes before the held spectra are shown",
-           resume > deferred && release > resume);
-    report("the deferred show is queued before the canvas re-entry",
-           canvas > release);
-    report("a never-shown spectrum is not treated as explicitly hidden",
-           at("WA_WState_ExplicitShowHide") >= 0 && at("WA_WState_ExplicitShowHide") < hold);
+    // Mutation: the checks must REJECT a branch whose production statements have
+    // been commented out. Without codeOnly() every one of these still passed.
+    struct Mutant { const char* what; QByteArray from, to; };
+    const Mutant mutants[] = {
+        {"sw->hide() commented out", "sw->hide();", "// sw->hide();"},
+        {"sw->show() commented out", "sw->show();", "// sw->show();"},
+        {"the deferred turn commented out",
+         "QTimer::singleShot(0, this, [this, heldSpectra]",
+         "// QTimer::singleShot(0, this, [this, heldSpectra]"},
+    };
+    for (const Mutant& m : mutants) {
+        QByteArray broken = exitBranch;
+        const qsizetype where = broken.indexOf(m.from);
+        if (where < 0) {
+            report(std::string("mutation setup: ") + m.what, false, "statement not found");
+            continue;
+        }
+        broken.replace(where, m.from.size(), m.to);
+        std::string ignored;
+        report(std::string("rejected: ") + m.what, !exitOrderHolds(broken, &ignored));
+    }
+
+    // And the comment stripper itself, since everything above now rests on it.
+    report("codeOnly drops // and /* */ but keeps the code",
+           codeOnly("a(); // b();\nc(); /* d(); */ e();").simplified() == QByteArray("a(); c(); e();"),
+           codeOnly("a(); // b();\nc(); /* d(); */ e();").simplified().toStdString());
 }
 
 } // namespace
