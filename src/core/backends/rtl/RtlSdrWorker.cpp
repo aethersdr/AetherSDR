@@ -2,66 +2,18 @@
 
 #include <QDebug>
 #include <QElapsedTimer>
-#include <rtl-sdr.h>
+#include "core/backends/rtl/RtlSdrUsbDevice.h"
 #include <aether_wdsp.h>
 
 namespace AetherSDR::rtl {
 namespace {
 constexpr std::uint32_t kRtlBufLength = 16384;
-constexpr std::uint32_t kRtlBufNum = 15;
 using T = RtlCaptureTransaction;
 
-class UsbDevice final : public RtlSdrWorker::Device {
-public:
-    explicit UsbDevice(rtlsdr_dev_t* device) : m_device(device) {}
-    ~UsbDevice() override { if (m_device) { rtlsdr_close(m_device); } }
-    bool set(T::Control control, std::int64_t value) override
-    {
-        if (!m_device) { return false; }
-        // Several librtlsdr versions return -2 for unchanged PPM or unsupported
-        // offset tuning, even when disabled. Skip only a matching readable
-        // value; the transaction still verifies the complete final readback.
-        switch (control) {
-        case T::Control::DirectSampling:
-            return rtlsdr_get_direct_sampling(m_device) == value
-                || rtlsdr_set_direct_sampling(m_device, static_cast<int>(value)) == 0;
-        case T::Control::SampleRate:
-            return rtlsdr_set_sample_rate(m_device, static_cast<std::uint32_t>(value)) == 0;
-        case T::Control::Ppm:
-            return rtlsdr_get_freq_correction(m_device) == value
-                || rtlsdr_set_freq_correction(m_device, static_cast<int>(value)) == 0;
-        case T::Control::OffsetTuning:
-            return rtlsdr_get_offset_tuning(m_device) == value
-                || rtlsdr_set_offset_tuning(m_device, static_cast<int>(value)) == 0;
-        case T::Control::Center:
-            return rtlsdr_set_center_freq(m_device, static_cast<std::uint32_t>(value)) == 0;
-        case T::Control::Gain:
-            return rtlsdr_set_tuner_gain_mode(m_device, 1) == 0
-                && rtlsdr_set_tuner_gain(m_device, static_cast<int>(value)) == 0
-                && rtlsdr_set_agc_mode(m_device, 0) == 0;
-        }
-        return false;
-    }
-    std::optional<T::Hardware> read() override
-    {
-        if (!m_device) { return {}; }
-        return T::Hardware{rtlsdr_get_center_freq(m_device), rtlsdr_get_sample_rate(m_device),
-            rtlsdr_get_direct_sampling(m_device), rtlsdr_get_offset_tuning(m_device),
-            rtlsdr_get_freq_correction(m_device), rtlsdr_get_tuner_gain(m_device)};
-    }
-    bool resetBuffer() override { return m_device && rtlsdr_reset_buffer(m_device) == 0; }
-    int readAsync(Callback callback, void* context) override
-    {
-        return rtlsdr_read_async(m_device, callback, context, kRtlBufNum, kRtlBufLength);
-    }
-    void cancelAsync() override { if (m_device) { rtlsdr_cancel_async(m_device); } }
-private:
-    rtlsdr_dev_t* m_device;
-};
 } // namespace
 
 RtlSdrWorker::RtlSdrWorker(struct rtlsdr_dev* dev, QObject* parent, std::size_t capacity)
-    : RtlSdrWorker(std::make_unique<UsbDevice>(dev), parent, capacity)
+    : RtlSdrWorker(std::make_unique<RtlSdrUsbDevice>(dev), parent, capacity)
 {
 }
 

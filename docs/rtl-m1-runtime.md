@@ -125,3 +125,38 @@ group delay, or the frozen 1/2/4-receiver hardware workload. Those qualification
 gates remain open. The shared-model dependency also needs an explicit deferred
 acceptance contract: #5919's typed dispatch is not acknowledgment, and its RTL
 audio adapter must preserve sparse stable receiver IDs during integration.
+
+### Driver-specific prerequisites
+
+The control audit compared [upstream librtlsdr at 797f8143](https://github.com/osmocom/rtl-sdr/blob/797f8143266d983c56d8f35d2d442527529dd8a5/src/librtlsdr.c)
+with [RTL-SDR Blog at aed0ea19 (V1.4.0)](https://github.com/rtlsdrblog/rtl-sdr-blog/blob/aed0ea19f3a273370a13c9009b96313c75d54c7b/src/librtlsdr.c).
+Mac and Nobara's audited libraries were built from that clean Blog source;
+the Windows DLL hash matched the vendor's V1.4.0 release archive. This is a
+statement about those build artifacts, not every installed RTL library.
+
+Both sources reject offset tuning on R820T/R828D with `-2`, but Blog first
+toggles bias-tee GPIO. Its offset getter still reads the tuning offset, not
+antenna power. The private USB adapter therefore refuses R82xx offset changes
+before calling the setter. A matching disabled offset remains a no-op; it does
+not prove bias tee is off. Failed offset requests preserve accepted capture
+state through the existing transaction compensation path. Supported tuners keep
+normal offset control; actual I/O errors and direct-sampling conflicts remain
+refusals. The socket-free adapter regression covers these distinct cases.
+
+Before an authorized hardware run, record the loaded library path/hash/source,
+tuner and dongle variant, and the operator's known bias-tee/EEPROM configuration.
+Blog's forced-bias EEPROM option can enable antenna DC during device open and
+ignore an off request. Do not open a device to discover that setting, use offset
+tuning as a bias-tee probe, or interpret offset readback as a DC measurement.
+No EEPROM, GPIO, driver or bias-tee changes are part of offline qualification.
+
+Blog mode `0` also permits automatic Q direct sampling below 24 MHz for R820T
+(excluding its recognized Blog V4L variant); R828D does not take that path.
+Its direct-sampling getter reports the current path, not the remembered mode.
+M1 currently selects Q sampling below 24 MHz independent of tuner identity.
+Thus V4/upconverter HF selection and manual mode-0 behavior need an explicit
+device-specific policy/qualification decision before claiming support. Do not
+weaken exact transaction readback to accept a mismatched sampling path. The
+source probes used stubbed low-level I/O, and the adapter tests used injected C
+calls: neither reproduces a reported user's hardware/driver problem nor qualifies
+live reception. Production admission remains one.

@@ -1337,6 +1337,15 @@ target_link_libraries(rtl_rf_extractor_test PRIVATE Qt6::Core)
 add_test(NAME rtl_rf_extractor_test COMMAND rtl_rf_extractor_test)
 
 if(AETHER_BACKEND_RTL)
+    # Inject the C API into the private adapter; no USB, sockets or driver load.
+    add_executable(rtl_usb_controls_test tests/rtl_usb_controls_test.cpp
+        src/core/backends/rtl/RtlCaptureTransaction.cpp src/core/SharedCapturePolicy.cpp)
+    target_include_directories(rtl_usb_controls_test PRIVATE src
+        $<TARGET_PROPERTY:${RTLSDR_TARGET},INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:${RTL_FFTW3F_TARGET},INTERFACE_INCLUDE_DIRECTORIES>)
+    target_link_libraries(rtl_usb_controls_test PRIVATE Qt6::Core)
+    add_test(NAME rtl_usb_controls_test COMMAND rtl_usb_controls_test)
+
     add_executable(rtl_runtime_settings_test tests/rtl_runtime_settings_test.cpp)
     target_include_directories(rtl_runtime_settings_test PRIVATE src tests)
     target_link_libraries(rtl_runtime_settings_test PRIVATE aethercore Qt6::Core)
