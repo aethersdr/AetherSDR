@@ -57,16 +57,20 @@ public:
     // N = 8 at 25 fps spans ~320 ms of wall clock sampled once every 40 ms,
     // not 8 back-to-back transforms. Moving the fps cap changes the time
     // constant without changing this number — a constraint on whatever
-    // slider mapping RFC #5782 q1 settles on, not a defect here.
+    // step-to-depth mapping the setPanAverage() wiring chooses, not a defect
+    // here.
     //
-    // NOTHING CALLS THIS YET, DELIBERATELY. The operator-facing control is a
-    // 0..100 slider, and the mapping from that number to an integration depth
-    // is a behaviour decision RFC #5782 has not ruled on (q1), as is the seam
-    // that would carry it down (q2) and whether this accumulator should be
-    // shared with the ANAN and RTL families in src/core/dsp/ (q3). #5794 is
-    // the part of that work which is invariant under all three rulings, and
-    // this signature is in FRAMES precisely so it is not mistaken for the
-    // operator's number.
+    // NOTHING CALLS THIS YET, DELIBERATELY. RFC #5782 has since ruled the seam
+    // (q2): IRadioBackend::setPanAverage() carries the operator's 0..100 FFT
+    // AVG, and what one step means is the backend's call. Wiring HL2 to it is
+    // that PR's work, and it owes three things: the step-to-depth mapping;
+    // what setPanWeightedAverage() means here (on ANAN it selects WDSP's
+    // log-recursive mode, so HL2 either offers a dB-domain blend behind it or
+    // says it ignores it); and engaging RadioCapabilities::backendPanAveraging
+    // IN THE SAME CHANGE, so SpectrumWidget's own EMA does not stack on this
+    // one. Whether this accumulator moves to src/core/dsp/ (q3) is that PR's
+    // call too. This signature is in FRAMES precisely so it is not mistaken
+    // for the operator's number.
     //
     // Changing the depth DROPS the accumulated state: an exponential state
     // built at one alpha does not mean anything at another, and carrying it
