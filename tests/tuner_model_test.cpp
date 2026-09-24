@@ -10,6 +10,20 @@
 #include <QSignalSpy>
 #include <cstdio>
 
+namespace AetherSDR {
+// Transport injection: the session is marked live and frames go straight to
+// the frame handler, so no socket and no stand-in tuner are involved.
+class TgxlConnectionTestAccess {
+public:
+    static void markConnected(TgxlConnection& c)
+    {
+        c.m_connected = true;
+        emit c.connected();
+    }
+    static void feed(TgxlConnection& c, const QString& line) { c.processLine(line); }
+};
+}  // namespace AetherSDR
+
 using namespace AetherSDR;
 
 static int g_failures = 0;
@@ -232,6 +246,51 @@ int main(int argc, char** argv)
 
         t.abortTune();                       // the press that used to key TX
         CHECK(at.count() == 0);
+    }
+
+    // ---- the relayed `tuning` yields to the direct one ----
+    // The radio relays the tuner's state at its own pace and trails it: on
+    // one measured tune (TGXL fw 1.2.39) the relay reported tuning=1 for
+    // 4.4 s against the tuner's own 3.8 s. With both writing the flag the
+    // tune ended 0→1→0 — STOP on an idle tuner, where pressing it sends
+    // `autotune` and starts a tune. While the tuner reports itself, the
+    // relay's copy is a late echo.
+    {
+        TunerModel t;
+        t.setHandle("0x3000");
+        TgxlConnection direct;
+        t.setDirectConnection(&direct);
+        TgxlConnectionTestAccess::markConnected(direct);
+        CHECK(t.hasDirectConnection());
+        QSignalSpy tuning(&t, &TunerModel::tuningChanged);
+
+        TgxlConnectionTestAccess::feed(direct, QStringLiteral(
+            "S0|state antA=0 state=1 tuning=1 bypass=0 relayC1=0 relayL=0 relayC2=0"));
+        CHECK(t.isTuning() && tuning.count() == 1);
+        TgxlConnectionTestAccess::feed(direct, QStringLiteral(
+            "S0|state antA=0 state=1 tuning=0 bypass=0 relayC1=16 relayL=4 relayC2=0"));
+        CHECK(!t.isTuning() && tuning.count() == 2);
+
+        TunerDelta lateRelay; lateRelay.tuning = true;
+        t.applyChanges(lateRelay);
+        // abortTune() is gated on this flag; on the direct path it sends
+        // `autotune` over the socket, so the flag is the thing to pin.
+        CHECK(!t.isTuning());
+        CHECK(tuning.count() == 2);
+    }
+
+    // ---- a repeated result is a new notice, not a duplicate ----
+    // The applet takes its banner down by itself (a tune starting, a lost
+    // clear), so two tunes settling on the same SWR must both reach it.
+    {
+        TunerModel t;
+        TgxlConnection direct;
+        t.setDirectConnection(&direct);
+        TgxlConnectionTestAccess::markConnected(direct);
+        QSignalSpy alerts(&t, &TunerModel::alertChanged);
+        TgxlConnectionTestAccess::feed(direct, QStringLiteral("M|Tuned SWR: 1.01:1"));
+        TgxlConnectionTestAccess::feed(direct, QStringLiteral("M|Tuned SWR: 1.01:1"));
+        CHECK(alerts.count() == 2);
     }
 
     if (g_failures == 0) {

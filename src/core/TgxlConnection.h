@@ -89,6 +89,10 @@ private slots:
     void pollStatus();
 
 private:
+    // Socket-free transport injection for unit tests (AGENTS.md, test-layer
+    // boundary): marks the session live and feeds frames to processLine().
+    friend class TgxlConnectionTestAccess;
+
     void applyPollRateFor(const QMap<QString, QString>& kvs);
     void processLine(const QString& line);
 

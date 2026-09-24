@@ -66,10 +66,12 @@ void TunerModel::applyChanges(const TunerDelta& d)
         changed = true;
         pendingAntennaA = m_antennaA;
     }
-    // The relay trails the tuner (tuning=1 for ~0.6 s after the tuner's own
-    // tuning=0, on fw 1.2.39), so with both writing the flag every tune ended
-    // in a 0→1→0 flap: STOP on an idle tuner, and a wiped result notice.
-    // While the direct connection is up it is the one authority.
+    // The relay trails the tuner (measured on one tune, fw 1.2.39: tuning=1
+    // for 4.4 s against the tuner's own 3.8 s), so with both writing the flag
+    // a tune could end in a 0→1→0 flap: STOP on an idle tuner, and a wiped
+    // result notice. While the direct connection is up it is the one
+    // authority. The trade: a direct link whose socket stays up while the
+    // tuner goes silent holds its last `tuning` until the socket drops.
     if (d.tuning && !hasDirectConnection() && m_tuning != *d.tuning) {
         m_tuning = *d.tuning;
         changed = true;

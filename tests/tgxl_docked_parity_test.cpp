@@ -284,6 +284,35 @@ int main(int argc, char** argv)
     settle();
     CHECK(!overlay->isVisible());
 
+    // ── A result whose clear never arrives still comes down ──────────────
+    //
+    // The banner covers the controls. The tuner clears its result ~2 s after
+    // raising it, and on the TGXL firmware due 28 Sep a banner that missed
+    // that clear stayed up until the next tune — with the TUNE key under it.
+    // A result is informational, so it has an upper bound of its own.
+    emit model.alertChanged(QStringLiteral("Tuned SWR: 1.01:1"));
+    settle();
+    CHECK(overlay->isVisible());
+    CHECK(spin([&] { return !overlay->isVisible(); }, 7000));
+
+    // The same reading again is a new tune's notice, not a repeat to drop.
+    emit model.alertChanged(QStringLiteral("Tuned SWR: 1.01:1"));
+    settle();
+    CHECK(overlay->isVisible());
+    emit model.alertChanged(QString());
+    settle();
+    CHECK(!overlay->isVisible());
+
+    // A failure keeps the tuner's schedule: it says a tune did not run, and
+    // taking it down early would hide that. Held past the result's bound.
+    emit model.alertChanged(QStringLiteral("LOW RF POWER"));
+    settle();
+    settle(6000);
+    CHECK(overlay->isVisible());
+    emit model.alertChanged(QString());
+    settle();
+    CHECK(!overlay->isVisible());
+
     // ── Device text is never markup ──────────────────────────────────────
     //
     // The banner shows the body of an M| frame verbatim. Under QLabel's
