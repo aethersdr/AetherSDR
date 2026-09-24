@@ -131,6 +131,28 @@ inline QString appStylesheetTemplate()
             alternate-background-color: {{color.background.1}};
         }
         QListWidget::item:selected { background-color: {{color.accent}}; color: #000; }
+        /* Tree views need the same treatment as QListWidget.  Without an
+           explicit alternate-background-color they fall back to the native
+           palette's AlternateBase — near-white on Windows 11 — while the
+           item text still inherits the dark theme's very light
+           color.text.primary, so every other row is illegible (#5934: the
+           Theme Editor's Object list looked like it was missing rows). */
+        QTreeView, QTreeWidget {
+            background-color: {{color.background.0}};
+            alternate-background-color: {{color.background.1}};
+            color: {{color.text.primary}};
+            border: 1px solid {{color.border.strong}};
+        }
+        QTreeView::item:selected, QTreeWidget::item:selected {
+            background-color: {{color.accent}};
+            color: #000;
+        }
+        QHeaderView::section {
+            background-color: {{color.background.1}};
+            color: {{color.text.primary}};
+            border: none;
+            padding: 3px 6px;
+        }
         QSlider {
             border: none;
             background: transparent;
