@@ -6,8 +6,8 @@ continues to decode transmit sidetone. Only the selected receive backend runs.
 The RFC is #4817; DeepCW remains outside this change. The operator authorized
 preparing this PR before DeepCW, overriding the earlier implementation order.
 
-DeepFist consumes monitored PCM through `PcmFrame`, resamples on its worker,
-and uses the pinned native Lyra frontend. Source changes, discontinuities,
+DeepFist consumes selected-slice pre-monitor PCM through `PcmFrame`, resamples
+on its worker, and uses the pinned native Lyra frontend. Source changes, discontinuities,
 queue overflow, resets and backend switches invalidate previous work. The
 queue holds at most two seconds of PCM. Model loading and inference run off
 the UI thread; stopping joins the current inference before destroying state.
@@ -16,8 +16,9 @@ The single DeepFist choice enables activity normalization, completed-mark
 admission and bounded pending-character carry. These are developer settings;
 there is no second normalized decoder in the UI. Output has no calibrated
 ggmorse cost and is displayed without inventing confidence, pitch or speed.
-DeepFist output does not feed automatic callsign spotting. Multiple audible
-slices can interfere because the input is monitored audio, not isolated RF.
+DeepFist output does not feed automatic callsign spotting. Other monitored
+slices and speaker gain/mute do not alter the selected decoder input. This is
+an audio slice tap, not an RF separation claim.
 
 ## Distribution prerequisite
 
@@ -77,5 +78,6 @@ not train or improve itself during use.
 The preserved comparison build, Fldigi experiment and experimental ggmorse
 changes are separate from this PR. No Fldigi implementation or comparison
 panel is included here. The merged ggmorse concurrency fix (#5645) is preserved:
-worker-owned engine, coherent parameter updates, frame-bounded work and joined
-teardown. TX sidetone stays on its existing byte API.
+worker-owned engine, coherent parameter updates, frame-bounded work and joined teardown. A5 extends
+that worker with typed source leases and generations; TX sidetone stays on its
+existing byte API.

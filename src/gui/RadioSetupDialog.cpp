@@ -14,7 +14,7 @@
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
 #include "core/NetworkSettings.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
 #include "KiwiPublicReceiverPicker.h"
 #include "core/LogManager.h"
@@ -37,7 +37,7 @@
 #include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
-#include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
+#include "core/backends/flex/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
 #include "models/AntennaGeniusModel.h"
@@ -120,6 +120,38 @@ static const QString kLabelStyle =
 
 static const QString kValueStyle =
     "QLabel { color: #00c8ff; font-size: 12px; font-weight: bold; }";
+
+// kValueStyle's colour, as the token it is a copy of. AGENTS.md: "every colour
+// resolves through a ThemeManager token ... never hardcode a colour literal",
+// and tools/migrate_colours.py already maps both #00c8ff and the token's own
+// #00c8f0 to color.accent.bright. Only ThemeManager::applyStyleSheet registers
+// a widget for re-resolution on themeChanged; a plain setStyleSheet does not,
+// so a label carrying the literal keeps its dark-theme cyan after View > Theme
+// switches to Default Light, where color.accent.bright is #0098c0.
+static const QString kValueStyleTemplate =
+    "QLabel { color: {{color.accent.bright}}; font-size: 12px; font-weight: bold; }";
+
+// The shared value style, paired with its QLabel once. The four Radio
+// Information fields -- Serial:, Region:, HW Version:, Options: -- route
+// through here, which is what makes them byte-identical to each other: the
+// invariant #5507 item 2 is about, and the one the test asserts.
+//
+// This is NOT a whole-file fold. 14 direct setStyleSheet(kValueStyle) sites and
+// two applyStyleSheet(..., kValueStyle) sites elsewhere in this file still carry
+// the literal, untouched on purpose -- migrating them is a file-wide change that
+// does not belong in a fix for one field.
+//
+// It also answers tools/audit_colours.py's ratchet, which counts setStyleSheet()
+// CALL SITES and not colours. The bespoke ThemeManager template Region: used to
+// carry was never counted, so replacing it with a counted setStyleSheet() read
+// as +1 even though no colour moved. Folding four fields onto one applyStyleSheet
+// retires three counted sites and adds none.
+static QLabel* makeValueLabel(const QString& text)
+{
+    auto* label = new QLabel(text);
+    ThemeManager::instance().applyStyleSheet(label, kValueStyleTemplate);
+    return label;
+}
 
 static const QString kEditStyle =
     "QLineEdit { background: #1a2a3a; border: 1px solid #304050; "
@@ -266,6 +298,40 @@ static QString kiwiSetupMetadataSummary(const KiwiSdrManager* manager,
                          protocol.waterfall.lastObservedLayout));
     }
     return parts.join(QStringLiteral(" · "));
+}
+
+// Hide/show a navigation row only when its state actually changes; returns
+// whether it did. Pair with settleNavigationLayout() once per handler.
+//
+// QTreeWidgetItem::setHidden() -> QTreeView::setRowHidden() can schedule a
+// delayed layout, and updateRadioCapabilityVisibility() runs on every GPS /
+// oscillator / capability status message from the radio, re-hiding rows that are
+// already hidden. That left a layout pending almost permanently. When macOS then
+// asked for the focused element, QAccessibleTableCell::state() -> rect() ->
+// QTreeView::visualRect() ran the pending QTreeView::doItemsLayout() from
+// *inside* the cell's own method; that layout emits
+// QAccessible::TableModelChanged, which frees every accessible cell (including
+// the running one), and the next view->viewport() dereferenced null (Qt 6.8.3:
+// SIGSEGV at 0x8 in QAbstractScrollArea::viewport()).
+static bool setNavigationItemHidden(QTreeWidgetItem* item, bool hidden)
+{
+    if (!item || item->isHidden() == hidden) {
+        return false;
+    }
+    item->setHidden(hidden);
+    return true;
+}
+
+// Settle the navigation tree's layout on our own call stack once a handler has
+// changed rows, so nothing is left pending for an accessibility query to run
+// re-entrantly. One layout per handler, not one per row: Qt coalesced the
+// delayed layouts before, and each synchronous layout tears down and rebuilds
+// every accessible cell interface.
+static void settleNavigationLayout(QTreeWidget* tree, bool changed)
+{
+    if (changed && tree) {
+        tree->doItemsLayout();
+    }
 }
 
 // Wrap a tab page in a vertical QScrollArea so tabs whose stacked groups exceed
@@ -775,9 +841,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("frequency calibration ppb ppm oscillator crystal clock error wwv gpsdo zero beat"),
         [this] { return buildCalibrationTab(); });
     m_calibrationPageIndex = m_pageIndexes.value(QStringLiteral("Calibration"));
-    calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+    setNavigationItemHidden(calItem, !m_model->backendCapabilities().hostFrequencyCalibration);
     connect(m_model, &RadioModel::connectionStateChanged, this, [this, calItem] {
-        calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+        settleNavigationLayout(m_navigation, setNavigationItemHidden(
+            calItem, !m_model->backendCapabilities().hostFrequencyCalibration));
         // A different radio may now be connected — re-read its own calibration
         // so a later Trim press cannot commit the previous radio's number.
         if (m_calibrationReseed)
@@ -790,9 +857,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("droop calibration ddc0 panadapter spectrum sweep decimation edge cic"),
         [this] { return buildDroopCalibrationTab(); });
     m_droopCalibrationPageIndex = m_pageIndexes.value(QStringLiteral("Droop Correction"));
-    droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+    setNavigationItemHidden(droopItem, !droopCalibrationAvailable(m_model->backend()));
     connect(m_model, &RadioModel::connectionStateChanged, this, [this, droopItem] {
-        droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+        settleNavigationLayout(m_navigation, setNavigationItemHidden(
+            droopItem, !droopCalibrationAvailable(m_model->backend())));
         if (m_droopReseed)
             m_droopReseed();
     });
@@ -805,10 +873,11 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     QTreeWidgetItem* apdItem = addPage(hardwareCategory, QStringLiteral("APD"),
         QStringLiteral("adaptive predistortion amplifier sampler linearization"), [this] { return buildApdTab(); });
     m_apdPageIndex = m_pageIndexes.value(QStringLiteral("APD"));
-    apdItem->setHidden(!m_model->transmitModel().apdConfigurable());
+    setNavigationItemHidden(apdItem, !m_model->transmitModel().apdConfigurable());
     connect(&m_model->transmitModel(), &TransmitModel::apdStateChanged,
             this, [this, apdItem] {
-        apdItem->setHidden(!m_model->transmitModel().apdConfigurable());
+        settleNavigationLayout(m_navigation, setNavigationItemHidden(
+            apdItem, !m_model->transmitModel().apdConfigurable()));
     });
     addPage(hardwareCategory, QStringLiteral("USB Cables"),
         QStringLiteral("usb cable gpio bit bcd amplifier tuner accessory"), [this] { return buildUsbCablesTab(); });
@@ -859,6 +928,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     connect(search, &QLineEdit::textChanged, this, [this](const QString& text) {
         const QString needle = text.trimmed();
         QTreeWidgetItem* firstVisible = nullptr;
+        bool navigationChanged = false;
         for (int i = 0; i < m_navigation->topLevelItemCount(); ++i) {
             QTreeWidgetItem* category = m_navigation->topLevelItem(i);
             bool anyVisible = false;
@@ -884,16 +954,17 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
                     || (droopRow && !droopCalibrationAvailable(m_model->backend()));
                 if (!gated) {
-                    item->setHidden(!matches);
+                    navigationChanged |= setNavigationItemHidden(item, !matches);
                 }
                 anyVisible = anyVisible || !item->isHidden();
                 if (!item->isHidden() && !firstVisible) {
                     firstVisible = item;
                 }
             }
-            category->setHidden(!anyVisible);
+            navigationChanged |= setNavigationItemHidden(category, !anyVisible);
             category->setExpanded(true);
         }
+        settleNavigationLayout(m_navigation, navigationChanged);
         // Stash the first match but do NOT make it current here: selecting it
         // fires currentItemChanged → buildDeferredTab, which would eagerly
         // construct and hardware-probe deferred pages (Audio, Serial,
@@ -1110,11 +1181,12 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
 
     const QLineEdit* search = findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
     const QString needle = search ? search->text().trimmed() : QString();
+    bool navigationChanged = false;
     for (const int index : {m_filtersPageIndex, m_smartLinkPageIndex}) {
         if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
             const QString haystack = item->text(0) + QStringLiteral(" ")
                 + item->data(0, Qt::UserRole + 1).toString();
-            item->setHidden(!isCapabilityPageAvailable(item)
+            navigationChanged |= setNavigationItemHidden(item, !isCapabilityPageAvailable(item)
                             || (!needle.isEmpty()
                                 && !haystack.contains(needle, Qt::CaseInsensitive)));
         }
@@ -1123,10 +1195,11 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (QTreeWidgetItem* gpsItem = m_pageItems.value(m_gpsPageIndex, nullptr)) {
         const QString haystack = gpsItem->text(0) + QStringLiteral(" ")
             + gpsItem->data(0, Qt::UserRole + 1).toString();
-        gpsItem->setHidden(!isGpsSetupAvailable()
+        navigationChanged |= setNavigationItemHidden(gpsItem, !isGpsSetupAvailable()
                            || (!needle.isEmpty()
                                && !haystack.contains(needle, Qt::CaseInsensitive)));
     }
+    settleNavigationLayout(m_navigation, navigationChanged);
 
     const bool currentPageUnavailable = m_navigation
         && (!isCapabilityPageAvailable(m_navigation->currentItem())
@@ -1260,24 +1333,47 @@ QWidget* RadioSetupDialog::buildRadioTab()
         grid->setColumnStretch(0, 1);
         grid->setColumnStretch(1, 1);
 
-        m_serialLabel = new QLabel(radioSerialNumber(m_model));
-        m_serialLabel->setStyleSheet(kValueStyle);
+        m_serialLabel = makeValueLabel(radioSerialNumber(m_model));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Radio Serial Number"),
                                               QStringLiteral("Serial:"),
                                               m_serialLabel),
                         0, 0);
 
-        m_regionLabel = new QLabel(m_model->region().isEmpty() ? "USA" : m_model->region());
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_regionLabel, "QLabel { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.accent.bright}}; font-size: 11px; font-weight: bold; "
-            "padding: 3px 10px; }");
-        m_regionLabel->setAlignment(Qt::AlignCenter);
-        grid->addWidget(makeInfoField(QStringLiteral("Region:"), m_regionLabel,
-                                      kInfoRightLabelWidth),
+        // displayOrDash, not a fabricated default. This read
+        //     new QLabel(m_model->region().isEmpty() ? "USA" : m_model->region())
+        // and RadioModel::m_region is written in exactly two places, both Flex:
+        // the `info` reply key/value chain and applyRadioChanges' RadioDelta.
+        // Hl2Backend builds no delta carrying a region and Hl2Discovery sets no
+        // RadioInfo::turfRegion, so on a Hermes-Lite 2 region() is
+        // UNCONDITIONALLY empty and that ternary always rendered "USA" — an
+        // invented value in the styling of a reading. The app contradicted
+        // itself about it with no hardware in the loop: troubleshootingSnapshot
+        // publishes the same m_region and SliceTroubleshootingDialog renders it
+        // through orPlaceholder as "n/a". Every other value in this dialog
+        // already answers an empty field with the em-dash. (#5507 item 1)
+        m_regionLabel = makeValueLabel(displayOrDash(m_model->region()));
+        // makeValueLabel and makeCopyableInfoField — a status label, like
+        // HW Version: beside it. What was here instead was a ThemeManager
+        // stylesheet carrying kToggleStyle's box metrics (1px border,
+        // border-radius 3px, font-size 11px, bold, padding 3px 10px) plus
+        // setAlignment(Qt::AlignCenter): a centred bordered accent box sitting
+        // in the column that makeToggle builds Remote On: and multiFLEX: in. It
+        // reads as pressable, it is a QLabel with no event handling of any kind,
+        // and an operator clicked it and reported that it offered no options.
+        //
+        // Styling alone left one half of the claim unmade. Region: was also the
+        // only one of this group's four values that was neither mouse-selectable
+        // nor carried a CopyValueButton, so an operator gathering details for a
+        // bug report could copy Serial:, HW Version: and Options: and not this
+        // one. That asymmetry was invisible while Region: looked like a
+        // different kind of widget and conspicuous the moment it stopped. Same
+        // classification, same affordances. (#5507 item 2)
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("Region"),
+                                              QStringLiteral("Region:"),
+                                              m_regionLabel, kInfoRightLabelWidth),
                         0, 1);
 
-        m_hwVersionLabel = new QLabel(prefixedVersion(m_model->version()));
-        m_hwVersionLabel->setStyleSheet(kValueStyle);
+        m_hwVersionLabel = makeValueLabel(prefixedVersion(m_model->version()));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("HW Version"),
                                               QStringLiteral("HW Version:"),
                                               m_hwVersionLabel),
@@ -1292,8 +1388,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                             kInfoRightLabelWidth);
         grid->addWidget(m_remoteOnInfoField, 1, 1);
 
-        m_optionsLabel = new QLabel(radioOptionsText(m_model));
-        m_optionsLabel->setStyleSheet(kValueStyle);
+        m_optionsLabel = makeValueLabel(radioOptionsText(m_model));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Options"),
                                               QStringLiteral("Options:"),
                                               m_optionsLabel),
@@ -1388,6 +1483,14 @@ QWidget* RadioSetupDialog::buildRadioTab()
             }
             if (m_hwVersionLabel) {
                 m_hwVersionLabel->setText(prefixedVersion(m_model->version()));
+            }
+            // Region: was missing from this lambda — m_regionLabel had no
+            // setText anywhere in the file, so it froze at construction while
+            // its three neighbours here refreshed. RadioModel::disconnectFromRadio
+            // clears m_region, so even on a Flex the label went on showing the
+            // PREVIOUS radio's region after a disconnect. (#5507 item 3)
+            if (m_regionLabel) {
+                m_regionLabel->setText(displayOrDash(m_model->region()));
             }
             if (m_optionsLabel) {
                 m_optionsLabel->setText(radioOptionsText(m_model));

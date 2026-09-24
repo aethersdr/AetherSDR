@@ -12,15 +12,17 @@
 //
 // This file proves two things:
 //
-//   1. (Confident, no radio involved.) AnanSpectrum's FFT+fftshift correctly
-//      mirrors a conjugated tone to the opposite side of DC. This is the
-//      mathematical building block the whole conjugate-split design depends
-//      on, and it is provable with no assumption about which way the real
-//      wire's handedness goes.
+//   1. (Confident, no radio involved.) A WIRE-convention tone above centre
+//      lands above centre, and one below lands below, through the whole
+//      spectrum path -- AnanRxDsp feeding WDSP's analyzer, whose Spectrum0()
+//      I/Q swap is now the one place the spectrum is mirrored. This also pins
+//      the analyzer's point order (lowest frequency first) and that DC sits
+//      at the centre point.
 //   2. (CONFIRMED, 2026-08-21 -- was provisional, now pins a bench-verified
-//      fact, not just current code behaviour.) AnanRxDsp's conjugate split
-//      (demodulator raw, spectrum conjugated -- the same split Hl2RxDsp
-//      settled on for Protocol 1) is the actually-correct one for a real
+//      fact, not just current code behaviour.) AnanRxDsp's split
+//      (demodulator raw, spectrum mirrored -- the same split Hl2RxDsp
+//      settled on for Protocol 1; the spectrum's mirror is now WDSP's
+//      analyzer's I/Q swap, see item 1) is the actually-correct one for a real
 //      ANAN-G2: `radiocert rx` (real WWV carrier) showed the textbook
 //      USB/DIGU-recover, LSB/DIGL-don't signature, and an independent
 //      RSP1B/SDR++ receiver reproduced the identical pattern at the same
@@ -36,16 +38,22 @@
 
 #include "core/backends/anan/AnanDroopCorrection.h"
 #include "core/backends/anan/AnanRxDsp.h"
-#include "core/backends/anan/AnanSpectrum.h"
+#include "core/backends/anan/AnanPanAnalyzer.h"
+#include "core/dsp/WdspSMeter.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QThread>
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <complex>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <numbers>
+#include <string>
 #include <vector>
 
 using namespace AetherSDR::anan;
@@ -63,7 +71,7 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// ---- Group 1 helpers: AnanSpectrum peak-bin location ----
+// ---- Spectrum helpers: WDSP analyzer frames ----
 
 int peakBin(const std::vector<float>& binsDbfs)
 {
@@ -75,21 +83,82 @@ int peakBin(const std::vector<float>& binsDbfs)
     return best;
 }
 
-// A pure tone at exactly `cyclesPerFrame` cycles over `n` samples -- an
-// integer bin frequency, so the FFT peak lands on one bin with no leakage
-// ambiguity from the Hanning window.
-std::vector<std::complex<float>> makeTone(int n, double cyclesPerFrame, bool conjugate)
+// Exactly enough samples for ONE analyzer FFT. Feeding a fresh analyzer this
+// many produces exactly one FFT (its overlap advance at 48/96 ksps and 25 fps
+// is far smaller than the FFT, so the ring never fills a second one), which
+// makes the first frame deterministic: the seeded average IS that FFT.
+constexpr int kOneFft = AnanPanAnalyzer::kMinFftSize;
+constexpr int kPoints = 1024;
+
+// A tone `offsetHz` above centre in WIRE convention -- exp(-jwt), the
+// handedness a real HPSDR/ANAN radio sends for a signal above the dial.
+std::vector<std::complex<float>> wireTone(int n, double offsetHz, int rateHz, float amp,
+                                          int phaseOffset = 0)
 {
-    std::vector<std::complex<float>> out(static_cast<std::size_t>(n));
-    const double dp = 2.0 * kPi * cyclesPerFrame / n;
-    for (int k = 0; k < n; ++k) {
-        const double phase = dp * k;
-        const float re = static_cast<float>(std::cos(phase));
-        const float im = static_cast<float>(std::sin(phase));
-        out[static_cast<std::size_t>(k)] = conjugate ? std::complex<float>(re, -im)
-                                                     : std::complex<float>(re, im);
+    std::vector<std::complex<float>> v(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        const double ph = 2.0 * kPi * offsetHz * (i + phaseOffset) / rateHz;
+        v[static_cast<std::size_t>(i)] = {amp * static_cast<float>(std::cos(ph)),
+                                          -amp * static_cast<float>(std::sin(ph))};
     }
+    return v;
+}
+
+// The analyzer computes its FFTs on WDSP worker threads, so a frame is not
+// synchronous with the feed. Feed `iq`, then keep pumping empty blocks (which
+// only poll for a frame) until the first spectrumReady, or give up.
+std::vector<float> firstFrame(AnanRxDsp& dsp, const std::vector<std::complex<float>>& iq)
+{
+    std::vector<float> frame;
+    bool got = false;
+    const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
+        [&](const std::vector<float>& bins) {
+            if (!got) { frame = bins; got = true; }
+        });
+    dsp.processIqBlock(iq);
+    const std::vector<std::complex<float>> none;
+    QElapsedTimer t;
+    t.start();
+    while (!got && t.elapsed() < 10000) {
+        QThread::msleep(2);
+        dsp.processIqBlock(none);
+    }
+    QObject::disconnect(conn);
+    return frame;
+}
+
+// The analyzer's own output for `iq`, with no AnanRxDsp involved -- the
+// independent reference the droop groups compare against. Slot 60: channels
+// only ever take slots 0..31, so this never collides with one.
+std::vector<float> rawAnalyzerFrame(const std::vector<std::complex<float>>& iq, int rateHz)
+{
+    AnanPanAnalyzer::Settings s;
+    s.sampleRateHz = rateHz;
+    s.numPoints = kPoints;
+    s.framesPerSecond = 25;
+    std::string err;
+    auto a = AnanPanAnalyzer::create(60, s, &err);
+    check(a != nullptr, err.empty() ? "reference analyzer is created" : err.c_str());
+    if (!a)
+        return {};
+    a->feed(iq);
+    std::vector<float> out;
+    QElapsedTimer t;
+    t.start();
+    while (!a->takeFrame(out) && t.elapsed() < 10000)
+        QThread::msleep(2);
     return out;
+}
+
+bool allClose(const std::vector<float>& a, const std::vector<float>& b, float tol)
+{
+    if (a.size() != b.size() || a.empty())
+        return false;
+    for (std::size_t k = 0; k < a.size(); ++k) {
+        if (std::fabs(a[k] - b[k]) > tol)
+            return false;
+    }
+    return true;
 }
 
 // ---- Group 2 helpers: end-to-end demodulated-audio frequency ----
@@ -231,32 +300,214 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
 
-    // ---- Group 1: conjugation flips the spectral peak to the mirror bin ----
-    // No WdspChannel, no radio, no hypothesis -- pure FFT/fftshift math.
+    // Shared by the spectrum groups below: a spectrum-only configuration --
+    // linear AGC so nothing else rescales, output blocking so the audio side
+    // is deterministic too.
+    const auto spectrumConfig = [](int rateHz) {
+        AnanRxDsp::Config cfg;
+        cfg.inputSampleRateHz = rateHz;
+        cfg.audioSampleRateHz = kAudioRate;
+        cfg.dspBlockSize = kBlock;
+        cfg.panPoints = kPoints;   // one point per droop-table entry, as in production
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.filterLowHz = 100.0;
+        cfg.filterHighHz = 2900.0;
+        cfg.agcMode = 0;
+        cfg.maximumAgcGainDb = 40.0;
+        cfg.blockForOutput = true;
+        return cfg;
+    };
+
+    // ---- Group 1: a wire tone lands on the correct side of centre ----
+    // The spectrum's mirror now happens inside WDSP's analyzer (Spectrum0()
+    // swaps I and Q), and AnanRxDsp hands it the RAW wire. A wire-convention
+    // tone 6 kHz above centre must come out 6 kHz above centre: about 128 of
+    // 1024 points (46.875 Hz each at 48 ksps) above the centre point, 512.
+    // Pins handedness, the analyzer's point order and where DC lands, all at
+    // once; a conjugate added anywhere in the path puts it at 384 instead.
     {
-        constexpr int kFft = 64;
-        constexpr double kCycles = 10.0;   // integer bin offset from DC
+        for (const double offsetHz : {6000.0, -6000.0}) {
+            AnanRxDsp dsp;
+            std::string err;
+            check(dsp.configure(spectrumConfig(48000), &err),
+                  err.empty() ? "handedness: configure() succeeds" : err.c_str());
+            const std::vector<float> frame =
+                firstFrame(dsp, wireTone(kOneFft, offsetHz, 48000, 0.25f));
+            check(frame.size() == static_cast<std::size_t>(kPoints),
+                  "handedness: one frame of kPoints points");
+            const int peak = peakBin(frame);
+            const int expected =
+                kPoints / 2 + static_cast<int>(std::lround(offsetHz / 48000.0 * kPoints));
+            std::fprintf(stderr, "wire tone %+.0f Hz: peak point %d, expected %d\n",
+                         offsetHz, peak, expected);
+            check(std::abs(peak - expected) <= 2,
+                  offsetHz > 0 ? "a wire tone above centre lands above centre, at its frequency"
+                               : "a wire tone below centre lands below centre, at its frequency");
+        }
+    }
 
-        AnanSpectrum specA(kFft);
-        std::vector<float> binsA;
-        check(specA.process(makeTone(kFft, kCycles, /*conjugate=*/false), binsA) == 1,
-              "one frame produced for the direct tone");
-        const int pA = peakBin(binsA);
+    // ---- Group 1b: the analyzer's settings, and a seeded first frame ----
+    {
+        // deskHPSDR's formulas, as AnanPanAnalyzer::derive() applies them.
+        AnanPanAnalyzer::Settings s;
+        s.sampleRateHz = 48000;
+        s.numPoints = 1024;
+        s.framesPerSecond = 25;
+        s.averageTimeMs = 250;   // deskHPSDR's default
+        AnanPanAnalyzer::Derived d = AnanPanAnalyzer::derive(s);
+        check(d.fftSize == 16384, "the FFT is never smaller than 16384");
+        check(d.overlap == 16384 - 48000 / 25,
+              "overlap = FFT - rate/fps: one FFT per display frame over fresh samples");
+        check(d.maxWriteahead == 16384 + 4800,
+              "write-ahead = FFT + the lesser of 0.1 s of input and 0.1 s of FFT work");
+        check(std::fabs(d.avBackmult - std::exp(-1.0 / (25 * 0.25))) < 1e-12,
+              "history weight is deskHPSDR's exp(-1/(fps*t)): 250 ms at 25 fps");
+        s.averageTimeMs = 0;
+        check(AnanPanAnalyzer::derive(s).avBackmult == 0.0,
+              "FFT AVG 0 means no time averaging");
+        s.sampleRateHz = 1536000;
+        s.averageTimeMs = 250;
+        d = AnanPanAnalyzer::derive(s);
+        check(d.overlap == 0, "at 1536 ksps the FFTs tile the stream with no overlap");
+        // 1536000 / 16384 = 93.75 FFTs per second, each applying the weight, so
+        // the weight must be derived from that rate or 250 ms would deliver
+        // ~67 ms.
+        check(std::fabs(d.avBackmult - std::exp(-1.0 / (93.75 * 0.25))) < 1e-12,
+              "history weight follows the analyzer's FFT rate once the overlap saturates, "
+              "so FFT AVG keeps its 10 ms unit at 1536 ksps");
+        s.averageTimeMs = 0;
+        // derive() grows the FFT for a larger point count, but create() refuses
+        // anything above WDSP's dMAX_PIXELS -- pin the refusal that is actually
+        // reachable alongside the formula.
+        s.numPoints = 20000;
+        check(AnanPanAnalyzer::derive(s).fftSize == 32768,
+              "derive(): the FFT grows to the next power of two above the point count");
+        {
+            std::string tooMany;
+            check(AnanPanAnalyzer::create(61, s, &tooMany) == nullptr && !tooMany.empty(),
+                  "create() refuses a point count above WDSP's dMAX_PIXELS");
+        }
+        s.numPoints = 1024;
+        s.framesPerSecond = 1000;
+        d = AnanPanAnalyzer::derive(s);
+        check(d.maxWriteahead <= 2 * AnanPanAnalyzer::kMaxFftSize - AnanPanAnalyzer::kBlockSize,
+              "write-ahead never exceeds the analyzer's input ring");
 
-        AnanSpectrum specB(kFft);
-        std::vector<float> binsB;
-        check(specB.process(makeTone(kFft, kCycles, /*conjugate=*/true), binsB) == 1,
-              "one frame produced for the conjugated tone");
-        const int pB = peakBin(binsB);
+        // Seeding. WDSP's log-recursive average starts at -160 dB; unseeded,
+        // the first frame after every build (every zoom) would read ~130 dB low
+        // and ramp up over a second. Seeded, the first frame IS the first FFT,
+        // and a later frame of the same steady tone reads the same.
+        AnanRxDsp dsp;
+        std::string err;
+        AnanRxDsp::Config seedCfg = spectrumConfig(48000);
+        seedCfg.spectrumAverageMs = 250;   // averaging ON: the seed matters
+        check(dsp.configure(seedCfg, &err),
+              err.empty() ? "seeding: configure() succeeds" : err.c_str());
+        const auto tone = wireTone(2 * kOneFft, 6000.0, 48000, 0.25f);
+        const std::vector<std::complex<float>> firstHalf(tone.begin(), tone.begin() + kOneFft);
+        const std::vector<std::complex<float>> secondHalf(tone.begin() + kOneFft, tone.end());
+        const std::vector<float> f1 = firstFrame(dsp, firstHalf);
+        const std::vector<float> f2 = firstFrame(dsp, secondHalf);
+        check(f1.size() == static_cast<std::size_t>(kPoints)
+                  && f2.size() == static_cast<std::size_t>(kPoints),
+              "seeding: two frames produced");
+        if (f1.size() == f2.size() && !f1.empty()) {
+            const int pk = peakBin(f1);
+            std::fprintf(stderr, "seeding: first frame peak %.2f dB, later frame %.2f dB\n",
+                         f1[static_cast<std::size_t>(pk)], f2[static_cast<std::size_t>(pk)]);
+            check(f1[static_cast<std::size_t>(pk)] > -40.0f,
+                  "the first frame reads the tone at its level, not ramping up from -160 dB");
+            check(std::fabs(f2[static_cast<std::size_t>(pk)] - f1[static_cast<std::size_t>(pk)])
+                      < 1.0f,
+                  "a later frame of the same steady tone reads the same -- no ramp");
+        }
 
-        std::fprintf(stderr, "peak bin: direct=%d conjugated=%d (fftSize=%d)\n",
-                     pA, pB, kFft);
-        check(pA != pB, "conjugating the tone moves the peak to a different bin");
-        // fftshift centres DC at fftSize/2; a tone at +k cycles lands at
-        // fftSize/2 + k, its conjugate (-k cycles) at fftSize/2 - k. The two
-        // are symmetric about the centre bin, i.e. they sum to fftSize.
-        check(pA + pB == kFft,
-              "direct and conjugated peaks are mirror images about DC (pA+pB == fftSize)");
+        // Turning FFT AVG up from 0 mid-stream: entering log-recursive mode
+        // resets WDSP's history to -160 dB, so this must re-seed too.
+        AnanRxDsp live;
+        check(live.configure(spectrumConfig(48000), &err),
+              err.empty() ? "re-seed: configure() succeeds" : err.c_str());
+        const std::vector<float> g1 = firstFrame(live, firstHalf);   // averaging off
+        live.setSpectrumAverageMs(250);
+        const std::vector<float> g2 = firstFrame(live, secondHalf);  // averaging on
+        if (g1.size() == g2.size() && !g1.empty()) {
+            const int pk = peakBin(g1);
+            std::fprintf(stderr, "re-seed: averaging off %.2f dB, switched on %.2f dB\n",
+                         g1[static_cast<std::size_t>(pk)], g2[static_cast<std::size_t>(pk)]);
+            check(std::fabs(g2[static_cast<std::size_t>(pk)] - g1[static_cast<std::size_t>(pk)])
+                      < 1.0f,
+                  "switching averaging on mid-stream re-seeds -- no fade-in from -160 dB");
+        } else {
+            check(false, "re-seed: two frames produced");
+        }
+
+        // Switching the averaging MODE (weighted-average toggle) resets WDSP's
+        // history as well, so it must re-seed too.
+        const auto more = wireTone(kOneFft, 6000.0, 48000, 0.25f, 2 * kOneFft);
+        live.setSpectrumLogAverage(false);
+        const std::vector<float> g3 = firstFrame(live, more);
+        if (g3.size() == g1.size() && !g1.empty()) {
+            const int pk = peakBin(g1);
+            std::fprintf(stderr, "re-seed: switched to linear %.2f dB\n",
+                         g3[static_cast<std::size_t>(pk)]);
+            check(std::fabs(g3[static_cast<std::size_t>(pk)] - g1[static_cast<std::size_t>(pk)])
+                      < 1.0f,
+                  "switching log -> linear averaging mid-stream re-seeds -- no dip");
+        } else {
+            check(false, "re-seed: a frame after the mode switch");
+        }
+    }
+
+    // ---- Group 1c: the seed must come from a frame computed AFTER the switch ----
+    // In production takeFrame() only polls when a display frame is due (the
+    // 25 fps cap), so a frame the worker finished under the OLD mode can be
+    // waiting in GetPixels when FFT AVG is switched on. Seeding from that frame
+    // would leave the new mode's -160 dB history in place and fade the
+    // panadapter in from black -- the exact defect the seed exists to prevent.
+    {
+        AnanRxDsp capped;
+        std::string err;
+        check(capped.configure(spectrumConfig(48000), &err),
+              err.empty() ? "capped seed: configure() succeeds" : err.c_str());
+        capped.setSpectrumRateFps(25);   // what AnanBackend::setPanFrameRate() does
+        const auto steady = wireTone(2 * kOneFft, 6000.0, 48000, 0.25f);
+        const std::vector<std::complex<float>> first(steady.begin(), steady.begin() + kOneFft);
+        const std::vector<float> c1 = firstFrame(capped, first);   // averaging off
+        check(c1.size() == static_cast<std::size_t>(kPoints), "capped seed: a first frame");
+        // One more FFT's worth (the overlap advance is 1920 samples at 48 ksps
+        // and 25 fps): computed in mode "none" by the worker, NOT taken -- the
+        // next display frame is not due yet.
+        const std::vector<std::complex<float>> more(steady.begin() + kOneFft,
+                                                    steady.begin() + kOneFft + 2048);
+        capped.processIqBlock(more);
+        QThread::msleep(20);
+        capped.setSpectrumAverageMs(250);
+        // Poll without feeding for longer than a display interval. Without the
+        // drain in AnanPanAnalyzer::applyAveraging() this takes the stale
+        // mode-none frame and marks the average seeded.
+        {
+            const std::vector<std::complex<float>> none;
+            QElapsedTimer t;
+            t.start();
+            while (t.elapsed() < 120) {
+                QThread::msleep(2);
+                capped.processIqBlock(none);
+            }
+        }
+        const std::vector<std::complex<float>> after(steady.begin() + kOneFft + 2048,
+                                                     steady.begin() + kOneFft + 4096);
+        const std::vector<float> c2 = firstFrame(capped, after);   // first frame computed in log mode
+        if (c1.size() == c2.size() && !c1.empty()) {
+            const int pk = peakBin(c1);
+            std::fprintf(stderr, "capped seed: before %.2f dB, first averaged frame %.2f dB\n",
+                         c1[static_cast<std::size_t>(pk)], c2[static_cast<std::size_t>(pk)]);
+            check(std::fabs(c2[static_cast<std::size_t>(pk)] - c1[static_cast<std::size_t>(pk)])
+                      < 1.0f,
+                  "a frame pending from before the switch does not seed the new mode -- "
+                  "no fade-in from -160 dB under the display-rate cap");
+        } else {
+            check(false, "capped seed: a frame after the switch");
+        }
     }
 
     // ---- Group 2: bench-confirmed handedness pin (see file header) ----
@@ -266,7 +517,7 @@ int main(int argc, char** argv)
         cfg.inputSampleRateHz = kInputRate;
         cfg.audioSampleRateHz = kAudioRate;
         cfg.dspBlockSize = kBlock;
-        cfg.fftSize = 256;
+        cfg.panPoints = 256;
         cfg.mode = WdspChannel::Mode::Lsb;
         cfg.filterLowHz = -9000.0;          // wide, so a shifted tone stays in band
         cfg.filterHighHz = -100.0;
@@ -303,7 +554,7 @@ int main(int argc, char** argv)
         cfg.inputSampleRateHz = kInputRate;
         cfg.audioSampleRateHz = 24000;
         cfg.dspBlockSize = 1024;
-        cfg.fftSize = 256;
+        cfg.panPoints = 256;
         cfg.blockForOutput = true;
         cfg.mode = WdspChannel::Mode::Am;
         cfg.filterLowHz = -4000.0;
@@ -343,19 +594,26 @@ int main(int argc, char** argv)
         cfg.inputSampleRateHz = kInputRate;
         cfg.audioSampleRateHz = kAudioRate;
         cfg.dspBlockSize = kBlock;
-        cfg.fftSize = 256;
+        cfg.panPoints = 256;
         cfg.mode = WdspChannel::Mode::Usb;
         cfg.filterLowHz = 100.0;
         cfg.filterHighHz = 2900.0;
         cfg.agcMode = 3;
         cfg.maximumAgcGainDb = 40.0;
         cfg.blockForOutput = true;
+        cfg.noiseBlankerEnabled = true;
+        cfg.noiseBlankerLevel = 50;
 
         AnanRxDsp dsp;
         dsp.beginInitialBuild(cfg);
         AnanRxDsp::RebuildResult initial = AnanRxDsp::buildChannel(cfg);
         check(initial.channel != nullptr,
               initial.error.empty() ? "initial background build succeeds" : initial.error.c_str());
+        // Read BEFORE the install: installChannel() re-applies m_config's
+        // blanker anyway, so only the built channel shows buildChannel() did.
+        check(initial.channel && initial.channel->noiseBlankerEnabled()
+                  && initial.channel->config().noiseBlankerLevel == 50,
+              "buildChannel() opens the channel with the requested noise blanker");
         check(dsp.installRebuiltChannel(std::move(initial)),
               "first-connect installs its asynchronously built channel");
         check(dsp.channelForTest()->config().mode == cfg.mode,
@@ -388,6 +646,9 @@ int main(int argc, char** argv)
               "a failed install does not disturb the operator's mode change either");
 
         dsp.beginRebuild();
+        // The operator moves the NB button WHILE the background build runs.
+        // Deferred, not pushed: the swap below has to apply it.
+        dsp.setNoiseBlanker(false, 80);
 
         // buildChannel() is static and thread-agnostic -- built here from a
         // config that does NOT reflect the operator's LSB/filter/AGC change
@@ -411,41 +672,135 @@ int main(int argc, char** argv)
         check(installed->config().agcMode == 2
               && installed->config().maximumAgcGainDb == 25.0,
               "installRebuiltChannel() re-applies the operator's CURRENT AGC setting");
+        check(!installed->noiseBlankerEnabled()
+                  && installed->config().noiseBlankerLevel == 80,
+              "installRebuiltChannel() re-applies a noise blanker change made "
+              "during the build, not buildChannel()'s (stale) NB-on snapshot");
+
+        // Live, with no rebuild in flight, the change reaches the channel.
+        dsp.setNoiseBlanker(true, 120);
+        check(dsp.channelForTest()->noiseBlankerEnabled()
+                  && dsp.channelForTest()->config().noiseBlankerLevel == 100,
+              "setNoiseBlanker() reaches the live channel, level clamped to 100");
+    }
+
+    // ---- Group 4b: a mute must not de-arm the noise blanker ----
+    // setAudioMuted() clocks the channel with zeros (a rate change's settle
+    // window), and the blanker triggers on a RATIO against a running average
+    // magnitude. Unheld, that average decays to nothing during the silence and
+    // the first real audio afterwards is gated as if it were an impulse.
+    // Mirrors hl2_noise_blanker_test's section 5 and measures it the same way:
+    // blanker-on recovery against blanker-off recovery, in blocks, so the
+    // pipeline's own settling (paid by both arms) cancels out.
+    {
+        constexpr int kEdgeBlock = 256;   // short, so a ~7 ms hole spans blocks
+        constexpr double kToneHz = 1000.0;
+        constexpr double kToneAmp = 0.02;
+        constexpr int kNbLevel = 80;
+
+        // WIRE-convention tone, demodulated in LSB -- Group 2's geometry.
+        auto tone = [&](int samples, int phaseOffset) {
+            std::vector<std::complex<float>> out(static_cast<std::size_t>(samples));
+            for (int n = 0; n < samples; ++n) {
+                const double ph = 2.0 * kPi * kToneHz * (n + phaseOffset) / kInputRate;
+                out[static_cast<std::size_t>(n)] = {
+                    static_cast<float>(kToneAmp * std::cos(ph)),
+                    static_cast<float>(kToneAmp * std::sin(ph))
+                };
+            }
+            return out;
+        };
+        auto feed = [&](AnanRxDsp& dsp, const std::vector<std::complex<float>>& s) {
+            for (std::size_t off = 0; off < s.size(); off += kEdgeBlock) {
+                const std::size_t n = std::min<std::size_t>(kEdgeBlock, s.size() - off);
+                dsp.processIqBlock(std::vector<std::complex<float>>(
+                    s.begin() + static_cast<std::ptrdiff_t>(off),
+                    s.begin() + static_cast<std::ptrdiff_t>(off + n)));
+            }
+        };
+
+        int recoveryBlockOff = -1;
+        int recoveryBlockOn = -1;
+        for (int pass = 0; pass < 2; ++pass) {
+            const bool blankerOn = (pass == 1);
+            AnanRxDsp::Config cfg;
+            cfg.inputSampleRateHz = kInputRate;
+            cfg.audioSampleRateHz = kAudioRate;
+            cfg.dspBlockSize = kEdgeBlock;
+            cfg.panPoints = 256;
+            cfg.mode = WdspChannel::Mode::Lsb;
+            cfg.filterLowHz = -3000.0;
+            cfg.filterHighHz = -150.0;
+            cfg.agcMode = 0;               // AGC off: it would hide the hole
+            cfg.maximumAgcGainDb = 40.0;
+            cfg.blockForOutput = true;
+            AnanRxDsp dsp;
+            std::string err;
+            check(dsp.configure(cfg, &err),
+                  err.empty() ? "AnanRxDsp configures for the mute-edge case" : err.c_str());
+            if (blankerOn)
+                dsp.setNoiseBlanker(true, kNbLevel);
+
+            std::vector<double> blockRms;
+            bool collecting = false;
+            const auto conn = QObject::connect(&dsp, &AnanRxDsp::audioReady, &dsp,
+                [&](const std::vector<float>& pcm) {
+                    if (!collecting)
+                        return;
+                    double sum = 0.0;
+                    std::size_t count = 0;
+                    for (std::size_t k = 0; k < pcm.size(); k += 2) {
+                        sum += static_cast<double>(pcm[k]) * pcm[k];
+                        ++count;
+                    }
+                    blockRms.push_back(count > 0 ? std::sqrt(sum / static_cast<double>(count))
+                                                 : 0.0);
+                });
+
+            feed(dsp, tone(kInputRate, 0));            // arm on real signal
+            dsp.setAudioMuted(true);
+            feed(dsp, tone(kInputRate / 2, kInputRate)); // muted: channel sees zeros
+            dsp.setAudioMuted(false);
+            collecting = true;
+            feed(dsp, tone(kInputRate / 2, kInputRate + kInputRate / 2));
+            QObject::disconnect(conn);
+
+            double steady = 0.0;
+            const std::size_t tail = std::min<std::size_t>(10, blockRms.size());
+            for (std::size_t k = blockRms.size() - tail; k < blockRms.size(); ++k)
+                steady += blockRms[k];
+            steady = tail > 0 ? steady / static_cast<double>(tail) : 0.0;
+            int recovered = -1;
+            for (std::size_t k = 0; k < blockRms.size(); ++k) {
+                if (blockRms[k] > steady * 0.5) {
+                    recovered = static_cast<int>(k);
+                    break;
+                }
+            }
+            (blankerOn ? recoveryBlockOn : recoveryBlockOff) = recovered;
+        }
+
+        std::fprintf(stderr, "post-mute recovery block off=%d on=%d (%d samples each)\n",
+                     recoveryBlockOff, recoveryBlockOn, kEdgeBlock);
+        check(recoveryBlockOff >= 0, "the blanker-off arm recovers audio after a mute");
+        check(recoveryBlockOn >= 0, "the blanker-on arm recovers audio after a mute");
+        check(recoveryBlockOn >= 0 && recoveryBlockOn <= recoveryBlockOff,
+              "the noise blanker adds NO delay to the return of audio after a mute");
     }
 
     // ---- Group 5: droop-correction insertion point ----
-    // Pins that AnanDroopCorrection's per-bin dB correction lands exactly
-    // between AnanSpectrum::process() and smoothSpectrumBins()'s EMA -- not
-    // applied twice, not applied after smoothing. Uses a SYNTHETIC table
-    // pushed via setDroopCorrectionTable() rather than any bench-measured
-    // one, so this test is independent of whatever a real calibration sweep
-    // (AnanDroopCalibrator) or a per-radio settings load happened to
-    // produce. On a freshly configured AnanRxDsp, smoothSpectrumBins()
-    // takes its "nothing to blend against yet" branch on exactly the FIRST
-    // emitted frame (m_smoothedBins starts empty), which passes m_bins
-    // through untouched -- so the first frame's emitted bins must equal an
-    // independently computed raw AnanSpectrum frame plus the synthetic
-    // table, bin for bin.
+    // Pins that AnanDroopCorrection's per-point dB correction lands on the
+    // analyzer's output, once, and that the edge fade follows it. Uses a
+    // SYNTHETIC table pushed via setDroopCorrectionTable() rather than any
+    // bench-measured one, so this test is independent of whatever a real
+    // calibration sweep or a per-radio settings load happened to produce. The
+    // reference is a standalone analyzer fed the same IQ -- no AnanRxDsp
+    // involved -- so the first frame's emitted points must equal that raw
+    // frame plus the synthetic table, point for point.
     {
-        constexpr int kFft = 1024;   // matches production (AnanBackend.cpp
-                                     // always configures fftSize=1024) and
-                                     // the fixed size of every droop table.
-
-        AnanRxDsp::Config cfg;
-        cfg.inputSampleRateHz = 48000;   // -> 48 ksps, a recognized droop rate
-        cfg.audioSampleRateHz = kAudioRate;
-        cfg.dspBlockSize = kBlock;
-        cfg.fftSize = kFft;
-        cfg.mode = WdspChannel::Mode::Usb;
-        cfg.filterLowHz = 100.0;
-        cfg.filterHighHz = 2900.0;
-        cfg.agcMode = 0;                 // linear: nothing else rescales the bins
-        cfg.maximumAgcGainDb = 40.0;
-        cfg.blockForOutput = true;
-
         AnanRxDsp dsp;
         std::string err;
-        check(dsp.configure(cfg, &err),
+        check(dsp.configure(spectrumConfig(48000), &err),
               err.empty() ? "droop-correction test: configure() succeeds" : err.c_str());
 
         // Synthetic, deliberately non-zero and non-uniform so the test can't
@@ -453,48 +808,23 @@ int main(int argc, char** argv)
         DroopCorrectionTable syntheticTable{};
         for (std::size_t k = 0; k < syntheticTable.size(); ++k)
             syntheticTable[k] = 3.25f + 0.01f * static_cast<float>(k % 50);
-        dsp.setDroopCorrectionTable(cfg.inputSampleRateHz / 1000,
+        dsp.setDroopCorrectionTable(48,
             std::vector<float>(syntheticTable.begin(), syntheticTable.end()));
 
-        const std::vector<std::complex<float>> iq = makeTone(kFft, 37.0, /*conjugate=*/false);
-
-        std::vector<float> emitted;
-        bool gotFrame = false;
-        const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
-            [&](const std::vector<float>& bins) {
-                if (!gotFrame) {   // keep the FIRST frame only
-                    emitted = bins;
-                    gotFrame = true;
-                }
-            });
-        dsp.processIqBlock(iq);
-        QObject::disconnect(conn);
-        check(gotFrame, "the first processIqBlock() call emits one spectrum frame");
-
-        // Independently computed reference: the SAME conjugation convention
-        // processIqBlock() applies (raw IQ conjugated once, before the FFT --
-        // see processIqBlock()'s own comment on why the spectrum path
-        // conjugates), fed to a standalone AnanSpectrum with no AnanRxDsp
-        // involved at all.
-        std::vector<std::complex<float>> conjugated(iq.size());
-        for (std::size_t k = 0; k < iq.size(); ++k)
-            conjugated[k] = std::conj(iq[k]);
-        AnanSpectrum refSpectrum(kFft);
-        std::vector<float> rawBins;
-        check(refSpectrum.process(conjugated, rawBins) == 1,
-              "reference AnanSpectrum produces exactly one frame from the same IQ");
+        const auto iq = wireTone(kOneFft, 1300.0, 48000, 0.25f);
+        const std::vector<float> emitted = firstFrame(dsp, iq);
+        check(!emitted.empty(), "the droop test's AnanRxDsp emits a spectrum frame");
+        const std::vector<float> rawBins = rawAnalyzerFrame(iq, 48000);
 
         const DroopCorrectionTable& table = syntheticTable;
         check(emitted.size() == rawBins.size() && emitted.size() == table.size(),
               "emitted/reference/table sizes all agree");
 
-        // applyEdgeFade() now runs right after applyDroopCorrectionDb() for
-        // any rate with a real (non-zero) table -- which this synthetic one
-        // is -- so the outermost kTailBins on each side no longer equal
-        // raw+table exactly; they're the fade's own deterministic curve.
-        // kTailBins mirrors applyEdgeFade()'s own default tailFraction
-        // (0.03) at this test's fftSize (1024): static_cast<size_t>(1024 *
-        // 0.03f) == 30.
+        // applyEdgeFade() runs right after applyDroopCorrectionDb() for any
+        // rate with a real (non-zero) table -- which this synthetic one is --
+        // so the outermost kTailBins on each side are the fade's own curve.
+        // kTailBins mirrors applyEdgeFade()'s default tailFraction (0.03) at
+        // 1024 points: static_cast<size_t>(1024 * 0.03f) == 30.
         constexpr std::size_t kTailBins = 30;
 
         std::vector<float> rawPlusTable(rawBins.size());
@@ -503,43 +833,39 @@ int main(int argc, char** argv)
 
         bool matched = emitted.size() == rawBins.size() && emitted.size() == table.size();
         for (std::size_t k = kTailBins; matched && k < emitted.size() - kTailBins; ++k) {
-            if (std::fabs(emitted[k] - rawPlusTable[k]) > 1.0e-4f) {
+            if (std::fabs(emitted[k] - rawPlusTable[k]) > 1.0e-3f) {
                 matched = false;
                 std::fprintf(stderr,
-                    "  bin %zu: emitted=%.6f raw+correction=%.6f (raw=%.6f correction=%.6f)\n",
+                    "  point %zu: emitted=%.6f raw+correction=%.6f (raw=%.6f correction=%.6f)\n",
                     k, emitted[k], rawPlusTable[k], rawBins[k], table[k]);
             }
         }
         check(matched,
-              "the first emitted frame's non-tail bins equal the raw FFT bins plus the "
-              "rate's droop correction table, bin for bin -- proving the correction "
-              "lands between process() and the EMA, not before the FFT and not after "
-              "smoothing");
+              "the first emitted frame's non-tail points equal the analyzer's raw points "
+              "plus the rate's droop correction table -- the correction lands once, on "
+              "the analyzer's output");
 
-        // Tail bins: applyEdgeFade() run on a copy of raw+table, at the
-        // same defaults processIqBlock() uses, must equal what was emitted
-        // -- proving the fade is the SECOND step in the pipeline (after
-        // the per-bin correction, still before the EMA), not skipped and
-        // not applied to the raw bins directly.
+        // Tail points: applyEdgeFade() run on a copy of raw+table, at the
+        // same defaults processIqBlock() uses, must equal what was emitted --
+        // the fade is the SECOND step, not a replacement for the correction.
         std::vector<float> expectedTail = rawPlusTable;
         applyEdgeFade(expectedTail);
         bool tailMatched = expectedTail.size() == emitted.size();
         for (std::size_t k = 0; tailMatched && k < kTailBins; ++k) {
-            if (std::fabs(emitted[k] - expectedTail[k]) > 1.0e-4f)
+            if (std::fabs(emitted[k] - expectedTail[k]) > 1.0e-3f)
                 tailMatched = false;
             const std::size_t ridx = emitted.size() - 1 - k;
-            if (std::fabs(emitted[ridx] - expectedTail[ridx]) > 1.0e-4f)
+            if (std::fabs(emitted[ridx] - expectedTail[ridx]) > 1.0e-3f)
                 tailMatched = false;
         }
         check(tailMatched,
-              "the tail bins match applyEdgeFade() run on raw+table, bin for bin -- "
-              "the cosmetic fade is the second step, not a replacement for the real "
-              "correction and not skipped");
+              "the tail points match applyEdgeFade() run on raw+table -- the cosmetic "
+              "fade is the second step, not a replacement for the real correction");
     }
 
     // ---- Group 6: rate change picks up the NEW rate's droop table ----
     // Regression for a real bug: installRebuiltChannel() swapped in the new
-    // WdspChannel/AnanSpectrum but never updated m_config.inputSampleRateHz,
+    // WdspChannel and spectrum stage but never updated m_config.inputSampleRateHz,
     // so droopTableForRate() (which reads m_config.inputSampleRateHz, not
     // the rate the new channel was actually built for) kept consulting
     // whatever rate was live at the last configure() -- forever, for every
@@ -552,19 +878,7 @@ int main(int argc, char** argv)
     // emitted spectrum reflects the 96 ksps table -- not the 48 ksps one and
     // not the zero fallback.
     {
-        constexpr int kFft = 1024;
-
-        AnanRxDsp::Config cfg48;
-        cfg48.inputSampleRateHz = 48000;   // -> 48 ksps
-        cfg48.audioSampleRateHz = kAudioRate;
-        cfg48.dspBlockSize = kBlock;
-        cfg48.fftSize = kFft;
-        cfg48.mode = WdspChannel::Mode::Usb;
-        cfg48.filterLowHz = 100.0;
-        cfg48.filterHighHz = 2900.0;
-        cfg48.agcMode = 0;                 // linear: nothing else rescales the bins
-        cfg48.maximumAgcGainDb = 40.0;
-        cfg48.blockForOutput = true;
+        const AnanRxDsp::Config cfg48 = spectrumConfig(48000);   // -> 48 ksps
 
         AnanRxDsp dsp;
         std::string err;
@@ -587,46 +901,28 @@ int main(int argc, char** argv)
         AnanRxDsp::Config cfg96 = cfg48;
         cfg96.inputSampleRateHz = 96000;   // -> 96 ksps
         AnanRxDsp::RebuildResult result = AnanRxDsp::buildChannel(cfg96);
-        check(result.channel != nullptr,
+        check(result.channel != nullptr && result.analyzer != nullptr,
               result.error.empty() ? "rate-change test: 96 ksps buildChannel() succeeds"
                                    : result.error.c_str());
         check(dsp.installRebuiltChannel(std::move(result)),
               "rate-change test: installRebuiltChannel() to 96 ksps succeeds");
 
-        const std::vector<std::complex<float>> iq = makeTone(kFft, 37.0, /*conjugate=*/false);
-        std::vector<float> emitted;
-        bool gotFrame = false;
-        const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
-            [&](const std::vector<float>& bins) {
-                if (!gotFrame) {
-                    emitted = bins;
-                    gotFrame = true;
-                }
-            });
-        dsp.processIqBlock(iq);
-        QObject::disconnect(conn);
-        check(gotFrame, "rate-change test: processIqBlock() emits a frame after the rebuild");
+        const auto iq = wireTone(kOneFft, 1300.0, 96000, 0.25f);
+        const std::vector<float> emitted = firstFrame(dsp, iq);
+        check(!emitted.empty(), "rate-change test: a frame is emitted after the rebuild");
+        const std::vector<float> rawBins = rawAnalyzerFrame(iq, 96000);
 
-        std::vector<std::complex<float>> conjugated(iq.size());
-        for (std::size_t k = 0; k < iq.size(); ++k)
-            conjugated[k] = std::conj(iq[k]);
-        AnanSpectrum refSpectrum(kFft);
-        std::vector<float> rawBins;
-        check(refSpectrum.process(conjugated, rawBins) == 1,
-              "rate-change test: reference AnanSpectrum produces exactly one frame");
-
-        // Skip the tail bins here -- applyEdgeFade() replaces them with its
-        // own deterministic curve (see Group 5, which already covers that
-        // math in detail); this group's job is only to confirm the RIGHT
-        // rate's table drives the non-tail bins after a live rate change.
+        // Skip the tail points -- applyEdgeFade() replaces them with its own
+        // curve (Group 5 covers that); this group's job is only to confirm the
+        // RIGHT rate's table drives the rest after a live rate change.
         constexpr std::size_t kTailBins = 30;
         bool matched = emitted.size() == rawBins.size() && emitted.size() == table96.size();
         for (std::size_t k = kTailBins; matched && k < emitted.size() - kTailBins; ++k) {
-            if (std::fabs(emitted[k] - (rawBins[k] + table96[k])) > 1.0e-4f)
+            if (std::fabs(emitted[k] - (rawBins[k] + table96[k])) > 1.0e-3f)
                 matched = false;
         }
         check(matched,
-              "after a live rate change, the emitted frame's non-tail bins use the NEW "
+              "after a live rate change, the emitted frame's non-tail points use the NEW "
               "rate's (96 ksps) droop table -- proving m_config.inputSampleRateHz was "
               "updated by the rebuild, not left stale at the connect-time 48 ksps");
     }
@@ -652,24 +948,12 @@ int main(int argc, char** argv)
     //     must return the same rate to the true zero path -- again including
     //     the fade, for the same identity reason.
     //
-    // Each case needs its OWN AnanRxDsp: smoothSpectrumBins() passes only the
-    // FIRST emitted frame through untouched (m_smoothedBins starts empty),
-    // and a comparison against a raw reference is only exact on that frame.
+    // Each case needs its OWN AnanRxDsp: the first frame from a fresh analyzer
+    // is exactly one FFT (the average is seeded from it), which is what makes
+    // an exact comparison against a raw reference possible.
     {
-        constexpr int kFft = 1024;
         constexpr int kRateKsps = 48;
-
-        AnanRxDsp::Config cfg;
-        cfg.inputSampleRateHz = kRateKsps * 1000;
-        cfg.audioSampleRateHz = kAudioRate;
-        cfg.dspBlockSize = kBlock;
-        cfg.fftSize = kFft;
-        cfg.mode = WdspChannel::Mode::Usb;
-        cfg.filterLowHz = 100.0;
-        cfg.filterHighHz = 2900.0;
-        cfg.agcMode = 0;
-        cfg.maximumAgcGainDb = 40.0;
-        cfg.blockForOutput = true;
+        const AnanRxDsp::Config cfg = spectrumConfig(kRateKsps * 1000);
 
         // Non-uniform and non-zero, so "suppressed" cannot pass by accident.
         DroopCorrectionTable syntheticTable{};
@@ -677,17 +961,10 @@ int main(int argc, char** argv)
             syntheticTable[k] = 5.5f + 0.02f * static_cast<float>(k % 40);
         const std::vector<float> tableVec(syntheticTable.begin(), syntheticTable.end());
 
-        const std::vector<std::complex<float>> iq = makeTone(kFft, 41.0, /*conjugate=*/false);
+        const auto iq = wireTone(kOneFft, 1900.0, kRateKsps * 1000, 0.25f);
 
-        // The raw reference: the same conjugation convention processIqBlock()
-        // uses, through a standalone AnanSpectrum with no AnanRxDsp involved.
-        std::vector<std::complex<float>> conjugated(iq.size());
-        for (std::size_t k = 0; k < iq.size(); ++k)
-            conjugated[k] = std::conj(iq[k]);
-        AnanSpectrum refSpectrum(kFft);
-        std::vector<float> rawBins;
-        check(refSpectrum.process(conjugated, rawBins) == 1,
-              "bypass test: reference AnanSpectrum produces exactly one frame");
+        // The raw reference: a standalone analyzer, no AnanRxDsp involved.
+        const std::vector<float> rawBins = rawAnalyzerFrame(iq, kRateKsps * 1000);
 
         // Captures the first emitted frame from a freshly configured AnanRxDsp
         // after `arrange` has had its way with the droop tables.
@@ -698,41 +975,31 @@ int main(int argc, char** argv)
                   err.empty() ? "bypass test: configure() succeeds" : err.c_str());
             dsp.setDroopCorrectionTable(kRateKsps, tableVec);
             arrange(dsp);
-            std::vector<float> emitted;
-            bool got = false;
-            const auto conn = QObject::connect(&dsp, &AnanRxDsp::spectrumReady,
-                [&](const std::vector<float>& bins) {
-                    if (!got) { emitted = bins; got = true; }
-                });
-            dsp.processIqBlock(iq);
-            QObject::disconnect(conn);
-            check(got, "bypass test: processIqBlock() emits one spectrum frame");
+            const std::vector<float> emitted = firstFrame(dsp, iq);
+            check(!emitted.empty(), "bypass test: processIqBlock() emits a spectrum frame");
             return emitted;
         };
 
         // `report` only for the checks that EXPECT equality -- the negative
         // controls below call this too, and printing their first differing
-        // bin would decorate a fully passing run with what looks like failure
-        // output.
+        // point would decorate a fully passing run with what looks like
+        // failure output.
         const auto equalsRawEverywhere = [&](const std::vector<float>& emitted,
                                              bool report) {
-            if (emitted.size() != rawBins.size())
+            if (emitted.size() != rawBins.size() || emitted.empty())
                 return false;
-            bool equal = true;
             for (std::size_t k = 0; k < emitted.size(); ++k) {
-                if (std::fabs(emitted[k] - rawBins[k]) > 1.0e-4f) {
-                    if (!report)
-                        return false;
-                    equal = false;
-                    std::fprintf(stderr, "  bin %zu: emitted=%.6f raw=%.6f\n",
-                                 k, emitted[k], rawBins[k]);
-                    break;
+                if (std::fabs(emitted[k] - rawBins[k]) > 1.0e-3f) {
+                    if (report)
+                        std::fprintf(stderr, "  point %zu: emitted=%.6f raw=%.6f\n",
+                                     k, emitted[k], rawBins[k]);
+                    return false;
                 }
             }
-            return equal;
+            return true;
         };
 
-        // Control: armed, the table really does change the bins. Without this
+        // Control: armed, the table really does change the points. Without this
         // the two suppression checks below would pass on a broken table push.
         const std::vector<float> armed = firstFrameWith([](AnanRxDsp&) {});
         check(!equalsRawEverywhere(armed, /*report=*/false),
@@ -741,9 +1008,9 @@ int main(int argc, char** argv)
         const std::vector<float> bypassed =
             firstFrameWith([](AnanRxDsp& d) { d.setDroopCorrectionBypassed(true); });
         check(equalsRawEverywhere(bypassed, /*report=*/true),
-              "with the correction bypassed, the emitted frame equals the raw FFT bins "
-              "across the WHOLE frame -- neither the per-bin correction nor the edge "
-              "fade survives, so a calibration sweep measures the radio and not its "
+              "with the correction bypassed, the emitted frame equals the analyzer's raw "
+              "points across the WHOLE frame -- neither the per-point correction nor the "
+              "edge fade survives, so a calibration sweep measures the radio and not its "
               "own corrected output");
 
         const std::vector<float> cleared =
@@ -759,10 +1026,121 @@ int main(int argc, char** argv)
             d.setDroopCorrectionBypassed(true);
             d.setDroopCorrectionBypassed(false);
         });
-        check(!equalsRawEverywhere(restored, /*report=*/false) && restored == armed,
+        check(!equalsRawEverywhere(restored, /*report=*/false)
+                  && allClose(restored, armed, 1.0e-3f),
               "lifting the bypass restores the identical corrected frame -- the tables "
               "were hidden, never discarded, so an aborted sweep cannot lose a "
               "calibration");
+    }
+
+    // ---- Group 8: the S-meter never publishes our own silence ----
+    //
+    // Two edges, one cause. While the audio channel is clocked with zeros
+    // (setAudioMuted(), used across a rate change) WDSP's signal-average
+    // meter integrates that silence, and because nothing flushes its average
+    // the reading is still wrong for the length of its own time constant
+    // AFTER the mute lifts. A guard on the mute flag alone would therefore
+    // move the needle's dive from during the zoom to the end of it. Removing
+    // the settle window turns the last check here red.
+    {
+        const int settle = AetherSDR::WdspSMeter::settleBlocks(kInputRate, kBlock);
+        check(settle == 15,
+              "3 tau of WDSP's 0.100 s meter average at 48 ksps / 1024-sample blocks "
+              "is 15 blocks (ceil of 14.0625)");
+        // The count is in blocks but the wait is a property of the tap, so it
+        // has to come out as the same wall-clock time at every DDC0 rate --
+        // a zoom must not settle six times longer at 48 than at 1536 ksps.
+        for (const int ksps : kDdc0RatesKsps) {
+            const int n = AetherSDR::WdspSMeter::settleBlocks(ksps * 1000, kBlock);
+            const double seconds = static_cast<double>(n) * kBlock / (ksps * 1000.0);
+            const double target = AetherSDR::WdspSMeter::kSettleTaus * AetherSDR::WdspSMeter::kAverageTauSec;
+            const double oneBlock = static_cast<double>(kBlock) / (ksps * 1000.0);
+            check(seconds >= target && seconds - target <= oneBlock,
+                  "the settle rounds up to the same 0.3 s at every DDC0 rate");
+        }
+        check(AetherSDR::WdspSMeter::settleBlocks(0, 0) == 1,
+              "an unconfigured rate still swallows one block rather than dividing by zero");
+
+        AnanRxDsp dsp;
+        AnanRxDsp::Config cfg;
+        cfg.inputSampleRateHz = kInputRate;
+        cfg.audioSampleRateHz = kAudioRate;
+        cfg.dspBlockSize = kBlock;
+        cfg.panPoints = 256;
+        // WDSP taps this meter immediately AFTER the main bandpass -- upstream
+        // RXA.c:647-648 runs xnbp(nbp0) and then xmeter(smeter) on the same
+        // midbuff -- so the tone has to be inside the passband or the meter
+        // reads the floor and the group proves nothing. Group 2's arrangement,
+        // already established there: a +800 Hz WIRE tone lands in an LSB
+        // channel's negative passband.
+        cfg.mode = WdspChannel::Mode::Lsb;
+        cfg.filterLowHz = -9000.0;
+        cfg.filterHighHz = -100.0;
+        cfg.agcMode = 0;                    // AGC off: the level is the signal's
+        cfg.maximumAgcGainDb = 40.0;
+        cfg.blockForOutput = true;          // deterministic for an offline burst feed
+        std::string err;
+        check(dsp.configure(cfg, &err), err.empty() ? "AnanRxDsp configures" : err.c_str());
+
+        std::vector<float> levels;
+        const auto conn = QObject::connect(&dsp, &AnanRxDsp::meterUpdate,
+                                           [&](float dbfs) { levels.push_back(dbfs); });
+
+        double phase = 0.0;
+        const double dp = 2.0 * kPi * 800.0 / kInputRate;
+        const auto feed = [&](int blocks) {
+            for (int b = 0; b < blocks; ++b) {
+                std::vector<std::complex<float>> iq(kBlock);
+                for (int k = 0; k < kBlock; ++k) {
+                    iq[static_cast<std::size_t>(k)] = {
+                        static_cast<float>(0.25 * std::cos(phase)),
+                        static_cast<float>(0.25 * std::sin(phase))
+                    };
+                    phase += dp;
+                    if (phase > 2.0 * kPi) phase -= 2.0 * kPi;
+                }
+                dsp.processIqBlock(iq);
+            }
+        };
+
+        // A channel is born with its average at zero, so the same window
+        // applies from the other end -- no mute involved.
+        feed(settle);
+        check(levels.empty(),
+              "a freshly installed channel publishes nothing until its meter has settled");
+
+        feed(60);
+        check(!levels.empty(), "a steady tone is published once the meter has settled");
+        const float preMute = levels.empty() ? -400.0f : levels.back();
+        check(preMute > -100.0f, "the settled reading is a real level, not the meter floor");
+
+        // The mute itself: the positive control above ran through this same
+        // connection, so "no emissions" here can only be the guard.
+        levels.clear();
+        dsp.setAudioMuted(true);
+        feed(12);                           // 250 ms, the rate change's settle window
+        check(levels.empty(),
+              "nothing is published while the channel is clocked with our own silence");
+
+        // The edge this group exists for. Cleared first so this check cannot
+        // inherit a failure of the muted-silence check above.
+        levels.clear();
+        dsp.setAudioMuted(false);
+        feed(settle);
+        check(levels.empty(),
+              "and nothing is published while the meter's average still carries it");
+
+        feed(40);
+        check(!levels.empty(), "readings resume after the settle window");
+        const float first = levels.empty() ? -400.0f : levels.front();
+        std::fprintf(stderr, "S-meter: %.1f dBFS before the mute, %.1f dBFS on the "
+                             "first reading after it\n",
+                     static_cast<double>(preMute), static_cast<double>(first));
+        check(std::fabs(first - preMute) < 3.0f,
+              "the first reading after the mute is within 3 dB of the pre-mute level -- "
+              "the needle holds through a zoom instead of diving at the end of it");
+
+        QObject::disconnect(conn);
     }
 
     if (g_failures == 0)

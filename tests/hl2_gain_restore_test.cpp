@@ -2,6 +2,7 @@
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/anan/AnanBackend.h"
 #include "gui/RfGainRestore.h"
 
 #include <QCoreApplication>
@@ -191,10 +192,33 @@ int main(int argc, char** argv)
         check(bandGain(session.backend.currentOperatingState(), QStringLiteral("20m")) == -12,
               "clamped connect override still preserves stored gain while pinned");
     }
+    // No transport: apply the per-radio snapshot, then exercise the same
+    // legacy-display helper called by MainWindow when the pan appears.
+    {
+        anan::AnanBackend backend;
+        RestoredRadioState state;
+        state.extensionSchemaVersion = 1;
+        state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
+            {QStringLiteral("adc0AttenuationDb"), 12},
+            {QStringLiteral("adc1AttenuationDb"), 23}}}};
+        backend.applyRestoredState(state);
+        const RadioCapabilities ananCaps = backend.capabilities();
+        int writes = 0;
+        const int shown = restoreLegacyRfGain(ananCaps.family,
+            ananCaps.clientSettingsDomains.testFlag(RadioCapabilities::ClientSettingsDomain::RfGain),
+            -5, -backend.attenuationDbForTest(), [&backend, &writes](int gain) {
+                ++writes;
+                backend.setPanRfGain(QStringLiteral("0"), gain);
+            });
+        check(shown == -12 && writes == 0 && backend.attenuationDbForTest() == 12,
+              "ANAN startup preserves per-radio attenuation despite stale family display gain");
+        check(backend.currentOperatingState().extension == state.extension,
+              "legacy display restore leaves both ANAN ADC values intact");
+    }
     // Cross-family compatibility at the exact display-restore seam. No Flex or
     // Icom backend is instantiated or changed; their current domain is empty.
     for (const QString& family : {QStringLiteral("flex"), QStringLiteral("icom"),
-                                  QStringLiteral("sim"), QStringLiteral("anan")}) {
+                                  QStringLiteral("sim")}) {
         int writes = 0;
         const int result = restoreLegacyRfGain(family, false, 20, 7,
             [&writes](int) { ++writes; });
@@ -203,7 +227,7 @@ int main(int argc, char** argv)
     int writes = 0;
     check(restoreLegacyRfGain(u"other", true, 20, 7,
               [&writes](int gain) { writes += gain == 20; }) == 20 && writes == 1,
-          "a non-HL2 client-owned family retains its existing saved replay");
+          "another client-owned family retains its existing saved replay");
     check(restoreLegacyRfGain(u"other", true, std::nullopt, 7,
               [&writes](int) { ++writes; }) == 7 && writes == 1,
           "an absent saved gain never writes a default");

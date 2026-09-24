@@ -1,5 +1,6 @@
 #include "TunerApplet.h"
 #include "HGauge.h"
+#include "MeterSmoother.h"
 #include "AccessoryPanelWidgets.h"
 #include "models/TunerModel.h"
 #include "models/MeterModel.h"
@@ -127,15 +128,6 @@ TunerApplet::TunerApplet(QWidget* parent)
         m_swrLabel->setText("SWR");
     });
 
-    // Peak hold: clear the white tick 2.5 s after the last new peak.
-    m_peakTimer = new QTimer(this);
-    m_peakTimer->setSingleShot(true);
-    m_peakTimer->setInterval(2500);
-    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
-        m_peakFwd = 0.0f;
-        static_cast<HGauge*>(m_fwdGauge)->clearPeak();
-    });
-
     // Relay-only completion notice. The first timer waits for the settled SWR
     // to arrive after the tune ends — the meters lag the tuning edge — and the
     // second takes the banner down again, because on this path there is no
@@ -251,8 +243,7 @@ void TunerApplet::buildUI()
     m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "", "",
         {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
         this, 80.0f);
-    // Slow release: bar rises quickly on RF bursts but decays over ~800 ms
-    static_cast<HGauge*>(m_fwdGauge)->setBallistics({0.030f, 0.800f});
+    static_cast<HGauge*>(m_fwdGauge)->setWindowPeakEnabled(true);
     m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
@@ -730,6 +721,12 @@ void TunerApplet::setRadioConnected(bool connected)
 {
     if (m_radioConnected == connected) return;
     m_radioConnected = connected;
+    if (!connected) {
+        auto* gauge = static_cast<HGauge*>(m_fwdGauge);
+        gauge->setWindowPeakEnabled(true);
+        gauge->setValueImmediate(0.0f);
+        gauge->clearPeak();
+    }
     updatePortRows();
 }
 
@@ -1042,7 +1039,14 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // applet is first built and decides which row is outlined.
     connect(m_model, &TunerModel::stateChanged, this, &TunerApplet::updateActivePort);
     connect(m_model, &TunerModel::directConnectionChanged, this,
-            [this](bool) { updatePortRows(); });
+            [this](bool connected) {
+                if (!connected) {
+                    auto* gauge = static_cast<HGauge*>(m_fwdGauge);
+                    gauge->setWindowPeakEnabled(true);
+                    gauge->clearPeak();
+                }
+                updatePortRows();
+            });
 
     connect(m_model, &TunerModel::alertChanged, this, &TunerApplet::setAlertText);
     setAlertText(m_model->alert());
@@ -1197,27 +1201,41 @@ void TunerApplet::cycleOperateState()
 
 void TunerApplet::setRadioMeters(float fwdPower, float swr)
 {
-    m_radioMeters.restart();
-    updateMeters(fwdPower, swr);
-}
-
-void TunerApplet::setDeviceMeters(float fwdPower, float swr)
-{
-    // Discarded, not applied-then-overwritten, while the relay is live. Two
-    // sources writing one gauge at different rates is last-writer-wins, and
-    // the slower one kept dragging the bar back to a stale sample.
-    if (m_radioMeters.isValid()
-            && m_radioMeters.elapsed() < kRelayMeterFreshnessMs) {
+    // Yields to the tuner's own status while that is arriving. Which source
+    // wins used to be the other way round, and was right when it was written:
+    // both ran at about 1 Hz, and the relay was the steadier of the two.
+    //
+    // The direct path is now 60 Hz while keyed and carries the device's peak
+    // field, which the relay does not have at all -- so the relay became the
+    // stale one. It still suppressed the direct path for 1500 ms per sample,
+    // which meant the gauge ran at the relay's rate on any station whose
+    // radio relays TGXL meters, and none of the faster polling reached the
+    // screen there.
+    if (m_deviceMeters.isValid()
+            && m_deviceMeters.elapsed() < kRelayMeterFreshnessMs) {
         return;
     }
     updateMeters(fwdPower, swr);
 }
 
-void TunerApplet::updateMeters(float fwdPower, float swr)
+void TunerApplet::setDeviceMeters(float fwdPower, float swr, float fwdPeak)
+{
+    // The authority whenever it is connected. The relay above takes over
+    // within kRelayMeterFreshnessMs of this going quiet, so a station with no
+    // direct connection, or one that drops, still gets a meter.
+    m_deviceMeters.restart();
+    updateMeters(fwdPower, swr, fwdPeak);
+}
+
+void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
 {
     m_fwdPower = fwdPower;
     m_swr = swr;
-    static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
+    auto* powerGauge = static_cast<HGauge*>(m_fwdGauge);
+    if (fwdPeak < 0.0f) {
+        powerGauge->setWindowPeakEnabled(true);
+    }
+    powerGauge->setValue(fwdPower);
     // TGXL sends swr=0.0000 (return loss = 0 dB) at idle — no incident signal
     // to measure against. The model converts that to rho=1.0 → ratio=99.9, which
     // pegs the gauge. Snap to 1.0 (empty) whenever forward power is below the
@@ -1229,10 +1247,18 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
     } else {
         static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
     }
-    if (fwdPower > m_peakFwd) {
-        m_peakFwd = fwdPower;
-        static_cast<HGauge*>(m_fwdGauge)->setPeakValue(fwdPower);
-        m_peakTimer->start();
+    // Peak the device's own reading when we have one. `fwd` is a single
+    // instant sampled well below the envelope rate, so peaking it holds the
+    // loudest silence rather than the loudest syllable: on a measured voice
+    // transmission `fwd` sat at 0.14 W in roughly three samples out of four
+    // while the TGXL's `peak` read up to 82 W. The radio-relayed path has no
+    // peak field and keeps the old behaviour.
+    // The device's own peak is a separately measured statistic, so it owns
+    // the external-peak mode while direct telemetry is present. The relay
+    // path above switches back to a window over fwdPower when no device peak
+    // is available.
+    if (fwdPeak >= 0.0f) {
+        powerGauge->setExternalPeak(fwdPeak);
     }
     updateValueLabels();
 }
@@ -1242,6 +1268,15 @@ void TunerApplet::updateValueLabels()
     if (m_fwdPower >= 5.0f) {
         m_labelClearTimer->stop();
         m_labelShowing = true;
+        // The bar animates at the full rate; the digits do not. At the
+        // transmit poll rate the text would change tens of times a second,
+        // which is not readable -- same reason the client meters throttle
+        // their readout to kMeterReadoutUpdateMs.
+        if (m_readoutClock.isValid()
+            && m_readoutClock.elapsed() < kMeterReadoutUpdateMs) {
+            return;
+        }
+        m_readoutClock.restart();
         m_pwrLabel->setText(QStringLiteral("PWR  %1").arg(static_cast<int>(m_fwdPower)));
         m_swrLabel->setText(QStringLiteral("SWR  %1:1").arg(m_swr, 0, 'f', 1));
     } else if (m_labelShowing && !m_labelClearTimer->isActive()) {

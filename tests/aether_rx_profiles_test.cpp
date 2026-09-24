@@ -5,6 +5,7 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AetherRxProfiles.h"
+#include "core/ChannelStripPresets.h"
 #include "core/AudioEngine.h"
 #include "core/ClientComp.h"
 #include "core/AppSettings.h"
@@ -51,6 +52,7 @@ private slots:
     void anUnknownStageNameStillResetsToTheDefault();
     void retiredSettingsKeysAreDroppedOnLoad();
     void aRefusedWriteKeepsTheLibraryAndReportsFailure();
+    void legacyPresetsMigrateTheirReceiveHalfOnly();
 
 private:
     QTemporaryDir m_home;
@@ -353,6 +355,44 @@ void AetherRxProfilesTest::aRefusedWriteKeepsTheLibraryAndReportsFailure()
     AetherRxProfiles reopened(nullptr);
     QVERIFY(reopened.hasProfile("Keep Me"));
     QVERIFY(!reopened.hasProfile("Should Not Land"));
+}
+
+void AetherRxProfilesTest::legacyPresetsMigrateTheirReceiveHalfOnly()
+{
+    // A channel-strip preset carried both directions. The receive half is the
+    // nested "rx" block, and it is the only part that belongs here — taking
+    // the top level too would drag transmit values into the receive chain.
+    QFile::remove(SettingsPaths::configDir() + "/AetherRxProfiles.json");
+
+    QJsonObject preset{
+        { "createdBy", "AetherSDR" },
+        { "chain", QJsonArray{ "Gate", "Eq" } },                     // TX half
+        { "gate",  QJsonObject{ { "thresholdDb", -11.0 } } },        // TX half
+        { "rx",    sampleProfile(-55.0) },
+    };
+    QJsonObject noRx = preset;
+    noRx.remove("rx");
+
+    QFile f(ChannelStripPresets::legacyLibraryPath());
+    QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    f.write(QJsonDocument(QJsonObject{
+        { "version", 1 },
+        { "presets", QJsonObject{ { "Ragchew", preset },
+                                  // Saved before the RX chain existed: no
+                                  // receive half, so nothing to migrate.
+                                  { "Ancient", noRx } } } }).toJson());
+    f.close();
+
+    AetherRxProfiles lib(nullptr);
+    QVERIFY2(lib.hasProfile("Ragchew"), qPrintable(lib.profileNames().join(',')));
+    QVERIFY(!lib.hasProfile("Ancient"));
+
+    const QString out = m_home.path() + "/migrated-rx.json";
+    QVERIFY(lib.exportToFile("Ragchew", out));
+    QFile g(out);
+    QVERIFY(g.open(QIODevice::ReadOnly));
+    const QJsonObject got = QJsonDocument::fromJson(g.readAll()).object();
+    QCOMPARE(got.value("gate").toObject().value("thresholdDb").toDouble(), -55.0);
 }
 
 int main(int argc, char** argv)

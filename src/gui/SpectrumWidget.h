@@ -66,6 +66,7 @@ enum class WfColorScheme : int {
     Fire,          // black → red → orange → yellow → white
     Plasma,        // black → purple → magenta → orange → yellow
     Purple,        // SmartSDR "Add Purple": black→blue→green→yellow→red→purple→white
+    Glacier,       // deep blue → blue → ice blue → white (first preset not black at t=0)
     Count          // sentinel — number of schemes
 };
 
@@ -86,6 +87,7 @@ inline const char* wfSchemeName(WfColorScheme scheme)
     case WfColorScheme::Fire:      return "Fire";
     case WfColorScheme::Plasma:    return "Plasma";
     case WfColorScheme::Purple:    return "Purple";
+    case WfColorScheme::Glacier:   return "Glacier";
     default:                       return "Default";
     }
 }
@@ -239,6 +241,16 @@ public:
     void showInterlockNotification(const QString& message,
                                    const QString& key = QString(),
                                    int durationMs = 5000);
+    // Transient card for something that is neither a TX block nor a swallowed
+    // TX filter -- a control that refused to arm, say. Takes its OWN card id
+    // for the reason showTxFilterNotification took one: showInterlockNotification
+    // pins every card it raises to "interlock.active" on a latest-wins rule, so
+    // routing an unrelated notice through it evicts a live "Transmit disabled"
+    // card in place, and is evicted by the next one. `id` must be non-empty and
+    // stable, so re-raising the same notice replaces it rather than stacking.
+    void showNoticeCard(const QString& detail,
+                        const QString& id,
+                        int durationMs = 5000);
 
     // Feed a new FFT frame. bins are scaled dBm values.
     void updateSpectrum(const QVector<float>& binsDbm);
@@ -399,6 +411,19 @@ public:
             return;
         m_edgeTaperEnabled = enabled;
         markOverlayDirty();
+    }
+
+    // Skip the fixed client-side EMA (SMOOTH_ALPHA) on the spectrum trace
+    // when the backend already averages per the operator's FFT AVG
+    // (RadioCapabilities::backendPanAveraging). m_smoothed then simply
+    // tracks the latest frame, so its readers (trace, noise floor) keep
+    // working unchanged.
+    void setClientFftSmoothingEnabled(bool enabled)
+    {
+        if (m_clientFftSmoothing == enabled)
+            return;
+        m_clientFftSmoothing = enabled;
+        m_resetFftSmoothingOnNextFrame = true;
     }
 
     // Enable/disable the "S"/"B" (segment/band zoom) buttons and explain why
@@ -966,6 +991,12 @@ public:
     static void toggleStarstruckMode();
 
 private:
+    // The one builder behind showInterlockNotification, showTxFilterNotification
+    // and showNoticeCard. The three differ only in how they choose the id and
+    // the title; everything a warning card IS -- dismissible, Warning tone, a
+    // floor of 1 ms -- is decided here once.
+    void raiseWarningCard(const QString& id, const QString& title,
+                          const QString& detail, int durationMs);
     void setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
                                    bool animateSmallNudges);
     double effectiveGridStepMhz(int widgetWidth) const;
@@ -1374,6 +1405,11 @@ private:
     float kiwiSdrWaterfallLevel(float level) const;
     float intensityToWaterfallLevel(float intensity) const;
     QRgb waterfallLevelToRgb(float level) const;
+    // The colour a cleared / not-yet-painted waterfall pixel takes: the current
+    // palette's floor, not Qt::black. Every preset through Purple is #000000 at
+    // t=0, so this is a no-op for them; Glacier is the first palette with a
+    // non-black floor.
+    QRgb waterfallFloorRgb() const;
     static quint8 encodeWaterfallLevel(float level);
     std::array<QRgb, 256> waterfallHistoryColorLut() const;
     // 3DSS surface colour for a normalised strength s in [0,1] across the stable
@@ -2089,6 +2125,8 @@ private:
 
     // See setPanEdgeTaperEnabled()'s own comment.
     bool m_edgeTaperEnabled{false};
+    // See setClientFftSmoothingEnabled()'s own comment.
+    bool m_clientFftSmoothing{true};
     bool m_kiwiSdrDisplaySourceKiwi{false};
 
 #ifdef AETHER_GPU_SPECTRUM

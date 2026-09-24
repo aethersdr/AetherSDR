@@ -29,9 +29,26 @@ public:
     struct Tuning {
         double windowSeconds = SmartMtrExtremes::kWindowMediumSec;
         double slewUnitsPerSec = SmartMtrExtremes::kSlewUnitsPerSec;
+        // The scale this engine works in. Defaults to SmartMTR's own UNIT
+        // span so the VFO flag is unaffected; HGauge passes its gauge range
+        // in watts instead. One engine, two scales -- duplicating it is how
+        // meter behaviour drifts apart in the first place.
+        double scaleMin = SmartMtrUnits::kScaleMin;
+        double scaleMax = SmartMtrUnits::kScaleMax;
     };
 
-    void setTuning(const Tuning& t) { m_tuning = t; }
+    void setTuning(const Tuning& t)
+    {
+        const bool scaleChanged = t.scaleMin != m_tuning.scaleMin
+                                  || t.scaleMax != m_tuning.scaleMax;
+        m_tuning = t;
+        // A scale change invalidates the marker positions: they are stored in
+        // the old scale's units and would otherwise sit off the new bar.
+        if (scaleChanged || !m_hasData) {
+            m_minPos = floorPos();
+            m_maxPos = floorPos();
+        }
+    }
     const Tuning& tuning() const { return m_tuning; }
 
     // Reversed (gain-reduction) meters fill from the high end of the scale, so the
@@ -41,7 +58,7 @@ public:
     void setReversed(bool r) { m_reversed = r; }
     double floorPos() const
     {
-        return m_reversed ? SmartMtrUnits::kScaleMax : SmartMtrUnits::kScaleMin;
+        return m_reversed ? m_tuning.scaleMax : m_tuning.scaleMin;
     }
 
     // Clear the window and snap both markers to the floor (rest position). Used on
@@ -146,8 +163,8 @@ public:
         // 4) Ordering / floor clamps: min <= needle <= max, nothing below floor.
         if (m_maxPos < needlePosUnits) m_maxPos = needlePosUnits;
         if (m_minPos > needlePosUnits) m_minPos = needlePosUnits;
-        if (m_minPos < SmartMtrUnits::kScaleMin) m_minPos = SmartMtrUnits::kScaleMin;
-        if (m_maxPos < SmartMtrUnits::kScaleMin) m_maxPos = SmartMtrUnits::kScaleMin;
+        if (m_minPos < m_tuning.scaleMin) m_minPos = m_tuning.scaleMin;
+        if (m_maxPos < m_tuning.scaleMin) m_maxPos = m_tuning.scaleMin;
         if (m_minPos > m_maxPos) m_minPos = m_maxPos;
 
         // Keep animating while a marker is mid-slew OR has not yet collapsed onto
@@ -209,7 +226,7 @@ private:
     double m_sumRaw = 0.0;
     double m_minRaw = 0.0;
     double m_maxRaw = 0.0;
-    double m_minPos = SmartMtrUnits::kScaleMin;
+    double m_minPos = SmartMtrUnits::kScaleMin;   // re-seeded by setTuning()
     double m_maxPos = SmartMtrUnits::kScaleMin;
     bool m_hasData = false;
 

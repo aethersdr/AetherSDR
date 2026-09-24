@@ -57,6 +57,11 @@ bool TxCoordinator::Operation::permitsDispatch(qint64 now) const
         || now < m_state->startedMs) {
         return false;
     }
+    Actor actor;
+    actor.m_state = m_state->actor;
+    if (!actor.permitsDispatch(now)) {
+        return false;
+    }
     // Subtract only after validating nonnegative, ordered clock values. Avoid
     // deadline addition, which overflows for a large trusted-clock test input.
     return m_state->maximumMs == 0
@@ -88,6 +93,11 @@ TxCoordinator::Operation TxCoordinator::Operation::withKeyingPermit(std::functio
 TxCoordinator::Operation TxCoordinator::Operation::heldKeying() const
 {
     return heldActivities(static_cast<unsigned>(Activity::Mox) | static_cast<unsigned>(Activity::CwPtt));
+}
+
+bool TxCoordinator::Operation::independent() const
+{
+    return m_state && m_state->actor && m_state->actor->policy.independent;
 }
 
 TxCoordinator::Operation TxCoordinator::Operation::heldCwKeying() const
@@ -193,7 +203,29 @@ bool TxCoordinator::Producer::valid() const
         return false;
     }
     const std::shared_ptr<Identity> identity = m_state->coordinator.lock();
-    return identity && identity->alive.load(std::memory_order_acquire);
+    return identity && identity->alive.load(std::memory_order_acquire)
+        && (!m_state->actor
+            || (!m_state->actor->revoked.load(std::memory_order_acquire)
+                && (!m_state->actor->policy.independent
+                    || m_state->actor->session == identity->session.load(std::memory_order_acquire))));
+}
+
+bool TxCoordinator::Actor::permitsDispatch(qint64 now) const
+{
+    if (!m_state || now < 0 || m_state->revoked.load(std::memory_order_acquire)
+        || !m_state->policy.mayTransmit
+        || (m_state->policy.authorizationCurrent && !m_state->policy.authorizationCurrent())
+        || (m_state->policy.expiresAtMs != 0 && now >= m_state->policy.expiresAtMs)) {
+        return false;
+    }
+    const qint64 liveness = m_state->livenessDeadlineMs.load(std::memory_order_acquire);
+    if (liveness != 0 && now >= liveness) {
+        return false;
+    }
+    const std::shared_ptr<Identity> identity = m_state->coordinator.lock();
+    return identity && identity->alive.load(std::memory_order_acquire)
+        && (!m_state->policy.independent
+            || m_state->session == identity->session.load(std::memory_order_acquire));
 }
 
 bool TxCoordinator::Producer::sameProducer(const Producer& other) const
@@ -286,7 +318,7 @@ bool TxCoordinator::Request::valid() const
         }
     }
     return !intent || (!intent->ended.load(std::memory_order_acquire)
-        && intent->operation.permitsDispatch(monotonicMs()));
+        && intent->operation.permitsDispatch(m_state->identity->clock()));
 }
 
 bool TxCoordinator::Request::originalSessionCurrent() const
@@ -320,7 +352,8 @@ bool TxCoordinator::Context::permitsDispatch(qint64 now) const
     }
     const std::shared_ptr<Identity> identity = m_producer.m_state->coordinator.lock();
     return identity && identity->session.load(std::memory_order_acquire) == m_session
-        && (m_continuous || m_operation.permitsDispatch(now));
+        && (m_continuous ? !identity->independentOperation.load(std::memory_order_acquire)
+                         : m_operation.permitsDispatch(now));
 }
 
 TxCoordinator::Dispatch TxCoordinator::Context::beginDispatch(qint64 now) const
@@ -355,13 +388,19 @@ bool TxCoordinator::Context::sameContext(const Context& other) const
         && (m_continuous || m_operation.sameAuthority(other.m_operation));
 }
 
-TxCoordinator::TxCoordinator(StopHandler stopHandler)
+TxCoordinator::TxCoordinator(StopHandler stopHandler, Clock clock)
     : m_thread(QThread::currentThread())
     , m_identity(std::make_shared<Identity>())
     , m_stopHandler(std::move(stopHandler))
 {
+    m_identity->clock = clock ? std::move(clock) : Clock(monotonicMs);
     qRegisterMetaType<Context>();
     qRegisterMetaType<Request>();
+}
+
+qint64 TxCoordinator::currentTimeMs() const
+{
+    return m_identity->clock();
 }
 
 TxCoordinator::~TxCoordinator()
@@ -388,30 +427,66 @@ bool TxCoordinator::onThread() const
 bool TxCoordinator::validActor(const Actor& actor) const
 {
     return m_identity->alive.load(std::memory_order_acquire)
-        && actor.m_state && !actor.m_state->revoked
-        && actor.m_state->coordinator.lock() == m_identity;
+        && actor.m_state && !actor.m_state->revoked.load(std::memory_order_acquire)
+        && actor.m_state->coordinator.lock() == m_identity
+        && (!actor.m_state->policy.independent
+            || actor.m_state->session == m_identity->session.load(std::memory_order_acquire));
 }
 
 TxCoordinator::Actor TxCoordinator::registerActor(ActorPolicy policy)
 {
     if (!onThread() || !m_identity->alive.load(std::memory_order_acquire)
-        || policy.maximumOperationMs < 0 || !m_stopHandler) {
+        || policy.maximumOperationMs < 0 || policy.expiresAtMs < 0 || !m_stopHandler
+        || policy.allowedActivities == 0 || (policy.allowedActivities & ~kAllActivities)
+        || (policy.independent && (policy.maximumOperationMs == 0 || policy.expiresAtMs == 0))) {
         return {};
     }
-    std::erase_if(m_actors, [](const std::weak_ptr<ActorState>& actor) {
+    std::erase_if(m_actors, [this](const std::weak_ptr<ActorState>& actor) {
         const std::shared_ptr<ActorState> state = actor.lock();
-        return !state || state->revoked;
+        return !state || state->revoked.load(std::memory_order_acquire)
+            || (state->policy.independent
+                && state->session != m_identity->session.load(std::memory_order_acquire));
     });
     if (m_actors.size() >= kMaximumActors) {
         return {};
     }
     Actor actor;
-    actor.m_state = std::make_shared<ActorState>(ActorState{m_identity, policy, false});
+    actor.m_state = std::make_shared<ActorState>();
+    actor.m_state->coordinator = m_identity;
+    actor.m_state->policy = policy;
+    actor.m_state->session = m_identity->session.load(std::memory_order_acquire);
     m_actors.push_back(actor.m_state);
     return actor;
 }
 
 TxCoordinator::Producer TxCoordinator::registerProducer(bool continuousMicrophone)
+{
+    // Legacy in-process callers. An unbound producer can never contribute to
+    // an independent actor's operation, even if handed its operation handle.
+    return makeProducer({}, continuousMicrophone);
+}
+
+bool TxCoordinator::refreshLiveness(const Actor& actor, qint64 now, qint64 deadline)
+{
+    if (!onThread() || !validActor(actor) || !actor.m_state->policy.independent
+        || !actor.permitsDispatch(now) || deadline <= now
+        || deadline > actor.m_state->policy.expiresAtMs) {
+        return false;
+    }
+    actor.m_state->livenessDeadlineMs.store(deadline, std::memory_order_release);
+    return true;
+}
+
+TxCoordinator::Producer TxCoordinator::registerProducer(const Actor& actor, bool continuousMicrophone)
+{
+    if (!onThread() || !validActor(actor)
+        || (continuousMicrophone && actor.m_state->policy.independent)) {
+        return {};
+    }
+    return makeProducer(actor, continuousMicrophone);
+}
+
+TxCoordinator::Producer TxCoordinator::makeProducer(const Actor& actor, bool continuousMicrophone)
 {
     if (!onThread() || !m_identity->alive.load(std::memory_order_acquire)) {
         return {};
@@ -426,9 +501,25 @@ TxCoordinator::Producer TxCoordinator::registerProducer(bool continuousMicrophon
     Producer producer;
     producer.m_state = std::make_shared<ProducerState>();
     producer.m_state->coordinator = m_identity;
+    producer.m_state->actor = actor.m_state;
     producer.m_state->continuousMicrophone = continuousMicrophone;
     m_producers.push_back(producer.m_state);
     return producer;
+}
+
+TxCoordinator::Actor TxCoordinator::requestActor(const Request& request) const
+{
+    Actor actor;
+    if (acceptsRequest(request)) {
+        actor.m_state = request.m_state->producer.m_state->actor;
+    }
+    return actor;
+}
+
+bool TxCoordinator::isIndependentRequest(const Request& request) const
+{
+    const Actor actor = requestActor(request);
+    return actor.m_state && actor.m_state->policy.independent;
 }
 
 bool TxCoordinator::acceptsRequest(const Request& request) const
@@ -575,6 +666,12 @@ TxCoordinator::Context TxCoordinator::mediaContext(const Producer& producer, con
             && (!m_active.sameOperation(operation) || m_active.m_state->cancelled.load(std::memory_order_acquire)))) {
         return {};
     }
+    if (!producer.m_state->continuousMicrophone
+        && ((producer.m_state->actor && producer.m_state->actor != operation.m_state->actor)
+            || (operation.m_state->actor->policy.independent
+                && producer.m_state->actor != operation.m_state->actor))) {
+        return {};
+    }
     Context context;
     context.m_producer = producer;
     context.m_session = m_identity->session.load(std::memory_order_acquire);
@@ -593,13 +690,16 @@ TxCoordinator::Admission TxCoordinator::acquire(const Actor& actor, qint64 now)
     if (!validActor(actor) || now < 0) {
         return {{}, Refusal::InvalidActor};
     }
-    if (!actor.m_state->policy.mayTransmit) {
+    if (!actor.permitsDispatch(now)) {
         return {{}, Refusal::Denied};
     }
     expire(now);
     // stopHandler may synchronously revoke the requesting actor.
     if (!validActor(actor)) {
         return {{}, Refusal::InvalidActor};
+    }
+    if (!actor.permitsDispatch(now)) {
+        return {{}, Refusal::Denied};
     }
     if (m_stopping.m_state || m_inStopHandler) {
         return {{}, Refusal::Recovering};
@@ -615,6 +715,9 @@ TxCoordinator::Admission TxCoordinator::acquire(const Actor& actor, qint64 now)
         // Keep the preceding owner until qualified stop evidence arrives.
         return {{}, Refusal::Busy};
     }
+    if (m_unconfirmed.m_state && actor.m_state->policy.independent) {
+        return {{}, Refusal::Recovering};
+    }
     if (m_identity->generation.load() == std::numeric_limits<quint64>::max()) {
         return {{}, Refusal::Recovering};
     }
@@ -628,12 +731,26 @@ TxCoordinator::Admission TxCoordinator::acquire(const Actor& actor, qint64 now)
     const auto releaseGeneration = qScopeGuard([this] {
         m_identity->dispatches.store(0, std::memory_order_release);
     });
+    const bool fenceContinuous = actor.m_state->policy.independent;
+    if (fenceContinuous) {
+        expected = 0;
+        if (!m_identity->continuousDispatches.compare_exchange_strong(
+                expected, Identity::kChangingGeneration, std::memory_order_acquire)) {
+            return {{}, Refusal::Recovering};
+        }
+    }
+    const auto releaseContinuous = qScopeGuard([this, fenceContinuous] {
+        if (fenceContinuous) {
+            m_identity->continuousDispatches.store(0, std::memory_order_release);
+        }
+    });
     m_active.m_state = std::make_shared<OperationState>();
     m_active.m_state->actor = actor.m_state;
     m_active.m_state->startedMs = m_unconfirmed.m_state
         ? m_unconfirmed.m_state->startedMs : now;
     m_active.m_state->maximumMs = actor.m_state->policy.maximumOperationMs;
     m_active.m_state->generation = ++m_identity->generation;
+    m_identity->independentOperation.store(actor.m_state->policy.independent, std::memory_order_release);
     m_unconfirmed = {};
     return {m_active, Refusal::None};
 }
@@ -662,6 +779,13 @@ TxCoordinator::Intent TxCoordinator::beginIntent(const Operation& operation,
         || m_active.m_state->cancelled.load(std::memory_order_acquire)
         || activityBit == 0 || activityBit > static_cast<unsigned>(Activity::Cwx)
         || (activityBit & (activityBit - 1)) != 0) {
+        return {};
+    }
+    const std::shared_ptr<ActorState>& actor = operation.m_state->actor;
+    if (!(actor->policy.allowedActivities & activityBit)
+        || (producer && producer->actor && producer->actor != actor)
+        || (actor->policy.independent && (!producer || producer->actor != actor
+            || !operation.permitsDispatch(currentTimeMs())))) {
         return {};
     }
     if (previous.pending()) {
@@ -770,7 +894,9 @@ TxCoordinator::Operation TxCoordinator::cleanupFence() const
     }
     Operation fence;
     fence.m_state = std::make_shared<OperationState>();
-    fence.m_state->actor = std::make_shared<ActorState>(ActorState{m_identity, {}, true});
+    fence.m_state->actor = std::make_shared<ActorState>();
+    fence.m_state->actor->coordinator = m_identity;
+    fence.m_state->actor->revoked.store(true, std::memory_order_release);
     fence.m_state->cancelled.store(true, std::memory_order_release);
     fence.m_state->generation = m_identity->generation.load(std::memory_order_acquire);
     return fence;
@@ -785,6 +911,54 @@ bool TxCoordinator::finishLocalIntent(const Operation& operation)
     m_unconfirmed = m_active;
     m_active = {};
     return true;
+}
+
+bool TxCoordinator::StopRequest::valid() const
+{
+    if (!m_state || m_state->retired.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const std::shared_ptr<Identity> identity = m_state->coordinator.lock();
+    return identity && identity->alive.load(std::memory_order_acquire)
+        && m_state->session == identity->session.load(std::memory_order_acquire)
+        && m_state->operation.permitsCleanup();
+}
+
+bool TxCoordinator::StopRequest::sameRequest(const StopRequest& other) const
+{
+    return m_state && m_state == other.m_state;
+}
+
+bool TxCoordinator::StopRequest::matchesOperation(const Operation& operation) const
+{
+    return valid() && m_state->operation.sameOperation(operation);
+}
+
+TxCoordinator::StopRequest TxCoordinator::requestStopConfirmation(const Operation& operation)
+{
+    if (!onThread() || !operation.permitsCleanup()
+        || (!m_stopping.sameOperation(operation) && !m_unconfirmed.sameOperation(operation))) {
+        return {};
+    }
+    if (m_stopRequest.m_state) {
+        m_stopRequest.m_state->retired.store(true, std::memory_order_release);
+    }
+    m_stopRequest.m_state = std::make_shared<StopState>();
+    m_stopRequest.m_state->operation = operation;
+    m_stopRequest.m_state->coordinator = m_identity;
+    m_stopRequest.m_state->session = m_identity->session.load(std::memory_order_acquire);
+    return m_stopRequest;
+}
+
+bool TxCoordinator::confirmStopped(const StopRequest& request)
+{
+    if (!onThread() || !request.valid() || !request.sameRequest(m_stopRequest)) {
+        return false;
+    }
+    // Keep the qualified token available if a terminal writer is still
+    // entered. Retrying this bookkeeping must not create a new stop attempt.
+    const Operation operation = request.m_state->operation;
+    return acknowledgeStopped(operation);
 }
 
 void TxCoordinator::finishLocalIntents(const Operation& operation)
@@ -832,10 +1006,11 @@ bool TxCoordinator::cancel(const Actor& actor, const Operation& operation)
 
 void TxCoordinator::revoke(const Actor& actor)
 {
-    if (!onThread() || !validActor(actor)) {
+    if (!onThread() || !actor.m_state || actor.m_state->coordinator.lock() != m_identity
+        || actor.m_state->revoked.load(std::memory_order_acquire)) {
         return;
     }
-    actor.m_state->revoked = true;
+    actor.m_state->revoked.store(true, std::memory_order_release);
     if ((m_active.m_state && m_active.m_state->actor == actor.m_state)
         || (m_unconfirmed.m_state && m_unconfirmed.m_state->actor == actor.m_state)) {
         stop(StopReason::ActorRevoked);
@@ -853,7 +1028,9 @@ void TxCoordinator::expire(qint64 now)
         // Its dispatch fence is already cancelled, so check the original
         // deadline rather than treating cancellation itself as expiration.
         const OperationState& state = *m_unconfirmed.m_state;
-        if (now < state.startedMs
+        Actor actor;
+        actor.m_state = state.actor;
+        if (!actor.permitsDispatch(now) || now < state.startedMs
             || (state.maximumMs > 0 && now - state.startedMs >= state.maximumMs)) {
             stop(StopReason::Expired);
         }
@@ -884,6 +1061,11 @@ void TxCoordinator::emergencyStop()
     }
 }
 
+bool TxCoordinator::hasOwnership() const
+{
+    return onThread() && (m_active.m_state || m_unconfirmed.m_state || m_stopping.m_state);
+}
+
 bool TxCoordinator::acknowledgeStopped(const Operation& operation)
 {
     if (!onThread()) {
@@ -907,10 +1089,20 @@ bool TxCoordinator::acknowledgeStopped(const Operation& operation)
     });
     if (m_stopping.sameOperation(operation)) {
         m_stopping = {};
+        if (m_stopRequest.m_state) {
+            m_stopRequest.m_state->retired.store(true, std::memory_order_release);
+            m_stopRequest = {};
+        }
+        m_identity->independentOperation.store(false, std::memory_order_release);
         return true;
     }
     if (m_unconfirmed.sameOperation(operation)) {
         m_unconfirmed = {};
+        if (m_stopRequest.m_state) {
+            m_stopRequest.m_state->retired.store(true, std::memory_order_release);
+            m_stopRequest = {};
+        }
+        m_identity->independentOperation.store(false, std::memory_order_release);
         return true;
     }
     return false;

@@ -20,7 +20,7 @@ class ClientTubeCurveWidget;
 // along the top, the display filling everything under it, and every knob
 // in one row at the foot.
 //
-//   ┌─ Model: [A][B][C]  [RN2] ──── Dry/Wet: ──●── 100 % ─┐
+//   ┌─ Model: [A][B][C] ─────────── Dry/Wet: ──●── 100 % ─┐
 //   │                                              │ OUT │
 //   │              transfer curve                  │     │
 //   ├──────────────────────────────────────────────┴─────┤
@@ -83,10 +83,6 @@ private:
     ClientCompKnob*        m_envelope{nullptr};
     ClientCompKnob*        m_release{nullptr};
     ClientLevelMeter*      m_outMeter{nullptr};
-    // TX mic pre-amp RN2 toggle, in the toolbar with the other switches.
-    // Created in the ctor as hidden; flipped visible only by showForTx().
-    // RX already has its own RN2 toggle elsewhere.  (#2813)
-    QPushButton*           m_rn2Btn{nullptr};
     QPushButton*           m_modelA{nullptr};
     QPushButton*           m_modelB{nullptr};
     QPushButton*           m_modelC{nullptr};

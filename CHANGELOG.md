@@ -8,6 +8,119 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.9.4] — 2026-09-20
+
+### AetherRX and AetherTX as one window each, Neural Noise Reduction and global precipitation · the Hermes-Lite 2 transmits through WDSP and reads its meters honestly
+
+97 merged changes from 13 human contributors, AetherClaude and two Dependabot updates within that total. The operator-facing half rebuilds the receive and transmit chains into one window each, brings WDSP 2.10 in with Neural Noise Reduction as a seventh client-side NR method, puts worldwide precipitation on the PSK Reporter map and gives the TGXL and PGXL front-panel presentations. The Hermes-Lite 2 gets the largest share of the rest: an ALC that only reduces, a WDSP TXA modulator keyed on the air and made the default, a derived dBm reference, a wideband bandscope and an S-meter that no longer reads the noise floor from a peak-hold. Underneath, aetherd gains credential-bound transmit grants, and the recorder, DVK, PMS and settings store all stop lying about failed writes.
+
+### Receive and transmit chains
+
+- **AetherRX — the receive chain in one window (#5805).** Every page now reads the same way: switches along the top, the display under them, every knob in one row at the foot. The tab column down the left *is* the chain — each row carries an enable checkbox and a grip, and dragging a row rewrites the RX chain order. Tabs are renamed to Gate, Compressor, Exciter and Final Output; the old spellings still resolve. Settings gains a profile library (save, load, import, export) that captures every stage's parameters, enablement, order and the active NR method as one nested-JSON document, and the EQ page draws the receive filter edges with the mode's width ladder — dragging an edge retunes the slice. Panels no longer poll the engine while invisible, the tube attack knob that changed nothing is gone, and a stored chain naming a retired stage keeps the operator's order instead of resetting it.
+- **AetherTX — the transmit chain in one window (#5819).** The same shape for the transmit side: Gate, EQ, De-esser, Compressor, Tube, Exciter, Reverb and Final Output, with the stage column, page frame and profile machinery shared with AetherRX rather than copied. BYPASS, Record and Play move into the Settings dialog's Chain section, RN2 moves to the gate toolbar where it actually acts, and the compressor makeup becomes a focusable, keyboard-driven control that announces through accessibility. Channel-strip presets are retired; each saved one is split once into its transmit and receive halves on first open.
+- A checked `QPushButton` under the modem chrome now has a visible state, so BYPASS, Record and Play show when they are pressed (#5846).
+
+### Noise reduction and shared DSP
+
+- **WDSP moves to 2.10 (#5686)**, fixing an upstream use-after-free on the channel-open path. The refresh costs about 8.8 MB of resident memory per RX channel because 2.10 instantiates NNR unconditionally; that was measured and ruled acceptable.
+- **Neural Noise Reduction (NNR)** becomes the seventh client-side NR method: the full ten-control surface is exposed with pinned default markers (#5687), it builds without DeepFilterNet (#5707), managed Kiwi sources are no longer silent under it and the selection persists across restarts (#5708), and the stereo adapter is told the real 192 ms end-to-end latency on the 24 kHz path with the default strength corrected to match WDSP (#5709).
+- **NR2 gains WDSP's psychoacoustic post-processing (#5703)** — the residual-and-noise blend that fills the dead gaps between syllables. Our port of `emnr.c` had no trace of it; it ships off, as upstream does.
+- The minimum-phase FIR workspace — four `FFTW_PATIENT` plans per instance, 72 of them dead on a single channel open — is built only when minimum phase is on, for every backend (#5697).
+- `WdspChannel` gains a real runtime start/stop, and `close()` no longer burns its full 100 ms timeout holding the FFTW setup lock (#5628). The five distinct WDSP processing failures are counted and logged instead of sharing one silent `continue` (#5738), and a transport sequence gap discards the partial panadapter frame rather than joining pre- and post-gap samples in one FFT window (#5744), both on HL2 and ANAN.
+- **The S-meter reads WDSP's average, not its decaying peak-hold**, on both raw-IQ backends. On a steady carrier the two agree exactly, which is why every test-tone check passed while the band noise floor read 11–14 dB high (#5785).
+
+### Maps and reporting
+
+- **Global precipitation with regional radar backups (#5705).** An opt-in LibreWXR overlay with independently selectable NOAA, ECCC and EUMETNET OPERA regional feeds, an optional per-provider intensity legend and default-off coverage shading from 389 bundled sites. When an existing user enables the weather overlay, LibreWXR becomes the default primary; NOAA stays selectable on its own.
+- WSJT-X "calling me" spots fall back to the station callsign when no DX cluster login is configured, compare case-insensitively, and strip hashed and portable notation (#5841).
+
+### CW and Copy Assist
+
+- **An optional DeepFist CW receive backend** lands behind `CwRxModel` (#5716). ggmorse remains the default and the sidetone decoder; DeepFist invents no confidence, pitch or speed and does not feed callsign spotting. `ENABLE_DEEPFIST_EXPERIMENT` stays off by default and no model weights ship.
+- CW decoder parameter changes no longer race the decoding worker: GGMorse lives entirely on the worker and consumes one coherent pending configuration between frames (#5645).
+- **Copy Assist stops taking the app down.** A GPU without room for the model fails the load and retries on CPU instead of dereferencing null in vendored whisper.cpp, and the default tier reads free GPU memory before picking `large-v3-turbo` (#5773). A fault inside device discovery or model load leaves flushed begin/end stage records in the log, and whisper/ggml warnings reach the log file (#5790). A model slower than real time drops audio at a bounded backlog and shows the dropped seconds instead of queueing forever (#5801).
+
+### Panadapter, spectrum and GPU
+
+- **Extended TNF** mirrors a tracking-notch band through the waterfall, the same affordance Extended Passband gives the filter, reachable from the TNF marker's menu and the pan overlay menu (#5679).
+- The FFT average slider now reaches the model on a raw-spectrum backend, so it survives a pan rebuild (#5754).
+- ANAN's panadapter crops its true edge instead of fading it, with the taper narrowed from 9% to 4% so the shipped droop correction is on screen (#5808), and ANAN regains its noise-floor auto-adjust — `panBinsAreAbsolute` is split out of `radioOwnsDbmScale`, which was answering two questions with one flag (#5726).
+- Selecting the discrete GPU on a hybrid-graphics laptop under Wayland works: a GLX-only environment variable that selects nothing on EGL no longer vetoes the saved choice (#5809).
+
+### Amplifiers and tuners
+
+- **TGXL front-panel presentation, tune abort and tuner alerts (#5676).** Popped out or on the workspace canvas the tuner applet lays itself out like the device's own panel. From a capture of TunerGeniusDesk: `autotune` is a toggle, so TUNE becomes STOP while a tune runs, and the tuner's `M|<text>` alert channel is shown as a banner for as long as the device shows it.
+- **PGXL front-panel presentation (#5694)** with per-port band, bias profile and source radio from the amplifier's direct status, and a **drive meter** on the amplifier panel from the `DRV` meter the radio was relaying all along; the relayed and direct forward-power and SWR feeds now have one owner instead of last-writer-wins, and MEffA gets a toggle (#5732).
+- **The TGXL is metered from the device's own `peak`**, and both peripherals are polled at about 60 Hz while transmitting and 4 Hz while receiving. Voice at 60 W had been reading about 10 W because `fwd` sampled the gaps between syllables (#5845).
+- The SPE LCD mirror stops blinking: display polling is paced from each reply, the idle gap shrinks to 250 ms, a rejected frame is re-requested promptly, and staleness gates only the front-panel key group rather than dimming the glass (#5542).
+- The amplifier-meter members are declared outside the hidapi guard, so a build without hidapi compiles again (#5767).
+
+### Hermes-Lite 2
+
+- **The TX level stack.** The ALC only ever reduces, and the Mic Level slider becomes the operator's transmit level — the old loop applied up to 40 dB of upward makeup gain and lifted room noise level with the voice between words (#5646). Engine-generated audio keeps the level its generator chose and is not moved by the mic slider (#5647), and the host-modulated WSPR beacon defaults to −3 dBFS so it does not go out 18.6 dB down (#5651). The Phone panel shows the **ALC Gain** the radio reports, gated on the meter existing (#5636).
+- **A WDSP TXA modulator (#5747), now the default (#5779).** ON8ST keyed it into a dummy load and onto an antenna on 2026-09-17, which is the condition `CMakeLists.txt` set for flipping `AETHER_HL2_TX_TXA` to ON; the in-tree phasing modulator remains one flag away. The phasing modulator's opposite-sideband suppression is now measured across the passband — 22 dB at 150 Hz on the DIGU/DIGL band, exactly the derived figure (#5741) — and the sideband gate measures the modulator rather than itself (#5810).
+- **The modes this radio cannot transmit in are declared** — AM, SAM, DSB, FM, NFM, WBFM and DRM took the upper-sideband branch of a phasing SSB modulator, so selecting AM and keying put suppressed-carrier SSB on the air. Keying and TUNE now refuse in those modes (#5680). The backend also publishes the modes it actually demodulates, so RTTY, DFM and DSTR stop silently falling back to USB (#5755).
+- **The wideband bandscope (endpoint 4)** is decoded and accounted for on the wire, behind a duty-cycle gate that is off by default (#5650), and **Tools → Wideband Bandscope…** shows one converter record on demand (#5675). **Automatic RF gain** drives on measured wideband headroom rather than the clip counter, per RFC #5535 — it ships off until the +20 dB LNA default can be reconciled with the arming baseline (#5652).
+- **The dBm reference is derived**: full scale is +3 dBm at the antenna at 0 dB LNA gain, from the AD9866 datasheet and the input transformer and filter-board loss (#5753), and connect gain is clamped without changing the native −12…+48 dB range (#5752).
+- **A zoom no longer silences the radio.** Pan-bandwidth chains are built on their own thread and installed on the I/O thread in one turn, instead of rebuilding inline where EP2 pacing starves and the gateware watchdog halts the stream (#5783).
+- The S-meter no longer publishes the silence clocked in while transmit-muted: the tap is guarded during the over and for a settle window after the mute releases, so the needle neither dives on key-down nor on unkey (#5821). The ADC RMS is measured about the mean, so converter DC can no longer deflate the crest factor that tells broadband noise from a carrier (#5832).
+- A declined automatic-gain arm explains itself where the operator is — checkbox state, a card, and the accessible channel — on every route to an arm, not only in the log; on a fresh install the +20 dB LNA default is always refused, so this was the first thing a new operator hit (#5825).
+- The link-stats getter carries liveness, and the gap, jitter and RTT figures reach the `liveness` verb (#5786). Documentation catches up on the TX positive-edges rule (#5710) and the retired 5 ms ALC attack (#5737), and the cadence test owns its includes (#5735).
+
+### Flex, Icom and ANAN
+
+- A TCP disconnect mid-status-line no longer leaves the parser buffer for the next session to fabricate a response from, and model command callbacks expire on disconnect (#5653).
+- Concurrent Icom Keychain reads coalesce behind one QtKeychain job, so a saved startup route no longer raises three authorization prompts (#5674). Radio certification's Icom Persist snapshots carry confirmation provenance, and TX evidence no longer turns unsupported meters into results (#5516).
+- **ANAN-G2 ships DDC0 droop-correction defaults derived from the Saturn gateware** — the CIC and 1024-tap FIR are fully specified in the FPGA sources, so an unswept radio gets a corrected FFT on first connect (#5549).
+
+### Recording, DVK, mailbox and persistence
+
+- QSO recordings claim their filename with exclusive creation and never truncate an existing WAV (#5644); incomplete writes are reported and the recorder stops safely instead of advertising a broken file (#5654); and recording is rate-aware, fixing each WAV at 24 or 48 kHz with playback that validates the real format (#5720).
+- DVK uploads no longer queue duplicate bytes on partial socket drains (#5668), and a failed or cancelled DVK export preserves the existing destination file (#5669).
+- The PMS mailbox writes atomically and says `SAVED` only when it did (#5666).
+- **A healthy settings database is never quarantined for a permissions error** — recovery now requires actual corruption evidence, and an unwritable store is detected at open rather than at the first save (#5639). Stale profile-transfer callbacks cannot tear down a replacement operation (#5638).
+
+### Audio, TCI and devices
+
+- A VFO B request from one TCI client no longer retunes the slice another client operates; satellite full duplex is unchanged (#5681). TCI receive audio preserves producer rates and stereo and negotiates only the published 8/12/24/48 kHz rates (#5722).
+- **The Windows CW sidetone defaults back to `QAudioSink`** (#5719), and the PortAudio heap corruption behind the Windows connect crash — a one-token upstream bug that frees a stack address while enumerating DAX endpoints — is patched at build time (#5748).
+- The Audio pane's device lists follow the platform instead of a build-time snapshot (#5781), and MIDI and serial selectors resolve choices by identity rather than by row, with a Refresh button for the Peripherals serial ports (#5787).
+- The FlexControl knob is treated as a host device, so its settings stay reachable on non-Flex radios (#5799).
+
+### Settings, Radio Setup and menus
+
+- **A three-state control doctrine and availability registry (#5658)** — unavailable, inactive and active — so unsupported controls stay visible, disabled and carry a reason. Nine Radio Setup surfaces dim with reasons, and TX Band Settings and Inhibit during TUNE gain accessible status tips.
+- **Tools → Calibrate AGC-T** joins the menu as a second entry point to the noise-floor calibration (#5757), placed under Clear ATU Memories with a shorter label (#5836).
+- Selecting a Radio Setup page on macOS no longer crashes accessibility queries: navigation rows are hidden only when their state changes and the layout is settled on our own call stack (#5838). Radio Setup stops inventing `Region: USA` on a radio that has none (#5848), and the Connect panel is no longer stranded on the previous Space when the main window is full screen (#5791).
+- A KiwiSDR receive antenna shows the right window again: `zoom_cap` is kept off the `zoom_max` start scale on v1.900+ shared waterfalls (#5657).
+
+### Backend seam
+
+- **Health that survives disconnection**: an `OfflineHealthSource` answers "is another client holding this radio", "is it reachable" and "what is its PA temperature" when no session exists, the verb #5414 was missing (#5642).
+- The construction-time mic push is gated on `hostModulates`, not on "not Flex" (#5643).
+
+### Headless engine (aetherd)
+
+- Desktop TX producer ownership survives queued work: a CAT stop releases only that client's key, and an old callback cannot acquire a newer input or release its transmission (#5659).
+- **Credential-bound TX grants and qualified Flex PTT handoff (#5830).** Independent clients bind to actors on the `TxCoordinator` behind explicit `--allow-local-tx` and a native-vault credential authority that fails closed; grants carry separate continuous-operation, lifetime and keepalive limits. Software PTT handoff supports Flex radios on SmartSDR TCP API 1.4 over LAN, hardware-tested on a FLEX-6700. Startup remains disarmed, and SmartLink, other families, TUNE/ATU/CW and transmit audio transport are not enabled.
+
+### Automation and MQTT
+
+- `aethersdr/radio/state` publishes the RF drive, the ceiling it scales against and whether the drive is confirmed radio state (#5733).
+
+### Project and packaging
+
+- `CLAUDE.md` and `AGENTS.md` lose the machine-specific paths and distro assumptions that only ever held on one maintainer's machine, and the roadmap is brought current (#5739).
+- Skills: `/pr-land` drives an accepted PR to merge with every judgment call put to the maintainer (#5746), audits the aetherd ratchets and pins EB3's vendor vocabulary (#5760), and gates on whether the green is still current after #5516 merged on a stale one (#5765); `/papercuts` and `/fb` add bridge-verified issue triage and bug fixing (#5812).
+- The `[full-suite]` bot issue carries the failing assertions above the log tail (#5795). Three tests are corrected rather than deleted: `tgxl_docked_parity` asserts maximality (#5736), the WSPR tag check stops pinning an argument list (#5763), and the watchdog fixture declares `twoToneGenerator` (#5772).
+- `jurplel/install-qt-action` moves to 4.4.0 (#5826) and `docker/build-push-action` to 7.4.0 (#5827).
+
+### Contributors
+
+Thanks to **@on8st** (38 commits — the Hermes-Lite 2 TX level stack, TXA, bandscope, dBm reference, meters and shared raw-IQ DSP), **@ten9876** (24 commits — maintainer; AetherRX and AetherTX, WDSP 2.10 and NNR, the 4O3A front panels and test repairs), **@rfoust** (13 commits — global precipitation, DeepFist, aetherd TX grants, recorder, DVK, PMS and settings persistence), **@skerker** (5 commits — Copy Assist hardening, the PortAudio fix and TCI VFO B), **@jensenpat** (3 commits — Icom radiocert, Keychain coalescing and the /papercuts and /fb skills), **@tropo1234** (2 commits — ANAN droop defaults and edge crop), **@Ozy311** (2 commits — rate-aware recording and TCI audio), **@NF0T** (1 commit — NNR build guard), **@chibondking** (1 commit — AGC-T in Tools), **@opalito** (1 commit — SPE LCD polling), **@quelleck** (1 commit — KiwiSDR zoom scale), **@w5jwp** (1 commit — macOS Radio Setup accessibility crash), **@WA8PAM** (1 commit — WSJT-X calling-me spots), **@aethersdr-agent** (2 commits — AetherClaude orchestrator; MQTT drive and the Tools menu). Dependabot contributed two dependency updates. Counts cover primary commit authors; co-author credit remains in the commit history.
+
+73, Jeremy KK7GWY & Claude (AI dev partner)
+
 ## [v26.9.3] — 2026-09-13
 
 ### A Tools-first menu bar, live map overlays and APRS digipeating · a vendor-neutral backend seam underneath
