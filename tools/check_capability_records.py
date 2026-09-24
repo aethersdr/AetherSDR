@@ -131,10 +131,24 @@ MAX_PLAUSIBLE_DROP = 15
 # NOT HANDLED: a raw string literal, `R"(…)"`. Its delimiters usually pair up
 # by accident and it survives, but an odd number of interior `"` mis-pairs and
 # an interior `{` goes live. A stated limitation, like `bool x(false)` below.
+#
+# A NUMBER IS ONE OF THE ALTERNATIVES (#5860 review, ten9876). Not because a
+# number is non-code — `_blanked` keeps it — but because a C++14 digit
+# separator is an apostrophe, and without a branch that claims it first the
+# `'` in `1'000` opened a character literal that ran to the next apostrophe:
+# the possessive in a trailing comment. Everything between was blanked, the
+# `;` included, and the bool on the following line was DELETED from the count.
+# `main`'s line parser counts it, so this was a regression in the quiet
+# direction. Digit separators are already in this tree and this header already
+# carries possessives in trailing comments; one rate limit written with a
+# separator was all it would have taken. The `(?<![\w.])` lookbehind keeps a
+# prefixed character literal (`u8'{'`) and the digits inside an identifier out
+# of the number branch.
 _NON_CODE_RE = re.compile(
     r"/\*.*?\*/"                # block comment
     r"|//[^\n]*"                 # line comment
     r'|"(?:\\.|[^"\\\n])*"'      # string literal
+    r"|(?<![\w.])\.?\d(?:'?[\w.])*"  # number, digit separators included
     r"|'(?:\\.|[^'\\\n])*'",     # character literal
     re.S)
 # A whole logical directive line, continuations included. Indented and
@@ -144,7 +158,15 @@ _DIRECTIVE_RE = re.compile(r"^[ \t]*#(?:.*?\\\n)*.*$", re.M)
 
 def _blanked(m: "re.Match[str]") -> str:
     """Replace a match with a single space: it is not code, and it is not a
-    token boundary the scan below should lose."""
+    token boundary the scan below should lose.
+
+    A NUMBER is the exception — it IS code — and is kept minus its digit
+    separators, so `1'000` never reaches the character-literal branch and
+    `bool b : 1;` keeps a token where the source had one.
+    """
+    token = m.group(0)
+    if token[0].isdigit() or token[0] == ".":
+        return token.replace("'", "")
     return " "
 
 
@@ -231,7 +253,9 @@ def direct_bool_fields(text: str) -> list[str]:
 
     chars: list[str] = []
     depth = 1
-    for ch in code[open_brace + 1:]:
+    body = code[open_brace + 1:]
+    signature = False  # a `(` at depth 1 since the statement began
+    for i, ch in enumerate(body):
         if ch == "{":
             depth += 1
             if depth == 2 and _opens_a_body(chars):
@@ -241,9 +265,27 @@ def direct_bool_fields(text: str) -> list[str]:
             depth -= 1
             if depth <= 0:
                 break
+            # A block closing in a SIGNATURE ends the statement unless the
+            # declarator carries on: `, b{…}` or ` {` in a constructor's
+            # member-init list. Without this, `Ctor() : a{x}, b{y} {}` left
+            # `, b` in front of the next field and DELETED it — the synthetic
+            # `;` emitted at `a{` erases the `(` from the window
+            # `_opens_a_body()` looks at, so the real body brace is read as an
+            # initialiser and never terminates the declarator. `: x(1), a{…}`
+            # worked only because that `(` survived; the flag, unlike the
+            # window, is cleared by a real `;` alone.
+            if depth == 1 and signature:
+                rest = body[i + 1:].lstrip()
+                if not rest.startswith((",", "{", ";")):
+                    chars.append(";")
+                    signature = False
             continue
         if depth == 1:
             chars.append(ch)
+            if ch == "(":
+                signature = True
+            elif ch == ";":
+                signature = False
 
     fields: list[str] = []
     for statement in "".join(chars).split(";"):
@@ -264,9 +306,13 @@ def direct_bool_fields(text: str) -> list[str]:
         # `constexpr` are added here. What is still missed is a MACRO
         # qualifier (`Q_DECL_DEPRECATED bool x`), unknowable without a
         # preprocessor, and `[[deprecated("why")]] bool x`, which the `(` rule
-        # above drops before this strip ever runs. Both are pre-existing and
-        # behave identically on the pre-#5727 parser; both are stated
-        # limitations, not claims of coverage.
+        # above drops before this strip ever runs. A macro used WITHOUT a
+        # trailing `;` (`Q_GADGET`, `Q_PROPERTY(…)`) belongs with them: it
+        # leaves no statement boundary, so it swallows the declaration after it
+        # (#5860 review, ten9876). All are pre-existing and behave identically
+        # on the pre-#5727 parser; all are stated limitations, not claims of
+        # coverage — and `RadioCapabilities` is a plain struct with none of
+        # them.
         head = re.sub(
             r"^\s*(?:\[\[[^\]]*\]\]\s*"
             r"|(?:public|private|protected)\s*:\s*"

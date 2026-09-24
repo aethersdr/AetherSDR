@@ -289,6 +289,92 @@ def test_apostrophes_in_comments_do_not_eat_a_declaration():
     check(names == ["alpha", "beta"], f"apostrophes in comments: {names}")
 
 
+def test_digit_separator_is_not_a_char_literal():
+    """A C++14 digit separator must not open a character literal (#5860 review).
+
+    The single alternation takes whichever construct STARTS first, and until a
+    number was one of its alternatives the `'` in `1'000` started a "char
+    literal" that ran to the next apostrophe — the possessive in the trailing
+    comment. Everything between them was blanked, the `;` included, so the
+    declaration merged into the following line and the bool declared there was
+    DELETED from the count. The pre-#5727 line parser counts it, so this was a
+    regression, in the quiet direction: a bool added there is growth the gate
+    never sees.
+
+    Neither half is exotic in this tree. Digit separators are already in it
+    (`src/core/QsoWavPlayback.h`, `src/core/AnanBackend.cpp`) and this header
+    already carries possessive apostrophes in trailing comments. One rate limit
+    written with a separator, with an apostrophe after it, is all it takes.
+    """
+    names = direct_bool_fields(
+        "struct RadioCapabilities {\n"
+        "    int maxHz = 54'000'000; // radio's max\n"
+        "    int minHz = 1'000; // it's low\n"
+        "    bool alpha = false;\n"
+        "    bool beta = false;\n"
+        "};\n")
+    check(names == ["alpha", "beta"], f"digit separator with apostrophes: {names}")
+
+    # One separator, one apostrophe, one field: the minimal shape.
+    names = direct_bool_fields(
+        "struct RadioCapabilities {\n"
+        "    int x = 10'000; // the radio's limit\n"
+        "    bool alpha = false;\n"
+        "};\n")
+    check(names == ["alpha"], f"one separator, one possessive: {names}")
+
+    # Two separators on one line pair with EACH OTHER and eat the field between
+    # them, with no comment involved at all.
+    names = direct_bool_fields(
+        "struct RadioCapabilities {\n"
+        "    int x = 1'000; bool alpha = false; int y = 2'0;\n"
+        "};\n")
+    check(names == ["alpha"], f"two separators on one line: {names}")
+
+    # And the number branch must not swallow a real character literal whose
+    # prefix ends in a digit: `u8'{'` still has to be lexed as one, or its
+    # brace goes live and collapses the scan.
+    names = direct_bool_fields(
+        "struct RadioCapabilities {\n"
+        "    char c = u8'{';\n"
+        "    bool alpha = false;\n"
+        "};\n")
+    check(names == ["alpha"], f"u8'{{' is still a character literal: {names}")
+
+
+def test_constructor_brace_init_list_does_not_delete_the_next_field():
+    """`: a{false}, b{true} {}` must not eat the field after the constructor.
+
+    The same class this PR closes, and the one shape of it still live on both
+    parsers (#5860 review, ten9876). `_opens_a_body()` decides on the text
+    since the last `;`, and the synthetic `;` emitted at `a{` erased the `(` of
+    the constructor's own signature from that window — so the body brace was
+    read as an initialiser, no terminator was emitted, and the `, b ` left over
+    was glued to the front of the next field, deleting it.
+
+    `: x(1), a{false} {}` already worked, because the `(` survived in the
+    window; two BRACE initialisers were needed to lose it. That is the tell
+    that the rule, not the shape, was wrong.
+    """
+    names = direct_bool_fields(
+        "struct RadioCapabilities {\n"
+        "    RadioCapabilities() : a{false}, b{true} {}\n"
+        "    bool a;\n"
+        "    bool b;\n"
+        "    bool z = false;\n"
+        "};\n")
+    check(names == ["a", "b", "z"], f"constructor brace-init list: {names}")
+
+    # A plain member function body followed by a brace-initialised comma
+    # declarator must keep working — the regression the last round fixed.
+    names = direct_bool_fields(
+        "struct RadioCapabilities {\n"
+        "    bool f() const { return true; }\n"
+        "    bool a{false}, b{true};\n"
+        "};\n")
+    check(names == ["a", "b"], f"body then comma declarator: {names}")
+
+
 def test_raw_string_with_an_unbalanced_brace_is_a_stated_limitation():
     """`R"(…)"` is not lexed as a raw string; an odd interior `"` mis-pairs.
 
