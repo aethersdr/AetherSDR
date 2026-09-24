@@ -1790,8 +1790,13 @@ add_test(NAME panadapter_model_rx_antenna_test COMMAND panadapter_model_rx_anten
 # desktop compilation in the default test graph is needed for this regression.
 option(AETHER_BUILD_SPECTRUM_GESTURE_TEST "Build real SpectrumWidget gesture regression" OFF)
 if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
+    # Optional desktop sources (MIDI, FreeDV, device dialogs, shader resources)
+    # are appended to AetherSDR after GUI_SOURCES is declared. Mirror its final
+    # source set so the test uses the same configured desktop implementation.
+    get_target_property(_spectrum_gesture_sources AetherSDR SOURCES)
+    list(REMOVE_ITEM _spectrum_gesture_sources src/main.cpp)
     add_executable(spectrum_confirmed_geometry_test
-        tests/spectrum_confirmed_geometry_test.cpp ${GUI_SOURCES} ${RESOURCES} ${DFNR_RESOURCES})
+        tests/spectrum_confirmed_geometry_test.cpp ${_spectrum_gesture_sources})
     target_include_directories(spectrum_confirmed_geometry_test PRIVATE
         $<TARGET_PROPERTY:AetherSDR,INCLUDE_DIRECTORIES>)
     target_compile_definitions(spectrum_confirmed_geometry_test PRIVATE
