@@ -158,10 +158,10 @@ HidEvent ShuttleXpressParser::parse(const uint8_t* buf, size_t len)
 
 HidEvent ShuttleProV2Parser::parse(const uint8_t* buf, size_t len)
 {
-    if (len < 4) return {};
+    if (len < 5) return {};
 
     uint8_t jog = buf[1];
-    uint16_t btns = static_cast<uint16_t>(buf[3] << 8 | buf[2]);
+    uint8_t btns = static_cast<uint8_t>((buf[3] >> 4) | ((buf[4] & 0x01) << 4));   
 
     // Buttons
     if (btns != m_prevButtons) {
