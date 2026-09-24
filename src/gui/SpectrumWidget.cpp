@@ -7611,6 +7611,7 @@ void SpectrumWidget::setPanGeometryConfirmationRequired(bool required)
 
 void SpectrumWidget::cancelPanGeometryRequests()
 {
+    const bool cancelledVfoDrag = m_draggingVfo;
     m_draggingPan = false;
     m_draggingBandwidth = false;
     m_draggingVfo = false;
@@ -7622,6 +7623,11 @@ void SpectrumWidget::cancelPanGeometryRequests()
     for (QTimer* timer : {m_panDragSettleTimer, m_frequencyRangeSettleTimer,
                          m_frequencyRangeCommandTimer, m_vfoDragEdgePanTimer}) {
         if (timer) { timer->stop(); }
+    }
+    if (cancelledVfoDrag) {
+        // Cancellation releases the owner's drag hold without the final
+        // tune/recenter that belongs to an ordinary mouse release.
+        emit sliceDragCancelled();
     }
 }
 

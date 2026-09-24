@@ -136,6 +136,25 @@ int main(int argc, char** argv)
           "VFO drag accepts confirmed geometry despite echo hold");
     mouse(widget, QEvent::MouseButtonRelease, 1190, 150);
 
+    int cancelled = 0;
+    int released = 0;
+    QObject::connect(&widget, &SpectrumWidget::sliceDragCancelled,
+        &widget, [&]() { ++cancelled; });
+    QObject::connect(&widget, &SpectrumWidget::sliceDragActiveChanged,
+        &widget, [&](bool active) { if (!active) { ++released; } });
+    widget.observeFrequencyRange(460.3, 0.125);
+    mouse(widget, QEvent::MouseButtonPress, 585, 150);
+    mouse(widget, QEvent::MouseMove, 1190, 150);
+    wait(100);
+    widget.clearDisplay();
+    const double cancelledEdgeCenter = edgeCenter;
+    widget.observeFrequencyRange(144.5, 0.25);
+    wait(150);
+    check(cancelled == 1 && released == 0,
+          "VFO cancellation releases owner hold without normal-release intent");
+    check(near(edgeCenter, cancelledEdgeCenter) && near(widget.centerMhz(), 144.5),
+          "cancelled VFO edge timer cannot send an old-session request");
+
     // Same real widget with the policy disabled pins the existing Flex path.
     widget.setPanGeometryConfirmationRequired(false);
     widget.setFrequencyRangeImmediate(460.3, 0.125);
