@@ -135,24 +135,25 @@ places that are not this token.
 
 - **The live trace is itself client-smoothed.** `SpectrumWidget::updateSpectrum`
   runs `m_smoothed[i] = SMOOTH_ALPHA * bins[i] + (1 - SMOOTH_ALPHA) *
-  m_smoothed[i]` at `SMOOTH_ALPHA = 0.35f`, and on ANAN
-  `AnanRxDsp::smoothSpectrumBins` has already applied a second, stateful EMA
-  below the seam. Neither of those paints in `color.spectrum.trace` either —
-  `SpectrumWidget` draws the trace in `m_fftFillColor` / `m_fftLineColor`, which
-  are operator settings rather than tokens. `color.spectrum.trace` is resolved
-  only by `BandscopeDialog` and, as a fallback, by `MiniPanScope`.
+  m_smoothed[i]` at `SMOOTH_ALPHA = 0.35f`. That paint does not use
+  `color.spectrum.trace` either — `SpectrumWidget` draws the trace in
+  `m_fftFillColor` / `m_fftLineColor`, which are operator settings rather than
+  tokens. `color.spectrum.trace` is resolved only by `BandscopeDialog` and, as
+  a fallback, by `MiniPanScope`.
 - **`SpectrumWidget::setFftAverage` stores a number no render path reads.** It
-  is not an unused member — two snapshots and the overlay-menu sync read it — so
-  the fault is a missing branch (@ten9876's correction on #5678, recorded in
-  `RadioModel::requestPanAverage`).
-- **On Flex the averaging is the radio's.** `RadioModel::requestPanAverage`
-  sends `display pan set <pan> average=<n>` and the Flex display engine applies
-  it, so the bins that arrive are already averaged and those are what is drawn.
-  "No render path reads it" is therefore a statement about the raw-spectrum
-  backends, not about Flex.
+  is not an unused member — two snapshots and the overlay-menu sync read it
+  (@ten9876's correction on #5678). On a raw-spectrum backend
+  `RadioModel::requestPanAverage` applies it in the `shapesDisplayRatesLocally()`
+  branch: ANAN turns it into WDSP analyzer averaging TIME
+  (`AnanBackend::setPanAverage`, steps of `kMsPerAverageStep`). HL2 and RTL do
+  not override `setPanAverage()`, so the slider still does not average their
+  spectra.
+- **On Flex the averaging is the radio's.** The same function sends
+  `display pan set <pan> average=<n>` and the Flex display engine applies it, so
+  the bins that arrive are already averaged and those are what is drawn.
 
-Where client-side averaging should live for the raw-spectrum backends, and in
-which domain, is still open — see #5782 and #5794.
+Where client-side averaging should live for the backends that still do none
+(HL2, RTL), and in which domain, is still open — see #5782 and #5794.
 
 The three `zoomButton.disabled.*` tokens are the exception to this section's
 "paint code only" heading — they are consumed from a QSS template through

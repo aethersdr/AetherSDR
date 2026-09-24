@@ -2005,15 +2005,21 @@ private:
     //   interval), so the frames in between never reach the waterfall at all:
     //   dropped, never accumulated. RTL-SDR's frames are unaveraged FFTs too,
     //   so the shape carries there; only the numbers are HL2's.
-    // - On ANAN they are not dropped, they leak in sideways.
-    //   AnanRxDsp::smoothSpectrumBins is a STATEFUL cross-frame EMA over
-    //   m_smoothedBins at a fixed kSpectrumSmoothAlpha, run immediately before
-    //   the frame is emitted, so the row is a decaying blend -- in the dB
-    //   domain and with no relation to localRowIntervalMs. A different defect,
-    //   #5782's domain question, and still not the integration that is owed.
-    // - Icom rows are reassembled CI-V scope sweeps in display units
-    //   (IcomScope.h: "Raw display units, 0..160. NOT dBm"), not FFT windows at
-    //   all, so neither the 2.67 ms nor the duty figure means anything there.
+    // - On ANAN the frames between rows are not dropped. Every IQ block is
+    //   fed to the WDSP analyzer and only TAKING a frame is paced (AnanRxDsp:
+    //   "none are thrown away"), so the row that lands here is already
+    //   time-averaged. The FFT AVG slider sets that time through
+    //   AnanBackend::setPanAverage (steps of kMsPerAverageStep); the
+    //   weighted-average toggle selects log-recursive or linear-recursive.
+    //   That blend is still not an integration over localRowIntervalMs, and
+    //   #5782 owns the domain question. The fixed-alpha dB EMA this bullet
+    //   used to name (AnanRxDsp::smoothSpectrumBins) was removed in #5814.
+    // - Icom rows are reassembled CI-V scope sweeps, not FFT windows at all,
+    //   so neither the 2.67 ms nor the duty figure means anything there.
+    //   IcomScope.h's "Raw display units, 0..160. NOT dBm" describes the RAW
+    //   sweep, not what reaches this gate: IcomCivBackend emits
+    //   toDbm(sweep, geom, cal) before spectrumFrameReady, so the row here is
+    //   the converted vector.
     //
     // The interval a row SHOULD integrate is the gap between rows: this gate's
     // own WaterfallRate::localRowIntervalMs(rate) while the gate is paced, and
