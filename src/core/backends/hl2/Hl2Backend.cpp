@@ -4610,19 +4610,41 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
             // still held is released NOW rather than deferred into a fresh
             // hold. Normally a no-op, because the monitor path already
             // unmuted; it is here so that it stays a no-op.
-            if (m_unkeyUnmuteTimer)
+            if (m_unkeyUnmuteTimer) {
                 m_unkeyUnmuteTimer->stop();
-            if (m_rxAudioMuted)
+            }
+            if (m_rxAudioMuted) {
                 applyRxAudioMute(false);
-        } else if (cwBreakIn) {
-            // CW FULL BREAK-IN SKIPS THE HOLD. RULED, not inherited.
+            }
+        } else if (cwBreakIn && m_cwHangTimer
+                   && m_cwHangTimer->interval() < m_unkeyUnmuteHoldMs) {
+            // CW FULL BREAK-IN AT A SHORT DELAY SKIPS THE HOLD. RULED by the
+            // maintainer (KK7GWY, 2026-09-24, on #5850): the hold is skipped
+            // only when the CW hang is shorter than the hold, which is the case
+            // where it would swallow the inter-element space and take QSK away.
+            // At a longer delay the hang fires once, at the end of the over, and
+            // that unkey takes the ordinary hold below like any other.
             //
-            // THE RULING (ON8ST, 2026-09-21, on this PR): an operator who
-            // turns QSK on has asked to hear between elements, and accepts the
-            // leak that comes with it. So the hold does not arm here, and the
-            // receiver opens as soon as the MOX-off is away.
+            // THIS IS NARROWER THAN WHAT THIS PR ORIGINALLY IMPLEMENTED, and the
+            // difference is the whole point. The earlier arm skipped the hold at
+            // EVERY break-in delay, on the author's own reading of the trade.
+            // AGENTS.md § Autonomous Agent Boundaries makes the maintainer the
+            // sole authority on UX direction, and break-in behaviour is UX — so
+            // the wider rule was never ours to make. At the default cwDelay of
+            // 500 ms the hang is longer than this hold, so it fires once at the
+            // end of the over; that key-up now gets the normal hold, so the
+            // +57 dB burst #5497 measured is removed for break-in operators too.
             //
-            // WHAT THE HOLD WOULD HAVE COST. The unkey hold is armed per
+            // THE PREDICATE READS THE HANG TIMER'S OWN INTERVAL, and nothing new
+            // is latched for it. setCwKeying() starts m_cwHangTimer with
+            // max(kCwEnvelopeReleaseMs, clamp(breakInDelayMs, 0, 2000)), and
+            // QTimer::interval() still returns that value after the single-shot
+            // has fired — which is where we are, since this call arrives FROM
+            // that timeout. So the comparison is the operator's configured hang
+            // against the hold, exactly as the ruling states it.
+            //
+            // WHAT THE HOLD WOULD HAVE COST IN THE SKIPPED CASE. The unkey hold
+            // is armed per
             // ELEMENT in full break-in, not per transmission: setCwKeying()
             // starts m_cwHangTimer at max(kCwEnvelopeReleaseMs, cwDelay) on
             // every element release, so at the deliberate-QSK setting of
@@ -4649,16 +4671,21 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
             // that unkey ends a transmission and has a real T/R turnaround
             // behind it, and the operator asked for no gap to hear in.
             //
-            // THE LEAK IS REAL AND IS THE PRICE. What the receiver hears in
-            // these milliseconds is the operator's own PA decaying into their
-            // own front end, forty-plus times a second at speed — the same
+            // THE LEAK IS REAL AND IS THE PRICE, and it is now paid only where
+            // the ruling says to pay it. What the receiver hears in these
+            // milliseconds is the operator's own PA decaying into their own
+            // front end, forty-plus times a second at speed — the same
             // +57.55 dB / +10.60 dBFS artefact this change removes everywhere
             // else. It is not suppressed here because suppressing it is what
-            // takes QSK away.
-            if (m_unkeyUnmuteTimer)
+            // takes QSK away. At a hang at or above the hold there is no
+            // inter-element space to protect, so the burst is suppressed and
+            // nothing is given up for it.
+            if (m_unkeyUnmuteTimer) {
                 m_unkeyUnmuteTimer->stop();
-            if (m_rxAudioMuted)
+            }
+            if (m_rxAudioMuted) {
                 applyRxAudioMute(false);
+            }
         } else if (keyChanged) {
             // THE ONE TRUE KEY-UP EDGE, and the only site allowed to arm a
             // hold.

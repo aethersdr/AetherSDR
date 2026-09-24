@@ -52,13 +52,24 @@
 //      cancel the hold. Both directions are asserted, because the branch that
 //      protects the second used to swallow the first as well.
 //
-//   7. CW FULL BREAK-IN SKIPS THE HOLD, AND SEMI-BREAK-IN DOES NOT. Ruled by
-//      ON8ST on #5850: an operator who turns QSK on has asked to hear between
-//      elements and accepts the leak. Asserted on the TIMER — "no hold is
-//      armed" — rather than on the mute, because an expired hold also leaves a
-//      chain unmuted. Both sides are driven: full break-in through
-//      setCwKeying(breakIn=true), semi-break-in as elements inside an MOX the
-//      operator asserted, whose release still gets the whole hold.
+//   7. CW FULL BREAK-IN SKIPS THE HOLD ONLY WHEN THE HANG IS SHORTER THAN THE
+//      HOLD. Ruled by the maintainer (KK7GWY, 2026-09-24, on #5850), narrowing
+//      what this PR first implemented: the hold is skipped only where it would
+//      swallow the space between elements. At a longer break-in delay the hang
+//      fires once, at the end of the over, and that key-up gets the ordinary
+//      hold. All three sides are driven: break-in at a SHORT delay (7a, 7b),
+//      break-in at the DEFAULT 500 ms delay (7c), and semi-break-in as elements
+//      inside an MOX the operator asserted (leg 8), whose release keeps the
+//      whole hold.
+//
+//      ASSERTED ON THE TIMER AT THE INSTANT THE MOX-OFF LANDS, which is the
+//      only place the claim is checkable. ten9876 showed on 2026-09-24 that the
+//      earlier form of these legs pinned NOTHING: they waited for the unmute
+//      first, and that wait absorbs the very hold it was meant to detect, so
+//      every structural assertion stayed green with the hold armed. The legs
+//      now pump only until moxOffApplied() and read holdArmed() there, before
+//      any hold has had time to expire. Verified by mutation, both ways -- see
+//      MUTATION EVIDENCE below.
 //
 // WHAT IT DOES NOT ASSERT, said here rather than left to be discovered: any
 // audio level, anything about the HL2's actual T/R turnaround, whether 70 ms is
@@ -70,6 +81,23 @@
 // which is a fact about the code, and leave the speed to arithmetic.
 // Those are bench questions and #5497 carries the measurements. This is an
 // ordering test with a clock in it.
+//
+// MUTATION EVIDENCE FOR THE CW LEGS, because a test that has only been seen to
+// pass is not a test. Each mutation was applied to Hl2Backend.cpp, rebuilt, run,
+// and reverted:
+//
+//   M1  the CW hang timer back to setKeying(false, ...), so cwBreakIn never
+//       reaches the key-up edge at all  ->  7a and 7b RED.
+//   M2  the QSK arm disabled entirely (`else if (false && ...)`), which is
+//       option 2 from the PR body -- keep the hold, accept semi-QSK
+//                                                        ->  7a and 7b RED.
+//   M3  the predicate widened back to the unconditional `else if (cwBreakIn)`
+//       this PR first shipped, which skips the hold at every delay
+//                                                        ->  7c RED.
+//
+// M1 and M2 previously produced ONE red between them, a wall-clock comparison,
+// while every structural assertion stayed green. That is the defect ten9876
+// reported on 2026-09-24 and it is why the legs assert at the MOX-off instant.
 //
 // THE CLOCK, AND WHERE IT IS WALL-CLOCK. Legs 1, 2, 4 and the monitor
 // directions assert on state at a named instant and hold no stopwatch. The
@@ -221,6 +249,36 @@ static void pumpUntilUnmutedOr(Hl2Backend& backend, int deadlineMs)
     while (clock.elapsed() < deadlineMs) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
         if (!Hl2UnkeyHoldTestAccess::dspMuted(backend))
+            return;
+        QThread::msleep(1);
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+}
+
+// Spin until the MOX-OFF HAS BEEN APPLIED, and stop there.
+//
+// THIS IS THE INSTANT THE CW LEGS HAVE TO ASSERT AT, and using it instead of
+// pumpUntilUnmutedOr() is what makes them pin anything at all. ten9876 built
+// and ran the earlier form on 2026-09-24 with the QSK arm disabled: because
+// those legs waited for the UNMUTE first, the wait absorbed the hold, the timer
+// had already expired by the time holdArmed() was read, and every structural
+// assertion passed on the code this commit replaces. The one red was a
+// wall-clock comparison.
+//
+// At this instant the question is decidable. applyKeying() posts the MOX-off
+// and only THEN takes its release branch, and both run to completion on this
+// thread before processEvents() returns -- so when moxOffApplied()'s blocking
+// round-trip comes back, the branch has already either armed the hold or
+// skipped it, and a hold of hundreds of milliseconds cannot yet have expired.
+// holdArmed() read here therefore separates "skipped" from "armed and waited
+// out", which is precisely what the ruling is about.
+static void pumpUntilMoxOffOr(Hl2Backend& backend, int deadlineMs)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (clock.elapsed() < deadlineMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        if (Hl2UnkeyHoldTestAccess::moxOffApplied(backend))
             return;
         QThread::msleep(1);
     }
@@ -525,7 +583,14 @@ int main(int argc, char** argv)
         check(mutedForMs >= hold - (hold / 4),
               "double-unkey: and it lasted at least the hold, so the hold ran "
               "at all");
-        check(mutedForMs < hold + (hold / 4),
+        // THE BOUND IS THE MIDPOINT the printf above already names, not
+        // hold + hold/4. ten9876 measured 190 and 210 ms here against a 250 ms
+        // ceiling on 2026-09-24: 40 ms of headroom, which a poll loop plus a
+        // BlockingQueuedConnection per check can plausibly eat under ASan or a
+        // full parallel ctest. The failure would then read as "a restarted
+        // hold", which is a false accusation, not a flake. hold + hold/2 still
+        // separates one hold (200) from two (~300).
+        check(mutedForMs < hold + (hold / 2),
               "double-unkey: a redundant unkey does NOT restart the hold -- the "
               "mute ends one hold after the REAL key-up edge, not one hold "
               "after the last redundant one");
@@ -628,21 +693,41 @@ int main(int argc, char** argv)
         QElapsedTimer sinceElementUp;
         backend.setCwKeying(false, /*breakIn=*/true, /*breakInDelayMs=*/0, tx.operation);
         sinceElementUp.start();
+
+        // STOP AT THE MOX-OFF, NOT AT THE UNMUTE. Everything structural is read
+        // here, while an armed hold would still be running. Waiting for the
+        // unmute first is what made the earlier version of this leg pass with
+        // the hold armed.
+        pumpUntilMoxOffOr(backend, 10 * hold + 500);
+        const qint64 moxOffAfterMs = sinceElementUp.elapsed();
+        const bool armedAtMoxOff = Hl2UnkeyHoldTestAccess::holdArmed(backend);
+        const bool mutedAtMoxOff = Hl2UnkeyHoldTestAccess::dspMuted(backend);
+
+        check(Hl2UnkeyHoldTestAccess::moxOffApplied(backend),
+              "QSK: the MOX-off did go out, so this is a real unkey and not a "
+              "key that never happened");
+        std::printf("      MEASURED: MOX-off applied %lld ms after the element "
+                    "key-up; hold armed at that instant: %s (hang 6 ms, hold "
+                    "%d ms)\n",
+                    static_cast<long long>(moxOffAfterMs),
+                    armedAtMoxOff ? "YES" : "NO", hold);
+        // THE RULING, ASSERTED WHERE IT IS DECIDABLE. At this instant an armed
+        // hold has had ~6 ms of a 400 ms life, so "not armed" cannot be an
+        // expired hold and cannot be luck.
+        check(!armedAtMoxOff,
+              "QSK: NO HOLD IS ARMED at the instant the MOX-off lands — the "
+              "ruling, read on the timer while an armed one would still be "
+              "running");
+        check(!mutedAtMoxOff,
+              "QSK: and the receiver is ALREADY OPEN at the MOX-off, not "
+              "opened later by a hold running out");
+
         pumpUntilUnmutedOr(backend, 10 * hold + 500);
         const qint64 openedAfterMs = sinceElementUp.elapsed();
-
         check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
               "QSK: the receiver is OPEN after the element release");
         check(!Hl2UnkeyHoldTestAccess::mixerGateClosed(backend),
               "QSK: and the mixer gate is open, so audio actually flows");
-        // THE STRUCTURAL CLAIM, clock-free. "Unmuted" could also be a hold that
-        // was armed and has already expired; "no timer running" cannot.
-        check(!Hl2UnkeyHoldTestAccess::holdArmed(backend),
-              "QSK: NO HOLD IS ARMED by an element release — the ruling, "
-              "asserted on the timer and not on the mute");
-        check(Hl2UnkeyHoldTestAccess::moxOffApplied(backend),
-              "QSK: and the MOX-off did go out, so this is a real unkey and not "
-              "a key that never happened");
         std::printf("      MEASURED: the receiver opened %lld ms after the "
                     "element key-up (hold %d ms; with the hold armed it could "
                     "not open before %d ms)\n",
@@ -672,19 +757,42 @@ int main(int argc, char** argv)
               "value");
 
         const int interElementMs = 48;   // 1200/25 WPM, PARIS
+        const int shippedHold = Hl2UnkeyHoldTestAccess::defaultHoldMs();
 
         backend.setCwKeying(true, true, 0, tx.operation);
+        QElapsedTimer sinceElementUp;
         backend.setCwKeying(false, true, 0, tx.operation);
-        pumpUntilUnmutedOr(backend, 10 * Hl2UnkeyHoldTestAccess::defaultHoldMs() + 500);
-        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
-              "between-elements: open after element 1");
+        sinceElementUp.start();
 
-        // THE WHOLE SPACE, not just its start. A hold that armed late would
+        // THE SPACE IS TIMED FROM THE ELEMENT KEY-UP, not from the unmute.
+        // Timing it from the unmute made the leg unfalsifiable: if the release
+        // HAD armed the 70 ms hold, the wait for the unmute simply absorbed it
+        // and the 48 ms was then measured from a late opening that the operator
+        // never got. So the MOX-off is the only thing waited for here, and
+        // everything else is read against the key-up clock.
+        pumpUntilMoxOffOr(backend, 10 * shippedHold + 500);
+        check(!Hl2UnkeyHoldTestAccess::holdArmed(backend),
+              "between-elements: no hold is armed at the MOX-off, so the "
+              "inter-element space is not about to be closed");
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "between-elements: open at the MOX-off after element 1");
+
+        // THE WHOLE SPACE, not just its start, and measured from the key-up the
+        // operator's paddle actually released. A hold that armed late would
         // close the window again part way through it.
-        pumpFor(interElementMs);
+        const qint64 alreadyElapsed = sinceElementUp.elapsed();
+        if (alreadyElapsed < interElementMs) {
+            pumpFor(interElementMs - static_cast<int>(alreadyElapsed));
+        }
+        std::printf("      MEASURED: %lld ms after the element key-up, muted: "
+                    "%s (shipped hold %d ms; armed it would still be muted "
+                    "here)\n",
+                    static_cast<long long>(sinceElementUp.elapsed()),
+                    Hl2UnkeyHoldTestAccess::dspMuted(backend) ? "YES" : "NO",
+                    shippedHold);
         check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
               "between-elements: STILL open a full 48 ms inter-element space "
-              "later — at 25 WPM the QSK operator hears the band");
+              "after the KEY-UP — at 25 WPM the QSK operator hears the band");
         check(!Hl2UnkeyHoldTestAccess::holdArmed(backend),
               "between-elements: and nothing armed a hold behind our back");
 
@@ -693,6 +801,77 @@ int main(int argc, char** argv)
         check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
               "between-elements: the next element key-down mutes again — the "
               "leak is accepted BETWEEN elements, not DURING one");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+
+    // -- 7c. BREAK-IN AT THE DEFAULT DELAY: THE HOLD STILL ARMS -------------
+    //
+    // THE NARROW HALF OF THE MAINTAINER'S RULING, and the leg he asked for by
+    // name. KK7GWY, 2026-09-24 on #5850: the hold is skipped ONLY when the
+    // break-in delay is shorter than the hold. TransmitModel's cwDelay defaults
+    // to 500 ms, and at that setting the hang does not sit between elements at
+    // all — it restarts on every element release and fires ONCE, at the end of
+    // the over. That key-up ends a real transmission with a real T/R turnaround
+    // behind it, so it gets the ordinary hold and the +57 dB burst #5497
+    // measured is removed for break-in operators too.
+    //
+    // This is what this PR originally got wrong: it skipped the hold at EVERY
+    // break-in delay, on the author's own reading. Without this leg, widening
+    // the predicate back again is a silent change.
+    {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+        Hl2UnkeyHoldTestAccess::setTxReceiverMode(backend, "CW");
+        // 400 < 500, so the hang is the LONGER of the two and the hold must
+        // arm. Deliberately on the other side of the shipped 70 ms, where the
+        // default 500 ms delay also lands, so this leg tests the rule and not a
+        // coincidence of the constants.
+        const int hold = 400;
+        const int cwDelayMs = 500;   // TransmitModel::m_cwDelay's default
+        Hl2UnkeyHoldTestAccess::setHoldMs(backend, hold);
+
+        backend.setCwKeying(true, /*breakIn=*/true, cwDelayMs, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "break-in/500: the element key-down mutes the demodulator");
+
+        QElapsedTimer sinceElementUp;
+        backend.setCwKeying(false, /*breakIn=*/true, cwDelayMs, tx.operation);
+        sinceElementUp.start();
+
+        // The hang is 500 ms here, so the MOX-off is half a second away. The
+        // deadline has to clear the hang AND leave room for the hold behind it.
+        pumpUntilMoxOffOr(backend, cwDelayMs + 10 * hold + 500);
+        const qint64 moxOffAfterMs = sinceElementUp.elapsed();
+        const bool armedAtMoxOff = Hl2UnkeyHoldTestAccess::holdArmed(backend);
+
+        check(Hl2UnkeyHoldTestAccess::moxOffApplied(backend),
+              "break-in/500: the MOX-off went out at the end of the over");
+        std::printf("      MEASURED: MOX-off applied %lld ms after the key-up; "
+                    "hold armed at that instant: %s (hang %d ms, hold %d ms)\n",
+                    static_cast<long long>(moxOffAfterMs),
+                    armedAtMoxOff ? "YES" : "NO", cwDelayMs, hold);
+        check(armedAtMoxOff,
+              "break-in/500: THE HOLD IS ARMED — a break-in delay LONGER than "
+              "the hold does not skip it, per the maintainer's ruling");
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "break-in/500: and the receiver is still shut at the MOX-off, "
+              "which is the ordering #5497 is about");
+
+        // And it runs its length rather than being a token arming.
+        const qint64 sinceMoxOff = moxOffAfterMs;
+        pumpUntilUnmutedOr(backend, 10 * hold + 500);
+        const qint64 mutedForMs = sinceElementUp.elapsed() - sinceMoxOff;
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "break-in/500: the hold does expire");
+        std::printf("      MEASURED: the hold held the mute %lld ms past the "
+                    "MOX-off (hold %d ms)\n",
+                    static_cast<long long>(mutedForMs), hold);
+        check(mutedForMs >= hold - (hold / 4),
+              "break-in/500: and it ran the FULL hold, so break-in operators "
+              "get the same T/R cover as everyone else");
 
         Hl2UnkeyHoldTestAccess::tearDown(backend);
     }
@@ -823,7 +1002,9 @@ int main(int argc, char** argv)
                     "lasted %lld ms past the real MOX-off (hold %d ms; a "
                     "restarted hold would land near %d ms)\n",
                     static_cast<long long>(mutedForMs), hold, hold + hold / 2);
-        check(mutedForMs < hold + (hold / 4),
+        // Same midpoint bound as the other double-unkey leg, for the same
+        // reason: 210 ms was measured against a 250 ms ceiling.
+        check(mutedForMs < hold + (hold / 2),
               "double-unkey/no-QSK: the edge guard is UNAFFECTED by the CW "
               "branch — still one hold after the real key-up edge");
 
