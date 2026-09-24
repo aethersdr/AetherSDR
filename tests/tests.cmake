@@ -1785,6 +1785,31 @@ target_include_directories(panadapter_model_rx_antenna_test PRIVATE src)
 target_link_libraries(panadapter_model_rx_antenna_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME panadapter_model_rx_antenna_test COMMAND panadapter_model_rx_antenna_test)
 
+# The real SpectrumWidget currently belongs to the desktop executable. Keep
+# this socket-free gesture lane opt-in; no GUI-library refactor or extra full
+# desktop compilation in the default test graph is needed for this regression.
+option(AETHER_BUILD_SPECTRUM_GESTURE_TEST "Build real SpectrumWidget gesture regression" OFF)
+if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
+    add_executable(spectrum_confirmed_geometry_test
+        tests/spectrum_confirmed_geometry_test.cpp ${GUI_SOURCES} ${RESOURCES} ${DFNR_RESOURCES})
+    target_include_directories(spectrum_confirmed_geometry_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(spectrum_confirmed_geometry_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_DEFINITIONS>)
+    target_compile_options(spectrum_confirmed_geometry_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_OPTIONS>)
+    target_link_libraries(spectrum_confirmed_geometry_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,LINK_LIBRARIES>)
+    add_test(NAME spectrum_confirmed_geometry_test COMMAND spectrum_confirmed_geometry_test)
+    set_tests_properties(spectrum_confirmed_geometry_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+endif()
+
+add_executable(pan_frame_guard_test tests/pan_frame_guard_test.cpp)
+target_include_directories(pan_frame_guard_test PRIVATE src)
+target_link_libraries(pan_frame_guard_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pan_frame_guard_test COMMAND pan_frame_guard_test)
+
 add_executable(packet_loss_concealment_test
     tests/packet_loss_concealment_test.cpp
     src/core/PacketLossConcealment.cpp
@@ -6567,6 +6592,7 @@ set(AETHER_SETTINGS_CONSUMERS
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     fm_filter_controls_test
+    spectrum_confirmed_geometry_test
     flex_slice_mode_intent_test
     rtl_slice_settings_test
     rtl_runtime_settings_test

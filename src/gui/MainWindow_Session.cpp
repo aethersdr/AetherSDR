@@ -57,6 +57,7 @@
 #endif
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
+#include "PanFrameGuard.h"
 #include "CatControlApplet.h"
 #include "ClientChainApplet.h"
 #include "DaxApplet.h"
@@ -1451,11 +1452,22 @@ void MainWindow::wirePanLifecycle()
         return profileLoadFrameLooksRenderable(sw, binCount);
     };
 
+    const auto capturePanFrame = [this](quint32 streamId, bool waterfall) {
+        PanadapterModel* source = nullptr;
+        for (auto* pan : m_radioModel.panadapters()) {
+            if ((waterfall ? pan->wfStreamId() : pan->panStreamId()) == streamId) {
+                source = pan;
+                break;
+            }
+        }
+        return PanFrameGuard(m_radioModel.confirmsReceiveControls(), source);
+    };
+
     // aetherd Gap B (Step 1): bind the render path to the backend-neutral feed, not
     // the Flex-only PanadapterStream. Signature-identical → handler bodies unchanged;
     // for a Flex session the feed forwards PanadapterStream 1:1 (byte-for-byte).
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
-            this, [this, profileLoadFrameReady](quint32 streamId,
+            this, [this, profileLoadFrameReady, capturePanFrame](quint32 streamId,
                                                 const QVector<float>& bins,
                                                 qint64 emittedNs) {
         if (m_shuttingDown || !m_panStack) {
@@ -1466,11 +1478,12 @@ void MainWindow::wirePanLifecycle()
                 PerfTelemetry::FrameKind::Panadapter,
                 static_cast<double>(PerfTelemetry::nowNs() - emittedNs) / 1000000.0);
         }
+        const PanFrameGuard frameGuard = capturePanFrame(streamId, false);
         deferReceivePresentation(
             ReceivePresentationSource::Flex,
             ReceivePresentationSurface::Spectrum,
-            [this, profileLoadFrameReady, streamId, bins]() {
-                if (m_shuttingDown || !m_panStack) {
+            [this, profileLoadFrameReady, streamId, bins, frameGuard]() {
+                if (m_shuttingDown || !m_panStack || !frameGuard.isCurrent()) {
                     return;
                 }
                 for (auto* pan : m_radioModel.panadapters()) {
@@ -1570,7 +1583,7 @@ void MainWindow::wirePanLifecycle()
     }
 
     connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,
-            this, [this, profileLoadFrameReady](quint32 streamId,
+            this, [this, profileLoadFrameReady, capturePanFrame](quint32 streamId,
                                                 const QVector<float>& bins,
                                                 double low,
                                                 double high,
@@ -1584,11 +1597,12 @@ void MainWindow::wirePanLifecycle()
                 PerfTelemetry::FrameKind::Waterfall,
                 static_cast<double>(PerfTelemetry::nowNs() - emittedNs) / 1000000.0);
         }
+        const PanFrameGuard frameGuard = capturePanFrame(streamId, true);
         deferReceivePresentation(
             ReceivePresentationSource::Flex,
             ReceivePresentationSurface::Waterfall,
-            [this, profileLoadFrameReady, streamId, bins, low, high, tc]() {
-                if (m_shuttingDown || !m_panStack) {
+            [this, profileLoadFrameReady, streamId, bins, low, high, tc, frameGuard]() {
+                if (m_shuttingDown || !m_panStack || !frameGuard.isCurrent()) {
                     return;
                 }
                 for (auto* pan : m_radioModel.panadapters()) {
@@ -1778,7 +1792,7 @@ void MainWindow::wirePanLifecycle()
                 applyNotchCapabilities(sw);
                 applyRadioSideDspToPanDisplay(sw);
                 connect(pan, &PanadapterModel::infoChanged,
-                        sw, &SpectrumWidget::setFrequencyRange);
+                        sw, &SpectrumWidget::observeFrequencyRange);
                 // Re-push authoritative geometry when a gesture that was
                 // suppressing it releases. Without this a backend that emits
                 // geometry only on change (HL2's NCO) loses the update for good
@@ -1849,7 +1863,7 @@ void MainWindow::wirePanLifecycle()
                 true, m_panadapterConnectionAnimationLabel);
         }
         connect(pan, &PanadapterModel::infoChanged,
-                applet->spectrumWidget(), &SpectrumWidget::setFrequencyRange);
+                applet->spectrumWidget(), &SpectrumWidget::observeFrequencyRange);
         connect(applet->spectrumWidget(), &SpectrumWidget::panGeometryResyncNeeded,
                 this, [this, panId = pan->panId()]() {
             resyncPanGeometryToView(panId);

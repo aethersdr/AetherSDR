@@ -122,6 +122,23 @@ hardware center, receiver RF or squelch detection. An offscreen receiver keeps
 receiving while its full passband remains captured. The existing explicit
 `rtl/sample_rate.set` extension remains the hardware sample-rate control.
 
+The native spectrum widget follows the same confirmed observation during a
+pan, zoom or VFO-edge gesture. Pointer movement sends intent; quantized or
+clamped backend geometry updates the axis and waterfall while the pointer is
+still held. Pending or refused changes keep the accepted view and continue
+ingesting current FFT rows. Release flushes the final requested geometry without
+substituting the last observation. Flex retains its optimistic preview and
+stale-status hold; Kiwi's independent display path is unchanged.
+
+Deferred native FFT/waterfall delivery carries the pan object's geometry
+revision. A frame superseded by an accepted range or session change is discarded
+instead of being painted against a different axis; unchanged/clamped geometry
+does not discard fresh frames. A backend-generation guard also rejects queued
+raw FFT delivery from a retired backend. These guards add no worker or transport.
+The socket-free `pan_frame_guard_test` is in the default graph. The real-widget
+gesture regression is opt-in with `AETHER_BUILD_SPECTRUM_GESTURE_TEST=ON`; it
+drives production mouse/wheel paths, without hardware or a firmware peer.
+
 The neutral confirmed-tune intent admits receiver RF and Preserve/Reveal/Center
 display intent together. Typed entry requests centering; publication waits for
 DSP/capture adoption. Refusal, supersession, failed hardware application and

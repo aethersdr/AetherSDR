@@ -783,6 +783,10 @@ void MainWindow::resyncPanGeometryToView(const QString& panId)
     auto* sw = m_panStack->spectrum(panId);
     if (!pan || !sw)
         return;
+    if (m_radioModel.confirmsReceiveControls()) {
+        sw->observeFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
+        return;
+    }
     // Effective (pending-else-model) geometry: a deferred write in flight —
     // e.g. the leave-kiwi reconcile parked behind a profile-load hold (#4142)
     // — supersedes the model value; re-pushing the superseded span here would

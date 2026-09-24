@@ -8158,6 +8158,7 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
     if (!sw) {
         return;
     }
+    sw->setPanGeometryConfirmationRequired(m_radioModel.confirmsReceiveControls());
     auto* menu = sw->overlayMenu();
     if (menu) {
         menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
@@ -11035,7 +11036,7 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
                 if (pan) {
                     // Push current state to the spectrum widget
                     applet->spectrumWidget()->setDbmRange(pan->minDbm(), pan->maxDbm());
-                    applet->spectrumWidget()->setFrequencyRange(
+                    applet->spectrumWidget()->observeFrequencyRange(
                         pan->centerMhz(), pan->bandwidthMhz());
                 }
             }

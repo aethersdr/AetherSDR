@@ -2291,6 +2291,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         }
         newCenter = std::max(newCenter, newBw / 2.0);
 
+        if (panGeometryConfirmationRequired()) {
+            scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
+            requestFrequencyRangeChange(newCenter, newBw);
+            return;
+        }
         const bool previewed = updateFrequencyPreview(
             m_centerMhz, m_bandwidthMhz, newCenter, newBw);
         if (!previewed) {
@@ -6556,6 +6561,7 @@ QRect SpectrumWidget::waterfallLiveButtonRect(const QRect& wfRect) const
 
 void SpectrumWidget::clearDisplay()
 {
+    if (m_panGeometryConfirmationRequired) { cancelPanGeometryRequests(); }
     clearFrequencyPreview();
     m_bins.clear();
     m_smoothed.clear();
@@ -7579,12 +7585,50 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
 
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 {
-    setFrequencyRangeInternal(centerMhz, bandwidthMhz, true);
+    if (!panGeometryConfirmationRequired()) {
+        setFrequencyRangeInternal(centerMhz, bandwidthMhz, true);
+    }
 }
 
 void SpectrumWidget::setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz)
 {
-    setFrequencyRangeInternal(centerMhz, bandwidthMhz, false);
+    if (!panGeometryConfirmationRequired()) {
+        setFrequencyRangeInternal(centerMhz, bandwidthMhz, false);
+    }
+}
+
+void SpectrumWidget::setPanGeometryConfirmationRequired(bool required)
+{
+    if (m_panGeometryConfirmationRequired == required) { return; }
+    cancelPanGeometryRequests();
+    m_panGeometryConfirmationRequired = required;
+    if (required) {
+        if (m_panCenterAnim) { m_panCenterAnim->stop(); }
+        clearFrequencyPreview();
+        m_deferredRangeValid = false;
+    }
+}
+
+void SpectrumWidget::cancelPanGeometryRequests()
+{
+    m_draggingPan = false;
+    m_draggingBandwidth = false;
+    m_draggingVfo = false;
+    m_panDragPendingCenterValid = false;
+    m_frequencyRangeSettlePending = false;
+    m_frequencyRangePendingValid = false;
+    m_frequencyRangeCommandThrottle.clear();
+    m_frequencyRangeCommandClock.invalidate();
+    for (QTimer* timer : {m_panDragSettleTimer, m_frequencyRangeSettleTimer,
+                         m_frequencyRangeCommandTimer, m_vfoDragEdgePanTimer}) {
+        if (timer) { timer->stop(); }
+    }
+}
+
+void SpectrumWidget::observeFrequencyRange(double centerMhz, double bandwidthMhz)
+{
+    const bool confirmed = panGeometryConfirmationRequired();
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, !confirmed, confirmed);
 }
 
 void SpectrumWidget::deferIncomingRange(double centerMhz, double bandwidthMhz)
@@ -7629,7 +7673,8 @@ void SpectrumWidget::applyDeferredRangeIfIdle()
 }
 
 void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
-                                               bool animateSmallNudges)
+                                               bool animateSmallNudges,
+                                               bool confirmedObservation)
 {
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
@@ -7641,7 +7686,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     const bool vfoDragPanEchoHold =
         m_vfoDragPanEchoHoldUntilMs > 0 && nowMs < m_vfoDragPanEchoHoldUntilMs;
-    if ((m_draggingPan || m_draggingVfo || vfoDragPanEchoHold)
+    if (!confirmedObservation && (m_draggingPan || m_draggingVfo || vfoDragPanEchoHold)
         && mhzNearlyEqual(bandwidthMhz, m_bandwidthMhz)) {
         deferIncomingRange(centerMhz, bandwidthMhz);
         return;
@@ -7651,7 +7696,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     // center and bandwidth. Flex can echo older center-only statuses after a
     // combined center+bandwidth command; accepting those stale centers retargets
     // the local view and can churn remote Kiwi W/F zoom/start requests.
-    if (m_frequencyRangeSettlePending
+    if (!confirmedObservation && m_frequencyRangeSettlePending
         && m_frequencyRangePendingValid
         && !mhzNearlyEqual(centerMhz, m_centerMhz)
         && !mhzNearlyEqual(centerMhz, m_frequencyRangePendingCenterMhz)) {
@@ -7678,7 +7723,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     // that blanks the spectrum, so skip it — but only when the bandwidth is also
     // unchanged, so that bandwidth corrections (e.g. after xpixels resize) are
     // not silently dropped (#1729).
-    if (m_panCenterAnim &&
+    if (!confirmedObservation && m_panCenterAnim &&
         m_panCenterAnim->state() != QAbstractAnimation::Stopped &&
         std::abs(centerMhz - m_panCenterStart) < 1e-9 &&
         bandwidthMhz == m_bandwidthMhz) {
@@ -10091,9 +10136,11 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     [this, id = so.sliceId]{ emit sliceTuneRequested(id, m_centerMhz); });
                 menu.addAction(QString("Center Slice %1").arg(letter), this,
                     [this, freq = so.freqMhz]{
-                        m_centerMhz = freq;
-                        markOverlayDirty();
-                        emit centerChangeRequested(m_centerMhz);
+                        if (!panGeometryConfirmationRequired()) {
+                            m_centerMhz = freq;
+                            markOverlayDirty();
+                        }
+                        emit centerChangeRequested(freq);
                     });
                 menu.addSeparator();
                 addCenterLockAction(&menu, so, true);
@@ -10572,9 +10619,12 @@ void SpectrumWidget::edgePanVelocityStep()
         return;
     }
 
-    reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
-    m_centerMhz = newCenter;
-    markOverlayDirty();
+    const double requestedCenterOffset = newCenter - m_centerMhz;
+    if (!panGeometryConfirmationRequired()) {
+        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
+        m_centerMhz = newCenter;
+        markOverlayDirty();
+    }
 
     // Park the slice a comfortable margin inside the leading edge rather than
     // exactly under the cursor: the cursor is jammed against the window border,
@@ -10583,7 +10633,8 @@ void SpectrumWidget::edgePanVelocityStep()
     // parked at the edge while the band scrolls under it, and stays continuous
     // with the in-window path at the boundary.  (user-reported)
     const int sliceX = std::clamp(m_vfoDragLastX, zonePx, w - zonePx);
-    const double sliceFreq = snapToStep(xToMhz(sliceX) - m_vfoDragOffsetHz / 1.0e6, m_stepHz);
+    const double sliceFreq = snapToStep(xToMhz(sliceX) - m_vfoDragOffsetHz / 1.0e6
+        + (panGeometryConfirmationRequired() ? requestedCenterOffset : 0.0), m_stepHz);
     qCDebug(lcPerf).nospace()
         << "SliceDrag phase=edgepan dir=" << dir
         << " depth=" << depth << " ramp=" << rampFactor
@@ -10630,6 +10681,7 @@ void SpectrumWidget::scheduleFrequencyRangeSettleUpdate(double centerMhz,
         && centerMhz > 0.0 && bandwidthMhz > 0.0) {
         m_frequencyRangePendingValid = true;
         m_frequencyRangePendingCenterMhz = centerMhz;
+        m_frequencyRangePendingBandwidthMhz = bandwidthMhz;
     }
     if (m_frequencyRangeSettleTimer) {
         m_frequencyRangeSettleTimer->start(kFrequencyRangeSettleMs);
@@ -10649,7 +10701,11 @@ void SpectrumWidget::finishFrequencyRangeSettleUpdate()
     commitFrequencyPreview();
     // Land the radio on the exact final center/bandwidth pair even when the
     // last high-rate gesture event fell inside the command throttle window.
-    requestFrequencyRangeChange(m_centerMhz, m_bandwidthMhz, true);
+    const bool confirmedRequest = panGeometryConfirmationRequired()
+        && m_frequencyRangePendingValid;
+    requestFrequencyRangeChange(
+        confirmedRequest ? m_frequencyRangePendingCenterMhz : m_centerMhz,
+        confirmedRequest ? m_frequencyRangePendingBandwidthMhz : m_bandwidthMhz, true);
     m_frequencyRangeSettlePending = false;
     m_frequencyRangePendingValid = false;
     if (m_dssZoomFloorSyncTimer) {
@@ -10683,35 +10739,37 @@ void SpectrumWidget::applyPanDragCenter(double newCenterMhz, bool force)
     }
 
     bool needsDeferredFlush = false;
-    const bool waterfallChanged =
-        !mhzNearlyEqual(newCenterMhz, m_panDragWaterfallFrameCenterMhz);
-    const bool previewed = waterfallChanged && updateFrequencyPreview(
-        m_panDragWaterfallFrameCenterMhz, m_bandwidthMhz,
-        newCenterMhz, m_bandwidthMhz);
-    if (!previewed) {
-        const bool waterfallDue = force || !m_panDragWaterfallClock.isValid()
-            || m_panDragWaterfallClock.elapsed() >= kPanDragFrameMs;
-        if (waterfallChanged && waterfallDue) {
-            handleWaterfallFrequencyFrameChange(m_panDragWaterfallFrameCenterMhz,
-                                                m_bandwidthMhz,
-                                                newCenterMhz,
-                                                m_bandwidthMhz);
-            m_panDragWaterfallFrameCenterMhz = newCenterMhz;
-            m_panDragWaterfallClock.restart();
-        } else if (waterfallChanged) {
-            needsDeferredFlush = true;
+    if (!panGeometryConfirmationRequired()) {
+        const bool waterfallChanged =
+            !mhzNearlyEqual(newCenterMhz, m_panDragWaterfallFrameCenterMhz);
+        const bool previewed = waterfallChanged && updateFrequencyPreview(
+            m_panDragWaterfallFrameCenterMhz, m_bandwidthMhz,
+            newCenterMhz, m_bandwidthMhz);
+        if (!previewed) {
+            const bool waterfallDue = force || !m_panDragWaterfallClock.isValid()
+                || m_panDragWaterfallClock.elapsed() >= kPanDragFrameMs;
+            if (waterfallChanged && waterfallDue) {
+                handleWaterfallFrequencyFrameChange(m_panDragWaterfallFrameCenterMhz,
+                                                    m_bandwidthMhz,
+                                                    newCenterMhz,
+                                                    m_bandwidthMhz);
+                m_panDragWaterfallFrameCenterMhz = newCenterMhz;
+                m_panDragWaterfallClock.restart();
+            } else if (waterfallChanged) {
+                needsDeferredFlush = true;
+            }
         }
-    }
-    if (waterfallChanged) {
-        reprojectSpectrum(m_centerMhz, m_bandwidthMhz,
-                          newCenterMhz, m_bandwidthMhz);
-    }
+        if (waterfallChanged) {
+            reprojectSpectrum(m_centerMhz, m_bandwidthMhz,
+                              newCenterMhz, m_bandwidthMhz);
+        }
 
-    m_centerMhz = newCenterMhz;
-    if (previewed) {
-        scheduleFrequencyPreviewFrame();
-    } else {
-        markOverlayDirty();
+        m_centerMhz = newCenterMhz;
+        if (previewed) {
+            scheduleFrequencyPreviewFrame();
+        } else {
+            markOverlayDirty();
+        }
     }
 
     const bool commandChanged =
@@ -10965,6 +11023,12 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 m_bwDragAnchorMhz, m_bwDragAnchorFraction, newBw,
                 panEdgeCropActive()),
             newBw / 2.0);
+        if (panGeometryConfirmationRequired()) {
+            scheduleFrequencyRangeSettleUpdate(zoomCenter, newBw);
+            requestFrequencyRangeChange(zoomCenter, newBw);
+            ev->accept();
+            return;
+        }
         const bool previewed = updateFrequencyPreview(
             m_centerMhz, m_bandwidthMhz, zoomCenter, newBw);
         if (!previewed) {
@@ -11345,7 +11409,9 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     if (m_draggingBandwidth) {
         m_draggingBandwidth = false;
         setSpectrumCursor(Qt::CrossCursor);
-        scheduleFrequencyRangeSettleUpdate(m_centerMhz, m_bandwidthMhz);
+        if (!panGeometryConfirmationRequired()) {
+            scheduleFrequencyRangeSettleUpdate(m_centerMhz, m_bandwidthMhz);
+        }
         finishFrequencyRangeSettleUpdate();
         ev->accept();
         return;
@@ -11372,7 +11438,8 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
         if (m_panDragSettleTimer) {
             m_panDragSettleTimer->stop();
         }
-        applyPanDragCenter(m_centerMhz, true);
+        applyPanDragCenter(panGeometryConfirmationRequired()
+                               ? m_panDragPendingCenterMhz : m_centerMhz, true);
         commitFrequencyPreview();
         m_panDragWaterfallFrameCenterMhz = m_centerMhz;
         emit panDragSettled(m_centerMhz, m_bandwidthMhz);
@@ -11671,6 +11738,11 @@ bool SpectrumWidget::event(QEvent* ev)
                 centerForAnchoredPanBandwidth(
                     anchorMhz, mouseXFrac, newBw, panEdgeCropActive()),
                 newBw / 2.0);
+            if (panGeometryConfirmationRequired()) {
+                scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
+                requestFrequencyRangeChange(newCenter, newBw);
+                return true;
+            }
             const bool previewed = updateFrequencyPreview(
                 m_centerMhz, m_bandwidthMhz, newCenter, newBw);
             if (!previewed) {
@@ -11867,6 +11939,12 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
             centerForAnchoredPanBandwidth(
                 anchorMhz, mouseXFrac, newBw, panEdgeCropActive()),
             newBw / 2.0);
+        if (panGeometryConfirmationRequired()) {
+            scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
+            requestFrequencyRangeChange(newCenter, newBw);
+            ev->accept();
+            return;
+        }
         const bool previewed = updateFrequencyPreview(
             m_centerMhz, m_bandwidthMhz, newCenter, newBw);
         if (!previewed) {

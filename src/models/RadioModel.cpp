@@ -976,8 +976,12 @@ void RadioModel::setupBackend(const QString& family)
     // IRadioBackend data-plane signal (HL2) feed the neutral render feed here.
     // Flex uses the PanadapterStream passthrough wired above and never emits this,
     // so this connect is harmless for Flex and load-bearing for HL2.
-    connect(m_backend.get(), &IRadioBackend::spectrumFrameReady,
-            this, &RadioModel::onBackendSpectrumFrame);
+    connect(m_backend.get(), &IRadioBackend::spectrumFrameReady, this,
+            [this, generation](int panId, const QByteArray& frame) {
+        if (generation == m_backendReceiverGeneration) {
+            onBackendSpectrumFrame(panId, frame);
+        }
+    });
     // Liveness stamps, on the arrival edge rather than anywhere downstream: a
     // frame that arrives and is then discarded still proves the link is alive,
     // and that is the question these answer.

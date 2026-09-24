@@ -165,6 +165,13 @@ public:
 
     // Set the frequency range covered by this panadapter.
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
+    // Confirmed backends keep gestures as requests. Only this observation
+    // entry may move their native view; Flex retains its optimistic path.
+    void setPanGeometryConfirmationRequired(bool required);
+    bool panGeometryConfirmationRequired() const {
+        return m_panGeometryConfirmationRequired && !m_kiwiSdrWaterfallActive;
+    }
+    void observeFrequencyRange(double centerMhz, double bandwidthMhz);
     // Same range update, but snaps instead of using the small pan-follow
     // animation. Center Lock uses this so the locked slice stays pinned.
     void setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz);
@@ -1002,7 +1009,7 @@ private:
     void raiseWarningCard(const QString& id, const QString& title,
                           const QString& detail, int durationMs);
     void setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
-                                   bool animateSmallNudges);
+                                   bool animateSmallNudges, bool confirmedObservation = false);
     double effectiveGridStepMhz(int widgetWidth) const;
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);
@@ -1800,9 +1807,11 @@ private:
     double m_bwDragStartBw{0.0};
     double m_bwDragAnchorMhz{0.0};
     double m_bwDragAnchorFraction{0.0};
+    bool m_panGeometryConfirmationRequired{false};
     bool m_frequencyRangeSettlePending{false};
     bool m_frequencyRangePendingValid{false};
     double m_frequencyRangePendingCenterMhz{0.0};
+    double m_frequencyRangePendingBandwidthMhz{0.0};
     QTimer* m_frequencyRangeSettleTimer{nullptr};
     QTimer* m_frequencyRangeCommandTimer{nullptr};
     QTimer* m_dssZoomFloorSyncTimer{nullptr};
@@ -1887,6 +1896,7 @@ private:
     // half of #4142's "defer, never drop".
     bool    m_deferredRangeValid{false};
     QTimer* m_deferredRangeTimer{nullptr};
+    void    cancelPanGeometryRequests();
     void    deferIncomingRange(double centerMhz, double bandwidthMhz);
     void    applyDeferredRangeIfIdle();
     bool m_vfoDragEdgePanDisabled{false};   // AETHER_NO_DRAG_EDGEPAN=1 escape hatch
