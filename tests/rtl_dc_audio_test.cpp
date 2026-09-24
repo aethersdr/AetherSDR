@@ -27,6 +27,24 @@ constexpr double kAmplitude = 0.1;
 constexpr std::uint64_t kDiscard = 96'000;
 constexpr std::uint64_t kCount = 48'000;
 
+double idealCarrierComponent(double modulationIndex)
+{
+    // J0(beta), the ideal sinusoidal-FM carrier mean (NIST DLMF 10.2.2):
+    // https://dlmf.nist.gov/10.2.E2, with nu = 0. libc++ lacks cyl_bessel_j.
+    // This test uses only 0 <= beta <= 2.5; summing through k=20 makes the
+    // alternating-series remainder smaller than 1e-35 over that interval.
+    check(std::isfinite(modulationIndex) && modulationIndex >= 0 && modulationIndex <= 2.5,
+          "fixture modulation index stays within the carrier-reference range");
+    const double factor = -modulationIndex * modulationIndex / 4;
+    double term = 1;
+    double sum = term;
+    for (int k = 1; k <= 20; ++k) {
+        term *= factor / (double(k) * k);
+        sum += term;
+    }
+    return sum;
+}
+
 struct Measurement : Extractor::Sink {
     std::unique_ptr<WdspChannel> channel;
     std::vector<float> pcm;
@@ -71,6 +89,7 @@ Measurement measure(double fmRecipe, double modulation, double offset, Bias bias
 {
     Measurement result;
     result.pcm.reserve(kCount);
+    const double carrierMean = kAmplitude * idealCarrierComponent(modulation / kTone);
     WdspChannel::Config dsp;
     dsp.mode = WdspChannel::Mode::Fm;
     dsp.fmReceive = WdspChannel::FmReceive{fmRecipe};
@@ -104,7 +123,7 @@ Measurement measure(double fmRecipe, double modulation, double offset, Bias bias
             // Negative control only: blind removal destroys the wanted carrier
             // mean at low modulation index. Production never does this.
             if (bias == Bias::BlindMean) {
-                value -= adcBias + std::complex<double>{kAmplitude * std::cyl_bessel_j(0, modulation / kTone), 0};
+                value -= adcBias + std::complex<double>{carrierMean, 0};
             }
             iq[i] = {float(value.real()), float(value.imag())};
         }
@@ -121,6 +140,13 @@ Measurement measure(double fmRecipe, double modulation, double offset, Bias bias
 
 int main()
 {
+    // Fixed reference values also pin the helper on libc++, without requiring
+    // its unavailable special function. Checked against libstdc++ on Nobara.
+    check(idealCarrierComponent(0) == 1, "unmodulated carrier has unit mean");
+    check(std::abs(idealCarrierComponent(0.1) - 0.99750156206604013) < 1e-15,
+          "low-index carrier mean matches the reference");
+    check(std::abs(idealCarrierComponent(2.5) + 0.048383776468197998) < 1e-15,
+          "largest fixture index matches the reference");
     for (double recipe : {2500.0, 5000.0}) {
         for (double modulation : {100.0, 2500.0}) {
             for (double offset : {-600'000.0, -Transaction::kDcSeparationHz, Transaction::kDcSeparationHz}) {
