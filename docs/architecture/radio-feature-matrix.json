@@ -316,7 +316,7 @@
    "flex": "W",
    "icom": "W",
    "hl2": "V",
-   "anan": "D",
+   "anan": "W",
    "rtl": "W",
    "sim": "D"
   },
@@ -713,13 +713,13 @@
    "flex": "W",
    "icom": "W",
    "hl2": "W",
-   "anan": "H",
+   "anan": "W",
    "rtl": "H",
    "sim": "H"
   },
   "headless": {},
   "verified": {},
-  "note": "The only OR gate in the GUI: VfoWidget spells it m_nbModeOk && (m_hasRadioSideDsp || m_hasHostNoiseBlanker), which is why the HL2 keeps the button for a blanker this host runs in WDSP."
+  "note": "The only OR gate in the GUI: VfoWidget spells it m_nbModeOk && (m_hasRadioSideDsp || m_hasHostNoiseBlanker), which is why the HL2 and the ANAN keep the button for a blanker this host runs in WDSP."
  },
  "dsp/auto-notch": {
   "control": "ANF button",

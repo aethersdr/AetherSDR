@@ -177,7 +177,7 @@ and scoring them per radio would be wrong.
 | `rx/pan-center` | W* | W | W | W | W | W | drag the spectrum or waterfall (pan centre) |
 | `rx/pan-bandwidth` | W* | W | V | W | W | D | zoom / span |
 | `rx/pan-framerate` | W* | D | W | W | W | D | waterfall / spectrum frame rate |
-| `rx/rf-gain` | W* | W | V | D | W | D | RF gain slider (ANT panel) |
+| `rx/rf-gain` | W* | W | V | W | W | D | RF gain slider (ANT panel) |
 | `rx/preamp` | H | W | H | H | H | H | preamp step (named positions) |
 | `rx/attenuator` | H | W | H | H | H | H | attenuator step |
 | `rx/antenna` | W* | W | H | H | H | H | receive antenna selection |
@@ -195,7 +195,7 @@ and scoring them per radio would be wrong.
 | feature | Flex | Icom | HL2 | ANAN | RTL | Demo | control |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|---|
 | `dsp/noise-reduction` | W* | W | H | H | H | H | NR button and level |
-| `dsp/noise-blanker` | W* | W | W | H | H | H | NB button and level |
+| `dsp/noise-blanker` | W* | W | W | W | H | H | NB button and level |
 | `dsp/auto-notch` | W* | W | H | H | H | H | ANF button |
 | `dsp/manual-notch` | H | W | H | H | H | H | MN per-slice manual notch |
 | `dsp/notch-create` | W | H | W | H | H | H | tracking notch (TNF): create |
@@ -392,12 +392,12 @@ frame, and `IcomControls` carries a single `"rit.offset"` spec labelled
 hazard is upstream of Icom: on a two-register family the alias would write the
 wrong one, which is why the generator emits `U` for that row rather than `W`.
 
-### ANAN (P2) — two live setters, and everything else at connect time
+### ANAN (P2) — three live setters, and everything else at connect time
 
-`P2Client` exposes **two** `Q_INVOKABLE` live setters, `setDdc0FrequencyHz` and
-`setDdcRateLive`; its class comment says *"RX-ONLY: there is no PTT
-parameter anywhere in this class"*. Everything else the radio is told is a
-connect-time `P2Client::Params` field. So on this family:
+`P2Client` exposes **three** `Q_INVOKABLE` live setters — `setDdc0FrequencyHz`,
+`setDdcRateLive` and `setStepAttenuationDb`; its class comment says *"RX-ONLY:
+there is no PTT parameter anywhere in this class"*. Everything else the radio is
+told is a connect-time `P2Client::Params` field. So on this family:
 
 - **reaches the wire** = frequency (`applyTuneToRadioAndPan()`, behind a 33 ms
   leading-and-trailing throttle), and the DDC sample rate, written **live on the
@@ -408,9 +408,24 @@ connect-time `P2Client::Params` field. So on this family:
   longer costs a session stop/reconfigure/restart — `startP2ClientSession` is
   reached from the connect path alone, and `AnanBackend::beginRateChange` now
   only rebuilds the DSP channel off-thread before handing over. Its own leading
-  comment still describes the old restart, so the source says both things;
-- **reaches the DSP** = mode, filter, AGC, frame rate and CW pitch, through
-  `QMetaObject::invokeMethod(m_dsp, …)` into `AnanRxDsp`.
+  comment still describes the old restart, so the source says both things; and
+  **RF gain**, which on a G2 is the step attenuator in front of the ADC rather
+  than a gain stage the host drives: `AnanBackend::setPanRfGain` clamps the
+  slider into -31…0 dB, negates it into 0…31 dB of attenuation and invokes
+  `P2Client::setStepAttenuationDb`, which stores the per-ADC value and resends
+  the High Priority packet **immediately when the session is running** rather
+  than letting the operator wait up to 100 ms for the next keepalive. It is the
+  one control written on both planes: the attenuation is mirrored into
+  `m_pendingParams` as well, so a restart that does rebuild the session resends
+  it;
+- **reaches the DSP** = mode, filter, AGC, frame rate, CW pitch and the **noise
+  blanker**, through `QMetaObject::invokeMethod(m_dsp, …)` into `AnanRxDsp`.
+  The blanker is WDSP's ANB on the raw IQ: `capabilities()` declares
+  `hasHostNoiseBlanker = true` while `hasRadioSideDsp` stays `false`, and
+  `AnanBackend::setSliceNoiseBlanker` forwards into
+  `AnanRxDsp::setNoiseBlanker`. The NB button gates on the OR of those two
+  fields, so declaring the host blanker is what keeps the control live on a
+  radio whose own firmware runs no DSP.
 
 Both count as the control working — on a raw-IQ radio the engine-side chain is
 where the demodulator is — and the trace distinguishes them because the repair
