@@ -12,7 +12,6 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QSignalBlocker>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QVBoxLayout>
@@ -93,56 +92,6 @@ AetherTxSettingsDialog::AetherTxSettingsDialog(AudioEngine* audio, QWidget* pare
     m_status = new QLabel;
     m_status->setWordWrap(true);
     root->addWidget(m_status);
-
-    // ── The two live controls the chain row used to carry ────────────────
-    auto* liveHeading = new QLabel(tr("Chain"));
-    liveHeading->setObjectName(QStringLiteral("SectionLabel"));
-    root->addWidget(liveHeading);
-
-    auto* liveRow = new QHBoxLayout;
-    liveRow->setSpacing(6);
-
-    m_bypassBtn = new QPushButton(tr("BYPASS"));
-    m_bypassBtn->setObjectName(QStringLiteral("aetherTxBypass"));
-    m_bypassBtn->setCheckable(true);
-    m_bypassBtn->setToolTip(
-        tr("Suppress every voice stage at once, so the microphone reaches the "
-           "radio unprocessed. The docked chain applet carries the same "
-           "control if you want it to hand mid-transmission."));
-    connect(m_bypassBtn, &QPushButton::toggled,
-            this, &AetherTxSettingsDialog::bypassToggled);
-    liveRow->addWidget(m_bypassBtn);
-
-    liveRow->addSpacing(16);
-
-    m_monRecBtn = new QPushButton(tr("Record"));
-    m_monRecBtn->setObjectName(QStringLiteral("aetherTxMonitorRecord"));
-    m_monRecBtn->setCheckable(true);
-    m_monRecBtn->setToolTip(
-        tr("Record up to 30 s of processed transmit audio (MIC must be set to "
-           "PC and DAX off). Click again to stop; playback starts by itself."));
-    connect(m_monRecBtn, &QPushButton::clicked,
-            this, &AetherTxSettingsDialog::monitorRecordClicked);
-    liveRow->addWidget(m_monRecBtn);
-
-    m_monPlayBtn = new QPushButton(tr("Play"));
-    m_monPlayBtn->setObjectName(QStringLiteral("aetherTxMonitorPlay"));
-    m_monPlayBtn->setCheckable(true);
-    m_monPlayBtn->setEnabled(false);
-    m_monPlayBtn->setToolTip(
-        tr("Play back the captured audio. Click again to cancel."));
-    // Why it is greyed out has to reach the accessible channel too, not just
-    // the tooltip — a screen-reader user meets a disabled button with no
-    // explanation otherwise (#4896).
-    m_monPlayBtn->setAccessibleDescription(
-        tr("Unavailable until something has been recorded. "
-           "Use Record first."));
-    connect(m_monPlayBtn, &QPushButton::clicked,
-            this, &AetherTxSettingsDialog::monitorPlayClicked);
-    liveRow->addWidget(m_monPlayBtn);
-
-    liveRow->addStretch(1);
-    root->addLayout(liveRow);
 
     auto* closeRow = new QHBoxLayout;
     closeRow->addStretch(1);
@@ -305,33 +254,6 @@ void AetherTxSettingsDialog::onImport()
         return;
     }
     m_status->setText(tr("Imported “%1”.").arg(name));
-}
-
-void AetherTxSettingsDialog::setMonitorRecording(bool on)
-{
-    if (m_monRecBtn) m_monRecBtn->setChecked(on);
-}
-
-void AetherTxSettingsDialog::setMonitorPlaying(bool on)
-{
-    if (m_monPlayBtn) m_monPlayBtn->setChecked(on);
-}
-
-void AetherTxSettingsDialog::setMonitorHasRecording(bool has)
-{
-    if (!m_monPlayBtn) return;
-    m_monPlayBtn->setEnabled(has);
-    m_monPlayBtn->setAccessibleDescription(
-        has ? tr("Play back the captured audio. Click again to cancel.")
-            : tr("Unavailable until something has been recorded. "
-                 "Use Record first."));
-}
-
-void AetherTxSettingsDialog::setBypassed(bool on)
-{
-    if (!m_bypassBtn) return;
-    QSignalBlocker block(m_bypassBtn);
-    m_bypassBtn->setChecked(on);
 }
 
 } // namespace AetherSDR

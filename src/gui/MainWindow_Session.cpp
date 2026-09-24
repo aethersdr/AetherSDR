@@ -2187,8 +2187,8 @@ void MainWindow::wireCatPorts()
     }
 #ifdef HAVE_WEBSOCKETS
     // Owned by the session — no QObject parent (see RadioSession docs, #2385).
-    // setAudioEngine before setTciServer: the session moves the server onto
-    // its I/O thread, and m_audio is a raw pointer written from this thread.
+    // The controller stays on this thread; its worker reaches AudioEngine
+    // through a context-bound queued connection carrying the TX permit.
     auto* tci = new TciServer(&m_radioModel, nullptr);
     tci->setAudioEngine(m_audio);
     m_session->setTciServer(tci);
@@ -2352,19 +2352,30 @@ void MainWindow::wireRxDemodAudioSinks()
                 m_qsoRecorder, &QsoRecorder::feedRxFrame);
     }
 
-    // CW decoder RX feed — gated live on the toggle (#2417).
-    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_cwDecoder, [this](const PcmFrame& frame) {
-                if (CwDecodeSettings::rxEnabled()) { m_cwDecoder.feed(frame); }
-            });
+    // A5: both RX backends consume the selected pre-monitor source. The facade
+    // dispatches native PCM to DeepFist and converted mono24 to GGMorse.
+    m_cwAudio = std::make_unique<DecoderAudioModel>(
+        m_radioModel, DecoderAudioModel::Consumer::Cw);
+    connect(m_cwAudio.get(), &DecoderAudioModel::routeStatusChanged,
+            this, &MainWindow::refreshCwInputStatus);
+    connect(m_cwAudio.get(), &DecoderAudioModel::nativePcmReady,
+            &m_cwDecoder, &CwRxModel::feed);
+    connect(m_cwAudio.get(), &DecoderAudioModel::pcmReady,
+            &m_cwDecoder, &CwRxModel::feedFixed24);
+    connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
+            &m_cwDecoder, &CwRxModel::reset);
+    connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
+            &m_cwCallsignSpotter, &CwCallsignSpotter::clear);
 
-    // RTTY decoder RX feed — gated on the decoder being running.
-    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_rttyDecoder, [this](const PcmFrame& frame) {
-                const QByteArray pcm = frame.legacyStereo24();
-                if (!pcm.isEmpty() && m_rttyDecoder.isRunning())
-                    m_rttyDecoder.feedAudio(pcm);
-            });
+    // RFC #5468 A5: selected receiver/DAX tap, before speaker gain/mute/mix.
+    m_rttyAudio = std::make_unique<DecoderAudioModel>(
+        m_radioModel, DecoderAudioModel::Consumer::Rtty);
+    connect(m_rttyAudio.get(), &DecoderAudioModel::routeStatusChanged,
+            this, &MainWindow::refreshRttyInputStatus);
+    connect(m_rttyAudio.get(), &DecoderAudioModel::pcmReady,
+            &m_rttyDecoder, &RttyDecoder::feedPcmBlock);
+    connect(m_rttyAudio.get(), &DecoderAudioModel::sourceReset,
+            &m_rttyDecoder, &RttyDecoder::resetInput);
 }
 
 // TX VITA-49 packets → the registered PanadapterStream socket. Flex-only (the
@@ -2405,8 +2416,9 @@ void MainWindow::wirePanStreamTciSinks()
     auto* ps = m_radioModel.panStream();
     if (!ps || !tciServer())
         return;
-    connect(ps, &PanadapterStream::daxPcmReady,
-            tciServer(), &TciServer::onDaxPcmReady, Qt::UniqueConnection);
+    disconnect(m_tciPcmConnection);
+    m_tciPcmConnection = connect(ps, &PanadapterStream::daxPcmReady,
+            tciServer(), tciServer()->daxPcmSink(), Qt::DirectConnection);
     connect(ps, &PanadapterStream::iqDataReady,
             tciServer(), &TciServer::onIqDataReady);
     connect(ps, &PanadapterStream::waterfallRowReady,

@@ -57,6 +57,11 @@ public:
     // where RadioModel lives — capabilities() is not thread-safe (no off-thread
     // caller exists yet; this documents the assumption).
     void setModelProvider(std::function<QString()> provider);
+    void setIndependentTxSequenceProvider(std::function<quint32()> sequence);
+    IndependentTxControl independentTxControl() const override;
+    bool independentTxReady() const override;
+    void stopIndependentTx(const TxCoordinator::Operation& operation,
+                           const TxCoordinator::StopRequest& request) override;
 
     // The capacity THIS radio declared, as opposed to what the model table
     // estimates for radios of its kind (#5594 item 3).
@@ -202,6 +207,7 @@ private:
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
+    std::function<quint32()> m_sequenceProvider;
 
     // Decode-side handle state (#4198). Captured from the amplifier/tgxl status
     // decode and consumed by invokeExtension() to build the amp/tuner relay wire,

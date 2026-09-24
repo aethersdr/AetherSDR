@@ -9,7 +9,7 @@
 #include "models/SliceModel.h"
 #include <QCoreApplication>
 #include <QStringList>
-#include <QWebSocket>
+#include "core/TciClient.h"
 #include <array>
 #include <atomic>
 #include <thread>
@@ -106,16 +106,16 @@ class TciRxAudioTest {
         RadioModel model;
         TciServer server{&model};
         InjectedBackend* backend{nullptr};
-        QHash<QWebSocket*, QList<QByteArray>> packets;
+        QHash<TciClient*, QList<QByteArray>> packets;
         Fixture()
         {
             replaceBackend();
-            for (float& gain : server.m_rxChannelGain) { gain = 1.0f; }
-            server.m_rxSend = [this](QWebSocket* socket, const QByteArray& packet) {
+            for (float& gain : server.m_io->m_rxChannelGain) { gain = 1.0f; }
+            server.m_io->m_rxSend = [this](quint64 id, const QByteArray& packet) { TciClient* socket = server.clientById(id);
                 packets[socket].append(packet);
                 return packet.size();
             };
-            server.m_rxBacklog = [](QWebSocket*) { return qint64{0}; };
+            server.m_io->m_rxBacklog = [](quint64) { return qint64{0}; };
         }
         ~Fixture()
         {
@@ -128,20 +128,20 @@ class TciRxAudioTest {
             backend = replacement.get();
             model.setBackendForTest(std::move(replacement), QStringLiteral("rtl"));
         }
-        QWebSocket* client(int rate = 24000, int receiver = -1, int channels = 2, int format = 3)
+        TciClient* client(int rate = 24000, int receiver = -1, int channels = 2, int format = 3)
         {
-            auto* socket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, &server);
+            auto* socket = new TciClient(&server);
             TciServer::ClientState state;
             state.socket = socket;
             state.protocol = new TciProtocol(&model, &server.m_routingState, &server.m_trxMap);
             server.m_clients.append(state);
-            QObject::connect(socket, &QWebSocket::textMessageReceived, &server, &TciServer::onTextMessage);
-            QObject::connect(socket, &QWebSocket::disconnected, &server, &TciServer::onClientDisconnected);
+            QObject::connect(socket, &TciClient::textMessageReceived, &server, &TciServer::onTextMessage);
+            QObject::connect(socket, &TciClient::disconnected, &server, &TciServer::onClientDisconnected);
             command(socket, QStringLiteral("audio_samplerate:%1;audio_stream_channels:%2;audio_stream_sample_type:%3;audio_start:%4;")
                     .arg(rate).arg(channels).arg(format).arg(receiver));
             return socket;
         }
-        void command(QWebSocket* socket, const QString& text) { emit socket->textMessageReceived(text); }
+        void command(TciClient* socket, const QString& text) { emit socket->textMessageReceived(text); if (auto* state = server.clientStateFor(socket)) { server.syncClient(*state); } }
         void feed(int id, const PcmFrame& frame) { emit backend->sliceAudioFrameReady(id, frame); }
     };
     static PcmFrame frame(PcmProducer& producer, int count, float left = 0.25f,
@@ -180,7 +180,7 @@ public:
             f.backend->add(3);
             PcmProducer producer;
             check(producer.start(PcmPurpose::Slice,3,{sourceRate,PcmLayout::Stereo}), "start matrix producer");
-            QList<QWebSocket*> clients;
+            QList<TciClient*> clients;
             const std::array<int,4> rates{8000,12000,24000,48000};
             for (int rate : rates) { clients.append(f.client(rate,0)); }
             const int inputFrames = 32768;
@@ -199,11 +199,11 @@ public:
                 check(anti, "antiphase is preserved sample by sample");
                 totalFrames += samples.size()/2;
             }
-            check(f.server.m_rxAudioFramesSent == totalFrames, "count actual frames of every client");
+            check(f.server.m_io->m_rxAudioFramesSent == totalFrames, "count actual frames of every client");
         }
         {
             Fixture f; f.backend->add(17);
-            QWebSocket* client = f.client(48000,0);
+            TciClient* client = f.client(48000,0);
             PcmProducer producer; producer.start(PcmPurpose::Slice,17,{48000,PcmLayout::Stereo});
             const auto input = producer.produce(tone(32768,48000,false,15000));
             f.feed(17,*input);
@@ -218,19 +218,19 @@ public:
             Fixture f; f.backend->add(3);
             // Invalid zero leaves the initial 48k default untouched; the
             // other arm explicitly negotiates 24k before requesting 44.1k.
-            QWebSocket* client = f.client(acceptedRate == 48000 ? 0 : acceptedRate,0);
-            QWebSocket* control = f.client(acceptedRate,0);
+            TciClient* client = f.client(acceptedRate == 48000 ? 0 : acceptedRate,0);
+            TciClient* control = f.client(acceptedRate,0);
             PcmProducer producer;
             producer.start(PcmPurpose::Slice,3,{acceptedRate == 48000 ? 24000 : 48000,PcmLayout::Stereo});
             // Leave an incomplete resampler block pending in both clients.
             f.feed(3,frame(producer,13));
-            const auto converters = f.server.clientStateFor(client)->rxConverters;
+            const auto converters = f.server.m_io->m_rxClients[client->id()].converters;
             const quint64 generation = f.server.clientStateFor(client)->rxGeneration;
             f.command(client,QStringLiteral("audio_samplerate:44100;"));
             check(f.server.clientStateFor(client)->audioSampleRate == acceptedRate,
                   "unsupported 44100 request retains the accepted wire rate");
             check(f.server.clientStateFor(client)->rxGeneration == generation
-                  && f.server.clientStateFor(client)->rxConverters == converters,
+                  && f.server.m_io->m_rxClients[client->id()].converters == converters,
                   "unsupported rate preserves converter identity and staged input");
             f.feed(3,frame(producer,32768));
             headers(f.packets[client],acceptedRate,0,2,3);
@@ -241,9 +241,9 @@ public:
     static void sparseRoutingAndSingleFeed()
     {
         Fixture f; f.backend->add(3); f.backend->add(17);
-        QWebSocket* first = f.client(24000,0);
-        QWebSocket* second = f.client(24000,1);
-        f.server.m_rxChannelGain[1] = 0.5f;
+        TciClient* first = f.client(24000,0);
+        TciClient* second = f.client(24000,1);
+        f.server.m_io->m_rxChannelGain[1] = 0.5f;
         PcmProducer a,b,speaker;
         a.start(PcmPurpose::Slice,3); b.start(PcmPurpose::Slice,17); speaker.start();
         const PcmFrame input = frame(b,3);
@@ -265,9 +265,9 @@ public:
     static void formatEncoding()
     {
         Fixture f; f.backend->add(3);
-        QWebSocket* monoFloat = f.client(24000,0,1,3);
-        QWebSocket* stereoInt = f.client(24000,0,2,0);
-        QWebSocket* monoInt = f.client(24000,0,1,0);
+        TciClient* monoFloat = f.client(24000,0,1,3);
+        TciClient* stereoInt = f.client(24000,0,2,0);
+        TciClient* monoInt = f.client(24000,0,1,0);
         PcmProducer producer; producer.start(PcmPurpose::Slice,3);
         f.feed(3,frame(producer,1,1.5f,-0.5f));
         headers(f.packets[monoFloat],24000,0,1,3);
@@ -291,7 +291,7 @@ public:
         PcmProducer producer; producer.start(PcmPurpose::Slice,3);
         const PcmFrame initial=frame(producer,128);
         f.server.onSlicePcmReady(3,initial); // no client yet: still consume cursor
-        QWebSocket* client=f.client();
+        TciClient* client=f.client();
         f.server.onSlicePcmReady(3,initial);
         check(f.packets[client].isEmpty(), "ingress accepted without subscribers cannot replay after start");
         const PcmFrame next=frame(producer,128);
@@ -323,7 +323,7 @@ public:
     static void resetIsolation()
     {
         Fixture f; f.backend->add(3); f.backend->add(17);
-        QWebSocket* client=f.client(48000);
+        TciClient* client=f.client(48000);
         PcmProducer a,b; a.start(PcmPurpose::Slice,3); b.start(PcmPurpose::Slice,17);
         f.server.onSlicePcmReady(3,frame(a,128,0.9f,0.9f));
         f.server.onSlicePcmReady(17,frame(b,128,0.4f,-0.4f));
@@ -346,7 +346,7 @@ public:
         f.server.onSlicePcmReady(3,current);
         check(floats(f.packets[client])==current.samples(), "client rate change drops old rate partial staging");
         // A second client remains uninterrupted when the first changes format.
-        QWebSocket* other=f.client(48000,1);
+        TciClient* other=f.client(48000,1);
         f.server.onSlicePcmReady(17,frame(b,128));
         f.command(client,QStringLiteral("audio_stream_channels:1;audio_stream_sample_type:0;"));
         f.server.onSlicePcmReady(17,frame(b,128));
@@ -360,7 +360,7 @@ public:
             QStringLiteral("audio_stream_channels:1;"),
             QStringLiteral("audio_stream_sample_type:0;")};
         for (const QString& reset : resets) {
-            Fixture f; f.backend->add(3); QWebSocket* client=f.client(48000,0);
+            Fixture f; f.backend->add(3); TciClient* client=f.client(48000,0);
             PcmProducer producer; producer.start(PcmPurpose::Slice,3);
             f.server.onSlicePcmReady(3,frame(producer,128,0.9f,0.9f));
             f.command(client,reset);
@@ -377,7 +377,7 @@ public:
             }
             check(zero, "post-reset zero continuation has no stale channel history");
         }
-        Fixture f; f.backend->add(3); QWebSocket* client=f.client(48000,0);
+        Fixture f; f.backend->add(3); TciClient* client=f.client(48000,0);
         PcmProducer producer; producer.start(PcmPurpose::Slice,3);
         f.server.onSlicePcmReady(3,frame(producer,128,0.9f,0.9f));
         frame(producer,128); // legitimate missed delivery, without discontinuity flag
@@ -393,7 +393,7 @@ public:
     static void retiredRouteAndCapacity()
     {
         Fixture f; f.backend->add(3);
-        QWebSocket* client=f.client();
+        TciClient* client=f.client();
         PcmProducer old,replacement; old.start(PcmPurpose::Slice,3);
         f.server.onSlicePcmReady(3,frame(old,3));
         f.backend->remove(3); f.backend->add(3);
@@ -412,7 +412,7 @@ public:
         check(f.packets[client].size()==3, "new connection epoch restores route");
 
         Fixture capped;
-        QWebSocket* observer=capped.client();
+        TciClient* observer=capped.client();
         std::vector<std::unique_ptr<PcmProducer>> producers;
         for (int id=0; id<32; ++id) {
             capped.backend->add(id);
@@ -433,7 +433,7 @@ public:
     static void daxLifecycle()
     {
         Fixture f; f.backend->add(3,2);
-        QWebSocket* client=f.client();
+        TciClient* client=f.client();
         PcmProducer producer; producer.start(PcmPurpose::Auxiliary);
         const PcmFrame a=frame(producer,3);
         f.server.onDaxPcmReady(1,a);
@@ -461,7 +461,7 @@ public:
     static void daxOwnerTransition()
     {
         Fixture f; f.backend->add(3,2); f.backend->add(17);
-        QWebSocket* client=f.client(48000);
+        TciClient* client=f.client(48000);
         PcmProducer producer; producer.start(PcmPurpose::Auxiliary);
         f.server.onDaxPcmReady(2,frame(producer,128,0.9f,0.9f));
         f.backend->add(3,0); f.backend->add(17,2);
@@ -476,7 +476,7 @@ public:
         }
         f.command(client,QStringLiteral("audio_samplerate:24000;"));
         f.packets.clear();
-        f.server.m_rxSend=[&](QWebSocket* socket,const QByteArray& packet) {
+        f.server.m_io->m_rxSend = [&](quint64 id,const QByteArray& packet) { TciClient* socket = f.server.clientById(id);
             f.packets[socket].append(packet);
             f.backend->add(17,0); f.backend->add(3,2);
             return packet.size();
@@ -487,16 +487,16 @@ public:
     static void staleFinalCheckAndChurn()
     {
         Fixture f; f.backend->add(3);
-        QWebSocket* client=f.client(); QWebSocket* other=f.client();
+        TciClient* client=f.client(); TciClient* other=f.client();
         PcmProducer producer; producer.start(PcmPurpose::Slice,3);
         int sends=0;
-        f.server.m_rxBacklog=[&](QWebSocket*) { producer.invalidate(); return qint64{0}; };
-        f.server.m_rxSend=[&](QWebSocket*,const QByteArray& packet) { ++sends; return packet.size(); };
+        f.server.m_io->m_rxBacklog = [&](quint64) { producer.invalidate(); return qint64{0}; };
+        f.server.m_io->m_rxSend = [&](quint64,const QByteArray& packet) { ++sends; return packet.size(); };
         f.server.onSlicePcmReady(3,frame(producer,4096));
         check(sends==0, "epoch revoked after conversion before send never crosses transport");
         producer.start(PcmPurpose::Slice,3);
-        f.server.m_rxBacklog=[](QWebSocket*) { return qint64{0}; };
-        f.server.m_rxSend=[&](QWebSocket* socket,const QByteArray& packet) {
+        f.server.m_io->m_rxBacklog = [](quint64) { return qint64{0}; };
+        f.server.m_io->m_rxSend = [&](quint64 id,const QByteArray& packet) { TciClient* socket = f.server.clientById(id);
             ++sends;
             if(socket==client) { emit client->disconnected(); }
             f.packets[socket].append(packet); return packet.size();
@@ -504,7 +504,7 @@ public:
         f.server.onSlicePcmReady(3,frame(producer,4096));
         check(f.packets[client].size()==1 && f.packets[other].size()==4,
               "disconnect inside send retires only departing client and does not invalidate iteration");
-        f.server.m_rxSend=[&](QWebSocket* socket,const QByteArray& packet) {
+        f.server.m_io->m_rxSend = [&](quint64 id,const QByteArray& packet) { TciClient* socket = f.server.clientById(id);
             f.packets[socket].append(packet);
             f.command(socket,QStringLiteral("audio_stop;audio_start:0;audio_samplerate:48000;"));
             return packet.size();
@@ -518,11 +518,12 @@ public:
         auto injected=std::make_unique<InjectedBackend>(); InjectedBackend* backend=injected.get();
         model.setBackendForTest(std::move(injected),QStringLiteral("rtl")); backend->add(3);
         auto server=std::make_unique<TciServer>(&model);
-        QWebSocket socket;
+        TciClient socket;
         TciServer::ClientState state; state.socket=&socket; state.audioEnabled=true; state.audioSampleRate=24000;
         server->m_clients.append(state);
-        server->m_rxBacklog=[](QWebSocket*) { return qint64{0}; };
-        server->m_rxSend=[&](QWebSocket*,const QByteArray& packet) { server.reset(); return packet.size(); };
+        server->syncClient(state);
+        server->m_io->m_rxBacklog = [](quint64) { return qint64{0}; };
+        server->m_io->m_rxSend = [&](quint64,const QByteArray& packet) { server.reset(); return packet.size(); };
         PcmProducer source; source.start(PcmPurpose::Slice,3);
         server->onSlicePcmReady(3,frame(source,4096));
         check(!server, "server may be destroyed by an output callback without use after free");
@@ -530,13 +531,13 @@ public:
     static void levelCallbackRetirement()
     {
         Fixture f; f.backend->add(3);
-        QWebSocket* client=f.client(48000);
+        TciClient* client=f.client(48000);
         PcmProducer producer; producer.start(PcmPurpose::Slice,3);
         const auto connection=QObject::connect(&f.server,&TciServer::rxLevel,&f.server,[&](int,float) {
             emit f.model.connectionStateChanged(false);
         });
         f.server.onSlicePcmReady(3,frame(producer,128));
-        check(f.packets[client].isEmpty() && f.server.clientStateFor(client)->rxConverters.isEmpty(),
+        check(f.packets[client].isEmpty() && f.server.m_io->m_rxClients[client->id()].converters.isEmpty(),
               "rxLevel retirement cannot restage sub-block input after clearing route");
         QObject::disconnect(connection);
         producer.invalidate(); producer.start(PcmPurpose::Slice,3);
@@ -544,14 +545,14 @@ public:
             f.command(client,QStringLiteral("audio_stop;audio_start:0;"));
         });
         f.server.onSlicePcmReady(3,frame(producer,128));
-        check(f.server.clientStateFor(client)->rxConverters.isEmpty(),
+        check(f.server.m_io->m_rxClients[client->id()].converters.isEmpty(),
               "rxLevel client reset cancels captured recipient before staging");
         QObject::disconnect(stopped);
     }
     static void negotiationClientChurn()
     {
         Fixture f; f.backend->add(3);
-        QWebSocket* original=f.client();
+        TciClient* original=f.client();
         bool churned=false;
         const auto connection=QObject::connect(&f.server,&TciServer::clientsChanged,&f.server,[&]() {
             if (churned) { return; }
@@ -575,7 +576,7 @@ public:
         Fixture f; f.backend->add(3);
         PcmProducer producer;
         for (int iteration=0; iteration<32; ++iteration) {
-            QWebSocket* client=f.client(iteration%2 ? 12000 : 48000,0);
+            TciClient* client=f.client(iteration%2 ? 12000 : 48000,0);
             check(producer.start(PcmPurpose::Slice,3), "churn starts a new producer session");
             for (int rate : {24000,48000,24000}) {
                 producer.setFormat({rate,PcmLayout::Stereo});
@@ -593,7 +594,7 @@ public:
             f.packets.remove(client);
         }
         check(f.server.m_clients.isEmpty(), "churn tears down every subscriber");
-        QWebSocket* client=f.client(24000,0);
+        TciClient* client=f.client(24000,0);
         producer.start(PcmPurpose::Slice,3);
         const PcmFrame pending=frame(producer,4096);
         std::atomic<bool> request{false};
@@ -605,7 +606,7 @@ public:
             revoked.store(true,std::memory_order_release);
             revoked.notify_one();
         });
-        f.server.m_rxSend=[&](QWebSocket*,const QByteArray& packet) {
+        f.server.m_io->m_rxSend = [&](quint64,const QByteArray& packet) {
             ++packets;
             request.store(true,std::memory_order_release);
             request.notify_one();
@@ -619,17 +620,17 @@ public:
         revoker.join();
         check(packets==1 && !pending.current(),
               "joined concurrent epoch revocation stops after the already committed packet");
-        check(f.server.clientStateFor(client)->rxConverters.isEmpty(),
+        check(f.server.m_io->m_rxClients[client->id()].converters.isEmpty(),
               "concurrent revocation retires converter staging after callback unwinds");
     }
     static void failedSendIsolation()
     {
         for (bool failed : {false,true}) {
             Fixture f; f.backend->add(3);
-            QWebSocket* slow = f.client();
-            QWebSocket* fast = f.client();
+            TciClient* slow = f.client();
+            TciClient* fast = f.client();
             int attempts = 0;
-            f.server.m_rxSend = [&](QWebSocket* socket, const QByteArray& packet) -> qint64 {
+            f.server.m_io->m_rxSend = [&](quint64 id, const QByteArray& packet) -> qint64 { TciClient* socket = f.server.clientById(id);
                 if (socket == slow) {
                     ++attempts;
                     return failed ? -1 : packet.size()-1;
@@ -649,19 +650,19 @@ public:
                   && transportWarnings.first().contains(failed ? "sent_bytes= -1" : "sent_bytes= 8255"),
                   "send failure logs its reason and exact byte counts once per stopped stream");
             const auto* client = f.server.clientStateFor(slow);
-            check(attempts == 1 && client && !client->audioEnabled && client->rxConverters.isEmpty(),
+            check(attempts == 1 && client && !client->audioEnabled && f.server.m_io->m_rxClients[slow->id()].converters.isEmpty(),
                   "short or failed send stops and resets audio across current and later batches");
-            check(f.packets[fast].size() == 8 && f.server.m_rxAudioFramesSent == 8192,
+            check(f.packets[fast].size() == 8 && f.server.m_io->m_rxAudioFramesSent == 8192,
                   "failed client contributes no sent frames and healthy client continues");
         }
     }
     static void failedSendSocketDeletion()
     {
         Fixture f; f.backend->add(3);
-        std::unique_ptr<QWebSocket> departing(f.client());
-        QWebSocket* fast = f.client();
+        std::unique_ptr<TciClient> departing(f.client());
+        TciClient* fast = f.client();
         int attempts = 0;
-        f.server.m_rxSend = [&](QWebSocket* socket, const QByteArray& packet) -> qint64 {
+        f.server.m_io->m_rxSend = [&](quint64 id, const QByteArray& packet) -> qint64 { TciClient* socket = f.server.clientById(id);
             if (socket == departing.get()) {
                 ++attempts;
                 departing.reset();
@@ -691,7 +692,7 @@ public:
     static void daxRouteSurvivesSliceRecreate()
     {
         Fixture f; f.backend->add(3,2);
-        QWebSocket* client = f.client();
+        TciClient* client = f.client();
         PcmProducer producer; producer.start(PcmPurpose::Auxiliary);
         f.server.onDaxPcmReady(2, frame(producer,3));
         check(f.packets[client].size() == 1, "DAX route delivers before the recall");
@@ -710,10 +711,10 @@ public:
         // Backlog refusal MUST request close.
         {
             Fixture f; f.backend->add(3);
-            QWebSocket* client = f.client();
+            TciClient* client = f.client();
             int closes = 0;
-            f.server.m_rxClose = [&](QWebSocket*, QWebSocketProtocol::CloseCode, const QString&) { ++closes; };
-            f.server.m_rxBacklog = [](QWebSocket*) { return qint64{256*1024}; };
+            f.server.m_io->m_rxClose = [&](quint64, QWebSocketProtocol::CloseCode, const QString&) { ++closes; };
+            f.server.m_io->m_rxBacklog = [](quint64) { return qint64{256*1024}; };
             PcmProducer producer; producer.start(PcmPurpose::Slice,3);
             f.feed(3,frame(producer,4096));
             check(closes == 1, "a backlog refusal requests graceful close of the shared socket");
@@ -721,10 +722,10 @@ public:
         // A short send MUST NOT close: the socket still carries CAT and PTT.
         {
             Fixture f; f.backend->add(3);
-            QWebSocket* client = f.client();
+            TciClient* client = f.client();
             int closes = 0;
-            f.server.m_rxClose = [&](QWebSocket*, QWebSocketProtocol::CloseCode, const QString&) { ++closes; };
-            f.server.m_rxSend = [&](QWebSocket*, const QByteArray& packet) -> qint64 {
+            f.server.m_io->m_rxClose = [&](quint64, QWebSocketProtocol::CloseCode, const QString&) { ++closes; };
+            f.server.m_io->m_rxSend = [&](quint64, const QByteArray& packet) -> qint64 {
                 return packet.size() - 1;
             };
             PcmProducer producer; producer.start(PcmPurpose::Slice,3);
@@ -739,8 +740,8 @@ public:
     {
         for (qint64 pending : {qint64{-1},qint64{256*1024}}) {
             Fixture f; f.backend->add(3);
-            QWebSocket* client = f.client();
-            f.server.m_rxBacklog = [pending](QWebSocket*) { return pending; };
+            TciClient* client = f.client();
+            f.server.m_io->m_rxBacklog = [pending](quint64) { return pending; };
             PcmProducer producer; producer.start(PcmPurpose::Slice,3);
             transportWarnings.clear();
             const QtMessageHandler previousHandler = qInstallMessageHandler(captureTransportWarning);
@@ -758,8 +759,8 @@ public:
     static void pressureAndReplacement()
     {
         Fixture f; f.backend->add(3);
-        QWebSocket* slow=f.client(); QWebSocket* fast=f.client();
-        f.server.m_rxBacklog=[&](QWebSocket* socket) { return socket==slow ? qint64{256*1024} : qint64{0}; };
+        TciClient* slow=f.client(); TciClient* fast=f.client();
+        f.server.m_io->m_rxBacklog = [&](quint64 id) { TciClient* socket = f.server.clientById(id); return socket==slow ? qint64{256*1024} : qint64{0}; };
         PcmProducer producer; producer.start(PcmPurpose::Slice,3);
         f.server.onSlicePcmReady(3,frame(producer,65536));
         check(f.packets[slow].isEmpty() && f.packets[fast].size()==64,
@@ -774,9 +775,29 @@ public:
         f.feed(3,frame(producer,3));
         check(f.packets[fast].size()==65, "production binding survives backend replacement exactly once");
     }
+    static void ingressOutlivesController()
+    {
+        RadioModel model;
+        auto server = std::make_unique<TciServer>(&model);
+        const auto sink = server->daxPcmSink();
+        PcmProducer producer;
+        producer.start(PcmPurpose::Auxiliary);
+        const PcmFrame pcm = frame(producer, 16);
+        std::atomic<bool> entered{false};
+        std::thread source([&] {
+            entered.store(true, std::memory_order_release);
+            for (int i = 0; i < 2048; ++i) { sink(1, pcm); }
+        });
+        while (!entered.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        server.reset();
+        source.join();
+        sink(1, pcm);
+        check(true, "copied network ingress remains inert after concurrent controller destruction");
+    }
+
     static int run()
     {
-        rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding();
+        ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding();
         replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); pressureAndReplacement();
         std::printf("TCI RX: %d checks, %d failures\n",checks,failures);

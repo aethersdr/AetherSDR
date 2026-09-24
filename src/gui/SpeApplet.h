@@ -181,8 +181,6 @@ private:
     QString m_lastPillKey;
 
     QTimer m_labelTimer;
-    QTimer* m_peakTimer{nullptr};
-    float m_peakFwd{0.0f};
 
     // Last applied power-gauge scale — setPowerRange() no-ops on repeats so
     // the wiring can re-derive the level-dependent scale on every status

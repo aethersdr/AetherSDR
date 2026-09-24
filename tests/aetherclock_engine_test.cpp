@@ -16,7 +16,8 @@
 // second edge can be compared against a known skew.
 
 #include "core/AetherClockEngine.h"
-#include "core/PanadapterStream.h"
+#include "core/ClockSampleTimeline.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/TimeFrameVoter.h"
 #include "models/SliceModel.h"
 
@@ -37,6 +38,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -73,6 +76,7 @@ struct Truth {
 };
 
 struct SynthOpts {
+    int          sampleRateHz = kFs;
     int          numFrames     = 3;                 // >= 3 consecutive minutes
     int          leadInSeconds = 10;                // tail of the prior minute
     int          leadOutSeconds = 10;               // head of the next minute
@@ -125,10 +129,10 @@ std::array<Sym,60> encodeMinute(const Truth& t) {
 
 // Append one second (kFs samples) of the pinned WWV waveform.
 //   sample(t) = 0.5*sin(2pi*1000*t)*(1 + d(t)*sin(2pi*100*t)) + tick(t)
-void appendSecond(std::vector<float>& sig, Sym sym, int tickFreq) {
-    for (int k = 0; k < kFs; ++k) {
-        const double t   = static_cast<double>(sig.size()) / kFs; // absolute -> phase-continuous
-        const double tau = static_cast<double>(k) / kFs;          // within-second
+void appendSecond(std::vector<float>& sig, Sym sym, int tickFreq, int sampleRateHz) {
+    for (int k = 0; k < sampleRateHz; ++k) {
+        const double t   = static_cast<double>(sig.size()) / sampleRateHz;
+        const double tau = static_cast<double>(k) / sampleRateHz;
         const double car = 0.5 * std::sin(2.0 * kPi * 1000.0 * t);
         double d;
         if (sym == Sym::Hole) {
@@ -159,7 +163,7 @@ std::vector<float> synthWwv(const Truth& start, const SynthOpts& o) {
             Sym s = sym[sec];
             if (o.corruptMarkers && s == Sym::Marker) s = Sym::Zero; // flatten markers
             if (o.removeHole && sec == 0)             s = Sym::Zero; // fill the hole
-            appendSecond(sig, s, tickFreq);
+            appendSecond(sig, s, tickFreq, o.sampleRateHz);
         }
     };
 
@@ -418,10 +422,36 @@ void sectionDaxReassign() {
     engine.start(&slice, ClockStation::Wwv);
     CHECK(stream.daxChannelHeldBy(2, Clock::Clock));
 
+    // A selected source already has a complete vote and diagnostics history.
+    // Moving DAX must retire these with its input conversion history.
+    qint64 beforeChangeSamples = 0;
+    feedStereo(engine, 2, mono, epochMs, kSkewMs, beforeChangeSamples, fakeNow, true);
+    CHECK(engine.lockState() == ClockLockState::Locked);
+    CHECK(engine.currentDiagnostics().framesInWindow > 0);
+    CHECK(engine.currentDiagnostics().classifiedPct > 0);
+
     slice.setDaxChannel(3);                    // engine reacquires new-before-old
     QCoreApplication::processEvents();
     CHECK(stream.daxChannelHeldBy(3, Clock::Clock));   // hold moved to 3
     CHECK(!stream.daxChannelHeldBy(2, Clock::Clock));  // released 2
+
+    // DAX RX runs 1-8 on the radios that have it, and the decoder route and the
+    // holder registry both span that range. A slice parked on 5-8 must take a
+    // real hold here too, not fall through to "no channel assigned".
+    for (int high : {5, 6, 7, 8}) {
+        slice.setDaxChannel(high);
+        QCoreApplication::processEvents();
+        CHECK(stream.daxChannelHeldBy(high, Clock::Clock));
+    }
+    slice.setDaxChannel(3);
+    QCoreApplication::processEvents();
+    CHECK(stream.daxChannelHeldBy(3, Clock::Clock));
+    for (int high : {5, 6, 7, 8}) {
+        CHECK(!stream.daxChannelHeldBy(high, Clock::Clock));
+    }
+    CHECK(engine.lockState() == ClockLockState::NoSignal);
+    CHECK(engine.currentDiagnostics().framesInWindow == 0);
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
 
     // Audio on the NEW channel is accepted (alignment frames flow).
     QSignalSpy spyAlign(&engine, &AetherClockEngine::alignmentFrame);
@@ -457,12 +487,23 @@ void sectionSliceRemoval() {
     CHECK(engine.isRunning());
     CHECK(stream.daxChannelHeldBy(2, Clock::Clock));
 
+    SynthOpts opts;
+    const std::vector<float> mono = synthWwv(kGold, opts);
+    const qint64 epochMs = synthEpochMs(kGold, opts);
+    qint64 fakeNow = epochMs + kSkewMs;
+    qint64 samplesFed = 0;
+    engine.setHostClock([&fakeNow] { return fakeNow; });
+    feedStereo(engine, 2, mono, epochMs, kSkewMs, samplesFed, fakeNow, true);
+    CHECK(engine.currentDiagnostics().classifiedPct > 0);
+
     delete slice;                              // graceful-loss handler fires
     QCoreApplication::processEvents();
 
     CHECK(!engine.isRunning());
     CHECK(engine.lockState() == ClockLockState::NoSignal);
     CHECK(!stream.daxChannelHeldBy(2, Clock::Clock));  // no orphaned hold
+    CHECK(engine.currentDiagnostics().framesInWindow == 0);
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
 }
 
 // [6] applyStationPreset tunes the BOUND slice: Wwv/10.0 -> 9.999 MHz USB;
@@ -756,6 +797,521 @@ void sectionDaxZeroChannelStillFilters() {
     engine.stop();
 }
 
+// Typed producer fixtures exercise the production engine ingress. No audio
+// devices, radio connections, peers or mutable global sample rates are used.
+PcmFrame feedTyped(AetherClockEngine& engine, PcmProducer& producer,
+                   const std::vector<float>& mono, PcmFormat format,
+                   qint64 epochMs, qint64& fakeNow, quint64 generation,
+                   int key = 5, bool dax = false, bool queued = false,
+                   quint64 firstSample = 12345)
+{
+    const std::array<std::size_t, 7> chunks{1, 255, 17, 4093, 1024, 31, 8192};
+    PcmFrame last;
+    std::size_t offset = 0;
+    std::size_t part = 0;
+    while (offset < mono.size()) {
+        const std::size_t n = std::min(chunks[part++ % chunks.size()], mono.size() - offset);
+        QVector<float> samples(static_cast<qsizetype>(n * format.channels()));
+        for (std::size_t i = 0; i < n; ++i) {
+            if (format.layout == PcmLayout::Mono) {
+                samples[static_cast<qsizetype>(i)] = mono[offset + i];
+            } else {
+                samples[static_cast<qsizetype>(2 * i)] = mono[offset + i] * 0.75f;
+                samples[static_cast<qsizetype>(2 * i + 1)] = mono[offset + i] * 1.25f;
+            }
+        }
+        const auto frame = producer.produce(std::move(samples), firstSample + offset, offset == 0);
+        CHECK(frame.has_value());
+        if (!frame) {
+            return {};
+        }
+        last = *frame;
+        offset += n;
+        fakeNow = epochMs + kSkewMs + static_cast<qint64>(offset * 1000 / format.sampleRateHz);
+        const auto deliver = [&engine, frame = *frame, generation, key, dax] {
+            if (dax) {
+                engine.feedRxAudio(key, frame, generation);
+            } else {
+                engine.feedRxSliceAudio(key, frame, generation);
+            }
+        };
+        if (queued) {
+            QMetaObject::invokeMethod(&engine, deliver, Qt::QueuedConnection);
+        } else {
+            deliver();
+        }
+    }
+    return last;
+}
+
+void sectionTypedRateTiming()
+{
+    std::array<double, 4> offsets{};
+    std::size_t trial = 0;
+    for (int rate : {24000, 48000}) {
+        SynthOpts opts;
+        opts.sampleRateHz = rate;
+        const std::vector<float> mono = synthWwv(kGold, opts);
+        for (PcmLayout layout : {PcmLayout::Mono, PcmLayout::Stereo}) {
+            SliceModel slice(5); // Sparse live id, not a channel or ordinal.
+            AetherClockEngine engine;
+            engine.setDaxAvailabilityProvider([] { return false; });
+            engine.setDaxChannelProvider([](int) {}, [](int) {});
+            qint64 fakeNow = synthEpochMs(kGold, opts) + kSkewMs;
+            engine.setHostClock([&fakeNow] { return fakeNow; });
+            engine.start(&slice, ClockStation::Wwv);
+            PcmProducer producer;
+            const PcmFormat format{rate, layout};
+            CHECK(producer.start(PcmPurpose::Slice, 5, format));
+            QSignalSpy time(&engine, &AetherClockEngine::timeDecoded);
+            feedTyped(engine, producer, mono, format, synthEpochMs(kGold, opts),
+                      fakeNow, engine.inputGeneration(), 5, false, false,
+                      std::numeric_limits<quint64>::max() - mono.size() - 1024);
+            CHECK(engine.lockState() == ClockLockState::Locked);
+            CHECK(!time.isEmpty());
+            if (!time.isEmpty()) {
+                offsets[trial] = time.back().at(1).toDouble();
+                CHECK(std::abs(offsets[trial] + kSkewMs) <= 60.0);
+                CHECK(time.back().at(0).toDateTime().date()
+                      == QDate(2026, 1, 1).addDays(kGold.doy - 1));
+            }
+            ++trial;
+        }
+    }
+    // WWV's 200 Hz classifier quantizes edges at5ms. This relative check
+    // catches omitted/wrong-sign48k converter delay (~70.58ms) independently
+    // of the existing detector's absolute alignment tolerance.
+    for (double offset : offsets) {
+        CHECK(std::abs(offset - offsets[0]) < 8.0);
+    }
+}
+
+void sectionTypedLifetime()
+{
+    SynthOpts opts;
+    const std::vector<float> mono = synthWwv(kGold, opts);
+    const qint64 epochMs = synthEpochMs(kGold, opts);
+    qint64 fakeNow = epochMs + kSkewMs;
+    auto slice = std::make_unique<SliceModel>(5);
+    AetherClockEngine engine;
+    engine.setDaxAvailabilityProvider([] { return false; });
+    engine.setDaxChannelProvider([](int) {}, [](int) {});
+    engine.setHostClock([&fakeNow] { return fakeNow; });
+    engine.start(slice.get(), ClockStation::Wwv);
+    PcmProducer producer;
+    CHECK(producer.start(PcmPurpose::Slice, 5));
+    const quint64 oldGeneration = engine.inputGeneration();
+    // These events have never crossed the engine's replay gate. Their producer
+    // stays live across restart, so only binding generation can reject them.
+    feedTyped(engine, producer, mono, {}, epochMs, fakeNow, oldGeneration, 5, false, true);
+    engine.stop();
+    engine.start(slice.get(), ClockStation::Wwv);
+    QCoreApplication::processEvents();
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
+    CHECK(engine.currentDiagnostics().framesInWindow == 0);
+    CHECK(engine.lockState() == ClockLockState::NoSignal);
+
+    // A fresh forward segment on the same producer is legitimate after restart.
+    const quint64 next = 12345 + mono.size();
+    PcmFrame last = feedTyped(engine, producer, mono, {}, epochMs, fakeNow,
+                             engine.inputGeneration(), 5, false, false, next);
+    CHECK(engine.lockState() == ClockLockState::Locked);
+    QSignalSpy time(&engine, &AetherClockEngine::timeDecoded);
+    const int classified = engine.currentDiagnostics().classifiedPct;
+    engine.feedRxSliceAudio(5, last, engine.inputGeneration());
+    CHECK(engine.lockState() == ClockLockState::Locked);
+    CHECK(engine.currentDiagnostics().classifiedPct == classified);
+    CHECK(time.isEmpty());
+
+    // A wrong slot, speaker-purpose frame or another still-live producer must
+    // not reset the current receiver, let alone feed its detector.
+    for (PcmPurpose purpose : {PcmPurpose::Speaker, PcmPurpose::Slice}) {
+        PcmProducer other;
+        CHECK(other.start(purpose, purpose == PcmPurpose::Slice ? 5 : -1));
+        const auto frame = other.produce(QVector<float>{0.1f, 0.1f});
+        CHECK(frame.has_value());
+        engine.feedRxSliceAudio(5, *frame, engine.inputGeneration());
+        CHECK(engine.lockState() == ClockLockState::Locked);
+    }
+    engine.feedRxSliceAudio(3, last, engine.inputGeneration());
+    CHECK(engine.lockState() == ClockLockState::Locked);
+
+    // An accepted48k frame too short to make an output batch still retires the
+    // detector, votes and diagnostics immediately on the format transition.
+    CHECK(producer.setFormat({48000, PcmLayout::Mono}));
+    const auto tiny = producer.produce(QVector<float>{0.1f});
+    CHECK(tiny.has_value());
+    engine.feedRxSliceAudio(5, *tiny, engine.inputGeneration());
+    CHECK(engine.lockState() == ClockLockState::NoSignal);
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
+    CHECK(engine.currentDiagnostics().framesInWindow == 0);
+    engine.feedRxSliceAudio(5, last, engine.inputGeneration()); // revoked24
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
+
+    CHECK(producer.setFormat({24000, PcmLayout::Stereo}));
+    last = feedTyped(engine, producer, mono, {}, epochMs, fakeNow, engine.inputGeneration());
+    CHECK(engine.lockState() == ClockLockState::Locked);
+    const auto missed = producer.produce(QVector<float>(512, 0.0f));
+    const auto afterGap = producer.produce(QVector<float>{0.0f, 0.0f});
+    CHECK(missed && afterGap);
+    engine.feedRxSliceAudio(5, *afterGap, engine.inputGeneration());
+    CHECK(engine.lockState() == ClockLockState::NoSignal);
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
+    CHECK(engine.currentDiagnostics().framesInWindow == 0);
+    engine.feedRxSliceAudio(5, last, engine.inputGeneration()); // replay after reset
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
+
+    // Same-slot replacement cannot revive the old still-live source. Its new
+    // source is admitted without waiting for the old object's producer to die.
+    slice.reset();
+    CHECK(!engine.isRunning());
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
+    slice = std::make_unique<SliceModel>(5);
+    engine.start(slice.get(), ClockStation::Wwv);
+    const auto stale = producer.produce(QVector<float>{0.1f, 0.1f});
+    engine.feedRxSliceAudio(5, *stale, engine.inputGeneration());
+    PcmProducer replacement;
+    CHECK(replacement.start(PcmPurpose::Slice, 5));
+    feedTyped(engine, replacement, mono, {}, epochMs, fakeNow, engine.inputGeneration());
+    CHECK(engine.lockState() == ClockLockState::Locked);
+}
+
+void sectionTimeline()
+{
+    ClockSampleTimeline timeline;
+    CHECK(timeline.anchor(1001, 5801, 48000, 3389, 1000000));
+    CHECK(std::abs(timeline.hostMsAtSample(2400) - 999929.3958333333) < 0.000001);
+    CHECK(timeline.anchor(std::numeric_limits<quint64>::max() - 4800,
+                          std::numeric_limits<quint64>::max(), 48000, 3389, 1000000));
+    CHECK(std::abs(timeline.hostMsAtSample(2400) - 999929.3958333333) < 0.000001);
+    // End includes one unprocessed source frame: its half-output-frame time
+    // stays in the mapping without rounding sample positions per callback.
+    CHECK(timeline.anchor(500, 761, 48000, 0, 2000));
+    CHECK(std::abs(timeline.hostMsAtSample(128) - 1999.8958333333) < 0.000001);
+    CHECK(timeline.anchor(9, 24009, 24000, 0, 1000));
+    CHECK(timeline.hostMsAtSample(12000) == 500.0);
+    CHECK(!timeline.anchor(10, 9, 24000, 0, 1000));
+    CHECK(!timeline.anchor(0, 10, 48000, -1, 1000));
+}
+
+void sectionTypedDaxSelection()
+{
+    SynthOpts opts;
+    const std::vector<float> mono = synthWwv(kGold, opts);
+    const qint64 epochMs = synthEpochMs(kGold, opts);
+    qint64 fakeNow = epochMs + kSkewMs;
+    PanadapterStream stream;
+    SliceModel slice(5);
+    slice.setDaxChannel(2);
+    AetherClockEngine engine;
+    wireProvider(engine, stream);
+    engine.setHostClock([&fakeNow] { return fakeNow; });
+    engine.start(&slice, ClockStation::Wwv);
+    PcmProducer channel2;
+    PcmProducer channel3;
+    CHECK(channel2.start(PcmPurpose::Auxiliary));
+    CHECK(channel3.start(PcmPurpose::Auxiliary));
+    const PcmFrame last2 = feedTyped(engine, channel2, mono, {}, epochMs, fakeNow,
+                                     engine.inputGeneration(), 2, true);
+    CHECK(engine.lockState() == ClockLockState::Locked);
+    feedTyped(engine, channel3, mono, {}, epochMs, fakeNow,
+              engine.inputGeneration(), 3, true, true);
+    slice.setDaxChannel(3);
+    CHECK(stream.daxChannelHeldBy(3, Clock::Clock));
+    CHECK(!stream.daxChannelHeldBy(2, Clock::Clock));
+    QCoreApplication::processEvents();
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
+    CHECK(engine.currentDiagnostics().framesInWindow == 0);
+    CHECK(engine.lockState() == ClockLockState::NoSignal);
+    feedTyped(engine, channel3, mono, {}, epochMs, fakeNow,
+              engine.inputGeneration(), 3, true, false, 12345 + mono.size());
+    CHECK(engine.lockState() == ClockLockState::Locked);
+    slice.setDaxChannel(2);
+    engine.feedRxAudio(2, last2, engine.inputGeneration());
+    CHECK(engine.currentDiagnostics().classifiedPct == 0);
+    CHECK(engine.currentDiagnostics().framesInWindow == 0);
+    feedTyped(engine, channel2, mono, {}, epochMs, fakeNow,
+              engine.inputGeneration(), 2, true, false, 12345 + mono.size());
+    CHECK(engine.lockState() == ClockLockState::Locked);
+    engine.stop();
+    CHECK(!stream.daxChannelHeldBy(2, Clock::Clock));
+    CHECK(!stream.daxChannelHeldBy(3, Clock::Clock));
+}
+
+void sectionReentrantClockOutput()
+{
+    SynthOpts opts;
+    const std::vector<float> mono = synthWwv(kGold, opts);
+    const qint64 epochMs = synthEpochMs(kGold, opts);
+    for (int action = 0; action < 4; ++action) {
+        SliceModel slice(5);
+        AetherClockEngine engine;
+        engine.setDaxAvailabilityProvider([] { return false; });
+        engine.setDaxChannelProvider([](int) {}, [](int) {});
+        qint64 fakeNow = epochMs + kSkewMs;
+        engine.setHostClock([&fakeNow] { return fakeNow; });
+        engine.start(&slice, ClockStation::Wwv);
+        PcmProducer producer;
+        CHECK(producer.start(PcmPurpose::Slice, 5));
+        feedTyped(engine, producer, mono, {}, epochMs, fakeNow, engine.inputGeneration());
+        CHECK(engine.lockState() == ClockLockState::Locked);
+        QSignalSpy alignment(&engine, &AetherClockEngine::alignmentFrame);
+        QMetaObject::Connection change;
+        change = QObject::connect(&engine, &AetherClockEngine::alignmentFrame, &engine,
+                                  [&] {
+            QObject::disconnect(change);
+            if (action == 0) {
+                producer.invalidate();
+            } else if (action == 1) {
+                // Restart inside decoder::process. Its old instance must stay
+                // alive until that call returns, and publish no further events.
+                engine.start(&slice, ClockStation::Wwv);
+            } else if (action == 2) {
+                slice.setFrequency(9.999);
+            } else {
+                slice.setMode(QStringLiteral("AM"));
+            }
+        });
+        QVector<float> samples(65536 * 2);
+        for (int i = 0; i < 65536; ++i) {
+            samples[2 * i] = samples[2 * i + 1] = mono[static_cast<std::size_t>(i)];
+        }
+        const auto frame = producer.produce(std::move(samples));
+        CHECK(frame.has_value());
+        fakeNow += 2731;
+        engine.feedRxSliceAudio(5, *frame, engine.inputGeneration());
+        CHECK(alignment.count() == 1);
+        CHECK(engine.isRunning());
+        CHECK(engine.lockState() == ClockLockState::NoSignal);
+        CHECK(engine.currentDiagnostics().classifiedPct == 0);
+        CHECK(engine.currentDiagnostics().framesInWindow == 0);
+    }
+}
+
+void sectionDeleteDuringClockSignal()
+{
+    // Immediate QObject deletion is legal from a direct signal observer. The
+    // executing decoder and callback state must survive until processing exits.
+    SynthOpts opts;
+    const std::vector<float> mono = synthWwv(kGold, opts);
+    const qint64 epochMs = synthEpochMs(kGold, opts);
+    qint64 fakeNow = epochMs + kSkewMs;
+    SliceModel slice(5);
+    for (int signalKind = 0; signalKind < 4; ++signalKind) {
+        auto engine = std::make_unique<AetherClockEngine>();
+        engine->setDaxAvailabilityProvider([] { return false; });
+        engine->setDaxChannelProvider([](int) {}, [](int) {});
+        engine->setHostClock([&fakeNow] { return fakeNow; });
+        engine->setLockDecayTimeoutMs(60);
+        if (signalKind == 0) {
+            QObject::connect(engine.get(), &AetherClockEngine::sourceGenerationChanged,
+                             &slice, [&](quint64) { engine.reset(); });
+            engine->start(&slice, ClockStation::Wwv);
+            CHECK(!engine);
+            continue;
+        }
+        engine->start(&slice, ClockStation::Wwv);
+        PcmProducer producer;
+        CHECK(producer.start(PcmPurpose::Slice, 5));
+        feedTyped(*engine, producer, mono, {}, epochMs, fakeNow, engine->inputGeneration());
+        CHECK(engine->lockState() == ClockLockState::Locked);
+        if (signalKind == 1) {
+            QObject::connect(engine.get(), &AetherClockEngine::lockStateChanged,
+                             &slice, [&](ClockLockState) { engine.reset(); });
+            engine->stop();
+        } else if (signalKind == 2) {
+            QObject::connect(engine.get(), &AetherClockEngine::alignmentFrame,
+                             &slice, [&](const ClockAlignmentFrame&) { engine.reset(); });
+            QVector<float> samples(65536 * 2);
+            for (int i = 0; i < 65536; ++i) {
+                samples[2 * i] = samples[2 * i + 1] = mono[static_cast<std::size_t>(i)];
+            }
+            const auto frame = producer.produce(std::move(samples));
+            CHECK(frame.has_value());
+            fakeNow += 2731;
+            engine->feedRxSliceAudio(5, *frame, engine->inputGeneration());
+        } else {
+            QSignalSpy stateChanged(engine.get(), &AetherClockEngine::lockStateChanged);
+            QObject::connect(engine.get(), &AetherClockEngine::lockStateChanged,
+                             &slice, [&](ClockLockState) { engine.reset(); });
+            CHECK(stateChanged.wait(2000)); // Watchdog callback owns no public-call stack.
+        }
+        CHECK(!engine);
+    }
+}
+
+void sectionStartSupersession()
+{
+    // A direct generation observer can supersede the operation that emitted it.
+    // Its final selection/running state must survive the outer start returning.
+    for (int action = 0; action < 3; ++action) {
+        auto selected = std::make_unique<SliceModel>(5);
+        SliceModel replacement(6);
+        AetherClockEngine engine;
+        engine.setDaxAvailabilityProvider([] { return false; });
+        engine.setDaxChannelProvider([](int) {}, [](int) {});
+        QSignalSpy running(&engine, &AetherClockEngine::runningChanged);
+        QMetaObject::Connection change;
+        change = QObject::connect(&engine, &AetherClockEngine::sourceGenerationChanged,
+                                  &engine, [&](quint64) {
+            QObject::disconnect(change);
+            if (action == 0) {
+                engine.stop();
+            } else if (action == 1) {
+                selected.reset();
+            } else {
+                engine.start(&replacement, ClockStation::Wwvb);
+            }
+        });
+        engine.start(selected.get(), ClockStation::Wwv);
+        CHECK(engine.isRunning() == (action == 2));
+        CHECK(engine.boundSliceId() == (action == 2 ? 6 : -1));
+        CHECK(running.count() == (action == 2 ? 2 : 1));
+        CHECK(!running.isEmpty());
+        if (!running.isEmpty()) {
+            CHECK(running.back().at(0).toBool() == (action == 2));
+        }
+        if (action == 2) {
+            CHECK(engine.configuredStation() == ClockStation::Wwvb);
+        }
+    }
+}
+
+void sectionResetSupersession()
+{
+    SynthOpts opts;
+    const std::vector<float> mono = synthWwv(kGold, opts);
+    const qint64 epochMs = synthEpochMs(kGold, opts);
+    qint64 fakeNow = epochMs + kSkewMs;
+    SliceModel selected(5);
+    SliceModel replacement(6);
+    AetherClockEngine engine;
+    engine.setDaxAvailabilityProvider([] { return false; });
+    engine.setDaxChannelProvider([](int) {}, [](int) {});
+    engine.setHostClock([&fakeNow] { return fakeNow; });
+    engine.start(&selected, ClockStation::Wwv);
+    PcmProducer first;
+    PcmProducer second;
+    CHECK(first.start(PcmPurpose::Slice, 5));
+    CHECK(second.start(PcmPurpose::Slice, 6));
+    feedTyped(engine, first, mono, {}, epochMs, fakeNow, engine.inputGeneration());
+    CHECK(engine.lockState() == ClockLockState::Locked);
+    QMetaObject::Connection change;
+    change = QObject::connect(&engine, &AetherClockEngine::lockStateChanged, &engine,
+                              [&](ClockLockState state) {
+        if (state != ClockLockState::NoSignal) {
+            return;
+        }
+        QObject::disconnect(change);
+        engine.start(&replacement, ClockStation::Wwv);
+        feedTyped(engine, second, mono, {}, epochMs, fakeNow, engine.inputGeneration(), 6);
+        CHECK(engine.lockState() == ClockLockState::Locked);
+    });
+    // Resetting the old detector emits NoSignal inline, before ingest anchors
+    // this gap block. The callback establishes a complete replacement context.
+    const auto gap = first.produce(QVector<float>{0.1f, 0.1f}, 12345 + mono.size() + 100, true);
+    CHECK(gap.has_value());
+    engine.feedRxSliceAudio(5, *gap, engine.inputGeneration());
+    CHECK(engine.boundSliceId() == 6);
+    CHECK(engine.isRunning());
+    CHECK(engine.lockState() == ClockLockState::Locked);
+    CHECK(engine.currentDiagnostics().classifiedPct > 0);
+    CHECK(engine.currentDiagnostics().framesInWindow > 0);
+}
+
+void sectionStopSupersession()
+{
+    for (bool fromProvider : {false, true}) {
+        PanadapterStream stream;
+        SliceModel selected(5);
+        SliceModel replacement(6);
+        selected.setDaxChannel(2);
+        replacement.setDaxChannel(3);
+        AetherClockEngine engine;
+        bool restartOnRelease = false;
+        engine.setDaxChannelProvider(
+            [&stream](int ch) { stream.acquireDaxChannel(ch, Clock::Clock); },
+            [&](int ch) {
+                stream.releaseDaxChannel(ch, Clock::Clock);
+                if (restartOnRelease) {
+                    restartOnRelease = false;
+                    engine.start(&replacement, ClockStation::Wwv);
+                }
+            });
+        engine.start(&selected, ClockStation::Wwv);
+        CHECK(stream.daxChannelHeldBy(2, Clock::Clock));
+        QMetaObject::Connection change;
+        if (fromProvider) {
+            restartOnRelease = true;
+        } else {
+            change = QObject::connect(&engine, &AetherClockEngine::sourceGenerationChanged,
+                                      &engine, [&](quint64) {
+                QObject::disconnect(change);
+                engine.start(&replacement, ClockStation::Wwv);
+            });
+        }
+        engine.stop();
+        CHECK(engine.isRunning());
+        CHECK(engine.boundSliceId() == 6);
+        CHECK(!stream.daxChannelHeldBy(2, Clock::Clock));
+        CHECK(stream.daxChannelHeldBy(3, Clock::Clock));
+        const quint64 generation = engine.inputGeneration();
+        selected.setFrequency(9.999);
+        selected.setMode(QStringLiteral("AM"));
+        selected.setDaxChannel(4);
+        CHECK(engine.inputGeneration() == generation);
+        CHECK(!stream.daxChannelHeldBy(4, Clock::Clock));
+        CHECK(stream.daxChannelHeldBy(3, Clock::Clock));
+        engine.stop();
+        CHECK(!stream.daxChannelHeldBy(2, Clock::Clock));
+        CHECK(!stream.daxChannelHeldBy(3, Clock::Clock));
+        CHECK(!stream.daxChannelHeldBy(4, Clock::Clock));
+    }
+}
+
+void sectionAcquireSupersession()
+{
+    for (int action = 0; action < 3; ++action) {
+        PanadapterStream stream;
+        SliceModel selected(5);
+        SliceModel replacement(6);
+        selected.setDaxChannel(2);
+        replacement.setDaxChannel(4);
+        auto engine = std::make_unique<AetherClockEngine>();
+        bool changeOnAcquire = false;
+        engine->setDaxChannelProvider(
+            [&](int ch) {
+                stream.acquireDaxChannel(ch, Clock::Clock);
+                if (std::exchange(changeOnAcquire, false)) {
+                    CHECK(stream.daxChannelHeldBy(2, Clock::Clock));
+                    CHECK(stream.daxChannelHeldBy(3, Clock::Clock));
+                    if (action == 0) {
+                        engine->stop();
+                    } else if (action == 1) {
+                        engine->start(&replacement, ClockStation::Wwv);
+                    } else {
+                        engine.reset();
+                    }
+                }
+            },
+            [&](int ch) { stream.releaseDaxChannel(ch, Clock::Clock); });
+        engine->start(&selected, ClockStation::Wwv);
+        changeOnAcquire = true;
+        selected.setDaxChannel(3);
+        CHECK(!stream.daxChannelHeldBy(2, Clock::Clock));
+        CHECK(!stream.daxChannelHeldBy(3, Clock::Clock));
+        CHECK(stream.daxChannelHeldBy(4, Clock::Clock) == (action == 1));
+        if (engine) {
+            CHECK(engine->isRunning() == (action == 1));
+            CHECK(engine->boundSliceId() == (action == 1 ? 6 : -1));
+            engine->stop();
+        }
+        CHECK(!stream.daxChannelHeldBy(2, Clock::Clock));
+        CHECK(!stream.daxChannelHeldBy(3, Clock::Clock));
+        CHECK(!stream.daxChannelHeldBy(4, Clock::Clock));
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -780,6 +1336,16 @@ int main(int argc, char** argv) {
     sectionDiagnosticsTelemetry();
     sectionSeamSliceAudio();
     sectionDaxZeroChannelStillFilters();
+    sectionTypedRateTiming();
+    sectionTypedLifetime();
+    sectionTimeline();
+    sectionTypedDaxSelection();
+    sectionReentrantClockOutput();
+    sectionDeleteDuringClockSignal();
+    sectionStartSupersession();
+    sectionResetSupersession();
+    sectionStopSupersession();
+    sectionAcquireSupersession();
 
     if (g_failures == 0) {
         std::printf("aetherclock_engine_test: all checks passed\n");

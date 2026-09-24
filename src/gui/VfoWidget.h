@@ -685,6 +685,9 @@ private:
     QPushButton* m_aetherDspBtn{nullptr};    // launches AetherDSP Settings dialog
     bool         m_aetherDspActive{false};   // any client NR module on (#3800)
     QPushButton* m_aetherVoiceBtn{nullptr};  // toggles Aetherial Audio Channel Strip
+    // Holds the two launchers side by side; relayoutDspGrid() spans it across
+    // whatever columns the toggles leave free, and the pair split that evenly.
+    QWidget*     m_aetherLauncherRow{nullptr};
 
     // Shared DSP-level row at the bottom of the DSP grid: one slider whose
     // target switches based on which leveled DSP the user most recently

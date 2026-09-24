@@ -1307,6 +1307,11 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         "QLabel { color: {{color.text.secondary}}; background: transparent; }"));
     m_statusLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_statusLabel->setWordWrap(true);
+    // The stats row sits on the footer surface like its neighbours, so it must
+    // opt out of the app-wide QWidget background.0 fill rather than paint its
+    // own rectangle through background.1.
+    ThemeManager::instance().applyStyleSheet(m_dxLabel, QStringLiteral(
+        "QLabel { background: transparent; }"));
     footerLayout->addWidget(m_dxLabel);
     footerLayout->addWidget(m_statusLabel);
     // Connection indicator pinned to the bottom-right corner: "MQTT"/"HTTP"

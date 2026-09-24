@@ -1216,6 +1216,24 @@ struct Ep4Stats {
     int    samples        = 0;
     int    peakAbs        = 0;    // 0..kEp4FullScale
     double sumSquares     = 0.0;  // of raw codes, so rms shares peak's scale
+    // Signed sum of the same raw codes, so the MEAN can be removed from the
+    // RMS. Without it there is no way to tell a converter DC offset from
+    // signal, and the offset is carried at full weight: for a record with mean
+    // m and standard deviation s, an about-zero RMS reports sqrt(m^2 + s^2)
+    // rather than s. That inflates rms, and since adcCrestDb is peak - rms it
+    // DEFLATES the crest — pushing a broadband noise floor (11-12 dB over 2048
+    // samples) toward the ~3 dB a discrete carrier gives, which is the one
+    // distinction this statistic exists to make. It cost a diagnosis: a
+    // terminated port read 3.71 dB and was called a near-sinusoidal carrier,
+    // when a DC pedestal fits that number exactly as well. (#5802.)
+    //
+    // Signed and not magnitude: a magnitude sum is not the mean and would
+    // remove nothing. Plain `double` for the same reason sumSquares is one —
+    // 2048 codes of at most 2048 accumulate to ~4.2e6 (their SQUARES to
+    // ~8.6e9), and both are exact integers far inside a double's exact-integer
+    // range, so the variance difference below cannot cancel catastrophically
+    // at any level a 12-bit converter can produce.
+    double sum            = 0.0;
     // Codes at either converter rail, counted with the gateware's OWN
     // predicate rather than a symmetric one: ad9866.v fires rxclipp at
     // 12'b011111111111 (+2047) and rxclipn at 12'b100000000000 (-2048). A
@@ -1227,10 +1245,48 @@ struct Ep4Stats {
     // nothing else — not with an S-meter, not with the WDSP ADC peak, and not
     // with any antenna-referred level. Nothing has compared it against a real
     // band; do not present it as an absolute.
+    //
+    // peakDbfs() is ABSOLUTE and rmsDbfs() is AC-COUPLED: the peak is the
+    // largest |code| seen, the RMS is the deviation about this record's own
+    // mean. Their difference is therefore a crest measured from the DC
+    // pedestal to the excursion, which is what makes a rail-ward peak legible
+    // while still refusing to let a converter offset masquerade as signal.
+    // MIXED REFERENCE ON PURPOSE, and RULED: the maintainer settled #5802
+    // question 1 on 2026-09-20 -- peakAbs STAYS absolute. So this pairing is a
+    // decision, not an omission, and nothing here should be read as having
+    // pre-empted it. A signed pedestal row to sit beside these is tracked at
+    // #5856, which is where a reader should go next rather than to #5802 --
+    // including for the bench evidence that the removed mean tracks analog
+    // gain, so it is not a converter offset on at least one radio.
     [[nodiscard]] double peakDbfs() const noexcept;
     [[nodiscard]] double rmsDbfs()  const noexcept;
+    // Peak-to-RMS in dB, or nullopt when the record cannot support one.
+    //
+    // kEp4FloorDbfs is a SENTINEL and not a level: it exists to say "below the
+    // smallest code this converter has" WITHOUT inventing one. Subtracting it
+    // invents one anyway, and the subtraction is the whole of adcCrestDb.
+    //
+    // Before the RMS became AC-referred the case could not arise: an
+    // about-zero RMS is at the floor only when the peak is too, and the
+    // difference was a harmless zero. Now a record can have a large, real,
+    // absolute peak and NO representable AC deviation at all — a DC pedestal
+    // with a wobble under half a code — and peak - floor would publish sixty
+    // to ninety dB of "crest" for a record whose crest is undefined. That is
+    // the reading a script thresholding "crest > 10 dB means broadband noise"
+    // gets exactly backwards.
+    //
+    // So the predicate is that BOTH terms are real levels, which also covers
+    // an RMS computed below the floor: a deviation smaller than half a code is
+    // quantisation residue, not a measurement to take a ratio against. The
+    // peak and RMS rows still report what they each computed; only the derived
+    // ratio declines to exist. (#5802, and the floor nit on PR #5832.)
+    [[nodiscard]] std::optional<double> crestDb() const noexcept;
     // Fold another packet's statistics in. Peak takes the max, everything else
     // sums — which is what makes a block's stats the same shape as a packet's.
+    // `sum` sums for exactly the reason sumSquares does: both are linear in
+    // the record, so the mean and variance of a merged block are the mean and
+    // variance of the 2048-sample concatenation and not an average of four
+    // packet-sized answers.
     void merge(const Ep4Stats& other) noexcept;
 };
 
