@@ -939,7 +939,6 @@ set(CORE_SOURCES
     src/core/MemoryTelemetry.cpp
     src/core/RigctlProtocol.cpp
     src/core/SmartCatProtocol.cpp
-    src/core/SplitAudioProfile.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
     src/core/KiwiSdrProtocol.cpp
@@ -1191,6 +1190,7 @@ set(GUI_SOURCES
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
     src/gui/VfoDisplayDefaults.cpp
+    src/gui/SplitAudioProfile.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp

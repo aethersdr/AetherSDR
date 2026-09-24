@@ -546,7 +546,7 @@ void MainWindow::handleFlexControlButton(int button, int action,
         // layer delivers presses only, with no release edge, so this TOGGLES
         // where the keyboard's "Monitor TX (Hold)" holds. Both drive the same
         // begin/end pair, so the two can be mixed without getting out of step.
-        if (m_splitMonitorActive) endSplitMonitor();
+        if (m_splitMonitor.active()) endSplitMonitor();
         else                      beginSplitMonitor();
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
@@ -1084,7 +1084,7 @@ void MainWindow::dispatchHidAction(const QString& actionName,
         // layer delivers presses only, with no release edge, so this TOGGLES
         // where the keyboard's "Monitor TX (Hold)" holds. Both drive the same
         // begin/end pair, so the two can be mixed without getting out of step.
-        if (m_splitMonitorActive) endSplitMonitor();
+        if (m_splitMonitor.active()) endSplitMonitor();
         else                      beginSplitMonitor();
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
@@ -1343,6 +1343,8 @@ void MainWindow::refreshStreamDeckLabels()
     QByteArray tsImg = renderTouchscreenJpeg(turnLabels, pushLabels, stateTexts, activeFlags);
 
     // Build labeled 120x120 images for the 8 LCD keys
+    // Both split keys share one background: Monitor TX is part of split.
+    static const QColor kSplitKeyBg(60, 40, 10);
     static const QHash<QString, QColor> kKeyBgColors{
         {QStringLiteral("ToggleMox"),        QColor(70, 20, 20)},
         {QStringLiteral("ToggleTune"),       QColor(70, 20, 20)},
@@ -1352,8 +1354,8 @@ void MainWindow::refreshStreamDeckLabels()
         {QStringLiteral("ClearXit"),         QColor(20, 40, 20)},
         {QStringLiteral("VolumeUp"),         QColor(40, 20, 60)},
         {QStringLiteral("VolumeDown"),       QColor(40, 20, 60)},
-        {QStringLiteral("SplitActiveSlice"), QColor(60, 40, 10)},
-        {QStringLiteral("SplitMonitorTx"),   QColor(60, 40, 10)},
+        {QStringLiteral("SplitActiveSlice"), kSplitKeyBg},
+        {QStringLiteral("SplitMonitorTx"),   kSplitKeyBg},
     };
     static const QHash<QString, QString> kKeyShortLabels{
         {QStringLiteral("None"),             {}},
@@ -1495,6 +1497,7 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
     } else if (actionId == "WheelSliceAudio") {
         if (auto* s = activeSlice()) {
             const float next = std::clamp(s->audioGain() + steps * 2.0f, 0.0f, 100.0f);
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             s->setAudioGain(next);
 #ifdef HAVE_HIDAPI
             triggerTMate2Overlay(TMate2Overlay::Volume, static_cast<int>(next));
@@ -1912,7 +1915,10 @@ void MainWindow::registerMidiParams()
 
     // ── RX ──────────────────────────────────────────────────────────────
     reg("rx.afGain", "AF Gain", "RX", P::Slider, 0, 200,
-        [this](float v) { if (auto* s = activeSlice()) s->setAudioGain(v); },
+        [this](float v) {
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
+            if (auto* s = activeSlice()) s->setAudioGain(v);
+        },
         [this]() -> float { auto* s = activeSlice(); return s ? s->audioGain() : 0; });
 
     reg("rx.squelch", "Squelch Level", "RX", P::Slider, 0, 100,
@@ -1938,7 +1944,10 @@ void MainWindow::registerMidiParams()
         });
 
     reg("rx.audioPan", "Audio Pan", "RX", P::Slider, 0, 100,
-        [this](float v) { if (auto* s = activeSlice()) s->setAudioPan(static_cast<int>(v)); },
+        [this](float v) {
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
+            if (auto* s = activeSlice()) s->setAudioPan(static_cast<int>(v));
+        },
         [this]() -> float { auto* s = activeSlice(); return s ? s->audioPan() : 50; });
 
     reg("rx.nbEnable", "Noise Blanker", "RX", P::Toggle, 0, 1,

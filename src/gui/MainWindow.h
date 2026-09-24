@@ -20,7 +20,6 @@
 #include "core/AppSettings.h"
 #include "core/AetherDspModePolicy.h"
 #include "core/KiwiSdrTxMutePolicy.h"  // optimistic-unkey Kiwi mute latch
-#include "core/SplitAudioProfile.h"   // remembered split audio arrangement (#2242)
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
@@ -30,6 +29,7 @@
 #include "gui/CenterLockRebindTracker.h"
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
+#include "gui/SplitAudioProfile.h"       // #2242 remembered split audio arrangement
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -67,6 +67,7 @@
 #include "models/RadioSession.h"
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #ifdef HAVE_MIDI
@@ -540,22 +541,33 @@ private:
     void resolveSplitPairs(QHash<QString, SliceModel*>& txByPan,
                            QHash<QString, SliceModel*>& rxByPan) const;
     bool activeSplitPair(SliceModel*& rx, SliceModel*& tx) const;
+    // The pair on sliceId's own panadapter only — no fallback to another pan,
+    // so a control on one slice can never retune a split somewhere else.
+    bool splitPairForSlice(int sliceId, SliceModel*& rx, SliceModel*& tx) const;
     // Split audio memory (#2242): learn the arrangement the operator left, put
     // it back next split. armSplitAudioMirror() subscribes; the mirror IS the
     // record, because by the time the TX slice is torn down its model object is
     // already gone (onSliceRemoved) and cannot be read.
-    void armSplitAudioMirror(SliceModel* rx, SliceModel* tx);
-    void applySplitAudioProfile(SliceModel* rx, SliceModel* tx);
+    void armSplitAudioMirror(SliceModel* rx, SliceModel* tx,
+                             const AetherSDR::SplitAudioApplyResult& applied);
+    void connectSplitAudioRx(SliceModel* rx);
+    void applyAndArmSplitAudio(SliceModel* rx, SliceModel* tx);
     void recordSplitAudioMirror();
     void disarmSplitAudioMirror();
     AetherSDR::SplitAudioProfile loadSplitAudioProfile() const;
     void saveSplitAudioProfile(const AetherSDR::SplitAudioProfile& p);
     // Momentary Monitor TX — the Icom XFC / Kenwood TF-SET / Yaesu TXW control.
     bool handleSplitMonitorShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
-    void beginSplitMonitor();
+    void beginSplitMonitor(bool keyHeld = false);
     void endSplitMonitor();
-    // Split Up N kHz: retunes the TX slice, never the RX slice (#311).
-    void applySplitOffsetKHz(double offsetKHz);
+    // Enter split on rxSliceId: create the TX slice offsetMhz above it, or at
+    // the mode default (CW 1 kHz, otherwise 5 kHz) when none is given.
+    void enterSplit(int rxSliceId, std::optional<double> offsetMhz = std::nullopt);
+    // Why enterSplit(rxSliceId) would refuse, or empty when it would not.
+    QString splitEntryBlocker(int rxSliceId) const;
+    // Split Up N kHz (#311): retunes the TX slice, never the RX slice; with no
+    // split yet, enters one at RX + N on rxSliceId (the active slice if -1).
+    void applySplitOffsetKHz(double offsetKHz, int rxSliceId = -1);
     void showSplitBadgeMenu(int sliceId, const QPoint& globalPos);
     // One status-bar notice per connect session for a control this radio
     // cannot honor. Shared by the commandDropped path and by the
@@ -1719,14 +1731,13 @@ private:
     // mistaken for the operator's choices.
     bool m_splitAudioApplying{false};
     bool m_splitAudioNoticeShown{false};
-    // Momentary Monitor TX. The pre-hold mute of both slices is snapshotted
-    // rather than assumed, so a release restores exactly what was there even if
-    // the operator had already customised the split.
-    bool m_splitMonitorActive{false};
-    int  m_splitMonitorRxId{-1};
-    int  m_splitMonitorTxId{-1};
-    bool m_splitMonitorRxMuteBefore{false};
-    bool m_splitMonitorTxMuteBefore{true};
+    // Momentary Monitor TX. Records which native mute it actually changed, so
+    // a release restores exactly that and never a replacement-owned one.
+    AetherSDR::SplitMonitorHold<SliceModel> m_splitMonitor;
+    // True when the hold came from the keyboard. Only a held key can lose its
+    // release to another window, so only it is ended on deactivation; a
+    // FlexControl/HID toggle stays in step with the operator's last press.
+    bool m_splitMonitorKeyHeld{false};
     int  m_pendingMemoryRevealSliceId{-1};
     double m_pendingMemoryRevealTargetMhz{0.0};
     int  m_pendingSpectrumTargetSliceId{-1};

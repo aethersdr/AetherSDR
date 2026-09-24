@@ -82,6 +82,7 @@ The shortcut editor also includes many actions that ship **unassigned** until yo
   from the `Monitor TX` submenu when you right-click the `SPLIT` badge.
 - `Split Up 1 kHz`, `Split Up 5 kHz`, `Split Up 10 kHz` — move the **transmit**
   slice that far above the receive slice. The receive frequency does not move.
+  With no split running, the key starts one on the active slice at that offset.
 - Filter widen and narrow
 - DSP actions such as `NB`, `NR`, and `ANF`
 - AGC mode cycle

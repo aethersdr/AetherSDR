@@ -1,4 +1,4 @@
-#include "core/SplitAudioProfile.h"
+#include "SplitAudioProfile.h"
 
 #include <QJsonValue>
 
@@ -17,7 +17,9 @@ bool readPercent(const QJsonObject& o, const char* key, bool& has, int& out)
         return true;              // absent is fine — just not learned
     if (!v.isDouble())
         return false;             // present but wrong type — the object is bad
-    out = qBound(0, static_cast<int>(v.toDouble()), 100);
+    // Clamp in the double domain BEFORE narrowing: a finite JSON number such as
+    // 1e100 is outside int's range, and casting it first is undefined behaviour.
+    out = static_cast<int>(qBound(0.0, v.toDouble(), 100.0));
     has = true;
     return true;
 }
@@ -47,7 +49,9 @@ SplitAudioProfile SplitAudioProfile::fromJson(const QJsonObject& o)
     // for the fields whose names happen to match — their meaning is exactly
     // what the version defines.
     const auto ver = o.value(QStringLiteral("v"));
-    if (!ver.isDouble() || static_cast<int>(ver.toDouble()) != kVersion)
+    // Compared as a double, never narrowed: 1.5 is not version 1, and a huge
+    // value must not reach an int cast.
+    if (!ver.isDouble() || ver.toDouble() != static_cast<double>(kVersion))
         return p;
 
     // monitor is read before the audio values and kept even if those turn out
@@ -86,28 +90,26 @@ QJsonObject SplitAudioProfile::toJson() const
     return o;
 }
 
-void SplitAudioRecorder::arm(int rxPanBefore, bool txMuted, int txGain, int txPan)
+void SplitAudioRecorder::arm(int rxPanBefore, bool rxPanMovedByApply)
 {
     *this = SplitAudioRecorder{};
-    m_armed       = true;
-    m_rxPanBefore = rxPanBefore;
-    m_rxPan       = rxPanBefore;
-    // Seeds, not learned values: the touched flags stay false, so a split the
-    // operator never touches stores nothing and the next one behaves exactly as
-    // it does today.
-    m_txMuted = txMuted;
-    m_txGain  = txGain;
-    m_txPan   = txPan;
+    m_armed             = true;
+    m_rxPanBefore       = rxPanBefore;
+    m_rxPanMovedByApply = rxPanMovedByApply;
 }
 
 SplitAudioProfile SplitAudioRecorder::merge(const SplitAudioProfile& existing) const
 {
-    SplitAudioProfile p = existing;
-    p.forgetLearnedState();   // keeps the chosen monitor mode
+    SplitAudioProfile p = existing;   // carried forward: it was replayed
     if (m_txMuteTouched) { p.hasTxMute = true; p.txMuted = m_txMuted; }
     if (m_txGainTouched) { p.hasTxGain = true; p.txGain  = qBound(0, m_txGain, 100); }
     if (m_txPanTouched)  { p.hasTxPan  = true; p.txPan   = qBound(0, m_txPan,  100); }
     if (m_rxPanTouched)  { p.hasRxPan  = true; p.rxPan   = qBound(0, m_rxPan,  100); }
+    // A split that ends with the TX slice muted is the operator saying they
+    // want no arrangement. Keeping its pan and gain would replay them onto a
+    // slice nobody can hear, and would still move the RX pan every split.
+    if (p.hasTxMute && p.txMuted)
+        p.forgetLearnedState();       // keeps the chosen monitor mode
     return p;
 }
 

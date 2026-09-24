@@ -1442,11 +1442,15 @@ target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Tes
 add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
 
 # Split audio memory (#2242) — the parsing rules for the one stored SplitAudio
-# object: the has*/value distinction that keeps an un-learned field from being
-# replayed onto live slice audio, the version gate, and clamping.
+# object (the has*/value distinction, the version gate, clamping), the
+# recorder's carry-forward and RX-pan restore across repeated splits, and the
+# Monitor TX hold's mute ownership, the last two instantiated over production
+# SliceModel. Socket-free: a SliceModel with no connection sends nothing.
 add_executable(split_audio_profile_test
     tests/split_audio_profile_test.cpp
-    src/core/SplitAudioProfile.cpp
+    src/gui/SplitAudioProfile.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
 )
 target_include_directories(split_audio_profile_test PRIVATE src)
 target_link_libraries(split_audio_profile_test PRIVATE Qt6::Core)

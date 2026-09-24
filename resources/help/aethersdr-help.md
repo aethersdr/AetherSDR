@@ -199,23 +199,25 @@ slice.
 **Right-click either badge** for the controls that go with split operation:
 
 - `Split Up 1 / 5 / 10 kHz` — move the transmit slice that far above the
-  receive slice. The receive frequency stays where it is.
+  receive slice. The receive frequency stays where it is. With no split
+  running, the same choice starts one at that offset.
 - `Monitor TX` — choose what the `Monitor TX (Hold)` key does while you hold
   it: `Solo TX frequency` silences the receive slice so you hear only where you
   are about to transmit, as `XFC`, `TF-SET` or `TXW` does on a conventional
-  transceiver; `Hear both` leaves the receive slice audible, the way a second
-  receiver would. Bind the key in `Settings → Keyboard Shortcuts`, or put it on
+  transceiver; `Hear both` makes both slices audible for the hold, the way a
+  second receiver would. Releasing the key puts both mutes back as they were. Bind the key in `Settings → Keyboard Shortcuts`, or put it on
   a FlexControl, RC-28 or HID controller, where it toggles rather than holds.
 - `Forget remembered audio` — clear the arrangement described below.
 
 **AetherSDR remembers how you set up the audio.** The transmit slice starts
 muted, as it always has. If you change that — unmute it, set its level, pan it
 to one ear and the receive slice to the other — the next split you start comes
-back the same way, with no clicks. Only the transmit slice's mute, level and
-pan are remembered, plus the receive slice's pan if you moved it; the receive
-slice's own volume and mute are never touched, and its original pan is restored
-when the split ends. Muting the transmit slice once is enough to go back to the
-original behaviour. Splits started by a logging program or another client over
+back the same way, with no clicks, and keeps coming back until you change it.
+Only the transmit slice's mute, level and pan are remembered, plus the receive
+slice's pan if you moved it; the receive slice's own volume and mute are never
+touched, and its original pan is restored when the split ends. Ending a split
+with the transmit slice muted clears what was remembered, so muting it once is
+enough to go back to the original behaviour. Splits started by a logging program or another client over
 CAT, Hamlib or TCI are left alone.
 
 ## The Applet Panel

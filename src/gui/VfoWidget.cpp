@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "SplitAudioProfile.h"
 #include "VfoDisplayDefaults.h"
 #ifdef HAVE_DEEPFIST
 #include "models/CwDecodeSettings.h"
@@ -1472,6 +1473,7 @@ void VfoWidget::buildUI()
             // Right-click on speaker tab toggles mute directly
             btn->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(btn, &QPushButton::customContextMenuRequested, this, [this](const QPoint&) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
                 if (m_slice) m_slice->setAudioMute(!m_slice->audioMute());
             });
         }
@@ -1779,12 +1781,16 @@ void VfoWidget::buildTabContent()
         connect(m_afGainSlider, &QSlider::valueChanged, this, [this, afVal](int v) {
             afVal->setText(QString::number(v));
             if (!m_updatingFromModel) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
                 if (m_slice) m_slice->setAudioGain(v);
                 emit afGainChanged(v);
             }
         });
         connect(m_muteBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel && m_slice) m_slice->setAudioMute(on);
+            if (!m_updatingFromModel && m_slice) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
+                m_slice->setAudioMute(on);
+            }
             m_muteBtn->setText(on ? QString::fromUtf8("AF  \xF0\x9F\x94\x87")    // 🔇 AF
                                   : QString::fromUtf8("AF  \xF0\x9F\x94\x8A"));  // 🔊 AF
             m_tabBtns[0]->setText(on ? QString::fromUtf8("\xF0\x9F\x94\x87")
@@ -1852,7 +1858,10 @@ void VfoWidget::buildTabContent()
             }
         });
         connect(m_panSlider, &QSlider::valueChanged, this, [this](int v) {
-            if (!m_updatingFromModel && m_slice) m_slice->setAudioPan(v);
+            if (!m_updatingFromModel && m_slice) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
+                m_slice->setAudioPan(v);
+            }
             if (!m_updatingFromModel) emit rxPanChanged(v);  // (#1460)
         });
         connect(m_divBtn, &QPushButton::toggled, this, [this](bool on) {

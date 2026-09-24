@@ -359,7 +359,7 @@ bool MainWindow::handleSplitMonitorShortcut(QKeyEvent* keyEvent,
     // `seq` no longer matches the binding. Without this the restore never runs
     // and the split is left monitoring — the operator hears the wrong slice,
     // with nothing on screen to say why.
-    if (!isMonitor && eventType == QEvent::KeyRelease && m_splitMonitorActive)
+    if (!isMonitor && eventType == QEvent::KeyRelease && m_splitMonitor.active())
         isMonitor = keyEventMatchesActionBaseKey(kSplitMonitorActionId, keyEvent);
 
     if (!isMonitor)
@@ -369,7 +369,7 @@ bool MainWindow::handleSplitMonitorShortcut(QKeyEvent* keyEvent,
     // is never gated on focus or on the shortcuts-enabled flag: whatever became
     // true mid-hold, the audio has to go back.
     if (eventType == QEvent::KeyRelease) {
-        if (!m_splitMonitorActive)
+        if (!m_splitMonitor.active())
             return false;
         endSplitMonitor();
         return true;
@@ -382,8 +382,44 @@ bool MainWindow::handleSplitMonitorShortcut(QKeyEvent* keyEvent,
     if (textEntryCaptured() || !m_keyboardShortcutsEnabled)
         return false;
 
-    beginSplitMonitor();
+    beginSplitMonitor(/*keyHeld=*/true);
     return true;   // consume the bound key so it can't also activate a button
+}
+
+
+// ─── Momentary Monitor TX (#2242) ───────────────────────────────────────────
+//
+// The Icom XFC / Kenwood TF-SET / Yaesu TXW control: hold to hear where you are
+// about to transmit. On a single-receiver rig that means the receiver MOVES,
+// which is what Solo reproduces (mute RX, unmute TX). Both makes the RX slice
+// audible too — the sub-receiver convention, for operators who have already
+// arranged the two slices across the stereo field.
+//
+// SplitMonitorHold records which native mute the press actually changed, and
+// the release restores exactly that — never a slice whose audio DAX/TCI/Kiwi
+// has replaced, where setAudioMute() writes a different domain.
+
+void MainWindow::beginSplitMonitor(bool keyHeld)
+{
+    if (m_splitMonitor.active()) return;
+    SliceModel* rx = nullptr;
+    SliceModel* tx = nullptr;
+    if (!activeSplitPair(rx, tx)) return;
+
+    m_splitAudioApplying = true;
+    const bool began = m_splitMonitor.begin(rx, tx, loadSplitAudioProfile().monitor);
+    m_splitAudioApplying = false;
+    m_splitMonitorKeyHeld = began && keyHeld;
+}
+
+void MainWindow::endSplitMonitor()
+{
+    if (!m_splitMonitor.active()) return;
+    m_splitAudioApplying = true;
+    m_splitMonitor.end(m_radioModel.slice(m_splitMonitor.rxId()),
+                       m_radioModel.slice(m_splitMonitor.txId()));
+    m_splitAudioApplying = false;
+    m_splitMonitorKeyHeld = false;
 }
 
 
@@ -505,12 +541,15 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     // the application leaves the active state. Do not consume the event.
     if (obj == qApp && event->type() == QEvent::ApplicationStateChange) {
         auto* stateEvent = static_cast<QApplicationStateChangeEvent*>(event);
-        if (stateEvent->applicationState() != Qt::ApplicationActive)
+        if (stateEvent->applicationState() != Qt::ApplicationActive) {
             failSafeMomentaryKeyingToRx("app-deactivate");
             // A Monitor TX hold whose KeyRelease went to another application
             // would otherwise leave the split's audio rearranged with no key
             // left to release. Same fail-safe reasoning as the line above.
-            endSplitMonitor();
+            // A controller toggle has no release to lose and is left alone.
+            if (m_splitMonitorKeyHeld)
+                endSplitMonitor();
+        }
     }
 
     if (auto* slider = qobject_cast<QAbstractSlider*>(obj)) {
@@ -1086,16 +1125,19 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("af_gain_up", "AF Gain Up", "Audio",
         QKeySequence(Qt::Key_Up), [this]() {
             auto* s = activeSlice();
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (s) s->setAudioGain(std::min(100.0f, s->audioGain() + 5.0f));
         });
     m_shortcutManager.registerAction("af_gain_down", "AF Gain Down", "Audio",
         QKeySequence(Qt::Key_Down), [this]() {
             auto* s = activeSlice();
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (s) s->setAudioGain(std::max(0.0f, s->audioGain() - 5.0f));
         });
     m_shortcutManager.registerAction("mute_toggle", "Mute Toggle", "Audio",
         QKeySequence(Qt::Key_M), [this]() {
             auto* s = activeSlice();
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (s) s->setAudioMute(!s->audioMute());
         });
     m_shortcutManager.registerAction("mute_all_slices_toggle", "Mute All Slices", "Audio",
