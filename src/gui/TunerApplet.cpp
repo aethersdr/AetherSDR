@@ -79,6 +79,8 @@ constexpr int kRailCaptionMinPx = 7;
 constexpr int kRailCaptionPadding = 8;
 // Breathing room around the widest caption, in design pixels.
 constexpr int kKeyPaddingDesignPx = 18;
+// Upper bound on a "Tuned SWR" notice: past the tuner's own ~2 s dwell.
+constexpr int kResultFallbackMs = 5000;
 
 // The three states TUNE cycles through visually. Kept as named templates
 // because both presentations' TUNE buttons wear them and the tuning handler
@@ -150,6 +152,14 @@ TunerApplet::TunerApplet(QWidget* parent)
     m_relayDwellTimer->setInterval(2000);
     connect(m_relayDwellTimer, &QTimer::timeout, this, [this]() {
         setAlertText(QString());
+    });
+    // The tuner clears its own result ~2 s after raising it; this only fires
+    // when that clear is lost, so it sits well past the device's dwell.
+    m_resultFallbackTimer = new QTimer(this);
+    m_resultFallbackTimer->setSingleShot(true);
+    m_resultFallbackTimer->setInterval(kResultFallbackMs);
+    connect(m_resultFallbackTimer, &QTimer::timeout, this, [this]() {
+        if (m_alertIsGood) setAlertText(QString());
     });
 
     buildUI();
@@ -881,6 +891,13 @@ void TunerApplet::setAlertText(const QString& text)
 
     m_alertIsGood = shown.startsWith(QLatin1String("Tuned"), Qt::CaseInsensitive);
     applyAlertStyle();
+    // Failures keep the tuner's schedule; a result is informational and must
+    // not hold the controls hostage if its clear frame goes missing.
+    if (m_alertIsGood) {
+        m_resultFallbackTimer->start();
+    } else {
+        m_resultFallbackTimer->stop();
+    }
 
     // The tuner raises the alert and later clears it with an empty frame; the
     // overlay simply follows those two, so its dwell time is whatever the

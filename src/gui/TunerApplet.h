@@ -244,6 +244,10 @@ private:
     // population losing the result entirely.
     QTimer*      m_relayResultTimer{nullptr};
     QTimer*      m_relayDwellTimer{nullptr};
+    // Takes a result notice down if the tuner's own clear never reaches us.
+    // The banner covers the controls, so one that outlives its clear would
+    // lock the applet until the next tune.
+    QTimer*      m_resultFallbackTimer{nullptr};
     bool         m_alertIsGood{false};
     RelayDial*   m_c1Dial{nullptr};
     RelayDial*   m_lDial{nullptr};

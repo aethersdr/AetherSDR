@@ -288,6 +288,24 @@ int main(int argc, char** argv)
         CHECK(tuning.count() == 2);
     }
 
+    // ── The relayed `tuning` yields to the direct one ─────────────────
+    //
+    // The radio relays the tuner's state at its own pace, and it trails the
+    // tuner: on a live TGXL (fw 1.2.39) the relay reported tuning=1 for 4.4 s
+    // of a tune the tuner itself reported as 3.8 s. Both used to write the
+    // same flag, so every tune ended with it flapping 0→1→0 — the key read
+    // STOP again on an idle tuner (pressing it sends `autotune`, which starts
+    // a tune) and the flap wiped or re-armed the completion notice. While the
+    // tuner is telling us itself, the relay's copy is only a late echo.
+    {
+        QSignalSpy tuning(&model, &TunerModel::tuningChanged);
+        TunerDelta lateRelay;
+        lateRelay.tuning = true;
+        model.applyChanges(lateRelay);
+        CHECK(!model.isTuning());
+        CHECK(tuning.count() == 0);
+    }
+
     // Keying on the direct path drives the lamps without the radio relaying it.
     QSignalSpy ptt(&model, &TunerModel::pttChanged);
     peer->write("S231|status fwd=36.88 peak=36.88 max=62.43 swr=-60.0000 "

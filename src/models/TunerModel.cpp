@@ -66,7 +66,11 @@ void TunerModel::applyChanges(const TunerDelta& d)
         changed = true;
         pendingAntennaA = m_antennaA;
     }
-    if (d.tuning && m_tuning != *d.tuning) {
+    // The relay trails the tuner (tuning=1 for ~0.6 s after the tuner's own
+    // tuning=0, on fw 1.2.39), so with both writing the flag every tune ended
+    // in a 0→1→0 flap: STOP on an idle tuner, and a wiped result notice.
+    // While the direct connection is up it is the one authority.
+    if (d.tuning && !hasDirectConnection() && m_tuning != *d.tuning) {
         m_tuning = *d.tuning;
         changed = true;
         pendingTuning = m_tuning;
@@ -238,7 +242,9 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
         // it was this client that asked for the tune.
         connect(m_directConn, &TgxlConnection::alertChanged, this,
                 [this](const QString& text) {
-            if (m_alert == text) return;
+            // Not change-gated: the applet takes its banner down on its own
+            // (a tune starting, a lost clear), so a repeat of the last text —
+            // two tunes settling on the same SWR — is a new notice, not noise.
             m_alert = text;
             emit alertChanged(m_alert);
         });
