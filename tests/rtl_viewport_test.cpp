@@ -27,6 +27,13 @@ int main()
     check(offset && offset->firstBin == 768 && offset->binCount == 171
         && offset->centerHz == 99'800'195.3125 && offset->spanHz == 200'390.625,
           "off-center crop retains the original RF frequency of every FFT bin");
+    check(RtlViewport::captureCenterFor(capture, 2048, 100'100'000, 200'000) == 100'000'000,
+          "in-capture pan leaves hardware center fixed");
+    check(RtlViewport::captureCenterFor(capture, 2048, 100'100'000, 3'000'000) == 100'100'000,
+          "full-width drag follows the requested RF center");
+    const auto beyond = RtlViewport::captureCenterFor(capture, 2048, 101'100'000, 200'000);
+    check(beyond && *beyond > 100'000'000 && *beyond < 101'100'000,
+          "narrow pan beyond the capture edge moves only enough to expose the requested window");
     for (double invalid : {0.0, -1.0, std::numeric_limits<double>::infinity(),
                            std::numeric_limits<double>::quiet_NaN()}) {
         check(!RtlViewport::fit(capture, 2048, 100'000'000, invalid), "invalid span is refused");

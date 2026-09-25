@@ -1,4 +1,5 @@
 #include "core/backends/rtl/RtlCaptureTransaction.h"
+#include "core/backends/rtl/RtlViewport.h"
 
 #include <array>
 #include <algorithm>
@@ -33,6 +34,76 @@ std::vector<Policy::SliceDescriptor> passbands(const std::vector<T::Receiver>& r
     return result;
 }
 
+Policy::Error validateConfigured(const std::vector<T::Receiver>& receivers,
+                                 Policy::ReceiverLimits limits)
+{
+    if (!limits.slotCount || limits.slotCount > 8 || !limits.capacity
+        || limits.capacity > limits.slotCount || receivers.empty()) {
+        return Policy::Error::InvalidCapacity;
+    }
+    if (receivers.size() > limits.capacity) { return Policy::Error::CapacityExceeded; }
+    std::array<bool, 8> used{};
+    for (const T::Receiver& receiver : receivers) {
+        const int id = receiver.passband.stableId;
+        if (id < 0 || static_cast<std::size_t>(id) >= limits.slotCount) {
+            return Policy::Error::InvalidIdentity;
+        }
+        if (used[id]) { return Policy::Error::DuplicateId; }
+        used[id] = true;
+        const auto occupied = Policy::occupiedInterval(receiver.passband);
+        if (!occupied.interval) { return occupied.error; }
+        if ((receiver.mode == T::Mode::Fm || receiver.mode == T::Mode::Fmn)
+            && (receiver.passband.filterLowHz < -21600
+                || receiver.passband.filterHighHz > 21600
+                || receiver.passband.filterLowHz >= 0
+                || receiver.passband.filterHighHz <= 0)) {
+            return Policy::Error::InvalidInterval;
+        }
+        if (receiver.passband.carrierHz < kDomains.front().minimumHz
+            || receiver.passband.carrierHz > kDomains.front().maximumHz) {
+            return Policy::Error::InvalidNumber;
+        }
+    }
+    return Policy::Error::None;
+}
+
+struct Membership {
+    Policy::Error error = Policy::Error::None;
+    std::vector<int> ids;
+};
+
+Membership receivingIn(const Policy::CaptureDescriptor& capture,
+                       const std::vector<T::Receiver>& configured,
+                       Policy::ReceiverLimits limits)
+{
+    const std::vector<Policy::SliceDescriptor> descriptors = passbands(configured);
+    const Policy::CenterDomain fixed{capture.centerHz, capture.centerHz, capture.centerHz, 1};
+    const Policy::RestoreResult fitted = Policy::restoreFixedCapture(capture, descriptors,
+        std::span(&fixed, 1), limits);
+    if (fitted.error != Policy::Error::None) { return {fitted.error, {}}; }
+    for (const Policy::RestoreRejection& rejected : fitted.rejected) {
+        if (rejected.reason != Policy::Error::OutsideCapture) { return {rejected.reason, {}}; }
+    }
+    Membership result;
+    for (const Policy::SliceDescriptor& descriptor : fitted.accepted) {
+        result.ids.push_back(descriptor.stableId);
+    }
+    return result;
+}
+
+std::vector<Policy::SliceDescriptor> receivingPassbands(const T::State& state)
+{
+    std::vector<Policy::SliceDescriptor> result;
+    result.reserve(state.receivingIds.size());
+    for (int id : state.receivingIds) {
+        const auto receiver = std::ranges::find_if(state.receivers, [id](const T::Receiver& value) {
+            return value.passband.stableId == id;
+        });
+        if (receiver != state.receivers.end()) { result.push_back(receiver->passband); }
+    }
+    return result;
+}
+
 bool narrowFm(const T::Receiver& receiver)
 {
     return receiver.mode == T::Mode::Fm || receiver.mode == T::Mode::Fmn;
@@ -46,13 +117,10 @@ Policy::Interval dcExclusion(const T::Receiver& receiver)
             std::max(occupied.interval->highHz, carrier + T::kDcSeparationHz)};
 }
 
-std::vector<Policy::CenterDomain> dcClearDomains(const T::State& state)
+std::vector<Policy::CenterDomain> dcClearDomains(const T::State& state,
+                                                const T::Receiver& receiver)
 {
-    std::vector<Policy::Interval> excluded;
-    for (const T::Receiver& receiver : state.receivers) {
-        if (narrowFm(receiver)) { excluded.push_back(dcExclusion(receiver)); }
-    }
-    std::ranges::sort(excluded, {}, &Policy::Interval::lowHz);
+    const Policy::Interval excluded = dcExclusion(receiver);
     double low = 24'000;
     double high = 1'766'000'000;
     // Placement alone must not cross the automatic front-end mode boundary.
@@ -66,14 +134,28 @@ std::vector<Policy::CenterDomain> dcClearDomains(const T::State& state)
         first = std::ceil(first); last = std::floor(last);
         if (first <= last) { domains.push_back({first, last, 0, 1}); }
     };
-    for (const Policy::Interval& interval : excluded) {
-        if (interval.highHz <= low || interval.lowHz >= high) { continue; }
-        append(low, std::min(interval.lowHz, high));
-        low = std::max(low, interval.highHz);
-        if (low > high) { break; }
+    if (excluded.highHz > low && excluded.lowHz < high) {
+        append(low, std::min(excluded.lowHz, high));
+        low = std::max(low, excluded.highHz);
     }
     append(low, high);
     return domains;
+}
+
+bool dcClearFor(const T::Receiver& receiver, double centerHz)
+{
+    const Policy::Interval interval = dcExclusion(receiver);
+    return centerHz <= interval.lowHz || centerHz >= interval.highHz;
+}
+
+bool centersRequestedView(const Policy::CaptureDescriptor& capture,
+                          const T::Desired::CenteredView& request)
+{
+    const auto view = RtlViewport::fit(capture, RtlViewport::kRtlSpectrumBins,
+                                       request.centerHz, request.spanHz);
+    const double halfBinHz = capture.achievedSampleRateHz
+        / (2.0 * RtlViewport::kRtlSpectrumBins);
+    return view && std::abs(view->centerHz - request.centerHz) <= halfBinHz + 1.0;
 }
 
 bool apply(const T::Hardware& hardware, T::DeviceOperations& device, bool compensate)
@@ -102,13 +184,16 @@ bool apply(const T::Hardware& hardware, T::DeviceOperations& device, bool compen
 bool matches(const T::State& state, const T::Hardware& hardware)
 {
     if (!validHardware(hardware) || hardware != state.hardware) { return false; }
+    if (validateConfigured(state.receivers, {8, 8}) != Policy::Error::None) { return false; }
     Policy::CaptureDescriptor actual = state.capture;
     actual.centerHz = hardware.centerHz;
     actual.achievedSampleRateHz = hardware.sampleRateHz;
     // Transitional legacy DDC margin, not a measured multi-RX bandwidth claim.
     actual.usableLeftHz = actual.usableRightHz = hardware.sampleRateHz * 0.45;
-    return Policy::validateReadback(state.capture, actual, passbands(state.receivers),
-                                    kDomains, {8, 8}) == Policy::Error::None;
+    const Membership fitted = receivingIn(actual, state.receivers, {8, 8});
+    return fitted.error == Policy::Error::None && fitted.ids == state.receivingIds
+        && Policy::validateReadback(state.capture, actual, receivingPassbands(state),
+                                   kDomains, {8, 8}) == Policy::Error::None;
 }
 } // namespace
 
@@ -142,6 +227,16 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
         || desired.receivers.size() > 8 || m_limits.slotCount > 8) {
         return {{}, Policy::Error::InvalidNumber};
     }
+    const Policy::Error configured = validateConfigured(desired.receivers, m_limits);
+    if (configured != Policy::Error::None) { return {{}, configured}; }
+    if (desired.centeredView
+        && (!desired.followReceiverId || !std::isfinite(desired.centeredView->centerHz)
+            || !std::isfinite(desired.centeredView->spanHz)
+            || desired.centeredView->centerHz < kDomains.front().minimumHz
+            || desired.centeredView->centerHz > kDomains.front().maximumHz
+            || desired.centeredView->spanHz <= 0)) {
+        return {{}, Policy::Error::InvalidNumber};
+    }
     for (const Receiver& receiver : desired.receivers) {
         if (receiver.mode < Mode::Am || receiver.mode > Mode::Cwr
             || receiver.audioGain < 0 || receiver.audioGain > 100
@@ -159,28 +254,89 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
     target.capture = {m_session, target.token.revision, double(desired.hardware.centerHz),
         double(desired.hardware.sampleRateHz), desired.hardware.sampleRateHz * 0.45,
         desired.hardware.sampleRateHz * 0.45};
-    const auto selection = Policy::selectCenter(target.capture, passbands(target.receivers),
-                                                 kDomains, m_limits);
+    const Receiver* followed = nullptr;
+    if (desired.followReceiverId) {
+        const auto found = std::ranges::find_if(target.receivers, [id = *desired.followReceiverId](
+            const Receiver& receiver) { return receiver.passband.stableId == id; });
+        if (found == target.receivers.end()) { return {{}, Policy::Error::InvalidIdentity}; }
+        followed = &*found;
+    } else if (!m_confirmed) {
+        // Startup must establish one real receiver rather than a valid but
+        // empty DSP capture when a saved center and first slice disagree.
+        followed = &target.receivers.front();
+    } else if (desired.avoidDc) {
+        for (int id : m_confirmed->receivingIds) {
+            const auto found = std::ranges::find_if(target.receivers, [id](const Receiver& receiver) {
+                return receiver.passband.stableId == id;
+            });
+            if (found != target.receivers.end() && narrowFm(*found)) {
+                followed = &*found;
+                break;
+            }
+        }
+        if (!followed) { return {{}, Policy::Error::NoLegalCenter}; }
+    }
+    const std::vector<Policy::SliceDescriptor> required = followed
+        ? std::vector<Policy::SliceDescriptor>{followed->passband}
+        : std::vector<Policy::SliceDescriptor>{};
+    // Operator-requested free RF browsing intentionally parks receivers that
+    // leave capture. The earlier all-active/refuse RFC policy needs maintainer
+    // review before this behavior is merged.
+    const auto selection = Policy::selectCenter(target.capture, required, kDomains, m_limits);
     if (!selection.capture) { return {{}, selection.error}; }
     target.capture = *selection.capture;
-    const bool recentered = target.capture.centerHz != desired.hardware.centerHz;
-    const bool hasFm = std::ranges::any_of(target.receivers, narrowFm);
-    if (hasFm && (!m_confirmed || recentered || desired.avoidDc)) {
-        // Preserve an already-clear established capture for an explicit repeat
-        // or a mode entry. A required retune instead leaves useful view room on
-        // both sides of the wanted carrier, rather than pinning it to an edge.
-        if (!m_confirmed || recentered || !dcClear(target)) {
-            const auto domains = dcClearDomains(target);
-            if (domains.empty()) { return {{}, Policy::Error::NoLegalCenter}; }
-            const auto receiver = std::ranges::find_if(target.receivers, narrowFm);
-            auto preferred = target.capture;
-            preferred.centerHz = receiver->passband.carrierHz
-                + receiver->passband.translationHz + target.hardware.sampleRateHz / 4.0;
-            const auto displaced = Policy::selectCenter(preferred, passbands(target.receivers),
-                                                        domains, m_limits);
-            if (!displaced.capture) { return {{}, displaced.error}; }
-            target.capture = *displaced.capture;
+    if (desired.centeredView && !centersRequestedView(target.capture, *desired.centeredView)) {
+        const auto nearest = RtlViewport::captureCenterFor(target.capture,
+            RtlViewport::kRtlSpectrumBins, desired.centeredView->centerHz,
+            desired.centeredView->spanHz);
+        if (!nearest) { return {{}, Policy::Error::NoLegalCenter}; }
+        auto preferred = target.capture;
+        preferred.centerHz = *nearest;
+        const auto centered = Policy::selectCenter(preferred, required, kDomains, m_limits);
+        if (!centered.capture || !centersRequestedView(*centered.capture, *desired.centeredView)) {
+            return {{}, Policy::Error::NoLegalCenter};
         }
+        target.capture = *centered.capture;
+    }
+    const bool recentered = target.capture.centerHz != desired.hardware.centerHz;
+    if (followed && narrowFm(*followed)
+        && (!m_confirmed || recentered || desired.avoidDc)
+        && (!m_confirmed || recentered || !dcClearFor(*followed, target.capture.centerHz))) {
+        // An explicit slice tune may move capture away from converter DC;
+        // when it must retune, prefer room for a centered viewport as well.
+        // Display-only free pan cannot silently displace the operator's view.
+        const auto domains = dcClearDomains(target, *followed);
+        if (domains.empty() && (!desired.centeredView || desired.avoidDc)) {
+            return {{}, Policy::Error::NoLegalCenter};
+        }
+        if (!domains.empty()) {
+            auto preferred = target.capture;
+            preferred.centerHz = followed->passband.carrierHz
+                + followed->passband.translationHz + target.hardware.sampleRateHz / 4.0;
+            const auto displaced = Policy::selectCenter(preferred, required, domains, m_limits);
+            if (displaced.capture && (!desired.centeredView
+                || centersRequestedView(*displaced.capture, *desired.centeredView))) {
+                target.capture = *displaced.capture;
+            } else if (desired.centeredView) {
+                // A nearly full-width view may admit a small DC-clear offset,
+                // even when the quarter-rate preference cannot center it.
+                const auto nearest = Policy::selectCenter(target.capture, required, domains, m_limits);
+                if (nearest.capture && centersRequestedView(*nearest.capture, *desired.centeredView)) {
+                    target.capture = *nearest.capture;
+                } else if (desired.avoidDc) {
+                    return {{}, Policy::Error::NoLegalCenter};
+                }
+            } else {
+                return {{}, displaced.error};
+            }
+        }
+    }
+    const Membership fitted = receivingIn(target.capture, target.receivers, m_limits);
+    if (fitted.error != Policy::Error::None) { return {{}, fitted.error}; }
+    target.receivingIds = fitted.ids;
+    if (followed && std::ranges::find(target.receivingIds, followed->passband.stableId)
+            == target.receivingIds.end()) {
+        return {{}, Policy::Error::OutsideCapture};
     }
     target.hardware.centerHz = static_cast<std::uint32_t>(target.capture.centerHz);
     if (desired.automaticDirectSampling) {
@@ -197,13 +353,13 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
 
 bool RtlCaptureTransaction::dcClear(const State& state)
 {
-    for (const Receiver& receiver : state.receivers) {
-        if (!narrowFm(receiver)) { continue; }
-        if (!Policy::occupiedInterval(receiver.passband).interval) { return false; }
-        const Policy::Interval interval = dcExclusion(receiver);
-        if (state.capture.centerHz > interval.lowHz && state.capture.centerHz < interval.highHz) {
-            return false;
-        }
+    for (int id : state.receivingIds) {
+        const auto receiver = std::ranges::find_if(state.receivers, [id](const Receiver& value) {
+            return value.passband.stableId == id;
+        });
+        if (receiver == state.receivers.end()) { return false; }
+        if (narrowFm(*receiver) && (!Policy::occupiedInterval(receiver->passband).interval
+            || !dcClearFor(*receiver, state.capture.centerHz))) { return false; }
     }
     return true;
 }
@@ -244,12 +400,14 @@ RtlCaptureTransaction::Completion RtlCaptureTransaction::complete(const Result& 
         || (result.code == ResultCode::Applied
             && (!result.actual || result.actual->token != work.target.token
                 || result.actual->capture != work.target.capture
+                || result.actual->receivingIds != work.target.receivingIds
                 || result.actual->receivers != work.target.receivers
                 || result.actual->automaticDirectSampling != work.target.automaticDirectSampling
                 || !matches(work.target, result.actual->hardware)))
         || (result.code == ResultCode::Restored
             && (!work.before || !result.actual || result.actual->token != work.before->token
                 || result.actual->capture != work.before->capture
+                || result.actual->receivingIds != work.before->receivingIds
                 || result.actual->receivers != work.before->receivers
                 || result.actual->automaticDirectSampling != work.before->automaticDirectSampling
                 || !matches(*work.before, result.actual->hardware)))) {

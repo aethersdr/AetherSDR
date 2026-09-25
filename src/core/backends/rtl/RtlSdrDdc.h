@@ -32,6 +32,9 @@ public:
     // no parsing, planning, allocation or destruction here.
     void applyCapture(double rateHz, double centerHz, double sliceHz,
                       RtlCaptureTransaction::Mode mode, int lowHz, int highHz);
+    // Acquisition-context only. Retire partial legacy PCM when a receiver
+    // parks, resumes or changes its accepted filter without moving hardware.
+    void resetReceiveAudio() noexcept;
     void setSampleRate(double sampleRateHz);
     void setCenterFrequency(double centerHz);
     void setSliceFrequency(double sliceHz);

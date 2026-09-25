@@ -1394,6 +1394,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
             emit activeChanged(a);
         }
     }
+    if (d.inCapture.has_value() && *d.inCapture != m_inCapture) {
+        m_inCapture = *d.inCapture;
+        emit inCaptureChanged(m_inCapture);
+    }
     if (d.txSlice.has_value()) {
         bool tx = *d.txSlice;
         if (tx != m_txSlice) {

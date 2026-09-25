@@ -24,13 +24,10 @@ RtlReceivePipeline::RtlReceivePipeline(std::size_t capacity)
 {
     for (auto& monitor : m_monitor) { monitor.store(100 | (50 << 8)); }
 }
-bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapture, bool verifiedRollback)
+RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
+    const Transaction::State& state, bool resetCapture, bool verifiedRollback)
 {
-    if (!m_registry || state.receivers.empty() || state.receivers.size() > 8) { return false; }
-    const bool legacy = std::ranges::any_of(state.receivers, [](const auto& receiver) {
-        return receiver.mode != Transaction::Mode::Fm && receiver.mode != Transaction::Mode::Fmn;
-    });
-    if (legacy && state.receivers.size() != 1) { return false; }
+    if (!m_registry || state.receivers.empty() || state.receivers.size() > 8) { return Submission::Failed; }
     // Refusal must not replace an already prepared bank or consume its epoch.
     // Validate the complete input before registry/session mutations, including
     // the legacy path (which submits an empty receiver bank).
@@ -39,18 +36,33 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
         const int id = receiver.passband.stableId;
         if (id < 0 || id >= 8 || validated[id] || receiver.audioGain < 0
             || receiver.audioGain > 100 || receiver.audioPan < 0 || receiver.audioPan > 100
-            || receiver.squelchLevel < 0 || receiver.squelchLevel > 100
-            || (legacy && receiver.squelchEnabled)) { return false; }
+            || receiver.squelchLevel < 0 || receiver.squelchLevel > 100) { return Submission::Failed; }
         validated[id] = true;
     }
-    const bool advanceCaptureEpoch = resetCapture || legacy != m_legacy;
-    if (advanceCaptureEpoch && m_nextEpoch == std::numeric_limits<std::uint64_t>::max()) { return false; }
+    std::array<bool, 8> receiving{};
+    bool legacy = false;
+    std::uint8_t receivingMask = 0;
+    for (int id : state.receivingIds) {
+        if (id < 0 || id >= 8 || receiving[id] || !validated[id]) { return Submission::Failed; }
+        receiving[id] = true;
+        receivingMask |= static_cast<std::uint8_t>(1u << id);
+        const auto receiver = std::ranges::find_if(state.receivers, [id](const auto& value) {
+            return value.passband.stableId == id;
+        });
+        legacy = legacy || (receiver->mode != Transaction::Mode::Fm
+            && receiver->mode != Transaction::Mode::Fmn);
+        if (legacy && receiver->squelchEnabled) { return Submission::Failed; }
+    }
+    if (legacy && (state.receivers.size() != 1 || state.receivingIds.size() != 1)) { return Submission::Failed; }
+    const bool advanceCaptureEpoch = resetCapture || legacy != m_legacy
+        || receivingMask != m_receivingMask;
+    if (advanceCaptureEpoch && m_nextEpoch == std::numeric_limits<std::uint64_t>::max()) { return Submission::Failed; }
     auto epochs = m_epochs;
     auto specs = m_specs;
     if (!m_session) {
         m_session = m_registry.beginSession(state.capture);
         m_reader = m_registry.attachReader();
-        if (!m_session || !m_reader) { return false; }
+        if (!m_session || !m_reader) { return Submission::Failed; }
     }
     const unsigned faults = m_faults.load(std::memory_order_acquire);
     std::array<RtlReceiverRegistry::ReceiverSpec, 8> desired;
@@ -59,12 +71,19 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
     if (!legacy) {
         for (const auto& receiver : state.receivers) {
             const int id = receiver.passband.stableId;
-            if (id < 0 || id >= 8 || used[id]) { return false; }
+            if (!receiving[id]) { continue; }
+            if (id < 0 || id >= 8 || used[id]) { return Submission::Failed; }
             used[id] = true;
             if (verifiedRollback && !m_handles[id]) { m_handles[id] = m_registry.currentHandle(id); }
             if (m_handles[id] != m_registry.currentHandle(id)) { m_handles[id].reset(); }
             if (!m_handles[id]) { m_handles[id] = m_registry.reserveSlot(id); }
-            if (!m_handles[id]) { return false; }
+            if (!m_handles[id]) {
+                if (m_registry.slotAwaitingRetirement(id)) { return Submission::RetryRetiringSlot; }
+                // A destructor may have completed between the failed reserve
+                // and the status query. Retry that narrow race once.
+                m_handles[id] = m_registry.reserveSlot(id);
+                if (!m_handles[id]) { return Submission::Failed; }
+            }
             auto spec = RtlReceiverRegistry::ReceiverSpec{};
             spec.handle = *m_handles[id]; spec.passband = receiver.passband;
             spec.capture = state.capture; spec.extractRf = true;
@@ -75,7 +94,7 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
             spec.dsp.filterHighHz = receiver.passband.filterHighHz;
             if (resetCapture || (faults & (1u << id)) || m_specs[id].handle != spec.handle
                 || m_specs[id].passband != spec.passband || m_specs[id].dsp != spec.dsp) {
-                if (epochs[id] == std::numeric_limits<std::uint64_t>::max()) { return false; }
+                if (epochs[id] == std::numeric_limits<std::uint64_t>::max()) { return Submission::Failed; }
                 ++epochs[id];
             }
             spec.epoch = epochs[id];
@@ -86,7 +105,8 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
     const auto result = verifiedRollback
         ? m_registry.submitVerifiedRollback(state.capture, std::span(desired).first(count))
         : m_registry.submit(state.capture, std::span(desired).first(count));
-    if (result != RtlReceiverRegistry::Result::Accepted) { return false; }
+    if (result == RtlReceiverRegistry::Result::Busy) { return Submission::RetryPlannerBusy; }
+    if (result != RtlReceiverRegistry::Result::Accepted) { return Submission::Failed; }
     for (std::size_t i = 0; i < used.size(); ++i) { if (!used[i]) { m_handles[i].reset(); } }
     m_epochs = epochs;
     m_specs = specs;
@@ -97,8 +117,9 @@ bool RtlReceivePipeline::prepare(const Transaction::State& state, bool resetCapt
             | (receiver.audioPan << 8) | (receiver.audioMute ? 1 << 16 : 0));
     }
     m_nextToken = state.token; m_nextCapture = state.capture; m_nextLegacy = legacy;
+    m_nextReceivingMask = receivingMask;
     if (advanceCaptureEpoch) { ++m_nextEpoch; }
-    return true;
+    return Submission::Accepted;
 }
 RtlReceivePipeline::Preparation RtlReceivePipeline::service()
 {
@@ -118,6 +139,7 @@ bool RtlReceivePipeline::adopt() noexcept
     if (resetSquelch) { m_spectrumFresh = false; m_squelchEpoch.fill(0); }
     m_token = m_nextToken; m_capture = m_nextCapture;
     m_captureEpoch = m_nextEpoch; m_legacy = m_nextLegacy;
+    m_receivingMask = m_nextReceivingMask;
     m_faults.store(0, std::memory_order_release); // old bank faults cannot request a second reset
     return true;
 }

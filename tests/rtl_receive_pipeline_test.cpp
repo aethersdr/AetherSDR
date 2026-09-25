@@ -78,6 +78,7 @@ static void measureSingleFmReceiver(T::Mode mode)
     state.token = {99, 1};
     state.capture = {99, 1, 100000000, 2400000, 1080000, 1080000};
     state.receivers = {{{0, 100000000, -8000, 8000, 0, 3000, 3000}, mode}};
+    state.receivingIds = {0};
     check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
         "single FM audio reproduction prepares the production graph");
     std::array<std::complex<float>, 8192> iq;
@@ -133,6 +134,7 @@ static void measureSquelchPipeline()
     state.capture = {101, 1, 100000000, 2400000, 1080000, 1080000};
     state.receivers = {{{3, 100000000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fmn,
                         100, 50, false, true, 100}};
+    state.receivingIds = {3};
     check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
         "sparse squelched receiver prepares");
     const auto epoch = AetherSDR::rtl::RtlReceivePipelineTestAccess::receiverEpoch(*pipeline, 3);
@@ -195,9 +197,60 @@ static void measureSquelchPipeline()
 }
 #endif
 
+static void measureParkAndResume()
+{
+    auto pipeline = std::make_unique<Pipeline>();
+    T::State state;
+    state.token = {111, 1};
+    state.hardware.centerHz = 100'000'000;
+    state.capture = {111, 1, 100'000'000, 2'400'000, 1'080'000, 1'080'000};
+    state.receivers = {{{0, 100'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
+    state.receivingIds = {0};
+    check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
+          "captured receiver prepares before parking");
+    std::array<std::complex<float>, 8192> iq;
+    iq.fill({0.25f, 0.0f});
+    const auto consume = [&](int expectedRevision, bool expectAudio) {
+        bool observed = false;
+        for (std::uint64_t first = 0; first < 8192 * 100; first += iq.size()) {
+            check(pipeline->process(first, iq), "park/resume capture block accepted");
+            Pipeline::Packet packet;
+            while (pipeline->takePacket(packet)) {
+                check(packet.token.revision == expectedRevision,
+                      "audio keeps the adopted capture revision");
+                observed = true;
+            }
+            std::this_thread::sleep_for(3ms);
+        }
+        check(observed == expectAudio,
+              "only a captured receiver emits slice or speaker PCM");
+    };
+    consume(1, true);
+
+    state.token.revision = 2;
+    state.capture.generation = 2;
+    state.capture.centerHz = 103'000'000;
+    state.hardware.centerHz = 103'000'000;
+    state.receivingIds.clear();
+    check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
+          "all-parked capture retains a valid empty receiver bank");
+    consume(2, false);
+
+    state.token.revision = 3;
+    state.capture.generation = 3;
+    state.capture.centerHz = 100'000'000;
+    state.hardware.centerHz = 100'000'000;
+    state.receivingIds = {0};
+    check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
+          "returning capture rebuilds the preserved receiver");
+    consume(3, true);
+    pipeline->stop();
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    measureParkAndResume();
     measureSingleFmReceiver(T::Mode::Fm);
     measureSingleFmReceiver(T::Mode::Fmn);
 #ifdef AETHER_BACKEND_RTL
@@ -209,6 +262,7 @@ int main(int argc, char** argv)
         accepted.token = {7, 1};
         accepted.capture = {7, 1, 100000000, 2400000, 1080000, 1080000};
         accepted.receivers = {{{2, 100000000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
+        accepted.receivingIds = {2};
         check(candidate->prepare(accepted, true) && ready(*candidate), "valid pending bank prepared before refusal tests");
         using Access = AetherSDR::rtl::RtlReceivePipelineTestAccess;
         const auto revision = Access::requested(*candidate);
@@ -244,6 +298,7 @@ int main(int argc, char** argv)
     constexpr std::array<double, 4> tones{701, 1093, 1601, 2203};
     for (int id = 0; id < 4; ++id) {
         state.receivers.push_back({{id, 100000000 + offsets[id], -15000, 15000, 0, 3000, 3000}, T::Mode::Fm});
+        state.receivingIds.push_back(id);
     }
     state.receivers[0].audioGain = 0;
     state.receivers[0].audioMute = true;

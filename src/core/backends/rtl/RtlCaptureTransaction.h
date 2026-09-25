@@ -34,11 +34,21 @@ public:
         bool operator==(const Receiver&) const = default;
     };
     struct Desired {
+        struct CenteredView {
+            double centerHz = 0;
+            double spanHz = 0;
+        };
         Hardware hardware;
         std::vector<Receiver> receivers;
         bool automaticDirectSampling = true;
         // One-shot operator/mode-entry intent. Display pan/zoom never sets it.
         bool avoidDc = false;
+        // One-shot slice tune: this receiver must fit the next capture. Without
+        // it, hardware.centerHz is an independent free-pan capture placement.
+        std::optional<int> followReceiverId;
+        // One-shot typed Center/Reveal intent. The transaction places capture
+        // so the requested real FFT-bin viewport can center on this frequency.
+        std::optional<CenteredView> centeredView;
     };
     struct Token {
         std::uint64_t session = 0;
@@ -49,6 +59,9 @@ public:
         Token token;
         Hardware hardware;
         SharedCapturePolicy::CaptureDescriptor capture;
+        // Configured identities/settings remain in receivers when outside RF
+        // capture; only these sorted IDs have a live DSP receiver bank.
+        std::vector<int> receivingIds;
         std::vector<Receiver> receivers;
         bool automaticDirectSampling = true;
     };

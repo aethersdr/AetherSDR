@@ -1911,6 +1911,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Push overlay for this slice to the spectrum widget
     pushSliceOverlay(s);
+    connect(s, &SliceModel::inCaptureChanged, this, [this, s](bool) {
+        pushSliceOverlay(s);
+    });
 
     // Set the panadapter applet's slice label (e.g. "Slice B") based on
     // which pan this slice belongs to

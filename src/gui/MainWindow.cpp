@@ -9031,6 +9031,7 @@ void MainWindow::pushSliceOverlay(SliceModel* s)
         s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq(),
         s->diversity(), s->isDiversityParent(),
         s->isDiversityChild(), s->diversityIndex());
+    sw->setSliceOverlayInCapture(s->sliceId(), s->inCapture());
 }
 
 void MainWindow::syncTxWaterfallSliceToSpectrums()

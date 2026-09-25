@@ -6,14 +6,29 @@ receive-only. The qualified production admission constant is **one**; eight
 stable slots are storage, and four receivers are an offline measurement target.
 Increasing admission requires the integrated architecture evidence below.
 
+**Operator-requested design revision (2026-09-25):** RTL free panning keeps
+configured slices at their absolute RF settings while the capture moves. A slice
+outside usable capture is parked until its complete guarded passband fits again.
+This supersedes RFC #5468 §1's previously approved preserve-all-active/refuse
+policy for pan-driven capture moves. Ozy approved implementation and receive-only
+validation; Jeremy's maintainer decision on this UX/RFC change remains required
+before merge. This revision does not raise production receiver admission.
+
 ## Acquisition and ownership
 
-A complete desired state includes center, achieved sample rate, direct sampling,
-offset tuning, PPM, tuner gain and all receiver passbands. Hardware changes
-quiesce USB, apply and verify the complete readback, prepare compatible DSP and
-adopt it before acknowledgment. Preparation failure after a hardware change
-compensates hardware and prepares the restored state. Failed compensation
-withdraws valid capture. Superseded results cannot publish or persist.
+The RTL transaction owns one capture stream. Its complete desired state includes
+center, requested sample rate, direct sampling, offset tuning, PPM, tuner gain
+and configured receiver passbands. A future device with multiple independently
+tunable streams needs separate capture descriptors and membership per stream;
+antenna-port count alone cannot establish that topology.
+Hardware changes quiesce USB, apply and verify the complete readback, prepare
+compatible DSP-active receivers and adopt the resulting bank before
+acknowledgment. Configured slice identity and settings do not depend on whether
+the slice currently has an active DSP receiver. The `active` selection flag is
+independent of `inCapture`, which reports confirmed DSP membership. Preparation
+failure after a hardware change compensates hardware and prepares the restored
+state. Failed compensation withdraws valid capture. Superseded results cannot
+publish or persist, and rapid pan moves coalesce to the latest operator request.
 
 Receiver-only changes prepare on the existing bounded registry pool while USB
 continues. The acquisition context adopts the requested revision at a sample
@@ -25,11 +40,17 @@ item; the transaction owner coalesces one further complete desired state.
 ## FM extraction and mixing
 
 FM/FMN use separate phase-continuous NCOs, paired r8brain histories and fixed
-1024-sample planar WDSP blocks at 48 kHz. Full filter edges plus a 3 kHz guard
-must fit the capture. A gap, invalid block or WDSP underrun withdraws the
-receiver; replacement is prepared away from acquisition. WDSP's nonblocking
-exchange advances its ring on underrun, so continuing that instance could
-mislabel stale samples. Unchanged siblings retain history and keep progressing.
+1024-sample planar WDSP blocks at 48 kHz. An FM slice is DSP-active only when
+its full RF filter interval plus the 3 kHz guard fits inside the confirmed
+usable capture. Both interval edges must fit under `SharedCapturePolicy`'s
+conservative rounding; a slice whose filter only partly fits is parked. Its
+passband is never clipped into an aliased channel. Parked slices retain
+configuration but emit no audio or decoder data. Returning to capture prepares
+a fresh receiver and resumes after adoption, without replaying old output. A gap, invalid block
+or WDSP underrun withdraws an active receiver; replacement is prepared away
+from acquisition. WDSP's nonblocking exchange advances its ring on underrun,
+so continuing that instance could mislabel stale samples. Unchanged siblings
+retain history and keep progressing.
 
 A receiver joining an existing capture starts at the next exact coincidence of
 its integral hardware sample clock and the 48 kHz clock. This is at most one
@@ -94,40 +115,59 @@ recipe remain subject to maintainer review under RFC #5468.
 ## Capture placement and display geometry
 
 FM/FM-N establishment and necessary capture recentering prefer a hardware
-center one quarter of the capture rate above the first FM carrier. The existing
-receiver NCO translates the unchanged absolute RF to baseband. Placement must
-fit every receiver's full passband and guards and keep converter DC at least
-48 kHz from each FM carrier (or outside its guarded passband, whichever is
-wider). Legal integer-Hz tuner bounds and the automatic 24 MHz direct-sampling
-boundary constrain this preference. No legal whole-set placement means refusal,
-with no receiver or capture changes. This does not enable librtlsdr offset
+center one quarter of the capture rate above the selected FM carrier. The existing
+receiver NCO translates the unchanged absolute RF to baseband. The requested
+viewport is fitted to the confirmed usable capture. For each slice that
+will be DSP-active, its complete passband and guards must fit; a configured
+slice that cannot fit remains parked at its original RF. The center preference
+keeps converter DC at least 48 kHz from the selected FM carrier (or outside
+its guarded passband, whichever is wider) where a legal placement allows it.
+Other receiving FM slices can overlap DC; Radio Health reports that condition.
+Legal integer-Hz tuner bounds and the automatic 24 MHz
+direct-sampling boundary still constrain capture movement. DC overlap is
+reported truthfully rather than silently moving a slice or refusing browsing
+solely to keep another slice active. This does not enable librtlsdr offset
 tuning, alter the R82xx guard, erase FFT bins, subtract a signal mean, or notch
-demodulated audio. WFM and other legacy demodulators do not gain this policy.
+demodulated audio. This FM-specific DC preference does not alter WFM or other
+legacy demodulators. Free-pan membership and parking apply to every configured
+RTL slice.
 
 Ordinary in-window frequency changes keep the existing legal capture, including
 when the operator tunes near converter DC. A transition into overlap produces
 an existing configuration warning. The spectrum context menu's **Move capture
-away from DC** action explicitly requests a whole-set placement while preserving
-every absolute receiver RF. It is dimmed with an accessible reason unless the
-backend declares support. A busy or impossible request refuses. Radio Health
-reports accepted capture center/rate, usable RF edges, FM DC-clear status and
-the last request outcome. This is geometry and converter-relative evidence,
-not a measurement of a physical dongle's DC bias or calibrated RF power.
+away from DC** action explicitly requests DC-cleared placement while preserving
+every configured slice's absolute RF and settings. Slices outside the resulting
+usable capture remain parked. It is dimmed with an accessible reason unless the
+backend declares support. A busy or impossible DC-clearing request refuses.
+Radio Health reports accepted capture center/rate, usable RF edges, FM DC-clear
+status and the last request outcome. This is geometry and converter-relative
+evidence, not a measurement of a physical dongle's DC bias or calibrated RF
+power.
 
-RTL pan and zoom are independent display operations: they crop contiguous
-original bins from the 2048-point capture FFT and clamp to its usable interval.
-The sixteen-bin zoom floor is 18.75 kHz at 2.4 MS/s; neither interpolation nor
-additional resolution is claimed. Display operations cannot change sample rate,
-hardware center, receiver RF or squelch detection. An offscreen receiver keeps
-receiving while its full passband remains captured. The existing explicit
-`rtl/sample_rate.set` extension remains the hardware sample-rate control.
+RTL zoom and in-capture pan crop contiguous original bins from the 2048-point
+capture FFT. The sixteen-bin zoom floor is 18.75 kHz at 2.4 MS/s; neither
+interpolation nor additional resolution is claimed. Panning past the usable
+capture moves the hardware capture across supported RF, including a drag at
+full zoom-out. It does not change the sample rate or any slice's configured RF,
+mode, filter or other settings. The viewport and capture are distinct: a slice
+outside the visible zoomed viewport keeps receiving whenever its full guarded
+passband remains inside usable capture. A slice outside usable capture is
+parked and clearly reported out of capture, and resumes automatically
+when the confirmed capture again contains the whole passband. The existing
+explicit `rtl/sample_rate.set` extension remains the hardware sample-rate
+control. The normalized slice state exposes `inCapture`; the desktop gives an
+accessible out-of-capture reason even when its marker is offscreen. Squelch
+sees only current-capture detector input for DSP-active slices.
 
 The native spectrum widget follows the same confirmed observation during a
 pan, zoom or VFO-edge gesture. Pointer movement sends intent; quantized or
-clamped backend geometry updates the axis and waterfall while the pointer is
-still held. Pending or refused changes keep the accepted view and continue
-ingesting current FFT rows. Release flushes the final requested geometry without
-substituting the last observation. Flex retains its optimistic preview and
+hardware-confirmed backend geometry updates the axis and waterfall while the
+pointer is still held. Pending or refused changes keep the accepted view and
+continue ingesting current FFT rows. A failed retune restores the previous
+confirmed capture, view and capture membership after compensation; failed
+compensation withdraws capture rather than showing false geometry or stale
+receive data. Release flushes the latest requested geometry without
+substituting an older observation. Flex retains its optimistic preview and
 stale-status hold; Kiwi's independent display path is unchanged.
 
 Deferred native FFT/waterfall delivery carries the pan object's geometry
@@ -141,9 +181,18 @@ drives production mouse/wheel paths, without hardware or a firmware peer.
 
 The neutral confirmed-tune intent admits receiver RF and Preserve/Reveal/Center
 display intent together. Typed entry requests centering; publication waits for
-DSP/capture adoption. Refusal, supersession, failed hardware application and
-rollback preserve accepted receiver and view observations. Centering is quantized
-to real bins and clamped when the full visible span cannot center on the target.
+DSP/capture adoption. An in-capture Center can move only the viewport, without
+USB writes. A distant Center follows its selected slice with a capture retune;
+other configured slices may park. The transaction fits the selected slice's
+complete guarded passband and requires its RF to center in the real 2048-bin view
+within half a bin plus integer-Hz tolerance. At full width this view requirement
+can leave converter DC on the selected FM carrier when no DC-clear position also
+fits. Radio Health reports the accepted overlap. If no legal capture can satisfy
+both the passband and Center view, the request refuses. Exact behavior at the
+tuner RF limits has no dedicated regression yet. Pan requests beyond capture
+use the same confirmed transaction and latest-request ordering. Refusal, supersession,
+failed hardware application and rollback preserve accepted receiver and view
+observations.
 Other backends retain their existing policy. These desktop verbs add no headless
 control grant. The placement preference, separation, zoom floor and explicit
 action are scoped UX choices requiring maintainer ratification.
@@ -167,9 +216,16 @@ write never falls through to a second generic writer.
 
 Saved receivers are considered in ascending stable-ID order against the
 accepted, fixed capture. Restore does not retune, resize a passband or move a
-sibling. Omitted entries survive reduced admission and out-of-window restore;
-explicit accepted removal is separate. No fitting entry retains the valid
-initial receiver. Pending or refused requests never feed the document writer.
+sibling. Valid configured slices outside that capture remain parked with their
+settings and stable IDs, subject to the current configured-slice capacity and
+addressable-slot bounds. Production still admits one configured slice; fixture
+capacity can exercise multiple configured slices without raising that limit.
+Explicit accepted removal is separate. If no saved slice is valid, retain the
+session's valid initial receiver. Pending or refused requests never feed the
+document writer; an accepted pan preserves every configured slice's absolute RF
+and settings while persisting confirmed capture geometry. Capture membership is
+derived again from that geometry and the configured passbands; it is not a saved
+slice setting.
 Monitor controls are prepared with the bank and applied before its first block.
 Accepted FM/FM-N enabled/threshold values are restored and saved in `RtlSlices`.
 The desktop separately owns `ReceiveSquelchIntent-<stable ID>` (schema 1), which
@@ -189,6 +245,18 @@ ownership. The ordinary-C++ allocation probe does not intercept malloc, Qt or
 private allocators. WDSP's C allocation guard now observes the executing thread;
 its process-wide counter remains available for resource accounting. RTL warms
 platform TLS before entering acquisition callbacks.
+
+The changed socket-free tests contain assertions for interior and capture-moving
+drags (including full zoom-out), guarded-passband edge parking,
+offscreen-but-captured reception, parked/resumed slice identity and settings,
+fixture-only multiple membership, rapid coalescing, retune rollback, stale FFT
+and waterfall revision rejection, and silence while every slice is parked.
+Typed Center assertions cover an in-capture view move without USB writes and a
+distant full-width retune that parks a sibling. Execution results on the final
+source head, mutation sensitivity and native receive convergence are separate
+evidence; the presence of assertions does not establish that they pass.
+Family-swap coverage must keep Flex, Icom and Hermes behavior. These tests do
+not raise the qualified production capacity of one.
 
 Before raising `kQualifiedReceiverCapacity`, freeze 1/2/4-distinct-FM workloads
 and run at least 30 minutes with the actual integrated application, spectrum,
@@ -232,6 +300,11 @@ transfer and FM passband transition were ratified in the ruling linked above.
 A second backend adopting the settings takeover must justify it separately.
 The new DC placement and joint tune/view intents still need ratification. Offline
 model acceptance does not establish live receive convergence or release readiness.
+The operator-requested free-pan and parked-slice policy also needs Jeremy's
+explicit UX/RFC decision before merge; prior approval of #5468's whole-set
+refusal policy does not grant that decision. Native receive-only verification
+must confirm pointer behavior, actual capture readback, parked/resumed routing
+and launcher revision before live receive convergence is claimed.
 
 
 ### Runtime diagnostic readback

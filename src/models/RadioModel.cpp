@@ -13342,6 +13342,7 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
         slice["mode"] = sliceModel->mode();
         slice["mode_list"] = toJsonArray(sliceModel->modeList());
         slice["active"] = sliceModel->isActive();
+        slice["in_capture"] = sliceModel->inCapture();
         slice["tx_slice"] = sliceModel->isTxSlice();
 
         QJsonObject filter;

@@ -10,6 +10,7 @@ namespace AetherSDR::rtl {
 // A display window is a contiguous set of genuine FFT bins. No interpolation,
 // invented edge bins, amplitude correction, or capture/tuning state lives here.
 struct RtlViewport {
+    static constexpr int kRtlSpectrumBins = 2048;
     int firstBin = 0;
     int binCount = 0;
     int sourceBinCount = 0;
@@ -49,6 +50,27 @@ struct RtlViewport {
                                      first, end - count);
         return RtlViewport{start, count, bins, origin + (start + count / 2.0) * step,
                            count * step, 16 * step, (end - first) * step};
+    }
+
+    // Return the nearest capture placement that can show the requested real
+    // FFT-bin window. A full-width view has one legal center, so any drag
+    // moves capture. The transaction owner still validates hardware limits
+    // and publishes only confirmed readback.
+    static std::optional<double> captureCenterFor(
+        const SharedCapturePolicy::CaptureDescriptor& capture,
+        int bins, double center, double span)
+    {
+        const auto view = fit(capture, bins, center, span);
+        if (!view) { return {}; }
+        const double step = capture.achievedSampleRateHz / bins;
+        const double origin = capture.centerHz - capture.achievedSampleRateHz / 2;
+        const double low = std::max(0.0, capture.centerHz - capture.usableLeftHz);
+        const double high = capture.centerHz + capture.usableRightHz;
+        const int first = std::clamp(int(std::ceil((low - origin) / step)), 0, bins);
+        const int end = std::clamp(int(std::floor((high - origin) / step)), 0, bins);
+        const double minimum = origin + (first + view->binCount / 2.0) * step;
+        const double maximum = origin + (end - view->binCount / 2.0) * step;
+        return capture.centerHz + center - std::clamp(center, minimum, maximum);
     }
 };
 

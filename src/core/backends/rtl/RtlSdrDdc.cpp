@@ -56,22 +56,7 @@ void RtlSdrDdc::applyCapture(double rateHz, double centerHz, double sliceHz,
 {
     if (m_sampleRateHz.load() != rateHz || m_centerHz.load() != centerHz
         || m_sliceHz.load() != sliceHz || m_mode.load() != mode) {
-        m_ncoPhase = 0;
-        m_ncoPhasor = {1, 0};
-        m_ncoNormalizeCounter = 0;
-        m_decimAcc = {};
-        m_decimCount = 0;
-        m_prevDecimIq = {};
-        m_deemphState = 0;
-        m_audioDecimAcc = 0;
-        m_audioDecimCounter = 0;
-        m_audioResamplePhase = 0;
-        // Unemitted PCM belongs to the old capture/receiver. The accumulator
-        // is private after append (emitted buffers are cleared in processAudio),
-        // so truncation retains its capacity and performs no allocation.
-        m_audioBuffer.truncate(0);
-        m_tapBuffer.truncate(0);
-        m_firstAudioEmitted = false;
+        resetReceiveAudio();
         m_firstSpectrumEmitted = false;
         m_spectrumCounter = 0;
         m_detectorCounter = 0; m_firstDetectorEmitted = false; m_squelchSpectrumFresh = false;
@@ -81,6 +66,25 @@ void RtlSdrDdc::applyCapture(double rateHz, double centerHz, double sliceHz,
     setSliceFrequency(sliceHz);
     m_mode.store(mode, std::memory_order_relaxed);
     setSliceFilter(lowHz, highHz);
+}
+
+void RtlSdrDdc::resetReceiveAudio() noexcept
+{
+    m_ncoPhase = 0;
+    m_ncoPhasor = {1, 0};
+    m_ncoNormalizeCounter = 0;
+    m_decimAcc = {};
+    m_decimCount = 0;
+    m_prevDecimIq = {};
+    m_deemphState = 0;
+    m_audioDecimAcc = 0;
+    m_audioDecimCounter = 0;
+    m_audioResamplePhase = 0;
+    // The accumulator is private after append. Truncation retains capacity
+    // and does not allocate in the USB callback.
+    m_audioBuffer.truncate(0);
+    m_tapBuffer.truncate(0);
+    m_firstAudioEmitted = false;
 }
 
 void RtlSdrDdc::setSampleRate(double sampleRateHz)

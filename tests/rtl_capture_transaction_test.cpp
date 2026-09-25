@@ -65,7 +65,8 @@ static bool establish(T& owner, Device& device)
 }
 int main()
 {
-    // Removing whole-set admission or publishing requested state breaks these.
+    // Receiver adoption still waits for acknowledgment. Configured receivers
+    // may park outside capture without being deleted or sent to the DSP bank.
     T owner({8, 4}); Device device;
     if (!establish(owner, device)) { return 1; }
     int writes = device.writes;
@@ -82,8 +83,87 @@ int main()
         check(owner.complete(result) == T::Completion::Published, "receiver change published after adoption");
     }
     d.receivers.push_back({{1, 105'000'000, -100'000, 100'000, 0, 0, 0}, T::Mode::Wfm});
-    check(!owner.submit(d), "impossible full set refused");
-    check(!owner.takeWork() && device.writes == writes, "refusal has no device work");
+    check(bool(owner.submit(d)), "out-of-window receiver remains configured");
+    work = owner.takeWork();
+    check(work && !work->hardwareChanged && work->target.receivingIds == std::vector<int>{0},
+          "parked receiver is absent from receiving membership without USB retune");
+    if (work) {
+        check(owner.complete(T::execute(*work, device)) == T::Completion::Published,
+              "parked receiver configuration publishes after acknowledgment");
+        check(owner.confirmed()->receivers == d.receivers && device.writes == writes,
+              "parking preserves both configured receivers and USB center");
+    }
+
+    // Membership uses the complete guarded interval and is recomputed on
+    // each verified capture placement. IDs are sorted independently of the
+    // saved receiver order.
+    {
+        T tx({8, 4}); Device usb; if (!establish(tx, usb)) { return 1; }
+        auto configured = desired();
+        configured.receivers.push_back({{7, 98'948'000, -8000, 8000, 0, 20'000, 20'000}, T::Mode::Usb});
+        configured.receivers.push_back({{3, 101'052'000, -8000, 8000, 0, 20'000, 20'000}, T::Mode::Usb});
+        check(bool(tx.submit(configured)), "receivers at both guarded capture edges admitted");
+        auto job = tx.takeWork();
+        check(job && job->target.receivingIds == (std::vector<int>{0, 3, 7}),
+              "exact guarded edges receive in sorted ID order");
+        if (job) { tx.complete(T::execute(*job, usb)); }
+
+        configured.hardware.centerHz = 99'999'999;
+        check(bool(tx.submit(configured)), "one hertz left pan admitted");
+        job = tx.takeWork();
+        check(job && job->target.receivingIds == (std::vector<int>{0, 7}),
+              "right-edge receiver parks when one guarded hertz leaves capture");
+        if (job) { tx.complete(T::execute(*job, usb)); }
+
+        configured.hardware.centerHz = 100'000'001;
+        check(bool(tx.submit(configured)), "one hertz right pan admitted");
+        job = tx.takeWork();
+        check(job && job->target.receivingIds == (std::vector<int>{0, 3}),
+              "left-edge receiver parks when one guarded hertz leaves capture");
+        if (job) { tx.complete(T::execute(*job, usb)); }
+
+        configured.hardware.centerHz = 105'000'000;
+        check(bool(tx.submit(configured)), "capture may pan beyond every configured receiver");
+        job = tx.takeWork();
+        check(job && job->target.receivingIds.empty() && job->target.receivers == configured.receivers,
+              "empty live bank retains every configured receiver");
+        if (job) {
+            check(tx.complete(T::execute(*job, usb)) == T::Completion::Published,
+                  "empty live bank publishes after center readback");
+            check(tx.confirmed()->receivingIds.empty() && usb.hardware.centerHz == 105'000'000,
+                  "free pan reaches requested capture center with all receivers parked");
+        }
+
+        configured.followReceiverId = 3;
+        check(bool(tx.submit(configured)), "explicit slice tune can reacquire a parked receiver");
+        job = tx.takeWork();
+        check(job && job->target.receivingIds == std::vector<int>{3},
+              "followed receiver alone determines new capture placement");
+        if (job) {
+            check(tx.complete(T::execute(*job, usb)) == T::Completion::Published,
+                  "followed capture publishes after readback");
+            check(tx.confirmed()->receivers == configured.receivers,
+                  "following one receiver keeps parked siblings configured");
+        }
+        configured.followReceiverId.reset();
+        configured.hardware.centerHz = 100'000'000;
+        check(bool(tx.submit(configured)), "free pan back to parked receivers admitted");
+        job = tx.takeWork();
+        check(job && job->target.receivingIds == (std::vector<int>{0, 3, 7}),
+              "returning capture resumes all fitting receivers without retuning them");
+        if (job) { tx.complete(T::execute(*job, usb)); }
+    }
+
+    {
+        T tx({8, 1}); Device usb; tx.beginSession();
+        auto startup = desired(); startup.hardware.centerHz = 105'000'000;
+        check(bool(tx.submit(startup)), "first capture follows its initial receiver");
+        const auto job = tx.takeWork();
+        check(job && job->target.receivingIds == std::vector<int>{0}
+            && job->target.hardware.centerHz != 105'000'000,
+              "saved offscreen center cannot start with an empty receiver bank");
+        if (job) { tx.complete(T::execute(*job, usb)); }
+    }
 
     // Each partial failure must restore ALL fields, not only the last setter.
     for (int position = 1; position <= 6; ++position) {
@@ -100,6 +180,26 @@ int main()
         check(usb.hardware == desired().hardware, "complete previous hardware restored");
         check(tx.complete(result) == T::Completion::Failed, "failed request never published");
         check(tx.confirmed()->hardware.centerHz == 100'000'000, "accepted center survives refusal");
+    }
+
+    {
+        T tx({8, 4}); Device usb; if (!establish(tx, usb)) { return 1; }
+        auto configured = desired();
+        configured.receivers.push_back({{1, 105'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm});
+        tx.submit(configured); auto job = tx.takeWork(); tx.complete(T::execute(*job, usb));
+        configured.hardware.centerHz = 105'000'000;
+        check(bool(tx.submit(configured)), "parking retune admitted before injected USB failure");
+        job = tx.takeWork();
+        usb.failAt = usb.writes + 5; // Center setter fails after earlier controls mutate.
+        if (job) {
+            check(tx.complete(T::execute(*job, usb)) == T::Completion::Failed,
+                  "failed parking retune restores prior capture");
+            check(tx.confirmed()->hardware.centerHz == 100'000'000
+                && tx.confirmed()->receivingIds == std::vector<int>{0}
+                && tx.confirmed()->receivers == configured.receivers,
+                  "rollback retains the previously receiving and parked identities");
+            check(usb.hardware == desired().hardware, "failed parking retune restores USB readback");
+        }
     }
 
     // Invalid readback and a failed rollback must withdraw valid capture.
@@ -139,6 +239,34 @@ int main()
         tx.beginSession();
         check(tx.complete(result) == T::Completion::Ignored && !tx.confirmed(),
               "old-session completion ignored");
+    }
+    {
+        T tx({8, 4}); Device usb; if (!establish(tx, usb)) { return 1; }
+        auto pan = desired(); pan.hardware.centerHz = 105'000'000;
+        check(bool(tx.submit(pan)), "first free-pan center accepted");
+        auto job = tx.takeWork();
+        const auto stale = T::execute(*job, usb);
+        for (std::uint32_t center : {106'000'000u, 107'000'000u, 108'000'000u}) {
+            pan.hardware.centerHz = center;
+            check(bool(tx.submit(pan)) && tx.pendingCount() == 1,
+                  "rapid free-pan requests coalesce to one pending center");
+        }
+        check(tx.complete(stale) == T::Completion::Compensating,
+              "superseded free-pan readback cannot publish");
+        check(tx.confirmed()->hardware.centerHz == 100'000'000
+            && tx.confirmed()->receivingIds == std::vector<int>{0},
+              "superseded pan leaves published capture and membership intact");
+        auto rollback = tx.takeWork();
+        check(rollback && rollback->compensation, "free-pan rollback precedes latest center");
+        if (rollback) { tx.complete(T::execute(*rollback, usb)); }
+        auto latest = tx.takeWork();
+        check(latest && latest->target.hardware.centerHz == 108'000'000
+            && latest->target.receivingIds.empty(),
+              "only newest free-pan center and its parked membership execute");
+        if (latest) {
+            check(tx.complete(T::execute(*latest, usb)) == T::Completion::Published,
+                  "latest free-pan readback publishes");
+        }
     }
     // Replacement before preparation, during readback, and during receiver
     // adoption. Every result still has to pass the production completion gate.
@@ -201,6 +329,30 @@ int main()
         check(!tx.submit(next) && !tx.takeWork(), "nonfinite request refused before device work");
         next = desired(); next.receivers.push_back(next.receivers.front());
         check(!tx.submit(next), "duplicate stable receiver identity refused");
+        next = desired(); next.receivers.push_back(
+            {{3, 105'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm});
+        next.receivers.back().passband.filterHighHz = -8000;
+        check(!tx.submit(next) && !tx.takeWork(),
+              "malformed parked passband refused before device work");
+        next = desired(); next.receivers.push_back(
+            {{3, 105'000'000, -8000, 50'000, 0, 3000, 3000}, T::Mode::Fm});
+        check(!tx.submit(next) && !tx.takeWork(),
+              "parked FM filter beyond the 48 kHz DSP passband is refused before work");
+        next.receivers.back().passband.filterLowHz = 1000;
+        next.receivers.back().passband.filterHighHz = 8000;
+        check(!tx.submit(next) && !tx.takeWork(),
+              "parked FM filter must still straddle its carrier");
+        next = desired(); next.receivers.push_back(
+            {{9, 105'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm});
+        check(!tx.submit(next) && !tx.takeWork(),
+              "out-of-range parked identity refused before device work");
+        next = desired(); next.receivers.push_back(
+            {{3, 1'767'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm});
+        check(!tx.submit(next) && !tx.takeWork(),
+              "out-of-domain parked carrier refused before device work");
+        next = desired(); next.followReceiverId = 3;
+        check(!tx.submit(next) && !tx.takeWork(),
+              "follow intent must name a configured receiver");
         for (int level : {-1, 101}) {
             next = desired(); next.receivers[0].squelchLevel = level;
             check(!tx.submit(next) && !tx.takeWork(), "out-of-range squelch refused before work");
@@ -210,6 +362,22 @@ int main()
         next = desired(); tx.submit(next); auto job = tx.takeWork(); auto result = T::execute(*job, usb);
         result.actual->capture.generation++;
         check(tx.complete(result) == T::Completion::Invalidated, "mismatched capture generation never publishes");
+    }
+    {
+        T tx({8, 1}); Device usb; if (!establish(tx, usb)) { return 1; }
+        auto next = desired(); next.receivers.push_back(
+            {{3, 105'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm});
+        check(!tx.submit(next) && !tx.takeWork(),
+              "configured receiver count respects capacity even if one would park");
+    }
+    {
+        T tx({8, 4}); Device usb; if (!establish(tx, usb)) { return 1; }
+        auto next = desired(); next.receivers[0].audioGain = 75;
+        tx.submit(next); auto job = tx.takeWork(); auto result = T::execute(*job, usb);
+        result.actual->receivingIds.clear();
+        check(tx.complete(result) == T::Completion::Invalidated,
+              "worker readback cannot publish fabricated receiving membership");
+        check(!tx.confirmed(), "unverifiable receiving membership withdraws capture");
     }
     // A new FM capture places converter DC away from the wanted RF carrier.
     // Removing capture displacement must fail without changing any DSP samples.
@@ -249,17 +417,27 @@ int main()
             {{0, 99'960'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm},
             {{3, 100'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fmn},
             {{7, 100'040'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
-        // Fixed-capture restore may retain an overlapping receiver. Placement
-        // cannot pretend the same crowded set has a DC-clear legal center.
+        // DC displacement follows the selected FM receiver. Siblings may
+        // remain configured even when their own DC exclusion is not clear.
         check(bool(tx.submit(next)), "complete restored receiver set fits existing capture");
         job = tx.takeWork(); tx.complete(T::execute(*job, usb));
         const auto before = *tx.confirmed(); const int writesBefore = usb.writes;
         check(!T::dcClear(before), "DC overlap is reported for crowded receiver set");
+        next.followReceiverId = 0;
         next.avoidDc = true;
-        check(!tx.submit(next) && !tx.takeWork(), "impossible DC-clear whole set is refused");
-        check(tx.confirmed()->hardware == before.hardware
-            && tx.confirmed()->receivers == before.receivers && usb.writes == writesBefore,
-              "DC refusal preserves every sibling passband and USB state");
+        check(bool(tx.submit(next)), "followed FM receiver admits DC-clear relocation");
+        job = tx.takeWork();
+        check(job && job->target.hardware.centerHz != before.hardware.centerHz,
+              "selected FM receiver moves converter DC");
+        if (job) {
+            check(job->target.receivers == before.receivers,
+                  "FM placement preserves every configured sibling passband");
+            check(job->target.hardware.centerHz >= 100'008'000,
+                  "followed FM carrier is outside its DC exclusion");
+            check(tx.complete(T::execute(*job, usb)) == T::Completion::Published,
+                  "followed FM placement waits for verified readback");
+            check(usb.writes > writesBefore, "FM relocation changes USB capture");
+        }
     }
     for (const double carrier : {24'000.0, 23'990'000.0, 1'765'950'000.0}) {
         T tx({8, 1}); Device usb; tx.beginSession();

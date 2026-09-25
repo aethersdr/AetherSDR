@@ -102,8 +102,11 @@ void RtlSdrWorker::serviceCancellation()
             // A just-removed slot remains charged until its off-thread
             // destructor finishes. Keep one bounded request while it retires;
             // never resurrect its old handle to make reuse appear immediate.
-            m_preparationSubmitted = m_pipeline->prepare(m_work->target, false, m_work->compensation);
-            if (!m_preparationSubmitted && ++m_prepareAttempts < 100) { return; }
+            const auto submission = m_pipeline->prepareDetailed(m_work->target, false, m_work->compensation);
+            m_preparationSubmitted = submission == RtlReceivePipeline::Submission::Accepted;
+            if ((submission == RtlReceivePipeline::Submission::RetryRetiringSlot
+                || submission == RtlReceivePipeline::Submission::RetryPlannerBusy)
+                && ++m_prepareAttempts < 100) { return; }
         }
         const auto status = m_preparationSubmitted ? m_pipeline->service() : RtlReceivePipeline::Preparation::Failed;
         if (status == RtlReceivePipeline::Preparation::Ready) {
@@ -125,20 +128,46 @@ void RtlSdrWorker::serviceCancellation()
 void RtlSdrWorker::applyDdc(const Transaction::State& state)
 {
     const Transaction::Receiver& receiver = state.receivers.front();
+    const bool legacyReceiving = m_pipeline->legacy();
+    const int lowHz = static_cast<int>(receiver.passband.filterLowHz);
+    const int highHz = static_cast<int>(receiver.passband.filterHighHz);
     m_ddc.applyCapture(state.hardware.sampleRateHz, state.hardware.centerHz,
                       receiver.passband.carrierHz, receiver.mode,
-                      static_cast<int>(receiver.passband.filterLowHz),
-                      static_cast<int>(receiver.passband.filterHighHz));
+                      lowHz, highHz);
+    if (legacyReceiving != m_legacyReceiving
+        || (legacyReceiving && (lowHz != m_legacyFilterLowHz
+            || highHz != m_legacyFilterHighHz))) {
+        m_ddc.resetReceiveAudio();
+    }
+    m_legacyReceiving = legacyReceiving;
+    m_legacyFilterLowHz = lowHz;
+    m_legacyFilterHighHz = highHz;
     m_ddc.applyMonitor(receiver.audioGain, receiver.audioPan, receiver.audioMute);
     m_applied = state.token;
 }
 
 bool RtlSdrWorker::prepareHardwareResult()
 {
-    if (!m_result->actual || !m_pipeline->prepare(*m_result->actual, true,
-        m_work->compensation || m_result->code == Transaction::ResultCode::Restored)) { return false; }
+    if (!m_result->actual) { return false; }
     QElapsedTimer deadline; deadline.start();
+    bool submitted = false;
     while (!m_stopRequested.load(std::memory_order_acquire) && deadline.elapsed() < 30000) {
+        if (!submitted) {
+            const auto submission = m_pipeline->prepareDetailed(*m_result->actual, true,
+                m_work->compensation || m_result->code == Transaction::ResultCode::Restored);
+            if (submission == RtlReceivePipeline::Submission::Failed
+                || submission == RtlReceivePipeline::Submission::RetryPlannerBusy) { return false; }
+            if (submission == RtlReceivePipeline::Submission::RetryRetiringSlot) {
+                // Hardware is quiesced here. Reap the old bank off the callback
+                // and wait briefly for its destructor before reserving a new
+                // instance of the same slot. Other refusals fail immediately.
+                if (deadline.elapsed() >= 2000) { return false; }
+                (void)m_pipeline->service();
+                QThread::msleep(1);
+                continue;
+            }
+            submitted = true;
+        }
         const auto status = m_pipeline->service();
         if (status == RtlReceivePipeline::Preparation::Ready) { return m_pipeline->adopt(); }
         if (status == RtlReceivePipeline::Preparation::Failed) { return false; }

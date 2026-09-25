@@ -127,7 +127,7 @@ private:
     QVector<RtlSliceSettings::Slice> acceptedSettings() const;
     void finishExtensions(bool success, RtlCaptureTransaction::Token token = {});
     bool acceptsFrame(quint64 session, quint64 revision) const;
-    void requestViewport();
+    void requestViewport(bool followDrag = false);
     void publishViewport();
     QByteArray viewportFrame(const QByteArray& frame) const;
 

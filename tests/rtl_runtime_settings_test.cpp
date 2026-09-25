@@ -37,6 +37,7 @@ struct RtlCaptureBackendTestAccess {
         state.token = {1, 1}; state.capture = {1, 1, 100000000, 2400000, 1080000, 1080000};
         state.hardware.centerHz = 100000000;
         state.receivers = {{{id, hz, -8000, 8000, 0, 3000, 3000}, RtlCaptureTransaction::Mode::Fm}};
+        state.receivingIds = {id};
         backend.m_lastPublished = state;
         backend.m_requested.receivers = state.receivers;
         backend.m_requested.receivers[0].passband.carrierHz = hz + 100000; // unaccepted intent
@@ -55,6 +56,9 @@ struct RtlCaptureBackendTestAccess {
         return backend.m_settingsActive && backend.m_restoreAttempted && !backend.m_restoreToken.revision
             && backend.m_lastPublished && backend.m_lastPublished->receivers.front().passband.stableId == 1;
     }
+    static std::optional<RtlCaptureTransaction::State> state(const RtlSdrBackend& backend)
+    { return backend.m_lastPublished; }
+    static bool busy(const RtlSdrBackend& backend) { return backend.m_capture.busy(); }
     static void remove(RtlSdrBackend& backend, int id) { backend.m_removedSettings.append(id); }
 };
 }
@@ -162,6 +166,11 @@ int main(int argc, char** argv)
         RadioModelSliceLifecycleTestAccess::restore(model, "restore-live");
         auto& live = *static_cast<rtl::RtlSdrBackend*>(model.backend());
         bool ownershipRepublished = false;
+        QHash<int, bool> publishedCaptureMembership;
+        QObject::connect(&live, &IRadioBackend::sliceChanged,
+            [&](int id, const SliceDelta& delta) {
+                if (delta.inCapture) { publishedCaptureMembership[id] = *delta.inCapture; }
+            });
         QObject::connect(&model, &RadioModel::capabilitiesChanged,
             [&](bool, const RadioCapabilities& caps) {
                 if (caps.clientSettingsDomains.testFlag(D::RtlSlices)) {
@@ -177,16 +186,61 @@ int main(int argc, char** argv)
         while (deadline.elapsed() < 3000 && !rtl::RtlCaptureBackendTestAccess::restored(live)) {
             device->block(); QCoreApplication::processEvents(); QThread::msleep(5);
         }
-        check(rtl::RtlCaptureBackendTestAccess::restored(live), "actual backend restores fitting sparse IDs after readback and adoption");
+        check(rtl::RtlCaptureBackendTestAccess::restored(live), "actual backend restores sparse IDs after readback and adoption");
+        const auto restored = rtl::RtlCaptureBackendTestAccess::state(live);
+        check(restored && restored->receivers.size() == 3
+            && restored->receivers[0].passband.stableId == 1
+            && restored->receivers[1].passband.stableId == 3
+            && restored->receivers[2].passband.stableId == 5
+            && restored->receivingIds == (std::vector<int>{1, 3})
+            && restored->hardware.centerHz == 100'000'000
+            && restored->hardware.sampleRateHz == 2'400'000
+            && publishedCaptureMembership.value(1) && publishedCaptureMembership.value(3)
+            && publishedCaptureMembership.contains(5) && !publishedCaptureMembership.value(5),
+            "saved slices stay configured while the out-of-capture slice is parked");
         check(ownershipRepublished && model.backendCapabilities().clientSettingsDomains.testFlag(D::RtlSlices),
             "live settings ownership reaches model consumers through capabilitiesChanged");
         check(device->starts == 1 && device->writes == 6 && device->cancels == 0,
-            "fitting restore never retunes or restarts the accepted capture");
+            "restore never retunes or restarts the accepted capture");
         model.flushPendingOperatingState();
         const auto document = RtlSliceSettings(liveScope).load().document;
         check(document.slices.size() == 3 && document.slices[1].audioMute && document.slices[1].audioGain == 22
             && document.slices[1].audioPan == 11 && document.slices[5].frequencyHz == 120000000,
-            "restored monitor controls survive and rejected out-of-capture entry remains saved");
+            "restored monitor controls and parked slice remain saved");
+        live.setPanCenter(QStringLiteral("0xe1000000"), 120'000'000,
+            IRadioBackend::PanCenterIntent::Drag);
+        deadline.restart();
+        while (deadline.elapsed() < 3000) {
+            device->block(); QCoreApplication::processEvents(); QThread::msleep(5);
+            const auto current = rtl::RtlCaptureBackendTestAccess::state(live);
+            if (!rtl::RtlCaptureBackendTestAccess::busy(live) && current
+                && current->hardware.centerHz == 120'000'000
+                && current->receivingIds == (std::vector<int>{5})) { break; }
+        }
+        const auto resumed = rtl::RtlCaptureBackendTestAccess::state(live);
+        check(restored && resumed && resumed->hardware.centerHz == 120'000'000
+            && resumed->receivingIds == (std::vector<int>{5})
+            && resumed->receivers == restored->receivers
+            && resumed->hardware.sampleRateHz == restored->hardware.sampleRateHz
+            && resumed->hardware.directSampling == restored->hardware.directSampling
+            && resumed->hardware.offsetTuning == restored->hardware.offsetTuning
+            && resumed->hardware.gainTenths == restored->hardware.gainTenths
+            && resumed->hardware.ppm == restored->hardware.ppm
+            && !publishedCaptureMembership.value(1) && !publishedCaptureMembership.value(3)
+            && publishedCaptureMembership.value(5),
+            "drag resumes the saved RF slice and parks earlier slices without changing their settings");
+        model.flushPendingOperatingState();
+        const auto movedDocument = RtlSliceSettings(liveScope).load().document;
+        check(movedDocument.captureCenterHz == 120'000'000
+            && movedDocument.sampleRateHz == document.sampleRateHz
+            && movedDocument.slices.size() == 3
+            && movedDocument.slices[1].frequencyHz == first.frequencyHz
+            && movedDocument.slices[3].frequencyHz == second.frequencyHz
+            && movedDocument.slices[5].frequencyHz == outside.frequencyHz
+            && movedDocument.slices[5].audioMute == outside.audioMute
+            && movedDocument.slices[5].audioGain == outside.audioGain
+            && movedDocument.slices[5].audioPan == outside.audioPan,
+            "drag persists the new capture center without changing saved slice RF or monitor settings");
         live.disconnectRadio();
     }
     std::fprintf(stderr, "rtl_runtime_settings_test: %d failures\n", failures);

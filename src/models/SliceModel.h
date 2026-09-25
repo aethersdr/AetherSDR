@@ -21,6 +21,7 @@ class SliceModel : public QObject {
     Q_PROPERTY(int filterLow     READ filterLow  NOTIFY filterChanged)
     Q_PROPERTY(int filterHigh    READ filterHigh NOTIFY filterChanged)
     Q_PROPERTY(bool active       READ isActive   NOTIFY activeChanged)
+    Q_PROPERTY(bool inCapture    READ inCapture  NOTIFY inCaptureChanged)
     Q_PROPERTY(bool txSlice      READ isTxSlice  NOTIFY txSliceChanged)
 
 public:
@@ -81,6 +82,7 @@ public:
     bool    adaptiveHetReject()     const { return m_adaptiveHetReject; } // opt-in edge-het cut
     bool    adaptiveActive()        const { return m_adaptiveActive; }
     bool    isActive()   const { return m_active; }
+    bool    inCapture()  const { return m_inCapture; }
     bool    isTxSlice()  const { return m_txSlice; }
     float   rfGain()     const { return m_rfGain; }
     float   audioGain()  const { return m_externalReceiveAudioReplacement
@@ -467,6 +469,7 @@ signals:
     void adaptiveHetRejectChanged(bool on);
     void adaptiveActiveChanged(bool on);
     void activeChanged(bool active);
+    void inCaptureChanged(bool inCapture);
     void txSliceChanged(bool tx);
     void audioGainChanged(float gain);
     void audioPanChanged(int pan);
@@ -596,6 +599,7 @@ private:
     bool    m_adaptiveHetReject{false};  // opt-in edge-het cut
     bool    m_adaptiveActive{false};     // a confident live fit is applied
     bool    m_active{false};
+    bool    m_inCapture{true};
     bool    m_txSlice{false};
     float   m_rfGain{0.0f};
     float   m_audioGain{50.0f};

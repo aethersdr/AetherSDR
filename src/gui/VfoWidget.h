@@ -417,6 +417,8 @@ private:
     void updateDspTabAccent();
     void deactivateTabButton(int closedTab);  // reset a just-closed tab's style
     void updateFreqLabel();
+    void updateCaptureStatus();
+    void updateCollapsedFrequencyLabel();
     bool cancelDirectEntry();
     void updateFilterLabel();
     void updateModeTab();
@@ -490,6 +492,7 @@ private:
 
     // Frequency / meter
     QLabel* m_freqLabel{nullptr};
+    QLabel* m_captureStatusLabel{nullptr};
     QLineEdit* m_freqEdit{nullptr};
     QStackedWidget* m_freqStack{nullptr};
     QLabel* m_dbmLabel{nullptr};

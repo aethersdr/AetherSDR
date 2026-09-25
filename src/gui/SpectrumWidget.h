@@ -713,6 +713,7 @@ public:
         int    filterHighHz{0};
         bool   isTxSlice{false};
         bool   isActive{false};
+        bool   inCapture{true};
         int    splitPartnerId{-1};  // slice ID of split partner, -1 if not in split
         bool   diversity{false};
         bool   diversityParent{false};
@@ -748,6 +749,7 @@ public:
                          int diversityIndex = -1);
     // Update just the frequency on an existing overlay (for optimistic scroll-to-tune)
     void setSliceOverlayFreq(int sliceId, double freqMhz);
+    void setSliceOverlayInCapture(int sliceId, bool inCapture);
     // Update the per-client letter on an existing overlay; safe to call
     // before/after setSliceOverlay.  Used by the Multi-Flex display mode
     // so the slice marker / passband colour can follow the radio's

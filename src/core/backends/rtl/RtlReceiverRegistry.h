@@ -160,6 +160,9 @@ public:
     // A pending set from another owner returns Busy; it is never overwritten.
     std::uint64_t beginSession(const Capture& capture);
     std::optional<Handle> reserveSlot(std::optional<int> preferred = std::nullopt);
+    // A failed reservation can be retried only while a prior bank for this
+    // slot is retiring. Never reissue its old handle before destruction ends.
+    bool slotAwaitingRetirement(int slot) const;
     Result cancelReservation(Handle handle);
     std::optional<Handle> currentHandle(int slot) const;
     Result submit(const Capture& capture, std::span<const ReceiverSpec> desired);

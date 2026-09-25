@@ -493,6 +493,28 @@ std::optional<RtlReceiverRegistry::Handle> RtlReceiverRegistry::reserveSlot(std:
     return std::nullopt;
 }
 
+bool RtlReceiverRegistry::slotAwaitingRetirement(int slot) const
+{
+    if (!m_state || slot < 0 || static_cast<std::size_t>(slot) >= m_state->limits.slotCount) {
+        return false;
+    }
+    const std::shared_ptr<Executor> controller = executor();
+    const std::scoped_lock lock(controller->mutex);
+    const std::uint64_t session = m_state->session.load(std::memory_order_acquire);
+    if (!session) { return false; }
+    for (const BankSlot& bank : m_state->banks) {
+        const Stage stage = bank.stage.load(std::memory_order_acquire);
+        if ((stage != Stage::Retired && stage != Stage::Destroying)
+            || bank.request.session != session) { continue; }
+        const auto last = bank.request.receivers.begin() + bank.request.count;
+        if (std::any_of(bank.request.receivers.begin(), last,
+                [slot](const ReceiverSpec& spec) { return spec.handle.slot == slot; })) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::optional<RtlReceiverRegistry::Handle> RtlReceiverRegistry::currentHandle(int slot) const
 {
     if (!m_state || slot < 0 || static_cast<std::size_t>(slot) >= m_state->limits.slotCount) { return {}; }

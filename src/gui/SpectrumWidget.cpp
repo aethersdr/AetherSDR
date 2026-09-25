@@ -8242,6 +8242,14 @@ void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHi
     }
 }
 
+void SpectrumWidget::setSliceOverlayInCapture(int sliceId, bool inCapture)
+{
+    const int index = overlayIndex(sliceId);
+    if (index < 0 || m_sliceOverlays[index].inCapture == inCapture) { return; }
+    m_sliceOverlays[index].inCapture = inCapture;
+    markOverlayDirty();
+}
+
 void SpectrumWidget::setSliceOverlayMarkerStyle(int sliceId, int markerWidth, bool filterEdgesHidden)
 {
     int idx = overlayIndex(sliceId);
@@ -14307,6 +14315,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             m_frequencyScalePreviewNeedsUpload = false;
         }
 
+        // Position flags before painting the cached off-screen indicators:
+        // their rectangles must use the same frame's VFO geometry.
+        // Live-flag selection stays outside this render callback.
+        repositionVfoFlags(specRect);
+
         // Background-image layer — kept separate from the static overlay so
         // it can render BELOW the FFT trace (parity with software paint).
         // Rebuilt whenever the static overlay is rebuilt, since markOverlayDirty
@@ -15001,11 +15014,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
         }
 
-        // Position the flags for THIS frame so a dragged flag's sprite is drawn at
-        // the current marker position (no one-frame lag).  (Live-flag selection
-        // runs OUTSIDE the render callback — from the refresh timer / mouse move —
-        // because it shows/raises widgets, which must not happen mid-render.)
-        repositionVfoFlags(specRect);
         if (!m_dssMeshReady) {
             // Lazily build the fallback pipeline/VBO on first use (runs before
             // beginPass, so resource creation is outside the render pass). Only
@@ -17532,7 +17540,8 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
     auto drawOne = [&](const SliceOverlay& so) {
         if (so.freqMhz < startMhz || so.freqMhz > endMhz) return;
 
-        const QColor col = sliceColorForOverlay(so);
+        const QColor col = so.inCapture ? sliceColorForOverlay(so)
+            : AetherSDR::ThemeManager::instance().color("color.accent.warning");
         // Bandwidth affordances (passband fill + filter edges) render at full
         // brightness so they stay visible on non-active slices (#3484) — but an
         // inactive slice uses the neutral secondary colour instead of the
@@ -17542,7 +17551,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         // near-invisible passband. The VFO centre line, triangle, and RIT/XIT
         // lines keep `col` (dimmed when inactive) to preserve the focus cue.
         const int colourIdx = SliceLabel::displayColorIndex(so.sliceId, so.perClientLetter);
-        const QColor bandCol = so.isActive
+        const QColor bandCol = so.isActive && so.inCapture
             ? SliceColorManager::instance().activeColor(colourIdx)
             : AetherSDR::ThemeManager::instance().color("color.text.secondary");
         const double fLoMhz = so.freqMhz + so.filterLowHz / 1.0e6;
@@ -18104,7 +18113,8 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
     const double endMhz   = m_centerMhz + effectiveBandwidthMhz() / 2.0;
 
     m_offScreenRects.resize(m_sliceOverlays.size());
-    int leftStack = 0, rightStack = 0;  // vertical stacking counters
+    int leftNextY = specRect.top() + 20;
+    int rightNextY = leftNextY;
 
     for (int oi = 0; oi < m_sliceOverlays.size(); ++oi) {
         const auto& so = m_sliceOverlays[oi];
@@ -18113,7 +18123,8 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
         if (so.freqMhz >= startMhz && so.freqMhz <= endMhz) continue;
 
         const bool isRight = (so.freqMhz > endMhz);
-        const QColor col = sliceColorForOverlay(so);
+        const QColor col = so.inCapture ? sliceColorForOverlay(so)
+            : AetherSDR::ThemeManager::instance().color("color.accent.warning");
         // Letter on the off-screen pill follows the same display mode as
         // the marker colour: per-client letter (with Unicode subscript)
         // in RadioIndexed mode, global letter in Global mode (#2606).
@@ -18140,13 +18151,14 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
         int topLineW = bigFm.horizontalAdvance(sliceAndChevron);
         int txW = 0;
         if (so.isTxSlice) { txW = smallFm.horizontalAdvance("TX "); topLineW += txW; }
-        const int freqW = smallFm.horizontalAdvance(freqStr);
+        const QString detail = so.inCapture ? freqStr
+            : freqStr + tr("  OUT OF CAPTURE");
+        const int freqW = smallFm.horizontalAdvance(detail);
         const int boxW = std::max(topLineW, freqW) + 2 * padH;
         const int boxH = bigFm.height() + smallFm.height() + 4;
 
-        int& stackCount = isRight ? rightStack : leftStack;
-        const int boxY = specRect.top() + 20 + stackCount * (boxH + 4);
-        ++stackCount;
+        int& nextY = isRight ? rightNextY : leftNextY;
+        int boxY = nextY;
 
         int boxX;
         if (isRight) {
@@ -18158,6 +18170,31 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
                 leftMargin = occluded.width() + 2;
             boxX = specRect.left() + leftMargin;
         }
+
+        // The VFO is a child widget above this painted marker. When an
+        // off-screen slice pins that card to an edge, keep the whole pill
+        // clear of it, including the parked-slice status line.
+        for (VfoWidget* vfo : m_vfoWidgets) {
+            if (!vfo || !vfo->isVisible()
+                || !QRect(boxX, boxY, boxW, boxH).intersects(vfo->geometry())) {
+                continue;
+            }
+            const int belowY = vfo->geometry().bottom() + 5;
+            if (belowY + boxH <= specRect.bottom() + 1) {
+                boxY = belowY;
+            } else {
+                // Short panels can have no room beneath an expanded flag.
+                // Its external buttons extend up to 22 px past the card.
+                const int besideX = isRight
+                    ? vfo->geometry().left() - boxW - 26
+                    : vfo->geometry().right() + 26;
+                if (besideX >= specRect.left() + 4
+                    && besideX + boxW <= specRect.right() - DBM_STRIP_W - 3) {
+                    boxX = besideX;
+                }
+            }
+        }
+        nextY = boxY + boxH + 4;
 
         m_offScreenRects[oi] = QRect(boxX, boxY, boxW, boxH);
 
@@ -18178,8 +18215,8 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
         p.setFont(smallFont);
         p.setPen(QColor(col.red(), col.green(), col.blue(), hovAlpha));
         const int freqY = topBaseline + smallFm.height() + 2;
-        if (isRight) p.drawText(boxX + boxW - padH - freqW, freqY, freqStr);
-        else         p.drawText(boxX + padH, freqY, freqStr);
+        if (isRight) p.drawText(boxX + boxW - padH - freqW, freqY, detail);
+        else         p.drawText(boxX + padH, freqY, detail);
     }
 }
 

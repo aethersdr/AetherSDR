@@ -77,6 +77,9 @@ private:
     bool m_preparationSubmitted = false; // backend thread only
     unsigned m_prepareAttempts = 0;
     Transaction::Token m_applied; // acquisition-context only
+    bool m_legacyReceiving = false; // acquisition-context only
+    int m_legacyFilterLowHz = 0;
+    int m_legacyFilterHighHz = 0;
     std::unique_ptr<RtlReceivePipeline> m_pipeline;
     std::uint64_t m_firstSample = 0;
     RtlSdrDdc m_ddc;

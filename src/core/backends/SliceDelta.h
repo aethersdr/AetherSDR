@@ -36,6 +36,9 @@ struct SliceDelta {
 
     // Core state
     std::optional<bool>        active;
+    // Whether the complete guarded receive passband is inside this slice's
+    // capture stream. Independent of active, which means selected/focused.
+    std::optional<bool>        inCapture;
     std::optional<bool>        txSlice;
     std::optional<double>      rfGain;
     std::optional<double>      audioGain;

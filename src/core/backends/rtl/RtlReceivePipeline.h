@@ -5,6 +5,7 @@
 #include "RtlSquelchGate.h"
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <optional>
 
 namespace AetherSDR::rtl {
@@ -38,8 +39,12 @@ public:
         std::array<float, 2048> samples{};
     };
     explicit RtlReceivePipeline(std::size_t capacity = 1);
+    enum class Submission { Accepted, RetryRetiringSlot, RetryPlannerBusy, Failed };
+    Submission prepareDetailed(const Transaction::State& state, bool resetCapture = false,
+                               bool verifiedRollback = false);
     bool prepare(const Transaction::State& state, bool resetCapture = false,
-                 bool verifiedRollback = false);
+                 bool verifiedRollback = false)
+    { return prepareDetailed(state, resetCapture, verifiedRollback) == Submission::Accepted; }
     enum class Preparation { Pending, Ready, Failed };
     Preparation service();
     bool adopt() noexcept;
@@ -68,6 +73,7 @@ private:
     RtlReceiverRegistry::Capture m_nextCapture;
     std::uint64_t m_nextEpoch = 1;
     bool m_nextLegacy = true;
+    std::uint8_t m_nextReceivingMask = 0;
     std::array<std::optional<RtlReceiverRegistry::Handle>, 8> m_handles;
     std::array<RtlReceiverRegistry::ReceiverSpec, 8> m_specs;
     std::array<std::uint64_t, 8> m_epochs{};
@@ -76,6 +82,7 @@ private:
     RtlReceiverRegistry::Capture m_capture;
     std::uint64_t m_captureEpoch = 0;
     bool m_legacy = true;
+    std::uint8_t m_receivingMask = 0;
     RtlAudioMixer m_mixer;
     std::atomic<unsigned> m_faults{0};
     std::array<std::atomic<unsigned>, 8> m_monitor;

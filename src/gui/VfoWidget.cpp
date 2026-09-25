@@ -551,6 +551,8 @@ QString VfoWidget::accessibleSummary() const
     QString s = letter.isEmpty() ? QStringLiteral("VFO")
                                  : QStringLiteral("VFO slice %1").arg(letter);
     s += QStringLiteral(", %1 MHz").arg(m_slice->frequency(), 0, 'f', 6);
+    if (!m_slice->inCapture())
+        s += QStringLiteral(", out of capture; receive audio and decoders inactive");
     if (m_slice->isTxSlice())
         s += QStringLiteral(", transmit slice");
     if (m_collapsed)
@@ -1116,6 +1118,18 @@ void VfoWidget::buildUI()
         freqRow->addWidget(m_freqStack);
         root->addLayout(freqRow);
     }
+
+    m_captureStatusLabel = new QLabel(tr("OUT OF CAPTURE"));
+    m_captureStatusLabel->setObjectName(QStringLiteral("sliceCaptureStatus"));
+    m_captureStatusLabel->setAccessibleName(tr("Receive status: out of capture"));
+    m_captureStatusLabel->setAccessibleDescription(tr(
+        "This slice is parked because its full filter passband is outside the usable capture. "
+        "Audio and decoders resume when capture returns."));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_captureStatusLabel,
+        "QLabel { color: {{color.accent.warning}}; font-size: 10px; font-weight: bold; "
+        "background: transparent; border: none; }");
+    m_captureStatusLabel->hide();
+    root->addWidget(m_captureStatusLabel);
 
 #ifdef HAVE_RADE
     // ── RADE info row: [callsign] [SNR] [offset] [stretch] ──────────────
@@ -3077,19 +3091,8 @@ void VfoWidget::setCollapsed(bool collapsed)
         // Show collapsed frequency label and position it immediately
         if (m_collapsedFreqLabel) {
             updateFreqLabel();
-            m_collapsedFreqLabel->setText(m_freqLabel->text());
-            m_collapsedFreqLabel->adjustSize();
+            updateCollapsedFrequencyLabel();
             m_collapsedFreqLabel->show();
-
-            // Position now based on current widget location
-            const int freqGap = 2;
-            int freqH = m_collapsedFreqLabel->sizeHint().height();
-            int freqW = m_collapsedFreqLabel->sizeHint().width();
-            int freqY = pos().y() + (44 - freqH) / 2;
-            int freqX = m_lastOnLeft
-                ? pos().x() - freqW - freqGap
-                : pos().x() + COLLAPSED_W + freqGap;
-            m_collapsedFreqLabel->move(freqX, freqY);
         }
     } else {
         // Restore full width, remove fixed height constraint
@@ -4510,6 +4513,7 @@ void VfoWidget::setSlice(SliceModel* slice)
     setProperty("sliceId", m_slice ? m_slice->sliceId() : -1);
     if (!m_slice) {
         updateFreqLabel();
+        updateCaptureStatus();
         return;
     }
 
@@ -4526,6 +4530,9 @@ void VfoWidget::setSlice(SliceModel* slice)
 
     // Frequency
     connect(m_slice, &SliceModel::frequencyChanged, this, [this](double) { updateFreqLabel(); });
+    connect(m_slice, &SliceModel::inCaptureChanged, this, [this](bool) {
+        updateCaptureStatus();
+    });
     // Blocked tune: cancel any in-flight direct-entry (widget-local side
     // effect), then let lockedFeedbackActiveChanged drive the LOCKED repaint.
     connect(m_slice, &SliceModel::tuneBlockedByLock, this, [this] {
@@ -5149,6 +5156,7 @@ void VfoWidget::syncFromSlice()
                 "border-radius: 3px; font-weight: bold; font-size: 11px; }")
             .arg(SliceColorManager::instance().hexActive(colourIdx)));
     updateFreqLabel();
+    updateCaptureStatus();
     updateFilterLabel();
 
     // Mode tab
@@ -5335,8 +5343,7 @@ void VfoWidget::updateFreqLabel()
             QAccessible::updateAccessibility(&lockedEvt);
         }
         if (m_collapsed && m_collapsedFreqLabel) {
-            m_collapsedFreqLabel->setText(QStringLiteral("LOCKED"));
-            m_collapsedFreqLabel->adjustSize();
+            updateCollapsedFrequencyLabel();
         }
         return;
     }
@@ -5354,8 +5361,50 @@ void VfoWidget::updateFreqLabel()
 
     // Keep collapsed frequency label in sync
     if (m_collapsed && m_collapsedFreqLabel) {
-        m_collapsedFreqLabel->setText(freqText);
+        updateCollapsedFrequencyLabel();
+    }
+}
+
+void VfoWidget::updateCollapsedFrequencyLabel()
+{
+    if (!m_collapsed || !m_collapsedFreqLabel || !m_freqLabel) { return; }
+    const bool parked = m_slice && !m_slice->inCapture();
+    const QString text = parked
+        ? m_freqLabel->text() + tr("  OUT OF CAPTURE")
+        : m_freqLabel->text();
+    if (m_collapsedFreqLabel->text() != text) {
+        m_collapsedFreqLabel->setText(text);
         m_collapsedFreqLabel->adjustSize();
+    }
+    const int gap = 2;
+    const int x = m_lastOnLeft
+        ? pos().x() - m_collapsedFreqLabel->sizeHint().width() - gap
+        : pos().x() + COLLAPSED_W + gap;
+    const int y = pos().y() + (height() - m_collapsedFreqLabel->sizeHint().height()) / 2;
+    m_collapsedFreqLabel->move(x, y);
+}
+
+void VfoWidget::updateCaptureStatus()
+{
+    if (!m_captureStatusLabel) { return; }
+    const bool parked = m_slice && !m_slice->inCapture();
+    const bool showExpanded = parked && !m_collapsed;
+    if ((!m_captureStatusLabel->isHidden()) != showExpanded) {
+        m_captureStatusLabel->setVisible(showExpanded);
+    }
+    updateCollapsedFrequencyLabel();
+    if (m_freqLabel) {
+        const QString description = parked
+            ? tr("Out of capture. This slice is parked; audio and decoders are inactive.")
+            : QString();
+        if (m_freqLabel->accessibleDescription() == description) { return; }
+        m_freqLabel->setAccessibleDescription(description);
+    }
+    if (QAccessible::isActive() && m_freqLabel) {
+        QAccessibleEvent event(m_freqLabel, QAccessible::DescriptionChanged);
+        QAccessible::updateAccessibility(&event);
+        QAccessibleEvent group(this, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&group);
     }
 }
 

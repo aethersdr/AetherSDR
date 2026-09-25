@@ -196,7 +196,9 @@ int main(int argc, char** argv)
               "zoom publishes a genuine narrow display window");
         check(rtl::RtlCaptureBackendTestAccess::idle(backend) && device->writes == beforeWrites,
               "display zoom performs no capture transaction or USB writes");
-        model.requestPanCenter(pan->panId(), 106.5, -1.0, IRadioBackend::PanCenterIntent::Drag);
+        // Quarter-rate FM placement leaves 106.7 MHz inside usable capture,
+        // while the 107 MHz slice is outside this 200 kHz display window.
+        model.requestPanCenter(pan->panId(), 106.7, -1.0, IRadioBackend::PanCenterIntent::Drag);
         check(pan->centerMhz() < 106.9 && slice->frequency() == 107.0,
               "panning can put a receiving slice offscreen without retuning it");
         check(device->writes == beforeWrites && rtl::RtlCaptureBackendTestAccess::idle(backend),
@@ -374,11 +376,51 @@ int main(int argc, char** argv)
         auto* multiPan = multi.panadapter(multi.slice(1)->panId());
         const double multiView = multiPan->centerMhz();
         const int multiWrites = usb->writes;
-        check(!multi.requestConfirmedReceiveTune(1, 105.0, IRadioBackend::ReceiveTuneView::Center)
-            && multi.slice(1)->frequency() == 100.3 && multi.slice(0)->frequency() == 100.5
-            && multiPan->centerMhz() == multiView && usb->writes == multiWrites
-            && rtl::RtlCaptureBackendTestAccess::idle(radio),
-              "impossible whole-set typed tune preserves both receivers, display, and capture");
+        int captureTransitions = 0;
+        QObject::connect(multi.slice(0), &SliceModel::inCaptureChanged, &multi,
+            [&](bool) { ++captureTransitions; });
+        check(multi.slice(0)->inCapture() && multi.slice(1)->inCapture(),
+              "both receivers initially report live capture");
+        check(multi.requestConfirmedReceiveTune(1, 105.0, IRadioBackend::ReceiveTuneView::Center),
+              "distant typed tune admits its selected receiver while sibling may park");
+        check(multi.slice(1)->frequency() == 100.3 && multi.slice(0)->inCapture()
+            && multiPan->centerMhz() == multiView,
+              "pending distant tune changes no accepted model observation");
+        check(waitFor([&] { usb->block(); return rtl::RtlCaptureBackendTestAccess::idle(radio)
+            && multi.slice(1)->frequency() == 105.0 && !multi.slice(0)->inCapture(); }),
+              "confirmed distant tune parks the sibling only after readback");
+        const double halfFftBinMhz = 2'400'000.0 / (2.0 * rtl::RtlViewport::kRtlSpectrumBins * 1e6);
+        check(multi.slice(0)->frequency() == 100.5 && multi.slice(1)->inCapture()
+            && multiPan->bandwidthMhz() > 2.0
+            && std::abs(multiPan->centerMhz() - 105.0) <= halfFftBinMhz
+            && usb->writes > multiWrites,
+              "full-width typed Center tune centers the selected RF within half an FFT bin");
+        multi.requestPanCenter(multiPan->panId(), 100.4, -1.0,
+            IRadioBackend::PanCenterIntent::Drag);
+        const bool returned = waitFor([&] { usb->block(); return rtl::RtlCaptureBackendTestAccess::idle(radio)
+            && multi.slice(0)->inCapture() && !multi.slice(1)->inCapture(); });
+        check(returned,
+              "return drag automatically resumes one fixed-RF slice and parks the distant one");
+        check(multi.slice(0)->frequency() == 100.5 && multi.slice(1)->frequency() == 105.0
+            && captureTransitions == 2,
+              "park and resume each publish one capture-availability transition without tuning either RF");
+        const int parkedWrites = usb->writes;
+        multi.slice(1)->setFilterWidth(-8000, 50'000);
+        check(rtl::RtlCaptureBackendTestAccess::idle(radio) && usb->writes == parkedWrites
+            && multi.slice(1)->filterLow() == -8000 && multi.slice(1)->filterHigh() == 8000,
+              "parked FM rejects an out-of-DSP filter without publishing or touching USB");
+        multi.slice(1)->setFilterWidth(-6000, 6000);
+        check(waitFor([&] { usb->block(); return rtl::RtlCaptureBackendTestAccess::idle(radio)
+            && multi.slice(1)->filterLow() == -6000 && multi.slice(1)->filterHigh() == 6000
+            && !multi.slice(1)->inCapture() && usb->writes == parkedWrites; }),
+              "valid parked FM filter is accepted without claiming a live receiver");
+        check(multi.requestConfirmedReceiveTune(1, 100.3, IRadioBackend::ReceiveTuneView::Preserve),
+              "distant slice can be brought back into the shared capture");
+        check(waitFor([&] { usb->block(); return rtl::RtlCaptureBackendTestAccess::idle(radio)
+            && multi.slice(1)->frequency() == 100.3 && multi.slice(0)->inCapture()
+            && multi.slice(1)->inCapture() && multi.slice(1)->filterLow() == -6000
+            && multi.slice(1)->filterHigh() == 6000; }),
+              "both configured receivers resume with the valid parked filter after accepted retune");
         if (retired) {
             retired->setFrequency(100.7); retired->setFilterWidth(-4000, 4000); retired->setAudioGain(9);
             retired->setSquelch(true, 90);
@@ -394,7 +436,7 @@ int main(int argc, char** argv)
         QObject::connect(survivor, &SliceModel::frequencyChanged, &multi, [&](double value) {
             if (value == 105.0) { ++wrong; }
         });
-        // Retire the other receiver so the out-of-window tune is admissible.
+        // Remove the sibling to isolate rollback from membership changes.
         check(radio.removeSlice(0), "remove sibling before hardware failure test");
         check(waitFor([&] { usb->block(); return !multi.slice(0) && rtl::RtlCaptureBackendTestAccess::idle(radio); }),
               "one receiver remains for hardware failure");
@@ -403,6 +445,45 @@ int main(int argc, char** argv)
         check(waitFor([&] { return !radio.isConnected(); }), "invalid readback and rollback disconnect the model session");
         check(wrong == 0 && survivor && survivor->frequency() == 100.3,
               "failed apply and failed rollback never publish requested frequency");
+    }
+    // A later zoom while a typed Center tune is awaiting readback must become
+    // part of the pending capture placement before either view is published.
+    {
+        RadioModel zoom;
+        check(zoom.rebuildBackendForTest("rtl"), "pending-zoom model initialized");
+        auto& radio = *static_cast<rtl::RtlSdrBackend*>(zoom.backend());
+        auto usb = std::make_shared<test::DeviceState>();
+        rtl::RtlCaptureBackendTestAccess::start(radio, std::make_unique<test::InjectedDevice>(usb), 4);
+        usb->releaseReadback();
+        check(waitFor([&] { usb->block(); return zoom.slice(0)
+            && rtl::RtlCaptureBackendTestAccess::idle(radio); }),
+              "pending-zoom FM receiver initialized");
+        auto* pan = zoom.panadapter(zoom.slice(0)->panId());
+        check(pan != nullptr, "pending-zoom pan resolved");
+        if (pan) {
+            zoom.requestPanCenter(pan->panId(), 100.0, 0.2);
+            check(pan->bandwidthMhz() < 0.201 && pan->bandwidthMhz() > 0.198,
+                  "pending-zoom test starts with a narrow display");
+            {
+                std::lock_guard lock(usb->mutex); usb->holdReadback = true;
+            }
+            check(zoom.requestConfirmedReceiveTune(0, 105.0, IRadioBackend::ReceiveTuneView::Center),
+                  "pending narrow typed Center admitted");
+            check(waitFor([&] { std::lock_guard lock(usb->mutex); return usb->inReadback; }),
+                  "pending typed Center readback held");
+            zoom.requestPanBandwidth(pan->panId(), 2.4);
+            check(zoom.slice(0)->frequency() == 100.0 && pan->bandwidthMhz() < 0.201,
+                  "concurrent full-width zoom publishes neither pending receiver nor view");
+            usb->releaseReadback();
+            check(waitFor([&] { usb->block(); return rtl::RtlCaptureBackendTestAccess::idle(radio)
+                && zoom.slice(0)->frequency() == 105.0; }),
+                  "latest typed tune and zoom settle after verified readback");
+            const double halfFftBinMhz = 2'400'000.0 / (2.0 * rtl::RtlViewport::kRtlSpectrumBins * 1e6);
+            check(pan->bandwidthMhz() > 2.0
+                && std::abs(pan->centerMhz() - 105.0) <= halfFftBinMhz,
+                  "full-width zoom during pending typed Center keeps the RF centered within half an FFT bin");
+        }
+        radio.disconnectRadio();
     }
     std::fprintf(stderr, "rtl_model_acceptance_test: %d failures\n", failures);
     return failures ? 1 : 0;
