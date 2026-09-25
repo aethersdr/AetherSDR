@@ -36,6 +36,7 @@ public:
         bool transmitting { false };
         QString source;
     };
+    static std::optional<TrxRequest> parseTrxRequest(const QStringList& args);
 
     explicit TciProtocol(RadioModel* model, TciRoutingState* routingState = nullptr,
                          const TciTrxMap* trxMap = nullptr);

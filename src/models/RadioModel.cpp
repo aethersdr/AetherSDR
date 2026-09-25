@@ -8,7 +8,7 @@
 #include "BandDefs.h"
 #include "BandSettings.h"
 #include "DeclaredBands.h"
-#include "core/CommandParser.h"
+#include "core/backends/flex/CommandParser.h"
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
@@ -890,6 +890,12 @@ void RadioModel::setupBackend(const QString& family)
                    "was unavailable when AetherSDR was compiled."));
             return;
         }
+        connect(m_backend.get(), &IRadioBackend::independentTxStopped, this,
+                [this, generation](const TxStopEvidence& evidence) {
+            if (generation == m_backendReceiverGeneration && !m_txSessionClosing) {
+                acknowledgeIndependentTxStop(evidence);
+            }
+        });
         // Hand the backend the offline health source this model owns, if the
         // family declared one. A BORROW, not a transfer: the source must
         // outlive every backend, because its job is answering when there is no
@@ -920,6 +926,7 @@ void RadioModel::setupBackend(const QString& family)
                 sendSliceCommand(nullptr, cmd);   // guard looks up the slice from cmd
             });
             flex->setModelProvider([this]{ return m_model; });
+            flex->setIndependentTxSequenceProvider([this] { return m_seqCounter.fetch_add(1); });
             m_connection = flex->connection();   // non-owning; the backend owns it
             m_panStream  = flex->panStream();    // non-owning; the backend owns it
             m_flexBackend = flex;                // transitional alias (2.3)
@@ -1294,6 +1301,10 @@ void RadioModel::setupBackend(const QString& family)
         m_frontEndOverload = s;
         emit frontEndOverloadChanged(s);
     });
+    // Nothing cached: the control itself answers isArmed() and
+    // lastArmRefusalReason(), and a view that arrives late asks it directly.
+    connect(m_backend.get(), &IRadioBackend::autoRfGainArmSettled,
+            this, &RadioModel::autoRfGainArmSettled);
 
     // meterId is "SOURCE:NAME" (e.g. "TX:FWDPWR"), matching MeterDef's own
     // source/name pair rather than inventing a second naming scheme.
@@ -2205,6 +2216,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateTuneAvailability);
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateTuneAvailability);
     qRegisterMetaType<PcmFrame>();
+    qRegisterMetaType<TxCoordinator::StopRequest>();
+    qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
@@ -2839,6 +2852,7 @@ RadioModel::~RadioModel()
     blockSignals(true);
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
+    m_independentTxGrants.reset(); // stop while every model member is still alive
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
             m_backend->setTune(false, m_transmitModel.tunePower(), m_txCoordinator.cleanupFence());
@@ -5012,8 +5026,13 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
             return true;
         }
     }
+    // Grant cancellation also arrives through the unscoped model stop route.
+    // Retain its original operation so the backend uses the qualified stop
+    // writer, not a legacy unkey that would invalidate the stop certificate.
     const TxCoordinator::Operation cleanup = tx ? TxCoordinator::Operation{}
-        : request ? m_txCoordinator.requestOperation(*request) : m_txCoordinator.cleanupFence();
+        : request ? m_txCoordinator.requestOperation(*request)
+        : m_txOperation.independent() && m_txOperation.permitsCleanup()
+            ? m_txOperation : m_txCoordinator.cleanupFence();
     if (tx) {
         // F2 (#4448): refuse keying on a backend that cannot transmit. The
         // guard is a capability test, not a family test — HL2 is TX-capable
@@ -6326,12 +6345,13 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     // which nothing ever set. The model write is also what the automation
     // readback and RadioResourceAdapter's snapshot read.
     //
-    // IT DOES NOT MAKE AVERAGING HAPPEN, and no comment here should be read as
-    // saying it does. On a raw-spectrum backend nothing consumes m_fftAverage
-    // in a render path: onBackendSpectrumFrame is a pass-through, and ANAN's
-    // smoothSpectrumBins uses a fixed kSpectrumSmoothAlpha rather than this
-    // value. Client-side averaging for these backends is #5678 row 2.1's other
-    // half -- "port + new" -- and is not written yet.
+    // THE MODEL WRITE ALONE DOES NOT MAKE AVERAGING HAPPEN. On a raw-spectrum
+    // backend nothing consumes m_fftAverage in a render path:
+    // onBackendSpectrumFrame is a pass-through. What averages is the backend
+    // call below -- ANAN turns the value into WDSP analyzer averaging time
+    // (AnanPanAnalyzer); a backend that does not override setPanAverage()
+    // (HL2, RTL) still does no averaging. Client-side averaging for those is
+    // #5678 row 2.1's other half -- "port + new" -- and is not written yet.
     //
     // Mechanism corrected by @ten9876 on #5678: m_fftAverage IS read (by the
     // persistence snapshot and the overlay menu), so the fault is this missing
@@ -6341,6 +6361,9 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
             return false;
         }
         pan->setLocalAverage(average);
+        // And down to the backend, which may average its own spectrum -- the
+        // same path setPanFrameRate() takes in requestPanDisplayRates().
+        m_backend->setPanAverage(backendPanIdFor(panId), average);
         return true;
     }
 
@@ -6352,6 +6375,25 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     if (pan) {
         pan->setRequestedFftSettings(average, -1);
     }
+    return true;
+}
+
+bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
+{
+    // Local-shaping backends only. On Flex the caller still sends the
+    // weighted_average= wire text itself: moving it in here would add a raw
+    // command above the seam (tools/check_command_plane.py, #5262 M4).
+    if (panId.isEmpty() || !shapesDisplayRatesLocally()) {
+        return false;
+    }
+    // The model write mirrors requestPanAverage()'s setLocalAverage(): no
+    // radio echo is coming, so the value is authoritative here and the
+    // automation readback / resource snapshot see it (a missing pan is not
+    // an error -- the backend still gets the setting).
+    if (PanadapterModel* pan = panadapter(panId)) {
+        pan->setLocalWeightedAverage(on);
+    }
+    m_backend->setPanWeightedAverage(backendPanIdFor(panId), on);
     return true;
 }
 
@@ -10146,7 +10188,7 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
 }
 
 void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
-                                   const QString& family)
+                                   const QString& family, PanadapterStream* panStream)
 {
     // THROUGH teardownBackend(), not over the top of the previous pointer.
     // A bare `m_backend = std::move(...)` destroys the old backend while this
@@ -10157,6 +10199,7 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     dropAllSessionModelsForFamilySwitch();
     teardownBackend();
     m_backend = std::move(backend);
+    m_panStream = panStream;
     m_family = family;
     wireBackendPcm();
     wireRxDemodAudioBus();

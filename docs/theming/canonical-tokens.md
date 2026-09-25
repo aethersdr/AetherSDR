@@ -103,7 +103,7 @@ single-use colours snap to the nearest canonical neighbour.
 | `color.spectrum.peakHold` | `#ffb84d` | peak-hold overlay |
 | `color.spectrum.average` | `#8ea8c0` | averaged trace |
 | `color.spectrum.grid` | `#1a2330` | dB/frequency grid lines |
-| `color.waterfall.colormap` | (gradient — Phase 2 gradient support) | the 8-stop RF colormap |
+| `color.waterfall.colormap.*` | (gradient family — Phase 2 gradient support) | the RF colormap presets: `.default`, `.grayscale`, `.blueGreen`, `.fire`, `.plasma`, `.purple`, `.glacier`. One linear gradient per `WfColorScheme` enumerator; the Display ▸ Scheme selector is generated from that enum. `.glacier` is the only preset whose `at: 0.00` stop is not `#000000` — cleared waterfall pixels take `waterfallFloorRgb()` (the `t=0` colour) rather than black so its deep-blue floor is continuous |
 | `color.spectrum.zoomButton.disabled.background` | `#5a0f0f1a` | disabled state of the waterfall zoom / band-segment buttons |
 | `color.spectrum.zoomButton.disabled.border` | `#5a304050` | as above, border |
 | `color.spectrum.zoomButton.disabled.text` | `#8c90a0b0` | as above, glyph |
@@ -120,6 +120,12 @@ Store translucent values in canonical `#AARRGGBB` format so `QColor` and the
 Theme Editor can read them and restore their factory values. The stylesheet
 resolver converts that storage format to `rgba()` before applying QSS; raw
 `rgba()` token values would bypass the editor's colour and Reset paths.
+
+The AetherRX/AetherTX footer toggles use
+`color.toggle.footer.{warning,danger,success}.background.{checked,hover}`.
+The checked and hover fills have alpha `2d` and `46` respectively, and use
+the amber, red and green accent RGB values. Both bundled themes define all
+six tokens so the footer stays editable and follows theme changes.
 
 ### Hardware-display colours (specialised — paint code only)
 

@@ -323,7 +323,7 @@ so the seam is a `tests.cmake` entry, not a missing capability.
 
 ### Version and release files
 
-Current version: **26.9.3**.
+Current version: **26.9.4**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
@@ -449,7 +449,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
   the authoritative model + decision record (it exists because these formulas
   have churned when edited without a shared spec).
 
-**Threading:** up to 12 threads — see `docs/architecture/pipelines.md` for the
+**Threading:** up to 13 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
 
 **Design principle:** RadioModel owns all sub-models on the main thread.
@@ -517,10 +517,25 @@ are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
 revision checks and limits. Clients cannot supply arbitrary endpoints or
 credentials. Every negotiated session, observer or controller, now shares a
 per-client request budget (100/s, burst 200, advertised in `limits`); exceeding
-it is terminal for that connection. The revocation hook
-discards pending observations and terminates local delivery; no wire or daemon
-path invokes it yet. Remote credential verification/provisioning and transmit
-grants are not implemented yet.
+it is terminal for that connection. Terminal session cleanup discards pending
+observations and synchronously retires bound authority before deferred socket
+cleanup; unrecoverable output failure also revokes the session. Local input
+processing yields after a bounded batch so a busy client cannot monopolize the
+engine thread. There is no wire credential-provisioning or revocation method.
+Explicit offline OS-vault setup and optional `--credential-authority` verification
+are implemented; credential roles do not arm or key a radio. Provisioning and
+serving share an authority reservation, and unavailable secure storage has no
+plaintext fallback. See `docs/aetherd-stage4-client-grants.md` for the current
+credential/lifetime contract. `--allow-local-tx` explicitly composes independent
+grants, private TX/admin methods and operation-bound stop proof; it requires the
+credential authority and local control, and starts disarmed. Initial backend
+support covers compatible Flex LAN software PTT on SmartSDR TCP API 1.4 with
+complete live interlock evidence, not a model/firmware-build allowlist. Hardware
+coverage is FLEX-6700 firmware 4.2.18.41174; do not claim other models were tested.
+See `docs/aetherd-flex-ptt-stop-evidence.md` for the shared protocol contract and
+the separate hardware evidence record. Unsupported backends and
+activities cannot issue a grant. Receive mutations also refuse retained TX
+ownership, including acquired-but-not-keyed leases and unconfirmed cleanup.
 `slice.setFrequency` now dispatches a bounded, revision-checked intent for an
 existing owned slice, with explicit backend observation provenance and fail-closed
 TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
@@ -536,8 +551,8 @@ remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.
 
-Step 4 has an engine-owned `TxCoordinator` and a transitional desktop actor;
-this is not yet per-client TX authorization. Flex primary keying and CWX text
+Step 4 has one engine-owned `TxCoordinator`, independent grant-bound actors,
+and a transitional desktop actor. Flex primary keying and CWX text
 carry operation/batch fences to the original TCP writer. A queue-consumed
 callback ends local handoff only, never proves radio idle. Preserve normal
 operator reengagement, but use `finishLocalIntent()` rather than asserting a
@@ -676,10 +691,14 @@ a new violation or a grown baseline errors:
 reaches around `IRadioBackend` to a vendor wire class. What this means for
 you:
 
-- **Nothing was relocated.** Step 2.4 is *ratchet-only*: the vendor
-  headers stay where they are (`src/core/…`, `src/models/…`) for now. EB3
-  just makes the existing boundary enforceable *in place*, so the
-  decoupling can proceed without new coupling piling up behind it.
+- **Relocation does not convert a touchpoint.** Step 2.4 established the
+  ratchet in place. The five Flex wire classes (`RadioConnection`,
+  `PanadapterStream`, `SmartLinkClient`, `WanConnection`, `CommandParser`)
+  now live under `src/core/backends/flex/` (#5554 §2.6 slice 1). Existing
+  callers use those explicit paths and remain tracked by EB3; no forwarding
+  headers or new include-directory shortcuts bypass the boundary. Demo-only
+  compatibility data lives in `core/backends/DemoRadioConstants.h`, so the
+  synthetic Flex connection does not include the concrete `SimBackend`.
 - **The rule.** Each tracked file's baseline row is the exact **set** of
   vendor headers it may include. Adding a vendor `#include` (e.g.
   `KiwiSdrManager.h`, `RadioConnection.h`, `StreamStatus.h`) to a `gui/`,
@@ -738,10 +757,11 @@ SmartSDR status decode now lives in `FlexBackend` behind typed deltas, and
 the models apply normalized signals. The amp (PGXL) and tuner (TGXL)
 accessory models followed in 2.4 — `AmpModel` was extracted from
 `RadioModel`, and their status decode and command encode now route through
-`FlexBackend` too (#4099, #4101, #4113, #4192, #4200). The remaining vendor
-headers are **not** relocated yet — step 2.4 landed the EB3 ratchet (above) that
-freezes today's above-seam vendor coupling and lets it be decoupled
-subsystem-by-subsystem. Converting a touchpoint still follows the claim
+`FlexBackend` too (#4099, #4101, #4113, #4192, #4200). The five Flex wire
+classes are physically relocated, but their existing model/UI consumers are
+not converted by that move. The EB3 ratchet (above) still freezes that
+coupling while it is decoupled subsystem-by-subsystem. Other vendor headers
+outside the backend tree remain staged work. Converting a touchpoint follows the claim
 protocol + before/after `tools/verify_slice0_rx.py` recipe; a converted
 file drops its vendor include and lowers its EB3 baseline.
 

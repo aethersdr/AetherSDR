@@ -160,6 +160,7 @@
 #include "core/UlanziDialBackend.h"
 #include "UlanziDialMapperDialog.h"
 #include "AetherRxDialog.h"
+#include "core/TxKeyingMarker.h"
 #include "ModeFilterPresets.h"
 #include "StripEqPanel.h"
 #include "AetherDspWidget.h"
@@ -249,7 +250,7 @@
 #include "core/RADEEngine.h"
 #include "RadeApplet.h"
 #endif
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/backends/IRadioBackend.h"   // seam: SimBackend::audioFrameReady wiring
 #include "core/backends/hl2/Hl2Backend.h"  // dynamic_cast for WDSP setup progress
 #include "core/backends/sim/SimBackend.h"  // dynamic_cast for demo noise controls
@@ -1429,6 +1430,12 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(&m_radioModel, &RadioModel::interlockNotificationRequested,
             this, &MainWindow::showPanadapterInterlockNotification);
+    // An automatic-gain arm request settled -- from the operator's click, the
+    // backend's own connect-time restore, or a bridge verb. One handler for all
+    // three, because the checkbox reading isArmed() back after its OWN click
+    // covered exactly one of them (#5817).
+    connect(&m_radioModel, &RadioModel::autoRfGainArmSettled,
+            this, &MainWindow::onAutoRfGainArmSettled);
     // Goes on the panadapter as a transient card, NOT the status bar (#4649).
     // A QStatusBar temporary message hides every permanent widget for its whole
     // duration -- the TX indicator, PA temperature and supply voltage among
@@ -2826,6 +2833,18 @@ MainWindow::~MainWindow()
         m_ax25HfPacketDecodeDialog = nullptr;
     }
 
+#ifdef HAVE_WEBSOCKETS
+    // Stop TCI producers while both the model and audio consumer are alive.
+    // The controller joins its I/O worker before AudioEngine teardown.
+    if (m_appletPanel && m_appletPanel->tciApplet()) {
+        m_appletPanel->tciApplet()->setTciServer(nullptr);
+    }
+    {
+        ShutdownTrace trace("tci.server.destroy");
+        m_session->shutdownTciServer();
+    }
+#endif
+
     // Stop audio processing on the worker thread before destruction (#502).
     // Use BlockingQueuedConnection to ensure completion before we proceed.
     if (m_audio && m_audioThread && m_audioThread->isRunning()) {
@@ -2859,22 +2878,7 @@ MainWindow::~MainWindow()
     }
     m_audio = nullptr;
 
-#ifdef HAVE_WEBSOCKETS
-    // TciServer holds a raw RadioModel* and dereferences it in stop() →
-    // releaseDaxForTci(). Qt would delete it as a child of MainWindow during
-    // ~QWidget::deleteChildren(), which runs *after* MainWindow's value members
-    // (including m_radioModel) have already been destroyed — crash on quit
-    // (#2385). Tear it down explicitly here: audio is stopped (no more
-    // daxPcmReady cross-thread signals), m_radioModel is still alive (DAX
-    // stream-remove commands reach the radio), and we null out TciApplet's raw
-    // back-reference first so no dangling pointer remains in the widget tree.
-    if (m_appletPanel && m_appletPanel->tciApplet())
-        m_appletPanel->tciApplet()->setTciServer(nullptr);
-    {
-        ShutdownTrace trace("tci.server.destroy");
-        m_session->shutdownTciServer();
-    }
-#endif
+
 
     // Stop external controller thread (#502)
     if (m_extCtrlThread && m_extCtrlThread->isRunning()) {
@@ -3353,11 +3357,158 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
                 {s->diguOffset(), s->diglOffset(), s->rttyShift()});
             s->setFilterWidth(edges.lo, edges.hi);
         });
-        // Seed the page with the filter it is looking at right now, rather than
-        // leaving it blank until the next slice change pushes one.
+        // REC / PLAY: the same routing as the VFO flag's record and play
+        // buttons (MainWindow_Wiring.cpp, wireVfoWidget) -- client-side to
+        // the QSO recorder, radio-side to the slice -- except this window is
+        // not pinned to one slice, so radio-side goes to whichever slice is
+        // active. The recorder can refuse to start (#4629), so the button is
+        // set from what it actually did, never from the click.
+        const auto clientSide = [] {
+            return AppSettings::instance().value("RecordingMode", "Client")
+                       .toString() == "Client";
+        };
+        connect(m_rxDialog, &AetherRxDialog::recordToggled,
+                this, [this, clientSide](bool on) {
+            if (clientSide()) {
+                if (on) m_qsoRecorder->startRecording();
+                else    m_qsoRecorder->stopRecording();
+            } else if (auto* sl = activeSlice()) {
+                sl->setRecordOn(on);
+            }
+            syncAetherRxRecordButtons();
+        });
+        connect(m_rxDialog, &AetherRxDialog::playToggled,
+                this, [this, clientSide](bool on) {
+            if (clientSide()) {
+                if (on) m_qsoRecorder->startPlayback();
+                else    m_qsoRecorder->stopPlayback();
+            } else if (auto* sl = activeSlice()) {
+                sl->setPlayOn(on);
+            }
+            syncAetherRxRecordButtons();
+        });
+        // Every recorder transition, including the error path that never
+        // emits recordingStopped, re-reads the recorder rather than trusting
+        // the last click.
+        connect(m_qsoRecorder, &QsoRecorder::recordingStarted, m_rxDialog,
+                [this](const QString&) { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::recordingStopped, m_rxDialog,
+                [this](const QString&, int) { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::recordingError, m_rxDialog,
+                [this](const QString&) { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::playbackStarted, m_rxDialog,
+                [this]() { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::playbackStopped, m_rxDialog,
+                [this]() { syncAetherRxRecordButtons(); });
+        syncAetherRxRecordButtons();
+
+        // "TX Playback" on PLAY's context menu. The transmit input is
+        // captured here, at the operator's click, and carried into the
+        // session -- the same boundary the AX.25 send button uses. The
+        // bridge reaches the same routine through the registered keying
+        // action, with its own controller, and only under
+        // AETHER_AUTOMATION_ALLOW_TX: it resolves actions on a QMenu while
+        // that menu is open, which the context menu is during exec().
+        if (!m_rxPlaybackTx) {
+            m_rxPlaybackTx = std::make_unique<RxPlaybackTransmitter>(&m_radioModel, m_audio, this);
+            connect(m_rxPlaybackTx.get(), &RxPlaybackTransmitter::finished,
+                    this, [this](bool aborted, const QString& reason) {
+                statusBar()->showMessage(
+                    aborted ? tr("TX Playback stopped: %1.").arg(reason)
+                            : tr("TX Playback finished."), 4000);
+            });
+        }
+        connect(m_rxPlaybackTx.get(), &RxPlaybackTransmitter::activeChanged,
+                m_rxDialog, &AetherRxDialog::setTxPlaybackActive);
+        m_rxDialog->setTxPlaybackActive(m_rxPlaybackTx->active());
+        connect(m_rxDialog, &AetherRxDialog::txPlaybackTriggered, this, [this] {
+            if (m_rxPlaybackTx && m_rxPlaybackTx->active()) {
+                m_rxPlaybackTx->abort(tr("stopped by the operator"));
+                return;
+            }
+            const std::shared_ptr<TxController> controller = m_radioModel.localTxController();
+            if (!controller || !controller->valid()) {
+                statusBar()->showMessage(
+                    tr("TX Playback: no transmit control is available right now."), 4000);
+                return;
+            }
+            toggleRxPlaybackTransmit(
+                controller->captureProgram(TxController::Activity::Mox).request());
+        });
+        registerTxKeyingAction(m_rxDialog->txPlaybackAction(),
+            [this](const std::shared_ptr<TxController>& controller,
+                   const QString& action, const QString&) -> TxKeyingAction::Prepared {
+            if (action != QLatin1String("trigger") || !controller
+                || !controller->belongsTo(&m_radioModel)) {
+                return {};
+            }
+            const TxCoordinator::Request input =
+                controller->captureProgram(TxController::Activity::Mox).request();
+            return [this, input] { toggleRxPlaybackTransmit(input); };
+        });
+        // Seed the EQ page with the filter it is looking at right now, rather
+        // than leaving it blank until the next slice change pushes one.
         pushRxFilterCutoffsToEq();
     }
     return m_rxDialog.data();
+}
+
+void MainWindow::toggleRxPlaybackTransmit(const TxCoordinator::Request& input)
+{
+    if (!m_rxPlaybackTx) return;
+    if (m_rxPlaybackTx->active()) {
+        m_rxPlaybackTx->abort(tr("stopped by the operator"));
+        return;
+    }
+    if (!m_qsoRecorder || !m_qsoRecorder->hasLastRecording()) {
+        statusBar()->showMessage(
+            tr("TX Playback: nothing has been recorded on this client yet."), 4000);
+        return;
+    }
+    // The same file cannot go to the speakers and the transmitter at once.
+    if (m_qsoRecorder->isPlaying()) m_qsoRecorder->stopPlayback();
+    // Decode only the portion we can send. A finalized QSO can be much
+    // longer than the TX cap or the ordinary full-file playback budget.
+    const int capSecs = std::max(1,
+        AppSettings::instance().value("QsoRecordingIdleTimeout", "120").toInt());
+    const QAudioFormat format = RxPlaybackTransmitter::wireFormat();
+    const qint64 capFrames = std::min<qint64>(
+        static_cast<qint64>(capSecs) * format.sampleRate(), kQsoPlaybackMaxFrames);
+    QString why;
+    std::optional<QByteArray> pcm = m_qsoRecorder->lastRecordingPcm(
+        format, &why, capFrames, true);
+    if (!pcm) {
+        qCWarning(lcAudio) << "TX Playback refused:" << why;
+        statusBar()->showMessage(tr("TX Playback: %1.").arg(why), 4000);
+        return;
+    }
+    // The idle timeout is the operator's TX playback duration cap too.
+    if (pcm->size() == capFrames * format.bytesPerFrame()) {
+        statusBar()->showMessage(
+            tr("TX Playback: sending up to the first %1 s of the recording.")
+                .arg(capFrames / format.sampleRate()), 6000);
+    }
+    if (!m_rxPlaybackTx->start(*pcm, activeSlice(), input, &why)) {
+        qCWarning(lcAudio) << "TX Playback refused:" << why;
+        statusBar()->showMessage(tr("TX Playback: %1.").arg(why), 4000);
+    }
+}
+
+void MainWindow::syncAetherRxRecordButtons()
+{
+    if (!m_rxDialog) return;
+    const bool clientSide =
+        AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+    if (clientSide) {
+        m_rxDialog->setRecordOn(m_qsoRecorder && m_qsoRecorder->isRecording());
+        m_rxDialog->setPlayOn(m_qsoRecorder && m_qsoRecorder->isPlaying());
+        m_rxDialog->setPlayEnabled(m_qsoRecorder && m_qsoRecorder->hasLastRecording());
+        return;
+    }
+    auto* sl = activeSlice();
+    m_rxDialog->setRecordOn(sl && sl->recordOn());
+    m_rxDialog->setPlayOn(sl && sl->playOn());
+    m_rxDialog->setPlayEnabled(sl && sl->playEnabled());
 }
 
 void MainWindow::toggleAetherRxDialog()
@@ -5233,6 +5384,17 @@ void MainWindow::buildUI()
         }
         applet->spectrumWidget()->setBandSegmentZoomAvailable(
             m_radioModel.isConnected() && m_radioModel.usesFlexCommandPlane());
+        // The two capability switches onConnectionStateChanged() applies for
+        // the same reason: a pan created after connect would otherwise keep
+        // the widget defaults (no edge crop, client EMA on) until the next
+        // connect/disconnect -- on a G2 that is the double averaging
+        // RadioCapabilities::backendPanAveraging exists to remove.
+        const bool connected = m_radioModel.isConnected();
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        applet->spectrumWidget()->setPanEdgeTaperEnabled(
+            connected && caps.hasDdcPanEdgeRolloff);
+        applet->spectrumWidget()->setClientFftSmoothingEnabled(
+            !(connected && caps.backendPanAveraging.has_value()));
     });
 
     // Band stack panel signal wiring
@@ -6291,10 +6453,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
         const bool bandSegmentZoomAvailable = connected && m_radioModel.usesFlexCommandPlane();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
+        const bool backendAverages =
+            connected && m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
                 applet->spectrumWidget()->setBandSegmentZoomAvailable(bandSegmentZoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
+                applet->spectrumWidget()->setClientFftSmoothingEnabled(
+                    !backendAverages);
             }
         }
     }
@@ -8007,8 +8173,18 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
         // did not reflect that would report a control as off while it was
         // holding the operator's gain down.
         auto* autoGain = m_radioModel.autoRfGain();
+        const bool armed = autoGain && autoGain->isArmed();
         menu->setAutoRfGainAvailable(autoGain != nullptr);
-        menu->setAutoRfGainEnabled(autoGain && autoGain->isArmed());
+        menu->setAutoRfGainEnabled(armed);
+        // AND IF THE LAST REQUEST WAS REFUSED BEFORE THIS PAN EXISTED. The
+        // backend's connect-time restore settles inside its link-up handler,
+        // after it has emitted connected() and before the pans that would have
+        // heard autoRfGainArmSettled are built. The reason is still on the
+        // control, and the description is the only channel a late pan has for
+        // it. No card: nothing just happened, this pan is only catching up.
+        if (autoGain && !armed) {
+            menu->setAutoRfGainRefusalDescription(autoGain->lastArmRefusalReason());
+        }
     }
     // A MASK, not a rewrite: the operator's stored HW preference survives a
     // session on a radio that has no hardware black level, and comes back by
@@ -8523,6 +8699,8 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 
     // QSO recorder: track active slice for frequency/mode metadata (#1297)
     m_qsoRecorder->setSlice(s);
+    // Radio-side recording is per slice, and AetherRX shows the active one.
+    syncAetherRxRecordButtons();
 
     // Re-wire applet panel, overlay menu to the new active slice
     if (m_panStack) {
@@ -9039,9 +9217,7 @@ void MainWindow::setActivePanApplet(PanadapterApplet* applet)
 // so decoded text appears in the correct pan's CW widget (#864).
 void MainWindow::routeCwDecoderOutput()
 {
-#ifdef HAVE_DEEPFIST
-    refreshCwRxContext();
-#endif
+    if (m_cwAudio) { m_cwAudio->setSlice(activeSlice()); }
     // Determine which applet should receive CW decoder output:
     // the pan that owns the active audio slice (whose audio feeds the decoder).
     PanadapterApplet* target = nullptr;
@@ -9067,7 +9243,7 @@ void MainWindow::routeCwDecoderOutput()
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
                    this, &MainWindow::cwRxModelAction);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                   &m_cwDecoder, &CwRxModel::stop);
+                   this, &MainWindow::stopCwRx);
 #endif
         disconnect(&m_cwDecoder, &CwRxModel::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwText);
@@ -9086,7 +9262,7 @@ void MainWindow::routeCwDecoderOutput()
         disconnect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
                    &m_cwDecoder, &CwRxModel::setSpeedRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                   &m_cwDecoder, &CwRxModel::stop);
+                   this, &MainWindow::stopCwRx);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                    &m_cwDecoderTx, &CwDecoder::stop);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
@@ -9129,12 +9305,13 @@ void MainWindow::routeCwDecoderOutput()
         m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(),
                                   m_cwDecoderApplet->speedRangeHigh());
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                &m_cwDecoder, &CwRxModel::stop);
+                this, &MainWindow::stopCwRx);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                 &m_cwDecoderTx, &CwDecoder::stop);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
                 &m_cwCallsignSpotter, &CwCallsignSpotter::feedText);
     }
+    refreshCwInputStatus();
 }
 
 // Recompute the CW decoder run state, panel visibility, and the
@@ -9182,6 +9359,10 @@ void MainWindow::refreshCwDecodeState()
     refreshCwRxBackend();
 #endif
     const bool shouldRunRx = isCw && rxOn;
+    if (m_cwAudio) {
+        m_cwAudio->setSlice(s);
+        m_cwAudio->setEnabled(shouldRunRx);
+    }
     if (shouldRunRx && !m_cwDecoder.isRunning())
         m_cwDecoder.start();
     else if (!shouldRunRx && m_cwDecoder.isRunning())
@@ -9960,13 +10141,42 @@ void MainWindow::toggleMinimalMode(bool on)
             s.value("MinimalModeSplitterSizes", "").toByteArray());
         if (!splitterState.isEmpty())
             m_splitter->restoreState(splitterState);
-        m_splitter->show();
 
-        // Resume spectrum rendering
+        // The spectrum widgets stay HIDDEN until the window has its full
+        // geometry back, and are shown one event-loop turn later, below.
+        // Visible, every step that follows — releasing the fixed width, the
+        // status bar, restoreGeometry, showNormal, the re-anchor — resizes
+        // them, and QRhiWidget::resizeEvent renders synchronously on each
+        // resize.  When the app was launched in minimal mode the spectrum has
+        // never been drawn, so its first QRhi set-up and first texture
+        // uploads land inside that resize cascade.  On Intel D3D11
+        // (igd10umt64xe, Arc 140V, driver 32.0.101.8626) that faults in
+        // ID3D11DeviceContext::UpdateSubresource and kills the process
+        // (#4363, #4990).  Deferred, the first frame is drawn once, at the
+        // final size, after layout has settled — the same conditions as a
+        // normal launch.  Only the spectrum widgets are held back, not the
+        // whole splitter: hiding the splitter left the full-size window with
+        // no central content (applet panel included) until that first frame.
+        // Floating pans live in their own window and are left alone.
+        QList<QPointer<SpectrumWidget>> heldSpectra;
         if (m_panStack) {
-            for (auto* a : m_panStack->allApplets())
-                a->spectrumWidget()->setUpdatesEnabled(true);
+            for (auto* a : m_panStack->allApplets()) {
+                auto* sw = a->spectrumWidget();
+                // Skip only an explicit hide(), never a spectrum that simply
+                // has not been shown yet — the launched-in-minimal case this
+                // hold exists for.
+                const bool explicitlyHidden = sw->isHidden()
+                    && sw->testAttribute(Qt::WA_WState_ExplicitShowHide);
+                if (m_panStack->isFloating(a->panId()) || explicitlyHidden)
+                    continue;
+                QSizePolicy sp = sw->sizePolicy();
+                sp.setRetainSizeWhenHidden(true);  // pan layout keeps its space
+                sw->setSizePolicy(sp);
+                sw->hide();
+                heldSpectra.append(sw);
+            }
         }
+        m_splitter->show();
 
         // Release fixed width and restore minimum size
         setFixedWidth(QWIDGETSIZE_MAX);
@@ -9991,6 +10201,39 @@ void MainWindow::toggleMinimalMode(bool on)
         // phantom-caption offset.  Re-anchoring first would just be undone.
         if (restored)
             reanchorCustomFrameGeometry(geom);
+
+        // Now show the spectrum, one turn later (see the note above the
+        // splitter restore).  Queued BEFORE the canvas re-entry below, which
+        // expects the spectrum shown; same-turn timers run in order.
+        QTimer::singleShot(0, this, [this, heldSpectra] {
+            // Resume rendering BEFORE showing the held spectra: the show
+            // delivers their pending resize, and QRhiWidget draws its first
+            // frame from that resize.  With updates still off that frame is
+            // dropped, and a render-to-texture widget does not repaint on a
+            // later update() (seen on Linux: the spectrum stayed blank until
+            // something grabbed it).  Not if minimal mode was re-entered
+            // before this turn ran — a deferred WindowStateChange landing in
+            // changeEvent during showNormal()/restoreGeometry(), the hazard
+            // m_enteringMinimalMode guards on the enter side (a second Ctrl+M
+            // is its own event and cannot get in first): the enter path
+            // suspended rendering again, so leave it suspended.
+            if (!m_minimalMode && m_panStack) {
+                for (auto* a : m_panStack->allApplets())
+                    a->spectrumWidget()->setUpdatesEnabled(true);
+            }
+            // Always undo the hold, re-entered or not: the enter path has
+            // hidden the splitter by then, so showing these draws nothing,
+            // and a widget left hidden here would be skipped by every later
+            // exit.
+            for (const auto& sw : heldSpectra) {
+                if (!sw)
+                    continue;  // pan closed during the turn
+                QSizePolicy sp = sw->sizePolicy();
+                sp.setRetainSizeWhenHidden(false);
+                sw->setSizePolicy(sp);
+                sw->show();
+            }
+        });
 
         // The round trip ends where it started: minimal entered from
         // canvas mode returns to canvas mode.  Deferred one event-loop

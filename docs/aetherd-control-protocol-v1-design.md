@@ -258,10 +258,18 @@ generated high-entropy token stored only in the OS credential vault.  Tokens
 map to explicit grants and can be revoked without changing the protocol.
 
 The initial Stage 3 local endpoint authenticates implicitly through that
-current-user boundary, so its `hello` omits `auth`. Until a remote transport
-supplies a verifier, any supplied `auth` field is rejected with `auth.invalid`;
-credentials are never accepted and ignored. The `auth` shape above is reserved
-for a transport wired to the verifier described here.
+current-user boundary, so its `hello` omits `auth`. Without an explicitly bound
+verifier, any supplied `auth` field is rejected with `auth.invalid`; credentials
+are never accepted and ignored. The local Stage 4 foundation optionally binds
+an OS-vault verifier through `--credential-authority`; its strict bearer shape,
+offline provisioning and retirement contract are specified in
+[`aetherd-stage4-client-grants.md`](aetherd-stage4-client-grants.md).
+Verified identity and the grant-admin role are not observe/control/TX grants.
+The explicit local `--allow-local-tx` service adds private `tx.*` and `txAdmin.*`
+methods as specified in that document. No startup grant is issued. Only the
+selected grant-admin credential may arm a live client connection; ordinary
+authentication or local control never suffices. Reconnect/radio invalidation
+requires fresh authorization, and every burst requires fresh acquisition intent.
 
 The service now enforces an explicit, immutable authorization context on each
 `ControlSession`. The default context is unauthenticated: after envelope
@@ -288,9 +296,13 @@ The local transport aborts synchronously to discard its unwritten output;
 already delivered bytes cannot be recalled. Revocation is idempotent and
 terminal even before negotiation or while a resync notice is pending. A newly
 verified connection creates a new session and must take a fresh baseline.
-There is no wire revocation method, daemon caller of the revocation hook, or
-credential provisioning in this slice; revocation remains a trusted embedding
-hook. The no-grants context likewise has no production
+Terminal transport paths end session authority synchronously before deferred
+socket cleanup or a final error reply. A trusted embedding can bind one
+authority-retirement callback to this lifetime; the binding does not authenticate
+a client or issue a grant. Unrecoverable output failure invokes revocation and
+aborts delivery. There is no wire credential-provisioning or revocation method;
+the Stage 4 offline CLI cannot change records while that authority is serving.
+The no-grants context likewise has no production
 producer yet. Output binding rejects duplicate bindings, missing callbacks, and
 mismatched calling/endpoint threads in release builds as well as debug builds.
 Both endpoints must remain on their owning thread after binding.
@@ -357,6 +369,10 @@ the engine or other sessions.
 
 All dispatch runs on the engine/model owning thread.  Transport callbacks only
 frame and enqueue bounded work; they never mutate models from a socket thread.
+The local input pump processes at most 16 frames and reads at most 64 KiB per
+event-loop turn, scheduling a continuation when either budget is exhausted.
+These scheduling bounds are not additional wire limits: they let timers and
+other clients run even when one client has a large buffered burst.
 
 ## 9. Error registry
 

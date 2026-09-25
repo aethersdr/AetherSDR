@@ -1,9 +1,9 @@
 #include "MainWindowHelpers.h"
 
 #include "SpectrumWidget.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/RadioDiscovery.h"
-#include "core/SmartLinkClient.h"
+#include "core/backends/flex/SmartLinkClient.h"
 #include "models/BandSettings.h"
 #include "models/MemoryEntry.h"
 #include "models/RadioModel.h"

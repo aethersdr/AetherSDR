@@ -77,7 +77,11 @@ struct MeterSurface {
 // to a connect() found in the GUI; a meter listed here with rendered=false has
 // no such connection anywhere.
 inline constexpr std::array<MeterSurface, 10> kMeterSurfaces{{
-    {"SLC:LEVEL", "dBm", "MeterModel::sLevelChanged / sLevel()",
+    // sLevelForSlice(), NOT the sLevel() scalar this row used to name. That
+    // scalar had no writer, so half of what this row advertised was a dead
+    // path while the row itself said the listing was "verified against the
+    // wiring, not assumed" (#5499 item 2).
+    {"SLC:LEVEL", "dBm", "MeterModel::sLevelChanged / sLevelForSlice()",
      "S-meter applet; VFO slice signal flag; AGC calibration dialog", true},
 
     {"TX:FWDPWR", "Watts,dBm", "MeterModel::directionalPowerMetersChanged / fwdPowerInstant()",

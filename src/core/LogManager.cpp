@@ -83,7 +83,7 @@ LogManager::LogManager()
         // share the rig-control plumbing that the qCInfo lines report on.
         // The description names the TX-summary fields (blocks/peak/rms/clips)
         // because those are the tokens an operator greps a support log for.
-        {"aether.cat",        "TCI / CAT / rigctld",  "TCI server (slice and DAX arming, TX audio summary: blocks, peak, rms, clips), rigctld TCP servers, PTY virtual serial ports"},
+        {"aether.cat",        "TCI / CAT / rigctld",  "TCI server (slice and DAX arming, TX audio summary, TX_CHRONO stall summary at debug: maxGap/latePolls/catch-up), rigctld TCP servers, PTY virtual serial ports"},
         {"aether.dax",        "DAX",          "Virtual audio bridge (PipeWire/CoreAudio)"},
         {"aether.meters",     "Meters",       "Meter definitions and value conversion"},
         {"aether.transmit",   "Transmit",     "TX state, ATU, profiles, power control"},
