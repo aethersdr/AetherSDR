@@ -878,6 +878,37 @@ int main(int argc, char** argv)
         Hl2UnkeyHoldTestAccess::tearDown(backend);
     }
 
+    // -- 7d. BREAK-IN AT A DELAY EQUAL TO THE HOLD: THE HOLD STILL ARMS ---
+    //
+    // THE BOUNDARY OF THE RULING. The hold is skipped only when the break-in
+    // delay is SHORTER than the hold, so a hang exactly as long as the hold
+    // is not short and gets the ordinary hold. 7a and 7c sit far either side
+    // of the line; without this leg, `<` loosened to `<=` passes both.
+    {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+        Hl2UnkeyHoldTestAccess::setTxReceiverMode(backend, "CW");
+        const int hold = 200;
+        const int cwDelayMs = hold;   // equal: NOT shorter than the hold
+        Hl2UnkeyHoldTestAccess::setHoldMs(backend, hold);
+
+        backend.setCwKeying(true, /*breakIn=*/true, cwDelayMs, tx.operation);
+        backend.setCwKeying(false, /*breakIn=*/true, cwDelayMs, tx.operation);
+        pumpUntilMoxOffOr(backend, cwDelayMs + 10 * hold + 500);
+
+        check(Hl2UnkeyHoldTestAccess::moxOffApplied(backend),
+              "break-in/equal: the MOX-off went out");
+        check(Hl2UnkeyHoldTestAccess::holdArmed(backend),
+              "break-in/equal: THE HOLD IS ARMED — a delay equal to the hold is "
+              "not shorter than it, so the ruling does not skip it");
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "break-in/equal: and the receiver is still shut at the MOX-off");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+
     // -- 8. BREAK-IN OFF: the hold still arms and still runs its length -----
     //
     // SEMI-BREAK-IN IS THE OTHER HALF OF THE RULING and it is asserted, not
@@ -917,7 +948,7 @@ int main(int argc, char** argv)
         backend.setKeying(false, tx.operation);
         sinceRealUnkey.start();
         check(Hl2UnkeyHoldTestAccess::holdArmed(backend),
-              "semi: THE HOLD STILL ARMS — only full break-in skips it");
+              "semi: THE HOLD STILL ARMS — only short-delay full break-in skips it");
         check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
               "semi: and the receiver is held shut past the MOX-off");
         check(Hl2UnkeyHoldTestAccess::moxOffApplied(backend),
