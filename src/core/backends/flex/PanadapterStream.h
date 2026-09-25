@@ -3,8 +3,8 @@
 #include "core/PcmFrame.h"
 #include <map>
 
-#include "PacketLossConcealment.h"
-#include "VitaBinCoverage.h"
+#include "core/PacketLossConcealment.h"
+#include "core/VitaBinCoverage.h"
 
 #include <QObject>
 #include <QUdpSocket>
@@ -148,6 +148,8 @@ public:
         Tci    = 1,   // TCI server audio clients (WSJT-X etc.)
         Rade   = 2,   // RADE digital-voice engine
         Clock  = 3,   // AetherClock time-signal decode engine
+        CwDecoder = 4, // selected receiver CW decoder (pre-monitor DAX)
+        RttyDecoder = 5, // selected receiver RTTY decoder (pre-monitor DAX)
     };
     static const char* daxConsumerName(DaxConsumer who);
 
