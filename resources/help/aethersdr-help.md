@@ -215,9 +215,10 @@ to one ear and the receive slice to the other — the next split you start comes
 back the same way, with no clicks, and keeps coming back until you change it.
 Only the transmit slice's mute, level and pan are remembered, plus the receive
 slice's pan if you moved it; the receive slice's own volume and mute are never
-touched, and its original pan is restored when the split ends. Ending a split
-with the transmit slice muted clears what was remembered, so muting it once is
-enough to go back to the original behaviour. Splits started by a logging program or another client over
+touched, and its original pan is restored when the split ends. If you mute the
+transmit slice yourself before ending a split, what was remembered is cleared,
+so muting it once is enough to go back to the original behaviour.
+Splits started by a logging program or another client over
 CAT, Hamlib or TCI are left alone.
 
 ## The Applet Panel

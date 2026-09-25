@@ -55,6 +55,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QSpinBox>
+#include <QStatusBar>
 #include <QTextEdit>
 #include <QTimer>
 
@@ -404,7 +405,16 @@ void MainWindow::beginSplitMonitor(bool keyHeld)
     if (m_splitMonitor.active()) return;
     SliceModel* rx = nullptr;
     SliceModel* tx = nullptr;
-    if (!activeSplitPair(rx, tx)) return;
+    if (!activeSplitPair(rx, tx)) {
+        // A control that does nothing should say so (#5265). With more than
+        // one split running, the operator has to say which by selecting it.
+        QHash<QString, SliceModel*> txByPan, rxByPan;
+        resolveSplitPairs(txByPan, rxByPan);
+        statusBar()->showMessage(rxByPan.isEmpty()
+            ? tr("Monitor TX needs a split.")
+            : tr("Monitor TX: select a slice on the split to monitor."), 3000);
+        return;
+    }
 
     m_splitAudioApplying = true;
     const bool began = m_splitMonitor.begin(rx, tx, loadSplitAudioProfile().monitor);
@@ -412,14 +422,70 @@ void MainWindow::beginSplitMonitor(bool keyHeld)
     m_splitMonitorKeyHeld = began && keyHeld;
 }
 
-void MainWindow::endSplitMonitor()
+void MainWindow::endSplitMonitor(bool deferWrites)
 {
     if (!m_splitMonitor.active()) return;
-    m_splitAudioApplying = true;
-    m_splitMonitor.end(m_radioModel.slice(m_splitMonitor.rxId()),
-                       m_radioModel.slice(m_splitMonitor.txId()));
-    m_splitAudioApplying = false;
     m_splitMonitorKeyHeld = false;
+    // The hold is over NOW (its ids may be reused by the next slice); only the
+    // restoring writes may wait a turn — see recordSplitAudioMirror().
+    auto hold = m_splitMonitor;
+    m_splitMonitor = {};
+    if (deferWrites) {
+        // A live removal: the removed slice is gone for good; restore the
+        // survivor after the radio's queued status burst.
+        QTimer::singleShot(0, this, [this, hold]() mutable {
+            m_splitAudioApplying = true;
+            hold.end(m_radioModel.slice(hold.rxId()), m_radioModel.slice(hold.txId()));
+            m_splitAudioApplying = false;
+        });
+        return;
+    }
+    // Released while the connection is down: RadioModel has parked the slices
+    // (alive, out of the live map) and will reclaim the SAME objects. The
+    // radio still holds the hold's mutes, so the restore must wait for them.
+    const bool rxParked = hold.rxObject() && !m_radioModel.slice(hold.rxId());
+    const bool txParked = hold.txObject() && !m_radioModel.slice(hold.txId());
+    if (rxParked || txParked) {
+        m_splitMonitorPendingRelease = hold;
+        qCInfo(lcGui) << "Split monitor: released while slices are parked;"
+                      << "restore waits for the reclaim";
+        return;
+    }
+    m_splitAudioApplying = true;
+    hold.end(m_radioModel.slice(hold.rxId()), m_radioModel.slice(hold.txId()));
+    m_splitAudioApplying = false;
+}
+
+void MainWindow::tryCompletePendingMonitorRelease()
+{
+    auto& p = m_splitMonitorPendingRelease;
+    if (!p.active()) return;
+    const bool rxParked = p.rxObject() && !m_radioModel.slice(p.rxId());
+    const bool txParked = p.txObject() && !m_radioModel.slice(p.txId());
+    if (rxParked || txParked) return;   // not everything is back yet
+    // Reclaimed objects are restored; a destroyed or replaced one is not
+    // written (SplitMonitorHold's identity fence).
+    m_splitAudioApplying = true;
+    p.end(m_radioModel.slice(p.rxId()), m_radioModel.slice(p.txId()));
+    m_splitAudioApplying = false;
+}
+
+void MainWindow::endSplitMonitorForSlice(int sliceId, bool deferWrites)
+{
+    if (m_splitMonitor.active()
+        && (sliceId == m_splitMonitor.rxId() || sliceId == m_splitMonitor.txId()))
+        endSplitMonitor(deferWrites);
+}
+
+void MainWindow::endSplitMonitorForPan(const QString& panId)
+{
+    if (!m_splitMonitor.active() || panId.isEmpty()) return;
+    for (const int id : {m_splitMonitor.rxId(), m_splitMonitor.txId()}) {
+        if (auto* s = m_radioModel.slice(id); s && s->panId() == panId) {
+            endSplitMonitor();
+            return;
+        }
+    }
 }
 
 

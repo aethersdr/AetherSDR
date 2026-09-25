@@ -249,6 +249,11 @@ void MainWindow::noteBandRecallForPan(const QString& panId)
         return;
     }
 
+    // A FLEX band recall persists each slice's current audio_mute into the
+    // outgoing band slot (SliceModel.h). A Monitor TX hold's temporary mute is
+    // not the operator's, so unwind it before the command goes out. (#2242)
+    endSplitMonitorForPan(panId);
+
     // Flex band persistence destroys and rebuilds this pan's slices. Snapshot
     // the locked receiver and our pre-recall topology before sending the band
     // command. Restoration is deferred until the full grace window elapses so
@@ -2302,11 +2307,6 @@ void MainWindow::onSliceAdded(SliceModel* s)
     });
 
     // If split is pending, this new slice is the TX slice
-    // An RX slice the radio dropped and re-created mid-split (band recall does
-    // this, same id) took its pan-learning connection with it. (#2242)
-    if (m_splitAudioRecorder.armed() && s->sliceId() == m_splitAudioRxSliceId)
-        connectSplitAudioRx(s);
-
     if (m_splitActive && m_splitTxSliceId < 0 && s->sliceId() != m_splitRxSliceId) {
         m_splitTxSliceId = s->sliceId();
         s->setTxSlice(true);
@@ -2509,9 +2509,9 @@ void MainWindow::onSliceRemoved(int id)
     // A Monitor TX hold on a slice that no longer exists ends now: the id can be
     // reused by the next slice, and a later release must not restore a mute
     // onto a slice the hold never touched. (#2242)
-    if (m_splitMonitor.active()
-        && (id == m_splitMonitor.rxId() || id == m_splitMonitor.txId()))
-        endSplitMonitor();
+    // Deferred: the radio's status burst for the remaining slice is already
+    // queued and would overwrite a synchronous restore (see recordSplitAudioMirror).
+    endSplitMonitorForSlice(id, /*deferWrites=*/true);
 
     // If the split TX slice was closed, disable split
     if (m_splitActive && id == m_splitTxSliceId) {
@@ -2525,8 +2525,9 @@ void MainWindow::onSliceRemoved(int id)
         const int rxId = m_splitRxSliceId;   // capture before reset
         // Same learn-and-restore as disableSplit(). The TX slice model is
         // already gone here, so everything recorded comes from the mirror —
-        // the reason it is kept live for the whole split. (#2242)
-        recordSplitAudioMirror();
+        // the reason it is kept live for the whole split. The restore is
+        // deferred past the radio's queued status burst. (#2242)
+        recordSplitAudioMirror(/*deferRestore=*/true);
         m_splitActive = false;
         m_splitRxSliceId = -1;
         m_splitTxSliceId = -1;
@@ -7392,14 +7393,22 @@ bool MainWindow::activeSplitPair(SliceModel*& rx, SliceModel*& tx) const
         rx = rxByPan.value(panId);
         return tx && rx;
     }
+    // Only when there is exactly ONE pair: with two, which one a keyboard
+    // Split Up would retune is not something to pick by hash order.
+    SliceModel* soleTx = nullptr;
+    SliceModel* soleRx = nullptr;
+    int pairs = 0;
     for (auto it = txByPan.cbegin(); it != txByPan.cend(); ++it) {
         if (auto* partner = rxByPan.value(it.key(), nullptr)) {
-            tx = it.value();
-            rx = partner;
-            return tx && rx;
+            soleTx = it.value();
+            soleRx = partner;
+            ++pairs;
         }
     }
-    return false;
+    if (pairs != 1) return false;
+    tx = soleTx;
+    rx = soleRx;
+    return tx && rx;
 }
 
 bool MainWindow::splitPairForSlice(int sliceId, SliceModel*& rx, SliceModel*& tx) const
@@ -7501,7 +7510,13 @@ void MainWindow::armSplitAudioMirror(SliceModel* rx, SliceModel* tx,
     if (!tx) return;
 
     m_splitAudioRxSliceId = rx ? rx->sliceId() : -1;
+    m_splitAudioRxSlice   = rx;
     m_splitAudioRecorder.arm(applied.rxPanBefore, applied.rxPanMoved);
+    qCInfo(lcGui) << "Split audio: armed rx=" << m_splitAudioRxSliceId
+                  << "tx=" << tx->sliceId()
+                  << "rxPanBefore=" << applied.rxPanBefore
+                  << "rxPanMovedByApply=" << applied.rxPanMoved
+                  << "restored=" << applied.restored;
 
     m_splitAudioConns.append(connect(tx, &SliceModel::audioMuteCommandIssued, this,
         [this](bool mute) {
@@ -7515,19 +7530,16 @@ void MainWindow::armSplitAudioMirror(SliceModel* rx, SliceModel* tx,
         [this](int pan) {
             if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxPan(pan);
         }));
-    if (rx)
-        connectSplitAudioRx(rx);
-}
-
-void MainWindow::connectSplitAudioRx(SliceModel* rx)
-{
-    // RX pan only. Its volume and mute are the operator's everyday listening
-    // level and stay out of this entirely (#2242) — a split must not come back
-    // later and change how the radio sounds the rest of the time.
-    m_splitAudioConns.append(connect(rx, &SliceModel::audioPanCommandIssued, this,
-        [this](int pan) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteRxPan(pan);
-        }));
+    if (rx) {
+        // RX pan only. Its volume and mute are the operator's everyday
+        // listening level and stay out of this entirely (#2242) — a split must
+        // not come back later and change how the radio sounds the rest of the
+        // time.
+        m_splitAudioConns.append(connect(rx, &SliceModel::audioPanCommandIssued, this,
+            [this](int pan) {
+                if (!m_splitAudioApplying) m_splitAudioRecorder.noteRxPan(pan);
+            }));
+    }
 }
 
 void MainWindow::disarmSplitAudioMirror()
@@ -7537,28 +7549,41 @@ void MainWindow::disarmSplitAudioMirror()
     m_splitAudioConns.clear();
     m_splitAudioRecorder.disarm();
     m_splitAudioRxSliceId = -1;
+    m_splitAudioRxSlice.clear();
 }
 
-void MainWindow::recordSplitAudioMirror()
+void MainWindow::recordSplitAudioMirror(bool deferRestore)
 {
     if (!m_splitAudioRecorder.armed()) return;
 
     // A momentary hold is not an arrangement. Unwind it first so ending the
     // split mid-monitor records what the operator set up, not what the hold
     // was temporarily doing to it.
-    endSplitMonitor();
+    endSplitMonitor(deferRestore);
 
     saveSplitAudioProfile(m_splitAudioRecorder.merge(loadSplitAudioProfile()));
 
     // Put the RX slice's pan back. The operator panned it left FOR the split,
-    // not for everything they do afterwards.
-    if (const int restore = m_splitAudioRecorder.rxPanToRestore(); restore >= 0) {
-        if (auto* rxSlice = m_radioModel.slice(m_splitAudioRxSliceId);
-            rxSlice && !rxSlice->externalReceiveReplacementActive()) {
+    // not for everything they do afterwards. Only onto the same RX object.
+    const int restore = m_splitAudioRecorder.rxPanToRestore();
+    qCInfo(lcGui) << "Split audio: ended rx=" << m_splitAudioRxSliceId
+                  << "rxPanToRestore=" << restore
+                  << "deferred=" << deferRestore;
+    if (restore >= 0) {
+        const QPointer<SliceModel> rx = m_splitAudioRxSlice;
+        const int rxId = m_splitAudioRxSliceId;
+        auto apply = [this, rx, rxId, restore]() {
+            if (!rx || m_radioModel.slice(rxId) != rx.data()
+                || rx->externalReceiveReplacementActive())
+                return;
             m_splitAudioApplying = true;
-            rxSlice->setAudioPan(restore);
+            rx->setAudioPan(restore);
             m_splitAudioApplying = false;
-        }
+        };
+        if (deferRestore)
+            QTimer::singleShot(0, this, apply);
+        else
+            apply();
     }
 
     disarmSplitAudioMirror();

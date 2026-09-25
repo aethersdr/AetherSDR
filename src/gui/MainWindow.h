@@ -550,16 +550,28 @@ private:
     // already gone (onSliceRemoved) and cannot be read.
     void armSplitAudioMirror(SliceModel* rx, SliceModel* tx,
                              const AetherSDR::SplitAudioApplyResult& applied);
-    void connectSplitAudioRx(SliceModel* rx);
     void applyAndArmSplitAudio(SliceModel* rx, SliceModel* tx);
-    void recordSplitAudioMirror();
+    // deferRestore: the slice was removed out of band, and the radio's status
+    // burst for the remaining slice is already queued behind this call. A
+    // synchronous restore would be overwritten by that stale status (Flex
+    // does not echo our own audio_pan back), so it runs one event-loop turn
+    // later, after the burst. Verified on a FLEX-8600.
+    void recordSplitAudioMirror(bool deferRestore = false);
     void disarmSplitAudioMirror();
+    // End a Monitor TX hold that involves any slice on panId, or sliceId.
+    // Called on the edges where a temporary hold mute would otherwise be
+    // captured as real state: a band recall and a KiwiSDR takeover.
+    void endSplitMonitorForPan(const QString& panId);
+    void endSplitMonitorForSlice(int sliceId, bool deferWrites = false);
     AetherSDR::SplitAudioProfile loadSplitAudioProfile() const;
     void saveSplitAudioProfile(const AetherSDR::SplitAudioProfile& p);
     // Momentary Monitor TX — the Icom XFC / Kenwood TF-SET / Yaesu TXW control.
     bool handleSplitMonitorShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
     void beginSplitMonitor(bool keyHeld = false);
-    void endSplitMonitor();
+    void endSplitMonitor(bool deferWrites = false);
+    // A release that found its slices parked for a reconnect (alive, but not
+    // in the live map) waits here until RadioModel reclaims them.
+    void tryCompletePendingMonitorRelease();
     // Enter split on rxSliceId: create the TX slice offsetMhz above it, or at
     // the mode default (CW 1 kHz, otherwise 5 kHz) when none is given.
     void enterSplit(int rxSliceId, std::optional<double> offsetMhz = std::nullopt);
@@ -1722,10 +1734,15 @@ private:
     // onSliceRemoved has already destroyed by the time it runs. It is fed ONLY
     // from the *CommandIssued signals — those do not fire for radio status
     // echoes, so a pan moved by another client never becomes a preference
-    // (Principle II). See core/SplitAudioProfile.h.
+    // (Principle II). See gui/SplitAudioProfile.h.
     AetherSDR::SplitAudioRecorder m_splitAudioRecorder;
     QVector<QMetaObject::Connection> m_splitAudioConns;
     int m_splitAudioRxSliceId{-1};
+    // The RX slice OBJECT the recorder was armed on. The RX-pan restore only
+    // goes to that object: a reconnect reclaims the same object, while a new
+    // slice that reuses the id (a later session, a recreated slice) is not
+    // the split's RX and must not have its pan moved.
+    QPointer<SliceModel> m_splitAudioRxSlice;
     // True while WE are moving slice audio (applying a profile, or a Monitor TX
     // hold). Suppresses mirror recording so the app's own writes are never
     // mistaken for the operator's choices.
@@ -1738,6 +1755,9 @@ private:
     // release to another window, so only it is ended on deactivation; a
     // FlexControl/HID toggle stays in step with the operator's last press.
     bool m_splitMonitorKeyHeld{false};
+    // A released hold whose slices were parked (disconnected) at release time.
+    // Completed on slotOccupancyChanged when the same objects are reclaimed.
+    AetherSDR::SplitMonitorHold<SliceModel> m_splitMonitorPendingRelease;
     int  m_pendingMemoryRevealSliceId{-1};
     double m_pendingMemoryRevealTargetMhz{0.0};
     int  m_pendingSpectrumTargetSliceId{-1};

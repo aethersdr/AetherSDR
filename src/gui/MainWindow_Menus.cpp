@@ -1824,9 +1824,12 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
         if (pan >= 67) return tr("right");
         return tr("centre");
     };
+    const bool pending = m_splitAudioRecorder.hasPendingLearning();
     QString summaryText;
     if (!profile.hasLearnedState()) {
-        summaryText = tr("Nothing remembered yet");
+        summaryText = pending
+            ? tr("This split's changes will be remembered when it ends")
+            : tr("Nothing remembered yet");
     } else {
         QStringList parts;
         if (profile.hasTxMute)
@@ -1840,13 +1843,17 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     summary->setEnabled(false);
 
     QAction* forget = menu.addAction(tr("Forget remembered audio"));
-    forget->setEnabled(profile.hasLearnedState());
-    if (!profile.hasLearnedState())
+    const bool forgettable = profile.hasLearnedState() || pending;
+    forget->setEnabled(forgettable);
+    if (!forgettable)
         forget->setStatusTip(tr("Nothing is remembered yet."));
     connect(forget, &QAction::triggered, this, [this]() {
         auto p = loadSplitAudioProfile();
         p.forgetLearnedState();   // keeps the chosen monitor mode
         saveSplitAudioProfile(p);
+        // And this split's edits so far, or the split's end would write them
+        // straight back. The RX pan is still put back at exit.
+        m_splitAudioRecorder.forgetTouched();
         // Let the notice fire again: after a forget the next restore is news.
         m_splitAudioNoticeShown = false;
     });

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QPointer>
 
 namespace AetherSDR {
 
@@ -115,6 +116,20 @@ public:
     void disarm() { *this = SplitAudioRecorder{}; }
     bool armed() const { return m_armed; }
 
+    // "Forget remembered audio" pressed mid-split: drop what this split has
+    // learned so far, or merge() would write it straight back at split end.
+    // The RX-pan restore is kept — the split still moved it.
+    void forgetTouched()
+    {
+        m_txMuteTouched = m_txGainTouched = m_txPanTouched = m_rxPanTouched = false;
+    }
+    // This split has operator edits that merge() will store when it ends.
+    bool hasPendingLearning() const
+    {
+        return m_armed && (m_txMuteTouched || m_txGainTouched
+                           || m_txPanTouched || m_rxPanTouched);
+    }
+
     // Operator-issued changes only. Every caller is a *CommandIssued signal,
     // which does not fire for radio status echoes — so a pan moved by another
     // client on the radio, or the front panel, never arrives here. And a note
@@ -124,7 +139,13 @@ public:
     void noteTxMute(bool muted) { if (noting()) { m_txMuteTouched = true; m_txMuted = muted; } }
     void noteTxGain(int gain)   { if (noting()) { m_txGainTouched = true; m_txGain  = gain; } }
     void noteTxPan(int pan)     { if (noting()) { m_txPanTouched  = true; m_txPan   = pan; } }
-    void noteRxPan(int pan)     { if (noting()) { m_rxPanTouched  = true; m_rxPan   = pan; } }
+    void noteRxPan(int pan)
+    {
+        if (!noting()) return;
+        m_rxPanTouched = true;
+        m_rxPanMovedByOperator = true;   // survives forgetTouched(): restore duty
+        m_rxPan = pan;
+    }
 
     // The profile to store. Learned fields CARRY FORWARD: `existing` was
     // replayed onto this split, so a field the operator left alone is still
@@ -140,7 +161,7 @@ public:
     // afterwards.
     int rxPanToRestore() const
     {
-        return ((m_rxPanTouched || m_rxPanMovedByApply) && m_rxPanBefore >= 0)
+        return ((m_rxPanMovedByOperator || m_rxPanMovedByApply) && m_rxPanBefore >= 0)
             ? m_rxPanBefore : -1;
     }
 
@@ -150,6 +171,9 @@ private:
     bool m_armed{false};
     int  m_rxPanBefore{-1};
     bool m_rxPanMovedByApply{false};
+    // Restore duty, kept apart from the learning flag below: forgetting what
+    // the split taught must not also forget that the RX pan was moved.
+    bool m_rxPanMovedByOperator{false};
     bool m_rxPanTouched{false};  int  m_rxPan{50};
     bool m_txMuteTouched{false}; bool m_txMuted{true};
     bool m_txGainTouched{false}; int  m_txGain{0};
@@ -211,6 +235,10 @@ SplitAudioApplyResult applySplitAudioProfile(const SplitAudioProfile& profile,
 
 // A momentary Monitor TX hold. It remembers which slice's NATIVE mute it
 // actually changed, and release restores exactly those and nothing else:
+//  • only into the SAME slice objects it changed: a reconnect that reclaims
+//    them (RadioModel keeps the objects) restores normally, while a new slice
+//    that merely reuses the id — a later session, a recreated slice — is never
+//    written;
 //  • a slice whose receive audio is replaced (DAX/TCI/Kiwi) is never touched,
 //    because SliceModel::setAudioMute() on it writes the replacement mute, a
 //    different domain from the one being restored;
@@ -231,6 +259,8 @@ public:
         m_active = true;
         m_rxId   = rx->sliceId();
         m_txId   = tx->sliceId();
+        m_rx     = rx;
+        m_tx     = tx;
 
         if (tx->flexAudioMute()) {
             tx->setAudioMute(false);
@@ -253,10 +283,10 @@ public:
     void end(Slice* rx, Slice* tx)
     {
         if (!m_active) return;
-        if (m_txUnmuted && tx && tx->sliceId() == m_txId
+        if (m_txUnmuted && tx && tx == m_tx.data()
             && !tx->externalReceiveReplacementActive())
             tx->setAudioMute(true);
-        if (m_rxChanged && rx && rx->sliceId() == m_rxId
+        if (m_rxChanged && rx && rx == m_rx.data()
             && !rx->externalReceiveReplacementActive())
             rx->setAudioMute(m_rxMuteBefore);
         *this = SplitMonitorHold{};
@@ -265,11 +295,17 @@ public:
     bool active() const { return m_active; }
     int  rxId() const { return m_rxId; }
     int  txId() const { return m_txId; }
+    // The held objects (null once destroyed). A caller that finds one alive
+    // but absent from the live slice map knows it is parked for a reconnect.
+    Slice* rxObject() const { return m_rx.data(); }
+    Slice* txObject() const { return m_tx.data(); }
 
 private:
     bool m_active{false};
     int  m_rxId{-1};
     int  m_txId{-1};
+    QPointer<Slice> m_rx;       // identity, not just the id (see above)
+    QPointer<Slice> m_tx;
     bool m_txUnmuted{false};
     bool m_rxChanged{false};
     bool m_rxMuteBefore{false};

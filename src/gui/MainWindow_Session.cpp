@@ -858,6 +858,10 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    // A reconnect reclaims our slice objects without sliceAdded; a Monitor TX
+    // release that happened while they were parked completes here. (#2242)
+    connect(&m_radioModel, &RadioModel::slotOccupancyChanged,
+            this, [this](int) { tryCompletePendingMonitorRelease(); });
     connect(&m_radioModel, &RadioModel::sliceConnectEnumerationStarted,
             this, [this]() {
         m_connectSliceEnumeration.arm(QDateTime::currentMSecsSinceEpoch());

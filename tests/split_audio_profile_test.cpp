@@ -490,6 +490,115 @@ void testWritesOutsideTheOperatorScopeAreNotLearned()
           "the replayed RX pan is still restored to its pre-split value");
 }
 
+// "Forget remembered audio" mid-split (bot review, Codex review, rnash2 on a
+// FLEX-6600): clearing the stored profile is not enough if the recorder still
+// holds this split's edits, because the split's end merges them straight back.
+void testForgetMidSplitDropsPendingEditsKeepsRestore()
+{
+    SplitAudioOperatorEdit op;
+    SplitAudioRecorder r;
+    r.arm(/*rxPanBefore=*/50, /*rxPanMovedByApply=*/false);
+    check(!r.hasPendingLearning(), "a fresh split has nothing pending");
+    r.noteTxPan(100);
+    r.noteRxPan(0);
+    check(r.hasPendingLearning(), "operator edits are pending until the split ends");
+
+    SplitAudioProfile stored;               // Forget already cleared this
+    stored.monitor = SplitAudioProfile::Monitor::Both;
+    r.forgetTouched();
+    check(!r.hasPendingLearning(), "forget drops the pending edits");
+    const auto p = r.merge(stored);
+    check(!p.hasLearnedState(), "the split's end writes nothing back after forget");
+    check(p.monitor == SplitAudioProfile::Monitor::Both, "monitor mode is kept");
+    check(r.rxPanToRestore() == 50,
+          "the RX pan the operator moved is still put back at exit");
+}
+
+// Codex review + automated pass: a hold must restore into the SAME slice
+// objects it changed. A quick reconnect reclaims those objects (RadioModel
+// keeps them), so the release must still work; a new session's slices that
+// merely reuse the ids must never be written.
+void testHoldRestoresOnlyIntoTheSameObjects()
+{
+    SplitMonitorHold hold;
+    SliceModel rx(0), tx(1);
+    tx.setAudioMute(true);
+    hold.begin(&rx, &tx, SplitAudioProfile::Monitor::Solo);
+
+    SliceModel rx2(0), tx2(1);            // same ids, different objects
+    rx2.setAudioMute(true);
+    tx2.setAudioMute(false);
+    SplitMonitorHold copy = hold;         // what a deferred release carries
+    copy.end(&rx2, &tx2);
+    check(rx2.flexAudioMute() && !tx2.flexAudioMute(),
+          "same-id slices that are not the held objects are not written");
+    check(rx.flexAudioMute() && !tx.flexAudioMute(),
+          "...and the held objects keep the hold's state until released");
+
+    hold.end(&rx, &tx);                   // reclaimed: the same objects
+    check(!rx.flexAudioMute() && tx.flexAudioMute(),
+          "the same objects (a reclaim after reconnect) are restored");
+}
+
+// A slice the hold changed was destroyed and a new one took its id: the
+// guarded pointer is null, so nothing is written anywhere.
+void testHoldOnDestroyedSlicesWritesNothing()
+{
+    SplitMonitorHold hold;
+    {
+        SliceModel rx(0), tx(1);
+        tx.setAudioMute(true);
+        hold.begin(&rx, &tx, SplitAudioProfile::Monitor::Solo);
+    }
+    SliceModel rx2(0), tx2(1);
+    rx2.setAudioMute(false);
+    tx2.setAudioMute(false);
+    hold.end(&rx2, &tx2);
+    check(!rx2.flexAudioMute() && !tx2.flexAudioMute(),
+          "a destroyed slice's successors are untouched");
+    check(!hold.active(), "and the hold is over");
+}
+
+// MainWindow parks a release whose slices are alive but out of the live map
+// (a reconnect in progress) and completes it on reclaim. That decision rests
+// on these accessors naming the held objects and going null once they die.
+void testHoldExposesItsObjectsForTheReclaimCheck()
+{
+    SplitMonitorHold hold;
+    auto* rx = new SliceModel(0);
+    SliceModel tx(1);
+    tx.setAudioMute(true);
+    hold.begin(rx, &tx, SplitAudioProfile::Monitor::Solo);
+    check(hold.rxObject() == rx && hold.txObject() == &tx,
+          "the hold names the objects it changed");
+    SplitMonitorHold pending = hold;      // a parked release keeps the copy
+    delete rx;                            // e.g. pruned instead of reclaimed
+    check(pending.rxObject() == nullptr && pending.txObject() == &tx,
+          "a destroyed held slice reads as gone, not parked");
+    pending.end(nullptr, &tx);
+    check(tx.flexAudioMute(), "the surviving held slice is still restored");
+}
+
+// Codex review: KiwiSDR snapshots the Flex mute when it takes a slice over and
+// restores that snapshot when it lets go. MainWindow ends any Monitor TX hold
+// on the slice FIRST (endSplitMonitorForSlice in the Kiwi takeover), so the
+// snapshot is the operator's real mute, not the hold's temporary one.
+void testKiwiTakeoverAfterEndingTheHoldRestoresAudible()
+{
+    SliceModel rx(0), tx(1);
+    tx.setAudioMute(true);
+    SplitMonitorHold hold;
+    hold.begin(&rx, &tx, SplitAudioProfile::Monitor::Solo);
+    check(rx.flexAudioMute(), "setup: the hold muted RX");
+
+    hold.end(&rx, &tx);                               // MainWindow's order
+    const bool kiwiPreviousMute = rx.flexAudioMute(); // Kiwi's snapshot
+    rx.setExternalReceiveAudioReplacementMute(true);
+    rx.setExternalReceiveAudioReplacementMute(false, kiwiPreviousMute);
+    check(!rx.flexAudioMute(),
+          "after Kiwi lets go the receiver is audible again");
+}
+
 // ── Monitor TX hold against real SliceModels ────────────────────────────────
 
 // Review blocker 3: an RX slice whose audio a KiwiSDR/DAX replacement owns is
@@ -613,6 +722,11 @@ int main(int argc, char** argv)
     testMonitorBothUnmutesRxForTheHold();
     testMonitorReplacementMidHold();
     testMonitorRefusesReplacedTxAndMissingSlices();
+    testForgetMidSplitDropsPendingEditsKeepsRestore();
+    testHoldRestoresOnlyIntoTheSameObjects();
+    testHoldOnDestroyedSlicesWritesNothing();
+    testHoldExposesItsObjectsForTheReclaimCheck();
+    testKiwiTakeoverAfterEndingTheHoldRestoresAudible();
 
     if (g_failures) {
         std::fprintf(stderr, "split_audio_profile_test: %d failure(s)\n", g_failures);
