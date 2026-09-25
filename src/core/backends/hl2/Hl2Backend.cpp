@@ -433,8 +433,9 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // window stops this timer, so reaching here while keyed should be
         // impossible — but "should be impossible" is how a hold turns into an
         // unmute in the middle of a transmission, and this costs one test.
-        if (m_keyed && !m_txMonitor)
+        if (m_keyed && !m_txMonitor) {
             return;
+        }
         applyRxAudioMute(false);
     });
 
@@ -1486,8 +1487,9 @@ void Hl2Backend::publishWideState()
 // run stops AT the offending call instead of logging past it.
 static void hl2RequireBackendThread(const QObject* owner, const char* what)
 {
-    if (owner->thread() == QThread::currentThread())
+    if (owner->thread() == QThread::currentThread()) {
         return;
+    }
     qCWarning(lcHl2) << "HL2:" << what
                      << "was called from a thread that does not own the "
                         "backend. m_rxAudioMuted is read without "
@@ -1510,9 +1512,10 @@ void Hl2Backend::applyRxAudioMute(bool muted)
     // writes while unmuted rather than trusting this request.
     m_sliceSampling.setRequested(!muted, hl2::steadyNowNs());
     for (Receiver& r : m_rx) {
-        if (r.dsp)
+        if (r.dsp) {
             QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
                 Q_ARG(bool, muted));
+        }
     }
 }
 
@@ -1524,8 +1527,9 @@ void Hl2Backend::releaseRxAudioMuteAfterHold()
         // ordinary path when the TX audio monitor is on: the key edge never
         // muted anything, and starting a 70 ms timer to un-mute an unmuted
         // chain would be a lie in the trace and a spurious wake-up.
-        if (m_unkeyUnmuteTimer)
+        if (m_unkeyUnmuteTimer) {
             m_unkeyUnmuteTimer->stop();
+        }
         return;
     }
     if (m_unkeyUnmuteHoldMs <= 0 || !m_unkeyUnmuteTimer) {
@@ -1574,8 +1578,9 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
     // the hold. That is one block, not the 70 ms the old gate would have let
     // through, and it is the same direction of skew the SliceSamplingGate
     // comment describes.
-    if (m_rxAudioMuted)
+    if (m_rxAudioMuted) {
         return;
+    }
     const Receiver* r = rx(ddc);
     if (!r || r->audioMuted)
         return;   // not queued at all: a muted receiver must not accumulate
@@ -4492,8 +4497,9 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     // radio's EXTERNAL keying inputs, which never go high for a host MOX key.
     // A delay is forced. #5497 measures its length; the header names it.
     if (muteWhileKeyed) {
-        if (m_unkeyUnmuteTimer)
+        if (m_unkeyUnmuteTimer) {
             m_unkeyUnmuteTimer->stop();   // a re-key inside the hold cancels it
+        }
         applyRxAudioMute(true);
     }
     // Drop whatever was already queued for the mix. On unkey these would be the
@@ -5068,8 +5074,9 @@ void Hl2Backend::setTxAudioMonitor(bool on)
     // would make a diagnostic that enables the monitor mid-over wait 70 ms for
     // audio it deliberately asked for.
     if (m_keyed && !on) {
-        if (m_unkeyUnmuteTimer)
+        if (m_unkeyUnmuteTimer) {
             m_unkeyUnmuteTimer->stop();
+        }
         applyRxAudioMute(true);
     } else if (!on && !m_keyed && m_unkeyUnmuteTimer && m_unkeyUnmuteTimer->isActive()) {
         // AN ARMED HOLD IS NOT AN OVERTAKEN ONE, and the else branch below used
@@ -5099,8 +5106,9 @@ void Hl2Backend::setTxAudioMonitor(bool on)
         // milliseconds later. Monitor ON falls through to the immediate path.
     } else {
         applyRxAudioMute(false);
-        if (m_unkeyUnmuteTimer)
+        if (m_unkeyUnmuteTimer) {
             m_unkeyUnmuteTimer->stop();   // overtaken, or answered on purpose
+        }
     }
 }
 
@@ -7889,8 +7897,9 @@ void Hl2Backend::pushInitialState()
     // ordering is what #5497 is about, and a counter-example sitting in the
     // same file is what a future reader copies (ten9876, #5850 review). Costs
     // nothing to put right.
-    if (m_unkeyUnmuteTimer)
+    if (m_unkeyUnmuteTimer) {
         m_unkeyUnmuteTimer->stop();
+    }
     applyRxAudioMute(false);
     // A fresh transport starts unkeyed by construction; an old connection's
     // stop must not be queued into it with a newly acquired operation.

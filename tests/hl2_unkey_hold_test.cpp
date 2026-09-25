@@ -248,8 +248,9 @@ static void pumpUntilUnmutedOr(Hl2Backend& backend, int deadlineMs)
     clock.start();
     while (clock.elapsed() < deadlineMs) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        if (!Hl2UnkeyHoldTestAccess::dspMuted(backend))
+        if (!Hl2UnkeyHoldTestAccess::dspMuted(backend)) {
             return;
+        }
         QThread::msleep(1);
     }
     QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
@@ -278,8 +279,9 @@ static void pumpUntilMoxOffOr(Hl2Backend& backend, int deadlineMs)
     clock.start();
     while (clock.elapsed() < deadlineMs) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-        if (Hl2UnkeyHoldTestAccess::moxOffApplied(backend))
+        if (Hl2UnkeyHoldTestAccess::moxOffApplied(backend)) {
             return;
+        }
         QThread::msleep(1);
     }
     QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
