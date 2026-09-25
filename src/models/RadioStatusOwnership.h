@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/CommandParser.h"
+#include "core/backends/flex/CommandParser.h"
 #include "core/StreamStatus.h"
 
 #include <QMap>

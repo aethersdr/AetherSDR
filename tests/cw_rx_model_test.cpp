@@ -67,22 +67,26 @@ bool retainLockedEstimates()
     decoder.setPitchRange(550, 650);
     decoder.setSpeedRange(18, 22);
     decoder.start();
-    // Exercise the original monitored-PCM facade, without A5's converter or
-    // route model. DeepFist is selected below but never started or downloaded.
+    // Exercise fixed24 receive ingress with the original source lease.
+    // Backend switches below use the inert stub; no model is downloaded.
     const PcmFormat format{24000, PcmLayout::Stereo};
     PcmProducer producer;
-    if (!require(producer.start(PcmPurpose::Speaker, -1, format),
-                 "Monitored PCM producer did not start")) { return false; }
+    DecoderPcmAdapter adapter;
+    adapter.selectRoute(DecoderPcmAdapter::RouteLane::NativeSlice, 11);
+    if (!require(producer.start(PcmPurpose::Slice, 11, format),
+                 "Selected PCM producer did not start")) { return false; }
     const QVector<float> samples = letterV(format);
     constexpr qsizetype chunk = 2400 * 2;
     for (qsizetype offset = 0; offset < samples.size(); offset += chunk) {
         const auto frame = producer.produce(samples.mid(offset, chunk));
         if (!require(frame.has_value(), "Morse PCM frame rejected")) { return false; }
-        decoder.feed(*frame);
+        const auto block = adapter.accept(*frame);
+        if (!require(block.has_value(), "Morse PCM conversion rejected")) { return false; }
+        decoder.feedFixed24(*block);
         pump(10);
     }
     pump(300);
-    if (!require(decoded.count('V') >= 3, "Real monitored-PCM worker did not decode Morse V")
+    if (!require(decoded.count('V') >= 3, "Real fixed24 worker did not decode Morse V")
         || !require(decoder.estimatedPitch() > 550 && decoder.estimatedPitch() < 650
                         && decoder.estimatedSpeed() > 0,
                     "Worker did not establish positive pitch and speed")) { return false; }

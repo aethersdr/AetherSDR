@@ -1,6 +1,7 @@
 #ifdef HAVE_SPECBLEACH
 
 #include "SpecbleachFilter.h"
+#include "core/dsp/FftwPlannerLock.h"
 #include <specbleach_denoiser.h>
 #include <cstring>
 #include <algorithm>
@@ -18,7 +19,10 @@ SpecbleachFilter::SpecbleachFilter(int sampleRate)
         qWarning() << "SpecbleachFilter: unsupported sample rate" << sampleRate;
         return;
     }
-    m_handle = specbleach_initialize(sampleRate, kFrameSizeMs);
+    {
+        auto lock = fftwfPlannerLock();
+        m_handle = specbleach_initialize(sampleRate, kFrameSizeMs);
+    }
     if (!m_handle) {
         qWarning() << "SpecbleachFilter: failed to initialize";
         return;
@@ -32,8 +36,10 @@ SpecbleachFilter::SpecbleachFilter(int sampleRate)
 
 SpecbleachFilter::~SpecbleachFilter()
 {
-    if (m_handle)
+    if (m_handle) {
+        auto lock = fftwfPlannerLock();
         specbleach_free(m_handle);
+    }
 }
 
 void SpecbleachFilter::reset()

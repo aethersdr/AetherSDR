@@ -55,6 +55,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QSpinBox>
+#include <QStatusBar>
 #include <QTextEdit>
 #include <QTimer>
 
@@ -337,6 +338,157 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
 }
 
 
+bool MainWindow::handleSplitMonitorShortcut(QKeyEvent* keyEvent,
+                                            QEvent::Type eventType)
+{
+    // Monitor TX (Hold) — the XFC/TF-SET/TXW control. Same shape as
+    // handlePttHoldShortcut(), and for the same reason: QShortcut has no
+    // "released" signal, so a hold control cannot be one and has to be driven
+    // from the app-level event filter, resolving its rebindable key through
+    // ShortcutManager rather than hardcoding one.
+    if (!keyEvent || keyEvent->isAutoRepeat())
+        return false;   // a held key must not re-issue the mute pair per repeat
+    if (eventType != QEvent::KeyPress && eventType != QEvent::KeyRelease)
+        return false;
+
+    const QKeySequence seq = shortcutSequenceFromKeyEvent(keyEvent);
+    const auto* action = m_shortcutManager.actionForKey(seq);
+    bool isMonitor = action && action->id == QLatin1String(kSplitMonitorActionId);
+
+    // Modifier-tolerant release (Principle VI), exactly as PTT-hold: a combo
+    // binding released modifier-first delivers the base key on KeyRelease, so
+    // `seq` no longer matches the binding. Without this the restore never runs
+    // and the split is left monitoring — the operator hears the wrong slice,
+    // with nothing on screen to say why.
+    if (!isMonitor && eventType == QEvent::KeyRelease && m_splitMonitor.active())
+        isMonitor = keyEventMatchesActionBaseKey(kSplitMonitorActionId, keyEvent);
+
+    if (!isMonitor)
+        return false;
+
+    // Release is unconditional while a hold is live. Unlike the press below it
+    // is never gated on focus or on the shortcuts-enabled flag: whatever became
+    // true mid-hold, the audio has to go back.
+    if (eventType == QEvent::KeyRelease) {
+        if (!m_splitMonitor.active())
+            return false;
+        endSplitMonitor();
+        return true;
+    }
+
+    // Don't steal the key from a text field, and honour the global disable.
+    // textEntryCaptured() (not textInputCaptured()) for the same reason
+    // PTT-hold uses it: a focused non-editable combo keeps focus after its
+    // popup closes (#3908) and would otherwise swallow the first press.
+    if (textEntryCaptured() || !m_keyboardShortcutsEnabled)
+        return false;
+
+    beginSplitMonitor(/*keyHeld=*/true);
+    return true;   // consume the bound key so it can't also activate a button
+}
+
+
+// ─── Momentary Monitor TX (#2242) ───────────────────────────────────────────
+//
+// The Icom XFC / Kenwood TF-SET / Yaesu TXW control: hold to hear where you are
+// about to transmit. On a single-receiver rig that means the receiver MOVES,
+// which is what Solo reproduces (mute RX, unmute TX). Both makes the RX slice
+// audible too — the sub-receiver convention, for operators who have already
+// arranged the two slices across the stereo field.
+//
+// SplitMonitorHold records which native mute the press actually changed, and
+// the release restores exactly that — never a slice whose audio DAX/TCI/Kiwi
+// has replaced, where setAudioMute() writes a different domain.
+
+void MainWindow::beginSplitMonitor(bool keyHeld)
+{
+    if (m_splitMonitor.active()) return;
+    SliceModel* rx = nullptr;
+    SliceModel* tx = nullptr;
+    if (!activeSplitPair(rx, tx)) {
+        // A control that does nothing should say so (#5265). With more than
+        // one split running, the operator has to say which by selecting it.
+        QHash<QString, SliceModel*> txByPan, rxByPan;
+        resolveSplitPairs(txByPan, rxByPan);
+        statusBar()->showMessage(rxByPan.isEmpty()
+            ? tr("Monitor TX needs a split.")
+            : tr("Monitor TX: select a slice on the split to monitor."), 3000);
+        return;
+    }
+
+    m_splitAudioApplying = true;
+    const bool began = m_splitMonitor.begin(rx, tx, loadSplitAudioProfile().monitor);
+    m_splitAudioApplying = false;
+    m_splitMonitorKeyHeld = began && keyHeld;
+}
+
+void MainWindow::endSplitMonitor(bool deferWrites)
+{
+    if (!m_splitMonitor.active()) return;
+    m_splitMonitorKeyHeld = false;
+    // The hold is over NOW (its ids may be reused by the next slice); only the
+    // restoring writes may wait a turn — see recordSplitAudioMirror().
+    auto hold = m_splitMonitor;
+    m_splitMonitor = {};
+    if (deferWrites) {
+        // A live removal: the removed slice is gone for good; restore the
+        // survivor after the radio's queued status burst.
+        QTimer::singleShot(0, this, [this, hold]() mutable {
+            m_splitAudioApplying = true;
+            hold.end(m_radioModel.slice(hold.rxId()), m_radioModel.slice(hold.txId()));
+            m_splitAudioApplying = false;
+        });
+        return;
+    }
+    // Released while the connection is down: RadioModel has parked the slices
+    // (alive, out of the live map) and will reclaim the SAME objects. The
+    // radio still holds the hold's mutes, so the restore must wait for them.
+    const bool rxParked = hold.rxObject() && !m_radioModel.slice(hold.rxId());
+    const bool txParked = hold.txObject() && !m_radioModel.slice(hold.txId());
+    if (rxParked || txParked) {
+        m_splitMonitorPendingRelease = hold;
+        qCInfo(lcGui) << "Split monitor: released while slices are parked;"
+                      << "restore waits for the reclaim";
+        return;
+    }
+    m_splitAudioApplying = true;
+    hold.end(m_radioModel.slice(hold.rxId()), m_radioModel.slice(hold.txId()));
+    m_splitAudioApplying = false;
+}
+
+void MainWindow::tryCompletePendingMonitorRelease()
+{
+    auto& p = m_splitMonitorPendingRelease;
+    if (!p.active()) return;
+    const bool rxParked = p.rxObject() && !m_radioModel.slice(p.rxId());
+    const bool txParked = p.txObject() && !m_radioModel.slice(p.txId());
+    if (rxParked || txParked) return;   // not everything is back yet
+    // Reclaimed objects are restored; a destroyed or replaced one is not
+    // written (SplitMonitorHold's identity fence).
+    m_splitAudioApplying = true;
+    p.end(m_radioModel.slice(p.rxId()), m_radioModel.slice(p.txId()));
+    m_splitAudioApplying = false;
+}
+
+void MainWindow::endSplitMonitorForSlice(int sliceId, bool deferWrites)
+{
+    if (m_splitMonitor.active()
+        && (sliceId == m_splitMonitor.rxId() || sliceId == m_splitMonitor.txId()))
+        endSplitMonitor(deferWrites);
+}
+
+void MainWindow::endSplitMonitorForPan(const QString& panId)
+{
+    if (!m_splitMonitor.active() || panId.isEmpty()) return;
+    for (const int id : {m_splitMonitor.rxId(), m_splitMonitor.txId()}) {
+        if (auto* s = m_radioModel.slice(id); s && s->panId() == panId) {
+            endSplitMonitor();
+            return;
+        }
+    }
+}
+
+
 bool MainWindow::keyEventMatchesActionBaseKey(const char* actionId,
                                               const QKeyEvent* ev)
 {
@@ -455,8 +607,15 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     // the application leaves the active state. Do not consume the event.
     if (obj == qApp && event->type() == QEvent::ApplicationStateChange) {
         auto* stateEvent = static_cast<QApplicationStateChangeEvent*>(event);
-        if (stateEvent->applicationState() != Qt::ApplicationActive)
+        if (stateEvent->applicationState() != Qt::ApplicationActive) {
             failSafeMomentaryKeyingToRx("app-deactivate");
+            // A Monitor TX hold whose KeyRelease went to another application
+            // would otherwise leave the split's audio rearranged with no key
+            // left to release. Same fail-safe reasoning as the line above.
+            // A controller toggle has no release to lose and is left alone.
+            if (m_splitMonitorKeyHeld)
+                endSplitMonitor();
+        }
     }
 
     if (auto* slider = qobject_cast<QAbstractSlider*>(obj)) {
@@ -526,6 +685,11 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         // rather than a hardcoded Space, so reassigning it actually moves the
         // transmit key (#3879).
         if (handlePttHoldShortcut(ke, event->type()))
+            return true;
+
+        // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
+        // same missing-released-signal reason.
+        if (handleSplitMonitorShortcut(ke, event->type()))
             return true;
 
         // MeterSlider (TCI/DAX gain) handles its own arrow stepping, badge,
@@ -1027,16 +1191,19 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("af_gain_up", "AF Gain Up", "Audio",
         QKeySequence(Qt::Key_Up), [this]() {
             auto* s = activeSlice();
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (s) s->setAudioGain(std::min(100.0f, s->audioGain() + 5.0f));
         });
     m_shortcutManager.registerAction("af_gain_down", "AF Gain Down", "Audio",
         QKeySequence(Qt::Key_Down), [this]() {
             auto* s = activeSlice();
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (s) s->setAudioGain(std::max(0.0f, s->audioGain() - 5.0f));
         });
     m_shortcutManager.registerAction("mute_toggle", "Mute Toggle", "Audio",
         QKeySequence(Qt::Key_M), [this]() {
             auto* s = activeSlice();
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (s) s->setAudioMute(!s->audioMute());
         });
     m_shortcutManager.registerAction("mute_all_slices_toggle", "Mute All Slices", "Audio",
@@ -1123,6 +1290,22 @@ void MainWindow::registerShortcutActions()
                 disableSplit();
             }
         });
+    // Monitor TX (Hold) is driven by the app-level event filter
+    // (handleSplitMonitorShortcut) because QShortcut has no "released" signal.
+    // Registered with a null handler so the keyboard map lists it as bindable
+    // — the same arrangement PTT (Hold) uses, and the place operators look for
+    // hold-style controls. No default key: it is opt-in, and every unmodified
+    // letter is already spoken for.
+    m_shortcutManager.registerAction(kSplitMonitorActionId, "Monitor TX (Hold)",
+        "Slice", QKeySequence(), nullptr);
+    // Split Up N — the one-touch pileup offsets every modern rig has (#311).
+    // These tune the TX slice; the RX slice does not move.
+    m_shortcutManager.registerAction("split_up_1", "Split Up 1 kHz", "Slice",
+        QKeySequence(), [this]() { applySplitOffsetKHz(1.0); });
+    m_shortcutManager.registerAction("split_up_5", "Split Up 5 kHz", "Slice",
+        QKeySequence(), [this]() { applySplitOffsetKHz(5.0); });
+    m_shortcutManager.registerAction("split_up_10", "Split Up 10 kHz", "Slice",
+        QKeySequence(), [this]() { applySplitOffsetKHz(10.0); });
     m_shortcutManager.registerAction("cycle_tx_slice", "Cycle TX Slice", "Slice",
         QKeySequence(), [this]() {
             const auto slices = m_radioModel.slices();

@@ -572,6 +572,9 @@ void MainWindow::setKiwiSdrVirtualAntennaForSliceInternal(int sliceId,
         setActiveSliceInternal(sliceId, false);
     }
 
+    // A Monitor TX hold's temporary mute must not become the "previous" Flex
+    // mute Kiwi restores on removal, or the receiver comes back silent. (#2242)
+    endSplitMonitorForSlice(sliceId, /*deferWrites=*/false);
     if (!m_kiwiSdrVirtualPreviousMute.contains(sliceId)) {
         m_kiwiSdrVirtualPreviousMute.insert(sliceId, slice->flexAudioMute());
     }

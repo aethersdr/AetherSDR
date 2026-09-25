@@ -150,6 +150,12 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.toggle.background.disabled", QString("#0f0f1a"));
     m_tokens.insert("color.toggle.border", QString("#304050"));
     m_tokens.insert("color.toggle.border.disabled", QString("#0f0f1a"));
+    m_tokens.insert("color.toggle.footer.danger.background.checked", QString("#2dff4d4d"));
+    m_tokens.insert("color.toggle.footer.danger.background.hover", QString("#46ff4d4d"));
+    m_tokens.insert("color.toggle.footer.success.background.checked", QString("#2d4dd87a"));
+    m_tokens.insert("color.toggle.footer.success.background.hover", QString("#464dd87a"));
+    m_tokens.insert("color.toggle.footer.warning.background.checked", QString("#2dffb84d"));
+    m_tokens.insert("color.toggle.footer.warning.background.hover", QString("#46ffb84d"));
     m_tokens.insert("color.toggle.foreground", QString("#c8d8e8"));
     m_tokens.insert("color.toggle.foreground.disabled", QString("#3a4a5a"));
     m_tokens.insert("color.toggle.success.background.checked", QString("#006040"));
@@ -196,6 +202,17 @@ void ThemeManager::seedGeneratedDefaults()
         g.stops.append({0.75, QColor("#ffc800")});
         g.stops.append({1.0, QColor("#ffffdc")});
         m_tokens.insert("color.waterfall.colormap.fire", QVariant::fromValue(g));
+    }
+    {
+        ThemeGradient g;
+        g.type = ThemeGradient::Linear;
+        g.angle = 180.0;
+        g.stops.append({0.0, QColor("#05183c")});
+        g.stops.append({0.3, QColor("#0a5ad2")});
+        g.stops.append({0.55, QColor("#3ca0ff")});
+        g.stops.append({0.8, QColor("#a8dcff")});
+        g.stops.append({1.0, QColor("#ffffff")});
+        m_tokens.insert("color.waterfall.colormap.glacier", QVariant::fromValue(g));
     }
     {
         ThemeGradient g;

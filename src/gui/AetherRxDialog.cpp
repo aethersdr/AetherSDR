@@ -16,6 +16,7 @@
 #include "StripTubePanel.h"
 #include "StripWaveformPanel.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -23,11 +24,13 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFrame>
+#include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QStackedWidget>
@@ -35,6 +38,7 @@
 #include <QVBoxLayout>
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/TxKeyingMarker.h"
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
@@ -193,9 +197,102 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         addStage(Output, QStringLiteral("Final Output"), page);
     }
 
-    m_tabs->addFooterButton(
+    // REC / PLAY on one row above BYPASS, as in AetherTX -- but recording
+    // the receive audio itself, through the same path as the VFO flag's
+    // record and play buttons. A click reports the state the button now
+    // shows; MainWindow answers with what the recorder actually did (a
+    // capture can be refused: PC audio off, unwritable directory), so the
+    // button follows the recorder rather than the click.
+    const auto pair = m_tabs->addFooterToggleRow({
+        {tr("REC"), QStringLiteral("aetherRxRecord"),
+         tr("Record the receive audio to a WAV file, as the VFO flag's record "
+            "button does. Click again to stop."),
+         StageTabBar::Accent::Red},
+        {tr("PLAY"), QStringLiteral("aetherRxPlay"),
+         tr("Play back the last recording. Click again to stop."),
+         StageTabBar::Accent::Green},
+    });
+    m_recBtn  = pair.at(0);
+    m_playBtn = pair.at(1);
+    // The short labels fit the row; the spoken names stay whole words
+    // (#4896).
+    m_recBtn->setAccessibleName(tr("Record"));
+    m_playBtn->setAccessibleName(tr("Play"));
+    connect(m_recBtn, &QPushButton::clicked, this, [this](bool checked) {
+        emit recordToggled(checked);
+    });
+    connect(m_playBtn, &QPushButton::clicked, this, [this](bool checked) {
+        if (m_txPlaybackActive) {
+            // PLAY remains enabled to stop an active transmission. A normal
+            // click must never start speaker playback while TX owns the file.
+            QSignalBlocker block(m_playBtn);
+            m_playBtn->setChecked(false);
+            emit txPlaybackTriggered();
+            return;
+        }
+        emit playToggled(checked);
+    });
+    setPlayEnabled(false);
+
+    // Right-click on PLAY: one entry, "TX Playback", which sends the last
+    // recording out over the air instead of to the speakers. A keying
+    // control, so it carries the marker the automation bridge refuses to
+    // invoke without AETHER_AUTOMATION_ALLOW_TX; MainWindow registers the
+    // real keying action on it once the radio is known.
+    m_txPlaybackAction = new QAction(tr("TX Playback"), this);
+    m_txPlaybackAction->setObjectName(QStringLiteral("aetherRxTxPlayback"));
+    m_txPlaybackAction->setCheckable(true);
+    m_txPlaybackAction->setToolTip(
+        tr("Transmit the last recording over the active slice. Select again "
+           "to stop."));
+    m_txPlaybackAction->setProperty(kTxKeyingProperty, true);
+    connect(m_txPlaybackAction, &QAction::triggered, this, [this] {
+        // A checkable action flips itself; the host says what really
+        // happened through setTxPlaybackActive.
+        QSignalBlocker block(m_txPlaybackAction);
+        m_txPlaybackAction->setChecked(m_txPlaybackActive);
+        emit txPlaybackTriggered();
+    });
+    m_playBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_playBtn, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        // Reachable whenever there is something to send or something to
+        // stop: setPlayEnabled() keeps the button enabled while a transmit
+        // playback runs, so this handler can still open the menu to stop it.
+        m_txPlaybackAction->setEnabled(m_playEnabled || m_txPlaybackActive);
+        QMenu menu(m_playBtn);
+        menu.setObjectName(QStringLiteral("aetherRxPlayMenu"));
+        menu.addAction(m_txPlaybackAction);
+        menu.exec(m_playBtn->mapToGlobal(pos));
+    });
+
+    // BYPASS beside the Settings gear, where AetherTX keeps its own. The
+    // engine owns the snapshot-and-restore, and the docked chain applet's RX
+    // BYPASS drives the same state, so this button follows the engine back
+    // rather than remembering anything itself. The engine takes AetherNR
+    // down with the chain, so a bypassed receive path is truly unprocessed.
+    m_bypassBtn = m_tabs->addFooterToggle(
+        tr("BYPASS"), QStringLiteral("aetherRxBypass"),
+        tr("Suppress every receive stage at once, AetherNR included, so audio "
+           "reaches you unprocessed. Click again to restore what was on."));
+    connect(m_bypassBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_audio) m_audio->setRxBypassed(on);
+    });
+    if (m_audio) {
+        {
+            QSignalBlocker block(m_bypassBtn);
+            m_bypassBtn->setChecked(m_audio->isRxBypassed());
+        }
+        connect(m_audio, &AudioEngine::rxBypassChanged, this, [this](bool on) {
+            if (!m_bypassBtn) return;
+            QSignalBlocker block(m_bypassBtn);
+            m_bypassBtn->setChecked(on);
+        });
+    }
+
+    // The gear leads BYPASS's row.
+    m_tabs->addFooterGearButton(
         tr("Settings"), QStringLiteral("aetherRxSettingsButton"),
-        tr("Profiles: save, load, import and export the receive chain."));
+        tr("Settings: save, load, import and export receive chain profiles."));
 
     // Pin every panel to its RX engine instance. Without this the EQ canvas
     // has no engine to enumerate bands for and collapses to its "(no EQ
@@ -439,6 +536,48 @@ void AetherRxDialog::showSettings()
         m_tabs->refreshFromHost();
     });
     dlg.exec();
+}
+
+void AetherRxDialog::setRecordOn(bool on)
+{
+    if (!m_recBtn) return;
+    QSignalBlocker block(m_recBtn);
+    m_recBtn->setChecked(on);
+}
+
+void AetherRxDialog::setPlayOn(bool on)
+{
+    if (!m_playBtn) return;
+    QSignalBlocker block(m_playBtn);
+    m_playBtn->setChecked(on);
+}
+
+void AetherRxDialog::setPlayEnabled(bool enabled)
+{
+    m_playEnabled = enabled;
+    if (!m_playBtn) return;
+    // A disabled widget gets no context-menu event, so the menu that stops
+    // a transmit playback would vanish with it. While one is transmitting
+    // the button stays enabled whatever the host says; the host's answer is
+    // kept and applied once the transmit ends.
+    const bool effective = enabled || m_txPlaybackActive;
+    m_playBtn->setEnabled(effective);
+    // Why it is greyed out has to reach the accessible channel too, not
+    // just the tooltip (#4896).
+    m_playBtn->setAccessibleDescription(
+        effective ? tr("Play back the last recording. Click again to stop.")
+                  : tr("Unavailable until something has been recorded. "
+                       "Use REC first."));
+}
+
+void AetherRxDialog::setTxPlaybackActive(bool on)
+{
+    m_txPlaybackActive = on;
+    if (m_txPlaybackAction) {
+        QSignalBlocker block(m_txPlaybackAction);
+        m_txPlaybackAction->setChecked(on);
+    }
+    setPlayEnabled(m_playEnabled);
 }
 
 void AetherRxDialog::syncFromEngine()

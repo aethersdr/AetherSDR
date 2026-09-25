@@ -206,6 +206,22 @@ int main(int argc, char** argv)
               && !error.isEmpty(), "frame budget is independent of sample format");
     check(prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Int16), &error, 242).has_value()
               && error.isEmpty(), "Int16 sink gets the same frame ceiling as Float");
+    const auto prefix = prepareQsoWavPlayback(
+        source, sink(48000, 2, QAudioFormat::Float), &error, 120, true);
+    check(prefix && prefix->size() == 120 * 8 && error.isEmpty(),
+          "TX prefix decodes exactly the bounded duration from an over-budget file");
+    check(source.pos() == 44 + 60 * 2,
+          "TX prefix reads only the needed source samples");
+    float prefixPeak = 0;
+    if (prefix) {
+        for (int frame = 0; frame < 120; ++frame) {
+            prefixPeak = std::max(prefixPeak,
+                std::abs(sampleAt(*prefix, frame * 2, QAudioFormat::Float)));
+        }
+    }
+    check(prefixPeak > 0.1f, "TX prefix contains decoded recording audio");
+    check(!prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Float), &error, 120)
+              && !error.isEmpty(), "ordinary playback still refuses a file over budget");
     check(!prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Int32)),
           "unsupported negotiated encoding is not misinterpreted");
     check(!prepareQsoWavPlayback(source, sink(192001, 2, QAudioFormat::Int16)),

@@ -66,6 +66,7 @@ enum class WfColorScheme : int {
     Fire,          // black → red → orange → yellow → white
     Plasma,        // black → purple → magenta → orange → yellow
     Purple,        // SmartSDR "Add Purple": black→blue→green→yellow→red→purple→white
+    Glacier,       // deep blue → blue → ice blue → white (first preset not black at t=0)
     Count          // sentinel — number of schemes
 };
 
@@ -86,6 +87,7 @@ inline const char* wfSchemeName(WfColorScheme scheme)
     case WfColorScheme::Fire:      return "Fire";
     case WfColorScheme::Plasma:    return "Plasma";
     case WfColorScheme::Purple:    return "Purple";
+    case WfColorScheme::Glacier:   return "Glacier";
     default:                       return "Default";
     }
 }
@@ -409,6 +411,19 @@ public:
             return;
         m_edgeTaperEnabled = enabled;
         markOverlayDirty();
+    }
+
+    // Skip the fixed client-side EMA (SMOOTH_ALPHA) on the spectrum trace
+    // when the backend already averages per the operator's FFT AVG
+    // (RadioCapabilities::backendPanAveraging). m_smoothed then simply
+    // tracks the latest frame, so its readers (trace, noise floor) keep
+    // working unchanged.
+    void setClientFftSmoothingEnabled(bool enabled)
+    {
+        if (m_clientFftSmoothing == enabled)
+            return;
+        m_clientFftSmoothing = enabled;
+        m_resetFftSmoothingOnNextFrame = true;
     }
 
     // Enable/disable the "S"/"B" (segment/band zoom) buttons and explain why
@@ -1390,6 +1405,11 @@ private:
     float kiwiSdrWaterfallLevel(float level) const;
     float intensityToWaterfallLevel(float intensity) const;
     QRgb waterfallLevelToRgb(float level) const;
+    // The colour a cleared / not-yet-painted waterfall pixel takes: the current
+    // palette's floor, not Qt::black. Every preset through Purple is #000000 at
+    // t=0, so this is a no-op for them; Glacier is the first palette with a
+    // non-black floor.
+    QRgb waterfallFloorRgb() const;
     static quint8 encodeWaterfallLevel(float level);
     std::array<QRgb, 256> waterfallHistoryColorLut() const;
     // 3DSS surface colour for a normalised strength s in [0,1] across the stable
@@ -2105,6 +2125,8 @@ private:
 
     // See setPanEdgeTaperEnabled()'s own comment.
     bool m_edgeTaperEnabled{false};
+    // See setClientFftSmoothingEnabled()'s own comment.
+    bool m_clientFftSmoothing{true};
     bool m_kiwiSdrDisplaySourceKiwi{false};
 
 #ifdef AETHER_GPU_SPECTRUM
