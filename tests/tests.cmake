@@ -1167,6 +1167,15 @@ target_include_directories(hl2_rxdsp_unmute_return_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_unmute_return_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_unmute_return_test COMMAND hl2_rxdsp_unmute_return_test)
 
+# WDSP patch 13 (#5954): a minimum-phase FIR core frees its design workspace
+# after each design, so a minimum-phase RX channel holds no more WDSP
+# allocations than a linear one, before or after filter changes. Counts the
+# WDSP port's own live allocations; socket-free.
+add_executable(wdsp_minphase_workspace_test tests/wdsp_minphase_workspace_test.cpp)
+target_include_directories(wdsp_minphase_workspace_test PRIVATE src)
+target_link_libraries(wdsp_minphase_workspace_test PRIVATE aethercore)
+add_test(NAME wdsp_minphase_workspace_test COMMAND wdsp_minphase_workspace_test)
+
 # The host-side impulse noise blanker (WDSP ANB) ahead of the demodulator. The
 # HL2 runs no firmware DSP, so this stage is the only noise blanker the radio
 # has and there is no wire traffic to assert against — the test measures the

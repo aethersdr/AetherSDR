@@ -2,9 +2,10 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries ten local changes in the otherwise exact `Source/*.[ch]`
-snapshot — four teardown corrections, two null/lifetime fixes, one added
-accessor set, two channel-state fixes, and one performance change:
+AetherSDR carries thirteen local changes in the otherwise exact `Source/*.[ch]`
+snapshot. The first ten are listed below — four teardown corrections, two
+null/lifetime fixes, one added accessor set, two channel-state fixes, and one
+performance change — and patches 11 to 13 follow in their own sections:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -511,6 +512,15 @@ accessor set, two channel-state fixes, and one performance change:
     `create_minphase()`'s own allocation sizes. **No memory was measured**, here
     or on hardware, and nothing in this work ran a radio.
 
+    **Since patch 13 the `mp == 1` case holds none of it either.** Patch 10
+    stops building the workspace for cores that never design at minimum phase;
+    `Hl2RxDsp` now runs its bandpass cores at minimum phase outside CW (#5498),
+    and for those cores the workspace is used -- but only during a design.
+    Patch 13 frees it after each one, so no core holds it between designs.
+    Measured there with `wdspPortOutstandingAllocations()`: an 8192-tap RX
+    channel holds 1200 live WDSP allocations at either phase; without patch 13
+    the minimum-phase channel held 48 more, ~49 MB by heap measurement.
+
     This is shared DSP -- **every backend that opens a `WdspChannel` pays it**,
     not only the HL2, and the HL2's tap count only sets how much.
 
@@ -649,4 +659,59 @@ at rounding level only. `hl2_rxdsp_unmute_return_test` and
 
 When updating WDSP, keep this unless upstream stops planning these transforms
 with a measuring flag.
+
+## Patch 13 — the minimum-phase design workspace is freed after each design (#5954)
+
+`upstream/firmin.c`: `plan_fircore()` no longer builds a core's
+`create_minphase()` workspace, and `calc_fircore()` frees it with
+`destroy_minphase()` straight after `mp_imp_exec()` has used it.
+`ensure_minphase()` (patch 10) rebuilds it for the next design.
+
+The workspace is design scratch: seven buffers of `nc * pfactor` elements and
+four FFTW plans, read only by `mp_imp_exec()`. Upstream held it for the life of
+the core. After #5498 put `Hl2RxDsp`'s bandpass at minimum phase outside CW,
+that was the six cores `RXASetMP()` reaches -- three of them 131072 points -- for
+every non-CW HL2 receiver. Measured, one 8192-tap RX channel, heap in use:
+
+| | linear phase | minimum phase |
+|---|---|---|
+| before this patch | 37.8 MB | 86.7 MB |
+| with this patch | **31.3 MB** | **31.3 MB** |
+| `setFilter()` at minimum phase, mean of 20 | -- | 9.1 ms -> **14.6 ms** |
+
+The linear channel shrinks too, because the equaliser core (`eqp`, built
+minimum-phase by upstream on every RX and TX channel) releases its workspace as
+well. The cost is the rebuild on every design: the allocation and zeroing of the
+buffers plus four `FFTW_ESTIMATE` plans (patch 12), about +5 ms per passband
+change at 8192 taps. It is paid on the control path, never per sample.
+
+Every caller of `calc_fircore()` is a WDSP control function (`Set*` / `RXA*Set*`,
+the notch-database edits in `nbp.c`, `RXAbpsnbaCheck`); none is reached from the
+per-block exchange. The host makes every such call under
+`WdspChannel`'s `g_setupMutex`, the process-wide FFTW planner lock, so the
+re-plan is serialised like any other. A host that calls those functions without
+that lock would now plan FFTW concurrently; keep that in mind before adding one.
+
+**The re-plan must not consult wisdom, so this patch also adds `FFTW_UNALIGNED`
+to patch 12's four `create_minphase()` plans.** `FFTW_ESTIMATE` still uses
+wisdom when a matching plan exists. Re-planning on every design meant an
+aligned request could pick up wisdom another plan recorded in between, and
+design the same filter with a different FFT algorithm: two identical channels
+then differed at rounding level. Measured under `ctest -R 'anan|wdsp' -j16`,
+15 loops each: current `main` 0 failing loops; this patch without
+`FFTW_UNALIGNED` 15 of 15 (all `wdsp_channel_test`, including 3 × "identical
+WDSP channels produced different vectors" and 3 intermittent group-delay
+checks, alongside the deterministic patch-10 check restated below); with
+`FFTW_UNALIGNED` 0 of 15. No other plan in this process is unaligned, so the key
+never matches wisdom and every design gets the same heuristic plan. The
+`setFilter()` figure in the table is with it.
+
+Coverage: `wdsp_minphase_workspace_test` requires a minimum-phase channel to
+hold the same live WDSP allocations as a linear one after opening, after a
+filter change, and after twenty more; removing the free fails it (1256 against
+1208), and so does reverting patch 10 (1248 against 1296). `wdsp_channel_test`'s
+patch-10 check now counts allocations MADE by each open rather than held after
+it -- the minimum-phase open builds and frees the workspace, the linear open
+never builds it -- and still fails when patch 10 is reverted.
+When updating WDSP, keep this unless upstream stops holding the workspace.
 

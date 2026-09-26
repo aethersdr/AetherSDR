@@ -66,12 +66,23 @@ public:
     // are unchanged, and collapses the group delay: the post-unmute return
     // measured 128 -> 44 ms (AGC off) and 137 -> 53 ms (AGC medium).
     //
-    // NOT IN CW, by maintainer ruling (KK7GWY, 2026-09-26, on #5498). Through
-    // a 300 Hz CW filter minimum phase measured overshoot 5.8 -> 19.6 % and a
-    // post-edge ring at +10 ms of -33 -> -21 dB (#5578); through an SSB-wide
-    // passband keying edges are essentially unchanged and data modes see under
-    // two samples of differential delay. So CW keeps linear phase and its
-    // latency, and every other mode takes the shorter chain.
+    // NOT IN CW, by maintainer ruling (KK7GWY, 2026-09-26), recorded at
+    // https://github.com/aethersdr/AetherSDR/pull/5954#discussion_r4110668837
+    // -- chosen over the operator-visible setting on8st suggested on #5578.
+    // Through a 300 Hz CW filter minimum phase measured overshoot 5.8 -> 19.6 %
+    // and a post-edge ring at +10 ms of -33 -> -21 dB (#5578); through an
+    // SSB-wide passband keying edges are essentially unchanged and data modes
+    // see under two samples of differential delay. So CW keeps linear phase and
+    // its latency, and every other mode takes the shorter chain. A mode added
+    // to WdspChannel::Mode later gets minimum phase unless it is listed here.
+    //
+    // THE COST, measured at 8192 taps. Every passband change re-designs the
+    // minimum-phase filter: ~14 ms of control-path work on this object's
+    // (hl2-io) thread per setFilter(), against ~0.3 ms at linear phase -- paid
+    // per filter edit, never per sample, and tuning does not reach it (the
+    // slice shift is a separate stage). Memory does NOT grow: WDSP patch 13
+    // frees the ~49 MB design workspace after each design, so a minimum-phase
+    // channel holds exactly what a linear one does (wdsp_minphase_workspace_test).
     [[nodiscard]] static constexpr bool rxMinimumPhaseFor(WdspChannel::Mode mode) noexcept
     {
         return mode != WdspChannel::Mode::Cwl && mode != WdspChannel::Mode::Cwu;

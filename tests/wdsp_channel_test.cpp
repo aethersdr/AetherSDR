@@ -1143,7 +1143,13 @@ bool runMinimumPhaseWorkspaceTest()
                                     double* toneRms) -> bool {
         WdspChannel::Config channelConfig = config;
         channelConfig.minimumPhase = minimumPhase;
-        const uint64_t before = WdspChannel::outstandingAllocationsForTest();
+        // Allocations MADE by the open, not allocations HELD after it: since
+        // WDSP patch 13 a minimum-phase core frees its design workspace right
+        // after designing, so what an open HOLDS is the same at either phase.
+        // What still separates them is that the minimum-phase open BUILDS the
+        // workspace (and frees it) while the linear open never builds it --
+        // which is patch 10's claim.
+        const uint64_t before = WdspChannel::allocationSequenceForTest();
         std::string error;
         std::unique_ptr<WdspChannel> channel =
             WdspChannel::create(channelConfig, &error);
@@ -1152,7 +1158,7 @@ bool runMinimumPhaseWorkspaceTest()
                       << minimumPhase << ": " << error << '\n';
             return false;
         }
-        *liveAllocations = WdspChannel::outstandingAllocationsForTest() - before;
+        *liveAllocations = WdspChannel::allocationSequenceForTest() - before;
 
         std::vector<float> inputI(config.inputBlockSize);
         std::vector<float> inputQ(config.inputBlockSize);
@@ -1198,8 +1204,8 @@ bool runMinimumPhaseWorkspaceTest()
         return false;
     }
     if (minimumAllocations <= linearAllocations) {
-        std::cerr << "FAIL: minimum phase cost no extra WDSP allocations "
-                     "(linear=" << linearAllocations
+        std::cerr << "FAIL: a minimum-phase open made no more WDSP allocations "
+                     "than a linear one (linear=" << linearAllocations
                   << " minimum=" << minimumAllocations
                   << ") - the minimum-phase workspace is still being built "
                      "for cores that do not use it\n";

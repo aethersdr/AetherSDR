@@ -326,7 +326,11 @@ void plan_fircore (FIRCORE a)
 	// length, per core. ensure_minphase() below keeps the lazy path honest --
 	// setMp_fircore() can turn mp on at any time, so calc_fircore() builds the
 	// workspace on first use rather than assuming plan_fircore() left one.
-	a->pminphase = a->mp ? create_minphase (a->nc, a->pfactor) : 0;
+	//
+	// AetherSDR patch 13: and never here at all. calc_fircore() builds it,
+	// designs with it and frees it again, so no core holds it between designs
+	// whatever its mp. See AETHERSDR-PATCHES.md.
+	a->pminphase = 0;
 }
 
 // AetherSDR: the minimum-phase workspace is built lazily -- see
@@ -348,6 +352,14 @@ void calc_fircore (FIRCORE a, int flip)
 	{
 		ensure_minphase (a);								// AetherSDR: lazy minphase build
 		mp_imp_exec (a->pminphase, a->impulse, a->imp);
+		// AetherSDR patch 13: the workspace is DESIGN scratch -- seven buffers
+		// of nc * pfactor elements (13.6 MB at 131072) and four plans -- read
+		// only by the mp_imp_exec() above. Free it now rather than hold it for
+		// the life of the core; the next design rebuilds it (FFTW_ESTIMATE
+		// plans, patch 12). Every caller of calc_fircore() is a control call
+		// made under the host's setup lock, so the re-plan is serialised.
+		destroy_minphase (a->pminphase);
+		a->pminphase = 0;
 	}
 	else
 		memcpy (a->imp, a->impulse, a->nc * sizeof (complex));
