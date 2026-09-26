@@ -69,6 +69,7 @@ public:
     void appendCwText(const QString& text, float cost = 0.0f);
     void appendCwTextTx(const QString& text, float cost = 0.0f);
     void setCwStats(float pitchHz, float speedWpm);
+    void setCwInputHint(const QString& hint, const QString& reason);
     void clearCwText();
 #ifdef HAVE_DEEPFIST
     bool deepFistEngineSelected() const;
@@ -91,6 +92,7 @@ public:
     void  setRttyPanelVisible(bool visible);
     void  appendRttyText(const QString& text, float confidence);
     void  setRttyStats(float markLevel, float spaceLevel, float snrDb, bool locked);
+    void  setRttyInputHint(const QString& hint, const QString& reason);
     void  clearRttyText();
     int   rttyMarkHz()  const;
     int   rttyShiftHz() const;
@@ -185,6 +187,7 @@ private:
     QTextEdit*    m_cwText{nullptr};
     CallsignCard* m_cwCallsignCard{nullptr};
     QLabel*       m_cwStatsLabel{nullptr};
+    QLabel*       m_cwInputHint{nullptr};
     QSlider*      m_cwSensSlider{nullptr};
     QPushButton*  m_lockPitchBtn{nullptr};
     QPushButton*  m_lockSpeedBtn{nullptr};
@@ -206,6 +209,7 @@ private:
     QWidget*      m_rttyPanel{nullptr};
     QTextEdit*    m_rttyText{nullptr};
     QLabel*       m_rttyStatsLabel{nullptr};
+    QLabel*       m_rttyInputHint{nullptr};
     QComboBox*    m_rttyMarkCombo{nullptr};
     QComboBox*    m_rttyShiftCombo{nullptr};
     QComboBox*    m_rttyBaudCombo{nullptr};

@@ -6,7 +6,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
-#include "core/RadioConnection.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "ScopedChildWidget.h"
 
 #include <QCoreApplication>

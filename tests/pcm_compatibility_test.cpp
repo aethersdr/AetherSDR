@@ -2,7 +2,7 @@
 // ingress, plus Flex parser/DAX lifetime. No peers, devices or radio connect.
 #include "TestSettingsProfile.h"
 #include "core/AudioEngine.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"

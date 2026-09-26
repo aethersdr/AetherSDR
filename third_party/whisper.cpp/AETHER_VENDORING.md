@@ -69,8 +69,9 @@ following the same convention as `third_party/wdsp` and
   compile break originally raised in #4406.
 - `src/whisper.cpp` — fails the model load when the weight buffer cannot be
   allocated instead of uploading into unbacked tensors (SIGSEGV on a GPU short
-  of memory). Fixes #4972. Not in the prebuilt Windows `whisper-gpu` pack until
-  that pack is rebuilt.
+  of memory). Fixes #4972. Not in the `whisper-gpu-1.9.1` prebuilt pack (the
+  `ASR_USE_PREBUILT_WHISPER_GPU` fallback); the Windows release compiles the
+  vendored tree.
 
 The two Metal changes are kept as thin as possible: the *policy* around them —
 required toolchain, missing-toolchain behaviour, deployment target, shader

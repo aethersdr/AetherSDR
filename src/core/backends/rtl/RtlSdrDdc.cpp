@@ -1,4 +1,5 @@
 #include "core/backends/rtl/RtlSdrDdc.h"
+#include "core/dsp/FftwPlannerLock.h"
 
 #include <cmath>
 #include <numbers>
@@ -22,16 +23,20 @@ RtlSdrDdc::RtlSdrDdc(QObject* parent)
                                                     - 0.01168 * std::cos(6.0 * std::numbers::pi * n / (N - 1.0)));
     }
 
-    // Allocate FFTW buffers and plan
-    m_fftIn  = static_cast<fftwf_complex*>(fftwf_malloc(sizeof(fftwf_complex) * kFftSize));
-    m_fftOut = static_cast<fftwf_complex*>(fftwf_malloc(sizeof(fftwf_complex) * kFftSize));
-    if (m_fftIn && m_fftOut) {
-        m_fftPlan = fftwf_plan_dft_1d(static_cast<int>(kFftSize), m_fftIn, m_fftOut, FFTW_FORWARD, FFTW_ESTIMATE);
+    // The single-precision planner and its allocator are shared with NR4.
+    {
+        auto lock = fftwfPlannerLock();
+        m_fftIn  = static_cast<fftwf_complex*>(fftwf_malloc(sizeof(fftwf_complex) * kFftSize));
+        m_fftOut = static_cast<fftwf_complex*>(fftwf_malloc(sizeof(fftwf_complex) * kFftSize));
+        if (m_fftIn && m_fftOut) {
+            m_fftPlan = fftwf_plan_dft_1d(static_cast<int>(kFftSize), m_fftIn, m_fftOut, FFTW_FORWARD, FFTW_ESTIMATE);
+        }
     }
 }
 
 RtlSdrDdc::~RtlSdrDdc()
 {
+    auto lock = fftwfPlannerLock();
     if (m_fftPlan) {
         fftwf_destroy_plan(m_fftPlan);
         m_fftPlan = nullptr;

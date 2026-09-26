@@ -476,6 +476,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // No DDC in any networked Icom's receive chain — CI-V ships finished audio
     // (see hasDaxStreams below), not a decimated IQ stream with an edge to taper.
     c.hasDdcPanEdgeRolloff = false;
+    // CI-V has no per-pan zoom-to-band/segment verb; the scope span is set
+    // directly, not by a radio-owned flag.
+    c.panZoomModes = std::nullopt;
 
     // NO IQ, on any networked Icom. Not deferred — absent. See icom-oracle §8.1.
     c.hasDaxStreams = false;

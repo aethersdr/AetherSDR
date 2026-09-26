@@ -55,13 +55,17 @@ option(ENABLE_NVIDIA_AFX "Enable the NVIDIA Maxine AFX GPU denoiser (BNR; runtim
 # is CPU-only); see third_party/whisper.cpp/AETHER_VENDORING.md. Opt out with
 # -DENABLE_ASR=OFF.
 option(ENABLE_ASR "Enable on-device speech-to-text (ASR) via vendored whisper.cpp" ON)
-# Windows-only: consume prebuilt whisper/ggml/ggml-vulkan static libs from the
-# whisper-gpu-<ver> release asset instead of compiling from source. Bypasses
-# the 4h step-timeout on stock GitHub windows-latest runners (4 core / 16 GB)
-# where the ggml-vulkan Release compile alone exceeds the budget. Local dev
-# builds should leave this OFF and compile from source.
+# Windows-only fallback: consume prebuilt whisper/ggml/ggml-vulkan static libs
+# from the whisper-gpu-<ver> release asset instead of compiling from source.
+# The Windows installer workflow compiles the vendored tree (with the /O1
+# override below, the whole whisper target is 2-3 min on a stock 4-core
+# windows-latest runner; measured 2026-09-21, run 35660187303, and
+# 2026-07-22, runs 29904473886 and 29924632118). The pinned pack predates the
+# vendored tree's local patches
+# (third_party/whisper.cpp/AETHERSDR-PATCHES.md), so turning this ON ships
+# those patches only once the pack is rebuilt and re-pinned. Leave OFF.
 option(ASR_USE_PREBUILT_WHISPER_GPU
-    "Windows CI: consume prebuilt whisper-gpu asset instead of building from source" OFF)
+    "Windows fallback: consume the prebuilt whisper-gpu asset instead of building from source" OFF)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
 
 # ── Sanitizers: ONE tree-wide switch ─────────────────────────────────────────
@@ -821,6 +825,11 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
     src/core/backends/flex/FlexPttWireSession.cpp
+    src/core/backends/flex/RadioConnection.cpp  # SmartSDR TCP command/reply/status wire
+    src/core/backends/flex/CommandParser.cpp    # SmartSDR wire line parse/build
+    src/core/backends/flex/PanadapterStream.cpp # SmartSDR VITA-49 UDP receiver (DAX/IQ)
+    src/core/backends/flex/SmartLinkClient.cpp  # SmartLink WAN auth + radio list
+    src/core/backends/flex/WanConnection.cpp    # SmartLink TLS transport (#5554 §2.6)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
@@ -843,7 +852,7 @@ set(CORE_SOURCES
     src/core/backends/anan/P2Protocol.cpp    # aetherd ANAN P2 Phase 1b (openHPSDR Protocol 2 wire codec)
     src/core/backends/anan/P2Client.cpp      # aetherd ANAN P2 Phase 1b (UDP wire + DDC0 ingest)
     src/core/backends/anan/AnanDiscovery.cpp # aetherd ANAN P2 Phase 1b (P2 discovery -> picker)
-    src/core/backends/anan/AnanSpectrum.cpp  # aetherd ANAN P2 Phase 1b (FFT panadapter, FFTW)
+    src/core/backends/anan/AnanPanAnalyzer.cpp  # ANAN panadapter via WDSP's display analyzer
     src/core/backends/anan/AnanRxDsp.cpp     # aetherd ANAN P2 Phase 1b (IQ -> WdspChannel demod + spectrum)
     src/core/backends/anan/AnanDroopCorrection.cpp # ANAN DDC0 droop compensation (pure apply math)
     src/core/backends/anan/AnanDroopCalibrator.cpp # live, in-app DDC0 droop calibration sweep
@@ -864,6 +873,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomCivBackend.cpp # IcomCIV (IRadioBackend impl)
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
+    src/core/dsp/FftwPlannerLock.cpp # the one process-global FFTW planner lock (#5895)
     src/core/dsp/WdspChannel.cpp
     src/core/backends/rtl/RtlReceiverRegistry.cpp # RFC #5468 prepared receiver ownership; no USB dependency
     ${AETHER_SETTINGS_SOURCES}
@@ -875,10 +885,8 @@ set(CORE_SOURCES
     src/core/OccupiedRegion.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
-    src/core/RadioConnection.cpp
     src/core/NetworkPathResolver.cpp
     src/core/TgxlConnection.cpp
-    src/core/CommandParser.cpp
     src/core/AudioSummaryLogger.cpp
     src/core/AudioFormatNegotiator.cpp
     src/core/AudioDeviceNegotiator.cpp
@@ -918,11 +926,11 @@ set(CORE_SOURCES
     src/core/TxGrantManager.cpp
     src/core/SpectralNR.cpp
     src/core/MonoDspStereoAdapter.cpp
-    src/core/PanadapterStream.cpp
     src/core/TimeFrameVoter.cpp
     src/core/WwvDecoder.cpp
     src/core/WwvbDecoder.cpp
     src/core/AetherClockEngine.cpp
+    src/core/DecoderPcmAdapter.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
     src/core/GreenHeronProtocol.cpp
@@ -933,7 +941,6 @@ set(CORE_SOURCES
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
-    src/core/SmartLinkClient.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
     src/core/KiwiSdrCredentialStore.cpp
@@ -941,7 +948,6 @@ set(CORE_SOURCES
     src/core/KiwiSdrManager.cpp
     src/core/ReceivePresentationSync.cpp
     src/core/KiwiPublicDirectory.cpp
-    src/core/WanConnection.cpp
     src/core/DxClusterClient.cpp
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp
@@ -959,6 +965,8 @@ set(CORE_SOURCES
     src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
+    src/core/TciIoWorker.cpp
+    src/core/TciClient.h
     src/core/TciServer.cpp
     src/core/TciRxConverter.cpp
     src/core/TciPeerProcess.cpp
@@ -1080,6 +1088,7 @@ elseif(UNIX)
 endif()
 
 set(MODEL_SOURCES
+    src/models/DecoderAudioModel.cpp
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
@@ -1183,6 +1192,7 @@ set(GUI_SOURCES
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
     src/gui/VfoDisplayDefaults.cpp
+    src/gui/SplitAudioProfile.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
@@ -1206,6 +1216,7 @@ set(GUI_SOURCES
     src/gui/AetherRxDialog.cpp
     src/gui/StagePage.cpp
     src/gui/StageTabBar.cpp
+    src/gui/RxPlaybackTransmitter.cpp
     src/gui/AetherRxSettingsDialog.cpp
     src/gui/AetherTxSettingsDialog.cpp
     src/gui/AetherDspWidget.cpp
@@ -1893,7 +1904,7 @@ if (ENABLE_ASR)
             set_target_properties(ggml-vulkan PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;Vulkan::Vulkan")
             set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
             set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
-            message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
+            message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (fallback; the vendored tree's local patches are absent until the pack is rebuilt)")
             # The pack is produced by a stock in-tree build (GGML_NATIVE=OFF →
             # ggml's fixed x86-64 feature set; MSVC /arch:AVX2 additionally
             # implies FMA+F16C). Recorded here for the startup inventory
@@ -3173,8 +3184,9 @@ if (NOT ENABLE_ASR)
     # stale cache still carries GGML_* entries from an earlier ASR configure
     # (which would otherwise arm an ASR warning in an ASR-less build).
 elseif (DEFINED _aether_prebuilt_ggml_baseline)
-    # Prebuilt whisper-gpu pack (Windows release): ggml's CMake never ran, so
-    # the baseline comes from the pack's recorded build settings above.
+    # Prebuilt whisper-gpu pack (the ASR_USE_PREBUILT_WHISPER_GPU fallback):
+    # ggml's CMake never ran, so the baseline comes from the pack's recorded
+    # build settings above.
     set(_aether_ggml_baseline_str "${_aether_prebuilt_ggml_baseline}")
 elseif (USE_SYSTEM_LIBWHISPER)
     # Distro libwhisper: its ISA baseline is the packager's choice and not

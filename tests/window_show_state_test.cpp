@@ -210,7 +210,8 @@ int main(int argc, char** argv)
     report("Window menu excludes hidden windows",
            !entryFor(windows, &hiddenWindow));
     report("Window menu excludes transient popup menus",
-           !entryFor(windows, &transientMenu));
+           !windowTypeAppearsInMenu(Qt::Popup)
+               && !entryFor(windows, &transientMenu));
     report("Window menu excludes tooltips",
            !entryFor(windows, &tooltip));
     report("Window menu excludes splash screens",
@@ -219,9 +220,18 @@ int main(int argc, char** argv)
            !windowTypeAppearsInMenu(Qt::SubWindow));
     report("Window menu excludes desktop surfaces",
            !windowTypeAppearsInMenu(kDesktopWindowType));
-    report("Window menu sorts subwindows by title",
+    report("Window menu sorts secondary windows by title",
            entryIndex(windows, &aetherControl)
                < entryIndex(windows, &pskReporter));
+
+    // topLevelWidgets() is unordered, not construction-ordered. Supply a
+    // deliberately reversed list so deleting the sort fails on every run.
+    const QList<WindowMenuEntry> ordered = windowInventory(
+        {&pskReporter, &aetherControl, &mainWindow}, &mainWindow);
+    report("Window menu orders explicit candidates primary-first then by title",
+           ordered.size() == 3 && ordered.at(0).window == &mainWindow
+               && ordered.at(1).window == &aetherControl
+               && ordered.at(2).window == &pskReporter);
 
     // --- Case 11: a rare untitled real window is still reachable by an
     // object/class-name fallback rather than silently disappearing.

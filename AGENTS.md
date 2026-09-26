@@ -449,7 +449,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
   the authoritative model + decision record (it exists because these formulas
   have churned when edited without a shared spec).
 
-**Threading:** up to 12 threads — see `docs/architecture/pipelines.md` for the
+**Threading:** up to 13 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
 
 **Design principle:** RadioModel owns all sub-models on the main thread.
@@ -691,10 +691,14 @@ a new violation or a grown baseline errors:
 reaches around `IRadioBackend` to a vendor wire class. What this means for
 you:
 
-- **Nothing was relocated.** Step 2.4 is *ratchet-only*: the vendor
-  headers stay where they are (`src/core/…`, `src/models/…`) for now. EB3
-  just makes the existing boundary enforceable *in place*, so the
-  decoupling can proceed without new coupling piling up behind it.
+- **Relocation does not convert a touchpoint.** Step 2.4 established the
+  ratchet in place. The five Flex wire classes (`RadioConnection`,
+  `PanadapterStream`, `SmartLinkClient`, `WanConnection`, `CommandParser`)
+  now live under `src/core/backends/flex/` (#5554 §2.6 slice 1). Existing
+  callers use those explicit paths and remain tracked by EB3; no forwarding
+  headers or new include-directory shortcuts bypass the boundary. Demo-only
+  compatibility data lives in `core/backends/DemoRadioConstants.h`, so the
+  synthetic Flex connection does not include the concrete `SimBackend`.
 - **The rule.** Each tracked file's baseline row is the exact **set** of
   vendor headers it may include. Adding a vendor `#include` (e.g.
   `KiwiSdrManager.h`, `RadioConnection.h`, `StreamStatus.h`) to a `gui/`,
@@ -753,10 +757,11 @@ SmartSDR status decode now lives in `FlexBackend` behind typed deltas, and
 the models apply normalized signals. The amp (PGXL) and tuner (TGXL)
 accessory models followed in 2.4 — `AmpModel` was extracted from
 `RadioModel`, and their status decode and command encode now route through
-`FlexBackend` too (#4099, #4101, #4113, #4192, #4200). The remaining vendor
-headers are **not** relocated yet — step 2.4 landed the EB3 ratchet (above) that
-freezes today's above-seam vendor coupling and lets it be decoupled
-subsystem-by-subsystem. Converting a touchpoint still follows the claim
+`FlexBackend` too (#4099, #4101, #4113, #4192, #4200). The five Flex wire
+classes are physically relocated, but their existing model/UI consumers are
+not converted by that move. The EB3 ratchet (above) still freezes that
+coupling while it is decoupled subsystem-by-subsystem. Other vendor headers
+outside the backend tree remain staged work. Converting a touchpoint follows the claim
 protocol + before/after `tools/verify_slice0_rx.py` recipe; a converted
 file drops its vendor include and lowers its EB3 baseline.
 

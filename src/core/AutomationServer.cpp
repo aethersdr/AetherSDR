@@ -1199,6 +1199,17 @@ ResolvedAction matchMenuActionUnconditional(QMenu* menu, const QString& target)
     return {};
 }
 
+// QMainWindow::menuBar() creates a replacement when its original menu bar has
+// been moved into the title-bar layout. Query the existing widget tree instead
+// so automation never alters the native menu ownership while looking it up.
+QList<QMenuBar*> existingMenuBars(QMainWindow* window)
+{
+    if (!window) {
+        return {};
+    }
+    return window->findChildren<QMenuBar*>(QString(), Qt::FindChildrenRecursively);
+}
+
 // Resolve a QAction anywhere in any top-level window's menu bar, regardless of
 // whether the menu is currently open. This is what lets `invoke` drive
 // menu-launched dialogs (AetherControl…/Network…/MQTT…/Radio Setup…/Connect…)
@@ -1206,30 +1217,28 @@ ResolvedAction matchMenuActionUnconditional(QMenu* menu, const QString& target)
 ResolvedAction resolveMenuBarAction(const QString& target)
 {
     const QWidgetList tops = QApplication::topLevelWidgets();
-    // 1. Any QMainWindow's menu bar (Windows/Linux, and macOS when the actions
-    //    remain on the bar). Searched unconditionally so a CLOSED menu resolves.
+    // 1. Existing bars, including the bar embedded in TitleBar on all platforms.
+    //    Searched unconditionally so a CLOSED menu resolves.
     for (QWidget* tlw : tops) {
         auto* mw = qobject_cast<QMainWindow*>(tlw);
-        if (!mw)
-            continue;
-        QMenuBar* mb = mw->menuBar();
-        if (!mb)
-            continue;
-        for (QAction* topAction : mb->actions()) {
-            // A top-level menu title (e.g. "Settings") matches but has no owning
-            // QMenu to route through; its submenu is what carries the leaves.
-            if (actionMatchesTarget(topAction, target))
-                return {topAction, nullptr};
-            if (QMenu* submenu = topAction->menu()) {
-                const ResolvedAction match = matchMenuActionUnconditional(submenu, target);
-                if (match.action)
-                    return match;
+        for (QMenuBar* mb : existingMenuBars(mw)) {
+            for (QAction* topAction : mb->actions()) {
+                // A top-level menu title (e.g. "Settings") matches but has no owning
+                // QMenu to route through; its submenu is what carries the leaves.
+                if (actionMatchesTarget(topAction, target)) {
+                    return {topAction, nullptr};
+                }
+                if (QMenu* submenu = topAction->menu()) {
+                    const ResolvedAction match = matchMenuActionUnconditional(submenu, target);
+                    if (match.action) {
+                        return match;
+                    }
+                }
             }
         }
     }
-    // 2. macOS NATIVE menu bar: Qt reparents each top menu to a TOP-LEVEL QMenu
-    //    that is NOT under a queryable QMenuBar, so the menu-bar walk above finds
-    //    nothing. Walk every top-level QMenu unconditionally to reach those. A
+    // 2. Retain the fallback for menus exposed as top-level QMenu widgets,
+    //    including native menus. Walk them unconditionally to reach closed menus. A
     //    transient context-menu/combo-popup QMenu won't carry our dialog/zoom
     //    labels, so the exact-text match stays unambiguous.
     for (QWidget* tlw : tops) {
@@ -1854,6 +1863,21 @@ QJsonObject vfoFlagSnapshot(QWidget* vfo, RadioModel* radio)
     return flag;
 }
 
+// EVALUATE THE OPTIONAL ONCE. Both …IfLive() accessors read the clock INSIDE
+// themselves and compare against a staleness window, so calling one twice --
+// once to test it, once to dereference it -- can find it engaged and then
+// disengaged, and dereferencing a disengaged optional is undefined behaviour.
+//
+// The window is sub-microsecond and was reasoned from the code rather than
+// observed. That is precisely the kind of race that is cheaper to remove than
+// to argue about, and a caller cannot be expected to know the accessor reads a
+// clock. (#5499 review)
+template <typename T>
+static QJsonValue jsonOrNull(std::optional<T> v)
+{
+    return v ? QJsonValue(*v) : QJsonValue();
+}
+
 QJsonObject radioSnapshot(const RadioModel* r)
 {
     // Multi-Flex slot occupancy across the radio's whole slice capacity: each
@@ -1887,7 +1911,24 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("connectState"), r->connectState()},
         {QStringLiteral("fullDuplex"),   r->fullDuplexEnabled()},
         {QStringLiteral("transmitting"), r->isRadioTransmitting()},
-        {QStringLiteral("txPower"),      r->txPower()},
+        // Qualified, not a dead scalar. This published RadioModel::m_txPower
+        // — declared, given a getter and a Q_PROPERTY(float txPower READ
+        // txPower NOTIFY metersChanged), and ASSIGNED NOWHERE IN THE TREE, from
+        // the commit that introduced it onwards. It answered 0 at every drive,
+        // keyed or not: with rfPower 10, the relay thrown and 0.153-0.184 W
+        // measurably entering a dummy load, every sample of this field read 0.
+        // A bench run then gated a transmit on setting a drive and reading it
+        // back here — the right shape of gate, and incapable of failing,
+        // because it compared 0 against 0.
+        //
+        // The member, its getter and its property are gone. The live quantity
+        // is the forward-power meter, which is what a field called txPower
+        // hanging off metersChanged always meant; `get transmit`.rfPower
+        // remains the REQUESTED drive, a different quantity that no longer
+        // claims to be this one. The freshness duration matches
+        // `get meters`.txMetersFresh, but this checks FWDPWR's own timestamp:
+        // fresh SWR or REFPWR cannot revive expired watts. (#5499 item 1)
+        {QStringLiteral("txPower"), jsonOrNull(r->meterModel().fwdPowerIfLive())},
         // Qualified, not the scalar: an absent or stale sensor reads null here
         // exactly as it does in `get meters`.
         //
@@ -2362,8 +2403,14 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         // the fwdPower/reflectedPower pair above — a client reading this scalar
         // must not get a different answer from the one reading the array
         // (#4533). swrAgeMs is still reported so a consumer can see WHY.
-        {QStringLiteral("swr"),
-         m->swrIfLive() ? QJsonValue(*m->swrIfLive()) : QJsonValue()},
+        // THE SAME DOUBLE EVALUATION, and the one the other two were copied
+        // from. swrIfLive() reads the clock inside itself like its two
+        // siblings, so testing and dereferencing are two different instants
+        // and a sample on the staleness edge can be engaged for the first and
+        // disengaged for the second. Pre-dates #5499 and is fixed with them
+        // rather than left one line away from two corrections, which is how a
+        // pattern gets copied forward.
+        {QStringLiteral("swr"), jsonOrNull(m->swrIfLive())},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          temperature.value(QStringLiteral("value"))},
         {QStringLiteral("supplyVolts"),     voltage.value(QStringLiteral("value"))},
@@ -2378,7 +2425,15 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("compPeak"),        m->compPeak()},           // dB compression (peak)
         {QStringLiteral("compLevel"),       m->compLevel()},          // dB compression
         {QStringLiteral("hasCompression"),  m->hasCompressionMeterValue()},
-        {QStringLiteral("sLevel"),          m->sLevel()},             // dBm
+        // Null rather than a fabricated floor, for the same reason and under the
+        // same rule as swr above (#4533). MeterModel::m_sLevel was written in
+        // exactly one place — clear(), to -130.0f — so this field answered
+        // -130 dBm for 1304 consecutive samples while the SLC:LEVEL row in
+        // `all`, the same quantity in the same reply, moved around a median of
+        // -83.9. sLevelIfLive() declines when more than one receiver declares a
+        // LEVEL meter, because then the scalar has no single answer and `all`
+        // is where a client names the receiver it means. (#5499 item 2)
+        {QStringLiteral("sLevel"), jsonOrNull(m->sLevelIfLive())},           // dBm
         // Same constant the SWR gate uses, so "the TX meters are fresh" and "the
         // SWR is live" cannot drift apart as two different literals.
         {QStringLiteral("txMetersFresh"),
@@ -5192,7 +5247,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         IRadioBackend* backend = radio->backend();
         if (!backend)
             return err(QStringLiteral("no backend attached"));
-        // Same synchronous-extension contract doCiv documents: the HL2 answers
+        // Same synchronous-extension contract doCiv documents: the backend answers
         // inside invokeExtension, so a direct connection lands before the call
         // returns, and anything that does not answer is reported as unsupported
         // rather than as an empty success.
@@ -5214,7 +5269,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             failed = true;
             failure = msg;
         }, Qt::DirectConnection);
-        backend->invokeExtension(QStringLiteral("hl2"), QStringLiteral("nb.get"),
+        backend->invokeExtension(radio->backendCapabilities().family, QStringLiteral("nb.get"),
                                  rid, QVariant());
         disconnect(okConn);
         disconnect(errConn);
@@ -8471,9 +8526,14 @@ QJsonObject AutomationServer::doBandscope(const QString& action)
             {QStringLiteral("ep4Rewinds"), row("ep4Rewinds")},
             {QStringLiteral("blocks"), row("bandscopeBlocks")},
             {QStringLiteral("timeouts"), row("bandscopeTimeouts")},
-            // Absent until a block has arrived — the rows carry an invalid
-            // variant until then, which lands here as a JSON null rather than
-            // as a fabricated 0.00 dBFS.
+            // Absent until a block has arrived, AND absent again once the
+            // newest one is older than kHeadroomMaxAgeMs — the gate can be
+            // stopped mid-session, and a value that is no longer being
+            // measured must not be served as a current one. The rows carry an
+            // invalid variant in both cases, which lands here as a JSON null
+            // rather than as a fabricated 0.00 dBFS. adcObservedAgoMs below is
+            // NOT expired with them: it is what tells a caller which of the
+            // two silences it is looking at.
             {QStringLiteral("adcPeakDbfs"), row("adcPeakDbfs")},
             {QStringLiteral("adcRmsDbfs"), row("adcRmsDbfs")},
             {QStringLiteral("adcCrestDb"), row("adcCrestDb")},
@@ -9939,10 +9999,9 @@ QJsonArray describeMenuActions(QMenu* menu)
     return arr;
 }
 
-// The app's top-level menus, coping with BOTH a regular QMenuBar and the macOS
-// NATIVE menu bar (where each menu is reparented to a top-level QMenu widget,
-// invisible to QMainWindow::menuBar()->actions()). De-duplicated, in discovery
-// order. On macOS this also surfaces submenus as their own entries — harmless.
+// The app's menus from existing bars (including TitleBar's nested bar), with a
+// fallback for named top-level QMenu widgets. De-duplicated, in discovery order.
+// The fallback can also surface submenus as their own entries.
 QList<QPair<QString, QMenu*>> collectTopMenus()
 {
     QList<QPair<QString, QMenu*>> out;
@@ -9950,12 +10009,12 @@ QList<QPair<QString, QMenu*>> collectTopMenus()
     const QWidgetList tops = QApplication::topLevelWidgets();
     for (QWidget* tlw : tops) {
         auto* mw = qobject_cast<QMainWindow*>(tlw);
-        if (!mw || !mw->menuBar())
-            continue;
-        for (QAction* a : mw->menuBar()->actions()) {
-            if (QMenu* sub = a->menu(); sub && !seen.contains(sub)) {
-                seen.insert(sub);
-                out.append({actionDisplayText(a), sub});
+        for (QMenuBar* menuBar : existingMenuBars(mw)) {
+            for (QAction* a : menuBar->actions()) {
+                if (QMenu* sub = a->menu(); sub && !seen.contains(sub)) {
+                    seen.insert(sub);
+                    out.append({actionDisplayText(a), sub});
+                }
             }
         }
     }

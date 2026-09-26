@@ -50,6 +50,14 @@ Q_DECLARE_LOGGING_CATEGORY(lcAutomation)
 Q_DECLARE_LOGGING_CATEGORY(lcQrz)
 Q_DECLARE_LOGGING_CATEGORY(lcClock)
 Q_DECLARE_LOGGING_CATEGORY(lcHl2)
+// DECLARED HERE rather than in one backend .cpp, because "aether.hl2.tx" now
+// has more than one writer: Hl2Backend's gateware telemetry and MetisClient's
+// HOST-queue starvation lines. Qt filters by NAME, so a second file-static
+// object with the same string would also work -- but each object carries its
+// own enabled flags, and one shared object is what every other category in
+// this file does. (Hl2TxDsp.cpp still keeps a file-static lcTxMod on the same
+// string; folding that one in is a separate change and is not made here.)
+Q_DECLARE_LOGGING_CATEGORY(lcHl2Tx)
 
 // Central registry for toggling per-module diagnostic logging at runtime.
 // The Support dialog (Help → Support) uses this to let users enable/disable

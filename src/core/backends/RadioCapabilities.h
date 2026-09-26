@@ -110,6 +110,25 @@ struct PanSpanModel {
 // answers — which is exactly why consumers must go through
 // RadioCapabilities::dbmAxisIsCalibrated() and ::panBinsAbsolute() rather than
 // reach in here and pick a default for themselves.
+// The backend averages its own panadapter frames per the operator's FFT AVG
+// before they leave it (ANAN: WDSP's display analyzer, AnanPanAnalyzer).
+// ENGAGED means it does, so the widget's fixed client-side EMA
+// (SpectrumWidget::SMOOTH_ALPHA) would average a second time -- at 25 fps
+// roughly another 90 ms of lag even at FFT AVG 0 -- and is skipped
+// (MainWindow::onConnectionStateChanged() ->
+// SpectrumWidget::setClientFftSmoothingEnabled(), beside the edge crop).
+// ABSENT means the widget keeps its EMA, as on Flex, HL2, Icom and Sim.
+struct BackendPanAveraging {
+    // What one FFT AVG slider step means to this backend, as an averaging
+    // time. ANAN follows deskHPSDR's unit: 10 ms per step, 0 = off.
+    //
+    // DELIBERATELY NO DEFAULT. Absent record = no backend has been read;
+    // inside the record every field is a considered answer, so a backend
+    // that engages this has to state its own unit rather than inherit
+    // ANAN's by forgetting to.
+    int msPerAverageStep;
+};
+
 struct PanAmplitudeModel {
     // The numbers on the axis are ABSOLUTE dBm at the antenna. True for a radio
     // that carries a per-unit factory calibration — a Flex reports true dBm —
@@ -328,6 +347,8 @@ struct RadioCapabilities {
     // than unwrapping it at the call site.
     std::optional<PanSpanModel> panSpanModel;
     std::optional<PanAmplitudeModel> panAmplitude;
+    // See BackendPanAveraging. Absent = the widget averages client-side.
+    std::optional<BackendPanAveraging> backendPanAveraging;
 
     // A backend nobody has read labelled its axis dBm and was consumed as
     // though it meant it. ABSENT KEEPS THAT CLAIM, so this is the legacy shape
@@ -346,6 +367,39 @@ struct RadioCapabilities {
     {
         return panAmplitude && panAmplitude->binsAbsolute;
     }
+
+
+    // Per-pan band/segment zoom: `display pan set <panId> band_zoom=<0|1>` and
+    // the matching `segment_zoom=`, the radio-authoritative flags that snap a
+    // panadapter to the current band or segment (#4057). ENGAGED means the
+    // radio answers that wire text; ABSENT means UNDECLARED.
+    //
+    // ABSENT REFUSES, and that direction is the point. The failure this exists
+    // to stop is the HERMES.md section 17 dead control: on a radio with no
+    // command plane the write is dropped inside RadioModel::sendCmd while the
+    // UI control moves anyway, so an operator gets a zoom button that lies.
+    // Every surface that can issue the write asks gui/PanZoomModeGate.h, which
+    // reads this record and refuses when it is absent.
+    //
+    // A RECORD AND NOT ANOTHER BOOL, per the M2 convention above: `band_zoom`
+    // and `segment_zoom` are two separate wire keys that happen to travel
+    // together today, so the first radio that answers one and not the other
+    // gets a field in here rather than a second loose boolean and a hunt
+    // through every consumer of the first.
+    //
+    // A CAPABILITY AND NOT A FAMILY STRING. The button enable used to ask
+    // RadioModel::usesFlexCommandPlane(), which is literally `family() ==
+    // "flex"`; #5554's standing notice is that no new family-string branch may
+    // be added above the seam. A second family that gains a zoom verb engages
+    // this record in its own capabilities() and needs no edit in the UI.
+    struct PanZoomModes {
+        // The verb that carries both modes, recorded so the declaration names
+        // what it grants rather than being a bare presence bit. DIAGNOSTIC, in
+        // exactly TwoToneGenerator::selectionCommand's sense below: the gate
+        // branches on this record being ENGAGED and never on the string.
+        QString setCommand;
+    };
+    std::optional<PanZoomModes> panZoomModes;
 
 
     // The frequency range the receiver can actually be tuned to, in Hz.

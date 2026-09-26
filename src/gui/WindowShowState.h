@@ -46,6 +46,13 @@ void showAndRaiseWindow(QWidget* w);
 [[nodiscard]] QList<WindowMenuEntry> windowInventory(
     const QWidget* primaryWindow = nullptr);
 
+// Explicit candidates for deterministic inventory/filter/order coverage.
+[[nodiscard]] QList<WindowMenuEntry> windowInventory(
+    const QList<QWidget*>& candidates, const QWidget* primaryWindow);
+
+// Window/canvas names are operator text, not QAction mnemonic markup.
+[[nodiscard]] QString windowMenuText(QString title);
+
 // Best available user-facing label for a top-level window.  Production
 // windows normally provide windowTitle(); the fallbacks keep an unusual
 // QWidget window reachable instead of silently omitting its native handle.

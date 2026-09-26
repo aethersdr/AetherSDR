@@ -12,6 +12,7 @@
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/Hl2AdcPairing.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+#include "core/backends/hl2/Hl2BandscopeHeadroom.h"
 #include "core/backends/hl2/Hl2OverloadPolicy.h"
 #include "core/backends/hl2/Hl2DspSetupPolicy.h"
 #include "core/backends/hl2/Hl2GainSplit.h"
@@ -29,6 +30,7 @@
 #include <QHostAddress>
 #include <QLoggingCategory>
 #include <QPointer>
+#include <QThread>
 
 #include <algorithm>
 #include <cstddef>
@@ -53,7 +55,9 @@
 static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
               "Hl2Backend.h seeds m_alcTargetPeak with this value — keep them equal");
 
-Q_LOGGING_CATEGORY(lcHl2Tx, "aether.hl2.tx")
+// lcHl2Tx moved to LogManager.h/.cpp beside every other category: this string
+// has a second writer now (MetisClient's host-queue starvation lines), and one
+// shared object is better than two with separate enabled flags.
 
 namespace AetherSDR::hl2 {
 
@@ -422,6 +426,22 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_dspBuildContext->moveToThread(m_dspBuildThread);
     m_dspBuildThread->start();
 
+    // THE UNKEY HOLD. Single-shot and parented here, so it lives and fires on
+    // this object's thread — the same thread applyKeying() runs on, which is
+    // what lets a re-key stop it with a plain call and no lock.
+    m_unkeyUnmuteTimer = new QTimer(this);
+    m_unkeyUnmuteTimer->setSingleShot(true);
+    connect(m_unkeyUnmuteTimer, &QTimer::timeout, this, [this] {
+        // BELT AND BRACES WITH THE STOP IN applyKeying(). A re-key inside the
+        // window stops this timer, so reaching here while keyed should be
+        // impossible — but "should be impossible" is how a hold turns into an
+        // unmute in the middle of a transmission, and this costs one test.
+        if (m_keyed && !m_txMonitor) {
+            return;
+        }
+        applyRxAudioMute(false);
+    });
+
     m_cwHangTimer = new QTimer(this);
     m_cwHangTimer->setSingleShot(true);
     connect(m_cwHangTimer, &QTimer::timeout, this, [this] {
@@ -430,7 +450,23 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         }
         m_cwAutoKeyed = false;
         const TxCoordinator::Completion completion = std::exchange(m_cwHangCompletion, {});
-        setKeying(false, m_cwHangOperation, completion);
+        // applyKeying() DIRECTLY, with cwBreakIn TRUE, and that argument is the
+        // whole point of this line — see the QSK branch in applyKeying().
+        //
+        // THIS USED TO CALL setKeying(), WHICH HARD-CODES cwBreakIn=false.
+        // That made the flag unreachable on the only edge that arms the unkey
+        // hold: setCwKeying() passes true on the key-DOWN and nowhere else, so
+        // "applyKeying already receives cwBreakIn" was true of the class and
+        // false of the key-UP. A hold gated on the parameter as it stood would
+        // have been dead code in full break-in, which is exactly the case the
+        // gate exists for.
+        //
+        // NOTHING ELSE MOVES ON THE WIRE. applyKeying()'s only other use of the
+        // argument picks setCwMox() over setMox(), and MetisClient::setMoxImpl()
+        // reads cwBreakIn only in its `keyed ?` arm: on an UNKEY the two are the
+        // same function. Verified against the source rather than assumed,
+        // because this is a transmit path.
+        applyKeying(false, m_cwHangOperation, completion, /*cwBreakIn=*/true);
     });
 
     // Raw IQ -> the per-receiver DSP chains. ONE connection for every receiver,
@@ -726,6 +762,14 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_ep4Rewinds = c.ep4Rewinds;
         m_ep4Blocks = c.bandscopeBlocks;
         m_ep4Timeouts = c.bandscopeTimeouts;
+        // The silence watchdog's recovery record. It rides this publish for the
+        // reason the bandscope's counters do -- no signal and no timer of its
+        // own -- and it has to ride SOMETHING, because a recovery that works is
+        // invisible by construction: m_linkUp never drops, so no linkDown and
+        // no linkUp fires and nothing republishes. These two numbers are the
+        // whole trace it leaves.
+        m_silenceRecoveryAttempts = c.silenceRecoveryAttempts;
+        m_silenceRecoveriesCompleted = c.silenceRecoveriesCompleted;
     });
 
     // ONE ACCEPTED BANDSCOPE BLOCK, mirrored onto the GUI thread. The same
@@ -956,8 +1000,7 @@ void Hl2Backend::buildReceivers(int count)
         }
         r.dsp = nullptr;             // never inherited; recreated below
         r.audioMuted = false;
-        r.haveSMeter = false;
-        r.sMeterClock = QElapsedTimer{};
+        r.sMeter.reset();
 
         std::string err;
         if (!openReceiverDsp(i, &err)) {
@@ -1063,25 +1106,11 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         // change while the trace stayed put would be its own kind of lie.
         const double dbm = m_dbRef.toDbm(dbfs);
 
-        // Smooth EVERY sample, publish only on the tick. Both halves matter:
-        // smoothing all of them is what makes the published value represent
-        // the whole interval rather than one arbitrary instant inside it,
-        // and the tick is what stops ~47 cross-thread emits a second
-        // repainting a widget nobody can read that fast. Per receiver, so a
-        // strong signal on one does not drive another's needle.
-        if (!r->haveSMeter) {
-            r->sMeterDbm = dbm;
-            r->haveSMeter = true;
-        } else {
-            const double alpha = (dbm > r->sMeterDbm) ? kMeterAttackAlpha
-                                                      : kMeterDecayAlpha;
-            r->sMeterDbm = alpha * dbm + (1.0 - alpha) * r->sMeterDbm;
-        }
-        if (r->sMeterClock.isValid()
-            && r->sMeterClock.elapsed() < kMeterPublishIntervalMs)
-            return;
-        r->sMeterClock.restart();
-        emit meterUpdate(sliceMeterName(ui), r->sMeterDbm);
+        // Smooth EVERY sample, publish only on the tick -- SMeterSmoother,
+        // per receiver so a strong signal on one does not drive another's
+        // needle.
+        if (const auto out = r->sMeter.feed(dbm))
+            emit meterUpdate(sliceMeterName(ui), *out);
     });
 
     // Recorded, not published. m_rx is this thread's, so this is a plain store;
@@ -1435,22 +1464,119 @@ void Hl2Backend::publishWideState()
         emit panWideChanged(ids.panId, spanned);
 }
 
+// AFFINITY, ENFORCED RATHER THAN TRUSTED — AND IN THE BUILD THAT SHIPS.
+//
+// Every caller of the two helpers below was traced to the backend's own thread:
+// applyKeying(), setTxAudioMonitor(), pushInitialState(), and the unkey timer,
+// which is parented to the backend and therefore fires there. The check exists
+// because the cost of being wrong is SILENT: m_rxAudioMuted is read by
+// mixReceiverAudio() with no synchronisation, on the strength of both being on
+// this thread, and a caller arriving from the I/O thread would produce a torn
+// gate that only misbehaves under load.
+//
+// WHY NOT Q_ASSERT ALONE, which is what this was. Qt defines QT_NO_DEBUG for
+// every non-Debug configuration, so Q_ASSERT compiles to nothing in
+// RelWithDebInfo — the configuration this project builds, measures and ships.
+// A check that disappears in exactly the build where it matters makes the
+// paragraph above true of the check as well as of the defect (ten9876, #5850
+// review). So: a warning in every build, and Q_ASSERT_X on top of it so a debug
+// run stops AT the offending call instead of logging past it.
+static void hl2RequireBackendThread(const QObject* owner, const char* what)
+{
+    if (owner->thread() == QThread::currentThread()) {
+        return;
+    }
+    qCWarning(lcHl2) << "HL2:" << what
+                     << "was called from a thread that does not own the "
+                        "backend. m_rxAudioMuted is read without "
+                        "synchronisation by mixReceiverAudio(), so this is a "
+                        "torn receive-audio gate, not a style point.";
+    Q_ASSERT_X(false, what, "called off the Hl2Backend's own thread");
+}
+
+void Hl2Backend::applyRxAudioMute(bool muted)
+{
+    hl2RequireBackendThread(this, "applyRxAudioMute");
+    m_rxAudioMuted = muted;
+    // Record the moment sampling is asked to RESUME at the site that actually
+    // asks for it, which since #5497 is HERE and not at the top of
+    // applyKeying(): on the unkey edge the request is now made a hold later
+    // than the key edge, and a stamp taken at the key edge would have told
+    // SliceSamplingGate the chain was sampling for the whole of the hold. The
+    // queued delivery to the DSP thread still leaves one block of skew, which
+    // is the skew the gate was built to answer — it reads the stamp Hl2RxDsp
+    // writes while unmuted rather than trusting this request.
+    m_sliceSampling.setRequested(!muted, hl2::steadyNowNs());
+    for (Receiver& r : m_rx) {
+        if (r.dsp) {
+            QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
+                Q_ARG(bool, muted));
+        }
+    }
+}
+
+void Hl2Backend::releaseRxAudioMuteAfterHold()
+{
+    hl2RequireBackendThread(this, "releaseRxAudioMuteAfterHold");
+    if (!m_rxAudioMuted) {
+        // Nothing is being held, so there is nothing to defer. This is the
+        // ordinary path when the TX audio monitor is on: the key edge never
+        // muted anything, and starting a 70 ms timer to un-mute an unmuted
+        // chain would be a lie in the trace and a spurious wake-up.
+        if (m_unkeyUnmuteTimer) {
+            m_unkeyUnmuteTimer->stop();
+        }
+        return;
+    }
+    if (m_unkeyUnmuteHoldMs <= 0 || !m_unkeyUnmuteTimer) {
+        applyRxAudioMute(false);
+        return;
+    }
+    // start() on a running single-shot timer RESTARTS it, which is the
+    // behaviour a second unkey inside the window wants: that unkey has its own
+    // T/R turnaround to cover and inherits none of the elapsed time of the
+    // first. The bench build this fix comes from did not coalesce them.
+    m_unkeyUnmuteTimer->start(m_unkeyUnmuteHoldMs);
+}
+
 void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
 {
-    // Belt and braces with the demodulator mute. This drops any block that was
-    // already in flight when the key went down; Hl2RxDsp::setAudioMuted stops
-    // the pipeline FILLING with our own transmission, which is what stopped the
-    // tail draining out afterwards.
+    // THE SAME FLAG THE DEMODULATOR IS MUTED ON, not a second expression that
+    // happens to agree with it most of the time (#5497).
     //
-    // THE MONITOR EXCEPTION HAS TO BE HERE, not only at the demodulator mute.
+    // It used to read `m_keyed && !m_txMonitor`, evaluated here, while the
+    // demodulator was muted on `key && !m_txMonitor` evaluated in
+    // applyKeying(). Those agreed exactly until the unmute was deferred past
+    // the radio's T/R — after which this gate would have re-opened 70 ms before
+    // the demodulator did, and those 70 ms would have been DIGITAL ZEROS pushed
+    // into the engine. Gating both on m_rxAudioMuted makes the hold a continued
+    // GAP in audioFrameReady() instead, so the engine's presentation prebuffer
+    // refills with real audio when the hold ends rather than with silence.
+    //
+    // Belt and braces with the demodulator mute, as before: this drops any
+    // block that was already in flight when the key went down, while
+    // Hl2RxDsp::setAudioMuted stops the pipeline FILLING with our own
+    // transmission.
+    //
+    // THE MONITOR EXCEPTION IS STILL HONOURED HERE, and it has to be.
     // audioFrameReady() is emitted from this function and nowhere else, and it is
     // what feeds the engine's "output" capture — so an early return here silences
     // the capture no matter what the DSP is doing. Porting setTxAudioMonitor as a
     // demodulator-mute change alone would leave it a no-op on this backend, and a
     // diagnostic that reads silence draws a confident wrong conclusion from it
     // (#4487 review, finding 1). Off by default; only a measurement turns it on.
-    if (m_keyed && !m_txMonitor)
+    // m_rxAudioMuted carries that exception: applyKeying() never sets it while
+    // the monitor is on, and setTxAudioMonitor() clears it mid-over.
+    //
+    // ONE BLOCK OF SKEW REMAINS AND IS NOT HIDDEN: the flag clears on this
+    // thread while the unmute rides a queued connection to the DSP thread, so
+    // at most one already-zero-filled block can pass this gate at the end of
+    // the hold. That is one block, not the 70 ms the old gate would have let
+    // through, and it is the same direction of skew the SliceSamplingGate
+    // comment describes.
+    if (m_rxAudioMuted) {
         return;
+    }
     const Receiver* r = rx(ddc);
     if (!r || r->audioMuted)
         return;   // not queued at all: a muted receiver must not accumulate
@@ -1747,7 +1873,59 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.twoToneGenerator = std::nullopt;
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
-    c.fmTonePresentation = FmTonePresentation::Legacy;
+    // NO REPEATER DUPLEX AND NO TONE ENCODE, because this radio cannot key FM
+    // at all -- receiveOnlyModes below says so, and these two controls are the
+    // surface that still implied otherwise.
+    //
+    // hasFmRepeaterOffset was never DECLARED here; it was INHERITED. The struct
+    // defaults it true, so a radio that omits it claims a duplex offset, and
+    // the HL2 omitted it. There is nothing behind that claim:
+    // IRadioBackend::setSliceRepeaterOffsetDir and setSliceFmRepeaterOffset are
+    // virtuals with empty bodies and this backend overrides neither, so the
+    // offset spin and the +/-/simplex buttons -- enabled from this flag in BOTH
+    // VfoWidget::configureFmToneControls and RxApplet::configureFmToneControls --
+    // moved a number that reached nothing. A dead control that looks live is
+    // the failure this field exists to prevent, and the two backends that do
+    // decline it (RtlSdrBackend, and IcomCivBackend when the model profile has
+    // no duplex) decline it for exactly this reason. The HL2 has no such verb;
+    // it has no command plane at all.
+    //
+    // fmTonePresentation WAS declared, as Legacy, and Legacy is the value that
+    // fills the tone-mode combo from legacyFmToneModes() -- i.e. it OFFERS
+    // CTCSS ENCODE. There is no CTCSS encoder on this path: grep the whole of
+    // src/core/backends/hl2/ for "ctcss" and nothing answers, and this backend
+    // overrides none of setSliceFmToneMode, setSliceFmToneValue,
+    // setSliceFmToneRxValue or setSliceFmDtcs, all of which are no-op virtuals
+    // in IRadioBackend.
+    //
+    // AND THE MODE CANNOT BE KEYED AT ALL, which is the fact that does not move
+    // with the build. FM and NFM are on receiveOnlyModes below, so
+    // RadioModel::refuseKeyInReceiveOnlyMode() refuses every TxActivity in
+    // them. Resting the argument there rather than on the modulator is
+    // deliberate: the modulator is chosen at build time by AETHER_HL2_TX_TXA
+    // (default ON = a WDSP TXA channel; OFF = the in-tree phasing modulator),
+    // and a comment that described only one of the two would be half wrong in
+    // every build. TXA's own chain does carry fmmod, which is exactly why the
+    // honest gate is the declaration and not the DSP.
+    //
+    // Hidden is the honest value and is the one both widgets read to WITHDRAW
+    // the tone controls rather than show a control that does nothing -- by
+    // different mechanisms, which is worth stating because this comment is the
+    // artifact a later reader will trust over the code.
+    // VfoWidget::configureFmToneControls hides a CONTAINER
+    // (m_fmToneContainer->setVisible(modeEligible && presentation != Hidden));
+    // RxApplet::configureFmToneControls hides the individual CHILDREN
+    // (m_toneModeCmb, m_toneValueCmb and the CTCSS/DTCS combos) and never
+    // touches m_fmContainer by presentation at all -- that one follows the
+    // MODE, not this capability. The operator-visible outcome is the same in
+    // both: under Hidden no tone control is shown.
+    //
+    // WHAT THIS DOES NOT TOUCH: receive. FM and NFM demodulate exactly as
+    // before -- WDSP's FM demodulator is unaffected by either field. What is
+    // withdrawn is a set of TRANSMIT-side controls for a mode this backend
+    // already refuses to key in.
+    c.hasFmRepeaterOffset = false;
+    c.fmTonePresentation = FmTonePresentation::Hidden;
     c.fmDtcsCodes = {};
     // The CEILING, not the running count. A capability answers "what can this
     // radio do", and receivers are now added on demand — so reporting the
@@ -1883,9 +2061,142 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.tuningMaxHz = 38'400'000.0;
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
                                100'000, 38'400'000};
+    // THE MODES THE HEADLESS RECEIVE PATH MAY BE ASKED FOR, and it is an ACCEPT
+    // list rather than a menu -- ModelReceiveControlTarget reads it twice.
+    //
+    //   * ModelReceiveControlTarget::setMode refuses a REQUESTED mode that is
+    //     not in it, and
+    //   * ModelReceiveControlTarget::checkSlice, on ReceiveOperation::Mode,
+    //     requires the slice's currently OBSERVED mode to be in it.
+    //
+    // The second reading is why the omissions bit harder than a missing menu
+    // entry would, and it is SELF-LATCHING: checkSlice is the first statement
+    // of setMode, so a slice whose observed mode is absent from this list has
+    // slice.setMode refused with "capability.unavailable" WHATEVER mode is
+    // requested -- including a mode that is on the list. It cannot be steered
+    // back out over the control plane at all.
+    //
+    // (What it does NOT do is retract the verb from the advertised method set:
+    // ModelReceiveControlTarget::available is an any-slice OR over checkSlice,
+    // so with one healthy slice present slice.setMode still advertises as
+    // available while being refused for the stranded one. That is worse than a
+    // clean retraction, not better.)
+    //
+    // DSB and CWL are modes this backend genuinely demodulates --
+    // modeFromString() maps each onto its own WdspChannel::Mode (Dsb, Cwl) and
+    // defaultPassbandForMode() carries an entry written for each ({-3000,3000}
+    // and {-250,250}) -- and both are on publishedModeStrings(), so the mode
+    // MENU offers them. An operator could pick DSB out of the combo and strand
+    // the slice.
+    //
+    // NO ALIAS SPELLING IS ON THIS LIST, AND THAT IS LOAD-BEARING RATHER THAN
+    // TIDINESS. An earlier revision of this change added "CWU" here, reasoning
+    // that setSliceMode() could put that spelling on a slice and the observed
+    // read would then strand it. The right fix was the other one: setSliceMode()
+    // below now runs canonicalOfferedMode(), so "CWU" collapses onto "CW"
+    // BEFORE a slice holds it, and applyRestoredState() has always done the
+    // same. With both closed, every writer of Receiver::mode produces a
+    // canonical spelling and no slice can be OBSERVED in an alias at all.
+    //
+    // AND AN ALIAS LEFT ON THE LIST WOULD THEN LATCH THE SLICE, which is the
+    // fault this whole declaration exists to remove, arriving by the other
+    // door. ModelReceiveControlTarget::setMode records the REQUESTED string
+    // (`m_pendingModes.insert(slice, mode)`) and releases it only on an
+    // observation that compares EQUAL to it. Ask for "CWU", get "CW"
+    // published, and that entry never clears -- after which checkSlice()
+    // refuses every further Mode AND Filter intent on the slice with
+    // "request.conflict" until the radio disconnects or the backend is
+    // rebuilt. So an alias on this list is not a harmless extra entry once the
+    // backend canonicalises; it is a permanent wedge.
+    //
+    // THE INVARIANT THAT KEEPS IT SHUT, asserted in control_receive_test
+    // rather than left here: every mode on this list is its own canonical
+    // spelling -- canonicalOfferedMode(m) == m for all of them. That is
+    // exactly the condition under which the requested string and the published
+    // one cannot disagree.
+    //
+    // It also happens to make this list equal to publishedModeStrings(), which
+    // is the right shape for a different reason given below, and the two are
+    // still separate questions: this one asks "may the receive control plane
+    // be asked for it", the menu asks "should an operator be able to pick it".
+    //
+    // DSB BEING ON receiveOnlyModes IS NOT A CONTRADICTION: that list answers
+    // "may this radio KEY in this mode", this one answers "may the receive
+    // control plane be asked for it". A receive-only mode is precisely a mode a
+    // receiver may sit in.
+    //
+    // THE TEST APPLIED HERE is "does this backend SERVE the mode", not "does
+    // modeFromString() have a line for it". DSB and CWL pass it on the same
+    // terms as the seven already listed: a WdspChannel::Mode of their own, a
+    // defaultPassbandForMode() entry written for them, and nothing about the
+    // chain left at a value nobody chose. CWU passes on a narrower ground and
+    // it is worth being exact about it -- it is CW's second spelling, sharing
+    // both the WDSP mode and the passband entry, and it earns a place here only
+    // because the run-time paths above can put that spelling on a slice.
+    //
+    // FM IS DECLARED, AND ON A DIFFERENT GROUND FROM THE OTHERS.
+    // It does NOT pass the "does this backend serve the mode" test above --
+    // the demodulator reservations below are all still true -- and it is
+    // here anyway, because this list's SECOND reading makes exclusion the
+    // more dangerous answer. publishedModeStrings() carries "FM", so
+    // SliceDelta::modeList publishes it and the mode MENU offers it. The set
+    // difference between the menu and this list was exactly {FM}: pick FM out
+    // of the combo and the slice is stranded, in the same self-latching way
+    // DSB and CWL were, with no way back out over the control plane.
+    //
+    // A mode the radio's own menu puts on a slice must not latch the control
+    // plane shut. That is the ground: not "the HL2 serves FM well", but "the
+    // HL2 already lets an operator sit in FM, so the receive control plane
+    // must be able to steer them out of it".
+    //
+    // "NFM" IS NOT LISTED, and deliberately so. It is FM's alias, it is not on
+    // publishedModeStrings(), and setSliceMode() below collapses it onto "FM"
+    // before a slice holds it -- so there is no observation to rescue, and
+    // listing it would create the permanent "request.conflict" wedge described
+    // in the alias paragraph above. receiveOnlyModes is the list that still
+    // needs both spellings, and for its own reason: that one is a membership
+    // test run on whatever string the slice happens to hold, and it must stay
+    // correct even if a future change reopens a route this one closes.
+    //
+    // NOTE WHAT THIS ALSO WIDENS, because the list is read twice and this is
+    // the other read: slice.setMode mode="FM" is now accepted where it was
+    // refused "request.out_of_range". KEYING IS UNAFFECTED, and
+    // that is checked rather than assumed -- receiveOnlyModes below carries
+    // FM and NFM, RadioCapabilities::modeIsReceiveOnly() is a
+    // case-insensitive membership test on exactly that list, and
+    // RadioModel::refuseKeyInReceiveOnlyMode() runs it inside
+    // beginTxActivity() (plus forwardNonFlexCwKeying() for the CW element
+    // path), which is the common entry for MOX, TUNE, ATU and CWX alike.
+    // receiveModeControl reaches ModelReceiveControlTarget and
+    // RadioResourceAdapter and nothing on the transmit side at all.
+    //
+    // THE DEMODULATOR RESERVATIONS STAND, and declaring the mode does not
+    // answer them -- it only stops the answer being "the slice is stuck":
+    //
+    //   * FM/NFM reach WDSP's fmd, but nothing in this tree ever calls
+    //     SetRXAFMDeviation, so fmd runs on create_rxa's 5 kHz default whatever
+    //     the signal is; SetRXAMode(FM) also clears the AGC, and there is no
+    //     squelch on this backend at all (setSliceSquelch is not overridden
+    //     here). "Demodulates" is true and "is served well" is not.
+    //
+    // WBFM, WFM AND DRM STAY OFF, and each fails differently:
+    //
+    //   * WBFM/WFM additionally clear nbp0 and panel in SetRXAMode, which is
+    //     the stage carrying the sideband selection and the manual notches --
+    //     and broadcast FM is outside the first Nyquist zone this radio can
+    //     hear (tuningMaxHz above is 38.4 MHz).
+    //   * DRM has no decoder here at all.
+    //
+    // Neither of those three is on publishedModeStrings(), so neither can be
+    // reached from the menu and neither has the stranding exposure FM had.
+    // Declaring them is a real question and it is not this one; it wants the
+    // deviation, squelch and AGC work behind it rather than a list entry that
+    // makes the gap harder to see.
     c.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
-        {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("DIGU"),
-         QStringLiteral("DIGL"), QStringLiteral("AM"), QStringLiteral("SAM"), QStringLiteral("CW")}};
+        {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("DSB"),
+         QStringLiteral("DIGU"), QStringLiteral("DIGL"), QStringLiteral("AM"),
+         QStringLiteral("SAM"), QStringLiteral("CW"), QStringLiteral("CWL"),
+         QStringLiteral("FM")}};
     // Conservative carrier-relative subdomains of the existing WDSP passband.
     c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine, {
         {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},
@@ -2019,6 +2330,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasManualNotch = false;
     c.hasTransmitFrequencyCheck = false;
     c.hasDdcPanEdgeRolloff = false;
+    // No band/segment zoom: this backend vends no command plane at all, so
+    // `display pan set ... band_zoom=` is dropped inside RadioModel::sendCmd.
+    // Declaring absence is what makes the control refuse rather than lie.
+    c.panZoomModes = std::nullopt;
     // The one member of the noise family that is NOT moot here. WDSP's ANB runs
     // on this host, on the raw IQ, ahead of the demodulator — the same
     // arrangement as the manual notch and for the same reason (oracle addendum
@@ -2271,10 +2586,10 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         const bool hasStored = m_lnaDbByBand.contains(m_currentBandKey);
         const AetherSDR::hl2::ConnectLna seed = AetherSDR::hl2::connectLna(
             m_haveRestoredState, hasStored,
-            m_lnaDbByBand.value(m_currentBandKey, m_lnaDefaultDb),
+            m_lnaDbByBand.value(m_currentBandKey, hl2::kLnaDefaultGainDb),
             paramPresent,
             request.params.value(QStringLiteral("lnaGainDb")).toInt(),
-            m_lnaDefaultDb, kLnaGainMinDb, kLnaGainMaxDb);
+            hl2::kLnaDefaultGainDb, kLnaGainMinDb, kLnaGainMaxDb);
         // Only take the live value when the policy actually had something to
         // say: with no restored state and no param it returns the default,
         // which must not stamp on a value the lines above already settled.
@@ -3056,12 +3371,49 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     notifyOperatingStateChanged();
 }
 
-void Hl2Backend::setSliceMode(int sliceId, const QString& mode)
+void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
 {
     const int ddc = ddcForSlice(sliceId);
     Receiver* r = rx(ddc);
     if (!r)
         return;
+
+    // THE ALIAS COLLAPSES HERE, not only at the restore boundary.
+    //
+    // applyRestoredState() has always run canonicalOfferedMode() before the
+    // mode reaches a slice, and Hl2ModeVocabulary.h spells out why: both
+    // consumers rebuild the mode combo with clear()/addItems()/findText() and
+    // move the selection ONLY on a findText() hit, so a slice holding a
+    // spelling publishedModeStrings() does not carry leaves the combo on index
+    // 0 -- "LSB" -- with signals blocked while the receiver really is in
+    // another mode. "An operator reading LSB while hearing FM is the exact
+    // fault #5580 exists to remove."
+    //
+    // That header names this function as one of the three run-time routes that
+    // could still do it -- "CAT, TCI and Hl2Backend::setSliceMode still put
+    // either spelling on the slice at run time" -- and it was a description of
+    // what happened, not a requirement. Declaring CWU (and FM/NFM) on
+    // receiveModeControl above turns that description into a wider hole: the
+    // list is read for the REQUESTED mode too, so slice.setMode mode="CWU" now
+    // passes ModelReceiveControlTarget and arrives here, where the old code
+    // stored it verbatim. Canonicalising is what keeps the request surface
+    // from widening to a spelling the menu cannot display.
+    //
+    // IT CANNOT WEAKEN THE KEY REFUSAL, which is the one property
+    // Hl2ModeVocabulary.h asks of any collapse. modeIsReceiveOnly() is a
+    // case-insensitive membership test and capabilities()'s receiveOnlyModes
+    // lists every alias pair BOTH ways (FM and NFM, WBFM and WFM) or on
+    // NEITHER (CW and CWU, both of which key correctly through the gateware
+    // keyer), so each pair's two spellings are equivalent across that boundary
+    // by construction -- hl2_mode_vocabulary_test pins that equivalence for
+    // every accepted spelling. Collapsing one onto the other moves nothing.
+    //
+    // isKnownModeString() FIRST, exactly as applyRestoredState() does it: a
+    // string the vocabulary does not know is passed through untouched rather
+    // than merely upper-cased, so this changes nothing for anything outside
+    // the three alias pairs.
+    const QString mode = isKnownModeString(requested) ? canonicalOfferedMode(requested) : requested;
+
     const QString previous = r->mode;
     r->mode = mode;
     const WdspChannel::Mode wdsp = modeFromString(mode);
@@ -4338,15 +4690,39 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     // measurement turns it on. Applied to every receiver for the same reason the
     // mute is: whichever one the capture is taken from must not be silenced.
     const bool muteWhileKeyed = key && !m_txMonitor;
-    // Record the moment sampling is asked to RESUME, at the same site that asks
-    // for it. The unmute below is queued, so at key-up `!muteWhileKeyed` is true
-    // a block before Hl2RxDsp has unmuted; SliceSamplingGate turns that request
-    // into an answer taken from the stamp on the reading.
-    m_sliceSampling.setRequested(!muteWhileKeyed, hl2::steadyNowNs());
-    for (Receiver& r : m_rx) {
-        if (r.dsp)
-            QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
-                Q_ARG(bool, muteWhileKeyed));
+    // THE TWO EDGES ARE NOT SYMMETRIC, AND #5497 IS WHAT THEY COST WHEN THEY
+    // ARE TREATED AS IF THEY WERE.
+    //
+    // KEY DOWN: mute HERE, ahead of everything else this function does. Muting
+    // early is free — the operator cannot want to hear a transmitter that has
+    // not started — and late is expensive, because what the receiver hears
+    // while the PA is up is our own carrier at a level that rails the ADC.
+    //
+    // KEY UP: the release is NOT here. It is at the bottom of this function,
+    // after the MOX-off has been queued, and it is deferred past the radio's
+    // T/R turnaround on top of that. See releaseRxAudioMuteAfterHold() and the
+    // constant's own comment in the header.
+    //
+    // WHY THE OLD CODE WAS WRONG AND NOT MERELY RACY. Every Receiver::dsp is
+    // moved to m_ioThread in openReceiverDsp(), and MetisClient is moved to the
+    // same thread in this class's constructor. Both edges ride
+    // Qt::QueuedConnection onto that one event queue, at equal priority, so
+    // delivery is FIFO in POSTING order. An unmute posted ahead of the
+    // setMox(false) further down this function was therefore not racing it and
+    // did not sometimes lose: it was GUARANTEED to be delivered first, every
+    // time. The demodulator listened at full gain while the PA was still up,
+    // for the whole T/R turnaround, on every unkey.
+    //
+    // WHY A TIMER AND NOT AN EVENT. There is no T/R-complete indication to gate
+    // on, and that was checked rather than assumed: Ep6Response::ptt is decoded
+    // but MetisClient's own note records ptt_resp as `cw_on | ext_ptt` — the
+    // radio's EXTERNAL keying inputs, which never go high for a host MOX key.
+    // A delay is forced. #5497 measures its length; the header names it.
+    if (muteWhileKeyed) {
+        if (m_unkeyUnmuteTimer) {
+            m_unkeyUnmuteTimer->stop();   // a re-key inside the hold cancels it
+        }
+        applyRxAudioMute(true);
     }
     // Drop whatever was already queued for the mix. On unkey these would be the
     // stalest blocks in the buffer and would play out ahead of live audio.
@@ -4414,6 +4790,142 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 metis->setMox(key, operation);
             }
         }, Qt::QueuedConnection);
+    }
+    // AND ONLY NOW THE RELEASE — after the MOX-off above is on the queue, never
+    // before it. The ordering is what #5497 is about, so it is stated as an
+    // ordering here rather than left to the timer to enforce: even at a hold of
+    // zero, the unmute is posted behind the MOX-off rather than ahead of it.
+    // The hold then covers what the ordering alone cannot — the control-packet
+    // wait, the network hop, the HL2's T/R relay and the PA's decay.
+    //
+    // ARMED BY THE KEY-UP EDGE, NOT BY THE UNKEYED STATE — and that distinction
+    // is worth the three branches below.
+    //
+    // A hold covers ONE T/R turnaround: the one the MOX-off just above started.
+    // A second setKeying(false) arriving with m_keyed ALREADY false started no
+    // turnaround and so has none of its own to cover; it inherits the one
+    // already being covered. This used to be a bare `if (!muteWhileKeyed)`,
+    // which re-entered releaseRxAudioMuteAfterHold() with the mute still set
+    // and RESTARTED the single-shot timer from zero — measured at 311 ms of
+    // mute past the real MOX-off for a 200 ms hold, against the 200 ms the
+    // operator is owed. Every one of those milliseconds is charged to #5498's
+    // post-unkey dropout by this change's own accounting, so the defect
+    // overstated that cost as well as causing it (ten9876, #5850 review).
+    //
+    // THE REDUNDANT UNKEY IS NOT HYPOTHETICAL, and the paths were traced rather
+    // than assumed. RadioModel::requestTransmitStop() calls
+    // TransmitModel::stopTune() — which reaches setTune(false) and its
+    // setKeying(false) — and then, in the same function, an unconditional
+    // TransmitModel::setMox(false). setMox's off edge is not edge-guarded: the
+    // `m_transmitting != on` block is skipped on an already-unkeyed model but
+    // the trailing moxCommandIssued(on) still fires, so a second
+    // setKeying(false) lands. pushInitialState() below is the same shape by
+    // construction — it assigns m_keyed = false and then calls setKeying(false).
+    //
+    // Nothing upstream filters it either: on the off edge
+    // TxCoordinator::Command::permitsDispatch degrades to
+    // Operation::permitsCleanup(), which tests liveness and generation and has
+    // no notion of key state, and every local unkey uses a cleanupFence() built
+    // to satisfy exactly that.
+    //
+    // keyChanged is already computed above, for m_sinceUnkey and for
+    // transmitChanged. The hold simply has to consult it too.
+    if (!muteWhileKeyed) {
+        if (key) {
+            // KEY DOWN WITH THE TX AUDIO MONITOR ON. muteWhileKeyed is false
+            // only because the monitor asked to HEAR the transmitter. There is
+            // no turnaround at a key-down and so nothing to wait for: anything
+            // still held is released NOW rather than deferred into a fresh
+            // hold. Normally a no-op, because the monitor path already
+            // unmuted; it is here so that it stays a no-op.
+            if (m_unkeyUnmuteTimer) {
+                m_unkeyUnmuteTimer->stop();
+            }
+            if (m_rxAudioMuted) {
+                applyRxAudioMute(false);
+            }
+        } else if (cwBreakIn && m_cwHangTimer
+                   && m_cwHangTimer->interval() < m_unkeyUnmuteHoldMs) {
+            // CW FULL BREAK-IN AT A SHORT DELAY SKIPS THE HOLD. RULED by the
+            // maintainer (KK7GWY, 2026-09-24, on #5850): the hold is skipped
+            // only when the CW hang is shorter than the hold, which is the case
+            // where it would swallow the inter-element space and take QSK away.
+            // At a longer delay the hang fires once, at the end of the over, and
+            // that unkey takes the ordinary hold below like any other.
+            //
+            // THIS IS NARROWER THAN WHAT THIS PR ORIGINALLY IMPLEMENTED, and the
+            // difference is the whole point. The earlier arm skipped the hold at
+            // EVERY break-in delay, on the author's own reading of the trade.
+            // AGENTS.md § Autonomous Agent Boundaries makes the maintainer the
+            // sole authority on UX direction, and break-in behaviour is UX — so
+            // the wider rule was never ours to make. At the default cwDelay of
+            // 500 ms the hang is longer than this hold, so it fires once at the
+            // end of the over; that key-up now gets the normal hold, so the
+            // +57 dB burst #5497 measured is removed for break-in operators too.
+            //
+            // THE PREDICATE READS THE HANG TIMER'S OWN INTERVAL, and nothing new
+            // is latched for it. setCwKeying() starts m_cwHangTimer with
+            // max(kCwEnvelopeReleaseMs, clamp(breakInDelayMs, 0, 2000)), and
+            // QTimer::interval() still returns that value after the single-shot
+            // has fired — which is where we are, since this call arrives FROM
+            // that timeout. So the comparison is the operator's configured hang
+            // against the hold, exactly as the ruling states it.
+            //
+            // WHAT THE HOLD WOULD HAVE COST IN THE SKIPPED CASE. The unkey hold
+            // is armed per
+            // ELEMENT in full break-in, not per transmission: setCwKeying()
+            // starts m_cwHangTimer at max(kCwEnvelopeReleaseMs, cwDelay) on
+            // every element release, so at the deliberate-QSK setting of
+            // cwDelay = 0 the hang is 6 ms and every element's release reaches
+            // this function. The next element's key-down then stops the timer
+            // and re-mutes, so a hold longer than the inter-element space
+            // means the receiver never opens at all.
+            //
+            // THE CROSSOVER IS ARITHMETIC FROM THE TWO CONSTANTS ABOVE, NOT A
+            // MEASUREMENT, and that is stated because it would otherwise read
+            // as one. There is NO CW measurement anywhere behind this change:
+            // #5497's eleven windows are all 4-second SSB keys. At PARIS
+            // timing the inter-element space is 1200/WPM ms, so it falls below
+            // kUnkeyUnmuteHoldMs (70) at 1200/70 = 17.1 WPM, and below the 76
+            // ms that actually elapses from element key-up to unmute — the
+            // 6 ms hang plus the hold it arms — at 1200/76 = 15.8 WPM. Both
+            // numbers are divisions, done here, on constants in this file.
+            //
+            // SEMI-BREAK-IN IS UNAFFECTED AND MUST BE. With break-in off,
+            // setCwKeying() never keys: CW rides an MOX/PTT the operator
+            // asserted, and the unkey that ends the over is that operator's
+            // release arriving through setKeying() with cwBreakIn FALSE. It
+            // takes the branch below and gets the full hold, which is right —
+            // that unkey ends a transmission and has a real T/R turnaround
+            // behind it, and the operator asked for no gap to hear in.
+            //
+            // THE LEAK IS REAL AND IS THE PRICE, and it is now paid only where
+            // the ruling says to pay it. What the receiver hears in these
+            // milliseconds is the operator's own PA decaying into their own
+            // front end, forty-plus times a second at speed — the same
+            // +57.55 dB / +10.60 dBFS artefact this change removes everywhere
+            // else. It is not suppressed here because suppressing it is what
+            // takes QSK away. At a hang at or above the hold there is no
+            // inter-element space to protect, so the burst is suppressed and
+            // nothing is given up for it.
+            if (m_unkeyUnmuteTimer) {
+                m_unkeyUnmuteTimer->stop();
+            }
+            if (m_rxAudioMuted) {
+                applyRxAudioMute(false);
+            }
+        } else if (keyChanged) {
+            // THE ONE TRUE KEY-UP EDGE, and the only site allowed to arm a
+            // hold.
+            releaseRxAudioMuteAfterHold();
+        } else if (!m_unkeyUnmuteTimer || !m_unkeyUnmuteTimer->isActive()) {
+            // A redundant unkey with no hold running — an unmuted chain, or one
+            // whose hold has already expired. Kept going through the helper so
+            // both settle exactly as they always did.
+            releaseRxAudioMuteAfterHold();
+        }
+        // else: a redundant unkey INSIDE a running hold. Leave the timer
+        // exactly as the real edge armed it; restarting it is the defect above.
     }
     if (!key) {
         // Drop buffered audio on unkey so the next transmission does not open
@@ -4772,12 +5284,53 @@ void Hl2Backend::setTxAudioMonitor(bool on)
     // which is the site that actually gates audioFrameReady().
     // Enabling the monitor mid-transmission is the second way sampling resumes,
     // and the one where the held peak is most likely still fresh by age — the
-    // key-down that froze it may be only milliseconds old. Same gate, same site.
-    m_sliceSampling.setRequested(!(m_keyed && !on), hl2::steadyNowNs());
-    for (Receiver& r : m_rx) {
-        if (r.dsp)
-            QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
-                Q_ARG(bool, m_keyed && !on));
+    // key-down that froze it may be only milliseconds old. applyRxAudioMute()
+    // stamps SliceSamplingGate for both.
+    //
+    // NO HOLD ON THIS PATH, and that is not an oversight. #5497's hold exists
+    // to cover the radio's T/R turnaround — the interval in which the PA is
+    // still up after the host has asked it to stop. Turning the monitor ON
+    // asks to HEAR the transmitter, so there is nothing to wait for; turning it
+    // OFF while keyed must silence it now, for the same reason the key-down
+    // edge mutes now. Either way this is the immediate path. A hold placed here
+    // would make a diagnostic that enables the monitor mid-over wait 70 ms for
+    // audio it deliberately asked for.
+    if (m_keyed && !on) {
+        if (m_unkeyUnmuteTimer) {
+            m_unkeyUnmuteTimer->stop();
+        }
+        applyRxAudioMute(true);
+    } else if (!on && !m_keyed && m_unkeyUnmuteTimer && m_unkeyUnmuteTimer->isActive()) {
+        // AN ARMED HOLD IS NOT AN OVERTAKEN ONE, and the else branch below used
+        // to treat it as one. (UNKEYED, monitor OFF) is exactly the state an
+        // unkey has just left behind, with the hold running and the PA still
+        // up; cancelling it there unmutes inside the T/R turnaround -- the
+        // defect this whole change exists to remove, let back in through
+        // another door.
+        //
+        // Not hypothetical: RadioCertification's run() epilogue calls
+        // keyViaOperatorPath(false) and then setTxAudioMonitor(false) in the
+        // same synchronous unwind, which is the one path in the tree that
+        // deliberately listens to its own transmitter.
+        //
+        // AND IT SPLITS ON `on`, WHICH IS THE CORRECTION. This guard was first
+        // written without the `!on`, so it was taken for BOTH values and
+        // swallowed setTxAudioMonitor(TRUE) inside the window as well: a
+        // diagnostic that asked to HEAR the receiver got silence until the
+        // timer expired, and a following key-down -- muteWhileKeyed false
+        // because the monitor is on -- then re-armed a fresh hold off the mute
+        // that was still set. ASKING TO HEAR IS ASKING FOR SOMETHING; only
+        // asking for OFF is asking for nothing, and only that one may be
+        // answered by doing nothing (ten9876, #5850 review).
+        //
+        // So: monitor OFF inside an armed hold leaves the timer running and
+        // stays muted, and the hold expires on its own a few tens of
+        // milliseconds later. Monitor ON falls through to the immediate path.
+    } else {
+        applyRxAudioMute(false);
+        if (m_unkeyUnmuteTimer) {
+            m_unkeyUnmuteTimer->stop();   // overtaken, or answered on purpose
+        }
     }
 }
 
@@ -5852,10 +6405,8 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // requirement beside it would describe a rule that is not in force.
     if (m_autoGainConfig.requireHeadroomToRelease) {
         const AetherSDR::hl2::HeadroomObservation h =
-            AetherSDR::hl2::bandscopeHeadroom(
-                m_bandscopeBlock,
-                m_bandscopeBlockClock.isValid()
-                    ? m_bandscopeBlockClock.elapsed() : -1);
+            AetherSDR::hl2::bandscopeHeadroom(m_bandscopeBlock,
+                                              bandscopeBlockAgeMs());
         // How much room the step needs: the step, plus the gate's sampling
         // bias, plus the configured margin. This is the number the reading is
         // actually compared against, so publishing it saves an operator from
@@ -5913,10 +6464,16 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 
     // DRIVE: WHAT WAS ASKED FOR, AND WHAT WAS WRITTEN (#4912).
     //
-    // Nothing anywhere reported the APPLIED drive. `get transmit` has rfPower
-    // and `get radio` has txPower, but both read TransmitModel — the operator's
-    // request — which is exactly the readback-shares-the-failure problem this
-    // section exists to solve. Worse, applyDrive()'s transmit gate forces the
+    // Nothing anywhere reported the APPLIED drive. `get transmit` has rfPower,
+    // which reads TransmitModel — the operator's request — which is exactly
+    // the readback-shares-the-failure problem this section exists to solve.
+    // (This used to name `get radio`.txPower alongside it as a second reader of
+    // TransmitModel. It was neither: it read a RadioModel member nothing in the
+    // tree assigned, so it was worse than the readback this paragraph warns
+    // about. It now carries the measured forward power, qualified — see
+    // AutomationServer's radioSnapshot, #5499 item 1.)
+    //
+    // Worse, applyDrive()'s transmit gate forces the
     // register to 0 while the requested percent reads back untouched, so
     // "commanded but never applied" was invisible to automation in the one area
     // where it is safety-adjacent.
@@ -6184,6 +6741,23 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // this is the first number to look at when it does.
     put("droppedPackets", QStringLiteral("Dropped EP6 packets"),
         static_cast<qulonglong>(m_drops));
+    // ---- the silence watchdog's recovery record ----
+    //
+    // Reported unconditionally, next to the loss row, because the question they
+    // answer is the same one: "why did the audio have a hole in it". When the
+    // radio stops streaming an established link, MetisClient re-sends the run
+    // command before declaring the link down, and a recovery that WORKS is
+    // invisible everywhere else -- no linkDown, no linkUp, no reconnect, no
+    // pane rebuilt. These two rows are the only place it shows.
+    //
+    // READ THEM TOGETHER. Attempts climbing while completions do not is the
+    // shape that says the re-send is not the right answer for whatever is
+    // actually failing, and it is the reading that would be lost if only one of
+    // them were published.
+    put("silenceRecoveryAttempts", QStringLiteral("EP6 silence recoveries attempted"),
+        static_cast<qulonglong>(m_silenceRecoveryAttempts));
+    put("silenceRecoveriesCompleted", QStringLiteral("EP6 silence recoveries completed"),
+        static_cast<qulonglong>(m_silenceRecoveriesCompleted));
     // Partial FFT windows discarded at discontinuities, including accepted
     // rewinds and duplicates. Poll each DSP's atomic like the ADC peak rows;
     // its lifetime is protected by the GUI-owned receiver list.
@@ -6365,7 +6939,62 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // "Link", where the last section marker left them, put the two at opposite
     // ends of the dialog. (PR #5650 review round 3.)
     section("adcPeakDbfs", QStringLiteral("Converter"));
-    const bool haveBlock = m_bandscopeBlock.samples > 0;
+    // TWO QUESTIONS, NOT ONE, AND THE ROWS BELOW DIVIDE ON WHICH THEY ANSWER.
+    //
+    // `haveObservation` is "has a block ever arrived". `haveBlock` is "is the
+    // newest one still describing now". Those were the same test here until
+    // this changed, and the gap between them is a defect with a measurement
+    // behind it: stop the EP4 stream inside a session -- closing the wideband
+    // bandscope does exactly that, with the link up and everything else on the
+    // dialog live -- and the level rows went on publishing the last block the
+    // gate happened to deliver, indefinitely, with no marker. Measured on
+    // hardware: 31 dB of commanded LNA gain moved these three rows 0.00 dB
+    // while adcSlicePeakDbfs0, sampled by a different subsystem, moved 19.04
+    // dB over the same steps. An earlier bench leg caught a pair frozen 21.17
+    // dB away from the radio's actual operating point.
+    //
+    // resetBandscopeMirrors() already applies exactly this cure at exactly one
+    // edge -- "back to 'never seen', which is what makes the level rows go
+    // ABSENT again rather than keep showing the previous session's last
+    // reading" -- and a gate stopped mid-session is the same sentence with the
+    // link still up. The auto-gain path is handed the age and refuses on it
+    // (see the bandscopeHeadroom() call in stepAutoGain); these rows were
+    // handed nothing. Two readers of one block, one refusing and one
+    // publishing.
+    //
+    // THE EXPIRY IS bandscopeHeadroom()'s OWN, deliberately and not by
+    // coincidence: kHeadroomMaxAgeMs, three MetisClient::kBandscopeSampleMs
+    // gate periods, which Hl2BandscopeHeadroom.h derives as two periods of
+    // block-to-block spacing plus one of slack for a late I/O thread, and
+    // which that header already calls "a DISPLAY AND CONTROL boundary". The
+    // rows and the loop read one block from one gate, so a separately chosen
+    // display threshold would buy nothing and would leave a window in which
+    // the loop refuses a block these rows still publish -- a smaller version
+    // of the bug being fixed.
+    //
+    // WHAT KEEPS A LIVE GATE FROM BLINKING is the producer's period against
+    // this expiry and nothing else: MetisClient::kBandscopeSampleMs is 1000 ms
+    // into kHeadroomMaxAgeMs's 3000 ms, so a running gate may miss two blocks
+    // before a row goes absent. RadioHealthDialog::kRefreshIntervalMs is NOT
+    // the reason and cannot be — a poll rate changes how soon a blink is
+    // OBSERVED, never whether there is one. (This comment asserted otherwise
+    // until PR #5880 review round 2.)
+    //
+    // AND THESE ROWS DO GO ABSENT DURING TRANSMIT. That is a consequence of
+    // this expiry and it is meant. MetisClient::bandscopeInterlocked() holds
+    // the gate off for m_mox, for the radio's OWN ptt, and for
+    // kBandscopeUnkeyHoldoffMs after unkey, and bandscopeArm() refuses
+    // silently on it — so no block arrives while keyed, and three seconds into
+    // an over these four rows read as dashes (JSON null on the bridge) until
+    // unkey plus the hold-off plus one gate period. The honest answer: the
+    // converter is being shown our own PA rather than the band, the sensor is
+    // not sampling it, and the last pre-key number presented as current is
+    // precisely the fabrication this function is fixing. adcObservedAgoMs is
+    // not expired with them and is what says which silence it is.
+    const std::int64_t blockAgeMs = bandscopeBlockAgeMs();
+    const bool haveObservation = m_bandscopeBlock.samples > 0;
+    const bool haveBlock =
+        AetherSDR::hl2::bandscopeBlockIsCurrent(m_bandscopeBlock, blockAgeMs);
     const double peak = haveBlock ? m_bandscopeBlock.peakDbfs() : 0.0;
     const double rms  = haveBlock ? m_bandscopeBlock.rmsDbfs()  : 0.0;
     auto dbfs = [haveBlock](double v) {
@@ -6421,9 +7050,16 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
                   : QVariant());
     // How old the reading is. A gated sensor's number is a snapshot, and a
     // snapshot with no age on it invites being read as current.
+    //
+    // GATED ON haveObservation, NOT ON haveBlock, and that is the whole reason
+    // the two names exist. This row is what EXPLAINS the four above going
+    // absent: an operator who sees four dashes and an age of 46 810 ms knows
+    // the gate stopped, where four dashes and a fifth dash says only that
+    // something is missing. Expiring the age along with the values would
+    // delete the evidence for the expiry.
     put("adcObservedAgoMs", QStringLiteral("ADC level observed (ms ago)"),
-        (haveBlock && m_bandscopeBlockClock.isValid())
-            ? QVariant(static_cast<qulonglong>(m_bandscopeBlockClock.elapsed()))
+        (haveObservation && m_bandscopeBlockClock.isValid())
+            ? QVariant(static_cast<qulonglong>(blockAgeMs))
             : QVariant());
     return h;
 }
@@ -6449,7 +7085,6 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_haveRestoredState = false;
     m_lnaDbByBand.clear();
     m_driveByBand.clear();
-    m_lnaDefaultDb = hl2::kLnaDefaultGainDb;
     m_lnaGainDb = hl2::kLnaDefaultGainDb;
     // The automatic offset is session state and a radio swap ends the session:
     // radio B must not come up attenuated by a decision taken about radio A's
@@ -6606,10 +7241,43 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // (RestoredRadioState.h). Values clamp to the hardware's own ranges.
     const QJsonObject rfGain =
         state.extension.value(QStringLiteral("rfGain")).toObject();
-    if (rfGain.contains(QStringLiteral("defaultDb")))
-        m_lnaDefaultDb = qBound(kLnaGainMinDb,
-                                rfGain.value(QStringLiteral("defaultDb")).toInt(),
-                                kLnaGainMaxDb);
+    // rfGain.defaultDb IS DELIBERATELY NOT READ (#5829). The fallback gain an
+    // UNVISITED band comes up on is hl2::kLnaDefaultGainDb and nothing else.
+    //
+    // The key used to be read here into a member that was then written straight
+    // back out by currentOperatingState() -- and nowhere in the tree did
+    // anything else ever assign it. No setter, no verb, no GUI control. So its
+    // value was a closed loop: whatever a profile happened to hold, it held
+    // forever, steering every first visit to a band, with no operator action
+    // able to move it. One station's profile sat at -6 dB permanently.
+    //
+    // Ignoring it on read and dropping it from the capture below is what makes
+    // a stale value harmless: the key decays out of the document on the next
+    // snapshot and the shipped constant is the single source of truth. A
+    // document that still carries the key is not rejected -- it is simply not
+    // consulted, which is what "authoritative" has to mean here.
+    //
+    // This also retires a clamp the codebase's own rule rejects. The read this
+    // comment replaces qBound()ed the document value and then persisted the
+    // clamped result, which is exactly what the AGC threshold restore a few
+    // lines up refuses to do in its own words: clamping invents a setpoint the
+    // operator never chose and then writes it back.
+    //
+    // IGNORED OUT LOUD, because this boundary logs every other value it
+    // declines -- the pre-#4914 CW passband just above, the invalid mic level
+    // just below -- and a key dropped in silence is the one an operator cannot
+    // connect to what they hear. A document still carrying this key is exactly
+    // a profile whose next UNVISITED band now comes up on +20 dB instead of
+    // whatever was frozen in it, so the line names both numbers: the value
+    // being ignored, and the value that replaces it. That is what lets a
+    // support log be traced back to #5829 rather than read as a radio fault.
+    if (rfGain.contains(QStringLiteral("defaultDb"))) {
+        qCInfo(lcHl2) << "HL2: ignoring stale restored LNA default (#5829)"
+                      << rfGain.value(QStringLiteral("defaultDb")).toVariant()
+                      << "— unvisited bands come up on"
+                      << hl2::kLnaDefaultGainDb << "dB";
+    }
+
     // ARMED LATER, NOT HERE. Restore runs before the link is up, and the
     // control refuses to arm from a baseline it does not trust -- a decision it
     // cannot make until the restored baseline has actually been applied. So
@@ -6850,8 +7518,14 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     // persisted and is absent from this object: an automatic transient that
     // outlived the session that produced it would be indistinguishable, next
     // launch, from a gain the operator chose. See m_lnaAutoOffsetDb.
-    QJsonObject rfGain{{QStringLiteral("defaultDb"), m_lnaDefaultDb},
-                       {QStringLiteral("lnaDbByBand"), lnaByBand},
+    // NO "defaultDb" KEY (#5829). It was persisted here and read back in
+    // applyRestoredState with nothing in the tree able to write it, so a
+    // profile's value was frozen for the life of that profile and decided the
+    // gain of every first band visit.
+    // hl2::kLnaDefaultGainDb is now the only answer to that question; see
+    // applyRestoredState(). Dropping the key here is the half that heals an
+    // existing document, because the next capture writes the object without it.
+    QJsonObject rfGain{{QStringLiteral("lnaDbByBand"), lnaByBand},
                        // THE WISH, NOT THE RUNNING FLAG. m_autoRfGainEnabled is
                        // whether the loop is running right now; m_autoRfGainWanted
                        // is whether the operator wants it to. Those differ exactly
@@ -6992,7 +7666,43 @@ void Hl2Backend::setLnaAutoOffsetDb(int offsetDb)
 // Arm or disarm the automatic control. RADIO-WIDE: there is one AD9866.
 void Hl2Backend::setAutoRfGain(bool on)
 {
-    if (on == m_autoRfGainEnabled) {
+    // A DECLINED ARM IS A THIRD STATE, and a guard on the running flag alone
+    // can only see two. The refusal path leaves the loop off with the wish
+    // recorded (m_autoRfGainWanted true, m_autoRfGainEnabled false) on purpose,
+    // so that the asking survives a decline -- and an explicit "off" from there
+    // matched `on == m_autoRfGainEnabled` and returned before the disarm branch,
+    // the only writer of m_autoRfGainWanted = false. currentOperatingState()
+    // persists the WISH, so the withdrawal never reached the profile and the
+    // next connect from a baseline the loop trusts armed a control the operator
+    // had switched off (#5828).
+    //
+    // ON BOTH FLAGS RATHER THAN A SECOND DISARM PATH BEFORE THE GUARD. The
+    // withdrawal is not a different event from a disarm; it is a disarm of a
+    // loop that happens not to be running, and it owes the caller exactly what
+    // a disarm owes: the wish cleared, the refusal reason dropped, a settled
+    // verdict emitted and the document republished. Hand-copying that subset
+    // into a second exit is what produced a "successful off" that went on
+    // reporting "declined" through the bridge reply and the checkbox's
+    // accessible description. One exit, one list.
+    //
+    // AND EVERY SIDE EFFECT OF THE DISARM BRANCH IS INERT FROM THE REFUSED
+    // STATE, which is what makes routing it there safe rather than merely
+    // tidier. m_autoRfGainEnabled is already false. applyBandscopeForAutoGain()
+    // computes `wanted` false and returns at `if (!m_bandscopeOwnedByAutoGain)`,
+    // because that flag is set only where m_autoRfGainEnabled was true.
+    // m_autoGainReason is already Disarmed -- its member default, and the value
+    // every route out of a running loop leaves behind. m_autoGainState is
+    // default-constructed for the same reason. setLnaAutoOffsetDb(0) returns at
+    // its own `requested == m_lnaAutoOffsetDb`, the offset being 0 unless the
+    // loop ran. The one thing that was NOT inert is the log sentence, and it is
+    // conditioned below.
+    //
+    // THE COMBINATION THIS WIDENING NEWLY ADMITS TO THE ARM BRANCH -- on true,
+    // enabled true, wanted false -- IS UNREACHABLE: m_autoRfGainEnabled = true
+    // is written in exactly one place and the next statement sets
+    // m_autoRfGainWanted = true, while every writer of wanted = false (the
+    // disarm below, and applyRestoredState) has already set enabled false.
+    if (on == m_autoRfGainEnabled && on == m_autoRfGainWanted) {
         return;
     }
     if (on) {
@@ -7038,6 +7748,31 @@ void Hl2Backend::setAutoRfGain(bool on)
             // caller's own readback could discover was invisible on the two
             // routes that have no readback: the restore below and the bridge.
             emit autoRfGainArmSettled(false);
+            // THE SURVIVING ASK IS PERSISTED STATE, so it moves the document and
+            // has to say so. Without this the wish lives only in this process and
+            // the "arms on the next connect that allows it" promise above holds
+            // only until the application is closed -- and, worse, it makes the
+            // withdrawal above untestable: a profile that never recorded the true
+            // reads false afterwards whether or not the withdrawal works.
+            //
+            // ORDERED AFTER autoRfGainArmSettled, to match the arm and disarm
+            // branches: both emit the settled verdict inside the branch and reach
+            // the shared notifyOperatingStateChanged() at the tail afterwards.
+            // The flag this publishes is already set above, so nothing observable
+            // turns on the order -- only the uniformity does, and a handler of
+            // the verdict should not see one path's document refreshed and the
+            // other two's not.
+            //
+            // AND THIS SCHEDULES A WRITE ON EVERY DECLINED ASK, so the rate is
+            // worth knowing before anything new is wired to this path. Today it
+            // is bounded by who asks: the linkUp handler once per connect, the
+            // operator once per click, the bridge once per verb --- and
+            // RadioModel::scheduleOperatingStateSave() coalesces behind a
+            // debounce, so a burst is one write. A PERIODIC RE-ARM ATTEMPT would
+            // turn this into a timer-driven save of the whole operating-state
+            // document; if one is ever added, give it its own guard rather than
+            // letting it inherit this line.
+            notifyOperatingStateChanged();
             return;
         }
         // CLEARED ON SUCCESS. A reason that outlived the refusal it describes
@@ -7060,22 +7795,58 @@ void Hl2Backend::setAutoRfGain(bool on)
                       << "dB, floor" << m_autoGainConfig.maxOffsetDb << "dB below";
         emit autoRfGainArmSettled(true);
     } else {
+        // WAS IT ACTUALLY RUNNING. Read before the flag is cleared, and used
+        // only for the log: the two states that reach here with it false are a
+        // decline still standing, and the window inside a connect after
+        // applyRestoredState() has restored autoEnabled:true and before the
+        // linkUp handler has tried to arm on it. Neither has a baseline to
+        // restore, and the old sentence claimed one for both.
+        const bool wasRunning = m_autoRfGainEnabled;
         m_autoRfGainEnabled = false;
         // The operator turning it OFF is a preference, and is persisted as one.
-        // A REFUSAL does not reach here -- that path returns before this -- so a
-        // radio that declined to arm keeps the operator's "on" recorded and
-        // arms on the next connect that allows it.
+        // A REFUSAL ITSELF still does not reach here -- the arm branch returns
+        // before this -- so a radio that declined to arm keeps the operator's
+        // "on" recorded and arms on the next connect that allows it. What DOES
+        // reach here is the operator's later, explicit withdrawal of that "on",
+        // which is a different event and is what #5828 was about.
         m_autoRfGainWanted = false;
+        // THE REASON DIES WITH THE REQUEST IT DESCRIBED, and this is the only
+        // place that can kill it: it is otherwise cleared on a successful arm
+        // and on applyRestoredState, so an off that followed a decline left
+        // lastArmRefusalReason() returning "Auto RF gain declined ..." about an
+        // attempt the operator had already abandoned. IAutoRfGainControl defines
+        // that accessor as empty when the last attempt succeeded, and an off
+        // that took is an attempt that succeeded. Three readers repeat it
+        // otherwise: the bridge's `pan autorfgain` reply and every later status
+        // report, and MainWindow's per-pan catch-up, which writes it as the
+        // checkbox's ACCESSIBLE DESCRIPTION -- so a screen-reader user was told
+        // "declined" about a switch they had turned off.
+        //
+        // BEFORE THE EMIT BELOW, NOT AFTER. MainWindow::onAutoRfGainArmSettled
+        // reads lastArmRefusalReason() on entry when `armed` is false; emitting
+        // first would hand it the stale sentence and re-show the refusal card on
+        // a plain off.
+        m_autoRfGainRefusal.clear();
         applyBandscopeForAutoGain();
         m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
         m_autoGainState = AetherSDR::hl2::AutoGainState{};
         // ONE ACTION, from any state. A switch that left the radio attenuated
         // after being turned off would be a control that does not undo itself.
         setLnaAutoOffsetDb(0);
-        qCInfo(lcHl2) << "HL2 auto RF gain: disarmed, baseline" << m_lnaGainDb
-                      << "dB restored";
+        if (wasRunning) {
+            qCInfo(lcHl2) << "HL2 auto RF gain: disarmed, baseline" << m_lnaGainDb
+                          << "dB restored";
+        } else {
+            qCInfo(lcHl2) << "HL2 auto RF gain: request withdrawn; the loop was "
+                             "not running, so there is no baseline to restore";
+        }
         emit autoRfGainArmSettled(false);
     }
+    // BOTH BRANCHES ABOVE MOVED m_autoRfGainWanted, which currentOperatingState()
+    // publishes. Reached only past the opening guard, so an idempotent call -- the
+    // operator re-asserting a switch that is already where they want it -- still
+    // announces nothing.
+    notifyOperatingStateChanged();
 }
 
 // The operator's floor. Applied live: pulling it in while the loop is holding
@@ -7232,9 +8003,7 @@ void Hl2Backend::stepAutoGain(const Hl2Telemetry& t)
     // invalid clock is passed as a negative age for the same reason: "never
     // observed" and "observed too long ago" are both Absent, and neither is a
     // headroom of zero.
-    obs.headroom = bandscopeHeadroom(
-        m_bandscopeBlock,
-        m_bandscopeBlockClock.isValid() ? m_bandscopeBlockClock.elapsed() : -1);
+    obs.headroom = bandscopeHeadroom(m_bandscopeBlock, bandscopeBlockAgeMs());
 
     const AutoGainAction a = autoGainStep(m_autoGainState, obs, m_autoGainConfig);
     m_autoGainState = a.next;
@@ -7330,8 +8099,11 @@ void Hl2Backend::applyPerBandStateFor(double freqHz, const char* reason)
     const QString oldBand = m_currentBandKey;
     m_currentBandKey = newBand;
 
+    // A band with no entry of its own comes up on the SHIPPED default, never on
+    // a persisted one (#5829): the document key that used to sit here could not
+    // be written by anything and so could never be corrected either.
     const int lna = qBound(kLnaGainMinDb,
-                           m_lnaDbByBand.value(newBand, m_lnaDefaultDb),
+                           m_lnaDbByBand.value(newBand, hl2::kLnaDefaultGainDb),
                            kLnaGainMaxDb);
     if (lna != m_lnaGainDb)
         applyLnaGainDb(lna);
@@ -7608,6 +8380,30 @@ void Hl2Backend::pushInitialState()
     if (m_lastTxOperation.permitsCleanup()) {
         setKeying(false, m_lastTxOperation);
     }
+    // AND THE RECEIVE-AUDIO HOLD WITH IT — AFTER the cleanup unkey above, never
+    // before it.
+    //
+    // While the mixer gated on m_keyed, clearing m_keyed above was enough;
+    // since #5497 it gates on m_rxAudioMuted, which that line does not touch. A
+    // session that ended mid-transmission would otherwise hand the new one a
+    // closed gate — and the setKeying(false) above is conditional, so on the
+    // path where it is skipped nothing would ever reopen it. Hence
+    // unconditional, and cleared rather than deferred: the T/R turnaround this
+    // hold exists to cover belonged to a transport that no longer exists.
+    //
+    // THE ORDER IS THE POINT, AND IT USED TO BE THE WRONG WAY ROUND. This block
+    // stood ABOVE the setKeying(false) — posting the unmute ahead of a queued
+    // MOX-off, which is the exact posting order this change removes from
+    // applyKeying(), reproduced on the relink path. It was not a live
+    // regression: EP2 stops when the link drops, the gateware's own watchdog
+    // halts the transmission, and the PA is long down before a relink runs. But
+    // ordering is what #5497 is about, and a counter-example sitting in the
+    // same file is what a future reader copies (ten9876, #5850 review). Costs
+    // nothing to put right.
+    if (m_unkeyUnmuteTimer) {
+        m_unkeyUnmuteTimer->stop();
+    }
+    applyRxAudioMute(false);
     // A fresh transport starts unkeyed by construction; an old connection's
     // stop must not be queued into it with a newly acquired operation.
 }
@@ -7762,11 +8558,27 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
                          << "(uncalibrated reference curve)";
     }
-    // TX IQ FIFO — a queue-fed transmission can starve the radio's buffer in a
-    // way a per-packet generated tone never can, so this is what distinguishes
-    // "the audio is wrong" from "the audio never arrived". `fill` is the top 7
-    // bits of the level, 0-127, not a sample count; `pacingFault` is the one
-    // flag the gateware sends for both underrun and blocked writes.
+    // TX IQ FIFO — THE RADIO'S, not ours. `fill` is the top 7 bits of the
+    // gateware's DSIQ level, 0-127, not a sample count; `pacingFault` is the
+    // one flag the gateware sends for both underrun and blocked writes.
+    //
+    // WHAT THIS PAIR CANNOT TELL YOU, corrected here because the comment that
+    // stood in this place said the opposite and a healthy reading was being
+    // taken as evidence against a defect it is structurally blind to:
+    // it does NOT report a starvation of the CLIENT's queue
+    // (MetisClient::m_txIq). That queue running dry does not drop an EP2
+    // packet or shorten one — MetisClient::onEp2PacerTick emits a full-size
+    // frame off the wall clock either way and ep2WriteTxIq zero-fills the
+    // samples that were not supplied — so the radio is handed an unbroken
+    // 48 kHz sample stream whose CONTENT is partly silence, and its FIFO fill
+    // is identical in both cases. The host-side fault has its own counters:
+    // MetisClient::txUnderflowPackets, ::txUnderflowSamples and
+    // ::txOverflowSamples, logged under this same category from the I/O
+    // thread that owns them.
+    //
+    // So these two readings answer "did the audio reach the radio late or in
+    // bursts", and the client's counters answer "was there any audio to send".
+    // A fault in either one is invisible to the other.
     if (m_keyed && t.txFifoFillMsbs)
         qCDebug(lcHl2Tx) << "HL2 fifo: fill" << *t.txFifoFillMsbs << "/127"
                          << "pacingFault" << t.txFifoRecovery.value_or(false);
@@ -7990,6 +8802,21 @@ void Hl2Backend::resetIoBoardSchedule()
         m_ioBoardThrottle->stop();
     m_ioBoardSchedule.reset();
     m_ioBoardBandKey.clear();
+}
+
+// How old the mirrored bandscope block is, in the one encoding every consumer
+// of it already expects: a NEGATIVE age means "never observed", which is what
+// bandscopeBlockIsCurrent() and bandscopeHeadroom() both turn into Absent
+// rather than into a headroom of zero.
+//
+// ONE DEFINITION, because there are three readers — the auto-gain release rows,
+// the converter rows and stepAutoGain() — and this expression was written out
+// at all three. That is the same drift shape PR #5880 removed from the
+// predicate itself; leaving it in the argument would have re-opened it one
+// level down.
+std::int64_t Hl2Backend::bandscopeBlockAgeMs() const
+{
+    return m_bandscopeBlockClock.isValid() ? m_bandscopeBlockClock.elapsed() : -1;
 }
 
 void Hl2Backend::resetBandscopeMirrors()

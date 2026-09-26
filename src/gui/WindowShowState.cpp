@@ -85,8 +85,19 @@ QString windowMenuLabel(const QWidget* w)
 
 QList<WindowMenuEntry> windowInventory(const QWidget* primaryWindow)
 {
+    return windowInventory(QApplication::topLevelWidgets(), primaryWindow);
+}
+
+QString windowMenuText(QString title)
+{
+    return title.replace(QLatin1Char('&'), QStringLiteral("&&"));
+}
+
+QList<WindowMenuEntry> windowInventory(const QList<QWidget*>& candidates,
+                                      const QWidget* primaryWindow)
+{
     QList<QWidget*> windows;
-    for (QWidget* w : QApplication::topLevelWidgets()) {
+    for (QWidget* w : candidates) {
         if (isUserFacingTopLevelWindow(w)) {
             windows.append(w);
         }
@@ -144,8 +155,7 @@ QList<WindowMenuEntry> windowInventory(const QWidget* primaryWindow)
         // QAction text treats '&' as a mnemonic marker. Window titles are
         // operator data (canvas names are free-form), so escape after all
         // suffixes have been applied.
-        menuText.replace(QLatin1Char('&'), QStringLiteral("&&"));
-        entries.append({window, title, menuText});
+        entries.append({window, title, windowMenuText(menuText)});
     }
     return entries;
 }

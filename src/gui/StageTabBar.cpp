@@ -113,6 +113,40 @@ private:
 // page — checkable, property-selected, sized by the layout — but left-aligned,
 // because a column of centred labels of different lengths reads as ragged
 // where a row of them reads as even.
+// The family's accent token for the text; hover shows the border in the
+// same colour, and checked adds a translucent fill of the family so an
+// engaged toggle reads as a state, not a selected page. Tokens, not
+// literals: ThemeManager::applyStyleSheet() resolves them and re-applies on
+// a theme change. Disabled goes to the column's disabled text so a PLAY with
+// nothing to play does not read as "off" in its own colour.
+QString footerToggleStyle(StageTabBar::Accent accent)
+{
+    const char* accentToken = "{{color.accent.warning}}";
+    const char* fill  = "{{color.toggle.footer.warning.background.checked}}";
+    const char* hover = "{{color.toggle.footer.warning.background.hover}}";
+    switch (accent) {
+    case StageTabBar::Accent::Amber:
+        break;
+    case StageTabBar::Accent::Red:
+        accentToken = "{{color.accent.danger}}";
+        fill = "{{color.toggle.footer.danger.background.checked}}";
+        hover = "{{color.toggle.footer.danger.background.hover}}";
+        break;
+    case StageTabBar::Accent::Green:
+        accentToken = "{{color.accent.success}}";
+        fill = "{{color.toggle.footer.success.background.checked}}";
+        hover = "{{color.toggle.footer.success.background.hover}}";
+        break;
+    }
+    return QStringLiteral(
+        "QPushButton { text-align: left; color: %1; }"
+        "QPushButton:disabled { color: {{color.text.disabled}}; }"
+        "QPushButton:hover:enabled { border-color: %1; }"
+        "QPushButton:checked { border-color: %1; background: %2; }"
+        "QPushButton:checked:hover { background: %3; }")
+        .arg(QLatin1String(accentToken), QLatin1String(fill), QLatin1String(hover));
+}
+
 QPushButton* makeStageTab(const QString& text)
 {
     auto* b = new QPushButton(text);
@@ -248,28 +282,95 @@ void StageTabBar::addFooterWidget(QWidget* w)
     m_rows->addWidget(row);
 }
 
-void StageTabBar::addFooterButton(const QString& label, const QString& objectName,
-                                  const QString& tooltip)
+QPushButton* StageTabBar::addFooterToggle(const QString& label, const QString& objectName,
+                                          const QString& tooltip)
+{
+    return addFooterToggleRow({{label, objectName, tooltip}}).constFirst();
+}
+
+QVector<QPushButton*> StageTabBar::addFooterToggleRow(const QVector<FooterToggle>& toggles)
 {
     beginFooter();
 
-    auto* button = makeStageTab(label);
-    button->setCheckable(false);
-    button->setObjectName(objectName);
-    button->setAccessibleName(label);
-    button->setToolTip(tooltip);
-    connect(button, &QPushButton::clicked, this, &StageTabBar::footerButtonClicked);
-
-    // Indented like every other label, so the column has one left edge.
-    m_footerRow = new QWidget;
-    auto* rowBox = new QHBoxLayout(m_footerRow);
+    // Not indented: the grip pad the stage rows carry lines a label up with
+    // the labels above it, but these are buttons, and a button starts where
+    // the column does.
+    auto* row = new QWidget;
+    auto* rowBox = new QHBoxLayout(row);
     rowBox->setContentsMargins(0, 0, 0, 0);
     rowBox->setSpacing(4);
-    auto* pad = new QWidget;
-    pad->setFixedWidth(StageGrip::kGripWidth);
-    rowBox->addWidget(pad);
-    rowBox->addWidget(button, 1);
-    m_rows->addWidget(m_footerRow);
+
+    QVector<QPushButton*> made;
+    made.reserve(toggles.size());
+    for (const FooterToggle& t : toggles) {
+        auto* button = makeStageTab(t.label);
+        button->setObjectName(t.objectName);
+        button->setAccessibleName(t.label);
+        button->setToolTip(t.tooltip);
+        // Not in m_group: checking it must not deselect the current stage
+        // page, and the page tabs must not uncheck it. Its own checked
+        // colour, too -- the tab sheet's checked state reads as "this page
+        // is showing", and an engaged bypass or a running capture has to
+        // read as a state instead.
+        ThemeManager::instance().applyStyleSheet(button, footerToggleStyle(t.accent));
+        // Equal shares of the row: a short label must not shrink its half.
+        rowBox->addWidget(button, 1);
+        made.append(button);
+    }
+    m_rows->addWidget(row);
+    m_lastToggleRow = rowBox;
+    return made;
+}
+
+void StageTabBar::addFooterGearButton(const QString& accessibleName,
+                                      const QString& objectName,
+                                      const QString& tooltip)
+{
+    beginFooter();
+
+    // A stage tab in every respect but the label: the same chrome, height,
+    // hover and radius as the rows above, so it reads as part of the column
+    // rather than a control dropped onto it. Square, glyph centred.
+    auto* button = makeStageTab(QString::fromUtf8("\xe2\x9a\x99"));   // ⚙
+    button->setCheckable(false);
+    button->setObjectName(objectName);
+    button->setAccessibleName(accessibleName);
+    button->setToolTip(tooltip);
+    // Same vertical padding as the tabs (left to the chrome sheet) so the
+    // gear stands exactly as tall as the BYPASS beside it; only the side
+    // padding goes, so the glyph centres in a square. Hover behaves like the
+    // toggles beside it -- the text brightens and the border shows -- in
+    // neutral grey, since the gear has no colour family of its own.
+    button->setFixedWidth(36);
+    ThemeManager::instance().applyStyleSheet(button, QStringLiteral(
+        "QPushButton { text-align: center; font-size: 18px;"
+        "              padding-left: 0; padding-right: 0; }"
+        "QPushButton:hover { color: {{color.text.primary}};"
+        "                    border-color: {{color.border.strong}}; }"));
+    connect(button, &QPushButton::clicked, this, &StageTabBar::footerButtonClicked);
+
+    if (m_lastToggleRow) {
+        // Exactly as tall as the toggle it sits beside: the larger glyph
+        // would otherwise push it a couple of pixels past the row.
+        if (auto* item = m_lastToggleRow->itemAt(0)) {
+            if (auto* sibling = item->widget())
+                button->setFixedHeight(sibling->sizeHint().height());
+        }
+        // Leftmost, so the gear leads the row and the toggle fills what is
+        // left.
+        m_lastToggleRow->insertWidget(0, button, 0);
+        return;
+    }
+
+    // No toggle row to join: its own row, flush with the column's edge like
+    // the toggle rows, with the gear at the left.
+    auto* row = new QWidget;
+    auto* rowBox = new QHBoxLayout(row);
+    rowBox->setContentsMargins(0, 0, 0, 0);
+    rowBox->setSpacing(4);
+    rowBox->addWidget(button, 0);
+    rowBox->addStretch(1);
+    m_rows->addWidget(row);
 }
 
 void StageTabBar::setCurrentStage(int id)
