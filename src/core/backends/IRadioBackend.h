@@ -416,6 +416,29 @@ public:
         Q_UNUSED(fps);
     }
 
+    // The operator's FFT-average setting (Display -> FFT AVG), 0..100:
+    // 0 = no time averaging; what one step means is the backend's call.
+    // Same situation as setPanFrameRate(): a backend
+    // that computes its own spectrum has no radio-side display engine to
+    // ask, so the setting reaches it here or not at all.
+    //
+    // Default no-op: a Flex radio averages on the radio, and a host-computed
+    // backend that does not override this keeps its own fixed behaviour.
+    virtual void setPanAverage(const QString& panId, int average)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(average);
+    }
+
+    // The operator's weighted-average toggle (Display -> FFT). Same routing
+    // and same default as setPanAverage(); what the two states mean for a
+    // host-computed spectrum is the backend's call.
+    virtual void setPanWeightedAverage(const QString& panId, bool on)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(on);
+    }
+
     // ---- per-slice audio ----
     //
     // A Flex mixes its slices ON THE RADIO, so these are wire commands to it and

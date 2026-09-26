@@ -11,6 +11,7 @@ enum class DaxTxRequestReason {
     RadeModemTx,
     AetherModemAx25Tx,
     WsprBeacon,
+    RxPlaybackTx,
     ExternalDaxRouteOnly,
     GenericAudioRecreate
 };
@@ -49,6 +50,7 @@ inline QString daxTxRequestReasonName(DaxTxRequestReason reason)
     case DaxTxRequestReason::RadeModemTx:         return QStringLiteral("rade_modem_tx");
     case DaxTxRequestReason::AetherModemAx25Tx:   return QStringLiteral("aethermodem_ax25_tx");
     case DaxTxRequestReason::WsprBeacon:           return QStringLiteral("wspr_beacon");
+    case DaxTxRequestReason::RxPlaybackTx:         return QStringLiteral("rx_playback_tx");
     case DaxTxRequestReason::ExternalDaxRouteOnly:return QStringLiteral("external_dax_route_only");
     case DaxTxRequestReason::GenericAudioRecreate:return QStringLiteral("generic_audio_recreate");
     }
@@ -162,6 +164,13 @@ inline DaxTxPolicyDecision evaluateDaxTxPolicy(const DaxTxPolicyContext& context
         // directly. It does not claim an OS DAX audio device, so it needs its
         // own client-owned dax_tx stream on every platform.
         return {true, QStringLiteral("wspr_sends_vita49_directly")};
+
+    case DaxTxRequestReason::RxPlaybackTx:
+        // AetherRX's "TX Playback" decodes a Client-Side QSO recording and
+        // sends VITA-49 packets directly through the modem route, like the
+        // AX.25 modem. No OS DAX audio device is claimed, so it needs its own
+        // dax_tx stream on every platform.
+        return {true, QStringLiteral("rx_playback_sends_vita49_directly")};
 
     case DaxTxRequestReason::ExternalDaxRouteOnly:
         if (context.mode == DaxTxMode::ExternalDax2) {

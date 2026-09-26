@@ -347,7 +347,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get clock`](#get-clock) | AetherClock time-signal decode state (lock, station, decoded UTC, offset, quality). |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
-| | [`get hostnb`](#get-hostnb) | Host-side noise blanker, read from the backend (HL2). |
+| | [`get hostnb`](#get-hostnb) | Host-side noise blanker, read from the backend (HL2 and ANAN). |
 | | `get waveforms` | Installed waveform list, WFP state, local D-STAR service/configuration, delivery health/metrics, and recent waveform status reports. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
@@ -1585,9 +1585,10 @@ scope actually consumed, in milliseconds per wall-clock second.
 ### `get hostnb`
 The host-side impulse noise blanker, answered by the **backend** rather than by
 the slice model. Only meaningful on a radio that declares
-`hasHostNoiseBlanker` — today the HL2, whose blanker is WDSP's ANB running on
-this host, ahead of the demodulator, because the radio ships raw IQ and has no
-firmware DSP to switch on.
+`hasHostNoiseBlanker` — currently HL2 and ANAN. Both run WDSP's ANB on
+this host ahead of demodulation. The bridge asks `nb.get` in the selected
+backend's extension namespace (`hl2` or `anan`); it does not infer applied
+state from the slice button.
 
 ```json
 → {"cmd":"get","model":"hostnb"}
@@ -1602,8 +1603,8 @@ firmware DSP to switch on.
   entirely would still report `nb: true` there and look correct.
 - **`on`/`level` are read from the DSP, not from the request.** They are the
   state the WDSP stage actually holds, read across the thread boundary from
-  `Hl2RxDsp`. `requestedOn`/`requestedLevel` are what the backend was asked
-  for. Reporting both is the point: the request is stored synchronously while
+  `Hl2RxDsp` or `AnanRxDsp`. `requestedOn`/`requestedLevel` are what the backend
+  was asked for. Reporting both is the point: the request is stored synchronously while
   the stage is configured through a queued call, so **a mismatch between the
   pairs is exactly the "the control moves and nothing happens" failure this
   verb exists to catch.** A readback that echoed the request would certify its
@@ -1611,15 +1612,19 @@ firmware DSP to switch on.
 - Because the seam is asynchronous, the pairs can differ for a few
   milliseconds right after a toggle. A driver asserts on them settling, not on
   the first read — `wait_for` rather than a bare `get`.
-- `hasChain` is false for a receiver between rebuilds (a sample-rate change,
-  a reconnect). There is nothing applied then, so `on` reads false rather than
-  flattering the request.
+- On ANAN, `hasChain` is false until a channel is installed. An asynchronous
+  rebuild keeps the outgoing channel, so readback continues to report its
+  applied state until the swap. A disconnect retains that channel too: this
+  field describes the DSP stage, not whether radio samples are arriving.
+  With no chain, `on` is false and `level` is zero, regardless of the request.
 - `threshold` is what WDSP got, computed from the **applied** level: the 0..100
   level runs the opposite way from WDSP's trigger (a multiple of the running
   average magnitude, so **smaller is more aggressive**). Level 0 → 100,
   level 50 → 20, level 100 → 4.
-- `on`/`level` are **per receiver**, not radio-wide — unlike the notches. Two
-  panadapters on different bands can legitimately want different settings.
+- `on`/`level` are **per receiver**, not radio-wide — unlike the notches. HL2
+  can report multiple receivers; ANAN currently reports DDC 0 only. ANAN
+  retains the requested NB pair across reconnects and radio identity changes,
+  and publishes it to the replacement slice so its NB button agrees.
 - Errors on a radio that does not declare the capability, rather than returning
   an empty success that a test could pass against.
 
@@ -3557,12 +3562,23 @@ modulator never heard about it.
 
 `rows` is ordered as the dialog renders it; `section` appears on the first row
 of each group and is absent on the rest. A `value` of `null` means **the radio
-never reported this**, which is distinct from a zero — "the FIFO is empty" and
-"we were never told" are different answers, and collapsing them is what makes a
-readout unable to detect its own failure. An empty `rows` array with
-`"ok":true` is a real state too: nothing connected and no stream-free source
-aimed, or a family that publishes no health rows. Check `connected` to tell
-those apart.
+is not reporting this** — either it never did, or what it last reported has
+expired and is no longer being measured. Either way it is distinct from a zero:
+"the FIFO is empty" and "we were never told" are different answers, and
+collapsing them is what makes a readout unable to detect its own failure. An
+empty `rows` array with `"ok":true` is a real state too: nothing connected and
+no stream-free source aimed, or a family that publishes no health rows. Check
+`connected` to tell those apart.
+
+**Where a row can expire, a companion age row tells you which silence it is.**
+The HL2's four converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcCrestDb` and
+`adcClippedPerBlock` — come from a gated sensor, and they go `null` once the
+newest block has stopped describing now, which includes the whole of any
+transmission longer than about three seconds. `adcObservedAgoMs` is deliberately
+**not** expired with them: a `null` beside an age of `46810` means *reported,
+then expired*, while a `null` beside a `null` age means *never reported*. A
+script that reads these must treat `null` as a refusal to answer rather than as
+a number it can coerce.
 
 **Reading `health` is itself a demand signal.** A stream-free source polls only
 while something is watching, so each read renews a 5 s demand window and keeps

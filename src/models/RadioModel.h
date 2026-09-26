@@ -3,7 +3,7 @@
 #include "core/TxGrantManager.h"
 #include "core/backends/IndependentTxControl.h"
 
-#include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
+#include "core/backends/flex/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
 #include "core/RadioSettingsScope.h"  // RFC #4603 radio-scoped feature documents
 #include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
@@ -16,9 +16,9 @@
 #include "core/backends/OfflineHealthSource.h" // health that survives disconnection
 
 #include <QHostAddress>
-#include "core/RadioConnection.h"
-#include "core/WanConnection.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/WanConnection.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
@@ -1110,6 +1110,10 @@ public:
     // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
     // See core/WaterfallRate.h. (#4606)
     bool requestPanAverage(const QString& panId, int average);
+    // Weighted-average toggle for a backend that shapes its own spectrum:
+    // straight down to that backend. Returns false on Flex, where the caller
+    // sends the weighted_average= wire command itself.
+    bool requestLocalPanWeightedAverage(const QString& panId, bool on);
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
@@ -1923,8 +1927,11 @@ public:
     }
 
     // Install a socket-free backend with the same normalized receiver-state
-    // bindings used by production. Replacement drops old session models.
-    void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
+    // bindings used by production. Replacement drops old session models. An
+    // optional unopened PanadapterStream must be owned by that backend and
+    // live on the model's thread; it exercises the normal DAX holder/PCM path.
+    void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family,
+                           PanadapterStream* panStream = nullptr);
     // The production family switch WITHOUT the dial that follows it: calls the
     // same rebuildBackendForFamily() connectToRadio() calls, so the two cannot
     // drift. Builds the REAL backend for `family` through makeBackend(), so a
@@ -1967,7 +1974,7 @@ private:
     // cannot resolve. Identity for Flex.
     QString backendPanIdFor(const QString& modelPanId) const;
 
-    // ---- waterfall pacing for raw-spectrum backends (HL2) ------------------
+    // ---- waterfall pacing for raw-spectrum backends ------------------------
     //
     // The PAN rate is capped at the source (IRadioBackend::setPanFrameRate), so
     // frames arrive here already at the operator's FFT FPS. The waterfall runs
@@ -1980,9 +1987,91 @@ private:
     // bin per frame for no gain the operator can see.
     //
     // It is also correctness, not just load: the widget scales its time axis
-    // from line_duration, so a row must actually represent line_duration of
-    // time. Unpaced, rows arrived at the full frame rate and the visible
-    // history was several times shorter than the axis claimed.
+    // from line_duration, so a row must actually ARRIVE every line_duration.
+    // Unpaced, rows arrived at the full frame rate and the visible history was
+    // several times shorter than the axis claimed.
+    //
+    // What the gate fixes is the CADENCE, and only the cadence. It does not
+    // make a row represent its interval, and an earlier wording here claimed it
+    // did -- which is why the remaining gap has been easy to miss. Each emitted
+    // row is still the single producer frame that happened to land on the gate:
+    // one frame out of the whole localRowIntervalMs. The loss is by frame
+    // SELECTION, not only by burst length -- a burst shorter than the gap
+    // between ROWS can miss the history entirely rather than merely being
+    // attenuated, AND a burst a pan frame DID catch is still absent from the
+    // history unless that frame is the one landing on the gate.
+    //
+    // Scope what follows to HL2, because this gate is not HL2's. It hangs off
+    // the generic IRadioBackend::spectrumFrameReady, which every family except
+    // Flex emits -- HL2, ANAN, Icom, RTL-SDR and the demo SimBackend -- and
+    // what a "frame" MEANS differs across them:
+    //
+    // - On HL2 the claim is exact. The frame is one unaveraged FFT window; at
+    //   384 kHz that window is 1024/384000 = 2.67 ms (docs/HERMES.md 15.2.1
+    //   states the same thing as 375 fps; fftSize is Hl2RxDsp.h's 1024) --
+    //   nominal, since Hl2Spectrum's Hanning window weights the ends down and
+    //   the effective span is shorter still -- and at rate 10
+    //   localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 -- 0.66 %,
+    //   an upper bound. Production depth is one window: Hl2Spectrum::setAverageFrames
+    //   defaults to 1 and only hl2_spectrum_test calls it (#5833), so m_avgPower
+    //   is present and unwired and the emitted frame is still unaveraged. m_acc
+    //   holds only the partial IQ window the NEXT frame completes from, which is
+    //   why HERMES 15.2.1 says the accumulator keeps filling on a skipped
+    //   interval. The frames between rows never reach the waterfall at all:
+    //   dropped, never accumulated. RTL-SDR's frames are unaveraged FFTs too,
+    //   so the shape carries there; only the numbers are HL2's.
+    // - On ANAN the frames between rows are not dropped. Every IQ block is
+    //   fed to the WDSP analyzer and only TAKING a frame is paced (AnanRxDsp:
+    //   "none are thrown away"), so the row that lands here is already
+    //   time-averaged. The FFT AVG slider sets that time through
+    //   AnanBackend::setPanAverage (steps of kMsPerAverageStep); the
+    //   weighted-average toggle selects log-recursive or linear-recursive.
+    //   That blend is still not an integration over localRowIntervalMs, and
+    //   #5782 owns the domain question. The fixed-alpha dB EMA this bullet
+    //   used to name (AnanRxDsp::smoothSpectrumBins) was removed in #5814.
+    // - Icom rows are reassembled CI-V scope sweeps, not FFT windows at all,
+    //   so neither the 2.67 ms nor the duty figure means anything there.
+    //   IcomScope.h's "Raw display units, 0..160. NOT dBm" describes the RAW
+    //   sweep, not what reaches this gate: IcomCivBackend emits
+    //   toDbm(sweep, geom, cal) before spectrumFrameReady, so the row here is
+    //   the converted vector.
+    //
+    // The interval a row SHOULD integrate is the gap between rows: this gate's
+    // own WaterfallRate::localRowIntervalMs(rate) while the gate is paced, and
+    // the pan frame interval at rate 100, where localRowIntervalMs() returns 0
+    // and the gate is lifted. Which layer that number has to reach is part of
+    // the open question below, not settled here.
+    // Note what does NOT rest on that number, because it reads the other way
+    // round. updateWaterfallRow() stamps each row with its ARRIVAL time and
+    // Q_UNUSED()s the timecode; updateWaterfallMsPerRowFromHistory() measures
+    // m_wfMsPerRow from those stamps (localMsPerRow only SEEDS the preview, in
+    // resetWfTimeScale); and waterfallTimeMarkers() takes rows, head, seconds,
+    // offset and height — it never sees the rate at all, and labels wall-clock
+    // boundaries off the same stamps. localRowIntervalMs() could not carry the
+    // axis anyway: it returns 0 at rate 100, where the gate is lifted.
+    //
+    // ARRIVAL there means arrival AT THE WIDGET, which is not this gate's
+    // stamp. The nowNs the gate passes out reaches PerfTelemetry only; the row
+    // is then routed through MainWindow::deferReceivePresentation, and
+    // updateWaterfallRow() takes its own QDateTime::currentMSecsSinceEpoch().
+    // So the axis calibrates from PRESENTATION cadence, which tracks this
+    // gate's cadence but is not it, and diverges under a presentation delay or
+    // a busy GUI thread.
+    //
+    // Nor does that contradict the retained rationale above, and the link is
+    // worth stating because the two paragraphs read as opposites. Both are true
+    // because resetWfTimeScale() seeds m_wfMsPerRow from localMsPerRow with
+    // m_wfTimeScaleLocked false, so the deterministic mapping IS the axis until
+    // updateWaterfallMsPerRowFromHistory() has enough rows at this rate to lock
+    // onto the measured value. The seeded half is the half unpaced rows
+    // falsified.
+    //
+    // The open question is which LAYER owns the accumulation and in
+    // which domain, because averaging dBFS is averaging logarithms -- see
+    // RFC #5782 (this repository's own; not one of the real upstreams), whose
+    // plan row 2.2 is the integrated waterfall row and whose Option C rules
+    // the above-the-seam variant out. Do not add an accumulator here until
+    // that lands.
     QHash<int, qint64> m_backendWfLastRowNs;
     // Covers only the window before MainWindow seeds the pan model from the
     // operator's sliders. 100 is the top of the 1..100 rate control and matches

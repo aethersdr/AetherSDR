@@ -1,7 +1,7 @@
 #include "DvkWavTransfer.h"
 #include "../models/DvkModel.h"
 #include "../models/RadioModel.h"
-#include "../core/RadioConnection.h"
+#include "core/backends/flex/RadioConnection.h"
 
 #include <QDebug>
 #include <QDir>

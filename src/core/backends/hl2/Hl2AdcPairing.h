@@ -281,13 +281,15 @@ enum class AdcPairing {
 // `sliceSideSampling` — KNOWN IN ADVANCE, for the one case where that is
 // possible. Hl2RxDsp does not sample RXA_ADC_PK while muted, and Hl2Backend is
 // the code that queues that mute, so it knows synchronously that the readings
-// are about to stop: it passes `!(m_keyed && !m_txMonitor)`, mirroring
-// `muteWhileKeyed` in setKeying. That mirroring is load-bearing rather than
-// tidy — with the TX audio monitor on, the chain keeps sampling through the
-// transmission, the reading keeps moving, and the pairing must keep pairing.
+// are about to stop: Hl2Backend::applyRxAudioMute() passes `!muted` for the
+// mute it is about to queue. So the input reads "not sampling" from the key
+// edge through the whole unkey hold (#5497), and with the TX audio monitor on
+// the chain is never muted, keeps sampling through the transmission, and the
+// pairing keeps pairing. Deriving it from the mute itself rather than from
+// the key state is load-bearing: the two differ for the length of the hold.
 //
 // This input is what covers the HEAD of a transmission, which the age alone
-// cannot: see kSliceStaleMs. `m_keyed` is set synchronously in setKeying while
+// cannot: see kSliceStaleMs. applyRxAudioMute() sets this synchronously while
 // the mute rides a queued connection to the DSP thread, so the gate shuts at
 // or before the instant sampling actually stops — early is the safe direction
 // here, because the failure it prevents is an assertion, not an omission.

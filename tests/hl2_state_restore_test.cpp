@@ -174,8 +174,15 @@ int main(int argc, char** argv)
               "an out-of-range restored frequency is dropped");
         const QJsonObject rfGain =
             snapshot.extension.value(QStringLiteral("rfGain")).toObject();
-        check(rfGain.value(QStringLiteral("defaultDb")).toInt() <= 48,
-              "a restored LNA default clamps to the AD9866's range");
+        // INVERTED BY #5829, and the inversion is the point rather than a
+        // consequence. This used to read `defaultDb <= 48` -- i.e. the 999 in
+        // the document above was clamped and then written back out. The key is
+        // no longer read or written at all, so the assertion has to test for
+        // its ABSENCE: left as a bound it would pass vacuously, because a
+        // missing key also reads 0 through toInt() and 0 is <= 48.
+        check(!rfGain.contains(QStringLiteral("defaultDb")),
+              "a restored LNA default is neither consulted nor written back: "
+              "the key is absent from the capture, not clamped into it");
         check(rfGain.value(QStringLiteral("lnaDbByBand"))
                       .toObject()
                       .value(QStringLiteral("40m"))
@@ -420,8 +427,22 @@ int main(int argc, char** argv)
                       .toObject()
                       .isEmpty(),
               "radio A's per-band LNA map does not survive the swap");
-        check(rfGain.value(QStringLiteral("defaultDb")).toInt() == 20,
-              "the LNA default resets to the virgin construction value");
+        // INVERTED BY #5829. This used to read `== 20`, which checked that the
+        // swap reset a member that carried the LNA default. There is no such
+        // member any more -- hl2::kLnaDefaultGainDb is read directly -- so the
+        // property that replaces it is that radio A's stuck 6 cannot appear in
+        // radio B's capture at all, because no capture emits the key.
+        //
+        // SWAP-ISOLATION COVERAGE FOR THIS FIELD IS GONE, NOT MOVED, and this
+        // assertion is documentation of that rather than a live guard: it
+        // cannot fail on any post-fix build, because no path emits the key on
+        // any radio, swapped or not. It is kept so the inversion is visible at
+        // the site the old guard occupied. The swap isolation that is still
+        // LIVE is the per-band map and the drive baseline either side of it --
+        // those have members to leak and are checked here for real.
+        check(!rfGain.contains(QStringLiteral("defaultDb")),
+              "radio A's persisted LNA default does not survive the swap, and "
+              "nothing writes a new one: the key is gone from the capture");
         check(!snap.extension.value(QStringLiteral("txSetpoints"))
                        .toObject()
                        .contains(QStringLiteral("defaultPercent")),

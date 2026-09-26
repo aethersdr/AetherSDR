@@ -1048,8 +1048,10 @@ void PhoneCwApplet::buildCwPanel()
 
 void PhoneCwApplet::setMode(const QString& mode)
 {
-    // A Flex reports bare "CW"; an Icom and an HL2 spell the same mode CWU,
-    // and CWL is the reverse-side one. All three drive this applet.
+    // A Flex reports bare "CW"; an Icom spells the same mode CWU, and CWL is
+    // the reverse-side one. All three drive this applet. (The HL2 reported
+    // CWU as well until Hl2Backend::setSliceMode began collapsing it onto CW;
+    // Icom still does, so nothing is removed here.)
     bool isCw = isCwMode(mode);
     m_stack->setCurrentIndex(isCw ? 1 : 0);
 }

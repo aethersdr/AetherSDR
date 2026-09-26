@@ -192,6 +192,50 @@ void SetRXAAGCAttack(int channel, int attackMs);
 void SetRXAAGCDecay(int channel, int decayMs);
 void SetRXAAGCHang(int channel, int hangMs);
 void SetRXAAGCHangThreshold(int channel, int hangThreshold);
+
+// ── FM demodulator deviation ──────────────────────────────────────────────
+//
+// NO VENDORED PATCH IS INVOLVED, and that is worth saying plainly because the
+// opposite was believed about this corner of WDSP for three days.
+// `upstream/wdsp.h` is upstream's own GENERATED public interface — its banner
+// says it is produced by `gen_wdsp_h.py`, which scans the sources for
+// PORT-decorated functions "so that this header cannot drift from what the DLL
+// actually exports" — and it is what says whether a WDSP entry point is
+// public. It declares `SetRXAFMDeviation`.
+//
+// THIS SYMBOL WAS NEVER ONE OF THE HIDDEN-LOOKING ONES: `fmd.h` declares it
+// too. What misled was a NEIGHBOUR — `fmsq.c` defines `SetRXAFMSQRun` and
+// `fmsq.h` never declares it, which reads exactly like a symbol that exists
+// and cannot be reached without patching the snapshot. It is not; `wdsp.h`
+// declares that one as well. So the rule is about the per-module headers being
+// an unreliable NEGATIVE, not about them hiding this call: a per-module header
+// saying nothing says nothing. Check `upstream/wdsp.h` before concluding that
+// reaching a WDSP symbol needs AETHERSDR-PATCHES.md treatment — that
+// discipline is for CHANGING vendored behaviour, which this is not.
+//
+// DEVIATION IS AN INVERSE AUDIO GAIN, not a bandwidth, and the name misleads
+// in a way worth pinning here. `SetRXAFMDeviation` stores the value and
+// recomputes `again = rate / (deviation * TWOPI)` (`upstream/fmd.c`); `xfmd`
+// then emits `again * (fil_out - fmdc)`. The PLL's capture range is fixed at
+// construction (`fmin`/`fmax`, ±8 kHz in `RXA.c`) and this call does not touch
+// it, nor the audio filter, nor the de-emphasis. So halving the deviation
+// narrows nothing — it DOUBLES the detector's audio output, exactly. The value
+// is the receiver's ASSUMPTION about how wide the incoming signal is deviated:
+// match the transmission and recovered audio arrives at unity level; assume
+// 5 kHz for a 2.5 kHz narrow-FM signal and it arrives 6 dB quiet.
+//
+// `RXA.c` builds the stage with 5000.0 and, until this declaration existed,
+// nothing in this tree could change it — so every FM signal was demodulated
+// against a 5 kHz assumption whatever it actually was. 2500 is the European
+// narrow-FM figure.
+//
+// NOTHING NON-LINEAR IS IN THE WAY, which is what makes the effect measurable
+// end to end rather than squashed on its way out. `create_fmd` sets
+// `lim_run = 0` and nothing in this tree calls `SetRXAFMLimRun`, so the
+// detector's own AGC is off and the whole path from `again` to the channel
+// output is linear. `wdsp_channel_test`'s ratio assertion depends on that and
+// is what will say so if the limiter is ever switched on.
+void SetRXAFMDeviation(int channel, double deviationHz);
 void SetTXAMode(int channel, int mode);
 void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength
@@ -300,6 +344,46 @@ void setAlphaKnee_nnr(NNR a, double knee_db);
 void setTau_nnr(NNR a, double tau);
 void setMaxGain_nnr(NNR a, double gmax_db);
 void setSmooth_nnr(NNR a, double att_ms, double rel_ms);
+
+// ── Display analyzer (analyzer.c) ─────────────────────────────────────────
+//
+// WDSP's panadapter engine: windowed FFT, per-pixel detector, time averaging
+// and conversion to dB, computed on WDSP-owned worker threads. `disp` is a
+// slot in [0, 72) — its own namespace, not a channel id, though a host may
+// reuse one as the other.
+//
+// XCreateAnalyzer sizes the buffers for FFTs up to `maxSize`; the input ring is
+// 2 * maxSize samples, so `maxWriteahead` passed to SetAnalyzer must stay below
+// that, and `bufferSize` must divide it. SetAnalyzer plans with FFTW_PATIENT:
+// call it off any real-time thread and under the host's FFTW planner lock.
+//
+// Spectrum0 takes exactly `bufferSize` complex samples, INTERLEAVED DOUBLE,
+// and reads element 2i+1 as I and 2i as Q — the swap mirrors the spectrum.
+//
+// GetPixels copies `numPixels` floats (dB) into `pixels` and sets *flag = 1
+// when a frame newer than the last call exists, else sets *flag = 0.
+//
+// Detector modes: 0 peak, 1 Rosenfell, 2 average, 3 sample, 4 RMS.
+// Average modes: -1 peak hold, 0 none, 1 linear recursive, 2 linear window,
+// 3 log recursive.
+void XCreateAnalyzer(int disp, int* success, int maxSize, int maxNumFft,
+                     int maxStitch, char* appDataPath);
+void DestroyAnalyzer(int disp);
+void SetAnalyzer(int disp, int numPixout, int numFft, int complexInput,
+                 int* highSideLo, int fftSize, int bufferSize, int windowType,
+                 double kaiserPiAlpha, int overlap, int clipBins,
+                 double clipLowBins, double clipHighBins, int numPixels,
+                 int numStitch, int calibrationSet, double fMin, double fMax,
+                 int maxWriteahead);
+void Spectrum0(int run, int disp, int ss, int LO, double* pbuff);
+void GetPixels(int disp, int pixout, float* pixels, int* flag);
+void ResetPixelBuffers(int disp);
+void SetDisplayDetectorMode(int disp, int pixout, int mode);
+void SetDisplayAverageMode(int disp, int pixout, int mode);
+void SetDisplayNumAverage(int disp, int pixout, int num);
+void SetDisplayAvBackmult(int disp, int pixout, double mult);
+void SetDisplaySampleRate(int disp, int rate);
+void SetDisplayNormOneHz(int disp, int pixout, int norm);
 
 int GetWDSPVersion(void);
 

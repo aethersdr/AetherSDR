@@ -32,7 +32,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <atomic>
 #include <cstdint>
 #include <functional>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -177,10 +176,16 @@ public:
                                        WisdomCancelCb shouldCancel = nullptr);
 
 private:
-    // FFTW plan creation/destruction is NOT thread-safe. This mutex guards
-    // all fftw_plan_*, fftw_destroy_plan, and wisdom import/export calls.
-    // fftw_execute() is thread-safe and does not need the lock. (#467)
-    static std::mutex s_fftwMutex;
+    // FFTW plan creation/destruction is NOT thread-safe, and neither is the
+    // allocator pairing TSan named in #5424. THE LOCK IS NOT OURS AND IS NOT
+    // DECLARED HERE: every site in the .cpp that plans, allocates, frees or
+    // moves wisdom takes AetherSDR::fftwPlannerLock() from
+    // core/dsp/FftwPlannerLock.h, because the planner it guards is
+    // process-global and WDSP, Hl2Spectrum and AnanPanAnalyzer reach the same
+    // one in the same double-precision family. This class used to keep a
+    // private static mutex here (#467, written when SpectralNR.cpp held all
+    // the FFTW in the tree); two mutexes over one planner serialise nothing
+    // (#5895). fftw_execute() is thread-safe and does not need the lock.
     // FFT parameters
     int m_fftSize;
     int m_overlap;          // supported values: 2 (50%) or 4 (75%)
