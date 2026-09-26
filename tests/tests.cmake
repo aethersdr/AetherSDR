@@ -1501,6 +1501,13 @@ target_link_libraries(split_audio_profile_test PRIVATE Qt6::Core)
 add_test(NAME split_audio_profile_test COMMAND split_audio_profile_test)
 set_tests_properties(split_audio_profile_test PROPERTIES TIMEOUT 30)
 
+# Split QSY preference document: defaults, bounds, versioning and round-trips.
+add_executable(split_qsy_settings_test tests/split_qsy_settings_test.cpp)
+target_include_directories(split_qsy_settings_test PRIVATE src)
+target_link_libraries(split_qsy_settings_test PRIVATE Qt6::Core)
+add_test(NAME split_qsy_settings_test COMMAND split_qsy_settings_test)
+set_tests_properties(split_qsy_settings_test PROPERTIES TIMEOUT 30)
+
 # ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.

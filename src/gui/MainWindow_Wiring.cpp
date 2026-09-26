@@ -86,6 +86,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QPointer>
+#include <QScopedValueRollback>
 #include <QSet>
 
 #include <optional>
@@ -1955,6 +1956,15 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Connect slice state changes → spectrum overlay updates
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double mhz) {
+        if (AetherSDR::shouldCloseSplitOnQsy(
+                m_splitQsySettings, m_splitActive,
+                s->sliceId() == m_splitRxSliceId,
+                m_splitSwapTuneInProgress, mhz, m_splitRxFrequencyMhz)) {
+            qCDebug(lcDevices) << "Disabling split after RX QSY from"
+                               << m_splitRxFrequencyMhz << "to" << mhz;
+            disableSplit();
+        }
+
         // Don't snap overlay back to stale radio-confirmed freq during active
         // encoder tuning — the optimistic VFO position is already ahead (#1524)
         bool activeTuning = false;
@@ -2538,6 +2548,7 @@ void MainWindow::onSliceRemoved(int id)
         m_splitActive = false;
         m_splitRxSliceId = -1;
         m_splitTxSliceId = -1;
+        m_splitRxFrequencyMhz = 0.0;
         if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
         if (auto* rx = m_radioModel.slice(rxId))
             rx->setTxSlice(true);
@@ -6123,7 +6134,16 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         if (!rx || !tx) return;
         double rxFreq = rx->frequency();
         double txFreq = tx->frequency();
-        applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune, "split-swap-rx");
+        {
+            // Retuning RX is part of this swap, not an operator QSY; keep the
+            // split alive while the two frequency requests are applied.
+            QScopedValueRollback<bool> swapTune(m_splitSwapTuneInProgress, true);
+            applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune,
+                             "split-swap-rx");
+        }
+        if (m_splitActive && m_splitRxSliceId == rx->sliceId()) {
+            m_splitRxFrequencyMhz = rx->frequency();
+        }
         applyTuneRequest(tx, rxFreq, TuneIntent::IncrementalTune, "split-swap-tx");
     });
 
@@ -7376,6 +7396,7 @@ void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
 
     m_splitActive = true;
     m_splitRxSliceId = rxSliceId;
+    m_splitRxFrequencyMhz = rxSlice->frequency();
     m_radioModel.sendCommand(
         QString("slice create pan=%1 freq=%2")
             .arg(panId).arg(txFreq, 0, 'f', 6));
