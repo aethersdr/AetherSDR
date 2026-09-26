@@ -274,6 +274,7 @@ const FlexActionDef kFlexActions[] = {
     {"ToggleApf", "Toggle APF"},
     {"NextSlice", "Change Active Slice"},
     {"SplitActiveSlice", "Split Active Slice"},
+    {"SplitMonitorTx", "Monitor TX Frequency"},
     {"ToggleMox", "MOX"},
     {"WheelPower", "RF Power"},
     {"WheelCwSpeed", "CW Speed"},

@@ -179,6 +179,37 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/gen_touchpoint_manifest.py --check
 
+      # ── The seam-probe table (tests/SeamSignalProbeTable.inc) is generated
+      # from IRadioBackend.h's signals: section. #5868.
+      #
+      # backend_seam_affinity_test already asserts this, against the
+      # meta-object — but at RUNTIME, and no PR lane runs it: ci-test-gate.txt
+      # is frozen so it cannot join the per-PR allow-list, and ci.yml's Linux
+      # job runs no ctest at all. It therefore first executes in
+      # full-suite.yml, post-merge on main. Detection was late, not absent:
+      # #5825 added autoRfGainArmSettled without the probe line, was green on
+      # every PR check, and went red on the merge with "51 probed, 52
+      # declared" (#5865 repaired it).
+      #
+      # This is that assertion restated as a static check, where it can block
+      # the PR — stdlib Python, seconds, no build, no Qt. Generating the table
+      # rather than only auditing it is the other half: a checker keeps two
+      # lists honest, a generator leaves one.
+      - name: Seam probe table covers every IRadioBackend signal
+        if: ${{ !cancelled() }}
+        run: python tools/gen_seam_probe_table.py --check
+
+      # The scanner behind that table, run here and not only as a ctest.
+      # --check compares the committed table against the SAME parser that
+      # generates it, so a parser that under-reads produces a table that is
+      # short in exactly the matching way and --check reports "up to date".
+      # The generator refuses rather than under-reads (residue()), and these
+      # tests are what hold it to that — which makes them load-bearing for
+      # the step above, unlike the other tools/test_*.py that are ctest-only.
+      - name: Seam probe scanner
+        if: ${{ !cancelled() }}
+        run: python tools/test_gen_seam_probe_table.py
+
       # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
       # was 6,357 lines, over half of it 300+ test-target declarations; the split
       # cut it to ~2,780. tests/tests.cmake fails the CONFIGURE step if a test
@@ -205,6 +236,26 @@ jobs:
       - name: Capability record convention
         if: ${{ !cancelled() }}
         run: python tools/check_capability_records.py --strict
+
+      # ── The step above is only as good as its PARSER, and #5727 showed the
+      # parser losing fields silently: an accessor declared beside a capability
+      # deleted the NEXT bool from the count, and a bool added after one was
+      # never seen — so the population could grow past the freeze with the
+      # count flat and the step above green. The `std::optional<Record>` +
+      # accessor shape the ratchet asks for is the shape that broke it.
+      #
+      # tools/test_check_capability_records.py is also declared in
+      # tests/tests.cmake, so it runs unfiltered post-merge in full-suite.yml
+      # and weekly under the sanitizers. This second line is deliberate and is
+      # the same argument the "Test registration location" step above makes:
+      # the thing under test is a PR gate, so its regression test has to run on
+      # the same PR, not minutes after the merge that broke it. Stdlib-only and
+      # sub-second, like every other step here — it costs nothing to keep both.
+      # (Not a `ctest -R` step, so it does not touch the frozen per-PR test
+      # gate in .github/ci-test-gate.txt; that freeze is about ci.yml's build.)
+      - name: Capability record parser
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_capability_records.py
 
       # ── #5262 M4: raw Flex wire text above the seam is FROZEN per file.
       # Models emitting commandReady and widgets calling sendCommand hand

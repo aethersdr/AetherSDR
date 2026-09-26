@@ -1199,6 +1199,17 @@ ResolvedAction matchMenuActionUnconditional(QMenu* menu, const QString& target)
     return {};
 }
 
+// QMainWindow::menuBar() creates a replacement when its original menu bar has
+// been moved into the title-bar layout. Query the existing widget tree instead
+// so automation never alters the native menu ownership while looking it up.
+QList<QMenuBar*> existingMenuBars(QMainWindow* window)
+{
+    if (!window) {
+        return {};
+    }
+    return window->findChildren<QMenuBar*>(QString(), Qt::FindChildrenRecursively);
+}
+
 // Resolve a QAction anywhere in any top-level window's menu bar, regardless of
 // whether the menu is currently open. This is what lets `invoke` drive
 // menu-launched dialogs (AetherControl…/Network…/MQTT…/Radio Setup…/Connect…)
@@ -1206,30 +1217,28 @@ ResolvedAction matchMenuActionUnconditional(QMenu* menu, const QString& target)
 ResolvedAction resolveMenuBarAction(const QString& target)
 {
     const QWidgetList tops = QApplication::topLevelWidgets();
-    // 1. Any QMainWindow's menu bar (Windows/Linux, and macOS when the actions
-    //    remain on the bar). Searched unconditionally so a CLOSED menu resolves.
+    // 1. Existing bars, including the bar embedded in TitleBar on all platforms.
+    //    Searched unconditionally so a CLOSED menu resolves.
     for (QWidget* tlw : tops) {
         auto* mw = qobject_cast<QMainWindow*>(tlw);
-        if (!mw)
-            continue;
-        QMenuBar* mb = mw->menuBar();
-        if (!mb)
-            continue;
-        for (QAction* topAction : mb->actions()) {
-            // A top-level menu title (e.g. "Settings") matches but has no owning
-            // QMenu to route through; its submenu is what carries the leaves.
-            if (actionMatchesTarget(topAction, target))
-                return {topAction, nullptr};
-            if (QMenu* submenu = topAction->menu()) {
-                const ResolvedAction match = matchMenuActionUnconditional(submenu, target);
-                if (match.action)
-                    return match;
+        for (QMenuBar* mb : existingMenuBars(mw)) {
+            for (QAction* topAction : mb->actions()) {
+                // A top-level menu title (e.g. "Settings") matches but has no owning
+                // QMenu to route through; its submenu is what carries the leaves.
+                if (actionMatchesTarget(topAction, target)) {
+                    return {topAction, nullptr};
+                }
+                if (QMenu* submenu = topAction->menu()) {
+                    const ResolvedAction match = matchMenuActionUnconditional(submenu, target);
+                    if (match.action) {
+                        return match;
+                    }
+                }
             }
         }
     }
-    // 2. macOS NATIVE menu bar: Qt reparents each top menu to a TOP-LEVEL QMenu
-    //    that is NOT under a queryable QMenuBar, so the menu-bar walk above finds
-    //    nothing. Walk every top-level QMenu unconditionally to reach those. A
+    // 2. Retain the fallback for menus exposed as top-level QMenu widgets,
+    //    including native menus. Walk them unconditionally to reach closed menus. A
     //    transient context-menu/combo-popup QMenu won't carry our dialog/zoom
     //    labels, so the exact-text match stays unambiguous.
     for (QWidget* tlw : tops) {
@@ -5238,7 +5247,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         IRadioBackend* backend = radio->backend();
         if (!backend)
             return err(QStringLiteral("no backend attached"));
-        // Same synchronous-extension contract doCiv documents: the HL2 answers
+        // Same synchronous-extension contract doCiv documents: the backend answers
         // inside invokeExtension, so a direct connection lands before the call
         // returns, and anything that does not answer is reported as unsupported
         // rather than as an empty success.
@@ -5260,7 +5269,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             failed = true;
             failure = msg;
         }, Qt::DirectConnection);
-        backend->invokeExtension(QStringLiteral("hl2"), QStringLiteral("nb.get"),
+        backend->invokeExtension(radio->backendCapabilities().family, QStringLiteral("nb.get"),
                                  rid, QVariant());
         disconnect(okConn);
         disconnect(errConn);
@@ -8517,9 +8526,14 @@ QJsonObject AutomationServer::doBandscope(const QString& action)
             {QStringLiteral("ep4Rewinds"), row("ep4Rewinds")},
             {QStringLiteral("blocks"), row("bandscopeBlocks")},
             {QStringLiteral("timeouts"), row("bandscopeTimeouts")},
-            // Absent until a block has arrived — the rows carry an invalid
-            // variant until then, which lands here as a JSON null rather than
-            // as a fabricated 0.00 dBFS.
+            // Absent until a block has arrived, AND absent again once the
+            // newest one is older than kHeadroomMaxAgeMs — the gate can be
+            // stopped mid-session, and a value that is no longer being
+            // measured must not be served as a current one. The rows carry an
+            // invalid variant in both cases, which lands here as a JSON null
+            // rather than as a fabricated 0.00 dBFS. adcObservedAgoMs below is
+            // NOT expired with them: it is what tells a caller which of the
+            // two silences it is looking at.
             {QStringLiteral("adcPeakDbfs"), row("adcPeakDbfs")},
             {QStringLiteral("adcRmsDbfs"), row("adcRmsDbfs")},
             {QStringLiteral("adcCrestDb"), row("adcCrestDb")},
@@ -9985,10 +9999,9 @@ QJsonArray describeMenuActions(QMenu* menu)
     return arr;
 }
 
-// The app's top-level menus, coping with BOTH a regular QMenuBar and the macOS
-// NATIVE menu bar (where each menu is reparented to a top-level QMenu widget,
-// invisible to QMainWindow::menuBar()->actions()). De-duplicated, in discovery
-// order. On macOS this also surfaces submenus as their own entries — harmless.
+// The app's menus from existing bars (including TitleBar's nested bar), with a
+// fallback for named top-level QMenu widgets. De-duplicated, in discovery order.
+// The fallback can also surface submenus as their own entries.
 QList<QPair<QString, QMenu*>> collectTopMenus()
 {
     QList<QPair<QString, QMenu*>> out;
@@ -9996,12 +10009,12 @@ QList<QPair<QString, QMenu*>> collectTopMenus()
     const QWidgetList tops = QApplication::topLevelWidgets();
     for (QWidget* tlw : tops) {
         auto* mw = qobject_cast<QMainWindow*>(tlw);
-        if (!mw || !mw->menuBar())
-            continue;
-        for (QAction* a : mw->menuBar()->actions()) {
-            if (QMenu* sub = a->menu(); sub && !seen.contains(sub)) {
-                seen.insert(sub);
-                out.append({actionDisplayText(a), sub});
+        for (QMenuBar* menuBar : existingMenuBars(mw)) {
+            for (QAction* a : menuBar->actions()) {
+                if (QMenu* sub = a->menu(); sub && !seen.contains(sub)) {
+                    seen.insert(sub);
+                    out.append({actionDisplayText(a), sub});
+                }
             }
         }
     }

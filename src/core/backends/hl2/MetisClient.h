@@ -172,6 +172,33 @@ public:
         // samples rather than packets, and the EP4 rate at two, and at four or
         // more, receivers. Read its assumptions before suspecting hardware.
         quint64 bandscopeTimeouts = 0;
+        // ---- EP6 silence recovery ----
+        //
+        // How many times the EP6 silence watchdog re-sent the run command
+        // instead of declaring the link down, and how many of those the stream
+        // came back from. ATTEMPTS WITHOUT COMPLETIONS is the shape that says
+        // this recovery is not the right one for whatever is actually failing,
+        // and it is only readable if both numbers travel together.
+        //
+        // On LinkCounters rather than behind getters of their own, because a
+        // counter nobody reads records nothing: this struct is the file's
+        // established path to the operator. Hl2Backend mirrors it from
+        // linkCountersUpdated onto the GUI thread, healthSnapshot() turns it
+        // into rows, and RadioHealthDialog::refresh() and the automation
+        // bridge's `health` verb both iterate those rows generically -- so a
+        // new field arrives on both with no registration anywhere. (NOT the
+        // support bundle: SupportBundle::createBundle writes logs, system info,
+        // radio info and settings, and no health rows at all. The dialog's own
+        // copy-to-clipboard is the path a number takes into a bug report.) The
+        // publish is also what makes the read thread-safe. A RECOVERY THAT SUCCEEDED IS
+        // INVISIBLE EVERYWHERE ELSE by design -- m_linkUp never drops, so no
+        // signal fires and no pane republishes -- so these two rows are the
+        // only record that the audio's hole had a cause.
+        //
+        // Session-life, zeroed with the rest of m_link at start() and NOT at
+        // stop(): a stop is not a reason to forget that a recovery happened.
+        quint64 silenceRecoveryAttempts = 0;
+        quint64 silenceRecoveriesCompleted = 0;
         // Over the publish window only, so a stall that has ended stops being
         // reported as if it were still happening. Negative = nothing measured.
         int meanGapMs = -1;
@@ -529,6 +556,128 @@ public:
     Q_INVOKABLE void flushTxIq();
     [[nodiscard]] std::size_t txQueueDepth() const noexcept { return m_txIq.size(); }
 
+    // ---- TX IQ FIFO fault accounting ----
+    //
+    // The FIFO is bounded ABOVE at kTxQueueMax and not below, and both ends
+    // silently alter what goes on the air: overflow drops the oldest samples
+    // (a discontinuity), underflow substitutes transmit silence for samples
+    // that never arrived (a step to zero mid-envelope). queueTxIq's own
+    // documentation above says so, and until these counters existed NOTHING
+    // said it had happened -- not a log line, not a reading, not a test.
+    //
+    // THESE COUNT; THEY DO NOT REPAIR. The truncation is still exactly what it
+    // was, deliberately: giving the FIFO a floor (a pre-roll, a target depth,
+    // or a held/ramped last sample instead of a step to zero) changes what
+    // this client transmits, and that is a separate decision from being able
+    // to see the fault at all. Counting first is what makes that decision
+    // measurable rather than argued.
+    //
+    // The spectral cost is measured, not assumed: on EP2 captures of live
+    // speech, windows containing no starvation give 78.6-78.8 dB
+    // opposite-sideband suppression and windows containing one give
+    // 33.7-35.2 dB. A SINGLE zeroed sample takes it from 78.99 dB to 48.97 dB.
+    // Gating a one-sided analytic spectrum with a real gate is an image
+    // generator, and the gate here is the zero fill.
+    //
+    // PROVENANCE, because those numbers will otherwise be read as on-air
+    // figures and they are not. The captures are EP2 traffic off the wire, but
+    // the peer was hpsdrsim on loopback rather than a radio, so the producer
+    // clock is not a live sound card. What they establish is that the
+    // starvation HAPPENS in ordinary speech and what it costs WITHIN one
+    // capture; they do not establish the on-air magnitude. Nor is 78.7 dB the
+    // modulator's own suppression -- on a steady tone the same instrument reads
+    // 87.15-87.19 dB, matching Hl2TxDsp::designFilters. 78.7 is the clean-window
+    // baseline for speech through this instrument, which is what makes the
+    // 33.7-35.2 dB comparison meaningful.
+    //
+    // WHY THE RADIO'S OWN FIFO TELEMETRY CANNOT SEE THIS, which is the trap:
+    // Hl2Telemetry::txFifoFillMsbs and ::txFifoRecovery report the GATEWARE's
+    // DSIQ FIFO -- 16384 deep on this board, with the 0-127 reading being the
+    // TOP SEVEN BITS of its fill level rather than its depth or a sample count,
+    // as MetisProtocol.h says at the decode -- and that FIFO is fed by EP2
+    // PACKET ARRIVALS. An
+    // underflow here does not drop a packet or shorten one -- onEp2PacerTick
+    // emits a full-size EP2 frame on the wall clock either way, and
+    // ep2WriteTxIq zero-fills the samples that were not supplied. The radio
+    // therefore receives an unbroken 48 kHz sample stream whose CONTENT is
+    // partly silence, and its FIFO fill is identical in both cases. A healthy
+    // gateware FIFO reading is not evidence that this did not happen.
+    //
+    // AND THE BLINDNESS IS SYMMETRIC, which matters just as much and is the
+    // easier half to forget. These counters see the HOST end of the CLIENT's
+    // queue and nothing else. They are incremented before the socket write, so
+    // a datagram lost on the wire, a genuine overrun of the gateware's DSIQ
+    // FIFO, or anything else that happens after this client hands the bytes to
+    // the socket is invisible to THEM exactly as a host starvation is invisible
+    // to the gateware rows. The two instruments are DISJOINT, not overlapping:
+    // neither can stand in for the other, and a fault occurring between the
+    // socket write and the FIFO is invisible to both. "The counters are clean"
+    // is not evidence that the transmission was.
+    //
+    // Underflow is counted only on the queued-IQ path while keyed. The CW and
+    // test-tone paths synthesise a whole block per packet and cannot starve,
+    // and an UNKEYED frame carries silence by design rather than by fault.
+    //
+    // Packets and samples are both counted because they separate two different
+    // faults that the sample count alone conflates: a burst of whole-packet
+    // underflows at key-down is the missing pre-roll (the queue has not been
+    // primed yet), while occasional PARTIAL packets mid-over are the pacer and
+    // the audio device clock drifting apart. Same counter, different shapes.
+    //
+    // THESE DO NOT ANSWER "WAS THIS OVER CLEAN", and the shape of the error is
+    // a FALSE POSITIVE rather than a miss. THE FLOOR HAS TWO HALVES, at the two
+    // ends of the over, and the first published description of it named only
+    // the smaller one.
+    //
+    //   THE TAIL, at key-up. Real audio does not end on a packet boundary, so
+    //   the last packet of a perfectly healthy over is short and is counted: at
+    //   the moment the count is taken, "the queue is short" and "the over is
+    //   over" are indistinguishable here. ONE underflow packet, plus
+    //   1..kTxSamplesPerPacket-1 samples.
+    //
+    //   THE PRE-ROLL, at key-down, and it is the BIGGER half. It is the same
+    //   missing pre-roll the paragraph above names, read as a floor rather than
+    //   as a fault: Hl2Backend::applyKeying posts setMox to this client
+    //   immediately, while the first block of transmit IQ cannot arrive until
+    //   the audio chain has produced one -- Hl2TxDsp works in whole
+    //   Config::dspBlockSize blocks at Config::inputSampleRateHz, and nothing
+    //   primes m_txIq before MOX. Every tick in between takes the empty-queue
+    //   arm and counts a WHOLE packet. So a clean over OPENS with a burst of
+    //   whole-packet underflows and CLOSES with the short tail, and the burst
+    //   is worth an order of magnitude more silent samples than the tail is.
+    //
+    // Both halves are measured and pinned in hl2_tx_gate_test rather than
+    // described, so that changing either is a change that announces itself.
+    // Neither is a defect in this client: they are what an unprimed,
+    // wall-clock-paced FIFO reads on a healthy transmission, and they are the
+    // reason these counters are a session budget and not a per-over verdict.
+    //
+    // txUnderflowPackets is the more polluted of the two: its floor is a fixed
+    // per-over cost that does not grow with the over's length, while a real
+    // starvation adds kTxSamplesPerPacket per packet for as long as it lasts.
+    //
+    // "TOTALS" MEANS SINCE PROCESS START. Nothing resets these -- not start(),
+    // not a link edge, not flushTxIq() -- so they accumulate across reconnects
+    // and, if the operator switches radios without restarting, across radios.
+    // That is deliberate rather than an oversight, and the log line says so in
+    // those words: the question they answer is "how much substituted silence
+    // has this PROCESS put on the air", and a reset on a link edge would erase
+    // exactly the slow accumulation they exist to show. An operator who wants a
+    // per-link figure subtracts two readings.
+    //
+    // Suppressing either half of the floor would need the count deferred and
+    // attributed against the key edges, which is a design change and is not
+    // made here; the honest floor is a reportable state in the meantime.
+    //
+    // THREAD CONTRACT: I/O THREAD ONLY. See the note on the logging category in
+    // MetisClient.cpp -- these are plain integers written by the EP2 pacer, and
+    // reading them from anywhere else (healthSnapshot() is the obvious
+    // temptation) is a cross-thread read of a non-atomic. The only caller today
+    // is hl2_tx_gate_test, on one thread.
+    [[nodiscard]] std::uint64_t txUnderflowPackets() const noexcept { return m_txUnderflowPackets; }
+    [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
+    [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
+
     // A baseband test tone, offsetHz from the TX carrier, amplitude 0..1.
     // amplitude <= 0 disables it. Takes precedence over queued IQ.
     //
@@ -699,6 +848,16 @@ private:
     // real C&C frame; a stream started before any C&C has landed emits ADC-idle
     // samples (Q pinned to zero) until one does.
     void sendPrimingBurst(int countPerBank);
+    // Seed the start-retry budget and start its timer. The datagram itself is
+    // NOT sent here: the three callers put different bytes on the wire --
+    // start() and setReceiverCount() send metisStart(), onWatchdogTick()'s
+    // stage 1 sends metisRunCommand() -- and folding the send in would either
+    // take a 64-byte array nobody but this helper would build or hide the one
+    // line a reader of those paths most needs to see. What it does remove is
+    // the third hand-rolled copy of "m_startAttempts = 1; timer->start()" and
+    // the off-by-one that copy invited: the seed of 1 COUNTS THE DATAGRAM THE
+    // CALLER JUST SENT, so what remains is kMaxStartAttempts - 1 re-sends.
+    void armStartRetry();
     // Offer one decoded EP6 C&C response to the RQST/ACK machine and publish
     // whatever verdict that produces. Separated from the datagram loop so a
     // test can drive the reply path with a synthetic Ep6Response and no socket
@@ -746,6 +905,10 @@ private:
     static constexpr int kEp2AudioRateHz     = 48000;
     static constexpr int kStartRetryMs       = 300;
     static constexpr int kMaxStartAttempts   = 5;
+    // How many FURTHER re-sends armStartRetry() leaves, for anything that
+    // reports the budget to a human. The seed of 1 counts the datagram the
+    // caller has already sent, so "budget 5" in a log line is wrong by one.
+    static constexpr int kStartResendsAfterArm = kMaxStartAttempts - 1;
     // "EP6 is flowing" for the start-retry's purposes: a packet within this long.
     // Sits far ABOVE the slowest EP6 interpacket gap (2.6 ms, at 48 kHz with one
     // receiver) and far BELOW kStartRetryMs, so a running stream and a stopped one
@@ -757,6 +920,19 @@ private:
     static constexpr int kWatchdogTickMs     = 25;
     static constexpr int kConnectTimeoutMs   = 2000;
     static constexpr int kSilenceTimeoutMs   = 2000;
+    // THE START RETRY'S WHOLE BUDGET MUST FIT INSIDE THE SILENCE WINDOW, and
+    // two live call sites rest on it rather than one. setReceiverCount()'s
+    // comment says why for the restart path -- a budget that outlasted the
+    // window would let the watchdog fire while a retry was still pending, and
+    // the retry would be dead code. onWatchdogTick()'s stage 1 rests on the
+    // same inequality from the other side: it seeds m_startAttempts = 1 and
+    // then uses `m_startRetryTimer->isActive()` as its "the attempt still has
+    // time" test, which is only a bounded wait while the budget is shorter than
+    // the window that produced it. Pinned here because both readings are
+    // comments about constants declared in this file, and a comment does not
+    // fail a build.
+    static_assert(kMaxStartAttempts * kStartRetryMs < kSilenceTimeoutMs,
+                  "the start-retry budget must expire inside one silence window");
 
     QTimer* m_ep2Timer = nullptr;         // paces EP2 off the wall clock
     QTimer* m_watchdogTimer = nullptr;    // EP6 silence detection
@@ -765,6 +941,22 @@ private:
     int     m_startAttempts = 0;          // start datagrams sent this connect
     QElapsedTimer m_ep2Clock;             // pacer reference clock
     QElapsedTimer m_sinceLastEp6;         // silence detection
+    // A recovery is in flight for the CURRENT silence. Set when the watchdog
+    // re-sends the run command, cleared by the EP6 packet that ends the
+    // silence -- so it is per-silence, not per-session, and a link that goes
+    // quiet twice gets two recoveries rather than one. Also cleared by stop()
+    // and by setReceiverCount(), which restarts the stream by its own route and
+    // must not have its EP6 credited to this one.
+    bool m_silenceRecoveryArmed = false;
+    // NO TEST SEAM HERE, AND THAT IS A STOP-GAP RATHER THAN A POSITION.
+    // AGENTS.md routes a disconnected input to a socket-free test that injects
+    // the transport, and lists hl2_receiver_count_restart_test's fake Metis
+    // radio among four legacy exceptions tracked for extraction in #5254. This
+    // coverage grows that exception. The reason it does is mechanical and not a
+    // preference: stage 1's only observable is a datagram, it goes out through
+    // m_socket, and there is no injectable datagram sink beside feedDatagram()
+    // to observe it with. The socket-free shape #5254 wants needs that sink
+    // first; when it lands, this belongs behind it.
     // Free-running from construction and never restarted: the RQST/ACK floor
     // differences it, so it must not be reset under an outstanding request the
     // way m_sinceLastEp6 is per packet.
@@ -823,6 +1015,49 @@ private:
     // Roughly a quarter second at 48 kHz. Past this the operator is hearing
     // latency, so dropping is better than growing the backlog.
     static constexpr std::size_t kTxQueueMax = 12000;
+    // Monotonic for the life of the PROCESS; see the accessors above. Never
+    // reset on key, unkey, link loss or a change of radio -- a per-over counter
+    // would answer a different question and would lose the drift that
+    // accumulates, which is the one these exist to show. The log line calls
+    // them "totals since process start" for that reason and not "session".
+    std::uint64_t m_txUnderflowPackets = 0;
+    std::uint64_t m_txUnderflowSamples = 0;
+    std::uint64_t m_txOverflowSamples = 0;
+    // Length of the starvation currently in progress, in packets and in
+    // substituted silent samples, so ONE log line describes the whole EPISODE
+    // instead of one line per EP2 frame at 380 frames/second. Reported and
+    // cleared by reportTxUnderflowRun(), which every exit from the queued-IQ
+    // path calls: a flush, the key going up, or the stream being taken by CW or
+    // the test tone.
+    std::uint64_t m_txUnderflowRunPackets = 0;
+    std::uint64_t m_txUnderflowRunSamples = 0;
+    // Contiguous FULL packets since the last short one.
+    //
+    // WHEN A STARVATION EPISODE IS OVER, and it is NOT "the next full packet".
+    // The first version of this flushed the run on the very next full packet.
+    // That is right for the burst shape -- the key-down pre-roll: N short
+    // packets in a row, then the queue primes and stays primed -- and wrong for
+    // the other shape this FIFO produces, which the accounting comment above
+    // names itself: the pacer and the audio device clock drifting apart gives
+    // ALTERNATING short and full packets. Flushing on every full packet turns
+    // that into one ~400-character debug line per PAIR, up to ~190 lines a
+    // second at the pacer's ~381 frames/s, which is precisely the "one line per
+    // EP2 frame" outcome the coalescing exists to prevent -- and the failure
+    // mode of #5813, where a high-rate burst flushed the support-log tail it
+    // was meant to explain.
+    //
+    // So an episode ends when the queue has KEPT UP for about 100 ms, DERIVED
+    // from the EP2 rate rather than typed as a packet count, plus the
+    // unconditional flushes at every exit from the queued-IQ path: the key
+    // going up, flushTxIq(), CW taking the stream, the test tone taking it.
+    // Within an over that gives one line per episode; across overs the unkey
+    // backstop still guarantees the line is attributed to the over it happened
+    // in rather than to the next one.
+    static constexpr std::uint64_t kUnderflowRunQuietPackets =
+        (static_cast<std::uint64_t>(kEp2AudioRateHz) / 10u)
+            / static_cast<std::uint64_t>(kTxSamplesPerPacket);
+    std::uint64_t m_txUnderflowRunQuietPackets = 0;
+    void reportTxUnderflowRun();
     double m_toneHz = 0.0;
     double m_toneAmp = 0.0;
     double m_tonePhase = 0.0;   // radians, carried across packets

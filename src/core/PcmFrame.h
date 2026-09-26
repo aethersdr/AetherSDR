@@ -57,6 +57,27 @@ struct PcmEpoch {
 class PcmProducer;
 class PcmFrameGate;
 
+// A small, read-only revocation witness for consumers that queue converted
+// samples or pin a route. Unlike retaining PcmFrame, this retains no input PCM.
+class PcmEpochLease final {
+public:
+    PcmEpochLease() = default;
+    const PcmStreamDescriptor& stream() const
+    {
+        static const PcmStreamDescriptor empty;
+        return m_epoch ? m_epoch->descriptor : empty;
+    }
+    bool current() const
+    {
+        return m_epoch && m_epoch->active.load(std::memory_order_acquire);
+    }
+private:
+    friend class PcmFrame;
+    explicit PcmEpochLease(std::shared_ptr<const detail::PcmEpoch> epoch)
+        : m_epoch(std::move(epoch)) {}
+    std::shared_ptr<const detail::PcmEpoch> m_epoch;
+};
+
 // Owning native-endian, interleaved IEEE float32 PCM. Metadata and samples are
 // immutable to consumers and copied together by Qt queued delivery. Neither a
 // borrowed callback buffer nor a mutable global rate can reinterpret a frame.
@@ -77,6 +98,7 @@ public:
     {
         return m_epoch && m_epoch->active.load(std::memory_order_acquire);
     }
+    PcmEpochLease epochLease() const { return PcmEpochLease(m_epoch); }
 
     // Compatibility boundary ONLY. Refuse formats the existing 24 kHz stereo
     // consumers cannot interpret; never resample, downmix, clip or relabel.
