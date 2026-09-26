@@ -6367,8 +6367,8 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     // onBackendSpectrumFrame is a pass-through. What averages is the backend
     // call below -- ANAN turns the value into WDSP analyzer averaging time
     // (AnanPanAnalyzer); a backend that does not override setPanAverage()
-    // (HL2, RTL) still does no averaging. Client-side averaging for those is
-    // #5678 row 2.1's other half -- "port + new" -- and is not written yet.
+    // (HL2) still does no averaging. RTL now consumes the setting in its
+    // acquisition-owned spectrum accumulator, independently of audio/squelch.
     //
     // Mechanism corrected by @ten9876 on #5678: m_fftAverage IS read (by the
     // persistence snapshot and the overlay menu), so the fault is this missing

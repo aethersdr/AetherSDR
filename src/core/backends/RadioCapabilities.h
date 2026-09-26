@@ -143,6 +143,14 @@ struct BackendPanAveraging {
     // that engages this has to state its own unit rather than inherit
     // ANAN's by forgetting to.
     int msPerAverageStep;
+    // Explicit client persistence owner for these two local display controls.
+    // False preserves a family's existing settings behavior. This is separate
+    // from computing an average: ANAN already computes one without this owner.
+    bool clientPersistsAveraging;
+    // Empty preserves existing UI wording. A backend with different averaging
+    // units or weighted semantics supplies the descriptions of its controls.
+    QString averageDescription;
+    QString weightedDescription;
 };
 
 struct PanAmplitudeModel {

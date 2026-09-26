@@ -88,6 +88,8 @@ void RtlSdrDdc::resetSpectrum() noexcept
     m_displayWrite = 0;
     m_displayFilled = 0;
     m_displayUntilFrame = kSpectrumBinCount;
+    m_displaySamplesSinceFrame = 0;
+    m_displayAverage.reset();
     m_detectorCounter = 0;
     m_firstDetectorEmitted = false;
     m_squelchSpectrumFresh = false;
@@ -279,6 +281,7 @@ void RtlSdrDdc::processDisplaySpectrum(std::span<const std::complex<float>> samp
         m_displayWrite = (m_displayWrite + count) % kSpectrumBinCount;
         m_displayFilled = std::min(size_t(kSpectrumBinCount), m_displayFilled + count);
         m_displayUntilFrame -= count;
+        m_displaySamplesSinceFrame += count;
         if (m_displayUntilFrame != 0) { continue; }
         // The first deadline is a whole observation; later deadlines may
         // overlap it. Short blocks are accumulated, never zero-padded.
@@ -288,12 +291,25 @@ void RtlSdrDdc::processDisplaySpectrum(std::span<const std::complex<float>> samp
             m_displayIn[i][1] = sample.imag() * m_displayWindow[i];
         }
         fftwf_execute(m_displayPlan);
+        const int average = m_spectrumAverage.load(std::memory_order_relaxed);
+        const bool weighted = m_spectrumWeightedAverage.load(std::memory_order_relaxed);
+        m_displayAverage.beginFrame(average, weighted, m_displaySamplesSinceFrame / rate);
         for (size_t i = 0; i < kSpectrumBinCount; ++i) {
+            if (average > 0 && !weighted) {
+                // Accumulate before the log, with no power -> dB -> power trip.
+                const float re = m_displayOut[i][0] / kSpectrumBinCount;
+                const float im = m_displayOut[i][1] / kSpectrumBinCount;
+                m_displayBins[(i + kSpectrumBinCount / 2) % kSpectrumBinCount] =
+                    m_displayAverage.bin(i, re * re + im * im, 0);
+                continue;
+            }
             const float magnitude = std::hypot(m_displayOut[i][0], m_displayOut[i][1])
                 / kSpectrumBinCount;
+            const float db = 20.0f * std::log10(std::max(magnitude, 1e-6f));
             m_displayBins[(i + kSpectrumBinCount / 2) % kSpectrumBinCount] =
-                20.0f * std::log10(std::max(magnitude, 1e-6f));
+                m_displayAverage.bin(i, magnitude * magnitude, db);
         }
+        m_displaySamplesSinceFrame = 0;
         m_displayUntilFrame = m_displayStride;
         const QByteArray frame(reinterpret_cast<const char*>(m_displayBins.data()),
                                kSpectrumBinCount * int(sizeof(float)));

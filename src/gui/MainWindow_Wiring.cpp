@@ -3130,6 +3130,24 @@ void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
     });
 }
 
+void MainWindow::scheduleClientFftAverageSave(int panIndex, int average, bool weighted)
+{
+    const auto averaging = m_radioModel.backendCapabilities().backendPanAveraging;
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!m_radioModel.shapesDisplayRatesLocally() || !averaging
+        || !averaging->clientPersistsAveraging || scope.radioId().isEmpty() || panIndex < 0) {
+        return;
+    }
+    // Distinct from waterfall cadence; edits to either feature must survive
+    // coalescing. Capture scope now so a later radio switch cannot redirect it.
+    const QString key = QStringLiteral("fft:") + QString::number(scope.family().size())
+        + QLatin1Char(':') + scope.family() + QString::number(scope.radioId().size())
+        + QLatin1Char(':') + scope.radioId() + QLatin1Char(':') + QString::number(panIndex);
+    m_pendingDisplayWrites.schedule(key, [scope, panIndex, average, weighted] {
+        ClientDisplaySettings::saveFftAverage(scope, panIndex, true, {average, weighted});
+    });
+}
+
 void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
                                       PanadapterModel* pan)
 {
@@ -3203,7 +3221,23 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     // branch below — a pan re-wired after switching from a self-shaping backend
     // to a Flex has to be told the law changed back.
     sw->setWfRateShapedLocally(m_radioModel.shapesDisplayRatesLocally());
+    const auto averaging = m_radioModel.backendCapabilities().backendPanAveraging;
+    if (SpectrumOverlayMenu* menu = sw->overlayMenu()) {
+        menu->setFftAverageDescriptions(averaging ? averaging->averageDescription : QString{},
+                                       averaging ? averaging->weightedDescription : QString{});
+    }
     if (m_radioModel.shapesDisplayRatesLocally()) {
+        if (averaging && averaging->clientPersistsAveraging) {
+            if (pan->average() >= 0) {
+                // A live model wins over disk on applet/layout rebuild.
+                sw->setFftAverage(pan->average());
+                sw->setFftWeightedAvg(pan->weightedAverage());
+            } else if (const auto saved = ClientDisplaySettings::fftAverage(
+                           m_radioModel.settingsScope(), sw->panIndex(), true)) {
+                sw->setFftAverage(saved->average);
+                sw->setFftWeightedAvg(saved->weighted);
+            }
+        }
         if (const auto savedRate = ClientDisplaySettings::waterfallRate(
                 m_radioModel.settingsScope(), sw->panIndex(), true)) {
             sw->setWfLineDuration(*savedRate);
@@ -3343,7 +3377,9 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         // requestPanAverage()/requestPanDisplayRates() reject an empty id;
         // weighted-average still needs this guard on its raw command path.
         if (!targetPanId.isEmpty()) {
-            m_radioModel.requestPanAverage(targetPanId, src->fftAverage());
+            if (m_radioModel.requestPanAverage(targetPanId, src->fftAverage())) {
+                scheduleClientFftAverageSave(dst->panIndex(), src->fftAverage(), src->fftWeightedAvg());
+            }
             if (!m_radioModel.requestLocalPanWeightedAverage(targetPanId,
                                                              src->fftWeightedAvg())) {
                 m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
@@ -4671,7 +4707,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::fftAverageChanged,
             this, [this, applet, sw](int v) {
         sw->setFftAverage(v);
-        m_radioModel.requestPanAverage(applet->panId(), v);
+        if (m_radioModel.requestPanAverage(applet->panId(), v)) {
+            scheduleClientFftAverageSave(sw->panIndex(), v, sw->fftWeightedAvg());
+        }
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
             this, [this, applet, sw](int v) {
@@ -4690,6 +4728,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), on)) {
             m_radioModel.sendCommand(
                 QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        } else {
+            scheduleClientFftAverageSave(sw->panIndex(), sw->fftAverage(), on);
         }
     });
     connect(menu, &SpectrumOverlayMenu::wfColorSchemeChanged,
@@ -4968,7 +5008,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // so the reset doesn't fight the congestion-aware cap. The SpectrumWidget
         // values above (sw->setFftFps / sw->setWfLineDuration) are already updated,
         // so they become the new restore targets when the throttle lifts.
-        m_radioModel.requestPanAverage(applet->panId(), 0);
+        if (m_radioModel.requestPanAverage(applet->panId(), 0)) {
+            scheduleClientFftAverageSave(sw->panIndex(), 0, false);
+        }
         if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), false)) {
             m_radioModel.sendCommand(
                 QString("display pan set %1 weighted_average=0").arg(applet->panId()));

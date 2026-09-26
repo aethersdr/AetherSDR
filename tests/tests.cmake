@@ -1423,6 +1423,13 @@ if(AETHER_BACKEND_RTL)
     add_test(NAME rtl_spectrum_resolution_test COMMAND rtl_spectrum_resolution_test)
     set_tests_properties(rtl_spectrum_resolution_test PROPERTIES TIMEOUT 30)
 
+    # Generated IQ through the real averaging seam; no sockets or USB.
+    add_executable(rtl_spectrum_averaging_test tests/rtl_spectrum_averaging_test.cpp)
+    target_include_directories(rtl_spectrum_averaging_test PRIVATE src tests)
+    target_link_libraries(rtl_spectrum_averaging_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_spectrum_averaging_test COMMAND rtl_spectrum_averaging_test)
+    set_tests_properties(rtl_spectrum_averaging_test PROPERTIES TIMEOUT 30)
+
     # Socket-free RTL-SDR backend seam, DSP, and discovery contract.
     add_executable(rtl_backend_test tests/rtl_backend_test.cpp)
     target_include_directories(rtl_backend_test PRIVATE src)

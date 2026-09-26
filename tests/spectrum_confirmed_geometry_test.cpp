@@ -1,6 +1,7 @@
 // Opt-in real-widget test: no sockets, radio, USB, or synthetic firmware peer.
 #include "TestSettingsProfile.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/SpectrumOverlayMenu.h"
 #include "gui/MainWindowHelpers.h"
 #include "RtlInjectedDevice.h"
 #include "core/backends/flex/FlexBackend.h"
@@ -15,6 +16,8 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QThread>
+#include <QSlider>
+#include <QPushButton>
 #include <cmath>
 #include <cstdio>
 
@@ -22,6 +25,7 @@ using namespace AetherSDR;
 
 namespace AetherSDR {
 struct SpectrumOffscreenTestAccess {
+    static const QVector<float>& trace(const SpectrumWidget& widget) { return widget.displaySpectrumBins(); }
     static QPoint marker(SpectrumWidget& widget) {
         QImage image(widget.size(), QImage::Format_ARGB32);
         QPainter painter(&image);
@@ -80,6 +84,31 @@ int main(int argc, char** argv)
         std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
         failures += !ok;
     };
+    {
+        SpectrumWidget trace;
+        trace.updateSpectrum(QVector<float>(32,-80));
+        trace.updateSpectrum(QVector<float>(32,-20));
+        check(std::abs(SpectrumOffscreenTestAccess::trace(trace).front()+59)<.001,
+              "undeclared backends retain the existing client EMA");
+        trace.setClientFftSmoothingEnabled(false);
+        trace.updateSpectrum(QVector<float>(32,-40));
+        trace.updateSpectrum(QVector<float>(32,-10));
+        check(SpectrumOffscreenTestAccess::trace(trace)==QVector<float>(32,-10),
+              "backend-averaged bins reach the displayed trace without a second EMA");
+        const auto caps=rtl::RtlSdrBackend().capabilities();
+        const auto averaging=caps.backendPanAveraging.value_or(BackendPanAveraging{0,false,{},{}});
+        auto* menu=trace.overlayMenu();
+        menu->setFftAverageDescriptions(averaging.averageDescription,averaging.weightedDescription);
+        auto* avg=trace.findChild<QSlider*>("displayFftAvgSlider");
+        auto* weighted=trace.findChild<QPushButton*>("displayWeightedAvgBtn");
+        check(avg && weighted && avg->accessibleDescription().contains("10 ms")
+            && weighted->accessibleDescription().contains("dB levels"),
+            "averaging units and domain reach keyboard and screen-reader descriptions");
+        menu->setFftAverageDescriptions({},{});
+        check(avg && weighted && avg->accessibleDescription().isEmpty()
+            && weighted->toolTip().contains("Weights recent"),
+            "switching to an undeclared family restores its original wording");
+    }
     SpectrumWidget widget;
     widget.resize(1200, 600);
     widget.setBandwidthLimits(0.01, 2.16);

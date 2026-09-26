@@ -477,3 +477,58 @@ fixtures measure both signs of a 48 kHz carrier placement for FM, FMN, AM and
 CW, plus exact-center and 50 Hz cases. They quantify IQ effects, not live
 audio intelligibility or radio calibration. Revision-specific performance,
 mutation, live reception and delivery evidence belongs in the PR report.
+
+## Temporal FFT averaging
+
+RTL consumes the neutral `setPanAverage` and `setPanWeightedAverage` verbs in
+the acquisition-owned display FFT. The 0..100 control means an exponential
+decay time of 10 ms per step: 0 bypasses averaging, 5 is 50 ms and 100 is one
+second. This is an explicit RTL mapping, following the existing ANAN time
+scale; it does not claim undocumented Flex firmware parity. The default
+remains 0, with weighted mode off.
+
+With weighted mode off, the accumulator averages normalized FFT power before
+taking its logarithm. Weighted mode selects a recursive blend of dB levels,
+as on ANAN, rather than a different depth. A constant carrier retains its
+level in either mode. Varying signals and noise generally read lower in the
+dB blend; this is an estimator choice, not better receiver sensitivity. Both
+modes blur short events as their time setting increases. Backend-provided
+tooltips and accessible descriptions explain the units and distinction.
+
+The new-state weight is `1-exp(-elapsedSamples/(sampleRate*timeConstant))`.
+Elapsed samples come from actual emitted-frame deadlines, including a change
+of FPS partway through a display interval. The stated decay time therefore
+does not depend on FPS, although lower FPS supplies fewer observations and
+can miss short activity. This averages the genuine emitted FFT observations;
+it is not a claim to integrate uncomputed FFTs between display deadlines.
+The first frame seeds the state. Changing depth or domain discards the old
+estimator. Capture/adoption/discontinuity resets discard it with the IQ
+window, and each new session constructs fresh state. Pure viewport cropping
+retains the full-capture bin identities and their average.
+
+`SpectrumTemporalAverage` uses one preallocated float per full-capture bin
+(256 KiB at 65,536 bins). Processing/reset allocates no accumulator storage.
+Spectrum and waterfall emit the same averaged bins at the existing cadence.
+`backendPanAveraging` disables the widget's additional fixed temporal blend,
+including at AVG 0. Raw squelch observations and receiver audio do not pass
+through this accumulator. Flex, Icom, Hermes, Sim and ANAN processing remain
+unchanged.
+
+The existing `ClientDisplay` schema-1 owner stores both controls under
+`fftAverages[panIndex] = {average, weighted}` only when the backend explicitly
+declares `clientPersistsAveraging` (RTL in this change). No family string is
+tested in the GUI. Exact known device identity and pan slot scope the values;
+anonymous devices are session-only. Corrupt, malformed or newer settings are
+not overwritten; unrelated fields, including waterfall rates, survive writes.
+Edits coalesce separately from waterfall cadence and capture their scope before
+a radio switch. A live pan model wins over disk during layout rebuilding.
+Other backends keep their existing persistence behavior.
+
+The generated-IQ regression first failed with identical off/low/high/weighted
+output on the old no-op path. It tests the actual backend/DDC route, analytical
+step response, FPS changes, detector/audio independence, noise variance and
+frame cadence. Settings and real-widget regressions cover isolation/schema
+guards, skipped duplicate smoothing and accessible control descriptions.
+The mapping, weighted semantics and persistence owner remain draft decisions
+for maintainer review under RFC #5782/#5468. Live evidence is revision-specific
+in the PR report; numerical fixtures alone are not hardware qualification.

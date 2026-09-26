@@ -4,6 +4,7 @@
 
 #include "core/backends/rtl/RtlCaptureTransaction.h"
 #include "core/backends/rtl/RtlViewport.h"
+#include "core/dsp/SpectrumTemporalAverage.h"
 
 #include <QObject>
 #include <QByteArray>
@@ -45,6 +46,8 @@ public:
     void setSliceMode(const QString& mode);
     void setSliceFilter(int lowHz, int highHz);
     void setSpectrumRateFps(int fps);
+    void setSpectrumAverage(int average) { m_spectrumAverage.store(std::clamp(average, 0, 100)); }
+    void setSpectrumWeightedAverage(bool on) { m_spectrumWeightedAverage.store(on); }
     void setAudioMute(bool mute);
     void applyMonitor(int gain, int pan, bool mute); // acquisition boundary only
     void setAudioGain(int gainPercent);
@@ -90,6 +93,8 @@ private:
     std::atomic<int> m_filterLowHz{-100000};
     std::atomic<int> m_filterHighHz{100000};
     std::atomic<int> m_spectrumFps{30};
+    std::atomic<int> m_spectrumAverage{0};
+    std::atomic<bool> m_spectrumWeightedAverage{false};
     size_t m_detectorCounter = 0;
     bool m_firstDetectorEmitted = false;
     bool m_squelchSpectrumFresh = false;
@@ -118,6 +123,8 @@ private:
     size_t m_displayUntilFrame = kSpectrumBinCount;
     size_t m_displayStride = 80'000;
     double m_displayRateHz = 2'400'000;
+    size_t m_displaySamplesSinceFrame = 0;
+    SpectrumTemporalAverage m_displayAverage{kSpectrumBinCount};
 
     // NCO & Decimation state
     double m_ncoPhase{0.0};

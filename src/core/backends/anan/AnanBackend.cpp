@@ -491,7 +491,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasHostNoiseBlanker = true;  // WDSP ANB on the raw IQ, in AnanRxDsp
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
-    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep}; // AnanPanAnalyzer
+    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}}; // AnanPanAnalyzer
     // No band/segment zoom: the protocol carries no per-pan zoom flag.
     c.panZoomModes = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly

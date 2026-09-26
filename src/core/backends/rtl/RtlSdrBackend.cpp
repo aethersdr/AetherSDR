@@ -153,6 +153,9 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // separate question from this one and belongs with its own reasoning.
     amplitude.binsAbsolute = true;
     c.panAmplitude = amplitude;
+    c.backendPanAveraging = BackendPanAveraging{SpectrumTemporalAverage::kMsPerStep, true,
+        tr("Spectrum averaging time: 10 ms per step; 0 is off and 100 is one second. Higher values smooth changes but blur short signals. The decay time stays the same when FPS changes."),
+        tr("Off averages signal power. On averages dB levels for a smoother trace, but varying signals and noise read lower. Both modes use the FFT AVG time setting.")};
     c.family = QStringLiteral("rtl");
     c.model  = m_modelName;
     c.manufacturer = m_vendor.isEmpty() ? QStringLiteral("Realtek") : m_vendor;
@@ -781,6 +784,18 @@ void RtlSdrBackend::setPanFrameRate(const QString& panId, int fps)
     if (RtlSdrDdc* ddcEngine = ddc()) {
         ddcEngine->setSpectrumRateFps(fps);
     }
+}
+
+void RtlSdrBackend::setPanAverage(const QString& panId, int average)
+{
+    Q_UNUSED(panId); // one pan in the current RTL runtime
+    if (RtlSdrDdc* engine = ddc()) { engine->setSpectrumAverage(average); }
+}
+
+void RtlSdrBackend::setPanWeightedAverage(const QString& panId, bool on)
+{
+    Q_UNUSED(panId);
+    if (RtlSdrDdc* engine = ddc()) { engine->setSpectrumWeightedAverage(on); }
 }
 
 void RtlSdrBackend::updateMonitor(int sliceId)
