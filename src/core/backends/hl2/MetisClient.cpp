@@ -792,12 +792,23 @@ void MetisClient::submitSpeakerAudio(const QByteArray& interleavedInt16)
     // deliberately not done blind, since the drift depends on two crystals
     // nobody has measured together.
     //
-    // Trimmed to an EVEN count so the drop cannot land between a left and a
-    // right sample — an odd trim would swap the channels of everything after
-    // it, and stay swapped, because the offset carries into the next block.
+    // THE PARITY IS STRUCTURAL, not corrected after the fact. The front of this
+    // queue is always a LEFT sample, and an odd number of front pops would swap
+    // the channels of everything after it — and stay swapped, because the
+    // offset carries into the next block. All three sites that move samples
+    // keep the count even: the push above writes whole interleaved frames, the
+    // cap is an even number of samples, and the consumer in
+    // buildNextControlPacket() masks its take with `& ~1`. Since the size and
+    // the cap are both even, this loop stops exactly ON the cap and has popped
+    // an even number to get there.
+    //
+    // THERE USED TO BE A `size() % 2` CORRECTIVE pop_front() HERE. It was
+    // unreachable — and had it ever fired it would have BEEN the swap it was
+    // written to prevent, because a single front pop is exactly what moves the
+    // left/right phase. The invariant is asserted instead.
+    static_assert(kSpeakerAudioCapSamples % 2 == 0,
+                  "the cap counts samples, so it must hold whole L/R frames");
     while (m_speakerAudio.size() > kSpeakerAudioCapSamples)
-        m_speakerAudio.pop_front();
-    if (m_speakerAudio.size() % 2 != 0)
         m_speakerAudio.pop_front();
 }
 

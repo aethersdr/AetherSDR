@@ -209,9 +209,14 @@ Cc ccTxDrive(int level, bool paEnable, bool atuTune) noexcept
     // request. Alex filters and VNA stay zero — those are separate decisions
     // and neither belongs in a drive-level write.
     //
-    // DATA[18] STAYS CLEAR, which is not an omission: on this register the
-    // gateware reads a set bit there as "an external tuner is in charge", and
-    // setting it alongside DATA[20] asks two tuners to start at once.
+    // DATA[18] STAYS CLEAR, which is not an omission. It is `tr_disable`
+    // (control.v: `tr_disable <= cmd_data[18]`), and its one consumer is
+    // `assign pa_inttr = int_tx_on & ~vna & (pa_enable | ~tr_disable);` —
+    // so setting it while the PA is off holds the radio's internal T/R relay
+    // in receive for the whole transmission. That is a setting for a station
+    // whose external amplifier does its own T/R switching, not something a
+    // drive-level write gets to decide. DATA[17], the tuner's BYPASS command
+    // (exttuner.v: `bypass <= cmd_data[17]`), stays clear for the same reason.
     const auto c2 = static_cast<std::uint8_t>((paEnable ? 0x08 : 0x00)
                                             | (atuTune ? 0x10 : 0x00));
     return {kC0TxDrive, static_cast<std::uint8_t>(level), c2, 0x00, 0x00};

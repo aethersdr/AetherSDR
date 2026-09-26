@@ -4035,7 +4035,9 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     filterCombo->addItem(QStringLiteral("N2ADR — transmit only"), 2);
     filterCombo->setAccessibleName(QStringLiteral("Companion filter board"));
     filterCombo->setToolTip(QStringLiteral(
-        "None: no board fitted. Every relay is released and the front end is bare.\n\n"
+        "None: no board fitted. Every relay is released — the front end is bare\n"
+        "on receive, and nothing filters the transmitter's harmonics on the way\n"
+        "to the antenna. Choose it only when there really is nothing on J16.\n\n"
         "Receive and transmit: the usual boxed Hermes-Lite 2 — the band's low-pass\n"
         "and the AM-broadcast high-pass are ahead of the ADC as well as after the PA.\n\n"
         "Transmit only: the low-pass bank is in the transmit path alone. This is the\n"
