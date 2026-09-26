@@ -273,6 +273,24 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_command_plane.py --strict
 
+      # ── The radio feature register is GENERATED and DIFFED, not touched.
+      # docs/architecture/radio-feature-matrix.md answers "where does the click
+      # END" per control per radio, and a control that does nothing looks
+      # exactly like one that works — so the document is only worth having if
+      # it cannot quietly stop being true.
+      #
+      # Deliberately NOT a gate that forces the matrix to be edited when a
+      # capability is edited: that enforces A change, not the RIGHT one, and a
+      # counter can be paid off with a comment. This derives the cells a
+      # parser can settle — is the capability declared, is the virtual
+      # overridden, is the base Q_UNUSED, is the control gated above the seam —
+      # and diffs them against the committed record and its JSON sidecar. `V`
+      # (verified on real hardware) is never generated and only has to carry a
+      # run citation; `U` is a legitimate committed value.
+      - name: Radio feature register
+        if: ${{ !cancelled() }}
+        run: python tools/check_radio_feature_matrix.py --strict
+
       # ── The per-PR test gate in ci.yml is FROZEN. ci.yml runs no Linux tests
       # and a short allow-list of platform-toolchain tests behind `ctest -R`
       # steps; the full suite runs unfiltered on every push to main

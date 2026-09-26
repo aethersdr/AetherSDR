@@ -1,0 +1,2153 @@
+{
+ "rx/frequency": {
+  "control": "VFO tuning — dial, keypad, band buttons, click-tune",
+  "seam": "setSliceFrequency",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "V",
+   "anan": "W",
+   "rtl": "W",
+   "sim": "W"
+  },
+  "headless": {
+   "method": "slice.setFrequency",
+   "record": "sliceFrequencyControl",
+   "cells": {
+    "flex": "R",
+    "icom": "R",
+    "hl2": "W",
+    "anan": "R",
+    "rtl": "W",
+    "sim": "W"
+   }
+  },
+  "verified": {
+   "hl2": {
+    "run": "d114-full-band-baseline",
+    "shows": "93 chunks swept 0.29-31.74 MHz on the real radio; 8/8 broadcast spans clear the floor by 15 dB, loudest 71.4 dB at 9.592 MHz - the commanded frequency changes what the radio receives"
+   }
+  },
+  "hide": {},
+  "note": "Pure virtual: the compiler forces every family to implement it. The headless cell is NOT the GUI cell — validCoverage() additionally demands minimumHz > 0, which Flex and ANAN do not declare."
+ },
+ "rx/mode": {
+  "control": "mode selection (USB/LSB/CW/AM/FM/DIGU/…)",
+  "seam": "setSliceMode",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "W",
+   "anan": "W",
+   "rtl": "W",
+   "sim": "W"
+  },
+  "headless": {
+   "method": "slice.setMode",
+   "record": "receiveModeControl",
+   "cells": {
+    "flex": "W",
+    "icom": "R",
+    "hl2": "W",
+    "anan": "R",
+    "rtl": "W",
+    "sim": "W"
+   }
+  },
+  "verified": {},
+  "hide": {},
+  "note": "Pure virtual. On a Flex this override is the ONLY path: SliceModel::setMode deliberately emits no wire text, it raises modeChangeRequested instead."
+ },
+ "rx/filter": {
+  "control": "receive filter width / passband edges",
+  "seam": "setSliceFilter",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setFilterWidth",
+    "wire": "filt "
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {
+   "rtl": {
+    "member": "m_filterLowHz",
+    "scope": "src/core/backends/rtl"
+   }
+  },
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "V",
+   "anan": "W",
+   "rtl": "P",
+   "sim": "W"
+  },
+  "headless": {
+   "method": "slice.setFilter",
+   "record": "receiveFilterControl",
+   "cells": {
+    "flex": "W",
+    "icom": "R",
+    "hl2": "W",
+    "anan": "R",
+    "rtl": "R",
+    "sim": "R"
+   }
+  },
+  "verified": {
+   "hl2": {
+    "run": "d111-noise-density-vs-bandwidth",
+    "shows": "S-meter -108.52 -> -99.15 dBm across a commanded 500->3000 Hz passband, noise density flat, slope 0.219 dB/dB against a 0.40 bound, forward and reverse legs agreeing"
+   }
+  },
+  "hide": {},
+  "note": "Pure virtual. RTL overrides it and the DDC stores the edges without ever reading them back: the backend ASKED for this control, so it is not the inherited-default phantom but the cached-readback one, and the repair is real work rather than one assignment."
+ },
+ "rx/filter-preset": {
+  "control": "stored RX filter preset (FIL1/FIL2/FIL3)",
+  "seam": "setSliceFilterPreset",
+  "capability": [
+   "rxFilterControl"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "M",
+   "icom": "M",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "relabelled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "hasCompleteRxFilterPresets"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "hasCompleteRxFilterPresets"
+    }
+   ],
+   "why": "The filter button row never hides. With no radio presets declared, its buttons carry the operator's width presets instead of FIL1/FIL2/FIL3, so the radio-preset meaning is withdrawn without a reason."
+  },
+  "note": "Icom's presets come from a per-model profile; every other family leaves the record empty, which closes the control rather than offering an inert one. Pending because ambiguous: nothing is hidden, the same buttons change meaning per radio, and section 4a does not say which state that is. Recorded as pending migration rather than as compliant."
+ },
+ "rx/agc": {
+  "control": "AGC mode — off / slow / med / fast",
+  "seam": "setSliceAgc",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "W",
+   "anan": "W",
+   "rtl": "D",
+   "sim": "W"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "Pure virtual, so every family implements it — but RTL's override discards all three arguments."
+ },
+ "rx/agc-threshold": {
+  "control": "AGC-T threshold slider",
+  "seam": "setSliceAgc",
+  "capability": [
+   "hasAgcThreshold"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setAgcThreshold",
+    "wire": "agc_threshold="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "M",
+   "hl2": "W",
+   "anan": "W",
+   "rtl": "M",
+   "sim": "W"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "disabled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "syncAgcSliderFromSlice"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "updateAgcSliderFromSlice"
+    }
+   ],
+   "why": "The AGC-T slider stays on screen and is disabled. The reason is in the tooltip only; its accessibleDescription does not carry it, and section 4a says a tooltip is not enough."
+  },
+  "note": "The same seam verb as rx/agc, carrying the second half of the pair; the row exists separately because it has its own gate."
+ },
+ "rx/pan-center": {
+  "control": "drag the spectrum or waterfall (pan centre)",
+  "seam": "setPanCenter",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/RadioModel.cpp",
+    "symbol": "dispatchPanCenterBandwidth",
+    "wire": "center="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "W",
+   "anan": "W",
+   "rtl": "W",
+   "sim": "W"
+  },
+  "headless": {
+   "method": "panadapter.setCenter",
+   "record": "receivePanCenterControl",
+   "cells": {
+    "flex": "R",
+    "icom": "R",
+    "hl2": "W",
+    "anan": "R",
+    "rtl": "R",
+    "sim": "R"
+   }
+  },
+  "verified": {},
+  "hide": {},
+  "note": "Pure virtual. FlexBackend's override is reachable from neither plane today — RadioModel's seam branch is guarded !m_flexBackend and receivePanCenterControl is nullopt."
+ },
+ "rx/pan-bandwidth": {
+  "control": "zoom / span",
+  "seam": "setPanBandwidth",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/RadioModel.cpp",
+    "symbol": "dispatchPanCenterBandwidth",
+    "wire": "bandwidth="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "V",
+   "anan": "W",
+   "rtl": "W",
+   "sim": "D"
+  },
+  "headless": {
+   "method": "panadapter.setBandwidth",
+   "record": "receivePanBandwidthControl",
+   "cells": {
+    "flex": "R",
+    "icom": "R",
+    "hl2": "R",
+    "anan": "W",
+    "rtl": "W",
+    "sim": "R"
+   }
+  },
+  "verified": {
+   "hl2": {
+    "run": "d101-pan-limits",
+    "shows": "delivered EP6 rates 48000.8 / 95999.8 / 192002.3 / 383992.6 Hz counted from sequence numbers across four zoom levels; the 48 k floor and 384 k ceiling both proven by extra clicks that change nothing"
+   }
+  },
+  "hide": {},
+  "note": ""
+ },
+ "rx/pan-framerate": {
+  "control": "waterfall / spectrum frame rate",
+  "seam": "setPanFrameRate",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/RadioModel.cpp",
+    "symbol": "requestPanDisplayRates",
+    "wire": "fps="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "D",
+   "hl2": "W",
+   "anan": "W",
+   "rtl": "W",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "rx/rf-gain": {
+  "control": "RF gain slider (ANT panel)",
+  "seam": "setPanRfGain",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/RadioModel.cpp",
+    "symbol": "setPanRfGainFor",
+    "wire": "rfgain="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "V",
+   "anan": "W",
+   "rtl": "W",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {
+   "hl2": {
+    "run": "d103-gain-fold",
+    "shows": "LNA code 31 = -53.20 dBFS against code 32 = -97.75 dBFS, a -44.55 dB step; all seven wrapped codes land on their mod-32 twins within 0.52 dB"
+   }
+  },
+  "hide": {},
+  "note": "No capability field and no published range on the seam, so nothing hides the slider on a family that cannot act on it."
+ },
+ "rx/preamp": {
+  "control": "preamp step (named positions)",
+  "seam": "setPanPreamp",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {
+   "token": "panPreampInfoChanged"
+  },
+  "phantom": {},
+  "cells": {
+   "flex": "M",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumOverlayMenu.cpp",
+     "symbol": "refreshFrontEndButtons"
+    }
+   ],
+   "why": "The overlay menu hides the preamp row, one row for one control, when the published label list has fewer than two entries."
+  },
+  "note": "Gated on a LIST the backend publishes, not on a capability: an empty label list means the stage does not exist and the control never appears."
+ },
+ "rx/attenuator": {
+  "control": "attenuator step",
+  "seam": "setPanAttenuator",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {
+   "token": "panAttenuatorInfoChanged"
+  },
+  "phantom": {},
+  "cells": {
+   "flex": "M",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumOverlayMenu.cpp",
+     "symbol": "refreshFrontEndButtons"
+    }
+   ],
+   "why": "The overlay menu hides the attenuator row, one row for one control, when the published label list has fewer than two entries."
+  },
+  "note": "Same published-list gate as the preamp."
+ },
+ "rx/antenna": {
+  "control": "receive antenna selection",
+  "seam": "setSliceRxAntenna",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setRxAntenna",
+    "wire": "rxant="
+   }
+  },
+  "runtime_gate": {
+   "token": "rxAntennaList"
+  },
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "not-closed",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "rxAntennaOptions"
+    },
+    {
+     "file": "src/gui/SpectrumOverlayMenu.cpp",
+     "symbol": "append(QStringLiteral(\"ANT1\"))"
+    }
+   ],
+   "why": "The generator derives H from the empty published list, but the selector stays on screen and falls back to invented ANT1/ANT2 entries (defect 7)."
+  },
+  "note": "RxApplet falls back to inventing ANT1/ANT2 when the list is empty, so the published-list gate does not fully close this control. See the defects section. Pending because ambiguous: the control is not hidden at all, so H here is the capability's verdict rather than what the operator sees. Whatever the right cell is, it is not a compliant hide."
+ },
+ "rx/audio-mute": {
+  "control": "slice mute",
+  "seam": "setSliceAudioMute",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setAudioMute",
+    "wire": "audio_mute="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "D",
+   "hl2": "W",
+   "anan": "D",
+   "rtl": "W",
+   "sim": "D"
+  },
+  "headless": {
+   "method": "slice.setAudioMute",
+   "record": "receiveAudioControl",
+   "cells": {
+    "flex": "R",
+    "icom": "R",
+    "hl2": "W",
+    "anan": "R",
+    "rtl": "W",
+    "sim": "R"
+   }
+  },
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "rx/audio-gain": {
+  "control": "slice audio gain",
+  "seam": "setSliceAudioGain",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setAudioGain",
+    "wire": "audio_level="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "W",
+   "anan": "D",
+   "rtl": "W",
+   "sim": "D"
+  },
+  "headless": {
+   "method": "slice.setAudioGain",
+   "record": "receiveAudioControl",
+   "cells": {
+    "flex": "R",
+    "icom": "R",
+    "hl2": "W",
+    "anan": "R",
+    "rtl": "W",
+    "sim": "R"
+   }
+  },
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "rx/audio-pan": {
+  "control": "slice audio pan",
+  "seam": "setSliceAudioPan",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setAudioPan",
+    "wire": "audio_pan="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "D",
+   "hl2": "W",
+   "anan": "D",
+   "rtl": "W",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "rx/dial-lock": {
+  "control": "radio dial lock",
+  "seam": "setRadioDialLock",
+  "capability": [],
+  "model_gate": {
+   "capability": [
+    "hasRadioDialLock"
+   ],
+   "symbol": "setRadioDialLock",
+   "visible": false
+  },
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "D",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "hasRadioDialLock is read in exactly one file above the seam, RadioModel.cpp -- which is the read the D cells rest on. Below the seam IcomCivBackend.cpp reads it too, in its own dispatch and decode, on the one family whose cell is W. There is NO GUI gate: the control is on screen everywhere and the intent is dropped one layer up, silently."
+ },
+ "rx/rit-enable": {
+  "control": "RIT on/off",
+  "seam": "setRitEnabled",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [
+   "hasRit",
+   "ritControl",
+   "hasRitControl",
+   "receiveIncrementalTuning"
+  ],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setRit",
+    "wire": "rit_on="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "rx/rit-offset": {
+  "control": "RIT offset",
+  "seam": "setRitOffset",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [
+   "hasRit",
+   "ritControl",
+   "hasRitControl",
+   "receiveIncrementalTuning"
+  ],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setRit",
+    "wire": "rit_freq="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "rx/xit-enable": {
+  "control": "XIT on/off",
+  "seam": "setXitEnabled",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [
+   "hasXit",
+   "xitControl",
+   "hasXitControl",
+   "transmitIncrementalTuning"
+  ],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setXit",
+    "wire": "xit_on="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "rx/xit-offset": {
+  "control": "XIT offset",
+  "seam": "setXitOffset",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [
+   "hasXit",
+   "xitControl",
+   "hasXitControl",
+   "transmitIncrementalTuning"
+  ],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setXit",
+    "wire": "xit_freq="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "U",
+   "hl2": "U",
+   "anan": "U",
+   "rtl": "U",
+   "sim": "U"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "The base body is an ALIAS into setRitOffset, so the generator declines to score it: reachable, but not necessarily this control. On an Icom the alias is correct — 21 00 is one shared shift register. On a two-register radio it would silently write the wrong one."
+ },
+ "dsp/noise-reduction": {
+  "control": "NR button and level",
+  "seam": "setSliceNoiseReduction",
+  "capability": [
+   "hasRadioSideDsp"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setNrLevel",
+    "wire": "nr_level="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "applyRadioSideDspVisibility"
+    }
+   ],
+   "why": "VfoWidget hides the NR button individually with setVisible(false)."
+  },
+  "note": "Radio-side NR only. The host AetherDSP noise modules are a different control that works on every family and is deliberately not in this matrix."
+ },
+ "dsp/noise-blanker": {
+  "control": "NB button and level",
+  "seam": "setSliceNoiseBlanker",
+  "capability": [
+   "hasRadioSideDsp",
+   "hasHostNoiseBlanker"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setNbLevel",
+    "wire": "nb_level="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "W",
+   "anan": "W",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "applyRadioSideDspVisibility"
+    }
+   ],
+   "why": "VfoWidget hides the NB button individually with setVisible(false)."
+  },
+  "note": "The only OR gate in the GUI: VfoWidget spells it m_nbModeOk && (m_hasRadioSideDsp || m_hasHostNoiseBlanker), which is why the HL2 and the ANAN keep the button for a blanker this host runs in WDSP."
+ },
+ "dsp/auto-notch": {
+  "control": "ANF button",
+  "seam": "setSliceAutoNotch",
+  "capability": [
+   "hasRadioSideDsp"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setAnfLevel",
+    "wire": "anf_level="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "applyRadioSideDspVisibility"
+    }
+   ],
+   "why": "VfoWidget hides the ANF button individually with setVisible(false)."
+  },
+  "note": ""
+ },
+ "dsp/manual-notch": {
+  "control": "MN per-slice manual notch",
+  "seam": "setSliceManualNotch",
+  "capability": [
+   "hasManualNotch"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "M",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "applyRadioSideDspVisibility"
+    }
+   ],
+   "why": "VfoWidget hides the MN button individually with setVisible(false)."
+  },
+  "note": ""
+ },
+ "dsp/notch-create": {
+  "control": "tracking notch (TNF): create",
+  "seam": "createNotch",
+  "capability": [
+   "maxNotchFilters"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "M",
+   "hl2": "W",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumOverlayMenu.cpp",
+     "symbol": "kBtnAddTnf"
+    },
+    {
+     "file": "src/gui/SpectrumWidget.cpp",
+     "symbol": "Add TNF at"
+    }
+   ],
+   "why": "The +TNF overlay button and the Add TNF context-menu entry are left out individually on a radio with maxNotchFilters == 0."
+  },
+  "note": ""
+ },
+ "dsp/notch-edit": {
+  "control": "tracking notch: move / resize / depth",
+  "seam": "setNotch",
+  "capability": [
+   "maxNotchFilters"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "M",
+   "hl2": "W",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumWidget.cpp",
+     "symbol": "tnfCreateRequested"
+    }
+   ],
+   "why": "Follows notch-create: with no way to create a notch no marker exists, so its move, resize and depth menu never appears."
+  },
+  "note": ""
+ },
+ "dsp/notch-remove": {
+  "control": "tracking notch: remove",
+  "seam": "removeNotch",
+  "capability": [
+   "maxNotchFilters"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "M",
+   "hl2": "W",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumWidget.cpp",
+     "symbol": "tnfCreateRequested"
+    }
+   ],
+   "why": "Follows notch-create: with no way to create a notch no marker exists, so its remove menu never appears."
+  },
+  "note": ""
+ },
+ "dsp/notch-enable": {
+  "control": "tracking notches on/off",
+  "seam": "setNotchesEnabled",
+  "capability": [
+   "maxNotchFilters"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "M",
+   "hl2": "W",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "not-closed",
+   "sites": [
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_tnfIndicator"
+    },
+    {
+     "file": "src/gui/SpectrumWidget.cpp",
+     "symbol": "Extended TNF"
+    }
+   ],
+   "why": "Only the Extended TNF context entry is left out. The status-bar TNF toggle is deliberately ungated in MainWindow::applyCapabilitiesToUi and stays on screen."
+  },
+  "note": "Pending because ambiguous: the main on/off control is not hidden, so H is the capability's verdict rather than what the operator sees."
+ },
+ "dsp/squelch": {
+  "control": "SQL button and threshold slider",
+  "seam": "setSliceSquelch",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [
+   "hasSquelch",
+   "squelchControl",
+   "hasSquelchControl",
+   "receiveSquelchControl"
+  ],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setSquelch",
+    "wire": "squelch_level="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "RadioCapabilities has exactly one squelch field, hasModeIndependentSquelch, and its own comment shows it is a POLICY refinement — in which modes squelch may be set — not a support declaration. The GUI never asks whether the radio has squelch at all."
+ },
+ "tx/keying": {
+  "control": "MOX / PTT",
+  "seam": "setKeying",
+  "capability": [],
+  "model_gate": {
+   "capability": [
+    "canTransmit"
+   ],
+   "symbol": "refuseKeyOnTransmitIncapableBackend",
+   "visible": true
+  },
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "V",
+   "anan": "R",
+   "rtl": "R",
+   "sim": "R"
+  },
+  "headless": {
+   "method": "tx.setKeying",
+   "record": "canTransmit",
+   "cells": {
+    "flex": "U",
+    "icom": "R",
+    "hl2": "U",
+    "anan": "R",
+    "rtl": "R",
+    "sim": "R"
+   }
+  },
+  "verified": {
+   "hl2": {
+    "run": "d126-ep2-cw-drive40",
+    "shows": "MOX set on 7744 EP2 frames over 10.16 s keyed, corroborated by two independent instruments: sustained forward power 0.652 W and PA temperature +4.97 degC"
+   }
+  },
+  "hide": {},
+  "note": "The one control in the app that refuses a receive-only radio before any optimistic mutation, with a message the operator sees. It is the model the rest of the transmit block should follow."
+ },
+ "tx/tune": {
+  "control": "TUNE",
+  "seam": "setTune",
+  "capability": [],
+  "model_gate": {
+   "capability": [
+    "canTransmit"
+   ],
+   "symbol": "refuseKeyOnTransmitIncapableBackend",
+   "visible": true
+  },
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "W",
+   "anan": "R",
+   "rtl": "R",
+   "sim": "R"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "tx/power": {
+  "control": "RF power",
+  "seam": "setTxPower",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/TransmitModel.cpp",
+    "symbol": "setRfPower",
+    "wire": "rfpower="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "V",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {
+   "hl2": {
+    "run": "d99-drive-sweep",
+    "shows": "the radio's own forward-power detector read 1.6 / 115 / 115 / 126 / 154 / 225 / 332 / 434 / 476 across drive 0->100 %, monotone above 10 % and better than 3x from 25 to 100 % (RESULT.md; OBSERVATION.md's external-meter leg is retracted as unreadable)"
+   }
+  },
+  "hide": {},
+  "note": "No canTransmit guard anywhere on this path: the keying sites were hardened and the setpoints were not."
+ },
+ "tx/mic-gain": {
+  "control": "microphone gain",
+  "seam": "setMicGain",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/TransmitModel.cpp",
+    "symbol": "setMicLevel",
+    "wire": "miclevel="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "W",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "tx/filter": {
+  "control": "TX filter low/high cuts",
+  "seam": "setTxFilter",
+  "capability": [
+   "hasTxFilterControls"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/TransmitModel.cpp",
+    "symbol": "setTxFilter",
+    "wire": "filter_low="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "V",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {
+   "hl2": {
+    "run": "d110-usb-geometry-low-edge",
+    "shows": "TX passband commanded 300/2700 -> 150/3000 and read back, measured at a remote receiver: USB window +13.8 dB, LSB -13.2 dB, a 27.0 dB split against a pre-registered >=+10 / <=-10 / >=20; corroborated at wire level by d125's 54.81 dB CW-passband suppression"
+   }
+  },
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/PhoneApplet.cpp",
+     "symbol": "setTxFilterControlsAvailable"
+    }
+   ],
+   "why": "PhoneApplet hides the TX low/high cut widget, a section inside the applet rather than an applet of its own."
+  },
+  "note": ""
+ },
+ "tx/monitor": {
+  "control": "TX monitor on / level",
+  "seam": "setTxMonitor",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/TransmitModel.cpp",
+    "symbol": "setSbMonitor",
+    "wire": "mon_gain_sb="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "tx/audio-monitor": {
+  "control": "TX audio monitor toggle",
+  "seam": "setTxAudioMonitor",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "D",
+   "icom": "W",
+   "hl2": "W",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "No capability field, no alternate path on any family that does not override it, and its only caller is RadioCertification — a diagnostic whose own result depends on the monitor having opened."
+ },
+ "tx/speech-processor": {
+  "control": "speech processor (PROC)",
+  "seam": "setSpeechProcessor",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/TransmitModel.cpp",
+    "symbol": "setSpeechProcessorEnable",
+    "wire": "speech_processor_enable="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "tx/vox": {
+  "control": "VOX",
+  "seam": "setVox",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/TransmitModel.cpp",
+    "symbol": "setVoxEnable",
+    "wire": "vox_enable="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "tx/atu": {
+  "control": "ATU / antenna tuner",
+  "seam": "setAtu",
+  "capability": [
+   "hasTuner"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "disabled",
+   "sites": [
+    {
+     "file": "src/gui/TxApplet.cpp",
+     "symbol": "updateAtuAvailability"
+    }
+   ],
+   "why": "The ATU button stays on screen and is disabled. The reason is in the tooltip only; its accessibleDescription stays the static 'Start automatic antenna tuner'."
+  },
+  "note": ""
+ },
+ "tx/freq-check": {
+  "control": "transmit frequency check",
+  "seam": "setTransmitFrequencyCheck",
+  "capability": [
+   "hasTransmitFrequencyCheck"
+  ],
+  "model_gate": {
+   "capability": [
+    "hasTransmitFrequencyCheck"
+   ],
+   "symbol": "setTransmitFrequencyCheck",
+   "visible": false
+  },
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "M",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "relabelled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureRepeaterReverseControl"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureRepeaterReverseControl"
+    }
+   ],
+   "why": "The shared button wears REV instead of XFC when hasTransmitFrequencyCheck is false, so the transmit-frequency-check control is replaced rather than hidden or dimmed."
+  },
+  "note": "Pending because ambiguous: one button carries two controls and changes personality per radio, which section 4a does not address. Recorded as pending migration rather than as compliant."
+ },
+ "tx/tx-slice": {
+  "control": "which slice transmits",
+  "seam": "setTxSlice",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setTxSlice",
+    "wire": "tx="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "D",
+   "hl2": "W",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "cw/keying": {
+  "control": "CW key down / up",
+  "seam": "setCwKeying",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/RadioModel.cpp",
+    "symbol": "sendCwInput",
+    "wire": "cw key "
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "D",
+   "hl2": "W",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "On a Flex the CW key rides the legacy plane through NetCW with a TCP backstop; the seam branch is guarded !usesFlexCommandPlane()."
+ },
+ "cw/speed": {
+  "control": "CW speed (WPM)",
+  "seam": "setCwSpeed",
+  "capability": [],
+  "model_gate": {
+   "capability": [
+    "hasRadioSideCwKeyer"
+   ],
+   "symbol": "cwSpeedCommandIssued",
+   "visible": false
+  },
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/TransmitModel.cpp",
+    "symbol": "setCwSpeed",
+    "wire": "cw wpm "
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "RadioModel drops this one layer above the seam, where no backend audit can see it. On an Icom that gate is hasRadioSideCwKeyer = profile.cwTextKeyer.has_value() — a question about the CI-V 17 TEXT keyer, used to answer a question about speed."
+ },
+ "cw/pitch": {
+  "control": "CW pitch",
+  "seam": "setCwPitch",
+  "capability": [],
+  "model_gate": {
+   "capability": [
+    "hasRadioSideCwKeyer",
+    "hostModulates"
+   ],
+   "symbol": "cwPitchCommandIssued",
+   "visible": false
+  },
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/TransmitModel.cpp",
+    "symbol": "setCwPitch",
+    "wire": "cw pitch "
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "W",
+   "anan": "W",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "TWO RadioModel forwards, and the second is why this is not dead on the HL2 or the ANAN: hostModulates carries the pitch into an engine-side BFO, with a connect-edge re-push so a session that never touches the control still agrees with the backend."
+ },
+ "cw/break-in": {
+  "control": "CW break-in",
+  "seam": "setCwBreakIn",
+  "capability": [],
+  "model_gate": {
+   "capability": [
+    "hasRadioSideCwKeyer"
+   ],
+   "symbol": "cwBreakInCommandIssued",
+   "visible": false
+  },
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/TransmitModel.cpp",
+    "symbol": "setCwBreakIn",
+    "wire": "cw break_in "
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "cw/text-send": {
+  "control": "text keyer: send",
+  "seam": "sendCwText",
+  "capability": [
+   "hasRadioSideCwKeyer"
+  ],
+  "model_gate": {
+   "capability": [
+    "hasRadioSideCwKeyer"
+   ],
+   "symbol": "dispatchCwxText",
+   "visible": false
+  },
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/CwxModel.cpp",
+    "symbol": "emitExpandedSend",
+    "wire": "cwx send "
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_cwxIndicator->setVisible(cwx)"
+    },
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_cwKeyerAction->setVisible"
+    }
+   ],
+   "why": "The status-bar CWX/CWK toggle and the Tools-menu action are hidden, and the CWX panel with them. radio-capabilities-map.md names this status-bar row as superseded by M3a."
+  },
+  "note": ""
+ },
+ "cw/text-abort": {
+  "control": "text keyer: abort",
+  "seam": "abortCwText",
+  "capability": [
+   "hasRadioSideCwKeyer"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_cwxIndicator->setVisible(cwx)"
+    },
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_cwKeyerAction->setVisible"
+    }
+   ],
+   "why": "The status-bar CWX/CWK toggle and the Tools-menu action are hidden, and the CWX panel with them. radio-capabilities-map.md names this status-bar row as superseded by M3a."
+  },
+  "note": ""
+ },
+ "fm/tone-mode": {
+  "control": "CTCSS / DTCS tone mode",
+  "seam": "setSliceFmToneMode",
+  "capability": [
+   "fmTonePresentation"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setFmToneMode",
+    "wire": "fm_tone_mode="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureFmToneControls"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureFmToneControls"
+    }
+   ],
+   "why": "The tone-mode combo is hidden individually inside the FM row when fmTonePresentation is Hidden."
+  },
+  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
+ },
+ "fm/tone-tx": {
+  "control": "TX tone frequency",
+  "seam": "setSliceFmToneValue",
+  "capability": [
+   "fmTonePresentation"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setFmToneValue",
+    "wire": "fm_tone_value="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureFmToneControls"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureFmToneControls"
+    }
+   ],
+   "why": "The TX tone combo is hidden individually inside the FM row when fmTonePresentation is Hidden."
+  },
+  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
+ },
+ "fm/tone-rx": {
+  "control": "RX tone frequency",
+  "seam": "setSliceFmToneRxValue",
+  "capability": [
+   "fmTonePresentation"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "D",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureFmToneControls"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureFmToneControls"
+    }
+   ],
+   "why": "The RX tone combo is hidden individually inside the FM row when fmTonePresentation is Hidden."
+  },
+  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
+ },
+ "fm/dtcs": {
+  "control": "DTCS code and reverse flags",
+  "seam": "setSliceFmDtcs",
+  "capability": [
+   "fmTonePresentation"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "D",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureFmToneControls"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureFmToneControls"
+    }
+   ],
+   "why": "The DTCS code and polarity combos is hidden individually inside the FM row when fmTonePresentation is Hidden."
+  },
+  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
+ },
+ "fm/repeater-dir": {
+  "control": "repeater shift direction",
+  "seam": "setSliceRepeaterOffsetDir",
+  "capability": [
+   "hasFmRepeaterOffset"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setRepeaterOffsetDir",
+    "wire": "repeater_offset_dir="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "P",
+   "rtl": "M",
+   "sim": "P"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "disabled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "m_offsetSpin->setEnabled(repeaterAvailable)"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "m_fmOffsetSpin->setEnabled(repeaterAvailable)"
+    }
+   ],
+   "why": "The offset spin and the -/Simplex/+ buttons stay on screen and are disabled with no stated reason. REV beside them does carry an accessibleDescription."
+  },
+  "note": "hasFmRepeaterOffset is declared = true in RadioCapabilities.h and both readers spell the gate !connected || caps.hasFmRepeaterOffset, so the control is offered unless a CONNECTED radio actively denies it. A backend that never mentions the field never asked for this control - that is the inherited-default ground for P, and one assignment repairs it."
+ },
+ "fm/repeater-offset": {
+  "control": "repeater offset (Hz)",
+  "seam": "setSliceFmRepeaterOffset",
+  "capability": [
+   "hasFmRepeaterOffset"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setFmRepeaterOffsetFreq",
+    "wire": "fm_repeater_offset_freq="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "M",
+   "anan": "P",
+   "rtl": "M",
+   "sim": "P"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "disabled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "m_offsetSpin->setEnabled(repeaterAvailable)"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "m_fmOffsetSpin->setEnabled(repeaterAvailable)"
+    }
+   ],
+   "why": "The offset spin and the -/Simplex/+ buttons stay on screen and are disabled with no stated reason. REV beside them does carry an accessibleDescription."
+  },
+  "note": ""
+ },
+ "mem/recall": {
+  "control": "recall a memory channel",
+  "seam": "applyMemoryRecallDetails",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/gui/MainWindow.cpp",
+    "symbol": "activateMemorySpot",
+    "wire": "memory apply "
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "W",
+   "hl2": "U",
+   "anan": "U",
+   "rtl": "U",
+   "sim": "U"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "Deliberately NOT gated on canApplyMemories: RadioModel::recallCachedMemory calls the seam whenever nativeFilter > 0, and that flag is only ever set by the Icom decoder. The base body returns TRUE having called four no-ops."
+ },
+ "mem/refresh": {
+  "control": "refresh the memory list",
+  "seam": "refreshMemories",
+  "capability": [],
+  "model_gate": {
+   "capability": [
+    "canRefreshMemories"
+   ],
+   "symbol": "memoriesRefreshable",
+   "visible": false
+  },
+  "absent_probe": [],
+  "alt_path": {},
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "D",
+   "icom": "W",
+   "hl2": "D",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "canRefreshMemories is read only in RadioModel.cpp, so this is a model gate and not a GUI gate."
+ },
+ "slice/create": {
+  "control": "add a slice / receiver",
+  "seam": "createSlice",
+  "capability": [],
+  "model_gate": {
+   "capability": [
+    "canCreateSlices"
+   ],
+   "symbol": "sliceLifecycleFailed",
+   "visible": true
+  },
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/RadioModel.cpp",
+    "symbol": "addSliceOnPan",
+    "wire": "slice create pan="
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "R",
+   "hl2": "R",
+   "anan": "R",
+   "rtl": "R",
+   "sim": "R"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": "canCreateSlices is read only in RadioModel.cpp, which refuses with a translated reason through sliceLifecycleFailed — a visible refusal, not a silent drop."
+ },
+ "slice/remove": {
+  "control": "remove a slice / receiver",
+  "seam": "removeSlice",
+  "capability": [],
+  "model_gate": {
+   "capability": [
+    "canCreateSlices"
+   ],
+   "symbol": "sliceLifecycleFailed",
+   "visible": true
+  },
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/RadioModel.cpp",
+    "symbol": "removeSlice",
+    "wire": "slice remove "
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "R",
+   "hl2": "R",
+   "anan": "R",
+   "rtl": "R",
+   "sim": "R"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "slice/active": {
+  "control": "select the active slice",
+  "seam": "setActiveSlice",
+  "capability": [],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/SliceModel.cpp",
+    "symbol": "setActive",
+    "wire": "active=1"
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "D",
+   "hl2": "W",
+   "anan": "D",
+   "rtl": "D",
+   "sim": "D"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "pan/create": {
+  "control": "add a panadapter",
+  "seam": "createPanadapter",
+  "capability": [
+   "maxPanadapters"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/RadioModel.cpp",
+    "symbol": "createPanadapter",
+    "wire": "display panafall create"
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "R",
+   "hl2": "W",
+   "anan": "R",
+   "rtl": "R",
+   "sim": "W"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ },
+ "pan/remove": {
+  "control": "remove a panadapter",
+  "seam": "removePanadapter",
+  "capability": [
+   "maxPanadapters"
+  ],
+  "model_gate": {},
+  "absent_probe": [],
+  "alt_path": {
+   "flex": {
+    "file": "src/models/RadioModel.cpp",
+    "symbol": "removePanadapter",
+    "wire": "display pan remove "
+   }
+  },
+  "runtime_gate": {},
+  "phantom": {},
+  "cells": {
+   "flex": "W",
+   "icom": "R",
+   "hl2": "W",
+   "anan": "R",
+   "rtl": "R",
+   "sim": "W"
+  },
+  "headless": {},
+  "verified": {},
+  "hide": {},
+  "note": ""
+ }
+}
