@@ -19,6 +19,7 @@ struct DeviceState {
     std::atomic<int> starts{0}, cancels{0}, writes{0}, callbacks{0};
     std::atomic<bool> badReadback{false};
     std::atomic<std::uint32_t> callbackBytes{16384};
+    std::atomic<unsigned char> iqLevel{130};
     std::atomic<int> failWriteAt{0};
     std::atomic<bool> destroyed{false};
     T::Hardware hardware;
@@ -80,6 +81,7 @@ public:
             if (m_state->canceled) { break; }
             --m_state->blocks;
             lock.unlock();
+            iq.fill(m_state->iqLevel.load());
             callback(iq.data(), m_state->callbackBytes.load(), context);
             ++m_state->callbacks;
             lock.lock();

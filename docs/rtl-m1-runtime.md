@@ -523,13 +523,35 @@ it is not a claim to integrate uncomputed FFTs between display deadlines.
 The first frame seeds the state. Changing between nonzero depths in the same
 domain preserves the accumulated estimate and applies the new time constant
 at the next observation; it never inserts a raw frame. Explicit disable and
-re-enable or a domain change reseed from current input. Capture/adoption/
-discontinuity resets discard it with the IQ
-window, and each new session constructs fresh state. Pure viewport cropping
-retains the full-capture bin identities and their average.
+re-enable or a domain change reseed from current input. Every adoption discards
+partial IQ and requires a complete new-revision FFT window. Receiver-only
+changes retain the compatible RF estimate separately from that IQ history.
+Sample time accumulated before a compatible adoption remains part of the next
+observation interval; stopped acquisition contributes no invented samples.
 
-`SpectrumTemporalAverage` uses one preallocated float per full-capture bin
-(256 KiB at 65,536 bins). Processing/reset allocates no accumulator storage.
+A successful center-only retune can retain estimates over overlapping usable
+RF coverage, provided the sample rate, gain, PPM, direct-sampling, offset-tuning
+and DC-correction state are unchanged. Retained state has an anchored RF grid:
+storage slides only by whole bins. Current observations and output history
+are linearly sampled against that grid in the selected power/dB domain for a
+fractional native-bin shift. The current FFT and emitted frequency grid are
+unchanged. This is local interpolation of an averaging estimate, not added
+spectral resolution; fractional shifts can change its local amplitude response.
+The averaged state is never recursively resampled into itself, which would
+progressively smear narrow carriers during repeated pans.
+
+Interpolation requires both neighbors to have valid measured coverage. History
+never wraps across FFT edges or extrapolates into new RF. New frequencies seed
+their actual first observation and then accumulate normally; there cannot be a
+pre-existing average for unobserved RF. Retunes also retire historical evidence
+within four bins of the old and new converter DC centers (the Blackman-Harris
+main-lobe radius). Current DC/neighbor measurements remain intact. This avoids
+leaving converter artifacts at their old RF location. Incompatible controls,
+rollback/compensation, malformed callbacks and new sessions discard all history.
+Pure viewport cropping retains the full-capture bin identities and average.
+
+`SpectrumTemporalAverage` uses two preallocated floats and a validity byte per
+full-capture bin (576 KiB at 65,536 bins). Processing/reset allocates no storage.
 Spectrum and waterfall emit the same averaged bins at the existing cadence.
 `backendPanAveraging` disables the widget's additional fixed temporal blend,
 including at AVG 0. Raw squelch observations and receiver audio do not pass

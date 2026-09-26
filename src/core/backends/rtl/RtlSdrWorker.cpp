@@ -131,7 +131,19 @@ void RtlSdrWorker::serviceCancellation()
 
 void RtlSdrWorker::applyDdc(const Transaction::State& state)
 {
-    m_ddc.resetSpectrum(); // no mixed-revision window, including verified rollback
+    bool compatible = m_work->before && m_applied.session == state.token.session
+        && m_applied.revision != 0 && !m_work->compensation
+        && m_result && m_result->code == Transaction::ResultCode::Applied
+        && m_work->before->dcSuppression == state.dcSuppression;
+    if (compatible) {
+        Transaction::Hardware previous = m_work->before->hardware;
+        previous.centerHz = state.hardware.centerHz;
+        compatible = previous == state.hardware;
+    }
+    // A receiver-only adoption, or a center-only retune, can retain estimates
+    // at matching RF. Gain/rate/PPM/driver/DC/session changes and rollback must
+    // start fresh. applyCapture still discards all partial current IQ windows.
+    if (!compatible) { m_ddc.resetSpectrum(); }
     const bool resetDc = m_work->hardwareChanged || m_applied.session != state.token.session
         || m_dcSuppression != state.dcSuppression;
     if (resetDc) {
@@ -145,7 +157,7 @@ void RtlSdrWorker::applyDdc(const Transaction::State& state)
     const int highHz = static_cast<int>(receiver.passband.filterHighHz);
     m_ddc.applyCapture(state.hardware.sampleRateHz, state.hardware.centerHz,
                       receiver.passband.carrierHz, receiver.mode,
-                      lowHz, highHz);
+                      lowHz, highHz, state.capture.usableLeftHz, state.capture.usableRightHz);
     if (legacyReceiving != m_legacyReceiving
         || (legacyReceiving && (lowHz != m_legacyFilterLowHz
             || highHz != m_legacyFilterHighHz))) {

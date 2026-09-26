@@ -205,6 +205,113 @@ void amountChangeContinuity()
         }
     }
 }
+
+float bin(const Probe& probe, int index)
+{
+    float value = -999;
+    if (probe.last.size() == rtl::RtlSdrDdc::kSpectrumBinCount * int(sizeof(float))) {
+        std::memcpy(&value, probe.last.constData() + index * sizeof(float), sizeof(value));
+    }
+    return value;
+}
+
+void captureTransitionContinuity()
+{
+    constexpr int window = rtl::RtlSdrDdc::kSpectrumBinCount;
+    constexpr double rate = 2'400'000;
+    constexpr double center = 100'000'000;
+    for (bool weighted : {false, true}) {
+        Probe raw(0, weighted), average(100, weighted);
+        for (Probe* p : {&raw, &average}) {
+            p->ddc.applyCapture(rate, center, center, rtl::RtlCaptureTransaction::Mode::Wfm, -4000, 4000);
+            p->feed(.02f, window);
+        }
+        const double old = bin(raw, window / 2);
+        for (Probe* p : {&raw, &average}) {
+            p->ddc.applyCapture(rate, center, center + 100'000,
+                                rtl::RtlCaptureTransaction::Mode::Wfm, -4000, 4000);
+        }
+        const double input = raw.feed(.4f, window);
+        const double actual = average.feed(.4f, window);
+        const double retained = std::exp(-window / rate);
+        const double expected = weighted ? retained * old + (1 - retained) * input
+            : 10 * std::log10(retained * std::pow(10., old / 10)
+                + (1 - retained) * std::pow(10., input / 10));
+        check(std::abs(actual - expected) < .004 && actual < input - 8,
+              "receiver-only double-click tune preserves the same-RF average without a raw first frame");
+
+        // The same RF carrier appears at a different baseband frequency after
+        // a hardware retune. Include a non-integral native-bin displacement.
+        for (double offset : {9375., -9375., 9512.}) {
+            Probe before(100, weighted), reference(0, weighted);
+            constexpr double carrier = center + 150'000;
+            const auto feedTone = [&](Probe& p, double captureCenter, float amplitude) {
+                p.ddc.applyCapture(rate, captureCenter, center,
+                                   rtl::RtlCaptureTransaction::Mode::Wfm, -4000, 4000);
+                QVector<std::complex<float>> iq(window);
+                for (int i = 0; i < window; ++i) {
+                    iq[i] = std::polar(amplitude, float(2 * std::numbers::pi
+                        * (carrier - captureCenter) * i / rate));
+                }
+                p.ddc.processIqData(iq, false);
+            };
+            feedTone(before, center, .02f);
+            feedTone(before, center + offset, .4f);
+            feedTone(reference, center + offset, .4f);
+            const int peak = int(std::llround((carrier - center - offset) * window / rate)) + window / 2;
+            check(bin(before, peak) < bin(reference, peak) - 8,
+                  "retune keeps an overlapping RF estimate aligned instead of reseeding its first frame raw");
+            const int wrong = int(std::llround((carrier - center) * window / rate)) + window / 2;
+            check(bin(before, wrong) < bin(before, peak) - 35,
+                  "retained carrier never stays at its old screen-relative bin");
+        }
+
+        for (double nextRate : {rate, 1'024'000.}) {
+            Probe reset(100, weighted), reference(0, weighted);
+            reset.ddc.applyCapture(rate, center, center, rtl::RtlCaptureTransaction::Mode::Wfm, -4000, 4000);
+            reset.feed(.5f, window);
+            for (Probe* p : {&reset, &reference}) {
+                p->ddc.applyCapture(nextRate, center + 3'000'000, center + 3'000'000,
+                                    rtl::RtlCaptureTransaction::Mode::Wfm, -4000, 4000);
+            }
+            check(std::abs(reset.feed(.01f, window) - reference.feed(.01f, window)) < .004,
+                  "new RF coverage or sample rate seeds actual measurements without unrelated history");
+        }
+    }
+}
+
+void fixedRfGridDoesNotDiffuse()
+{
+    for (bool logarithmic : {false, true}) {
+        SpectrumTemporalAverage average(32);
+        const float floor = logarithmic ? -100.f : 1e-10f;
+        std::vector<float> input(32, floor);
+        input[16] = logarithmic ? -20.f : .01f;
+        average.processFrame(input, 100, logarithmic, .04, 1000, 1, 2, 30);
+        // No elapsed acquisition time isolates remapping from temporal decay.
+        // Repeated fractional retunes must not recursively blur the estimate.
+        for (int repeat = 0; repeat < 100; ++repeat) {
+            for (double offset : {.25, 1.75, -2.25, .5, 0.}) {
+                std::fill(input.begin(), input.end(), floor);
+                average.processFrame(input, 100, logarithmic, 0, 1000 + offset, 1, 2, 30);
+            }
+        }
+        check(std::abs(input[16] + 20) < .0001f && input[15] < -99 && input[17] < -99,
+              "fractional retunes retain a fixed RF estimator instead of diffusing its carrier repeatedly");
+        std::fill(input.begin(), input.end(), logarithmic ? -60.f : 1e-6f);
+        const std::size_t reused = average.processFrame(input, 100, logarithmic, 0, 1000.5, 1, 2, 30);
+        const double halfBin = logarithmic ? -60 : 10 * std::log10((.01 + 1e-10) / 2);
+        check(std::abs(input[15] - halfBin) < .0001 && std::abs(input[16] - halfBin) < .0001,
+              "fractional RF positions interpolate the two correctly located retained bins in their own domain");
+        check(reused > 20 && reused < 28 && std::abs(input[29] + 60) < .0001f,
+              "newly exposed boundary bins seed actual observations without wrap or extrapolation");
+        average.invalidate(1015, 1017);
+        std::fill(input.begin(), input.end(), logarithmic ? -60.f : 1e-6f);
+        average.processFrame(input, 100, logarithmic, 0, 1000, 1, 2, 30);
+        check(std::abs(input[16] + 60) < .0001f,
+              "invalidated converter evidence seeds measured RF rather than erasing current bins");
+    }
+}
 }
 int main(int argc, char** argv)
 {
@@ -247,5 +354,7 @@ int main(int argc, char** argv)
     noiseStatistics();
     partitionContinuity();
     amountChangeContinuity();
+    captureTransitionContinuity();
+    fixedRfGridDoesNotDiffuse();
     return failures ? 1 : 0;
 }

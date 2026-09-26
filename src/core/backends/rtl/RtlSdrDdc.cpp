@@ -1,10 +1,12 @@
 #include "core/backends/rtl/RtlSdrDdc.h"
 #include "core/dsp/FftwPlannerLock.h"
+#include "core/LogManager.h"
 
 #include <cmath>
 #include <numbers>
 #include <algorithm>
 #include <QDebug>
+#include <QDateTime>
 
 namespace AetherSDR::rtl {
 
@@ -69,13 +71,30 @@ RtlSdrDdc::~RtlSdrDdc()
 }
 
 void RtlSdrDdc::applyCapture(double rateHz, double centerHz, double sliceHz,
-                              RtlCaptureTransaction::Mode mode, int lowHz, int highHz)
+                              RtlCaptureTransaction::Mode mode, int lowHz, int highHz,
+                              double usableLeftHz, double usableRightHz)
 {
     if (m_sampleRateHz.load() != rateHz || m_centerHz.load() != centerHz
         || m_sliceHz.load() != sliceHz || m_mode.load() != mode) {
         resetReceiveAudio();
-        resetSpectrum();
     }
+    if (m_sampleRateHz.load() != rateHz) {
+        resetSpectrum();
+    } else if (m_centerHz.load() != centerHz) {
+        // Converter DC (and its correction transient) follows the LO, not RF.
+        // Retire only its Blackman-Harris main lobe from historical estimates;
+        // current measured DC/neighbour bins are neither removed nor modified.
+        const double radius = 4 * rateHz / kSpectrumBinCount;
+        m_displayAverage.invalidate(m_centerHz.load() - radius, m_centerHz.load() + radius);
+        m_displayAverage.invalidate(centerHz - radius, centerHz + radius);
+    }
+    // Every adoption starts a complete current-revision IQ window. Compatible
+    // RF estimates survive independently; no old IQ enters that new FFT.
+    restartSpectrumWindow();
+    const double left = usableLeftHz < 0 ? rateHz / 2 : std::clamp(usableLeftHz, 0.0, rateHz / 2);
+    const double right = usableRightHz < 0 ? rateHz / 2 : std::clamp(usableRightHz, 0.0, rateHz / 2);
+    m_displayFirstUsable = std::size_t(std::ceil((rateHz / 2 - left) * kSpectrumBinCount / rateHz));
+    m_displayEndUsable = std::size_t(std::floor((rateHz / 2 + right) * kSpectrumBinCount / rateHz));
     setSampleRate(rateHz);
     setCenterFrequency(centerHz);
     setSliceFrequency(sliceHz);
@@ -85,11 +104,17 @@ void RtlSdrDdc::applyCapture(double rateHz, double centerHz, double sliceHz,
 
 void RtlSdrDdc::resetSpectrum() noexcept
 {
+    restartSpectrumWindow();
+    m_displaySamplesSinceFrame = 0;
+    m_displayAverage.reset();
+}
+
+void RtlSdrDdc::restartSpectrumWindow() noexcept
+{
     m_displayWrite = 0;
     m_displayFilled = 0;
     m_displayUntilFrame = kSpectrumBinCount;
-    m_displaySamplesSinceFrame = 0;
-    m_displayAverage.reset();
+    m_displayTransition = true;
     m_detectorCounter = 0;
     m_firstDetectorEmitted = false;
     m_squelchSpectrumFresh = false;
@@ -293,21 +318,30 @@ void RtlSdrDdc::processDisplaySpectrum(std::span<const std::complex<float>> samp
         fftwf_execute(m_displayPlan);
         const int average = m_spectrumAverage.load(std::memory_order_relaxed);
         const bool weighted = m_spectrumWeightedAverage.load(std::memory_order_relaxed);
-        m_displayAverage.beginFrame(average, weighted, m_displaySamplesSinceFrame / rate);
         for (size_t i = 0; i < kSpectrumBinCount; ++i) {
             if (average > 0 && !weighted) {
                 // Accumulate before the log, with no power -> dB -> power trip.
                 const float re = m_displayOut[i][0] / kSpectrumBinCount;
                 const float im = m_displayOut[i][1] / kSpectrumBinCount;
                 m_displayBins[(i + kSpectrumBinCount / 2) % kSpectrumBinCount] =
-                    m_displayAverage.bin(i, re * re + im * im, 0);
+                    re * re + im * im;
                 continue;
             }
             const float magnitude = std::hypot(m_displayOut[i][0], m_displayOut[i][1])
                 / kSpectrumBinCount;
             const float db = 20.0f * std::log10(std::max(magnitude, 1e-6f));
             m_displayBins[(i + kSpectrumBinCount / 2) % kSpectrumBinCount] =
-                m_displayAverage.bin(i, magnitude * magnitude, db);
+                db;
+        }
+        const std::size_t reused = m_displayAverage.processFrame(m_displayBins, average, weighted,
+            m_displaySamplesSinceFrame / rate, m_centerHz.load() - rate / 2,
+            rate / kSpectrumBinCount, m_displayFirstUsable, m_displayEndUsable);
+        if (m_displayTransition) {
+            qCDebug(lcPerf).nospace() << "RtlSpectrum phase=average ms=" << QDateTime::currentMSecsSinceEpoch()
+                << " centerHz=" << qint64(std::llround(m_centerHz.load()))
+                << " average=" << average << " weighted=" << weighted << " reusedBins=" << reused
+                << " usableBins=" << m_displayEndUsable - m_displayFirstUsable;
+            m_displayTransition = false;
         }
         m_displaySamplesSinceFrame = 0;
         m_displayUntilFrame = m_displayStride;

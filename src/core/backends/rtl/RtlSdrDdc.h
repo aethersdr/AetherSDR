@@ -33,12 +33,13 @@ public:
     // Acquisition-context only, at a block boundary. Prepared numeric values;
     // no parsing, planning, allocation or destruction here.
     void applyCapture(double rateHz, double centerHz, double sliceHz,
-                      RtlCaptureTransaction::Mode mode, int lowHz, int highHz);
+                      RtlCaptureTransaction::Mode mode, int lowHz, int highHz,
+                      double usableLeftHz = -1, double usableRightHz = -1);
     // Acquisition-context only. Retire partial legacy PCM when a receiver
     // parks, resumes or changes its accepted filter without moving hardware.
     void resetReceiveAudio() noexcept;
     // Acquisition only: discard partial spectra across observable IQ gaps or
-    // accepted revisions, including rollback to the same hardware geometry.
+    // incompatible acquisition changes, including rollback to the same RF.
     void resetSpectrum() noexcept;
     void setSampleRate(double sampleRateHz);
     void setCenterFrequency(double centerHz);
@@ -81,6 +82,7 @@ private:
     using DemodMode = RtlCaptureTransaction::Mode;
 
     void processDisplaySpectrum(std::span<const std::complex<float>> samples);
+    void restartSpectrumWindow() noexcept;
     void processAudio(const QVector<std::complex<float>>& samples);
 
     // Written by the main thread and sampled inside the USB callback. These
@@ -125,6 +127,9 @@ private:
     double m_displayRateHz = 2'400'000;
     size_t m_displaySamplesSinceFrame = 0;
     SpectrumTemporalAverage m_displayAverage{kSpectrumBinCount};
+    std::size_t m_displayFirstUsable = 0;
+    std::size_t m_displayEndUsable = kSpectrumBinCount;
+    bool m_displayTransition = true;
 
     // NCO & Decimation state
     double m_ncoPhase{0.0};

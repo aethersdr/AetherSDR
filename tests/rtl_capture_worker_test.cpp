@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <numbers>
 
 using namespace AetherSDR;
 using T = rtl::RtlCaptureTransaction;
@@ -163,11 +164,85 @@ static void deferredPanCannotOutliveNewerIntent()
         receiver.disconnectRadio();
     }
 }
+static void receiverTuneKeepsDisplayAverage()
+{
+    auto device = std::make_shared<DeviceState>();
+    rtl::RtlSdrBackend receiver;
+    rtl::RtlCaptureBackendTestAccess::start(receiver, std::make_unique<InjectedDevice>(device));
+    device->releaseReadback();
+    check(waitFor([&] { return receiver.isConnected(); }), "averaging worker connects");
+    receiver.setPanAverage({}, 100);
+    int frames = 0;
+    float lastDc = -999;
+    QObject::connect(&receiver, &IRadioBackend::spectrumFrameReady,
+        [&](int, const QByteArray& frame, const SpectrumCoverage&) {
+            ++frames;
+            std::memcpy(&lastDc, frame.constData() + frame.size() / 2, sizeof(lastDc));
+        });
+    for (int i = 0; i < 8; ++i) { device->block(); }
+    check(waitFor([&] { return frames > 0; }), "averaging worker seeds a complete observation");
+    const int writes = device->writes;
+    device->iqLevel = 190;
+    receiver.setSliceFrequency(0, 100'100'000);
+    check(waitFor([&] { device->block(); return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
+          "receiver-only tune adopts through the actual USB callback");
+    const int beforeFrames = frames;
+    for (int i = 0; i < 8; ++i) { device->block(); }
+    check(waitFor([&] { return frames > beforeFrames; }), "tuned receiver emits new accepted FFT");
+    const double raw = 20 * std::log10(std::sqrt(2.) * (190 - 127.5) / 127.5
+                                      * .35875 * (65535. / 65536));
+    check(device->writes == writes && lastDc < raw - 8,
+          "receiver-only adoption preserves display smoothing with unchanged hardware");
+    receiver.setPanRfGain({}, 25);
+    check(waitFor([&] { device->block(); return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
+          "gain change adopts through verified hardware path");
+    const int beforeGainFrames = frames;
+    for (int i = 0; i < 8; ++i) { device->block(); }
+    check(waitFor([&] { return frames > beforeGainFrames; }), "new gain emits complete frame");
+    check(std::abs(lastDc - raw) < .02,
+          "gain transition discards incompatible amplitude history");
+    device->iqLevel = 130;
+    receiver.invokeExtension("rtl", "ppm.set", 1, 1);
+    check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
+          "PPM change completes its hardware readback");
+    const int beforePpmFrames = frames;
+    for (int i = 0; i < 8; ++i) { device->block(); }
+    check(waitFor([&] { return frames > beforePpmFrames; }), "PPM change emits complete observation");
+    const double weak = 20 * std::log10(std::sqrt(2.) * (130 - 127.5) / 127.5
+                                       * .35875 * (65535. / 65536));
+    check(rtl::RtlCaptureBackendTestAccess::state(receiver).hardware.ppm == 1
+        && std::abs(lastDc - weak) < .02,
+          "PPM change cannot reinterpret the previous RF history");
+    device->iqLevel = 190;
+    receiver.invokeExtension("rtl", "dc_suppression.set", 2, true);
+    check(waitFor([&] {
+        device->block(); QThread::msleep(20);
+        return !rtl::RtlCaptureBackendTestAccess::busy(receiver);
+    }), "DC correction adopts on a real callback boundary");
+    const int beforeDcFrames = frames;
+    for (int i = 0; i < 8; ++i) { device->block(); }
+    check(waitFor([&] { return frames > beforeDcFrames; }), "DC correction emits complete observation");
+    const double pole = std::exp(-2 * std::numbers::pi * rtl::RtlDcBlocker::kCornerHz / 2'400'000);
+    double correctedWindowGain = 0;
+    for (int i = 0; i < 65536; ++i) {
+        const double a = 2 * std::numbers::pi * i / 65535;
+        const double window = .35875 - .48829 * std::cos(a) + .14128 * std::cos(2*a) - .01168 * std::cos(3*a);
+        correctedWindowGain += window * std::pow(pole, i) / 65536;
+    }
+    const double corrected = 20 * std::log10(std::sqrt(2.) * (190 - 127.5) / 127.5
+                                            * (1 + pole) / 2 * correctedWindowGain);
+    check(rtl::RtlCaptureBackendTestAccess::state(receiver).dcSuppression
+        && std::abs(lastDc - corrected) < .03,
+          "DC mode change discards old estimates and shows the actual first corrected window");
+    receiver.disconnectRadio();
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     sustainedPanProgress(false);
     sustainedPanProgress(true);
+    receiverTuneKeepsDisplayAverage();
     deferredPanCannotOutliveNewerIntent();
     auto state = std::make_shared<DeviceState>();
     rtl::RtlSdrBackend backend;
