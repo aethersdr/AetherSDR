@@ -180,6 +180,107 @@ bool runVector(WdspChannel::Direction direction)
                        : "TX vector produced no IQ output");
 }
 
+// #5734, AetherSDR WDSP patch 13: A BLOCKED processIq() MUST NOT BE RELEASED
+// BEFORE THE WORKER HAS TAKEN ITS INPUT.
+//
+// With blockForOutput and inputBlockSize == dspBlockSize, WDSP's input ring
+// holds two blocks. Worker iteration w reads the slot host call w wrote, and
+// host call w + 2 writes that same slot again. The only thing keeping them
+// apart is ordering inside dexchange(): upstream released the host (Sem_OutReady)
+// FIRST and copied its input slot out SECOND. A worker preempted between the two
+// processed block w + 2, or a torn mix of w and w + 2, in place of block w --
+// and nothing reported it. runVector() above caught it as two identical channels
+// diverging under CPU load (0.058 on #5734's box); on an idle one the window is
+// a few instructions wide and the host never wins.
+//
+// This case makes the host win on purpose, so it does not need a loaded
+// machine: the port's test-only pause puts the worker to sleep right after the
+// release, which is exactly the preemption #5734's load produced. Before patch
+// 13 the input copy was still pending at that point. Measured with the reorder
+// reverted: RX differs by 0.00205633 at block 3 -- the same figure #5734
+// recorded on Arch under load, to every printed digit -- and TX by 1.0e-5 at
+// block 6, on every run. At RX block 3 the correct stream is exact zeros (the
+// mute delay-up) and the overwritten one is a later, ramped block, which is
+// the "rmsB=0" #5734 read as a channel that wrote nothing. With patch 13 the
+// copy is already done, the pause is only a slower worker, and the output is
+// the same stream an unpaused channel produces.
+//
+// The comparison is against an unpaused channel rather than a stored vector
+// for the reason runVector() gives: it pins "the scheduler does not change the
+// numbers", which is the actual contract, and not whatever the chain
+// computed on the day the vector was recorded.
+bool runWorkerHandoffTest(WdspChannel::Direction direction)
+{
+    struct PauseReset {
+        ~PauseReset() { WdspChannel::setWorkerHandoffPauseForTest(0); }
+    } pauseReset;
+
+    WdspChannel::Config config;
+    config.direction = direction;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.mode = WdspChannel::Mode::Usb;
+    config.blockForOutput = true;
+    constexpr std::size_t kBlocks = 24;
+
+    const auto clock = [&](unsigned pauseMicroseconds,
+                           std::vector<std::vector<float>>& left,
+                           std::vector<std::vector<float>>& right) {
+        WdspChannel::setWorkerHandoffPauseForTest(pauseMicroseconds);
+        std::string error;
+        std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+        if (!require(channel != nullptr, error.c_str())) {
+            return false;
+        }
+        std::vector<float> inputI(config.inputBlockSize);
+        std::vector<float> inputQ(config.inputBlockSize);
+        left.assign(kBlocks, std::vector<float>(channel->outputBlockSize()));
+        right.assign(kBlocks, std::vector<float>(channel->outputBlockSize()));
+        for (std::size_t block = 0; block < kBlocks; ++block) {
+            if (direction == WdspChannel::Direction::Receive) {
+                fillComplexTone(inputI, inputQ, config.inputSampleRate, 1000.0,
+                                block * config.inputBlockSize);
+            } else {
+                fillAudioTone(inputI, inputQ, config.inputSampleRate, 1000.0,
+                              block * config.inputBlockSize);
+            }
+            if (!require(channel->processIq(inputI, inputQ, left[block], right[block]) ==
+                             WdspChannel::ProcessResult::Ok,
+                         "handoff test: processIq failed")) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    std::vector<std::vector<float>> referenceLeft, referenceRight;
+    std::vector<std::vector<float>> pausedLeft, pausedRight;
+    // 5 ms: three orders of magnitude longer than the host needs to return,
+    // fill the next block and write it, so an unfixed tree loses every time
+    // rather than when the scheduler happens to cooperate.
+    if (!clock(0, referenceLeft, referenceRight) ||
+        !clock(5000, pausedLeft, pausedRight)) {
+        return false;
+    }
+    double energy = 0.0;
+    for (std::size_t block = 0; block < kBlocks; ++block) {
+        const double difference =
+            std::max(maximumDifference(pausedLeft[block], referenceLeft[block]),
+                     maximumDifference(pausedRight[block], referenceRight[block]));
+        if (difference >= 1.0e-6) {
+            std::cerr << "FAIL: " << (direction == WdspChannel::Direction::Receive ? "RX" : "TX")
+                      << " block " << block << " differs by " << difference
+                      << " when the worker is slow to return after releasing the host\n";
+            return require(false,
+                           "a slow DSP worker changed the output: the host overwrote "
+                           "an input block the worker had not yet read (#5734)");
+        }
+        energy += rms(referenceLeft[block]);
+    }
+    // A positive control on the comparison: two silent streams agree trivially.
+    return require(energy > 0.01, "handoff test: reference stream carried no signal");
+}
+
 bool runUnderrunTest()
 {
     WdspChannel::Config config;
@@ -3354,9 +3455,10 @@ int main()
     // -- each builds and tears down its own channels -- but chaining them with
     // `||` meant the FIRST failure silently skipped every case after it.
     //
-    // That is not hypothetical. `runVector` diverges under CPU load (#5734,
-    // pre-existing and unrelated to anything here) and it runs THIRD, so while
-    // it was firing none of the five start/stop cases below ran at all. Those
+    // That is not hypothetical. `runVector` diverged under CPU load (#5734,
+    // since fixed by AetherSDR WDSP patch 13 and pinned by the worker-handoff
+    // cases) and it runs THIRD, so while it was firing none of the five
+    // start/stop cases below ran at all. Those
     // five are the regression pins for AetherSDR WDSP patches 7, 8 and 9; a
     // regression in any of them would have been invisible behind an unrelated
     // red, which is the exact failure a pin exists to prevent. Run everything,
@@ -3379,6 +3481,12 @@ int main()
     }));
     check(runLeakChecked("TX vector", [] {
         return runVector(WdspChannel::Direction::Transmit);
+    }));
+    check(runLeakChecked("RX worker handoff", [] {
+        return runWorkerHandoffTest(WdspChannel::Direction::Receive);
+    }));
+    check(runLeakChecked("TX worker handoff", [] {
+        return runWorkerHandoffTest(WdspChannel::Direction::Transmit);
     }));
     check(runLeakChecked("TX discard", runTransmitDiscardTest));
     check(runLeakChecked("TX live geometry", runTransmitLiveGeometryTest));
