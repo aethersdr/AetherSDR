@@ -6108,9 +6108,37 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                 const auto it = in.constFind(QLatin1String(key));
                 return it == in.constEnd() ? current : it->toBool();
             };
-            if (in.contains(QStringLiteral("codec")))
+            if (in.contains(QStringLiteral("codec"))) {
                 next.codec = Hl2HardwareOptions::clampCodec(
                     in.value(QStringLiteral("codec")).toInt());
+                // A CHANGE OF BOARD RE-SEEDS THE DITHER BIT, because 0x00[11]
+                // does not mean the same thing on the board being left and the
+                // board being declared — band volts on a bare HL2, a
+                // loudspeaker on the two that carry a codec. Carrying the old
+                // value across carries a decision that was about something
+                // else: declaring the AK4951 and then correcting it to None
+                // used to leave the bit high and persist it, so a bare
+                // Hermes-Lite 2 came up driving its band-voltage output
+                // because the operator had once looked at a codec (#5867
+                // review, found twice).
+                //
+                // HERE AND NOT IN THE DIALOG, for two reasons. The dialog
+                // cannot call the policy without including a vendor(hl2)
+                // header above the radio seam, which is the EB3 coupling
+                // `636a7e41` removed from that page. And a bridge caller
+                // changing the codec needs the same rule — a fix in the widget
+                // would not have reached it.
+                //
+                // AN EXPLICIT ditherBit IN THE SAME CALL STILL WINS. The seed
+                // is what the caller gets by NOT stating the bit; a caller
+                // that names both is declaring a board and its speaker
+                // together, and boolOr() below reads the stated value over
+                // this one.
+                if (next.codec != m_hw.codec) {
+                    next.ditherBit = Hl2HardwareOptions::ditherBitOnCodecChange(
+                        next.codec, m_hw.ditherBit);
+                }
+            }
             if (in.contains(QStringLiteral("filterBoard")))
                 next.filterBoard = Hl2HardwareOptions::clampFilterBoard(
                     in.value(QStringLiteral("filterBoard")).toInt());

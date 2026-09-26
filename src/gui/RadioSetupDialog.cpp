@@ -3846,8 +3846,11 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     auto& theme = AetherSDR::ThemeManager::instance();
     auto themed = [&theme](QWidget* w, const QString& tpl) { theme.applyStyleSheet(w, tpl); };
 
-    static const QString kLabel =
-        QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 12px; }");
+    // kLabelStyleTemplate, NOT a local copy of it. #5898 made that constant this
+    // file's single owner of the label style, and a retyped duplicate is how the
+    // two drift apart on the next token rename — which is the failure the
+    // constant's own comment describes. The other builders' local copies predate
+    // #5898 and are not this change's to convert.
     static const QString kHint =
         QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     static const QString kGroup =
@@ -3897,7 +3900,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
 
     auto* codecRow = new QHBoxLayout;
     auto* codecLbl = new QLabel("Codec:");
-    themed(codecLbl, kLabel);
+    themed(codecLbl, kLabelStyleTemplate);
     auto* codecCombo = new QComboBox;
     codecCombo->setObjectName(QStringLiteral("hl2HwCodec"));
     AetherSDR::applyComboStyle(codecCombo);
@@ -3931,7 +3934,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     // happen to sum to. See Hl2HardwareOptions::speakerLevelPercent.
     auto* spkRow = new QHBoxLayout;
     auto* spkLbl = new QLabel("Speaker level:");
-    themed(spkLbl, kLabel);
+    themed(spkLbl, kLabelStyleTemplate);
     auto* spkSlider = new QSlider(Qt::Horizontal);
     spkSlider->setObjectName(QStringLiteral("hl2HwSpeakerLevel"));
     spkSlider->setRange(0, 100);
@@ -4064,7 +4067,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
 
     auto* filterRow = new QHBoxLayout;
     auto* filterLbl = new QLabel("Board:");
-    themed(filterLbl, kLabel);
+    themed(filterLbl, kLabelStyleTemplate);
     auto* filterCombo = new QComboBox;
     filterCombo->setObjectName(QStringLiteral("hl2HwFilterBoard"));
     AetherSDR::applyComboStyle(filterCombo);
@@ -4261,33 +4264,34 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     m_hl2HardwareReseed();
 
     connect(codecCombo, &QComboBox::currentIndexChanged, this,
-            [apply, codecCombo, ditherChk, refreshDither, refreshSpeaker](int) {
+            [this, apply, codecCombo, refreshDither, refreshSpeaker](int) {
         const int codec = codecCombo->currentData().toInt();
         refreshDither();
         refreshSpeaker();
-        // DECLARING AN AK4951 SEEDS ITS SPEAKER ON, because that is where the
-        // gateware has already put it: its init sequence writes codec register
-        // 0x02 = 0xae before the host speaks, and it only re-writes that
-        // register when the bit CHANGES, so a host that starts low emits no
-        // I2C write and the speaker keeps playing. Seeding high makes the
-        // checkbox describe the radio from the first frame, and unchecking it
-        // is then a real change the gateware acts on.
+        // THE DITHER BIT IS NOT SENT WITH THE CODEC, and that is the fix rather
+        // than an omission. 0x00[11] does not mean the same thing on the board
+        // being left and the board being chosen, so it has to be re-seeded — and
+        // this page is the wrong place to decide it. An earlier version of this
+        // handler seeded only the AK4951 case, so selecting AK4951 and then None
+        // left the bit high and persisted it: a bare Hermes-Lite 2 came up
+        // driving its band-voltage output because the operator had once looked
+        // at a codec. That is the SECOND time this defect was found in this
+        // handler (#5867 review).
         //
-        // ONLY ON AN OPERATOR ACTION. This handler is unreachable from fill(),
-        // which sets the combo under a QSignalBlocker, so a stored "speaker
-        // off" is never overwritten by re-opening the page.
+        // Sending the codec ALONE hands the decision to hw.set, which owns the
+        // document and applies Hl2HardwareOptions::ditherBitOnCodecChange()
+        // whenever the codec moves and the caller did not state the bit itself.
+        // A bridge caller changing the codec gets the same rule, which a fix
+        // living in this lambda would not have given it. The reseed below then
+        // shows whatever the backend decided, so the checkbox cannot disagree
+        // with what was stored.
         //
-        // Blocked, so this does not also fire the dither toggled() handler:
-        // the two values go out TOGETHER below, as one declaration, rather
-        // than as two applies the backend would persist separately.
-        if (codec == 1) {
-            const QSignalBlocker block(ditherChk);
-            ditherChk->setChecked(true);
-        }
-        apply(QVariantMap{
-            {QStringLiteral("codec"), codec},
-            {QStringLiteral("ditherBit"), ditherChk->isChecked()},
-        });
+        // AND THIS FILE STAYS OUT OF THE VENDOR HEADER. Calling the policy here
+        // would mean including Hl2HardwareOptions.h above the radio seam —
+        // exactly the EB3 coupling `636a7e41` removed from this page.
+        apply(QVariantMap{{QStringLiteral("codec"), codec}});
+        if (m_hl2HardwareReseed)
+            m_hl2HardwareReseed();
     });
     connect(ditherChk, &QCheckBox::toggled, this, [apply](bool on) {
         apply(QVariantMap{{QStringLiteral("ditherBit"), on}});

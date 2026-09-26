@@ -23,10 +23,12 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
+#include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2HardwareOptions.h"
 
 #include <QCoreApplication>
 #include <QJsonObject>
+#include <QVariantMap>
 #include <QLatin1String>
 #include <QString>
 
@@ -156,6 +158,53 @@ int main(int argc, char** argv)
         check(unconfigured.filterBoard == Hl2HardwareOptions::FilterBoard::N2adrRxTx,
               "including the one default that is not the bare board — the N2ADR "
               "pattern this backend has always driven");
+    }
+
+    // ---- 4b. THE GUARD ITSELF, through the backend -------------------------
+    //
+    // Section 4 above shows that no family-wide row exists after three writes
+    // that all carried a serial — which is a property of those writes, not of
+    // the guard. @on8st deleted `if (m_radioSerial.isEmpty())` from
+    // Hl2Backend::applyHardwareOptions() and this file still reported "all
+    // checks passed" (#5867 review). So the guard is now driven, on the path
+    // that actually reaches it: `hw.set` arrives through invokeExtension, and
+    // backendDeclaresExtension() gates on the NAMESPACE, not on whether a radio
+    // is attached — so a default-constructed backend answers it with
+    // m_radioSerial still empty. That is the case I found in the original diff
+    // and could not previously pin.
+    //
+    // Socket-free: nothing is connected, nothing binds, no peer.
+    {
+        const RadioSettingsScope familyWide(family, QString{});
+        check(familyWide.featureExact(QLatin1String(Hl2HardwareOptions::kFeature)).isEmpty(),
+              "no family-wide Hardware row before the unattached hw.set");
+
+        hl2::Hl2Backend backend;      // never connected: m_radioSerial is empty
+        backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0,
+                                QVariantMap{
+                                    {QStringLiteral("codec"), 2},
+                                    {QStringLiteral("atuGateware"), true},
+                                });
+
+        check(familyWide.featureExact(QLatin1String(Hl2HardwareOptions::kFeature)).isEmpty(),
+              "hw.set before any connect writes NO family-wide row — every HL2 "
+              "without a row of its own would otherwise inherit it");
+
+        // And the refusal is a refusal to PERSIST, not to apply: the session
+        // still honours what the caller asked for. A reply proves the verb ran
+        // rather than being dropped, which is what would make the check above
+        // pass for the wrong reason.
+        int reportedCodec = -1;
+        QObject::connect(&backend, &IRadioBackend::extensionResult, &backend,
+                         [&reportedCodec](quint64, const QVariant& r) {
+            const QVariantMap m = r.toMap();
+            if (m.contains(QStringLiteral("codec")))
+                reportedCodec = m.value(QStringLiteral("codec")).toInt();
+        });
+        backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("hw.get"), 7, {});
+        check(reportedCodec == 2,
+              "and the verb did run — the session holds the declaration it was "
+              "given, it simply does not write it anywhere");
     }
 
     // ---- 5. an invalid scope is inert in both directions -------------------

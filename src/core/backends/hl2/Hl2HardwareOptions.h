@@ -87,6 +87,10 @@ struct Hl2HardwareOptions {
         Ak4951     = 1,   // HL2+ companion board, codec over I2S
         SquareSdr2 = 2,   // SquareSDR 2, codec on the mainboard
     };
+    // How many there are. Used by clampCodec() below and by the tests, which
+    // walk the set rather than a hand-written list — a list is how a fourth
+    // variant gets added and never exercised.
+    static constexpr int kCodecCount = 3;
 
     // ---- companion filter board on J16 ----
     //
@@ -201,6 +205,50 @@ struct Hl2HardwareOptions {
         return ditherBit;
     }
 
+    // THE BIT TO ADOPT WHEN THE OPERATOR DECLARES A DIFFERENT BOARD — because
+    // 0x00[11] does not mean the same thing on the board they left and the board
+    // they chose, so carrying the old value across is carrying a decision that
+    // was about something else.
+    //
+    // WHY THIS IS A FUNCTION HERE AND NOT THREE LINES IN THE DIALOG. It was in
+    // the dialog, and it was wrong in a way the dialog's own tests could not
+    // see: selecting the AK4951 seeded the bit high, and selecting None
+    // afterwards left it high and persisted it — so a bare Hermes-Lite 2 came up
+    // driving its band-voltage output because the operator had once looked at a
+    // codec (#5867 review, @on8st, twice). The rule belongs where the rest of
+    // this file's policy lives, with the Qt-free test that walks every pair.
+    //
+    //   None        FALSE. The bit is the band-voltage output on the CL2 jack,
+    //               a DC level per band. Nobody should get that by declaring
+    //               what codec they do not have, which is the same reason
+    //               ditherBit's own default is off.
+    //   Ak4951      TRUE. The gateware's init sequence has already turned that
+    //               speaker on before the host speaks (i2c.v, STATE_AK4951S8
+    //               writes register 0x02 = 0xae) and only rewrites the register
+    //               on a CHANGE — so seeding low would emit no I2C write at all
+    //               and leave the checkbox describing a speaker that is playing.
+    //   SquareSdr2  THE OPERATOR'S CURRENT VALUE, deliberately. The bit is that
+    //               board's loudspeaker too, so carrying a speaker setting onto
+    //               a speaker is harmless in the way carrying it onto band volts
+    //               is not. And there is no SquareSDR 2 equivalent of the
+    //               STATE_AK4951S8 citation, so seeding either way would be
+    //               asserting a power-on state nobody here has established.
+    [[nodiscard]] static constexpr bool ditherBitOnCodecChange(Codec next,
+                                                               bool current) noexcept
+    {
+        switch (next) {
+        case Codec::None:
+            return false;
+        case Codec::Ak4951:
+            return true;
+        case Codec::SquareSdr2:
+            return current;
+        }
+        // No default: above, so a new enumerator is a -Wswitch warning at every
+        // build rather than a silent fall-through to somebody's guess.
+        return current;
+    }
+
     // True when the host must put real audio in the EP2 audio slot. On a bare
     // HL2 that slot is NOT AUDIO — its first word per frame is the extended
     // address register — so writing to it is a protocol violation, not merely
@@ -311,5 +359,25 @@ struct Hl2HardwareOptions {
         }
     }
 };
+
+// THE SENTINEL THAT MAKES "ADD A VARIANT AND THE TESTS NOTICE" TRUE. Out here
+// rather than inside the class, because a class-scope static_assert cannot call
+// a constexpr member before the class is complete.
+//
+// hl2_hardware_options_test walks 0..kCodecCount-1 through clampCodec(), so a new
+// enumerator is covered the moment clampCodec() maps it — and this assert fires
+// until kCodecCount is bumped to match, which is the same step that forces a
+// decision in ditherBitOnCodecChange().
+//
+// An earlier version of the test iterated a hand-written {None, Ak4951,
+// SquareSdr2} and the PR claimed a fourth variant would fail it. @on8st added
+// `Codec::Fourth = 3`, forced its dither bit high, and the test still reported
+// "all checks passed" (#5867 review). A hand-written list cannot make that
+// claim. This can: add the enumerator, map it in clampCodec(), and the build
+// stops here until the count and the dither rule agree with it.
+static_assert(Hl2HardwareOptions::clampCodec(Hl2HardwareOptions::kCodecCount)
+                  == Hl2HardwareOptions::Codec::None,
+              "a new Codec enumerator needs a dither-bit decision: add it to "
+              "ditherBitOnCodecChange() and clampCodec(), then bump kCodecCount");
 
 }  // namespace AetherSDR
