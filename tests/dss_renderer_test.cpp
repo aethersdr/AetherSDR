@@ -57,6 +57,11 @@ int testCoherentCaptureHistory()
             capture, captureCenter, 2, true);
     };
     push(-80, 100); push(-80, 100); push(-20, 100);
+    const quint64 expectedHistoryBytes = 2 * quint64(renderer.historyCapacityRows())
+        * (DssRenderer::kCols * sizeof(qfloat16) + 2 * sizeof(double));
+    if (renderer.historyStorageBytes() != expectedHistoryBytes) {
+        return fail("coherent history must allocate exactly its bounded primary and supplemental capacity");
+    }
     if (renderer.rowDataRing(renderer.headRing())[300] != -20
         || renderer.rowSupplementalDataRing(renderer.headRing())[300] != -25) {
         return fail("coherent FFT rows must retain backend temporal samples in both primary and supplemental surfaces");

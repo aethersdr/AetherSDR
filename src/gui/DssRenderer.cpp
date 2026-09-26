@@ -587,7 +587,9 @@ void DssRenderer::appendHistoryRow(const QVector<float>& binsDbm,
         && std::isfinite(supplementalBandwidthMhz) && supplementalBandwidthMhz > 0;
     if (haveSupplemental) {
         if (m_historySupplementalRows.isEmpty()) {
-            m_historySupplementalRows.resize(m_historyCapacityRows * kCols);
+            // Sized construction avoids QVector's growth spare capacity: this
+            // bank's bounded size is already known and will never append.
+            m_historySupplementalRows = QVector<qfloat16>(m_historyCapacityRows * kCols);
             m_historySupplementalCenterMhz = QVector<double>(m_historyCapacityRows, 0);
             m_historySupplementalBandwidthMhz = QVector<double>(m_historyCapacityRows, 0);
         }
