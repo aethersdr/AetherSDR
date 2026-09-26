@@ -80,11 +80,13 @@ discriminator is PROVENANCE — not the value of any field.** The question is
 Reading a field's *value* as the discriminator gets the FM rows right by
 accident and will be wrong on the next backend that writes a permissive value
 down on purpose. `FmTonePresentation` defaults to `Hidden`, and `Legacy` is what
-turns the tone controls **on**; the HL2 assigns `Legacy` explicitly, so it asked,
-and its unimplemented tone verbs are `D`. `hasFmRepeaterOffset` defaults to
-`true` and the HL2 never mentions it, so it never asked, and the repeater rows
-one line below are `P`. Two adjacent rows, opposite verdicts, and only
-provenance separates them.
+turns the tone controls **on**; the Demo backend assigns `Legacy` explicitly, so
+it asked, and its unimplemented tone verbs are `D`. `hasFmRepeaterOffset`
+defaults to `true` and the Demo backend never mentions it, so it never asked,
+and the repeater rows one line below are `P`. Two adjacent rows, opposite
+verdicts, and only provenance separates them. The HL2 held both halves of this
+example until it declared `Hidden` and `false` outright; all six of its FM rows
+are now `H`.
 
 The generator enforces exactly this: `PERMISSIVE` is reachable only from
 `DEFAULT_TRUE`, which is returned only when `capabilities()` carries no
@@ -236,12 +238,12 @@ and scoring them per radio would be wrong.
 
 | feature | Flex | Icom | HL2 | ANAN | RTL | Demo | control |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|---|
-| `fm/tone-mode` | W* | W | D | H | H | D | CTCSS / DTCS tone mode |
-| `fm/tone-tx` | W* | W | D | H | H | D | TX tone frequency |
-| `fm/tone-rx` | D | W | D | H | H | D | RX tone frequency |
-| `fm/dtcs` | D | W | D | H | H | D | DTCS code and reverse flags |
-| `fm/repeater-dir` | W* | W | P | P | H | P | repeater shift direction |
-| `fm/repeater-offset` | W* | W | P | P | H | P | repeater offset (Hz) |
+| `fm/tone-mode` | W* | W | H | H | H | D | CTCSS / DTCS tone mode |
+| `fm/tone-tx` | W* | W | H | H | H | D | TX tone frequency |
+| `fm/tone-rx` | D | W | H | H | H | D | RX tone frequency |
+| `fm/dtcs` | D | W | H | H | H | D | DTCS code and reverse flags |
+| `fm/repeater-dir` | W* | W | H | P | H | P | repeater shift direction |
+| `fm/repeater-offset` | W* | W | H | P | H | P | repeater offset (Hz) |
 
 ### Memories, slices and panadapters
 
@@ -478,7 +480,7 @@ production caller today"*.
 
 ---
 
-## The seven `P` cells, by provenance
+## The five `P` cells, by provenance
 
 `P` has two grounds. Both satisfy the definition — the control reports success,
 the radio does not move, and a readback confirms the value the operator set —
@@ -487,7 +489,7 @@ one and prints the split rather than a single tally.
 
 | ground | cells | what it is | repair |
 |---|---|---|---|
-| **inherited default** | `fm/repeater-dir` and `fm/repeater-offset` on HL2, ANAN and Demo (6) | The backend never mentions `hasFmRepeaterOffset`, which is declared `= true`. Both readers spell the gate `!connected \|\| caps.hasFmRepeaterOffset`, so the control is offered unless a *connected* radio actively denies it. **Nobody decided to offer it.** On the HL2 it is a claim the same `capabilities()` body contradicts a few lines away, where `FM`, `NFM`, `WBFM` and `WFM` sit on `receiveOnlyModes`; on the ANAN it is a repeater duplex control on a radio with no transmitter. | One assignment per backend: `c.hasFmRepeaterOffset = false;` |
+| **inherited default** | `fm/repeater-dir` and `fm/repeater-offset` on ANAN and Demo (4) | The backend never mentions `hasFmRepeaterOffset`, which is declared `= true`. Both readers spell the gate `!connected \|\| caps.hasFmRepeaterOffset`, so the control is offered unless a *connected* radio actively denies it. **Nobody decided to offer it.** On the ANAN it is a repeater duplex control on a radio with no transmitter. The HL2 carried the same two cells until it made the assignment this column prescribes; both are now `H`. | One assignment per backend: `c.hasFmRepeaterOffset = false;` |
 | **cached readback** | `rx/filter` on RTL (1) | The backend **did** ask: `RtlSdrBackend::setSliceFilter` validates the edges, stores them, pushes them to `RtlSdrDdc::setSliceFilter`, and echoes a `SliceDelta`. The DDC stores them into two atomics that **nothing in the tree reads**. The edges round-trip through `currentOperatingState()`/`applyRestoredState()`, so they survive a reconnect and the GUI shows exactly what the operator set — and never affect a sample. | Real work in `RtlSdrDdc`: consume the edges, or stop claiming them |
 
 The second ground is why `P` is not simply "the permissive-default class". A
@@ -613,7 +615,7 @@ Recorded here, not filed. Each is a candidate for its own issue.
 | 5 | `IcomCivBackend` | `hasRadioSideCwKeyer` is `profile.cwTextKeyer.has_value()` — a question about the CI-V `17` **text** keyer — and `RadioModel` uses it to gate CW **speed, pitch and break-in**. The IC-9700 has no text keyer and sets `hasCwTune = true`, so on that radio three CW controls reach nothing, silently. One capability answering two different questions. |
 | 6 | `FlexBackend` | `setTxAudioMonitor` is not overridden, has no alternate wire path and no capability to gate on — and its only caller is `RadioCertification`, which opens the monitor *"just for this stage"* and whose own result is downstream of it. A silent no-op inside a diagnostic. |
 | 7 | `RxApplet` | When the RX-antenna list is empty — which it always is on HL2, ANAN, RTL and Demo — the menu falls back to `"ANT1"`/`"ANT2"`. The operator is offered two named antennas the radio never claimed. Worse than a dead control: an invented one. |
-| 8 | `AnanBackend` | `hasFmRepeaterOffset` is never assigned and inherits `true`, so the repeater duplex control is live on a receive-only radio whose `modeFromString` accepts `FM` and `NFM`. One line fixes it; the same shape holds on HL2 and Demo. |
+| 8 | `AnanBackend` | `hasFmRepeaterOffset` is never assigned and inherits `true`, so the repeater duplex control is live on a receive-only radio whose `modeFromString` accepts `FM` and `NFM`. One line fixes it; the same shape still holds on Demo. |
 | 9 | `IcomCivBackend` | `setPanPreamp` on a model with no verified preamp ladder clamps to 0 and **still writes OFF to the register**, against the file's own stated rule (*"no verified table means publish nothing"*) and against its own sibling `setPanAttenuator`, which returns early. |
 | 10 | `FlexBackend` | `capabilities()` advertises a complete CWX text keyer — `cwTextKeyerName = "CWX"` plus three shape flags — while not overriding `sendCwText`, whose base returns *"radio has no text keyer"*. **Not a live bug**: `RadioModel::dispatchCwxText` short-circuits `return true` for the Flex plane before the seam call. It is a contradiction held together by one family-name comparison, and the next seam caller added without that short-circuit gets a false refusal from the one family that obviously supports the feature. |
 

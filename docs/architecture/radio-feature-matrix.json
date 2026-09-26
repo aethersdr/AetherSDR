@@ -1446,7 +1446,7 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "D",
+   "hl2": "H",
    "anan": "H",
    "rtl": "H",
    "sim": "D"
@@ -1475,7 +1475,7 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "D",
+   "hl2": "H",
    "anan": "H",
    "rtl": "H",
    "sim": "D"
@@ -1498,7 +1498,7 @@
   "cells": {
    "flex": "D",
    "icom": "W",
-   "hl2": "D",
+   "hl2": "H",
    "anan": "H",
    "rtl": "H",
    "sim": "D"
@@ -1521,7 +1521,7 @@
   "cells": {
    "flex": "D",
    "icom": "W",
-   "hl2": "D",
+   "hl2": "H",
    "anan": "H",
    "rtl": "H",
    "sim": "D"
@@ -1550,7 +1550,7 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "P",
+   "hl2": "H",
    "anan": "P",
    "rtl": "H",
    "sim": "P"
@@ -1579,7 +1579,7 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "P",
+   "hl2": "H",
    "anan": "P",
    "rtl": "H",
    "sim": "P"
