@@ -70,6 +70,26 @@ bool writeDocument(const QJsonObject& obj, const QString& what)
 
 }  // namespace
 
+QString UlanziDialMappings::enabledSettingsKey()
+{
+    return QStringLiteral("UlanziDialEnabled");
+}
+
+bool UlanziDialMappings::enabled()
+{
+    return AppSettings::instance()
+               .value(enabledSettingsKey(), QStringLiteral("True"))
+               .toString()
+           == QLatin1String("True");
+}
+
+void UlanziDialMappings::setEnabled(bool on)
+{
+    auto& s = AppSettings::instance();
+    s.setValue(enabledSettingsKey(), on ? QStringLiteral("True") : QStringLiteral("False"));
+    s.save();
+}
+
 QString UlanziDialMappings::rootSettingsKey()
 {
     return QStringLiteral("UlanziDialMappings");

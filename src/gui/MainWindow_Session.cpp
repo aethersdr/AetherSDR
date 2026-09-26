@@ -2808,13 +2808,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
             }
         }
 
-        const auto dialEnabled = [] {
-            return AppSettings::instance()
-                       .value(QStringLiteral("UlanziDialEnabled"),
-                              QStringLiteral("False"))
-                       .toString()
-                   == QLatin1String("True");
-        };
+        const auto dialEnabled = [this] { return ulanziDialEnabled(); };
 
         // queued means accepted for delivery, not completed. A later thread
         // shutdown can still prevent delivery; do not report device state from

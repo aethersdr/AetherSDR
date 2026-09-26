@@ -8,6 +8,8 @@
 #include <QObject>
 #include <QString>
 
+class QTimer;
+
 namespace AetherSDR {
 
 // macOS backend for the Ulanzi Dial using IOKit HID Manager.  Mirrors
@@ -58,6 +60,8 @@ private:
     void restoreSystemEventSuppression();
     void discardSystemEventSuppression();
 
+    // Polls for an attached dial until one appears; start() claims it then.
+    QTimer* m_presenceTimer{nullptr};
     void* m_manager{nullptr};   // IOHIDManagerRef
     void* m_eventSystemClient{nullptr}; // IOHIDEventSystemClientRef
     void* m_suppressedService{nullptr}; // IOHIDServiceClientRef

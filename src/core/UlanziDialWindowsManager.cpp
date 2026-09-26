@@ -69,6 +69,13 @@ UlanziDialWindowsManager::~UlanziDialWindowsManager()
 
 void UlanziDialWindowsManager::start()
 {
+    // Idempotent like the Linux and macOS backends: MainWindow re-applies the
+    // enable setting on every serial-settings change, and rescan() closes the
+    // open dial first, which would drop and reattach it each time.
+    if (!m_devices.isEmpty()) {
+        m_hotplugTimer->start();
+        return;
+    }
     if (rescan()) {
         m_pollTimer->start();
         emit connectionChanged(true, m_deviceName);
@@ -103,6 +110,8 @@ bool UlanziDialWindowsManager::rescan()
     hid_free_enumeration(infos);
     if (m_devices.isEmpty()) { m_deviceName.clear(); return false; }
     m_deviceName = m_devices.first().productString;
+    qCInfo(lcDevices) << "UlanziDialWindowsManager: attached" << m_deviceName
+                      << "(" << m_devices.size() << "HID interface(s))";
     return true;
 }
 
@@ -118,6 +127,7 @@ void UlanziDialWindowsManager::closeAll()
     if (!m_deviceName.isEmpty()) {
         const QString name = m_deviceName;
         m_deviceName.clear();
+        qCInfo(lcDevices) << "UlanziDialWindowsManager: detached" << name;
         emit connectionChanged(false, name);
     }
     m_decoder.reset();

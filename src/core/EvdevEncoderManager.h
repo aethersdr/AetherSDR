@@ -3,6 +3,7 @@
 #ifdef Q_OS_LINUX
 
 #include "core/UlanziChordDecoder.h"
+#include "core/UlanziDialAccessState.h"
 
 #include <QObject>
 #include <QString>
@@ -44,6 +45,10 @@ public:
 
     void start();        // begin scanning + watching for hot-plug
     void stop();         // release grab + close fd
+    // Re-announce a present-but-blocked dial. The mapper dialog calls this
+    // when it opens: the scan that first found the dial blocked usually ran at
+    // launch, before any dialog existed to hear accessRequired.
+    void reportAccessState();
 
     bool isConnected() const { return m_fd >= 0; }
     QString deviceName() const { return m_deviceName; }
@@ -77,7 +82,11 @@ private:
     QSocketNotifier* m_notifier{nullptr};
     QFileSystemWatcher* m_watcher{nullptr};
     QTimer* m_rescanTimer{nullptr};  // debounced rescan after directory change
-    bool m_accessRequiredEmitted{false};  // de-dupe accessRequired across rescans
+    // While a dial is present but blocked, re-check on a timer: granting
+    // access (a udev ACL) changes nothing in /dev/input, so the directory
+    // watcher never fires for it.
+    QTimer* m_accessRetryTimer{nullptr};
+    UlanziDialAccessState m_access;
 
     // Chord assembly and signature formatting are shared with the macOS and
     // Windows backends (ulanzi_chord_decoder_test covers all three).

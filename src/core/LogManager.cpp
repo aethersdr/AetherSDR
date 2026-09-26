@@ -33,7 +33,10 @@ Q_LOGGING_CATEGORY(lcGui,        "aether.gui",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDxCluster,  "aether.dxcluster",   QtWarningMsg)
 Q_LOGGING_CATEGORY(lcMqtt,       "aether.mqtt",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcRbn,        "aether.rbn",         QtWarningMsg)
-Q_LOGGING_CATEGORY(lcDevices,    "aether.devices",     QtWarningMsg)
+// Info by default: control-surface attach/detach is a handful of lines per
+// session, and without it a support log cannot tell "the dial was never found"
+// from "the dial was found and working" — both used to read as silence.
+Q_LOGGING_CATEGORY(lcDevices,    "aether.devices",     QtInfoMsg)
 Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcRender,     "aether.render",      QtWarningMsg)
 Q_LOGGING_CATEGORY(lcCw,         "aether.cw",          QtWarningMsg)

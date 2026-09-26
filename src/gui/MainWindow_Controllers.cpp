@@ -373,6 +373,32 @@ void MainWindow::syncFlexControlDialog()
     m_flexControlDialog->setActiveAuxButton(m_flexActiveLedButton);
 }
 
+bool MainWindow::ulanziDialEnabled() const
+{
+    return UlanziDialMappings::enabled();
+}
+
+void MainWindow::applyUlanziDialEnabled()
+{
+    if (!m_dialBackend) {
+        return;
+    }
+    const bool enabled = ulanziDialEnabled();
+    // Say so once per state change: with the dial off, the backend never
+    // scans, and nothing else in the log would explain a dial that is ignored.
+    if (enabled != m_ulanziDialEnabledLogged) {
+        m_ulanziDialEnabledLogged = enabled;
+        if (!enabled) {
+            qCInfo(lcDevices) << "Ulanzi Dial: turned off in Radio Setup → Serial &"
+                              << "Controllers; a connected dial is left to the OS";
+        }
+    }
+    QMetaObject::invokeMethod(m_dialBackend,
+                              enabled ? &UlanziDialBackend::start
+                                      : &UlanziDialBackend::stop,
+                              Qt::QueuedConnection);
+}
+
 void MainWindow::syncFlexControlIndicatorForSettings()
 {
     if (m_flexActiveLedButton < 1 || m_flexActiveLedButton > 3) {
@@ -3114,16 +3140,10 @@ void MainWindow::wireExternalControllers()
         }
     });
 
-    // Kick off scanning on the external-controller thread — only if the
-    // user has opted in. On macOS, the backend's IOHIDManagerOpen(...,
-    // kIOHIDOptionsTypeSeizeDevice) trips the OS Input Monitoring TCC
-    // prompt the moment it is called, regardless of whether a Ulanzi Dial
-    // is actually present. Defaulting this off so the vast majority of
-    // users — who do not own the peripheral — never see the prompt (#3257).
-    if (AppSettings::instance().value("UlanziDialEnabled", "False").toString() == "True") {
-        QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
-                                  Qt::QueuedConnection);
-    }
+    // Kick off detection on the external-controller thread. On by default:
+    // every backend only claims a dial it has detected, so on macOS the
+    // Input Monitoring prompt (#3257) reaches only users who own one.
+    applyUlanziDialEnabled();
 
     // Start the external controller thread — objects are already moved
     m_extCtrlThread->start();

@@ -40,6 +40,7 @@
 #include "core/backends/flex/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
+#include "core/UlanziDialMappings.h"
 #include "models/AntennaGeniusModel.h"
 
 #include <QCloseEvent>
@@ -7151,8 +7152,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
     auto& settings = AppSettings::instance();
 
     // ── USB control surfaces (Ulanzi Dial, StreamDeck+) (#3257) ──────────
-    // These are opt-in because the first call into each backend triggers the
-    // macOS Input Monitoring permission prompt (kIOHIDOptionsTypeSeizeDevice
+    // The Ulanzi Dial is on by default: every backend detects the dial before
+    // claiming it, so only a present dial reaches the macOS Input Monitoring
+    // prompt. HID encoders stay opt-in because the first call into that
+    // backend triggers the macOS Input Monitoring permission prompt (kIOHIDOptionsTypeSeizeDevice
     // in the IOKit-direct backend, hid_open() in HIDAPI). Defaulting them off
     // means the prompt only ever fires for users who actually own and want to
     // use the hardware.
@@ -7163,23 +7166,22 @@ QWidget* RadioSetupDialog::buildSerialTab()
         gvbox->setSpacing(6);
 
         auto* note = new QLabel(
-            "Enable only if you connect a Ulanzi Dial or Elgato Stream Deck+. "
-            "On macOS, enabling will trigger an Input Monitoring permission "
-            "prompt the first time AetherSDR scans for the device.");
+            "A connected Ulanzi Dial is detected and used automatically; turn "
+            "it off to leave the dial's media keys to the operating system. "
+            "Enable HID encoders only if you connect one. On macOS, AetherSDR "
+            "asks for Input Monitoring permission the first time it claims "
+            "one of these devices.");
         note->setWordWrap(true);
         note->setStyleSheet(kLabelStyle);
         gvbox->addWidget(note);
 
-        auto* ulanziEnable = new QCheckBox("Enable Ulanzi Dial");
+        auto* ulanziEnable = new QCheckBox("Use a Ulanzi Dial when detected");
         AetherSDR::ThemeManager::instance().applyStyleSheet(
             ulanziEnable, "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
             + kCheckBoxIndicator);
-        ulanziEnable->setChecked(
-            settings.value("UlanziDialEnabled", "False").toString() == "True");
+        ulanziEnable->setChecked(UlanziDialMappings::enabled());
         connect(ulanziEnable, &QCheckBox::toggled, this, [this](bool on) {
-            auto& s = AppSettings::instance();
-            s.setValue("UlanziDialEnabled", on ? "True" : "False");
-            s.save();
+            UlanziDialMappings::setEnabled(on);
             emit serialSettingsChanged();
         });
         gvbox->addWidget(ulanziEnable);
