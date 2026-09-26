@@ -114,14 +114,14 @@ struct Capture {
     }
 };
 
-Hl2RxDsp::Config baseConfig()
+Hl2RxDsp::Config baseConfig(WdspChannel::Mode mode = WdspChannel::Mode::Usb)
 {
     Hl2RxDsp::Config cfg;
     cfg.inputSampleRateHz = kFs;
     cfg.audioSampleRateHz = kFs;
     cfg.dspBlockSize = 1024;
     cfg.fftSize = 256;
-    cfg.mode = WdspChannel::Mode::Usb;
+    cfg.mode = mode;
     // AGC OFF. With it on, the AGC would hide exactly what this test measures:
     // its whole job is to hold the output level constant, so a chain that lets
     // every impulse through and one that blanks them all would produce similar
@@ -204,49 +204,64 @@ int main(int argc, char** argv)
     // running average, dense enough that a one-second window contains plenty.
     const auto impulsive = makeStream(oneSecond, 2000, oneSecond);
 
-    double peakOff = 0.0;
-    double rmsOff = 0.0;
-    double peakOn = 0.0;
-    double rmsOn = 0.0;
-
-    for (int pass = 0; pass < 2; ++pass) {
-        const bool blankerOn = (pass == 1);
-        Hl2RxDsp dsp;
-        std::string err;
-        check(dsp.configure(baseConfig(), &err),
-              err.empty() ? "Hl2RxDsp configures" : err.c_str());
-        if (blankerOn) {
-            dsp.setNoiseBlanker(true, kNbLevel);
-            check(dsp.noiseBlankerEnabled(), "Hl2RxDsp reports the blanker enabled");
-            check(dsp.noiseBlankerLevel() == kNbLevel,
-                  "Hl2RxDsp reports the level it was given");
-        }
-
-        Capture cap;
-        QObject::connect(&dsp, &Hl2RxDsp::audioReady, &dsp,
-                         [&cap](const std::vector<float>& pcm) {
-            if (!cap.collecting)
-                return;
-            for (float s : pcm) {
-                cap.peak = std::max(cap.peak, std::abs(s));
-                cap.sumSquares += static_cast<double>(s) * s;
-                ++cap.count;
+    // The same pair of passes through the chain `mode` builds. Run for USB
+    // (minimum-phase bandpass) and for CWU (linear phase), because the peak is
+    // read after that filter and its phase moves the ratio -- see below.
+    struct Peaks {
+        double peakOff = 0.0;
+        double rmsOff = 0.0;
+        double peakOn = 0.0;
+        double rmsOn = 0.0;
+    };
+    const auto measure = [&](WdspChannel::Mode mode) {
+        Peaks m;
+        for (int pass = 0; pass < 2; ++pass) {
+            const bool blankerOn = (pass == 1);
+            Hl2RxDsp dsp;
+            std::string err;
+            check(dsp.configure(baseConfig(mode), &err),
+                  err.empty() ? "Hl2RxDsp configures" : err.c_str());
+            if (blankerOn) {
+                dsp.setNoiseBlanker(true, kNbLevel);
+                check(dsp.noiseBlankerEnabled(), "Hl2RxDsp reports the blanker enabled");
+                check(dsp.noiseBlankerLevel() == kNbLevel,
+                      "Hl2RxDsp reports the level it was given");
             }
-        });
 
-        feed(dsp, leadIn);          // arm; nothing measured
-        cap.collecting = true;
-        cap.reset();
-        feed(dsp, impulsive);
+            Capture cap;
+            QObject::connect(&dsp, &Hl2RxDsp::audioReady, &dsp,
+                             [&cap](const std::vector<float>& pcm) {
+                if (!cap.collecting)
+                    return;
+                for (float s : pcm) {
+                    cap.peak = std::max(cap.peak, std::abs(s));
+                    cap.sumSquares += static_cast<double>(s) * s;
+                    ++cap.count;
+                }
+            });
 
-        if (blankerOn) {
-            peakOn = cap.peak;
-            rmsOn = cap.rms();
-        } else {
-            peakOff = cap.peak;
-            rmsOff = cap.rms();
+            feed(dsp, leadIn);          // arm; nothing measured
+            cap.collecting = true;
+            cap.reset();
+            feed(dsp, impulsive);
+
+            if (blankerOn) {
+                m.peakOn = cap.peak;
+                m.rmsOn = cap.rms();
+            } else {
+                m.peakOff = cap.peak;
+                m.rmsOff = cap.rms();
+            }
         }
-    }
+        return m;
+    };
+
+    const Peaks usb = measure(WdspChannel::Mode::Usb);
+    const Peaks cw = measure(WdspChannel::Mode::Cwu);
+    const double peakOff = usb.peakOff;
+    const double rmsOff = usb.rmsOff;
+    const double peakOn = usb.peakOn;
+    const double rmsOn = usb.rmsOn;
 
     check(peakOff > 0.0 && peakOn > 0.0, "both passes produced audio");
     // The headline claim. An impulse that reaches the demodulator dominates the
@@ -258,11 +273,17 @@ int main(int argc, char** argv)
     // energy and so peaks an UNBLANKED impulse 2.1 dB lower than linear phase
     // does -- measured off 0.627 -> 0.490 -- while the blanked residue moves
     // only 0.271 -> 0.293. The ratio therefore went 0.43 -> 0.60 without the
-    // blanker changing at all. "At least a third off" holds with margin on
-    // either phase; a blanker that does nothing reads ~1.0 and fails.
+    // blanker changing at all. So the original, stronger claim is pinned on
+    // the linear-phase chain CW keeps, where it was calibrated, and the
+    // minimum-phase chain gets the bound its own filter allows; a blanker that
+    // does nothing reads ~1.0 and fails both.
+    check(cw.peakOff > 0.0 && cw.peakOn > 0.0, "both CWU passes produced audio");
+    check(cw.peakOn < cw.peakOff * 0.5,
+          "linear phase (CWU): the blanker at least halves the impulse peak in "
+          "the demodulated audio");
     check(peakOn < peakOff * (2.0 / 3.0),
-          "the blanker takes at least a third off the impulse peak in the "
-          "demodulated audio");
+          "minimum phase (USB): the blanker takes at least a third off the "
+          "impulse peak in the demodulated audio");
     // And the claim that makes it useful rather than merely quiet: the wanted
     // signal is still there. A stage that gated the whole passband would pass
     // the assertion above and fail this one.
@@ -270,6 +291,8 @@ int main(int argc, char** argv)
           "the wanted tone survives blanking (the stage is not just a mute)");
     std::fprintf(stdout, "  peak off=%.4f on=%.4f  rms off=%.5f on=%.5f\n",
                  peakOff, peakOn, rmsOff, rmsOn);
+    std::fprintf(stdout, "  CWU peak off=%.4f on=%.4f (ratio %.3f)\n",
+                 cw.peakOff, cw.peakOn, cw.peakOn / cw.peakOff);
 
     // ── 4. The blanker survives a rate change ─────────────────────────────
     //

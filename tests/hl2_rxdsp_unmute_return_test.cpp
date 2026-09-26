@@ -190,11 +190,14 @@ static double unmuteReturnMs(Hl2RxDsp& dsp)
 }
 
 // The chain's plain latency: never muted, meeting the tone for the first time
-// after ~1 s of silence.
+// after ~1 s of silence. Primed with tone first, because WDSP's startup up-slew
+// (iobuffs.c upslew2) stays armed until the first non-zero input and would
+// otherwise add ~23 ms to this reference that the running unmute leg never pays.
 static double freshOnsetMs(Hl2RxDsp& dsp)
 {
     Capture cap;
     cap.attach(dsp);
+    feed(dsp, wireTone(48 * kBlk, 0));
     feed(dsp, std::vector<std::complex<float>>(48 * kBlk));
     cap.armed = true;
     feed(dsp, wireTone(144 * kBlk, 0));

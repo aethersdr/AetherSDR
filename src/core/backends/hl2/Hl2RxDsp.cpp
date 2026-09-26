@@ -425,8 +425,10 @@ void Hl2RxDsp::applyMinimumPhaseForMode()
     // The phase follows the mode (rxMinimumPhaseFor), so a change INTO or OUT
     // OF CW has to move it too. WdspChannel::setMinimumPhase() returns early
     // when the phase is already right, so SSB <-> digital costs nothing; a
-    // real switch re-plans the six masks under the FFTW lock, a few ms of
-    // control-path work, and the notch database survives it.
+    // real switch re-designs the six masks under the FFTW lock, ~27 ms of
+    // control-path work measured on a cold cache (the design FFTs plan with
+    // FFTW_ESTIMATE, WDSP patch 12 -- a measured plan here took over a minute,
+    // on the thread that paces EP2), and the notch database survives it.
     const bool wanted = rxMinimumPhaseFor(m_config.mode);
     if (!m_channel->setMinimumPhase(wanted)) {
         qCWarning(lcHl2RxDsp) << "could not switch the RX filter to"
