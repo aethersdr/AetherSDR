@@ -1,5 +1,11 @@
-// A band change must not put a stale sample rate in the later of an EP2 frame's
-// two C&C banks. (aethersdr/AetherSDR#4579)
+// WHAT AN EP2 FRAME IS ALLOWED TO CARRY. Two properties of the same packet
+// builder, kept in one target because they are asserted on the same bytes:
+//
+//   sections 1-4  a band change must not put a stale sample rate in the later
+//                 of an EP2 frame's two C&C banks (aethersdr/AetherSDR#4579);
+//   section 5     the frame's audio slot stays untouched unless a codec has
+//                 been DECLARED, because on a bare HL2 that slot is the
+//                 extended address register.
 //
 // SOCKET-FREE ON PURPOSE. It drives MetisClient's own packet builder, which is
 // public for exactly this reason ("Exists so the gate can be tested on the exact
@@ -23,6 +29,7 @@
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
+#include <QByteArray>
 #include <QCoreApplication>
 
 #include <array>
@@ -38,6 +45,23 @@ static void check(bool ok, const char* what)
 }
 
 using Ep2 = std::array<std::uint8_t, kUsbPacketSize>;
+
+namespace AetherSDR::hl2 {
+// The friend seam MetisClient.h declares, for one question section 5 cannot
+// answer from the bytes: how much audio is SITTING IN the queue. Without it the
+// three codec gates are only pinned together — @on8st removed each on its own
+// and all three stayed green, because the other two mask it (#5867 review).
+// Reading the queue makes the producer gate and the drain load-bearing
+// individually, and leaves the packet builder's gate as the backstop it is.
+struct MetisClientTestAccess {
+    static std::size_t speakerQueued(const MetisClient& c) { return c.m_speakerAudio.size(); }
+    // Withdraw the codec WITHOUT the drain setLocalCodec() performs, to produce
+    // the one state the packet builder's own gate says it exists for: "a queue
+    // that filled by mistake must still not reach the wire". Production cannot
+    // reach it — which is exactly why the gate is otherwise untestable.
+    static void forgetCodecWithoutDraining(MetisClient& c) { c.m_params.hasCodec = false; }
+};
+}  // namespace AetherSDR::hl2
 
 // C&C sits SYNC(3) into each 512-byte frame. Frame 0 is bank A, frame 1 bank B.
 static const std::uint8_t* bank(const Ep2& pkt, int which)
@@ -130,6 +154,119 @@ int main(int argc, char** argv)
             survived = survived || isConfigBank(bank(pkt, 1));
         }
         check(!survived, "nothing a disconnected band change queued survives into the next session");
+    }
+
+    // ---- 5. the EP2 audio slot is gated on a DECLARED codec ----
+    //
+    // On a bare Hermes-Lite 2 the four bytes ep2WriteTxAudio() writes are not
+    // audio: the first word of each frame's payload is the extended address
+    // register, so a sample landing there is a register command. The gate in
+    // buildNextControlPacket() is therefore `m_params.hasCodec`, not "do we
+    // happen to have audio queued" -- and until now nothing asserted it. The
+    // decision cannot be seen from Hl2HardwareOptions, which is where the
+    // policy lives; it can only be seen on the bytes, which is here.
+    {
+        // The audio half of a sample slot is payload[k+0..3]; the IQ half is
+        // [k+4..7]. Slot 0 of frame 0 is the one that is also EADDR.
+        const auto audioHalf = [](const Ep2& pkt, int frame, std::size_t slot) {
+            const std::size_t fs = (frame == 0 ? 8u : 8u + kFrameSize);
+            return pkt.data() + fs + 8 + slot * kTxSampleBytes;
+        };
+        const auto audioSlotsAllZero = [&](const Ep2& pkt) {
+            for (int f = 0; f < 2; ++f) {
+                for (std::size_t slot = 0; slot < kFramePayload / kTxSampleBytes; ++slot) {
+                    const std::uint8_t* p = audioHalf(pkt, f, slot);
+                    if (p[0] || p[1] || p[2] || p[3])
+                        return false;
+                }
+            }
+            return true;
+        };
+
+        // Loud, and deliberately not symmetric, so a swapped channel or a
+        // half-written sample cannot pass as silence.
+        QByteArray block;
+        for (int i = 0; i < kTxSamplesPerPacket; ++i) {
+            const std::int16_t l = 0x4321;
+            const std::int16_t r = 0x1234;
+            block.append(reinterpret_cast<const char*>(&l), sizeof(l));
+            block.append(reinterpret_cast<const char*>(&r), sizeof(r));
+        }
+
+        {
+            MetisClient c;                       // Params::hasCodec defaults false
+            c.submitSpeakerAudio(block);
+            check(MetisClientTestAccess::speakerQueued(c) == 0,
+                  "no declared codec: the audio is refused at the PRODUCER — it "
+                  "never enters the queue, so the packet builder's gate is a "
+                  "backstop rather than the only thing standing between a bare "
+                  "HL2 and a register write");
+            const Ep2 pkt = c.buildNextControlPacket();
+            check(audioSlotsAllZero(pkt),
+                  "no declared codec: not one audio byte reaches the EADDR slot");
+        }
+
+        {
+            MetisClient c;
+            c.setLocalCodec(true);
+            c.submitSpeakerAudio(block);
+            const Ep2 pkt = c.buildNextControlPacket();
+            const std::uint8_t* p = audioHalf(pkt, 0, 0);
+            check(p[0] == 0x43 && p[1] == 0x21 && p[2] == 0x12 && p[3] == 0x34,
+                  "declared codec: the sample reaches the audio slot, L then R, big-endian");
+            check(p[4] == 0 && p[5] == 0 && p[6] == 0 && p[7] == 0,
+                  "and the IQ half of the same slot is untouched");
+        }
+
+        // WITHDRAWING THE CODEC MUST DRAIN WHAT IS ALREADY QUEUED. Otherwise a
+        // page that corrected a wrong codec declaration would keep feeding the
+        // extended-address register from a queue filled while it was wrong.
+        {
+            MetisClient c;
+            c.setLocalCodec(true);
+            c.submitSpeakerAudio(block);
+            c.setLocalCodec(false);
+            check(MetisClientTestAccess::speakerQueued(c) == 0,
+                  "codec withdrawn: the queue is DRAINED, not merely gated — the "
+                  "samples that were legal a moment ago are gone");
+            const Ep2 pkt = c.buildNextControlPacket();
+            check(audioSlotsAllZero(pkt),
+                  "codec withdrawn: the audio queued while it was declared does not leak out");
+        }
+
+        // A zero speaker level stops new submissions in Hl2Backend, but audio
+        // already queued would otherwise remain audible until the pacer drains
+        // it. Clearing the queue must silence the very next packet.
+        {
+            MetisClient c;
+            c.setLocalCodec(true);
+            c.submitSpeakerAudio(block);
+            check(MetisClientTestAccess::speakerQueued(c) > 0,
+                  "speaker audio is queued before the level reaches zero");
+            c.clearSpeakerAudio();
+            check(MetisClientTestAccess::speakerQueued(c) == 0,
+                  "silencing the speaker discards audio already queued");
+            check(audioSlotsAllZero(c.buildNextControlPacket()),
+                  "the next packet is silent after the speaker queue is cleared");
+        }
+
+        // THE BACKSTOP, on the state it was written for. The gate in
+        // buildNextControlPacket() is a DECLARED codec rather than "do we happen
+        // to have audio queued", and its comment says why: a queue that filled by
+        // mistake must still not reach the wire. Nothing in production can
+        // produce that state — setLocalCodec(false) drains — so it is produced
+        // here, or the gate is pinned by nothing.
+        {
+            MetisClient c;
+            c.setLocalCodec(true);
+            c.submitSpeakerAudio(block);
+            check(MetisClientTestAccess::speakerQueued(c) > 0, "audio is queued");
+            MetisClientTestAccess::forgetCodecWithoutDraining(c);
+            const Ep2 pkt = c.buildNextControlPacket();
+            check(audioSlotsAllZero(pkt),
+                  "a queue that filled by mistake still does not reach the wire — "
+                  "the packet builder gates on the DECLARATION, not on the queue");
+        }
     }
 
     if (g_failures == 0)

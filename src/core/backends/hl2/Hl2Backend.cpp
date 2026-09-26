@@ -1494,10 +1494,15 @@ void Hl2Backend::publishWideState()
     // so it was bypassed. Computed from the same rule applyBandFilter() applies,
     // rather than from a flag it sets, so the indicator cannot drift out of step
     // with the relays.
+    //
+    // THE RECEIVE BYTE, because "wide" is a statement about what the RECEIVERS
+    // can hear. Asking the transmit rule here would report every receiver as
+    // narrow on a transmit-only filter board, where receive is in fact wide
+    // open — the exact opposite of what this indicator exists to say.
     int want = -1;
     bool spanned = false;
     for (const Receiver& r : m_rx) {
-        const int w = static_cast<int>(ocFilterByteForHz(r.sliceFreqHz));
+        const int w = static_cast<int>(m_hw.ocReceiveByteForHz(r.sliceFreqHz));
         if (want < 0)
             want = w;
         else if (w != want)
@@ -1648,6 +1653,7 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
         // adapter takes an owning copy for queued consumers.
         if (q.size() == pcm.size()) {
             publishLegacyAudio(floatBytes(pcm));
+            forwardSpeakerAudioToCodec(pcm);
             q.clear();
             return;
         }
@@ -1665,6 +1671,7 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
         m_mixAccum.assign(q.cbegin(), q.cend());
         q.clear();
         publishLegacyAudio(floatBytes(m_mixAccum));
+        forwardSpeakerAudioToCodec(m_mixAccum);
         return;
     }
 
@@ -1740,6 +1747,7 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
         s = std::clamp(s, -kMixCeiling, kMixCeiling);
 
     publishLegacyAudio(floatBytes(m_mixAccum));
+    forwardSpeakerAudioToCodec(m_mixAccum);
 }
 
 void Hl2Backend::releaseReceiverDsps()
@@ -2601,6 +2609,25 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
                       << "— effective clock"
                       << Hl2FreqCal::effectiveClockHz(m_freqCalPpb) << "Hz";
 
+    // WHICH HL2 THIS IS, from the same per-radio scope and for a related
+    // reason: the calibration describes one crystal, and this describes one
+    // BOARD. Loaded here, before mp is filled in below, because three of these
+    // fields are start() parameters — the dither bit rides the config register
+    // the very first frame carries, and the codec decides whether that frame's
+    // audio slot may hold anything at all.
+    m_hw = Hl2HardwareOptions::load(
+        RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial));
+    // The codec's resampler carries state across blocks; a new radio is a new
+    // stream and must not be interpolated out of the last one's final sample.
+    m_codecHavePrev = false;
+    if (m_hw != Hl2HardwareOptions{})
+        qCInfo(lcHl2) << "HL2 hardware options: codec=" << static_cast<int>(m_hw.codec)
+                      << "dither=" << m_hw.ditherBitOnWire()
+                      << "random=" << m_hw.randomBit
+                      << "filterBoard=" << static_cast<int>(m_hw.filterBoard)
+                      << "n2adrHpf=" << m_hw.n2adrHpf
+                      << "atuGateware=" << m_hw.atuGateware;
+
     // Notches are SESSION state, and the same call is true on both sides of the
     // seam: RadioModel::onDisconnected() calls m_tnfModel.clear(), and a
     // same-family reconnect rebuilds no backend, so anything kept here would be
@@ -2797,8 +2824,21 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // band spanning yet and this is simply that frequency's filter. It becomes a
     // spanning decision the moment the operator moves one of them; see
     // applyBandFilter().
-    mp.ocFilterByte = ocFilterByteForHz(startFreqHz);
+    //
+    // THE RECEIVE byte, not the unconditional per-band one: an operator whose
+    // low-pass bank sits in the transmit path only (a SquareSDR 2, or an HL2
+    // with the filter board after the PA) would otherwise come up with relays
+    // engaged in a path they are not in. See Hl2HardwareOptions::FilterBoard.
+    mp.ocFilterByte = m_hw.ocReceiveByteForHz(startFreqHz);
     m_ocFilterByte = static_cast<int>(mp.ocFilterByte);
+    // The variant fields that are start() parameters. The dither bit and the
+    // codec must be right on the FIRST frame for the same reason the filter
+    // byte must: nothing reads them back, so a value applied one frame later is
+    // a frame of the wrong thing — a SquareSDR 2's speaker clicking on at
+    // connect, or a sample written into a bare HL2's EADDR.
+    mp.ditherBit   = m_hw.ditherBitOnWire();
+    mp.randomBit   = m_hw.randomBit;
+    mp.hasCodec    = m_hw.hasLocalCodec();
     qCInfo(lcHl2).nospace()
         << "HL2 band filter: " << QString::asprintf("0x%02X", m_ocFilterByte)
         << " (" << ocFilterName(mp.ocFilterByte) << ") for "
@@ -4934,6 +4974,12 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // voice transmission would have gone out at 10%.
         const bool wasTuning = m_tuning;
         m_tuning = false;
+        // Cleared on EVERY unkey, not only a tuning one, and unconditionally
+        // rather than behind `wasTuning`: this is the single point every unkey
+        // path converges on (the comment above enumerates them), and a tune
+        // request left standing is a bit the radio re-reads on the next key —
+        // a tuner that starts on the operator's next voice transmission.
+        applyAtuTuneRequest(false);
         if (wasTuning) {
             setTxPower(m_rfPowerPercent);
             // AND re-decide the filter, because the call above ran while
@@ -5309,6 +5355,202 @@ void Hl2Backend::repushAllFrequencies()
         setTxFrequency(txRx->sliceFreqHz);
 }
 
+void Hl2Backend::forwardSpeakerAudioToCodec(const std::vector<float>& mixed)
+{
+    // THE ONE PLACE the speaker feed leaves for the radio's own codec, and it
+    // is deliberately a tap on the EXISTING mix rather than a second mixer:
+    // what the internal loudspeaker plays has to be what the host speaker
+    // plays, including every fader, balance and mute the operator set. A
+    // parallel path would drift the moment either side gained a control.
+    if (!m_metis || !m_hw.hasLocalCodec() || mixed.empty())
+        return;
+
+    // 24 kHz -> 48 kHz. Hl2RxDsp produces the engine's native RX rate (see
+    // dc.audioSampleRateHz) and EP2 is clocked at a fixed 48 kHz whatever the
+    // DDC is doing, so the ratio is exactly two and this is an INTERPOLATION,
+    // not a resampler: one original frame plus one midpoint between it and the
+    // next. Doubling by repetition instead would mirror the whole baseband
+    // about 12 kHz, which on a speaker feed is audible as a harsh edge on
+    // sibilants rather than as anything subtle.
+    //
+    // The midpoint that straddles a block boundary needs the PREVIOUS block's
+    // last frame, which is why m_codecLastL/R exist. Without them every block
+    // boundary repeats a sample — a 20 ms buzz at the block rate.
+    const std::size_t frames = mixed.size() / 2;
+    if (frames == 0)
+        return;
+    std::vector<std::int16_t> out;
+    out.reserve(frames * 4);              // 2 output frames x 2 channels
+
+    // THE RADIO'S OWN LEVEL, which is not the application's. AudioEngine
+    // applies the operator's volume as a device attenuation on the host's
+    // QAudioSink, so it is not in these samples and no tap could find it —
+    // see Hl2HardwareOptions::speakerLevelPercent for why that makes a
+    // separate fader necessary rather than merely convenient.
+    const float speakerGain = m_hw.speakerGain();
+    if (speakerGain <= 0.0f) {
+        // Silent, but the interpolator's carry still has to advance or the
+        // first sample after the operator brings the level back up would be
+        // interpolated out of a frame from before it went down — a click at
+        // exactly the moment they are listening for one.
+        m_codecLastL = mixed[2 * (frames - 1)];
+        m_codecLastR = mixed[2 * (frames - 1) + 1];
+        m_codecHavePrev = true;
+        return;
+    }
+
+    const auto toI16 = [speakerGain](float v) -> std::int16_t {
+        v *= speakerGain;
+        // Symmetric clamp, 32767 not 32768: letting a full-scale sample wrap to
+        // the negative rail is a click, and this is a speaker feed.
+        v = std::clamp(v, -1.0f, 1.0f);
+        return static_cast<std::int16_t>(v * 32767.0f);
+    };
+
+    float prevL = m_codecHavePrev ? m_codecLastL : (mixed.size() > 0 ? mixed[0] : 0.0f);
+    float prevR = m_codecHavePrev ? m_codecLastR : (mixed.size() > 1 ? mixed[1] : 0.0f);
+    for (std::size_t f = 0; f < frames; ++f) {
+        const float l = mixed[2 * f];
+        const float r = mixed[2 * f + 1];
+        // Midpoint FIRST, then the sample itself: the interpolated frame sits
+        // between the previous original and this one, so emitting it after
+        // would put it half a sample into the future and delay the whole
+        // stream by one output frame every block.
+        out.push_back(toI16(0.5f * (prevL + l)));
+        out.push_back(toI16(0.5f * (prevR + r)));
+        out.push_back(toI16(l));
+        out.push_back(toI16(r));
+        prevL = l;
+        prevR = r;
+    }
+    m_codecLastL = prevL;
+    m_codecLastR = prevR;
+    m_codecHavePrev = true;
+
+    QMetaObject::invokeMethod(
+        m_metis, "submitSpeakerAudio", Qt::QueuedConnection,
+        Q_ARG(QByteArray, QByteArray(reinterpret_cast<const char*>(out.data()),
+                                     static_cast<qsizetype>(out.size()
+                                         * sizeof(std::int16_t)))));
+}
+
+void Hl2Backend::applyAtuTuneRequest(bool tuning)
+{
+    if (!m_metis)
+        return;
+    // GATED ON THE OPERATOR'S DECLARATION, not on "are we tuning". An ATU
+    // driven from the N2ADR IO board over I2C must never see this bit — both
+    // tuners would start at once — so a radio whose operator has not said the
+    // gateware owns the tuner gets a clear bit and nothing else.
+    //
+    // AND ON THE TRANSMIT GATE, which is Principle VI and not symmetry.
+    // @on8st asked three times why this bit is not gated like the drive
+    // register; the answer turned out to be that it should be, and for a
+    // stronger reason than the one in the question. The gateware's tuner state
+    // machine leaves IDLE on the BIT ALONE — `exttuner.v`:
+    //
+    //     IDLE: begin
+    //       timer_next = DELAY_TIME;
+    //       if (enable) state_next = DELAY;   // enable <= cmd_data[20]
+    //     end
+    //
+    // no key, no PTT in that transition. DELAY, TRY and HANG then assert
+    // `txinhibit`, which `hermeslite_core.v` feeds into `tx_en(tx_on &
+    // ~atu_txinhibit)` and `cw_on(...)`, and TRY drives `start` low — the
+    // request that tells an external tuner to begin a tune cycle.
+    //
+    // So setting this in a transmit-blocked session is not inert. setTune(true)
+    // raises the bit BEFORE the carrier, deliberately, and every step after it
+    // — applyDrive(), setTxTestTone(), setKeying() — refuses when !m_txAllowed.
+    // This one did not, so pressing TUNE with the automation bridge active and
+    // no AETHER_AUTOMATION_ALLOW_TX started a real antenna tuner into whatever
+    // was connected, un-keyed, and inhibited the radio's own transmit path
+    // while it ran. Reachable only for an operator who declared the gateware
+    // ATU, which is why it survived this long.
+    //
+    // THE CLEARING DIRECTION IS NEVER GATED: `tuning` false makes `request`
+    // false whatever the gate says, so an already-standing bit is still
+    // cleared by setKeying(false) in a session that may not transmit.
+    const bool request = tuning && m_hw.atuGateware && m_txAllowed;
+    QMetaObject::invokeMethod(m_metis, "setAtuTuneRequest", Qt::QueuedConnection,
+                              Q_ARG(bool, request));
+}
+
+void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persist)
+{
+    const Hl2HardwareOptions before = m_hw;
+    m_hw = next;
+    if (persist) {
+        // NEVER WRITE AN EMPTY radio_id ROW, and RadioSettingsScope::isValid()
+        // is NOT that guard: it only requires a non-empty FAMILY, which "hl2"
+        // always is, so a still-empty serial does not fail the write — it
+        // silently targets the family-wide default row (AGENTS.md: "An empty
+        // radio_id row is the family-wide default; guard against writing one by
+        // accident"). Every HL2 without a row of its own then inherits it.
+        //
+        // That is precisely the failure this document exists to prevent. See
+        // Hl2HardwareOptions' opening note: an operator with an HL2 on the
+        // bench and a SquareSDR 2 in the shack must not have one's codec choice
+        // applied to the other, because the dither bit means different things
+        // on the two. A family-wide row does exactly that, to every HL2 at once.
+        //
+        // Reachable before connect: hw.set arrives through invokeExtension, and
+        // backendDeclaresExtension() gates on the NAMESPACE, not on whether a
+        // radio is attached. The dialog does check, but the dialog is not the
+        // authority here — same reasoning as applyFreqCalPpb() below, whose
+        // guard this mirrors deliberately rather than by coincidence.
+        if (m_radioSerial.isEmpty()) {
+            qCWarning(lcHl2) << "HL2: not persisting hardware options —"
+                             << "no radio identity yet; applying for this session only";
+        } else {
+            Hl2HardwareOptions::save(
+                RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), m_hw);
+        }
+    }
+    if (!m_metis)
+        return;
+
+    // EACH FIELD PUSHED ONLY IF IT MOVED, and through the setter that owns it
+    // rather than by rebuilding the session. Every one of these is live-
+    // changeable on a running stream: the config register rides every EP2
+    // frame, the drive bank is a one-shot, and the codec gate is a flag the
+    // packet builder reads.
+    // Reconnecting to apply them would drop the operator's audio to change a
+    // checkbox.
+    if (m_hw.ditherBitOnWire() != before.ditherBitOnWire()
+        || m_hw.randomBit != before.randomBit) {
+        QMetaObject::invokeMethod(m_metis, "setDitherRandomBits", Qt::QueuedConnection,
+                                  Q_ARG(bool, m_hw.ditherBitOnWire()),
+                                  Q_ARG(bool, m_hw.randomBit));
+    }
+    if (m_hw.hasLocalCodec() != before.hasLocalCodec()) {
+        // The resampler's carry describes a stream that is about to stop or
+        // start; either way the next block must not be interpolated out of it.
+        m_codecHavePrev = false;
+        QMetaObject::invokeMethod(m_metis, "setLocalCodec", Qt::QueuedConnection,
+                                  Q_ARG(bool, m_hw.hasLocalCodec()));
+    }
+    if (m_hw.hasLocalCodec() && m_hw.speakerLevelPercent == 0
+        && before.speakerLevelPercent != 0) {
+        // The fader stops new samples in forwardSpeakerAudioToCodec(), but
+        // samples already queued would keep the speaker audible for up to 250 ms.
+        QMetaObject::invokeMethod(m_metis, "clearSpeakerAudio", Qt::QueuedConnection);
+    }
+    if (m_hw.atuGateware != before.atuGateware) {
+        // Turning the option OFF mid-tune has to clear a request that is
+        // already standing, which applyAtuTuneRequest() does because it
+        // re-derives the bit from m_hw rather than from what was asked for.
+        applyAtuTuneRequest(m_tuning);
+    }
+    if (m_hw.filterBoard != before.filterBoard || m_hw.n2adrHpf != before.n2adrHpf) {
+        // Re-evaluated, not recomputed here: applyBandFilter() owns the
+        // agree-or-bypass rule and the transmit override, and a second site
+        // deciding the same byte is how the two drift apart.
+        applyBandFilter("hardware options");
+        publishWideState();
+    }
+}
+
 void Hl2Backend::applyFreqCalPpb(int ppb, bool persist)
 {
     const int clamped = Hl2FreqCal::clampPpb(ppb);
@@ -5533,6 +5775,12 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     // function — the operator releasing the TUNE toggle.
     if (on) {
         m_tuning = true;
+        // BEFORE the carrier, not after. The HL2's AH-4 handler samples the
+        // request alongside the key, and raising it after the tone is already
+        // radiating leaves the first moments of the tune un-requested — which
+        // on some ATUs is long enough to be a transmission the tuner ignores.
+        // No-op unless the operator declared the gateware owns the tuner.
+        applyAtuTuneRequest(true);
         // Straight to the drive register rather than through setTxPower(), which
         // would overwrite the saved RF power we have to restore on release.
         if (tunePowerPercent >= 0)
@@ -6024,6 +6272,99 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             applyFreqCalPpb(arg.toInt(), /*persist=*/false);
             if (requestId != 0)
                 emit extensionResult(requestId, QVariant(m_freqCalPpb));
+            return;
+        }
+        // WHICH HL2 THIS IS. Completes locally, exactly like the
+        // calibration verbs above and for the same reason: nothing in
+        // Protocol 1 reads any of these back, so a device round trip to await
+        // would be a confirmation the wire cannot give. What the radio DOES
+        // with them is visible on the air, not in a reply.
+        if (verb == QLatin1String("hw.get")) {
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("codec"), static_cast<int>(m_hw.codec)},
+                    {QStringLiteral("ditherBit"), m_hw.ditherBit},
+                    // The intent AND the wire value. No variant overrides the
+                    // operator any more (Hl2HardwareOptions::ditherBitOnWire),
+                    // so the two agree today — reported as a pair anyway so a
+                    // caller reads the wire from the field that names it, and
+                    // a future override cannot change this reply's meaning
+                    // without changing its shape.
+                    {QStringLiteral("ditherBitOnWire"), m_hw.ditherBitOnWire()},
+                    {QStringLiteral("randomBit"), m_hw.randomBit},
+                    {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},
+                    {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
+                    {QStringLiteral("atuGateware"), m_hw.atuGateware},
+                    {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
+                });
+            }
+            return;
+        }
+        if (verb == QLatin1String("hw.set")) {
+            const QVariantMap in = arg.toMap();
+            // PARTIAL BY DESIGN: a caller sets the one field it cares about and
+            // every absent key keeps its current value. Defaulting an absent
+            // key to false instead would let a bridge command that meant to
+            // change the filter board silently switch off the operator's codec.
+            Hl2HardwareOptions next = m_hw;
+            const auto boolOr = [&in](const char* key, bool current) {
+                const auto it = in.constFind(QLatin1String(key));
+                return it == in.constEnd() ? current : it->toBool();
+            };
+            if (in.contains(QStringLiteral("codec"))) {
+                next.codec = Hl2HardwareOptions::clampCodec(
+                    in.value(QStringLiteral("codec")).toInt());
+                // A CHANGE OF BOARD RE-SEEDS THE DITHER BIT, because 0x00[11]
+                // does not mean the same thing on the board being left and the
+                // board being declared — band volts on a bare HL2, a
+                // loudspeaker on the two that carry a codec. Carrying the old
+                // value across carries a decision that was about something
+                // else: declaring the AK4951 and then correcting it to None
+                // used to leave the bit high and persist it, so a bare
+                // Hermes-Lite 2 came up driving its band-voltage output
+                // because the operator had once looked at a codec (#5867
+                // review, found twice).
+                //
+                // HERE AND NOT IN THE DIALOG, for two reasons. The dialog
+                // cannot call the policy without including a vendor(hl2)
+                // header above the radio seam, which is the EB3 coupling
+                // `636a7e41` removed from that page. And a bridge caller
+                // changing the codec needs the same rule — a fix in the widget
+                // would not have reached it.
+                //
+                // AN EXPLICIT ditherBit IN THE SAME CALL STILL WINS. The seed
+                // is what the caller gets by NOT stating the bit; a caller
+                // that names both is declaring a board and its speaker
+                // together, and boolOr() below reads the stated value over
+                // this one.
+                if (next.codec != m_hw.codec) {
+                    next.ditherBit = Hl2HardwareOptions::ditherBitOnCodecChange(
+                        next.codec, m_hw.ditherBit);
+                }
+            }
+            if (in.contains(QStringLiteral("filterBoard")))
+                next.filterBoard = Hl2HardwareOptions::clampFilterBoard(
+                    in.value(QStringLiteral("filterBoard")).toInt());
+            next.ditherBit   = boolOr("ditherBit", next.ditherBit);
+            next.randomBit   = boolOr("randomBit", next.randomBit);
+            next.n2adrHpf    = boolOr("n2adrHpf", next.n2adrHpf);
+            next.atuGateware = boolOr("atuGateware", next.atuGateware);
+            if (in.contains(QStringLiteral("speakerLevelPercent")))
+                next.speakerLevelPercent = Hl2HardwareOptions::clampSpeakerLevel(
+                    in.value(QStringLiteral("speakerLevelPercent")).toInt());
+            applyHardwareOptions(next, /*persist=*/true);
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("codec"), static_cast<int>(m_hw.codec)},
+                    {QStringLiteral("ditherBit"), m_hw.ditherBit},
+                    {QStringLiteral("ditherBitOnWire"), m_hw.ditherBitOnWire()},
+                    {QStringLiteral("randomBit"), m_hw.randomBit},
+                    {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},
+                    {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
+                    {QStringLiteral("atuGateware"), m_hw.atuGateware},
+                    {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
+                });
+            }
             return;
         }
         if (verb == QLatin1String("freqcal.get")) {
@@ -8545,6 +8886,12 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission.
     m_keyed = false;
     m_tuning = false;
+    // BELT AND BRACES, and named as such rather than dressed up: the bit lives
+    // in MetisClient, which clears it in start(), so on the path that matters
+    // this is redundant. It is here because this function is the one place that
+    // states what a fresh transport starts as, and a reader checking whether
+    // the tune request is part of that should find it listed with the rest.
+    applyAtuTuneRequest(false);
     if (m_lastTxOperation.permitsCleanup()) {
         setKeying(false, m_lastTxOperation);
     }
@@ -9050,10 +9397,26 @@ void Hl2Backend::applyBandFilter(const char* reason)
     //
     // TRANSMIT is not affected by the bypass decision, because transmit is what
     // the low-pass is legally there for. See the TX-receiver override below.
+    // WHICH DIRECTION ARE WE IN. The relay bank is one piece of hardware and it
+    // is either in the receive path, the transmit path, or both — that is the
+    // operator's wiring, and Hl2HardwareOptions::FilterBoard is where they
+    // declare it. Transmit and receive therefore ask for DIFFERENT bytes, and
+    // on the common N2adrRxTx setting the two answers are identical, which is
+    // why this was a single function for as long as that was the only case.
+    //
+    // KEYED OR TUNING IS THE TRANSMIT CASE, and it is decided once here rather
+    // than only inside the spanning branch below: a radio whose low-pass is in
+    // the transmit path ONLY must engage it while keyed even when every
+    // receiver agrees about the band, which the old code's receive-side answer
+    // would never have done.
+    const bool transmitting = m_keyed || m_tuning;
+
     int oc = -1;
     bool spanned = false;
     for (std::size_t i = 0; i < m_rx.size(); ++i) {
-        const int want = static_cast<int>(ocFilterByteForHz(m_rx[i].sliceFreqHz));
+        const int want = static_cast<int>(
+            transmitting ? m_hw.ocTransmitByteForHz(m_rx[i].sliceFreqHz)
+                         : m_hw.ocReceiveByteForHz(m_rx[i].sliceFreqHz));
         if (oc < 0)
             oc = want;
         else if (want != oc)
@@ -9067,9 +9430,9 @@ void Hl2Backend::applyBandFilter(const char* reason)
         // through a bypassed filter bank because a second receiver happened to
         // be parked on another band would put harmonics on the air, and no
         // receive-side convenience justifies that.
-        if (m_keyed || m_tuning) {
+        if (transmitting) {
             const Receiver* txRx = rx(m_txDdc);
-            oc = txRx ? static_cast<int>(ocFilterByteForHz(txRx->sliceFreqHz))
+            oc = txRx ? static_cast<int>(m_hw.ocTransmitByteForHz(txRx->sliceFreqHz))
                       : static_cast<int>(kOcNone);
         } else {
             oc = static_cast<int>(kOcNone);

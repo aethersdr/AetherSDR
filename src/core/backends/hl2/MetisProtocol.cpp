@@ -102,7 +102,8 @@ const char* ocFilterName(std::uint8_t oc) noexcept
     }
 }
 
-Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte) noexcept
+Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte,
+            bool dither, bool random) noexcept
 {
     const auto c1 = static_cast<std::uint8_t>((static_cast<std::uint8_t>(rate) & 0x03) | kConfigMercury);
     if (numRx < 1) numRx = 1;
@@ -116,7 +117,17 @@ Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte) noexcept
     // mask is 0x0F. It was 0x07 while only one receiver ever ran, which silently
     // capped the encodable count at 8 and would have wrapped 9..12 into 1..4.
     const auto c4 = static_cast<std::uint8_t>(kConfigDuplex | (((numRx - 1) & 0x0F) << 3));
-    return {kC0Config, c1, c2, 0x00, c4};
+    // C3 was a hardcoded 0x00 for as long as this encoder had one caller with
+    // one kind of radio behind it. It is a PARAMETER now because the dither bit
+    // it carries is the band-voltage output on a bare HL2 and the loudspeaker
+    // switch on both an HL2+ and a SquareSDR 2 — see
+    // kConfigDither. Whichever of those it is, it shares this register with the
+    // sample rate and the receiver count, so it has to be carried through every
+    // rebuild of the register rather than re-defaulted; MetisClient::Params
+    // holds it for that reason, exactly as it holds ocFilterByte.
+    const auto c3 = static_cast<std::uint8_t>((dither ? kConfigDither : 0u)
+                                            | (random ? kConfigRandom : 0u));
+    return {kC0Config, c1, c2, c3, c4};
 }
 
 Cc ccRxFreq(int rxIndex, std::uint32_t hz) noexcept
@@ -189,14 +200,25 @@ Cc ccTxFreq(std::uint32_t hz) noexcept
             static_cast<std::uint8_t>(hz & 0xFF)};
 }
 
-Cc ccTxDrive(int level, bool paEnable) noexcept
+Cc ccTxDrive(int level, bool paEnable, bool atuTune) noexcept
 {
     if (level < 0) level = 0;
     if (level > kTxDriveMax) level = kTxDriveMax;
     // C1 = DATA[31:24] drive level. C2 = DATA[23:16]; bit 3 of it is DATA[19],
-    // the onboard PA enable. ATU tune, Alex filters and VNA stay zero — those
-    // are separate decisions and none of them belong in a drive-level write.
-    const auto c2 = static_cast<std::uint8_t>(paEnable ? 0x08 : 0x00);
+    // the onboard PA enable, and bit 4 is DATA[20], the gateware's ATU tune
+    // request. Alex filters and VNA stay zero — those are separate decisions
+    // and neither belongs in a drive-level write.
+    //
+    // DATA[18] STAYS CLEAR, which is not an omission. It is `tr_disable`
+    // (control.v: `tr_disable <= cmd_data[18]`), and its one consumer is
+    // `assign pa_inttr = int_tx_on & ~vna & (pa_enable | ~tr_disable);` —
+    // so setting it while the PA is off holds the radio's internal T/R relay
+    // in receive for the whole transmission. That is a setting for a station
+    // whose external amplifier does its own T/R switching, not something a
+    // drive-level write gets to decide. DATA[17], the tuner's BYPASS command
+    // (exttuner.v: `bypass <= cmd_data[17]`), stays clear for the same reason.
+    const auto c2 = static_cast<std::uint8_t>((paEnable ? 0x08 : 0x00)
+                                            | (atuTune ? 0x10 : 0x00));
     return {kC0TxDrive, static_cast<std::uint8_t>(level), c2, 0x00, 0x00};
 }
 
@@ -263,6 +285,32 @@ void ep2WriteTxIq(std::array<std::uint8_t, kUsbPacketSize>& pkt,
             payload[k + 5] = static_cast<std::uint8_t>(ui & 0xFF);          // I low
             payload[k + 6] = static_cast<std::uint8_t>((uq >> 8) & 0xFF);   // Q high
             payload[k + 7] = static_cast<std::uint8_t>(uq & 0xFF);          // Q low
+        }
+    }
+}
+
+void ep2WriteTxAudio(std::array<std::uint8_t, kUsbPacketSize>& pkt,
+                     std::span<const std::int16_t> audio) noexcept
+{
+    const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+    std::size_t consumed = 0;                 // in SAMPLES, not int16s
+    for (const std::size_t fs : frameStarts) {
+        std::uint8_t* payload = pkt.data() + fs + 8;     // after SYNC(3) + C&C(5)
+        for (std::size_t k = 0; k + kTxSampleBytes <= kFramePayload; k += kTxSampleBytes) {
+            // Stop at the end of the span rather than padding: the remaining
+            // slots keep ep2Packet's zero fill, which on a codec radio is
+            // silence and on the FIRST slot of a frame is also a zero EADDR.
+            // That last part is why underrun is safe here — a short block
+            // degrades toward the bare-HL2 behaviour instead of away from it.
+            if (2 * consumed + 1 >= audio.size())
+                return;
+            const auto l = static_cast<std::uint16_t>(audio[2 * consumed]);
+            const auto r = static_cast<std::uint16_t>(audio[2 * consumed + 1]);
+            ++consumed;
+            payload[k + 0] = static_cast<std::uint8_t>((l >> 8) & 0xFF);   // L high
+            payload[k + 1] = static_cast<std::uint8_t>(l & 0xFF);          // L low
+            payload[k + 2] = static_cast<std::uint8_t>((r >> 8) & 0xFF);   // R high
+            payload[k + 3] = static_cast<std::uint8_t>(r & 0xFF);          // R low
         }
     }
 }

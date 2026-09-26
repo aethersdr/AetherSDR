@@ -10,6 +10,7 @@
 
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2HardwareOptions.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "TxTestAuthority.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -53,6 +54,21 @@ struct MetisClientTestAccess {
 };
 
 struct Hl2TxGateTestAccess {
+    // Declare the gateware ATU without going near the settings store, and read
+    // the transmit gate back so a test can state which side of it it is on.
+    static void declareGatewareAtu(Hl2Backend& backend)
+    {
+        Hl2HardwareOptions hw = backend.m_hw;
+        hw.atuGateware = true;
+        backend.m_hw = hw;
+    }
+    static bool txAllowed(const Hl2Backend& backend) { return backend.m_txAllowed; }
+    // Set it explicitly rather than relying on the default. m_txAllowed is
+    // `!automation || automationAllowsTx`, so in a plain test process it is
+    // TRUE — the closed gate is the automation-bridge-without-ALLOW_TX case,
+    // and a test that wants it has to say so.
+    static void setTxAllowed(Hl2Backend& backend, bool allowed) { backend.m_txAllowed = allowed; }
+
     static void prepare(Hl2Backend& backend)
     {
         // Constructed transport only: no connectRadio(), socket, peer or DSP
@@ -202,11 +218,82 @@ static Ep2IqShape ep2IqShape(const std::array<std::uint8_t, kUsbPacketSize>& pkt
     return shape;
 }
 
+// THE ATU TUNE REQUEST IS TRANSMIT, AND THE GATE MUST REACH IT. Principle VI.
+//
+// setTune(true) raises 0x09[20] BEFORE the carrier, deliberately. Every step
+// after it — applyDrive(), setTxTestTone(), setKeying() — refuses when the
+// transmit gate is closed. This one did not, and it is not inert: the gateware's
+// tuner state machine leaves IDLE on the BIT ALONE (exttuner.v,
+// `IDLE: if (enable) state_next = DELAY;` — no key in that transition), then
+// asserts `txinhibit` into `tx_en`/`cw_on` and drives `start` low, which is the
+// request that tells an external tuner to begin a tune cycle.
+//
+// So with the bridge active and no AETHER_AUTOMATION_ALLOW_TX, pressing TUNE
+// started a real antenna tuner into whatever was connected. Raised three times
+// by @on8st as a symmetry point on #5867; the gateware says it was a defect.
+static void testAtuTuneHonoursTheTransmitGate(TxTestAuthority& authority)
+{
+    // C2 of the 0x09 bank; the tune request is bit 4 (DATA[20]).
+    const auto tuneRequestedIn = [](const std::array<std::uint8_t, kUsbPacketSize>& pkt) {
+        const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+        for (const std::size_t fs : frameStarts) {
+            if ((pkt[fs + 3] & ~kC0MoxBit) == kC0TxDrive && (pkt[fs + 5] & 0x10) != 0)
+                return true;
+        }
+        return false;
+    };
+
+    const auto sawTuneRequest = [&](Hl2Backend& backend) {
+        // The push to MetisClient is a queued invoke onto its own thread, so let
+        // it land before reading the builder.
+        QCoreApplication::processEvents();
+        for (int i = 0; i < 12; ++i) {
+            if (tuneRequestedIn(Hl2TxGateTestAccess::packet(backend)))
+                return true;
+        }
+        return false;
+    };
+
+    {
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);                  // transport, DSP
+        Hl2TxGateTestAccess::declareGatewareAtu(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, false);      // the bridge case
+        check(!Hl2TxGateTestAccess::txAllowed(backend), "the transmit gate is closed");
+        backend.setTune(true, 10, authority.operation, {});
+        check(!sawTuneRequest(backend),
+              "gate CLOSED: TUNE puts no ATU tune request on the wire — an external "
+              "tuner is not started by a session that may not transmit");
+        backend.setTune(false, 10, authority.operation, {});
+    }
+
+    {
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        Hl2TxGateTestAccess::declareGatewareAtu(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        check(Hl2TxGateTestAccess::txAllowed(backend), "the transmit gate is open");
+        backend.setTune(true, 10, authority.operation, {});
+        check(sawTuneRequest(backend),
+              "gate OPEN with the gateware ATU declared: the tune request does reach "
+              "the wire — the gate narrows this feature, it does not disable it");
+        backend.setTune(false, 10, authority.operation, {});
+    }
+
+    // The CLEARING direction needs no case of its own: applyAtuTuneRequest()
+    // computes `tuning && m_hw.atuGateware && m_txAllowed`, so a false `tuning`
+    // clears the bit whatever the gate says. That ordering is deliberate — a
+    // session that may not transmit must still be able to take a standing
+    // request down — and it is a property of the expression, not of a schedule.
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     TxTestAuthority authority;
     MetisClient client;
+
+    testAtuTuneHonoursTheTransmitGate(authority);
 
     {
         MetisClient board;
