@@ -133,10 +133,14 @@ different surface with its own `color.meter.*` tokens.)
 token was for. Do not read that as "there is no averaging": there is, in three
 places that are not this token.
 
-- **The live trace is itself client-smoothed.** `SpectrumWidget::updateSpectrum`
-  runs `m_smoothed[i] = SMOOTH_ALPHA * bins[i] + (1 - SMOOTH_ALPHA) *
-  m_smoothed[i]` at `SMOOTH_ALPHA = 0.35f`. That paint does not use
-  `color.spectrum.trace` either — `SpectrumWidget` draws the trace in
+- **The live trace is client-smoothed, unless the backend already averaged.**
+  `SpectrumWidget::updateSpectrum` runs `m_smoothed[i] = SMOOTH_ALPHA * bins[i]
+  + (1 - SMOOTH_ALPHA) * m_smoothed[i]` at `SMOOTH_ALPHA = 0.35f`, except when
+  `m_clientFftSmoothing` is off: then `m_smoothed` copies the frame straight
+  through. `MainWindow` turns that flag off while connected if
+  `RadioCapabilities::backendPanAveraging` is set, so the widget does not
+  average a second time. Today only ANAN sets that capability. That paint does
+  not use `color.spectrum.trace` either — `SpectrumWidget` draws the trace in
   `m_fftFillColor` / `m_fftLineColor`, which are operator settings rather than
   tokens. `color.spectrum.trace` is resolved only by `BandscopeDialog` and, as
   a fallback, by `MiniPanScope`.

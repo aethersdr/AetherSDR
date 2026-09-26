@@ -1999,10 +1999,12 @@ private:
     //   nominal, since Hl2Spectrum's Hanning window weights the ends down and
     //   the effective span is shorter still -- and at rate 10
     //   localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 -- 0.66 %,
-    //   an upper bound. Hl2Spectrum carries no spectral state between frames (m_acc
-    //   holds only the partial window the NEXT frame completes from, which is
+    //   an upper bound. Production depth is one window: Hl2Spectrum::setAverageFrames
+    //   defaults to 1 and only hl2_spectrum_test calls it (#5833), so m_avgPower
+    //   is present and unwired and the emitted frame is still unaveraged. m_acc
+    //   holds only the partial IQ window the NEXT frame completes from, which is
     //   why HERMES 15.2.1 says the accumulator keeps filling on a skipped
-    //   interval), so the frames in between never reach the waterfall at all:
+    //   interval. The frames between rows never reach the waterfall at all:
     //   dropped, never accumulated. RTL-SDR's frames are unaveraged FFTs too,
     //   so the shape carries there; only the numbers are HL2's.
     // - On ANAN the frames between rows are not dropped. Every IQ block is
