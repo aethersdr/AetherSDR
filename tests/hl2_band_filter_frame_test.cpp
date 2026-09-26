@@ -234,6 +234,22 @@ int main(int argc, char** argv)
                   "codec withdrawn: the audio queued while it was declared does not leak out");
         }
 
+        // A zero speaker level stops new submissions in Hl2Backend, but audio
+        // already queued would otherwise remain audible until the pacer drains
+        // it. Clearing the queue must silence the very next packet.
+        {
+            MetisClient c;
+            c.setLocalCodec(true);
+            c.submitSpeakerAudio(block);
+            check(MetisClientTestAccess::speakerQueued(c) > 0,
+                  "speaker audio is queued before the level reaches zero");
+            c.clearSpeakerAudio();
+            check(MetisClientTestAccess::speakerQueued(c) == 0,
+                  "silencing the speaker discards audio already queued");
+            check(audioSlotsAllZero(c.buildNextControlPacket()),
+                  "the next packet is silent after the speaker queue is cleared");
+        }
+
         // THE BACKSTOP, on the state it was written for. The gate in
         // buildNextControlPacket() is a DECLARED codec rather than "do we happen
         // to have audio queued", and its comment says why: a queue that filled by

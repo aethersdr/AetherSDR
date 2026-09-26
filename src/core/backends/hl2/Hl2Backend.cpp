@@ -5333,6 +5333,12 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
         QMetaObject::invokeMethod(m_metis, "setLocalCodec", Qt::QueuedConnection,
                                   Q_ARG(bool, m_hw.hasLocalCodec()));
     }
+    if (m_hw.hasLocalCodec() && m_hw.speakerLevelPercent == 0
+        && before.speakerLevelPercent != 0) {
+        // The fader stops new samples in forwardSpeakerAudioToCodec(), but
+        // samples already queued would keep the speaker audible for up to 250 ms.
+        QMetaObject::invokeMethod(m_metis, "clearSpeakerAudio", Qt::QueuedConnection);
+    }
     if (m_hw.atuGateware != before.atuGateware) {
         // Turning the option OFF mid-tune has to clear a request that is
         // already standing, which applyAtuTuneRequest() does because it

@@ -73,7 +73,15 @@ void Hl2HardwareOptions::save(const RadioSettingsScope& scope,
         return;
     // Read-modify-write, so a field this build does not know about survives a
     // change made from this build (Principle XIV — persisted as a unit).
-    QJsonObject doc = scope.featureExact(QLatin1String(kFeature));
+    int storedVersion = 0;
+    AppSettings::FeatureReadStatus status = AppSettings::FeatureReadStatus::Unavailable;
+    QJsonObject doc = scope.featureExact(QLatin1String(kFeature), &storedVersion, &status);
+    if (status == AppSettings::FeatureReadStatus::Corrupt
+        || status == AppSettings::FeatureReadStatus::Unavailable
+        || storedVersion > kSchemaVersion) {
+        qWarning("Hl2HardwareOptions: refusing to overwrite unreadable or newer hardware options");
+        return;
+    }
     doc[QLatin1String(kFieldCodec)]       = static_cast<int>(opts.codec);
     doc[QLatin1String(kFieldDither)]      = opts.ditherBit;
     doc[QLatin1String(kFieldRandom)]      = opts.randomBit;

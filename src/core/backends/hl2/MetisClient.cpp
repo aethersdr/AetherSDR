@@ -1043,6 +1043,11 @@ void MetisClient::submitSpeakerAudio(const QByteArray& interleavedInt16)
         m_speakerAudio.pop_front();
 }
 
+void MetisClient::clearSpeakerAudio()
+{
+    m_speakerAudio.clear();
+}
+
 void MetisClient::setAtuTuneRequest(bool request)
 {
     if (request == m_atuTune)

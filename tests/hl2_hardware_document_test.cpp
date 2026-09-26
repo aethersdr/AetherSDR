@@ -16,6 +16,7 @@
 //      that guard — it only requires a non-empty FAMILY — so the empty-serial
 //      case is checked here, on the store, rather than trusted to the one
 //      `if` in Hl2Backend::applyHardwareOptions().
+//   4. An older build must not replace a document with a newer schema.
 //
 // Socket-free and radio-free: nothing here binds, discovers or connects.
 // (aethersdr/AetherSDR#5867 review follow-up.)
@@ -131,6 +132,27 @@ int main(int argc, char** argv)
               "a field this build does not know about survives a write from this build");
         check(after.value(QStringLiteral("speakerLevelPercent")).toInt() == 11,
               "and our own change landed in the same document");
+    }
+
+    // ---- 3b. a newer document remains read-only to this build ------------
+    {
+        const RadioSettingsScope scope(family, serialA);
+        QJsonObject future = scope.featureExact(QLatin1String(Hl2HardwareOptions::kFeature));
+        future[QStringLiteral("speakerLevelPercent")] = 73;
+        const int futureVersion = Hl2HardwareOptions::kSchemaVersion + 1;
+        check(scope.setFeature(QLatin1String(Hl2HardwareOptions::kFeature),
+                               futureVersion, future),
+              "a newer Hardware schema is stored for the downgrade check");
+
+        Hl2HardwareOptions changed = everyFieldMoved();
+        changed.speakerLevelPercent = 12;
+        Hl2HardwareOptions::save(scope, changed);
+
+        int storedVersion = 0;
+        const QJsonObject after = scope.featureExact(
+            QLatin1String(Hl2HardwareOptions::kFeature), &storedVersion);
+        check(storedVersion == futureVersion && after == future,
+              "an older build does not downgrade or change a newer Hardware document");
     }
 
     // ---- 4. the family-wide row is not written by accident ----------------

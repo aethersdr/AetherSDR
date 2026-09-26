@@ -119,8 +119,8 @@ Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte,
     const auto c4 = static_cast<std::uint8_t>(kConfigDuplex | (((numRx - 1) & 0x0F) << 3));
     // C3 was a hardcoded 0x00 for as long as this encoder had one caller with
     // one kind of radio behind it. It is a PARAMETER now because the dither bit
-    // it carries is the band-voltage output on a bare HL2, the codec-present
-    // flag on an HL2+, and the loudspeaker switch on a SquareSDR 2 — see
+    // it carries is the band-voltage output on a bare HL2 and the loudspeaker
+    // switch on both an HL2+ and a SquareSDR 2 — see
     // kConfigDither. Whichever of those it is, it shares this register with the
     // sample rate and the receiver count, so it has to be carried through every
     // rebuild of the register rather than re-defaulted; MetisClient::Params

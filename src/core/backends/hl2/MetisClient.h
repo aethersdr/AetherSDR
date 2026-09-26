@@ -288,6 +288,9 @@ public:
     // stalled EP2 pacer must not grow a queue without limit.
     Q_INVOKABLE void submitSpeakerAudio(const QByteArray& interleavedInt16);
 
+    // Discard samples captured before the operator silenced the radio speaker.
+    Q_INVOKABLE void clearSpeakerAudio();
+
     // Raise or clear the gateware's ATU tune request (0x09[20]). Rides the
     // drive-level bank, so this restates the current drive rather than being a
     // register of its own.
