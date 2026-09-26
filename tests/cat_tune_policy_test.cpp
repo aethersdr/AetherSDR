@@ -102,7 +102,7 @@ static void testTuneSliceForCat()
 {
     RadioModel model;
     SliceModel slice(0);
-    QSignalSpy commands(&slice, &SliceModel::commandReady);
+    QSignalSpy commands(&slice, &SliceModel::receiveTuneRequested);
 
     check(!model.tuneSliceForCat(nullptr, 14.100), QStringLiteral("a null slice is rejected"));
 
@@ -148,12 +148,12 @@ static void testTuneSliceForCat()
     // the assertion that says so.
     check(model.tuneSliceForCat(&slice, 7.100), QStringLiteral("an out-of-span tune is accepted"));
     check(commands.size() == 1, QStringLiteral("an accepted tune issues exactly one command"));
-    const QString cmd = commands.isEmpty() ? QString()
-                                           : commands.first().first().toString();
-    check(cmd == QStringLiteral("slice tune 0 7.100000"),
-          QStringLiteral("out-of-span tunes recenter the pan, got %1").arg(cmd));
-    check(!cmd.contains(QStringLiteral("autopan=0")),
-          QStringLiteral("the recentering command must NOT suppress autopan"));
+    const SliceTuneRequest request = commands.isEmpty()
+        ? SliceTuneRequest{0, SliceTuneRequest::PanIntent::PreservePan}
+        : qvariant_cast<SliceTuneRequest>(commands.first().first());
+    check(request.frequencyHz == 7'100'000
+              && request.panIntent == SliceTuneRequest::PanIntent::AllowRecenter,
+          QStringLiteral("out-of-span tune explicitly asks the backend to recenter"));
 
     // A retune to the frequency the slice already holds is a legitimate no-op,
     // not a refusal — the seam tests the lock rather than comparing before and
@@ -169,23 +169,25 @@ static void testTuneSliceForCat()
 static void testSliceTuneCommands()
 {
     SliceModel slice(2);
-    QSignalSpy commands(&slice, &SliceModel::commandReady);
+    QSignalSpy commands(&slice, &SliceModel::receiveTuneRequested);
 
     // In-span: autopan=0 keeps the radio from recentering, so external Doppler
     // software (SatPC32 steps every few seconds) does not yank the pan.
     slice.setFrequency(14.101);
     check(commands.size() == 1, QStringLiteral("setFrequency issues one command"));
     check(!commands.isEmpty()
-              && commands.first().first().toString()
-                     == QStringLiteral("slice tune 2 14.101000 autopan=0"),
+              && qvariant_cast<SliceTuneRequest>(commands.first().first()).frequencyHz == 14'101'000
+              && qvariant_cast<SliceTuneRequest>(commands.first().first()).panIntent
+                     == SliceTuneRequest::PanIntent::PreservePan,
           QStringLiteral("setFrequency suppresses the radio-side recenter"));
 
     commands.clear();
     slice.tuneAndRecenter(14.150);
     check(commands.size() == 1, QStringLiteral("tuneAndRecenter issues one command"));
     check(!commands.isEmpty()
-              && commands.first().first().toString()
-                     == QStringLiteral("slice tune 2 14.150000"),
+              && qvariant_cast<SliceTuneRequest>(commands.first().first()).frequencyHz == 14'150'000
+              && qvariant_cast<SliceTuneRequest>(commands.first().first()).panIntent
+                     == SliceTuneRequest::PanIntent::AllowRecenter,
           QStringLiteral("tuneAndRecenter lets the radio recenter"));
 
     // Both bail on a locked slice — the reason the seam has to report false.

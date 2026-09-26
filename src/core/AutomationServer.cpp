@@ -7979,20 +7979,10 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
     if (action == QLatin1String("filter")) {
         // Set the RX passband explicitly: "slice filter <lowHz> <highHz>".
         //
-        // This exists because the mode/filter split is a recurring source of
-        // silent divergence between the model and whatever the DSP was actually
-        // configured with. Changing mode mirrors the passband inside SliceModel
-        // (normalizeFilterPolarity) WITHOUT emitting the operator intent, so a
-        // backend that owns its own DSP chain — HL2 — can be left running the
-        // pre-mirror passband while get_state cheerfully reports the mirrored
-        // one. Measuring anything through the audio path is meaningless while
-        // the passband is unknown, so an agent needs a way to ASSERT it.
-        //
-        // Routed through setFilterWidth() rather than poking the fields: that is
-        // the operator-intent setter, so it emits filterCommandIssued and the
-        // value reaches IRadioBackend::setSliceFilter. It also runs the same
-        // polarity normalization the UI does, so the value that comes back is
-        // the canonical one the model will hold.
+        // Use the desktop setter and its explicit Operator filter origin,
+        // including the same polarity normalization and adaptive-filter epoch
+        // as the UI. The typed request reaches the backend; the returned
+        // desktop value is not proof that hardware has applied it.
         const QStringList parts =
             arg.trimmed().split(QRegularExpression(QStringLiteral("[\\s,]+")),
                                 Qt::SkipEmptyParts);
@@ -8072,7 +8062,7 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
     if (action == QLatin1String("agc")) {
         // "slice agc <off|slow|med|fast> [threshold 0..100]" — drive the RX AGC
         // through the same operator setters the RX applet uses, so the change
-        // emits agcCommandIssued and reaches IRadioBackend::setSliceAgc.
+        // emits field-specific receiveAgcRequested intents through the seam.
         const QStringList parts =
             arg.trimmed().split(QRegularExpression(QStringLiteral("[\\s,]+")),
                                 Qt::SkipEmptyParts);
@@ -8102,10 +8092,9 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         if (!s)
             return err(QStringLiteral("no slice available to set AGC on"));
 
-        // Threshold first: setAgcMode() emits the intent carrying BOTH values,
-        // so applying the threshold first means a single mode+threshold request
-        // reaches the backend as one coherent pair rather than as the new mode
-        // paired with the stale threshold.
+        // Threshold first: when enabling AGC, host DSP receives the new mode
+        // with the requested threshold already in its pair. These are two
+        // field edits (when changed), not an atomic multi-field operation.
         if (threshold >= 0)
             s->setAgcThreshold(threshold);
         s->setAgcMode(mode);

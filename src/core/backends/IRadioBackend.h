@@ -25,6 +25,7 @@
 #include "core/backends/ProfileDelta.h"
 #include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/ReceiveCommand.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -263,6 +264,26 @@ public:
 
     // ---- intents DOWN: canonical core-profile verbs (grow per burndown) ----
     // The backend translates each to its vendor wire protocol.
+    // Desktop and daemon receive callers use these intent-bearing adapters.
+    // Defaults preserve the existing family implementations below: tuning may
+    // still move a hardware receive window, all filter origins reach host DSP,
+    // and AGC off-level remains unsupported unless a backend overrides it.
+    virtual void requestSliceTune(int sliceId, const SliceTuneRequest& request)
+    {
+        setSliceFrequency(sliceId, request.frequencyHz);
+    }
+    virtual void requestSliceFilter(int sliceId, const SliceFilterRequest& request)
+    {
+        setSliceFilter(sliceId, request.lowHz, request.highHz);
+    }
+    virtual void requestSliceAgc(int sliceId, const SliceAgcRequest& request)
+    {
+        if (request.field != SliceAgcRequest::Field::OffLevel) {
+            setSliceAgc(sliceId, request.mode, request.threshold);
+        }
+    }
+    // Compatibility implementation hooks for backend-internal callers and
+    // existing paired AGC users. New receive routing uses the adapters above.
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;

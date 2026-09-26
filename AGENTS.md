@@ -1134,6 +1134,24 @@ level), that value must be client-only — never a value the radio also echoes.
 - Radio status pushes update models via `applyStatus(kvs)`
 - Use `m_updatingFromModel` guard or `QSignalBlocker` to prevent echo loops
 
+**First M4 receive group (#5904).** Frequency, mode, filter and AGC now use
+one `RadioModel::wireSliceReceiveIntentsToBackend` binding at both slice
+construction sites. Frequency/filter/AGC carry `ReceiveCommand.h` requests:
+pan preservation versus recentering, operator/adaptive/mode-normalization
+filter origin, and the selected AGC field plus the host-DSP pair. Mode uses
+`setSliceMode`. Flex encodes these behind the guarded slice sink; mode-only
+filter normalization does not overwrite its radio-owned filter memory.
+Legacy `frequencyCommandIssued`, `filterCommandIssued` and `agcCommandIssued`
+are local notifications, **not additional dispatch paths**. Keep frequency
+display notification before its provenance notification: linked slices rely
+on that order. Ordinary status never emits a receive request. Bindings are
+idempotent, synchronous on the owner thread and check exact active slice
+identity, so stale objects cannot control reused ids. Daemon targets keep
+their own admission and observation-only state semantics; do not replace
+them with optimistic desktop setters or infer a new capability from these
+desktop verbs. AGC off-level remains unsupported by the default backend
+adapter, and no daemon AGC method is added.
+
 ### Auto-Reconnect
 
 `RadioModel` has a 3-second `m_reconnectTimer` for unexpected disconnects.

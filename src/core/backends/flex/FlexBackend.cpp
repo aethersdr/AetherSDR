@@ -447,11 +447,44 @@ bool FlexBackend::isConnected() const
 
 void FlexBackend::setSliceFrequency(int sliceId, double hz)
 {
-    // Matches SliceModel::setFrequency's wire string exactly. Slice verbs use
-    // the TX-inhibit-guarded slice sink (§6), not the generic sink.
-    sendSlice(QStringLiteral("slice tune %1 %2 autopan=0")
-                  .arg(sliceId)
-                  .arg(hz / 1'000'000.0, 0, 'f', 6));
+    requestSliceTune(sliceId, {hz, SliceTuneRequest::PanIntent::PreservePan});
+}
+
+void FlexBackend::requestSliceTune(int sliceId, const SliceTuneRequest& request)
+{
+    // FlexLib 4.2.18 Slice.Freq: MHz/f6, with autopan=0 only when the caller
+    // wants to retain the pan. Every variant uses the guarded slice sink.
+    QString command = QStringLiteral("slice tune %1 %2")
+        .arg(sliceId).arg(request.frequencyHz / 1'000'000.0, 0, 'f', 6);
+    if (request.panIntent == SliceTuneRequest::PanIntent::PreservePan) {
+        command += QStringLiteral(" autopan=0");
+    }
+    sendSlice(command);
+}
+
+void FlexBackend::requestSliceFilter(int sliceId, const SliceFilterRequest& request)
+{
+    // The radio restores its per-mode passband. A desktop polarity repair
+    // must not overwrite it; explicit operator and adaptive edits still do.
+    if (request.origin != SliceFilterRequest::Origin::ModeNormalization) {
+        setSliceFilter(sliceId, request.lowHz, request.highHz);
+    }
+}
+
+void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
+{
+    // FlexLib 4.2.18 Slice: each AGC setter writes only its own field.
+    switch (request.field) {
+    case SliceAgcRequest::Field::Mode:
+        sendSlice(QStringLiteral("slice set %1 agc_mode=%2").arg(sliceId).arg(request.mode));
+        break;
+    case SliceAgcRequest::Field::Threshold:
+        sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(request.threshold));
+        break;
+    case SliceAgcRequest::Field::OffLevel:
+        sendSlice(QStringLiteral("slice set %1 agc_off_level=%2").arg(sliceId).arg(request.offLevel));
+        break;
+    }
 }
 
 void FlexBackend::setSliceMode(int sliceId, const QString& mode)
@@ -466,12 +499,11 @@ void FlexBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 
 void FlexBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
-    // Flex owns its AGC in firmware, so both halves are plain slice-set writes.
-    // In the current wiring this is reached only through the seam; the GUI path
-    // still emits the same commands via SliceModel's Flex command sink, exactly
-    // as setSliceFilter() mirrors SliceModel::setFilterWidth's "filt" write.
-    if (!mode.trimmed().isEmpty())
+    // Compatibility paired operation; desktop edits use requestSliceAgc so
+    // an edit to one field never reasserts a stale value for another.
+    if (!mode.trimmed().isEmpty()) {
         sendSlice(QStringLiteral("slice set %1 agc_mode=%2").arg(sliceId).arg(mode));
+    }
     sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(thresholdDb));
 }
 
