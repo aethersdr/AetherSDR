@@ -6402,6 +6402,20 @@ bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
     return true;
 }
 
+bool RadioModel::requestLocalPanPixelWidth(const QString& panId, int points)
+{
+    // Local-shaping backends only, as requestLocalPanWeightedAverage(): on
+    // Flex the caller still sends the xpixels= wire text itself. Unlike that
+    // one, nothing is mirrored into PanadapterModel: the width is not an
+    // operator setting but a fact of the window, re-sent on every resize,
+    // and fftXPixels() was never echoed for a local backend either.
+    if (panId.isEmpty() || !shapesDisplayRatesLocally()) {
+        return false;
+    }
+    m_backend->setPanPixelWidth(backendPanIdFor(panId), points);
+    return true;
+}
+
 bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
                                         int wfRate)
 {

@@ -1114,6 +1114,10 @@ public:
     // straight down to that backend. Returns false on Flex, where the caller
     // sends the weighted_average= wire command itself.
     bool requestLocalPanWeightedAverage(const QString& panId, bool on);
+    // Panel width in spectrum points for a backend that shapes its own
+    // spectrum: straight down to that backend. Returns false on Flex, where
+    // the caller sends the xpixels= wire command itself.
+    bool requestLocalPanPixelWidth(const QString& panId, int points);
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 

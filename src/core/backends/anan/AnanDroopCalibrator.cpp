@@ -394,10 +394,11 @@ void AnanDroopCalibrator::onSpectrumFrame(const std::vector<float>& binsDbm)
 {
     if (m_phase == Phase::Idle)
         return;
-    if (binsDbm.size() != static_cast<int>(anan::kDroopCorrectionFftSize))
+    // The panadapter's point count follows the panel width; the tables are
+    // stored on the fixed kDroopCorrectionFftSize grid, so read each frame
+    // onto that grid. At exactly that count this is a straight copy.
+    if (!anan::resampleToDroopGrid(binsDbm, m_latestFrame))
         return;
-    for (int i = 0; i < binsDbm.size(); ++i)
-        m_latestFrame[static_cast<std::size_t>(i)] = binsDbm[i];
     m_haveLatestFrame = true;
 }
 

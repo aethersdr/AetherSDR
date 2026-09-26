@@ -72,6 +72,31 @@ int testCursorAnchoredZoom()
     return 0;
 }
 
+int testPanPointsForPixelWidth()
+{
+    using namespace AetherSDR;
+    // No crop: one point per pixel, nothing added.
+    for (const int px : {100, 1024, 1917, 3840}) {
+        if (panPointsForPixelWidth(px, false) != px) {
+            return fail("without the edge crop a local spectrum needs exactly one point per pixel");
+        }
+    }
+    // With the crop: the smallest count whose kept span still covers every
+    // pixel -- checked against the same margin croppedBinsForDisplay() drops.
+    for (int px = 100; px <= 8000; ++px) {
+        const int n = panPointsForPixelWidth(px, true);
+        if (n - 2 * panEdgeCropMarginBins(n) < px) {
+            return fail("the cropped span must keep at least one point per pixel");
+        }
+        for (int smaller = px; smaller < n; ++smaller) {
+            if (smaller - 2 * panEdgeCropMarginBins(smaller) >= px) {
+                return fail("the point count must be the smallest that covers the panel");
+            }
+        }
+    }
+    return 0;
+}
+
 int testEdgeCropGateAndZoomAnchor()
 {
     using namespace AetherSDR;
@@ -1185,6 +1210,9 @@ int main()
         return result;
     }
     if (const int result = testEdgeCropGateAndZoomAnchor(); result != 0) {
+        return result;
+    }
+    if (const int result = testPanPointsForPixelWidth(); result != 0) {
         return result;
     }
     return testStablePresentationAnchor();

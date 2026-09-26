@@ -101,6 +101,31 @@ inline double panDisplayBandwidthMhz(double bandwidthMhz, bool edgeCropEnabled)
         : bandwidthMhz;
 }
 
+// Bins croppedBinsForDisplay() drops from EACH side of an n-bin frame.
+inline int panEdgeCropMarginBins(int n)
+{
+    return static_cast<int>(n * kEdgeTaperFraction);
+}
+
+// How many points a host-computed spectrum should spread across its full
+// bandwidth so that, once the edge crop has dropped panEdgeCropMarginBins()
+// from each side, at least one point lands on each of `pixels` screen pixels
+// -- and no more than that needs. Without the crop it is `pixels` itself.
+inline int panPointsForPixelWidth(int pixels, bool edgeCropEnabled)
+{
+    if (pixels < 1 || !edgeCropEnabled)
+        return pixels;
+    // The kept span n - 2 * margin(n) lies between (1 - 2f) n and that plus
+    // two, since each margin rounds down, so no n below
+    // (pixels - 2) / (1 - 2f) can cover the panel. Count up from there to the
+    // first that does -- a few steps at most.
+    int n = std::max(pixels, static_cast<int>(
+        std::floor((pixels - 2) / (1.0 - 2.0 * kEdgeTaperFraction))));
+    while (n - 2 * panEdgeCropMarginBins(n) < pixels)
+        ++n;
+    return n;
+}
+
 // No explicit frame when cropping is off: preserve each existing writer's
 // fallback, especially DSS's preview-base resolution on Flex/Icom.
 inline std::optional<FrequencyFrame> edgeCroppedWaterfallFrame(
