@@ -1208,6 +1208,441 @@ bool runMinimumPhaseWorkspaceTest()
     return true;
 }
 
+// ── Runtime filter length and phase mode ──────────────────────────────────
+//
+// The defect this is written against is a setter that is called, returns true,
+// updates its cached Config and changes NOTHING in WDSP. Reading filterTaps
+// back would pass against exactly that, so nothing here reads it back: every
+// assertion below is a MEASUREMENT of the channel's group delay, taken from
+// audio the channel actually produced.
+//
+// The measurement is tone onset. A linear-phase FIR of N taps delays by
+// (N-1)/2 samples, so 2048 -> 1023.5 and 8192 -> 4095.5, and the DIFFERENCE is
+// 3072 samples exactly. Differences are what this asserts: the absolute onset
+// also carries WDSP's iobuffs pipeline (dspBlockSize + max(in, dsp) samples)
+// and the startup mute ramp, and both are identical in every leg, so both
+// cancel. That is deliberate -- pinning the absolute would pin two constants
+// this change does not own.
+//
+// THE PRIMING MATTERS AND IS NOT OPTIONAL. iobuffs.c's upslew2 leaves its
+// BEGIN state only `if ((I != 0.0) || (Q != 0.0))`, so clocking SILENCE to
+// spend the startup mute ramp does not spend it -- it pins it, and the ramp
+// then fires on the first sample of the probe tone, inside the measurement
+// window. Every leg is primed with low-level NOISE instead, after any setter
+// call (RXASetNC restarts the channel, which re-arms the ramp) and before the
+// tone. Priming with noise and probing with a tone also keeps the onset
+// threshold unambiguous: the primer's output is orders of magnitude below half
+// the tone's steady level.
+double onsetSamplesForLeg(int openTaps, int setTaps, bool setMinimumPhase,
+                          bool* ok)
+{
+    *ok = false;
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.inputSampleRate = 48000;
+    config.dspSampleRate = 48000;
+    config.outputSampleRate = 48000;
+    config.mode = WdspChannel::Mode::Usb;
+    config.filterLowHz = 150.0;
+    config.filterHighHz = 3000.0;
+    // AGC off at unity. wcpagc.c's xwcpagc early-returns at mode 0 and never
+    // enters its lookahead buffer, which otherwise contributes its own delay
+    // (and would contribute it identically in every leg, but there is no
+    // reason to measure through a stage this change does not touch).
+    config.agcMode = 0;
+    config.agcFixedGainDb = 0.0;
+    config.blockForOutput = true;
+    config.filterTaps = openTaps;
+
+    std::string error;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+    if (!channel) {
+        std::cout << "  channel creation failed: " << error << "\n";
+        return 0.0;
+    }
+    if (setTaps != 0 && !channel->setFilterTaps(setTaps)) {
+        std::cout << "  setFilterTaps(" << setTaps << ") returned false\n";
+        return 0.0;
+    }
+    if (setMinimumPhase && !channel->setMinimumPhase(true)) {
+        std::cout << "  setMinimumPhase(true) returned false\n";
+        return 0.0;
+    }
+
+    std::vector<float> inputI(config.inputBlockSize);
+    std::vector<float> inputQ(config.inputBlockSize);
+    std::vector<float> outputLeft(channel->outputBlockSize());
+    std::vector<float> outputRight(channel->outputBlockSize());
+
+    // Prime. 96 blocks = 24576 samples: longer than the 8192-tap filter's own
+    // fill and far longer than the 0.035 s mute ramp.
+    constexpr std::size_t kPrimeBlocks = 96;
+    uint32_t lcg = 0x13579bdfu;
+    for (std::size_t block = 0; block < kPrimeBlocks; ++block) {
+        for (std::size_t sample = 0; sample < config.inputBlockSize; ++sample) {
+            lcg = lcg * 1664525u + 1013904223u;
+            inputI[sample] = static_cast<float>(
+                1.0e-5 * (static_cast<double>(lcg >> 8) / 8388608.0 - 1.0));
+            lcg = lcg * 1664525u + 1013904223u;
+            inputQ[sample] = static_cast<float>(
+                1.0e-5 * (static_cast<double>(lcg >> 8) / 8388608.0 - 1.0));
+        }
+        if (channel->processIq(inputI, inputQ, outputLeft, outputRight) !=
+            WdspChannel::ProcessResult::Ok) {
+            std::cout << "  primer block " << block << " did not process\n";
+            return 0.0;
+        }
+    }
+
+    // Probe. The tone is negative baseband because RXA as configured passes the
+    // opposite sign to its passband bounds -- the same geometry
+    // runNotchAttenuationTest measures in, and the one the HL2 runs.
+    constexpr std::size_t kProbeBlocks = 128;
+    std::vector<float> capture;
+    capture.reserve(kProbeBlocks * outputLeft.size());
+    for (std::size_t block = 0; block < kProbeBlocks; ++block) {
+        fillComplexTone(inputI, inputQ, config.inputSampleRate, -1500.0,
+                        block * config.inputBlockSize);
+        if (channel->processIq(inputI, inputQ, outputLeft, outputRight) !=
+            WdspChannel::ProcessResult::Ok) {
+            std::cout << "  probe block " << block << " did not process\n";
+            return 0.0;
+        }
+        capture.insert(capture.end(), outputLeft.begin(), outputLeft.end());
+    }
+
+    // Envelope: peak magnitude over one period of the 1500 Hz audio tone.
+    // Steady level from the final quarter, which is long past any onset this
+    // test can produce. NOT the peak over the whole capture -- a linear-phase
+    // bandpass step response overshoots, and that peak is Gibbs ringing.
+    constexpr std::size_t kPeriod = 32;   // 48000 / 1500
+    if (capture.size() <= kPeriod) {
+        return 0.0;
+    }
+    std::vector<double> envelope(capture.size() - kPeriod, 0.0);
+    for (std::size_t sample = 0; sample < envelope.size(); ++sample) {
+        double peak = 0.0;
+        for (std::size_t k = 0; k < kPeriod; ++k) {
+            peak = std::max(peak, std::abs(static_cast<double>(capture[sample + k])));
+        }
+        envelope[sample] = peak;
+    }
+    double steady = 0.0;
+    const std::size_t steadyFrom = envelope.size() - envelope.size() / 4;
+    for (std::size_t sample = steadyFrom; sample < envelope.size(); ++sample) {
+        steady += envelope[sample];
+    }
+    steady /= static_cast<double>(envelope.size() - steadyFrom);
+    if (steady <= 1.0e-4) {
+        std::cout << "  the probe tone produced no steady output (" << steady << ")\n";
+        return 0.0;
+    }
+    for (std::size_t sample = 0; sample < envelope.size(); ++sample) {
+        if (envelope[sample] >= 0.5 * steady) {
+            *ok = true;
+            return static_cast<double>(sample);
+        }
+    }
+    std::cout << "  the probe tone never reached half its steady level\n";
+    return 0.0;
+}
+
+bool runFilterTapsGroupDelayTest()
+{
+    // Expected group-delay difference between 8192 and 2048 taps:
+    // (8192-1)/2 - (2048-1)/2 = 3072 samples, 64.0 ms at 48 kHz.
+    constexpr double kExpectedDelta = 3072.0;
+    // One input block. The onset estimator quantises to its 32-sample envelope
+    // window and the filter's ring-up is gradual, so this is loose against the
+    // estimator and tight against the quantity: a setter that did nothing would
+    // read a delta of 0, and a setter that moved the taps the wrong way would
+    // read -3072.
+    constexpr double kTolerance = 256.0;
+
+    bool ok = false;
+    const double open2048 = onsetSamplesForLeg(2048, 0, false, &ok);
+    if (!require(ok, "the 2048-tap baseline leg did not measure")) {
+        return false;
+    }
+    const double raised = onsetSamplesForLeg(2048, 8192, false, &ok);
+    if (!require(ok, "the setFilterTaps(8192) leg did not measure")) {
+        return false;
+    }
+    const double open8192 = onsetSamplesForLeg(8192, 0, false, &ok);
+    if (!require(ok, "the 8192-tap baseline leg did not measure")) {
+        return false;
+    }
+    const double lowered = onsetSamplesForLeg(8192, 2048, false, &ok);
+    if (!require(ok, "the setFilterTaps(2048) leg did not measure")) {
+        return false;
+    }
+    const double minimumPhase = onsetSamplesForLeg(8192, 0, true, &ok);
+    if (!require(ok, "the setMinimumPhase(true) leg did not measure")) {
+        return false;
+    }
+
+    std::cout << "  onset, samples after the probe tone starts:\n"
+              << "    opened 2048                  " << open2048 << "\n"
+              << "    opened 2048 -> setFilterTaps(8192) " << raised
+              << "   (delta " << (raised - open2048) << ")\n"
+              << "    opened 8192                  " << open8192 << "\n"
+              << "    opened 8192 -> setFilterTaps(2048) " << lowered
+              << "   (delta " << (lowered - open8192) << ")\n"
+              << "    opened 8192 -> setMinimumPhase(true) " << minimumPhase
+              << "   (delta " << (minimumPhase - open8192) << ")\n"
+              << "  expected tap delta " << kExpectedDelta << " samples ("
+              << (kExpectedDelta * 1000.0 / 48000.0) << " ms at 48 kHz)\n";
+
+    bool result = true;
+    // Raising. The measurement that a setter doing nothing fails.
+    result = require(std::abs((raised - open2048) - kExpectedDelta) <= kTolerance,
+                     "setFilterTaps(8192) did not add the group delay of an "
+                     "8192-tap filter") && result;
+    // Lowering. The same defect can hide in one direction only -- a setter that
+    // applies a floor, or that only ever grows the filter, passes the leg above
+    // and fails this one.
+    result = require(std::abs((lowered - open8192) + kExpectedDelta) <= kTolerance,
+                     "setFilterTaps(2048) did not remove the group delay of an "
+                     "8192-tap filter") && result;
+    // The setter arrives where open() arrives. Without these two, both deltas
+    // above could be right while the channel sat at some third tap count.
+    result = require(std::abs(raised - open8192) <= kTolerance,
+                     "setFilterTaps(8192) did not reach the same group delay as "
+                     "opening at 8192") && result;
+    result = require(std::abs(lowered - open2048) <= kTolerance,
+                     "setFilterTaps(2048) did not reach the same group delay as "
+                     "opening at 2048") && result;
+    // Minimum phase keeps the 8192 taps and front-loads their energy, so the
+    // onset must collapse well below even the 2048-tap linear-phase figure.
+    // Asserted as a relation, not a number: the exact figure is
+    // frequency-dependent for a minimum-phase filter.
+    result = require(minimumPhase < open2048,
+                     "setMinimumPhase(true) did not reduce the group delay below "
+                     "the 2048-tap linear-phase figure") && result;
+
+    // The notch width floor is a function of the tap count -- 1600 / (nc/256) Hz
+    // at 48 kHz -- and it is what the long filter is bought for. A caller that
+    // raises the taps to honour a narrow notch has to see the floor move, so
+    // pin that it follows the setter rather than the Config the channel opened
+    // with.
+    WdspChannel::Config config;
+    config.filterTaps = 2048;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(config);
+    if (!require(channel != nullptr, "the notch-width channel did not open")) {
+        return false;
+    }
+    const int channelIdBefore = channel->channelIdForTest();
+    const double floorAt2048 = channel->minimumNotchWidthHz();
+    result = require(std::abs(floorAt2048 - 200.0) < 0.5,
+                     "the 2048-tap notch width floor is not 200 Hz") && result;
+    result = require(channel->setFilterTaps(8192),
+                     "setFilterTaps(8192) was refused on a live channel") && result;
+    // The WDSP channel id is the process-global table slot. If it moved, the
+    // channel was closed and reopened -- which is what reconfigure() does and
+    // what takes the notch database with it. Same id is the cheap proof that
+    // RXASetNC changed the filter IN PLACE.
+    result = require(channel->channelIdForTest() == channelIdBefore,
+                     "setFilterTaps closed and reopened the channel") && result;
+    const double floorAt8192 = channel->minimumNotchWidthHz();
+    result = require(std::abs(floorAt8192 - 50.0) < 0.5,
+                     "the notch width floor did not follow setFilterTaps(8192) "
+                     "down to 50 Hz") && result;
+    result = require(channel->setFilterTaps(2048),
+                     "setFilterTaps(2048) was refused on a live channel") && result;
+    result = require(std::abs(channel->minimumNotchWidthHz() - 200.0) < 0.5,
+                     "the notch width floor did not follow setFilterTaps(2048) "
+                     "back up to 200 Hz") && result;
+    std::cout << "  minimumNotchWidthHz: 2048 -> " << floorAt2048
+              << " Hz, after setFilterTaps(8192) -> " << floorAt8192 << " Hz\n";
+
+    // Refusals. nc >= size is WDSP's own requirement (fircore divides nc by
+    // size); a shorter filter than one block gives nfor == 0 and a channel that
+    // is silent rather than broken, which is the worst way to fail.
+    result = require(!channel->setFilterTaps(0),
+                     "setFilterTaps accepted zero taps") && result;
+    result = require(!channel->setFilterTaps(-8192),
+                     "setFilterTaps accepted a negative tap count") && result;
+    result = require(!channel->setFilterTaps(
+                         static_cast<int>(config.dspBlockSize) / 2),
+                     "setFilterTaps accepted a filter shorter than one DSP block")
+             && result;
+
+    // AND THE HALF nc >= size DOES NOT COVER. fircore walks its overlap-save
+    // ring with idxmask = nfor - 1 used as a POWER-OF-TWO MASK (firmin.c,
+    // xfircore), and firmin.h states the contract on the field itself: "number
+    // of filter coefficients, power of two, >= size". The first three below all
+    // satisfy nc >= size, all used to return true, and all corrupt the filter
+    // silently.
+    //
+    // dspBlockSize is 1024 here, so: 3072 gives nfor 3 and mask 2, at which
+    // buffidx is pinned at 0 and one partition is never written or read; 6144
+    // gives nfor 6 and mask 5, at which half the ring is skipped; 1536 is not a
+    // multiple of the block at all, so nfor truncates to 1 and a third of the
+    // impulse is discarded.
+    //
+    // MEASURED before the guard existed, dspBlockSize 1024, a 0.1-amplitude
+    // tone in a 150-3000 Hz passband, steady-state peak in band (1500 Hz) and
+    // out of band (6000 Hz):
+    //
+    //   1024 taps  0.39807 / 0.00000  = 139 dB rejection   sound
+    //   1536 taps  0.39723 / 0.00032  =  62 dB             impulse truncated
+    //   2048 taps  0.39807 / 0.00000  = 149 dB             sound
+    //   3072 taps  0.00008 / 0.00044  = -15 dB             ring broken
+    //   6144 taps  0.19966 / 0.03989  =  14 dB             ring broken
+    //   8192 taps  0.39807 / 0.00000  = 161 dB             sound
+    //
+    // At 3072 the wanted signal comes out 74 dB down and the out-of-band tone
+    // comes out LOUDER than it. The truncating counts keep their passband and
+    // lose their stopband -- audio that sounds right and no longer filters,
+    // which is the worse of the two failures because nothing sounds wrong.
+    result = require(!channel->setFilterTaps(3072),
+                     "setFilterTaps accepted 3072 taps, whose nfor of 3 is not a "
+                     "power of two") && result;
+    result = require(!channel->setFilterTaps(6144),
+                     "setFilterTaps accepted 6144 taps, whose nfor of 6 is not a "
+                     "power of two") && result;
+    result = require(!channel->setFilterTaps(1536),
+                     "setFilterTaps accepted 1536 taps, which is not a multiple "
+                     "of the DSP block size") && result;
+    result = require(!channel->setFilterTaps(128),
+                     "setFilterTaps accepted 128 taps, below WDSP's own "
+                     "min_notch_width divisor of 256") && result;
+    // Refused and INERT: a rejected count must not have moved the channel.
+    result = require(std::abs(channel->minimumNotchWidthHz() - 200.0) < 0.5,
+                     "a refused setFilterTaps still moved the notch width floor")
+             && result;
+
+    // THE SAME DOOR THROUGH open(). validateConfig() did not look at filterTaps
+    // at all, so create() and reconfigure() reached every corruption above
+    // while the setter refused it. One predicate now guards both.
+    for (const int bad : {3072, 6144, 1536, 128, 0, -8192}) {
+        WdspChannel::Config badConfig;
+        badConfig.filterTaps = bad;
+        std::string badError;
+        result = require(WdspChannel::create(badConfig, &badError) == nullptr,
+                         "create() accepted a filter length fircore cannot "
+                         "partition") && result;
+    }
+    // ... and the sound ones still open, across four tap/block pairings. 2048
+    // at dspBlockSize 2048 and 256 at 256 are both nfor == 1, the tightest case
+    // in the tree and the one runUnderrunTest already relies on.
+    for (const auto [taps, block] : {std::pair<int, std::size_t>{2048, 1024},
+                                     {8192, 256},
+                                     {2048, 2048},
+                                     {256, 256}}) {
+        WdspChannel::Config goodConfig;
+        goodConfig.filterTaps = taps;
+        goodConfig.dspBlockSize = block;
+        goodConfig.inputBlockSize = block;
+        std::string goodError;
+        result = require(WdspChannel::create(goodConfig, &goodError) != nullptr,
+                         "create() refused a filter length fircore can "
+                         "partition") && result;
+    }
+
+    // Transmit has none of the six cores RXASetNC and RXASetMP address.
+    WdspChannel::Config txConfig;
+    txConfig.direction = WdspChannel::Direction::Transmit;
+    std::unique_ptr<WdspChannel> tx = WdspChannel::create(txConfig);
+    if (require(tx != nullptr, "the transmit channel did not open")) {
+        result = require(!tx->setFilterTaps(8192),
+                         "setFilterTaps was accepted on a transmit channel") && result;
+        result = require(!tx->setMinimumPhase(true),
+                         "setMinimumPhase was accepted on a transmit channel") && result;
+    } else {
+        result = false;
+    }
+
+    return result;
+}
+
+// The property that makes a runtime tap change worth having at all, and the one
+// reconfigure() cannot provide: RXASetNC reaches nbp0 through setNc_nbp ->
+// calc_nbp_impulse, which rebuilds the mask FROM the notch database rather than
+// replacing the database, so notches placed before the call survive it.
+// reconfigure() closes and reopens the channel and takes the database with it.
+bool runNotchSurvivesTapChangeTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.inputSampleRate = 48000;
+    config.dspSampleRate = 48000;
+    config.outputSampleRate = 48000;
+    config.mode = WdspChannel::Mode::Usb;
+    config.filterLowHz = 150.0;
+    config.filterHighHz = 3000.0;
+    config.agcMode = 0;
+    config.agcFixedGainDb = 0.0;
+    config.blockForOutput = true;
+    config.filterTaps = 2048;
+
+    const double tuneHz = 7'000'000.0;
+    const double toneBasebandHz = -1500.0;
+    const double toneRfHz = tuneHz + 1500.0;
+
+    // Same geometry as runNotchAttenuationTest. `notchRfHz == 0` measures the
+    // unnotched control.
+    const auto measure = [&](double notchRfHz, bool raiseTaps) -> double {
+        std::unique_ptr<WdspChannel> channel = WdspChannel::create(config);
+        if (!channel || !channel->setNotchTuneFrequency(tuneHz)) {
+            return -1.0;
+        }
+        if (notchRfHz != 0.0) {
+            // 400 Hz: above the 200 Hz floor at 2048 taps, so the notch is
+            // placed at the width asked for and stays at it when the taps rise.
+            if (!channel->addNotch(0, notchRfHz, 400.0, true) ||
+                !channel->setNotchesEnabled(true)) {
+                return -1.0;
+            }
+        }
+        // AFTER the notch is placed. This is the ordering under test.
+        if (raiseTaps && !channel->setFilterTaps(8192)) {
+            return -1.0;
+        }
+        if (raiseTaps && channel->notchCount() != (notchRfHz != 0.0 ? 1 : 0)) {
+            return -1.0;
+        }
+        std::vector<float> inputI(config.inputBlockSize);
+        std::vector<float> inputQ(config.inputBlockSize);
+        std::vector<float> outputLeft(channel->outputBlockSize());
+        std::vector<float> outputRight(channel->outputBlockSize());
+        double energy = 0.0;
+        constexpr std::size_t kSettleBlocks = 60;
+        constexpr std::size_t kTotalBlocks = 120;
+        for (std::size_t block = 0; block < kTotalBlocks; ++block) {
+            fillComplexTone(inputI, inputQ, config.inputSampleRate,
+                            toneBasebandHz, block * config.inputBlockSize);
+            if (channel->processIq(inputI, inputQ, outputLeft, outputRight) !=
+                WdspChannel::ProcessResult::Ok) {
+                return -1.0;
+            }
+            if (block >= kSettleBlocks) {
+                energy += rms(outputLeft);
+            }
+        }
+        return energy;
+    };
+
+    const double unnotched = measure(0.0, true);
+    const double notched = measure(toneRfHz, true);
+    const double mirror = measure(tuneHz - 1500.0, true);
+
+    if (!require(unnotched > 1.0e-4 && notched >= 0.0 && mirror >= 0.0,
+                 "the notch-survives-tap-change measurement failed to run")) {
+        return false;
+    }
+    std::cout << "  after setFilterTaps(8192) with a notch already placed:"
+              << " unnotched " << unnotched << ", notched " << notched
+              << ", mirror " << mirror << "\n";
+    return require(notched < unnotched * 0.25,
+                   "a notch placed before setFilterTaps no longer attenuates "
+                   "after it -- the tap change destroyed the notch database") &&
+           require(mirror > unnotched * 0.75,
+                   "raising the taps inverted the notch frequency axis");
+}
+
 bool runLifecycleTest()
 {
     const uint64_t baseline = WdspChannel::outstandingAllocationsForTest();
@@ -2959,6 +3394,10 @@ int main()
     check(runLeakChecked("notch attenuation test", runNotchAttenuationTest));
     check(runLeakChecked("minimum-phase workspace test",
                          runMinimumPhaseWorkspaceTest));
+    check(runLeakChecked("filter-taps group-delay test",
+                         runFilterTapsGroupDelayTest));
+    check(runLeakChecked("notch survives tap change test",
+                         runNotchSurvivesTapChangeTest));
     check(runLeakChecked("FM deviation test", runFmDeviationTest));
     // LAST, and deliberately so: see the ordering note above. Anything added
     // later belongs ABOVE this line, not below it.

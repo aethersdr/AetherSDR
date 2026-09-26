@@ -2541,6 +2541,12 @@ void VfoWidget::buildTabContent()
             m_fmRevBtn->setAccessibleName("Reverse repeater offset");
             m_fmRevBtn->setCheckable(true);
             m_fmRevBtn->setStyleSheet(kRevBtn);
+            // The same :disabled rule its three neighbours carry. Without it a
+            // gated-off REV is indistinguishable from a live one, which is the
+            // "dead control that looks live" failure the gate exists to remove.
+            ThemeManager::instance().applyStyleSheet(m_fmRevBtn, m_fmRevBtn->styleSheet()
+                + QStringLiteral("QPushButton:disabled { color: {{color.text.disabled}}; "
+                                 "background: {{color.background.2}}; }"));
             connect(m_fmRevBtn, &QPushButton::toggled, this, [this](bool on) {
                 if (m_fmRevBtn->signalsBlocked() || !m_slice
                     || usesTransmitFrequencyCheck()) return;
@@ -6508,6 +6514,35 @@ void VfoWidget::configureRepeaterReverseControl()
     m_fmRevBtn->setCheckable(!xfc);
     m_fmRevBtn->setChecked(false);
     m_fmRevBtn->setDown(xfc && m_radioModel->transmitFrequencyCheck());
+    // REV IS GATED HERE AND NOT IN configureFmToneControls(), BECAUSE THIS
+    // BUTTON IS TWO CONTROLS. Its three neighbours in the same row -- the
+    // offset spin and -/Simplex/+ -- are repeater duplex and nothing else, so
+    // they take hasFmRepeaterOffset directly. This one wears XFC when the
+    // backend declares hasTransmitFrequencyCheck and REV otherwise, and only
+    // the REV personality moves the repeater offset: its toggled handler writes
+    // SliceModel::setTxOffsetFreq, while the XFC personality is momentary and
+    // drives RadioModel::setTransmitFrequencyCheck from pressed/released.
+    //
+    // Those two capabilities are INDEPENDENT, so hasFmRepeaterOffset alone is
+    // the wrong gate. IcomCivBackend derives hasFmRepeaterOffset from
+    // FmRepeaterProfile::hasDuplex and hasTransmitFrequencyCheck from
+    // FmRepeaterProfile::hasXfc, and the IC-7300MK2 declares hasXfc true with
+    // hasDuplex false -- a shipping radio whose XFC button would go dark.
+    // The honest test is whether the personality the button is CURRENTLY
+    // wearing has a verb behind it.
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    const bool repeaterAvailable = !connected
+        || m_radioModel->backendCapabilities().hasFmRepeaterOffset;
+    m_fmRevBtn->setEnabled(xfc || repeaterAvailable);
+    // AGENTS.md: "unavailable (the radio lacks it, dimmed WITH A STATED
+    // REASON)", and the reason "must reach a screen reader via
+    // accessibleDescription ... because a tooltip is a mouse affordance that is
+    // never announced". Cleared when the control is live so a stale reason
+    // cannot be read out over a working button.
+    m_fmRevBtn->setAccessibleDescription((xfc || repeaterAvailable)
+        ? QString()
+        : QStringLiteral("Unavailable: this radio declares no repeater duplex "
+                         "offset, so there is nothing for REV to reverse."));
     if (!xfc) {
         m_xfcHeldByThisControl = false;
     }

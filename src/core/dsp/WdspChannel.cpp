@@ -252,6 +252,57 @@ void setError(std::string* error, const char* message)
     }
 }
 
+// ── Which tap counts WDSP's fircore can actually run ──────────────────────
+//
+// fircore partitions the filter into nfor = nc / size blocks and walks the
+// overlap-save ring with idxmask = nfor - 1 used as a POWER-OF-TWO MASK
+// (firmin.c, xfircore: `k = (k + idxmask) & idxmask` and
+// `buffidx = (buffidx + 1) & idxmask`). firmin.h states the contract in the
+// struct itself -- `int nc; // number of filter coefficients, power of two,
+// >= size` -- so nc >= size is NECESSARY AND NOT SUFFICIENT, and nothing in
+// this file enforced the other half.
+//
+// What the missing half costs, MEASURED on this tree at dspBlockSize 1024
+// with a 0.1-amplitude tone in a 150-3000 Hz passband (in-band 1500 Hz /
+// out-of-band 6000 Hz, steady-state peak):
+//
+//   taps  nfor  mask | in-band  out-of-band  rejection
+//   1024   1     0   | 0.39807   0.00000      139 dB   sound
+//   1536   1     0   | 0.39723   0.00032       62 dB   impulse TRUNCATED
+//   2048   2     1   | 0.39807   0.00000      149 dB   sound
+//   2560   2     1   | 0.39807   0.00003       82 dB   impulse TRUNCATED
+//   3072   3     2   | 0.00008   0.00044      -15 dB   ring BROKEN
+//   4096   4     3   | 0.39807   0.00000      150 dB   sound
+//   6144   6     5   | 0.19966   0.03989       14 dB   ring BROKEN
+//   8192   8     7   | 0.39807   0.00000      161 dB   sound
+//
+// At nfor == 3 the mask is 2, so buffidx is pinned at 0 and one partition is
+// never written and never read: the wanted signal comes out 74 dB down and an
+// out-of-band tone comes out 15 dB LOUDER than it. At nfor == 6 the mask is 5
+// and half the ring is skipped. A count that is not an exact multiple of the
+// block truncates the impulse instead, which keeps the passband and throws
+// away the stopband -- audio that sounds right and no longer filters.
+//
+// Every one of those was accepted before this predicate existed, by open() and
+// by setFilterTaps() alike, and every one returned success.
+//
+// Requiring a power of two in [256, 16384] settles all of it: every divisor of
+// a power of two is a power of two, so nc / size is then exact AND itself a
+// power of two, and idxmask is a real mask. The 256 floor is WDSP's, not ours
+// -- min_notch_width() (nbp.c) computes `1600.0 / (a->nc / 256)` where NBP::nc
+// is an int, so below 256 that is a division by zero. It is also what makes
+// minimumNotchWidthHz() below identical to WDSP's own, rather than merely
+// close.
+constexpr int kMinFilterTaps = 256;
+constexpr int kMaxFilterTaps = 16384;
+
+bool filterTapsArePartitionable(int taps, std::size_t dspBlockSize) noexcept
+{
+    return taps >= kMinFilterTaps && taps <= kMaxFilterTaps &&
+           (taps & (taps - 1)) == 0 && dspBlockSize != 0 &&
+           static_cast<std::size_t>(taps) % dspBlockSize == 0;
+}
+
 } // namespace
 
 namespace {
@@ -694,6 +745,103 @@ bool WdspChannel::setAgc(int agcMode, double maximumGainDb) noexcept
     return true;
 }
 
+bool WdspChannel::setFilterTaps(int taps) noexcept
+{
+    // The SAME predicate validateConfig() applies, so the setter and open()
+    // cannot disagree about what fircore can run. nc >= size is only half of
+    // it; see filterTapsArePartitionable() for the other half and for what it
+    // costs to be missing.
+    if (m_config.direction != Direction::Receive ||
+        !filterTapsArePartitionable(taps, m_config.dspBlockSize)) {
+        return false;
+    }
+    if (taps == m_config.filterTaps) {
+        // Already there. Returning early rather than paying the stop/re-plan
+        // keeps this cheap enough for a caller that recomputes a desired length
+        // on every notch edit.
+        return true;
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+
+    // STOP THE CHANNEL OURSELVES, OUTSIDE g_setupMutex, BEFORE THE LOCK.
+    //
+    // RXASetNC opens with SetChannelState(ch, 0, 1) (RXA.c). dmode 1 spins
+    // Sleep(1) up to a 100-count timeout waiting for flushflag, and flushflag
+    // is cleared only by the down-ramp inside fexchange2 -- which
+    // beginControlOperation() above has just made unreachable, because
+    // processIq() now returns Busy. Nothing can clock that ramp, so THE
+    // TIMEOUT ALWAYS EXPIRES. Calling RXASetNC under the lock therefore holds
+    // the process-global FFTW planner lock for the whole of that timeout on top
+    // of the re-planning it is actually for. That is 100 ms only where Sleep(1)
+    // costs 1 ms; the port routes it to nanosleep() (port/wdsp_port.c), and
+    // MEASURED here it is 155-227 ms per call against 1.8-28.8 ms for the
+    // re-planning: summed over the seven calls in wdsp_channel_test, 1145 ms
+    // before against 85 ms after, so 93 % of the hold was sleep, not work.
+    //
+    // That is not a latency curiosity. Hl2Spectrum's constructor and destructor
+    // take this same lock on the EP2-pacing I/O thread (#5424) -- gateware
+    // watchdog territory -- and every other slice's control call and every
+    // backend's open() queues behind it.
+    //
+    // Stopping first makes BOTH of RXASetNC's own SetChannelState calls
+    // no-ops: WDSP returns early from each when the state already matches, so
+    // its stop does not wait and its restore does nothing. The locked region
+    // shrinks to the six FIR re-plans, which is all it was ever for.
+    // open()'s RXASetNC never had this problem -- its channel is still stopped.
+    //
+    // This is the FIFTH SetChannelState site in this file and it follows the
+    // convention setRunning(), reconfigure() and close() already follow: dmode
+    // 0, outside g_setupMutex. The drain is processIq()'s job and a control
+    // thread cannot wait for it.
+    //
+    // Leaving a down-ramp armed and never clocked is safe here for the reason
+    // reconfigure()'s stop documents: AetherSDR patch 7 made case 1 cancel a
+    // stale ramp with flush_slews() rather than finish it. The restore below
+    // does not wait either -- patch 8's wait needs exchange CLEAR, and a ramp
+    // that was never clocked leaves it SET, so case 1 falls straight through.
+    const bool wasRunning = m_running.load(std::memory_order_relaxed);
+    if (wasRunning) {
+        SetChannelState(m_channelId, 0, 0);
+    }
+    {
+        // setNc_fircore re-plans six FIR cores and FFTW's planner is process
+        // global. This, and only this, is what the lock is for.
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXASetNC(m_channelId, taps);
+    }
+    if (wasRunning) {
+        SetChannelState(m_channelId, 1, 0);
+    }
+    m_config.filterTaps = taps;
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::setMinimumPhase(bool on) noexcept
+{
+    if (m_config.direction != Direction::Receive) {
+        return false;
+    }
+    if (on == m_config.minimumPhase) {
+        return true;
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+    {
+        // RXASetMP does not stop the channel, but it does run every mask
+        // through mp_imp_exec, which plans and executes FFTs at nc * pfactor.
+        // Same planner, same lock.
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXASetMP(m_channelId, on ? 1 : 0);
+    }
+    m_config.minimumPhase = on;
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setShift(double shiftHz) noexcept
 {
     if (m_config.direction != Direction::Receive || !std::isfinite(shiftHz)
@@ -849,11 +997,23 @@ double WdspChannel::minimumNotchWidthHz() const noexcept
     // WDSP's own min_notch_width() (nbp.c) for the window type RXA.c creates the
     // stage with (wintype 0). Mirrored here rather than exposed from WDSP
     // because the value is needed to *offer* widths, before any notch exists.
-    if (m_config.direction != Direction::Receive || m_config.filterTaps <= 0
-        || m_config.dspSampleRate <= 0) {
+    //
+    // nc / 256 IS INTEGER DIVISION IN WDSP -- NBP::nc is an int (nbp.h) and so
+    // is the 256 -- and this used to do it in floating point. The two agree at
+    // 2048 and 8192 and diverge everywhere else, always in the direction that
+    // UNDER-reports the floor: at 1000 taps the real division offers 409.6 Hz
+    // where WDSP will enforce 533.3 Hz. The tap guard now admits only powers of
+    // two >= 256, at which the two are identical by construction, so this is a
+    // statement of intent rather than a behaviour change -- but it is the
+    // statement that keeps them identical if the guard is ever widened.
+    //
+    // NBP::rate is a double, so the rate half is genuine real division there
+    // too and stays as it is.
+    if (m_config.direction != Direction::Receive
+        || m_config.filterTaps < kMinFilterTaps || m_config.dspSampleRate <= 0) {
         return 0.0;
     }
-    return 1600.0 / (static_cast<double>(m_config.filterTaps) / 256.0)
+    return 1600.0 / static_cast<double>(m_config.filterTaps / 256)
            * (static_cast<double>(m_config.dspSampleRate) / 48000.0);
 }
 
@@ -925,6 +1085,22 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
     }
     if (config.direction == Direction::Transmit && config.mode == Mode::Wbfm) {
         setError(error, "WDSP TX does not define a WBFM mode");
+        return false;
+    }
+    // Receive only: filterTaps reaches WDSP solely through open()'s RXASetNC
+    // and is read only by minimumNotchWidthHz(), both of which are RX-side. A
+    // transmit channel has none of the six cores RXASetNC addresses, so
+    // constraining it there would refuse geometries nothing can be hurt by.
+    //
+    // THIS IS THE SAME CLAUSE setFilterTaps() APPLIES, deliberately. Without it
+    // here, create() and reconfigure() were a second door into exactly the
+    // corruption the setter refuses -- see filterTapsArePartitionable() above
+    // for the measured cost of walking through it.
+    if (config.direction == Direction::Receive &&
+        !filterTapsArePartitionable(config.filterTaps, config.dspBlockSize)) {
+        setError(error,
+                 "WDSP filter taps must be a power of two in [256, 16384] and "
+                 "an exact multiple of the DSP block size");
         return false;
     }
     // Refused here as well as in setFmDeviation(), because open() pushes the

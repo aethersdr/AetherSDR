@@ -112,7 +112,10 @@ public:
     bool isConnected() const override;
 
     void setSliceFrequency(int sliceId, double hz) override;
-    void setSliceMode(int sliceId, const QString& mode) override;
+    // `requested` because the definition canonicalises it: an alias spelling
+    // (CWU/NFM/WFM) is collapsed onto the one publishedModeStrings() carries
+    // before a slice ever holds it. See the definition for why.
+    void setSliceMode(int sliceId, const QString& requested) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setCwPitch(int hz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
