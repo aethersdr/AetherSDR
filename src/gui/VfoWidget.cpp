@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "SplitAudioProfile.h"
 #include "VfoDisplayDefaults.h"
 #ifdef HAVE_DEEPFIST
 #include "models/CwDecodeSettings.h"
@@ -895,6 +896,14 @@ void VfoWidget::buildUI()
         else
             emit splitToggled();
     });
+    // Right-click is where the split offsets, Monitor TX and the remembered
+    // audio arrangement live. Without it the arrangement is learned and applied
+    // with nothing anywhere to show it exists or to clear it. (#2242, #311)
+    m_splitBadge->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_splitBadge, &QPushButton::customContextMenuRequested,
+            this, [this](const QPoint& pos) {
+        emit splitBadgeMenuRequested(m_splitBadge->mapToGlobal(pos));
+    });
     hdr->addWidget(m_splitBadge);
 
     m_txBadge = new QPushButton("TX");
@@ -1464,6 +1473,7 @@ void VfoWidget::buildUI()
             // Right-click on speaker tab toggles mute directly
             btn->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(btn, &QPushButton::customContextMenuRequested, this, [this](const QPoint&) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
                 if (m_slice) m_slice->setAudioMute(!m_slice->audioMute());
             });
         }
@@ -1771,12 +1781,16 @@ void VfoWidget::buildTabContent()
         connect(m_afGainSlider, &QSlider::valueChanged, this, [this, afVal](int v) {
             afVal->setText(QString::number(v));
             if (!m_updatingFromModel) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
                 if (m_slice) m_slice->setAudioGain(v);
                 emit afGainChanged(v);
             }
         });
         connect(m_muteBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel && m_slice) m_slice->setAudioMute(on);
+            if (!m_updatingFromModel && m_slice) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
+                m_slice->setAudioMute(on);
+            }
             m_muteBtn->setText(on ? QString::fromUtf8("AF  \xF0\x9F\x94\x87")    // 🔇 AF
                                   : QString::fromUtf8("AF  \xF0\x9F\x94\x8A"));  // 🔊 AF
             m_tabBtns[0]->setText(on ? QString::fromUtf8("\xF0\x9F\x94\x87")
@@ -1844,7 +1858,10 @@ void VfoWidget::buildTabContent()
             }
         });
         connect(m_panSlider, &QSlider::valueChanged, this, [this](int v) {
-            if (!m_updatingFromModel && m_slice) m_slice->setAudioPan(v);
+            if (!m_updatingFromModel && m_slice) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
+                m_slice->setAudioPan(v);
+            }
             if (!m_updatingFromModel) emit rxPanChanged(v);  // (#1460)
         });
         connect(m_divBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -1973,9 +1990,10 @@ void VfoWidget::buildTabContent()
         connect(m_aetherDspBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherDspRequested);
 
-        // AetherTX launcher — opens the transmit chain window.
-        // 2 columns wide (cols 2-3 of the same row that hosts AetherRX).
+        // AetherTX launcher — opens the transmit chain window. Placed by
+        // relayoutDspGrid() beside AetherRX, always at the same width.
         m_aetherVoiceBtn = new QPushButton("AetherTX");
+        m_aetherVoiceBtn->setObjectName("aetherVoiceBtn");
         m_aetherVoiceBtn->setCheckable(false);
         m_aetherVoiceBtn->setFixedHeight(26);
         m_aetherVoiceBtn->setStyleSheet(kDspToggle);
@@ -1983,6 +2001,17 @@ void VfoWidget::buildTabContent()
         m_aetherVoiceBtn->setToolTip("Open AetherTX — the transmit chain: gate, EQ, compressor, de-esser, tube, voice processor, reverb, output");
         connect(m_aetherVoiceBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherVoiceRequested);
+
+        // The pair share one row container so they can split whatever width
+        // the toggles leave on their row -- three cells as readily as four or
+        // two -- with no empty cell at the end. Same gap between them as the
+        // grid keeps between its cells.
+        m_aetherLauncherRow = new QWidget;
+        auto* launcherBox = new QHBoxLayout(m_aetherLauncherRow);
+        launcherBox->setContentsMargins(0, 0, 0, 0);
+        launcherBox->setSpacing(m_dspGrid->spacing());
+        launcherBox->addWidget(m_aetherDspBtn, 1);
+        launcherBox->addWidget(m_aetherVoiceBtn, 1);
 
         // Radio-side DSP buttons only \u2014 client-side modules (NR2 / NR4 /
         // MNR / BNR / DFNR / RN2 / NNR) live in the spectrum overlay menu and
@@ -5360,10 +5389,8 @@ void VfoWidget::relayoutDspGrid()
                           m_mnBtn};
     for (auto* btn : all)
         m_dspGrid->removeWidget(btn);
-    if (m_aetherDspBtn)
-        m_dspGrid->removeWidget(m_aetherDspBtn);
-    if (m_aetherVoiceBtn)
-        m_dspGrid->removeWidget(m_aetherVoiceBtn);
+    if (m_aetherLauncherRow)
+        m_dspGrid->removeWidget(m_aetherLauncherRow);
 
     // Re-add only non-hidden buttons in 4-column rows
     int col = 0, row = 0;
@@ -5373,14 +5400,14 @@ void VfoWidget::relayoutDspGrid()
             if (++col >= 4) { col = 0; ++row; }
         }
     }
-    // Client-side launchers: ADSP (1 col) + AetherVoice (2 cols spanning
-    // the rightmost 2 columns) live on the same row.  If ADSP would land
-    // beyond col 1, wrap the pair to a fresh row first so AetherVoice
-    // always occupies cols 2-3.
-    if (m_aetherDspBtn && m_aetherVoiceBtn) {
-        if (col > 1) { col = 0; ++row; }
-        m_dspGrid->addWidget(m_aetherDspBtn, row, col);
-        m_dspGrid->addWidget(m_aetherVoiceBtn, row, 2, 1, 2);
+    // Client-side launchers, AetherRX then AetherTX, side by side and always
+    // the same width. Their row container spans every column the toggles
+    // left free on this row and the pair split it evenly, so a three-cell
+    // remainder is filled edge to edge rather than leaving a cell empty. A
+    // row with fewer than two cells left wraps to a fresh one first.
+    if (m_aetherLauncherRow) {
+        if (col > 2) { col = 0; ++row; }
+        m_dspGrid->addWidget(m_aetherLauncherRow, row, col, 1, 4 - col);
     }
 }
 

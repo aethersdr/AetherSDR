@@ -14,6 +14,8 @@ layout(std140, binding = 0) uniform Uniforms {
     float texelHeightUnit;
     float waterfallRows;
     float padding7;
+    // Shared waterfall UBO -- see texturedquad_rowframes.frag.
+    vec4 floorColor;
 };
 
 void main()
@@ -21,7 +23,7 @@ void main()
     // Do not let the reconstruction kernel cross the logical bottom edge and
     // wrap the newest ring row into a one-pixel "echo" beneath unfilled data.
     if (v_uv.y >= 1.0 - texelHeightUnit) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        fragColor = floorColor;
         return;
     }
 

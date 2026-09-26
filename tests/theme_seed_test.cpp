@@ -126,16 +126,41 @@ int main(int argc, char** argv)
                  "#506070");
 
     // ── Gradient tokens survive the emit → QVariant → ThemeGradient round trip ──
-    // All six waterfall colormaps were unseeded before the generator; a missing
-    // one gives the operator a blank waterfall with no diagnostic.
+    // Every waterfall colormap must round-trip; a missing one gives the
+    // operator a blank waterfall with no diagnostic.  (The six that predate
+    // the generator were unseeded before it existed, which is what it was
+    // written to fix; glacier postdates it and rides the same path.)
     for (const char* map : {"default", "fire", "plasma", "purple",
-                            "blueGreen", "grayscale"}) {
+                            "blueGreen", "grayscale", "glacier"}) {
         const ThemeGradient g =
             tm.gradient(QStringLiteral("color.waterfall.colormap.")
                         + QLatin1String(map));
         EXPECT_TRUE(g.stops.size() > 1);
         for (const ThemeGradientStop& stop : g.stops)
             EXPECT_TRUE(stop.color.isValid());
+    }
+
+    // ── The waterfall floor invariant SpectrumWidget::waterfallFloorRgb() rests on ──
+    // A cleared waterfall pixel is painted with the palette's t=0 colour
+    // rather than Qt::black.  That is only a no-op for the presets that ARE
+    // black at zero, and Glacier is deliberately the one that is not -- its
+    // #05183c floor is the whole point of the preset (#5670).  Pin both
+    // halves: if a future palette edit moved one of the six off black the
+    // change would be silent, and if glacier's floor drifted the clear paths
+    // would stop matching floor-level signal.
+    for (const char* map : {"default", "fire", "plasma", "purple",
+                            "blueGreen", "grayscale"}) {
+        const ThemeGradient g =
+            tm.gradient(QStringLiteral("color.waterfall.colormap.")
+                        + QLatin1String(map));
+        EXPECT_COLOR(g.stops.first().color, "#000000");
+        EXPECT_TRUE(qFuzzyIsNull(g.stops.first().at));
+    }
+    {
+        const ThemeGradient glacier =
+            tm.gradient(QStringLiteral("color.waterfall.colormap.glacier"));
+        EXPECT_COLOR(glacier.stops.first().color, "#05183c");
+        EXPECT_TRUE(qFuzzyIsNull(glacier.stops.first().at));
     }
     // The meter bar ramp is the other seeded gradient, and the only one that
     // was seeded before the generator — pin it so a generator change that

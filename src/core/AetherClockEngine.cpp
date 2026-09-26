@@ -2,6 +2,8 @@
 
 #include "core/WwvDecoder.h"
 #include "core/WwvbDecoder.h"
+#include "core/ClockSampleTimeline.h"
+#include "core/DecoderPcmAdapter.h"
 #include "models/SliceModel.h"
 
 #include <QByteArray>
@@ -15,11 +17,14 @@
 #include <QVector>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
+#include <map>
+#include <utility>
 #include <vector>
 
 namespace AetherSDR {
@@ -84,7 +89,7 @@ struct DecoderHolder final : IDecoder {
 
 } // namespace
 
-struct AetherClockEngine::Impl {
+struct AetherClockEngine::Impl : std::enable_shared_from_this<AetherClockEngine::Impl> {
     explicit Impl(AetherClockEngine* owner) : q(owner) {
         // Parented to q so it dies with the engine. Single-shot; the engine is a
         // thread-agnostic QObject whose slots and queued feedRxAudio all run on
@@ -103,7 +108,7 @@ struct AetherClockEngine::Impl {
         });
     }
 
-    AetherClockEngine* q = nullptr;
+    QPointer<AetherClockEngine> q;
 
     // DAX-hold provider (EB3: the engine never touches the vendor stream). The
     // wiring layer wraps the central PanadapterStream::acquire/releaseDaxChannel
@@ -113,9 +118,15 @@ struct AetherClockEngine::Impl {
     std::function<bool()> daxAvailable;               // unset = assume DAX
 
     QPointer<SliceModel> slice;
-    std::unique_ptr<IDecoder> decoder;
+    std::shared_ptr<IDecoder> decoder;
+    IDecoder* processingDecoder = nullptr;
+    quint64 processingGeneration = 0;
+    std::optional<PcmEpochLease> processingSource;
+    bool deferredDecoderReset = false;
 
-    int heldChannel = 0;                              // 0 = none
+    // Both channels belong to us while acquire-new invokes the external
+    // provider. Nested stop/start must be able to retire either hold.
+    std::array<bool, 8> heldChannels{};
     ClockStation configured = ClockStation::Unknown;  // station chosen at start()
     ClockStation lastStation = ClockStation::Unknown; // for stationDetected edges
     ClockLockState lastState = ClockLockState::NoSignal;
@@ -141,10 +152,15 @@ struct AetherClockEngine::Impl {
     std::function<qint64()> nowUtcMs =
         [] { return QDateTime::currentMSecsSinceEpoch(); };
 
-    // Sample <-> host anchor: host time `anchorHostMs` corresponds to total
-    // consumed sample `anchorSamples` (the END of the last fed buffer).
-    std::int64_t anchorSamples = 0;
-    qint64 anchorHostMs = 0;
+    ClockSampleTimeline timeline;
+    DecoderPcmAdapter input;
+    quint64 inputGeneration = 0;
+    quint64 transitionRevision = 0;
+    bool expectsDax = true;
+    int selectedDaxChannel = 0;
+    // Preserve slot/object attribution across stop/start and visits to other
+    // slices. A replacement object cannot inherit a still-live retired source.
+    std::map<int, QPointer<SliceModel>> nativeOwners;
 
     // Second-0 sample index of the most recent completed frame (from onFrame,
     // which always fires immediately before the vote refresh). votedField
@@ -156,45 +172,165 @@ struct AetherClockEngine::Impl {
     std::vector<float> monoScratch;
 
     void ingest(const QByteArray& pcm);
+    void ingest(const PcmFrame& frame);
+
+    void advanceInputGeneration() {
+        const std::shared_ptr<Impl> lifetime = shared_from_this();
+        ++inputGeneration;
+        if (q) {
+            emit q->sourceGenerationChanged(inputGeneration);
+        }
+    }
+
+    void resetAcquisition() {
+        const std::shared_ptr<Impl> lifetime = shared_from_this();
+        const std::shared_ptr<IDecoder> resetting = decoder;
+        const quint64 revision = transitionRevision;
+        const quint64 generation = inputGeneration;
+        if (resetting) {
+            if (resetting.get() == processingDecoder) {
+                deferredDecoderReset = true;
+            } else {
+                resetting->reset();
+            }
+        }
+        if (!q || revision != transitionRevision || generation != inputGeneration
+            || resetting != decoder) {
+            return;
+        }
+        timeline.reset();
+        lastFrameStartSample = 0;
+        haveFrame = false;
+        lastStation = ClockStation::Unknown;
+        classifiedMs.clear();
+        setState(ClockLockState::NoSignal);
+        if (q && running && revision == transitionRevision && generation == inputGeneration
+            && resetting == decoder) {
+            armDecayTimer();
+        }
+    }
+
+    bool resetInputContext(bool reselect = false) {
+        const std::shared_ptr<Impl> lifetime = shared_from_this();
+        const quint64 revision = ++transitionRevision;
+        if (reselect) {
+            selectInput();
+        } else {
+            input.reset();
+        }
+        ++inputGeneration;
+        resetAcquisition();
+        if (!q || revision != transitionRevision) {
+            return false;
+        }
+        emit q->sourceGenerationChanged(inputGeneration);
+        return q && revision == transitionRevision;
+    }
+
+    bool canPublish() const {
+        return q && running && decoder
+            && (!processingDecoder
+                || (decoder.get() == processingDecoder
+                    && processingGeneration == inputGeneration
+                    && (!processingSource || processingSource->current())));
+    }
+
+    void processSamples(const float* samples, std::size_t count,
+                        std::optional<PcmEpochLease> source = std::nullopt) {
+        const std::shared_ptr<Impl> lifetime = shared_from_this();
+        // Signals fire inline inside process(). A listener may revoke the
+        // producer, stop, retune or restart. Hold the executing instance alive,
+        // defer its reset, and suppress every further old-context publication.
+        const std::shared_ptr<IDecoder> executing = decoder;
+        processingDecoder = executing.get();
+        processingGeneration = inputGeneration;
+        processingSource = source;
+        deferredDecoderReset = false;
+        executing->process(samples, count);
+        processingDecoder = nullptr;
+        processingSource.reset();
+        const bool stillSelected = decoder == executing;
+        if (q && stillSelected && (deferredDecoderReset || (source && !source->current()))) {
+            input.reset();
+            resetAcquisition();
+        }
+        deferredDecoderReset = false;
+    }
+
+    void selectInput() {
+        input.clearRoute();
+        if (!slice) {
+            return;
+        }
+        if (expectsDax) {
+            if (selectedDaxChannel > 0) {
+                input.selectRoute(DecoderPcmAdapter::RouteLane::Dax, selectedDaxChannel);
+            }
+        } else {
+            input.selectRoute(DecoderPcmAdapter::RouteLane::NativeSlice, slice->sliceId());
+        }
+    }
 
     QMetaObject::Connection connDax;
     QMetaObject::Connection connDestroyed;
+    QMetaObject::Connection connFrequency;
+    QMetaObject::Connection connMode;
 
     double hostMsAtSample(std::int64_t s) const {
-        return static_cast<double>(anchorHostMs)
-             - static_cast<double>(anchorSamples - s) * 1000.0
-                   / static_cast<double>(AetherClockEngine::kSampleRateHz);
+        return timeline.hostMsAtSample(s);
     }
 
     void setState(ClockLockState s) {
-        if (s == lastState) return;
+        if (!q || s == lastState) return;
         lastState = s;
         emit q->lockStateChanged(s);
-        emit q->lockedChanged(s == ClockLockState::Locked);
+        if (q && lastState == s && (s == ClockLockState::NoSignal || canPublish())) {
+            emit q->lockedChanged(s == ClockLockState::Locked);
+        }
     }
 
     void disconnectAll() {
         QObject::disconnect(connDax);
         QObject::disconnect(connDestroyed);
+        QObject::disconnect(connFrequency);
+        QObject::disconnect(connMode);
         connDax = {};
         connDestroyed = {};
+        connFrequency = {};
+        connMode = {};
     }
 
-    void releaseHold() {
-        if (releaseCh && heldChannel >= 1 && heldChannel <= 8)
-            releaseCh(heldChannel);
-        heldChannel = 0;
+    void releaseHold(int channel) {
+        const std::function<void(int)> release = releaseCh;
+        if (std::exchange(heldChannels[static_cast<std::size_t>(channel - 1)], false)
+            && release) {
+            release(channel);
+        }
+    }
+
+    void releaseAllHolds() {
+        const quint64 revision = transitionRevision;
+        for (int channel = 1; channel <= 8; ++channel) {
+            releaseHold(channel);
+            if (!q || revision != transitionRevision) {
+                return;
+            }
+        }
     }
 
     void armDecayTimer() { decayTimer->start(decayTimeoutMs); }
 
     void onDecayTimeout() {
+        const std::shared_ptr<Impl> lifetime = shared_from_this();
+        const quint64 revision = transitionRevision;
         if (!running) return;
         // Demote ONE step and re-arm; at the NoSignal floor stop re-arming until
         // the next classified second re-arms the watchdog (handleSecond).
         if (lastState == ClockLockState::Locked) {
             setState(ClockLockState::Acquiring);
-            armDecayTimer();
+            if (q && running && revision == transitionRevision) {
+                armDecayTimer();
+            }
         } else if (lastState == ClockLockState::Acquiring) {
             setState(ClockLockState::NoSignal);
         }
@@ -202,9 +338,16 @@ struct AetherClockEngine::Impl {
 
     // ---- Decoder callbacks: fire inline on the feed thread during process() ----
 
-    void handleState(ClockLockState st) { setState(st); }
+    void handleState(ClockLockState st) {
+        if (canPublish()) {
+            setState(st);
+        }
+    }
 
     void handleSecond(const ClockSecondInfo& info) {
+        if (!canPublish()) {
+            return;
+        }
         ClockAlignmentFrame f;
         f.hostUtcMs = static_cast<qint64>(std::llround(hostMsAtSample(info.edgeSample)));
         f.secondOfFrame = info.secondOfFrame;
@@ -220,7 +363,13 @@ struct AetherClockEngine::Impl {
         f.symbol = static_cast<int>(info.symbol);
         f.confidence = info.confidence;
         f.station = static_cast<quint8>(static_cast<int>(decoder->station()));
+        if (!canPublish()) {
+            return;
+        }
         emit q->alignmentFrame(f);
+        if (!canPublish()) {
+            return;
+        }
 
         // Surface the station once the decoder classifies it (WWV/WWVH by tick
         // band per NIST SP 432; WWVB by construction).
@@ -228,6 +377,9 @@ struct AetherClockEngine::Impl {
         if (st != lastStation) {
             lastStation = st;
             emit q->stationDetected(st);
+        }
+        if (!canPublish()) {
+            return;
         }
 
         // A classified second means audio is live: re-arm the lock-decay
@@ -238,6 +390,9 @@ struct AetherClockEngine::Impl {
         armDecayTimer();
         const ClockLockState ds = decoder->lockState();
         if (ds != lastState) setState(ds);
+        if (!canPublish()) {
+            return;
+        }
 
         // WS-7 stage-4 ring: this callback fires once per CLASSIFIED second.
         const qint64 nowMs = nowUtcMs();
@@ -246,6 +401,9 @@ struct AetherClockEngine::Impl {
     }
 
     void handleFrame(const ClockFrameInfo& frame) {
+        if (!canPublish()) {
+            return;
+        }
         // Fires immediately BEFORE any vote refresh; frameStartSample is the
         // decoder input-sample index of this frame's second 0 (same clock as
         // lastEdgeSample and the host anchor).
@@ -258,6 +416,9 @@ struct AetherClockEngine::Impl {
     }
 
     void handleTime(const ClockTimeInfo& t) {
+        if (!canPublish()) {
+            return;
+        }
         // Compose from the voted frame's second 0 plus the elapsed-sample count
         // to the last edge. This is exact across WWVB per-second re-emission
         // (cached vote), WWV chunk-straddle, and multi-frame backlog, because
@@ -282,12 +443,14 @@ struct AetherClockEngine::Impl {
             - hostMsAtSample(t.lastEdgeSample);
         int quality = static_cast<int>(std::lround(t.quality * 100.0));
         quality = std::clamp(quality, 0, 100);
-        emit q->timeDecoded(decodedUtc, offsetMs, quality);
+        if (canPublish()) {
+            emit q->timeDecoded(decodedUtc, offsetMs, quality);
+        }
     }
 };
 
 AetherClockEngine::AetherClockEngine(QObject* parent)
-    : QObject(parent), m_impl(std::make_unique<Impl>(this)) {
+    : QObject(parent), m_impl(std::make_shared<Impl>(this)) {
     // Register everything that crosses queued connections (GpsDelta precedent).
     qRegisterMetaType<AetherSDR::ClockAlignmentFrame>();
     qRegisterMetaType<AetherSDR::ClockLockState>("AetherSDR::ClockLockState");
@@ -300,7 +463,7 @@ AetherClockEngine::~AetherClockEngine() {
     // Silent teardown: never leak a DAX hold (INV-3). No signals from a dying
     // object.
     m_impl->disconnectAll();
-    m_impl->releaseHold();
+    m_impl->releaseAllHolds();
     m_impl->decoder.reset();
 }
 
@@ -338,9 +501,14 @@ ClockStation AetherClockEngine::configuredStation() const {
 
 ClockLockState AetherClockEngine::lockState() const { return m_impl->lastState; }
 
+quint64 AetherClockEngine::inputGeneration() const { return m_impl->inputGeneration; }
+
 ClockDiagnostics AetherClockEngine::currentDiagnostics() const {
     auto& d = *m_impl;
     ClockDiagnostics g;
+    if (!d.running) {
+        return g;
+    }
     if (d.decoder) {
         const ClockDecoderDiagnostics dd = d.decoder->diagnostics();
         g.toneSnrDb = dd.toneSnrDb;
@@ -366,36 +534,89 @@ ClockDiagnostics AetherClockEngine::currentDiagnostics() const {
 }
 
 void AetherClockEngine::start(SliceModel* slice, ClockStation station) {
-    auto& d = *m_impl;
-    if (d.running) stop();
-
-    // Require a slice to bind; stay stopped otherwise.
-    if (!slice) {
-        qWarning() << "AetherClockEngine::start: no slice - staying stopped";
+    const std::shared_ptr<Impl> lifetime = m_impl;
+    auto& d = *lifetime;
+    const QPointer<SliceModel> requestedSlice = slice;
+    if (d.running || d.decoder || d.slice
+        || std::any_of(d.heldChannels.begin(), d.heldChannels.end(), [](bool held) { return held; })) {
+        const quint64 beforeStop = d.transitionRevision;
+        stop();
+        if (d.transitionRevision != beforeStop + 1) {
+            return;
+        }
+    }
+    if (!d.q) {
         return;
     }
 
-    d.slice = slice;
+    // Require a slice to bind; stay stopped otherwise.
+    if (!requestedSlice) {
+        qWarning() << "AetherClockEngine::start: no slice - staying stopped";
+        return;
+    }
+    const quint64 revision = ++d.transitionRevision;
+
+    const bool expectsDax = !d.daxAvailable || d.daxAvailable();
+    if (!d.q || revision != d.transitionRevision || !requestedSlice) {
+        return;
+    }
+    d.slice = requestedSlice;
+    d.expectsDax = expectsDax;
+    d.selectedDaxChannel = slice->daxChannel();
+    if (!d.expectsDax) {
+        for (auto it = d.nativeOwners.begin(); it != d.nativeOwners.end();) {
+            if (!it->second) {
+                d.input.retireRoute(DecoderPcmAdapter::RouteLane::NativeSlice, it->first);
+                it = d.nativeOwners.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        const auto previous = d.nativeOwners.find(slice->sliceId());
+        if (previous != d.nativeOwners.end() && previous->second != slice) {
+            d.input.retireRoute(DecoderPcmAdapter::RouteLane::NativeSlice, slice->sliceId());
+        }
+        if (previous == d.nativeOwners.end()
+            && d.nativeOwners.size() >= DecoderPcmAdapter::kMaxRoutes) {
+            d.slice = nullptr;
+            qWarning() << "AetherClockEngine::start: receiver attribution capacity reached";
+            return;
+        }
+        d.nativeOwners[slice->sliceId()] = slice;
+    }
     d.configured = station;
     d.lastStation = ClockStation::Unknown;
 
     // Create the selected decoder and wire its inline callbacks.
     if (station == ClockStation::Wwvb)
-        d.decoder = std::make_unique<DecoderHolder<WwvbDecoder>>(kSampleRateHz);
+        d.decoder = std::make_shared<DecoderHolder<WwvbDecoder>>(kSampleRateHz);
     else
-        d.decoder = std::make_unique<DecoderHolder<WwvDecoder>>(kSampleRateHz);
-    d.decoder->onSecond = [this](const ClockSecondInfo& i) { m_impl->handleSecond(i); };
-    d.decoder->onFrame = [this](const ClockFrameInfo& fr) { m_impl->handleFrame(fr); };
-    d.decoder->onTime = [this](const ClockTimeInfo& t) { m_impl->handleTime(t); };
-    d.decoder->onStateChanged = [this](ClockLockState s) { m_impl->handleState(s); };
+        d.decoder = std::make_shared<DecoderHolder<WwvDecoder>>(kSampleRateHz);
+    const std::weak_ptr<Impl> weak = lifetime;
+    d.decoder->onSecond = [weak](const ClockSecondInfo& i) {
+        if (const auto state = weak.lock()) { state->handleSecond(i); }
+    };
+    d.decoder->onFrame = [weak](const ClockFrameInfo& fr) {
+        if (const auto state = weak.lock()) { state->handleFrame(fr); }
+    };
+    d.decoder->onTime = [weak](const ClockTimeInfo& t) {
+        if (const auto state = weak.lock()) { state->handleTime(t); }
+    };
+    d.decoder->onStateChanged = [weak](ClockLockState s) {
+        if (const auto state = weak.lock()) { state->handleState(s); }
+    };
 
     // Arm the absolute-plausibility gate with the host clock (WS-4.5). The
     // callback fires on the feed thread inside process(); nowUtcMs is the same
     // injectable clock the sample<->host anchor uses, so tests stay in control.
     d.decoder->setPlausibility(
-        [this] {
+        [weak] {
+            const auto state = weak.lock();
+            if (!state || !state->q) {
+                return TimeFields{};
+            }
             const QDateTime now = QDateTime::fromMSecsSinceEpoch(
-                m_impl->nowUtcMs(), QTimeZone::utc());
+                state->nowUtcMs(), QTimeZone::utc());
             TimeFields tf;
             tf.minute = now.time().minute();
             tf.hour = now.time().hour();
@@ -406,22 +627,22 @@ void AetherClockEngine::start(SliceModel* slice, ClockStation station) {
         kPlausibilityBoundMinutes);
 
     // Fresh sample<->host and frame anchors for the fresh decoder.
-    d.anchorSamples = 0;
-    d.anchorHostMs = d.nowUtcMs();
+    d.timeline.reset();
     d.lastFrameStartSample = 0;
     d.haveFrame = false;
+    d.selectInput();
 
     // Hold the slice's LIVE DAX channel through the injected provider (the
     // wiring layer routes this to the central #3305 ownership registry).
     const int ch = slice->daxChannel();
-    d.heldChannel = 0;
     if (!d.acquireCh || !d.releaseCh) {
         qWarning() << "AetherClockEngine::start: no DAX channel provider set -"
                    << "hold not acquired; audio will not flow";
-    } else if (ch >= 1 && ch <= 4) {
-        d.heldChannel = ch;
-        d.acquireCh(ch);
-    } else if (d.daxAvailable && !d.daxAvailable()) {
+    } else if (ch >= 1 && ch <= 8) {
+        d.heldChannels[static_cast<std::size_t>(ch - 1)] = true;
+        const std::function<void(int)> acquire = d.acquireCh;
+        acquire(ch);
+    } else if (!d.expectsDax) {
         // Seam-native backend: the radio declares no DAX plane, so there is no
         // channel to assign and nothing to hold. Audio arrives through
         // feedRxSliceAudio() instead. Warning here would be true-sounding and
@@ -430,31 +651,61 @@ void AetherClockEngine::start(SliceModel* slice, ClockStation station) {
         qWarning() << "AetherClockEngine::start: slice" << slice->sliceId()
                    << "has no DAX channel assigned - audio will not flow";
     }
+    if (!d.q || revision != d.transitionRevision) {
+        return;
+    }
+    if (!d.slice) {
+        stop();
+        return;
+    }
 
     // Follow mid-session DAX reassignment THROUGH THE PROVIDER: acquire NEW
     // before releasing OLD so the channel's holder set never transiently hits
     // zero (RADE precedent).
     d.connDax = connect(slice, &SliceModel::daxChannelChanged, this,
                         [this](int newCh) {
-        auto& e = *m_impl;
+        const std::shared_ptr<Impl> state = m_impl;
+        auto& e = *state;
+        if (e.expectsDax && e.selectedDaxChannel != newCh) {
+            e.selectedDaxChannel = newCh;
+            if (!e.resetInputContext(true)) {
+                return;
+            }
+        }
         if (!e.acquireCh || !e.releaseCh) return;
-        const int oldCh = e.heldChannel;
-        const int nc = (newCh >= 1 && newCh <= 4) ? newCh : 0;
-        if (nc) e.acquireCh(nc);
-        if (oldCh >= 1 && oldCh <= 4 && oldCh != nc) e.releaseCh(oldCh);
-        e.heldChannel = nc;
+        const quint64 revision = e.transitionRevision;
+        const int nc = (newCh >= 1 && newCh <= 8) ? newCh : 0;
+        if (nc && !e.heldChannels[static_cast<std::size_t>(nc - 1)]) {
+            e.heldChannels[static_cast<std::size_t>(nc - 1)] = true;
+            const std::function<void(int)> acquire = e.acquireCh;
+            acquire(nc);
+            if (!e.q || revision != e.transitionRevision) {
+                return;
+            }
+        }
+        for (int channel = 1; channel <= 8; ++channel) {
+            if (channel != nc) {
+                e.releaseHold(channel);
+                if (!e.q || revision != e.transitionRevision) {
+                    return;
+                }
+            }
+        }
     });
+    // A changed demodulator context invalidates both detector state and queued
+    // pre-change audio without altering the operator's running toggle or holds.
+    d.connFrequency = connect(slice, &SliceModel::frequencyChanged, this,
+                              [this] { m_impl->resetInputContext(); });
+    d.connMode = connect(slice, &SliceModel::modeChanged, this,
+                         [this] { m_impl->resetInputContext(); });
 
     // Graceful loss if the bound slice is destroyed under us.
-    d.connDestroyed = connect(slice, &QObject::destroyed, this, [this] {
+    d.connDestroyed = connect(slice, &QObject::destroyed, this, [this, sliceId = slice->sliceId()] {
         auto& e = *m_impl;
-        e.decayTimer->stop();
-        e.releaseHold();
-        e.disconnectAll();
-        if (e.decoder) e.decoder->reset();
-        e.running = false;
-        e.setState(ClockLockState::NoSignal);
-        emit runningChanged(false);
+        if (!e.expectsDax) {
+            e.input.retireRoute(DecoderPcmAdapter::RouteLane::NativeSlice, sliceId);
+        }
+        stop();
     });
 
     d.running = true;
@@ -462,25 +713,47 @@ void AetherClockEngine::start(SliceModel* slice, ClockStation station) {
     d.armDecayTimer();                       // watchdog runs while running
     d.classifiedMs.clear();
     d.diagTimer->start();                    // ~1 Hz diagnostics while running
+    d.advanceInputGeneration();
+    if (!d.q || revision != d.transitionRevision || !d.slice) {
+        return;
+    }
     emit runningChanged(true);
 }
 
 void AetherClockEngine::stop() {
-    auto& d = *m_impl;
+    const std::shared_ptr<Impl> lifetime = m_impl;
+    auto& d = *lifetime;
+    const quint64 revision = ++d.transitionRevision;
     const bool was = d.running;
+    d.running = false;
+    // Retire resources before any signal or provider callback can start a
+    // replacement run. Such a callback must see a fully detached old context.
     d.decayTimer->stop();
     d.diagTimer->stop();
-    d.classifiedMs.clear();
-    d.releaseHold();
     d.disconnectAll();
-    if (d.decoder) d.decoder->reset();
+    d.input.clearRoute();
     d.decoder.reset();
     d.slice = nullptr;
+    d.releaseAllHolds();
+    if (!d.q || revision != d.transitionRevision) {
+        return;
+    }
+    d.resetAcquisition();
+    if (!d.q || revision != d.transitionRevision) {
+        return;
+    }
+    d.advanceInputGeneration();
+    if (!d.q || revision != d.transitionRevision) {
+        return;
+    }
+    d.classifiedMs.clear();
     d.lastStation = ClockStation::Unknown;
     d.haveFrame = false;
     d.running = false;
     d.setState(ClockLockState::NoSignal);  // emits only on actual change
-    if (was) emit runningChanged(false);
+    if (was && d.q && revision == d.transitionRevision) {
+        emit runningChanged(false);
+    }
 }
 
 void AetherClockEngine::applyStationPreset(ClockStation station, double carrierMHz) {
@@ -528,30 +801,87 @@ void AetherClockEngine::Impl::ingest(const QByteArray& pcm) {
 
     d.monoScratch.resize(n);
     for (std::size_t i = 0; i < n; ++i)
-        d.monoScratch[i] = 0.5f * (in[2 * i] + in[2 * i + 1]);  // downmix L+R
+        d.monoScratch[i] = 0.5f * in[2 * i] + 0.5f * in[2 * i + 1];
 
     // Anchor BEFORE process(): host time corresponds to the END of this buffer
     // (samplesConsumedBefore + n), so callbacks fired inline during process()
     // already read a current sample<->host mapping.
-    d.anchorSamples = d.decoder->samplesConsumed() + static_cast<std::int64_t>(n);
-    d.anchorHostMs = d.nowUtcMs();
-    d.decoder->process(d.monoScratch.data(), n);
+    d.timeline.anchor(0, d.decoder->samplesConsumed() + n, kSampleRateHz, 0, d.nowUtcMs());
+    d.processSamples(d.monoScratch.data(), n);
+}
+
+void AetherClockEngine::Impl::ingest(const PcmFrame& frame) {
+    const quint64 generation = inputGeneration;
+    const quint64 revision = transitionRevision;
+    const std::shared_ptr<IDecoder> selectedDecoder = decoder;
+    const QPointer<SliceModel> selectedSlice = slice;
+    const qint64 arrivalMs = nowUtcMs();
+    const std::optional<DecoderPcmBlock> block = input.accept(frame);
+    if (!block || !block->current()) {
+        return;
+    }
+    if (block->discontinuity) {
+        resetAcquisition();
+    }
+    if (!canPublish() || generation != inputGeneration || revision != transitionRevision
+        || selectedDecoder != decoder || selectedSlice != slice) {
+        return;
+    }
+    if (block->firstOutputSample != static_cast<quint64>(decoder->samplesConsumed())
+        || !timeline.anchor(block->segmentFirstInputSample, block->inputEndSample,
+                            block->inputSampleRateHz, block->groupDelayInputFrames,
+                            arrivalMs)) {
+        input.reset();
+        resetAcquisition();
+        return;
+    }
+    // The admitted input-end anchor includes the still-staged partial batch.
+    // Decoder callbacks remain in local24 samples, including the converter's
+    // signal delay; only their host-time mapping compensates that delay.
+    if (block->current() && !block->samples.isEmpty()) {
+        processSamples(block->samples.constData(), block->samples.size(), block->source);
+    }
 }
 
 void AetherClockEngine::feedRxAudio(int channel, const QByteArray& pcm) {
-    auto& d = *m_impl;
-    if (!d.running || !d.decoder || !d.slice) return;
+    const std::shared_ptr<Impl> lifetime = m_impl;
+    auto& d = *lifetime;
+    if (!d.running || !d.decoder || !d.slice || d.processingDecoder) return;
     if (channel != d.slice->daxChannel()) return;  // live channel filter
     d.ingest(pcm);
 }
 
 void AetherClockEngine::feedRxSliceAudio(int sliceId, const QByteArray& pcm) {
-    auto& d = *m_impl;
-    if (!d.running || !d.decoder || !d.slice) return;
+    const std::shared_ptr<Impl> lifetime = m_impl;
+    auto& d = *lifetime;
+    if (!d.running || !d.decoder || !d.slice || d.processingDecoder) return;
     // Live slice filter. Deliberately NOT a daxChannel() compare: the sender
     // already identified the slice, and a seam backend's daxChannel() is 0.
     if (sliceId != d.slice->sliceId()) return;
     d.ingest(pcm);
+}
+
+void AetherClockEngine::feedRxAudio(int channel, const PcmFrame& frame,
+                                  quint64 generation) {
+    const std::shared_ptr<Impl> lifetime = m_impl;
+    auto& d = *lifetime;
+    if (!d.running || !d.decoder || !d.slice || d.processingDecoder || !d.expectsDax
+        || generation != d.inputGeneration || channel <= 0
+        || channel != d.slice->daxChannel()) {
+        return;
+    }
+    d.ingest(frame);
+}
+
+void AetherClockEngine::feedRxSliceAudio(int sliceId, const PcmFrame& frame,
+                                       quint64 generation) {
+    const std::shared_ptr<Impl> lifetime = m_impl;
+    auto& d = *lifetime;
+    if (!d.running || !d.decoder || !d.slice || d.processingDecoder || d.expectsDax
+        || generation != d.inputGeneration || sliceId != d.slice->sliceId()) {
+        return;
+    }
+    d.ingest(frame);
 }
 
 // ---- Station preset statics ----

@@ -108,7 +108,7 @@ constexpr qint64 kDssFftPixelScaleSettleMs = 750;
 // std140 float count of the waterfall UBO — must match the Uniforms block in
 // texturedquad.frag AND texturedquad_rowframes.frag, the buffer allocs in
 // initWaterfallPipeline(), and the uniforms[] writer in renderGpuFrame().
-constexpr int kWaterfallUboFloats = 8;
+constexpr int kWaterfallUboFloats = 12;
 
 QSize evenAlignedRhiSize(QSize size)
 {
@@ -776,9 +776,10 @@ static QString formatFreqScaleLabel(double freqMhz, int decimals)
 
 // ─── Waterfall color scheme gradient cache ────────────────────────────────────
 //
-// The five preset schemes (Default, Grayscale, Blue-Green, Fire, Plasma) used
-// to live as compile-time const tables.  They now resolve through ThemeManager
-// against `color.waterfall.colormap.{default,grayscale,blueGreen,fire,plasma}`
+// The preset schemes (Default, Grayscale, Blue-Green, Fire, Plasma, Purple,
+// Glacier) used to live as compile-time const tables.  They now resolve through
+// ThemeManager against
+// `color.waterfall.colormap.{default,grayscale,blueGreen,fire,plasma,purple,glacier}`
 // gradient tokens so a theme switch (or user theme override) reshapes any of
 // them.  Cached once per theme load — `intensityToRgb` and `fftDbmToRgb` hit
 // this hundreds of times per second per row, so we can't afford a token
@@ -813,6 +814,7 @@ const char* wfSchemeToken(WfColorScheme s)
     case WfColorScheme::Fire:      return "color.waterfall.colormap.fire";
     case WfColorScheme::Plasma:    return "color.waterfall.colormap.plasma";
     case WfColorScheme::Purple:    return "color.waterfall.colormap.purple";
+    case WfColorScheme::Glacier:   return "color.waterfall.colormap.glacier";
     default:                       return "color.waterfall.colormap.default";
     }
 }
@@ -5455,7 +5457,7 @@ void SpectrumWidget::appendVisibleRow(const QRgb* rowData,
     if (m_waterfallSupplemental.size() != m_waterfall.size()) {
         m_waterfallSupplemental =
             QImage(m_waterfall.size(), QImage::Format_RGB32);
-        m_waterfallSupplemental.fill(Qt::black);
+        m_waterfallSupplemental.fill(waterfallFloorRgb());
     }
     auto* supplementalRow = reinterpret_cast<QRgb*>(
         m_waterfallSupplemental.bits()
@@ -5823,7 +5825,10 @@ static void remapHistoryRowInto(
                 curCenterMhz, curBwMhz, x, preservePeaks)];
             continue;
         }
-        dst[x] = qRgb(0, 0, 0);
+        // No frame covers this column. Palette floor, not a black gap -- same
+        // reasoning as reprojectWaterfallImage()'s fill; colorLut[0] is
+        // waterfallFloorRgb() by construction.
+        dst[x] = colorLut[0];
     }
 }
 
@@ -6060,7 +6065,7 @@ void SpectrumWidget::paintWaterfallRowsFromHistory(
 
         // Label the pixels that were actually written. Claiming supplemental
         // coverage the image does not hold sends the shader sampling rows the
-        // fill() above left black.
+        // fill() above left at the palette floor.
         m_wfVisibleRowCenterMhz[destinationRow] =
             recolorPlan.primaryFrame.centerMhz;
         m_wfVisibleRowBwMhz[destinationRow] =
@@ -6102,9 +6107,9 @@ void SpectrumWidget::recolorWaterfallViewport()
     // palette-independent intensity history. Keep the current visible ring
     // position and scroll clock intact so a palette change cannot move the
     // waterfall while it is live or paused.
-    m_waterfall.fill(Qt::black);
+    m_waterfall.fill(waterfallFloorRgb());
     if (!m_waterfallSupplemental.isNull()) {
-        m_waterfallSupplemental.fill(Qt::black);
+        m_waterfallSupplemental.fill(waterfallFloorRgb());
     }
     // Effective (cropped) bandwidth -- see rebuildWaterfallViewportForFrame()'s
     // matching comment; this function doesn't route through it.
@@ -6160,9 +6165,9 @@ void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
     }
 
     m_wfHistoryOffsetRows = std::clamp(m_wfHistoryOffsetRows, 0, maxWaterfallHistoryOffsetRows());
-    m_waterfall.fill(Qt::black);
+    m_waterfall.fill(waterfallFloorRgb());
     if (!m_waterfallSupplemental.isNull()) {
-        m_waterfallSupplemental.fill(Qt::black);
+        m_waterfallSupplemental.fill(waterfallFloorRgb());
     }
     m_wfWriteRow = 0;
     m_wfVisibleTimeRows = QVector<WaterfallTimeRow>(m_waterfall.height());
@@ -6585,10 +6590,10 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_wfVisibleTimeRows = QVector<WaterfallTimeRow>(m_waterfall.height());
     m_wfIncomingTimestampMs = 0;
     if (!m_waterfall.isNull()) {
-        m_waterfall.fill(Qt::black);
+        m_waterfall.fill(waterfallFloorRgb());
     }
     if (!m_waterfallSupplemental.isNull()) {
-        m_waterfallSupplemental.fill(Qt::black);
+        m_waterfallSupplemental.fill(waterfallFloorRgb());
     }
     if (m_waterfallHistory.isConfigured()) {
         m_waterfallHistory.discardRows();
@@ -6862,7 +6867,7 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     if (m_waterfallSupplemental.size() != m_waterfall.size()) {
         m_waterfallSupplemental =
             QImage(m_waterfall.size(), QImage::Format_RGB32);
-        m_waterfallSupplemental.fill(Qt::black);
+        m_waterfallSupplemental.fill(waterfallFloorRgb());
     }
     if (!m_waterfall.isNull()) {
         m_waterfallStreamSizeHint = m_waterfall.size();
@@ -7385,11 +7390,14 @@ void SpectrumWidget::resetGpuResources()
 
 // Horizontally reproject a waterfall image from one frequency frame
 // (oldCenter/oldBw) to another (newCenter/newBw). Overlapping spectrum is
-// remapped to its new pixel columns; newly-exposed columns become black.
-// Shared by the live waterfall (per pan step) and the deferred history flush.
+// remapped to its new pixel columns; newly-exposed columns become floorRgb.
+// Called from reprojectWaterfall() on each pan step of the Legacy pipeline.
+// floorRgb is threaded in rather than read from the widget because this is a
+// file-static free function with no `this` — see SpectrumWidget::waterfallFloorRgb().
 static void reprojectWaterfallImage(QImage& image,
                                     double oldCenterMhz, double oldBandwidthMhz,
-                                    double newCenterMhz, double newBandwidthMhz)
+                                    double newCenterMhz, double newBandwidthMhz,
+                                    QRgb floorRgb)
 {
     if (image.isNull() || oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
         return;
@@ -7408,7 +7416,9 @@ static void reprojectWaterfallImage(QImage& image,
                                           newCenterMhz + newBandwidthMhz / 2.0);
 
     QImage reprojected(imageWidth, imageHeight, QImage::Format_RGB32);
-    reprojected.fill(Qt::black);
+    // Non-overlap columns after a pan must read as the palette floor, not as a
+    // black gap.
+    reprojected.fill(floorRgb);
 
     if (overlapEndMhz > overlapStartMhz) {
         const double srcLeft = (overlapStartMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
@@ -7452,7 +7462,7 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
         const double effNewBw = panEdgeCropActive()
             ? newBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : newBandwidthMhz;
         reprojectWaterfallImage(m_waterfall, oldCenterMhz, effOldBw,
-                                newCenterMhz, effNewBw);
+                                newCenterMhz, effNewBw, waterfallFloorRgb());
         resetVisibleWaterfallFrequencyFrames(newCenterMhz, effNewBw);
     }
     m_prevTileLevels.clear();
@@ -8422,7 +8432,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         }
     }
 
-    if (m_resetFftSmoothingOnNextFrame) {
+    if (m_resetFftSmoothingOnNextFrame || !m_clientFftSmoothing) {
         m_smoothed = *spectrumBins;
         m_resetFftSmoothingOnNextFrame = false;
         m_fftFallbackSeedMask.clear();
@@ -10821,10 +10831,10 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         // still visible in the FFT (#3482).
         if (wfHeight > 0 && contentWidth() > 0) {
             QImage newWf(contentWidth(), wfHeight, QImage::Format_RGB32);
-            newWf.fill(Qt::black);
+            newWf.fill(waterfallFloorRgb());
             QImage newSupplemental(
                 contentWidth(), wfHeight, QImage::Format_RGB32);
-            newSupplemental.fill(Qt::black);
+            newSupplemental.fill(waterfallFloorRgb());
             if (!m_waterfall.isNull()) {
                 QImage scaled = m_waterfall.scaled(contentWidth(), wfHeight, Qt::IgnoreAspectRatio, Qt::FastTransformation);
                 if (!scaled.isNull())
@@ -11953,9 +11963,9 @@ void SpectrumWidget::applySettledResizeBuffers()
 
     if (waterfallChanged) {
         QImage newWf(waterfallSize, QImage::Format_RGB32);
-        newWf.fill(Qt::black);
+        newWf.fill(waterfallFloorRgb());
         QImage newSupplemental(waterfallSize, QImage::Format_RGB32);
-        newSupplemental.fill(Qt::black);
+        newSupplemental.fill(waterfallFloorRgb());
         if (!m_waterfall.isNull()) {
             QImage scaled = m_waterfall.scaled(
                 waterfallSize, Qt::IgnoreAspectRatio, Qt::FastTransformation);
@@ -12433,6 +12443,18 @@ QRgb SpectrumWidget::waterfallLevelToRgb(float level) const
     return interpolateGradient(std::clamp(level, 0.0f, 1.0f), stops, n);
 }
 
+// The colour a cleared / not-yet-painted waterfall pixel takes.  Every preset
+// through Purple is #000000 at t=0, so this is a no-op for them; Glacier is the
+// first palette with a non-black floor, and clearing to Qt::black there leaves
+// a pure-black band against the #05183c noise floor (worst on the
+// recolorWaterfallViewport() path, which setWfColorScheme() calls directly —
+// picking Glacier would otherwise repaint black everywhere retained history
+// doesn't cover).
+QRgb SpectrumWidget::waterfallFloorRgb() const
+{
+    return waterfallLevelToRgb(0.0f);
+}
+
 quint8 SpectrumWidget::encodeWaterfallLevel(float level)
 {
     return static_cast<quint8>(std::lround(
@@ -12501,7 +12523,10 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
                 + (static_cast<double>(x) / static_cast<double>(destWidth))
                     * effectiveBw;
             if (freqMhz < txMaskLowMhz || freqMhz > txMaskHighMhz) {
-                scanline[x] = qRgb(0, 0, 0);
+                // Outside the TX passband reads as "no signal here", so it
+                // takes the palette floor like every other cleared pixel --
+                // not a hard-black notch beside a non-black floor (#5670).
+                scanline[x] = colorLut[0];
                 continue;
             }
         }
@@ -13604,7 +13629,7 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
             if (m_waterfallSupplemental.size() != m_waterfall.size()) {
                 m_waterfallSupplemental =
                     QImage(m_waterfall.size(), QImage::Format_RGB32);
-                m_waterfallSupplemental.fill(Qt::black);
+                m_waterfallSupplemental.fill(waterfallFloorRgb());
             }
             QImage supplementalRgba =
                 m_waterfallSupplemental.convertToFormat(
@@ -14000,6 +14025,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
             && m_wfFrameTexReady
             && m_wfSupplementalGpuTex != nullptr ? 1.0f : 0.0f;
+    const QRgb wfFloorRgb = waterfallFloorRgb();
     float uniforms[] = {
         rowOffset,
         waterfallTargetCenterOffsetMhz,
@@ -14009,6 +14035,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         m_wfGpuTexH > 0 ? 1.0f / static_cast<float>(m_wfGpuTexH) : 0.0f,
         static_cast<float>(m_wfGpuTexH),
         0.0f,
+        // floorColor -- the palette's t=0 colour, so the shader's "no data
+        // here" exits match the CPU fills (waterfallFloorRgb()) instead of
+        // hardcoding black. No-op for every preset that is #000000 at zero.
+        static_cast<float>(qRed(wfFloorRgb)) / 255.0f,
+        static_cast<float>(qGreen(wfFloorRgb)) / 255.0f,
+        static_cast<float>(qBlue(wfFloorRgb)) / 255.0f,
+        1.0f,
     };
     static_assert(sizeof(uniforms) == kWaterfallUboFloats * sizeof(float),
                   "waterfall UBO writer must match kWaterfallUboFloats, the "
@@ -15415,7 +15448,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     p.drawLine(divRect.left(), divRect.center().y(), divRect.right(), divRect.center().y());
 
     drawFreqScale(p, scaleRect);
-    p.fillRect(wfRect, Qt::black);  // paint the strip gap before the time tape
+    // Paint the strip gap before the time tape. Palette floor, not black: with
+    // Glacier the gap would otherwise read as a pure-black seam beside the
+    // #05183c noise floor on every repaint.
+    p.fillRect(wfRect, QColor::fromRgb(waterfallFloorRgb()));
     drawWaterfall(p, wfContentRect);
 
     // Edge crop (panEdgeCropActive()) now happens upstream, at the bin/
@@ -15838,7 +15874,7 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 void SpectrumWidget::drawWaterfall(QPainter& p, const QRect& r)
 {
     if (m_waterfall.isNull()) {
-        p.fillRect(r, Qt::black);
+        p.fillRect(r, QColor::fromRgb(waterfallFloorRgb()));
         return;
     }
 

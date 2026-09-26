@@ -13,60 +13,6 @@ Q_LOGGING_CATEGORY(lcHl2RxDsp, "aether.hl2.rxdsp")
 
 namespace AetherSDR::hl2 {
 
-namespace {
-
-// WDSP's S-meter average is an EMA over I*I + Q*Q with a time constant of
-// 0.100 s — the `tau_av` argument RXA.c passes to create_meter() for
-// rxa[].smeter, applied per SAMPLE in xmeter() (meter.c). Nothing in WDSP
-// exposes a way to hold or seed that accumulator, and flush_meter() is worse
-// than useless here: it sets avg to 0, i.e. the -400 dB floor, which is the
-// very number this guard exists to keep off the needle.
-//
-// So the only lever is WHEN we read it, and the settle window below is that
-// lever. Stated as a time constant rather than a block count because the block
-// count depends on the sample rate the operator picked, which changes under us.
-//
-// NOT A CALIBRATION CONSTANT: nothing reads this value back and compares it to
-// WDSP's. If this drifts from RXA.c the failure is a slightly early or slightly
-// late first reading, and hl2_adc_sampling_seam_test measures the reading
-// itself rather than retyping the arithmetic, so a drift that matters shows up
-// as a failed dB comparison rather than as two copies of a number agreeing.
-constexpr double kSMeterAverageTauSec = 0.100;
-// Three time constants, and the EMA does NOT get all three. xmeter(smeter)
-// runs after xnbp in xrxa(), so the samples it sees have been through the RXA
-// bandpass: a linear-phase FIR of kRxFilterTaps, whose group delay is about
-// half that — 4096 samples, ~85 ms at the 48 kHz DSP rate — during which the
-// meter is still being fed the zeros that were in the filter when the mute
-// ended. What is left for the average to wash out in is ~0.215 s, a little
-// over two time constants, so the first published reading sits roughly half a
-// decibel below the true level rather than the ~0.2 dB three clean taus would
-// give. That is the number to compare against: half a dB, not zero, against
-// the ~214 dB step this replaces.
-//
-// Deliberately NOT stretched further. The whole cost of this window is that
-// the last pre-transmit reading is held for its length after the operator
-// unkeys, so it buys accuracy with staleness, and past about a third of a
-// second the needle visibly lags the band coming back. Both halves of that
-// trade are measured in hl2_adc_sampling_seam_test.
-//
-// Rate-independent by construction, which is worth spelling out because it is
-// not obvious: buildChannel() holds WDSP's dsp_rate at kWdspDspSampleRateHz
-// and scales dsp_size with the input rate, so one block is the same slice of
-// WALL time at 48 kHz as at 384 kHz, and so is the filter's group delay.
-constexpr double kSMeterSettleTaus = 3.0;
-
-[[nodiscard]] int sMeterSettleBlocks(int inputSampleRateHz, int dspBlockSize) noexcept
-{
-    if (inputSampleRateHz <= 0 || dspBlockSize <= 0)
-        return 0;
-    const double blockSeconds = static_cast<double>(dspBlockSize)
-                                / static_cast<double>(inputSampleRateHz);
-    const double blocks = kSMeterSettleTaus * kSMeterAverageTauSec / blockSeconds;
-    return static_cast<int>(std::ceil(blocks));
-}
-
-}   // namespace
-
 Hl2RxDsp::Hl2RxDsp(QObject* parent) : QObject(parent)
 {
     // Registered so audioReady/spectrumReady can cross a thread boundary once
@@ -404,8 +350,28 @@ void Hl2RxDsp::installChannel(RebuildResult result)
 
 void Hl2RxDsp::armMeterSettle()
 {
-    m_meterSettleBlocks = sMeterSettleBlocks(m_config.inputSampleRateHz,
-                                             m_config.dspBlockSize);
+    // The window is WdspSMeter's: three time constants of the 0.100 s average
+    // RXA.c builds the S-meter with, counted in blocks so it measures the
+    // clock the meter integrates on. Two things about it are HL2's:
+    //
+    // The EMA does NOT get all three taus. xmeter(smeter) runs after xnbp in
+    // xrxa(), so the samples it sees have been through the RXA bandpass: a
+    // linear-phase FIR of kRxFilterTaps, whose group delay is about half that
+    // — 4096 samples, ~85 ms at the 48 kHz DSP rate — during which the meter
+    // is still being fed the zeros that were in the filter when the mute
+    // ended. What is left for the average to wash out in is ~0.215 s, so the
+    // first published reading sits roughly half a decibel below the true
+    // level rather than the ~0.2 dB three clean taus would give. That is the
+    // number to compare against: half a dB, not zero, against the ~214 dB
+    // step this replaces. Both halves of that trade are measured in
+    // hl2_adc_sampling_seam_test, which measures the reading itself rather
+    // than retyping the arithmetic.
+    //
+    // And the same arm sets the read cadence: every inputRate/48k-th block,
+    // so the backend's smoother sees ~47 readings a second at 384 ksps as at
+    // 48 rather than eight times as many.
+    m_meterTap.arm(m_config.inputSampleRateHz, m_config.dspBlockSize,
+                   kWdspDspSampleRateHz);
 }
 
 void Hl2RxDsp::setNoiseBlanker(bool on, int level)
@@ -839,13 +805,14 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         // than the mute itself. That is the honest trade: a held reading is at
         // least a reading of the band, and the alternative on offer is a
         // measurement of our own silence.
-        if (!m_audioMuted) {
-            if (m_meterSettleBlocks > 0) {
-                --m_meterSettleBlocks;
-            } else {
-                emit meterUpdate(static_cast<float>(
-                    m_channel->meter(WdspChannel::Meter::SignalAverage)));
-            }
+        //
+        // The same gate sets the READ CADENCE (WdspSMeter::emitEveryBlocks):
+        // one reading per DSP-rate block's worth of input, so the backend's
+        // per-reading EMA keeps the same time constant at every sample rate
+        // instead of shrinking eightfold between 48 and 384 ksps.
+        if (!m_audioMuted && m_meterTap.tick()) {
+            emit meterUpdate(static_cast<float>(
+                m_channel->meter(WdspChannel::Meter::SignalAverage)));
         }
         // The POST-DDC half of §13 item 16's ADC pairing, sampled here because
         // this is the one instant it means something: a block has just gone

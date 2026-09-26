@@ -1,10 +1,12 @@
 #pragma once
 
 #include "core/PcmFrame.h"
+#include "core/dsp/WdspSMeter.h"
 
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <complex>
@@ -14,7 +16,7 @@
 
 #include "core/backends/anan/AnanDroopCorrection.h"
 #include "core/backends/anan/P2Protocol.h"   // kDdc0RatesKsps
-#include "core/backends/anan/AnanSpectrum.h"
+#include "core/backends/anan/AnanPanAnalyzer.h"
 #include "core/dsp/WdspChannel.h"
 #include "core/dsp/WdspProcessTally.h"
 
@@ -24,16 +26,14 @@ namespace AetherSDR::anan {
 
 // The ANAN-G2 receive DSP stage: turns raw DDC0 IQ blocks (from
 // P2Client::ddc0IqReady) into demodulated audio (WdspChannel), a panadapter
-// spectrum (AnanSpectrum), and an uncalibrated raw signal-peak reading kept
+// spectrum (AnanPanAnalyzer, WDSP's display analyzer), and an uncalibrated
+// raw signal-peak reading kept
 // below the seam until a measured dBFS-to-dBm calibration exists. The eventual
 // AnanBackend owns one and runs it on the backend's I/O thread. Mirrors
 // Hl2RxDsp's shape closely -- same WdspChannel, same "owns a DSP chain"
 // branch of the seam already proven there -- but scoped to exactly what
-// aetherd ANAN P2 Phase 1b needs (see 02-working-plan.md Step 2): no noise
-// blanker, no manual notch filters. Both are real HL2 features and neither
-// is speculative to add later; they are simply not part of this phase's
-// one-DDC, RX-only scope, matching Hl2RxDsp's OWN history -- its notch/NB
-// machinery arrived in later commits, not its first one.
+// the one-DDC, RX-only ANAN path needs. The existing WDSP impulse blanker
+// runs ahead of demodulation; manual notch filters are not implemented here.
 //
 // *** READ HERMES.md §16 ("Receive handedness and tuning — the two-error
 // trap") BEFORE TOUCHING processIqBlock(). *** It documents the most
@@ -48,8 +48,11 @@ namespace AetherSDR::anan {
 // sharing zero code with this backend -- reproduced the exact same
 // USB-hears/LSB-doesn't pattern at the same dial/offset geometry, and
 // visually confirmed the panadapter draws the carrier on the correct side
-// of the dial. See the comment at the one point processIqBlock()
-// conjugates for the mechanism this confirms.
+// of the dial. See processIqBlock()'s handedness comment for the mechanism
+// this confirms. Since the move to WDSP's analyzer the spectrum's mirror is
+// done INSIDE the analyzer (Spectrum0() swaps I and Q), so both paths are fed
+// the raw wire and nothing in this class conjugates; the handedness test pins
+// that a wire-convention tone above centre still lands above centre.
 class AnanRxDsp : public QObject {
     Q_OBJECT
 
@@ -69,7 +72,20 @@ public:
         // divides evenly into it.
         int audioSampleRateHz = 24000;
         int dspBlockSize = 1024;         // WdspChannel input/processing block
-        int fftSize = 1024;              // panadapter FFT size
+        // Panadapter output points per frame. The FFT behind them is larger
+        // (AnanPanAnalyzer: at least 16384) and averaged down to this count.
+        // Stays at the droop tables' kDroopCorrectionFftSize so each point
+        // lines up with one table entry.
+        int panPoints = 1024;
+        // Display frame rate the analyzer is sized for; kept current by
+        // setSpectrumRateFps() so a rebuild comes up at the operator's rate.
+        int spectrumFps = 25;
+        // Panadapter time-average, ms; 0 = none. Kept current by
+        // setSpectrumAverageMs() for the same reason.
+        int spectrumAverageMs = 0;
+        // Log-recursive (true) or linear-recursive (false) averaging; kept
+        // current by setSpectrumLogAverage().
+        bool spectrumLogAverage = true;
         WdspChannel::Mode mode = WdspChannel::Mode::Usb;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
@@ -83,6 +99,13 @@ public:
         // output block (deterministic for an offline/burst feed -- what the
         // handedness test uses).
         bool blockForOutput = false;
+        // WDSP's impulse noise blanker (ANB), run on the raw IQ ahead of the
+        // channel -- see WdspChannel::setNoiseBlanker(). In Config so a
+        // rate-change rebuild opens the new channel with the operator's
+        // blanker, the same way it carries mode, filter and AGC. Level is
+        // 0..100 in the slice model's units.
+        bool noiseBlankerEnabled = false;
+        int noiseBlankerLevel = 50;
     };
 
     // Synchronous convenience used by deterministic tests. Production first
@@ -90,12 +113,16 @@ public:
     // FFTW planning never blocks this object's I/O thread.
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
 
-    // Result of building a WdspChannel + AnanSpectrum pair OFF this object's
-    // own thread -- reads and writes nothing on `this`, so it is safe to
-    // call from any thread. Move-only (owns two unique_ptrs).
+    // Result of building a WdspChannel + AnanPanAnalyzer pair OFF this
+    // object's own thread -- reads and writes nothing on `this`, so it is safe
+    // to call from any thread. Move-only (owns two unique_ptrs).
+    //
+    // `analyzer` is declared AFTER `channel` so it is destroyed FIRST: it uses
+    // the channel's id as its analyzer slot, and must be gone before the
+    // channel's destructor returns that id to the pool.
     struct RebuildResult {
         std::unique_ptr<WdspChannel> channel;
-        std::unique_ptr<AnanSpectrum> spectrum;
+        std::unique_ptr<AnanPanAnalyzer> analyzer;
         std::size_t outputBlockSize = 0;
         // The DDC0 rate buildChannel() actually built this channel for.
         // installChannel() copies it into m_config.inputSampleRateHz on
@@ -149,8 +176,8 @@ public:
     // buildChannel() was given, which may be stale if the operator changed
     // mode/filter/AGC/shift while the build was in flight -- to the new
     // channel, resizes scratch buffers for its outputBlockSize(), resets
-    // the DC blocker and spectrum-smoothing state, and retires the old
-    // channel/spectrum. Always clears the in-flight flag set by
+    // the DC blocker, and retires the old channel/analyzer. Always clears
+    // the in-flight flag set by
     // beginRebuild(). Returns false (leaving the current channel untouched)
     // if result.channel is null.
     bool installRebuiltChannel(RebuildResult result);
@@ -161,12 +188,34 @@ public:
     // RX frequency shift in Hz relative to the NCO -- how a single-DDC
     // backend tunes the slice inside the passband without moving the DDC.
     Q_INVOKABLE void setShift(double shiftHz);
+    // Noise blanker on/off and level (0..100). Deferred like setMode() while a
+    // rebuild is in flight; installChannel() re-applies it at the swap.
+    Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    struct NoiseBlankerState {
+        bool hasChain = false;
+        bool on = false;
+        int level = 0;
+    };
+    // One atomic snapshot of the installed channel, safe to query from the
+    // backend's thread. Deferred or refused requests do not change this value.
+    [[nodiscard]] NoiseBlankerState noiseBlankerState() const noexcept
+    {
+        const int state = m_nbAppliedState.load(std::memory_order_relaxed);
+        if (state < 0) {
+            return {};
+        }
+        return {true, state >= kNbEnabledOffset, state % kNbEnabledOffset};
+    }
     // Cap how often a panadapter frame is produced, in frames per second.
-    // See Hl2RxDsp::setSpectrumRateFps's comment for why this is done HERE
-    // (skipping the FFT entirely when a frame is not due) rather than by
-    // throttling downstream -- the reasoning is WDSP/FFT-cost arithmetic,
-    // not anything ANAN-specific, and transfers unchanged.
+    // Also re-sizes the analyzer's overlap and averaging weights for the new
+    // rate, so one FFT still completes per display frame.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
+    // Panadapter time-average, ms; 0 = none. See
+    // AnanPanAnalyzer::setAverageTimeMs().
+    Q_INVOKABLE void setSpectrumAverageMs(int ms);
+    // Log-recursive (true) or linear-recursive (false) time averaging. See
+    // AnanPanAnalyzer::setLogAverage().
+    Q_INVOKABLE void setSpectrumLogAverage(bool on);
 
     // Installs the measured per-bin dB correction for ONE DDC0 rate (see
     // AnanDroopCorrection.h). Ignored -- no change, no crash -- if `table`
@@ -302,8 +351,9 @@ public:
     }
 
 public slots:
-    // Feed one IQ block (normalized complex<float>). Emits spectrumReady per
-    // FFT frame and audioReady/meterUpdate per completed WdspChannel block.
+    // Feed one IQ block (normalized complex<float>). Emits spectrumReady when
+    // a display frame is due and the analyzer has a new one, and
+    // audioReady/meterUpdate per completed WdspChannel block.
     void processIqBlock(const std::vector<std::complex<float>>& iq);
 
     // A DDC0 sequence gap preceded the NEXT block this stage will be handed.
@@ -312,62 +362,45 @@ public slots:
     // same call chain that then delivers the block, so this is a plain call and
     // introduces no cross-thread edge.
     //
-    // Discards the partial panadapter frame; see Hl2RxDsp::onSequenceGap() for
-    // the full reasoning, including why the AUDIO path is deliberately left
-    // alone, and why the per-bin smoother below is too -- smoothSpectrumBins()
-    // blends MAGNITUDES between frames and stays meaningful across a gap, while
-    // the FFT the gap corrupts is phase-coherent within one frame.
+    // Drops the partly staged analyzer block that would straddle the gap, and
+    // counts it (see spectrumGapDiscards()). The analyzer's own history is
+    // left alone, as the openHPSDR desktop clients do on a sequence error: its
+    // FFTs overlap and average over ~250 ms, so a gap costs at most a frame or
+    // two of slightly blended display, and purging it would blank the
+    // panadapter instead. The AUDIO path is left alone too; see
+    // Hl2RxDsp::onSequenceGap().
     void onSequenceGap();
 
 signals:
     void pcmReady(const AetherSDR::PcmFrame& frame);
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
-    // WDSP's own signal-strength meter (SignalPeak), NOT the RMS of the
+    // WDSP's own signal-strength meter (SignalAverage), NOT the RMS of the
     // demodulated audio -- the AGC holds audio level roughly constant, so an
     // audio-RMS meter would barely move with signal strength.
     void meterUpdate(float dbfs);
 
 private:
+    void publishNoiseBlankerState();
+    static constexpr int kNbEnabledOffset = 128; // levels occupy 0..100
+    std::atomic<int> m_nbAppliedState{-1};       // -1: no installed channel
     PcmProducer m_pcmProducer;
     bool spectrumFrameDue();
 
     // Shared install step for a successful RebuildResult -- resizes scratch
-    // buffers, resets the DC blocker and spectrum smoothing, re-applies
+    // buffers, resets the DC blocker, re-applies
     // m_config/m_shiftHz's CURRENT values to the new channel (not whatever
     // it was built with, which may be stale), and takes ownership of
-    // result's channel/spectrum. Used by configure() and the asynchronous
+    // result's channel/analyzer. Used by configure() and the asynchronous
     // first-connect/rate-change path so their final installation cannot drift.
     void installChannel(RebuildResult result);
 
-    // Per-bin exponential smoothing applied to EVERY emitted spectrumReady
-    // frame -- not just a display nicety, but the fix for a real bench
-    // symptom: this radio's waterfall row comes from a SINGLE raw FFT
-    // snapshot (AnanSpectrum::process() is one un-averaged periodogram, no
-    // multi-frame power averaging -- see its own header), paced by
-    // RadioModel's separate waterfall-rate control
-    // (panFeedWaterfallRowReady()), which reads bins straight from this
-    // signal with no smoothing of its own. SpectrumWidget's OWN client-side
-    // EMA (m_smoothed, SMOOTH_ALPHA) softens the TRACE but is fed by the
-    // SAME raw snapshot for the waterfall's primary row path, so it does not
-    // help there. Doing it here, once, before emission, smooths both. See
-    // kSpectrumSmoothAlpha's own comment for why the value is lighter than
-    // the client-side one.
-    void smoothSpectrumBins(std::vector<float>& binsDbfs);
-    std::vector<float> m_smoothedBins;   // persists across frames; see smoothSpectrumBins()
     // See spectrumGapDiscards(). Written on the I/O thread by onSequenceGap(),
     // read by whatever polls it; relaxed for the same reasons Hl2RxDsp gives.
     std::atomic<quint64> m_spectrumGapDiscards {0};
-    // Weight on the NEW frame each call (1 - this on the running average).
-    // Lighter than SpectrumWidget's client-side SMOOTH_ALPHA (0.35): the
-    // trace already gets THAT smoothing on top of this one, so a second,
-    // equally-heavy pass would compound into a noticeably laggier trace, not
-    // just a smoother waterfall. This value alone is enough to visibly
-    // reduce single-snapshot periodogram noise without adding much lag.
-    static constexpr float kSpectrumSmoothAlpha = 0.5f;
-
     std::unique_ptr<WdspChannel> m_channel;
-    std::unique_ptr<AnanSpectrum> m_spectrum;
+    // Declared after m_channel so it is destroyed first -- see RebuildResult.
+    std::unique_ptr<AnanPanAnalyzer> m_analyzer;
     double m_shiftHz = 0.0;
     Config m_config;
     // See beginRebuild()/installRebuiltChannel()'s own comments.
@@ -378,13 +411,22 @@ private:
     WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
+    // The S-meter tap's gate: the settle window after our own silence or a
+    // channel install, and the read cadence -- see WdspSMeter.h, and its use
+    // in processIqBlock(). DSP thread only, like m_audioMuted.
+    WdspSMeterTap m_meterTap;
+    // Arms it from the CURRENT config. Both call sites run after
+    // m_config.inputSampleRateHz has taken the new rate.
+    void armMeterSettle() noexcept
+    {
+        m_meterTap.arm(m_config.inputSampleRateHz, m_config.dspBlockSize,
+                       kWdspDspSampleRateHz);
+    }
     int m_spectrumIntervalMs = 0;   // 0 = uncapped
     QElapsedTimer m_spectrumClock;
     qint64 m_lastSpectrumMs = 0;
 
     std::vector<std::complex<float>> m_iqBuffer;    // IQ awaiting a full DSP block
-    // Wire IQ conjugated for the SPECTRUM only -- see processIqBlock().
-    std::vector<std::complex<float>> m_conjugated;
     std::vector<float> m_i, m_q;                    // deinterleaved input scratch
     std::vector<float> m_left, m_right;             // WdspChannel output scratch
     DcBlocker m_dcBlockL, m_dcBlockR;
@@ -393,8 +435,8 @@ private:
 
     // Live droop-correction tables, keyed by DDC0 rate in ksps -- see
     // setDroopCorrectionTable(). Survives a rate-change rebuild untouched:
-    // installRebuiltChannel() swaps m_channel/m_spectrum, not this object,
-    // and the correction is applied to m_bins after the FFT, independent of
+    // installRebuiltChannel() swaps m_channel/m_analyzer, not this object,
+    // and the correction is applied to m_bins after the analyzer, independent of
     // which WdspChannel produced the IQ that fed it.
     QMap<int, DroopCorrectionTable> m_droopTables;
     // See setDroopCorrectionBypassed(). Deliberately NOT cleared by

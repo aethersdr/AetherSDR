@@ -1,6 +1,6 @@
 #include "WanConnection.h"
-#include "AppSettings.h"
-#include "LogManager.h"
+#include "core/AppSettings.h"
+#include "core/LogManager.h"
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QJsonDocument>

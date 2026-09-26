@@ -2,10 +2,12 @@
 <#
 .SYNOPSIS
     Package the whisper.cpp + ggml-vulkan static libs from an already-completed
-    Windows build into a release asset, so CI (GitHub's stock 4-core windows-latest
-    runners, capped at 6 h / step-timeout 4 h) can consume the prebuilt libs
-    instead of compiling whisper/ggml/ggml-vulkan from source — which today
-    exceeds the timeout on those runners.
+    Windows build into a release asset. The Windows installer workflow compiles
+    whisper/ggml/ggml-vulkan from the vendored tree (2-3 min for the whisper
+    target on a stock 4-core windows-latest runner with the /O1 override); the
+    asset is
+    the ASR_USE_PREBUILT_WHISPER_GPU fallback, and a pack cut before a local
+    patch under third_party/whisper.cpp does not carry that patch.
 
 .DESCRIPTION
     Mirrors the design of scripts/build/build-afx-bits-windows.ps1: we host a
