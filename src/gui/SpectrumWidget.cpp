@@ -9419,7 +9419,7 @@ QVector<float> SpectrumWidget::croppedBinsForDisplay(const QVector<float>& bins)
 {
     if (!panEdgeCropActive()) return bins;
     const int n = bins.size();
-    const int margin = static_cast<int>(n * kEdgeTaperFraction);
+    const int margin = panEdgeCropMarginBins(n);
     if (margin <= 0 || n - 2 * margin < 2) return bins;
     return bins.mid(margin, n - 2 * margin);
 }

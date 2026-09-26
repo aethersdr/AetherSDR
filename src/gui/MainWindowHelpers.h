@@ -109,6 +109,10 @@ inline constexpr const char* kCwRightPaddleActionName = "Trigger CW Right Paddle
 // event filter drives press/release directly and must look the binding up by
 // this id so a rebound key actually transmits (#3879).
 inline constexpr const char* kPttHoldActionId = "ptt_hold";
+// Momentary "hear where I am about to transmit" (#2242). Like ptt_hold it is
+// driven from the app-level event filter, because QShortcut has no released
+// signal and a hold control needs both edges.
+inline constexpr const char* kSplitMonitorActionId = "split_monitor_tx";
 
 // ─── AetherSweep SWR-sweep tuning constants ─────────────────────────────────
 //
@@ -168,6 +172,11 @@ QString xvtrForBandSummary(const QString& bandName,
 // sizing in MainWindow.cpp and the per-pan wiring in MainWindow_Wiring.cpp.
 
 int panXpixelsFor(const SpectrumWidget* spectrum);
+// Points a backend that computes its own spectrum should spread across the
+// pan's full bandwidth: one per device pixel of the panel, widened for the
+// edge crop so the kept span still has one per pixel. Not capped at the Flex
+// xpixels limit -- the backend clamps to what it can produce.
+int panLocalSpectrumPointsFor(const SpectrumWidget* spectrum);
 int panYpixelsFor(const SpectrumWidget* spectrum);
 bool panPixelDimensionsReady(const SpectrumWidget* spectrum);
 

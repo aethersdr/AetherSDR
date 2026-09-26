@@ -492,6 +492,8 @@ RadioCapabilities AnanBackend::capabilities() const
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep}; // AnanPanAnalyzer
+    // No band/segment zoom: the protocol carries no per-pan zoom flag.
+    c.panZoomModes = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly
     c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::RfGain;
     c.hostDroopCalibration = true; // AnanDroopCorrection.h -- real DDC0 CIC droop,
@@ -640,10 +642,12 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     m_pendingDspConfig.inputSampleRateHz = m_pendingParams.ddc0RateKsps * 1000;
     m_pendingDspConfig.audioSampleRateHz = 24000;
     m_pendingDspConfig.dspBlockSize = 1024;
-    // One point per droop-table entry; the analyzer's FFT behind them is
-    // larger (see AnanPanAnalyzer). spectrumFps keeps Config's default until
-    // RadioModel pushes the operator's rate through setPanFrameRate().
-    m_pendingDspConfig.panPoints = static_cast<int>(kDroopCorrectionFftSize);
+    // The panel's width in points (setPanPixelWidth()), or one point per
+    // droop-table entry until the GUI has reported one; the analyzer's FFT
+    // behind them is larger (see AnanPanAnalyzer). spectrumFps keeps Config's
+    // default until RadioModel pushes the operator's rate through
+    // setPanFrameRate().
+    m_pendingDspConfig.panPoints = m_panPoints;
     m_pendingDspConfig.mode = modeFromString(m_mode);
     m_pendingDspConfig.filterLowHz = static_cast<double>(m_filterLowHz) + cwBfoHz();
     m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
@@ -1259,6 +1263,21 @@ void AnanBackend::setPanWeightedAverage(const QString& panId, bool on)
     if (m_dsp)
         QMetaObject::invokeMethod(m_dsp, "setSpectrumLogAverage", Qt::QueuedConnection,
                                   Q_ARG(bool, on));
+}
+
+void AnanBackend::setPanPixelWidth(const QString& panId, int pixels)
+{
+    Q_UNUSED(panId);   // one pan in this phase
+    // One analyzer point per screen pixel, as deskHPSDR sizes its analyzer
+    // from the panel width. A fixed 1024 points stretched across a wider
+    // panel is what made the waterfall look soft.
+    if (pixels < 2)
+        return;
+    m_panPoints = std::min(pixels, AnanPanAnalyzer::kMaxPoints);
+    m_pendingDspConfig.panPoints = m_panPoints;
+    if (m_dsp)
+        QMetaObject::invokeMethod(m_dsp, "setPanPoints", Qt::QueuedConnection,
+                                  Q_ARG(int, m_panPoints));
 }
 
 void AnanBackend::setCwPitch(int hz)

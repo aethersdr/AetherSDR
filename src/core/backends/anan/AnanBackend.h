@@ -78,6 +78,7 @@ public:
     void setPanRfGain(const QString& panId, int gainDb) override;
     void setPanAverage(const QString& panId, int average) override;
     void setPanWeightedAverage(const QString& panId, bool on) override;
+    void setPanPixelWidth(const QString& panId, int pixels) override;
     void setCwPitch(int hz) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
@@ -149,6 +150,10 @@ private:
     // actually exists.
     P2Client::Params m_pendingParams;
     AnanRxDsp::Config m_pendingDspConfig;
+    // Panadapter points from the panel width (setPanPixelWidth()). Kept here
+    // as well as in AnanRxDsp so a connect that happens after the width
+    // arrives still builds the analyzer at that count.
+    int m_panPoints = static_cast<int>(kDroopCorrectionFftSize);
     void emitSliceState();
     void emitPanState();
     // Declares SLC:LEVEL to the meter seam; on every connect, before the

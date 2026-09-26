@@ -17,6 +17,7 @@
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "TitleBar.h"
+#include "WindowShowState.h"
 #include "containers/ContainerManager.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
@@ -662,14 +663,11 @@ void MainWindow::rebuildCanvasWindowsMenu(QMenu* menu)
         return;
     }
     const bool enabled = m_workspaceController->isEnabled();
-    auto menuText = [](const QString& t) {
-        return QString(t).replace(QLatin1Char('&'), QStringLiteral("&&"));
-    };
 
     const auto windows = m_workspaceController->canvasWindowList();
     for (const auto& info : windows) {
         // Checked = open.  Toggling is hide-and-keep in both directions.
-        QAction* a = menu->addAction(menuText(info.label));
+        QAction* a = menu->addAction(windowMenuText(info.label));
         a->setCheckable(true);
         a->setChecked(info.open);
         a->setEnabled(enabled);
@@ -702,7 +700,7 @@ void MainWindow::rebuildCanvasWindowsMenu(QMenu* menu)
     for (const auto& info : windows) {
         const QString sid   = info.id;
         const QString label = info.label;
-        renameMenu->addAction(menuText(label), this, [this, sid, label] {
+        renameMenu->addAction(windowMenuText(label), this, [this, sid, label] {
             const QString l = QInputDialog::getText(
                 this, tr("Rename canvas window"), tr("Name:"),
                 QLineEdit::Normal, label);
@@ -710,7 +708,7 @@ void MainWindow::rebuildCanvasWindowsMenu(QMenu* menu)
                 m_workspaceController->renameCanvasWindow(sid, l);
             }
         });
-        removeMenu->addAction(menuText(label), this, [this, sid, label] {
+        removeMenu->addAction(windowMenuText(label), this, [this, sid, label] {
             if (QMessageBox::question(
                     this, tr("Remove canvas window"),
                     tr("Remove \"%1\"? Its widgets move back to the main "

@@ -19,12 +19,18 @@
 #include "gui/WindowShowState.h"
 
 #include <QApplication>
+#include <QDialog>
+#include <QMenu>
 #include <QWidget>
 
 #include <cstdio>
 
 using AetherSDR::showAndRaiseWindow;
+using AetherSDR::WindowMenuEntry;
+using AetherSDR::windowInventory;
+using AetherSDR::windowMenuLabel;
 using AetherSDR::windowIsShowing;
+using AetherSDR::windowTypeAppearsInMenu;
 
 namespace {
 
@@ -46,6 +52,27 @@ void toggle(QWidget* w)
     } else {
         showAndRaiseWindow(w);
     }
+}
+
+const WindowMenuEntry* entryFor(const QList<WindowMenuEntry>& entries,
+                                const QWidget* window)
+{
+    for (const WindowMenuEntry& entry : entries) {
+        if (entry.window == window) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+int entryIndex(const QList<WindowMenuEntry>& entries, const QWidget* window)
+{
+    for (int i = 0; i < entries.size(); ++i) {
+        if (entries.at(i).window == window) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 }  // namespace
@@ -144,6 +171,107 @@ int main(int argc, char** argv)
         std::printf("[SKIP] fullscreen state unavailable on this platform - "
                     "fullscreen preservation NOT verified by this run\n");
     }
+
+    // --- Case 10: the Window menu inventory is automatic.  Any visible
+    // titled top-level QWidget joins without a MainWindow registry entry.
+    w.hide();
+    QWidget mainWindow;
+    mainWindow.setWindowTitle(QStringLiteral("AetherSDR"));
+    mainWindow.show();
+    QDialog aetherControl(&mainWindow);
+    aetherControl.setWindowTitle(QStringLiteral("AetherControl"));
+    aetherControl.show();
+    QDialog pskReporter(&mainWindow);
+    pskReporter.setWindowTitle(QStringLiteral("PSK Reporter"));
+    pskReporter.showMinimized();
+    QWidget hiddenWindow;
+    hiddenWindow.setWindowTitle(QStringLiteral("Hidden Window"));
+    QMenu transientMenu;
+    transientMenu.setTitle(QStringLiteral("Transient Menu"));
+    transientMenu.show();
+    QWidget tooltip(nullptr, Qt::ToolTip);
+    tooltip.show();
+    QWidget splash(nullptr, Qt::SplashScreen);
+    splash.show();
+    constexpr Qt::WindowType kDesktopWindowType =
+        static_cast<Qt::WindowType>(static_cast<int>(Qt::Window) | 0x10);
+    app.processEvents();
+
+    const QList<WindowMenuEntry> windows = windowInventory(&mainWindow);
+    report("Window menu puts the primary window first",
+           !windows.isEmpty() && windows.first().window == &mainWindow);
+    report("Window menu discovers a visible modeless dialog",
+           entryFor(windows, &aetherControl));
+    report("Window menu keeps minimized windows reachable",
+           entryFor(windows, &pskReporter));
+    const WindowMenuEntry* pskEntry = entryFor(windows, &pskReporter);
+    report("Window menu labels minimized windows",
+           pskEntry && pskEntry->menuText == QStringLiteral("PSK Reporter — Minimized"));
+    report("Window menu excludes hidden windows",
+           !entryFor(windows, &hiddenWindow));
+    report("Window menu excludes transient popup menus",
+           !windowTypeAppearsInMenu(Qt::Popup)
+               && !entryFor(windows, &transientMenu));
+    report("Window menu excludes tooltips",
+           !entryFor(windows, &tooltip));
+    report("Window menu excludes splash screens",
+           !entryFor(windows, &splash));
+    report("Window menu excludes subwindows",
+           !windowTypeAppearsInMenu(Qt::SubWindow));
+    report("Window menu excludes desktop surfaces",
+           !windowTypeAppearsInMenu(kDesktopWindowType));
+    report("Window menu sorts secondary windows by title",
+           entryIndex(windows, &aetherControl)
+               < entryIndex(windows, &pskReporter));
+
+    // topLevelWidgets() is unordered, not construction-ordered. Supply a
+    // deliberately reversed list so deleting the sort fails on every run.
+    const QList<WindowMenuEntry> ordered = windowInventory(
+        {&pskReporter, &aetherControl, &mainWindow}, &mainWindow);
+    report("Window menu orders explicit candidates primary-first then by title",
+           ordered.size() == 3 && ordered.at(0).window == &mainWindow
+               && ordered.at(1).window == &aetherControl
+               && ordered.at(2).window == &pskReporter);
+
+    // --- Case 11: a rare untitled real window is still reachable by an
+    // object/class-name fallback rather than silently disappearing.
+    QWidget unusualWindow;
+    unusualWindow.setObjectName(QStringLiteral("namedTool"));
+    unusualWindow.show();
+    QDialog classFallback;
+    classFallback.show();
+    QWidget modifiedTitle;
+    modifiedTitle.setWindowTitle(QStringLiteral("Audio & DSP[*]"));
+    modifiedTitle.show();
+    QWidget duplicateA;
+    duplicateA.setObjectName(QStringLiteral("duplicateA"));
+    duplicateA.setWindowTitle(QStringLiteral("Canvas & Tools"));
+    duplicateA.show();
+    QWidget duplicateB;
+    duplicateB.setObjectName(QStringLiteral("duplicateB"));
+    duplicateB.setWindowTitle(QStringLiteral("Canvas & Tools"));
+    duplicateB.show();
+    app.processEvents();
+    report("Window menu labels untitled windows by object name",
+           windowMenuLabel(&unusualWindow) == QStringLiteral("namedTool"));
+    report("Window menu falls back to the widget class name",
+           windowMenuLabel(&classFallback) == QStringLiteral("QDialog"));
+    report("Window menu strips the modified-title placeholder",
+           windowMenuLabel(&modifiedTitle) == QStringLiteral("Audio & DSP"));
+
+    const QList<WindowMenuEntry> labelled = windowInventory(&mainWindow);
+    report("Window menu retains an untitled user-facing window",
+           entryFor(labelled, &unusualWindow));
+    const WindowMenuEntry* modifiedEntry = entryFor(labelled, &modifiedTitle);
+    report("Window menu escapes title ampersands",
+           modifiedEntry
+               && modifiedEntry->menuText == QStringLiteral("Audio && DSP"));
+    const WindowMenuEntry* duplicateAEntry = entryFor(labelled, &duplicateA);
+    const WindowMenuEntry* duplicateBEntry = entryFor(labelled, &duplicateB);
+    report("Window menu numbers duplicate titles after sorting",
+           duplicateAEntry && duplicateBEntry
+               && duplicateAEntry->menuText == QStringLiteral("Canvas && Tools (1)")
+               && duplicateBEntry->menuText == QStringLiteral("Canvas && Tools (2)"));
 
     if (g_failures == 0) {
         std::printf("All window show-state tests passed.\n");

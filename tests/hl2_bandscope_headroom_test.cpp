@@ -22,6 +22,7 @@
 #include "core/backends/hl2/Hl2BandscopeHeadroom.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 
 using namespace AetherSDR::hl2;
@@ -262,6 +263,75 @@ int main()
         check(bandscopeClipAgreement(railed, true, false)
                   == BandscopeClipAgreement::Agreed,
               "a railed block with a cleared flag still reports the rail");
+    }
+
+    // ---- 5 . is this block still describing now? ----
+    //
+    // bandscopeBlockIsCurrent() is the predicate bandscopeHeadroom() has
+    // always applied and Hl2Backend::healthSnapshot() did not: the level rows
+    // asked only "has a block ever arrived", so stopping the EP4 stream inside
+    // a live session left them publishing one frozen block indefinitely. The
+    // two now call ONE function, and these are its edges.
+    //
+    // BOTH DIRECTIONS AT EVERY EDGE. A predicate that returned false for
+    // everything would withhold the stale block correctly and be useless, so
+    // each case below is paired with the neighbouring input that must answer
+    // the other way.
+    {
+        const Ep4Stats live = block(512);
+        const Ep4Stats empty = block(512, 0, 0);
+
+        // The boundary itself, to the millisecond, from both sides.
+        check(bandscopeBlockIsCurrent(live, kHeadroomMaxAgeMs),
+              "a block exactly at the expiry is still current");
+        check(!bandscopeBlockIsCurrent(live, kHeadroomMaxAgeMs + 1),
+              "one millisecond past the expiry is not");
+
+        // The two ends of the useful range.
+        check(bandscopeBlockIsCurrent(live, 0),
+              "a block taken this instant is current");
+        check(bandscopeBlockIsCurrent(live, kHeadroomMaxAgeMs - 1),
+              "a block just inside the expiry is current");
+        check(!bandscopeBlockIsCurrent(live, 10 * kHeadroomMaxAgeMs),
+              "a long-dead block is not current");
+
+        // "Never observed" arrives as a negative age, and is the same answer
+        // as too old rather than a third state.
+        check(!bandscopeBlockIsCurrent(live, -1),
+              "an invalid clock reads as never observed, not as current");
+
+        // A block with no samples is not made current by a fresh clock: the
+        // pre-first-block case predates the expiry and must survive it.
+        check(!bandscopeBlockIsCurrent(empty, 0),
+              "an empty block is not current however fresh the stamp");
+        check(!bandscopeBlockIsCurrent(empty, kHeadroomMaxAgeMs),
+              "an empty block is not current at the boundary either");
+
+        // The caller may narrow the window; the default must not be the only
+        // thing that works, or a stricter consumer silently gets 3000 ms.
+        check(bandscopeBlockIsCurrent(live, 40, 50),
+              "an explicit tighter window still admits a block inside it");
+        check(!bandscopeBlockIsCurrent(live, 60, 50),
+              "an explicit tighter window refuses a block outside it");
+
+        // AND THE PREDICATE AGREES WITH THE CLASSIFIER IT WAS FACTORED OUT OF.
+        // This is the check that fails if the two ever drift apart again --
+        // which is the entire defect, expressed as an invariant.
+        for (const std::int64_t age : {std::int64_t(-1), std::int64_t(0),
+                                       std::int64_t(1),
+                                       kHeadroomMaxAgeMs - 1,
+                                       kHeadroomMaxAgeMs,
+                                       kHeadroomMaxAgeMs + 1,
+                                       kHeadroomMaxAgeMs * 4}) {
+            for (const Ep4Stats& b : {live, empty}) {
+                const bool current = bandscopeBlockIsCurrent(b, age);
+                const bool classified =
+                    bandscopeHeadroom(b, age).state != BandscopeHeadroom::Absent;
+                check(current == classified,
+                      "the freshness predicate and bandscopeHeadroom() answer "
+                      "the same question the same way at every age");
+            }
+        }
     }
 
     if (g_failures == 0)

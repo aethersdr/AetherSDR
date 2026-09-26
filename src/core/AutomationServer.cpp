@@ -8526,9 +8526,14 @@ QJsonObject AutomationServer::doBandscope(const QString& action)
             {QStringLiteral("ep4Rewinds"), row("ep4Rewinds")},
             {QStringLiteral("blocks"), row("bandscopeBlocks")},
             {QStringLiteral("timeouts"), row("bandscopeTimeouts")},
-            // Absent until a block has arrived — the rows carry an invalid
-            // variant until then, which lands here as a JSON null rather than
-            // as a fabricated 0.00 dBFS.
+            // Absent until a block has arrived, AND absent again once the
+            // newest one is older than kHeadroomMaxAgeMs — the gate can be
+            // stopped mid-session, and a value that is no longer being
+            // measured must not be served as a current one. The rows carry an
+            // invalid variant in both cases, which lands here as a JSON null
+            // rather than as a fabricated 0.00 dBFS. adcObservedAgoMs below is
+            // NOT expired with them: it is what tells a caller which of the
+            // two silences it is looking at.
             {QStringLiteral("adcPeakDbfs"), row("adcPeakDbfs")},
             {QStringLiteral("adcRmsDbfs"), row("adcRmsDbfs")},
             {QStringLiteral("adcCrestDb"), row("adcCrestDb")},

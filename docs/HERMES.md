@@ -1977,9 +1977,10 @@ and Display->Waterfall Rate sliders governed neither — they emitted `display p
 set … fps=` and `display panafall set … line_duration=`, Flex wire text
 addressed to a command interpreter this radio does not have.
 
-For the waterfall this was **correctness, not just load**: the widget scales its
-time axis from `line_duration`, so rows arriving at 375/s against a 100 ms
-calibration made the visible history up to **37x shorter than it claimed**.
+For the waterfall this was **correctness, not just load**: the widget seeds its
+time axis from `line_duration` until it has measured real row arrivals, so rows
+arriving at 375/s against a 100 ms seed made the visible history up to **37x
+shorter than the axis claimed**.
 
 **The cap lives at the SOURCE** (`Hl2RxDsp::setSpectrumRateFps`, reached through
 `IRadioBackend::setPanFrameRate`), where a frame that is not due costs nothing.

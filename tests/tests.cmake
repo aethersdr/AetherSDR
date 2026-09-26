@@ -1159,6 +1159,14 @@ target_include_directories(hl2_rxdsp_unmute_staleness_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_unmute_staleness_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_unmute_staleness_test COMMAND hl2_rxdsp_unmute_staleness_test)
 
+# #5498: the band's return after an unkey is the RX chain's latency, not lost
+# audio, and outside CW the RX bandpass runs at minimum phase to shorten it.
+# A real Hl2RxDsp fed a tone that stays on the air across the mute; socket-free.
+add_executable(hl2_rxdsp_unmute_return_test tests/hl2_rxdsp_unmute_return_test.cpp)
+target_include_directories(hl2_rxdsp_unmute_return_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_unmute_return_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_unmute_return_test COMMAND hl2_rxdsp_unmute_return_test)
+
 # The host-side impulse noise blanker (WDSP ANB) ahead of the demodulator. The
 # HL2 runs no firmware DSP, so this stage is the only noise blanker the radio
 # has and there is no wire traffic to assert against — the test measures the
@@ -1364,6 +1372,20 @@ target_include_directories(hl2_connect_reentrancy_test PRIVATE src tests)
 target_link_libraries(hl2_connect_reentrancy_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_connect_reentrancy_test COMMAND hl2_connect_reentrancy_test)
 
+# HL2 per-receiver S-meter lifetime — the meter a receiver declares as its chain
+# opens must go when the chain does. Drives a real MeterModel over the backend's
+# own meterDefined/meterRemoved, so the assertions are consumer lookups rather
+# than call spies. Needs no radio, and adds no fake peer — but it drives the real
+# connect flow, and the socket start at the end of finishDspSetup() BINDS A UDP
+# SOCKET LOCALLY whether or not anything answers, same as the
+# hl2_connect_reentrancy_test sibling says in its own header. Packets go to
+# TEST-NET-1 (192.0.2.0/24), which is reserved for documentation and routes
+# nowhere. See the file header.
+add_executable(hl2_slice_meter_lifecycle_test tests/hl2_slice_meter_lifecycle_test.cpp)
+target_include_directories(hl2_slice_meter_lifecycle_test PRIVATE src tests)
+target_link_libraries(hl2_slice_meter_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_slice_meter_lifecycle_test COMMAND hl2_slice_meter_lifecycle_test)
+
 add_executable(client_eq_test
     tests/client_eq_test.cpp
     src/core/ClientEq.cpp
@@ -1450,6 +1472,22 @@ add_executable(slice_model_squelch_memory_test
 target_include_directories(slice_model_squelch_memory_test PRIVATE src)
 target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
+
+# Split audio memory (#2242) — the parsing rules for the one stored SplitAudio
+# object (the has*/value distinction, the version gate, clamping), the
+# recorder's carry-forward and RX-pan restore across repeated splits, and the
+# Monitor TX hold's mute ownership, the last two instantiated over production
+# SliceModel. Socket-free: a SliceModel with no connection sends nothing.
+add_executable(split_audio_profile_test
+    tests/split_audio_profile_test.cpp
+    src/gui/SplitAudioProfile.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(split_audio_profile_test PRIVATE src)
+target_link_libraries(split_audio_profile_test PRIVATE Qt6::Core)
+add_test(NAME split_audio_profile_test COMMAND split_audio_profile_test)
+set_tests_properties(split_audio_profile_test PROPERTIES TIMEOUT 30)
 
 # ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
@@ -2655,6 +2693,15 @@ set_tests_properties(flex_control_visibility_test PROPERTIES
 # #5507: the production Radio Setup dialog against a backend that reports no
 # region, driven by RadioDelta over the real IRadioBackend::radioChanged route.
 # Same target shape as flex_control_visibility_test above — no sockets, no peers.
+# ${THEME_TEST_RESOURCES} -- set by this file's own
+# qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc), above -- is
+# what puts :/themes/default-dark.json and :/themes/default-light.json in this
+# binary. Without it ThemeManager still resolves color.accent.bright --
+# ThemeSeedGenerated.cpp compiles the dark values in -- but scanAvailableThemes()
+# finds nothing in :/themes/, so availableThemes() is empty and setActiveTheme()
+# cannot switch. #5857's slot switches the theme and reads the colour back, which
+# is the only assertion that can see a widget that is tracked but carries no
+# token to re-resolve.
 add_executable(radio_setup_region_field_test
     tests/radio_setup_region_field_test.cpp
     src/gui/DragValuePopup.cpp
@@ -2665,12 +2712,38 @@ add_executable(radio_setup_region_field_test
     src/gui/SliceColorManager.cpp
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(radio_setup_region_field_test PRIVATE src tests)
 target_link_libraries(radio_setup_region_field_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME radio_setup_region_field_test COMMAND radio_setup_region_field_test)
 set_tests_properties(radio_setup_region_field_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# #5896: RadioSetupDialog's caption labels and line edits across a LIVE theme
+# switch.  Same target shape as radio_setup_region_field_test above, plus
+# ${THEME_TEST_RESOURCES}: without :/themes/ compiled in, ThemeSeedGenerated.cpp
+# still resolves every token so a construction-time reading succeeds, but
+# availableThemes() is empty and setActiveTheme() has nothing to switch to --
+# and the switch is the only thing that can see this defect.
+add_executable(radio_setup_label_theme_token_test
+    tests/radio_setup_label_theme_token_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_label_theme_token_test PRIVATE src tests)
+target_link_libraries(radio_setup_label_theme_token_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_label_theme_token_test COMMAND radio_setup_label_theme_token_test)
+set_tests_properties(radio_setup_label_theme_token_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 
@@ -3842,6 +3915,15 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
+    # The #5262 M2 boolean ratchet's PARSER (#5727). direct_bool_fields() is a
+    # pure text -> names function, so the shapes that break it are synthetic
+    # headers rather than a build: an accessor beside a field used to delete the
+    # next bool from the count, and a bool added after one was never seen at
+    # all. Running the checker against the real header cannot see either —
+    # which is how the bug survived two review rounds on #5619.
+    add_test(NAME capability_record_parser
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_capability_records.py)
     # RxApplet/VfoWidget are full-desktop translation units with no practical
     # unit-test link seam. Pin their radio-backed presentation wiring; label
     # behavior itself is covered by fm_tone_presentation_test above.
@@ -3859,6 +3941,18 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME bridge_docs_check
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
+    # The generated seam-probe table (tests/SeamSignalProbeTable.inc) vs
+    # IRadioBackend.h. static-checks.yml runs the same --check on every PR;
+    # this is the local copy, so `ctest` says so before a push does.
+    add_test(NAME seam_probe_table_check
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_seam_probe_table.py --check)
+    # The scanner behind that table: access labels end the signals section, so
+    # IRadioBackend's protected/private publishLegacyAudio and warnAudioDropped
+    # stay out of it.
+    add_test(NAME seam_probe_table_scanner
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_seam_probe_table.py)
 endif()
 
 # Retired local-listener fixture. Positive behavior is covered through the live
@@ -4012,6 +4106,17 @@ add_executable(shortcut_manager_test
 target_include_directories(shortcut_manager_test PRIVATE src)
 target_link_libraries(shortcut_manager_test PRIVATE Qt6::Core Qt6::Widgets)
 add_test(NAME shortcut_manager_test COMMAND shortcut_manager_test)
+
+# Actual Qt key delivery, socket-free; no radio or transmitter is constructed.
+add_executable(window_shortcut_test
+    tests/window_shortcut_test.cpp
+    src/core/ShortcutManager.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(window_shortcut_test PRIVATE src)
+target_link_libraries(window_shortcut_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME window_shortcut_test COMMAND window_shortcut_test)
+set_tests_properties(window_shortcut_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(antenna_alias_test
     tests/antenna_alias_test.cpp
@@ -4213,6 +4318,17 @@ add_executable(hdlc_codec_test
 target_include_directories(hdlc_codec_test PRIVATE src)
 target_link_libraries(hdlc_codec_test PRIVATE aether_libmodem_core)
 add_test(NAME hdlc_codec_test COMMAND hdlc_codec_test)
+
+# Contour ShuttleXpress / ShuttlePro v2 report decoding (#5927). The parsers
+# are pure byte decoders with no hidapi dependency, so the test is built
+# unconditionally; HAVE_HIDAPI only unlocks the #ifdef around them.
+add_executable(hid_device_parser_test
+    tests/hid_device_parser_test.cpp
+    src/core/HidDeviceParser.cpp
+)
+target_include_directories(hid_device_parser_test PRIVATE src)
+target_compile_definitions(hid_device_parser_test PRIVATE HAVE_HIDAPI)
+add_test(NAME hid_device_parser_test COMMAND hid_device_parser_test)
 
 # Offline AX.25 decode diagnostic: replays a captured WAV through the decoder.
 # Not a ctest (needs an input file); built on demand for troubleshooting.
@@ -4743,6 +4859,13 @@ add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
+
+# #5497: the unkey unmute waits for the radio's T/R, and the MOX-off is queued
+# ahead of it. An ordering test with a clock in it — no WDSP, no socket.
+add_executable(hl2_unkey_hold_test tests/hl2_unkey_hold_test.cpp)
+target_include_directories(hl2_unkey_hold_test PRIVATE src)
+target_link_libraries(hl2_unkey_hold_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_unkey_hold_test COMMAND hl2_unkey_hold_test)
 
 # HL2 RQST/ACK state machine (docs/HERMES.md §13 item 13, oracle §5) — pure
 # policy, standalone (no Qt, no socket, no radio). The clock is EP6 frames.
@@ -5952,6 +6075,24 @@ add_executable(hl2_pan_limits_declaration_test tests/hl2_pan_limits_declaration_
 target_include_directories(hl2_pan_limits_declaration_test PRIVATE src tests)
 target_link_libraries(hl2_pan_limits_declaration_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_pan_limits_declaration_test COMMAND hl2_pan_limits_declaration_test)
+# Socket-free HL2 FM-control DECLARATIONS: the repeater duplex offset it does
+# not have (hasFmRepeaterOffset was INHERITED true, and the two backend verbs
+# behind it are no-op virtuals this backend never overrides) and the CTCSS
+# encode it cannot perform (fmTonePresentation was declared Legacy, the value
+# that OFFERS ctcss_tx, on a radio that declares FM receive-only). Asserted
+# against receiveOnlyModes and legacyFmToneModes() -- production, not a copy.
+# Separate target for the same reason as the line above: the fixture that would
+# have carried an HL2 seam assertion is retired, and a declaration must not be
+# pinned only inside something that does not build.
+add_executable(hl2_fm_controls_declaration_test tests/hl2_fm_controls_declaration_test.cpp)
+target_include_directories(hl2_fm_controls_declaration_test PRIVATE src tests)
+target_link_libraries(hl2_fm_controls_declaration_test PRIVATE aethercore Qt6::Core)
+# fmTonePresentation's struct default is Hidden as well, so no constructed
+# backend can tell a STATED Hidden from an inherited one. The target reads the
+# statement out of Hl2Backend.cpp instead, which needs the repo root.
+target_compile_definitions(hl2_fm_controls_declaration_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME hl2_fm_controls_declaration_test COMMAND hl2_fm_controls_declaration_test)
 # The two HL2 mode vocabularies and the containment between them. Separate
 # target for the same reason as the one above: the fake-radio fixture that would
 # have carried a seam assertion is retired, and a declaration must not be pinned
@@ -6483,6 +6624,7 @@ set(AETHER_SETTINGS_CONSUMERS
     firmware_close_dialog_test
     flex_control_visibility_test
     radio_setup_region_field_test
+    radio_setup_label_theme_token_test
     atu_seam_gate_test
     backend_capability_revision_test
     radio_capacity_declaration_test
@@ -6503,6 +6645,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_gain_restore_test
     hl2_tx_gate_test
     hl2_pan_limits_declaration_test
+    hl2_fm_controls_declaration_test
     hl2_mode_vocabulary_test
     hl2_gain_split_test
     icom_identity_test
@@ -6542,6 +6685,7 @@ set(AETHER_SETTINGS_CONSUMERS
     s_meter_geometry_test
     qrz_callsign_test
     shortcut_manager_test
+    window_shortcut_test
     antenna_alias_test
     mqtt_settings_test
     mqtt_radio_state_test

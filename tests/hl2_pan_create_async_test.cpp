@@ -101,6 +101,13 @@
 // still succeed — so it cannot pass on a fixture that has simply stopped being
 // able to build.
 //
+//   CASE 6  the same forced failure, observed through the S-METER. #5866
+//           declares a per-receiver meter in openReceiverDsp(), which succeeds
+//           before the build is posted, so a failed build has to withdraw it —
+//           a meter left declared renders its last reading forever and goes
+//           red nowhere. Asserted through a real MeterModel lookup, with the
+//           meter's presence checked before the failure is released.
+//
 // NO RADIO IS NEEDED. The connect's discovery probe times out on a dead port,
 // the session comes up on conservative defaults, and the link edge is injected
 // — nothing below asserts anything about the wire.
@@ -109,6 +116,7 @@
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/MetisClient.h"
+#include "models/MeterModel.h"
 
 #include "TestSettingsProfile.h"
 #include "TestDspBuildWait.h"
@@ -679,6 +687,147 @@ void aStaleSuccessIsNotWrittenOntoTheReuser()
     check(Access::receiverCount(backend) == 2, "both receivers are still running");
 }
 
+// THE METER CATALOGUE AS A CONSUMER HOLDS IT.
+//
+// RadioModel's own two connections, reproduced rather than referenced so this
+// test needs no GUI: meterDefined -> defineMeter, meterRemoved -> removeMeter.
+// Every assertion below is a MeterModel::findMeter() -- the same lookup the
+// meter list and the S-meter widget go through -- so what is asserted is the
+// CONSEQUENCE a consumer can see, not a call. There is no spy on
+// withdrawSliceLevelMeter() here, and deliberately so: a spy would still pass
+// if the withdrawal named the wrong meter.
+//
+// disconnected -> clear() is NOT wired, because it must not be: that wholesale
+// wipe is RadioModel::onDisconnected()'s backstop, it is what hides this class
+// of defect on the ordinary disconnect, and it does not run on the path below.
+// Modelling it here would hide the defect from this test too.
+class Catalogue {
+public:
+    MeterModel model;
+
+    explicit Catalogue(Hl2Backend& backend)
+    {
+        QObject::connect(&backend, &IRadioBackend::meterDefined, &backend,
+                         [this](const MeterDef& def) { model.defineMeter(def); });
+        QObject::connect(&backend, &IRadioBackend::meterRemoved, &backend,
+                         [this](int index) { model.removeMeter(index); });
+    }
+
+    // The consumer's own lookup. The explicit sourceIndex is NOT optional:
+    // findMeter() treats a negative index as MATCH-ANY and would answer with
+    // receiver 0's meter for every receiver, turning a real absence into a
+    // false present -- and this case would then pass with the fix reverted.
+    int sliceMeter(int uiNumber) const
+    {
+        return model.findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"),
+                               uiNumber);
+    }
+};
+
+// ── CASE 6: a FAILED build must not leave the receiver's S-METER behind ─────
+//
+// THE INTERACTION THIS CATCHES, AND WHY NEITHER PR SHOWS IT ALONE. #5866 put
+// withdrawSliceLevelMeter() on "every path that drops a receiver", one of which
+// was createPanadapter()'s INLINE failure path. This PR MOVED that whole path
+// into finishReceiverDspBuild(), from a base that predates #5866. Because the
+// path moved rather than changed, the merge raises only a textual conflict on
+// the shared qCWarning line -- so resolving it by taking either side wholesale
+// drops the withdrawal, and nothing marks its absence. Reading either PR on its
+// own shows nothing wrong; it took an integration build of both to surface it.
+//
+// THE METER IS GENUINELY OUTSTANDING AT THAT POINT. openReceiverDsp() declares
+// it with defineSliceLevelMeter(ui) as its LAST act and SUCCEEDS -- what fails
+// is the build startReceiverDspBuild() posts afterwards -- so a failed async
+// build leaves a defined S-meter published for a receiver that does not exist.
+// That is a shape nothing goes red for on its own: a meter left declared does
+// not throw, does not warn and does not stop rendering. It renders the last
+// value it ever received, forever.
+//
+// FORCED, NOT HOPED FOR, exactly as case 5 is: the build fails through
+// Hl2RxDsp::buildChannel()'s own non-positive-rate guard, reached the way a
+// malformed params override reaches it in the field. The meter's PRESENCE is
+// asserted before the failure is released, so an absence afterwards is a
+// withdrawal and not a meter that was never declared -- without that
+// precondition this case would pass on a backend that had simply stopped
+// defining meters at all. And it ends on the same control case 5 uses.
+void aFailedBuildWithdrawsItsSMeter()
+{
+    TestSettingsProfile profile(QStringLiteral("hl2-pan-create-failed-smeter"));
+    Hl2Backend backend;
+    Catalogue catalogue(backend);
+    bringUp(backend);
+
+    int lifecycleFailures = 0;
+    QObject::connect(&backend, &IRadioBackend::sliceLifecycleFailed, &backend,
+                     [&lifecycleFailures](const QString&, int, const QString&) {
+                         ++lifecycleFailures;
+                     });
+
+    const int survivors = Access::receiverCount(backend);
+
+    // Hold the build thread so the receiver is announced -- and its meter
+    // declared -- while its chain is provably not built. The precondition below
+    // is checked inside that window, on a semaphore rather than a timer.
+    ThreadHold hold(Access::buildContext(backend));
+
+    const int goodRate = Access::forceNextBuildToFail(backend);
+    check(backend.createPanadapter(), "the receiver is admitted");
+    Access::restoreCommittedRate(backend, goodRate);
+
+    const int ui = Access::lastReceiverUi(backend);
+    check(ui == 1, "the added receiver took UI 1");
+
+    // ── THE PRECONDITION ──────────────────────────────────────────────────
+    //
+    // The meter really was declared, and it is THIS receiver's rather than
+    // receiver 0's. Without this the assertion after the failure would be
+    // satisfied by a meter that never existed.
+    check(catalogue.sliceMeter(ui) >= 0,
+          "the failing receiver's S-meter is in the catalogue before the "
+          "failure lands");
+    check(catalogue.sliceMeter(ui) != catalogue.sliceMeter(0),
+          "and it is its OWN meter, not receiver 0's answering a match-any "
+          "lookup");
+
+    // LET THE FAILURE LAND.
+    hold.release();
+    AetherSDR::test::spinUntil([&] { return lifecycleFailures > 0; });
+
+    // AND THE BUILD REALLY DID FAIL -- the condition under test, not an
+    // incidental.
+    check(lifecycleFailures == 1,
+          "the failed build is reported once as a create failure");
+    check(Access::receiverCount(backend) == survivors,
+          "and the failed receiver is erased again");
+
+    // ── THE ASSERTION THIS CASE EXISTS FOR ────────────────────────────────
+    //
+    // A meter this lookup can still find is a meter a consumer can still see.
+    std::fprintf(stderr,
+                 "     after the failure: findMeter(SLC, LEVEL, %d) = %d "
+                 "(receiver 0's is %d)\n",
+                 ui, catalogue.sliceMeter(ui), catalogue.sliceMeter(0));
+    check(catalogue.sliceMeter(ui) < 0,
+          "no S-meter is left published for the receiver that vanished");
+
+    // AND THE WITHDRAWAL TOOK ONLY ITS OWN. A withdrawal that removed the wrong
+    // index would satisfy the assertion above while breaking the receiver that
+    // survived, so the survivor's meter is checked too.
+    check(catalogue.sliceMeter(0) >= 0,
+          "and receiver 0's S-meter is untouched");
+
+    // THE CONTROL, as in case 5: prove the injection was scoped to one build.
+    check(backend.createPanadapter(), "a later receiver is still admitted");
+    AetherSDR::test::spinUntil(
+        [&] { return Access::lastReceiverDspChannel(backend) >= 0; });
+    check(Access::lastReceiverDspChannel(backend) >= 0,
+          "and its build SUCCEEDS -- so the failure above was the injection, "
+          "not a fixture that had stopped working");
+    check(catalogue.sliceMeter(Access::lastReceiverUi(backend)) >= 0,
+          "and that later receiver DOES get an S-meter -- so the absence above "
+          "was a withdrawal, not a backend that had stopped declaring them");
+}
+
 // ── CASE 5: a FAILED build must not leave transmit or the active slice
 //            pointing at nothing ────────────────────────────────────────────
 //
@@ -842,6 +991,7 @@ int main(int argc, char** argv)
     aStaleFailureDoesNotCloseTheReuser();
     aStaleSuccessIsNotWrittenOntoTheReuser();
     aFailedBuildLeavesTheRolesOnALiveReceiver();
+    aFailedBuildWithdrawsItsSMeter();
     std::fprintf(stderr, "hl2_pan_create_async_test: %d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
 }
