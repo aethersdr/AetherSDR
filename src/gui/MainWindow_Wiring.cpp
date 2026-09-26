@@ -98,6 +98,10 @@
 
 namespace AetherSDR {
 
+namespace {
+constexpr double kSplitQsyThresholdMhz = 0.002;
+}
+
 void MainWindow::wireStatusBarMessages()
 {
     QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(m_statusBarContainer->layout());
@@ -1955,6 +1959,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Connect slice state changes → spectrum overlay updates
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double mhz) {
+        if (m_splitActive && s->sliceId() == m_splitRxSliceId
+            && std::abs(mhz - m_splitRxFrequencyMhz) > kSplitQsyThresholdMhz) {
+            qCDebug(lcDevices) << "Disabling split after RX QSY from"
+                               << m_splitRxFrequencyMhz << "to" << mhz;
+            disableSplit();
+        }
+
         // Don't snap overlay back to stale radio-confirmed freq during active
         // encoder tuning — the optimistic VFO position is already ahead (#1524)
         bool activeTuning = false;
@@ -2538,6 +2549,7 @@ void MainWindow::onSliceRemoved(int id)
         m_splitActive = false;
         m_splitRxSliceId = -1;
         m_splitTxSliceId = -1;
+        m_splitRxFrequencyMhz = 0.0;
         if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
         if (auto* rx = m_radioModel.slice(rxId))
             rx->setTxSlice(true);
@@ -7376,6 +7388,7 @@ void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
 
     m_splitActive = true;
     m_splitRxSliceId = rxSliceId;
+    m_splitRxFrequencyMhz = rxSlice->frequency();
     m_radioModel.sendCommand(
         QString("slice create pan=%1 freq=%2")
             .arg(panId).arg(txFreq, 0, 'f', 6));

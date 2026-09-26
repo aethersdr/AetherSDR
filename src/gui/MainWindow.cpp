@@ -9080,6 +9080,7 @@ void MainWindow::disableSplit()
 
     m_splitRxSliceId = -1;
     m_splitTxSliceId = -1;
+    m_splitRxFrequencyMhz = 0.0;
     if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
 
     updateSplitState();
