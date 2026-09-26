@@ -319,11 +319,24 @@ int main(int argc, char** argv)
         const int startsBefore = startsSeen;
         startsToDrop = 99;      // the radio ignores every start from here on
         streaming = false;
+        // The failed attempt has to leave the I/O thread without an EP6 wakeup.
+        // onReadyRead is what normally emits linkCountersUpdated, and it does
+        // not run when every run command is ignored. Drop the emit in stage 1
+        // and this spy stays empty while the getter above still reads 3.
+        QSignalSpy published(&client, &MetisClient::linkCountersUpdated);
         spin(5000);             // 2000 silence + 1500 retry budget + margin
         check(client.linkCounters().silenceRecoveryAttempts == 3,
               "a third silence gets its own recovery");
         check(client.linkCounters().silenceRecoveriesCompleted == 2,
               "which does NOT complete, because the radio never came back");
+        bool publishedFailure = false;
+        for (int i = 0; i < published.count(); ++i) {
+            const auto row = published.at(i).at(0).value<MetisClient::LinkCounters>();
+            if (row.silenceRecoveryAttempts == 3 && row.silenceRecoveriesCompleted == 2)
+                publishedFailure = true;
+        }
+        check(publishedFailure,
+              "a failed recovery is published on linkCountersUpdated with no EP6 wakeup");
         // THE RUN COMMANDS REALLY WENT OUT, and there were the right number of
         // them. kMaxStartAttempts is 5 and armStartRetry() seeds the count at 1
         // to charge for the datagram stage 1 just sent, so the wire sees that

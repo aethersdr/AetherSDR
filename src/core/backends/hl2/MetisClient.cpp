@@ -462,11 +462,15 @@ void MetisClient::onWatchdogTick()
         // counter. A second start while run is already 1 re-writes 1 over 1 and
         // nothing downstream sees an edge; every consumer in hermeslite_core.v
         // takes run as a level. The duplicate also re-latches wide_spectrum
-        // from bit 1 and watchdog_disable from bit 7, which is precisely why
-        // this sends metisRunCommand with the LIVE bandscope and watchdog state
-        // rather than metisStart() -- metisStart() hard-codes bit 1 clear and
-        // would silently drop the bandscope mid-capture. (Same reason the
-        // start-retry lambda above does not use metisStart() either.)
+        // from bit 1 and watchdog_disable from bit 7. Stage 1 does not send the
+        // live bandscope bit: resetBandscopeGate() runs first and the datagram
+        // below passes wideSpectrum=false, so a sensor that is no longer armed
+        // is not left asserted. metisStart() would be the same bytes while the
+        // gate is idle, and it is still the wrong helper -- it hard-clears bit 1
+        // with no way to say otherwise. The shared retry lambda keeps
+        // metisRunCommand keyed on m_bsState for the callers where the gate may
+        // be mid-cycle; after the reset here that state is Idle, so the
+        // re-sends are wide_spectrum clear too.
         //
         // One more thing the gateware settles: its own anti-wedge watchdog
         // (dsopenhpsdr1.v, watchdog_cnt, tripping at &watchdog_cnt to
@@ -527,6 +531,13 @@ void MetisClient::onWatchdogTick()
         if (!m_silenceRecoveryArmed && m_socket && m_startRetryTimer) {
             m_silenceRecoveryArmed = true;
             ++m_link.silenceRecoveryAttempts;
+            // Publish in this turn. linkCountersUpdated otherwise leaves only
+            // from onReadyRead, after a datagram, and this path runs because
+            // none is arriving. Without the emit, stage 2's linkDown is followed
+            // by start(), which replaces m_link, and the failed attempt never
+            // reaches the health rows. The snapshot may still carry the previous
+            // window's gap figures; the counters are the reason it goes out now.
+            emit linkCountersUpdated(m_link);
             qInfo() << "MetisClient: no EP6 for" << silentMs
                     << "ms — re-sending the run command before declaring link loss"
                        " (this one, then up to" << kStartResendsAfterArm
@@ -1558,9 +1569,10 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
         // saw this happen. The counters are the only record that it did, which
         // is the point: a recovery that is invisible to the operator must not
         // also be invisible to whoever asks later why the audio had a hole in
-        // it. They ride LinkCounters, so they reach the health dialog and the
-        // support bundle on the next publish rather than sitting behind a
-        // getter nothing calls.
+        // it. They ride LinkCounters. Hl2Backend mirrors linkCountersUpdated
+        // onto the health rows; the support bundle does not carry those rows.
+        // The attempt itself was published when it was armed — onReadyRead is
+        // not what delivers a recovery that never gets another datagram.
         m_silenceRecoveryArmed = false;
         ++m_link.silenceRecoveriesCompleted;
         qInfo() << "MetisClient: EP6 resumed after a silence recovery ("
