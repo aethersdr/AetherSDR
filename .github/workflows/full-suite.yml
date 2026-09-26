@@ -143,10 +143,13 @@ jobs:
           #
           # --output-on-failure prints `N/M Test #N: name ...***Failed` BEFORE
           # the captured output, so the nearest PRECEDING such line names the
-          # test that owns each assertion. `[FAIL]` is this suite's own
-          # convention (188 of the test .cpp files print it); the rest cover
-          # the three QtTest binaries and the ways a test dies without
-          # printing a verdict at all. Bounded twice (200 lines, then 8 KB) so
+          # test that owns each assertion. The suite has two conventions of
+          # its own: `[FAIL]` (196 test .cpp files) and a bare `FAIL: ` at the
+          # start of the line (174, of which 171 never print `[FAIL]`, among
+          # them wdsp_channel_test; #5952). `^ *FAIL[:!]` takes both that and
+          # QtTest's `FAIL!`, anchored so the word in prose does not match; the
+          # rest cover the three QtTest binaries and the ways a test dies
+          # without printing a verdict at all. Bounded twice (200 lines, then 8 KB) so
           # a few hundred failures cannot crowd out the sections below.
           awk '
             /^ *[0-9]+\/[0-9]+ +Test +#[0-9]+: +[A-Za-z0-9_.-]+/ {
@@ -156,7 +159,7 @@ jobs:
               cur = t
               next
             }
-            /\[FAIL\]|^FAIL!|^ *Loc: \[|Assertion .* failed|^terminate called|^QFATAL|Segmentation fault/ {
+            /\[FAIL\]|^ *FAIL[:!]|^ *Loc: \[|Assertion .* failed|^terminate called|^QFATAL|Segmentation fault/ {
               if (n++ < 200) print (cur == "" ? "?" : cur) ": " $0
             }
           ' full-suite.log > failures.txt 2>/dev/null
