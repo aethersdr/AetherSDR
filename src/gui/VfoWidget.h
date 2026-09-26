@@ -345,6 +345,10 @@ Q_SIGNALS:
     void aetherVoiceRequested();   // user clicked the AetherVoice button on the DSP tab
     void splitToggled();
     void swapRequested();
+    // Right-click on the SPLIT/SWAP badge. The menu itself is built by
+    // MainWindow, which owns the split pair and the remembered arrangement;
+    // this widget only reports where the operator clicked. (#2242, #311)
+    void splitBadgeMenuRequested(const QPoint& globalPos);
     void autotuneRequested(bool intermittent);  // CW auto-tune: false=stop, true=loop
     void autotuneOnceRequested();               // CW auto-tune one-shot
     void zeroBeatRequested();                   // client-side CW zero-beat
@@ -685,6 +689,9 @@ private:
     QPushButton* m_aetherDspBtn{nullptr};    // launches AetherDSP Settings dialog
     bool         m_aetherDspActive{false};   // any client NR module on (#3800)
     QPushButton* m_aetherVoiceBtn{nullptr};  // toggles Aetherial Audio Channel Strip
+    // Holds the two launchers side by side; relayoutDspGrid() spans it across
+    // whatever columns the toggles leave free, and the pair split that evenly.
+    QWidget*     m_aetherLauncherRow{nullptr};
 
     // Shared DSP-level row at the bottom of the DSP grid: one slider whose
     // target switches based on which leveled DSP the user most recently

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DecoderPcmAdapter.h"
+
 #include <QObject>
 #include <QByteArray>
 #include <QMutex>
@@ -33,8 +35,8 @@ public:
     void stop();
     bool isRunning() const { return m_running; }
 
-    float estimatedPitch() const { return m_pitch; }
-    float estimatedSpeed() const { return m_speed; }
+    float estimatedPitch() const;
+    float estimatedSpeed() const;
 
     // Lock pitch/speed to current detected values (prevents wandering)
     void lockPitch(bool lock);
@@ -53,13 +55,19 @@ public:
 
 public slots:
     // Feed 24kHz stereo float32 PCM (same format as AudioEngine receives).
+    // TX sidetone retains this compatibility path. RX uses the typed mono path.
     void feedAudio(const QByteArray& pcm24kStereo);
+    void feedPcmBlock(const AetherSDR::DecoderPcmBlock& block);
+    void resetInput();
 
 signals:
     void textDecoded(const QString& text, float cost);
     void statsUpdated(float pitchHz, float speedWpm);
 
 private:
+    void appendMono(const QByteArray& mono, const PcmEpochLease& source,
+                    bool typed, bool discontinuity);
+    void queueResetStats(quint64 generation);
     void decodeLoop();
     std::unique_ptr<QThread> m_workerThread;
 
@@ -83,8 +91,11 @@ private:
     bool m_parametersDirty{true};
 
     // Ring buffer for audio samples (mono int16 at 24kHz)
-    QMutex        m_bufMutex;
+    mutable QMutex m_bufMutex;
     QByteArray    m_ringBuf;
+    PcmEpochLease m_source; // protected with the ring and its generation
+    bool m_typedSource = false;
+    std::atomic<quint64> m_inputGeneration{0};
     static constexpr int RING_CAPACITY = 24000 * 2 * 4; // 4 seconds of mono int16
 
     std::atomic<bool> m_running{false};

@@ -4,6 +4,7 @@
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/P2Client.h"
+#include "core/dsp/WdspSMeter.h"
 
 #include <QMap>
 #include <QString>
@@ -58,6 +59,8 @@ public:
     RadioCapabilities capabilities() const override;
     bool ownsRxAudio() const override { return true; }
 
+    void applyRestoredState(const RestoredRadioState& state) override;
+    RestoredRadioState currentOperatingState() const override;
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override { return m_connected; }
@@ -66,9 +69,15 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     void setPanCenter(const QString& panId, double hz, PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanFrameRate(const QString& panId, int fps) override;
+    // The G2's receive step attenuator, presented as RF gain: -31..0 dB,
+    // where -12 means 12 dB of attenuation. See the definition.
+    void setPanRfGain(const QString& panId, int gainDb) override;
+    void setPanAverage(const QString& panId, int average) override;
+    void setPanWeightedAverage(const QString& panId, bool on) override;
     void setCwPitch(int hz) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
@@ -112,8 +121,20 @@ public:
     // seam.
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
+    [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
+    [[nodiscard]] bool noiseBlankerOnForTest() const noexcept { return m_nbOn; }
+    [[nodiscard]] int noiseBlankerLevelForTest() const noexcept { return m_nbLevel; }
+    // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
+    // smoothing and publish tick can be tested without a live radio.
+    void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
+    // The smoothed value itself, whether or not the publish tick has come
+    // round. Without this the ballistics can only be observed through the
+    // tick, which makes the assertion depend on wall-clock timing and lets a
+    // test pass with the smoothing replaced by a plain assignment.
+    [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeter.value(); }
 
 private:
+    friend class AnanNoiseBlankerTestAccess;
     void beginDspSetup();
     void finishDspSetup(quint64 generation, bool ok, const QString& error);
     // The "restart P2Client with m_pendingParams, then retune" half of what
@@ -130,6 +151,14 @@ private:
     AnanRxDsp::Config m_pendingDspConfig;
     void emitSliceState();
     void emitPanState();
+    // Declares SLC:LEVEL to the meter seam; on every connect, before the
+    // first reading can arrive. See its definition.
+    void defineMeters();
+    // One WDSP S-meter reading (dBFS) -> dBm, smoothed, published on a tick.
+    void onDspMeter(float dbfs);
+    // The same smoother Hl2Backend publishes through, so the two receivers'
+    // needles move alike by construction -- see WdspSMeter.h.
+    SMeterSmoother m_sMeter;
     // Leading+trailing throttle around applyTuneToRadioAndPan() -- see
     // setSliceFrequency()'s comment for why an unthrottled click/drag-tune
     // gesture is a problem for this backend specifically.
@@ -204,6 +233,9 @@ private:
     // object's own thread (the GUI thread), not m_ioThread.
     static constexpr int kTuneThrottleMs = 33;   // ~30 Hz ceiling on real DDC0 retunes
     QTimer* m_tuneThrottleTimer = nullptr;
+    // Active ADC attenuation, mirrored in m_pendingParams for session restarts.
+    // Captured/restored only through RadioStateMemory's rfGain extension.
+    int m_attenuationDb = 0;
     bool m_tunePendingApply = false;
 
     // setPanBandwidth() serialization: only one rate-change reconfigure runs
@@ -302,6 +334,15 @@ private:
     // Defaults match connectRadio()'s own connect-time defaults.
     int m_agcMode = 3;
     double m_agcCeilingDb = 60.0;
+    // Noise blanker as setSliceNoiseBlanker() last stored it. Both
+    // connectRadio() and beginRateChange() build the DSP config from it. This
+    // differs from the AGC pair, which only beginRateChange() reads:
+    // connectRadio() re-defaults AGC, but carries the blanker across a
+    // reconnect. emitSliceState() also publishes the pair when a different
+    // radio gets a fresh slice, keeping its NB button in agreement with the
+    // retained setting. Defaults match AnanRxDsp::Config's.
+    bool m_nbOn = false;
+    int m_nbLevel = 50;
 
     // Fixed identifiers -- Phase 1b is exactly one slice, one pan.
     static constexpr int kSliceId = 0;

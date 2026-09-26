@@ -3,7 +3,7 @@
 // reply sink; no synthetic firmware peer, USB device, DSP channel or wire.
 #include "TestSettingsProfile.h"
 #include "core/AutomationServer.h"
-#include "core/RadioConnection.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "core/backends/IRadioBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
