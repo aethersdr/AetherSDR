@@ -112,6 +112,14 @@ public:
     // antenna/relay methods below) stays local and does not go through the seam.
     void setOperate(bool on);
     void setBypass(bool on);
+    // Combined operate+bypass transition in one optimistic update. Prefer over
+    // calling setOperate + setBypass in sequence: those two commands cause the
+    // FlexRadio to send intermediate status echoes that temporarily revert one
+    // field while the other is still in flight, producing a visible UI flicker
+    // (e.g., STANDBY→BYPASS flashes to OPERATE between the two echoes).
+    // This method guards against that by holding both fields against incoming
+    // echoes until the hardware confirms the commanded values.
+    void setOperateAndBypass(bool operate, bool bypass);
     void autoTune();
     // Break a tune already in progress — the same `autotune` the start uses,
     // which the firmware treats as a toggle. No-op when not tuning.
@@ -164,6 +172,15 @@ private:
     bool    m_pttB{false};
     bool    m_operate{false};
     bool    m_bypass{false};
+    // In-flight command guards: when a two-command transition (e.g. STANDBY→BYPASS)
+    // is in progress, intermediate FlexRadio echoes may carry the old value for
+    // the field that is still awaiting its command. Holding the field to the
+    // commanded value until the echo confirms it prevents the transient revert
+    // that would otherwise flash an intermediate state in the UI.
+    bool    m_heldOperate{false};
+    bool    m_heldOperateVal{false};
+    bool    m_heldBypass{false};
+    bool    m_heldBypassVal{false};
     bool    m_tuning{false};
     int     m_relayC1{0};
     int     m_relayL{0};

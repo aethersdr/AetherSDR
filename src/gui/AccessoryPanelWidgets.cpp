@@ -290,6 +290,10 @@ AccessoryPortRow::AccessoryPortRow(const QString& portLetter, QWidget* parent)
     // costs nothing to keep the whole row literal.
     m_sourceLabel->setTextFormat(Qt::PlainText);
     m_sourceLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    // Hidden by default: shown only when the port has confirmed live source
+    // data. Avoids showing "RF SENSE" as an assumption before the trigger
+    // mode is known.
+    m_sourceLabel->setVisible(false);
 
     m_freqLabel = new QLabel(tr("N/A"), this);
     m_freqLabel->setTextFormat(Qt::PlainText);
@@ -348,6 +352,13 @@ void AccessoryPortRow::setFrequencyVisible(bool visible)
     // question actually being asked here.
     if (m_freqLabel->isHidden() == !visible) return;
     m_freqLabel->setVisible(visible);
+    updateAccessibleText();
+}
+
+void AccessoryPortRow::setSourceVisible(bool visible)
+{
+    if (m_sourceLabel->isHidden() == !visible) return;
+    m_sourceLabel->setVisible(visible);
     updateAccessibleText();
 }
 

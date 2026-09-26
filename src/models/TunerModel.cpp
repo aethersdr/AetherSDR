@@ -59,8 +59,21 @@ void TunerModel::applyChanges(const TunerDelta& d)
     if (d.handle && m_handle != *d.handle)           { m_handle = *d.handle;       changed = true; }
     if (d.serialNum && m_serialNum != *d.serialNum) { m_serialNum = *d.serialNum; changed = true; }
     if (d.model && m_model != *d.model)             { m_model = *d.model;         changed = true; }
-    if (d.operate && m_operate != *d.operate)       { m_operate = *d.operate;     changed = true; }
-    if (d.bypass && m_bypass != *d.bypass)          { m_bypass = *d.bypass;       changed = true; }
+    if (d.operate) {
+        // If we have an in-flight operate command, apply the commanded value
+        // rather than the echo until the echo confirms our command. This
+        // prevents intermediate echoes (produced while the companion bypass
+        // command is still in flight) from reverting the optimistic update and
+        // flashing an unwanted intermediate state in the UI.
+        bool effective = m_heldOperate ? m_heldOperateVal : *d.operate;
+        if (m_heldOperate && *d.operate == m_heldOperateVal) m_heldOperate = false;
+        if (m_operate != effective) { m_operate = effective; changed = true; }
+    }
+    if (d.bypass) {
+        bool effective = m_heldBypass ? m_heldBypassVal : *d.bypass;
+        if (m_heldBypass && *d.bypass == m_heldBypassVal) m_heldBypass = false;
+        if (m_bypass != effective) { m_bypass = effective; changed = true; }
+    }
     if (d.antennaA && m_antennaA != *d.antennaA) {
         m_antennaA = *d.antennaA;
         changed = true;
@@ -125,6 +138,13 @@ void TunerModel::setOperate(bool on)
         qCDebug(lcTuner) << "TunerModel::setOperate: no handle yet, ignoring";
         return;
     }
+    // A new single-command transition supersedes any combined-command hold that
+    // may still be armed from a previous setOperateAndBypass() call. Without
+    // this, a stale m_heldBypass (e.g., val=true from STANDBY→BYPASS) would
+    // block the bypass=0 echo that arrives when the tuner returns to OPERATE,
+    // leaving m_bypass stuck at true and the UI showing BYPASS indefinitely.
+    m_heldOperate = false;
+    m_heldBypass  = false;
     // Neutral intent → Flex "tgxl set handle=<h> mode=" wire (via RadioModel).
     emit operateRequested(on);
     // Optimistic update: reflect the commanded state immediately so the
@@ -138,11 +158,44 @@ void TunerModel::setBypass(bool on)
         qCDebug(lcTuner) << "TunerModel::setBypass: no handle yet, ignoring";
         return;
     }
+    // Same hold-clearing rationale as setOperate(): a new single-command
+    // transition must not be masked by a hold armed in a prior two-command
+    // sequence that never received its confirmation echo.
+    m_heldOperate = false;
+    m_heldBypass  = false;
     // Neutral intent → Flex "tgxl set handle=<h> bypass=" wire (via RadioModel).
     emit bypassRequested(on);
     // Optimistic update: reflect the commanded state immediately so the
     // button label stays in sync even before the radio echoes back.
     if (m_bypass != on) { m_bypass = on; emit stateChanged(); }
+}
+
+void TunerModel::setOperateAndBypass(bool operate, bool bypass)
+{
+    if (m_handle.isEmpty()) {
+        qCDebug(lcTuner) << "TunerModel::setOperateAndBypass: no handle yet, ignoring";
+        return;
+    }
+    // Send only the commands that actually change state.
+    const bool opChanged = (m_operate != operate);
+    const bool byChanged = (m_bypass  != bypass);
+    if (!opChanged && !byChanged) return;
+
+    // Arm the holds BEFORE emitting the intents so that any synchronous echo
+    // that arrives (unlikely on a LAN but correct to guard) does not slip past.
+    if (opChanged) { m_heldOperate = true; m_heldOperateVal = operate; }
+    if (byChanged) { m_heldBypass  = true; m_heldBypassVal  = bypass;  }
+
+    // Emit the neutral intents — RadioModel translates these to the Flex wire.
+    // Operate must be commanded before bypass so the hardware state machine
+    // sees a valid intermediate state (operate=1) before bypass=1 is applied.
+    if (opChanged) emit operateRequested(operate);
+    if (byChanged) emit bypassRequested(bypass);
+
+    // Single optimistic update for the combined transition.
+    if (opChanged) m_operate = operate;
+    if (byChanged) m_bypass  = bypass;
+    emit stateChanged();
 }
 
 void TunerModel::autoTune()

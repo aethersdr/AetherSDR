@@ -221,6 +221,7 @@ public:
     // report one per port, so its strips leave the cell out rather than
     // standing an N/A in it forever.
     void setFrequencyVisible(bool visible);
+    void setSourceVisible(bool visible);
     // The port carrying the radio's transmit path, outlined to match the
     // panel's highlight of the port in use.
     void setActive(bool active);

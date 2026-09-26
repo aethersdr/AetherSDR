@@ -113,7 +113,7 @@ constexpr const char* kBypassActiveStyle =
 TunerApplet::TunerApplet(QWidget* parent)
     : QWidget(parent)
 {
-    theme::setContainer(this, QStringLiteral("applet/tuner"));
+        theme::setContainer(this, QStringLiteral("applet/tuner"));
     hide();   // hidden by default until toggled on
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
@@ -550,23 +550,35 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
     connect(m_stbyBtn, &QPushButton::clicked, this, [this]() {
         if (!m_model) return;
         if (!m_model->isOperate()) {
-            // Already in standby — return to operate. Same order as
-            // cycleOperateState's standby leg so both paths command the
-            // tuner identically.
-            m_model->setBypass(false);
-            m_model->setOperate(true);
+	    // Return to operate. A standby can carry bypass=1 (FlexLib derives
+            // Standby from operate=0 alone, Tuner.cs:210); clear it on the way
+            // out as FlexLib's AutoTune does (Tuner.cs:355-356).
+            m_model->setOperateAndBypass(true, false);
+           
+        } else if (m_model->isBypass()) {
+            // BYPASS → STANDBY: two commands (bypass=0, operate=0). Use the
+            // combined method to hold both fields against intermediate echoes —
+            // without it the first echo reverts the optimistic update for the
+            // second field and the display briefly flashes OPERATE.
+            m_model->setOperateAndBypass(false, false);
         } else {
-            m_model->setBypass(false);
+            // OPERATE → STANDBY: bypass is already 0, one command suffices.
             m_model->setOperate(false);
         }
     });
     connect(m_bypBtn, &QPushButton::clicked, this, [this]() {
         if (!m_model) return;
         if (m_model->isOperate() && m_model->isBypass()) {
-            m_model->setBypass(false);   // back to operate, still out of standby
-        } else {
-            m_model->setOperate(true);
+            // BYPASS → OPERATE: single command, no echo race possible.
+            m_model->setBypass(false);
+        } else if (m_model->isOperate()) {
+            // OPERATE → BYPASS: single command.
             m_model->setBypass(true);
+        } else {
+            // STANDBY → BYPASS: two commands (operate=1, bypass=1). Use the
+            // combined method to prevent intermediate echoes from flashing the
+            // OPERATE state between the two command confirmations.
+            m_model->setOperateAndBypass(true, true);
         }
     });
 }
@@ -905,6 +917,8 @@ void TunerApplet::setAlertText(const QString& text)
     }
 }
 
+
+
 void TunerApplet::updatePortRows()
 {
     if (!m_portA || !m_portB) return;
@@ -920,16 +934,18 @@ void TunerApplet::updatePortRows()
         return;
     }
 
-    // Fallback: the Flex-relayed "amplifier" status carries no per-port block
-    // at all, so without the direct connection this is the client's view of
-    // its own radio rather than the tuner's report. Port A is assumed to be
-    // the networked radio's and port B to be on RF sense — true of the common
-    // wiring, and the honest limit of what is knowable on this path.
+    // Relay path: the Flex-relayed status carries no per-port trigger-mode
+    // field, so the source label is only shown where we have positive evidence.
+    // Port A: we know it is the connected radio — show the radio name unless
+    // PTT has been latched (which reveals it is PTT-triggered, not RF sense).
+    // Port B: trigger mode is unknown; leave the label hidden rather than
+    // guess "RF SENSE" and mislead PTT-mode users.
     const QString modelName = m_radioModelName.trimmed();
-    m_portA->setSourceText(m_radioConnected && !modelName.isEmpty()
-                               ? modelName
-                               : tr("NO RADIO"));
-    m_portB->setSourceText(tr("RF SENSE"));
+    const bool showA = m_radioConnected && !modelName.isEmpty();
+    m_portA->setSourceVisible(showA);
+    if (showA)
+        m_portA->setSourceText(modelName);
+    m_portB->setSourceVisible(false);  // trigger mode unknown on relay path
 
     const bool haveFreq = m_radioConnected && m_portAFreqMhz > 0.0;
     m_portA->setFrequencyMhz(haveFreq ? m_portAFreqMhz : 0.0);
@@ -945,15 +961,17 @@ void TunerApplet::updatePortRows()
     updateActivePort();
 }
 
-void TunerApplet::applyPortInfo(AccessoryPortRow* row, const TunerPortInfo& info)
+    void TunerApplet::applyPortInfo(AccessoryPortRow* row, const TunerPortInfo& info)
 {
-    // A port the tuner has no live reading on is one nothing is being heard
-    // on. It is labelled RF SENSE rather than with the radio name the tuner
-    // reports there anyway: `flexB` reads FLEX-8600 on a port carrying
-    // nothing, so trusting it would put a radio on a port that has none.
-    row->setSourceText(info.live && !info.source.trimmed().isEmpty()
-                           ? info.source.trimmed()
-                           : tr("RF SENSE"));
+    // Source label: shown only when we have positive evidence of what is on
+    // the port (live reading). Hidden otherwise — "RF SENSE" was an assumption
+    // about trigger mode the protocol never confirms, so showing nothing is
+    // more honest than guessing.
+    const bool showSource = info.live
+                            && !info.source.trimmed().isEmpty();
+    row->setSourceVisible(showSource);
+    if (showSource)
+        row->setSourceText(info.source.trimmed());
 
     // freqX is kHz on the wire. The band comes from that frequency through
     // the project's own band table rather than from the tuner's `bandX`
@@ -1054,6 +1072,7 @@ void TunerApplet::setTunerModel(TunerModel* model)
     connect(m_model, &TunerModel::pttChanged, this, [this](bool a, bool b) {
         m_portA->setPtt(a);
         m_portB->setPtt(b);
+              
     });
 
     connect(m_model, &TunerModel::directConnectionChanged, this, updateAntVisible);
@@ -1186,16 +1205,18 @@ void TunerApplet::cycleOperateState()
 
     // Cycle: OPERATE → BYPASS → STANDBY → OPERATE
     if (m_model->isOperate() && !m_model->isBypass()) {
-        // Currently OPERATE → go to BYPASS
+        // Currently OPERATE → go to BYPASS (single command, no echo race).
         m_model->setBypass(true);
     } else if (m_model->isOperate() && m_model->isBypass()) {
-        // Currently BYPASS → go to STANDBY
-        m_model->setBypass(false);
-        m_model->setOperate(false);
+        // Currently BYPASS → go to STANDBY (two commands). Use the combined
+        // method so intermediate echoes cannot revert the optimistic update
+        // for the second field and briefly flash OPERATE in the UI.
+        m_model->setOperateAndBypass(false, false);
     } else {
-        // Currently STANDBY → go to OPERATE
-        m_model->setBypass(false);
-        m_model->setOperate(true);
+       // Currently STANDBY → go to OPERATE. A standby can still carry
+        // bypass=1 (FlexLib derives Standby from operate=0 alone, Tuner.cs:210),
+        // so clear it on the way out as FlexLib's AutoTune does.
+        m_model->setOperateAndBypass(true, false);
     }
 }
 

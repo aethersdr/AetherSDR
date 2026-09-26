@@ -136,6 +136,8 @@ private:
     void applyTuneButtonText(const QString& text);
     void applyTuneButtonStyle(const char* styleTemplate);
     void updatePortRows();
+    // pttSeen is passed by value: the caller resolves and persists the latch
+    // first, then hands the final value in. applyPortInfo only reads it.
     void applyPortInfo(AccessoryPortRow* row, const TunerPortInfo& info);
     // Outlines exactly the port carrying transmit, or neither when that is
     // not yet knowable. Never both: only one port can be transmitting.
@@ -206,7 +208,7 @@ private:
     QWidget*     m_portRowsBox{nullptr};
     QWidget*     m_portLiveBox{nullptr};   // the two strips + the bypass overlay
     AccessoryPortRow* m_portA{nullptr};
-    AccessoryPortRow* m_portB{nullptr};
+    AccessoryPortRow* m_portB{nullptr}; 
     // Bypass is one device-wide field, so it is shown once across both strips
     // rather than repeated in each — repeating it reads as though a port could
     // be bypassed on its own.
