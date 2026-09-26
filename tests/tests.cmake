@@ -4295,6 +4295,17 @@ target_include_directories(hdlc_codec_test PRIVATE src)
 target_link_libraries(hdlc_codec_test PRIVATE aether_libmodem_core)
 add_test(NAME hdlc_codec_test COMMAND hdlc_codec_test)
 
+# Contour ShuttleXpress / ShuttlePro v2 report decoding (#5927). The parsers
+# are pure byte decoders with no hidapi dependency, so the test is built
+# unconditionally; HAVE_HIDAPI only unlocks the #ifdef around them.
+add_executable(hid_device_parser_test
+    tests/hid_device_parser_test.cpp
+    src/core/HidDeviceParser.cpp
+)
+target_include_directories(hid_device_parser_test PRIVATE src)
+target_compile_definitions(hid_device_parser_test PRIVATE HAVE_HIDAPI)
+add_test(NAME hid_device_parser_test COMMAND hid_device_parser_test)
+
 # Offline AX.25 decode diagnostic: replays a captured WAV through the decoder.
 # Not a ctest (needs an input file); built on demand for troubleshooting.
 add_executable(ax25_replay EXCLUDE_FROM_ALL

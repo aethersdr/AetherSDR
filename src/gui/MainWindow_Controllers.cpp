@@ -601,6 +601,82 @@ void MainWindow::handleVirtualFlexControlWheel(const QString& actionId, int step
 }
 
 #ifdef HAVE_HIDAPI
+// ── Contour shuttle ring (#5928) ────────────────────────────────────────────
+
+void MainWindow::onShuttleChanged(int position)
+{
+    if (position == 0) {
+        stopShuttle();
+        return;
+    }
+    const bool starting = (m_shuttleRate.position() == 0);
+    m_shuttleRate.setPosition(position);
+    if (!starting)
+        return;
+
+    // Read the settings once per deflection rather than on every tick.
+    m_shuttleAction =
+        HidEncoderManager::shuttleMappingField("action", QStringLiteral("WheelFrequency"));
+    const QString speed =
+        HidEncoderManager::shuttleMappingField("speed", QStringLiteral("Normal"));
+    m_shuttleSpeed = speed == QLatin1String("Slow") ? 0.5
+                   : speed == QLatin1String("Fast") ? 2.0 : 1.0;
+    m_shuttleLockNotified = false;
+    m_shuttleClock.start();
+    m_shuttleTimer->start();
+}
+
+void MainWindow::stopShuttle()
+{
+    if (m_shuttleTimer)
+        m_shuttleTimer->stop();
+    m_shuttleRate.reset();
+    m_shuttleLockNotified = false;
+}
+
+void MainWindow::onShuttleTick()
+{
+    // Real elapsed time, so a late tick does not slow the sweep; capped so a
+    // stalled event loop cannot turn into one huge jump.
+    const double dt = std::min(m_shuttleClock.restart() / 1000.0, 0.2);
+
+    auto* s = activeSlice();
+    if (!s)
+        return;
+
+    int unitHz = 0;
+    double maxRateHz = 0.0;
+    if (m_shuttleAction == QLatin1String("WheelFrequency")) {
+        if (s->isLocked()) {
+            // Once per deflection: notifyTuneBlockedByLock() also cancels
+            // direct frequency entry, so repeating it every tick would stop
+            // the operator typing a frequency while the ring is held.
+            if (!m_shuttleLockNotified) {
+                s->notifyTuneBlockedByLock();
+                m_shuttleLockNotified = true;
+            }
+            m_flexTargetMhz = -1.0;
+            m_shuttleRate.resetRemainder();
+            return;
+        }
+        auto* sw = spectrumForSlice(s);
+        unitHz = sw ? sw->stepSize() : (s->stepHz() > 0 ? s->stepHz() : 100);
+        maxRateHz = 200'000.0;
+    } else if (m_shuttleAction == QLatin1String("WheelRit")
+               || m_shuttleAction == QLatin1String("WheelXit")) {
+        // applyFlexControlWheelAction moves RIT/XIT 10 Hz per step, within
+        // +/-9999 Hz: keep the top speed low enough to stay controllable.
+        unitHz = 10;
+        maxRateHz = 1'000.0;
+    } else {
+        return;  // None, or an unknown value
+    }
+
+    const int steps = m_shuttleRate.tick(dt, unitHz, m_shuttleSpeed, maxRateHz);
+    if (steps != 0)
+        applyFlexControlWheelAction(m_shuttleAction, steps);
+}
+
 // static
 QString MainWindow::hidEncoderDefaultAction(int encoderIndex)
 {
@@ -2790,6 +2866,22 @@ void MainWindow::wireExternalControllers()
             if (m_hidAutoSnap) m_hidSnapTimer->start();
         }
         applyFlexControlWheelAction(actionId, steps);
+    });
+
+    // Contour shuttle ring (#5928). The ring reports its position only when
+    // it moves, so a timer integrates the held position into steps.
+    m_shuttleTimer = new QTimer(this);
+    m_shuttleTimer->setInterval(40);
+    connect(m_shuttleTimer, &QTimer::timeout, this, &MainWindow::onShuttleTick);
+    connect(m_hidEncoder, &HidEncoderManager::shuttleChanged,
+            this, &MainWindow::onShuttleChanged);
+    // Second line of defence: the manager returns the ring to 0 in close(),
+    // but a teardown of the controller thread that bypasses close() must not
+    // leave the radio tuning either.
+    connect(m_hidEncoder, &HidEncoderManager::connectionChanged,
+            this, [this](bool connected, const QString&) {
+        if (!connected)
+            stopShuttle();
     });
 
     connectDeviceInput(m_hidEncoder, &HidEncoderManager::buttonPressed, this, hidController,

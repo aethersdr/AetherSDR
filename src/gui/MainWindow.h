@@ -75,6 +75,7 @@
 #endif
 #ifdef HAVE_HIDAPI
 #include "core/HidEncoderManager.h"
+#include "core/ShuttleRateIntegrator.h"
 #endif
 #include "core/ShortcutManager.h"
 #include "core/SpectrogramBuffer.h"
@@ -1396,6 +1397,17 @@ private:
     int     m_hidSensitivity{1};    // RC-28 pulses required per frequency step (1 = off)
     bool    m_hidAutoSnap{false};   // snap to nearest 1 kHz after rotation stops
     QTimer* m_hidSnapTimer{nullptr};
+    // Contour shuttle ring (#5928): the ring only reports when it moves, so
+    // this timer integrates the held position into steps while deflected.
+    QTimer*               m_shuttleTimer{nullptr};
+    QElapsedTimer         m_shuttleClock;
+    ShuttleRateIntegrator m_shuttleRate;
+    QString               m_shuttleAction;          // cached per deflection
+    double                m_shuttleSpeed{1.0};      // cached per deflection
+    bool                  m_shuttleLockNotified{false};
+    void onShuttleChanged(int position);
+    void onShuttleTick();
+    void stopShuttle();
     enum class TMate2Overlay { None, Volume, Power, Speed, Wpm, Rit, Xit, Shift, Agc, Apf, Text };
     TMate2Overlay m_tmate2Overlay{TMate2Overlay::None};
     int     m_tmate2OverlayValue{0};

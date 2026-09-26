@@ -364,24 +364,44 @@ namespace AetherSDR {
 // RC-28 mapping is stored as one nested-JSON blob under "RC28Mapping"
 // (Principle V / Principle XIV). Reads default-fill missing fields; writes
 // regenerate the full object and persist atomically (single setValue+save).
-QString HidEncoderManager::rc28MappingField(const QString& field, const QString& dflt)
+static QString jsonMappingField(const char* key, const QString& field, const QString& dflt)
 {
     const QByteArray raw =
-        AppSettings::instance().value("RC28Mapping", "{}").toString().toUtf8();
+        AppSettings::instance().value(key, "{}").toString().toUtf8();
     const QJsonObject obj = QJsonDocument::fromJson(raw).object();
     const QJsonValue v = obj.value(field);
     return v.isString() ? v.toString() : dflt;
 }
 
-void HidEncoderManager::setRc28MappingField(const QString& field, const QString& value)
+static void setJsonMappingField(const char* key, const QString& field, const QString& value)
 {
     auto& s = AppSettings::instance();
     QJsonObject obj =
-        QJsonDocument::fromJson(s.value("RC28Mapping", "{}").toString().toUtf8()).object();
+        QJsonDocument::fromJson(s.value(key, "{}").toString().toUtf8()).object();
     obj.insert(field, value);
-    s.setValue("RC28Mapping",
+    s.setValue(key,
                QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
     s.save();
+}
+
+QString HidEncoderManager::rc28MappingField(const QString& field, const QString& dflt)
+{
+    return jsonMappingField("RC28Mapping", field, dflt);
+}
+
+void HidEncoderManager::setRc28MappingField(const QString& field, const QString& value)
+{
+    setJsonMappingField("RC28Mapping", field, value);
+}
+
+QString HidEncoderManager::shuttleMappingField(const QString& field, const QString& dflt)
+{
+    return jsonMappingField("ShuttleMapping", field, dflt);
+}
+
+void HidEncoderManager::setShuttleMappingField(const QString& field, const QString& value)
+{
+    setJsonMappingField("ShuttleMapping", field, value);
 }
 
 HidEncoderManager::HidEncoderManager(QObject* parent)
@@ -571,6 +591,13 @@ void HidEncoderManager::close()
         hid_close(m_device);
         m_device = nullptr;
     }
+    // Return a deflected shuttle ring to 0 before the parser goes away, and
+    // independently of the device-name guard below, so the GUI rate timer
+    // always stops on a close or surprise disconnect (#5928).
+    if (m_lastShuttle != 0) {
+        m_lastShuttle = 0;
+        emit shuttleChanged(0);
+    }
     m_parser.reset();
     if (!m_deviceName.isEmpty()) {
         qCDebug(lcDevices) << "HidEncoderManager: closed" << m_deviceName;
@@ -601,16 +628,31 @@ void HidEncoderManager::poll()
         }
         if (res == 0) break;  // no more data
 
-        auto event = m_parser->parse(m_buf, static_cast<size_t>(res));
-        switch (event.type) {
-        case HidEvent::Rotate:
-            emit tuneSteps(event.encoderIndex, m_invertDirection ? -event.steps : event.steps);
-            break;
-        case HidEvent::Button:
-            emit buttonPressed(event.button, event.action);
-            break;
-        case HidEvent::None:
-            break;
+        // One report can carry several events (e.g. two Contour buttons
+        // changing together): parse() returns the first, nextPending() the
+        // rest, in report order.
+        for (auto event = m_parser->parse(m_buf, static_cast<size_t>(res));
+             event.type != HidEvent::None;
+             event = m_parser->nextPending()) {
+            switch (event.type) {
+            case HidEvent::Rotate:
+                emit tuneSteps(event.encoderIndex, m_invertDirection ? -event.steps : event.steps);
+                break;
+            case HidEvent::Button:
+                emit buttonPressed(event.button, event.action);
+                break;
+            case HidEvent::None:
+                break;
+            }
+        }
+
+        if (m_parser->hasShuttle()) {
+            const int pos = m_parser->shuttlePosition();
+            const int shuttle = m_invertDirection ? -pos : pos;
+            if (shuttle != m_lastShuttle) {
+                m_lastShuttle = shuttle;
+                emit shuttleChanged(shuttle);
+            }
         }
     }
 }
