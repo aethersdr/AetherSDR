@@ -109,11 +109,22 @@ public:
     // this object's own thread. Returns false (and sets error, if given) when the
     // WDSP channel cannot be created.
     //
-    // STILL THE CONNECT PATH'S ENTRY POINT (Hl2Backend::beginDspSetup) and the
-    // add-a-panadapter path's (createPanadapter), where nothing is streaming yet
-    // and blocking the I/O thread costs nothing. A LIVE rate change must NOT use
-    // it — see buildChannel()/installRebuiltChannel() below and
-    // Hl2Backend::applyPanBandwidth().
+    // STILL THE CONNECT PATH'S ENTRY POINT (Hl2Backend::beginDspSetup), where
+    // nothing is streaming yet and blocking the I/O thread costs nothing. A LIVE
+    // rate change must NOT use it — see buildChannel()/installRebuiltChannel()
+    // below and Hl2Backend::applyPanBandwidth().
+    //
+    // THE ADD-A-PANADAPTER PATH NO LONGER REACHES THIS, and the reason is worth
+    // keeping because this comment used to claim it as a second safe caller "where
+    // nothing is streaming yet". That half was never true. createPanadapter()
+    // refuses before m_connected (Hl2DspSetupPolicy.h), docs/HERMES.md §20.10 is
+    // "receivers come and go while the radio runs", and hl2_receiver_churn_test
+    // asserts in as many words that "createPanadapter succeeds while EP6 is
+    // flowing". Configuring from there over a Qt::BlockingQueuedConnection
+    // therefore held the thread that paces EP2, which §20.8 says the gateware
+    // watchdog answers by halting the stream. It goes through
+    // Hl2Backend::startReceiverDspBuild() now, on the same split this file's
+    // buildChannel()/beginRebuild()/installRebuiltChannel() trio provides.
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
 
     // ── The asynchronous rebuild: build off-thread, swap on-thread ─────────

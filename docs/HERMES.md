@@ -4154,7 +4154,7 @@ The dialog is gated on elapsed time (1500 ms), not on a cold-cache predicate —
 that imports cleanly may still lack plans for these geometries and would report
 "warm" while the open measured regardless. See `MainWindow::armWdspSetupDialog`.
 
-### 22.4 Two paths blocked the GUI thread; one still does
+### 22.4 Three paths blocked the GUI thread; one still does
 
 #### Still open: backend teardown waits out an in-flight build
 
@@ -4178,6 +4178,90 @@ waiting. `OpenChannel` cannot be cancelled, so the honest options are a busy
 state over the teardown or a backend that can be abandoned rather than joined —
 and the second one also has to replace the `QPointer` guard in
 `beginDspSetup()`, which is sound today *because* teardown blocks.
+
+#### The third path, and it was not counted: "Add Panadapter"
+
+This section said **two** paths until it was corrected, and the missing one was
+`Hl2Backend::createPanadapter()`. It configured the new receiver's DSP over a
+`Qt::BlockingQueuedConnection` into `Hl2RxDsp`, and called
+`MetisClient::setReceiverCount` the same way — so it blocked the GUI thread
+unconditionally, exactly as teardown does, and it was never listed.
+
+§11.3 inherited the same omission: its "ONE path still blocks the GUI thread
+unconditionally" was false for as long as this one did.
+
+**The I/O thread was the expensive half, not the GUI thread.** `Hl2RxDsp` lives
+on `m_ioThread`, so the blocking hop ran `OpenChannel` ON the thread that paces
+EP2 from a 2 ms timer and drains EP6 — §20.8's case precisely, and the gateware
+watchdog halts the stream when EP2 stops arriving. `MetisClient::setReceiverCount`
+records a session lost this way already: *"The operator's session died from
+having clicked 'Add Panadapter'."*
+
+**And the premise that excused it was never true.** `Hl2RxDsp::configure()`
+carried a comment calling the add-a-panadapter path one "where nothing is
+streaming yet and blocking the I/O thread costs nothing". `createPanadapter()`
+refuses before `m_connected` (`Hl2DspSetupPolicy.h` says so), §20.10 is titled
+"receivers come and go while the radio runs", and `hl2_receiver_churn_test`
+asserts `"createPanadapter succeeds while EP6 is flowing"`. The connect half of
+that comment is sound; the add half was not.
+
+**What it looks like now.** Same three-thread split as #5783 above, for one
+chain instead of N — `startReceiverDspBuild()` marks and snapshots on the I/O
+thread, builds on `m_dspBuildThread`, swaps on the I/O thread —
+and `finishReceiverDspBuild()` picks the receiver back up on the GUI thread.
+
+**The announcement deliberately did NOT move.** `emitPanState()` and
+`emitSliceState()` still run before `createPanadapter()` returns, because two
+callers read the model the instant it does: `TciServer`'s non-Flex VFO-B branch
+diffs `slices()` immediately (its comment states the assumption — "the seam
+create is SYNCHRONOUS"), and `MainWindow::createPansSequentially()` diffs
+`panadapters()` after 300 ms, a figure chosen for the demo backend's two queued
+hops and not for a channel open. Neither emit reads `r.dsp`, so announcing
+before the chain exists describes the same receiver either way. What waits for
+the build is what genuinely needs it: the WDSP channel id, the shift, the notch
+and blanker seeding, and `publishIoDsps()` — which is what starts feeding it IQ,
+so the first spectrum frame is the pane filling in.
+
+**A COMPLETION HAS TO FIND ITS RECEIVER, AND A UI NUMBER IS NOT ENOUGH.**
+`finishReceiverDspBuild()` cannot carry a DDC index — closing any receiver
+renumbers every index after it, because the gateware needs them contiguous — so
+it carries the UI number, which a close leaves alone. That is true and it is not
+an identity: `Hl2ReceiverMap::append()` allocates the **lowest free** UI number,
+deliberately, because the monotonic version it replaced asked for slice id 4 on a
+radio whose slice ids run 0..3 and had the receiver refused as over capacity. So
+closing a receiver hands its number straight back to the next
+`createPanadapter()`, and a build still in flight for the closed one would
+resolve to the new one — closing a pane the operator had just opened, over a
+message about a receiver that no longer exists, or writing a dead WDSP channel id
+onto a chain that does not exist yet. The build therefore carries a **monotonic
+generation** stamped when it is posted (`Receiver::dspBuildGeneration`), and a
+completion whose generation has moved returns having touched nothing. The closed
+receiver needs no teardown there: `removePanadapter()` already did it.
+
+**AND AN ANNOUNCED RECEIVER CAN BE GIVEN A JOB BEFORE IT HAS A CHAIN.** The two
+roles the backend stores as DDC indices — which receiver owns transmit, which
+one the client's shared controls act on — are the other thing publishing early
+moved. `setTxSlice()` and `setActiveSlice()` resolve through `ddcForSlice()` and
+`rx()` and read no `r.dsp`, so for the whole length of a build the operator can
+click the new pane or press it into service as the transmit slice. When the
+build then **fails**, `finishReceiverDspBuild()` erases that receiver — and
+`hl2RoleAfterRemove()` answers "the role WAS the removed receiver" with `-1` by
+contract, so the caller can choose a new home. Nothing was choosing one, and
+`rx(-1)` is null: transmit owned no slice, and every later key attempt died in
+`RadioModel`'s interlock with *"No transmit slice is assigned"* and nothing said
+from the backend. The failure path now picks the home itself, as
+`removePanadapter()` already did — DDC 0 in post-erase numbering — and
+republishes the surviving slices, because the interlock reads the per-slice
+`txSlice` flag and not the member. The helper is unchanged: its `-1` is what
+keeps "this role is gone" distinguishable from "this role shifted down to index
+0". One case `removePanadapter()` never meets is real here — it refuses to close
+the last receiver, while a failed build can be the last receiver, if the one
+before it was closed while this one built.
+
+**Not measured.** Nothing here has a stopwatch on it. `hl2_pan_create_async_test`
+occupies each thread deliberately and asserts against that interval; it says the
+wait is gone, not how long the build takes. §22.3's ~19 s first open and this
+section's own disclaimer on the derived 0.6-1.1 s figure both still stand.
 
 #### Landed in #5783: the span change builds off the I/O thread
 

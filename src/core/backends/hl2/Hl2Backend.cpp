@@ -1196,15 +1196,21 @@ bool Hl2Backend::createPanadapter()
     // The WIRE FIRST, so the radio is already streaming the new layout before the
     // DSP that consumes it exists. The reverse order would leave a configured
     // chain briefly reading a payload with one fewer receiver in it. The extra
-    // slot the radio now sends goes nowhere until publishIoDsps() below — the
-    // fan-out is still working from a list one shorter and clamps to it.
+    // slot the radio now sends goes nowhere until the publishIoDsps() in
+    // finishReceiverDspBuild() — the fan-out is still working from a list one
+    // shorter and clamps to it (std::min against m_ioDsps.size(), where the new
+    // receiver is the LAST index, so no receiver that already existed is misfed).
     // This restarts the EP6 stream — see MetisClient::setReceiverCount.
+    //
+    // QUEUED, NOT BLOCKING, and nothing is lost by that. The blocking form
+    // guaranteed the I/O thread had taken the new count before the lines below
+    // ran, and no line below needs it: every later call this path makes into the
+    // wire is posted to the SAME event loop and is therefore already ordered
+    // behind this one, and setReceiverCount hands nothing back to read.
     if (m_metis) {
-        QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::BlockingQueuedConnection,
+        QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::QueuedConnection,
             Q_ARG(int, static_cast<int>(m_rx.size())));
     }
-
-    Receiver& r = m_rx.back();
 
     std::string err;
     if (!openReceiverDsp(ddc, &err)) {
@@ -1219,60 +1225,495 @@ bool Hl2Backend::createPanadapter()
         return false;
     }
 
-    Hl2RxDsp::Config dc;
+    const Hl2ReceiverIds* const opened = m_ids.byDdc(ddc);
+
+    // ── AND THE RECEIVER IS ANNOUNCED NOW, NOT WHEN THE CHAIN IS READY ────
+    //
+    // THE BUILD IS WHAT MOVED OFF THIS THREAD. The ANNOUNCEMENT deliberately
+    // did not, and getting that wrong would have broken two callers that read
+    // the model the instant this returns:
+    //
+    //   * TciServer, on the non-Flex branch of its VFO-B route: it snapshots
+    //     m_model->slices(), calls createPanadapter(), and DIFFS IMMEDIATELY to
+    //     learn which slice is new. Its own comment states the assumption —
+    //     "the seam create is SYNCHRONOUS ... there is no reply to parse, no
+    //     window in which the requester can leave, and no pending-create record
+    //     to reconcile". Announce late and that diff finds nothing, TCI reports
+    //     "VFO-B receiver could not be created", and a receiver appears anyway:
+    //     an error message AND an orphan.
+    //
+    //   * MainWindow::createPansSequentially(), which diffs
+    //     m_radioModel.panadapters() 300 ms after the call and stops the layout
+    //     recursion if nothing new is there. Announce late and a WDSP open on a
+    //     cold FFTW cache outruns that timer — and the 300 ms was chosen for the
+    //     DEMO backend's two queued hops, not for a channel open.
+    //
+    // NOTHING HERE NEEDS THE CHAIN. emitPanState() and emitSliceState() are
+    // pure functions of this receiver's state in m_rx and its ids — neither
+    // reads r.dsp — so publishing them before the WDSP channel exists describes
+    // exactly the same receiver it would have described after. What genuinely
+    // does need the built chain is in finishReceiverDspBuild(): the WDSP channel
+    // id, the shift, the notch and blanker seeding, and publishIoDsps(), which
+    // is what actually starts feeding it IQ.
+    //
+    // So the pane exists and is empty for the length of the build, instead of
+    // the whole application being frozen for the length of the build. The window
+    // is the same window; what changed is that the operator can use the radio
+    // during it and the radio keeps streaming.
+    //
+    // Publish it exactly as at connect, in the same order: pan geometry first so
+    // the model can materialise the pane, then the slice that lives in it.
+    emitPanState(ddc);
+    emitSliceState(ddc);
+    if (opened) {
+        emit panBandwidthLimitsChanged(
+            opened->panId,
+            static_cast<double>(kIqSampleRatesHz[0]) / 1.0e6,
+            static_cast<double>(m_sampleRateHz) / 1.0e6);
+        emit panRfGainInfoChanged(opened->panId, kLnaGainMinDb, kLnaGainMaxDb,
+                                  kLnaGainStepDb);
+        // EFFECTIVE, not baseline: a pan created while an automatic control is
+        // holding gain down must come up showing the same number as its
+        // siblings, not the operator's untouched baseline (Hl2GainSplit.h).
+        emit panRfGainChanged(opened->panId, lnaEffectiveDb());
+    }
+    // A new receiver can change whether the set spans bands.
+    applyBandFilter("add receiver");
+    publishWideState();
+
+    // THE BUILD IS STARTED LAST, AFTER THE ANNOUNCEMENT, and the order is not
+    // cosmetic. startReceiverDspBuild() has a synchronous fallback for the cases
+    // where there is no second thread to split across — before the I/O thread
+    // starts, after it is joined, or when called from it — and on that path
+    // finishReceiverDspBuild() runs INLINE. Starting the build first would then
+    // have run the completion (or, on a failure, the retraction) before the pan
+    // and slice were ever emitted. Posted or inline, this order is the same one.
+    startReceiverDspBuild(opened ? opened->uiNumber : -1);
+
+    // ADMITTED, AND ANNOUNCED — but the chain is still building.
+    //
+    // This used to return only once WDSP had opened a channel, because the
+    // configure() was a Qt::BlockingQueuedConnection into Hl2RxDsp. Two threads
+    // waited on it, not one. The GUI thread is the obvious victim; the
+    // EXPENSIVE one is the other, because Hl2RxDsp lives on m_ioThread — the
+    // same thread MetisClient paces EP2 from on a 2 ms timer and drains EP6 on,
+    // with iqBlocksReady a Qt::DirectConnection straight into processIqBlock().
+    // So "Add Panadapter" stopped EP2 for the length of an OpenChannel, and
+    // docs/HERMES.md §20.8 says the gateware watchdog answers a gap in EP2 by
+    // halting the stream. A frozen window is a nuisance; a halted radio is not.
+    //
+    // WHAT THE RETURN VALUE MEANS NOW, because it did not survive unchanged:
+    // false is an ADMISSION refusal — not connected, or the ceiling is already
+    // reached — and both are decided above, on this thread, before anything is
+    // posted. A DSP build that fails after admission is reported through
+    // finishReceiverDspBuild(), which retires the announced pan and says why.
+    // That is a narrowing, and it is also a correction:
+    // RadioModel::createPanadapter() answers a false by emitting
+    // panadapterLimitReached(), so a WDSP channel-open failure used to reach the
+    // operator as "you have too many panadapters", which it was not.
+    return true;
+}
+
+// The three-hop build, and the only reason it is three hops is that the two
+// threads Hl2Backend owns are BOTH unavailable for the work.
+//
+//   GUI THREAD (the caller): the Config is snapshotted from m_rx, which is
+//   GUI-thread-only, and handed over by value. Nothing downstream reads m_rx.
+//
+//   I/O THREAD (m_ioThread, reached through the chain's own object): mark the
+//   rebuild in flight and snapshot the noise-blanker pair — a turn of pointer
+//   writes. Then, at the far end, the swap. Never the build: this thread is the
+//   wire's and every other receiver's.
+//
+//   BUILD THREAD (m_dspBuildThread): WdspChannel::create()'s OpenChannel and
+//   the FFTW planning, with nothing live in reach.
+//
+// This is #5783's shape, ported. It is deliberately the same shape and not a
+// second one: applyPanBandwidth() posts through the same m_dspBuildContext, so
+// a create and a rate crossing that overlap are serialised by that thread's
+// event loop in the order they were posted, and the later install wins.
+//
+// buildChannel() is static and takes only a Config, which is what makes it
+// legal off the owning thread at all — see its header comment.
+void Hl2Backend::startReceiverDspBuild(int uiNumber)
+{
+    const Hl2ReceiverIds* const ids = m_ids.byUi(uiNumber);
+    Receiver* const r = ids ? rx(ids->ddcIndex) : nullptr;
+    if (!r || !r->dsp) {
+        qCWarning(lcHl2) << "HL2: no receiver behind UI" << uiNumber
+                         << "to build a DSP chain for";
+        return;
+    }
+
+    Hl2RxDsp::Config config;
     // THE COMMITTED RATE, NOT m_sampleRateHz. A receiver can be opened while a
     // rate change is still building, and m_sampleRateHz has already moved to the
     // rate being ATTEMPTED. Building this chain for that rate would hand it a
     // decimation geometry for IQ the radio is not producing yet — and if the
     // build in flight then fails, never will. The chain is built for what the
-    // wire is actually carrying; finishRateChange() rebuilds it if and when the
-    // crossing commits.
-    dc.inputSampleRateHz = m_rateLedger.committed();
-    dc.audioSampleRateHz = 24000;
-    dc.mode = modeFromString(r.mode);
-    std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
-    dc.agcMode = wdspAgcMode(r.agcMode);
-    dc.maximumAgcGainDb = m_dbRef.agcCeilingDb(r.agcThresholdDb);
-    bool ok = false;
-    Hl2RxDsp* dsp = r.dsp;
-    QMetaObject::invokeMethod(dsp, [dsp, &dc, &err, &ok] {
-        ok = dsp->configure(dc, &err);
-    }, Qt::BlockingQueuedConnection);
+    // wire is actually carrying; finishReceiverDspBuild() re-reads the ledger
+    // when the build lands, and finishRateChange() covers the other ordering.
+    //
+    // READ HERE, NOT AT THE CALL SITE, so the rebuild this function re-enters
+    // for after a rate commit picks up the new committed rate by construction
+    // rather than by a second copy of these six lines.
+    config.inputSampleRateHz = m_rateLedger.committed();
+    config.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
+    config.mode = modeFromString(r->mode);
+    std::tie(config.filterLowHz, config.filterHighHz) = dspFilterHz(*r);
+    config.agcMode = wdspAgcMode(r->agcMode);
+    config.maximumAgcGainDb = m_dbRef.agcCeilingDb(r->agcThresholdDb);
+
+    // MARKED BEFORE ANYTHING IS POSTED, and read by finishRateChange(). That
+    // function reconciles a receiver opened DURING a rate crossing by calling
+    // configure() on it synchronously; doing that to a chain whose own build is
+    // still in flight would run a second OpenChannel against WDSP's process-wide
+    // setup mutex the first one is holding — on the GUI thread — and then have
+    // the older build install over the result. Setting the flag after the post
+    // would leave exactly that window open.
+    r->dspBuildInFlight = true;
+
+    // AND STAMPED, because the UI number below is not an identity on its own.
+    //
+    // This build is about to travel through three event loops, and the receiver
+    // it belongs to can be CLOSED while it does. Closing frees its UI number,
+    // and Hl2ReceiverMap::append() hands out the lowest free one — so the next
+    // createPanadapter() can be given the very number this build is carrying.
+    // Without something unrepeatable alongside it, the completion resolves to
+    // that new receiver and acts on it: on the failure path it closes a pane the
+    // operator opened a moment ago, quoting a reason that belongs to a different
+    // receiver; on the success path it writes a dead WDSP channel id onto a
+    // chain that does not exist yet. finishReceiverDspBuild() compares this back
+    // and returns without touching anything if it has moved.
+    const quint64 generation = ++m_nextDspBuildGeneration;
+    r->dspBuildGeneration = generation;
+
+    Hl2RxDsp* const dsp = r->dsp;
+    MetisClient* const metis = m_metis;
+
+    if (!metis || !m_dspBuildContext || !m_ioThread || !m_ioThread->isRunning()
+        || QThread::currentThread() == m_ioThread) {
+        // NO THREADS TO SPLIT ACROSS. Before the I/O thread starts, after it is
+        // joined, or called from it — the same four conditions publishIoDspList()
+        // tests, and for the same reason: a queued hop into a dead event loop
+        // never arrives and one into your own deadlocks. Build inline instead of
+        // leaving a receiver with no chain. Nothing is streaming in any of these.
+        std::string error;
+        const bool ok = dsp->configure(config, &error);
+        finishReceiverDspBuild(uiNumber, generation, ok,
+                               ok ? dsp->wdspChannelId() : -1,
+                               config.inputSampleRateHz, error);
+        return;
+    }
+
+    QMetaObject::invokeMethod(dsp, [this, metis, dsp, config, uiNumber, generation] {
+        // ---- I/O THREAD, turn 1: mark and snapshot ----
+        //
+        // beginRebuild() on the chain's OWN thread, before the build starts, so
+        // a setMode/setFilter/setAgc/setShift/notch/NB arriving while it runs
+        // updates this chain's mirrors instead of blocking this thread on the
+        // setup mutex the build is about to hold. installRebuiltChannel()
+        // replays every one of them at the swap.
+        //
+        // The blanker pair is snapshotted here rather than carried in Config
+        // because the channel is OPENED with it — see buildChannel()'s note.
+        dsp->beginRebuild(config);
+        const bool nbOn = dsp->noiseBlankerEnabled();
+        const int nbLevel = dsp->noiseBlankerLevel();
+        QPointer<Hl2RxDsp> guard(dsp);
+
+        QMetaObject::invokeMethod(m_dspBuildContext, [this, metis, guard, config,
+                                                      uiNumber, generation,
+                                                      nbOn, nbLevel] {
+            // ---- BUILD THREAD: the whole cost, nothing live in reach ----
+            Hl2RxDsp::RebuildResult built =
+                Hl2RxDsp::buildChannel(config, nbOn, nbLevel);
+
+            QMetaObject::invokeMethod(metis, [this, guard, config, uiNumber,
+                                              generation,
+                                              b = std::move(built)]() mutable {
+                // ---- I/O THREAD, turn 2: the swap, which is pointer writes ----
+                //
+                // QPointer, and checked HERE rather than on the build thread:
+                // the receiver can be closed mid-build, and removePanadapter()
+                // retires the chain through deleteLater() posted to THIS thread.
+                // So the null check and the object's death are on one thread,
+                // which is what makes a QPointer — reentrant, not thread-safe —
+                // sound. `b` is destroyed on the way out if there is nothing to
+                // install, closing the new channel on the thread that owns it.
+                bool ok = false;
+                int channelId = -1;
+                std::string error = b.error;
+                if (!guard) {
+                    error = "the receiver was closed while its chain was building";
+                } else {
+                    ok = guard->installRebuiltChannel(std::move(b));
+                    channelId = guard->wdspChannelId();
+                }
+
+                QMetaObject::invokeMethod(this, [this, uiNumber, generation, ok,
+                                                 channelId,
+                                                 rate = config.inputSampleRateHz,
+                                                 error] {
+                    finishReceiverDspBuild(uiNumber, generation, ok, channelId,
+                                           rate, error);
+                }, Qt::QueuedConnection);
+            }, Qt::QueuedConnection);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
+// The GUI-thread half of opening a receiver: everything createPanadapter() used
+// to do after its blocking configure() returned.
+//
+// ── RESOLVED BY (UI NUMBER, GENERATION), AND THE SECOND HALF IS NOT OPTIONAL ──
+//
+// The DDC index the caller had is useless here: it is renumbered by any close
+// (Hl2ReceiverMap::remove, because the gateware needs the indices contiguous)
+// and this function runs an unbounded number of event loop turns after that
+// index was taken. So the build carries the UI number instead.
+//
+// THIS FILE USED TO STOP THERE, ON A NON-SEQUITUR. It said: "the UI number never
+// changes, so it still names the right receiver, or names none at all". The
+// premise is true — remove() leaves UI numbers alone, deliberately, so the pane
+// the operator still has open keeps its identity. The conclusion does not
+// follow, because Hl2ReceiverMap::append() allocates the LOWEST FREE UI number
+// rather than a monotonic one, and that too is deliberate: append()'s own
+// comment records that the monotonic version asked for slice id 4 on a radio
+// whose slice ids run 0..3 and had the receiver refused as over capacity. A
+// retired UI number is therefore handed straight back to the next
+// createPanadapter(), so "names none at all" is only one of the two ways this
+// can miss. The other is naming a DIFFERENT, LIVE receiver:
+//
+//   create → UI 1, build posted; close it → UI 1 freed and the chain
+//   deleteLater()'d, so the swap hop's QPointer goes null and a FAILED
+//   completion is posted for UI 1; create → append() returns UI 1 again.
+//
+// Landing that completion on the new receiver withdraws its IO DSPs, deletes
+// its LIVE chain and emits sliceLifecycleFailed/sliceRemoved/panRemoved — the
+// operator watches a pane they opened a moment ago vanish, over a message about
+// a receiver that no longer exists. The success-path variant is quieter and no
+// better: if the swap wins the race against deleteLater(), the completion writes
+// the DEAD chain's dspChannel and analyzerId onto the new receiver, clears the
+// dspBuildInFlight flag that is keeping finishRateChange() off a chain still
+// being built, and calls publishIoDsps() before that chain exists.
+//
+// So the generation stamped in startReceiverDspBuild() is compared back below,
+// and a completion whose generation has moved returns having touched nothing.
+// The closed receiver needed no teardown here in either case: removePanadapter()
+// already did it, withdrawal included.
+void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool ok,
+                                        int channelId, int builtRateHz,
+                                        const std::string& error)
+{
+    const Hl2ReceiverIds* ids = m_ids.byUi(uiNumber);
+    Receiver* r = ids ? rx(ids->ddcIndex) : nullptr;
+    if (!r) {
+        // Closed while it built, and nothing has taken its number yet.
+        // installRebuiltChannel() was never reached (the QPointer was already
+        // null) or the chain it installed is already queued for deletion on the
+        // I/O thread — either way there is nothing here to finish and nothing to
+        // withdraw.
+        qCInfo(lcHl2) << "HL2: receiver UI" << uiNumber
+                      << "was closed before its DSP chain finished building";
+        return;
+    }
+    if (r->dspBuildGeneration != generation) {
+        // Closed while it built, and its number has ALREADY BEEN REISSUED. The
+        // receiver standing here is a different one that happens to wear the
+        // same UI number, and acting on it is the whole defect described above.
+        // Logged at info rather than warning: on the operator's side nothing
+        // went wrong — a pane was closed and another opened — and the build this
+        // answers for belongs to a receiver that was correctly torn down by
+        // removePanadapter().
+        qCInfo(lcHl2) << "HL2: discarding a DSP build completion for UI" << uiNumber
+                      << "generation" << generation
+                      << "— that receiver was closed and its UI number reissued"
+                      << "(the receiver holding it now is on generation"
+                      << r->dspBuildGeneration << ")";
+        return;
+    }
+    const int ddc = ids->ddcIndex;
+    r->dspBuildInFlight = false;
+    r->dspBuildGeneration = 0;
+
     if (!ok) {
         qCWarning(lcHl2) << "HL2: receiver" << ddc << "DSP failed —"
-                         << QString::fromStdString(err);
-        dsp->disconnect(this);
-        dsp->deleteLater();
-        // THE S-METER, HOWEVER, WAS PUBLISHED. openReceiverDsp() succeeded just
-        // above -- it is the CONFIGURE that failed -- and declaring the meter is
-        // the last thing it does. Withdraw it before m_ids.remove(ddc) below
-        // takes the UI number away, or this rolled-back receiver keeps a meter
-        // in the catalogue for a chain that is being deleted on the next line.
-        if (const Hl2ReceiverIds* ids = m_ids.byDdc(ddc)) {
-            withdrawSliceLevelMeter(ids->uiNumber);
+                         << QString::fromStdString(error);
+        // A CLOSE, NOT A WITHDRAWAL — which is the opposite of what the old
+        // inline failure path did, and the difference is the announcement.
+        // createPanadapter() has already emitted this pan and this slice, so
+        // something outside this object believes in this receiver and the
+        // teardown has to be visible. The retraction is at the end of this
+        // branch.
+        //
+        // NOT A pop_back(). The old path could assume the failed receiver was
+        // still m_rx.back(), because it held the GUI thread from push to
+        // failure. This one runs an unbounded number of event-loop turns later,
+        // by which time another receiver may have been opened or closed, so it
+        // erases at the index resolved from the UI number above.
+        //
+        // Captured BEFORE m_ids.remove() below takes them away.
+        const QString removedPanId = ids->panId;
+        const int removedUi = ids->uiNumber;
+        // RE-APPLIED FROM #5866 AT THE MERGE, and it is the half this pair of
+        // changes loses on its own. #5866 put withdrawSliceLevelMeter() on
+        // "every path that drops a receiver", including createPanadapter()'s
+        // INLINE failure path; this change MOVED that whole path into this
+        // function. Because the path moved rather than changed, git raises only
+        // a textual conflict on the shared qCWarning line — so resolving it by
+        // taking either side wholesale drops the withdrawal with nothing to mark
+        // its absence.
+        //
+        // THE METER IS OUTSTANDING HERE. openReceiverDsp() declares it with
+        // defineSliceLevelMeter(ui) as its last act and it SUCCEEDED — what
+        // failed is the build startReceiverDspBuild() posted afterwards — so
+        // without this a rolled-back receiver leaves a meter in the catalogue,
+        // frozen at its last reading, for a chain about to be deleted.
+        //
+        // AFTER BOTH GUARDS ABOVE, NOT BEFORE THEM. A stale completion whose UI
+        // number has already been reissued returns at the generation guard; had
+        // the withdrawal run ahead of it, that completion would withdraw the
+        // meter belonging to the NEW receiver wearing the same number — the
+        // async test's cases 3 and 4 are exactly that interleaving.
+        //
+        // BEFORE THE TEARDOWN BELOW, mirroring the order removePanadapter()
+        // documents, and taken from removedUi because m_ids.remove() below
+        // takes the UI number away. No-ops on UI 0 by design.
+        withdrawSliceLevelMeter(removedUi);
+        Hl2RxDsp* const doomed = r->dsp;
+        r->dsp = nullptr;
+        // WITHDRAW, THEN DESTROY. publishIoDspList() blocks until the I/O thread
+        // has taken the list, so by the time the deletion below is posted the
+        // fan-out has already stopped feeding this chain. This is the one
+        // blocking hop left on this path, it is on the failure path only, and it
+        // is the same ordering removePanadapter() documents at length.
+        withdrawIoDsps();
+        if (doomed) {
+            doomed->disconnect(this);
+            doomed->deleteLater();
         }
-        // Safe to destroy without withdrawing it first: this chain was never
-        // published, so the fan-out has never held a pointer to it.
-        m_rx.pop_back();
-        m_ids.remove(ddc);
+        // ── THE TWO ROLES STORED AS DDC INDICES HAVE TO SURVIVE THE ERASE ──
+        //
+        // Both are DDC indices, and the erase below RENUMBERS every index after
+        // this one, so a role left naming a stale index is a silent
+        // misdirection (Hl2Receivers.h). That much this path always had. What it
+        // ALSO claimed was that the `==` case could not arise here — "nothing
+        // has selected it and transmit was never moved onto it" — and THIS
+        // CHANGE IS WHAT MADE THAT FALSE.
+        //
+        // THE ANNOUNCEMENT NOW PRECEDES THE BUILD. createPanadapter() emits this
+        // receiver's pan and slice before it calls startReceiverDspBuild(), on
+        // purpose — see the announcement note there — and the build then takes
+        // an unbounded number of GUI event-loop turns to land. The slice is
+        // public and live for every one of them, so setActiveSlice() and
+        // setTxSlice() resolve to it and will take it: both need only
+        // ddcForSlice() and rx(), and neither reads r->dsp. One click on the new
+        // pane, or one TCI client acting on the create it just made, and the
+        // role IS this receiver by the time the build fails. Before this change
+        // the receiver did not exist outside this object until its chain was
+        // open, and the claim held.
+        //
+        // hl2RoleAfterRemove() answers `==` with -1 BY CONTRACT: "the receiver
+        // is GONE; the caller must choose a new home, so this returns -1 rather
+        // than inventing one". STORING that -1 is the defect. rx(-1) is nullptr,
+        // so transmit would own no slice and every later key attempt would die
+        // in the interlock with nothing said — the exact failure
+        // removePanadapter() says it moves transmit to avoid — and the client's
+        // shared controls would act on no receiver at all.
+        //
+        // SO THE HOME IS CHOSEN HERE, AT THE CALL SITE, the way
+        // removePanadapter() chooses it — and NOT by making the helper return 0.
+        // The helper is a pure index shift shared with that function, which
+        // branches on `==` BEFORE calling it precisely so the helper never has
+        // to invent a home. A version returning 0 would make "this role is gone"
+        // and "this role legitimately shifted down to index 0" the same answer,
+        // which is the misdirection the helper exists to prevent, and it would
+        // silently swallow a transmit move that is worth a log line.
+        //
+        // AND ONE CASE removePanadapter() IS STRUCTURALLY SPARED. It refuses to
+        // close the last receiver, so DDC 0 always exists after its erase. This
+        // path has no such guard and the failed receiver CAN be the last one:
+        // add a second receiver, close the FIRST while the second is still
+        // building — allowed, the set had two — and this erase then empties
+        // m_rx. 0 is still the right answer there and -1 is still the wrong one:
+        // it is the value both roles are constructed with and the index the next
+        // receiver to exist will take, whether that is the next createPanadapter()
+        // or the next connect's buildReceivers(). rx(0) is nullptr exactly as
+        // rx(-1) was, so nothing is worse off meanwhile; the difference is that
+        // 0 becomes right again the moment a receiver exists, and -1 never does.
+        //
+        // Computed BEFORE the erase, because `ddc` names this receiver only
+        // until then.
+        const bool txWasHere = (m_txDdc == ddc);
+        const bool activeWasHere = (m_activeDdc == ddc);
+        if (txWasHere) {
+            qCInfo(lcHl2) << "HL2: transmit moves from DDC" << ddc
+                          << "to 0 — its receiver's DSP chain failed to build";
+        }
+        m_txDdc = txWasHere ? 0 : hl2RoleAfterRemove(m_txDdc, ddc);
+        m_activeDdc = activeWasHere ? 0 : hl2RoleAfterRemove(m_activeDdc, ddc);
+        m_rx.erase(m_rx.begin() + ddc);
+        m_ids.remove(ddc);        // renumbers DDC indices; UI numbers are untouched
+        m_mixPending.clear();     // the per-receiver queues describe the old set
+        m_mixAccum.clear();
         if (m_metis) {
             QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::QueuedConnection,
                 Q_ARG(int, static_cast<int>(m_rx.size())));
         }
-        return false;
+        publishIoDsps();
+        // RETRACT THE ANNOUNCEMENT. createPanadapter() published this pan and
+        // this slice before the build started — on purpose, see its note — so
+        // unlike the old inline failure path there IS something outside this
+        // object that believes in this receiver, and it has to be told.
+        //
+        // BOTH, and in this order, for the reason removePanadapter() gives: on
+        // this backend a slice IS a receiver, and emitting only panRemoved left
+        // the SliceModel naming a dead pan id, which then failed the next
+        // create's capacity guard against a slice count that never fell.
+        // SAY SO OUTWARD FIRST, and say it BETTER than the return value did. A
+        // false from createPanadapter() reaches the operator through
+        // RadioModel::createPanadapter() as panadapterLimitReached() — "you have
+        // too many panadapters" — which is the wrong sentence for a WDSP channel
+        // that would not open, and was the wrong sentence before this change too.
+        //
+        // sliceLifecycleFailed() is the seam's own answer and needs no new
+        // surface: IRadioBackend declares it as "failure of an accepted ordinary
+        // lifecycle request", operation "create". RadioModel forwards it and
+        // MainWindow_Session turns it into "Cannot create slice: <reason>".
+        //
+        // WITH THE REAL SLICE ID, not the -1 that signal documents for "creation
+        // never allocated a published ID" — because this one did. The slice was
+        // published at admission, which is the whole point of the announcement
+        // note in createPanadapter(); -1 would be true only of the old inline
+        // path. Emitted BEFORE the retraction below so the id still names
+        // something when RadioModel logs it.
+        emit sliceLifecycleFailed(QStringLiteral("create"), removedUi,
+                                  QString::fromStdString(error));
+        emit sliceRemoved(removedUi);
+        emit panRemoved(removedPanId);
+        applyBandFilter("receiver DSP build failed");
+        publishWideState();
+        // A ROLE THAT MOVED HAS TO BE SAID OUTWARD, for the reason
+        // removePanadapter() gives at its own end: the transmit and active
+        // indicators are published per slice, so a survivor that has just
+        // inherited one would otherwise never be told it has it — and the
+        // operator would be looking at a set of slices none of which claims
+        // transmit. Conditional rather than unconditional only because the
+        // common failure moves no role at all, and republishing every slice to
+        // say nothing changed is a delta the model would apply for nothing.
+        if (txWasHere || activeWasHere)
+            emitAllSliceState();
+        return;
     }
 
     // What this chain was actually built for, so a rate change that commits
     // while it was being opened can tell that it still needs rebuilding.
-    r.configuredRateHz = dc.inputSampleRateHz;
+    r->configuredRateHz = builtRateHz;
 
-    int channelId = -1;
-    QMetaObject::invokeMethod(dsp, [dsp, &channelId] {
-        channelId = dsp->wdspChannelId();
-    }, Qt::BlockingQueuedConnection);
-    if (auto* ids = m_ids.mutableByDdc(ddc)) {
-        ids->dspChannel = channelId;
-        ids->analyzerId = ids->uiNumber;
+    if (auto* mutableIds = m_ids.mutableByDdc(ddc)) {
+        mutableIds->dspChannel = channelId;
+        mutableIds->analyzerId = mutableIds->uiNumber;
     }
 
     // Put the NCO where this receiver's state says it should be. setReceiverCount
@@ -1281,48 +1722,60 @@ bool Hl2Backend::createPanadapter()
     if (m_metis) {
         QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
             Q_ARG(int, ddc),
-            Q_ARG(std::uint32_t, ncoCommandHz(r.ncoHz)));
+            Q_ARG(std::uint32_t, ncoCommandHz(r->ncoHz)));
     }
-    QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
-        Q_ARG(double, rxShiftHz(r)));
+    QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
+        Q_ARG(double, rxShiftHz(*r)));
     // Notches are radio-wide, so a receiver that appears after them has to be
     // brought up to date. Otherwise adding a second panadapter gives you one
     // receiver with the interferer notched out and one without.
-    seedNotches(r);
+    seedNotches(*r);
     // Per-receiver, so a new panadapter starts from ITS OWN state rather than
     // inheriting RX1's — which for a receiver that has never been configured is
     // the default of off.
-    pushNoiseBlanker(r);
+    pushNoiseBlanker(*r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
     // in a receiver that is fully set up, rather than one still being assembled.
     publishIoDsps();
 
-    const auto* ids = m_ids.byDdc(ddc);
-    qCInfo(lcHl2) << "HL2: added receiver — DDC" << ddc << "pan" << (ids ? ids->panId : QString())
+    qCInfo(lcHl2) << "HL2: added receiver — DDC" << ddc << "pan" << ids->panId
                   << "WDSP channel" << channelId
-                  << "; running" << m_rx.size() << "of" << ceiling;
+                  << "; running" << m_rx.size() << "of" << receiverCeiling();
 
-    // Publish it exactly as at connect, in the same order: pan geometry first so
-    // the model can materialise the pane, then the slice that lives in it.
-    emitPanState(ddc);
-    emitSliceState(ddc);
-    if (ids) {
-        emit panBandwidthLimitsChanged(
-            ids->panId,
-            static_cast<double>(kIqSampleRatesHz[0]) / 1.0e6,
-            static_cast<double>(m_sampleRateHz) / 1.0e6);
-        emit panRfGainInfoChanged(ids->panId, kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb);
-        // EFFECTIVE, not baseline: a pan created while an automatic control is
-        // holding gain down must come up showing the same number as its
-        // siblings, not the operator's untouched baseline (Hl2GainSplit.h).
-        emit panRfGainChanged(ids->panId, lnaEffectiveDb());
+    // NOT RE-ANNOUNCED HERE. createPanadapter() already emitted this pan and
+    // slice, and emitPanState()/emitSliceState() describe state that has not
+    // changed since — the chain arriving does not move the NCO, the mode or the
+    // passband. Repeating them would publish a delta that is identical to the
+    // one the model already applied.
+    //
+    // WHAT DID CHANGE IS THE SPECTRUM, and nothing has to say so: the pane has
+    // been sitting empty because publishIoDsps() above is what puts this chain
+    // into the fan-out, so the first frame is the announcement.
+
+    // ── THE RATE MAY HAVE MOVED WHILE THIS WAS BUILDING ──────────────────
+    //
+    // A crossing that snapshotted its steps BEFORE this receiver was pushed does
+    // not cover it, and finishRateChange() deliberately skips a chain whose build
+    // is in flight rather than reconciling it out from under this one. So the
+    // check lands here, where the flag is already cleared and the ledger is
+    // authoritative.
+    //
+    // ANOTHER ASYNCHRONOUS BUILD, not a synchronous configure(). The synchronous
+    // form is what finishRateChange() does for the same situation and calls "the
+    // honest cost"; paying it here would put a WDSP OpenChannel back on the GUI
+    // thread inside the very function that exists to take one off it.
+    //
+    // THIS TERMINATES. Each re-entry needs the committed rate to have moved
+    // again, which takes another operator zoom that commits; it is not a retry
+    // loop and a failed build does not re-enter at all (the branch above returns).
+    if (m_rateLedger.committed() != builtRateHz) {
+        qCInfo(lcHl2) << "HL2: receiver" << ddc << "opened at" << builtRateHz
+                      << "Hz but the radio committed to" << m_rateLedger.committed()
+                      << "Hz while it built — rebuilding";
+        startReceiverDspBuild(uiNumber);
     }
-    // A new receiver can change whether the set spans bands.
-    applyBandFilter("add receiver");
-    publishWideState();
-    return true;
 }
 
 bool Hl2Backend::removePanadapter(const QString& panId)
@@ -4599,6 +5052,23 @@ void Hl2Backend::finishRateChange(bool ok, quint64 generation, int targetRate,
     // one rebuild window.
     for (Receiver& r : m_rx) {
         if (!r.dsp || r.configuredRateHz == targetRate)
+            continue;
+        // A CHAIN WHOSE OWN BUILD IS STILL IN FLIGHT IS NOT OURS TO RECONCILE.
+        //
+        // createPanadapter() no longer opens a chain inline — it posts the build
+        // to m_dspBuildThread and returns (startReceiverDspBuild()). A receiver
+        // opened inside this crossing's window can therefore still be BUILDING
+        // when this runs, and the configure() below would then run a second
+        // OpenChannel against the process-wide WDSP setup mutex the first one is
+        // holding: on the GUI thread, for the length of the build, which is the
+        // stall this whole family of changes exists to remove. And it would be
+        // pointless as well as slow, because the in-flight build installs over
+        // the result the moment it lands.
+        //
+        // Left to finishReceiverDspBuild(), which re-reads the ledger when its
+        // build completes and starts another one if the rate moved under it. The
+        // flag is cleared there before that check, so nothing is dropped.
+        if (r.dspBuildInFlight)
             continue;
         const bool wasCovered =
             std::any_of(covered.begin(), covered.end(),

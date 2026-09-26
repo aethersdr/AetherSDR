@@ -363,6 +363,7 @@ signals:
 
 private:
     friend struct Hl2DspReadbackTestAccess;
+    friend struct Hl2PanCreateTestAccess;
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
@@ -711,6 +712,41 @@ private:
         // finishRateChange() reconciles the difference on the success path.
         int configuredRateHz = 0;
 
+        // TRUE WHILE THIS RECEIVER'S WDSP CHAIN IS BEING BUILT off both the GUI
+        // and the I/O thread — see startReceiverDspBuild(). It is not a duplicate
+        // of configuredRateHz == 0: that says "no chain has been built yet",
+        // which is also true of a receiver whose build already FAILED, and this
+        // says "a build is in flight and will install over anything done now".
+        // finishRateChange() reads it to leave such a chain alone: reconciling it
+        // synchronously would run a second OpenChannel against the setup mutex
+        // the in-flight build is holding, and then be overwritten by it anyway.
+        bool dspBuildInFlight = false;
+
+        // WHICH build is in flight, and the reason a bool was not enough.
+        //
+        // finishReceiverDspBuild() has to find the receiver its build was
+        // started for, and it resolves by UI NUMBER because a DDC index is
+        // renumbered by any close. The UI number does not change either — but
+        // it is REISSUED, and that is the part the first version of this file
+        // got wrong. Hl2ReceiverMap::append() allocates the LOWEST FREE UI
+        // number, deliberately (its own comment records that a monotonic
+        // counter asked for slice id 4 on a radio whose ids run 0..3), so the
+        // instant a receiver is closed its number is available to the next
+        // createPanadapter(). "The number still names the right receiver, or
+        // names none at all" is therefore false: it can name a DIFFERENT one.
+        //
+        // So the completion carries a generation stamped when its build was
+        // POSTED, and is refused unless this field still holds it. Zero means
+        // no build is in flight and never matches a stamped one, because
+        // Hl2Backend::m_nextDspBuildGeneration pre-increments from zero.
+        //
+        // WHY NOT COMPARE THE Hl2RxDsp POINTER: on the path that matters — the
+        // receiver closed while its chain built — removePanadapter() has already
+        // deleteLater()'d that object, so the captured pointer is dangling by
+        // the time the completion runs and comparing it is a use-after-free. A
+        // counter is compared by value and has no such lifetime.
+        quint64 dspBuildGeneration = 0;
+
         // Per-receiver S-meter ballistics (SMeterSmoother). Deliberately NOT
         // shared: a strong signal on receiver 1 must not move receiver 3's
         // needle, which is what a single smoother would have done.
@@ -864,6 +900,50 @@ private:
     // identical wiring block is exactly how a signal gets connected in one path
     // and forgotten in the other.
     bool openReceiverDsp(int ddc, std::string* error);
+
+    // The asynchronous half of opening a receiver, split out of
+    // createPanadapter() so no WDSP OpenChannel runs on the GUI thread or on the
+    // I/O thread. startReceiverDspBuild() posts the three-hop build (I/O thread
+    // to mark, build thread to build, I/O thread to swap);
+    // finishReceiverDspBuild() is the GUI-thread completion and is everything
+    // createPanadapter() used to do after its blocking configure() returned.
+    //
+    // BOTH TAKE A UI NUMBER, NEVER A DDC INDEX — AND A UI NUMBER IS NOT ENOUGH
+    // ON ITS OWN. A DDC index is renumbered by any close (Hl2ReceiverMap::remove)
+    // and these run an unbounded number of event loop turns after it was taken,
+    // so a DDC index cannot be carried. A UI number survives a close, which is
+    // true and is NOT the same as naming one receiver for ever: append()
+    // allocates the LOWEST FREE UI number, by design, so closing a receiver
+    // hands its number straight back to the next createPanadapter() and a
+    // completion still in flight for the closed one then resolves to the new
+    // one. The pair (uiNumber, generation) is what identifies a build; see
+    // Receiver::dspBuildGeneration for why the generation is a counter and not
+    // the chain pointer.
+    //
+    // startReceiverDspBuild() DERIVES the Config rather than taking one. That is
+    // not only to keep Hl2RxDsp::Config out of this header, which forward-declares
+    // Hl2RxDsp and cannot name a nested type of it — it also puts the derivation
+    // in ONE place, so the initial build and the rebuild that follows a rate
+    // commit cannot drift apart.
+    void startReceiverDspBuild(int uiNumber);
+    void finishReceiverDspBuild(int uiNumber, quint64 generation, bool ok,
+                                int channelId, int builtRateHz,
+                                const std::string& error);
+    // Stamped into Receiver::dspBuildGeneration by startReceiverDspBuild() and
+    // carried through the three hops. Monotonic and never reused — unlike the
+    // UI number, which is exactly the point. Same shape as the rate ledger's
+    // own generation, which exists for the same reason a rate crossing can be
+    // superseded while it is in flight.
+    //
+    // BACKEND-LIFETIME, AND NOTHING MAY RESET IT. A per-connect counter would
+    // close the close-and-re-add case and leave a worse one open: a build can
+    // outlive a whole session (§22.3 records ~19 s for a cold-cache first open),
+    // and tearDownReceivers()/buildReceivers() hand out UI numbers from zero
+    // again on the next connect — so a completion crossing a reconnect would
+    // find a freshly built receiver wearing its number with a generation counter
+    // that had been wound back to meet it. Because this only ever increments,
+    // every receiver a later connect builds starts at zero and matches nothing.
+    quint64 m_nextDspBuildGeneration = 0;
     // How many receivers this radio may run right now: the board's reported
     // count, capped by the link budget at the current sample rate.
     [[nodiscard]] int receiverCeiling() const;
