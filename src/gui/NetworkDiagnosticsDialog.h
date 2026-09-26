@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PersistentDialog.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "models/DigitalVoiceWaveformHistory.h"
 
 #include <QComboBox>

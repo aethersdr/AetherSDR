@@ -249,6 +249,11 @@ void MainWindow::noteBandRecallForPan(const QString& panId)
         return;
     }
 
+    // A FLEX band recall persists each slice's current audio_mute into the
+    // outgoing band slot (SliceModel.h). A Monitor TX hold's temporary mute is
+    // not the operator's, so unwind it before the command goes out. (#2242)
+    endSplitMonitorForPan(panId);
+
     // Flex band persistence destroys and rebuilds this pan's slices. Snapshot
     // the locked receiver and our pre-recall topology before sending the band
     // command. Restoration is deferred until the full grace window elapses so
@@ -1867,7 +1872,14 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // state via DAX2 — matches SmartSDR Console behavior. (#2315)
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         m_audio->setDaxTxMode(isDigital);
-        if (!profileLoadRadioStateWritesHeld()) {
+        // `transmit dax` and DAX TX streams belong to Flex's command plane.
+        // Icom and the other typed-seam backends carry their audio through the
+        // backend itself; pushing the Flex flag on connect or on a TX-mode
+        // change is both inert and an operator-facing unsupported-control
+        // warning. setDaxTxMode() above still switches the local TX feed, so
+        // TransmitModel's daxOn() does not follow digital modes on these
+        // backends.
+        if (m_radioModel.hasCommandPlane() && !profileLoadRadioStateWritesHeld()) {
             m_radioModel.transmitModel().setDax(isDigital);
             if (isDigital) {
                 m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
@@ -2305,7 +2317,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
     if (m_splitActive && m_splitTxSliceId < 0 && s->sliceId() != m_splitRxSliceId) {
         m_splitTxSliceId = s->sliceId();
         s->setTxSlice(true);
-        s->setAudioMute(true);  // TX slice in split has no audio output
+        // Apply the remembered arrangement, then start learning this split's.
+        // With nothing remembered the apply just mutes the TX slice, which is
+        // what this line used to do unconditionally. (#2242)
+        applyAndArmSplitAudio(m_radioModel.slice(m_splitRxSliceId), s);
         // TX slice frequency is already set by the slice create command
         // (with mode-dependent offset), so do NOT override it here (#789).
         if (auto* sw = spectrum()) sw->setSplitPair(m_splitRxSliceId, m_splitTxSliceId);
@@ -2498,6 +2513,13 @@ void MainWindow::onSliceRemoved(int id)
         deactivateFdvDisplay();
 #endif
 
+    // A Monitor TX hold on a slice that no longer exists ends now: the id can be
+    // reused by the next slice, and a later release must not restore a mute
+    // onto a slice the hold never touched. (#2242)
+    // Deferred: the radio's status burst for the remaining slice is already
+    // queued and would overwrite a synchronous restore (see recordSplitAudioMirror).
+    endSplitMonitorForSlice(id, /*deferWrites=*/true);
+
     // If the split TX slice was closed, disable split
     if (m_splitActive && id == m_splitTxSliceId) {
         // TX slice removed out-of-band (2nd client / front panel / rigctld),
@@ -2508,6 +2530,11 @@ void MainWindow::onSliceRemoved(int id)
         // never reclaimed) or, if a third slice was focused, the WRONG slice,
         // which would be keyed via the radio command "slice set N tx=1".
         const int rxId = m_splitRxSliceId;   // capture before reset
+        // Same learn-and-restore as disableSplit(). The TX slice model is
+        // already gone here, so everything recorded comes from the mirror —
+        // the reason it is kept live for the whole split. The restore is
+        // deferred past the radio's queued status burst. (#2242)
+        recordSplitAudioMirror(/*deferRestore=*/true);
         m_splitActive = false;
         m_splitRxSliceId = -1;
         m_splitTxSliceId = -1;
@@ -2776,9 +2803,16 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
 
     const int xpix = panXpixelsFor(sw);
     const int ypix = panYpixelsFor(sw);
-    m_radioModel.sendCommand(
-        QString("display pan set %1 xpixels=%2 ypixels=%3")
-            .arg(panId).arg(xpix).arg(ypix));
+    // xpixels/ypixels is a Flex command-plane contract. In-process and CI-V
+    // backends publish their own fixed frame geometry; sending this text to
+    // them can only be dropped, which used to surface an unsupported-command
+    // status-bar warning during an otherwise successful Icom connect. Only the
+    // write is skipped: the local rescale below still runs for them (#4448).
+    if (m_radioModel.hasCommandPlane()) {
+        m_radioModel.sendCommand(
+            QString("display pan set %1 xpixels=%2 ypixels=%3")
+                .arg(panId).arg(xpix).arg(ypix));
+    }
 
     // Arm the DSS settle gate now, before the radio echo switches the local
     // decoder. The stream keeps decoding with the old y_pixels until the echo,
@@ -3164,6 +3198,11 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         }
         m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
                                             sw->wfLineDuration());
+        // Same for the averaging controls: without these the backend runs at
+        // its built-in averaging until the operator touches a slider, whatever
+        // the saved setting says.
+        m_radioModel.requestPanAverage(panId, sw->fftAverage());
+        m_radioModel.requestLocalPanWeightedAverage(panId, sw->fftWeightedAvg());
     }
 
     // Reclaimed pans already hold their latest status and do not necessarily
@@ -3293,9 +3332,12 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         // weighted-average still needs this guard on its raw command path.
         if (!targetPanId.isEmpty()) {
             m_radioModel.requestPanAverage(targetPanId, src->fftAverage());
-            m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
-                                         .arg(targetPanId)
-                                         .arg(src->fftWeightedAvg() ? 1 : 0));
+            if (!m_radioModel.requestLocalPanWeightedAverage(targetPanId,
+                                                             src->fftWeightedAvg())) {
+                m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
+                                             .arg(targetPanId)
+                                             .arg(src->fftWeightedAvg() ? 1 : 0));
+            }
         }
         dst->setFftAverage(src->fftAverage());
         dst->setFftWeightedAvg(src->fftWeightedAvg());
@@ -4118,8 +4160,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // Band/Segment Zoom toggle off the pan's radio-authoritative model state
     // (togglePanZoomModeForPan) — shared with the keyboard/MIDI shortcuts
     // (MainWindow_Shortcuts.cpp) and the RC28/FlexControl paths
-    // (MainWindow_Controllers.cpp), and per-pan by construction. This right-click
-    // menu targets THIS applet's pan, not the active slice's. (#4057)
+    // (MainWindow_Controllers.cpp), and per-pan by construction. These are the
+    // "B"/"S" BUTTONS in the waterfall corner -- the only emitters of these two
+    // signals, and the only band/segment-zoom surface the capability gate used
+    // to reach. An earlier wording here called them a right-click menu; there
+    // is no such path, and reading it as one is how the other six surfaces went
+    // uncounted. They target THIS applet's pan, not the active slice's. (#4057)
     connect(sw, &SpectrumWidget::bandZoomRequested,
             this, [this, applet]() {
         togglePanZoomModeForPan(applet->panId(), /*segmentZoom=*/false);
@@ -4621,8 +4667,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::fftWeightedAverageChanged,
             this, [this, applet, sw](bool on) {
         sw->setFftWeightedAvg(on);
-        m_radioModel.sendCommand(
-            QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), on)) {
+            m_radioModel.sendCommand(
+                QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        }
     });
     connect(menu, &SpectrumOverlayMenu::wfColorSchemeChanged,
             sw, &SpectrumWidget::setWfColorScheme,
@@ -4901,8 +4949,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // values above (sw->setFftFps / sw->setWfLineDuration) are already updated,
         // so they become the new restore targets when the throttle lifts.
         m_radioModel.requestPanAverage(applet->panId(), 0);
-        m_radioModel.sendCommand(
-            QString("display pan set %1 weighted_average=0").arg(applet->panId()));
+        if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), false)) {
+            m_radioModel.sendCommand(
+                QString("display pan set %1 weighted_average=0").arg(applet->panId()));
+        }
         // fps + line_duration go through the dispatcher rather than as Flex wire
         // text: on a backend that shapes its own display rate the reset updated
         // the widget only, leaving the backend cap and the pan's stored line
@@ -5967,6 +6017,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 sl->setRecordOn(on);
         }
     });
+    // A capture can start from AetherRX's REC (or the bridge) as well as
+    // from this flag, and the one recorder serves them all, so the flag
+    // follows the recorder's own start rather than only its own click.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStarted, w, [w](const QString&) {
+        w->setRecordOn(true);
+    });
     // A stopped recording may have failed to write/finalize; only enable
     // playback when the recorder has a successfully finalized file.
     connect(m_qsoRecorder, &QsoRecorder::recordingStopped, w, [this, w]() {
@@ -6001,6 +6057,11 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(s, &SliceModel::recordOnChanged, w, &VfoWidget::setRecordOn);
     connect(s, &SliceModel::playOnChanged, w, &VfoWidget::setPlayOn);
     connect(s, &SliceModel::playEnabledChanged, w, &VfoWidget::setPlayEnabled);
+    // The AetherRX window's REC / PLAY follow the active slice's radio-side
+    // state through the same three signals; the sync reads which is active.
+    connect(s, &SliceModel::recordOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
+    connect(s, &SliceModel::playOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
+    connect(s, &SliceModel::playEnabledChanged, this, &MainWindow::syncAetherRxRecordButtons);
     connect(w, &VfoWidget::autotuneRequested, this, [this, sliceId](bool intermittent) {
         if (m_radioModel.slice(sliceId))
             m_radioModel.cwAutoTune(sliceId, intermittent);
@@ -6063,91 +6124,17 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         applyTuneRequest(tx, rxFreq, TuneIntent::IncrementalTune, "split-swap-tx");
     });
 
+    // Right-click the SPLIT/SWAP badge — offsets, Monitor TX mode, and the
+    // remembered audio arrangement (#2242, #311).
+    connect(w, &VfoWidget::splitBadgeMenuRequested, this,
+            [this, sliceId](const QPoint& globalPos) {
+        showSplitBadgeMenu(sliceId, globalPos);
+    });
+
     // Split toggle — per-widget, slice-aware (#328)
     connect(w, &VfoWidget::splitToggled, this, [this, sliceId]() {
         if (!m_splitActive) {
-            // Split creates its TX slice with Flex wire text, which a backend
-            // with no command plane drops before any wire write. Same gate
-            // #5266 put on the FlexControl and RC-28/HID Split actions; this
-            // on-screen badge and the split_toggle shortcut are the two
-            // primary operator paths and were not in #5263's item-3
-            // enumeration (issue 5277).
-            //
-            // It returns BEFORE the three writes below rather than merely
-            // skipping the send, because the writes are the worse half of the
-            // defect: m_splitActive is latched AHEAD of the command, so an HL2
-            // that never created the slice left the application believing
-            // split was on while the SPLIT badge — derived from model truth in
-            // updateSplitState() — correctly showed it off. From there
-            // startSwrSweep() refuses with "Disable split before running an
-            // SWR sweep" for a split the operator does not have,
-            // TxFollowsActiveSlice silently stops following, and the next
-            // slice to arrive from ANY source is adopted as the split TX
-            // slice, muted and made TX, by MainWindow::onSliceAdded.
-            //
-            // qCWarning, not the qCDebug the #5266 sites use: since #5265 an
-            // UNGATED dead control warns and shows the operator a status-bar
-            // notice, so a gate that logged at debug and said nothing would
-            // make the CONVERTED control the quieter of the two. The refusal
-            // is the drop, one layer up, and it reports the same way.
-            //
-            // This is the M0 gate, not the end state. TciServer::
-            // createTxSliceForVfoB already carries a family-blind split for
-            // exactly this radio — createPanadapter() brings up another DDC
-            // with its slice synchronously — so #5263's own "conversion beats
-            // gating where the seam verb exists" applies to these two GUI
-            // sites as an M4 item.
-            //
-            // Deliberately NOT permissive on disconnect, unlike every gate in
-            // applyCapabilitiesToUi() (which spells that rule out at the
-            // cmdPlane/`!connected ||` gate in MainWindow.cpp). Those gate
-            // ENABLEMENT of a visible control, where staying permissive with no
-            // radio attached is right. This gates an ACTION that writes
-            // m_splitActive ahead of its send, so admitting the press while
-            // disconnected would reinstate exactly the latch this guard exists
-            // to remove. The cost is that an offline press reports "this radio
-            // doesn't support that control" when there is no radio; the wording
-            // is the price of sharing one notice with the drop path.
-            //
-            // Which families this refuses is a property of the predicate, not a
-            // list kept here: hasCommandPlane() is m_wanConn || m_connection,
-            // and RadioModel::buildBackend() harvests m_connection in exactly
-            // two branches — dynamic_cast<FlexBackend*>, and the else-if
-            // dynamic_cast<SimBackend*> that vends the synthetic connection per
-            // RFC #4288 Route A. So Flex (LAN, and WAN via m_wanConn) and Sim
-            // pass unchanged, and every family that vends no RadioConnection
-            // refuses: hl2, icom, anan and rtl alike. Nothing here enumerates
-            // them, and a future backend that vends one passes with no edit to
-            // this site.
-            if (!m_radioModel.hasCommandPlane()) {
-                qCWarning(lcDevices)
-                    << "VFO split toggle ignored: this backend takes no Flex"
-                    << "slice-create command";
-                showUnsupportedControlNotice();
-                return;
-            }
-            // Entering split: this slice becomes RX, create a new TX slice
-            if (m_radioModel.slices().size() >= m_radioModel.maxSlices())
-                return;
-            auto* rxSlice = m_radioModel.slice(sliceId);
-            if (!rxSlice) return;
-
-            // Create TX slice on the SAME pan as the RX slice
-            QString panId = rxSlice->panId();
-            if (panId.isEmpty())
-                panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-
-            // CW split: offset 1 kHz up (convention). Other modes: 5 kHz up.
-            const QString mode = rxSlice->mode();
-            bool isCw = isCwMode(mode);
-            double offsetMhz = isCw ? 0.001 : 0.005;
-            double txFreq = rxSlice->frequency() + offsetMhz;
-
-            m_splitActive = true;
-            m_splitRxSliceId = sliceId;
-            m_radioModel.sendCommand(
-                QString("slice create pan=%1 freq=%2")
-                    .arg(panId).arg(txFreq, 0, 'f', 6));
+            enterSplit(sliceId);
         } else if (sliceId == m_splitRxSliceId) {
             // Clicking SPLIT on the RX VFO again → disable split, destroy TX slice
             disableSplit();
@@ -7300,6 +7287,324 @@ void MainWindow::onSpectrumReadyForAdaptiveFilter(quint32 streamId,
         }
         break;  // one pan owns this stream id
     }
+}
+
+// ─── Split entry, audio memory and offsets (#2242, #311) ────────────────────
+
+void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
+{
+    if (m_splitActive) return;
+    // Split creates its TX slice with Flex wire text, which a backend
+    // with no command plane drops before any wire write. Same gate
+    // #5266 put on the FlexControl and RC-28/HID Split actions; this
+    // on-screen badge and the split_toggle shortcut are the two
+    // primary operator paths and were not in #5263's item-3
+    // enumeration (issue 5277).
+    //
+    // It returns BEFORE the three writes below rather than merely
+    // skipping the send, because the writes are the worse half of the
+    // defect: m_splitActive is latched AHEAD of the command, so an HL2
+    // that never created the slice left the application believing
+    // split was on while the SPLIT badge — derived from model truth in
+    // updateSplitState() — correctly showed it off. From there
+    // startSwrSweep() refuses with "Disable split before running an
+    // SWR sweep" for a split the operator does not have,
+    // TxFollowsActiveSlice silently stops following, and the next
+    // slice to arrive from ANY source is adopted as the split TX
+    // slice, muted and made TX, by MainWindow::onSliceAdded.
+    //
+    // qCWarning, not the qCDebug the #5266 sites use: since #5265 an
+    // UNGATED dead control warns and shows the operator a status-bar
+    // notice, so a gate that logged at debug and said nothing would
+    // make the CONVERTED control the quieter of the two. The refusal
+    // is the drop, one layer up, and it reports the same way.
+    //
+    // This is the M0 gate, not the end state. TciServer::
+    // createTxSliceForVfoB already carries a family-blind split for
+    // exactly this radio — createPanadapter() brings up another DDC
+    // with its slice synchronously — so #5263's own "conversion beats
+    // gating where the seam verb exists" applies to these two GUI
+    // sites as an M4 item.
+    //
+    // Deliberately NOT permissive on disconnect, unlike every gate in
+    // applyCapabilitiesToUi() (which spells that rule out at the
+    // cmdPlane/`!connected ||` gate in MainWindow.cpp). Those gate
+    // ENABLEMENT of a visible control, where staying permissive with no
+    // radio attached is right. This gates an ACTION that writes
+    // m_splitActive ahead of its send, so admitting the press while
+    // disconnected would reinstate exactly the latch this guard exists
+    // to remove. The cost is that an offline press reports "this radio
+    // doesn't support that control" when there is no radio; the wording
+    // is the price of sharing one notice with the drop path.
+    //
+    // Which families this refuses is a property of the predicate, not a
+    // list kept here: hasCommandPlane() is m_wanConn || m_connection,
+    // and RadioModel::buildBackend() harvests m_connection in exactly
+    // two branches — dynamic_cast<FlexBackend*>, and the else-if
+    // dynamic_cast<SimBackend*> that vends the synthetic connection per
+    // RFC #4288 Route A. So Flex (LAN, and WAN via m_wanConn) and Sim
+    // pass unchanged, and every family that vends no RadioConnection
+    // refuses: hl2, icom, anan and rtl alike. Nothing here enumerates
+    // them, and a future backend that vends one passes with no edit to
+    // this site.
+    if (!m_radioModel.hasCommandPlane()) {
+        qCWarning(lcDevices)
+            << "Split entry ignored: this backend takes no Flex"
+            << "slice-create command";
+        showUnsupportedControlNotice();
+        return;
+    }
+    // Entering split: this slice becomes RX, create a new TX slice
+    if (m_radioModel.slices().size() >= m_radioModel.maxSlices())
+        return;
+    auto* rxSlice = m_radioModel.slice(rxSliceId);
+    if (!rxSlice) return;
+
+    // Create TX slice on the SAME pan as the RX slice
+    QString panId = rxSlice->panId();
+    if (panId.isEmpty())
+        panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
+
+    // CW split: offset 1 kHz up (convention). Other modes: 5 kHz up. A Split
+    // Up N control passes its own offset instead (#311).
+    const double offset =
+        offsetMhz.value_or(isCwMode(rxSlice->mode()) ? 0.001 : 0.005);
+    const double txFreq = rxSlice->frequency() + offset;
+
+    m_splitActive = true;
+    m_splitRxSliceId = rxSliceId;
+    m_radioModel.sendCommand(
+        QString("slice create pan=%1 freq=%2")
+            .arg(panId).arg(txFreq, 0, 'f', 6));
+}
+
+QString MainWindow::splitEntryBlocker(int rxSliceId) const
+{
+    // The same refusals enterSplit() makes, in words, so a control that cannot
+    // act says why instead of just being grey.
+    if (m_splitActive)
+        return tr("A split is already running or being set up.");
+    if (!m_radioModel.hasCommandPlane())
+        return tr("This radio cannot create a split slice.");
+    if (m_radioModel.slices().size() >= m_radioModel.maxSlices())
+        return tr("No free slice for the transmit side of a split.");
+    if (!m_radioModel.slice(rxSliceId))
+        return tr("No slice to split.");
+    return {};
+}
+
+bool MainWindow::activeSplitPair(SliceModel*& rx, SliceModel*& tx) const
+{
+    // The pair on the pan the operator is looking at. Falls back to the sole
+    // pair when the active slice is on a pan that has none, so Monitor TX and
+    // the Split Up offsets still act on the split the operator can see rather
+    // than doing nothing.
+    rx = nullptr; tx = nullptr;
+    QHash<QString, SliceModel*> txByPan, rxByPan;
+    resolveSplitPairs(txByPan, rxByPan);
+
+    QString panId;
+    if (auto* a = m_radioModel.slice(m_activeSliceId))
+        panId = a->panId();
+    if (!panId.isEmpty() && txByPan.contains(panId) && rxByPan.contains(panId)) {
+        tx = txByPan.value(panId);
+        rx = rxByPan.value(panId);
+        return tx && rx;
+    }
+    // Only when there is exactly ONE pair: with two, which one a keyboard
+    // Split Up would retune is not something to pick by hash order.
+    SliceModel* soleTx = nullptr;
+    SliceModel* soleRx = nullptr;
+    int pairs = 0;
+    for (auto it = txByPan.cbegin(); it != txByPan.cend(); ++it) {
+        if (auto* partner = rxByPan.value(it.key(), nullptr)) {
+            soleTx = it.value();
+            soleRx = partner;
+            ++pairs;
+        }
+    }
+    if (pairs != 1) return false;
+    tx = soleTx;
+    rx = soleRx;
+    return tx && rx;
+}
+
+bool MainWindow::splitPairForSlice(int sliceId, SliceModel*& rx, SliceModel*& tx) const
+{
+    rx = nullptr; tx = nullptr;
+    const auto* s = m_radioModel.slice(sliceId);
+    if (!s) return false;
+    QHash<QString, SliceModel*> txByPan, rxByPan;
+    resolveSplitPairs(txByPan, rxByPan);
+    tx = txByPan.value(s->panId(), nullptr);
+    rx = rxByPan.value(s->panId(), nullptr);
+    if (tx && rx) return true;
+    rx = nullptr; tx = nullptr;
+    return false;
+}
+
+void MainWindow::applySplitOffsetKHz(double offsetKHz, int rxSliceId)
+{
+    SliceModel* rx = nullptr;
+    SliceModel* tx = nullptr;
+    // From a badge, only the split on that slice's own panadapter; from a
+    // shortcut (no slice), the split the operator is looking at.
+    const bool paired = rxSliceId >= 0 ? splitPairForSlice(rxSliceId, rx, tx)
+                                       : activeSplitPair(rx, tx);
+    if (paired) {
+        // The TX slice moves, never the RX slice — the whole point of the
+        // control is that the frequency you are listening to stays put (#311).
+        applyTuneRequest(tx, rx->frequency() + offsetKHz / 1000.0,
+                         TuneIntent::IncrementalTune, "split-offset");
+        return;
+    }
+    // No split yet: one touch enters it at the chosen offset (#311).
+    enterSplit(rxSliceId >= 0 ? rxSliceId : m_activeSliceId, offsetKHz / 1000.0);
+}
+
+// The operator teaches the audio arrangement by operating: unmute the TX
+// slice, pan it right, pan the RX slice left, drop the TX gain, work the
+// station. When the split ends, what they did is what comes back next time.
+// Nothing is configured.
+//
+// Every value is learned from the *CommandIssued signals, never from the
+// *Changed ones. SliceModel.h spells out why: the Changed signals also fire
+// when radio status is applied, so learning from them would record the radio's
+// own state as the operator's preference and replay it — a client re-asserting
+// state it does not own (Principle II). It would also mean another client's
+// pan, or a profile load, silently became "what the operator likes".
+
+AetherSDR::SplitAudioProfile MainWindow::loadSplitAudioProfile() const
+{
+    const QString raw = AppSettings::instance()
+        .value(QLatin1String(AetherSDR::SplitAudioProfile::kSettingsKey)).toString();
+    if (raw.isEmpty())
+        return {};
+    const auto doc = QJsonDocument::fromJson(raw.toUtf8());
+    if (!doc.isObject())
+        return {};
+    return AetherSDR::SplitAudioProfile::fromJson(doc.object());
+}
+
+void MainWindow::saveSplitAudioProfile(const AetherSDR::SplitAudioProfile& p)
+{
+    AppSettings::instance().setValue(
+        QLatin1String(AetherSDR::SplitAudioProfile::kSettingsKey),
+        QString::fromUtf8(QJsonDocument(p.toJson()).toJson(QJsonDocument::Compact)));
+}
+
+void MainWindow::applyAndArmSplitAudio(SliceModel* rx, SliceModel* tx)
+{
+    if (!tx) return;
+
+    // Everything the apply writes is OUR write, not the operator's. The flag
+    // keeps it out of the recorder.
+    m_splitAudioApplying = true;
+    const auto applied =
+        AetherSDR::applySplitAudioProfile(loadSplitAudioProfile(), rx, tx);
+    m_splitAudioApplying = false;
+
+    // Armed with what the apply FOUND (the RX pan before it moved anything),
+    // not with the slices as they are now — otherwise a replayed RX pan would
+    // become the "before" and never be put back.
+    armSplitAudioMirror(rx, tx, applied);
+
+    // Say it once. A feature that silently rearranges audio is indistinguishable
+    // from a bug, and this is the only place that can name what just happened
+    // and where to change it.
+    if (applied.restored && !m_splitAudioNoticeShown) {
+        m_splitAudioNoticeShown = true;
+        statusBar()->showMessage(
+            tr("Split audio restored from your last split. "
+               "Right-click SPLIT to change or forget it."),
+            8000);
+    }
+}
+
+void MainWindow::armSplitAudioMirror(SliceModel* rx, SliceModel* tx,
+                                     const AetherSDR::SplitAudioApplyResult& applied)
+{
+    disarmSplitAudioMirror();
+    if (!tx) return;
+
+    m_splitAudioRxSliceId = rx ? rx->sliceId() : -1;
+    m_splitAudioRxSlice   = rx;
+    m_splitAudioRecorder.arm(applied.rxPanBefore, applied.rxPanMoved);
+    qCInfo(lcGui) << "Split audio: armed rx=" << m_splitAudioRxSliceId
+                  << "tx=" << tx->sliceId()
+                  << "rxPanBefore=" << applied.rxPanBefore
+                  << "rxPanMovedByApply=" << applied.rxPanMoved
+                  << "restored=" << applied.restored;
+
+    m_splitAudioConns.append(connect(tx, &SliceModel::audioMuteCommandIssued, this,
+        [this](bool mute) {
+            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxMute(mute);
+        }));
+    m_splitAudioConns.append(connect(tx, &SliceModel::audioGainCommandIssued, this,
+        [this](int gain) {
+            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxGain(gain);
+        }));
+    m_splitAudioConns.append(connect(tx, &SliceModel::audioPanCommandIssued, this,
+        [this](int pan) {
+            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxPan(pan);
+        }));
+    if (rx) {
+        // RX pan only. Its volume and mute are the operator's everyday
+        // listening level and stay out of this entirely (#2242) — a split must
+        // not come back later and change how the radio sounds the rest of the
+        // time.
+        m_splitAudioConns.append(connect(rx, &SliceModel::audioPanCommandIssued, this,
+            [this](int pan) {
+                if (!m_splitAudioApplying) m_splitAudioRecorder.noteRxPan(pan);
+            }));
+    }
+}
+
+void MainWindow::disarmSplitAudioMirror()
+{
+    for (const auto& c : m_splitAudioConns)
+        disconnect(c);
+    m_splitAudioConns.clear();
+    m_splitAudioRecorder.disarm();
+    m_splitAudioRxSliceId = -1;
+    m_splitAudioRxSlice.clear();
+}
+
+void MainWindow::recordSplitAudioMirror(bool deferRestore)
+{
+    if (!m_splitAudioRecorder.armed()) return;
+
+    // A momentary hold is not an arrangement. Unwind it first so ending the
+    // split mid-monitor records what the operator set up, not what the hold
+    // was temporarily doing to it.
+    endSplitMonitor(deferRestore);
+
+    saveSplitAudioProfile(m_splitAudioRecorder.merge(loadSplitAudioProfile()));
+
+    // Put the RX slice's pan back. The operator panned it left FOR the split,
+    // not for everything they do afterwards. Only onto the same RX object.
+    const int restore = m_splitAudioRecorder.rxPanToRestore();
+    qCInfo(lcGui) << "Split audio: ended rx=" << m_splitAudioRxSliceId
+                  << "rxPanToRestore=" << restore
+                  << "deferred=" << deferRestore;
+    if (restore >= 0) {
+        const QPointer<SliceModel> rx = m_splitAudioRxSlice;
+        const int rxId = m_splitAudioRxSliceId;
+        auto apply = [this, rx, rxId, restore]() {
+            if (!rx || m_radioModel.slice(rxId) != rx.data()
+                || rx->externalReceiveReplacementActive())
+                return;
+            m_splitAudioApplying = true;
+            rx->setAudioPan(restore);
+            m_splitAudioApplying = false;
+        };
+        if (deferRestore)
+            QTimer::singleShot(0, this, apply);
+        else
+            apply();
+    }
+
+    disarmSplitAudioMirror();
 }
 
 } // namespace AetherSDR

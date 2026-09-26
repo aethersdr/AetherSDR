@@ -60,6 +60,8 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
     m_ddc0FreqWord = 0;
     m_bypassAdc0Filters = params.bypassAdc0Filters;
     m_bypassAdc1Filters = params.bypassAdc1Filters;
+    m_adc0AttenuationDb = params.adc0AttenuationDb;
+    m_adc1AttenuationDb = params.adc1AttenuationDb;
     // Every DDC's sequence tracker, not just DDC0's -- a stale expectation
     // carried across a restart would report a phantom gap on the new
     // session's first frame.
@@ -131,7 +133,8 @@ bool P2Client::start(const Params& params, int connectTimeoutMs)
                            params.ditherEnabled, params.randomEnabled),
           m_host, kDdcSpecificPort);
     sendTo(*m_socket,
-          buildHighPriority(true, freqWords, m_bypassAdc0Filters, m_bypassAdc1Filters),
+          buildHighPriority(true, freqWords, m_bypassAdc0Filters, m_bypassAdc1Filters,
+                            m_adc0AttenuationDb, m_adc1AttenuationDb),
           m_host, kHighPriorityPort);
 
     m_keepaliveTimer->start();
@@ -149,7 +152,8 @@ void P2Client::stop()
         // radio before the socket that would carry any further keepalive
         // goes away.
         sendTo(*m_socket,
-              buildHighPriority(false, 0, m_bypassAdc0Filters, m_bypassAdc1Filters),
+              buildHighPriority(false, 0, m_bypassAdc0Filters, m_bypassAdc1Filters,
+                                m_adc0AttenuationDb, m_adc1AttenuationDb),
               m_host, kHighPriorityPort);
         m_socket->close();
         m_socket->deleteLater();
@@ -168,8 +172,29 @@ void P2Client::setDdc0FrequencyHz(double hz)
     if (m_running && m_socket)
         sendTo(*m_socket,
               buildHighPriority(true, sharedFreqWords(),
-                                m_bypassAdc0Filters, m_bypassAdc1Filters),
+                                m_bypassAdc0Filters, m_bypassAdc1Filters,
+                                m_adc0AttenuationDb, m_adc1AttenuationDb),
               m_host, kHighPriorityPort);
+}
+
+void P2Client::setStepAttenuationDb(int adcIndex, int db)
+{
+    if (adcIndex == 0) {
+        m_adc0AttenuationDb = db;
+    } else if (adcIndex == 1) {
+        m_adc1AttenuationDb = db;
+    } else {
+        return;
+    }
+    // Now rather than on the next keepalive: the operator is moving a
+    // control and should hear the change, not wait up to 100 ms for it.
+    if (m_running && m_socket) {
+        sendTo(*m_socket,
+              buildHighPriority(true, sharedFreqWords(),
+                                m_bypassAdc0Filters, m_bypassAdc1Filters,
+                                m_adc0AttenuationDb, m_adc1AttenuationDb),
+              m_host, kHighPriorityPort);
+    }
 }
 
 bool P2Client::setDdcRateLive(int ddcIndex, int rateKsps)
@@ -213,7 +238,8 @@ void P2Client::onKeepaliveTick()
     // also replay General/DDC-Specific on this cadence, same as the spike.
     sendTo(*m_socket,
           buildHighPriority(true, sharedFreqWords(),
-                            m_bypassAdc0Filters, m_bypassAdc1Filters),
+                            m_bypassAdc0Filters, m_bypassAdc1Filters,
+                            m_adc0AttenuationDb, m_adc1AttenuationDb),
           m_host, kHighPriorityPort);
 }
 

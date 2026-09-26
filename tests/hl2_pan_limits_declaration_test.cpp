@@ -33,6 +33,7 @@
 #include "TestSettingsProfile.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "gui/PanZoomModeGate.h"
 
 #include <QCoreApplication>
 
@@ -218,6 +219,93 @@ int main(int argc, char** argv)
           "and no span model either — a radio without the constraint, and one "
           "nobody has read, are the same descriptor only because neither is "
           "allowed to claim anything");
+
+    // ---- band/segment zoom: the gate, and that one predicate serves both ----
+    //
+    // Same thesis as the rest of this file -- a control that lies is the
+    // symptom of a declaration nobody reads. `band_zoom=`/`segment_zoom=` are
+    // Flex wire text; RadioModel::sendCmd drops them at hasCommandPlane() and
+    // emits commandDropped(). SpectrumWidget::setBandSegmentZoomAvailable()
+    // disabled the two buttons for that reason, and the keyboard/MIDI/
+    // FlexControl/RC28/automation paths into MainWindow::togglePanZoomModeForPan
+    // and MainWindow::setPanZoomMode went around it.
+    //
+    // The input is READ OFF THIS RADIO'S OWN DECLARATION rather than retyped
+    // as a literal false: the gate's middle rung is
+    // RadioCapabilities::panZoomModes.has_value(), so that is what is asked
+    // here. Engage the record in Hl2Backend::capabilities() and this section
+    // follows it instead of agreeing with a stale copy -- which is the failure
+    // mode the header of this file is about. (It used to ask
+    // `caps.family == "flex"`, which was the family-string branch #5554's
+    // standing notice forbids; the record is the sanctioned shape and does not
+    // move the capability-bool ratchet, since that counts direct bool members
+    // of RadioCapabilities and an std::optional is not one.)
+    check(!caps.panZoomModes.has_value(),
+          "this radio declares NO band/segment zoom -- absent, not a false "
+          "bool, so 'nobody set it' and 'considered no' are not the same "
+          "record");
+
+    const bool hl2DeclaresPanZoomModes = caps.panZoomModes.has_value();
+
+    check(!panZoomModeWritable(/*connected=*/true, hl2DeclaresPanZoomModes,
+                               /*panKnown=*/true),
+          "REFUSED on this radio even connected with a pan: band/segment zoom "
+          "is Flex wire text and this backend declares no band/segment zoom");
+    check(panZoomModeRefusal(/*connected=*/true, hl2DeclaresPanZoomModes,
+                             /*panKnown=*/true)
+              == PanZoomModeRefusal::NotDeclared,
+          "and it is refused for the CAPABILITY, not for a missing pan or a "
+          "missing connection -- the reason a caller would show the operator, "
+          "and the ONLY rung the call sites announce with "
+          "showUnsupportedControlNotice()");
+    check(!bandSegmentZoomAvailable(/*connected=*/true, hl2DeclaresPanZoomModes),
+          "the B/S buttons are disabled on this radio for the same reason");
+
+    // THE CONTAINMENT, which is the half that could drift: the availability
+    // the buttons show must be the admissibility the command paths test, with
+    // the pan taken as present. Asserted over every input rather than by
+    // comment, so a future edit that special-cases one side fails here.
+    for (bool connected : {false, true}) {
+        for (bool declared : {false, true}) {
+            check(bandSegmentZoomAvailable(connected, declared)
+                      == panZoomModeWritable(connected, declared,
+                                             /*panKnown=*/true),
+                  "button availability and write admissibility agree on every "
+                  "(connected, declared) pair");
+            // A write is never admitted without a pan, whatever the rest says.
+            check(!panZoomModeWritable(connected, declared, /*panKnown=*/false),
+                  "no resolvable pan is always a refusal");
+        }
+    }
+
+    // A radio that DOES declare it, for contrast: the gate refuses this one for
+    // a property of the radio, not because it refuses everything.
+    check(panZoomModeWritable(/*connected=*/true,
+                              /*panZoomModesDeclared=*/true,
+                              /*panKnown=*/true),
+          "a connected radio that declares the record, with a pan, IS admitted "
+          "(positive control -- the refusal above is a capability decision, "
+          "not a dead predicate)");
+    check(panZoomModeRefusal(/*connected=*/false,
+                             /*panZoomModesDeclared=*/true,
+                             /*panKnown=*/true)
+              == PanZoomModeRefusal::NotConnected,
+          "and a disconnected one is refused for being disconnected");
+
+    // WHAT THIS SECTION CANNOT SEE, said as plainly as the dBm note above.
+    //
+    // It pins the PREDICATE and the containment between its two spellings. It
+    // does NOT observe that MainWindow::togglePanZoomModeForPan and
+    // MainWindow::setPanZoomMode call it: no registered test target links
+    // MainWindow*.cpp, so an edit that deletes the call from either one leaves
+    // every assertion here green. What stands behind those two call sites is
+    // that there is now only one predicate to call -- the button-availability
+    // computation in MainWindow::onConnectionStateChanged reads the same
+    // function -- so the drift this guards against is the predicate changing
+    // under a caller, not a caller quietly dropping it.
+    //
+    // Closing the remaining half needs a MainWindow seam that does not exist
+    // today. Stated rather than left for the next reader to assume otherwise.
 
     std::printf("%s: %d failure(s)\n", argv[0], failures);
     return failures == 0 ? 0 : 1;

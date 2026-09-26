@@ -15,7 +15,7 @@ warning came true (#3184):
     dedicated slice-colour audit may tune these in a follow-up"; the JSON was
     tuned, the seed never was.
   * 24 tokens were never seeded AT ALL — `slice.dim.a..h`, `highlight.*`,
-    `button.*.disabled`, and the six `waterfall.colormap.*` gradients. Those
+    `button.*.disabled`, and the `waterfall.colormap.*` gradients. Those
     resolve TRANSPARENT on a theme predating them, which is a strictly worse
     failure than a wrong colour.
 

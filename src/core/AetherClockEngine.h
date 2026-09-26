@@ -10,9 +10,9 @@
 // DAX-hold provider wrapping the CENTRAL
 // PanadapterStream::acquireDaxChannel/releaseDaxChannel(ch,
 // DaxConsumer::Clock) registry, and connects the stream's daxPcmReady to
-// feedRxAudio(). That keeps the engine above the radio seam and
-// source-agnostic: any 24 kHz float32-stereo feed (Flex DAX today, other
-// backends tomorrow) drives it through the same two seams.
+// typed feedRxAudio(). Native slice PCM enters through feedRxSliceAudio().
+// Both retain immutable producer identity/rate metadata through queued delivery;
+// the engine's private mono adapter keeps the detectors at fixed 24 kHz.
 //
 // RX-only by design: no TX path, nothing radio-authoritative persisted, and
 // the OS clock is never modified — the engine only READS the host clock
@@ -25,6 +25,7 @@
 #include "ClockAlignmentFrame.h"
 #include "ClockDiagnostics.h"
 #include "TimeFrameVoter.h"
+#include "PcmFrame.h"
 
 #include <QByteArray>
 #include <QDateTime>
@@ -44,7 +45,7 @@ public:
     explicit AetherClockEngine(QObject* parent = nullptr);
     ~AetherClockEngine() override;
 
-    // DAX RX audio sample rate (Hz) — the daxPcmReady contract.
+    // Fixed decoder sample rate, independent of producer and sound-device rates.
     static constexpr int kSampleRateHz = 24000;
 
     // Station presets. Listening dial = carrier − 1 kHz, USB.
@@ -88,6 +89,11 @@ public:
     ClockStation configuredStation() const; // station selected at start()
     ClockLockState lockState() const;
 
+    // Capture when binding a queued producer callback. Start/stop and selected
+    // DAX changes invalidate earlier bindings, including already queued events
+    // whose producer epoch is still live and was never admitted by this engine.
+    quint64 inputGeneration() const;
+
     // WS-7 acquisition telemetry: the current diagnostics snapshot, assembled
     // on call from the decoder's read-only accessors plus the engine's
     // classified-seconds ring. The same snapshot is emitted at ~1 Hz via
@@ -116,11 +122,9 @@ public slots:
     void applyStationPreset(SliceModel* slice, ClockStation station,
                             double carrierMHz);
 
-    // PCM ingest — the daxPcmReady payload (float32 interleaved stereo,
-    // native-endian, 24 kHz). The wiring layer connects the audio source
-    // here; it is also the test-harness seam and the future non-Flex source
-    // seam. Samples whose channel differs from the bound slice's live
-    // daxChannel() are ignored.
+    // Legacy local/test PCM ingest (float32 interleaved stereo, native-endian,
+    // 24 kHz). Production uses the typed overload below. Samples whose channel
+    // differs from the bound slice's live daxChannel() are ignored.
     void feedRxAudio(int channel, const QByteArray& pcm);
 
     // Per-slice PCM ingest — the seam-native counterpart of feedRxAudio(),
@@ -131,8 +135,18 @@ public slots:
     // Payload for any other slice is ignored.
     void feedRxSliceAudio(int sliceId, const QByteArray& pcm);
 
+    // Production typed ingress. Mono passes through; stereo averages L/2+R/2.
+    // A private continuous converter preserves the detectors' fixed 24 kHz
+    // domain. Source epochs, forward gaps and explicit discontinuities reset
+    // conversion, acquisition, frame votes and sample-time mapping together.
+    void feedRxAudio(int channel, const AetherSDR::PcmFrame& frame,
+                     quint64 generation);
+    void feedRxSliceAudio(int sliceId, const AetherSDR::PcmFrame& frame,
+                          quint64 generation);
+
 signals:
     void runningChanged(bool running);
+    void sourceGenerationChanged(quint64 generation);
     void lockStateChanged(AetherSDR::ClockLockState state);
     void lockedChanged(bool locked);
     void stationDetected(AetherSDR::ClockStation station);
@@ -149,7 +163,7 @@ signals:
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> m_impl;
+    std::shared_ptr<Impl> m_impl;
 };
 
 } // namespace AetherSDR

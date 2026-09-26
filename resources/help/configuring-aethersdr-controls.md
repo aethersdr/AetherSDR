@@ -75,6 +75,14 @@ The shortcut editor also includes many actions that ship **unassigned** until yo
 - `Two-Tone Tune`
 - Next or previous slice
 - Split toggle
+- `Monitor TX (Hold)` — while held, listen on the transmit frequency of a split,
+  the way `XFC`, `TF-SET` or `TXW` works on a conventional transceiver. Hold it
+  before you call to hear whether the frequency is clear and where the DX is
+  listening. Whether it silences the receive slice or leaves both audible is set
+  from the `Monitor TX` submenu when you right-click the `SPLIT` badge.
+- `Split Up 1 kHz`, `Split Up 5 kHz`, `Split Up 10 kHz` — move the **transmit**
+  slice that far above the receive slice. The receive frequency does not move.
+  With no split running, the key starts one on the active slice at that offset.
 - Filter widen and narrow
 - DSP actions such as `NB`, `NR`, and `ANF`
 - AGC mode cycle
@@ -83,9 +91,15 @@ The shortcut editor also includes many actions that ship **unassigned** until yo
 
 ### Other built-in application shortcuts
 
+The Window menu manages the active AetherSDR window. Full Screen uses `F11`
+on Windows/Linux and `Command+Control+F` on macOS; Minimize uses `Command+M`
+on macOS and is unassigned elsewhere. Both bindings can be changed in
+Configure Shortcuts. They work in secondary windows, with Keyboard Shortcuts
+turned off, and while a text field or slider has focus.
+
 AetherSDR also has a few ordinary menu shortcuts that are separate from the operating-shortcut system:
 
-- `Ctrl+M` — toggle Minimal Mode
+- `Ctrl+Shift+M` — toggle Minimal Mode
 - `Ctrl+=` — increase UI scale
 - `Ctrl+-` — decrease UI scale
 - `Ctrl+0` — reset UI scale to 100%

@@ -321,6 +321,15 @@ void testDaxTxPolicy()
     windowsWspr.reason = DaxTxRequestReason::WsprBeacon;
     check(evaluateDaxTxPolicy(windowsWspr).allowed,
           "built-in WSPR creates its own dax_tx stream independently of DAX2");
+
+    DaxTxPolicyContext windowsRxPlayback = windowsExternalRoute;
+    windowsRxPlayback.reason = DaxTxRequestReason::RxPlaybackTx;
+    check(evaluateDaxTxPolicy(windowsRxPlayback).allowed,
+          "AetherRX TX Playback sends VITA-49 directly, so it creates its own "
+          "dax_tx stream independently of DAX2, like AX.25 and WSPR");
+    check(daxTxRequestReasonName(DaxTxRequestReason::RxPlaybackTx)
+              == QStringLiteral("rx_playback_tx"),
+          "RxPlaybackTx has a diagnostic name");
 }
 
 void testUdpRegistrationPolicy()
