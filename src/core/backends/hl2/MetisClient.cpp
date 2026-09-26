@@ -411,18 +411,18 @@ bool MetisClient::start(const Params& params)
     // included — putting twenty-four writes on the bus that clocks the AD9866.
     // That bus gets touched when there is a reason to touch it.
     //
-    // m_cl1EnabledForRadio is the one case that is not covered by "it booted on
-    // its crystal": WE switched THIS radio to CL1 earlier in this process, the
+    // m_cl1MaybeOn is the one case that is not covered by "it booted on its
+    // crystal": WE switched THIS radio to CL1 earlier in this process, the
     // operator disconnected without power-cycling it, and then cleared the box.
     // The radio is still on CL1 and only we know it, so that one gets the off
-    // table on reconnect.
+    // table on reconnect — and keeps getting it until the whole table has been
+    // confirmed sent, which is what makes an interrupted recovery resume rather
+    // than be forgotten.
     //
     // Matched on the SERIAL, not merely on "we did this once" — see the
     // member's comment. An unknown serial matches nothing, which is the right
     // way to fail: not writing the clock bus is always the safe answer.
-    const bool mayStillBeOnCl1 = !m_cl1EnabledForRadio.isEmpty()
-                              && m_cl1EnabledForRadio == m_params.radioSerial;
-    if (m_params.cl1RefClock || mayStillBeOnCl1)
+    if (m_params.cl1RefClock || cl1RecoveryPending())
         queueCl1Sequence(m_params.cl1RefClock);
     return true;
 }
@@ -767,8 +767,16 @@ void MetisClient::stop()
     // Same rule, higher stakes: a half-sent VersaClock sequence finishing in
     // the NEXT session would configure the part from the middle of a table
     // whose earlier writes never happened — that is not a wrong band relay,
-    // it is a converter with no usable clock. start() re-queues the whole
-    // sequence, so nothing is lost by dropping the remainder here.
+    // it is a converter with no usable clock.
+    //
+    // "start() re-queues the whole sequence, so nothing is lost" is what this
+    // comment used to say, and for the OFF table it was NOT TRUE: the record
+    // that the radio might still be on CL1 was cleared when the table was
+    // queued, so start() had nothing left to act on and the radio stayed on the
+    // external reference (#5923 review). The record is now released only on a
+    // confirmed send, and dropQueuedCl1Banks() abandons the countdown along with
+    // the banks — so the claim holds in both directions and an interrupted
+    // recovery resumes on the next connect.
     dropQueuedCl1Banks();
     // Whatever was still queued for the speaker describes a session that has
     // ended, and on a radio with no codec the same bytes would be EADDR writes.
@@ -1086,17 +1094,39 @@ void MetisClient::setCl1RefClock(bool externalRef)
     queueCl1Sequence(externalRef);
 }
 
+bool MetisClient::isCl1Bank(const Cc& bank) noexcept
+{
+    return bank[0] == kC0I2c1 && bank[1] == kI2cCookieWrite
+        && bank[2] == (kI2cStopAtEnd | kVersaClockI2cAddr);
+}
+
 void MetisClient::queueCl1Sequence(bool externalRef)
 {
     // Replace rather than append. Two sequences in the queue would apply the
     // older one LAST — an operator who toggled the setting twice would end on
     // the state they toggled away from.
     dropQueuedCl1Banks();
-    // Latched on the way in, released on the way out: once this process has put
-    // a radio on CL1, later connects to THAT radio have to be able to put it
-    // back, and once the off table has gone out there is nothing left to undo.
-    // See start() and the member's comment.
-    m_cl1EnabledForRadio = externalRef ? m_params.radioSerial : QString();
+    // RECORDED ON THE WAY IN, RELEASED ONLY ON PROOF. Switching a radio ON adds
+    // it to m_cl1MaybeOn immediately, because a sequence interrupted half-way
+    // may already have moved the part. Switching it OFF does NOT remove it here:
+    // that happens in onControlPacketSent(), once all twenty-four banks of THIS
+    // table have been confirmed sent. Clearing it at queue time is the defect
+    // #5923's review found — the record went away before a single write had left
+    // the host, so a disconnect in that window stranded the radio on CL1.
+    if (externalRef) {
+        if (m_params.radioSerial.isEmpty()) {
+            // Nothing to key the record on, so nothing could recover it. Worth a
+            // line in the log rather than a silent gap: the radio is going onto
+            // an external reference that no later connect will offer to undo.
+            qCWarning(lcHl2) << "HL2: switching CL1 on for a radio with no serial —"
+                             << "this session cannot offer to switch it back";
+        } else {
+            m_cl1MaybeOn.insert(m_params.radioSerial);
+        }
+    }
+    m_cl1SequenceRadio = m_params.radioSerial;
+    m_cl1SequenceIsOff = !externalRef;
+    m_cl1BanksUnsent = static_cast<int>(kVersaClockCl1Banks);
     for (const Cc& bank : versaClockCl1Banks(externalRef))
         m_oneShot.push_back(bank);
     qCInfo(lcHl2) << "HL2: CL1 reference clock ->"
@@ -1106,10 +1136,15 @@ void MetisClient::queueCl1Sequence(bool externalRef)
 
 void MetisClient::dropQueuedCl1Banks()
 {
-    std::erase_if(m_oneShot, [](const Cc& bank) {
-        return bank[0] == kC0I2c1 && bank[1] == kI2cCookieWrite
-            && bank[2] == (kI2cStopAtEnd | kVersaClockI2cAddr);
-    });
+    std::erase_if(m_oneShot, isCl1Bank);
+    // AND ABANDON THE COUNTDOWN. A sequence whose remainder has just been thrown
+    // away must not be able to finish counting down later and report itself
+    // complete — for an OFF table that would drop the radio out of m_cl1MaybeOn
+    // without the writes ever having gone out.
+    m_cl1BanksUnsent = 0;
+    m_cl1BankOnBuiltPacket = false;
+    m_cl1SequenceRadio.clear();
+    m_cl1SequenceIsOff = false;
 }
 
 void MetisClient::setAtuTuneRequest(bool request)
@@ -1556,10 +1591,16 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     // thrown away (a test, or a caller that inspects the bytes) must not leave
     // a stale claim that some later packet carried the request.
     m_requestOnBuiltPacket = false;
+    m_cl1BankOnBuiltPacket = false;
     Cc b;
     if (!m_oneShot.empty()) {
         b = m_oneShot.front();
         m_oneShot.pop_front();
+        // Claimed, not yet counted: onControlPacketSent() decides whether this
+        // bank actually reached the wire. Same shape as m_requestOnBuiltPacket
+        // above and for the same reason — a packet built and then discarded must
+        // not retire one of the twenty-four writes.
+        m_cl1BankOnBuiltPacket = isCl1Bank(b);
     } else if (const auto rqst = m_ccRequest.wireBank()) {
         // AFTER the one-shots, ahead of the round robin. After, because a
         // one-shot is a write the operator asked for and a read-back that
@@ -1764,6 +1805,19 @@ void MetisClient::onControlPacketSent(qint64 bytesWritten, qint64 nowMs) noexcep
     m_requestOnBuiltPacket = false;
     if (carriedRequest && bytesWritten > 0)
         m_ccRequest.onRequestSent(nowMs);
+    // THE VERSACLOCK SEQUENCE RETIRES HERE AND NOWHERE ELSE. A radio leaves
+    // m_cl1MaybeOn only when the last of an OFF table's twenty-four writes has
+    // been confirmed on the wire — so a session that dies part-way leaves the
+    // record standing and the next connect re-sends the whole table.
+    const bool carriedCl1 = m_cl1BankOnBuiltPacket;
+    m_cl1BankOnBuiltPacket = false;
+    if (carriedCl1 && bytesWritten > 0 && m_cl1BanksUnsent > 0) {
+        if (--m_cl1BanksUnsent == 0 && m_cl1SequenceIsOff) {
+            m_cl1MaybeOn.remove(m_cl1SequenceRadio);
+            qCInfo(lcHl2) << "HL2: CL1 off sequence complete —"
+                          << m_cl1SequenceRadio << "is back on its crystal";
+        }
+    }
 }
 
 void MetisClient::sendControlPacket()

@@ -5,6 +5,7 @@
 #include <QHostAddress>
 #include <QTimer>
 #include <QList>
+#include <QSet>
 #include <QObject>
 
 #include <complex>
@@ -985,17 +986,55 @@ private:
     // honour them; setCl1RefClock() is the way in.
     void queueCl1Sequence(bool externalRef);
     void dropQueuedCl1Banks();
-    // The radio THIS PROCESS last switched to CL1, by serial; empty when none.
-    // Survives stop() and start() on purpose — it is the only record that a
-    // still-powered radio may be running from an external reference the
-    // operator has since cleared, and nothing on the wire can be asked.
+    // True for a bank this class queued as part of a VersaClock sequence. One
+    // predicate, because three sites ask the question — the drop, the drain and
+    // the send confirmation — and a fourth spelling of it is how they diverge.
+    [[nodiscard]] static bool isCl1Bank(const Cc& bank) noexcept;
+    // THE RECOVERY RULE, named once. True when start() must send the OFF table
+    // for this radio even though the setting is clear: this process switched it
+    // on and never confirmed switching it back. start() reads it, and it is the
+    // property hl2_cl1_reference_test asserts — the condition is the whole of
+    // the fix for #5923's first blocker, so it is worth a name rather than an
+    // expression buried in a 200-line function.
+    [[nodiscard]] bool cl1RecoveryPending() const noexcept
+    {
+        return !m_params.radioSerial.isEmpty()
+            && m_cl1MaybeOn.contains(m_params.radioSerial);
+    }
+
+    // EVERY RADIO THIS PROCESS MAY HAVE LEFT ON CL1, by serial. The only record
+    // that a still-powered radio is running from an external reference the
+    // operator has since cleared; nothing on the wire can be asked. Survives
+    // stop() and start() on purpose.
     //
-    // A SERIAL AND NOT A BOOL, because this object outlives a radio swap. With
-    // a bare flag, enabling CL1 on one HL2 and then connecting a different one
-    // would send the second radio a VersaClock rewrite it never needed — the
-    // same "touch the clock bus without a reason" this whole guard exists to
-    // avoid, just one radio further along.
-    QString m_cl1EnabledForRadio;
+    // A SET AND NOT ONE SERIAL. With a single QString, switching a SECOND radio
+    // on overwrote the first one's record, and the first radio then never got
+    // its off table — it stayed on CL1 with nothing left that knew (#5923
+    // review). This object outlives a radio swap, so the record has to as well.
+    //
+    // ADDED PESSIMISTICALLY, at queue time, because a sequence interrupted
+    // half-way may have switched the part already. REMOVED ONLY ON PROOF: see
+    // m_cl1BanksUnsent.
+    QSet<QString> m_cl1MaybeOn;
+    // The sequence currently draining out of m_oneShot: whose it is, whether it
+    // is the OFF table, and how many of its banks have not yet been CONFIRMED
+    // SENT. Only when the last one is confirmed does its radio leave
+    // m_cl1MaybeOn.
+    //
+    // WHY CONFIRMED AND NOT MERELY QUEUED. queueCl1Sequence() used to clear the
+    // record the instant the OFF table was queued, before any of its twenty-four
+    // writes reached the transport. A disconnect in that window had stop() drop
+    // the remainder AND left start() with nothing to recover from, so a radio
+    // that was still powered stayed on the external reference for good. Counting
+    // confirmations instead means an interrupted sequence simply never finishes
+    // its countdown, the record stands, and the next connect re-sends the whole
+    // table — which is the behaviour stop()'s own comment already claimed.
+    QString m_cl1SequenceRadio;
+    bool    m_cl1SequenceIsOff = false;
+    int     m_cl1BanksUnsent = 0;
+    // Mirrors m_requestOnBuiltPacket: the packet just built carried a CL1 bank,
+    // and onControlPacketSent() decides whether it counts.
+    bool    m_cl1BankOnBuiltPacket = false;
 
     Cc m_ccTxDrive{};
     // The ATU tune request's standing state, held because it shares 0x09 with
