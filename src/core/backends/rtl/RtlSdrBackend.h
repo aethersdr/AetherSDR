@@ -118,7 +118,8 @@ private:
     void startCapture(std::unique_ptr<RtlSdrWorker> worker);
     void serviceCapture();
     bool requestCapture(const RtlCaptureTransaction::Desired& desired,
-                        const QString& extension = {}, quint64 requestId = 0);
+                        const QString& extension = {}, quint64 requestId = 0,
+                        bool fromDrag = false);
     void publishCapture();
     void drainAudio();
     void publishLegacyPcm(const QByteArray& pcm, const QByteArray& preMonitor);
@@ -162,6 +163,11 @@ private:
     double m_viewCenterRequestHz = 0;
     double m_viewSpanRequestHz = 0;
     RtlCaptureTransaction::Token m_pendingViewport;
+    // Only the latest display drag waits here. Never supersede an in-flight
+    // capture with every mouse move, or compensation can starve publication.
+    bool m_pendingDrag = false;
+    bool m_waitingCaptureFrame = false;
+    RtlCaptureTransaction::Token m_dragCapture;
     QString m_captureStatus;
     int m_panRfGainDb{kDefaultRfGainDb};
     int m_ppmCorrection{0};

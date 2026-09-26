@@ -6,8 +6,10 @@
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
 #include "core/RadioStateMemory.h"
+#include "core/LogManager.h"
 
 #include <QDebug>
+#include <QDateTime>
 
 #include <rtl-sdr.h>
 
@@ -391,6 +393,9 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
     m_lastPublished.reset();
     m_viewport.reset();
     m_pendingViewport = {};
+    m_pendingDrag = false;
+    m_waitingCaptureFrame = false;
+    m_dragCapture = {};
     m_viewCenterRequestHz = m_requested.receivers.front().passband.carrierHz;
     m_viewSpanRequestHz = m_requested.hardware.sampleRateHz;
     m_monitors.fill({});
@@ -401,6 +406,9 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
     const QPointer<RtlSdrWorker> producer(m_worker.get());
     connect(m_worker.get(), &RtlSdrWorker::spectrumFrameReady, this,
         [this, producer](quint64 session, quint64 revision, int panId, const QByteArray& frame) {
+            qCDebug(lcPerf).nospace() << "RtlCapture phase=arrival ms="
+                << QDateTime::currentMSecsSinceEpoch() << " session=" << session
+                << " revision=" << revision << " eligible=" << acceptsFrame(session, revision);
             if (producer && producer.data() == m_worker.get() && acceptsFrame(session, revision)) {
                 const QByteArray cropped = viewportFrame(frame);
                 if (cropped.isEmpty() || !m_capture.confirmed()) { return; }
@@ -413,6 +421,10 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
                                  usable->binCount * int(sizeof(float))),
                     (usable->centerHz - usable->spanHz / 2) / 1e6,
                     (usable->centerHz + usable->spanHz / 2) / 1e6};
+                m_waitingCaptureFrame = false;
+                qCDebug(lcPerf).nospace() << "RtlCapture phase=frame ms="
+                    << QDateTime::currentMSecsSinceEpoch() << " session=" << session
+                    << " revision=" << revision << " centerHz=" << quint64(capture.centerHz);
                 emit spectrumFrameReady(panId, cropped, coverage);
             }
         });
@@ -452,6 +464,9 @@ void RtlSdrBackend::disconnectRadio()
     m_capture.endSession();
     m_published = {};
     m_pendingViewport = {};
+    m_pendingDrag = false;
+    m_waitingCaptureFrame = false;
+    m_dragCapture = {};
     if (!m_worker && !m_connected && !m_connecting) { return; }
     m_connected = false;
     m_connecting = false;
@@ -713,6 +728,8 @@ void RtlSdrBackend::setPanCenter(const QString& panId, double hz, PanCenterInten
     // deliberate Center reveal at its requested RF while its span coalesces.
     m_viewCenterRequestHz = intent == PanCenterIntent::Range && m_capture.busy()
         && m_requested.centeredView ? m_requested.centeredView->centerHz : hz;
+    qCDebug(lcPerf).nospace() << "RtlCapture phase=view ms=" << QDateTime::currentMSecsSinceEpoch()
+        << " centerHz=" << hz << " drag=" << (intent == PanCenterIntent::Drag);
     requestViewport(intent == PanCenterIntent::Drag);
 }
 
@@ -740,6 +757,7 @@ void RtlSdrBackend::setPanBandwidth(const QString& panId, double hz)
 void RtlSdrBackend::requestViewport(bool followDrag)
 {
     if (followDrag && m_capture.confirmed()) {
+        m_pendingDrag = false;
         const auto center = RtlViewport::captureCenterFor(m_capture.confirmed()->capture,
             RtlSdrDdc::kSpectrumBinCount, m_viewCenterRequestHz, m_viewSpanRequestHz);
         if (center) {
@@ -747,11 +765,20 @@ void RtlSdrBackend::requestViewport(bool followDrag)
                 std::clamp(*center, kMinTuneHz, kMaxTuneHz)));
             if (hardwareCenter != m_requested.hardware.centerHz
                 || m_requested.followReceiverId.has_value()) {
+                if ((m_capture.busy() && m_dragCapture == m_capture.requested())
+                    || (!m_capture.busy() && m_waitingCaptureFrame)) {
+                    // Coalesce only successive display drags, not a newer
+                    // drag superseding a tune/reveal or device operation.
+                    // In-capture view changes need no such acquisition gap.
+                    m_pendingDrag = true;
+                    m_pendingViewport = m_capture.requested();
+                    return;
+                }
                 auto desired = m_requested;
                 desired.hardware.centerHz = hardwareCenter;
                 desired.followReceiverId.reset();
                 desired.centeredView.reset();
-                if (!requestCapture(desired)) {
+                if (!requestCapture(desired, {}, 0, true)) {
                     if (m_viewport) {
                         m_viewCenterRequestHz = m_viewport->centerHz;
                         m_viewSpanRequestHz = m_viewport->spanHz;
@@ -1100,7 +1127,7 @@ RestoredRadioState RtlSdrBackend::currentOperatingState() const
 // ──────────────────────────────────────────────────────────────────────────────
 
 bool RtlSdrBackend::requestCapture(const RtlCaptureTransaction::Desired& desired,
-                                  const QString& extension, quint64 requestId)
+                                  const QString& extension, quint64 requestId, bool fromDrag)
 {
     const auto submitted = m_capture.submit(desired);
     if (!submitted) {
@@ -1111,6 +1138,13 @@ bool RtlSdrBackend::requestCapture(const RtlCaptureTransaction::Desired& desired
         if (m_connected) { emit configurationWarning(m_captureStatus); }
         return false;
     }
+    // A new explicit receive/device operation supersedes an older deferred
+    // drag. Drag-only coalescing never weakens transaction revision fencing.
+    m_pendingDrag = false;
+    m_dragCapture = fromDrag ? submitted.token : RtlCaptureTransaction::Token{};
+    qCDebug(lcPerf).nospace() << "RtlCapture phase=request ms=" << QDateTime::currentMSecsSinceEpoch()
+        << " session=" << submitted.token.session << " revision=" << submitted.token.revision
+        << " centerHz=" << desired.hardware.centerHz << " drag=" << fromDrag;
     m_captureStatus = tr("Preparing; displayed capture remains the last accepted state.");
     QVector<quint64> superseded;
     const auto& old = m_requested.hardware;
@@ -1169,6 +1203,9 @@ void RtlSdrBackend::serviceCapture()
     m_diagnostics = m_worker->diagnostics();
     if (const auto result = m_worker->takeResult()) {
         const auto completion = m_capture.complete(*result);
+        qCDebug(lcPerf).nospace() << "RtlCapture phase=complete ms=" << QDateTime::currentMSecsSinceEpoch()
+            << " session=" << result->token.session << " revision=" << result->token.revision
+            << " operation=" << result->operation << " disposition=" << int(completion);
         if (completion == RtlCaptureTransaction::Completion::Invalidated) {
             finishExtensions(false);
             if (!producer || producer.data() != m_worker.get()) { return; }
@@ -1188,6 +1225,7 @@ void RtlSdrBackend::serviceCapture()
             m_requested.followReceiverId.reset();
             m_requested.centeredView.reset();
             m_pendingViewport = {};
+            m_pendingDrag = false;
             if (m_viewport) {
                 m_viewCenterRequestHz = m_viewport->centerHz;
                 m_viewSpanRequestHz = m_viewport->spanHz;
@@ -1206,6 +1244,9 @@ void RtlSdrBackend::serviceCapture()
         if (!m_capture.busy() && m_worker->needsRepair()) { requestCapture(m_requested); }
         if (const auto work = m_capture.takeWork()) {
             if (!m_worker->submit(*work)) { qFatal("RTL-SDR transaction mailbox ownership violated"); }
+        }
+        if (m_pendingDrag && !m_capture.busy() && !m_waitingCaptureFrame) {
+            requestViewport(true);
         }
     }
 }
@@ -1352,6 +1393,7 @@ void RtlSdrBackend::publishCapture()
         updateMonitor(receiver.passband.stableId);
     }
     m_published = state.token;
+    m_waitingCaptureFrame = state.token == m_dragCapture;
     m_panCenterHz = state.hardware.centerHz;
     m_sampleRateHz = state.hardware.sampleRateHz;
     m_directSampling = state.hardware.directSampling;
@@ -1384,6 +1426,9 @@ void RtlSdrBackend::publishCapture()
     m_pendingViewport = {};
     m_viewport = RtlViewport::fit(state.capture, RtlSdrDdc::kSpectrumBinCount,
                                  m_viewCenterRequestHz, m_viewSpanRequestHz);
+    qCDebug(lcPerf).nospace() << "RtlCapture phase=publish ms=" << QDateTime::currentMSecsSinceEpoch()
+        << " session=" << state.token.session << " revision=" << state.token.revision
+        << " centerHz=" << state.hardware.centerHz << " generation=" << state.capture.generation;
     const auto current = [this, token = state.token] {
         return acceptsFrame(token.session, token.revision);
     };

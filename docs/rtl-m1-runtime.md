@@ -478,6 +478,25 @@ CW, plus exact-center and 50 Hz cases. They quantify IQ effects, not live
 audio intelligibility or radio calibration. Revision-specific performance,
 mutation, live reception and delivery evidence belongs in the PR report.
 
+## Continuous capture-follow dragging
+
+Successive display drags coalesce to one latest viewport target before entering
+the capture transaction owner. An in-flight drag capture is allowed to finish
+hardware readback and receiver-bank adoption, publish its confirmed RF frame,
+and deliver one whole accepted FFT before another drag retune can stop USB.
+This prevents continuously moving input from repeatedly superseding successful
+captures and forcing compensation without any displayed progress. Retuning
+still has finite hardware/FFT-refill gaps; it is not uninterrupted acquisition.
+
+In-capture panning remains immediate. A newer slice tune, reveal or device
+operation still supersedes older intent through the existing strict transaction
+revision/operation fences. A drag superseding one of those operations also
+retains the original compensation behavior. Failed or disconnected sessions
+discard deferred drag intent. Geometry and FFT coverage always describe an
+actually adopted capture, including parking/resumption of configured receivers.
+The opt-in `aether.perf` log records `RtlCapture` request, hardware readback,
+adoption, publication and frame timestamps for held-button diagnostics.
+
 ## Temporal FFT averaging
 
 RTL consumes the neutral `setPanAverage` and `setPanWeightedAverage` verbs in
@@ -501,8 +520,11 @@ of FPS partway through a display interval. The stated decay time therefore
 does not depend on FPS, although lower FPS supplies fewer observations and
 can miss short activity. This averages the genuine emitted FFT observations;
 it is not a claim to integrate uncomputed FFTs between display deadlines.
-The first frame seeds the state. Changing depth or domain discards the old
-estimator. Capture/adoption/discontinuity resets discard it with the IQ
+The first frame seeds the state. Changing between nonzero depths in the same
+domain preserves the accumulated estimate and applies the new time constant
+at the next observation; it never inserts a raw frame. Explicit disable and
+re-enable or a domain change reseed from current input. Capture/adoption/
+discontinuity resets discard it with the IQ
 window, and each new session constructs fresh state. Pure viewport cropping
 retains the full-capture bin identities and their average.
 

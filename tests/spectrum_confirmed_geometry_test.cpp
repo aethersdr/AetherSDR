@@ -56,7 +56,7 @@ struct RtlCaptureBackendTestAccess {
         backend.m_requested.receivers = {{{0, 100'000'000, -6000, 6000, 0, 3000, 3000}, RtlCaptureTransaction::Mode::Fm}};
         backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device)));
     }
-    static bool idle(const RtlSdrBackend& backend) { return !backend.m_capture.busy(); }
+    static bool idle(const RtlSdrBackend& backend) { return !backend.m_capture.busy() && !backend.m_pendingDrag; }
 };
 }
 namespace AetherSDR::hl2 {

@@ -34,7 +34,7 @@ struct RtlCaptureBackendTestAccess {
         backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device), nullptr, capacity));
     }
     static std::size_t pending(const RtlSdrBackend& backend) { return backend.m_capture.pendingCount(); }
-    static bool busy(const RtlSdrBackend& backend) { return backend.m_capture.busy(); }
+    static bool busy(const RtlSdrBackend& backend) { return backend.m_capture.busy() || backend.m_pendingDrag; }
     static T::State state(const RtlSdrBackend& backend) { return *backend.m_capture.confirmed(); }
     static void spectrum(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
     { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
@@ -57,9 +57,118 @@ template<class Predicate> bool waitFor(Predicate predicate)
     }
     return predicate();
 }
+
+// A held pointer keeps issuing newer centers before each hardware readback.
+// Each completed capture must nevertheless publish a fresh, correctly framed
+// FFT before the next retune, without relaxing non-pan supersession rules.
+static void sustainedPanProgress(bool narrow)
+{
+    auto device = std::make_shared<DeviceState>();
+    rtl::RtlSdrBackend receiver;
+    rtl::RtlCaptureBackendTestAccess::start(receiver, std::make_unique<InjectedDevice>(device));
+    device->releaseReadback();
+    check(waitFor([&] { return receiver.isConnected() && device->starts > 0; }),
+          "held-pan fixture connects the actual worker");
+    receiver.setPanBandwidth({}, narrow ? 200'000 : 2'400'000);
+    {
+        std::lock_guard lock(device->mutex); device->holdReadback = true;
+    }
+    int frames = 0;
+    double framedCenter = 0;
+    QObject::connect(&receiver, &IRadioBackend::spectrumFrameReady,
+        [&](int, const QByteArray&, const SpectrumCoverage& coverage) {
+            ++frames;
+            framedCenter = (coverage.lowMhz + coverage.highMhz) * 500'000;
+        });
+    const std::array<double, 7> targets = narrow
+        ? std::array<double, 7>{101'300'000, 101'800'000, 102'300'000,
+                               100'000'000, 98'700'000, 98'200'000, 100'200'000}
+        : std::array<double, 7>{105'000'000, 106'000'000, 107'000'000,
+                               106'000'000, 99'000'000, 98'000'000, 100'000'000};
+    receiver.setPanCenter({}, targets.front(), IRadioBackend::PanCenterIntent::Drag);
+    for (std::size_t step = 0; step < targets.size(); ++step) {
+        check(waitFor([&] { std::lock_guard lock(device->mutex); return device->inReadback; }),
+              "held-pan retune reaches controlled hardware readback");
+        const auto previous = rtl::RtlCaptureBackendTestAccess::state(receiver);
+        if (step + 1 < targets.size()) {
+            for (int move = 1; move <= 25; ++move) {
+                const double next = targets[step]
+                    + (targets[step + 1] - targets[step]) * move / 25;
+                receiver.setPanCenter({}, next, IRadioBackend::PanCenterIntent::Drag);
+                check(rtl::RtlCaptureBackendTestAccess::pending(receiver) <= 1,
+                      "continuous pointer motion has bounded pending hardware work");
+            }
+        }
+        device->releaseOneReadback();
+        const bool progressed = waitFor([&] {
+            return rtl::RtlCaptureBackendTestAccess::state(receiver).token != previous.token;
+        });
+        check(progressed, "held motion publishes completed capture before pointer release");
+        if (!progressed) { break; }
+        const auto accepted = rtl::RtlCaptureBackendTestAccess::state(receiver);
+        check(accepted.hardware.centerHz != previous.hardware.centerHz,
+              "held motion advances genuine hardware-confirmed RF");
+        const int beforeFrames = frames;
+        const int beforeWrites = device->writes;
+        const int beforeCallbacks = device->callbacks;
+        for (int block = 0; block < 7; ++block) { device->block(); }
+        check(waitFor([&] { return device->callbacks >= beforeCallbacks + 7; }),
+              "fresh capture receives seven partial FFT blocks");
+        check(frames == beforeFrames && device->writes == beforeWrites,
+              "next pan waits for a whole fresh observation, not a partial window");
+        device->block();
+        check(waitFor([&] { return frames > beforeFrames; }),
+              "fresh RF frame escapes while continuous pointer motion is pending");
+        check(std::abs(framedCenter - accepted.hardware.centerHz) < 1,
+              "progress frame carries its actual accepted capture RF bounds");
+    }
+    device->releaseReadback();
+    check(waitFor([&] {
+        device->block();
+        return !rtl::RtlCaptureBackendTestAccess::busy(receiver);
+    }), "held-pan final target converges after release");
+    const auto final = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    check(final.receivers.front().passband.carrierHz == 100'000'000,
+          "continuous pan preserves configured receiver RF");
+    check(final.receivingIds == std::vector<int>{0},
+          "direction reversal resumes the parked receiver");
+    receiver.disconnectRadio();
+}
+
+static void deferredPanCannotOutliveNewerIntent()
+{
+    for (bool fail : {false, true}) {
+        auto device = std::make_shared<DeviceState>();
+        rtl::RtlSdrBackend receiver;
+        rtl::RtlCaptureBackendTestAccess::start(receiver, std::make_unique<InjectedDevice>(device));
+        device->releaseReadback();
+        check(waitFor([&] { return receiver.isConnected(); }), "supersession fixture connects");
+        {
+            std::lock_guard lock(device->mutex); device->holdReadback = true;
+        }
+        if (fail) { device->failWriteAt = device->writes + 5; }
+        receiver.setPanCenter({}, 105'000'000, IRadioBackend::PanCenterIntent::Drag);
+        check(waitFor([&] { std::lock_guard lock(device->mutex); return device->inReadback; }),
+              "supersession fixture reaches forward or rollback readback");
+        receiver.setPanCenter({}, 106'000'000, IRadioBackend::PanCenterIntent::Drag);
+        if (!fail) { receiver.setSliceFrequency(0, 100'200'000); }
+        device->releaseReadback();
+        check(waitFor([&] { device->block(); return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
+              "newer tune or verified failure settles without replaying deferred pan");
+        const auto accepted = rtl::RtlCaptureBackendTestAccess::state(receiver);
+        check(accepted.hardware.centerHz < 102'000'000
+            && accepted.receivers.front().passband.carrierHz == (fail ? 100'000'000 : 100'200'000)
+            && accepted.receivingIds == std::vector<int>{0},
+              "old queued drag cannot override newer receiver intent or failed capture rollback");
+        receiver.disconnectRadio();
+    }
+}
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    sustainedPanProgress(false);
+    sustainedPanProgress(true);
+    deferredPanCannotOutliveNewerIntent();
     auto state = std::make_shared<DeviceState>();
     rtl::RtlSdrBackend backend;
     test::SeamThreadAffinityProbe probe(&backend);

@@ -165,6 +165,46 @@ void partitionContinuity()
     }
     check(a.size()==3 && a==b,"USB partitioning does not change averaged bins or sample deadlines");
 }
+
+void amountChangeContinuity()
+{
+    constexpr int window = rtl::RtlSdrDdc::kSpectrumBinCount;
+    for (bool weighted : {false, true}) {
+        for (int fps : {10, 25, 60}) {
+            Probe raw(0, weighted, fps), average(80, weighted, fps);
+            const int stride = 2'400'000 / fps;
+            const double first = raw.feed(.02f, window);
+            average.feed(.02f, window);
+            double state = weighted ? first : std::pow(10., first / 10.);
+            for (int amount : {90, 30, 100, 60}) {
+                average.backend.setPanAverage("0xe1000000", amount);
+                const double input = raw.feed(.4f, stride);
+                const double retained = std::exp(-double(stride) / 2'400'000
+                                                / (amount * .01));
+                state = retained * state + (1 - retained)
+                    * (weighted ? input : std::pow(10., input / 10.));
+                const double expected = weighted ? state : 10 * std::log10(state);
+                const double actual = average.feed(.4f, stride);
+                check(std::abs(actual - expected) < .003,
+                      "nonzero amount changes preserve the accumulated estimate and sample-timed decay");
+                check(actual < input - .1,
+                      "changing averaging amount never flashes a raw frame");
+            }
+            average.backend.setPanAverage("0xe1000000", 0);
+            const double off = raw.feed(.04f, stride);
+            check(std::abs(average.feed(.04f, stride) - off) < .003,
+                  "explicit disable immediately returns raw FFT");
+            average.backend.setPanAverage("0xe1000000", 100);
+            const double enabled = raw.feed(.01f, stride);
+            check(std::abs(average.feed(.01f, stride) - enabled) < .003,
+                  "re-enable seeds current RF instead of reviving pre-disable history");
+            average.backend.setPanWeightedAverage("0xe1000000", !weighted);
+            const double domain = raw.feed(.2f, stride);
+            check(std::abs(average.feed(.2f, stride) - domain) < .003,
+                  "power and logarithmic domains never reinterpret retained state");
+        }
+    }
+}
 }
 int main(int argc, char** argv)
 {
@@ -206,5 +246,6 @@ int main(int argc, char** argv)
     cadenceAndReceiverIndependence();
     noiseStatistics();
     partitionContinuity();
+    amountChangeContinuity();
     return failures ? 1 : 0;
 }

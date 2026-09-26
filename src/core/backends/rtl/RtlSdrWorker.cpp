@@ -2,6 +2,8 @@
 
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QDateTime>
+#include "core/LogManager.h"
 #include "core/backends/rtl/RtlSdrUsbDevice.h"
 #include <aether_wdsp.h>
 
@@ -154,6 +156,9 @@ void RtlSdrWorker::applyDdc(const Transaction::State& state)
     m_legacyFilterHighHz = highHz;
     m_ddc.applyMonitor(receiver.audioGain, receiver.audioPan, receiver.audioMute);
     m_applied = state.token;
+    qCDebug(lcPerf).nospace() << "RtlCapture phase=adopt ms=" << QDateTime::currentMSecsSinceEpoch()
+        << " session=" << state.token.session << " revision=" << state.token.revision
+        << " centerHz=" << state.hardware.centerHz << " generation=" << state.capture.generation;
 }
 
 bool RtlSdrWorker::prepareHardwareResult()
@@ -188,7 +193,13 @@ bool RtlSdrWorker::prepareHardwareResult()
 void RtlSdrWorker::applyHardware()
 {
     m_command.store(Command::Applying, std::memory_order_release);
+    qCDebug(lcPerf).nospace() << "RtlCapture phase=hardware ms=" << QDateTime::currentMSecsSinceEpoch()
+        << " session=" << m_work->token.session << " revision=" << m_work->token.revision
+        << " operation=" << m_work->operation << " compensation=" << m_work->compensation;
     m_result = Transaction::execute(*m_work, *m_device);
+    qCDebug(lcPerf).nospace() << "RtlCapture phase=readback ms=" << QDateTime::currentMSecsSinceEpoch()
+        << " session=" << m_result->token.session << " revision=" << m_result->token.revision
+        << " operation=" << m_result->operation << " result=" << int(m_result->code);
     if (!prepareHardwareResult()) {
         // Planning/admission can fail after hardware readback. Compensate the
         // complete device before reporting refusal, exactly as for a USB error.

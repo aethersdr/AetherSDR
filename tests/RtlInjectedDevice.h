@@ -14,6 +14,7 @@ struct DeviceState {
     bool canceled = false;
     bool holdReadback = true;
     bool inReadback = false;
+    int readbackPermits = 0;
     int blocks = 0;
     std::atomic<int> starts{0}, cancels{0}, writes{0}, callbacks{0};
     std::atomic<bool> badReadback{false};
@@ -24,6 +25,10 @@ struct DeviceState {
     void releaseReadback()
     {
         std::lock_guard lock(mutex); holdReadback = false; changed.notify_all();
+    }
+    void releaseOneReadback()
+    {
+        std::lock_guard lock(mutex); ++readbackPermits; changed.notify_all();
     }
     void block()
     {
@@ -53,7 +58,10 @@ public:
         std::unique_lock lock(m_state->mutex);
         m_state->inReadback = true;
         m_state->changed.notify_all();
-        m_state->changed.wait(lock, [&] { return !m_state->holdReadback; });
+        m_state->changed.wait(lock, [&] {
+            return !m_state->holdReadback || m_state->readbackPermits > 0;
+        });
+        if (m_state->readbackPermits > 0) { --m_state->readbackPermits; }
         m_state->inReadback = false;
         auto actual = m_state->hardware;
         if (m_state->badReadback) { actual.sampleRateHz = 0; }

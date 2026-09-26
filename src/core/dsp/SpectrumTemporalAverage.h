@@ -20,7 +20,9 @@ public:
     void beginFrame(int average, bool logarithmic, double elapsedSeconds) noexcept
     {
         average = std::clamp(average, 0, 100);
-        if (average != m_average || logarithmic != m_logarithmic) { reset(); }
+        // A new time constant changes the next weight, not the estimate's
+        // RF-bin identity. Reseeding every slider step briefly exposed raw IQ.
+        if (average == 0 || m_average == 0 || logarithmic != m_logarithmic) { reset(); }
         m_average = average;
         m_logarithmic = logarithmic;
         m_seedFrame = !m_haveAverage;

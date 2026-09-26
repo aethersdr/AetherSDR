@@ -45,7 +45,7 @@ struct RtlCaptureBackendTestAccess {
         }
         backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device), nullptr, capacity));
     }
-    static bool idle(const RtlSdrBackend& backend) { return !backend.m_capture.busy(); }
+    static bool idle(const RtlSdrBackend& backend) { return !backend.m_capture.busy() && !backend.m_pendingDrag; }
     static T::State state(const RtlSdrBackend& backend) { return *backend.m_capture.confirmed(); }
     static void spectrum(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
     { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
