@@ -386,6 +386,39 @@ struct RadioCapabilities {
     }
 
 
+    // Per-pan band/segment zoom: `display pan set <panId> band_zoom=<0|1>` and
+    // the matching `segment_zoom=`, the radio-authoritative flags that snap a
+    // panadapter to the current band or segment (#4057). ENGAGED means the
+    // radio answers that wire text; ABSENT means UNDECLARED.
+    //
+    // ABSENT REFUSES, and that direction is the point. The failure this exists
+    // to stop is the HERMES.md section 17 dead control: on a radio with no
+    // command plane the write is dropped inside RadioModel::sendCmd while the
+    // UI control moves anyway, so an operator gets a zoom button that lies.
+    // Every surface that can issue the write asks gui/PanZoomModeGate.h, which
+    // reads this record and refuses when it is absent.
+    //
+    // A RECORD AND NOT ANOTHER BOOL, per the M2 convention above: `band_zoom`
+    // and `segment_zoom` are two separate wire keys that happen to travel
+    // together today, so the first radio that answers one and not the other
+    // gets a field in here rather than a second loose boolean and a hunt
+    // through every consumer of the first.
+    //
+    // A CAPABILITY AND NOT A FAMILY STRING. The button enable used to ask
+    // RadioModel::usesFlexCommandPlane(), which is literally `family() ==
+    // "flex"`; #5554's standing notice is that no new family-string branch may
+    // be added above the seam. A second family that gains a zoom verb engages
+    // this record in its own capabilities() and needs no edit in the UI.
+    struct PanZoomModes {
+        // The verb that carries both modes, recorded so the declaration names
+        // what it grants rather than being a bare presence bit. DIAGNOSTIC, in
+        // exactly TwoToneGenerator::selectionCommand's sense below: the gate
+        // branches on this record being ENGAGED and never on the string.
+        QString setCommand;
+    };
+    std::optional<PanZoomModes> panZoomModes;
+
+
     // The frequency range the receiver can actually be tuned to, in Hz.
     //
     // Both zero means "not reported" — clients then keep whatever range they

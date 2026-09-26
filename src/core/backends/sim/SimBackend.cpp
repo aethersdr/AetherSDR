@@ -324,6 +324,10 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasManualNotch = false;
     caps.hasTransmitFrequencyCheck = false;
     caps.hasDdcPanEdgeRolloff = false;   // synthetic scene, no real receive chain
+    // The demo vends a RadioConnection (RFC #4288 Route A) but understands no
+    // `band_zoom=`/`segment_zoom=`, so it declares absence explicitly -- the
+    // case a bare hasCommandPlane() test would have got wrong.
+    caps.panZoomModes = std::nullopt;
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;

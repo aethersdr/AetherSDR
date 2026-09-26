@@ -198,6 +198,50 @@ void SetRXAAGCAttack(int channel, int attackMs);
 void SetRXAAGCDecay(int channel, int decayMs);
 void SetRXAAGCHang(int channel, int hangMs);
 void SetRXAAGCHangThreshold(int channel, int hangThreshold);
+
+// ── FM demodulator deviation ──────────────────────────────────────────────
+//
+// NO VENDORED PATCH IS INVOLVED, and that is worth saying plainly because the
+// opposite was believed about this corner of WDSP for three days.
+// `upstream/wdsp.h` is upstream's own GENERATED public interface — its banner
+// says it is produced by `gen_wdsp_h.py`, which scans the sources for
+// PORT-decorated functions "so that this header cannot drift from what the DLL
+// actually exports" — and it is what says whether a WDSP entry point is
+// public. It declares `SetRXAFMDeviation`.
+//
+// THIS SYMBOL WAS NEVER ONE OF THE HIDDEN-LOOKING ONES: `fmd.h` declares it
+// too. What misled was a NEIGHBOUR — `fmsq.c` defines `SetRXAFMSQRun` and
+// `fmsq.h` never declares it, which reads exactly like a symbol that exists
+// and cannot be reached without patching the snapshot. It is not; `wdsp.h`
+// declares that one as well. So the rule is about the per-module headers being
+// an unreliable NEGATIVE, not about them hiding this call: a per-module header
+// saying nothing says nothing. Check `upstream/wdsp.h` before concluding that
+// reaching a WDSP symbol needs AETHERSDR-PATCHES.md treatment — that
+// discipline is for CHANGING vendored behaviour, which this is not.
+//
+// DEVIATION IS AN INVERSE AUDIO GAIN, not a bandwidth, and the name misleads
+// in a way worth pinning here. `SetRXAFMDeviation` stores the value and
+// recomputes `again = rate / (deviation * TWOPI)` (`upstream/fmd.c`); `xfmd`
+// then emits `again * (fil_out - fmdc)`. The PLL's capture range is fixed at
+// construction (`fmin`/`fmax`, ±8 kHz in `RXA.c`) and this call does not touch
+// it, nor the audio filter, nor the de-emphasis. So halving the deviation
+// narrows nothing — it DOUBLES the detector's audio output, exactly. The value
+// is the receiver's ASSUMPTION about how wide the incoming signal is deviated:
+// match the transmission and recovered audio arrives at unity level; assume
+// 5 kHz for a 2.5 kHz narrow-FM signal and it arrives 6 dB quiet.
+//
+// `RXA.c` builds the stage with 5000.0 and, until this declaration existed,
+// nothing in this tree could change it — so every FM signal was demodulated
+// against a 5 kHz assumption whatever it actually was. 2500 is the European
+// narrow-FM figure.
+//
+// NOTHING NON-LINEAR IS IN THE WAY, which is what makes the effect measurable
+// end to end rather than squashed on its way out. `create_fmd` sets
+// `lim_run = 0` and nothing in this tree calls `SetRXAFMLimRun`, so the
+// detector's own AGC is off and the whole path from `again` to the channel
+// output is linear. `wdsp_channel_test`'s ratio assertion depends on that and
+// is what will say so if the limiter is ever switched on.
+void SetRXAFMDeviation(int channel, double deviationHz);
 void SetTXAMode(int channel, int mode);
 void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength

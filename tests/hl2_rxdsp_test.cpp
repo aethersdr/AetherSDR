@@ -57,7 +57,13 @@ int main(int argc, char** argv)
         check(!guardErr.empty(), "rejected configure reports an error string");
     }
 
-    check(dsp.configure(cfg, &err), err.empty() ? "Hl2RxDsp configures" : err.c_str());
+    // Sequenced deliberately: err.empty()/err.c_str() must not share an
+    // argument list with the call that FILLS err. Argument evaluation order
+    // is unspecified, so the diagnostic could be read before configure()
+    // wrote it -- and err.c_str() taken before a reallocating assign is a
+    // dangling pointer, not merely a lost message.
+    const bool configured = dsp.configure(cfg, &err);
+    check(configured, err.empty() ? "Hl2RxDsp configures" : err.c_str());
 
     int audioCount = 0, specCount = 0;
     std::size_t lastAudioSize = 0;

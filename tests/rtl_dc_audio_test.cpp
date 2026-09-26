@@ -92,7 +92,8 @@ Measurement measure(double fmRecipe, double modulation, double offset, Bias bias
     const double carrierMean = kAmplitude * idealCarrierComponent(modulation / kTone);
     WdspChannel::Config dsp;
     dsp.mode = WdspChannel::Mode::Fm;
-    dsp.fmReceive = WdspChannel::FmReceive{fmRecipe};
+    dsp.fmReceive = WdspChannel::FmReceive{};
+    dsp.fmDeviationHz = fmRecipe;
     dsp.filterLowHz = -8000; dsp.filterHighHz = 8000;
     dsp.blockForOutput = true;
     result.channel = WdspChannel::create(dsp);

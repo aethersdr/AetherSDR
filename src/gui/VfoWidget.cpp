@@ -1,6 +1,7 @@
 #include "VfoWidget.h"
 #include <QScopeGuard>
 #include "ControlAvailabilityRegistry.h"
+#include "SplitAudioProfile.h"
 #include "VfoDisplayDefaults.h"
 #ifdef HAVE_DEEPFIST
 #include "models/CwDecodeSettings.h"
@@ -899,6 +900,14 @@ void VfoWidget::buildUI()
         else
             emit splitToggled();
     });
+    // Right-click is where the split offsets, Monitor TX and the remembered
+    // audio arrangement live. Without it the arrangement is learned and applied
+    // with nothing anywhere to show it exists or to clear it. (#2242, #311)
+    m_splitBadge->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_splitBadge, &QPushButton::customContextMenuRequested,
+            this, [this](const QPoint& pos) {
+        emit splitBadgeMenuRequested(m_splitBadge->mapToGlobal(pos));
+    });
     hdr->addWidget(m_splitBadge);
 
     m_txBadge = new QPushButton("TX");
@@ -1480,6 +1489,7 @@ void VfoWidget::buildUI()
             // Right-click on speaker tab toggles mute directly
             btn->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(btn, &QPushButton::customContextMenuRequested, this, [this](const QPoint&) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
                 if (m_slice) m_slice->setAudioMute(!m_slice->audioMute());
             });
         }
@@ -1787,12 +1797,16 @@ void VfoWidget::buildTabContent()
         connect(m_afGainSlider, &QSlider::valueChanged, this, [this, afVal](int v) {
             afVal->setText(QString::number(v));
             if (!m_updatingFromModel) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
                 if (m_slice) m_slice->setAudioGain(v);
                 emit afGainChanged(v);
             }
         });
         connect(m_muteBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel && m_slice) m_slice->setAudioMute(on);
+            if (!m_updatingFromModel && m_slice) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
+                m_slice->setAudioMute(on);
+            }
             m_muteBtn->setText(on ? QString::fromUtf8("AF  \xF0\x9F\x94\x87")    // 🔇 AF
                                   : QString::fromUtf8("AF  \xF0\x9F\x94\x8A"));  // 🔊 AF
             m_tabBtns[0]->setText(on ? QString::fromUtf8("\xF0\x9F\x94\x87")
@@ -1860,7 +1874,10 @@ void VfoWidget::buildTabContent()
             }
         });
         connect(m_panSlider, &QSlider::valueChanged, this, [this](int v) {
-            if (!m_updatingFromModel && m_slice) m_slice->setAudioPan(v);
+            if (!m_updatingFromModel && m_slice) {
+                AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
+                m_slice->setAudioPan(v);
+            }
             if (!m_updatingFromModel) emit rxPanChanged(v);  // (#1460)
         });
         connect(m_divBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -2540,6 +2557,12 @@ void VfoWidget::buildTabContent()
             m_fmRevBtn->setAccessibleName("Reverse repeater offset");
             m_fmRevBtn->setCheckable(true);
             m_fmRevBtn->setStyleSheet(kRevBtn);
+            // The same :disabled rule its three neighbours carry. Without it a
+            // gated-off REV is indistinguishable from a live one, which is the
+            // "dead control that looks live" failure the gate exists to remove.
+            ThemeManager::instance().applyStyleSheet(m_fmRevBtn, m_fmRevBtn->styleSheet()
+                + QStringLiteral("QPushButton:disabled { color: {{color.text.disabled}}; "
+                                 "background: {{color.background.2}}; }"));
             connect(m_fmRevBtn, &QPushButton::toggled, this, [this](bool on) {
                 if (m_fmRevBtn->signalsBlocked() || !m_slice
                     || usesTransmitFrequencyCheck()) return;
@@ -6650,6 +6673,35 @@ void VfoWidget::configureRepeaterReverseControl()
     m_fmRevBtn->setCheckable(!xfc);
     m_fmRevBtn->setChecked(false);
     m_fmRevBtn->setDown(xfc && m_radioModel->transmitFrequencyCheck());
+    // REV IS GATED HERE AND NOT IN configureFmToneControls(), BECAUSE THIS
+    // BUTTON IS TWO CONTROLS. Its three neighbours in the same row -- the
+    // offset spin and -/Simplex/+ -- are repeater duplex and nothing else, so
+    // they take hasFmRepeaterOffset directly. This one wears XFC when the
+    // backend declares hasTransmitFrequencyCheck and REV otherwise, and only
+    // the REV personality moves the repeater offset: its toggled handler writes
+    // SliceModel::setTxOffsetFreq, while the XFC personality is momentary and
+    // drives RadioModel::setTransmitFrequencyCheck from pressed/released.
+    //
+    // Those two capabilities are INDEPENDENT, so hasFmRepeaterOffset alone is
+    // the wrong gate. IcomCivBackend derives hasFmRepeaterOffset from
+    // FmRepeaterProfile::hasDuplex and hasTransmitFrequencyCheck from
+    // FmRepeaterProfile::hasXfc, and the IC-7300MK2 declares hasXfc true with
+    // hasDuplex false -- a shipping radio whose XFC button would go dark.
+    // The honest test is whether the personality the button is CURRENTLY
+    // wearing has a verb behind it.
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    const bool repeaterAvailable = !connected
+        || m_radioModel->backendCapabilities().hasFmRepeaterOffset;
+    m_fmRevBtn->setEnabled(xfc || repeaterAvailable);
+    // AGENTS.md: "unavailable (the radio lacks it, dimmed WITH A STATED
+    // REASON)", and the reason "must reach a screen reader via
+    // accessibleDescription ... because a tooltip is a mouse affordance that is
+    // never announced". Cleared when the control is live so a stale reason
+    // cannot be read out over a working button.
+    m_fmRevBtn->setAccessibleDescription((xfc || repeaterAvailable)
+        ? QString()
+        : QStringLiteral("Unavailable: this radio declares no repeater duplex "
+                         "offset, so there is nothing for REV to reverse."));
     if (!xfc) {
         m_xfcHeldByThisControl = false;
     }

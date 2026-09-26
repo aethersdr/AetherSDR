@@ -969,6 +969,8 @@ set(CORE_SOURCES
     src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
+    src/core/TciIoWorker.cpp
+    src/core/TciClient.h
     src/core/TciServer.cpp
     src/core/TciRxConverter.cpp
     src/core/TciPeerProcess.cpp
@@ -1194,6 +1196,7 @@ set(GUI_SOURCES
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
     src/gui/VfoDisplayDefaults.cpp
+    src/gui/SplitAudioProfile.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp

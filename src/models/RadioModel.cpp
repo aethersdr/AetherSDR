@@ -973,9 +973,14 @@ void RadioModel::setupBackend(const QString& family)
     }
 
     // aetherd Gap B (Step 2): backends that deliver spectra via the normalized
-    // IRadioBackend data-plane signal (HL2) feed the neutral render feed here.
-    // Flex uses the PanadapterStream passthrough wired above and never emits this,
-    // so this connect is harmless for Flex and load-bearing for HL2.
+    // IRadioBackend data-plane signal feed the neutral render feed here. Flex
+    // uses the PanadapterStream passthrough wired above and never emits this,
+    // so this connect is harmless for Flex -- but it is load-bearing for every
+    // OTHER family, not for HL2 alone: HL2, ANAN, Icom, RTL-SDR and the demo
+    // SimBackend all emit it, and what their frames CONTAIN differs (see the
+    // m_backendWfLastRowNs comment in the header). An earlier wording here said
+    // "(HL2)", which is how a sentence downstream came to describe HL2's frames
+    // as if they were everyone's.
     connect(m_backend.get(), &IRadioBackend::spectrumFrameReady, this,
             [this, generation](int panId, const QByteArray& frame) {
         if (generation == m_backendReceiverGeneration) {
@@ -6873,14 +6878,14 @@ void RadioModel::setBinauralRx(bool on)
 
 void RadioModel::setPanWnb(bool on)
 {
-    if (m_activePanId.isEmpty()) return;
+    if (m_activePanId.isEmpty() || !hasCommandPlane()) return;
     sendCmd(
         QString("display pan set %1 wnb=%2").arg(m_activePanId).arg(on ? 1 : 0));
 }
 
 void RadioModel::setPanWnbLevel(int level)
 {
-    if (m_activePanId.isEmpty()) return;
+    if (m_activePanId.isEmpty() || !hasCommandPlane()) return;
     sendCmd(
         QString("display pan set %1 wnb_level=%2").arg(m_activePanId).arg(level));
 }
@@ -6948,14 +6953,14 @@ void RadioModel::setPanWeightedAverage(bool on)
 
 void RadioModel::setWaterfallColorGain(int gain)
 {
-    if (activeWfId().isEmpty()) return;
+    if (activeWfId().isEmpty() || !hasCommandPlane()) return;
     sendCmd(
         QString("display panafall set %1 color_gain=%2").arg(activeWfId()).arg(gain));
 }
 
 void RadioModel::setWaterfallBlackLevel(int level)
 {
-    if (activeWfId().isEmpty()) return;
+    if (activeWfId().isEmpty() || !hasCommandPlane()) return;
     sendCmd(
         QString("display panafall set %1 black_level=%2").arg(activeWfId()).arg(level));
 }
@@ -6978,7 +6983,7 @@ void RadioModel::applyWaterfallAutoBlack()
     // when the user has selected radio-side auto-black AND auto-black is on.
     // Otherwise the client renders the floor from its own estimate, so keep
     // auto_black=0 (radio-authoritative when, and only when, the user asks).
-    if (activeWfId().isEmpty()) return;
+    if (activeWfId().isEmpty() || !hasCommandPlane()) return;
     // …and only when the RADIO can actually do it. m_wfAutoBlackRadioSide is the
     // operator's stored intent, which deliberately survives a session on a radio
     // that computes no black level (#4606), so the capability has to be ANDed in
@@ -7079,9 +7084,13 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // the waterfall row; it needs real band edges to scale against.
     //
     // Gated once more, because the waterfall rate is a SEPARATE control from
-    // the frame rate and normally asks for something slower. That gate is what
-    // makes a row actually represent the requested span of time — the
-    // calibration the widget's time axis already assumes.
+    // the frame rate and normally asks for something slower. That gate paces
+    // the row; it does NOT integrate it -- the row that goes out is the single
+    // producer frame that landed on the gate. What that frame is on each of
+    // the five families this handler serves, what is owed (the row's
+    // FIDELITY, not the time axis), and why the accumulator does not belong
+    // here are all on m_backendWfLastRowNs in the header, with RFC #5782
+    // (this repository's own) as the ruling. Kept in one place on purpose.
     // Geometry for THIS pan. `panId` here is already the neutral index, which is
     // the same key the geometry handler stores under.
     const double panBandwidthMhz = m_backendPanBandwidthMhz.value(panId, 0.0);
@@ -7196,6 +7205,15 @@ void RadioModel::onConnected()
     // cache — settle which store owns the session here, on the same edge, so
     // the browse panel and the memory-spot feed come up populated either way.
     syncMemoryStoreForSession();
+
+    // Everything below is the Flex GUI-client handshake. Backends on the
+    // typed seam own their connection setup and must not inherit Flex
+    // subscriptions merely because they share RadioModel's connected edge.
+    // Besides being inert, the dropped commands surface an operator-facing
+    // "unsupported control" warning during an otherwise successful connect.
+    if (!hasCommandPlane()) {
+        return;
+    }
     // Delay network monitor until after client gui registration
     // (pings sent before registration cause "Malformed command" on WAN)
 
@@ -10453,17 +10471,22 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
     }
     updateStreamFilters();
 
-    sendCmd(QString("display pan rfgain_info %1").arg(normalizedPanId),
-            [pan](int code, const QString& body) {
-        if (code != 0 || body.isEmpty()) return;
-        QStringList vals = body.split(',');
-        if (vals.size() < 3) return;
-        int low = vals[0].trimmed().toInt();
-        int high = vals[1].trimmed().toInt();
-        int step = vals[2].trimmed().toInt();
-        if (step > 0)
-            pan->setRfGainInfo(low, high, step);
-    });
+    // Flex discovers this range with a command. Seam backends publish their
+    // own range via panRfGainInfoChanged; asking them a Flex-only question is
+    // both meaningless and a loud commandDropped event in the UI.
+    if (hasCommandPlane()) {
+        sendCmd(QString("display pan rfgain_info %1").arg(normalizedPanId),
+                [pan](int code, const QString& body) {
+            if (code != 0 || body.isEmpty()) return;
+            QStringList vals = body.split(',');
+            if (vals.size() < 3) return;
+            int low = vals[0].trimmed().toInt();
+            int high = vals[1].trimmed().toInt();
+            int step = vals[2].trimmed().toInt();
+            if (step > 0)
+                pan->setRfGainInfo(low, high, step);
+        });
+    }
 
     qCDebug(lcProtocol) << "RadioModel:" << (reclaimed ? "reclaimed" : "claimed")
                         << "panadapter" << normalizedPanId;

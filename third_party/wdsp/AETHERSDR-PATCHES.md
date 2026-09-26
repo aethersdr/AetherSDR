@@ -433,24 +433,25 @@ accessor set, two channel-state fixes, and one performance change:
 
     ONE NEW PROPERTY THIS GIVES `setMp_fircore()`: it can now build FFTW plans,
     which it never could before, because `ensure_minphase()` reaches
-    `create_minphase()`'s four `FFTW_PATIENT` plans. FFTW planning is not
-    thread-safe. Today that is harmless — the only caller of `RXASetMP()` is
-    `WdspChannel::open()`, which holds the setup mutex, and `setNc_fircore()`
-    already planned from that same place. **If anything ever starts toggling
-    minimum phase at runtime, outside that mutex, this is the line to revisit.**
-    Raised by the reviewer on #5697 and recorded here rather than left in a
-    review thread.
+    `create_minphase()`'s four plans (`FFTW_ESTIMATE` since patch 12). FFTW
+    planning is not thread-safe. Both callers of `RXASetMP()` hold the setup
+    mutex: `WdspChannel::open()`, and `WdspChannel::setMinimumPhase()`, which
+    `Hl2RxDsp` calls on a mode change into or out of CW (#5498).
+    **Anything that toggles minimum phase outside that mutex is the line to
+    revisit.** Raised by the reviewer on #5697 and recorded here rather than
+    left in a review thread.
 
     Upstream ends `plan_fircore()` with an unconditional
     `a->pminphase = create_minphase (a->nc, a->pfactor)`, with no reference to
     `a->mp`. The only consumer is the `if (a->mp)` branch of `calc_fircore()`.
-    `WdspChannel::Config::minimumPhase` is `false` and nothing in this tree sets
-    it, so `RXASetMP()` passes 0 and **every** minimum-phase workspace an RX
-    channel builds is dead on arrival.
+    `WdspChannel::Config::minimumPhase` defaults to `false`, and only the HL2 in
+    CW keeps it there (`Hl2RxDsp::rxMinimumPhaseFor`); at `mp == 0` every
+    minimum-phase workspace an RX channel builds would be dead on arrival.
 
     `create_minphase()` (`fir.c`) allocates six `complex` buffers and one
     `double` buffer at `N * pfactor` elements -- 104 bytes per element in total --
-    and creates **four `FFTW_PATIENT` plans** of that length.
+    and creates **four plans** of that length (`FFTW_PATIENT` upstream,
+    `FFTW_ESTIMATE` under patch 12).
 
     **The standing cost is the resident workspace, not the planning.** An earlier
     draft of this note led with plan-construction time; that overstated it.
@@ -629,3 +630,34 @@ advance both counters; failed allocations advance neither. RTL materializes
 platform TLS on its acquisition thread before entering USB callbacks.
 `wdsp_allocation_scope_test` pins local detection and foreign-thread isolation.
 This changes host instrumentation, not the upstream DSP snapshot.
+## Patch 12 — `create_minphase()` plans with `FFTW_ESTIMATE` (#5498)
+
+`upstream/fir.c::create_minphase()` plans its four transforms with
+`FFTW_ESTIMATE` instead of `FFTW_PATIENT`. They run only in `mp_imp_exec()`,
+which designs a minimum-phase filter when a core's impulse changes (a filter
+edge, a tap count, a mode into or out of minimum phase); nothing executes them
+per sample. A measured plan therefore buys nothing, and measuring one is
+expensive at these sizes: `nc * pfactor` is 131072 points for the bandpass cores
+at `Hl2RxDsp::kRxFilterTaps` = 8192.
+
+Measured on x86_64 with an empty wisdom cache and no planner time limit, one RX
+`WdspChannel::create()` at 8192 taps: 36.4 s linear, 103.9 s minimum phase; a
+cold `setMinimumPhase(true)` on an open linear channel took 69.3 s. A bare
+`fftw_plan_dft_1d(131072, FFTW_PATIENT)` measures ~30 s per direction there;
+`FFTW_ESTIMATE` plans the same transform in 0.4 ms and executes four in 2.8 ms.
+With this patch, same machine, same empty cache: 10.9 s linear, 10.9 s minimum
+phase, and 27 ms for the cold `setMinimumPhase(true)`. The linear open gains too,
+because the equaliser core below stops measuring its 65536-point plans. Without
+it every HL2 install upgrading to minimum phase pays the difference once on its
+next connect, and a first-ever connect on a slow host approaches the HL2
+connect's 600 s DSP-setup limit.
+
+It applies to every caller, so it also covers the equaliser core (`eqp`, built
+minimum-phase by upstream on every RX and TX channel, `pfactor` 4). The designed
+taps are the same transform computed by a different FFT algorithm: they differ
+at rounding level only. `hl2_rxdsp_unmute_return_test` and
+`hl2_noise_blanker_test` read the same latencies and peaks with it as without.
+
+When updating WDSP, keep this unless upstream stops planning these transforms
+with a measuring flag.
+

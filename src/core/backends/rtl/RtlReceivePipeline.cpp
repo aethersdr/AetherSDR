@@ -88,8 +88,8 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
             spec.handle = *m_handles[id]; spec.passband = receiver.passband;
             spec.capture = state.capture; spec.extractRf = true;
             spec.dsp.mode = dspMode(receiver.mode);
-            spec.dsp.fmReceive = WdspChannel::FmReceive{
-                receiver.mode == Transaction::Mode::Fmn ? 2500.0 : 5000.0};
+            spec.dsp.fmReceive = WdspChannel::FmReceive{};
+            spec.dsp.fmDeviationHz = receiver.mode == Transaction::Mode::Fmn ? 2500.0 : 5000.0;
             spec.dsp.filterLowHz = receiver.passband.filterLowHz;
             spec.dsp.filterHighHz = receiver.passband.filterHighHz;
             if (resetCapture || (faults & (1u << id)) || m_specs[id].handle != spec.handle

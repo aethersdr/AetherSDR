@@ -30,6 +30,14 @@ Hl2Spectrum::Hl2Spectrum(int fftSize) : m_fftSize(fftSize < 2 ? 2 : fftSize)
     // window the input is zeroed anyway, so the bins come out 0 rather than inf.
     if (m_coherentGain < 1e-9)
         m_coherentGain = 1.0;
+    // Squared once here because computeFrame() works in power: dividing
+    // (re^2 + im^2) by this is the same normalisation as dividing the
+    // magnitude by m_coherentGain, without the square root in between.
+    m_coherentGainSq = m_coherentGain * m_coherentGain;
+    // Sized now, never resized later: process() is documented allocation-free
+    // and setAverageFrames() must not allocate either, since the alternative
+    // is a first-frame malloc on whichever thread happens to change the depth.
+    m_avgPower.assign(static_cast<std::size_t>(m_fftSize), 0.0);
 
     {
         // FFTW's planner is process-global and NOT thread-safe. Hl2Backend's
@@ -94,6 +102,34 @@ int Hl2Spectrum::process(std::span<const std::complex<float>> iq, std::vector<fl
     return frames;
 }
 
+void Hl2Spectrum::setAverageFrames(int frames) noexcept
+{
+    if (frames < 1) {
+        frames = 1;
+    }
+    // A no-op depth change must not drop the state: a settings replay that
+    // re-applies the depth this object is already at would otherwise clear the
+    // accumulator, and a UI that replays on every control touch would average
+    // nothing while the operator worked the spectrum.
+    //
+    // NOT the pan-rebuild path, which an earlier version of this comment
+    // named. A zoom REBUILDS the chain — Hl2RxDsp::buildChannel() constructs a
+    // fresh Hl2Spectrum — so a re-applied depth always lands on an object at
+    // the default 1 and this guard cannot fire there. It would become a no-op
+    // path only if Hl2RxDsp carried the depth as its own member and re-applied
+    // it from installRebuiltChannel(), which it does not: the depth does not
+    // survive a zoom today at all.
+    if (frames == m_averageFrames) {
+        return;
+    }
+    m_averageFrames = frames;
+    // An exponential state built at one alpha is not a state at the next one.
+    // Assign rather than resize — the vector was sized at construction, so
+    // this touches no allocator.
+    m_avgPower.assign(static_cast<std::size_t>(m_fftSize), 0.0);
+    m_haveAverage = false;
+}
+
 void Hl2Spectrum::accumulate(std::span<const std::complex<float>> iq)
 {
     m_acc.insert(m_acc.end(), iq.begin(), iq.end());
@@ -127,14 +163,53 @@ void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
     const auto* out = static_cast<fftw_complex*>(m_out);
     binsDbfs.resize(static_cast<std::size_t>(m_fftSize));
     const int half = m_fftSize / 2;
+    const bool blending = m_averageFrames > 1;
+    // alpha = 1/N. Only read when blending, so the division is never by the
+    // 1 that means "no averaging".
+    const double alpha = blending ? 1.0 / static_cast<double>(m_averageFrames) : 1.0;
     for (int k = 0; k < m_fftSize; ++k) {
         const int src = (k + half) % m_fftSize;                       // fftshift: DC -> centre
         const double re = out[src][0];
         const double im = out[src][1];
-        const double mag = std::sqrt(re * re + im * im) / m_coherentGain;
+        // POWER, not magnitude. The square root this replaces was only ever
+        // undone by the logarithm below — 20*log10(mag) IS 10*log10(mag^2) —
+        // so for a single frame this is the same number by the same route.
+        // What it buys is that anything accumulated across frames is
+        // accumulated in the domain where an average means what the operator
+        // reads it to mean; see setAverageFrames() in the header for what an
+        // average of logarithms actually computes.
+        double power = (re * re + im * im) / m_coherentGainSq;
+        if (blending) {
+            double& state = m_avgPower[static_cast<std::size_t>(k)];
+            // Take the first frame whole rather than blending it into a zero
+            // state, which would open every average with a ramp from the
+            // floor. After that it is an ordinary exponential blend.
+            state = m_haveAverage ? state + alpha * (power - state) : power;
+            power = state;
+        }
         // IQ is normalized to full scale 1.0, so this is dBFS directly.
+        //
+        // 1e-24 and not 1e-12: this floor is the SQUARE of the magnitude floor
+        // it replaces, so an empty bin still reads -240 dBFS rather than -120.
+        // It exists for the same reason the old one did — log10(0) is -inf and
+        // nothing downstream renders it — and is reached only by a bin that is
+        // exactly zero, which is an all-zero input and not a quiet band.
+        //
+        // NOT AN EXACT TRANSLATION, and the -240 above is the only part that is.
+        // The old `20·log10(mag + 1e-12)` expands to
+        // `10·log10(mag² + 2e-12·mag + 1e-24)`; this drops the cross term. The
+        // two therefore disagree by up to 3 dB — but only for bins below about
+        // -234 dBFS, which is 140 dB beneath anything a converter produces and
+        // is not rendered by anything downstream. Recorded because the sentence
+        // above would otherwise read as an identity, and it is not one.
         binsDbfs[static_cast<std::size_t>(k)] =
-            static_cast<float>(20.0 * std::log10(mag + 1e-12));
+            static_cast<float>(10.0 * std::log10(power + 1e-24));
+    }
+    // Set after the loop and only while blending, so a pass with averaging off
+    // cannot leave a stale "we have a state" behind for the next one to blend
+    // into. setAverageFrames() clears it on every depth change.
+    if (blending) {
+        m_haveAverage = true;
     }
 }
 

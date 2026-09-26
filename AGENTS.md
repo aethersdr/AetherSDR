@@ -449,7 +449,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
   the authoritative model + decision record (it exists because these formulas
   have churned when edited without a shared spec).
 
-**Threading:** up to 12 threads — see `docs/architecture/pipelines.md` for the
+**Threading:** up to 13 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
 
 **Design principle:** RadioModel owns all sub-models on the main thread.
@@ -482,7 +482,16 @@ pins rule 2 for HL2 while its DSP build runs on the I/O thread;
 a deterministic stale-delivery injection. Live-emission affinity for flex,
 anan, icom and rtl is a survey result until
 `tests/SeamThreadAffinityProbe.h` — which drops the same tripwire into any
-test that drives a backend — is carried by a test that drives one:
+test that drives a backend — is carried by a test that drives one.
+
+**The probe table is GENERATED. Do not hand-edit it.** Adding a signal to
+`IRadioBackend.h` means running `python tools/gen_seam_probe_table.py` and
+committing `tests/SeamSignalProbeTable.inc`; `Static checks` runs the same
+tool's `--check` on every PR and fails naming the signal you missed. It was
+hand-maintained until #5868: #5825 added a signal without its probe line, was
+green on every PR check, and broke `main` on the merge.
+
+The families that seam carries today, and where each backend lives:
 
 | Family | Backend | Notes |
 |---|---|---|

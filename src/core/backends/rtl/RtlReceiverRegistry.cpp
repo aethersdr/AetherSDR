@@ -40,8 +40,8 @@ bool validCapture(const Registry::Capture& capture)
 bool boundedDsp(const WdspChannel::Config& config)
 {
     if (config.fmReceive && (config.mode != WdspChannel::Mode::Fm
-        || !std::isfinite(config.fmReceive->deviationHz) || config.fmReceive->deviationHz <= 0
-        || config.fmReceive->deviationHz >= config.dspSampleRate / 2.0)) { return false; }
+        || !std::isfinite(config.fmDeviationHz) || config.fmDeviationHz <= 0
+        || config.fmDeviationHz >= config.dspSampleRate / 2.0)) { return false; }
     const auto blockSize = [](std::size_t value) {
         return value >= 64 && value <= 16384 && (value & (value - 1)) == 0;
     };
@@ -75,6 +75,11 @@ bool boundedDsp(const WdspChannel::Config& config)
         config.filterHighHz <= config.dspSampleRate / 2.0 &&
         config.filterTaps >= 64 && config.filterTaps <= 16384 &&
         (config.filterTaps & (config.filterTaps - 1)) == 0 &&
+        // WDSP derives again = rate / (fmDeviationHz * TWOPI) from this, so an
+        // unbounded registry client could hand the FM detector an infinite
+        // audio gain. Same pair of numbers as validateConfig() and the setter.
+        config.fmDeviationHz >= WdspChannel::Config::kMinFmDeviationHz &&
+        config.fmDeviationHz <= WdspChannel::Config::kMaxFmDeviationHz &&
         config.agcMode >= 0 && config.agcMode <= 4 &&
         std::isfinite(config.maximumAgcGainDb) && config.maximumAgcGainDb >= -100 &&
         config.maximumAgcGainDb <= 150 && config.agcSlopeDb >= 0 && config.agcSlopeDb <= 100 &&

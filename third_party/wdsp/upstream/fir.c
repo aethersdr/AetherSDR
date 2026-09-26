@@ -533,10 +533,14 @@ MINPHASE create_minphase (int N, int pfactor)
     a->newfreq = (double *) malloc0 (a->size * sizeof (complex));
     a->impulse = (double *) malloc0 (a->size * sizeof (complex));
 
-    a->p_fir    = fftw_plan_dft_1d (a->size, (fftw_complex *) a->firpad,  (fftw_complex *) a->firfreq, FFTW_FORWARD,  FFTW_PATIENT);
-    a->p_anafor = fftw_plan_dft_1d (a->size, (fftw_complex *) a->ana,     (fftw_complex *) a->anax,    FFTW_FORWARD,  FFTW_PATIENT);
-    a->p_anainv = fftw_plan_dft_1d (a->size, (fftw_complex *) a->anax,    (fftw_complex *) a->ana,     FFTW_BACKWARD, FFTW_PATIENT);
-    a->p_imp    = fftw_plan_dft_1d (a->size, (fftw_complex *) a->newfreq, (fftw_complex *) a->impulse, FFTW_BACKWARD, FFTW_PATIENT);
+    // AetherSDR patch 12: FFTW_ESTIMATE, not FFTW_PATIENT. These plans run
+    // only when a filter is (re)designed, never per sample, so a measured plan
+    // buys nothing -- and measuring one cold at nc * pfactor = 131072 points
+    // takes over a minute. See AETHERSDR-PATCHES.md.
+    a->p_fir    = fftw_plan_dft_1d (a->size, (fftw_complex *) a->firpad,  (fftw_complex *) a->firfreq, FFTW_FORWARD,  FFTW_ESTIMATE);
+    a->p_anafor = fftw_plan_dft_1d (a->size, (fftw_complex *) a->ana,     (fftw_complex *) a->anax,    FFTW_FORWARD,  FFTW_ESTIMATE);
+    a->p_anainv = fftw_plan_dft_1d (a->size, (fftw_complex *) a->anax,    (fftw_complex *) a->ana,     FFTW_BACKWARD, FFTW_ESTIMATE);
+    a->p_imp    = fftw_plan_dft_1d (a->size, (fftw_complex *) a->newfreq, (fftw_complex *) a->impulse, FFTW_BACKWARD, FFTW_ESTIMATE);
 
     memset (a->firpad, 0, a->size * sizeof (complex));
     return a;

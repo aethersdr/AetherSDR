@@ -15,7 +15,7 @@ void check(bool result, const char* message)
     if (!result) { std::fprintf(stderr, "FAIL: %s\n", message); ++failures; }
 }
 
-void measure(double deviation, double tone, double amplitude)
+double measure(double deviation, double tone, double amplitude)
 {
     constexpr int kRate = 48000;
     constexpr int kBlock = 1024;
@@ -23,13 +23,14 @@ void measure(double deviation, double tone, double amplitude)
     constexpr int kCount = 48000;
     WdspChannel::Config config;
     config.mode = WdspChannel::Mode::Fm;
-    config.fmReceive = WdspChannel::FmReceive{deviation};
+    config.fmReceive = WdspChannel::FmReceive{};
+    config.fmDeviationHz = deviation;
     config.filterHighHz = deviation == 5000 ? 12000 : 8000;
     config.filterLowHz = -config.filterHighHz;
     config.blockForOutput = true;
     auto channel = WdspChannel::create(config);
     check(channel != nullptr, "FM recipe constructs");
-    if (!channel) { return; }
+    if (!channel) { return 0; }
     std::array<float, kBlock> inI{}, inQ{}, left{}, right{};
     double peak = 0, allPeak = 0, sum = 0, energy = 0, re = 0, im = 0;
     int measured = 0;
@@ -63,13 +64,18 @@ void measure(double deviation, double tone, double amplitude)
     check(allPeak < 1.0, "startup does not hard-clip a full-deviation tone");
     check(residual / std::max(rms, 1e-12) < 0.005, "settled FM residual below 0.5 percent");
     check(!channel->setMode(WdspChannel::Mode::Usb), "FM normalization cannot leak into another mode");
+    check(!channel->setFmDeviation(kRate / 2.0), "FM recipe runtime setter preserves Nyquist bound");
+    check(channel->setFmDeviation(deviation), "FM recipe accepts its canonical runtime deviation");
+    check(channel->config().fmDeviationHz == deviation, "runtime deviation has a single config owner");
+    return fundamental;
 }
 
 void noiseTransitions()
 {
     WdspChannel::Config config;
     config.mode = WdspChannel::Mode::Fm;
-    config.fmReceive = WdspChannel::FmReceive{2500};
+    config.fmReceive = WdspChannel::FmReceive{};
+    config.fmDeviationHz = 2500;
     config.filterLowHz = -8000; config.filterHighHz = 8000;
     config.blockForOutput = true;
     auto channel = WdspChannel::create(config);
@@ -101,17 +107,21 @@ void noiseTransitions()
 int main()
 {
     WdspChannel::Config config;
-    config.fmReceive = WdspChannel::FmReceive{2500};
+    config.fmReceive = WdspChannel::FmReceive{};
+    config.fmDeviationHz = 2500;
     check(!WdspChannel::create(config), "FM recipe rejects non-FM channel");
     config.mode = WdspChannel::Mode::Fm;
     for (double invalid : {0.0, -1.0, 24000.0, std::numeric_limits<double>::infinity(),
                            std::numeric_limits<double>::quiet_NaN()}) {
-        config.fmReceive->deviationHz = invalid;
+        config.fmDeviationHz = invalid;
         check(!WdspChannel::create(config), "FM recipe rejects invalid deviation");
     }
-    for (double deviation : {2500.0, 5000.0}) {
-        for (double tone : {300.0, 1000.0, 2500.0}) {
-            for (double amplitude : {0.03, 0.3}) { measure(deviation, tone, amplitude); }
+    for (double tone : {300.0, 1000.0, 2500.0}) {
+        for (double amplitude : {0.03, 0.3}) {
+            const double narrow = measure(2500.0, tone, amplitude);
+            const double wide = measure(5000.0, tone, amplitude);
+            check(narrow > 0.85 * wide && narrow < 1.15 * wide,
+                "FMN and FM full-deviation tones retain the same normalization");
         }
     }
     noiseTransitions();

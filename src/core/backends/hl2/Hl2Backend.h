@@ -25,6 +25,7 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <atomic>
+#include <cstdint>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -111,7 +112,10 @@ public:
     bool isConnected() const override;
 
     void setSliceFrequency(int sliceId, double hz) override;
-    void setSliceMode(int sliceId, const QString& mode) override;
+    // `requested` because the definition canonicalises it: an alias spelling
+    // (CWU/NFM/WFM) is collapsed onto the one publishedModeStrings() carries
+    // before a slice ever holds it. See the definition for why.
+    void setSliceMode(int sliceId, const QString& requested) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setCwPitch(int hz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
@@ -360,6 +364,11 @@ private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
+    friend struct Hl2UnkeyHoldTestAccess;
+    // Delivers one bandscope block through MetisClient's own signal and lets
+    // the mirror age, so the converter rows' expiry can be exercised without a
+    // radio, a socket or an EP4 stream. Reaches nothing else.
+    friend struct Hl2HealthBlockTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
@@ -394,10 +403,21 @@ private:
     // the exact failure the connect-time reset exists to prevent, arrived at
     // from the other side (PR #5650 review).
     void resetBandscopeMirrors();
+    // Age of the mirrored bandscope block, negative when none has ever arrived
+    // — the encoding bandscopeBlockIsCurrent() and bandscopeHeadroom() both
+    // read as "never observed". The single definition its three readers share.
+    [[nodiscard]] std::int64_t bandscopeBlockAgeMs() const;
     // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
-    // the band containing freqHz (falling back to the restored defaults),
-    // and record the operator's current values into the maps for the band
-    // being left. Called from the band-change path and connect.
+    // the band containing freqHz, and record the operator's current values
+    // into the maps for the band being left. Called from the band-change path
+    // and connect.
+    //
+    // THE TWO HALVES FALL BACK DIFFERENTLY SINCE #5829, and this comment used
+    // to say "the restored defaults" for both. Drive still falls back to
+    // m_driveDefaultPercent, a genuine per-profile first-use latch restored
+    // from the document. LNA falls back to hl2::kLnaDefaultGainDb -- the
+    // shipped constant, nothing restored -- because the document key that once
+    // answered this was a value no operator action could move.
     void applyPerBandStateFor(double freqHz, const char* reason);
     void applyLnaGainDb(int gainDb);   // the one true LNA BASELINE application
     // Push m_lnaGainDb - m_lnaAutoOffsetDb to the register, the dB reference and
@@ -871,6 +891,23 @@ private:
     // more than one slice open this is where they become one.
     void mixReceiverAudio(int ddc, const std::vector<float>& pcm);
 
+    // THE RECEIVE-AUDIO HOLD, as two calls rather than as open-coded loops.
+    //
+    // applyRxAudioMute() is the ONLY writer of m_rxAudioMuted. It is NOT the
+    // only site that queues setAudioMuted -- pushInitialState()'s link-up loop
+    // re-asserts it per receiver as each one is opened, and that is deliberate:
+    // a receiver created after the mute was applied has to be told. It agrees
+    // with this flag because applyRxAudioMute() runs later in the same function.
+    // Saying "the only site" here would be an invariant a future reader relies
+    // on and the tree does not keep. Everything that wants the
+    // demodulator silenced goes through it, so the mixer's gate and the
+    // demodulator's mute can no longer drift apart -- which they did, and the
+    // skew was 70 ms wide by construction on the unkey edge.
+    void applyRxAudioMute(bool muted);
+    // Release the hold, but not before the radio has had time to drop out of
+    // transmit. Immediate when the hold is zero. Cancelled by any re-key.
+    void releaseRxAudioMuteAfterHold();
+
     // Per-slice meter name for the seam ("SLC:LEVEL" for the first receiver, so
     // an existing single-receiver consumer keeps the name it already binds to).
     static QString sliceMeterName(int uiNumber);
@@ -1132,6 +1169,12 @@ private:
     quint64 m_ep4Rewinds = 0;
     quint64 m_ep4Blocks = 0;
     quint64 m_ep4Timeouts = 0;
+    // The EP6 silence watchdog's recovery counters, mirrored the same way and
+    // for the same reason. These are NOT a bandscope number and are not reset
+    // by resetBandscopeMirrors(): they belong to the link, and MetisClient
+    // zeroes them with the rest of m_link at start().
+    quint64 m_silenceRecoveryAttempts = 0;
+    quint64 m_silenceRecoveriesCompleted = 0;
     // The bandscope GATE's state as MetisClient reports it on LinkCounters —
     // never this backend's own request. Mirrored so healthSnapshot() need not
     // reach across the I/O thread to read it.
@@ -1229,6 +1272,58 @@ private:
     TxCoordinator::Operation m_lastTxOperation;
     TxCoordinator::Completion m_cwHangCompletion;
     bool m_txMonitor = false;
+    // ONE flag for the receive-audio hold, read by mixReceiverAudio() and
+    // mirrored to every Hl2RxDsp by applyRxAudioMute(). It is NOT a mirror of
+    // (m_keyed && !m_txMonitor) any more: on the key-UP edge it stays true for
+    // m_unkeyUnmuteHoldMs after the MOX-off is queued. See #5497.
+    bool m_rxAudioMuted = false;
+    // HOW LONG THE MUTE OUTLIVES THE UNKEY, in milliseconds.
+    //
+    // A member rather than a literal so a TEST can set it to ZERO — that is the
+    // only arrangement in which "still muted after one event-loop turn" can
+    // ONLY mean the hold, and not a dropped invokeMethod, a renamed slot or an
+    // unattached DSP. There is no setting behind it and none is proposed: a
+    // second station that needs a different value needs a new measurement and a
+    // rebuild, which is the honest cost of a one-station constant.
+    //
+    // MEASURED, not chosen. #5497 measures W — the interval from the
+    // demodulator's unmute to the last sample of our own transmitter reaching
+    // it — on ON8ST's HL2 into a dummy load: n = 11, median 59.40 ms, range
+    // 51.66-66.15 ms, spread/median 0.224. That last figure is the one that
+    // says a fixed timer is the right SHAPE at all: a spread comparable to W
+    // itself would have meant no single constant could cover the population.
+    // Coverage of those eleven windows: 55 ms covers 2, 60 ms covers 7, 65 ms
+    // covers 9, 70 ms covers 11 with 3.85 ms to spare.
+    //
+    // THE HONEST LIMIT TRAVELS WITH THE NUMBER: one radio, one gateware
+    // (74.2), one network, one operator, one day. It is not known whether an
+    // uncovered window yields a partial artefact or a full one, so a smaller
+    // value is choosing a coverage fraction against an untested failure mode.
+    //
+    // AND THE COST IS REAL AND IS CHARGED TO #5498: every millisecond of hold
+    // is a millisecond of receive the operator does not get back. #5498 is the
+    // post-unkey dropout, and this change makes it worse — measured at 113.74
+    // ms median on stock and 250.65 ms with this hold in place. That is the
+    // reason not to be generous "just in case".
+    // AND IT IS SKIPPED IN CW FULL BREAK-IN ONLY WHEN THE HANG IS SHORTER THAN
+    // IT. Ruled by the maintainer (KK7GWY, 2026-09-24, on #5850), narrowing what
+    // this PR first proposed: the hold is skipped only where it would swallow
+    // the space between elements and take QSK away. At the default cwDelay of
+    // 500 ms the hang is longer than this constant, so it fires once at the end
+    // of the over and that key-up gets the ordinary hold — break-in operators
+    // get the +57 dB burst removed like everyone else. applyKeying()'s
+    // cwBreakIn arm carries the predicate and the reasoning. So this constant
+    // governs SSB, tune, digital, semi-break-in CW, and full break-in at any
+    // delay at or above itself. The crossover where a 70 ms hold would have
+    // swallowed the whole inter-element space is arithmetic from this number,
+    // not a measurement — there is no CW measurement behind #5497 at all. That
+    // arm shows the division.
+    static constexpr int kUnkeyUnmuteHoldMs = 70;
+    int m_unkeyUnmuteHoldMs = kUnkeyUnmuteHoldMs;
+    // Single-shot, owned by this object, therefore on this object's thread —
+    // which is what makes the hold cancellable from applyKeying() without a
+    // lock. Null only before the constructor reaches it.
+    QTimer* m_unkeyUnmuteTimer = nullptr;
     // Both flags above are set SYNCHRONOUSLY while the setAudioMuted they imply
     // rides a queued connection to the DSP thread, so at key-up they say
     // "sampling" a block before it is true. This gate holds the moment sampling
@@ -1256,7 +1351,11 @@ private:
     RestoredRadioState m_restoredState;
     QMap<QString, int> m_lnaDbByBand;
     QMap<QString, int> m_driveByBand;
-    int m_lnaDefaultDb = hl2::kLnaDefaultGainDb;
+    // There is no m_lnaDefaultDb. The LNA fallback for an unvisited band is
+    // hl2::kLnaDefaultGainDb directly (#5829) -- a member here would be a
+    // second source of truth for a value no operator action can move, which is
+    // the defect that key had. Note the asymmetry with m_driveDefaultPercent
+    // below: that one has a real first-use latch and is genuinely per-profile.
     // The connect param pinned a gain that the start band did not have stored.
     // Live value honoured, persistence refused: see Hl2BandMemoryPolicy.h.
     // Cleared when the operator changes gain or leaves the start band.
