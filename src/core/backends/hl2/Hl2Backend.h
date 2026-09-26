@@ -509,6 +509,17 @@ private:
     // why a reconnect must not.
     void seedReceiverAgc();
     void defineMeters();
+
+    // Declare and withdraw the S-meter of ONE receiver above the first.
+    //
+    // Receiver 0's meter is defineMeters()' def(1) and stays there: it has to
+    // be declared before the TX block, because MeterModel::defineMeter uses the
+    // preceding "SLC" definition as the slice context its TX waveform meters
+    // register under. These arrive as standalone definitions afterwards, at
+    // receiver creation rather than at connect, so no meter is ever declared
+    // for a receiver that does not exist.
+    void defineSliceLevelMeter(int uiNumber);
+    void withdrawSliceLevelMeter(int uiNumber);
     void publishTelemetry(const Hl2Telemetry& t);
 
     // ---- stream-free telemetry ----
@@ -910,7 +921,16 @@ private:
 
     // Per-slice meter name for the seam ("SLC:LEVEL" for the first receiver, so
     // an existing single-receiver consumer keeps the name it already binds to).
+    // The suffix on the rest is not decoration: MeterModel::splitMeterId reads
+    // it back as the sourceIndex, which is the only way an index reaches the
+    // model across IRadioBackend::meterUpdate's two-argument signature.
     static QString sliceMeterName(int uiNumber);
+
+    // Meter index for a receiver's "SLC"/"LEVEL". Receiver 0 keeps index 1,
+    // which is what defineMeters() has always declared and what every existing
+    // binding resolves to. The rest take a band that cannot collide with the
+    // fixed 1..9, so a receiver's meter identity is stable for its life.
+    static int sliceLevelMeterIndex(int uiNumber);
 
     // Mixing scratch. m_mixPending is per receiver and holds demodulated samples
     // waiting for their peers; m_mixAccum is the summing buffer, reused because
@@ -1426,6 +1446,11 @@ private:
     // reasons for each are written there. Hl2RxDsp reads the tap at one
     // DSP-rate block's cadence whatever the sample rate, so the smoother sees
     // ~47 readings a second at 48 and at 384 ksps alike.
+    // Meter indices 1..9 are the fixed catalogue defineMeters() declares, and
+    // they are ours to choose (nothing on an HL2 assigns them). Receivers above
+    // the first take one each from here, clear of that block and of any room it
+    // might grow into.
+    static constexpr int kSliceLevelMeterBase = 100;
     // The S-meter's clock and EMA are PER RECEIVER (Receiver::sMeter). Sharing
     // them would let a strong signal on one receiver drive every other
     // receiver's needle, and the 100 ms rate gate would publish whichever
