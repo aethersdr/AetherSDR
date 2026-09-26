@@ -70,18 +70,18 @@ jobs:
       - name: Install Qt6
         uses: jurplel/install-qt-action@bcb88e3bed2e992f5f9e24c0f9e364a231d278eb
         with:
-          # Exact, not '6.8.*'. The wildcard resolved to 6.8.3 only because Qt
-          # stopped publishing open-source 6.8.x binaries after it — 6.8.4 is
-          # source-only and 6.8.5+ are absent from the open-source repo. That is
-          # a licensing accident holding the release build to the tested Qt, not
-          # a pin. ci.yml's check-windows leg already spells 6.8.3 exactly; with
-          # both exact, the per-PR build and the release build agree by
-          # construction rather than by coincidence.
-          version: '6.8.3'
+          # Exact, not a wildcard. ci.yml's check-windows leg spells 6.12.0
+          # exactly; with both exact, the per-PR build and the release build
+          # agree by construction rather than by coincidence (#5487).
+          version: '6.12.0'
           host: 'windows'
           target: 'desktop'
           # Qt 6.8 LTS dropped MSVC 2019 builds — arch must be msvc2022.
           arch: 'win64_msvc2022_64'
+          # PyPI aqtinstall 3.3.0 cannot read Windows 6.11+ per-arch folders
+          # (aqtinstall#959 / #1000). Pin the unreleased fix until >3.3.0
+          # ships. Same commit as ci.yml's AQTINSTALL_GIT_REF.
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@076e1659807d0b362a3ed684d54c2e9c775eb9c7'
           # Base Qt PDBs live in debug_info; each add-on keeps its PDBs in a
           # separate .debug_information module. Restrict the base archives to
           # the QtBase/QtSvg binaries AetherSDR actually deploys so release CI

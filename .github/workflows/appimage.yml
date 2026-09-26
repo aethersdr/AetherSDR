@@ -19,7 +19,7 @@ jobs:
             qt_host: linux
             qt_arch: linux_gcc_64
             require_gpu: 'ON'   # x86_64 ships the whisper Vulkan GPU backend
-            gpu_spectrum: 'ON'  # unchanged: Qt 6.8.3 already enabled it here
+            gpu_spectrum: 'ON'  # Qt 6.8+ already enabled it here; 6.12 keeps it
             glslc_source: lunarg
           # Stays on noble, and must. Qt builds its linux_arm64 desktop binaries
           # on Ubuntu 24.04 (the packages are literally named
@@ -44,12 +44,16 @@ jobs:
             # QRhi spectrum rendering, ON deliberately. It was impossible on
             # aarch64 until now purely because Ubuntu's Qt 6.4.2 sits below the
             # 6.7 QRhiWidget floor — the CPU QPainter fallback was a symptom of
-            # the stale Qt, not a choice about ARM. Qt 6.8.3 clears that floor,
+            # the stale Qt, not a choice about ARM. Qt 6.8+ clears that floor,
             # so the Pi gets the same renderer as every other platform.
             gpu_spectrum: 'ON'
             glslc_source: apt
 
     runs-on: ${{ matrix.runner }}
+
+    env:
+      QT_VERSION: '6.12.0'
+      AQTINSTALL_VERSION: '3.3.0'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -158,30 +162,28 @@ jobs:
       # other artifact shipped 6.8.3, and README's "Release binaries ship Qt
       # 6.8.3 LTS" was simply untrue for the Pi build.
       #
-      # 6.8.7 is not reachable here: Qt's 6.8 LTS goes commercial-only after
-      # 6.8.3, so 6.8.4 is source-only and 6.8.5+ are not published to the open
-      # -source repo at all. 6.8.3 is the newest 6.8 LTS with prebuilt binaries
-      # under the open-source licence, which is what every other artifact pins.
+      # Binary pin is 6.12.0 (#5487). x86_64 stays on jammy: the 6.12.0 RC
+      # linux_gcc_64 tree referenced at most GLIBC_2.34 (readelf on libQt6Core /
+      # libQt6Gui / libQt6Multimedia from the 17-Sep SDK; #5487 comment). Repeat
+      # that measurement on the final SDK before moving the runner to noble.
       #
       # The aarch64 AppImage's glibc floor has two contributors. Qt sets the hard
-      # lower bound: the arm64 6.8.3 tree needs GLIBC_2.38 (readelf -V on the
+      # lower bound: the arm64 6.8.3 tree needed GLIBC_2.38 (readelf -V on the
       # shipped libQt6Gui.so.6), so no runner choice can take it below that. The
       # app's own objects then link against the builder's glibc on top, so the
       # artifact assembled on noble floors at 2.39. Target check against that: Pi
       # OS Trixie is glibc 2.41 (Debian 13, Mesa 25.0.7) and runs it; Pi OS
       # Bookworm is 2.36 and cannot. Bookworm is not a regression here — today's
-      # aarch64 AppImage already builds on noble and already floors at 2.39 — but
-      # it does mean Trixie is the supported Pi baseline, and that should stay
-      # true when this Qt pin moves.
-      - name: Install Qt 6.8.3 LTS via aqtinstall
+      # aarch64 AppImage already builds on noble and already floors at 2.39.
+      - name: Install Qt 6.12.0 LTS via aqtinstall
         run: |
-          pip3 install aqtinstall
+          pip3 install "aqtinstall==${AQTINSTALL_VERSION}"
           # No qtwayland entry, deliberately: it rides in the BASE package.
-          # qt.qt6.683.<arch>'s DownloadableArchives lists qtwayland-Linux-...7z
+          # qt.qt6.<ver>.<arch>'s DownloadableArchives lists qtwayland-Linux-...7z
           # next to qtbase, so this install already lays down
           # plugins/platforms/libqwayland-generic.so, libqwayland-egl.so and the
           # three wayland-* integration dirs. There is no "qtwayland" module in
-          # the 6.8.3 repository at all — only qtwaylandcompositor — and aqt
+          # the desktop repository — only qtwaylandcompositor — and aqt
           # hard-errors on an unknown module ("The packages ['qtwayland'] were
           # not found"), so naming one here fails the whole release build.
           #
@@ -191,23 +193,23 @@ jobs:
           # linuxdeploy-plugin-qt copies platforms/libqxcb.so and nothing else
           # unless EXTRA_PLATFORM_PLUGINS says otherwise. That is fixed in the
           # AppImage steps below.
-          aqt install-qt ${{ matrix.qt_host }} desktop 6.8.3 ${{ matrix.qt_arch }} \
+          aqt install-qt ${{ matrix.qt_host }} desktop "$QT_VERSION" ${{ matrix.qt_arch }} \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir ${{ github.workspace }}/Qt
           # aqt lays the install down under <version>/<arch minus the host
           # prefix>: linux_gcc_64 -> gcc_64, linux_gcc_arm64 -> gcc_arm64.
           # Derive it instead of hardcoding — FOUR separate steps used to spell
-          # out ".../Qt/6.8.3/gcc_64" by hand, so flipping aarch64 onto aqt
+          # out ".../Qt/<ver>/gcc_64" by hand, so flipping aarch64 onto aqt
           # without catching all four would have pointed the ARM build at an
           # x86_64 Qt. QT_ROOT is exported once and reused everywhere below.
           QT_DIR="${{ matrix.qt_arch }}"
-          QT_ROOT="${{ github.workspace }}/Qt/6.8.3/${QT_DIR#linux_}"
+          QT_ROOT="${{ github.workspace }}/Qt/${QT_VERSION}/${QT_DIR#linux_}"
           # Assert the layout rather than trusting it: a silently-wrong QT_ROOT
           # would sail through configure (system Qt would satisfy it) and only
           # show up as a subtly mis-deployed AppImage.
           if [ ! -x "$QT_ROOT/bin/qmake" ]; then
             echo "ERROR: no qmake at $QT_ROOT — aqt layout changed"
-            ls -la "${{ github.workspace }}/Qt/6.8.3/" || true
+            ls -la "${{ github.workspace }}/Qt/${QT_VERSION}/" || true
             exit 1
           fi
           {

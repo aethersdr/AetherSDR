@@ -18,18 +18,18 @@ need only on a specific platform, or when something goes wrong.
 ## macOS: Qt and qtkeychain
 
 Qt and qtkeychain do **not** come from Homebrew. Homebrew's `qt`
-formula (aliased `qt6` and `qt@6`) is a *rolling* release — 6.11.1 at the time
-of writing — while the DMG ships 6.8.3 LTS like every other artifact. Building
+formula (aliased `qt6` and `qt@6`) is a *rolling* release — 6.11.2 at the time
+of writing — while the DMG ships 6.12.0 LTS like every other artifact. Building
 against Homebrew's Qt means testing a Qt no release ships. Install the matching
 one and point CMake at it:
 
 ```bash
 # A venv rather than a bare `pip install`: a PEP 668 python3 refuses the latter.
 python3 -m venv ~/.venv/aqt && ~/.venv/aqt/bin/pip install aqtinstall
-~/.venv/aqt/bin/aqt install-qt mac desktop 6.8.3 clang_64 \
+~/.venv/aqt/bin/aqt install-qt mac desktop 6.12.0 clang_64 \
   -m qtmultimedia qtwebsockets qtserialport qtshadertools \
   --outputdir ~/Qt
-cmake -B build -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos;$(brew --prefix)"
+cmake -B build -DCMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/macos;$(brew --prefix)"
 ```
 
 `clang_64` is the only macOS desktop build Qt publishes, and it is universal2 —
@@ -42,7 +42,7 @@ against the Qt you just installed instead — or skip it and build without
 SmartLink credential persistence:
 
 ```bash
-CMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos" bash scripts/setup/setup-qtkeychain.sh
+CMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/macos" bash scripts/setup/setup-qtkeychain.sh
 ```
 
 **Two Qt installations visible to CMake at once is a real failure, not a
@@ -58,7 +58,7 @@ workflow asserts this; your machine will not.
 
 Prerequisites: Visual Studio 2022 (Build Tools, Community, or higher) with the
 MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.8+ (`msvc2022_64`; both CI and
-the release binaries use 6.8.3 LTS).
+the release binaries use 6.12.0 LTS).
 
 ```bat
 :: 1. Activate the MSVC environment. Adjust the edition (BuildTools / Community /
@@ -71,7 +71,7 @@ the release binaries use 6.8.3 LTS).
 ::    setup-qtkeychain.ps1 (step 4) reads QT_ROOT_DIR; on CI that variable is
 ::    exported by install-qt-action, so a local build has to set it explicitly
 ::    or the script exits with "Qt not found".
-set "QT_KIT=C:/Qt/6.8.3/msvc2022_64"
+set "QT_KIT=C:/Qt/6.12.0/msvc2022_64"
 set "QT_ROOT_DIR=%QT_KIT%"
 
 :: 3. Generate the single-precision FFTW import lib (needed by NR4/libspecbleach)
@@ -130,11 +130,11 @@ LTS at 6.4.2), install a newer Qt manually:
    The `kubuntu-backports` PPA may provide a newer Qt — verify the version it ships before relying on it.
 
 2. **Option 2: Using the Qt Online Installer**
-   Install Qt into your home directory (e.g., `~/Qt/6.8.3/gcc_64`). Because CMake otherwise defaults to the system-provided Qt, point it at the newer install with `-DCMAKE_PREFIX_PATH`:
+   Install Qt into your home directory (e.g., `~/Qt/6.12.0/gcc_64`). Because CMake otherwise defaults to the system-provided Qt, point it at the newer install with `-DCMAKE_PREFIX_PATH`:
 
    ```bash
    cmake -B build -G Ninja \
-       -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/gcc_64" \
+       -DCMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/gcc_64" \
        -DCMAKE_BUILD_TYPE=RelWithDebInfo
    ```
 

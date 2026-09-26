@@ -46,24 +46,29 @@ permissions:
 
 # Qt inputs shared by check-windows and check-macos. Declared once so the two
 # per-PR legs cannot drift apart: both aqt invocations and both cache keys
-# read these. 6.8.3 matches what community builders run and what
-# windows-installer.yml / macos-dmg.yml ship, so the per-PR build and the
-# release build agree by construction. aqt is pinned because it is the tool
-# that decides what Qt lands here — an unreviewed aqt upgrade is an
-# unreviewed change to the Qt CI builds against (same argument as
-# .github/docker/Dockerfile).
+# read these. 6.12.0 is the binary pin (#5487); find_package still floors at
+# 6.8 so Debian Trixie / Pi OS Trixie keep building. windows-installer.yml /
+# macos-dmg.yml / appimage.yml / the Linux CI image spell the same 6.12.0, so
+# the per-PR build and the release build agree by construction.
+#
+# aqt is pinned because it is the tool that decides what Qt lands here — an
+# unreviewed aqt upgrade is an unreviewed change to the Qt CI builds against
+# (same argument as .github/docker/Dockerfile). PyPI 3.3.0 is enough for
+# Linux/mac (nested qt6_6120/qt6_6120/). Windows 6.11+ moved Updates.xml into
+# per-arch folders (qt6_6120/qt6_6120_msvc2022_64/); that layout is taught by
+# aqtinstall#1000, merged but unreleased, so the Windows leg installs aqt
+# from AQTINSTALL_GIT_REF instead of the PyPI pin. Drop the git override
+# when aqtinstall > 3.3.0 ships on PyPI.
 env:
-  QT_VERSION: '6.8.3'
+  QT_VERSION: '6.12.0'
   AQTINSTALL_VERSION: '3.3.0'
-  # py7zr is aqt's 7z extractor and is pinned separately, to the same series
-  # jurplel/install-qt-action pins (py7zrversion default ==1.0.*). Left to
-  # pip, aqtinstall==3.3.0 resolves py7zr>=0.22.0 to the newest 1.1.x, whose
-  # symlink sanitising throws `Bad7zFile: Specified path is bad: lib/cmake/…`
-  # part-way through the Windows extraction, at random (aqtinstall #995 —
-  # the reporter measured ~50%). It passed on two PR runs of #5552 and then
-  # failed the first main run, which is exactly the shape of that bug.
+  AQTINSTALL_GIT_REF: '076e1659807d0b362a3ed684d54c2e9c775eb9c7'
+  # The pinned post-3.3.0 aqt revision declares py7zr>=1.1.3, so pin that
+  # compatible floor instead of letting pip float it. Windows does not use
+  # py7zr to extract Qt: aqtinstall #995 remains open for its random symlink-
+  # sanitising failures, so that leg passes the runner's 7-Zip via --external.
   # Not in the Qt cache key: the extractor does not change what is laid down.
-  PY7ZR_VERSION: '1.0.0'
+  PY7ZR_VERSION: '1.1.3'
   # Anti-vacuity floor for the restored-tree check in both per-PR legs: a
   # lib/cmake that declares fewer modules than this is itself short, and
   # "every framework/include dir it declared is present" stops meaning
@@ -321,6 +326,60 @@ jobs:
           key: ccache-linux-build-${{ github.run_id }}
 
 
+  # Source-floor compile (#5487 / #4688 item 5). The binary pin is 6.12.0;
+  # this job keeps 6.12-only APIs from landing without a 6.8 guard. It reuses
+  # the CI image for compiler deps. While that image still ships 6.8.3 the
+  # Linux `build` job IS the floor and this job no-ops; after the image
+  # rebuilds to 6.12 it aqt-installs 6.8.3 beside it and compiles again.
+  check-linux-qt68-floor:
+    runs-on: ubuntu-latest
+    container: ghcr.io/aethersdr/aethersdr-ci:latest
+    env:
+      QT_FLOOR_VERSION: '6.8.3'
+      AQTINSTALL_VERSION: '3.3.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Resolve Qt 6.8.3
+        id: floor
+        run: |
+          FLOOR_ROOT="/opt/Qt/${QT_FLOOR_VERSION}/gcc_64"
+          if [ -x "${FLOOR_ROOT}/bin/qmake" ] && \
+             [ "$("${FLOOR_ROOT}/bin/qmake" -query QT_VERSION)" = "${QT_FLOOR_VERSION}" ]; then
+            echo "CI image still provides Qt ${QT_FLOOR_VERSION}; the Linux build job is the floor."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 -m venv /tmp/aqt-venv
+          /tmp/aqt-venv/bin/pip install --no-cache-dir "aqtinstall==${AQTINSTALL_VERSION}"
+          /tmp/aqt-venv/bin/aqt install-qt linux desktop "${QT_FLOOR_VERSION}" linux_gcc_64 \
+            -m qtmultimedia qtwebsockets qtserialport qtshadertools \
+            --outputdir /opt/Qt
+          test -x "${FLOOR_ROOT}/bin/qmake"
+          "${FLOOR_ROOT}/bin/qmake" -query QT_VERSION
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "QT_FLOOR_ROOT=${FLOOR_ROOT}" >> "$GITHUB_ENV"
+
+      - name: Configure against Qt 6.8.3
+        if: steps.floor.outputs.skip != 'true'
+        run: |
+          cmake -B build-floor -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="$QT_FLOOR_ROOT" \
+            -DAETHER_GPU_SPECTRUM=ON > configure-floor.log 2>&1 || {
+            cat configure-floor.log
+            exit 1
+          }
+          grep -q "GPU spectrum rendering enabled" configure-floor.log || {
+            echo "ERROR: floor Qt disabled GPU spectrum. Relevant output:"
+            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure-floor.log || true
+            exit 1
+          }
+
+      - name: Build against Qt 6.8.3
+        if: steps.floor.outputs.skip != 'true'
+        run: cmake --build build-floor -j$(nproc)
+
+
   # Cross-platform build check — runs on every PR (no path gating).
   #
   # History: previously gated by a `check-paths` job on a hand-maintained
@@ -391,10 +450,8 @@ jobs:
       # Do not move the caps together on symmetry grounds.
       SCCACHE_CACHE_SIZE: 1G
       # QT_VERSION / AQTINSTALL_VERSION are workflow-level env (top of file).
-      # 6.8.3 exposes Qt 6.8.x MOC volume so we catch issues like #1910 (MSVC
-      # COFF section limit, fixed by /bigobj) before they reach users. QT_ARCH
-      # is spelled exactly as windows-installer.yml spells it: Qt 6.8 LTS
-      # dropped the MSVC 2019 builds.
+      # 6.12.0 is the binary pin (#5487). QT_ARCH is spelled exactly as
+      # windows-installer.yml spells it: Qt 6.8 LTS dropped the MSVC 2019 builds.
       QT_ARCH: 'win64_msvc2022_64'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -419,7 +476,7 @@ jobs:
         id: cache-qt-win
         with:
           path: ${{ runner.workspace }}\Qt
-          key: qt-${{ env.QT_VERSION }}-windows-${{ env.QT_ARCH }}-aqt${{ env.AQTINSTALL_VERSION }}-mm.ws.sp.st
+          key: qt-${{ env.QT_VERSION }}-windows-${{ env.QT_ARCH }}-aqt${{ env.AQTINSTALL_GIT_REF }}-mm.ws.sp.st
 
       # Same guard as the macOS job's, same reason and same derivation — see
       # the long note there. Windows has no framework layout to walk, so the
@@ -472,7 +529,7 @@ jobs:
             Write-Host "Qt tree complete: $($modules.Count) module(s) declared, every include directory present and populated"
             "complete=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } else {
-            $key = "qt-${env:QT_VERSION}-windows-${env:QT_ARCH}-aqt${env:AQTINSTALL_VERSION}-mm.ws.sp.st"
+            $key = "qt-${env:QT_VERSION}-windows-${env:QT_ARCH}-aqt${env:AQTINSTALL_GIT_REF}-mm.ws.sp.st"
             Write-Host "::warning title=Qt cache restore incomplete::Restored Qt tree is short; discarding it and reinstalling via aqt. If this repeats on the same key the stored entry is bad, and it can only be cleared by hand: gh cache delete $key --ref refs/heads/main"
             Remove-Item -Recurse -Force "$env:RUNNER_WORKSPACE\Qt" -ErrorAction SilentlyContinue
             # A partial delete would leave aqt extracting over the corrupt tree
@@ -496,10 +553,14 @@ jobs:
           # change to the Qt this job builds against.
           python -m venv "$env:RUNNER_TEMP\aqtvenv"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & "$env:RUNNER_TEMP\aqtvenv\Scripts\pip.exe" install -q "aqtinstall==$env:AQTINSTALL_VERSION" "py7zr==$env:PY7ZR_VERSION"
+          # PyPI 3.3.0 cannot locate Windows 6.11+ Updates.xml (aqtinstall#959).
+          # Install the unreleased #1000 fix from a pinned master commit.
+          & "$env:RUNNER_TEMP\aqtvenv\Scripts\pip.exe" install -q "git+https://github.com/miurahr/aqtinstall.git@$env:AQTINSTALL_GIT_REF" "py7zr==$env:PY7ZR_VERSION"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
           & "$env:RUNNER_TEMP\aqtvenv\Scripts\aqt.exe" install-qt windows desktop $env:QT_VERSION $env:QT_ARCH `
             -m qtmultimedia qtwebsockets qtserialport qtshadertools `
+            --external $sevenZip `
             --outputdir "$env:RUNNER_WORKSPACE\Qt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -862,8 +923,8 @@ jobs:
       - name: Install dependencies via Homebrew
         # Mirrors macos-dmg.yml's apple-silicon path — which no longer takes Qt
         # from Homebrew, so neither does this. Leaving qt@6 here would put the
-        # per-PR macOS check on a rolling Qt (6.11.1 today) while the DMG ships
-        # 6.8.3, i.e. CI green would say nothing about the artifact.
+        # per-PR macOS check on a rolling Qt (Homebrew 6.11.x today) while the
+        # DMG ships 6.12.0, i.e. CI green would say nothing about the artifact.
         run: |
           brew install ninja fftw portaudio hidapi librtlsdr \
             autoconf automake libtool
@@ -887,11 +948,11 @@ jobs:
       #
       # 2026-09-12, run 34708649276 attempt 1: this step restored the 1.3 GB
       # macOS entry, gtar reported "Cache restored successfully", Export Qt
-      # environment ran qmake and got 6.8.3 back — and Configure then died with
-      # six copies of
+      # environment ran qmake and got the pinned version back — and Configure
+      # then died with six copies of
       #
       #   Imported target "Qt6::SerialPort" includes non-existent path
-      #     ".../Qt/6.8.3/macos/lib/QtSerialPort.framework/Headers"
+      #     ".../Qt/<ver>/macos/lib/QtSerialPort.framework/Headers"
       #
       # The stored entry was fine. The immediate re-run restored the same key,
       # byte for byte, and configured cleanly. The extraction had silently
