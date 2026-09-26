@@ -3797,7 +3797,45 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     QPointer<QLabel> noRadioGuard(noRadioLbl);
     const QList<QPointer<QWidget>> calControls{
         refCombo, customEdit, ppbSpin, resetBtn, downBtn, upBtn, stepCombo, calBtn};
-    m_calibrationReseed = [this, spinGuard, noRadioGuard, calControls, refreshReadout] {
+    // Ask the backend whether this radio is on an external reference, and fold
+    // the answer into m_hl2ExternalRefLocked. THROUGH THE SEAM, not through the
+    // vendor header: the extension reply is the only thing this file may read,
+    // the same rule the HL2 Hardware page follows (EB3, see its note).
+    //
+    // Synchronous in practice — freqcal.get completes inside the backend and
+    // emits its reply before invokeBackendExtension() returns, which is why the
+    // handler is armed first and why the caller can read the member on the next
+    // line. If that ever stops being true the page is one reseed stale rather
+    // than wrong, and the live writer below still corrects it.
+    auto askExternalReference = [this] {
+        IRadioBackend* backend = m_model ? m_model->backend() : nullptr;
+        if (!backend || !m_model->backendDeclaresExtension(QStringLiteral("hl2")))
+            return;
+        constexpr quint64 kCalRequestIdBase = 0x0400000000000000ull;
+        static quint64 nextCalId = kCalRequestIdBase;
+        const quint64 requestId = nextCalId++;
+        auto* guard = new QObject(this);
+        connect(backend, &IRadioBackend::extensionResult, guard,
+                [this, guard, requestId](quint64 id, const QVariant& result) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+            const QVariantMap m = result.toMap();
+            if (m.contains(QStringLiteral("externalReference")))
+                m_hl2ExternalRefLocked =
+                    m.value(QStringLiteral("externalReference")).toBool();
+        });
+        connect(backend, &IRadioBackend::extensionError, guard,
+                [guard, requestId](quint64 id, const QString&) {
+            if (id == requestId)
+                guard->deleteLater();   // leave the page as it stands
+        });
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+                                        QStringLiteral("freqcal.get"), requestId);
+    };
+
+    m_calibrationReseed = [this, spinGuard, noRadioGuard, calControls, refreshReadout,
+                           askExternalReference] {
         if (!spinGuard)
             return;
         {
@@ -3815,6 +3853,28 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
         // crystal. docs/architecture/hl2-frequency-calibration.md §4 requires
         // the control to be disabled, and the backend refuses the verb as well;
         // this is the half the operator can see.
+        //
+        // THIS PAGE ASKS FOR ITSELF. It used to read m_hl2ExternalRefLocked and
+        // nothing else, and that member has only two writers — both on the HL2
+        // Hardware page. Pages are built lazily (addPage() defers every builder
+        // but Radio's into m_deferredBuilders), so with CL1 persisted from an
+        // earlier session an operator who opens Radio Setup and goes straight to
+        // Calibration found every control here ENABLED, and moving one sent
+        // freqcal.set with requestId 0 — a request the backend correctly refuses
+        // and whose refusal, emitted only `if (requestId != 0)`, went nowhere.
+        // The spin box then showed a correction that was never applied or
+        // stored, until the next showEvent() put 0 back. This file already names
+        // that shape as the thing to avoid: "a UI that reports success while
+        // nothing persists" (#5923 review, @on8st).
+        //
+        // freqcal.get reports externalReference for exactly this reason — its
+        // own comment says the answer carries "the reason it is refused in the
+        // same answer as the value" — so the page reads it here and stops
+        // depending on which page the operator happened to visit first. The
+        // member stays as the LIVE path: the HL2 Hardware page's checkbox
+        // updates it directly so a mid-session toggle is reflected without a
+        // round trip, and this reseed reconciles it on every open.
+        askExternalReference();
         const bool locked = m_hl2ExternalRefLocked;
         for (const QPointer<QWidget>& w : calControls) {
             if (w)
@@ -4157,6 +4217,10 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
         "This is the CLOCK input, not the antenna. Feeding a GPSDO into the RF\n"
         "input to calibrate by ear is a different thing with a different figure —\n"
         "that one needs ≥30 dB, because it reaches the AD9866.\n\n"
+        "The register sequence is the Hermes-Lite 2's. It was exercised on an\n"
+        "HL2, not on a SQUARE SDR 2 — that board carries the same VersaClock\n"
+        "(5P49V5923) and its own CL1 divider, so the same tables should apply,\n"
+        "but nobody here has run them on one.\n\n"
         "The radio boots on its crystal every time, so this is re-sent on connect\n"
         "while it is enabled. It also forces the manual frequency calibration to\n"
         "zero — a disciplined reference has no crystal error left to correct."));
@@ -4201,10 +4265,17 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     // Two things follow. The part does not "expect 3.3 V" — it needs a usable
     // amplitude at CLKIN, and a source below the design point still works as
     // long as enough arrives. And it does not need a SQUARE wave: a 10 MHz sine
-    // fed through this path lands as a ~1 Vpp sine and the VersaClock locks to
-    // it (Estévez, beta2 build). What actually matters is a source hotter than
-    // the design point, which is why the label is about padding a hot source
-    // rather than about meeting a spec.
+    // fed straight into CL1 with no attenuator lands at roughly a third of its
+    // amplitude and the VersaClock locks to it. Measured on this bench, on a
+    // beta2 board; the divider that does the dividing is R39 = 130 Ω over
+    // R40 = 75 Ω in the reference design (hardware/hl/Clock.sch), i.e. 0.366,
+    // and the SQUARE SDR 2 uses R75 = 150 Ω over R77 = 75 Ω for 0.333.
+    //
+    // NEITHER RATIO IS A GUARANTEE. This is open hardware: a board built from
+    // the published design may have those parts changed, absent or jumpered,
+    // and nothing on the wire says which. So the label pads a hot source
+    // unconditionally rather than quoting a figure that only holds for the two
+    // designs anybody here has read.
     //
     // A 5 V sine does NOT arrive at the chip as 5 V — roughly 1.5 Vpp.
     //

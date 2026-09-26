@@ -316,10 +316,27 @@ figure is the spec **at the connector**, with that divider already in the path.
    **If someone gets the datasheet figure**, this is worth revisiting: a warning
    that can say "above X Vpp at the connector" beats one that says "mind it".
 
-2. *For boards where those parts are absent.* **Production HL2 units ship with
-   the divider populated** — confirmed by the maintainer, who owns the hardware;
-   the project wiki does not state it either way. So for the units this feature
-   will actually meet, CL1 is wired through and works.
+2. *For boards where those parts are absent.* **The reference design populates
+   the divider, and so does the one derivative we can check** — but the
+   Hermes-Lite 2 is open hardware, so neither fact is a guarantee about the
+   board in front of any given operator.
+
+   | board | series | shunt | ratio | attenuation |
+   |---|---|---|---|---|
+   | HL2 reference, `hardware/hl/Clock.sch` | R39 = 130 Ω | R40 = 75 Ω | 75/205 = 0.366 | −8.7 dB |
+   | SQUARE SDR 2, published schematic | R75 = 150 Ω | R77 = 75 Ω | 75/225 = 0.333 | −9.5 dB |
+
+   Both divide, and the SQUARE SDR 2 divides slightly harder. Its schematic also
+   names the clock part as `5P49V5923B000NLGI`, which independently confirms
+   §3's `5P49V5923` — the two boards take the same register tables because they
+   carry the same VersaClock.
+
+   **This is why the warning is unconditional and carries no single number.**
+   Anyone can build an HL2 from the published design with these parts absent,
+   changed, or jumpered, and nothing on the wire reports which. An earlier
+   version of this section attributed "production units ship with it populated"
+   to a person rather than to a document; it is a schematic fact about two
+   specific designs, and it is written as one now.
 
    The exception is early hand-built hardware: on a Hermes-Lite 2 beta2 build,
    CL1, B58, R39 and R40 all had to be installed by the owner. On such a board
