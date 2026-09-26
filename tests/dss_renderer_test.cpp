@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <utility>
 
 namespace {
@@ -41,6 +42,85 @@ void appendStableHistoryPeak(DssRenderer& renderer, int bin, int count = 3)
     for (int i = 0; i < count; ++i) {
         renderer.appendHistoryRow(rowWithPeak(bin), 14.0, 1.0, -200.0f);
     }
+}
+
+int testCoherentCaptureHistory()
+{
+    const auto storage = std::make_unique<DssRenderer>();
+    DssRenderer& renderer = *storage;
+    renderer.setHistoryCapacityRows(8);
+    const auto push = [&](float level, double captureCenter) {
+        const QVector<float> viewport(768, level), capture(768, level - 5);
+        renderer.pushRowWithSupplemental(viewport, captureCenter, .02,
+            capture, captureCenter, 2, true);
+        renderer.appendHistoryRow(viewport, captureCenter, .02, -200,
+            capture, captureCenter, 2, true);
+    };
+    push(-80, 100); push(-80, 100); push(-20, 100);
+    if (renderer.rowDataRing(renderer.headRing())[300] != -20
+        || renderer.rowSupplementalDataRing(renderer.headRing())[300] != -25) {
+        return fail("coherent FFT rows must retain backend temporal samples in both primary and supplemental surfaces");
+    }
+    renderer.reprojectFrequencyFrame(100, .02, 100.3, .04, -200, true);
+    if (renderer.rowSupplementalBandwidthMhzAtAge(0) != 2
+        || renderer.rowSupplementalCenterMhzAtAge(0) != 100
+        || renderer.rowSupplementalDataRing(renderer.headRing())[300] != -25) {
+        return fail("zoom/pan from retained history must preserve original offscreen levels and RF bounds");
+    }
+    push(-40, 101);
+    renderer.rebuildVisibleFromHistory(0, 101, .02, -200);
+    if (renderer.rowSupplementalCenterMhzAtAge(0) != 101
+        || renderer.rowSupplementalCenterMhzAtAge(1) != 100
+        || renderer.rowSupplementalBandwidthMhzAtAge(1) != 2) {
+        return fail("retune history must keep each capture's own offscreen frequency frame");
+    }
+    const int oldRing = (renderer.headRing() + 1) % renderer.rows();
+    if (renderer.rowSupplementalDataRing(oldRing)[300] != -25) {
+        return fail("retained same-scale history must not acquire a second temporal blend");
+    }
+    renderer.setHistoryCapacityRows(0);
+    if (renderer.historyStorageBytes() != 0) {
+        return fail("releasing history must release supplemental storage too");
+    }
+    renderer.clear();
+    DssRenderer& liveOnly = renderer;
+    liveOnly.pushRowWithSupplemental(QVector<float>(768,-80),100,.02,
+        QVector<float>(768,-70),100,2,true);
+    liveOnly.reprojectFrequencyFrame(100,.02,100.3,.04,-200);
+    if (liveOnly.rowSupplementalBandwidthMhzAtAge(0) != 2
+        || liveOnly.rowSupplementalCenterMhzAtAge(0) != 100) {
+        return fail("live coverage must survive a pan even when retained history is disabled");
+    }
+    renderer.clear();
+    DssRenderer& edge = renderer;
+    edge.pushRowWithSupplemental(QVector<float>(768,-80),100.97,.06,
+        QVector<float>(768,-70),100,2,true);
+    edge.reprojectFrequencyFrame(100.99,.1,100.98,.12,-200);
+    if (edge.rowCoverageRing(edge.headRing())[700] != 0) {
+        return fail("an asymmetric primary crop must reproject from its own RF bounds, not the wider old viewport");
+    }
+    renderer.clear();
+    renderer.setHistoryCapacityRows(2);
+    push(-30,100);
+    const auto moved = std::make_unique<DssRenderer>(std::move(renderer));
+    moved->rebuildVisibleFromHistory(0,100,.02,-200);
+    if (moved->rowSupplementalBandwidthMhzAtAge(0) != 2) {
+        return fail("moving a retained renderer must preserve its coherent coverage");
+    }
+    renderer.appendHistoryRow(QVector<float>(768,-90),100,.02,-200);
+    renderer.rebuildVisibleFromHistory(0,100,.02,-200);
+    if (renderer.rowSupplementalBandwidthMhzAtAge(0) != 0) {
+        return fail("reusing a moved-from renderer must not expose previous coverage");
+    }
+    for (int i=0;i<3;++i) {
+        moved->appendHistoryRow(QVector<float>(768,-90),100,.02,-200);
+    }
+    moved->rebuildVisibleFromHistory(0,100,.02,-200);
+    if (moved->rowSupplementalBandwidthMhzAtAge(0) != 0
+        || moved->rowSupplementalBandwidthMhzAtAge(1) != 0) {
+        return fail("wrapping history with uncovered rows must retire old supplemental metadata");
+    }
+    return 0;
 }
 
 int testFrequencyReprojection()
@@ -891,6 +971,7 @@ int testSurfaceProjection()
 
 int main()
 {
+    if (int rc = testCoherentCaptureHistory(); rc != 0) { return rc; }
     if (int rc = testFrequencyReprojection(); rc != 0) {
         return rc;
     }

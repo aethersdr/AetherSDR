@@ -1274,18 +1274,20 @@ signals:
     // this terminal signal to stop reconnect UX and preserve the radio's reason.
     void guiClientRegistrationFailed(const QString& message);
     // aetherd Gap B (HL2 Phase 1c, Step 1): the backend-neutral panadapter render
-    // feed. Signatures mirror PanadapterStream.h:212-218 exactly, so the UI binds
+    // feed. Payloads follow PanadapterStream, so the UI binds
     // its panadapter/waterfall rendering to these instead of the Flex-only
     // PanadapterStream and the wiring is family-agnostic. A Flex session forwards
-    // its PanadapterStream into these 1:1 (signal-to-signal, no transformation);
+    // its PanadapterStream into these without changing samples or bounds;
     // an HL2 session (Step 2) synthesises them from IRadioBackend::spectrumFrameReady.
     // Per-RadioModel → per-session, which is exactly what the two-panadapter end
-    // state needs.
+    // state needs. Coherent coverage additionally declares final same-scale
+    // spectrum samples so a renderer avoids intensity calibration and smoothing.
     void panFeedSpectrumReady(quint32 streamId, const QVector<float>& binsDbm,
                               qint64 emittedNs);
     void panFeedWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                                   double lowFreqMhz, double highFreqMhz,
-                                  quint32 timecode, qint64 emittedNs);
+                                  quint32 timecode, qint64 emittedNs,
+                                  bool coherentSpectrumCoverage = false);
     void panFeedWaterfallAutoBlackLevel(quint32 streamId, quint32 autoBlack);
     // Demodulated RX audio from a backend that produces it in-process (HL2).
     // Owning typed PCM. A1 compatibility producers retain 24 kHz stereo.
@@ -1622,7 +1624,8 @@ private slots:
     // normalized IRadioBackend data-plane signal (e.g. HL2) into the neutral
     // panFeed. Decodes the float32 frame and re-emits panFeedSpectrumReady. Flex
     // never triggers this (it feeds panFeed via the PanadapterStream passthrough).
-    void onBackendSpectrumFrame(int panId, const QByteArray& frame);
+    void onBackendSpectrumFrame(int panId, const QByteArray& frame,
+                                const SpectrumCoverage& coverage);
 
 private:
     friend struct RadioModelWakeTestAccess;
@@ -2023,8 +2026,9 @@ private:
     //   holds only the partial IQ window the NEXT frame completes from, which is
     //   why HERMES 15.2.1 says the accumulator keeps filling on a skipped
     //   interval. The frames between rows never reach the waterfall at all:
-    //   dropped, never accumulated. RTL-SDR's frames are unaveraged FFTs too,
-    //   so the shape carries there; only the numbers are HL2's.
+    //   dropped, never accumulated. RTL-SDR now applies the operator's temporal
+    //   average to its emitted FFT observations; that does not integrate the
+    //   uncomputed observations between display deadlines or the paced rows.
     // - On ANAN the frames between rows are not dropped. Every IQ block is
     //   fed to the WDSP analyzer and only TAKING a frame is paced (AnanRxDsp:
     //   "none are thrown away"), so the row that lands here is already

@@ -344,8 +344,9 @@ int main(int argc, char** argv)
             QSignalSpy frames(&model, &RadioModel::panFeedSpectrumReady);
             const float value = -80.0f;
             const QByteArray frame(reinterpret_cast<const char*>(&value), sizeof(value));
-            std::thread enqueue([outgoing, frame] {
-                emit outgoing->spectrumFrameReady(0, frame);
+            const SpectrumCoverage coverage{frame, 99.0, 101.0};
+            std::thread enqueue([outgoing, frame, coverage] {
+                emit outgoing->spectrumFrameReady(0, frame, coverage);
             });
             enqueue.join();
             switchTo(model, QStringLiteral("hl2"), rebuilt);

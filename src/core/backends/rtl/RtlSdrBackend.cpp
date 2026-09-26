@@ -403,7 +403,17 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
         [this, producer](quint64 session, quint64 revision, int panId, const QByteArray& frame) {
             if (producer && producer.data() == m_worker.get() && acceptsFrame(session, revision)) {
                 const QByteArray cropped = viewportFrame(frame);
-                if (!cropped.isEmpty()) { emit spectrumFrameReady(panId, cropped); }
+                if (cropped.isEmpty() || !m_capture.confirmed()) { return; }
+                const auto& capture = m_capture.confirmed()->capture;
+                const auto usable = RtlViewport::fit(capture, RtlSdrDdc::kSpectrumBinCount,
+                    capture.centerHz, capture.achievedSampleRateHz);
+                if (!usable) { return; }
+                const SpectrumCoverage coverage{
+                    frame.sliced(usable->firstBin * int(sizeof(float)),
+                                 usable->binCount * int(sizeof(float))),
+                    (usable->centerHz - usable->spanHz / 2) / 1e6,
+                    (usable->centerHz + usable->spanHz / 2) / 1e6};
+                emit spectrumFrameReady(panId, cropped, coverage);
             }
         });
     connect(m_worker.get(), &RtlSdrWorker::waterfallRowReady, this,

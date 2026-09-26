@@ -29,6 +29,7 @@
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/SpectrumCoverage.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
 #include "core/backends/TxAudioSource.h"
@@ -1411,7 +1412,11 @@ signals:
     // Declared here so backends have a normalized outlet for spectrum/waterfall/
     // audio; the concrete zero-copy/binary frame formats are step-4 work. Until
     // then a backend may relay the existing in-tree frame types.
-    void spectrumFrameReady(int panId, const QByteArray& frame);
+    // A producer may attach wider, same-observation RF coverage. Existing
+    // producers omit it; consumers interested only in the viewport keep their
+    // two-argument connection. One emission owns spectrum + paced history.
+    void spectrumFrameReady(int panId, const QByteArray& frame,
+                            const AetherSDR::SpectrumCoverage& coverage = AetherSDR::SpectrumCoverage());
     void waterfallRowReady(int panId, const QByteArray& row);
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 

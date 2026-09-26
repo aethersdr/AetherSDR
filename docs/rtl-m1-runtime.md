@@ -532,3 +532,49 @@ guards, skipped duplicate smoothing and accessible control descriptions.
 The mapping, weighted semantics and persistence owner remain draft decisions
 for maintainer review under RFC #5782/#5468. Live evidence is revision-specific
 in the PR report; numerical fixtures alone are not hardware qualification.
+
+
+## Coherent offscreen 3D coverage
+
+RTL attaches the genuine usable capture bins and their RF bounds to the same
+backend emission as its cropped viewport FFT. At 2.4 MS/s, the usable interval
+is approximately 2.16 MHz; the 10% acquisition guard is not advertised as
+usable coverage. The existing capture/session/revision fences apply before
+this emission. The model validates optional `SpectrumCoverage`, preserves
+its bounds through pacing, and stops paired history delivery if a spectrum
+observer disconnects or changes the backend reentrantly. Older producers omit
+the metadata and keep their existing viewport/intensity paths.
+
+The widget forms each close-view 3D row from that observation's own full
+capture, not from a newer trace that may already have arrived. Its primary
+row retains the original close-view bin density before the existing
+768-column spatial reduction. A separate 768-column supplemental row covers
+the full usable capture and fills the offscreen part of the existing 3D
+mesh. The 2D trace still receives the original high-resolution viewport FFT.
+Both rows carry their actual RF frames, including asymmetric capture-edge
+intersections. Zoom previews keep these explicit frames. Frequencies outside
+the captured interval remain uncovered; no repeated or mirrored bins extend
+coverage. At the full usable span there is no additional RF coverage to fill
+the perspective wedges.
+
+These coherent rows already use the trace's level scale and the backend's
+selected temporal estimator. They bypass intensity-to-FFT quantile matching,
+Flex DC-edge repair, and the renderer's additional median/IIR/spatial blur.
+Peak-preserving spatial reduction still fits samples into the mesh columns.
+Legacy intensity sources retain their existing calibration and filtering.
+
+The visible live ring preserves supplemental data through pan/reprojection.
+When 3D scrollback is retained, an optional half-float supplemental bank keeps
+each row's own capture bounds through retunes and history reconstruction.
+It shares the existing history capacity and lifetime, is allocated only when
+coverage arrives, and participates in memory diagnostics. Its incremental
+storage is `capacity * (768 * sizeof(qfloat16) + 2 * sizeof(double))`, about
+35.5 MiB at 24,000 rows. Disabling history releases it; recycled or moved-from
+rows cannot expose old coverage. Offscreen retained data has the mesh's
+768-column resolution, not the full 65,536-bin acquisition resolution.
+
+Socket-free backend/model, real-widget and renderer fixtures cover tiny zoom,
+two close peaks, asymmetric/outside capture limits, queued stale deliveries,
+reentrant disconnect, history movement/wrapping, and per-retune RF frames.
+Native GPU presentation, bounded performance observations and receive liveness
+are recorded separately for the exact delivered revision in the stage report.

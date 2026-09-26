@@ -5221,7 +5221,11 @@ float SpectrumWidget::dssHistoryFallbackDbm() const
 
 void SpectrumWidget::appendDssHistoryRow(const QVector<float>& binsDbm,
                                          double frameCenterMhz,
-                                         double frameBandwidthMhz)
+                                         double frameBandwidthMhz,
+                                         const QVector<float>& supplementalBinsDbm,
+                                         double supplementalCenterMhz,
+                                         double supplementalBandwidthMhz,
+                                         bool preserveInput)
 {
     if (!m_waterfallWriteVisible
         || m_spectrumRenderMode != SpectrumRenderMode::Mode3D) {
@@ -5245,7 +5249,8 @@ void SpectrumWidget::appendDssHistoryRow(const QVector<float>& binsDbm,
             m_frequencyPreviewActive && !m_kiwiSdrWaterfallActive));
     retainDssHistoryRow(m_dss, binsDbm,
                         stampFrame.centerMhz, stampFrame.bandwidthMhz,
-                        dssHistoryFallbackDbm());
+                        dssHistoryFallbackDbm(), supplementalBinsDbm,
+                        supplementalCenterMhz, supplementalBandwidthMhz, preserveInput);
 }
 
 namespace {
@@ -5284,7 +5289,8 @@ void SpectrumWidget::appendDssWaterfallRow(const QVector<float>& binsDbm,
                                            bool updateLiveSurface,
                                            const QVector<float>& supplementalBinsDbm,
                                            double supplementalCenterMhz,
-                                           double supplementalBandwidthMhz)
+                                           double supplementalBandwidthMhz,
+                                           bool preserveInput)
 {
     if (!m_kiwiSdrWaterfallActive && flexDssFftScaleSettling()) {
         return;
@@ -5292,7 +5298,7 @@ void SpectrumWidget::appendDssWaterfallRow(const QVector<float>& binsDbm,
 
     QVector<float> repairedBins;
     const QVector<float>& dssBins = dcRepairedDssBins(
-        repairedBins, binsDbm, !m_kiwiSdrWaterfallActive,
+        repairedBins, binsDbm, !m_kiwiSdrWaterfallActive && !preserveInput,
         frameCenterMhz, frameBandwidthMhz, m_centerMhz, m_bandwidthMhz);
 
     // Keep live DSS and retained scrollback DSS on the same waterfall-row cadence.
@@ -5314,7 +5320,9 @@ void SpectrumWidget::appendDssWaterfallRow(const QVector<float>& binsDbm,
             FrequencyFrame{frameCenterMhz, frameBandwidthMhz},
             FrequencyFrame{m_centerMhz, m_bandwidthMhz},
             previewBase, usePreviewBase);
-        if (m_frequencyPreviewActive && m_waterfallWriteVisible
+        // Explicit coherent RF frames remain sampleable by the mesh during a
+        // preview; padding them into its old viewport would invent coverage.
+        if (!preserveInput && m_frequencyPreviewActive && m_waterfallWriteVisible
             && usePreviewBase) {
             const QVector<float>& previewBins = remapPreviewDssRow(
                 dssBins, frameCenterMhz, frameBandwidthMhz);
@@ -5323,7 +5331,7 @@ void SpectrumWidget::appendDssWaterfallRow(const QVector<float>& binsDbm,
                 previewBase.centerMhz, previewBase.bandwidthMhz,
                 supplementalBinsDbm,
                 supplementalCenterMhz,
-                supplementalBandwidthMhz);
+                supplementalBandwidthMhz, preserveInput);
             ++m_frequencyPreviewRemappedDssRows;
         } else {
             pushDssLiveRow(
@@ -5331,10 +5339,15 @@ void SpectrumWidget::appendDssWaterfallRow(const QVector<float>& binsDbm,
                 liveFrame.centerMhz, liveFrame.bandwidthMhz,
                 supplementalBinsDbm,
                 supplementalCenterMhz,
-                supplementalBandwidthMhz);
+                supplementalBandwidthMhz, preserveInput);
         }
     }
-    appendDssHistoryRow(dssBins, frameCenterMhz, frameBandwidthMhz);
+    // Existing intensity-derived sources retain their old history contract.
+    // Coherent FFT coverage carries trustworthy levels/bounds into scrollback.
+    appendDssHistoryRow(dssBins, frameCenterMhz, frameBandwidthMhz,
+        preserveInput ? supplementalBinsDbm : QVector<float>{},
+        preserveInput ? supplementalCenterMhz : 0,
+        preserveInput ? supplementalBandwidthMhz : 0, preserveInput);
 }
 
 void SpectrumWidget::pushDssLiveRow(DssRenderer& dss,
@@ -5344,7 +5357,7 @@ void SpectrumWidget::pushDssLiveRow(DssRenderer& dss,
                                     double frameBandwidthMhz,
                                     const QVector<float>& supplementalBinsDbm,
                                     double supplementalCenterMhz,
-                                    double supplementalBandwidthMhz)
+                                    double supplementalBandwidthMhz, bool preserveInput)
 {
     QElapsedTimer timer;
     timer.start();
@@ -5352,7 +5365,7 @@ void SpectrumWidget::pushDssLiveRow(DssRenderer& dss,
         binsDbm, frameCenterMhz, frameBandwidthMhz,
         supplementalBinsDbm,
         supplementalCenterMhz,
-        supplementalBandwidthMhz);
+        supplementalBandwidthMhz, preserveInput);
     m_panStats.dssLiveUs += static_cast<quint64>(timer.nsecsElapsed() / 1000);
     ++m_panStats.dssLiveRows;
     if (hiddenStream) {
@@ -5364,7 +5377,10 @@ void SpectrumWidget::retainDssHistoryRow(DssRenderer& dss,
                                          const QVector<float>& binsDbm,
                                          double centerMhz,
                                          double bandwidthMhz,
-                                         float fallbackDbm)
+                                         float fallbackDbm,
+                                         const QVector<float>& supplementalBinsDbm,
+                                         double supplementalCenterMhz,
+                                         double supplementalBandwidthMhz, bool preserveInput)
 {
     // Hidden sources release their retained DSS history (capacity 0), so this
     // early-returns for them and only the visible source retains scrollback —
@@ -5374,7 +5390,8 @@ void SpectrumWidget::retainDssHistoryRow(DssRenderer& dss,
     }
     QElapsedTimer timer;
     timer.start();
-    dss.appendHistoryRow(binsDbm, centerMhz, bandwidthMhz, fallbackDbm);
+    dss.appendHistoryRow(binsDbm, centerMhz, bandwidthMhz, fallbackDbm,
+        supplementalBinsDbm, supplementalCenterMhz, supplementalBandwidthMhz, preserveInput);
     m_panStats.dssHistoryUs += static_cast<quint64>(timer.nsecsElapsed() / 1000);
     ++m_panStats.dssHistoryRows;
 }
@@ -5388,8 +5405,13 @@ void SpectrumWidget::appendLatestDssWaterfallRow(double frameCenterMhz,
 QVector<float> SpectrumWidget::buildNativeDssSupplementalRow(
     const QVector<float>& tileIntensity,
     double tileLowMhz,
-    double tileHighMhz) const
+    double tileHighMhz, bool sameSpectrumScale) const
 {
+    if (sameSpectrumScale) {
+        if (!std::isfinite(tileLowMhz) || !std::isfinite(tileHighMhz)
+            || tileHighMhz <= tileLowMhz) { return {}; }
+        return tileIntensity; // These are the actual FFT levels, already in the trace's units.
+    }
     const QVector<float>& fftBins = displaySpectrumBins();
     const std::vector<float> calibrated =
         AetherSDR::buildDssSupplementalCoverage(
@@ -8617,11 +8639,13 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
 
 void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
                                         double lowFreqMhz, double highFreqMhz,
-                                        quint32 timecode)
+                                        quint32 timecode, bool coherentSpectrumCoverage)
 {
     PerfUpdateScope perfScope(PerfUpdateScope::Kind::Waterfall);
     // Native waterfall tiles carry intensity values (int16/128.0f, ~96-120 on HF).
     if (binsIntensity.isEmpty()) return;
+    if (coherentSpectrumCoverage && (!std::isfinite(lowFreqMhz) || !std::isfinite(highFreqMhz)
+        || lowFreqMhz < 0 || highFreqMhz <= lowFreqMhz)) { return; }
     // Record the extent this row claims, before any early-out below, so an
     // automated pan/waterfall alignment check sees what the producer asserted
     // even when the row is not rendered (e.g. the Kiwi path).
@@ -8854,7 +8878,30 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     // loop if a backend ever delivers more than one row per update.
     const QVector<float> dssSupplemental =
         buildNativeDssSupplementalRow(
-            binsIntensity, lowFreqMhz, highFreqMhz);
+            binsIntensity, lowFreqMhz, highFreqMhz, coherentSpectrumCoverage);
+    QVector<float> coherentPrimary;
+    double coherentCenterMhz = 0, coherentBandwidthMhz = 0;
+    if (coherentSpectrumCoverage) {
+        // A later live FFT may already have reached the widget while this
+        // history row waited for presentation. Derive both surfaces from THIS
+        // observation. Keep the close-view bin density and stamp only genuine
+        // captured frequencies, including a partially covered viewport.
+        int first = 0, end = srcSize;
+        const double viewHigh = m_centerMhz + displayBw / 2;
+        if (std::isfinite(panStartMhz) && std::isfinite(viewHigh) && displayBw > 0
+            && panStartMhz < highFreqMhz && viewHigh > lowFreqMhz) {
+            const double firstPosition = std::clamp((panStartMhz - lowFreqMhz) / tileBw,
+                                                    0.0, double(srcSize));
+            const double endPosition = std::clamp((viewHigh - lowFreqMhz) / tileBw,
+                                                  0.0, double(srcSize));
+            // Quantized view edges can differ by a few floating-point ulps.
+            first = std::clamp(int(std::floor(firstPosition + 1e-7)), 0, srcSize - 1);
+            end = std::clamp(int(std::ceil(endPosition - 1e-7)), first + 1, srcSize);
+        }
+        coherentPrimary = binsIntensity.sliced(first, end - first);
+        coherentBandwidthMhz = (end - first) * tileBw;
+        coherentCenterMhz = lowFreqMhz + (first + (end - first) / 2.0) * tileBw;
+    }
     for (int r = 0; r < rowsToPush; ++r) {
         QVector<quint8> interpolatedLevels(destWidth, 0);
         QVector<QRgb> interpolatedRow(destWidth, qRgb(0, 0, 0));
@@ -8885,11 +8932,15 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
             supplementalLevels.constData(),
             outputFrames.supplementalFrame.centerMhz,
             outputFrames.supplementalFrame.bandwidthMhz);
-        if (panEdgeCropActive()) {
+        if (coherentSpectrumCoverage) {
+            appendDssWaterfallRow(coherentPrimary, coherentCenterMhz, coherentBandwidthMhz,
+                true, dssSupplemental, incomingSupplementalCenterMhz,
+                incomingSupplementalBandwidthMhz, true);
+        } else if (panEdgeCropActive()) {
             appendDssWaterfallRow(croppedBinsForDisplay(displaySpectrumBins()),
                                  m_centerMhz, displayBw, true,
                                  dssSupplemental, incomingSupplementalCenterMhz,
-                                 incomingSupplementalBandwidthMhz);
+                                 incomingSupplementalBandwidthMhz, coherentSpectrumCoverage);
         } else {
             appendDssWaterfallRow(
                 displaySpectrumBins(),
@@ -8898,7 +8949,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
                 true,
                 dssSupplemental,
                 incomingSupplementalCenterMhz,
-                incomingSupplementalBandwidthMhz);
+                incomingSupplementalBandwidthMhz, coherentSpectrumCoverage);
         }
         if (m_wfLive) {
             // The whole tile gets one start() after the loop; don't restart the

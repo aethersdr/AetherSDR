@@ -274,6 +274,7 @@ void DssRenderer::clear()
     m_rowBandwidthMhz.fill(0.0);
     m_rowSupplementalCenterMhz.fill(0.0);
     m_rowSupplementalBandwidthMhz.fill(0.0);
+    m_preserveSupplementalFrame.fill(false);
     for (CoverageRow& coverage : m_rowSupplementalCoverage) {
         coverage.fill(0);
     }
@@ -290,6 +291,7 @@ quint64 DssRenderer::fixedStorageBytes() const
         + sizeof(m_rowCenterMhz) + sizeof(m_rowBandwidthMhz)
         + sizeof(m_rowSupplementalCenterMhz)
         + sizeof(m_rowSupplementalBandwidthMhz)
+        + sizeof(m_preserveSupplementalFrame)
         + sizeof(m_rawPrev1) + sizeof(m_rawPrev2)
         + sizeof(m_supplementalRawPrev1)
         + sizeof(m_supplementalRawPrev2)
@@ -300,7 +302,10 @@ quint64 DssRenderer::historyStorageBytes() const
 {
     return static_cast<quint64>(m_historyRows.capacity()) * sizeof(qfloat16)
         + static_cast<quint64>(m_historyRowCenterMhz.capacity()) * sizeof(double)
-        + static_cast<quint64>(m_historyRowBandwidthMhz.capacity()) * sizeof(double);
+        + static_cast<quint64>(m_historyRowBandwidthMhz.capacity()) * sizeof(double)
+        + static_cast<quint64>(m_historySupplementalRows.capacity()) * sizeof(qfloat16)
+        + static_cast<quint64>(m_historySupplementalCenterMhz.capacity()) * sizeof(double)
+        + static_cast<quint64>(m_historySupplementalBandwidthMhz.capacity()) * sizeof(double);
 }
 
 quint64 DssRenderer::cacheStorageBytes() const
@@ -401,7 +406,7 @@ void DssRenderer::pushRowWithSupplemental(
     double bandwidthMhz,
     const QVector<float>& supplementalBinsDbm,
     double supplementalCenterMhz,
-    double supplementalBandwidthMhz)
+    double supplementalBandwidthMhz, bool preserveInput)
 {
     const std::array<float, kCols> raw = resampledRawRow(binsDbm, -200.0f);
     const bool sameFrameAsPrevious =
@@ -419,8 +424,12 @@ void DssRenderer::pushRowWithSupplemental(
             ? &m_rows[m_head]
             : nullptr;
     m_skipLiveTemporalBlendOnce = false;
-    const std::array<float, kCols> nr =
-        smoothDssRow(raw, m_rawPrev1, m_rawPrev2, m_rawHistCount, previous);
+    const std::array<float, kCols> nr = preserveInput ? raw
+        : smoothDssRow(raw, m_rawPrev1, m_rawPrev2, m_rawHistCount, previous);
+    if (preserveInput) {
+        m_rawHistCount = 0;
+        m_skipLiveTemporalBlendOnce = true;
+    }
 
     m_head = (m_head - 1 + kRows) % kRows;
     m_rows[m_head] = nr;
@@ -452,12 +461,16 @@ void DssRenderer::pushRowWithSupplemental(
                 ? &m_rowSupplemental[previousRing]
                 : nullptr;
         m_skipSupplementalTemporalBlendOnce = false;
-        m_rowSupplemental[m_head] = smoothDssRow(
+        m_rowSupplemental[m_head] = preserveInput ? supplementalRaw : smoothDssRow(
             supplementalRaw,
             m_supplementalRawPrev1,
             m_supplementalRawPrev2,
             m_supplementalRawHistCount,
             supplementalPrevious);
+        if (preserveInput) {
+            m_supplementalRawHistCount = 0;
+            m_skipSupplementalTemporalBlendOnce = true;
+        }
         m_rowSupplementalCoverage[m_head].fill(1);
         m_rowSupplementalCenterMhz[m_head] = supplementalCenterMhz;
         m_rowSupplementalBandwidthMhz[m_head] =
@@ -469,6 +482,7 @@ void DssRenderer::pushRowWithSupplemental(
         m_rowSupplementalBandwidthMhz[m_head] = 0.0;
         m_supplementalRawHistCount = 0;
     }
+    m_preserveSupplementalFrame[m_head] = preserveInput && supplementalValid;
     m_count = std::min(m_count + 1, kRows);
     m_dirty = true;
     ++m_rowGeneration;
@@ -486,6 +500,9 @@ void DssRenderer::setHistoryCapacityRows(int rows)
     m_historyRows = QVector<qfloat16>(expectedSampleCount);
     m_historyRowCenterMhz = QVector<double>(rows, 0.0);
     m_historyRowBandwidthMhz = QVector<double>(rows, 0.0);
+    m_historySupplementalRows = QVector<qfloat16>();
+    m_historySupplementalCenterMhz = QVector<double>();
+    m_historySupplementalBandwidthMhz = QVector<double>();
     m_historyWriteRow = 0;
     m_historyRowCount = 0;
     resetHistorySmoothing();
@@ -496,7 +513,11 @@ bool DssRenderer::historyStorageMatchesCapacity() const
     const int expectedSampleCount = m_historyCapacityRows * kCols;
     return m_historyRows.size() == expectedSampleCount
         && m_historyRowCenterMhz.size() == m_historyCapacityRows
-        && m_historyRowBandwidthMhz.size() == m_historyCapacityRows;
+        && m_historyRowBandwidthMhz.size() == m_historyCapacityRows
+        && (m_historySupplementalRows.isEmpty()
+            || (m_historySupplementalRows.size() == expectedSampleCount
+                && m_historySupplementalCenterMhz.size() == m_historyCapacityRows
+                && m_historySupplementalBandwidthMhz.size() == m_historyCapacityRows));
 }
 
 void DssRenderer::resetHistorySmoothing()
@@ -508,7 +529,11 @@ void DssRenderer::resetHistorySmoothing()
 
 void DssRenderer::appendHistoryRow(const QVector<float>& binsDbm,
                                    double centerMhz, double bandwidthMhz,
-                                   float fallbackDbm)
+                                   float fallbackDbm,
+                                   const QVector<float>& supplementalBinsDbm,
+                                   double supplementalCenterMhz,
+                                   double supplementalBandwidthMhz,
+                                   bool preserveInput)
 {
     if (m_historyCapacityRows <= 0) {
         return;
@@ -542,9 +567,13 @@ void DssRenderer::appendHistoryRow(const QVector<float>& binsDbm,
         }
     }
     m_skipHistoryTemporalBlendOnce = false;
-    const std::array<float, kCols> row =
-        smoothDssRow(raw, m_historyRawPrev1, m_historyRawPrev2,
+    const std::array<float, kCols> row = preserveInput ? raw
+        : smoothDssRow(raw, m_historyRawPrev1, m_historyRawPrev2,
                      m_historyRawHistCount, previous);
+    if (preserveInput) {
+        resetHistorySmoothing();
+        m_skipHistoryTemporalBlendOnce = true;
+    }
     m_historyWriteRow =
         (m_historyWriteRow - 1 + m_historyCapacityRows) % m_historyCapacityRows;
     qfloat16* dst = m_historyRows.data() + m_historyWriteRow * kCols;
@@ -553,7 +582,47 @@ void DssRenderer::appendHistoryRow(const QVector<float>& binsDbm,
     }
     m_historyRowCenterMhz[m_historyWriteRow] = centerMhz;
     m_historyRowBandwidthMhz[m_historyWriteRow] = bandwidthMhz;
+    const bool haveSupplemental = !supplementalBinsDbm.isEmpty()
+        && std::isfinite(supplementalCenterMhz) && supplementalCenterMhz > 0
+        && std::isfinite(supplementalBandwidthMhz) && supplementalBandwidthMhz > 0;
+    if (haveSupplemental) {
+        if (m_historySupplementalRows.isEmpty()) {
+            m_historySupplementalRows.resize(m_historyCapacityRows * kCols);
+            m_historySupplementalCenterMhz = QVector<double>(m_historyCapacityRows, 0);
+            m_historySupplementalBandwidthMhz = QVector<double>(m_historyCapacityRows, 0);
+        }
+        const std::array<float, kCols> supplemental = resampledRawRow(supplementalBinsDbm, fallbackDbm);
+        qfloat16* supplementalDst = m_historySupplementalRows.data() + m_historyWriteRow * kCols;
+        for (int c = 0; c < kCols; ++c) {
+            supplementalDst[c] = qfloat16(supplemental[c]);
+        }
+        m_historySupplementalCenterMhz[m_historyWriteRow] = supplementalCenterMhz;
+        m_historySupplementalBandwidthMhz[m_historyWriteRow] = supplementalBandwidthMhz;
+    } else if (!m_historySupplementalRows.isEmpty()) {
+        // A recycled ring slot must not advertise an older capture's data.
+        m_historySupplementalCenterMhz[m_historyWriteRow] = 0;
+        m_historySupplementalBandwidthMhz[m_historyWriteRow] = 0;
+    }
     m_historyRowCount = std::min(m_historyRowCount + 1, m_historyCapacityRows);
+}
+
+void DssRenderer::restoreHistorySupplemental(int historyRing, int visibleRing)
+{
+    const double center = m_historySupplementalCenterMhz.value(historyRing, 0);
+    const double bandwidth = m_historySupplementalBandwidthMhz.value(historyRing, 0);
+    const bool present = !m_historySupplementalRows.isEmpty() && center > 0 && bandwidth > 0;
+    m_preserveSupplementalFrame[visibleRing] = present;
+    m_rowSupplementalCenterMhz[visibleRing] = present ? center : 0;
+    m_rowSupplementalBandwidthMhz[visibleRing] = present ? bandwidth : 0;
+    m_rowSupplementalCoverage[visibleRing].fill(present ? 1 : 0);
+    if (present) {
+        const qfloat16* source = m_historySupplementalRows.constData() + historyRing * kCols;
+        for (int c = 0; c < kCols; ++c) {
+            m_rowSupplemental[visibleRing][c] = float(source[c]);
+        }
+    } else {
+        m_rowSupplemental[visibleRing].fill(-200.0f);
+    }
 }
 
 void DssRenderer::rebuildVisibleFromHistory(int offsetRows,
@@ -612,10 +681,7 @@ void DssRenderer::rebuildVisibleFromHistory(int offsetRows,
         m_rowCoverage[age] = coverage;
         m_rowCenterMhz[age] = centerMhz;
         m_rowBandwidthMhz[age] = bandwidthMhz;
-        m_rowSupplemental[age].fill(-200.0f);
-        m_rowSupplementalCoverage[age].fill(0);
-        m_rowSupplementalCenterMhz[age] = 0.0;
-        m_rowSupplementalBandwidthMhz[age] = 0.0;
+        restoreHistorySupplemental(historyRing, age);
     }
 
     m_dirty = true;
@@ -675,10 +741,7 @@ void DssRenderer::reprojectFrequencyFrame(double oldCenterMhz,
             m_rowCoverage[visibleRing] = coverage;
             m_rowCenterMhz[visibleRing] = newCenterMhz;
             m_rowBandwidthMhz[visibleRing] = newBandwidthMhz;
-            m_rowSupplemental[visibleRing].fill(-200.0f);
-            m_rowSupplementalCoverage[visibleRing].fill(0);
-            m_rowSupplementalCenterMhz[visibleRing] = 0.0;
-            m_rowSupplementalBandwidthMhz[visibleRing] = 0.0;
+            restoreHistorySupplemental(historyRing, visibleRing);
         }
         m_dirty = true;
         // The previous live row was just replaced from retained history.
@@ -698,17 +761,20 @@ void DssRenderer::reprojectFrequencyFrame(double oldCenterMhz,
         const ReprojectedRow remapped = reprojectRow(
             m_rows[ring],
             &m_rowCoverage[ring],
-            oldCenterMhz, oldBandwidthMhz,
+            m_preserveSupplementalFrame[ring] ? m_rowCenterMhz[ring] : oldCenterMhz,
+            m_preserveSupplementalFrame[ring] ? m_rowBandwidthMhz[ring] : oldBandwidthMhz,
             newCenterMhz, newBandwidthMhz,
             fallbackDbm);
         m_rows[ring] = remapped.values;
         m_rowCoverage[ring] = remapped.coverage;
         m_rowCenterMhz[ring] = newCenterMhz;
         m_rowBandwidthMhz[ring] = newBandwidthMhz;
-        m_rowSupplemental[ring].fill(-200.0f);
-        m_rowSupplementalCoverage[ring].fill(0);
-        m_rowSupplementalCenterMhz[ring] = 0.0;
-        m_rowSupplementalBandwidthMhz[ring] = 0.0;
+        if (!m_preserveSupplementalFrame[ring]) {
+            m_rowSupplemental[ring].fill(-200.0f);
+            m_rowSupplementalCoverage[ring].fill(0);
+            m_rowSupplementalCenterMhz[ring] = 0.0;
+            m_rowSupplementalBandwidthMhz[ring] = 0.0;
+        }
     }
     m_dirty = true;
     // Even when retained history is unavailable, the first target-frame row

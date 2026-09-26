@@ -26,6 +26,21 @@ using namespace AetherSDR;
 namespace AetherSDR {
 struct SpectrumOffscreenTestAccess {
     static const QVector<float>& trace(const SpectrumWidget& widget) { return widget.displaySpectrumBins(); }
+    static QVector<float> supplemental(const SpectrumWidget& widget, const QVector<float>& bins,
+                                       double low, double high, bool sameScale) {
+        return widget.buildNativeDssSupplementalRow(bins, low, high, sameScale);
+    }
+    static void prepareHistory(SpectrumWidget& widget) {
+        widget.resetCurrentWaterfallRowsForSize(QSize(800, 100), QSize(800, 16));
+    }
+    static const DssRenderer& dss(const SpectrumWidget& widget) { return widget.m_dss; }
+    static void preview(SpectrumWidget& widget, double base, double target, double span) {
+        widget.m_frequencyPreviewActive = true;
+        widget.m_frequencyPreviewBaseCenterMhz = base;
+        widget.m_frequencyPreviewBaseBandwidthMhz = span * 2;
+        widget.m_frequencyPreviewTargetCenterMhz = target;
+        widget.m_frequencyPreviewTargetBandwidthMhz = span;
+    }
     static QPoint marker(SpectrumWidget& widget) {
         QImage image(widget.size(), QImage::Format_ARGB32);
         QPainter painter(&image);
@@ -108,6 +123,50 @@ int main(int argc, char** argv)
         check(avg && weighted && avg->accessibleDescription().isEmpty()
             && weighted->toolTip().contains("Weights recent"),
             "switching to an undeclared family restores its original wording");
+        trace.observeFrequencyRange(100.0, 0.01875);
+        trace.updateSpectrum(QVector<float>(512, -80));
+        QVector<float> capture(65536, -90);
+        capture[1000] = -15; // Real captured signal far outside this tiny view.
+        check(SpectrumOffscreenTestAccess::supplemental(trace, capture, 98.8, 101.2, true) == capture,
+            "same-scale FFT coverage retains every offscreen level even with too little overlap for intensity calibration");
+        check(SpectrumOffscreenTestAccess::supplemental(trace, capture, 98.8, 101.2, false).isEmpty(),
+            "unrelated intensity tiles retain the existing minimum-overlap rule");
+        trace.setSpectrumRenderMode(1);
+        SpectrumOffscreenTestAccess::prepareHistory(trace);
+        trace.updateSpectrum(QVector<float>(512, -20)); // A newer trace than the queued history row.
+        const int rowsBefore = SpectrumOffscreenTestAccess::dss(trace).rowCount();
+        trace.updateWaterfallRow(QVector<float>(65536, -80), 98.8, 101.2, 1, true);
+        const DssRenderer& dss = SpectrumOffscreenTestAccess::dss(trace);
+        std::printf("coherent_row before=%d after=%d primary=%.3f supplemental=%.3f\n",
+            rowsBefore, dss.rowCount(), dss.rowDataRing(dss.headRing())[300],
+            dss.rowSupplementalDataRing(dss.headRing())[300]);
+        check(dss.rowCount() == rowsBefore + 1 && dss.rowDataRing(dss.headRing())[300] == -80
+            && dss.rowSupplementalDataRing(dss.headRing())[300] == -80,
+            "coherent history derives its close view and overhang from the same observation despite a newer live trace");
+        capture.fill(-90);
+        capture[32512 + 100] = -15;
+        capture[32512 + 114] = -20;
+        trace.updateWaterfallRow(capture, 98.8, 101.2, 2, true);
+        const float* close = dss.rowDataRing(dss.headRing());
+        check(near(dss.rowBandwidthMhzAtAge(0), .01875)
+            && close[150] == -15 && close[171] == -20 && close[160] == -90,
+            "primary close-view density preserves two narrow peaks and their valley beside wide supplemental coverage");
+        trace.observeFrequencyRange(101.195, .03);
+        trace.updateWaterfallRow(capture, 98.8, 101.2, 3, true);
+        const double edgeLow = dss.rowCenterMhzAtAge(0) - dss.rowBandwidthMhzAtAge(0) / 2;
+        const double edgeHigh = dss.rowCenterMhzAtAge(0) + dss.rowBandwidthMhzAtAge(0) / 2;
+        check(edgeLow <= 101.18 && edgeLow >= 101.18 - 2.4 / 65536
+            && near(edgeHigh, 101.2) && near(dss.rowSupplementalBandwidthMhzAtAge(0), 2.4),
+            "partial right-edge coverage is stamped only through the last actual capture bin");
+        trace.observeFrequencyRange(102, .03);
+        trace.updateWaterfallRow(capture, 98.8, 101.2, 4, true);
+        check(near(dss.rowCenterMhzAtAge(0), 100) && near(dss.rowBandwidthMhzAtAge(0), 2.4),
+            "an out-of-capture view keeps the row's real RF frame instead of labeling absent frequencies");
+        trace.observeFrequencyRange(101.195, .03);
+        SpectrumOffscreenTestAccess::preview(trace, 101.19, 101.195, .03);
+        trace.updateWaterfallRow(capture, 98.8, 101.2, 5, true);
+        check(near(dss.rowCenterMhzAtAge(0) + dss.rowBandwidthMhzAtAge(0) / 2, 101.2),
+            "a zoom preview preserves explicit coherent RF bounds instead of relabeling a padded preview frame");
     }
     SpectrumWidget widget;
     widget.resize(1200, 600);

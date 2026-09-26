@@ -208,7 +208,11 @@ public:
         double bandwidthMhz,
         const QVector<float>& supplementalBinsDbm,
         double supplementalCenterMhz,
-        double supplementalBandwidthMhz);
+        double supplementalBandwidthMhz, bool preserveInput = false);
+    // preserveInput keeps final backend observations through this renderer:
+    // spatial resampling remains, but no median/IIR is applied a second time.
+    // Supplied retained coverage has its own frame and never replaces primary
+    // close-view samples. Existing callers retain their old smoothing/storage.
     void setHistoryCapacityRows(int rows);
     int historyCapacityRows() const { return m_historyCapacityRows; }
     int historyRowCount() const { return m_historyRowCount; }
@@ -218,7 +222,11 @@ public:
     quint64 allocatedBytes() const;
     void appendHistoryRow(const QVector<float>& binsDbm,
                           double centerMhz, double bandwidthMhz,
-                          float fallbackDbm);
+                          float fallbackDbm,
+                          const QVector<float>& supplementalBinsDbm = {},
+                          double supplementalCenterMhz = 0,
+                          double supplementalBandwidthMhz = 0,
+                          bool preserveInput = false);
     void rebuildVisibleFromHistory(int offsetRows,
                                    double centerMhz, double bandwidthMhz,
                                    float fallbackDbm);
@@ -304,6 +312,7 @@ public:
 
 private:
     bool historyStorageMatchesCapacity() const;
+    void restoreHistorySupplemental(int historyRing, int visibleRing);
     void resetHistorySmoothing();
     void rebuild(const QSize& px, int scaleStripPx, float floorDbm,
                  float rangeDb, float zCurve, const PaletteFn& palette,
@@ -333,6 +342,7 @@ private:
     std::array<double, kRows> m_rowBandwidthMhz{};
     std::array<double, kRows> m_rowSupplementalCenterMhz{};
     std::array<double, kRows> m_rowSupplementalBandwidthMhz{};
+    std::array<bool, kRows> m_preserveSupplementalFrame{};
     int     m_head  = 0;         // index of the newest row
     int     m_count = 0;         // number of valid rows (0..kRows)
     bool    m_dirty = true;
@@ -368,6 +378,11 @@ private:
     QVector<qfloat16> m_historyRows;      // flat [history row][kCols]
     QVector<double> m_historyRowCenterMhz;
     QVector<double> m_historyRowBandwidthMhz;
+    // Allocated only when a producer actually supplies retained wider data.
+    // Capacity and lifetime are the same bounded ring as the primary history.
+    QVector<qfloat16> m_historySupplementalRows;
+    QVector<double> m_historySupplementalCenterMhz;
+    QVector<double> m_historySupplementalBandwidthMhz;
     int m_historyCapacityRows = 0;
     int m_historyWriteRow = 0;            // ring index of newest retained row
     int m_historyRowCount = 0;

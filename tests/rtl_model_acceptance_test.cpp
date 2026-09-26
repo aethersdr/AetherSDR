@@ -77,6 +77,8 @@ int main(int argc, char** argv)
     saved.squelchEnabled = true; saved.squelchLevel = 33;
     check(RtlSliceSettings(scope).patch(100'000'000, 2'400'000, {saved}), "sparse saved receiver seeded");
     RadioModel model;
+    check(QMetaType::fromName("AetherSDR::SpectrumCoverage").isValid(),
+          "coverage payload is registered for name-based seam consumers");
     check(model.rebuildBackendForTest("rtl"), "real model backend initialized");
     RadioModelSliceLifecycleTestAccess::restore(model, "model-accepted");
     auto& backend = *static_cast<rtl::RtlSdrBackend*>(model.backend());
@@ -263,6 +265,14 @@ int main(int argc, char** argv)
             && backend.healthSnapshot().values.value("rtlCaptureDcClear").toBool(),
               "explicit placement moves capture while preserving receiver RF and reporting DC clearance");
         QVector<float> observedBins;
+        QVector<float> coverageBins;
+        double coverageLowMhz = 0, coverageHighMhz = 0;
+        int waterfallRows = 0;
+        model.requestPanDisplayRates(pan->panId(), 25, 100);
+        const auto waterfallConnection = QObject::connect(&model, &RadioModel::panFeedWaterfallRowReady,
+            &model, [&](quint32, const QVector<float>& bins, double low, double high, quint32, qint64) {
+                coverageBins = bins; coverageLowMhz = low; coverageHighMhz = high; ++waterfallRows;
+            });
         int frames = 0;
         const auto frameConnection = QObject::connect(&model, &RadioModel::panFeedSpectrumReady,
             &model, [&](quint32, const QVector<float>& bins, qint64) { observedBins = bins; ++frames; });
@@ -275,11 +285,42 @@ int main(int argc, char** argv)
         check(observedBins.size() == 512 && observedBins[256] == -12.0f
             && observedBins.front() == input[32512] && observedBins.back() == input[33023],
               "display crop preserves the genuine DC bin and unchanged neighboring amplitudes");
+        const auto usable = rtl::RtlViewport::fit(displaced.capture, input.size(),
+            displaced.capture.centerHz, displaced.capture.achievedSampleRateHz);
+        check(usable && coverageBins == input.sliced(usable->firstBin, usable->binCount)
+            && std::abs(coverageLowMhz - (usable->centerHz - usable->spanHz / 2) / 1e6) < 1e-10
+            && std::abs(coverageHighMhz - (usable->centerHz + usable->spanHz / 2) / 1e6) < 1e-10
+            && waterfallRows == 1,
+            "one history row preserves full usable real capture bins and RF bounds behind a narrow view");
+        const QVector<float> fullCoverage = coverageBins;
+        model.requestPanCenter(pan->panId(), displaced.capture.centerHz / 1e6,
+            16 * displaced.capture.achievedSampleRateHz / input.size() / 1e6);
+        rtl::RtlCaptureBackendTestAccess::spectrum(backend, raw, displaced.token);
+        check(observedBins.size() == 16 && coverageBins == fullCoverage && waterfallRows == 2,
+              "maximum zoom keeps real capture coverage while retaining all sixteen genuine close-view bins");
+        if (usable) {
+            const double rightCenter = (usable->centerHz + usable->spanHz / 2) / 1e6 - .009375;
+            model.requestPanCenter(pan->panId(), rightCenter, .01875);
+            rtl::RtlCaptureBackendTestAccess::spectrum(backend, raw, displaced.token);
+            check(observedBins == input.sliced(usable->firstBin + usable->binCount - 512, 512)
+                && coverageBins == fullCoverage && waterfallRows == 3,
+                "near-edge asymmetric view carries no invented coverage past the actual usable capture");
+        }
         const int acceptedFrames = frames;
+        const int acceptedRows = waterfallRows;
         rtl::RtlCaptureBackendTestAccess::spectrum(backend, raw, {displaced.token.session, displaced.token.revision + 1});
         rtl::RtlCaptureBackendTestAccess::spectrum(backend, raw.left(17), displaced.token);
-        check(frames == acceptedFrames, "stale and malformed spectra cannot populate the current view");
+        for (const SpectrumCoverage& invalid : {
+                 SpectrumCoverage{raw.left(17), 99, 101},
+                 SpectrumCoverage{raw, std::numeric_limits<double>::quiet_NaN(), 101},
+                 SpectrumCoverage{raw, 102, 101}, SpectrumCoverage{raw, -1, 101},
+                 SpectrumCoverage{raw, 99, 1e300}}) {
+            emit backend.spectrumFrameReady(0, raw, invalid);
+        }
+        check(frames == acceptedFrames && waterfallRows == acceptedRows,
+              "stale or malformed view/coverage payloads populate neither spectrum nor history");
         QObject::disconnect(frameConnection);
+        QObject::disconnect(waterfallConnection);
         slice->setFrequency(107.0);
         check(waitFor([&] { device->block(); return slice->frequency() == 107.0
             && rtl::RtlCaptureBackendTestAccess::idle(backend); }), "test receiver returned after viewport checks");
@@ -483,6 +524,18 @@ int main(int argc, char** argv)
                 && std::abs(pan->centerMhz() - 105.0) <= halfFftBinMhz,
                   "full-width zoom during pending typed Center keeps the RF centered within half an FFT bin");
         }
+        int rowsAfterDisconnect = 0;
+        QObject::connect(&zoom, &RadioModel::panFeedWaterfallRowReady, &zoom,
+            [&](quint32, const QVector<float>&, double, double, quint32, qint64) { ++rowsAfterDisconnect; });
+        QObject::connect(&zoom, &RadioModel::panFeedSpectrumReady, &zoom,
+            [&](quint32, const QVector<float>&, qint64) { radio.disconnectRadio(); });
+        const auto state = rtl::RtlCaptureBackendTestAccess::state(radio);
+        const QVector<float> lastFrame(rtl::RtlViewport::kRtlSpectrumBins, -80);
+        rtl::RtlCaptureBackendTestAccess::spectrum(radio,
+            QByteArray(reinterpret_cast<const char*>(lastFrame.constData()), lastFrame.size() * sizeof(float)),
+            state.token);
+        check(!radio.isConnected() && rowsAfterDisconnect == 0,
+              "reentrant disconnect during spectrum publication cannot leak its paired history row");
         radio.disconnectRadio();
     }
     std::fprintf(stderr, "rtl_model_acceptance_test: %d failures\n", failures);

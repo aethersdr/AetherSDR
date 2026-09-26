@@ -935,16 +935,21 @@ void RadioModel::setupBackend(const QString& family)
             m_flexBackend = flex;                // transitional alias (2.3)
 
             // aetherd Gap B (Step 1): forward Flex's render signals into the
-            // backend-neutral feed 1:1. Signal-to-signal, signature-identical → no
-            // transformation and no behaviour change; the UI binds to the RadioModel
+            // backend-neutral feed with unchanged samples/bounds. Flex tiles
+            // retain their intensity-scale semantics; the UI binds to RadioModel
             // panFeed* signals instead of panStream() so the render path is
-            // family-agnostic. Signal-to-signal preserves the original thread hop
+            // family-agnostic. The receiver context preserves the original thread hop
             // (PanadapterStream worker → RadioModel thread), so batching/pacing is
             // unchanged. Valid for the whole life (panStream == RadioModel life).
             connect(m_panStream, &PanadapterStream::spectrumReady,
                     this, &RadioModel::panFeedSpectrumReady);
             connect(m_panStream, &PanadapterStream::waterfallRowReady,
-                    this, &RadioModel::panFeedWaterfallRowReady);
+                    this, [this, generation](quint32 id, const QVector<float>& bins,
+                                              double low, double high, quint32 timecode, qint64 emittedNs) {
+                if (generation == m_backendReceiverGeneration) {
+                    emit panFeedWaterfallRowReady(id, bins, low, high, timecode, emittedNs);
+                }
+            });
             connect(m_panStream, &PanadapterStream::waterfallAutoBlackLevel,
                     this, &RadioModel::panFeedWaterfallAutoBlackLevel);
         } else if (auto* sim = dynamic_cast<SimBackend*>(m_backend.get())) {
@@ -982,9 +987,9 @@ void RadioModel::setupBackend(const QString& family)
     // "(HL2)", which is how a sentence downstream came to describe HL2's frames
     // as if they were everyone's.
     connect(m_backend.get(), &IRadioBackend::spectrumFrameReady, this,
-            [this, generation](int panId, const QByteArray& frame) {
+            [this, generation](int panId, const QByteArray& frame, const SpectrumCoverage& coverage) {
         if (generation == m_backendReceiverGeneration) {
-            onBackendSpectrumFrame(panId, frame);
+            onBackendSpectrumFrame(panId, frame, coverage);
         }
     });
     // Liveness stamps, on the arrival edge rather than anywhere downstream: a
@@ -2207,6 +2212,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateTuneAvailability);
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateTuneAvailability);
     qRegisterMetaType<PcmFrame>();
+    qRegisterMetaType<SpectrumCoverage>();
     qRegisterMetaType<TxCoordinator::StopRequest>();
     qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
@@ -7021,7 +7027,8 @@ void RadioModel::setPanNoiseFloorEnable(bool on)
 
 // ─── Connection slots ─────────────────────────────────────────────────────────
 
-void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
+void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame,
+                                       const SpectrumCoverage& coverage)
 {
     // aetherd Gap B (Step 2): the HL2 data-plane payload is a raw float32 array
     // (Hl2Backend::floatBytes) of DC-centred dBFS bins. Producer and consumer are
@@ -7029,7 +7036,8 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // the documented little-endian contract matters only for the step-4 binary
     // wire format that supersedes this relay cross-machine.
     const int binCount = static_cast<int>(frame.size() / sizeof(float));
-    if (binCount <= 0)
+    if (binCount <= 0 || frame.size() % sizeof(float) != 0
+        || (!coverage.empty() && !coverage.valid()))
         return;
     QVector<float> bins(binCount);
     memcpy(bins.data(), frame.constData(),
@@ -7072,16 +7080,19 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
             streamId = realId;
     }
     const qint64 nowNs = PerfTelemetry::nowNs();
+    const quint64 generation = m_backendReceiverGeneration;
+    const quint64 session = m_sessionGeneration;
 
     // The PAN feed is already at the operator's rate — the backend caps its own
     // production at the source (IRadioBackend::setPanFrameRate), where a frame
     // that is not due costs nothing instead of being computed and discarded.
     // So this is a straight pass-through.
     emit panFeedSpectrumReady(streamId, bins, nowNs);
+    if (generation != m_backendReceiverGeneration || session != m_sessionGeneration) { return; }
 
-    // Drive the waterfall from the same frames. The backend supplies no separate
-    // waterfall plane (Flex gets one from the radio), so the panadapter row IS
-    // the waterfall row; it needs real band edges to scale against.
+    // Drive the waterfall from the same observation. Optional coherent coverage
+    // contains the actual wider capture and its own RF bounds. Older producers
+    // retain their viewport-derived row. Flex supplies a separate radio plane.
     //
     // Gated once more, because the waterfall rate is a SEPARATE control from
     // the frame rate and normally asks for something slower. That gate paces
@@ -7138,10 +7149,15 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
                 if (const quint32 realWfId = pan->wfStreamId())
                     wfId = realWfId;
             }
-            emit panFeedWaterfallRowReady(wfId, bins,
-                                          panCenterMhz - half,
-                                          panCenterMhz + half,
-                                          m_backendWfTimecode++, nowNs);
+            QVector<float> coverageBins;
+            if (!coverage.empty()) {
+                coverageBins.resize(coverage.bins.size() / sizeof(float));
+                memcpy(coverageBins.data(), coverage.bins.constData(), coverage.bins.size());
+            }
+            emit panFeedWaterfallRowReady(wfId, coverage.empty() ? bins : coverageBins,
+                                          coverage.empty() ? panCenterMhz - half : coverage.lowMhz,
+                                          coverage.empty() ? panCenterMhz + half : coverage.highMhz,
+                                          m_backendWfTimecode++, nowNs, !coverage.empty());
         }
     }
 }

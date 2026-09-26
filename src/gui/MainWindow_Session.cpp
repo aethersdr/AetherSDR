@@ -1664,7 +1664,8 @@ void MainWindow::wirePanLifecycle()
                                                 double low,
                                                 double high,
                                                 quint32 tc,
-                                                qint64 emittedNs) {
+                                                qint64 emittedNs,
+                                                bool coherentSpectrumCoverage) {
         if (m_shuttingDown || !m_panStack) {
             return;
         }
@@ -1677,7 +1678,8 @@ void MainWindow::wirePanLifecycle()
         deferReceivePresentation(
             ReceivePresentationSource::Flex,
             ReceivePresentationSurface::Waterfall,
-            [this, profileLoadFrameReady, streamId, bins, low, high, tc, frameGuard]() {
+            [this, profileLoadFrameReady, streamId, bins, low, high, tc, frameGuard,
+             coherentSpectrumCoverage]() {
                 if (m_shuttingDown || !m_panStack || !frameGuard.isCurrent()) {
                     return;
                 }
@@ -1686,7 +1688,10 @@ void MainWindow::wirePanLifecycle()
                         double rowLow = low;
                         double rowHigh = high;
                         const double panCenter = pan->centerMhz();
-                        if (XvtrPolicy::isWaterfallTileOutsidePan(rowLow, rowHigh,
+                        // Coherent coverage already names its actual RF frame;
+                        // only legacy tiles may need IF-to-RF interpretation.
+                        if (!coherentSpectrumCoverage
+                            && XvtrPolicy::isWaterfallTileOutsidePan(rowLow, rowHigh,
                                                                   panCenter)) {
                             // Only reinterpret non-overlapping tile ranges for
                             // real XVTR IF/RF translation. Ordinary HF pans can
@@ -1725,7 +1730,7 @@ void MainWindow::wirePanLifecycle()
                                                        bins.size())) {
                                 return;
                             }
-                            sw->updateWaterfallRow(bins, rowLow, rowHigh, tc);
+                            sw->updateWaterfallRow(bins, rowLow, rowHigh, tc, coherentSpectrumCoverage);
                             finishPanadapterConnectionAnimation();
                         }
                         return;
@@ -1734,7 +1739,7 @@ void MainWindow::wirePanLifecycle()
                 if (m_radioModel.panadapters().isEmpty()
                     && !profileLoadRadioStateWritesHeld()) {
                     if (auto* sw = spectrum()) {
-                        sw->updateWaterfallRow(bins, low, high, tc);
+                        sw->updateWaterfallRow(bins, low, high, tc, coherentSpectrumCoverage);
                         finishPanadapterConnectionAnimation();
                     }
                 } else {

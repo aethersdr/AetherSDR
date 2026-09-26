@@ -270,7 +270,7 @@ public:
     // the FFT-derived waterfall rows from updateSpectrum().
     void updateWaterfallRow(const QVector<float>& binsDbm,
                             double lowFreqMhz, double highFreqMhz,
-                            quint32 timecode = 0);
+                            quint32 timecode = 0, bool coherentSpectrumCoverage = false);
     void setKiwiSdrWaterfallAvailable(bool available);
     void setKiwiSdrWaterfallActive(bool active);
     bool kiwiSdrWaterfallActive() const { return m_kiwiSdrWaterfallActive; }
@@ -1252,29 +1252,39 @@ private:
         double supplementalBandwidthMhz = -1.0);
     void appendDssHistoryRow(const QVector<float>& binsDbm,
                              double frameCenterMhz = -1.0,
-                             double frameBandwidthMhz = -1.0);
+                             double frameBandwidthMhz = -1.0,
+                             const QVector<float>& supplementalBinsDbm = {},
+                             double supplementalCenterMhz = 0,
+                             double supplementalBandwidthMhz = 0,
+                             bool preserveInput = false);
     void appendDssWaterfallRow(const QVector<float>& binsDbm,
                                double frameCenterMhz = -1.0,
                                double frameBandwidthMhz = -1.0,
                                bool updateLiveSurface = true,
                                const QVector<float>& supplementalBinsDbm = {},
                                double supplementalCenterMhz = -1.0,
-                               double supplementalBandwidthMhz = -1.0);
+                               double supplementalBandwidthMhz = -1.0,
+                               bool preserveInput = false);
     void appendLatestDssWaterfallRow(double frameCenterMhz = -1.0,
                                      double frameBandwidthMhz = -1.0);
     QVector<float> buildNativeDssSupplementalRow(
         const QVector<float>& tileIntensity,
         double tileLowMhz,
-        double tileHighMhz) const;
+        double tileHighMhz, bool sameSpectrumScale = false) const;
     void pushDssLiveRow(DssRenderer& dss, const QVector<float>& binsDbm,
                         bool hiddenStream, double frameCenterMhz,
                         double frameBandwidthMhz,
                         const QVector<float>& supplementalBinsDbm = {},
                         double supplementalCenterMhz = -1.0,
-                        double supplementalBandwidthMhz = -1.0);
+                        double supplementalBandwidthMhz = -1.0,
+                        bool preserveInput = false);
     void retainDssHistoryRow(DssRenderer& dss, const QVector<float>& binsDbm,
                              double centerMhz, double bandwidthMhz,
-                             float fallbackDbm);
+                             float fallbackDbm,
+                             const QVector<float>& supplementalBinsDbm = {},
+                             double supplementalCenterMhz = 0,
+                             double supplementalBandwidthMhz = 0,
+                             bool preserveInput = false);
     float dssHistoryFallbackDbm() const;
     const QVector<float>& remapPreviewDssRow(const QVector<float>& binsDbm,
                                              double frameCenterMhz,
