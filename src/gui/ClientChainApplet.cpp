@@ -100,6 +100,8 @@ ClientChainApplet::ClientChainApplet(QWidget* parent) : QWidget(parent)
 
         m_txBtn = new QPushButton("TX");
         m_txBtn->setCheckable(true);
+        m_txBtn->setAccessibleName(tr("Aetherial TX chain"));
+        m_txBtn->setAccessibleDescription(tr("Show the transmit audio chain"));
         m_txBtn->setStyleSheet(kModeBtnStyle);
         m_txBtn->setFixedHeight(22);
         m_txBtn->setToolTip("Show and edit the TX DSP chain");
@@ -109,6 +111,8 @@ ClientChainApplet::ClientChainApplet(QWidget* parent) : QWidget(parent)
 
         m_rxBtn = new QPushButton("RX");
         m_rxBtn->setCheckable(true);
+        m_rxBtn->setAccessibleName(tr("Aetherial RX chain"));
+        m_rxBtn->setAccessibleDescription(tr("Show the receive audio chain"));
         m_rxBtn->setStyleSheet(kModeBtnStyle);
         m_rxBtn->setFixedHeight(22);
         m_rxBtn->setToolTip("Show and edit the RX DSP chain");
@@ -300,6 +304,7 @@ void ClientChainApplet::setTxAudioPathNotice(const QString& text, bool warning)
 {
     if (!m_pcAudioNotice) return;
     m_audioPathNoticeVisible = !text.isEmpty();
+    m_txAudioPathBlocked = warning;
     m_pcAudioNotice->setText(text);
     m_pcAudioNotice->setAccessibleDescription(text);
     ThemeManager::instance().applyStyleSheet(m_pcAudioNotice, warning
@@ -309,7 +314,7 @@ void ClientChainApplet::setTxAudioPathNotice(const QString& text, bool warning)
         : "QLabel { background: {{color.background.1}}; "
           "color: {{color.text.primary}}; border: 1px solid {{color.border.strong}}; "
           "border-radius: 3px; padding: 4px; font-size: 10px; }");
-    m_pcAudioNotice->setVisible(m_audioPathNoticeVisible && m_mode == ChainMode::Tx);
+    updateContentVisibility();
 }
 
 void ClientChainApplet::setMonitorRecording(bool on)
@@ -413,18 +418,7 @@ void ClientChainApplet::setMode(ChainMode m)
     m_mode = m;
 
     const bool tx = (m == ChainMode::Tx);
-    if (m_chain)      m_chain->setVisible(tx);
-    if (m_rxChain)    m_rxChain->setVisible(!tx);
-    // Monitor record/play buttons capture post-PUDU TX audio; they're
-    // meaningless on the RX chain so hide them when RX is showing.
-    if (m_monRecBtn)  m_monRecBtn->setVisible(tx);
-    if (m_monPlayBtn) m_monPlayBtn->setVisible(tx);
-    // Hint text applies to whichever chain is showing — both sides
-    // now support the click-bypass / double-click-edit gestures.
-    if (m_hint)       m_hint->setVisible(true);
-    if (m_pcAudioNotice) {
-        m_pcAudioNotice->setVisible(tx && m_audioPathNoticeVisible);
-    }
+    updateContentVisibility();
 
     // BYPASS button visual must reflect the *current* tab's bypass
     // state.  Each side has its own engine-owned snapshot; the
@@ -441,6 +435,21 @@ void ClientChainApplet::setMode(ChainMode m)
         "PooDooAudioActiveTab", tx ? "TX" : "RX");
 
     emit chainModeChanged(m);
+}
+
+void ClientChainApplet::updateContentVisibility()
+{
+    const bool tx = m_mode == ChainMode::Tx;
+    const bool showTxControls = tx && !m_txAudioPathBlocked;
+    if (m_chain) m_chain->setVisible(showTxControls);
+    if (m_rxChain) m_rxChain->setVisible(!tx);
+    if (m_monRecBtn) m_monRecBtn->setVisible(showTxControls);
+    if (m_monPlayBtn) m_monPlayBtn->setVisible(showTxControls);
+    if (m_bypassBtn) m_bypassBtn->setVisible(!tx || showTxControls);
+    if (m_hint) m_hint->setVisible(!tx || showTxControls);
+    if (m_pcAudioNotice) {
+        m_pcAudioNotice->setVisible(tx && m_audioPathNoticeVisible);
+    }
 }
 
 void ClientChainApplet::setActiveTab(ChainMode m)

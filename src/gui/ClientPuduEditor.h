@@ -25,6 +25,7 @@ public:
 
     void showForTx();
     void showForRx();
+    bool isShowingTx() const { return isVisible() && m_side == Side::Tx; }
 
 signals:
     void bypassToggled(Side side, bool bypassed);

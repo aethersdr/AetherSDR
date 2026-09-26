@@ -618,6 +618,13 @@ void AetherialAudioStrip::showSettings()
     dlg.exec();
 }
 
+void AetherialAudioStrip::closeSettingsIfOpen()
+{
+    if (AetherTxSettingsDialog* dlg = findChild<AetherTxSettingsDialog*>()) {
+        dlg->reject();
+    }
+}
+
 AetherialAudioStrip::~AetherialAudioStrip() = default;
 
 void AetherialAudioStrip::setAudioPathNotice(const QString& text, bool warning)

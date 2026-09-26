@@ -42,6 +42,7 @@ public:
 
     void showForTx();
     void showForRx();
+    bool isShowingTx() const { return isVisible() && m_side == Side::Tx; }
 
 signals:
     // Fired when the bypass button is toggled inside the editor.  The

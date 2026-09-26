@@ -37,6 +37,7 @@ public:
     // Switch the editor to the given path and show / raise the window.
     // Safe to call whether or not the window is currently visible.
     void showForPath(ClientEqApplet::Path path);
+    bool isShowingTx() const { return isVisible() && m_path == ClientEqApplet::Path::Tx; }
 
     // Push the radio's TX low/high filter cutoffs to the canvas as
     // dashed yellow guide lines.  No-op when the editor's current path

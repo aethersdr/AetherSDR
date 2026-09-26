@@ -31,6 +31,7 @@ public:
     enum class ChainMode { Tx, Rx };
 
     explicit ClientChainApplet(QWidget* parent = nullptr);
+    ChainMode activeTab() const { return m_mode; }
 
     void setAudioEngine(AudioEngine* engine);
     void refreshFromEngine();
@@ -103,6 +104,7 @@ signals:
 
 private:
     void setMode(ChainMode m);
+    void updateContentVisibility();
     // Click handler for the BYPASS toggle.  On check: records which
     // TX stages are currently enabled, disables them all.  On uncheck:
     // re-enables just the stages that were on before.  Manual changes
@@ -135,6 +137,7 @@ private:
     bool               m_monHasRecording{false};
     bool               m_micReady{false};
     bool               m_audioPathNoticeVisible{false};
+    bool               m_txAudioPathBlocked{false};
     ChainMode          m_mode{ChainMode::Tx};
 };
 

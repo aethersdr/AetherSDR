@@ -50,12 +50,71 @@
 #include "models/SliceModel.h"
 
 #include <QTimer>
+#include <QMessageBox>
 
 #include <memory>
 
 #include <algorithm>
 
 namespace AetherSDR {
+
+MainWindow::TxAudioPathBlock MainWindow::txAudioPathBlock() const
+{
+    if (!m_radioModel.isConnected()) return TxAudioPathBlock::None;
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    if (!caps.canTransmit || caps.hostModulates) return TxAudioPathBlock::None;
+
+    const bool pcAudioOn = AppSettings::instance()
+        .value("PcAudioEnabled", "True").toString() == "True";
+    if (caps.takesTxAudioOverSeam && !pcAudioOn) {
+        return TxAudioPathBlock::PcAudio;
+    }
+    if (caps.hasSelectableMicInputs
+        && m_radioModel.transmitModel().micSelection() != QStringLiteral("PC")) {
+        return TxAudioPathBlock::MicInput;
+    }
+    return TxAudioPathBlock::None;
+}
+
+QString MainWindow::txAudioPathBlockMessage(TxAudioPathBlock block) const
+{
+    switch (block) {
+    case TxAudioPathBlock::PcAudio:
+        return tr("PC Audio is off, so this radio cannot receive AetherTX audio "
+                  "from your computer. Connect your microphone to the computer "
+                  "and turn on PC Audio in the main window. A mic on the radio "
+                  "bypasses AetherTX.");
+    case TxAudioPathBlock::MicInput:
+        return tr("AetherTX uses a microphone connected to this computer. "
+                  "A mic plugged into the radio bypasses its effects. "
+                  "In Phone/CW, set Microphone source to PC.");
+    case TxAudioPathBlock::None:
+        return {};
+    }
+    return {};
+}
+
+bool MainWindow::showTxAudioPathErrorIfBlocked()
+{
+    const TxAudioPathBlock block = txAudioPathBlock();
+    if (block == TxAudioPathBlock::None) return false;
+    if (QMessageBox* existing = findChild<QMessageBox*>(
+            QStringLiteral("aetherTxAudioPathError"))) {
+        existing->raise();
+        existing->activateWindow();
+        return true;
+    }
+    auto* error = new QMessageBox(
+        QMessageBox::Warning, tr("AetherTX unavailable"),
+        txAudioPathBlockMessage(block)
+            + tr("\n\nFix the audio path, then open AetherTX again."),
+        QMessageBox::Ok, this);
+    error->setObjectName(QStringLiteral("aetherTxAudioPathError"));
+    error->setAccessibleName(tr("AetherTX audio path error"));
+    error->setAttribute(Qt::WA_DeleteOnClose);
+    error->open();
+    return true;
+}
 
 void MainWindow::updateTxAudioPathNotice()
 {
@@ -75,32 +134,15 @@ void MainWindow::updateTxAudioPathNotice()
                          "use a computer mic.");
         }
     } else {
-        const RadioCapabilities caps = m_radioModel.backendCapabilities();
-        const auto& tx = m_radioModel.transmitModel();
-        if (caps.canTransmit && !caps.hostModulates) {
-            if (caps.takesTxAudioOverSeam && !pcAudioOn) {
-                // Icom-style PCM transport: PC Audio controls TX capture too.
-                detail = tr("PC Audio is off, so this radio cannot receive "
-                            "AetherTX audio from your computer. Connect your "
-                            "microphone to the computer and turn on PC Audio "
-                            "in the main window. A mic on the radio bypasses "
-                            "AetherTX.");
-                compact = tr("PC Audio is off. Use a computer mic and turn on "
-                             "PC Audio for AetherTX.");
-                warning = true;
-            } else if (caps.hasSelectableMicInputs) {
-                // Flex-style stream: PC Audio controls RX playback, while the
-                // radio's MIC input selects the TX microphone path.
-                if (tx.micSelection() != QStringLiteral("PC")) {
-                    detail = tr("AetherTX uses a microphone connected to this "
-                                "computer. A mic plugged into the radio bypasses "
-                                "its effects. To use AetherTX on this radio, "
-                                "select PC as the MIC input.");
-                    compact = tr("A radio mic bypasses AetherTX. Use a computer "
-                                 "mic and select PC as the MIC input.");
-                    warning = true;
-                }
-            }
+        const TxAudioPathBlock block = txAudioPathBlock();
+        detail = txAudioPathBlockMessage(block);
+        warning = block != TxAudioPathBlock::None;
+        if (block == TxAudioPathBlock::PcAudio) {
+            compact = tr("PC Audio is off. Use a computer mic and turn on "
+                         "PC Audio for AetherTX.");
+        } else if (block == TxAudioPathBlock::MicInput) {
+            compact = tr("A radio mic bypasses AetherTX. In Phone/CW, "
+                         "set Microphone source to PC.");
         }
     }
 
@@ -109,6 +151,23 @@ void MainWindow::updateTxAudioPathNotice()
     }
     if (m_appletPanel && m_appletPanel->clientChainApplet()) {
         m_appletPanel->clientChainApplet()->setTxAudioPathNotice(compact, warning);
+        m_appletPanel->setTxAudioPathBlocked(warning);
+    }
+    // A live route change must not leave the TX editor usable after it
+    // becomes unavailable. The applet gives the operator the recovery path.
+    if (warning && m_aetherialStrip) {
+        m_aetherialStrip->closeSettingsIfOpen();
+        if (m_aetherialStrip->isVisible()) {
+            m_aetherialStrip->hide();
+            updateToolsMenuState();
+        }
+    }
+    if (warning) {
+        if (m_clientEqEditor && m_clientEqEditor->isShowingTx()) m_clientEqEditor->hide();
+        if (m_clientGateEditor && m_clientGateEditor->isShowingTx()) m_clientGateEditor->hide();
+        if (m_clientCompEditor && m_clientCompEditor->isShowingTx()) m_clientCompEditor->hide();
+        if (m_clientTubeEditor && m_clientTubeEditor->isShowingTx()) m_clientTubeEditor->hide();
+        if (m_clientPuduEditor && m_clientPuduEditor->isShowingTx()) m_clientPuduEditor->hide();
     }
 }
 
@@ -413,6 +472,7 @@ void MainWindow::wireDspApplets()
     auto wireEqEditOpen = [this](ClientEqApplet* applet) {
         connect(applet, &ClientEqApplet::editRequested, this,
                 [this](ClientEqApplet::Path path) {
+            if (path == ClientEqApplet::Path::Tx && showTxAudioPathErrorIfBlocked()) return;
             ensureClientEqEditor()->showForPath(path);
         });
     };
@@ -462,7 +522,9 @@ void MainWindow::wireDspApplets()
     m_appletPanel->clientCompTxApplet()->setAudioEngine(m_audio);
     m_appletPanel->clientCompRxApplet()->setAudioEngine(m_audio);
     connect(m_appletPanel->clientCompTxApplet(), &ClientCompApplet::editRequested,
-            this, [this]() { ensureClientCompEditor()->showForTx(); });
+            this, [this]() {
+        if (!showTxAudioPathErrorIfBlocked()) ensureClientCompEditor()->showForTx();
+    });
     connect(m_appletPanel->clientCompRxApplet(), &ClientCompApplet::editRequested,
             this, [this]() { ensureClientCompEditor()->showForRx(); });
 
@@ -470,7 +532,9 @@ void MainWindow::wireDspApplets()
     m_appletPanel->clientGateTxApplet()->setAudioEngine(m_audio);
     m_appletPanel->clientGateRxApplet()->setAudioEngine(m_audio);
     connect(m_appletPanel->clientGateTxApplet(), &ClientGateApplet::editRequested,
-            this, [this]() { ensureClientGateEditor()->showForTx(); });
+            this, [this]() {
+        if (!showTxAudioPathErrorIfBlocked()) ensureClientGateEditor()->showForTx();
+    });
     connect(m_appletPanel->clientGateRxApplet(), &ClientGateApplet::editRequested,
             this, [this]() { ensureClientGateEditor()->showForRx(); });
 
@@ -481,7 +545,9 @@ void MainWindow::wireDspApplets()
     m_appletPanel->clientTubeTxApplet()->setAudioEngine(m_audio);
     m_appletPanel->clientTubeRxApplet()->setAudioEngine(m_audio);
     connect(m_appletPanel->clientTubeTxApplet(), &ClientTubeApplet::editRequested,
-            this, [this]() { ensureClientTubeEditor()->showForTx(); });
+            this, [this]() {
+        if (!showTxAudioPathErrorIfBlocked()) ensureClientTubeEditor()->showForTx();
+    });
     connect(m_appletPanel->clientTubeRxApplet(), &ClientTubeApplet::editRequested,
             this, [this]() { ensureClientTubeEditor()->showForRx(); });
 
@@ -502,7 +568,9 @@ void MainWindow::wireDspApplets()
     m_appletPanel->clientPuduTxApplet()->setAudioEngine(m_audio);
     m_appletPanel->clientPuduRxApplet()->setAudioEngine(m_audio);
     connect(m_appletPanel->clientPuduTxApplet(), &ClientPuduApplet::editRequested,
-            this, [this]() { ensureClientPuduEditor()->showForTx(); });
+            this, [this]() {
+        if (!showTxAudioPathErrorIfBlocked()) ensureClientPuduEditor()->showForTx();
+    });
     connect(m_appletPanel->clientPuduRxApplet(), &ClientPuduApplet::editRequested,
             this, [this]() { ensureClientPuduEditor()->showForRx(); });
 

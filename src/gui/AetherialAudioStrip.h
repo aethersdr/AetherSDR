@@ -54,6 +54,7 @@ public:
 
     void setFramelessMode(bool on);
     void setAudioPathNotice(const QString& text, bool warning);
+    void closeSettingsIfOpen();
 
     // Forward radio TX filter cutoffs to the embedded EQ canvas so the
     // dashed yellow filter-edge guide lines render here too.  MainWindow

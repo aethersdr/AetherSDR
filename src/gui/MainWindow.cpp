@@ -2718,8 +2718,16 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Restore the Aetherial Audio Channel Strip if it was open on last
     // exit (#2301).  toggleAetherialStrip() lazy-creates and shows.
-    if (s.value("AetherialStripVisible", "False").toString() == "True")
-        toggleAetherialStrip();
+    if (s.value("AetherialStripVisible", "False").toString() == "True") {
+        if (txAudioPathBlock() == TxAudioPathBlock::None) {
+            toggleAetherialStrip();
+        } else {
+            // Restore is automatic, not an operator attempt to open AetherTX.
+            // Leave the applet's callout to explain the route without a modal.
+            s.setValue("AetherialStripVisible", "False");
+            s.save();
+        }
+    }
     // Clear stale splitter state — layout has changed across versions.
     s.remove("SplitterState");
     // Force 4-pane sizing: CWX=0, DVK=0 (hidden), applet=260px, center=stretch.
@@ -9994,6 +10002,10 @@ void MainWindow::setFramelessWindow(bool on)
 
 void MainWindow::toggleAetherialStrip()
 {
+    // All entry points (Tools and the CHAIN edit gesture) arrive here. Check
+    // the connected radio's TX audio route when opening, but always allow an
+    // already-open strip to close.
+    if (!windowIsShowing(m_aetherialStrip) && showTxAudioPathErrorIfBlocked()) return;
     if (!m_aetherialStrip) {
         m_aetherialStrip = new AetherialAudioStrip(m_audio, this);
         // Override the parent-window relationship so the strip behaves as
