@@ -19,6 +19,26 @@ inline bool experimentalRadioIdentityPending(const QString& family, const QStrin
                    QLatin1String("Unknown Icom"), Qt::CaseInsensitive) == 0);
 }
 
+// How long the experimental chrome waits for a connected radio to identify.
+enum class ExperimentalRadioIdentityHold {
+    None,          // classify now
+    UntilTimeout,  // ordinary connect: bounded by the identity fallback timer
+    UntilWakeEnds, // a wake reconnect owns identity; its end re-evaluates
+};
+
+inline ExperimentalRadioIdentityHold experimentalRadioIdentityHold(
+    const QString& family, const QString& model, bool radioWakeActive,
+    bool identityWaitExpired)
+{
+    if (identityWaitExpired || !experimentalRadioIdentityPending(family, model)) {
+        return ExperimentalRadioIdentityHold::None;
+    }
+    // A woken radio keeps retrying identity well past the ordinary window;
+    // RadioModel's wake settles on the identified model or disconnects.
+    return radioWakeActive ? ExperimentalRadioIdentityHold::UntilWakeEnds
+                           : ExperimentalRadioIdentityHold::UntilTimeout;
+}
+
 inline std::optional<ExperimentalRadioDescriptor> experimentalRadioDescriptor(
     const QString& family, const QString& model = {})
 {

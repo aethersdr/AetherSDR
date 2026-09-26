@@ -113,6 +113,26 @@ int main(int argc, char** argv)
     check(!experimentalRadioIdentityPending(
               QStringLiteral("icom"), QStringLiteral("IC-7300MK2")),
           "a verified IC-7300MK2 identity is settled");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("icom"), QStringLiteral("Unknown Icom"), false, false)
+              == ExperimentalRadioIdentityHold::UntilTimeout,
+          "an ordinary Icom connect holds only for the bounded identity window");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("icom"), QStringLiteral("Unknown Icom"), true, false)
+              == ExperimentalRadioIdentityHold::UntilWakeEnds,
+          "a wake reconnect holds until the wake ends, not the ordinary window");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("icom"), QStringLiteral("Unknown Icom"), false, true)
+              == ExperimentalRadioIdentityHold::None,
+          "an expired identity window classifies an unidentified Icom");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("icom"), QStringLiteral("IC-7300MK2"), true, false)
+              == ExperimentalRadioIdentityHold::None,
+          "an identified radio is not held even while a wake is finishing");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("hl2"), QString(), false, false)
+              == ExperimentalRadioIdentityHold::None,
+          "non-Icom families classify on the connected edge");
     check(hl2Notice && hl2Notice->displayName == QStringLiteral("Hermes-Lite 2"),
           "Hermes-Lite 2 is identified as an experimental radio family");
     check(ananNotice && ananNotice->displayName == QStringLiteral("ANAN-G2"),

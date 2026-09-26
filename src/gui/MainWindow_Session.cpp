@@ -622,21 +622,28 @@ void MainWindow::updateExperimentalRadioSupport(bool connected, bool identityWai
     // arrives. Keep the chrome quiet while identity is in flight. If the radio
     // never identifies, fall back to the family warning after the backend's
     // five-attempt discovery window so an unknown Icom is not promoted by
-    // omission.
-    if (connected && experimentalRadioIdentityPending(family, model)
-        && !identityWaitExpired) {
+    // omission. A wake reconnect retries identity for far longer, so it holds
+    // until the wake ends instead (see the radioWakeProgress hook).
+    const ExperimentalRadioIdentityHold hold = connected
+        ? experimentalRadioIdentityHold(family, model,
+                                        m_radioModel.radioWakeActive(),
+                                        identityWaitExpired)
+        : ExperimentalRadioIdentityHold::None;
+    if (hold != ExperimentalRadioIdentityHold::None) {
         if (m_titleBar) {
             m_titleBar->setExperimentalRadioFamily(QString());
         }
         if (m_experimentalRadioNotice) {
             m_experimentalRadioNotice->close();
         }
-        QTimer::singleShot(5500, this, [this, generation] {
-            if (generation == m_experimentalRadioSupportGeneration
-                && m_radioModel.isConnected()) {
-                updateExperimentalRadioSupport(true, true);
-            }
-        });
+        if (hold == ExperimentalRadioIdentityHold::UntilTimeout) {
+            QTimer::singleShot(5500, this, [this, generation] {
+                if (generation == m_experimentalRadioSupportGeneration
+                    && m_radioModel.isConnected()) {
+                    updateExperimentalRadioSupport(true, true);
+                }
+            });
+        }
         return;
     }
 
@@ -665,8 +672,12 @@ void MainWindow::updateExperimentalRadioSupport(bool connected, bool identityWai
 
     const QString connectedFamily = m_radioModel.family();
     const ExperimentalRadioDescriptor noticeDescriptor = *descriptor;
-    QTimer::singleShot(0, this, [this, connectedFamily, noticeDescriptor]() {
-        if (!m_radioModel.isConnected()
+    QTimer::singleShot(0, this, [this, connectedFamily, noticeDescriptor, generation]() {
+        // A later re-evaluation (an identity reply in the same event-loop turn
+        // as the fallback timer) supersedes this one: never open the notice
+        // for a radio that has since identified as a supported model.
+        if (generation != m_experimentalRadioSupportGeneration
+            || !m_radioModel.isConnected()
             || m_radioModel.family() != connectedFamily) {
             return;
         }
@@ -770,6 +781,19 @@ void MainWindow::wireRadioModel()
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, [this](bool connected, const RadioCapabilities&) {
         updateExperimentalRadioSupport(connected);
+    });
+    // A wake reconnect holds the experimental chrome without a timer. When the
+    // wake ends with the radio still connected and unidentified (cancelled),
+    // re-evaluate so the ordinary bounded fallback takes over.
+    connect(&m_radioModel, &RadioModel::radioWakeProgress,
+            this, [this](const QString&, bool active) {
+        if (active || !m_radioModel.isConnected()
+            || !experimentalRadioIdentityPending(
+                   m_radioModel.family(), m_radioModel.backendCapabilities().model)) {
+            return;
+        }
+        m_experimentalRadioSupportIdentityKey.clear();
+        updateExperimentalRadioSupport(true);
     });
 
     // Loud drop (M0, #5263): RadioModel emits commandDropped on every
