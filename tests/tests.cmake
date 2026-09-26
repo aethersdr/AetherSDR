@@ -786,6 +786,17 @@ add_executable(hl2_hardware_options_test
 target_include_directories(hl2_hardware_options_test PRIVATE src)
 add_test(NAME hl2_hardware_options_test COMMAND hl2_hardware_options_test)
 
+# The same document where it meets the settings store: the save/load round
+# trip, the read-modify-write that keeps a newer build's field alive, and the
+# empty-serial case that would otherwise write the family-wide default row.
+# Needs AppSettings and therefore Qt, which is why it is a second target rather
+# than more of the pure-policy one above. Still socket-free and radio-free.
+add_executable(hl2_hardware_document_test
+    tests/hl2_hardware_document_test.cpp)
+target_include_directories(hl2_hardware_document_test PRIVATE src tests)
+target_link_libraries(hl2_hardware_document_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_hardware_document_test COMMAND hl2_hardware_document_test)
+
 # HL2 wideband bandscope (EP4) parser — the 12-bit ADC codes, the 20-bit
 # sequence counter and its forward-gap guard. Same shape as the target above:
 # compiles MetisProtocol.cpp directly, no Qt, no aethercore, no socket. Its
