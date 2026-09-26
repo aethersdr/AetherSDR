@@ -161,9 +161,9 @@ struct Hl2HardwareOptions {
     // and a future variant that does need an override has somewhere to put it.
     //
     // DEFAULTS OFF because the bare board's meaning is band volts, which no
-    // radio should start driving on its own. Declaring an AK4951 seeds it ON
-    // instead, in the dialog rather than here, because that is the gateware's
-    // power-on state for that board and not a property of this struct — see
+    // radio should start driving on its own. hw.set seeds it ON when the
+    // operator declares an AK4951, because that is the gateware's power-on
+    // state for that board and not a property of this struct — see
     // the init-sequence note above Codec.
     bool ditherBit = false;
 

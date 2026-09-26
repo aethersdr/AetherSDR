@@ -3828,9 +3828,9 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
 // board, and a SquareSDR 2 are the SAME RADIO on the wire: the same discovery
 // reply, the same gateware version, no board ID anywhere in Protocol 1. They
 // are not the same hardware, and the differences are not cosmetic — the config
-// register's dither bit drives a band-voltage output on one, is a mandatory
-// "codec present" flag on the second, and switches the loudspeaker on the
-// third. The operator is the only party who knows which is on the bench, so
+// register's dither bit drives a band-voltage output on the bare board and
+// switches the loudspeaker on both boards with a codec. The operator is the
+// only party who knows which is on the bench, so
 // every control here is a DECLARATION about the hardware, not a preference.
 //
 // Nothing on this page is read back from the radio, because nothing here CAN
