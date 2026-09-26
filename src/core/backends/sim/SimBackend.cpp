@@ -544,6 +544,28 @@ void SimBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
     emit sliceChanged(kSliceId, d);
 }
 
+ReceiveDispatch SimBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
+{
+    if (!m_connected || sliceId != kSliceId || !request.valid()
+        || request.field != SliceDspRequest::Field::Enabled) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // These two controls already affect Demo's signal generator. Retiring the
+    // synthetic wire route must not retire those audible effects with it.
+    SliceDelta delta;
+    if (request.feature == SliceDspRequest::Feature::Nb) {
+        setDemoNb(request.enabled);
+        delta.nb = request.enabled;
+    } else if (request.feature == SliceDspRequest::Feature::Anf) {
+        setDemoAnf(request.enabled);
+        delta.anf = request.enabled;
+    } else {
+        return ReceiveDispatch::Unsupported;
+    }
+    emit sliceChanged(sliceId, delta);
+    return ReceiveDispatch::Dispatched;
+}
+
 void SimBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
     // The demo has no hardware AGC and no engine-side DSP chain to configure, so

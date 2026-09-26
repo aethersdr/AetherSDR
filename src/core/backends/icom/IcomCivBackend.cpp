@@ -312,7 +312,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canCreateSlices = false;
     c.maxSlices = m.receivers;
-    c.maxPanadapters = m.hasScope ? m.receivers : 0;
+    // The implemented scope path publishes one panId ("0"), even on models
+    // with two receivers. Advertise streams we can supply, not hardware VFOs
+    // (#5347); independent receiver/scope selection remains separate work.
+    c.maxPanadapters = m.hasScope ? 1 : 0;
     c.tuningMinHz = static_cast<double>(m.tuningMinHz);
     c.tuningMaxHz = static_cast<double>(m.tuningMaxHz);
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio,
@@ -4677,6 +4680,74 @@ void IcomCivBackend::setPanAttenuator(const QString&, int step)
     sendUserCommand(cmdSetAttenuator(m_session ? m_session->civAddress() : 0xA4,
                                      steps[static_cast<std::size_t>(wanted)].db));
     emit panAttenuatorChanged(panId(), wanted);
+}
+
+ReceiveDispatch IcomCivBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
+{
+    if (!m_connected || !m_session || !m_model || sliceId != 0 || !request.valid()
+        || request.origin != SliceDspRequest::Origin::Operator) {
+        return ReceiveDispatch::Unsupported;
+    }
+    switch (request.feature) {
+    case SliceDspRequest::Feature::Nb:
+        setSliceNoiseBlanker(sliceId, request.enabled, request.level); break;
+    case SliceDspRequest::Feature::Nr:
+        setSliceNoiseReduction(sliceId, request.enabled, request.level); break;
+    case SliceDspRequest::Feature::Anf:
+        if (request.field != SliceDspRequest::Field::Enabled) {
+            return ReceiveDispatch::Unsupported;
+        }
+        setSliceAutoNotch(sliceId, request.enabled); break;
+    case SliceDspRequest::Feature::Mn:
+        setSliceManualNotch(sliceId, request.enabled, request.level); break;
+    default: return ReceiveDispatch::Unsupported;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch IcomCivBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (!m_connected || !m_session || !m_model || sliceId != 0
+        || !request.valid() || request.field != SliceAudioRequest::Field::Gain) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setSliceAudioGain(sliceId, request.value);
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch IcomCivBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
+{
+    if (!m_connected || !m_session || !m_model || sliceId != 0 || request.level < 0 || request.level > 100) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setSliceSquelch(sliceId, request.enabled, request.level);
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch IcomCivBackend::requestSliceRxAntenna(int sliceId, const QString& antenna)
+{
+    if (!m_connected || !m_session || sliceId != 0 || !m_model || !profileFor(*m_model).rxAntenna
+        || !profileFor(*m_model).rxAntenna->selectable
+        || (antenna != QLatin1String("ANT1") && antenna != QLatin1String("RX-ANT"))) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setSliceRxAntenna(sliceId, antenna);
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch IcomCivBackend::requestSliceLock(int sliceId, bool locked)
+{
+    if (sliceId != 0) {
+        return ReceiveDispatch::Unsupported;
+    }
+    if (!capabilities().hasRadioDialLock) {
+        return ReceiveDispatch::LocalOnly;
+    }
+    if (!m_connected || !m_session) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setRadioDialLock(locked);
+    return ReceiveDispatch::Dispatched;
 }
 
 void IcomCivBackend::setSliceRxAntenna(int, const QString& antenna)

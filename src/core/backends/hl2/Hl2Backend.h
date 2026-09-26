@@ -125,6 +125,8 @@ public:
     // the radio-side DSP family (NR, ANF) are deliberately NOT implemented and
     // stay hidden, because implementing one of them is not implementing all.
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;

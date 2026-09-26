@@ -656,6 +656,20 @@ void RtlSdrBackend::setPanFrameRate(const QString& panId, int fps)
     }
 }
 
+ReceiveDispatch RtlSdrBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (!request.valid() || request.origin != SliceAudioRequest::Origin::Operator
+        || sliceId != 0 || !ddc()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    switch (request.field) {
+    case SliceAudioRequest::Field::Gain: setSliceAudioGain(sliceId, request.value); break;
+    case SliceAudioRequest::Field::Mute: setSliceAudioMute(sliceId, request.value != 0); break;
+    case SliceAudioRequest::Field::Pan: setSliceAudioPan(sliceId, request.value); break;
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
 void RtlSdrBackend::setSliceAudioMute(int sliceId, bool mute)
 {
     if (sliceId == 0) {

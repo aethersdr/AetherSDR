@@ -76,7 +76,7 @@ from pathlib import Path
 BASELINE = {
     # ---- models ----
     "src/models/RadioModel.cpp": 135,
-    "src/models/SliceModel.cpp": 63,
+    "src/models/SliceModel.cpp": 25,
     "src/models/TransmitModel.cpp": 39,
     "src/models/CwxModel.cpp": 9,
     "src/models/DaxIqModel.cpp": 4,

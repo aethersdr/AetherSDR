@@ -447,11 +447,139 @@ bool FlexBackend::isConnected() const
 
 void FlexBackend::setSliceFrequency(int sliceId, double hz)
 {
-    // Matches SliceModel::setFrequency's wire string exactly. Slice verbs use
-    // the TX-inhibit-guarded slice sink (§6), not the generic sink.
-    sendSlice(QStringLiteral("slice tune %1 %2 autopan=0")
-                  .arg(sliceId)
-                  .arg(hz / 1'000'000.0, 0, 'f', 6));
+    requestSliceTune(sliceId, {hz, SliceTuneRequest::PanIntent::PreservePan});
+}
+
+void FlexBackend::requestSliceTune(int sliceId, const SliceTuneRequest& request)
+{
+    // FlexLib 4.2.18 Slice.Freq: MHz/f6, with autopan=0 only when the caller
+    // wants to retain the pan. Every variant uses the guarded slice sink.
+    QString command = QStringLiteral("slice tune %1 %2")
+        .arg(sliceId).arg(request.frequencyHz / 1'000'000.0, 0, 'f', 6);
+    if (request.panIntent == SliceTuneRequest::PanIntent::PreservePan) {
+        command += QStringLiteral(" autopan=0");
+    }
+    sendSlice(command);
+}
+
+void FlexBackend::requestSliceFilter(int sliceId, const SliceFilterRequest& request)
+{
+    // The radio restores its per-mode passband. A desktop polarity repair
+    // must not overwrite it; explicit operator and adaptive edits still do.
+    if (request.origin != SliceFilterRequest::Origin::ModeNormalization) {
+        setSliceFilter(sliceId, request.lowHz, request.highHz);
+    }
+}
+
+void FlexBackend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
+{
+    // FlexLib 4.2.18 Slice: each AGC setter writes only its own field.
+    switch (request.field) {
+    case SliceAgcRequest::Field::Mode:
+        sendSlice(QStringLiteral("slice set %1 agc_mode=%2").arg(sliceId).arg(request.mode));
+        break;
+    case SliceAgcRequest::Field::Threshold:
+        sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(request.threshold));
+        break;
+    case SliceAgcRequest::Field::OffLevel:
+        sendSlice(QStringLiteral("slice set %1 agc_off_level=%2").arg(sliceId).arg(request.offLevel));
+        break;
+    }
+}
+
+ReceiveDispatch FlexBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
+{
+    if (sliceId < 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib 4.2.18 Slice.cs: the enable and level setters are independent.
+    // Manual notch is not a Flex slice feature (TNF is a different resource).
+    QString key;
+    switch (request.feature) {
+    case SliceDspRequest::Feature::Nb: key = QStringLiteral("nb"); break;
+    case SliceDspRequest::Feature::Nr: key = QStringLiteral("nr"); break;
+    case SliceDspRequest::Feature::Anf: key = QStringLiteral("anf"); break;
+    case SliceDspRequest::Feature::Apf: key = QStringLiteral("apf"); break;
+    case SliceDspRequest::Feature::Nrl: key = QStringLiteral("lms_nr"); break;
+    case SliceDspRequest::Feature::Nrs: key = QStringLiteral("speex_nr"); break;
+    case SliceDspRequest::Feature::Rnn: key = QStringLiteral("rnnoise"); break;
+    case SliceDspRequest::Feature::Nrf: key = QStringLiteral("nrf"); break;
+    case SliceDspRequest::Feature::Anfl: key = QStringLiteral("lms_anf"); break;
+    case SliceDspRequest::Feature::Anft: key = QStringLiteral("anft"); break;
+    case SliceDspRequest::Feature::Mn: return ReceiveDispatch::Unsupported;
+    }
+    if (request.field == SliceDspRequest::Field::Level) {
+        if (request.feature == SliceDspRequest::Feature::Rnn
+            || request.feature == SliceDspRequest::Feature::Anft) {
+            return ReceiveDispatch::Unsupported;
+        }
+        key += QStringLiteral("_level");
+    }
+    sendSlice(QStringLiteral("slice set %1 %2=%3").arg(sliceId).arg(key)
+                  .arg(request.field == SliceDspRequest::Field::Enabled
+                           ? int(request.enabled) : request.level));
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (sliceId < 0 || !request.valid()) {
+        return ReceiveDispatch::Unsupported;
+    }
+    QString key;
+    switch (request.field) {
+    case SliceAudioRequest::Field::Gain: key = QStringLiteral("audio_level"); break;
+    case SliceAudioRequest::Field::Mute: key = QStringLiteral("audio_mute"); break;
+    case SliceAudioRequest::Field::Pan: key = QStringLiteral("audio_pan"); break;
+    }
+    sendSlice(QStringLiteral("slice set %1 %2=%3").arg(sliceId).arg(key).arg(request.value));
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceSquelch(int sliceId, const SliceSquelchRequest& request)
+{
+    if (sliceId < 0 || request.level < 0 || request.level > 100) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // FlexLib uses separate commands; a combined write is rejected by some
+    // firmware/mode combinations. Repeated UI intent need not rewrite either.
+    if (request.enabledChanged) {
+        sendSlice(QStringLiteral("slice set %1 squelch=%2").arg(sliceId).arg(int(request.enabled)));
+    }
+    if (request.levelChanged) {
+        sendSlice(QStringLiteral("slice set %1 squelch_level=%2").arg(sliceId).arg(request.level));
+    }
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceRxAntenna(int sliceId, const QString& antenna)
+{
+    // Port names are a single protocol token, not caller-supplied wire text.
+    if (sliceId < 0 || antenna.isEmpty() || antenna.size() > 64) {
+        return ReceiveDispatch::Unsupported;
+    }
+    for (const QChar ch : antenna) {
+        if (!((ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))
+              || (ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
+              || (ch >= QLatin1Char('0') && ch <= QLatin1Char('9'))
+              || ch == QLatin1Char('_') || ch == QLatin1Char('-')
+              || ch == QLatin1Char('/'))) {
+            return ReceiveDispatch::Unsupported;
+        }
+    }
+    sendSlice(QStringLiteral("slice set %1 rxant=%2").arg(sliceId).arg(antenna));
+    return ReceiveDispatch::Dispatched;
+}
+
+ReceiveDispatch FlexBackend::requestSliceLock(int sliceId, bool locked)
+{
+    if (sliceId < 0) {
+        return ReceiveDispatch::Unsupported;
+    }
+    // Per-slice lock, NOT the radio-wide hasRadioDialLock capability.
+    sendSlice(QStringLiteral("slice %1 %2")
+                  .arg(locked ? QStringLiteral("lock") : QStringLiteral("unlock")).arg(sliceId));
+    return ReceiveDispatch::Dispatched;
 }
 
 void FlexBackend::setSliceMode(int sliceId, const QString& mode)
@@ -466,12 +594,11 @@ void FlexBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 
 void FlexBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
-    // Flex owns its AGC in firmware, so both halves are plain slice-set writes.
-    // In the current wiring this is reached only through the seam; the GUI path
-    // still emits the same commands via SliceModel's Flex command sink, exactly
-    // as setSliceFilter() mirrors SliceModel::setFilterWidth's "filt" write.
-    if (!mode.trimmed().isEmpty())
+    // Compatibility paired operation; desktop edits use requestSliceAgc so
+    // an edit to one field never reasserts a stale value for another.
+    if (!mode.trimmed().isEmpty()) {
         sendSlice(QStringLiteral("slice set %1 agc_mode=%2").arg(sliceId).arg(mode));
+    }
     sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(thresholdDb));
 }
 

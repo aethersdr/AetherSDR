@@ -41,6 +41,7 @@
 
 using AetherSDR::PhoneCwApplet;
 using AetherSDR::SliceModel;
+using AetherSDR::SliceDspRequest;
 
 static int g_failures = 0;
 
@@ -198,14 +199,14 @@ int main(int argc, char** argv)
 
     // ── §2  Both directions ─────────────────────────────────────────────────
     std::printf("\nSection 2 — round trip\n");
-    QSignalSpy cmds(&sliceA, &SliceModel::commandReady);
+    QSignalSpy cmds(&sliceA, &SliceModel::receiveDspRequested);
 
     apfBtn->click();
     check("2.1  clicking APF asks the radio to engage it",
-          !cmds.isEmpty()
-              && cmds.last().at(0).toString() == QStringLiteral("slice set 0 apf=1"),
-          cmds.isEmpty() ? QStringLiteral("(no command)")
-                         : cmds.last().at(0).toString());
+          cmds.size() == 1
+              && qvariant_cast<SliceDspRequest>(cmds.last().at(0)).feature == SliceDspRequest::Feature::Apf
+              && qvariant_cast<SliceDspRequest>(cmds.last().at(0)).field == SliceDspRequest::Field::Enabled
+              && qvariant_cast<SliceDspRequest>(cmds.last().at(0)).enabled);
     check("2.2  level row follows engagement", apfSlider->isEnabled());
 
     // Radio-side echo drives the UI, not the button (Principle II): an APF
