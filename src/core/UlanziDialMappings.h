@@ -23,6 +23,15 @@ public:
     // AppSettings key holding the whole JSON document.
     static QString rootSettingsKey();
 
+    // Whether AetherSDR claims a Ulanzi Dial it detects. On by default: a dial
+    // is auto-detected and used with no setup. An operator who wants the OS to
+    // keep the dial's media keys turns it off in Radio Setup → Serial &
+    // Controllers, and an explicit "False" saved before this default flipped
+    // is honoured. (The key predates this document, hence a separate flat key.)
+    static QString enabledSettingsKey();
+    static bool enabled();
+    static void setEnabled(bool on);
+
     // Bound action for a pill, or an empty string when the document has no
     // entry (the caller supplies its own built-in default).
     static QString actionForPill(const QString& pillId);

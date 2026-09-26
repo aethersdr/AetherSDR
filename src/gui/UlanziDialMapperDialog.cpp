@@ -641,11 +641,40 @@ void UlanziDialMapperDialog::showEvent(QShowEvent* event)
     // (top_middle, dial_press) at their proper x.
     layoutPills();
     if (m_canvas) m_canvas->update();
+
+    // The dialog is persistent and usually opened long after launch, when the
+    // backend's scan has already reported. Re-read the state that decides what
+    // the status line should say rather than waiting for an edge.
+    if (!UlanziDialMappings::enabled()) {
+        showDisabledStatus();
+        return;
+    }
+#ifdef Q_OS_LINUX
+    // A dial found blocked at launch announced it before this dialog existed;
+    // ask again so the Grant access button can appear.
+    if (m_manager) {
+        QMetaObject::invokeMethod(m_manager, &UlanziDialBackend::reportAccessState,
+                                  Qt::QueuedConnection);
+    }
+#endif
+}
+
+void UlanziDialMapperDialog::showDisabledStatus()
+{
+    if (!m_statusLabel) return;
+    m_statusLabel->setText(
+        tr("Turned off in Radio Setup → Serial & Controllers"));
+    ThemeManager::instance().applyStyleSheet(
+        m_statusLabel, QStringLiteral("QLabel { color: {{color.text.secondary}}; }"));
 }
 
 void UlanziDialMapperDialog::onConnectionChanged(bool connected, const QString& name)
 {
     if (!m_statusLabel) return;
+    if (!connected && !UlanziDialMappings::enabled()) {
+        showDisabledStatus();
+        return;
+    }
     QString display = name;
     if (display.endsWith(QStringLiteral(" Keyboard"), Qt::CaseInsensitive))
         display.chop(QStringLiteral(" Keyboard").size());

@@ -1033,6 +1033,9 @@ private:
     void applyFlexControlWheelAction(const QString& actionId, int steps);
     void syncFlexControlDialog();
     void syncFlexControlIndicatorForSettings();
+    // Start or stop the Ulanzi Dial backend to match its enable setting.
+    void applyUlanziDialEnabled();
+    bool ulanziDialEnabled() const;
     void setFlexControlHardwareIndicator(int button);
     QJsonObject buildControlDevicesSnapshot() const;
     void showPropDashboard();
@@ -1445,6 +1448,7 @@ private:
 #else
     UlanziDialBackend*         m_dialBackend{nullptr};
 #endif
+    std::optional<bool>        m_ulanziDialEnabledLogged;  // last enable state logged
     QSet<QString>              m_dialActiveMidiGates;
     // True while the DIAL is holding PTT.  Distinct from m_pttHoldActive so a
     // dial release cannot un-key a PTT the keyboard is still holding.

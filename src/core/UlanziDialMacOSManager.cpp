@@ -7,6 +7,7 @@
 
 #include <QDebug>
 #include <QJsonArray>
+#include <QTimer>
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDManager.h>
@@ -213,6 +214,31 @@ QString openResultName(bool attempted, qint32 result)
     return QStringLiteral("error");
 }
 
+// Whether a Ulanzi Dial is attached, asked of a HID manager that is never
+// opened. Enumeration reads the IOKit registry; it is IOHIDManagerOpen (the
+// claim in start()) that raises the Input Monitoring prompt (#3257), so this
+// lets the dial be on by default without prompting users who do not own one.
+// diagnostics() has always enumerated the same way.
+bool ulanziDialPresent()
+{
+    IOHIDManagerRef probe = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+    if (!probe) {
+        return false;
+    }
+    CFMutableDictionaryRef match = makeMatchDict();
+    IOHIDManagerSetDeviceMatching(probe, match);
+    CFRelease(match);
+    CFSetRef matched = IOHIDManagerCopyDevices(probe);
+    const bool present = matched && CFSetGetCount(matched) > 0;
+    if (matched) {
+        CFRelease(matched);
+    }
+    CFRelease(probe);
+    return present;
+}
+
+constexpr int kPresencePollMs = 3000;
+
 } // namespace
 
 UlanziDialMacOSManager::UlanziDialMacOSManager(QObject* parent)
@@ -238,6 +264,24 @@ UlanziDialMacOSManager::~UlanziDialMacOSManager()
 void UlanziDialMacOSManager::start()
 {
     if (m_manager) return;
+    // Detect before claiming: only a dial that is actually attached reaches
+    // IOHIDManagerOpen and its permission prompt. Until then, poll the
+    // registry the way the Windows backend polls hidapi.
+    if (!ulanziDialPresent()) {
+        if (!m_presenceTimer) {
+            m_presenceTimer = new QTimer(this);
+            m_presenceTimer->setInterval(kPresencePollMs);
+            connect(m_presenceTimer, &QTimer::timeout, this, &UlanziDialMacOSManager::start);
+        }
+        if (!m_presenceTimer->isActive()) {
+            qCInfo(lcDevices) << "UlanziDialMacOSManager: waiting for a Ulanzi Dial";
+            m_presenceTimer->start();
+        }
+        return;
+    }
+    if (m_presenceTimer) {
+        m_presenceTimer->stop();
+    }
     if (m_suppressedService) {
         restoreSystemEventSuppression();
         if (m_suppressedService) {
@@ -595,6 +639,9 @@ QJsonObject UlanziDialMacOSManager::diagnostics() const
 
 void UlanziDialMacOSManager::stop()
 {
+    if (m_presenceTimer) {
+        m_presenceTimer->stop();
+    }
     restoreSystemEventSuppression();
     if (!m_manager) return;
     IOHIDManagerRef mgr = static_cast<IOHIDManagerRef>(m_manager);

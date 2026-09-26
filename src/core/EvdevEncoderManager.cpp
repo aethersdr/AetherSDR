@@ -54,6 +54,9 @@ EvdevEncoderManager::EvdevEncoderManager(QObject* parent)
     m_rescanTimer->setSingleShot(true);
     m_rescanTimer->setInterval(250);  // debounce udev burst
     connect(m_rescanTimer, &QTimer::timeout, this, &EvdevEncoderManager::onInputDirChanged);
+    m_accessRetryTimer = new QTimer(this);
+    m_accessRetryTimer->setInterval(2000);
+    connect(m_accessRetryTimer, &QTimer::timeout, this, &EvdevEncoderManager::onInputDirChanged);
 }
 
 EvdevEncoderManager::~EvdevEncoderManager()
@@ -64,6 +67,7 @@ EvdevEncoderManager::~EvdevEncoderManager()
 void EvdevEncoderManager::start()
 {
     if (!m_watcher) {
+        qCInfo(lcDevices) << "EvdevEncoderManager: watching /dev/input for a Ulanzi Dial";
         m_watcher = new QFileSystemWatcher(this);
         m_watcher->addPath(QStringLiteral("/dev/input"));
         connect(m_watcher, &QFileSystemWatcher::directoryChanged,
@@ -74,6 +78,8 @@ void EvdevEncoderManager::start()
 
 void EvdevEncoderManager::stop()
 {
+    m_accessRetryTimer->stop();
+    m_access.update(QString());
     closeFd();
     if (m_watcher) {
         m_watcher->deleteLater();
@@ -88,10 +94,10 @@ void EvdevEncoderManager::onInputDirChanged()
     const QString path = findMatchingDevice(&blockedName);
     if (path.isEmpty()) {
         // A recognized dial is present but we can't open its node — the udev
-        // access rule isn't installed.  Surface it once so the UI can offer to
-        // install the rule, rather than silently reading as "disconnected".
-        if (!blockedName.isEmpty() && !m_accessRequiredEmitted) {
-            m_accessRequiredEmitted = true;
+        // access rule isn't installed.  Surface it so the UI can offer to
+        // install the rule, rather than silently reading as "disconnected",
+        // and keep checking so a granted ACL is picked up without a replug.
+        if (m_access.update(blockedName)) {
             qCWarning(lcDevices)
                 << "EvdevEncoderManager:" << blockedName
                 << "detected but its /dev/input node is not accessible (EACCES)."
@@ -99,13 +105,26 @@ void EvdevEncoderManager::onInputDirChanged()
                 << "access) or add this user to the 'input' group.";
             emit accessRequired(blockedName);
         }
+        if (m_access.blocked()) {
+            m_accessRetryTimer->start();
+        } else {
+            m_accessRetryTimer->stop();
+        }
         return;
     }
-    m_accessRequiredEmitted = false;
+    m_access.update(QString());
+    m_accessRetryTimer->stop();
     if (openAndGrab(path)) {
         qCInfo(lcDevices) << "EvdevEncoderManager: attached"
                           << m_deviceName << "at" << m_devicePath;
         emit connectionChanged(true, m_deviceName);
+    }
+}
+
+void EvdevEncoderManager::reportAccessState()
+{
+    if (m_fd < 0 && m_access.blocked()) {
+        emit accessRequired(m_access.blockedName());
     }
 }
 

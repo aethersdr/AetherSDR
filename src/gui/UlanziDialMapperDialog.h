@@ -83,6 +83,9 @@ private slots:
     void onTuneSteps(int steps);
     void onButtonEvent(const QString& signature, int action);
     void onConnectionChanged(bool connected, const QString& name);
+    // Status line for a dial turned off in Radio Setup: without it the dialog
+    // reads "Disconnected" with nothing to say why.
+    void showDisabledStatus();
 #ifdef Q_OS_LINUX
     // Dial present but its evdev node isn't accessible — offer to install the
     // udev access rule via polkit.

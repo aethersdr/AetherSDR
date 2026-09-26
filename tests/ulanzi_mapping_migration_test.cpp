@@ -320,6 +320,19 @@ int main(int argc, char** argv)
                      "WheelApf guard is not inside a preprocessor conditional (#4658)");
     }
 
+    // ── enable: on unless the operator turned it off ─────────────────────
+    // A dial is auto-detected and used with no setup; an explicit "False"
+    // (including one saved while the default was off) keeps it off.
+    s.remove(UlanziDialMappings::enabledSettingsKey());
+    s.save();
+    ok &= expect(UlanziDialMappings::enabled(), "no saved value means the dial is used");
+    UlanziDialMappings::setEnabled(false);
+    ok &= expect(!UlanziDialMappings::enabled(), "an explicit off is honoured");
+    s.load();
+    ok &= expect(!UlanziDialMappings::enabled(), "the off choice survives a reload");
+    UlanziDialMappings::setEnabled(true);
+    ok &= expect(UlanziDialMappings::enabled(), "turning it back on sticks");
+
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';
     return ok ? 0 : 1;
 }
