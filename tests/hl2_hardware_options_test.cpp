@@ -38,7 +38,26 @@ static void check(bool cond, const char* what)
 }
 
 // ---------------------------------------------------------------------------
-// The dither bit: one bit, three meanings.
+// The dither bit: one bit, three meanings, ONE owner.
+//
+// The bit at 0x00[11] means something different on each of the three boards —
+// band volts on a bare HL2, the codec's loudspeaker on the two that have one —
+// but on none of them does it mean "a codec is present", and on none of them
+// may this code take it away from the operator. That claim is checked against
+// the Hermes-Lite 2 gateware rather than against deskHPSDR, which forces the
+// bit for HL2_CODEC_AK4951 on the strength of a comment in old_protocol.c:
+//
+//   i2c_bus2.v   `ifdef AK4951, cmd_addr 0x00:
+//                ak4951_spon_next = cmd_data[11];   // reuse Dither
+//                data1_next = 8'h2e | (cmd_data[11] ? 8'h80 : 8'h00);
+//   control.v    band_volts_enabled <= cmd_data[11];
+//   localaudio.v assign i2s_pdn = ~clk_i2c_rst;     // codec PDN, not the bit
+//   i2c.v        STATE_AK4951S8: {8'h02, 8'hae}     // speaker already ON
+//
+// Those are the only two consumers of cmd_data[11] on address 0x00, and the
+// codec is instantiated on the bitstream parameter AK4951, never on the bit.
+// If this test is ever changed back to pin a force, it has to cite a gateware
+// build that actually withholds the codec while the bit is low.
 // ---------------------------------------------------------------------------
 static void testDitherMeaning()
 {
@@ -52,18 +71,17 @@ static void testDitherMeaning()
     check(o.ditherBitOnWire(), "bare HL2: dither follows the operator (on)");
     check(!o.hasLocalCodec(), "bare HL2 has no local codec");
 
-    // HL2+: FORCED HIGH whatever the operator asked for. The gateware reads the
-    // bit as "a codec is present"; clearing it silently kills the codec, which
-    // is why the operator's own value is overridden rather than merely ignored.
+    // HL2+: the operator owns it too, because here it is the AK4951's
+    // loudspeaker. NOT forced — forcing it would nail the speaker on and take
+    // the only off switch the board has away from whoever is wearing headphones.
     o.codec = Hl2HardwareOptions::Codec::Ak4951;
     o.ditherBit = false;
-    check(o.ditherBitOnWire(), "HL2+: dither forced high even when the operator cleared it");
+    check(!o.ditherBitOnWire(), "HL2+: speaker off stays off (NOT forced high)");
     o.ditherBit = true;
-    check(o.ditherBitOnWire(), "HL2+: dither high when the operator set it too");
+    check(o.ditherBitOnWire(), "HL2+: speaker on");
     check(o.hasLocalCodec(), "HL2+ has a local codec");
 
-    // SquareSDR 2: the operator owns it again, because here it is the speaker.
-    // Forcing it as for the HL2+ would nail the loudspeaker on.
+    // SquareSDR 2: the same bit, the same owner, the same speaker.
     o.codec = Hl2HardwareOptions::Codec::SquareSdr2;
     o.ditherBit = false;
     check(!o.ditherBitOnWire(), "SquareSDR 2: speaker off stays off (NOT forced)");
@@ -71,14 +89,30 @@ static void testDitherMeaning()
     check(o.ditherBitOnWire(), "SquareSDR 2: speaker on");
     check(o.hasLocalCodec(), "SquareSDR 2 has a local codec");
 
-    // The operator's own choice must SURVIVE a round trip through a codec that
-    // overrides it — otherwise turning the HL2+ selection off again would leave
-    // the band-voltage output on for a radio whose operator never asked for it.
+    // NO VARIANT OVERRIDES THE OPERATOR. Stated as a loop rather than as three
+    // more cases, so that adding a fourth codec to the enum without deciding
+    // what its dither bit means fails here instead of shipping.
+    for (const auto codec : {Hl2HardwareOptions::Codec::None,
+                             Hl2HardwareOptions::Codec::Ak4951,
+                             Hl2HardwareOptions::Codec::SquareSdr2}) {
+        o.codec = codec;
+        o.ditherBit = false;
+        check(!o.ditherBitOnWire(), "no codec forces the bit high");
+        o.ditherBit = true;
+        check(o.ditherBitOnWire(), "no codec forces the bit low");
+    }
+
+    // The stored intent survives a change of board, in both directions: the
+    // document keeps one bit and the codec never writes to it.
     o.codec = Hl2HardwareOptions::Codec::Ak4951;
     o.ditherBit = false;
-    check(o.ditherBitOnWire(), "HL2+ overrides");
     o.codec = Hl2HardwareOptions::Codec::None;
-    check(!o.ditherBitOnWire(), "the operator's cleared bit is intact after the override ends");
+    check(!o.ditherBit && !o.ditherBitOnWire(),
+          "a cleared bit is still cleared after the board changes");
+    o.ditherBit = true;
+    o.codec = Hl2HardwareOptions::Codec::SquareSdr2;
+    check(o.ditherBit && o.ditherBitOnWire(),
+          "a set bit is still set after the board changes");
 }
 
 // ---------------------------------------------------------------------------

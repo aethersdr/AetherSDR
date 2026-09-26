@@ -5528,10 +5528,12 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                 emit extensionResult(requestId, QVariantMap{
                     {QStringLiteral("codec"), static_cast<int>(m_hw.codec)},
                     {QStringLiteral("ditherBit"), m_hw.ditherBit},
-                    // What the operator asked for AND what actually goes out —
-                    // they differ on an HL2+, where the codec forces the bit,
-                    // and a caller reading back only the intent would report a
-                    // bit that is low while the wire holds it high.
+                    // The intent AND the wire value. No variant overrides the
+                    // operator any more (Hl2HardwareOptions::ditherBitOnWire),
+                    // so the two agree today — reported as a pair anyway so a
+                    // caller reads the wire from the field that names it, and
+                    // a future override cannot change this reply's meaning
+                    // without changing its shape.
                     {QStringLiteral("ditherBitOnWire"), m_hw.ditherBitOnWire()},
                     {QStringLiteral("randomBit"), m_hw.randomBit},
                     {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},

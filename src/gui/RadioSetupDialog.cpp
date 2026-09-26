@@ -3869,12 +3869,14 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     codecCombo->setAccessibleName(QStringLiteral("Local audio codec"));
     codecCombo->setToolTip(QStringLiteral(
         "Which local audio codec this board has.\n\n"
-        "None: a plain Hermes-Lite 2. Receive audio plays on the computer only.\n\n"
-        "AK4951: the HL2+ companion board. The dither bit is held high — the\n"
-        "gateware reads it as \"a codec is present\" — so the Dither control below\n"
-        "is taken out of your hands.\n\n"
-        "SquareSDR 2: the codec is on the mainboard. Here the dither bit switches\n"
-        "the internal loudspeaker instead, so it stays yours to set below."));
+        "None: a plain Hermes-Lite 2. Receive audio plays on the computer only,\n"
+        "and the control below is the band-voltage output on the CL2 jack.\n\n"
+        "AK4951: the HL2+ companion board. The control below becomes that\n"
+        "codec's loudspeaker switch, and starts on — the gateware turns the\n"
+        "speaker on by itself at power-up.\n\n"
+        "SquareSDR 2: the codec is on the mainboard, and the control below is\n"
+        "its internal loudspeaker.\n\n"
+        "It is one bit on the wire either way, and it is always yours to set."));
     codecRow->addWidget(codecLbl);
     codecRow->addWidget(codecCombo);
     codecRow->addStretch(1);
@@ -3967,24 +3969,25 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     vbox->addWidget(ditherGroup);
 
     // Rewrites the dither control from the codec: three meanings, one bit.
+    // PRESENTATION ONLY — this never moves the checkbox. It used to force it
+    // checked for an AK4951, on the belief that the gateware read the bit as
+    // "a codec is present"; it does not (see Hl2HardwareOptions::Codec for the
+    // RTL). Keeping the write out of here is also what lets every caller stop
+    // worrying about signal blockers: a refresh that only relabels cannot
+    // persist an intent the operator never expressed.
     auto refreshDither = [ditherChk, ditherHint, codecCombo] {
         const int codec = codecCombo->currentData().toInt();
         switch (codec) {
         case 1:   // AK4951
-            ditherChk->setText(QStringLiteral("Dither bit — held high for the codec"));
-            ditherChk->setChecked(true);
-            // DIMMED WITH A STATED REASON, never hidden: the control still
-            // describes what is on the wire, and the reason it cannot be moved
-            // is the interesting part. The reason reaches a screen reader
-            // through accessibleDescription, because a tooltip is a mouse
-            // affordance and is never announced (AGENTS.md, three-state controls).
-            ditherChk->setEnabled(false);
+            ditherChk->setText(QStringLiteral("Internal loudspeaker"));
+            ditherChk->setEnabled(true);
             ditherChk->setAccessibleDescription(QStringLiteral(
-                "Unavailable: the HL2+ gateware reads this bit as \"an audio codec "
-                "is present\", so it is held high and cannot be changed."));
+                "Switches the AK4951 companion board's loudspeaker on or off."));
             ditherHint->setText(QStringLiteral(
-                "The HL2+ gateware reads this bit as \"an audio codec is present\". "
-                "It is held high for as long as the AK4951 is selected."));
+                "On the HL2+ companion board this bit switches the AK4951's "
+                "loudspeaker. The gateware turns it on at power-up, so declaring "
+                "the board starts it checked; clearing it is what silences the "
+                "radio's own speaker."));
             break;
         case 2:   // SquareSDR 2
             ditherChk->setText(QStringLiteral("Internal loudspeaker"));
@@ -4170,8 +4173,8 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             // persisted by the next drag as if the operator had chosen it.
             spkSlider->setValue(std::clamp(
                 m.value(QStringLiteral("speakerLevelPercent"), 100).toInt(), 0, 100));
-            // Inside the blockers: refreshDither forces the box checked on an
-            // AK4951, and that write must not be mistaken for the operator.
+            // Inside the blockers with everything else, though these three
+            // only relabel and dim now — nothing here writes a control's value.
             refreshDither();
             refreshHpf();
             refreshSpeaker();
@@ -4180,12 +4183,12 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             // other HL2 would then inherit. Leaving the controls live would be
             // a page that reports success while nothing persists.
             //
-            // ONE-WAY, and deliberately so: refreshDither() and refreshHpf()
-            // above have already set each control's own availability, so this
-            // only ever takes availability AWAY. Re-enabling here would undo
-            // them — the dither box on an AK4951 would become clickable again,
-            // and moving it would ask the gateware to stop believing there is
-            // a codec.
+            // ONE-WAY, and deliberately so: refreshDither(), refreshHpf() and
+            // refreshSpeaker() above have already set each control's own
+            // availability, so this only ever takes availability AWAY.
+            // Re-enabling here would undo them — the 3 MHz high-pass would
+            // become clickable with the filter board on receive, where it
+            // decides nothing, and the speaker fader with no codec declared.
             if (!haveRadio) {
                 for (const QPointer<QWidget>& w : *controls) {
                     if (w)
@@ -4219,14 +4222,30 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
 
     connect(codecCombo, &QComboBox::currentIndexChanged, this,
             [apply, codecCombo, ditherChk, refreshDither, refreshSpeaker](int) {
+        const int codec = codecCombo->currentData().toInt();
         refreshDither();
         refreshSpeaker();
-        // The codec and the dither bit go out TOGETHER. Selecting the AK4951
-        // forces the bit high in the same instant, and two calls would leave
-        // one frame in which the codec is declared and the bit is not yet set —
-        // which is precisely the state the gateware reads as "no codec".
+        // DECLARING AN AK4951 SEEDS ITS SPEAKER ON, because that is where the
+        // gateware has already put it: its init sequence writes codec register
+        // 0x02 = 0xae before the host speaks, and it only re-writes that
+        // register when the bit CHANGES, so a host that starts low emits no
+        // I2C write and the speaker keeps playing. Seeding high makes the
+        // checkbox describe the radio from the first frame, and unchecking it
+        // is then a real change the gateware acts on.
+        //
+        // ONLY ON AN OPERATOR ACTION. This handler is unreachable from fill(),
+        // which sets the combo under a QSignalBlocker, so a stored "speaker
+        // off" is never overwritten by re-opening the page.
+        //
+        // Blocked, so this does not also fire the dither toggled() handler:
+        // the two values go out TOGETHER below, as one declaration, rather
+        // than as two applies the backend would persist separately.
+        if (codec == 1) {
+            const QSignalBlocker block(ditherChk);
+            ditherChk->setChecked(true);
+        }
         apply(QVariantMap{
-            {QStringLiteral("codec"), codecCombo->currentData().toInt()},
+            {QStringLiteral("codec"), codec},
             {QStringLiteral("ditherBit"), ditherChk->isChecked()},
         });
     });

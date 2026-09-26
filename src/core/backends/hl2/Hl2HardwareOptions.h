@@ -32,30 +32,60 @@ class RadioSettingsScope;
 struct Hl2HardwareOptions {
     // ---- local audio codec ----
     //
-    // THE DITHER BIT IS THE WHOLE REASON THIS IS A THREE-WAY CHOICE and not a
-    // checkbox. Protocol 1's config register carries a "dither" bit at
-    // 0x00[11], which on genuine openHPSDR hardware turns on the LT2208's
-    // dither generator. The HL2 has no LT2208, and three different pieces of
-    // hardware hijacked that one bit for three different purposes:
+    // WHAT THE THREE VALUES RECORD IS WHICH BOARD IS FITTED, not which policy
+    // applies to the dither bit. That distinction is worth stating up front,
+    // because the bit is the reason this enum was originally three-way and it
+    // no longer is — see ditherBitOnWire() and the note below it.
     //
-    //   None        the bit drives the HL2's BAND VOLTAGE output (a DC level
-    //               per band on the CL2 jack, softerhardware/Hermes-Lite2 wiki
-    //               "Band-Volts"). The operator may want it either way.
-    //   Ak4951      the HL2+ companion board's gateware reads the bit as
-    //               "a codec is present" and it must be held HIGH for the
-    //               codec to work at all. The operator does not get a choice.
-    //   SquareSdr2  the SquareSDR 2's gateware uses the same bit to switch the
-    //               INTERNAL LOUDSPEAKER on and off, so it must stay under the
-    //               operator's control and must NOT be forced.
+    //   None        bare Hermes-Lite 2. No codec: the EP2 audio slot is the
+    //               extended address register and must stay zero.
+    //   Ak4951      the HL2+ companion board. Codec over I2S.
+    //   SquareSdr2  the SquareSDR 2, codec on the mainboard.
     //
-    // Getting this wrong is not subtle: forcing the bit on a SquareSDR 2 nails
-    // its speaker on, and clearing it on an HL2+ silently kills the codec.
-    // Both were found by deskHPSDR the hard way (its SQUARE SDR 2 patch exists
-    // for exactly this), and the three-way enum is what encodes the difference.
+    // Ak4951 and SquareSdr2 are behaviourally IDENTICAL today — every consumer
+    // but the UI asks hasLocalCodec(), i.e. `codec != None`. They are kept
+    // apart anyway, for two reasons that are not cosmetic: the document is
+    // already persisted as 0/1/2 at schema version 1, so collapsing them is a
+    // migration; and the boards genuinely differ elsewhere — the EP6 microphone
+    // word runs at a different rate on the SquareSDR 2 (docs/HERMES.md). A
+    // reader adding the first real per-board branch should add it here rather
+    // than re-widening a bool.
+    //
+    // THE DITHER BIT IS NOT ONE OF THOSE DIFFERENCES. Protocol 1's config
+    // register carries a "dither" bit at 0x00[11] which on genuine openHPSDR
+    // hardware turns on the LT2208's dither generator. The HL2 has no LT2208
+    // and hijacked the bit, but it is the OPERATOR'S on all three variants:
+    //
+    //   None        the HL2's BAND VOLTAGE output — a DC level per band on the
+    //               CL2 jack (control.v: `band_volts_enabled <= cmd_data[11]`).
+    //   Ak4951      the AK4951's loudspeaker (i2c_bus2.v under `ifdef AK4951`:
+    //               `ak4951_spon_next = cmd_data[11]`, writing codec register
+    //               0x02 as `8'h2e | (bit ? 8'h80 : 8'h00)`).
+    //   SquareSdr2  the SquareSDR 2's internal loudspeaker, same shape.
+    //
+    // IT IS NOT A "CODEC IS PRESENT" INTERLOCK, and an earlier revision of this
+    // file said it was. deskHPSDR's old_protocol.c forces LT2208_DITHER_ON for
+    // HL2_CODEC_AK4951 with a comment that some firmware abuses the bit that
+    // way, and that comment was the only source. The gateware says otherwise
+    // and this repo ranks the gateware above client code (Principle I):
+    // `localaudio` is instantiated on the bitstream parameter AK4951
+    // (hermeslite_core.v), its power-down pin is tied to the I2C reset
+    // (localaudio.v: `assign i2s_pdn = ~clk_i2c_rst;`), and cmd_data[11] on
+    // address 0x00 has exactly two consumers in the tree — the speaker branch
+    // above and band_volts_enabled. Nothing withholds the codec.
+    //
+    // ONE ASYMMETRY SURVIVES AND THE UI HAS TO KNOW ABOUT IT. The gateware's
+    // own AK4951 init sequence ends by writing register 0x02 = 0xae — which is
+    // 0x2e | 0x80, the speaker ALREADY ON — before the host has said anything
+    // (i2c.v, STATE_AK4951S8). Since ak4951_spon_reg resets to 0 and the write
+    // is guarded on a CHANGE, a host sending the bit low first emits no I2C
+    // write at all and the speaker stays on. So the operator's stored intent
+    // for an AK4951 starts HIGH, seeded when the board is declared, and the
+    // checkbox is honest from the first frame.
     enum class Codec : int {
         None       = 0,   // bare HL2: no codec, audio slot stays EADDR-safe zero
-        Ak4951     = 1,   // HL2+ companion board; dither forced high
-        SquareSdr2 = 2,   // SquareSDR 2, codec on the mainboard; dither is the speaker
+        Ak4951     = 1,   // HL2+ companion board, codec over I2S
+        SquareSdr2 = 2,   // SquareSDR 2, codec on the mainboard
     };
 
     // ---- companion filter board on J16 ----
@@ -121,11 +151,16 @@ struct Hl2HardwareOptions {
     // fader. Muting the radio's speaker is done with this control.
     int speakerLevelPercent = 100;
 
-    // The operator's dither-bit intent. MEANS NOTHING on its own — read it
-    // through ditherBitOnWire() below, which is where the codec's override
-    // lives. Held separately from the wire value so that turning the codec
-    // setting off again returns the operator's own choice rather than whatever
-    // the codec forced.
+    // The operator's dither-bit intent, and — since nothing overrides it any
+    // more — also what goes on the wire. Read it through ditherBitOnWire()
+    // anyway: that is the one named place where this bit's meaning is decided,
+    // and a future variant that does need an override has somewhere to put it.
+    //
+    // DEFAULTS OFF because the bare board's meaning is band volts, which no
+    // radio should start driving on its own. Declaring an AK4951 seeds it ON
+    // instead, in the dialog rather than here, because that is the gateware's
+    // power-on state for that board and not a property of this struct — see
+    // the init-sequence note above Codec.
     bool ditherBit = false;
 
     // The RANDOM bit, 0x00[12]. Same lineage as dither — an LT2208 control the
@@ -152,13 +187,18 @@ struct Hl2HardwareOptions {
 
     // ---- pure policy (what the tests pin) ----
 
-    // The dither bit AS IT MUST GO ON THE WIRE, which is not always what the
-    // operator asked for. See Codec: the HL2+ needs it held high whatever the
-    // operator thinks, and everything else passes the operator's choice
-    // through — including the SquareSDR 2, where the choice IS the speaker.
+    // The dither bit AS IT GOES ON THE WIRE. The operator's choice, on every
+    // variant — see Codec for what the bit does on each board and for why the
+    // "held high for the AK4951" rule that used to live here was wrong.
+    //
+    // AN IDENTITY FUNCTION TODAY, AND KEPT ANYWAY. It is the single named seam
+    // for "what does 0x00[11] carry", the place the header's evidence is
+    // attached to, and the field hw.get reports alongside the raw intent. A
+    // caller reading `ditherBit` directly would be asserting that no variant
+    // ever overrides it; going through here asserts only that none does now.
     [[nodiscard]] constexpr bool ditherBitOnWire() const noexcept
     {
-        return codec == Codec::Ak4951 ? true : ditherBit;
+        return ditherBit;
     }
 
     // True when the host must put real audio in the EP2 audio slot. On a bare

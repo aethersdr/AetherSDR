@@ -270,13 +270,13 @@ inline constexpr std::uint8_t kConfigDuplex = 0x04;   // C4 bit2: pihpsdr sets t
 // the LT2208's dither generator and its output randomiser. The HL2 has no
 // LT2208, and UNLIKE the two no-ops above, the dither bit is NOT inert here:
 // the HL2 gateware hijacked it, undocumented, to drive the BAND VOLTAGE output
-// on the CL2 jack (softerhardware/Hermes-Lite2 wiki, "Band-Volts"), the HL2+
-// companion board reads it as "an audio codec is present", and the SquareSDR 2
-// uses it to switch its internal loudspeaker.
+// on the CL2 jack (control.v: `band_volts_enabled <= cmd_data[11]`), while on
+// a board carrying a codec the same bit switches that codec's LOUDSPEAKER
+// (i2c_bus2.v under `ifdef AK4951`: `ak4951_spon_next = cmd_data[11]`).
 //
-// Three incompatible meanings for one bit is why nothing here decides what it
-// should be. That decision is Hl2HardwareOptions::ditherBitOnWire(), which
-// knows which board is on the other end; this header only names the bit.
+// It is NOT a "a codec is present" interlock on any variant — see the evidence
+// collected above Hl2HardwareOptions::Codec, which is also where the decision
+// about what this bit should carry lives. This header only names the bit.
 //
 // The random bit has no such second life on any HL2 variant known to us and is
 // carried for completeness — and so that a caller who sets it is setting a

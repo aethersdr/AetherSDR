@@ -1267,7 +1267,7 @@
  },
  "core/backends/hl2/Hl2HardwareOptions.h": {
   "tag": "vendor(hl2)",
-  "note": "Which HL2-compatible board is on the other end \u2014 local audio codec, the dither bit's three incompatible gateware meanings, companion filter board, gateware ATU. Protocol 1 reports none of it, so it is an operator declaration; every rule in it is an HL2 gateware quirk with no generic half to split out.",
+  "note": "Which HL2-compatible board is on the other end \u2014 local audio codec, what the dither bit switches on each board, companion filter board, gateware ATU. Protocol 1 reports none of it, so it is an operator declaration; every rule in it is an HL2 gateware quirk with no generic half to split out.",
   "split": "",
   "confidence": "high"
  },
