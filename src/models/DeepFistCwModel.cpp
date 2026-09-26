@@ -22,6 +22,18 @@ bool matches(const QString& path, qint64 size, const QByteArray& digest)
     return hash.addData(&file) && hash.result().toHex() == digest;
 }
 }
+DeepFistStream::Parameters DeepFistCwModel::appParameters()
+{
+    DeepFistStream::Parameters parameters;
+    parameters.requireCompletedMark = true;
+    parameters.carryPending = true;
+    parameters.normalizeActivity = true;
+    // The stream default (12) sits between dead air and a tuned-in signal (n9bc/DeepFist
+    // tools/squelch.py); weak off-air CW scores in that gap and was gated out (#5950).
+    // Steady carriers are held off by the completed-mark guard above, not by this value.
+    parameters.activityThreshold = 3.f;
+    return parameters;
+}
 DeepFistCwModel::DeepFistCwModel(QObject* parent)
     : DeepFistCwModel(modelDirectory(), DeepFistModelAssets::releaseBaseUrl(), nullptr, parent) {}
 DeepFistCwModel::DeepFistCwModel(QString directory, QString baseUrl,
@@ -29,9 +41,7 @@ DeepFistCwModel::DeepFistCwModel(QString directory, QString baseUrl,
     : QObject(parent), m_assets(std::make_unique<DeepFistModelAssets>(directory, baseUrl,
           DeepFistModelAssets::manifest(), network)), m_directory(std::move(directory))
 {
-    m_parameters.requireCompletedMark = true;
-    m_parameters.carryPending = true;
-    m_parameters.normalizeActivity = true;
+    m_parameters = appParameters();
     connect(m_assets.get(), &DeepFistModelAssets::checking, this, [this] {
         setStatus(tr("Checking model…"));
     });
