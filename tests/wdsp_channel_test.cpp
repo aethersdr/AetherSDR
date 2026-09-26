@@ -2691,16 +2691,39 @@ bool runTransmitSuppressionSweepTest()
     // averages down as 1/sqrt(N) while a real tone does not. The point of
     // printing it is to be able to say which, rather than quoting 297 dB at
     // anyone.
+    //
+    // BOTH PROBES GO THROUGH THE SETTLED HARNESS, like every sweep point above
+    // (#5962). They were written against measureSweepPoint directly, so under
+    // CPU load they got one roll at kPaceUs -- the FIRST attempt's pace -- and
+    // an underrun either emptied the capture ("produced no IQ") or left one
+    // that opens inside the post-underrun transient. A transient is amplitude
+    // modulation, the two runs caught different amounts of it, and the ratio
+    // walked off 0.5: a scheduler fault reported as an ALC fault. The
+    // predicate is "no underrun", for the reason measureSweepPointSettled
+    // gives; the retry budget can run out, so it is checked here rather than
+    // trusted. The 1 % bound is unchanged -- only the capture is.
     {
         const SweepPoint full =
-            measureSweepPoint(WdspChannel::Mode::Usb, 300.0, 2700.0, false,
-                              1000.0, kBlocks, kDiscard, kPaceUs, kAmplitude);
+            measureSweepPointSettled(WdspChannel::Mode::Usb, 300.0, 2700.0,
+                                     false, 1000.0, kBlocks, kDiscard, kPaceUs,
+                                     kAmplitude);
         const SweepPoint half =
-            measureSweepPoint(WdspChannel::Mode::Usb, 300.0, 2700.0, false,
-                              1000.0, kBlocks, kDiscard, kPaceUs,
-                              0.5 * kAmplitude);
-        if (!require(full.measured && half.measured,
-                     "the ALC linearity probe produced no IQ")) {
+            measureSweepPointSettled(WdspChannel::Mode::Usb, 300.0, 2700.0,
+                                     false, 1000.0, kBlocks, kDiscard, kPaceUs,
+                                     0.5 * kAmplitude);
+        if (!require(full.measured && half.measured &&
+                         full.underruns == 0 && half.underruns == 0,
+                     "the ALC linearity probe could not get an unstarved "
+                     "capture")) {
+            return false;
+        }
+        // Comparable, not merely present: the same span of the same stream.
+        // An underrun is not the only non-Ok result that restarts collection,
+        // and it is the only one counted above.
+        if (!require(full.captured == half.captured &&
+                         full.samples == half.samples,
+                     "the ALC linearity probe's two captures cover different "
+                     "spans")) {
             return false;
         }
         const double ratio = half.wanted / std::max(1.0e-20, full.wanted);
@@ -2714,22 +2737,28 @@ bool runTransmitSuppressionSweepTest()
             return false;
         }
 
-        const std::size_t halfLength =
-            wholeCycleCount(full.samples / 2, 1000.0, 48000.0);
+        // Gated on the probe's OWN run: comparing its length against `full`
+        // failed it for a reason unrelated to the floor whenever the two runs
+        // were starved differently.
         const TransmitRun probe =
             runTransmitChannelSettled(0, 1000.0, WdspChannel::Mode::Usb, 300.0,
                                       2700.0, kBlocks, kDiscard, kPaceUs,
                                       kAmplitude);
-        if (!require(probe.created && probe.iq.size() >= full.samples,
-                     "the floor probe produced no IQ")) {
+        const std::size_t fullLength =
+            wholeCycleCount(probe.iq.size(), 1000.0, 48000.0);
+        if (!require(probe.created && probe.underrunBlocks == 0 &&
+                         fullLength > 0,
+                     "the floor probe could not get an unstarved capture")) {
             return false;
         }
+        const std::size_t halfLength =
+            wholeCycleCount(fullLength / 2, 1000.0, 48000.0);
         const double imageFull =
-            binPower(probe.iq, probe.index, 1000.0, 48000.0, full.samples);
+            binPower(probe.iq, probe.index, 1000.0, 48000.0, fullLength);
         const double imageHalf =
             binPower(probe.iq, probe.index, 1000.0, 48000.0, halfLength);
         std::cout << "  instrument floor probe at USB 1 kHz: image over "
-                  << full.samples << " samples " << imageFull << ", over "
+                  << fullLength << " samples " << imageFull << ", over "
                   << halfLength << " samples " << imageHalf << " (ratio "
                   << (imageHalf / std::max(1.0e-30, imageFull))
                   << "; a real tone gives 1, broadband floor gives ~1.41)\n";
