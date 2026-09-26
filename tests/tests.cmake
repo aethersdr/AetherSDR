@@ -7021,7 +7021,8 @@ if(ENABLE_DEEPFIST_EXPERIMENT)
     add_test(NAME deepfist_cw_model_test COMMAND deepfist_cw_model_test)
     add_test(NAME deepfist_carrier_regression_test COMMAND deepfist_cw_model_test --carrier)
     add_test(NAME deepfist_cw_churn_test COMMAND deepfist_cw_model_test --churn)
-    set_tests_properties(deepfist_cw_churn_test deepfist_carrier_regression_test PROPERTIES
+    add_test(NAME deepfist_weak_signal_test COMMAND deepfist_cw_model_test --weak)
+    set_tests_properties(deepfist_cw_churn_test deepfist_carrier_regression_test deepfist_weak_signal_test PROPERTIES
         SKIP_RETURN_CODE 77 TIMEOUT 120)
     add_test(NAME deepfist_cw_model_inference_test COMMAND deepfist_cw_model_test --infer)
     add_test(NAME deepfist_cw_model_download_inference_test COMMAND deepfist_cw_model_test --download-infer)
