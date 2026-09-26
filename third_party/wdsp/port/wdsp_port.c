@@ -40,6 +40,8 @@ struct WdspThreadStart
 static _Thread_local uint64_t g_threadAllocationSequence = 0;
 static _Atomic uint64_t g_allocationSequence = 0;
 static _Atomic uint64_t g_outstandingAllocations = 0;
+// AetherSDR patch 13: see wdspPortHandoffPauseForTest() below.
+static _Atomic unsigned g_handoffPauseMicroseconds = 0;
 
 static uint64_t monotonicMilliseconds(void)
 {
@@ -409,6 +411,33 @@ uint64_t wdspPortOutstandingAllocations(void)
     return atomic_load_explicit(&g_outstandingAllocations, memory_order_relaxed);
 }
 
+// AetherSDR patch 13 (#5734). A test-only widening of the window between
+// dexchange() releasing the host and dexchange() returning. Before patch 13 the
+// worker still had to copy its input slot out of r1 in that window, so a host
+// allowed to run on overwrote it; the pause makes that deterministic instead of
+// a matter of CPU load. After patch 13 the copy is already done, and the pause
+// only delays the worker. Nothing but wdsp_channel_test ever sets it.
+void wdspPortSetHandoffPauseForTest(unsigned microseconds)
+{
+    atomic_store_explicit(&g_handoffPauseMicroseconds, microseconds, memory_order_relaxed);
+}
+
+void wdspPortHandoffPauseForTest(void)
+{
+    const unsigned microseconds =
+        atomic_load_explicit(&g_handoffPauseMicroseconds, memory_order_relaxed);
+    if (microseconds != 0)
+    {
+        struct timespec requested = {
+            .tv_sec = microseconds / 1000000U,
+            .tv_nsec = (long)(microseconds % 1000000U) * 1000L
+        };
+        while (nanosleep(&requested, &requested) != 0 && errno == EINTR)
+        {
+        }
+    }
+}
+
 void wdspEnableFlushToZero(void)
 {
 #if defined(__aarch64__)
@@ -499,6 +528,25 @@ uint64_t wdspPortAllocationSequence(void)
 uint64_t wdspPortOutstandingAllocations(void)
 {
     return (uint64_t)InterlockedCompareExchange64(&g_outstandingAllocations, 0, 0);
+}
+
+// AetherSDR patch 13: the Windows twin of the POSIX pair above. Sleep() has
+// millisecond resolution, so a non-zero request rounds UP to whole milliseconds
+// -- a longer window, never a shorter one.
+static volatile LONG g_handoffPauseMicroseconds = 0;
+
+void wdspPortSetHandoffPauseForTest(unsigned microseconds)
+{
+    InterlockedExchange(&g_handoffPauseMicroseconds, (LONG)microseconds);
+}
+
+void wdspPortHandoffPauseForTest(void)
+{
+    const LONG microseconds = InterlockedCompareExchange(&g_handoffPauseMicroseconds, 0, 0);
+    if (microseconds != 0)
+    {
+        Sleep((DWORD)((microseconds + 999) / 1000));
+    }
 }
 
 #endif

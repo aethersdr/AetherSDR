@@ -582,6 +582,12 @@ public:
 
     static uint64_t allocationSequenceForTest() noexcept;
     static uint64_t outstandingAllocationsForTest() noexcept;
+    // Process-global, test only (#5734, AetherSDR WDSP patch 13): the DSP
+    // worker sleeps this long right after it has released a blocked
+    // processIq(). That is the window in which, before patch 13, the host
+    // overwrote the input block the worker had not yet copied out. 0 restores
+    // the shipping path.
+    static void setWorkerHandoffPauseForTest(unsigned microseconds) noexcept;
 
     // Shared FFTW-planner serialization guard. FORWARDS to
     // AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h), which owns

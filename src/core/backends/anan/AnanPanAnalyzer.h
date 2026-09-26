@@ -49,10 +49,10 @@ namespace AetherSDR::anan {
 //
 // Threading. create() plans FFTs (FFTW_PATIENT) and must run off any
 // real-time thread; it takes WdspChannel::fftwSetupLock() itself. Everything
-// else -- feed(), takeFrame(), setFramesPerSecond(), the destructor -- must run
-// on ONE thread, the one that feeds samples: SetAnalyzer() resets the input
-// ring and cannot race Spectrum0(). The FFTs themselves run on WDSP-owned
-// worker threads.
+// else -- feed(), takeFrame(), setFramesPerSecond(), setNumPoints(), the
+// destructor -- must run on ONE thread, the one that feeds samples:
+// SetAnalyzer() resets the input ring and cannot race Spectrum0(). The FFTs
+// themselves run on WDSP-owned worker threads.
 class AnanPanAnalyzer {
 public:
     struct Settings {
@@ -73,6 +73,8 @@ public:
     // rate-change rebuild.
     static constexpr int kMaxFftSize = 65536;
     static constexpr int kMinFftSize = 16384;
+    // Most output points the analyzer can return (WDSP's dMAX_PIXELS).
+    static constexpr int kMaxPoints = 16384;
 
     // Builds and configures the analyzer in slot `disp` (0..71). Returns
     // nullptr and sets `error` if the slot cannot be created.
@@ -91,6 +93,12 @@ public:
     // re-applied for a new display rate. The FFT size does not change, so
     // nothing is re-planned; the running average is kept.
     void setFramesPerSecond(int fps);
+
+    // The output point count, for a new panel width. Clamped to
+    // 2..kMaxPoints. The FFT size cannot change -- every count up to
+    // kMaxPoints fits in kMinFftSize -- so nothing is re-planned, but the
+    // running average is per point, so the next frame re-seeds it.
+    void setNumPoints(int points);
 
     // The time average, in ms: 0 = none, t > 0 = log-recursive with time
     // constant t. Cheap -- no re-plan, no ring reset. Switching averaging back

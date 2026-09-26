@@ -839,6 +839,28 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# HL2 hardware-variant options — which board is on the other end (bare HL2,
+# HL2+ with the AK4951 codec, SquareSDR 2), the dither bit's three
+# incompatible meanings, the companion filter board's receive/transmit split
+# and the EP2 audio slot. Same shape as the target above: pure policy plus
+# pure wire, no Qt, no aethercore, no socket.
+add_executable(hl2_hardware_options_test
+    tests/hl2_hardware_options_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_hardware_options_test PRIVATE src)
+add_test(NAME hl2_hardware_options_test COMMAND hl2_hardware_options_test)
+
+# The same document where it meets the settings store: the save/load round
+# trip, the read-modify-write that keeps a newer build's field alive, and the
+# empty-serial case that would otherwise write the family-wide default row.
+# Needs AppSettings and therefore Qt, which is why it is a second target rather
+# than more of the pure-policy one above. Still socket-free and radio-free.
+add_executable(hl2_hardware_document_test
+    tests/hl2_hardware_document_test.cpp)
+target_include_directories(hl2_hardware_document_test PRIVATE src tests)
+target_link_libraries(hl2_hardware_document_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_hardware_document_test COMMAND hl2_hardware_document_test)
+
 # HL2 wideband bandscope (EP4) parser — the 12-bit ADC codes, the 20-bit
 # sequence counter and its forward-gap guard. Same shape as the target above:
 # compiles MetisProtocol.cpp directly, no Qt, no aethercore, no socket. Its
@@ -1463,6 +1485,20 @@ add_executable(hl2_connect_reentrancy_test tests/hl2_connect_reentrancy_test.cpp
 target_include_directories(hl2_connect_reentrancy_test PRIVATE src tests)
 target_link_libraries(hl2_connect_reentrancy_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_connect_reentrancy_test COMMAND hl2_connect_reentrancy_test)
+
+# HL2 per-receiver S-meter lifetime — the meter a receiver declares as its chain
+# opens must go when the chain does. Drives a real MeterModel over the backend's
+# own meterDefined/meterRemoved, so the assertions are consumer lookups rather
+# than call spies. Needs no radio, and adds no fake peer — but it drives the real
+# connect flow, and the socket start at the end of finishDspSetup() BINDS A UDP
+# SOCKET LOCALLY whether or not anything answers, same as the
+# hl2_connect_reentrancy_test sibling says in its own header. Packets go to
+# TEST-NET-1 (192.0.2.0/24), which is reserved for documentation and routes
+# nowhere. See the file header.
+add_executable(hl2_slice_meter_lifecycle_test tests/hl2_slice_meter_lifecycle_test.cpp)
+target_include_directories(hl2_slice_meter_lifecycle_test PRIVATE src tests)
+target_link_libraries(hl2_slice_meter_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_slice_meter_lifecycle_test COMMAND hl2_slice_meter_lifecycle_test)
 
 add_executable(client_eq_test
     tests/client_eq_test.cpp
@@ -4434,6 +4470,17 @@ add_executable(hdlc_codec_test
 target_include_directories(hdlc_codec_test PRIVATE src)
 target_link_libraries(hdlc_codec_test PRIVATE aether_libmodem_core)
 add_test(NAME hdlc_codec_test COMMAND hdlc_codec_test)
+
+# Contour ShuttleXpress / ShuttlePro v2 report decoding (#5927). The parsers
+# are pure byte decoders with no hidapi dependency, so the test is built
+# unconditionally; HAVE_HIDAPI only unlocks the #ifdef around them.
+add_executable(hid_device_parser_test
+    tests/hid_device_parser_test.cpp
+    src/core/HidDeviceParser.cpp
+)
+target_include_directories(hid_device_parser_test PRIVATE src)
+target_compile_definitions(hid_device_parser_test PRIVATE HAVE_HIDAPI)
+add_test(NAME hid_device_parser_test COMMAND hid_device_parser_test)
 
 # Offline AX.25 decode diagnostic: replays a captured WAV through the decoder.
 # Not a ctest (needs an input file); built on demand for troubleshooting.

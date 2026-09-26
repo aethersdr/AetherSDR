@@ -2815,12 +2815,15 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
 
     const int xpix = panXpixelsFor(sw);
     const int ypix = panYpixelsFor(sw);
-    // xpixels/ypixels is a Flex command-plane contract. In-process and CI-V
-    // backends publish their own fixed frame geometry; sending this text to
-    // them can only be dropped, which used to surface an unsupported-command
-    // status-bar warning during an otherwise successful Icom connect. Only the
-    // write is skipped: the local rescale below still runs for them (#4448).
-    if (m_radioModel.hasCommandPlane()) {
+    // A backend that computes its own spectrum takes the width through the
+    // seam. Everything else falls back to the xpixels/ypixels text, which is a
+    // Flex command-plane contract: an in-process or CI-V backend publishes its
+    // own fixed frame geometry, so the text can only be dropped, which used to
+    // surface an unsupported-command status-bar warning during an otherwise
+    // successful Icom connect. Only the write is skipped: the local rescale
+    // below still runs for them (#4448).
+    if (!m_radioModel.requestLocalPanPixelWidth(panId, panLocalSpectrumPointsFor(sw))
+        && m_radioModel.hasCommandPlane()) {
         m_radioModel.sendCommand(
             QString("display pan set %1 xpixels=%2 ypixels=%3")
                 .arg(panId).arg(xpix).arg(ypix));

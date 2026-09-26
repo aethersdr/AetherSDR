@@ -176,6 +176,11 @@ QString xvtrForBandSummary(const QString& bandName,
 // sizing in MainWindow.cpp and the per-pan wiring in MainWindow_Wiring.cpp.
 
 int panXpixelsFor(const SpectrumWidget* spectrum);
+// Points a backend that computes its own spectrum should spread across the
+// pan's full bandwidth: one per device pixel of the panel, widened for the
+// edge crop so the kept span still has one per pixel. Not capped at the Flex
+// xpixels limit -- the backend clamps to what it can produce.
+int panLocalSpectrumPointsFor(const SpectrumWidget* spectrum);
 int panYpixelsFor(const SpectrumWidget* spectrum);
 bool panPixelDimensionsReady(const SpectrumWidget* spectrum);
 

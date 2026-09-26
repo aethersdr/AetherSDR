@@ -397,6 +397,12 @@ uint64_t wdspPortThreadAllocationSequence(void);
 uint64_t wdspPortAllocationSequence(void);
 uint64_t wdspPortOutstandingAllocations(void);
 
+// TEST ONLY (AetherSDR patch 13). Makes the DSP worker sleep for this long
+// immediately after dexchange() has released the host's blocked fexchange*,
+// which is the window in which #5734's input overwrite happened. 0 (the
+// default) is a single relaxed load and no sleep. Process-global.
+void wdspPortSetHandoffPauseForTest(unsigned microseconds);
+
 #ifdef __cplusplus
 }
 #endif

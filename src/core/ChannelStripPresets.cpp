@@ -740,6 +740,8 @@ QJsonObject ChannelStripPresets::captureTxJson(AudioEngine* engine)
         o["makeupDb"]         = c->makeupDb();
         o["limiterEnabled"]   = c->limiterEnabled();
         o["limiterCeilingDb"] = c->limiterCeilingDb();
+        o["driveDb"]            = c->driveDb();
+        o["phaseRotatorStages"] = c->phaseRotatorStages();
         preset["comp"] = o;
     }
 
@@ -896,6 +898,11 @@ void ChannelStripPresets::applyTxJson(AudioEngine* engine, const QJsonObject& pr
         c->setLimiterEnabled(jbool(o, "limiterEnabled", c->limiterEnabled()));
         c->setLimiterCeilingDb(jnum(o, "limiterCeilingDb",
                                     c->limiterCeilingDb()));
+        c->setDriveDb(static_cast<float>(
+            std::clamp(jnum(o, "driveDb", c->driveDb()), 0.0, 18.0)));
+        c->setPhaseRotatorStages(static_cast<int>(std::clamp(
+            jnum(o, "phaseRotatorStages", c->phaseRotatorStages()),
+            0.0, 6.0)));
     }
 
     // De-Esser.

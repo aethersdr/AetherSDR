@@ -473,6 +473,21 @@ public:
         Q_UNUSED(on);
     }
 
+    // How many screen pixels the pan's full reported bandwidth would cover
+    // -- the panel's device-pixel width, widened by any display-side crop --
+    // so a backend that computes its own spectrum can return one point per
+    // pixel instead of a fixed count stretched across the panel. A Flex is
+    // told the same thing as `xpixels` on its own wire.
+    //
+    // Default no-op: a Flex radio takes xpixels on the wire, and a
+    // host-computed backend that does not override this keeps its own
+    // fixed point count.
+    virtual void setPanPixelWidth(const QString& panId, int pixels)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(pixels);
+    }
+
     // ---- per-slice audio ----
     //
     // A Flex mixes its slices ON THE RADIO, so these are wire commands to it and
