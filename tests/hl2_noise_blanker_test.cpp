@@ -251,8 +251,18 @@ int main(int argc, char** argv)
     check(peakOff > 0.0 && peakOn > 0.0, "both passes produced audio");
     // The headline claim. An impulse that reaches the demodulator dominates the
     // peak; one that is blanked before the bandpass never gets there.
-    check(peakOn < peakOff * 0.5,
-          "the blanker at least halves the impulse peak in the demodulated audio");
+    //
+    // The ratio depends on the RX bandpass's PHASE as well as on the blanker,
+    // because the peak is read after that filter. USB runs it at minimum phase
+    // (Hl2RxDsp::rxMinimumPhaseFor, #5498), which front-loads the filter's
+    // energy and so peaks an UNBLANKED impulse 2.1 dB lower than linear phase
+    // does -- measured off 0.627 -> 0.490 -- while the blanked residue moves
+    // only 0.271 -> 0.293. The ratio therefore went 0.43 -> 0.60 without the
+    // blanker changing at all. "At least a third off" holds with margin on
+    // either phase; a blanker that does nothing reads ~1.0 and fails.
+    check(peakOn < peakOff * (2.0 / 3.0),
+          "the blanker takes at least a third off the impulse peak in the "
+          "demodulated audio");
     // And the claim that makes it useful rather than merely quiet: the wanted
     // signal is still there. A stage that gated the whole passband would pass
     // the assertion above and fail this one.

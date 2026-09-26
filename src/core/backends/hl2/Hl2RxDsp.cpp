@@ -162,8 +162,15 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(const Config& config,
     // 1600 / (nc/256) Hz at 48 kHz, so 2048 taps floors a notch at 200 Hz and
     // WDSP silently widens anything narrower rather than refusing it. A carrier
     // heterodyne wants ~50 Hz, which needs 8192. That is what pihpsdr runs
-    // (receiver.c), and the cost is filter-delay, not CPU.
+    // (receiver.c), and the cost is filter-delay, not CPU — a cost minimum
+    // phase removes outside CW; see rxMinimumPhaseFor().
     wc.filterTaps = kRxFilterTaps;
+    // Opened in the phase its mode wants (rxMinimumPhaseFor). installChannel()
+    // re-applies the phase for the mode in force at the swap, and that is what
+    // makes it CORRECT; this makes that re-apply a no-op in the usual case, so
+    // a build does not open linear and then re-plan all six masks under the
+    // process-global FFTW lock.
+    wc.minimumPhase = rxMinimumPhaseFor(config.mode);
 
     auto channel = WdspChannel::create(wc, &result.error);
     if (!channel)
@@ -282,6 +289,9 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     // land. On the synchronous path m_config == config already and these are
     // the values the channel was just opened with.
     m_channel->setMode(m_config.mode);
+    // The chain was BUILT for the mode of its Config; a mode change during a
+    // background build lands in m_config instead, so the phase follows it here.
+    applyMinimumPhaseForMode();
     m_channel->setFilter(m_config.filterLowHz, m_config.filterHighHz);
     m_channel->setAgc(m_config.agcMode, m_config.maximumAgcGainDb);
     // A rebuild (rate change) creates a fresh channel; restore the operator's
@@ -355,17 +365,19 @@ void Hl2RxDsp::armMeterSettle()
     // clock the meter integrates on. Two things about it are HL2's:
     //
     // The EMA does NOT get all three taus. xmeter(smeter) runs after xnbp in
-    // xrxa(), so the samples it sees have been through the RXA bandpass: a
-    // linear-phase FIR of kRxFilterTaps, whose group delay is about half that
-    // — 4096 samples, ~85 ms at the 48 kHz DSP rate — during which the meter
-    // is still being fed the zeros that were in the filter when the mute
-    // ended. What is left for the average to wash out in is ~0.215 s, so the
-    // first published reading sits roughly half a decibel below the true
-    // level rather than the ~0.2 dB three clean taus would give. That is the
-    // number to compare against: half a dB, not zero, against the ~214 dB
-    // step this replaces. Both halves of that trade are measured in
-    // hl2_adc_sampling_seam_test, which measures the reading itself rather
-    // than retyping the arithmetic.
+    // xrxa(), so the samples it sees have been through the RXA bandpass. In CW
+    // that is a linear-phase FIR of kRxFilterTaps, whose group delay is about
+    // half that — 4096 samples, ~85 ms at the 48 kHz DSP rate — during which
+    // the meter is still being fed the zeros that were in the filter when the
+    // mute ended. (Every other mode runs the same filter at minimum phase, see
+    // rxMinimumPhaseFor(), so the zeros clear sooner and this window is
+    // conservative there.) What is left for the average to wash out in is
+    // ~0.215 s, so the first published reading sits roughly half a decibel
+    // below the true level rather than the ~0.2 dB three clean taus would
+    // give. That is the number to compare against: half a dB, not zero,
+    // against the ~214 dB step this replaces. Both halves of that trade are
+    // measured in hl2_adc_sampling_seam_test, which measures the reading
+    // itself rather than retyping the arithmetic.
     //
     // And the same arm sets the read cadence: every inputRate/48k-th block,
     // so the backend's smoother sees ~47 readings a second at 384 ksps as at
@@ -402,8 +414,27 @@ void Hl2RxDsp::setMode(WdspChannel::Mode mode)
     // DEFERRED, not lost, while a background rebuild is running: see
     // beginRebuild(). m_config still takes it and installChannel() re-applies
     // it at the swap.
-    if (canPushToChannel())
+    if (canPushToChannel()) {
         m_channel->setMode(mode);
+        applyMinimumPhaseForMode();
+    }
+}
+
+void Hl2RxDsp::applyMinimumPhaseForMode()
+{
+    // The phase follows the mode (rxMinimumPhaseFor), so a change INTO or OUT
+    // OF CW has to move it too. WdspChannel::setMinimumPhase() returns early
+    // when the phase is already right, so SSB <-> digital costs nothing; a
+    // real switch re-plans the six masks under the FFTW lock, a few ms of
+    // control-path work, and the notch database survives it.
+    const bool wanted = rxMinimumPhaseFor(m_config.mode);
+    if (!m_channel->setMinimumPhase(wanted)) {
+        qCWarning(lcHl2RxDsp) << "could not switch the RX filter to"
+                              << (wanted ? "minimum" : "linear")
+                              << "phase for the new mode; receive latency stays"
+                                 " as it was until the next mode change or"
+                                 " rebuild";
+    }
 }
 
 void Hl2RxDsp::setFilter(double lowHz, double highHz)
