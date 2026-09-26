@@ -2,6 +2,7 @@
 // channel. No USB, peer, radio, display manipulation, or calibrated dBm claim.
 #include "core/backends/rtl/RtlRfExtractor.h"
 #include "core/backends/rtl/RtlCaptureTransaction.h"
+#include "core/backends/rtl/RtlDcBlocker.h"
 #include "core/dsp/WdspChannel.h"
 
 #include <algorithm>
@@ -85,7 +86,7 @@ struct Measurement : Extractor::Sink {
 
 enum class Bias { Clean, Step, BlindMean };
 
-Measurement measure(double fmRecipe, double modulation, double offset, Bias bias, bool fragmented = false)
+Measurement measure(double fmRecipe, double modulation, double offset, Bias bias, bool fragmented = false, bool suppression = false)
 {
     Measurement result;
     result.pcm.reserve(kCount);
@@ -103,6 +104,7 @@ Measurement measure(double fmRecipe, double modulation, double offset, Bias bias
         {0, kCarrier, -8000, 8000, 0, 3000, 3000}, 48'000, 1024};
     Extractor extractor(cfg);
     check(extractor.valid(), "complete passband fits displaced capture");
+    AetherSDR::rtl::RtlDcBlocker blocker; blocker.configure(suppression, kRate);
     std::array<std::complex<float>, 8192> iq{};
     constexpr std::array<std::size_t, 4> chunks{257, 4093, 8192, 997};
     std::uint32_t random = 12345;
@@ -122,18 +124,20 @@ Measurement measure(double fmRecipe, double modulation, double offset, Bias bias
             value = {std::round((value.real() + 1) * 127.5) / 127.5 - 1,
                      std::round((value.imag() + 1) * 127.5) / 127.5 - 1};
             // Negative control only: blind removal destroys the wanted carrier
-            // mean at low modulation index. Production never does this.
+            // mean at low modulation index. The optional production filter
+            // estimates DC continuously instead of knowing this exact mean.
             if (bias == Bias::BlindMean) {
                 value -= adcBias + std::complex<double>{carrierMean, 0};
             }
             iq[i] = {float(value.real()), float(value.imag())};
         }
+        blocker.process({iq.data(), count});
         check(extractor.process(cfg.capture, first, {iq.data(), count}, result), "continuous production extraction");
         first += count;
     }
     result.finish();
-    std::printf("recipe=%.0f modulation=%.0f offset=%.0f bias=%d fragmented=%d samples=%zu fundamental=%.8f residual=%.8f peak=%.8f\n",
-        fmRecipe, modulation, offset, int(bias), fragmented, result.pcm.size(), result.fundamental,
+    std::printf("recipe=%.0f modulation=%.0f offset=%.0f bias=%d fragmented=%d suppression=%d samples=%zu fundamental=%.8f residual=%.8f peak=%.8f\n",
+        fmRecipe, modulation, offset, int(bias), fragmented, suppression, result.pcm.size(), result.fundamental,
         result.residualRatio, result.peak);
     return result;
 }
@@ -158,6 +162,13 @@ int main()
                     "displaced converter bias preserves matched wanted tone gain");
                 check(biased.residualRatio < clean.residualRatio + .035,
                     "displaced converter bias does not add material settled distortion");
+                if (std::abs(offset) == Transaction::kDcSeparationHz) {
+                    const Measurement corrected = measure(recipe, modulation, offset, Bias::Step, false, true);
+                    check(std::abs(corrected.fundamental / biased.fundamental - 1) < .01,
+                        "optional DC filter preserves wanted FM/FMN audio gain at DC-clear placement");
+                    check(corrected.residualRatio < biased.residualRatio + .005,
+                        "optional DC filter adds no material settled FM/FMN distortion at DC-clear placement");
+                }
                 if (recipe == 2500 && modulation == 100 && offset == -600'000) {
                     const Measurement fragmented = measure(recipe, modulation, offset, Bias::Step, true);
                     check(fragmented.pcm == biased.pcm, "callback chunking cannot change displaced FM PCM");
@@ -173,6 +184,9 @@ int main()
     const Measurement removedMean = measure(2500, 100, 0, Bias::BlindMean);
     check(removedMean.fundamental > lowIndex.fundamental * 2,
         "negative control detects blind mean removal destroying low-index FM fidelity");
+    const Measurement suppressedCenter = measure(2500, 100, 0, Bias::Clean, false, true);
+    check(suppressedCenter.fundamental > lowIndex.fundamental * 2,
+        "optional correction also removes a real centered low-index FM carrier; off-by-default warning is necessary");
     std::printf("rtl_dc_audio_test: %d failures\n", failures);
     return failures ? 1 : 0;
 }

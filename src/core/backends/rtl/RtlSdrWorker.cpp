@@ -102,7 +102,9 @@ void RtlSdrWorker::serviceCancellation()
             // A just-removed slot remains charged until its off-thread
             // destructor finishes. Keep one bounded request while it retires;
             // never resurrect its old handle to make reuse appear immediate.
-            const auto submission = m_pipeline->prepareDetailed(m_work->target, false, m_work->compensation);
+            const auto submission = m_pipeline->prepareDetailed(m_work->target,
+                !m_work->before || m_work->target.dcSuppression != m_work->before->dcSuppression,
+                m_work->compensation);
             m_preparationSubmitted = submission == RtlReceivePipeline::Submission::Accepted;
             if ((submission == RtlReceivePipeline::Submission::RetryRetiringSlot
                 || submission == RtlReceivePipeline::Submission::RetryPlannerBusy)
@@ -128,6 +130,13 @@ void RtlSdrWorker::serviceCancellation()
 void RtlSdrWorker::applyDdc(const Transaction::State& state)
 {
     m_ddc.resetSpectrum(); // no mixed-revision window, including verified rollback
+    const bool resetDc = m_work->hardwareChanged || m_applied.session != state.token.session
+        || m_dcSuppression != state.dcSuppression;
+    if (resetDc) {
+        m_dcSuppression = state.dcSuppression;
+        m_dcBlocker.configure(m_dcSuppression, state.hardware.sampleRateHz);
+        m_ddc.resetReceiveAudio();
+    }
     const Transaction::Receiver& receiver = state.receivers.front();
     const bool legacyReceiving = m_pipeline->legacy();
     const int lowHz = static_cast<int>(receiver.passband.filterLowHz);
@@ -240,6 +249,7 @@ void RtlSdrWorker::rtlsdrCallback(unsigned char* buf, std::uint32_t len, void* c
     }
     if (!buf || len == 0 || len % 2 != 0 || len > kRtlBufLength) {
         worker->m_ddc.resetSpectrum();
+        worker->m_dcBlocker.reset();
         return;
     }
     const bool adopting = command == Command::Receiver && worker->m_pipeline->adopt();
@@ -261,7 +271,12 @@ void RtlSdrWorker::handleCallback(unsigned char* buf, std::uint32_t len)
         m_iqBuffer[i] = {(float(buf[2 * i]) - 127.5f) / 127.5f,
                          (float(buf[2 * i + 1]) - 127.5f) / 127.5f};
     }
-    m_ddc.processIqData(m_iqBuffer, m_pipeline->legacy());
+    // Keep the established 2048-bin squelch detector on raw input, with its
+    // original scale and cadence. DC correction changes actual display/audio
+    // IQ, never the detector's calibration or the number of captured samples.
+    m_ddc.processSquelchSpectrum(m_iqBuffer);
+    m_dcBlocker.process(std::span(m_iqBuffer.data(), m_iqBuffer.size()));
+    m_ddc.processIqData(m_iqBuffer, m_pipeline->legacy(), false);
     const auto spectrum = m_ddc.takeSquelchSpectrum();
     if (!spectrum.empty()) { m_pipeline->observeSpectrum(spectrum, m_firstSample); }
     m_pipeline->process(m_firstSample, std::span(m_iqBuffer.constData(), m_iqBuffer.size()));

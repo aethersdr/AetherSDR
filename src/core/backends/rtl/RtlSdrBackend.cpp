@@ -239,7 +239,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
             | RadioCapabilities::ClientSettingsDomain::RfGain | RadioCapabilities::ClientSettingsDomain::Memories;
     }
     // Vendor extensions
-    c.extensions["rtl"] = QVariantMap{{"serial", m_serial}};
+    c.extensions["rtl"] = QVariantMap{{"serial", m_serial}, {"settingsVersion", 1}};
     c.extensionNamespaces = {"rtl"};
 
     return c;
@@ -343,12 +343,15 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
         m_serial.clear(); // Enumeration indices are connection locators, never serials.
     }
 
+    verifyDeviceSettingsIdentity(m_serial);
+
     // All capture controls are requested together; only the worker touches
     // them, and only its confirmed result is exposed as connected state.
     m_requested = {};
     m_requested.hardware.centerHz = static_cast<std::uint32_t>(m_panCenterHz);
     m_requested.hardware.sampleRateHz = m_sampleRateHz;
     m_requested.hardware.ppm = m_ppmCorrection;
+    m_requested.dcSuppression = m_dcSuppression;
     if (params.contains("initialFrequencyHz")) {
         const double hz = params.value("initialFrequencyHz").toDouble();
         if (!std::isfinite(hz)) {
@@ -847,13 +850,25 @@ void RtlSdrBackend::invokeExtension(const QString& ns, const QString& verb,
     if (verb == QLatin1String("gain.list")) {
         emit extensionResult(requestId, QVariant::fromValue(m_tunerGainsTenths)); return;
     }
+    if (verb == QLatin1String("settings.get")) {
+        emit extensionResult(requestId, deviceSettingsStatus()); return;
+    }
     bool ok = false;
     const qint64 value = arg.toLongLong(&ok);
+    const int type = arg.metaType().id();
+    const bool numeric = type == QMetaType::Int || type == QMetaType::UInt
+        || type == QMetaType::LongLong || type == QMetaType::ULongLong
+        || type == QMetaType::Double || type == QMetaType::Float;
+    const double number = arg.toDouble();
+    const bool integerPpm = numeric && std::isfinite(number) && std::trunc(number) == number
+        && number >= RtlDeviceSettings::kMinPpm && number <= RtlDeviceSettings::kMaxPpm;
     auto desired = m_requested;
     if (ok && verb == QLatin1String("gain.set") && value >= -100 && value <= 100) {
         desired.hardware.gainTenths = nearestGainTenths(m_tunerGainsTenths, int(value) * 10);
-    } else if (ok && verb == QLatin1String("ppm.set") && value >= -1000 && value <= 1000) {
-        desired.hardware.ppm = int(value);
+    } else if (verb == QLatin1String("ppm.set") && integerPpm) {
+        desired.hardware.ppm = int(number);
+    } else if (verb == QLatin1String("dc_suppression.set") && type == QMetaType::Bool) {
+        desired.dcSuppression = arg.toBool();
     } else if (ok && verb == QLatin1String("direct_sampling.set") && value >= 0 && value <= 2) {
         desired.hardware.directSampling = int(value);
         desired.automaticDirectSampling = false;
@@ -876,6 +891,14 @@ void RtlSdrBackend::configureSettingsScope(const RadioSettingsScope& scope, cons
     m_settingsActive = false; m_restoreAttempted = false; m_restoreToken = {};
     m_removedSettings.clear(); m_omittedSettings.clear();
     m_savedSettings = RtlSliceSettings(scope).load();
+    m_deviceSettingsAllowed = scope.family() == QLatin1String("rtl")
+        && !identity.reportedSerial.trimmed().isEmpty()
+        && identity.reportedSerial.trimmed() == scope.radioId();
+    m_savedDeviceSettings = m_deviceSettingsAllowed ? RtlDeviceSettings(scope).load()
+        : RtlDeviceSettings::ReadResult{RtlDeviceSettings::ReadStatus::Refused, {},
+            tr("Session only: no matching reported device serial.")};
+    m_deviceSettingsSaved = false;
+    m_deviceSettingsReason = m_savedDeviceSettings.reason;
 }
 QVector<RtlSliceSettings::Slice> RtlSdrBackend::acceptedSettings() const
 {
@@ -980,7 +1003,8 @@ void RtlSdrBackend::applyRestoredState(const RestoredRadioState& state)
     m_sliceFilterHigh = 100'000;
     m_sampleRateHz = 2'400'000;
     m_panRfGainDb = kDefaultRfGainDb;
-    m_ppmCorrection = 0;
+    m_ppmCorrection = m_savedDeviceSettings.values.ppm;
+    m_dcSuppression = m_savedDeviceSettings.values.dcSuppression;
     m_directSampling = 0;
 
     if (state.rfFrequencyHz > 0) {
@@ -1071,6 +1095,8 @@ bool RtlSdrBackend::requestCapture(const RtlCaptureTransaction::Desired& desired
         const bool changed = key == extension
             || (key == QLatin1String("gain.set") && old.gainTenths != next.gainTenths)
             || (key == QLatin1String("ppm.set") && old.ppm != next.ppm)
+            || (key == QLatin1String("dc_suppression.set")
+                && m_requested.dcSuppression != desired.dcSuppression)
             || (key == QLatin1String("sample_rate.set") && old.sampleRateHz != next.sampleRateHz)
             || (key == QLatin1String("offset_tuning.set") && old.offsetTuning != next.offsetTuning)
             || (key == QLatin1String("direct_sampling.set")
@@ -1097,7 +1123,9 @@ bool RtlSdrBackend::requestCapture(const RtlCaptureTransaction::Desired& desired
             qFatal("RTL-SDR transaction mailbox ownership violated");
         }
     }
+    emit extensionStatus(QStringLiteral("rtl"), QStringLiteral("settings"), deviceSettingsStatus());
     for (quint64 id : superseded) {
+        if (m_capture.requested().session != submitted.token.session || !m_worker) { return true; }
         emit extensionError(id, tr("RTL-SDR request superseded"));
     }
     return true;
@@ -1131,6 +1159,7 @@ void RtlSdrBackend::serviceCapture()
             m_requested.hardware = state.hardware;
             m_requested.receivers = state.receivers;
             m_requested.automaticDirectSampling = state.automaticDirectSampling;
+            m_requested.dcSuppression = state.dcSuppression;
             m_requested.followReceiverId.reset();
             m_requested.centeredView.reset();
             m_pendingViewport = {};
@@ -1239,7 +1268,8 @@ void RtlSdrBackend::publishCapture()
 {
     const auto state = *m_capture.confirmed();
     if (m_lastPublished) {
-        if (m_lastPublished->hardware != state.hardware) {
+        if (m_lastPublished->hardware != state.hardware
+            || m_lastPublished->dcSuppression != state.dcSuppression) {
             retireNativeAudio();
         } else if (m_lastPublished->receivingIds != state.receivingIds) {
             // The mixed stream changes epoch, but an unchanged FM sibling's
@@ -1301,6 +1331,11 @@ void RtlSdrBackend::publishCapture()
     m_sampleRateHz = state.hardware.sampleRateHz;
     m_directSampling = state.hardware.directSampling;
     m_ppmCorrection = state.hardware.ppm;
+    m_dcSuppression = state.dcSuppression;
+    if (!prior || prior->hardware.ppm != state.hardware.ppm
+        || prior->dcSuppression != state.dcSuppression) {
+        saveAcceptedDeviceSettings();
+    }
     m_panRfGainDb = qRound(state.hardware.gainTenths / 10.0);
     m_sliceFreqHz = state.receivers[0].passband.carrierHz;
     m_sliceMode = modeName(state.receivers[0].mode);
@@ -1309,6 +1344,7 @@ void RtlSdrBackend::publishCapture()
     m_requested.hardware = state.hardware;
     m_requested.receivers = state.receivers;
     m_requested.automaticDirectSampling = state.automaticDirectSampling;
+    m_requested.dcSuppression = state.dcSuppression;
     m_requested.avoidDc = false;
     m_requested.followReceiverId.reset();
     m_requested.centeredView.reset();
@@ -1385,9 +1421,18 @@ void RtlSdrBackend::finishExtensions(bool success, RtlCaptureTransaction::Token 
     // Snapshot before any signal can reenter the backend. Newly submitted
     // promises remain in the bounded map and cannot consume this completion.
     const auto confirmed = m_capture.confirmed();
+    const auto session = m_capture.requested().session;
+    if (m_connected && m_worker && confirmed
+        && (!token.revision || acceptsFrame(token.session, token.revision))) {
+        emit extensionStatus(QStringLiteral("rtl"), QStringLiteral("settings"), deviceSettingsStatus());
+    }
     for (auto it = requests.cbegin(); it != requests.cend(); ++it) {
+        if (!m_connected || m_capture.requested().session != session) { return; }
         if (!success || !confirmed || confirmed->token != token) {
             emit extensionError(it.value().requestId, tr("RTL-SDR capture transaction failed")); continue;
+        }
+        if (it.key() == QLatin1String("dc_suppression.set")) {
+            emit extensionResult(it.value().requestId, confirmed->dcSuppression); continue;
         }
         const auto& hardware = confirmed->hardware;
         qint64 value = 0;
@@ -1398,6 +1443,41 @@ void RtlSdrBackend::finishExtensions(bool success, RtlCaptureTransaction::Token 
         else if (it.key() == QLatin1String("sample_rate.set")) { value = hardware.sampleRateHz; }
         emit extensionResult(it.value().requestId, value);
     }
+}
+
+void RtlSdrBackend::verifyDeviceSettingsIdentity(const QString& serial)
+{
+    // Discovery identity is the sole scope owner. If enumeration changed,
+    // refuse calibration inheritance rather than opening another writer here.
+    if (serial.isEmpty() || serial != m_settingsScope.radioId()) {
+        m_deviceSettingsAllowed = false;
+        m_deviceSettingsSaved = false;
+        m_deviceSettingsReason = tr("Session only: opened device serial does not match the settings identity.");
+        m_ppmCorrection = 0;
+        m_dcSuppression = false;
+    }
+}
+
+void RtlSdrBackend::saveAcceptedDeviceSettings()
+{
+    m_deviceSettingsSaved = false;
+    if (m_deviceSettingsAllowed) {
+        m_deviceSettingsSaved = RtlDeviceSettings(m_settingsScope).saveAccepted(
+            {m_ppmCorrection, m_dcSuppression}, m_deviceSettingsReason);
+    }
+}
+
+QVariantMap RtlSdrBackend::deviceSettingsStatus() const
+{
+    return {{QStringLiteral("serial"), m_serial},
+        {QStringLiteral("applied"), m_connected && m_lastPublished.has_value()},
+        {QStringLiteral("ppm"), m_ppmCorrection},
+        {QStringLiteral("dcSuppression"), m_dcSuppression},
+        {QStringLiteral("pending"), m_capture.busy()},
+        {QStringLiteral("requestedPpm"), m_requested.hardware.ppm},
+        {QStringLiteral("requestedDcSuppression"), m_requested.dcSuppression},
+        {QStringLiteral("saved"), m_deviceSettingsSaved},
+        {QStringLiteral("saveReason"), m_deviceSettingsReason}};
 }
 
 void RtlSdrBackend::emitInitialState()

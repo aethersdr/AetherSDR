@@ -3,6 +3,7 @@
 #include "core/backends/rtl/RtlSdrDdc.h"
 #include "core/backends/rtl/RtlCaptureTransaction.h"
 #include "core/backends/rtl/RtlReceivePipeline.h"
+#include "core/backends/rtl/RtlDcBlocker.h"
 
 #include <QThread>
 #include <QVector>
@@ -83,6 +84,8 @@ private:
     std::unique_ptr<RtlReceivePipeline> m_pipeline;
     std::uint64_t m_firstSample = 0;
     RtlSdrDdc m_ddc;
+    RtlDcBlocker m_dcBlocker;
+    bool m_dcSuppression = false;
     QVector<std::complex<float>> m_iqBuffer;
 };
 } // namespace AetherSDR::rtl

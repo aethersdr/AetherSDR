@@ -3,6 +3,7 @@
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/RtlSliceSettings.h"
+#include "core/RtlDeviceSettings.h"
 #include <QSet>
 #include "core/backends/rtl/RtlCaptureTransaction.h"
 #include "core/backends/rtl/RtlReceivePipeline.h"
@@ -126,6 +127,9 @@ private:
     void restoreAcceptedSlices();
     QVector<RtlSliceSettings::Slice> acceptedSettings() const;
     void finishExtensions(bool success, RtlCaptureTransaction::Token token = {});
+    QVariantMap deviceSettingsStatus() const;
+    void saveAcceptedDeviceSettings();
+    void verifyDeviceSettingsIdentity(const QString& serial);
     bool acceptsFrame(quint64 session, quint64 revision) const;
     void requestViewport(bool followDrag = false);
     void publishViewport();
@@ -159,6 +163,11 @@ private:
     QString m_captureStatus;
     int m_panRfGainDb{kDefaultRfGainDb};
     int m_ppmCorrection{0};
+    bool m_dcSuppression = false;
+    RtlDeviceSettings::ReadResult m_savedDeviceSettings;
+    bool m_deviceSettingsAllowed = false;
+    bool m_deviceSettingsSaved = false;
+    QString m_deviceSettingsReason;
     int m_directSampling{0};
     QVector<int> m_tunerGainsTenths;
     struct PendingExtension {

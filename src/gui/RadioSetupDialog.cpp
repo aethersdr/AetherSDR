@@ -1,5 +1,6 @@
 #include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
+#include "RtlReceiverSettingsWidget.h"
 #include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
 #include "RttyDecodeSettings.h"
@@ -900,6 +901,12 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         if (m_calibrationReseed)
             m_calibrationReseed();
     });
+    addPage(radioCategory, QStringLiteral("RTL Receiver"),
+        QStringLiteral("rtl receiver ppm oscillator frequency correction calibration iq dc suppression serial"),
+        [this] { return new RtlReceiverSettingsWidget(*m_model); });
+    m_rtlReceiverPageIndex = m_pageIndexes.value(QStringLiteral("RTL Receiver"));
+    setNavigationItemHidden(m_pageItems.value(m_rtlReceiverPageIndex),
+        !isCapabilityPageAvailable(m_pageItems.value(m_rtlReceiverPageIndex)));
     // Droop Correction page — mirrors the Calibration page immediately above:
     // gated on the CAPABILITY (RadioCapabilities::hostDroopCalibration, the
     // ANAN-G2 today), with the ANAN namespace enforced at the request boundary.
@@ -997,7 +1004,8 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
                 const bool droopRow = item == m_pageItems.value(m_droopCalibrationPageIndex);
                 const bool gated =
-                    (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item))
+                    ((isFlexOnlyPage(item) || item == m_pageItems.value(m_rtlReceiverPageIndex))
+                        && !isCapabilityPageAvailable(item))
                     || (isGpsPage(item)
                         && !isGpsSetupAvailable())
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
@@ -1106,6 +1114,11 @@ bool RadioSetupDialog::isCapabilityPageAvailable(const QTreeWidgetItem* item) co
         return false;
     }
     const int index = item->data(0, Qt::UserRole).toInt();
+    if (index == m_rtlReceiverPageIndex) {
+        return m_model->backendDeclaresExtension(QStringLiteral("rtl"))
+            && m_model->backendCapabilities().extensions.value(QStringLiteral("rtl")).toMap()
+                .value(QStringLiteral("settingsVersion")).toInt() == 1;
+    }
     if (index == m_droopCalibrationPageIndex) {
         return droopCalibrationAvailable(m_model->backend());
     }
@@ -1232,7 +1245,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     const QLineEdit* search = findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
     const QString needle = search ? search->text().trimmed() : QString();
     bool navigationChanged = false;
-    for (const int index : {m_filtersPageIndex, m_smartLinkPageIndex}) {
+    for (const int index : {m_filtersPageIndex, m_smartLinkPageIndex, m_rtlReceiverPageIndex}) {
         if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
             const QString haystack = item->text(0) + QStringLiteral(" ")
                 + item->data(0, Qt::UserRole + 1).toString();

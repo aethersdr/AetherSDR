@@ -41,6 +41,7 @@ public:
         Hardware hardware;
         std::vector<Receiver> receivers;
         bool automaticDirectSampling = true;
+        bool dcSuppression = false;
         // One-shot operator/mode-entry intent. Display pan/zoom never sets it.
         bool avoidDc = false;
         // One-shot slice tune: this receiver must fit the next capture. Without
@@ -64,6 +65,7 @@ public:
         std::vector<int> receivingIds;
         std::vector<Receiver> receivers;
         bool automaticDirectSampling = true;
+        bool dcSuppression = false;
     };
     struct Work {
         Token token; // completion identity; rollback target retains its old token

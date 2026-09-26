@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"
+#include "core/RtlDeviceSettings.h"
 #include "models/RadioModel.h"
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include <QCoreApplication>
@@ -59,6 +60,7 @@ struct RtlCaptureBackendTestAccess {
     static std::optional<RtlCaptureTransaction::State> state(const RtlSdrBackend& backend)
     { return backend.m_lastPublished; }
     static bool busy(const RtlSdrBackend& backend) { return backend.m_capture.busy(); }
+    static int restoredPpm(const RtlSdrBackend& backend) { return backend.m_ppmCorrection; }
     static void remove(RtlSdrBackend& backend, int id) { backend.m_removedSettings.append(id); }
 };
 }
@@ -76,6 +78,21 @@ int main(int argc, char** argv)
     TestSettingsProfile profile(QStringLiteral("rtl-runtime-settings"));
     if (!profile.isValid()) { return 1; }
     QCoreApplication app(argc, argv); AppSettings::instance().load();
+    {
+        const RadioSettingsScope calibrated("rtl", "calibrated-receiver");
+        QString reason;
+        check(RtlDeviceSettings(calibrated).saveAccepted({17, false}, reason), "seed accepted device calibration");
+        rtl::RtlSdrBackend restored;
+        restored.configureSettingsScope(calibrated, {"calibrated-receiver", false});
+        restored.applyRestoredState({});
+        check(rtl::RtlCaptureBackendTestAccess::restoredPpm(restored) == 17,
+            "restore sends stored device PPM through the existing initial hardware transaction");
+        check(!restored.currentOperatingState().extension.contains("ppm"), "generic OperatingState is not a second calibration writer");
+        restored.configureSettingsScope(RadioSettingsScope("rtl", "different-receiver"), {"different-receiver", false});
+        restored.applyRestoredState({});
+        check(rtl::RtlCaptureBackendTestAccess::restoredPpm(restored) == 0,
+            "reusing a backend for another device clears previous calibration");
+    }
     const RadioSettingsScope scope("rtl", "0");
     check(scope.setFeature("OperatingState", 2, legacy()), "legacy numeric-serial snapshot seeded");
     rtl::RtlSdrBackend backend;

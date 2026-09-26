@@ -1403,6 +1403,12 @@ if(AETHER_BACKEND_RTL)
     target_link_libraries(rtl_runtime_settings_test PRIVATE aethercore Qt6::Core)
     add_test(NAME rtl_runtime_settings_test COMMAND rtl_runtime_settings_test)
 
+    # Injected device operations and real adoption/persistence; no sockets or USB.
+    add_executable(rtl_device_controls_test tests/rtl_device_controls_test.cpp)
+    target_include_directories(rtl_device_controls_test PRIVATE src tests)
+    target_link_libraries(rtl_device_controls_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_device_controls_test COMMAND rtl_device_controls_test)
+
     # Injected device operations; no sockets, USB enumeration or RF.
     add_executable(rtl_capture_worker_test tests/rtl_capture_worker_test.cpp)
     target_include_directories(rtl_capture_worker_test PRIVATE src tests)
@@ -2750,6 +2756,8 @@ add_executable(firmware_close_dialog_test
     tests/firmware_close_dialog_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -2770,6 +2778,8 @@ add_executable(flex_control_visibility_test
     tests/flex_control_visibility_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -2801,6 +2811,8 @@ add_executable(radio_setup_region_field_test
     tests/radio_setup_region_field_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -2826,6 +2838,8 @@ add_executable(radio_setup_label_theme_token_test
     tests/radio_setup_label_theme_token_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -5249,6 +5263,27 @@ target_include_directories(rtl_slice_settings_test PRIVATE src tests)
 target_link_libraries(rtl_slice_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_slice_settings_test COMMAND rtl_slice_settings_test)
 
+# Exact-device controls, without hardware or transport.
+# Production settings widget through an injected extension seam; no socket/device.
+add_executable(rtl_receiver_settings_widget_test
+    tests/rtl_receiver_settings_widget_test.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(rtl_receiver_settings_widget_test PRIVATE src tests)
+target_link_libraries(rtl_receiver_settings_widget_test PRIVATE aetherdesktop_support Qt6::Widgets)
+add_test(NAME rtl_receiver_settings_widget_test COMMAND rtl_receiver_settings_widget_test)
+set_tests_properties(rtl_receiver_settings_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Socket-free numerical IQ correction: real samples, no radio peer.
+add_executable(rtl_dc_blocker_test tests/rtl_dc_blocker_test.cpp)
+target_include_directories(rtl_dc_blocker_test PRIVATE src)
+add_test(NAME rtl_dc_blocker_test COMMAND rtl_dc_blocker_test)
+
+add_executable(rtl_device_settings_test tests/rtl_device_settings_test.cpp)
+target_include_directories(rtl_device_settings_test PRIVATE src tests)
+target_link_libraries(rtl_device_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_device_settings_test COMMAND rtl_device_settings_test)
+
 add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
 target_include_directories(radio_state_memory_test PRIVATE src tests)
 target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -6760,7 +6795,10 @@ set(AETHER_SETTINGS_CONSUMERS
     spectrum_confirmed_geometry_test
     flex_slice_mode_intent_test
     rtl_slice_settings_test
+    rtl_device_settings_test
+    rtl_receiver_settings_widget_test
     rtl_runtime_settings_test
+    rtl_device_controls_test
     rtl_model_acceptance_test
     automation_persist_diagnostics_test
     weather_radar_loading_test

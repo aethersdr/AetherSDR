@@ -61,7 +61,8 @@ public:
 
 public slots:
     // Process incoming complex float IQ samples (runs on worker thread)
-    void processIqData(const QVector<std::complex<float>>& samples, bool audio = true);
+    void processIqData(const QVector<std::complex<float>>& samples, bool audio = true, bool measureSquelch = true);
+    void processSquelchSpectrum(const QVector<std::complex<float>>& samples);
 
 signals:
     // Emits raw spectrum FFT magnitude data for PanadapterWidget (~30 FPS)
@@ -76,7 +77,6 @@ signals:
 private:
     using DemodMode = RtlCaptureTransaction::Mode;
 
-    void processSpectrum(const QVector<std::complex<float>>& samples);
     void processDisplaySpectrum(std::span<const std::complex<float>> samples);
     void processAudio(const QVector<std::complex<float>>& samples);
 

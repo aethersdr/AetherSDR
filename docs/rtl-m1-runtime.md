@@ -396,7 +396,7 @@ Squelch retains its original 2,048-point transform, peak-bin scale and
 nominal 30 Hz schedule. Display amplitude remains `20 log10(abs(FFT) / N)`;
 coherent Blackman-Harris gain is about -8.904 dB. Noise power per display bin
 falls about 15.05 dB for the 32-fold narrower bin spacing, as expected; this
-does not recalibrate squelch or claim dBm. DC and neighboring bins remain
+does not recalibrate squelch or claim dBm. With optional IQ DC suppression disabled, DC and neighboring bins remain
 unaltered. Sixteen genuine bins remain the minimum view, now 585.94 Hz at
 2.4 MS/s. This is an analysis window, not interpolated detail.
 
@@ -412,3 +412,68 @@ noise power, sample partitioning, exact cadence, discontinuity refill and
 squelch independence. Injected-worker, model and real-widget tests cover the
 production boundary, raw DC crop, parked receivers and offscreen reveal.
 Live performance and delivery evidence are revision-specific in the PR body.
+
+## Device PPM and optional IQ DC suppression
+
+`RtlDeviceSettings` owns the schema-1 `RtlDevice` document in the exact
+reported-serial scope. It stores integer `ppm` (-1000 through +1000) and
+boolean `dcSuppression` (default false). Calibration never falls back to the
+family row or a USB index. Anonymous devices remain session-only; identical
+reported serials necessarily share the same identity. On opening USB, a serial
+mismatch clears the restored correction and refuses writes to that scope.
+Unreadable, malformed and future documents are preserved. Unknown fields in
+a supported document survive an accepted update. `OperatingState` and the UI
+do not write these fields.
+
+The existing `rtl/ppm.set` transaction remains the hardware path. Fractional,
+boolean, string and out-of-range inputs are refused. The owner saves only after
+hardware readback and DSP adoption publish an accepted capture; pending,
+superseded and rolled-back requests cannot save. A save failure is distinct
+from hardware failure: applied state remains visible with a session-only
+reason. The RTL Receiver settings page discovers `rtl` and `settingsVersion=1`,
+uses `settings.get` plus `extensionStatus("rtl", "settings", ...)`, and keeps
+an explicit applied readout while controls are pending. IDs survive page
+recreation without reuse, and connection changes retire pending UI intent.
+These device-specific controls and their presentation remain draft policy
+requiring maintainer review.
+
+Positive PPM represents a fast crystal in
+[Osmocom librtlsdr](https://github.com/osmocom/rtl-sdr/blob/master/src/librtlsdr.c):
+the assumed clock is multiplied by `1 + ppm / 1e6`, and frequency correction
+updates the sample clock and tuner configuration. If a stable reference reads
+low with the existing correction, increasing correction moves its indicated
+frequency upward. No measured or estimated calibration is automatically
+chosen. Integer PPM is the driver's precision, not a promise of absolute
+frequency accuracy.
+
+`rtl/dc_suppression.set` requires a boolean. It changes software state in the
+same bounded capture transaction, with explicit DSP adoption and rollback;
+it never enables hardware offset tuning, bias tee or another device control.
+The acquisition thread applies a continuous complex DC blocker before display
+and audio. Its response is `g(1-z^-1)/(1-r*z^-1)`, with
+`r=exp(-2*pi*5/sampleRate)` and `g=(1+r)/2`, following
+[Julius O. Smith's DC blocker](https://www.dsprelated.com/freebooks/filters/DC_Blocker.html).
+Double state makes the very small coefficient stable at RTL sample rates.
+The filter allocates no memory, preserves every sample position and is
+independent of callback partitioning. The raw 2048-point squelch measurement
+keeps its original scale and cadence before correction. Display bins remain
+real transformed IQ; no bin is hidden, zeroed or interpolated.
+
+Correction is off by default. A constant step decays by 60 dB in about 220 ms;
+allow 300 ms to settle after enabling, a hardware acquisition restart or a
+recognized malformed callback. Samples continue through during settling;
+there is no artificial gap or promise of transient-free reception. Ordinary
+receiver-only changes retain estimator history. DC toggles reset the receiver
+DSP generation and spectrum window while USB capture continues, so stale
+frames and audio cannot be adopted as the new revision.
+
+At 2.4 MS/s the response is approximately -3.01 dB at 5 Hz, -0.043 dB at
+50 Hz, -0.011 dB at 100 Hz and -0.00043 dB at 500 Hz from capture center.
+A real constant carrier at exact center is indistinguishable from converter
+DC and is removed too; AM/CW reception there can be severely distorted.
+FM spectra can also contain a center component. This is why suppression is
+optional and the existing DC-clear capture placement remains useful. Numerical
+fixtures measure both signs of a 48 kHz carrier placement for FM, FMN, AM and
+CW, plus exact-center and 50 Hz cases. They quantify IQ effects, not live
+audio intelligibility or radio calibration. Revision-specific performance,
+mutation, live reception and delivery evidence belongs in the PR report.

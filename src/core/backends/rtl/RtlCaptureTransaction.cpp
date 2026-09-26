@@ -251,6 +251,7 @@ RtlCaptureTransaction::Submission RtlCaptureTransaction::submit(const Desired& d
     target.hardware = desired.hardware;
     target.receivers = desired.receivers;
     target.automaticDirectSampling = desired.automaticDirectSampling;
+    target.dcSuppression = desired.dcSuppression;
     target.capture = {m_session, target.token.revision, double(desired.hardware.centerHz),
         double(desired.hardware.sampleRateHz), desired.hardware.sampleRateHz * 0.45,
         desired.hardware.sampleRateHz * 0.45};
@@ -402,6 +403,7 @@ RtlCaptureTransaction::Completion RtlCaptureTransaction::complete(const Result& 
                 || result.actual->capture != work.target.capture
                 || result.actual->receivingIds != work.target.receivingIds
                 || result.actual->receivers != work.target.receivers
+                || result.actual->dcSuppression != work.target.dcSuppression
                 || result.actual->automaticDirectSampling != work.target.automaticDirectSampling
                 || !matches(work.target, result.actual->hardware)))
         || (result.code == ResultCode::Restored
@@ -409,6 +411,7 @@ RtlCaptureTransaction::Completion RtlCaptureTransaction::complete(const Result& 
                 || result.actual->capture != work.before->capture
                 || result.actual->receivingIds != work.before->receivingIds
                 || result.actual->receivers != work.before->receivers
+                || result.actual->dcSuppression != work.before->dcSuppression
                 || result.actual->automaticDirectSampling != work.before->automaticDirectSampling
                 || !matches(*work.before, result.actual->hardware)))) {
         m_confirmed.reset();

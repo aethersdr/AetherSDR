@@ -202,19 +202,19 @@ void RtlSdrDdc::applyMonitor(int gain, int pan, bool mute)
     setAudioGain(gain); setAudioPan(pan); setAudioMute(mute);
 }
 
-void RtlSdrDdc::processIqData(const QVector<std::complex<float>>& samples, bool audio)
+void RtlSdrDdc::processIqData(const QVector<std::complex<float>>& samples, bool audio, bool measureSquelch)
 {
     if (samples.isEmpty()) {
         return;
     }
 
-    processSpectrum(samples);
+    processDisplaySpectrum(std::span(samples.constData(), samples.size()));
+    if (measureSquelch) { processSquelchSpectrum(samples); }
     if (audio) { processAudio(samples); }
 }
 
-void RtlSdrDdc::processSpectrum(const QVector<std::complex<float>>& samples)
+void RtlSdrDdc::processSquelchSpectrum(const QVector<std::complex<float>>& samples)
 {
-    processDisplaySpectrum(std::span(samples.constData(), samples.size()));
     if (!m_fftPlan || !m_fftIn || !m_fftOut) {
         return;
     }

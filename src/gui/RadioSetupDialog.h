@@ -266,6 +266,7 @@ private:
     // External APD page (visible only when the radio reports apd configurable=1)
     int                       m_apdPageIndex{-1};
     int                       m_calibrationPageIndex{-1};
+    int                       m_rtlReceiverPageIndex{-1};
     // Re-seeds the Calibration page from the LIVE backend value. The page is
     // built once per process (buildDeferredTab erases the builder) and the
     // dialog is a showOrRaisePersistent singleton, so without this the spinbox
