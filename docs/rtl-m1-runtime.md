@@ -370,3 +370,45 @@ weaken exact transaction readback to accept a mismatched sampling path. The
 source probes used stubbed low-level I/O, and the adapter tests used injected C
 calls: neither reproduces a reported user's hardware/driver problem nor qualifies
 live reception. Production admission remains one.
+
+## Continuous high-resolution display spectrum
+
+The display observes 65,536 consecutive full-capture IQ samples with a
+four-term Blackman-Harris window. At 2.4 MS/s its observation is 27.3067 ms
+and bin spacing is 36.6211 Hz; the 2,048-point path had 1,171.875 Hz spacing.
+A preallocated circular buffer spans variable USB callbacks. No partial
+window is zero-padded into a display frame. Sample-count deadlines pace
+frames independently of callback partitioning, with overlapping windows at
+higher frame rates. At the lowest supported rate (225,001 S/s), initial
+window fill takes 291.27 ms; subsequent frames can overlap at the requested
+rate. Frame rate alone does not shorten the observation interval.
+
+The complete capture remains available. Viewport cropping selects genuine
+bins after the transform, without an NCO, downsampling, or a second receive
+path. No audio channel consumes this display history. Capture/adoption
+boundaries, rollback and malformed USB callbacks discard partial display
+history; the existing worker token, backend receiver generation and accepted
+frame checks fence queued frames. The device API does not report a sample
+sequence for otherwise valid callbacks, so undetectable upstream loss cannot
+be claimed to be identified by this accumulator.
+
+Squelch retains its original 2,048-point transform, peak-bin scale and
+nominal 30 Hz schedule. Display amplitude remains `20 log10(abs(FFT) / N)`;
+coherent Blackman-Harris gain is about -8.904 dB. Noise power per display bin
+falls about 15.05 dB for the 32-fold narrower bin spacing, as expected; this
+does not recalibrate squelch or claim dBm. DC and neighboring bins remain
+unaltered. Sixteen genuine bins remain the minimum view, now 585.94 Hz at
+2.4 MS/s. This is an analysis window, not interpolated detail.
+
+The bounded design comparison and generated carrier/noise fixtures favor the
+larger full-capture transform over a translated, filtered and decimated
+2,048-point display stream: it preserves view-independent history and avoids
+filter/NCO settling on zoom. The display's persistent arrays occupy 2 MiB,
+plus FFTW plan storage and queued output frames. Planning/allocation and
+teardown use the existing float FFTW planner lock outside acquisition.
+[`rtl_spectrum_resolution_test`](../tests/rtl_spectrum_resolution_test.cpp)
+pins two carriers 500 Hz apart, positive/negative/edge/DC mapping, window gain,
+noise power, sample partitioning, exact cadence, discontinuity refill and
+squelch independence. Injected-worker, model and real-widget tests cover the
+production boundary, raw DC crop, parked receivers and offscreen reveal.
+Live performance and delivery evidence are revision-specific in the PR body.

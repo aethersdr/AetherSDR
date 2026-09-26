@@ -1410,6 +1410,13 @@ if(AETHER_BACKEND_RTL)
     add_test(NAME rtl_capture_worker_test COMMAND rtl_capture_worker_test)
     set_tests_properties(rtl_capture_worker_test PROPERTIES TIMEOUT 20)
 
+    # Generated IQ only: genuine resolution, continuity, gain and detector independence.
+    add_executable(rtl_spectrum_resolution_test tests/rtl_spectrum_resolution_test.cpp)
+    target_include_directories(rtl_spectrum_resolution_test PRIVATE src)
+    target_link_libraries(rtl_spectrum_resolution_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_spectrum_resolution_test COMMAND rtl_spectrum_resolution_test)
+    set_tests_properties(rtl_spectrum_resolution_test PROPERTIES TIMEOUT 30)
+
     # Socket-free RTL-SDR backend seam, DSP, and discovery contract.
     add_executable(rtl_backend_test tests/rtl_backend_test.cpp)
     target_include_directories(rtl_backend_test PRIVATE src)

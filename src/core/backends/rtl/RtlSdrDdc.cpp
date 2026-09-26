@@ -11,7 +11,9 @@ namespace AetherSDR::rtl {
 RtlSdrDdc::RtlSdrDdc(QObject* parent)
     : QObject(parent)
 {
-    m_fftAccumulator.reserve(kFftSize);
+    m_displayHistory.resize(kSpectrumBinCount);
+    m_displayWindow.resize(kSpectrumBinCount);
+    m_displayBins.resize(kSpectrumBinCount);
 
     // Initialize Blackman-Harris window for FFT spectrum
     m_fftWindow.resize(kFftSize);
@@ -23,11 +25,23 @@ RtlSdrDdc::RtlSdrDdc(QObject* parent)
                                                     - 0.01168 * std::cos(6.0 * std::numbers::pi * n / (N - 1.0)));
     }
 
+    for (size_t i = 0; i < kSpectrumBinCount; ++i) {
+        const double angle = 2.0 * std::numbers::pi * i / (kSpectrumBinCount - 1.0);
+        m_displayWindow[i] = static_cast<float>(0.35875 - 0.48829 * std::cos(angle)
+            + 0.14128 * std::cos(2.0 * angle) - 0.01168 * std::cos(3.0 * angle));
+    }
+
     // The single-precision planner and its allocator are shared with NR4.
     {
         auto lock = fftwfPlannerLock();
         m_fftIn  = static_cast<fftwf_complex*>(fftwf_malloc(sizeof(fftwf_complex) * kFftSize));
         m_fftOut = static_cast<fftwf_complex*>(fftwf_malloc(sizeof(fftwf_complex) * kFftSize));
+        m_displayIn = static_cast<fftwf_complex*>(fftwf_malloc(sizeof(fftwf_complex) * kSpectrumBinCount));
+        m_displayOut = static_cast<fftwf_complex*>(fftwf_malloc(sizeof(fftwf_complex) * kSpectrumBinCount));
+        if (m_displayIn && m_displayOut) {
+            m_displayPlan = fftwf_plan_dft_1d(kSpectrumBinCount, m_displayIn, m_displayOut,
+                                             FFTW_FORWARD, FFTW_ESTIMATE);
+        }
         if (m_fftIn && m_fftOut) {
             m_fftPlan = fftwf_plan_dft_1d(static_cast<int>(kFftSize), m_fftIn, m_fftOut, FFTW_FORWARD, FFTW_ESTIMATE);
         }
@@ -37,6 +51,9 @@ RtlSdrDdc::RtlSdrDdc(QObject* parent)
 RtlSdrDdc::~RtlSdrDdc()
 {
     auto lock = fftwfPlannerLock();
+    if (m_displayPlan) { fftwf_destroy_plan(m_displayPlan); }
+    if (m_displayIn) { fftwf_free(m_displayIn); }
+    if (m_displayOut) { fftwf_free(m_displayOut); }
     if (m_fftPlan) {
         fftwf_destroy_plan(m_fftPlan);
         m_fftPlan = nullptr;
@@ -57,15 +74,23 @@ void RtlSdrDdc::applyCapture(double rateHz, double centerHz, double sliceHz,
     if (m_sampleRateHz.load() != rateHz || m_centerHz.load() != centerHz
         || m_sliceHz.load() != sliceHz || m_mode.load() != mode) {
         resetReceiveAudio();
-        m_firstSpectrumEmitted = false;
-        m_spectrumCounter = 0;
-        m_detectorCounter = 0; m_firstDetectorEmitted = false; m_squelchSpectrumFresh = false;
+        resetSpectrum();
     }
     setSampleRate(rateHz);
     setCenterFrequency(centerHz);
     setSliceFrequency(sliceHz);
     m_mode.store(mode, std::memory_order_relaxed);
     setSliceFilter(lowHz, highHz);
+}
+
+void RtlSdrDdc::resetSpectrum() noexcept
+{
+    m_displayWrite = 0;
+    m_displayFilled = 0;
+    m_displayUntilFrame = kSpectrumBinCount;
+    m_detectorCounter = 0;
+    m_firstDetectorEmitted = false;
+    m_squelchSpectrumFresh = false;
 }
 
 void RtlSdrDdc::resetReceiveAudio() noexcept
@@ -89,7 +114,7 @@ void RtlSdrDdc::resetReceiveAudio() noexcept
 
 void RtlSdrDdc::setSampleRate(double sampleRateHz)
 {
-    if (sampleRateHz > 0) {
+    if (std::isfinite(sampleRateHz) && sampleRateHz >= 1 && sampleRateHz <= 3'000'000) {
         m_sampleRateHz.store(sampleRateHz, std::memory_order_relaxed);
         const int spectrumFps = m_spectrumFps.load(std::memory_order_relaxed);
         m_spectrumSampleStride.store(
@@ -189,17 +214,15 @@ void RtlSdrDdc::processIqData(const QVector<std::complex<float>>& samples, bool 
 
 void RtlSdrDdc::processSpectrum(const QVector<std::complex<float>>& samples)
 {
+    processDisplaySpectrum(std::span(samples.constData(), samples.size()));
     if (!m_fftPlan || !m_fftIn || !m_fftOut) {
         return;
     }
 
-    m_spectrumCounter += samples.size();
     m_detectorCounter += samples.size();
-    const bool displayDue = !m_firstSpectrumEmitted
-        || m_spectrumCounter >= m_spectrumSampleStride.load(std::memory_order_relaxed);
     const bool detectorDue = !m_firstDetectorEmitted
         || m_detectorCounter >= m_sampleRateHz.load(std::memory_order_relaxed) / 30.0;
-    if (!displayDue && !detectorDue) { return; }
+    if (!detectorDue) { return; }
 
     const size_t numToCopy = std::min(static_cast<size_t>(samples.size()), kFftSize);
     for (size_t i = 0; i < numToCopy; ++i) {
@@ -229,10 +252,51 @@ void RtlSdrDdc::processSpectrum(const QVector<std::complex<float>>& samples)
         m_detectorCounter = 0; m_firstDetectorEmitted = true;
         m_squelchSpectrumFresh = true;
     }
-    if (displayDue) {
-        m_spectrumCounter = 0; m_firstSpectrumEmitted = true;
-        const QByteArray frame(reinterpret_cast<const char*>(m_spectrumBins.data()),
-            static_cast<int>(m_spectrumBins.size() * sizeof(float)));
+}
+
+void RtlSdrDdc::processDisplaySpectrum(std::span<const std::complex<float>> samples)
+{
+    if (!m_displayPlan || !m_displayIn || !m_displayOut) { return; }
+    const double rate = m_sampleRateHz.load(std::memory_order_relaxed);
+    if (rate != m_displayRateHz) {
+        resetSpectrum();
+        m_displayRateHz = rate;
+    }
+    const size_t stride = m_spectrumSampleStride.load(std::memory_order_relaxed);
+    if (stride != m_displayStride) {
+        if (m_displayFilled == kSpectrumBinCount) {
+            m_displayUntilFrame = std::min(m_displayUntilFrame, stride);
+        }
+        m_displayStride = stride;
+    }
+    while (!samples.empty()) {
+        // Stop at the exact sample deadline, even when USB partitions straddle
+        // it. The circular history keeps the last complete contiguous window.
+        const size_t count = std::min({samples.size(), m_displayUntilFrame,
+                                      size_t(kSpectrumBinCount) - m_displayWrite});
+        std::copy_n(samples.data(), count, m_displayHistory.data() + m_displayWrite);
+        samples = samples.subspan(count);
+        m_displayWrite = (m_displayWrite + count) % kSpectrumBinCount;
+        m_displayFilled = std::min(size_t(kSpectrumBinCount), m_displayFilled + count);
+        m_displayUntilFrame -= count;
+        if (m_displayUntilFrame != 0) { continue; }
+        // The first deadline is a whole observation; later deadlines may
+        // overlap it. Short blocks are accumulated, never zero-padded.
+        for (size_t i = 0; i < kSpectrumBinCount; ++i) {
+            const auto sample = m_displayHistory[(m_displayWrite + i) % kSpectrumBinCount];
+            m_displayIn[i][0] = sample.real() * m_displayWindow[i];
+            m_displayIn[i][1] = sample.imag() * m_displayWindow[i];
+        }
+        fftwf_execute(m_displayPlan);
+        for (size_t i = 0; i < kSpectrumBinCount; ++i) {
+            const float magnitude = std::hypot(m_displayOut[i][0], m_displayOut[i][1])
+                / kSpectrumBinCount;
+            m_displayBins[(i + kSpectrumBinCount / 2) % kSpectrumBinCount] =
+                20.0f * std::log10(std::max(magnitude, 1e-6f));
+        }
+        m_displayUntilFrame = m_displayStride;
+        const QByteArray frame(reinterpret_cast<const char*>(m_displayBins.data()),
+                               kSpectrumBinCount * int(sizeof(float)));
         emit spectrumFrameReady(0, frame);
         emit waterfallRowReady(0, frame);
     }

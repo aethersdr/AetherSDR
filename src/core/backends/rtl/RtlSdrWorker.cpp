@@ -127,6 +127,7 @@ void RtlSdrWorker::serviceCancellation()
 
 void RtlSdrWorker::applyDdc(const Transaction::State& state)
 {
+    m_ddc.resetSpectrum(); // no mixed-revision window, including verified rollback
     const Transaction::Receiver& receiver = state.receivers.front();
     const bool legacyReceiving = m_pipeline->legacy();
     const int lowHz = static_cast<int>(receiver.passband.filterLowHz);
@@ -237,7 +238,10 @@ void RtlSdrWorker::rtlsdrCallback(unsigned char* buf, std::uint32_t len, void* c
         worker->m_device->cancelAsync();
         return;
     }
-    if (!buf || len == 0 || len % 2 != 0 || len > kRtlBufLength) { return; }
+    if (!buf || len == 0 || len % 2 != 0 || len > kRtlBufLength) {
+        worker->m_ddc.resetSpectrum();
+        return;
+    }
     const bool adopting = command == Command::Receiver && worker->m_pipeline->adopt();
     if (adopting) { worker->applyDdc(worker->m_work->target); }
     worker->handleCallback(buf, len);

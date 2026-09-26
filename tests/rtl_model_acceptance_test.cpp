@@ -266,14 +266,14 @@ int main(int argc, char** argv)
         int frames = 0;
         const auto frameConnection = QObject::connect(&model, &RadioModel::panFeedSpectrumReady,
             &model, [&](quint32, const QVector<float>& bins, qint64) { observedBins = bins; ++frames; });
-        QVector<float> input(2048);
+        QVector<float> input(rtl::RtlViewport::kRtlSpectrumBins);
         for (int i = 0; i < input.size(); ++i) { input[i] = -120.0f + i * 0.02f; }
-        input[1024] = -12.0f;
+        input[32768] = -12.0f;
         const QByteArray raw(reinterpret_cast<const char*>(input.constData()), input.size() * sizeof(float));
         model.requestPanCenter(pan->panId(), displaced.capture.centerHz / 1e6, 0.01875);
         rtl::RtlCaptureBackendTestAccess::spectrum(backend, raw, displaced.token);
-        check(observedBins.size() == 16 && observedBins[8] == -12.0f
-            && observedBins.front() == input[1016] && observedBins.back() == input[1031],
+        check(observedBins.size() == 512 && observedBins[256] == -12.0f
+            && observedBins.front() == input[32512] && observedBins.back() == input[33023],
               "display crop preserves the genuine DC bin and unchanged neighboring amplitudes");
         const int acceptedFrames = frames;
         rtl::RtlCaptureBackendTestAccess::spectrum(backend, raw, {displaced.token.session, displaced.token.revision + 1});

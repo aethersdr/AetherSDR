@@ -3,6 +3,7 @@
 #include <span>
 
 #include "core/backends/rtl/RtlCaptureTransaction.h"
+#include "core/backends/rtl/RtlViewport.h"
 
 #include <QObject>
 #include <QByteArray>
@@ -17,13 +18,13 @@ namespace AetherSDR::rtl {
 
 // Digital Down-Converter (DDC) and Demodulation engine for RtlSdrBackend.
 // Executes on the RtlSdrWorker thread:
-// 1. Computes 2048-point FFT magnitude spectrum at ~30 FPS using FFTW float32
+// 1. Computes a continuous 65536-point display FFT with FFTW float32.
 // 2. Performs NCO frequency shifting, decimation, and FM/AM/SSB demodulation for AudioEngine
 class RtlSdrDdc : public QObject {
     Q_OBJECT
 
 public:
-    static constexpr int kSpectrumBinCount = 2048;
+    static constexpr int kSpectrumBinCount = RtlViewport::kRtlSpectrumBins;
     explicit RtlSdrDdc(QObject* parent = nullptr);
     ~RtlSdrDdc() override;
 
@@ -35,6 +36,9 @@ public:
     // Acquisition-context only. Retire partial legacy PCM when a receiver
     // parks, resumes or changes its accepted filter without moving hardware.
     void resetReceiveAudio() noexcept;
+    // Acquisition only: discard partial spectra across observable IQ gaps or
+    // accepted revisions, including rollback to the same hardware geometry.
+    void resetSpectrum() noexcept;
     void setSampleRate(double sampleRateHz);
     void setCenterFrequency(double centerHz);
     void setSliceFrequency(double sliceHz);
@@ -73,6 +77,7 @@ private:
     using DemodMode = RtlCaptureTransaction::Mode;
 
     void processSpectrum(const QVector<std::complex<float>>& samples);
+    void processDisplaySpectrum(std::span<const std::complex<float>> samples);
     void processAudio(const QVector<std::complex<float>>& samples);
 
     // Written by the main thread and sampled inside the USB callback. These
@@ -94,15 +99,25 @@ private:
     std::atomic<int> m_audioPanPercent{50};
 
     // FFT state & rate limiter
-    static constexpr size_t kFftSize = kSpectrumBinCount;
-    std::vector<std::complex<float>> m_fftAccumulator;
+    static constexpr size_t kFftSize = 2048; // Established squelch measurement only.
     std::vector<float> m_fftWindow;
     fftwf_complex* m_fftIn{nullptr};
     fftwf_complex* m_fftOut{nullptr};
     fftwf_plan m_fftPlan{nullptr};
     std::atomic<size_t> m_spectrumSampleStride{80'000};  // 2.4 MSPS / 30 FPS = 80,000 samples
-    size_t m_spectrumCounter{0};
-    bool m_firstSpectrumEmitted{false};
+    // Display history is always full capture IQ. A viewport change only crops
+    // its genuine bins downstream, without altering receiver samples or rate.
+    std::vector<std::complex<float>> m_displayHistory;
+    std::vector<float> m_displayWindow;
+    std::vector<float> m_displayBins;
+    fftwf_complex* m_displayIn{nullptr};
+    fftwf_complex* m_displayOut{nullptr};
+    fftwf_plan m_displayPlan{nullptr};
+    size_t m_displayWrite = 0;
+    size_t m_displayFilled = 0;
+    size_t m_displayUntilFrame = kSpectrumBinCount;
+    size_t m_displayStride = 80'000;
+    double m_displayRateHz = 2'400'000;
 
     // NCO & Decimation state
     double m_ncoPhase{0.0};

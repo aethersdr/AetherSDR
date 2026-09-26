@@ -10,7 +10,7 @@ namespace AetherSDR::rtl {
 // A display window is a contiguous set of genuine FFT bins. No interpolation,
 // invented edge bins, amplitude correction, or capture/tuning state lives here.
 struct RtlViewport {
-    static constexpr int kRtlSpectrumBins = 2048;
+    static constexpr int kRtlSpectrumBins = 65536;
     int firstBin = 0;
     int binCount = 0;
     int sourceBinCount = 0;

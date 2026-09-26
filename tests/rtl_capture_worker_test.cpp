@@ -76,6 +76,27 @@ int main(int argc, char** argv)
     state->releaseReadback();
     check(waitFor([&] { return backend.isConnected() && state->starts == 1; }), "initial capture confirmed");
     check(backend.currentOperatingState().rfFrequencyHz == 100'000'000, "initial confirmed center");
+    // A malformed USB callback is an observable gap, even if capture geometry
+    // does not move. The next display frame needs a wholly fresh observation.
+    int gapFrames = 0;
+    const auto gapConnection = QObject::connect(&backend, &IRadioBackend::spectrumFrameReady,
+        [&](int, const QByteArray&) { ++gapFrames; });
+    const auto clockBlocks = [&](int count) {
+        const int expected = state->callbacks + count;
+        for (int i = 0; i < count; ++i) { state->block(); }
+        check(waitFor([&] { return state->callbacks >= expected; }), "controlled spectrum callbacks finish");
+        QCoreApplication::processEvents();
+    };
+    clockBlocks(7);
+    check(gapFrames == 0, "USB partial window is not padded into a frame");
+    state->callbackBytes = 1;
+    clockBlocks(1);
+    state->callbackBytes = 16384;
+    clockBlocks(7);
+    check(gapFrames == 0, "malformed callback discards the previous partial spectrum");
+    clockBlocks(1);
+    check(waitFor([&] { return gapFrames == 1; }), "complete fresh USB window resumes display after gap");
+    QObject::disconnect(gapConnection);
     const int initialChanges = changes;
     backend.setSliceFrequency(0, 100'200'000);
     check(changes == initialChanges, "in-window request waits for callback adoption");
@@ -329,7 +350,7 @@ int main(int argc, char** argv)
             "IQ callbacks with every slice parked publish no slice PCM");
         check(spectra > iqSpectraAtPark && waterfalls > iqWaterfallsAtPark,
             "parked IQ callbacks continue producing spectrum and waterfall rows");
-        const QByteArray raw(2048 * static_cast<int>(sizeof(float)), '\0');
+        const QByteArray raw(rtl::RtlSdrDdc::kSpectrumBinCount * static_cast<int>(sizeof(float)), '\0');
         const int spectraAtPark = spectra, waterfallsAtPark = waterfalls;
         rtl::RtlCaptureBackendTestAccess::spectrum(multiple, raw, parked.token);
         rtl::RtlCaptureBackendTestAccess::waterfall(multiple, raw, parked.token);

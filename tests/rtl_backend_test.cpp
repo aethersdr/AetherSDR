@@ -109,7 +109,10 @@ int main(int argc, char** argv)
 
     // Feed 4096 synthetic complex float IQ samples
     QVector<std::complex<float>> syntheticSamples(4096, std::complex<float>(0.5f, 0.5f));
-    ddc.processIqData(syntheticSamples);
+    // A display frame now requires a complete continuous observation.
+    for (int i = 0; i < rtl::RtlSdrDdc::kSpectrumBinCount / syntheticSamples.size(); ++i) {
+        ddc.processIqData(syntheticSamples);
+    }
 
     check(spectrumEmitted, "RtlSdrDdc emitted spectrumFrameReady");
     check(waterfallEmitted, "RtlSdrDdc emitted waterfallRowReady");
