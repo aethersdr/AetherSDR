@@ -21,6 +21,7 @@
 #include "core/backends/hl2/Hl2HardwareOptions.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
+#include <algorithm>
 #include <complex>
 #include <cstdint>
 #include <cstdio>
@@ -337,28 +338,84 @@ static void testVersaClock()
         check(on[i][2] == 0xEA && off[i][2] == 0xEA, "C2 = stop | 0x6A");
     }
 
-    // Spot-checks against deskHPSDR's HL2CL1on / HL2CL1off tables, at the two
-    // ends and at the pair that differs most visibly between them.
-    check(on[0][3] == 0x10 && on[0][4] == 0xC0, "on[0] = 0x10,0xC0");
-    check(on[1][3] == 0x13 && on[1][4] == 0x03, "on[1] = 0x13,0x03");
-    check(on[12][3] == 0x18 && on[12][4] == 0x00, "on[12] = 0x18,0x00");
-    check(on[23][3] == 0x63 && on[23][4] == 0x01, "on[23] = 0x63,0x01");
-    check(off[0][3] == 0x10 && off[0][4] == 0xC0, "off[0] = 0x10,0xC0");
-    check(off[1][3] == 0x13 && off[1][4] == 0x00, "off[1] = 0x13,0x00");
-    check(off[12][3] == 0x18 && off[12][4] == 0x40, "off[12] = 0x18,0x40");
-    check(off[23][3] == 0x63 && off[23][4] == 0x00, "off[23] = 0x63,0x00");
+    // ---- ALL 24 PAIRS, BOTH DIRECTIONS, AGAINST A REFERENCE ----------------
+    //
+    // TRANSCRIBED INDEPENDENTLY, not derived. These are deskHPSDR's HL2CL1on /
+    // HL2CL1off arrays, `src/old_protocol.c`, copied register-for-register from
+    // that source rather than from our own table — which is the whole point. An
+    // earlier version of this test spot-checked indexes 0, 1, 12 and 23 and then
+    // compared the two tables' REGISTERS to each other, which asks whether our
+    // implementation agrees with itself. It does not catch a wrong VALUE at any
+    // of the other twenty pairs: #5923's review changed on[2] from 0x40 to 0x00
+    // and this test still reported "all checks passed".
+    //
+    // deskHPSDR carries them from piHPSDR and the Hermes-Lite 2 project, and its
+    // comment names what the sequence is for: "Enable Cl1 as 10 MHz in and Cl2
+    // as 10 MHz out". Nothing in a 5P49V datasheet would let a reader recompute
+    // them — they are a board-level recipe — so the only honest test is a
+    // comparison against the recorded table.
+    static constexpr std::uint8_t kRefOn[kVersaClockCl1Banks * 2] = {
+        0x10, 0xc0, 0x13, 0x03, 0x10, 0x40, 0x2d, 0x01, 0x2e, 0x20, 0x22, 0x03,
+        0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x19, 0x00, 0x1A, 0x00, 0x1B, 0x00,
+        0x18, 0x00, 0x17, 0x12, 0x62, 0x3b, 0x2c, 0x00, 0x31, 0x81, 0x3d, 0x09,
+        0x3e, 0x00, 0x32, 0x00, 0x33, 0x00, 0x34, 0x00, 0x35, 0x00, 0x63, 0x01,
+    };
+    static constexpr std::uint8_t kRefOff[kVersaClockCl1Banks * 2] = {
+        0x10, 0xc0, 0x13, 0x00, 0x10, 0x80, 0x2d, 0x01, 0x2e, 0x10, 0x22, 0x00,
+        0x23, 0x00, 0x24, 0x00, 0x25, 0x00, 0x19, 0x00, 0x1A, 0x00, 0x1B, 0x00,
+        0x18, 0x40, 0x17, 0x04, 0x62, 0x5b, 0x2c, 0x00, 0x31, 0x00, 0x3d, 0x00,
+        0x3e, 0x00, 0x32, 0x00, 0x33, 0x00, 0x34, 0x00, 0x35, 0x00, 0x63, 0x00,
+    };
 
-    // REGISTER ORDER IS IDENTICAL in both tables and only the values differ.
-    // That is what makes "send the other table" a complete switch rather than
-    // a partial reconfiguration leaving stale registers from the previous one.
-    for (std::size_t i = 0; i < on.size(); ++i)
-        check(on[i][3] == off[i][3], "both tables address the same registers in the same order");
+    // Every pair, named by index so a failure says WHICH one moved rather than
+    // only that something did.
+    static char label[64];
+    for (std::size_t i = 0; i < kVersaClockCl1Banks; ++i) {
+        std::snprintf(label, sizeof label, "on[%zu] reg 0x%02X", i, kRefOn[2 * i]);
+        check(on[i][3] == kRefOn[2 * i], label);
+        std::snprintf(label, sizeof label, "on[%zu] value 0x%02X", i, kRefOn[2 * i + 1]);
+        check(on[i][4] == kRefOn[2 * i + 1], label);
+        std::snprintf(label, sizeof label, "off[%zu] reg 0x%02X", i, kRefOff[2 * i]);
+        check(off[i][3] == kRefOff[2 * i], label);
+        std::snprintf(label, sizeof label, "off[%zu] value 0x%02X", i, kRefOff[2 * i + 1]);
+        check(off[i][4] == kRefOff[2 * i + 1], label);
+    }
 
-    // The two tables are not the same table.
-    bool differs = false;
-    for (std::size_t i = 0; i < on.size(); ++i)
-        differs = differs || (on[i][4] != off[i][4]);
-    check(differs, "the on and off tables carry different values");
+    // INTERIOR ORDERING, pinned separately, because register 0x10 APPEARS TWICE
+    // — 0x10,0xC0 at index 0 and 0x10,0x40/0x80 at index 2 — and the second
+    // write is the one that selects the source. A test that compared the pairs
+    // as a SET, or that sorted them, would accept the two in either order and so
+    // would accept a table that configures the part and then undoes it. The
+    // send order is part of the recipe, so it is asserted as a sequence.
+    bool orderHolds = true;
+    for (std::size_t i = 0; i < kVersaClockCl1Banks; ++i)
+        orderHolds = orderHolds && on[i][3] == kRefOn[2 * i]
+                                && off[i][3] == kRefOff[2 * i];
+    check(orderHolds, "both tables walk the reference's registers in the reference's order");
+    check(on[0][3] == 0x10 && on[2][3] == 0x10 && on[0][4] != on[2][4],
+          "register 0x10 is written twice with different values, in that order");
+
+    // The ten pairs that actually differ between the two tables. Everything else
+    // is identical in both, so THESE are what "switch the reference" means; a
+    // regression that collapsed the two tables into one would still pass every
+    // assertion above if the values above were read from the same array.
+    static constexpr std::size_t kDiffering[] = {1, 2, 4, 5, 12, 13, 14, 16, 17, 23};
+    for (const std::size_t i : kDiffering) {
+        std::snprintf(label, sizeof label,
+                      "on[%zu] and off[%zu] differ at reg 0x%02X", i, i, kRefOn[2 * i]);
+        check(on[i][4] != off[i][4], label);
+    }
+    // And the other fourteen agree, which is what makes the differing set exact
+    // rather than "at least these".
+    for (std::size_t i = 0; i < kVersaClockCl1Banks; ++i) {
+        const bool expectedToDiffer =
+            std::find(std::begin(kDiffering), std::end(kDiffering), i) != std::end(kDiffering);
+        if (expectedToDiffer)
+            continue;
+        std::snprintf(label, sizeof label, "on[%zu] and off[%zu] agree at reg 0x%02X",
+                      i, i, kRefOn[2 * i]);
+        check(on[i][4] == off[i][4], label);
+    }
 }
 
 // ---------------------------------------------------------------------------
