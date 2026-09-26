@@ -274,7 +274,28 @@ void MeterModel::removeMeter(int index)
     const bool removedCompSource = m_compPeakIdxByTxSource.removeIf(matchesIndex) > 0;
     const bool removedCompSlice = m_compPeakIdxBySlice.removeIf(matchesIndex) > 0;
     const bool compressionMapChanged = removedCompSource || removedCompSlice;
-    if (index == m_fwdPwrIdx) { m_fwdPwrIdx = -1; m_fwdPwrUnit.clear(); }
+    if (index == m_fwdPwrIdx) {
+        m_fwdPwrIdx = -1;
+        m_fwdPwrUnit.clear();
+        // AND THE SAMPLE, not only the route. Clearing the index alone left
+        // m_fwdPower and m_lastFwdPowerUpdateMs holding the departed meter's
+        // reading, and fwdPowerIfLive() gates on the STAMP: declare any FWDPWR
+        // meter again inside kTxMeterStaleMs -- which defineMeter() itself
+        // triggers when an index is reused for a different meter -- and
+        // `get radio`.txPower answers the previous meter's smoothed watts for
+        // one that has carried no packet. That is the declared-but-never-fed
+        // case this whole change exists to report as null. REFPWR immediately
+        // below already zeroed both of its members; this is that, for the
+        // reading that has two.
+        //
+        // Zeroing the stamp also puts swrSampleLive() back on its
+        // "backend never published forward power" branch, which is correct: a
+        // radio whose FWDPWR meter has been removed is a radio with no forward
+        // power to gate the ratio on, exactly like one that never declared it.
+        m_fwdPower = 0.0f;
+        m_fwdPowerInstant = 0.0f;
+        m_lastFwdPowerUpdateMs = 0;
+    }
     if (index == m_refPwrIdx) {
         m_refPwrIdx = -1;
         m_refPwrUnit.clear();
@@ -474,7 +495,6 @@ void MeterModel::clear()
     m_tgxlSwr = 1.0f;
     m_lastTgxlFwdPowerUpdateMs = 0;
     m_lastTgxlSwrUpdateMs = 0;
-    m_sLevel = -130.0f;
     m_fwdPower = 0.0f;
     m_fwdPowerInstant = 0.0f;
     m_reflectedPower = 0.0f;
@@ -778,6 +798,57 @@ std::optional<float> MeterModel::swrIfLive() const
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     return swrSampleLive(now, kTxMeterStaleMs) ? std::optional<float>(m_swr)
                                                : std::nullopt;
+}
+
+std::optional<float> MeterModel::sLevelForSlice(int sliceIndex) const
+{
+    const auto it = m_sLevelIdxBySlice.constFind(sliceIndex);
+    if (it == m_sLevelIdxBySlice.constEnd()) {
+        return std::nullopt;      // this receiver declares no LEVEL meter
+    }
+    const int index = it.value();
+    // DECLARED IS NOT FED AND FED IS NOT CURRENT. m_sLevelIdxBySlice is
+    // populated by the meter DEFINITION, so gating on the index alone would
+    // publish the m_values default for a meter no packet has ever carried —
+    // the fabricated-reading failure this whole issue is about, in a new
+    // place. vitalIsFresh is the predicate `get radio` already runs over
+    // PATEMP (#5516), reused here so one window governs both rather than a
+    // third literal appearing next to two existing ones. At the ~100 Hz the
+    // SLC:LEVEL row is fed while receiving, kVitalsFreshMs is 150 packets of
+    // slack; it bites only when the stream has actually stopped.
+    //
+    // The declared-and-fed argument is a literal true because valueAgeMs()
+    // already carries it: it returns -1 when the stamp is 0 or no value has
+    // been stored, and vitalIsFresh() rejects a negative age. Re-deriving the
+    // stamp here would be a second expression that has to agree with the
+    // first. (ten9876's review of #5499)
+    if (!vitalIsFresh(true, valueAgeMs(index))) {
+        return std::nullopt;
+    }
+    return m_values.value(index, 0.0f);
+}
+
+std::optional<float> MeterModel::sLevelIfLive() const
+{
+    // One receiver, one answer. See the header: with two LEVEL meters declared
+    // there is no single "the" S-level, and resolving it by recency would
+    // reintroduce #155 through the back door.
+    if (m_sLevelIdxBySlice.size() != 1) {
+        return std::nullopt;
+    }
+    return sLevelForSlice(m_sLevelIdxBySlice.constBegin().key());
+}
+
+std::optional<float> MeterModel::fwdPowerIfLive() const
+{
+    if (m_fwdPwrIdx < 0 || m_lastFwdPowerUpdateMs <= 0) {
+        return std::nullopt;      // undeclared, or declared and never fed
+    }
+    const qint64 age = QDateTime::currentMSecsSinceEpoch() - m_lastFwdPowerUpdateMs;
+    if (age < 0 || age > kTxMeterStaleMs) {
+        return std::nullopt;
+    }
+    return m_fwdPower;
 }
 
 bool MeterModel::hasRecentTxMeters(qint64 maxAgeMs) const

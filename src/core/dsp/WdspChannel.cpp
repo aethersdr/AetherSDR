@@ -1,4 +1,5 @@
 #include "core/dsp/WdspChannel.h"
+#include "core/dsp/FftwPlannerLock.h"
 
 #include <aether_wdsp.h>
 #include <fftw3.h>
@@ -38,7 +39,24 @@ constexpr int kRxChannelType = 0;
 constexpr int kTxChannelType = 1;
 
 std::mutex g_channelMutex;
-std::mutex g_setupMutex;
+// THE FFTW PLANNER LOCK, AND IT IS NOT OURS. This used to be a mutex owned
+// by this file, which made a process-global FFTW property look like a WDSP
+// one -- and SpectralNR, which has nothing to do with WDSP, reasonably kept
+// a second mutex of its own over the same planner (#467, #5895). It now
+// binds the single lock in FftwPlannerLock.h, so every scope below reads
+// unchanged while actually serialising against SpectralNR, Hl2Spectrum and
+// AnanPanAnalyzer.
+//
+// A REFERENCE bound during this file's dynamic initialisation is safe only
+// because fftwPlannerMutex() is a function-local static (constructed on
+// first use). Nothing in this process calls a WdspChannel entry point from
+// a static constructor; if that ever changes, this binding is what breaks.
+//
+// NOTE WHAT ELSE IT GUARDS. This is not a planner-only lock in practice:
+// every WDSP control call in this file takes it, and RXASetNC/RXASetMP
+// genuinely re-plan. Widening it was never a decision anyone made -- it is
+// simply what one mutex serving two jobs became.
+std::mutex& g_setupMutex = AetherSDR::fftwPlannerMutex();
 std::array<bool, kWdspChannelCount> g_channelsInUse {};
 
 // WDSP builds its FFTs with FFTW_PATIENT — ~220 planner calls per RX channel
@@ -209,7 +227,13 @@ void exportWisdomNow()
 void armWisdomExportOnce()
 {
     static std::once_flag flag;
-    std::call_once(flag, [] { std::atexit([] { exportWisdomNow(); }); });
+    std::call_once(flag, [] {
+        std::atexit([] {
+            // The exit export reads FFTW's process-global wisdom store too.
+            auto lock = AetherSDR::fftwPlannerLock();
+            exportWisdomNow();
+        });
+    });
 }
 
 void releaseChannelId(int channel)
@@ -629,6 +653,28 @@ bool WdspChannel::setFilter(double lowHz, double highHz) noexcept
     return true;
 }
 
+bool WdspChannel::setFmDeviation(double deviationHz) noexcept
+{
+    // Out of range is refused rather than clamped, and RANGE is the word:
+    // WDSP computes again = rate / (deviation * TWOPI), so zero divides by
+    // zero, a negative value inverts the recovered audio — and a tiny positive
+    // value, which a sign check waves through, sends again to infinity and the
+    // detector emits inf. See Config::kMinFmDeviationHz.
+    if (m_config.direction != Direction::Receive || !std::isfinite(deviationHz) ||
+        deviationHz < Config::kMinFmDeviationHz ||
+        deviationHz > Config::kMaxFmDeviationHz || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        SetRXAFMDeviation(m_channelId, deviationHz);
+    }
+    // Stored so open() can re-push it: reconfigure() frees the fmd stage.
+    m_config.fmDeviationHz = deviationHz;
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setAgc(int agcMode, double maximumGainDb) noexcept
 {
     // RX-only: SetRXAAGC* has no transmit counterpart, and a TX channel has no
@@ -843,7 +889,11 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
 
 std::unique_lock<std::mutex> WdspChannel::fftwSetupLock()
 {
-    return std::unique_lock<std::mutex>(g_setupMutex);
+    // Forwards, and keeps its name so Hl2Spectrum, AnanPanAnalyzer and
+    // wdsp_channel_test need no churn. The lock itself lives in
+    // FftwPlannerLock.h; new code outside this class should take
+    // fftwPlannerLock() directly rather than reaching through WDSP.
+    return AetherSDR::fftwPlannerLock();
 }
 
 bool WdspChannel::validateConfig(const Config& config, std::string* error) noexcept
@@ -875,6 +925,20 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
     }
     if (config.direction == Direction::Transmit && config.mode == Mode::Wbfm) {
         setError(error, "WDSP TX does not define a WBFM mode");
+        return false;
+    }
+    // Refused here as well as in setFmDeviation(), because open() pushes the
+    // Config value straight into SetRXAFMDeviation, which divides by it — and
+    // refused by RANGE, not by sign, for the reason on kMinFmDeviationHz.
+    // Direction-gated like the WBFM refusal above it: open() pushes this on
+    // the RXA path only, so a transmit Config never reaches the call and has
+    // no business being failed by it.
+    if (config.direction == Direction::Receive &&
+        (!std::isfinite(config.fmDeviationHz) ||
+         config.fmDeviationHz < Config::kMinFmDeviationHz ||
+         config.fmDeviationHz > Config::kMaxFmDeviationHz)) {
+        setError(error,
+            "WDSP FM deviation is outside Config::kMinFmDeviationHz..kMaxFmDeviationHz");
         return false;
     }
     return true;
@@ -963,8 +1027,15 @@ void WdspChannel::setNoiseBlankerHold(bool hold) noexcept
 {
     // No beginControlOperation(): this is called from the same thread that
     // drives processIq() on a transmit edge, and taking the control handshake
-    // there would deadlock against a callback in flight. Both stores are
-    // atomic and the flush they schedule happens inside processIq() itself.
+    // there would deadlock against a callback in flight. The store is atomic
+    // and processIq() reads it on its next block.
+    //
+    // IT SCHEDULES NO FLUSH. This used to say "the flush they schedule happens
+    // inside processIq() itself"; no flush is scheduled and none happens. The
+    // hold makes processIq SKIP the blanker stage, which is what preserves its
+    // running average across the transmit — see the branch there, which argues
+    // the measurement. The only flush_anbEXT call in this file is in
+    // setNoiseBlanker, on enable. (#5499 item 3)
     m_nbHold.store(hold, std::memory_order_relaxed);
 }
 
@@ -999,6 +1070,10 @@ void WdspChannel::open() noexcept
         // work — safe here inside open(), never from processIq().
         RXASetNC(m_channelId, m_config.filterTaps);
         RXASetMP(m_channelId, m_config.minimumPhase ? 1 : 0);
+        // The fmd stage is built by create_rxa with a hard 5000.0 and freed
+        // again by close(), so this has to be re-pushed on every open or a
+        // reconfigure() silently returns the operator to a 5 kHz assumption.
+        SetRXAFMDeviation(m_channelId, m_config.fmDeviationHz);
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);

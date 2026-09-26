@@ -1450,9 +1450,38 @@ QString RigctlProtocol::cmdGetLevel(const QString& arg)
         return makeResponse(formatRigLevelValue(nb));
     }
     if (level == "STRENGTH") {
-        // S-meter in dBm; STRENGTH is dB relative to S9 (-73 dBm on HF)
-        const double strength = m_model->meterModel().sLevel() - kS9Dbm;
-        return makeResponse(formatRigLevelValue(strength));
+        // S-meter in dBm; STRENGTH is dB relative to S9 (-73 dBm on HF).
+        //
+        // FROM THE ADDRESSED SLICE, out of the meter packet. This read
+        //     m_model->meterModel().sLevel() - kS9Dbm
+        // and MeterModel::m_sLevel was written in exactly one place in the
+        // tree — MeterModel::clear(), to -130.0f — so this branch answered
+        // -57.0 dB to every hamlib client on every backend and every radio
+        // family, always: WSJT-X, N1MM, gpredict, anything driving AetherSDR
+        // over rigctl. It was also the one level in this block that ignored
+        // the `slice` resolved a few lines above for exactly this purpose,
+        // even though the comment there names STRENGTH among the levels that
+        // use it (#5). Both halves are the same fix. (#5499 item 2)
+        //
+        // NO READING IS AN ERROR, NOT A NUMBER. hamlib has no "unknown" for
+        // get_level, and every number available here — bottom of scale, zero,
+        // the last value seen — is indistinguishable from a measurement to the
+        // client, which is the defect being fixed rather than a way out of it.
+        // RIG_ENAVAIL is at least legible, and this branch already returns an
+        // error for an unresolvable VFO, so a client meeting one here is not
+        // meeting something new. The alternative — answering the bottom of the
+        // declared range — is a maintainer's call, not this change's.
+        //
+        // sliceId() is the right key: sLevelForSlice() is keyed by
+        // MeterDef::sourceIndex, and every backend puts the slice id there --
+        // Flex from the manifest's `num`, HL2 and Icom by declaring one
+        // S-meter at 0. See the header; the one gap is HL2's second receiver
+        // -- see #5852 and its fix, #5866.
+        const auto dbm = m_model->meterModel().sLevelForSlice(slice->sliceId());
+        if (!dbm) {
+            return rprt(-11);   // RIG_ENAVAIL: no S-meter sample for this slice
+        }
+        return makeResponse(formatRigLevelValue(*dbm - kS9Dbm));
     }
 
     // TX/radio-wide levels (no slice dependency)

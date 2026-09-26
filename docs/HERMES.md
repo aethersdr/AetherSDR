@@ -1464,7 +1464,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
 | ~~1~~ | ~~Mute ramps `0.010/0.025/0.000/0.010` instead of all zeros~~ **DONE** | A3 §2 | `WdspChannel::Config` carries exactly those four values and `WdspChannel::open` hands them to `OpenChannel`. **Not HL2-scoped** — it is the shared `WdspChannel::Config`, so ANAN already opens with the same anti-click envelope, and the RTL registry will once it is wired (`RtlReceiverRegistry` has no production caller today). Flex, Icom, Sim and Web-888 never touch this path | — |
-| ~~2~~ | ~~S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS~~ **DONE** | A3 §7 | `Hl2RxDsp` emits `meterUpdate` from `WdspChannel::meter(Meter::SignalPeak)`, which is `GetRXAMeter(..., RXA_S_PK)`; the AGC-holds-it-flat reasoning is written at the call site. `AnanRxDsp` reads the same meter. **No audio-RMS meter survives on either path** | — |
+| ~~2~~ | ~~S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS~~ **DONE** | A3 §7 | `Hl2RxDsp` emits `meterUpdate` from `WdspChannel::meter(Meter::SignalAverage)`, which is `GetRXAMeter(..., RXA_S_AV)` — #5785 moved both backends off the peak tap, whose peak-hold reads the band noise floor 11–14 dB high; the AGC-holds-it-flat reasoning is written at the call site. `AnanRxDsp` reads the same meter, and both gate the read through `WdspSMeter.h`. **No audio-RMS meter survives on either path** | — |
 | ~~3~~ | ~~Rename `kC0AdcAssign`; document the `0x0e` dual meaning~~ **DONE** | O §4 | The constant is `kC0AdcAssignOrTxGain`, and the comment above it splits the generic-openHPSDR reading (per-receiver ADC assignment) from the HL2 one (TX LNA gain, `[15]` enable / `[14]` mode / `[13:8]` value) and names the two unbuilt things that need `0x0e` to carry a real value: the T/R gain switch and PureSignal's feedback path. The hazard is now documented rather than latent | — |
 | ~~4~~ | ~~Pipeline reset `0x39[7:4]=0x8` after an NCO move~~ **WITHDRAWN** | A2 §B2 | Built and tried. `ccPipelineReset()` still encodes the bank and `hl2_metis_protocol_test` still pins its bytes, but `MetisClient::requestPipelineReset()` is a **deliberate no-op**: driving it per NCO move fired ~30 resets/second during a pan drag and wedged the board until a physical power cycle. It validated at 7 resets ~2 s apart; the drag path was never exercised. Two causes were never separated — the reset rate, and the zeros we wrote to `0x39[27:24]`/`[11:8]` on an unverified assumption. The preconditions for bringing it back are written at the function, and `CERTIFICATION.md` §1.7 carries the general lesson (validate at the rate the UI actually produces). **Do not re-open this as cheap work** | — |
 | ~~5~~ | ~~Normalize by `2^23-1`, not `2^23`~~ **DONE** | A1 §A2 | `kFullScale = (1 << 23) - 1` in `MetisProtocol.h`, applied in the EP6 sample decode. **Not HL2-scoped in effect** — `P2Protocol.h`'s `kFullScale24Bit` is the same constant with a comment pointing back here, so ANAN has the same dBFS scale. Both are asserted in `hl2_metis_protocol_test` and `anan_p2_protocol_test` | — |
@@ -1977,9 +1977,10 @@ and Display->Waterfall Rate sliders governed neither — they emitted `display p
 set … fps=` and `display panafall set … line_duration=`, Flex wire text
 addressed to a command interpreter this radio does not have.
 
-For the waterfall this was **correctness, not just load**: the widget scales its
-time axis from `line_duration`, so rows arriving at 375/s against a 100 ms
-calibration made the visible history up to **37x shorter than it claimed**.
+For the waterfall this was **correctness, not just load**: the widget seeds its
+time axis from `line_duration` until it has measured real row arrivals, so rows
+arriving at 375/s against a 100 ms seed made the visible history up to **37x
+shorter than the axis claimed**.
 
 **The cap lives at the SOURCE** (`Hl2RxDsp::setSpectrumRateFps`, reached through
 `IRadioBackend::setPanFrameRate`), where a frame that is not due costs nothing.

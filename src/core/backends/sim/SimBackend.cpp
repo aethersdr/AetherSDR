@@ -5,8 +5,8 @@
 
 #include <cmath>
 
-#include "core/RadioConnection.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/backends/sim/SimSignalSource.h"
 
 namespace AetherSDR {
@@ -254,7 +254,7 @@ void SimBackend::setDemoNb(bool on)
 }
 
 QString SimBackend::demoModelName() { return QStringLiteral("AetherSDR Demo"); }
-QString SimBackend::demoSerial()    { return QStringLiteral("DEMO-0001"); }
+QString SimBackend::demoSerial()    { return DemoRadio::serial(); }
 QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 
 RadioCapabilities SimBackend::capabilities() const
@@ -324,6 +324,10 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasManualNotch = false;
     caps.hasTransmitFrequencyCheck = false;
     caps.hasDdcPanEdgeRolloff = false;   // synthetic scene, no real receive chain
+    // The demo vends a RadioConnection (RFC #4288 Route A) but understands no
+    // `band_zoom=`/`segment_zoom=`, so it declares absence explicitly -- the
+    // case a bare hasCommandPlane() test would have got wrong.
+    caps.panZoomModes = std::nullopt;
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;

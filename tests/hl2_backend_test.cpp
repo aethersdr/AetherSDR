@@ -729,11 +729,17 @@ int main(int argc, char** argv)
         // ---- #4912: health reports the APPLIED drive, not the request ------
         //
         // Nothing reported the drive the radio was actually given. `get
-        // transmit` has rfPower and `get radio` has txPower, but both read
-        // TransmitModel — the operator's ask — so a drive that never reached
-        // the radio read back as though it had. That is the exact failure the
-        // HL2 health section exists to catch, in the one area where it is
-        // safety-adjacent.
+        // transmit` has rfPower, which reads TransmitModel — the operator's
+        // ask — so a drive that never reached the radio read back as though it
+        // had. That is the exact failure the HL2 health section exists to
+        // catch, in the one area where it is safety-adjacent.
+        //
+        // This used to name `get radio`.txPower alongside it as a second
+        // reader of TransmitModel. It was never that: it read a RadioModel
+        // member nothing in the tree assigned. It now carries the measured
+        // forward power, qualified (#5499 item 1), so it is neither the ask
+        // nor a fabricated zero — see Hl2Backend.cpp's matching paragraph,
+        // which this sentence was drifting away from.
         //
         // Asserted against `lastDrive`, the value taken off the WIRE by the
         // same reader the checks above use. A readback that agrees only with

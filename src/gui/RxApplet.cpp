@@ -1,4 +1,5 @@
 #include "RxApplet.h"
+#include "SplitAudioProfile.h"
 #include "AgcModeAvailability.h"
 #include "ScopedChildWidget.h"
 #include "gui/CtcssToneLabel.h"
@@ -930,6 +931,7 @@ void RxApplet::buildUI()
         m_muteClickTimer = new QTimer(this);
         m_muteClickTimer->setSingleShot(true);
         connect(m_muteClickTimer, &QTimer::timeout, this, [this]() {
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (m_slice) m_slice->setAudioMute(!m_slice->audioMute());
         });
         connect(m_muteBtn, &QPushButton::clicked, this, [this]() {
@@ -946,6 +948,7 @@ void RxApplet::buildUI()
         row->addWidget(m_afSlider, 1);
 
         connect(m_afSlider, &QSlider::valueChanged, this, [this](int v) {
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (m_slice) m_slice->setAudioGain(v);
             emit afGainChanged(v);
         });
@@ -973,6 +976,7 @@ void RxApplet::buildUI()
         row->addWidget(rLbl);
 
         connect(m_panSlider, &QSlider::valueChanged, this, [this](int v) {
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (m_slice) m_slice->setAudioPan(v);
         });
         rightCol->addLayout(row);

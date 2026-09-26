@@ -1751,4 +1751,114 @@ void MainWindow::showCopyAssist()
 }
 #endif
 
+// Right-click on the SPLIT/SWAP badge (#2242, #311): the offsets, Monitor TX,
+// and the remembered split audio arrangement.
+void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
+{
+    SliceModel* rx = nullptr;
+    SliceModel* tx = nullptr;
+    const bool paired = splitPairForSlice(sliceId, rx, tx);
+    // With a split, the offsets retune its TX slice; without one, they enter
+    // split on the slice whose badge was clicked (#311). The reason a split
+    // cannot be entered goes on the statusTip, which a screen reader announces
+    // for a disabled QAction where a tooltip is never read.
+    const QString blocker = paired ? QString() : splitEntryBlocker(sliceId);
+
+    QMenu menu(this);
+
+    // ── One-touch pileup offsets (#311) ──────────────────────────────────
+    const double offsets[] = {1.0, 5.0, 10.0};
+    for (double khz : offsets) {
+        QAction* a = menu.addAction(tr("Split Up %1 kHz").arg(khz, 0, 'g', 2));
+        a->setEnabled(blocker.isEmpty());
+        if (!blocker.isEmpty())
+            a->setStatusTip(blocker);
+        connect(a, &QAction::triggered, this,
+                [this, khz, sliceId]() { applySplitOffsetKHz(khz, sliceId); });
+    }
+
+    // ── Monitor TX ───────────────────────────────────────────────────────
+    menu.addSeparator();
+    QMenu* monitorMenu = menu.addMenu(tr("Monitor TX"));
+
+    // Surface the binding here rather than only in the shortcut editor: this is
+    // a hold control, so an operator who finds it in this menu still needs to
+    // be told there is nothing to hold until they bind one.
+    QString keyText;
+    if (auto* act = m_shortcutManager.action(QLatin1String(kSplitMonitorActionId)))
+        keyText = act->currentKey.toString(QKeySequence::NativeText);
+    QAction* keyRow = monitorMenu->addAction(
+        keyText.isEmpty() ? tr("Not bound — set a key in Keyboard Shortcuts")
+                          : tr("Hold %1").arg(keyText));
+    keyRow->setEnabled(false);
+    monitorMenu->addSeparator();
+
+    auto profile = loadSplitAudioProfile();
+    using Monitor = AetherSDR::SplitAudioProfile::Monitor;
+    auto* group = new QActionGroup(&menu);
+    struct { Monitor mode; const char* label; } modes[] = {
+        {Monitor::Solo, QT_TR_NOOP("Solo TX frequency")},
+        {Monitor::Both, QT_TR_NOOP("Hear both")},
+    };
+    for (const auto& m : modes) {
+        QAction* a = monitorMenu->addAction(tr(m.label));
+        a->setCheckable(true);
+        a->setChecked(profile.monitor == m.mode);
+        group->addAction(a);
+        const Monitor mode = m.mode;
+        connect(a, &QAction::triggered, this, [this, mode]() {
+            // Read-modify-write: the learned half of the profile is not this
+            // menu's business and must survive a monitor-mode change.
+            auto p = loadSplitAudioProfile();
+            p.monitor = mode;
+            saveSplitAudioProfile(p);
+        });
+    }
+
+    // ── The remembered arrangement ───────────────────────────────────────
+    menu.addSeparator();
+    // Name what is stored, in operating terms. A remembered arrangement the
+    // operator cannot see is the difference between a feature and a haunting.
+    auto panWord = [this](int pan) {
+        if (pan <= 33) return tr("left");
+        if (pan >= 67) return tr("right");
+        return tr("centre");
+    };
+    const bool pending = m_splitAudioRecorder.hasPendingLearning();
+    QString summaryText;
+    if (!profile.hasLearnedState()) {
+        summaryText = pending
+            ? tr("This split's changes will be remembered when it ends")
+            : tr("Nothing remembered yet");
+    } else {
+        QStringList parts;
+        if (profile.hasTxMute)
+            parts << (profile.txMuted ? tr("TX muted") : tr("TX unmuted"));
+        if (profile.hasTxPan)  parts << tr("TX %1").arg(panWord(profile.txPan));
+        if (profile.hasTxGain) parts << tr("TX %1%").arg(profile.txGain);
+        if (profile.hasRxPan)  parts << tr("RX %1").arg(panWord(profile.rxPan));
+        summaryText = tr("Remembered: %1").arg(parts.join(tr(", ")));
+    }
+    QAction* summary = menu.addAction(summaryText);
+    summary->setEnabled(false);
+
+    QAction* forget = menu.addAction(tr("Forget remembered audio"));
+    const bool forgettable = profile.hasLearnedState() || pending;
+    forget->setEnabled(forgettable);
+    if (!forgettable)
+        forget->setStatusTip(tr("Nothing is remembered yet."));
+    connect(forget, &QAction::triggered, this, [this]() {
+        auto p = loadSplitAudioProfile();
+        p.forgetLearnedState();   // keeps the chosen monitor mode
+        saveSplitAudioProfile(p);
+        // And this split's edits so far, or the split's end would write them
+        // straight back. The RX pan is still put back at exit.
+        m_splitAudioRecorder.forgetTouched();
+        // Let the notice fire again: after a forget the next restore is news.
+        m_splitAudioNoticeShown = false;
+    });
+
+    menu.exec(globalPos);
+}
+
 } // namespace AetherSDR

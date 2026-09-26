@@ -8,7 +8,7 @@
 #include "BandDefs.h"
 #include "BandSettings.h"
 #include "DeclaredBands.h"
-#include "core/CommandParser.h"
+#include "core/backends/flex/CommandParser.h"
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
@@ -970,9 +970,14 @@ void RadioModel::setupBackend(const QString& family)
     }
 
     // aetherd Gap B (Step 2): backends that deliver spectra via the normalized
-    // IRadioBackend data-plane signal (HL2) feed the neutral render feed here.
-    // Flex uses the PanadapterStream passthrough wired above and never emits this,
-    // so this connect is harmless for Flex and load-bearing for HL2.
+    // IRadioBackend data-plane signal feed the neutral render feed here. Flex
+    // uses the PanadapterStream passthrough wired above and never emits this,
+    // so this connect is harmless for Flex -- but it is load-bearing for every
+    // OTHER family, not for HL2 alone: HL2, ANAN, Icom, RTL-SDR and the demo
+    // SimBackend all emit it, and what their frames CONTAIN differs (see the
+    // m_backendWfLastRowNs comment in the header). An earlier wording here said
+    // "(HL2)", which is how a sentence downstream came to describe HL2's frames
+    // as if they were everyone's.
     connect(m_backend.get(), &IRadioBackend::spectrumFrameReady,
             this, &RadioModel::onBackendSpectrumFrame);
     // Liveness stamps, on the arrival edge rather than anywhere downstream: a
@@ -6345,12 +6350,13 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     // which nothing ever set. The model write is also what the automation
     // readback and RadioResourceAdapter's snapshot read.
     //
-    // IT DOES NOT MAKE AVERAGING HAPPEN, and no comment here should be read as
-    // saying it does. On a raw-spectrum backend nothing consumes m_fftAverage
-    // in a render path: onBackendSpectrumFrame is a pass-through, and ANAN's
-    // smoothSpectrumBins uses a fixed kSpectrumSmoothAlpha rather than this
-    // value. Client-side averaging for these backends is #5678 row 2.1's other
-    // half -- "port + new" -- and is not written yet.
+    // THE MODEL WRITE ALONE DOES NOT MAKE AVERAGING HAPPEN. On a raw-spectrum
+    // backend nothing consumes m_fftAverage in a render path:
+    // onBackendSpectrumFrame is a pass-through. What averages is the backend
+    // call below -- ANAN turns the value into WDSP analyzer averaging time
+    // (AnanPanAnalyzer); a backend that does not override setPanAverage()
+    // (HL2, RTL) still does no averaging. Client-side averaging for those is
+    // #5678 row 2.1's other half -- "port + new" -- and is not written yet.
     //
     // Mechanism corrected by @ten9876 on #5678: m_fftAverage IS read (by the
     // persistence snapshot and the overlay menu), so the fault is this missing
@@ -6360,6 +6366,9 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
             return false;
         }
         pan->setLocalAverage(average);
+        // And down to the backend, which may average its own spectrum -- the
+        // same path setPanFrameRate() takes in requestPanDisplayRates().
+        m_backend->setPanAverage(backendPanIdFor(panId), average);
         return true;
     }
 
@@ -6371,6 +6380,25 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     if (pan) {
         pan->setRequestedFftSettings(average, -1);
     }
+    return true;
+}
+
+bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
+{
+    // Local-shaping backends only. On Flex the caller still sends the
+    // weighted_average= wire text itself: moving it in here would add a raw
+    // command above the seam (tools/check_command_plane.py, #5262 M4).
+    if (panId.isEmpty() || !shapesDisplayRatesLocally()) {
+        return false;
+    }
+    // The model write mirrors requestPanAverage()'s setLocalAverage(): no
+    // radio echo is coming, so the value is authoritative here and the
+    // automation readback / resource snapshot see it (a missing pan is not
+    // an error -- the backend still gets the setting).
+    if (PanadapterModel* pan = panadapter(panId)) {
+        pan->setLocalWeightedAverage(on);
+    }
+    m_backend->setPanWeightedAverage(backendPanIdFor(panId), on);
     return true;
 }
 
@@ -7039,9 +7067,13 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // the waterfall row; it needs real band edges to scale against.
     //
     // Gated once more, because the waterfall rate is a SEPARATE control from
-    // the frame rate and normally asks for something slower. That gate is what
-    // makes a row actually represent the requested span of time — the
-    // calibration the widget's time axis already assumes.
+    // the frame rate and normally asks for something slower. That gate paces
+    // the row; it does NOT integrate it -- the row that goes out is the single
+    // producer frame that landed on the gate. What that frame is on each of
+    // the five families this handler serves, what is owed (the row's
+    // FIDELITY, not the time axis), and why the accumulator does not belong
+    // here are all on m_backendWfLastRowNs in the header, with RFC #5782
+    // (this repository's own) as the ruling. Kept in one place on purpose.
     // Geometry for THIS pan. `panId` here is already the neutral index, which is
     // the same key the geometry handler stores under.
     const double panBandwidthMhz = m_backendPanBandwidthMhz.value(panId, 0.0);
@@ -10165,7 +10197,7 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
 }
 
 void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
-                                   const QString& family)
+                                   const QString& family, PanadapterStream* panStream)
 {
     // THROUGH teardownBackend(), not over the top of the previous pointer.
     // A bare `m_backend = std::move(...)` destroys the old backend while this
@@ -10176,6 +10208,7 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     dropAllSessionModelsForFamilySwitch();
     teardownBackend();
     m_backend = std::move(backend);
+    m_panStream = panStream;
     m_family = family;
     wireBackendPcm();
     wireRxDemodAudioBus();
