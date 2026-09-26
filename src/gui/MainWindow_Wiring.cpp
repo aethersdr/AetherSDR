@@ -1872,7 +1872,14 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // state via DAX2 — matches SmartSDR Console behavior. (#2315)
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         m_audio->setDaxTxMode(isDigital);
-        if (!profileLoadRadioStateWritesHeld()) {
+        // `transmit dax` and DAX TX streams belong to Flex's command plane.
+        // Icom and the other typed-seam backends carry their audio through the
+        // backend itself; pushing the Flex flag on connect or on a TX-mode
+        // change is both inert and an operator-facing unsupported-control
+        // warning. setDaxTxMode() above still switches the local TX feed, so
+        // TransmitModel's daxOn() does not follow digital modes on these
+        // backends.
+        if (m_radioModel.hasCommandPlane() && !profileLoadRadioStateWritesHeld()) {
             m_radioModel.transmitModel().setDax(isDigital);
             if (isDigital) {
                 m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
@@ -2796,9 +2803,16 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
 
     const int xpix = panXpixelsFor(sw);
     const int ypix = panYpixelsFor(sw);
-    m_radioModel.sendCommand(
-        QString("display pan set %1 xpixels=%2 ypixels=%3")
-            .arg(panId).arg(xpix).arg(ypix));
+    // xpixels/ypixels is a Flex command-plane contract. In-process and CI-V
+    // backends publish their own fixed frame geometry; sending this text to
+    // them can only be dropped, which used to surface an unsupported-command
+    // status-bar warning during an otherwise successful Icom connect. Only the
+    // write is skipped: the local rescale below still runs for them (#4448).
+    if (m_radioModel.hasCommandPlane()) {
+        m_radioModel.sendCommand(
+            QString("display pan set %1 xpixels=%2 ypixels=%3")
+                .arg(panId).arg(xpix).arg(ypix));
+    }
 
     // Arm the DSS settle gate now, before the radio echo switches the local
     // decoder. The stream keeps decoding with the old y_pixels until the echo,

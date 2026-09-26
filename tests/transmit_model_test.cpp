@@ -642,6 +642,20 @@ int main(int argc, char** argv)
                      "holdBreakInDelayArmed() already agrees with every edge as it is emitted");
     }
 
+    // resetState() drops the previous session's DAX flag: a backend with no
+    // Flex command plane never echoes dax=, so nothing else would clear it
+    // (#5871).
+    {
+        TransmitModel dax;
+        dax.setDax(true);
+        int micEdges = 0;
+        QObject::connect(&dax, &TransmitModel::micStateChanged,
+                         [&micEdges] { ++micEdges; });
+        dax.resetState();
+        ok &= expect(!dax.daxOn(), "resetState clears the previous session's DAX flag");
+        ok &= expect(micEdges > 0, "resetState announces the DAX change through micStateChanged");
+    }
+
     // resetState() (every disconnect, via RadioModel::onDisconnected) clears the
     // committed delay but keeps the client-side hold preference — #5288
     // Blocker 2, the cross-session leak.
