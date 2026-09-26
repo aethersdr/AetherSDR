@@ -5274,7 +5274,36 @@ void Hl2Backend::applyAtuTuneRequest(bool tuning)
     // driven from the N2ADR IO board over I2C must never see this bit — both
     // tuners would start at once — so a radio whose operator has not said the
     // gateware owns the tuner gets a clear bit and nothing else.
-    const bool request = tuning && m_hw.atuGateware;
+    //
+    // AND ON THE TRANSMIT GATE, which is Principle VI and not symmetry.
+    // @on8st asked three times why this bit is not gated like the drive
+    // register; the answer turned out to be that it should be, and for a
+    // stronger reason than the one in the question. The gateware's tuner state
+    // machine leaves IDLE on the BIT ALONE — `exttuner.v`:
+    //
+    //     IDLE: begin
+    //       timer_next = DELAY_TIME;
+    //       if (enable) state_next = DELAY;   // enable <= cmd_data[20]
+    //     end
+    //
+    // no key, no PTT in that transition. DELAY, TRY and HANG then assert
+    // `txinhibit`, which `hermeslite_core.v` feeds into `tx_en(tx_on &
+    // ~atu_txinhibit)` and `cw_on(...)`, and TRY drives `start` low — the
+    // request that tells an external tuner to begin a tune cycle.
+    //
+    // So setting this in a transmit-blocked session is not inert. setTune(true)
+    // raises the bit BEFORE the carrier, deliberately, and every step after it
+    // — applyDrive(), setTxTestTone(), setKeying() — refuses when !m_txAllowed.
+    // This one did not, so pressing TUNE with the automation bridge active and
+    // no AETHER_AUTOMATION_ALLOW_TX started a real antenna tuner into whatever
+    // was connected, un-keyed, and inhibited the radio's own transmit path
+    // while it ran. Reachable only for an operator who declared the gateware
+    // ATU, which is why it survived this long.
+    //
+    // THE CLEARING DIRECTION IS NEVER GATED: `tuning` false makes `request`
+    // false whatever the gate says, so an already-standing bit is still
+    // cleared by setKeying(false) in a session that may not transmit.
+    const bool request = tuning && m_hw.atuGateware && m_txAllowed;
     QMetaObject::invokeMethod(m_metis, "setAtuTuneRequest", Qt::QueuedConnection,
                               Q_ARG(bool, request));
 }

@@ -366,8 +366,16 @@ struct Hl2HardwareOptions {
 //
 // hl2_hardware_options_test walks 0..kCodecCount-1 through clampCodec(), so a new
 // enumerator is covered the moment clampCodec() maps it — and this assert fires
-// until kCodecCount is bumped to match, which is the same step that forces a
-// decision in ditherBitOnCodecChange().
+// until kCodecCount is bumped to match.
+//
+// WHAT IT ACTUALLY ENFORCES, stated precisely because an earlier version of this
+// comment overstated it (@on8st, #5867 review): the count. Bumping kCodecCount
+// is what silences it, and that is a mechanical edit. What forces the dither
+// DECISION is the switch in ditherBitOnCodecChange(), which has no `default:`
+// — so a new enumerator is a -Wswitch diagnostic there. That is a warning in
+// this build, not an error, and the honest reading is: the assert stops you
+// from adding a variant silently, and the warning tells you which function
+// still owes it an answer.
 //
 // An earlier version of the test iterated a hand-written {None, Ak4951,
 // SquareSdr2} and the PR claimed a fourth variant would fail it. @on8st added

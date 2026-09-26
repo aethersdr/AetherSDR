@@ -229,6 +229,65 @@ int main(int argc, char** argv)
               "given, it simply does not write it anywhere");
     }
 
+    // ---- 4c. THE SEED RULE'S CALL SITE, not just the rule ------------------
+    //
+    // testCodecChangeSeed() in hl2_hardware_options_test pins
+    // ditherBitOnCodecChange() thoroughly. It does not pin the ONE place that
+    // applies it — the `if (next.codec != m_hw.codec)` block in hw.set —
+    // and @on8st deleted that block with all three targets staying green
+    // (#5867 review). That is the same shape as the defect itself, one layer
+    // down: the policy tested, its application not.
+    //
+    // THE ROUTE MATTERS, and this is the part I would have got wrong.
+    // AK4951 -> None does NOT catch a deleted seed block, because without the
+    // seed the AK4951 never turns the bit on in the first place, so None has
+    // nothing to clear. Only a board that CARRIES the operator's speaker value
+    // across — the SquareSDR 2 — and then a move to None shows the regression.
+    // @on8st established that by running both halves under the mutation.
+    {
+        hl2::Hl2Backend backend;
+        int wire = -1;
+        QObject::connect(&backend, &IRadioBackend::extensionResult, &backend,
+                         [&wire](quint64, const QVariant& r) {
+            const QVariantMap m = r.toMap();
+            if (m.contains(QStringLiteral("ditherBitOnWire")))
+                wire = m.value(QStringLiteral("ditherBitOnWire")).toBool() ? 1 : 0;
+        });
+        const auto wireAfter = [&backend, &wire](const QVariantMap& set) {
+            wire = -1;
+            backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("hw.set"), 0, set);
+            backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("hw.get"), 9, {});
+            return wire;
+        };
+
+        // Declare the SquareSDR 2 and turn its loudspeaker on — a perfectly
+        // ordinary thing for that board's owner to do.
+        check(wireAfter(QVariantMap{{QStringLiteral("codec"), 2},
+                                    {QStringLiteral("ditherBit"), true}}) == 1,
+              "SquareSDR 2 with its loudspeaker on: the bit is high");
+
+        // Now correct the declaration to a bare Hermes-Lite 2. On that board the
+        // same bit is the band-voltage output on the CL2 jack, and it must not
+        // arrive switched on because of a speaker setting made for another board.
+        check(wireAfter(QVariantMap{{QStringLiteral("codec"), 0}}) == 0,
+              "correcting SquareSDR 2 -> None leaves the band-voltage output OFF "
+              "— the seed rule is APPLIED, not merely defined");
+
+        // The AK4951 route as well, which is the one an operator is likeliest to
+        // walk, even though it cannot catch a missing seed on its own.
+        check(wireAfter(QVariantMap{{QStringLiteral("codec"), 1}}) == 1,
+              "AK4951 seeds its speaker on through hw.set");
+        check(wireAfter(QVariantMap{{QStringLiteral("codec"), 0}}) == 0,
+              "and correcting AK4951 -> None leaves band volts off too");
+
+        // AND AN EXPLICIT BIT STILL WINS, which is the documented exception:
+        // a caller naming both is declaring a board and its speaker together.
+        check(wireAfter(QVariantMap{{QStringLiteral("codec"), 0},
+                                    {QStringLiteral("ditherBit"), true}}) == 1,
+              "a caller that states ditherBit alongside the codec overrides the "
+              "seed — by design, and only reachable from the bridge");
+    }
+
     // ---- 5. an invalid scope is inert in both directions -------------------
     {
         const RadioSettingsScope none;
