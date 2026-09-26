@@ -124,7 +124,8 @@ public:
     // seam verb lands in WDSP here rather than on a wire. The other members of
     // the radio-side DSP family (NR, ANF) are deliberately NOT implemented and
     // stay hidden, because implementing one of them is not implementing all.
-    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                              int level, AetherSDR::NoiseBlankerFill fill) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
@@ -651,9 +652,10 @@ private:
         // Authoritative noise-blanker state, held here for the same reason the
         // AGC is: nothing on this radio echoes it back, and a receiver rebuilt
         // by a sample-rate change or a reconnect has to be told again. Defaults
-        // mirror SliceModel's (off, level 50).
-        bool nbOn = false;
+        // mirror SliceModel's (off, level 50, zero fill).
+        AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
+        AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
 
         // Host-side per-slice audio. The radio mixes nothing for us — a Flex
         // sums its slices on-radio and sends one stream, and an HL2 demodulates

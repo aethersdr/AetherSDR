@@ -104,7 +104,8 @@ public:
     void setTxAudioMonitor(bool on) override;
     void setTxMonitor(bool on, int level) override;
     void setSliceNoiseReduction(int sliceId, bool on, int level) override;
-    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                              int level, AetherSDR::NoiseBlankerFill fill) override;
     void setSliceAutoNotch(int sliceId, bool on) override;
     void setSliceManualNotch(int sliceId, bool on, int position) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;

@@ -4800,8 +4800,15 @@ void IcomCivBackend::setSliceNoiseReduction(int, bool on, int level)
         sendUserCommand(cmdSetLevel(addr, level::kNrLevel, percentToLevelRaw(level)));
 }
 
-void IcomCivBackend::setSliceNoiseBlanker(int, bool on, int level)
+void IcomCivBackend::setSliceNoiseBlanker(int, AetherSDR::NoiseBlankerKind kind,
+                                          int level, AetherSDR::NoiseBlankerFill fill)
 {
+    // The radio has ONE blanker, so anything but Off is on and the fill is not a
+    // thing this radio has an opinion about. Not a downgrade of the operator's
+    // request: Advanced is only reachable where hasHostNoiseBlanker is set, and
+    // an Icom leaves that false.
+    Q_UNUSED(fill);
+    const bool on = kind != AetherSDR::NoiseBlankerKind::Off;
     m_nbLevelPercent = level;
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
     if (m_nbEnableSent != (on ? 1 : 0)) {
@@ -6071,7 +6078,10 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
             return false;
         const bool on = m_nbEnableSent == 1;
         m_nbEnableSent = -1;
-        setSliceNoiseBlanker(slice, on, m_nbLevelPercent);
+        setSliceNoiseBlanker(slice,
+                             on ? AetherSDR::NoiseBlankerKind::Impulse
+                                : AetherSDR::NoiseBlankerKind::Off,
+                             m_nbLevelPercent, AetherSDR::kDefaultNoiseBlankerFill);
         return true;
     }
     if (id == QLatin1String("anf")) {

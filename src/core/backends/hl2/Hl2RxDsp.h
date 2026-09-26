@@ -149,8 +149,10 @@ public:
         // The noise-blanker request the channel was OPENED with, so
         // installRebuiltChannel() can tell whether the operator moved it
         // mid-build and needs a live push after the swap.
-        bool builtNbOn = false;
+        WdspChannel::NoiseBlanker builtNbKind = WdspChannel::NoiseBlanker::Off;
         int builtNbLevel = 50;
+        WdspChannel::NoiseBlankerFill builtNbFill =
+            WdspChannel::NoiseBlankerFill::Zero;
         std::string error;   // set iff channel == nullptr
     };
 
@@ -159,14 +161,14 @@ public:
     // point is that it may run on a thread that is not this object's while the
     // CURRENTLY installed channel keeps producing audio on the one that is.
     //
-    // `noiseBlankerEnabled`/`noiseBlankerLevel` are passed in rather than read
-    // from members because the channel is OPENED with the blanker (see
-    // configure()'s own note): a chain that had to be re-armed after the swap
-    // would be briefly deaf to impulses. The caller snapshots them on this
-    // object's thread inside beginRebuild()'s turn.
-    [[nodiscard]] static RebuildResult buildChannel(const Config& config,
-                                                   bool noiseBlankerEnabled,
-                                                   int noiseBlankerLevel);
+    // The blanker triple is passed in rather than read from members because the
+    // channel is OPENED with the blanker (see configure()'s own note): a chain
+    // that had to be re-armed after the swap would be briefly deaf to impulses.
+    // The caller snapshots them on this object's thread inside beginRebuild()'s
+    // turn.
+    [[nodiscard]] static RebuildResult buildChannel(
+        const Config& config, WdspChannel::NoiseBlanker noiseBlanker,
+        int noiseBlankerLevel, WdspChannel::NoiseBlankerFill noiseBlankerFill);
 
     // Marks a rebuild in flight, and seeds the operator-facing half of m_config
     // from the snapshot the build is about to run with. Must be called on this
@@ -271,27 +273,48 @@ public:
     // caller's default would switch the blanker off while the operator's NB
     // button stayed lit. Anything that must outlive a rebuild lives in its own
     // member and is re-applied at the end of configure().
-    Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    Q_INVOKABLE void setNoiseBlanker(WdspChannel::NoiseBlanker kind, int level,
+                                     WdspChannel::NoiseBlankerFill fill);
     // What the operator ASKED for. Survives configure() and is what a rebuild
     // re-applies.
-    [[nodiscard]] bool noiseBlankerEnabled() const { return m_nbOn; }
+    [[nodiscard]] bool noiseBlankerEnabled() const
+    {
+        return m_nbKind != WdspChannel::NoiseBlanker::Off;
+    }
+    [[nodiscard]] WdspChannel::NoiseBlanker noiseBlankerKind() const { return m_nbKind; }
     [[nodiscard]] int noiseBlankerLevel() const { return m_nbLevel; }
+    [[nodiscard]] WdspChannel::NoiseBlankerFill noiseBlankerFill() const
+    {
+        return m_nbFill;
+    }
     // What the WDSP stage ACTUALLY has, which is not the same question. The
     // request crosses a queued connection to get here and WdspChannel can
     // refuse it outright (a control operation already in flight), so a readback
     // that reported the request back would be certifying its own input.
     //
-    // ATOMIC because these two are the only members of this class read from
-    // OUTSIDE its thread: Hl2Backend answers the bridge's `hl2 nb.get` from the
-    // GUI thread while this object lives on the I/O thread. Relaxed is enough —
-    // they are independent scalars and nothing is ordered against them.
+    // ATOMIC because these are the only members of this class read from OUTSIDE
+    // its thread: Hl2Backend answers the bridge's `hl2 nb.get` from the GUI
+    // thread while this object lives on the I/O thread. Relaxed is enough —
+    // they are independent scalars and nothing is ordered against them. A reader
+    // can therefore see a kind from one instant and a level from the next; that
+    // is acceptable here for the reason it is not in AnanRxDsp, which packs its
+    // snapshot into one int: this readback is a diagnostic, and these three only
+    // change when the operator moves a control.
     [[nodiscard]] bool appliedNoiseBlankerEnabled() const
     {
-        return m_nbAppliedOn.load(std::memory_order_relaxed);
+        return appliedNoiseBlankerKind() != WdspChannel::NoiseBlanker::Off;
+    }
+    [[nodiscard]] WdspChannel::NoiseBlanker appliedNoiseBlankerKind() const
+    {
+        return m_nbAppliedKind.load(std::memory_order_relaxed);
     }
     [[nodiscard]] int appliedNoiseBlankerLevel() const
     {
         return m_nbAppliedLevel.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] WdspChannel::NoiseBlankerFill appliedNoiseBlankerFill() const
+    {
+        return m_nbAppliedFill.load(std::memory_order_relaxed);
     }
 
     // ── The POST-DDC half of the ADC pairing (HERMES.md §13 item 16) ──────
@@ -646,13 +669,17 @@ private:
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
     // Noise-blanker state, kept out of m_config so configure() cannot clear it.
-    // m_nbOn/m_nbLevel are the REQUEST; m_nbApplied* are what the WDSP stage
-    // took. They diverge exactly when something went wrong, which is the whole
-    // reason the bridge readback reports the applied pair.
-    bool m_nbOn = false;
+    // m_nbKind/m_nbLevel/m_nbFill are the REQUEST; m_nbApplied* are what the
+    // WDSP stage took. They diverge exactly when something went wrong, which is
+    // the whole reason the bridge readback reports the applied set.
+    WdspChannel::NoiseBlanker m_nbKind = WdspChannel::NoiseBlanker::Off;
     int  m_nbLevel = 50;      // 0..100, the slice model's units
-    std::atomic<bool> m_nbAppliedOn {false};
+    WdspChannel::NoiseBlankerFill m_nbFill = WdspChannel::NoiseBlankerFill::Zero;
+    std::atomic<WdspChannel::NoiseBlanker> m_nbAppliedKind
+        {WdspChannel::NoiseBlanker::Off};
     std::atomic<int>  m_nbAppliedLevel {50};
+    std::atomic<WdspChannel::NoiseBlankerFill> m_nbAppliedFill
+        {WdspChannel::NoiseBlankerFill::Zero};
     // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and
     // 0 are the "never observed" sentinels, which is why neither is a value the
     // accessors can return. A steady_clock stamp rather than a QElapsedTimer

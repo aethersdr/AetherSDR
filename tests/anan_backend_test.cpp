@@ -152,10 +152,12 @@ int main(int argc, char** argv)
         AnanBackend backend;
         check(!backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 50,
               "noise blanker defaults match AnanRxDsp::Config's");
-        backend.setSliceNoiseBlanker(0, true, 70);
+        backend.setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Impulse, 70,
+                                     AetherSDR::NoiseBlankerFill::Zero);
         check(backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 70,
               "setSliceNoiseBlanker() stores the operator's NB state");
-        backend.setSliceNoiseBlanker(0, false, -5);
+        backend.setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Off, -5,
+                                     AetherSDR::NoiseBlankerFill::Zero);
         check(!backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 0,
               "NB off stored, level clamped to 0");
     }

@@ -6,6 +6,7 @@
 #include <QMap>
 #include <QTimer>
 
+#include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/SliceDelta.h"
 
 namespace AetherSDR {
@@ -99,7 +100,12 @@ public:
     QStringList txAntennaList() const { return m_txAntennaList; }
     bool    isLocked()    const { return m_locked; }
     bool    qskOn()       const { return m_qsk; }
-    bool    nbOn()        const { return m_nb; }
+    // WHETHER a blanker is running, for the many callers that only ask that:
+    // rigctl's NB, SmartCat's NB, TCI's rx_nb_enable, `get slice`, the MIDI
+    // mapping and the keyboard shortcut. nbKind() is WHICH one — see setNbKind().
+    bool    nbOn()        const { return m_nbKind != AetherSDR::NoiseBlankerKind::Off; }
+    AetherSDR::NoiseBlankerKind nbKind() const { return m_nbKind; }
+    AetherSDR::NoiseBlankerFill nbFill() const { return m_nbFill; }
     bool    nrOn()        const { return m_nr; }
     bool    anfOn()       const { return m_anf; }
     bool    nrlOn()       const { return m_nrl; }
@@ -302,7 +308,18 @@ public:
     bool isLockedFeedbackActive() const { return m_lockedFeedbackActive; }
     static constexpr int kLockedFeedbackMs = 500;
     void setQsk(bool on);
+    // The bool door, kept because most callers have only one: true means the
+    // FIRST blanker (Impulse), which is what every one of them meant before a
+    // second existed. A caller that wants NB2 uses setNbKind().
     void setNb(bool on);
+    // WHICH blanker. Off/Impulse/Advanced; Advanced is reachable only on a radio
+    // that runs the blanker on this host (RadioCapabilities::
+    // hasHostNoiseBlanker), because it is WDSP's second stage and a radio-side
+    // blanker has nothing to map it onto but its one blanker.
+    void setNbKind(AetherSDR::NoiseBlankerKind kind);
+    // What Advanced puts in the blanked window. Remembered while another kind
+    // runs, so switching to NB2 and back does not reset the operator's choice.
+    void setNbFill(AetherSDR::NoiseBlankerFill fill);
     void setNr(bool on);
     void setAnf(bool on);
     void setNrl(bool on);
@@ -424,7 +441,11 @@ signals:
     // register generally needs both to make either meaningful, and because the
     // two arriving separately is how a toggle lands before the level it implies.
     void noiseReductionCommandIssued(bool on, int level);
-    void noiseBlankerCommandIssued(bool on, int level);
+    // The blanker carries a KIND rather than a bool, and its fill with it, for
+    // the reason IRadioBackend::setSliceNoiseBlanker gives: one signal is the
+    // whole state, so nothing can arrive in the wrong order.
+    void noiseBlankerCommandIssued(AetherSDR::NoiseBlankerKind kind, int level,
+                                   AetherSDR::NoiseBlankerFill fill);
     void autoNotchCommandIssued(bool on);
     // Enable and position together — see IRadioBackend::setSliceManualNotch
     // for why turning the notch on without placing it is not enough.
@@ -479,7 +500,12 @@ signals:
     void tuneBlockedByLock();
     void lockedFeedbackActiveChanged(bool active);
     void qskChanged(bool on);
+    // Stays a bool: every consumer of it (TCI's rx_nb_enable broadcast, the
+    // VFO button's checked state) asks whether a blanker is on. nbKindChanged
+    // follows for the one that also needs to know which.
     void nbChanged(bool on);
+    void nbKindChanged(AetherSDR::NoiseBlankerKind kind);
+    void nbFillChanged(AetherSDR::NoiseBlankerFill fill);
     void nrChanged(bool on);
     void anfChanged(bool on);
     void nrlChanged(bool on);
@@ -625,7 +651,8 @@ private:
     bool    m_escEnabled{false};
     float   m_escGain{1.0f};
     float   m_escPhaseShift{0.0f};
-    bool    m_nb{false};
+    AetherSDR::NoiseBlankerKind m_nbKind{AetherSDR::NoiseBlankerKind::Off};
+    AetherSDR::NoiseBlankerFill m_nbFill{AetherSDR::kDefaultNoiseBlankerFill};
     bool    m_nr{false};
     bool    m_anf{false};
     bool    m_nrl{false};

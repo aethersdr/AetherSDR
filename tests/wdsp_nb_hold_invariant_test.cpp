@@ -20,15 +20,22 @@
 // later "fixes" the code to match the sentences that were wrong, the build
 // says so:
 //
-//   1. There is exactly ONE flush_anbEXT call in WdspChannel.cpp.
-//   2. It is inside WdspChannel::setNoiseBlanker, in the `if (on)` branch —
-//      i.e. on ENABLE, and nowhere else.
+//   1. There is exactly ONE flush_anbEXT and ONE flush_nobEXT call in
+//      WdspChannel.cpp — one per blanker stage.
+//   2. Each is inside WdspChannel::setNoiseBlanker, in the branch that STARTS
+//      that stage — i.e. on ENABLE, and nowhere else.
 //   3. setNoiseBlankerHold flushes nothing and schedules nothing.
 //   4. processIq flushes nothing, on either side of the hold.
-//   5. While held, the stage is SKIPPED — the hold branch does not feed
-//      xanbEXT. "Skipped, not fed" is the load-bearing half of the corrected
-//      comment: it is why the running average survives the transmit and why
-//      the blanker is already armed on the first receive sample.
+//   5. While held, the stage is SKIPPED — the hold branch feeds neither
+//      xanbEXT nor xnobEXT. "Skipped, not fed" is the load-bearing half of the
+//      corrected comment: it is why the running average survives the transmit
+//      and why the blanker is already armed on the first receive sample.
+//   6. Both run flags are written on every call, OUTSIDE the per-kind
+//      branches, so at most one blanker can be running. Added with NB2: WDSP
+//      cannot be asked which stages are running, so this is the only place the
+//      exclusivity can be pinned at all, and two stages blanking the same
+//      window is not a small error — the second reconstructs what the first
+//      zeroed.
 //
 // The rest of what those comments claim is UNGUARDABLE from here and is left
 // unguarded rather than half-guarded: the 1.000 / 0.43 / 0.52 impulse ratios
@@ -185,30 +192,37 @@ int countOf(const QString& haystack, const QRegularExpression& call)
 
 struct NbShape {
     bool parsed{false};                  // every function this needs was found
-    int  flushCount{0};                  // flush_anbEXT calls in the whole file
-    bool flushOnEnableOnly{false};       // the one call sits in setNoiseBlanker's if (on)
+    int  flushAnbCount{0};               // flush_anbEXT calls in the whole file
+    int  flushNobCount{0};               // flush_nobEXT calls in the whole file
+    bool flushOnEnableOnly{false};       // each flush sits in its own kind branch
     bool holdSetterIsInert{false};       // setNoiseBlankerHold flushes nothing
     bool processIqNeverFlushes{false};   // no flush on either side of the hold
-    bool stageSkippedWhileHeld{false};   // the hold branch does not feed xanbEXT
+    bool stageSkippedWhileHeld{false};   // the hold branch feeds neither stage
+    bool runFlagsUnconditional{false};   // both Run flags set outside any branch
 
     bool healthy() const
     {
-        return parsed && flushCount == 1 && flushOnEnableOnly && holdSetterIsInert
-            && processIqNeverFlushes && stageSkippedWhileHeld;
+        return parsed && flushAnbCount == 1 && flushNobCount == 1
+            && flushOnEnableOnly && holdSetterIsInert && processIqNeverFlushes
+            && stageSkippedWhileHeld && runFlagsUnconditional;
     }
 };
 
 // Comments have already been replaced with whitespace. C++ permits that
 // whitespace between the function identifier and its argument list.
-const QRegularExpression kFlush(QStringLiteral("\\bflush_anbEXT\\s*\\("));
-const QRegularExpression kFeed(QStringLiteral("\\bxanbEXT\\s*\\("));
+const QRegularExpression kFlushAnb(QStringLiteral("\\bflush_anbEXT\\s*\\("));
+const QRegularExpression kFlushNob(QStringLiteral("\\bflush_nobEXT\\s*\\("));
+const QRegularExpression kFeedAnb(QStringLiteral("\\bxanbEXT\\s*\\("));
+const QRegularExpression kFeedNob(QStringLiteral("\\bxnobEXT\\s*\\("));
+const QRegularExpression kRunAnb(QStringLiteral("\\bSetEXTANBRun\\s*\\("));
+const QRegularExpression kRunNob(QStringLiteral("\\bSetEXTNOBRun\\s*\\("));
 
 NbShape analyse(const QByteArray& rawSource)
 {
     NbShape shape;
     const QString source = stripComments(QString::fromUtf8(rawSource));
 
-    const QString setter = bodyOf(source, QStringLiteral("::setNoiseBlanker(bool"));
+    const QString setter = bodyOf(source, QStringLiteral("::setNoiseBlanker(NoiseBlanker"));
     const QString holdSetter = bodyOf(source, QStringLiteral("::setNoiseBlankerHold(bool"));
     const QString processIq = bodyOf(source, QStringLiteral("::processIq("));
     if (setter.isEmpty() || holdSetter.isEmpty() || processIq.isEmpty()) {
@@ -223,41 +237,70 @@ NbShape analyse(const QByteArray& rawSource)
         return shape;
     }
 
-    const int onAt = setter.indexOf(QStringLiteral("if (on)"));
-    const QString onBranch = onAt < 0 ? QString() : blockAt(setter, onAt);
-    if (onBranch.isEmpty()) {
+    // One enable branch per stage now, keyed on the kind being switched TO.
+    const int impulseAt = setter.indexOf(QStringLiteral("if (kind == NoiseBlanker::Impulse)"));
+    const int advancedAt = setter.indexOf(QStringLiteral("if (kind == NoiseBlanker::Advanced)"));
+    const QString impulseBranch = impulseAt < 0 ? QString() : blockAt(setter, impulseAt);
+    const QString advancedBranch = advancedAt < 0 ? QString() : blockAt(setter, advancedAt);
+    if (impulseBranch.isEmpty() || advancedBranch.isEmpty()) {
         return shape;
     }
 
     shape.parsed = true;
-    shape.flushCount = countOf(source, kFlush);
-    // "Only" in the strong sense: the call is in the enable branch AND the
-    // enclosing function holds no other one.
-    shape.flushOnEnableOnly = countOf(onBranch, kFlush) == 1
-        && countOf(setter, kFlush) == 1;
-    shape.holdSetterIsInert = countOf(holdSetter, kFlush) == 0;
-    shape.processIqNeverFlushes = countOf(processIq, kFlush) == 0;
-    // Skipped, not fed. The stage's running average survives the transmit
-    // precisely because nothing is pushed through it while held.
-    shape.stageSkippedWhileHeld = countOf(holdBranch, kFeed) == 0
-        && countOf(holdBranch, kFlush) == 0;
+    shape.flushAnbCount = countOf(source, kFlushAnb);
+    shape.flushNobCount = countOf(source, kFlushNob);
+    // "Only" in the strong sense: each stage's flush is in the branch that
+    // starts THAT stage, and the enclosing function holds no other flush of
+    // either kind — so a flush cannot migrate to the disable path or to the
+    // stage that is being stopped.
+    shape.flushOnEnableOnly = countOf(impulseBranch, kFlushAnb) == 1
+        && countOf(impulseBranch, kFlushNob) == 0
+        && countOf(advancedBranch, kFlushNob) == 1
+        && countOf(advancedBranch, kFlushAnb) == 0
+        && countOf(setter, kFlushAnb) == 1 && countOf(setter, kFlushNob) == 1;
+    shape.holdSetterIsInert = countOf(holdSetter, kFlushAnb) == 0
+        && countOf(holdSetter, kFlushNob) == 0;
+    shape.processIqNeverFlushes = countOf(processIq, kFlushAnb) == 0
+        && countOf(processIq, kFlushNob) == 0;
+    // Skipped, not fed, and that means NEITHER stage: the running average
+    // survives the transmit precisely because nothing is pushed through it.
+    shape.stageSkippedWhileHeld = countOf(holdBranch, kFeedAnb) == 0
+        && countOf(holdBranch, kFeedNob) == 0
+        && countOf(holdBranch, kFlushAnb) == 0
+        && countOf(holdBranch, kFlushNob) == 0;
+    // THE EXCLUSIVITY INVARIANT, and the reason it is a text check: the two
+    // blankers share a detector and a window, so running both would have the
+    // second reconstructing what the first zeroed. WDSP's EXT API exposes no way
+    // to READ a run flag back, so no runtime test can observe this — what can be
+    // checked is that each Run flag is set exactly once per call and OUTSIDE the
+    // per-kind branches, which is what makes the unchosen stage explicitly
+    // stopped rather than left however it was.
+    shape.runFlagsUnconditional = countOf(setter, kRunAnb) == 1
+        && countOf(setter, kRunNob) == 1
+        && countOf(impulseBranch, kRunAnb) == 0
+        && countOf(impulseBranch, kRunNob) == 0
+        && countOf(advancedBranch, kRunAnb) == 0
+        && countOf(advancedBranch, kRunNob) == 0;
     return shape;
 }
 
 // ── Synthetic sources: the positive control ─────────────────────────────────
 //
-// Miniatures of the four shapes that matter. If `analyse` reported health for
-// these as readily as for the real file, it would be measuring nothing — which
-// is the failure this whole issue is about, committed inside its own test.
+// Miniatures of the shapes that matter. If `analyse` reported health for these
+// as readily as for the real file, it would be measuring nothing — which is the
+// failure this whole issue is about, committed inside its own test.
 
 const char* kHealthyMiniature = R"CPP(
-bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
+bool WdspChannel::setNoiseBlanker(NoiseBlanker kind, int level, NoiseBlankerFill fill) noexcept
 {
     if (m_nbOpen) {
-        if (on) {
+        if (kind == NoiseBlanker::Impulse) {
             flush_anbEXT(m_channelId);
+        } else if (kind == NoiseBlanker::Advanced) {
+            flush_nobEXT(m_channelId);
         }
-        SetEXTANBRun(m_channelId, on ? 1 : 0);
+        SetEXTANBRun(m_channelId, kind == NoiseBlanker::Impulse ? 1 : 0);
+        SetEXTNOBRun(m_channelId, kind == NoiseBlanker::Advanced ? 1 : 0);
     }
     return true;
 }
@@ -270,7 +313,11 @@ WdspChannel::ProcessResult WdspChannel::processIq(Span i, Span q) noexcept
     if (m_nbActive.load(std::memory_order_relaxed)) {
         if (m_nbHold.load(std::memory_order_relaxed)) {
         } else {
-            xanbEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+            if (m_nbKind.load(std::memory_order_relaxed) == NoiseBlanker::Advanced) {
+                xnobEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+            } else {
+                xanbEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+            }
         }
     }
     return ProcessResult::Ok;
@@ -279,12 +326,16 @@ WdspChannel::ProcessResult WdspChannel::processIq(Span i, Span q) noexcept
 
 // The belief the stale comments carried: a flush on the way OUT of the hold.
 const char* kFlushesOnReleaseMiniature = R"CPP(
-bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
+bool WdspChannel::setNoiseBlanker(NoiseBlanker kind, int level, NoiseBlankerFill fill) noexcept
 {
     if (m_nbOpen) {
-        if (on) {
+        if (kind == NoiseBlanker::Impulse) {
             flush_anbEXT(m_channelId);
+        } else if (kind == NoiseBlanker::Advanced) {
+            flush_nobEXT(m_channelId);
         }
+        SetEXTANBRun(m_channelId, kind == NoiseBlanker::Impulse ? 1 : 0);
+        SetEXTNOBRun(m_channelId, kind == NoiseBlanker::Advanced ? 1 : 0);
     }
     return true;
 }
@@ -305,14 +356,20 @@ WdspChannel::ProcessResult WdspChannel::processIq(Span i, Span q) noexcept
 }
 )CPP";
 
-// Held but still fed — the other way to lose the running average.
+// Held but still fed — the other way to lose the running average. Feeding the
+// SECOND stage while held loses it just as thoroughly, which is why the check
+// counts both.
 const char* kFedWhileHeldMiniature = R"CPP(
-bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
+bool WdspChannel::setNoiseBlanker(NoiseBlanker kind, int level, NoiseBlankerFill fill) noexcept
 {
     if (m_nbOpen) {
-        if (on) {
+        if (kind == NoiseBlanker::Impulse) {
             flush_anbEXT(m_channelId);
+        } else if (kind == NoiseBlanker::Advanced) {
+            flush_nobEXT(m_channelId);
         }
+        SetEXTANBRun(m_channelId, kind == NoiseBlanker::Impulse ? 1 : 0);
+        SetEXTNOBRun(m_channelId, kind == NoiseBlanker::Advanced ? 1 : 0);
     }
     return true;
 }
@@ -324,7 +381,7 @@ WdspChannel::ProcessResult WdspChannel::processIq(Span i, Span q) noexcept
 {
     if (m_nbActive.load(std::memory_order_relaxed)) {
         if (m_nbHold.load(std::memory_order_relaxed)) {
-            xanbEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+            xnobEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
         } else {
             xanbEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
         }
@@ -336,12 +393,16 @@ WdspChannel::ProcessResult WdspChannel::processIq(Span i, Span q) noexcept
 // A flush the hold SETTER performs — the literal reading of the sentence that
 // said "the flush they schedule happens inside processIq() itself".
 const char* kHoldSetterFlushesMiniature = R"CPP(
-bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
+bool WdspChannel::setNoiseBlanker(NoiseBlanker kind, int level, NoiseBlankerFill fill) noexcept
 {
     if (m_nbOpen) {
-        if (on) {
+        if (kind == NoiseBlanker::Impulse) {
             flush_anbEXT(m_channelId);
+        } else if (kind == NoiseBlanker::Advanced) {
+            flush_nobEXT(m_channelId);
         }
+        SetEXTANBRun(m_channelId, kind == NoiseBlanker::Impulse ? 1 : 0);
+        SetEXTNOBRun(m_channelId, kind == NoiseBlanker::Advanced ? 1 : 0);
     }
     return true;
 }
@@ -362,15 +423,53 @@ WdspChannel::ProcessResult WdspChannel::processIq(Span i, Span q) noexcept
 }
 )CPP";
 
+// BOTH STAGES LEFT RUNNING: the run flags moved inside the kind branches, so
+// switching to NB2 starts the NOB and never stops the ANB. The shape a
+// reasonable-looking "only touch what changed" edit produces, and the one that
+// silently has the second blanker reconstructing the first one's zeros.
+const char* kBothStagesRunMiniature = R"CPP(
+bool WdspChannel::setNoiseBlanker(NoiseBlanker kind, int level, NoiseBlankerFill fill) noexcept
+{
+    if (m_nbOpen) {
+        if (kind == NoiseBlanker::Impulse) {
+            flush_anbEXT(m_channelId);
+            SetEXTANBRun(m_channelId, 1);
+        } else if (kind == NoiseBlanker::Advanced) {
+            flush_nobEXT(m_channelId);
+            SetEXTNOBRun(m_channelId, 1);
+        }
+    }
+    return true;
+}
+void WdspChannel::setNoiseBlankerHold(bool hold) noexcept
+{
+    m_nbHold.store(hold, std::memory_order_relaxed);
+}
+WdspChannel::ProcessResult WdspChannel::processIq(Span i, Span q) noexcept
+{
+    if (m_nbActive.load(std::memory_order_relaxed)) {
+        if (m_nbHold.load(std::memory_order_relaxed)) {
+        } else {
+            xanbEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+        }
+    }
+    return ProcessResult::Ok;
+}
+)CPP";
+
 // A comment claiming a flush must not be able to satisfy — or violate — any of
 // the above, because a comment claiming a flush is precisely what was wrong.
 const char* kCommentOnlyFlushMiniature = R"CPP(
-bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
+bool WdspChannel::setNoiseBlanker(NoiseBlanker kind, int level, NoiseBlankerFill fill) noexcept
 {
     if (m_nbOpen) {
-        if (on) {
+        if (kind == NoiseBlanker::Impulse) {
             flush_anbEXT(m_channelId);
+        } else if (kind == NoiseBlanker::Advanced) {
+            flush_nobEXT(m_channelId);
         }
+        SetEXTANBRun(m_channelId, kind == NoiseBlanker::Impulse ? 1 : 0);
+        SetEXTNOBRun(m_channelId, kind == NoiseBlanker::Advanced ? 1 : 0);
     }
     return true;
 }
@@ -406,7 +505,7 @@ int main()
     const NbShape onRelease = analyse(QByteArray(kFlushesOnReleaseMiniature));
     check("control: a flush on hold RELEASE is seen and rejected",
           onRelease.parsed && !onRelease.processIqNeverFlushes
-              && onRelease.flushCount == 2 && !onRelease.healthy());
+              && onRelease.flushAnbCount == 2 && !onRelease.healthy());
 
     const NbShape fedWhileHeld = analyse(QByteArray(kFedWhileHeldMiniature));
     check("control: feeding the stage while held is seen and rejected",
@@ -417,6 +516,10 @@ int main()
     check("control: a flush in the hold SETTER is seen and rejected",
           setterFlushes.parsed && !setterFlushes.holdSetterIsInert
               && !setterFlushes.healthy());
+
+    const NbShape bothRun = analyse(QByteArray(kBothStagesRunMiniature));
+    check("control: run flags moved inside the kind branches are seen and rejected",
+          bothRun.parsed && !bothRun.runFlagsUnconditional && !bothRun.healthy());
 
     const NbShape commentOnly = analyse(QByteArray(kCommentOnlyFlushMiniature));
     check("control: a flush that exists only in a COMMENT changes nothing",
@@ -435,7 +538,7 @@ int main()
             .replace("flush_anbEXT(", flushCall));
         check(("control: separated release flush is rejected: "
                + separator.toHex()).constData(),
-              spacedRelease.parsed && spacedRelease.flushCount == 2
+              spacedRelease.parsed && spacedRelease.flushAnbCount == 2
                   && !spacedRelease.processIqNeverFlushes && !spacedRelease.healthy());
 
         const NbShape spacedSetter = analyse(QByteArray(kHoldSetterFlushesMiniature)
@@ -467,14 +570,19 @@ int main()
     check("the three noise-blanker functions are all still recognisable",
           real.parsed);
     check("there is exactly one flush_anbEXT call in the file",
-          real.flushCount == 1);
-    check("and it is on ENABLE, inside setNoiseBlanker's if (on) branch",
+          real.flushAnbCount == 1);
+    check("and exactly one flush_nobEXT call",
+          real.flushNobCount == 1);
+    check("each is on ENABLE, in the branch that starts its own stage",
           real.flushOnEnableOnly);
+    check("both run flags are written outside the per-kind branches, so at most "
+          "one blanker runs",
+          real.runFlagsUnconditional);
     check("setNoiseBlankerHold flushes nothing and schedules nothing",
           real.holdSetterIsInert);
     check("processIq flushes nothing on either side of the hold",
           real.processIqNeverFlushes);
-    check("while held the stage is SKIPPED, not fed",
+    check("while held NEITHER stage is fed",
           real.stageSkippedWhileHeld);
 
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");

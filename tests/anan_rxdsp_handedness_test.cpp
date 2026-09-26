@@ -601,7 +601,7 @@ int main(int argc, char** argv)
         cfg.agcMode = 3;
         cfg.maximumAgcGainDb = 40.0;
         cfg.blockForOutput = true;
-        cfg.noiseBlankerEnabled = true;
+        cfg.noiseBlanker = WdspChannel::NoiseBlanker::Impulse;
         cfg.noiseBlankerLevel = 50;
 
         AnanRxDsp dsp;
@@ -648,7 +648,8 @@ int main(int argc, char** argv)
         dsp.beginRebuild();
         // The operator moves the NB button WHILE the background build runs.
         // Deferred, not pushed: the swap below has to apply it.
-        dsp.setNoiseBlanker(false, 80);
+        dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Off, 80,
+                            WdspChannel::NoiseBlankerFill::Zero);
 
         // buildChannel() is static and thread-agnostic -- built here from a
         // config that does NOT reflect the operator's LSB/filter/AGC change
@@ -678,7 +679,8 @@ int main(int argc, char** argv)
               "during the build, not buildChannel()'s (stale) NB-on snapshot");
 
         // Live, with no rebuild in flight, the change reaches the channel.
-        dsp.setNoiseBlanker(true, 120);
+        dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, 120,
+                            WdspChannel::NoiseBlankerFill::Zero);
         check(dsp.channelForTest()->noiseBlankerEnabled()
                   && dsp.channelForTest()->config().noiseBlankerLevel == 100,
               "setNoiseBlanker() reaches the live channel, level clamped to 100");
@@ -739,7 +741,8 @@ int main(int argc, char** argv)
             check(dsp.configure(cfg, &err),
                   err.empty() ? "AnanRxDsp configures for the mute-edge case" : err.c_str());
             if (blankerOn)
-                dsp.setNoiseBlanker(true, kNbLevel);
+                dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, kNbLevel,
+                                    WdspChannel::NoiseBlankerFill::Zero);
 
             std::vector<double> blockRms;
             bool collecting = false;

@@ -305,7 +305,9 @@ int main(int argc, char** argv)
         const Hl2RxDsp::Config usbCfg = config(M::Usb);
         dsp.beginRebuild(usbCfg);
         dsp.setMode(M::Cwu);   // deferred: a rebuild is in flight
-        check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(usbCfg, false, 0)),
+        check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(
+                  usbCfg, WdspChannel::NoiseBlanker::Off, 0,
+                  WdspChannel::NoiseBlankerFill::Zero)),
               "rebuild: the rebuilt chain installs");
         const double r = unmuteReturnMs(dsp);
         std::printf("      MEASURED: rebuilt for USB, CWU set mid-build: return %.1f ms\n", r);
