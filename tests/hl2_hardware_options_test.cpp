@@ -91,12 +91,16 @@ static void testDitherMeaning()
     check(o.ditherBitOnWire(), "SquareSDR 2: speaker on");
     check(o.hasLocalCodec(), "SquareSDR 2 has a local codec");
 
-    // NO VARIANT OVERRIDES THE OPERATOR. Stated as a loop rather than as three
-    // more cases, so that adding a fourth codec to the enum without deciding
-    // what its dither bit means fails here instead of shipping.
-    for (const auto codec : {Hl2HardwareOptions::Codec::None,
-                             Hl2HardwareOptions::Codec::Ak4951,
-                             Hl2HardwareOptions::Codec::SquareSdr2}) {
+    // NO VARIANT OVERRIDES THE OPERATOR, walked through clampCodec() over
+    // 0..kCodecCount-1 rather than over a hand-written list. The list was the
+    // defect: it claimed a fourth codec would fail here, and @on8st showed it
+    // would not — `Codec::Fourth = 3` with its dither bit forced high passed
+    // every check (#5867 review). What actually stops that now is the
+    // static_assert at the foot of Hl2HardwareOptions.h, which refuses to
+    // compile until a new enumerator has been given a dither rule; this loop
+    // then covers it without being edited.
+    for (int raw = 0; raw < Hl2HardwareOptions::kCodecCount; ++raw) {
+        const auto codec = Hl2HardwareOptions::clampCodec(raw);
         o.codec = codec;
         o.ditherBit = false;
         check(!o.ditherBitOnWire(), "no codec forces the bit high");
@@ -115,6 +119,67 @@ static void testDitherMeaning()
     o.codec = Hl2HardwareOptions::Codec::SquareSdr2;
     check(o.ditherBit && o.ditherBitOnWire(),
           "a set bit is still set after the board changes");
+}
+
+// ---------------------------------------------------------------------------
+// What the dither bit becomes when the operator declares a DIFFERENT board.
+//
+// The bit means different things on the three variants, so it cannot simply
+// carry across a change of board. This is the rule that decides, and it is
+// pinned here rather than in the dialog because the dialog is where it was
+// wrong twice: the first version clobbered the operator's stored intent from
+// refreshDither(), and its replacement seeded only the AK4951 case — so
+// declaring an AK4951 and then correcting it to None left the bit high and
+// persisted it, and a bare Hermes-Lite 2 came up driving its band-voltage
+// output (#5867 review, @on8st, both rounds).
+// ---------------------------------------------------------------------------
+static void testCodecChangeSeed()
+{
+    using Codec = Hl2HardwareOptions::Codec;
+    const auto seed = &Hl2HardwareOptions::ditherBitOnCodecChange;
+
+    // None: always off. The bit is the band-voltage output on the CL2 jack, and
+    // nobody may get a DC level on an antenna jack by declaring what codec they
+    // do not have.
+    check(!seed(Codec::None, false), "-> None seeds the bit off (was off)");
+    check(!seed(Codec::None, true),  "-> None seeds the bit off (was ON) — the "
+                                     "band-volts regression, pinned");
+
+    // AK4951: always on, because the gateware's init already turned that
+    // speaker on (i2c.v STATE_AK4951S8 writes 0x02 = 0xae) and only rewrites
+    // the register on a change.
+    check(seed(Codec::Ak4951, false), "-> AK4951 seeds the bit on (was off)");
+    check(seed(Codec::Ak4951, true),  "-> AK4951 seeds the bit on (was on)");
+
+    // SquareSDR 2: the operator's value, untouched. It is a loudspeaker on that
+    // board too, so carrying a speaker setting onto a speaker is harmless in
+    // the way carrying it onto band volts is not — and no gateware citation
+    // exists for its power-on state, so seeding either way would assert
+    // something nobody here has established.
+    check(!seed(Codec::SquareSdr2, false), "-> SquareSDR 2 carries the operator's off");
+    check(seed(Codec::SquareSdr2, true),   "-> SquareSDR 2 carries the operator's on");
+
+    // THE REGRESSION ITSELF, walked as the operator walks it: declare a codec,
+    // then correct the declaration. Every ordered pair, so no route back to
+    // None can leave band volts on however the operator got there.
+    for (int from = 0; from < Hl2HardwareOptions::kCodecCount; ++from) {
+        for (int to = 0; to < Hl2HardwareOptions::kCodecCount; ++to) {
+            const Codec a = Hl2HardwareOptions::clampCodec(from);
+            const Codec b = Hl2HardwareOptions::clampCodec(to);
+            const bool afterFirst  = seed(a, false);
+            const bool afterSecond = seed(b, afterFirst);
+            if (b == Codec::None) {
+                check(!afterSecond,
+                      "declaring any board and then correcting to None leaves the "
+                      "band-voltage output off");
+            }
+            if (b == Codec::Ak4951) {
+                check(afterSecond,
+                      "declaring any board and then choosing the AK4951 leaves its "
+                      "speaker on, matching the gateware's power-on state");
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +538,7 @@ static void testEp2Audio()
 int main()
 {
     testDitherMeaning();
+    testCodecChangeSeed();
     testFilterBoard();
     testSpeakerLevel();
     testClamps();

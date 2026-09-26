@@ -842,7 +842,7 @@ add_test(NAME hl2_hardware_options_test COMMAND hl2_hardware_options_test)
 add_executable(hl2_hardware_document_test
     tests/hl2_hardware_document_test.cpp)
 target_include_directories(hl2_hardware_document_test PRIVATE src tests)
-target_link_libraries(hl2_hardware_document_test PRIVATE aethercore Qt6::Core)
+target_link_libraries(hl2_hardware_document_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_hardware_document_test COMMAND hl2_hardware_document_test)
 
 # The CL1 external reference, in the two places it fails silently: the OFF-table
