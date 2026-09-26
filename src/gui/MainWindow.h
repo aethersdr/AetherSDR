@@ -1734,6 +1734,7 @@ private:
     bool m_splitActive{false};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
+    double m_splitRxFrequencyMhz{0.0};
     // Split audio memory (#2242). The recorder holds what the operator did to
     // the two slices during this split and outlives the TX slice model, which
     // onSliceRemoved has already destroyed by the time it runs. It is fed ONLY
