@@ -2550,6 +2550,18 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // audio slot may hold anything at all.
     m_hw = Hl2HardwareOptions::load(
         RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial));
+    // AND RECONCILE THE TWO DOCUMENTS BEFORE ANYTHING IS COMPUTED FROM THEM.
+    // The calibration and the hardware options are separate rows, loaded by the
+    // two independent calls above and written by two independent operations, so
+    // "CL1 on with a manual ppb standing" is a state that can exist on disk —
+    // an interruption between the two writes leaves exactly it. Nothing later in
+    // connectRadio() would notice: mp is filled from m_hw a few lines down and
+    // the initial NCO and DSP frequencies are computed from m_freqCalScale, so
+    // the session would come up correcting a disciplined clock by the error of
+    // the crystal it no longer runs on, with the UI's ppb control disabled and
+    // therefore unable to show or repair it (#5923 review).
+    normalizeCl1Calibration("restored settings disagree");
+
     // The codec's resampler carries state across blocks; a new radio is a new
     // stream and must not be interpolated out of the last one's final sample.
     m_codecHavePrev = false;
@@ -5340,27 +5352,11 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
     if (m_hw.cl1RefClock != before.cl1RefClock) {
         QMetaObject::invokeMethod(m_metis, "setCl1RefClock", Qt::QueuedConnection,
                                   Q_ARG(bool, m_hw.cl1RefClock));
-        // AND ZERO THE MANUAL CORRECTION, which is not a courtesy — it is the
-        // constraint docs/architecture/hl2-frequency-calibration.md §4 puts on
-        // this feature: "When CL1 is locked, the manual ppb from this feature
-        // must be forced to zero and the control disabled — otherwise we would
-        // correct an already-correct clock."
-        //
-        // The two describe the same error in the same units and they compose by
-        // multiplication, so leaving a ppb standing under a disciplined
-        // reference does not half-correct anything: it INTRODUCES exactly the
-        // error the operator measured off the old crystal, permanently, against
-        // a clock that no longer has it.
-        //
-        // Persisted, not merely applied. The ppb lives in this radio's settings
-        // document and a session-only zero would come back on the next connect,
-        // which is the one place nobody would think to look for it.
-        if (m_hw.cl1RefClock && m_freqCalPpb != 0) {
-            qCInfo(lcHl2) << "HL2: CL1 external reference engaged — forcing the"
-                          << "manual frequency calibration from" << m_freqCalPpb
-                          << "ppb to 0 (hl2-frequency-calibration.md §4)";
-            applyFreqCalPpb(0, /*persist=*/true);
-        }
+        // AND ZERO THE MANUAL CORRECTION — through the one rule that owns it,
+        // because the checkbox is not the only way the two documents can end up
+        // disagreeing. See normalizeCl1Calibration().
+        if (normalizeCl1Calibration("CL1 external reference engaged"))
+            repushAllFrequencies();
     }
     if (m_hw.atuGateware != before.atuGateware) {
         // Turning the option OFF mid-tune has to clear a request that is
@@ -5375,6 +5371,51 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
         applyBandFilter("hardware options");
         publishWideState();
     }
+}
+
+bool Hl2Backend::normalizeCl1Calibration(const char* why)
+{
+    // THE INVARIANT: an external 10 MHz reference at CL1 and a non-zero manual
+    // correction cannot both stand. docs/architecture/hl2-frequency-calibration.md
+    // §4: "When CL1 is locked, the manual ppb from this feature must be forced to
+    // zero and the control disabled — otherwise we would correct an
+    // already-correct clock."
+    //
+    // The two describe the same error in the same units and compose by
+    // multiplication, so leaving a ppb standing under a disciplined reference
+    // does not half-correct anything: it INTRODUCES exactly the error the
+    // operator measured off the old crystal, permanently, against a clock that
+    // no longer has it.
+    //
+    // ONE RULE, TWO CALLERS, and that is the point of the function. It ran only
+    // inside applyHardwareOptions()' change-of-checkbox branch, which covers the
+    // operator ticking the box and nothing else — not a connect that restores an
+    // inconsistent pair, which is the case the review found.
+    if (!m_hw.cl1RefClock || m_freqCalPpb == 0)
+        return false;
+    qCWarning(lcHl2) << "HL2:" << why << "— CL1 external reference is enabled with"
+                     << "a manual frequency calibration of" << m_freqCalPpb
+                     << "ppb standing; forcing it to 0"
+                     << "(hl2-frequency-calibration.md §4)";
+    m_freqCalPpb = 0;
+    m_freqCalScale = Hl2FreqCal::scaleForPpb(0);
+    // PERSISTED, not merely applied. The ppb lives in this radio's settings
+    // document and a session-only zero would come back on the next connect,
+    // which is the one place nobody would think to look for it. savePpb()
+    // reports its own failure — it removes the row for a zero and warns if the
+    // store refused — so a write that does not land is on the record rather than
+    // silently repaired again next session.
+    //
+    // The empty-serial guard is applyFreqCalPpb()'s, restated because this does
+    // not go through it: a row written with no identity becomes the family-wide
+    // default that every HL2 without one of its own adopts (AGENTS.md).
+    if (m_radioSerial.isEmpty()) {
+        qCWarning(lcHl2) << "HL2: not persisting the forced zero —"
+                         << "no radio identity yet; applying for this session only";
+    } else {
+        Hl2FreqCal::savePpb(RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), 0);
+    }
+    return true;
 }
 
 void Hl2Backend::applyFreqCalPpb(int ppb, bool persist)
