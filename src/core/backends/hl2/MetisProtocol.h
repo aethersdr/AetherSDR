@@ -459,6 +459,24 @@ inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
 inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1
 inline constexpr std::uint8_t kI2cCookieWrite = 0x06;  // C1
 inline constexpr std::uint8_t kI2cStopAtEnd   = 0x80;  // C2 bit 7
+// AND 0x07 IS THE READ COOKIE, on both buses. Named here without an encoder,
+// because the distinction between "the protocol cannot" and "this client does
+// not" is worth keeping straight. i2c_bus2.v accepts either address on
+// `cmd_data[31:25] == 7'h03` — i.e. C1 of 0x06 or 0x07 — and then branches on
+// the low bit:
+//
+//     state_next = cmd_data[24] ? STATE_READ_CMDADDR : STATE_CMDADDR;
+//
+// A read walks STATE_READ_DATA0..4, assembles four bytes into `resp_data`, and
+// control.v's RESP_READ returns them as `cmd_resp_data_i2c`. So a VersaClock
+// register CAN be read back over Protocol 1; nothing here implements it.
+//
+// WHAT A READBACK WOULD AND WOULD NOT BE WORTH. It reads the register we wrote,
+// so it proves the write arrived — which is more than we have today. It does NOT
+// prove the PLL has locked to anything: no status bit is routed out of the part
+// to the command plane, so "locked to CL1" and "programmed for CL1 with no cable
+// attached" still look identical from here. Do not build a lock indicator on it.
+inline constexpr std::uint8_t kI2cCookieRead  = 0x07;  // C1; no encoder, see above
 
 // ---- Hermes-Lite 2 IO Board (N2ADR), I2C2 chip 0x1D ----
 //

@@ -845,6 +845,19 @@ target_include_directories(hl2_hardware_document_test PRIVATE src tests)
 target_link_libraries(hl2_hardware_document_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_hardware_document_test COMMAND hl2_hardware_document_test)
 
+# The CL1 external reference, in the two places it fails silently: the OFF-table
+# recovery record (released only on a CONFIRMED send, kept per radio) and the
+# connect that restores "CL1 on" beside a stale manual ppb. Nothing about CL1 is
+# readable back from the radio, so these are observable here or nowhere.
+# Socket-free both halves: Part A injects transport state through the
+# MetisClientTestAccess friend seam, Part B uses the boardMaxRx connect that
+# skips the discovery socket.
+add_executable(hl2_cl1_reference_test
+    tests/hl2_cl1_reference_test.cpp)
+target_include_directories(hl2_cl1_reference_test PRIVATE src tests)
+target_link_libraries(hl2_cl1_reference_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_cl1_reference_test COMMAND hl2_cl1_reference_test)
+
 # HL2 wideband bandscope (EP4) parser — the 12-bit ADC codes, the 20-bit
 # sequence counter and its forward-gap guard. Same shape as the target above:
 # compiles MetisProtocol.cpp directly, no Qt, no aethercore, no socket. Its

@@ -229,14 +229,31 @@ switch-without-stopping sequence, and a lock indicator.
 table at 48 kHz, and `MetisClient::stop()` drops any remainder rather than
 letting a half-written table finish in the next session.
 
-**The lock indicator was not built, and cannot be from the host.** Protocol 1
-has no readback for the VersaClock — no status register, no I2C read path, and
-the discovery reply carries nothing about the clock source. The host therefore
-cannot distinguish "locked to CL1" from "reprogrammed for CL1 with no cable
-attached". Anything drawn as a lock indicator would be an echo of the setting,
-which is worse than no indicator because it looks like evidence. What exists
-instead is the frequency readout: an operator confirms the lock by watching a
-known carrier, which is the same check §5 already describes.
+**The lock indicator was not built, and the reason is narrower than "Protocol 1
+cannot".** An earlier version of this section said there is no I2C read path.
+That is wrong, and the correction matters because it separates a protocol limit
+from an unimplemented client path. `gateware/rtl/i2c_bus2.v` accepts a command on
+either I2C address when `cmd_data[31:25] == 7'h03` — C1 of `0x06` or `0x07` — and
+branches on the low bit:
+
+```verilog
+state_next = cmd_data[24] ? STATE_READ_CMDADDR : STATE_CMDADDR;
+```
+
+A read then walks `STATE_READ_DATA0..4`, assembles four bytes into `resp_data`,
+and `control.v`'s `RESP_READ` returns them as `cmd_resp_data_i2c`. So a
+VersaClock register **can** be read back; AetherSDR simply does not implement it
+(`MetisProtocol.h` names `kI2cCookieRead` without an encoder).
+
+**What that readback would be worth is still not a lock indicator.** It reads
+back the register the host wrote, which proves the write arrived — more than we
+have today. It does not prove the PLL has locked to an input: no status bit from
+the part is routed to the command plane, and the discovery reply carries nothing
+about the clock source. "Locked to CL1" and "reprogrammed for CL1 with no cable
+attached" therefore still look identical from the host, and anything drawn as a
+lock indicator would be an echo of the setting — worse than no indicator, because
+it looks like evidence. What exists instead is the frequency readout: an operator
+confirms the lock by watching a known carrier, the same check §5 describes.
 
 Two hard constraints if we build it:
 
