@@ -857,12 +857,11 @@ sub-actions, so action-level drift is invisible to CI.
 1. ~~**Read back what the DSP was actually configured with.**~~ **DONE.**
    `get_state model=dsp` now carries a `backend` object alongside the
    client-side chain: `family`, and a `chains` list. Each entry names its
-   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive, and
-   optionally a WDSP TXA channel on transmit whose config is a different struct;
-   `modulator` on that entry names the transmit modulator the binary was built
-   with: `wdsp-txa` on a fresh default configure or with `-DAETHER_HL2_TX_TXA=ON`,
-   and `phasing` with `-DAETHER_HL2_TX_TXA=OFF`. Existing build caches retain
-   their configured choice, and there is no runtime switch between them) and
+   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs a WDSP receive channel and
+   a WDSP TXA transmit channel, whose config is a different struct; `modulator`
+   on that entry names the transmit modulator and is always `wdsp-txa`, because
+   the Hermes-Lite 2 has exactly one transmit path and it is selectable neither
+   at run time nor at build time) and
    its `level`, because "read-back" is used loosely and the
    difference decides what a mismatch proves: `channel-config` is what
    `WdspChannel` was OPENED with after clamping or refusal, `dsp-config` is the

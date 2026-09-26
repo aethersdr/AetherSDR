@@ -301,21 +301,26 @@ double cwBfoOffsetHz(const QString& mode, int pitchHz) noexcept
 //
 //   RX (RXANBPSetFreqs): the SIGN of the passband selects the sideband. The
 //                        mode does not.
-//   TX (Hl2TxDsp):       the MODE selects the sideband -- isLowerSideband()
-//                        negates Q -- and the bandpass is an audio-domain
-//                        magnitude. Handing it a negative pair flips LSB and
-//                        DIGL onto the upper sideband.
+//   TX (this table):     the MODE selects the sideband and the pair here is an
+//                        audio-domain MAGNITUDE. Handing this table a negative
+//                        pair flips LSB and DIGL onto the upper sideband.
 //
 // Measured, not assumed: hl2_txdsp_test drives a 1 kHz tone through the real
 // modulator and reads the sideband off the emitted IQ. With a negative pair,
 // LSB lands on the same wire bin as USB.
 //
-// THE TX RULE ABOVE IS Hl2TxDsp'S, NOT WDSP'S. SetTXABandpassFreqs is signed
-// exactly like RXA: TXASetupBPFilters handles TXA_LSB and TXA_USB in one
-// fall-through case with identical CalcBandpassFilter arguments, and create_txa
-// defaults TXA_LSB to f_low = -5000, f_high = -100. Give a TXA channel this
-// table's positive pairs and LSB comes out on the SAME sideband as USB. Read
-// docs/HERMES.md section 5 before migrating transmit onto a WDSP TXA channel.
+// THE TX RULE ABOVE IS THIS TABLE'S, NOT WDSP'S, AND THE TWO MEET IN ONE
+// FUNCTION. SetTXABandpassFreqs is signed exactly like RXA: TXASetupBPFilters
+// handles TXA_LSB and TXA_USB in one fall-through case with identical
+// CalcBandpassFilter arguments, and create_txa defaults TXA_LSB to f_low =
+// -5000, f_high = -100. So the sideband rides on the passband's sign all the
+// way down, and Hl2TxDsp::applyModeAndFilter() is the single place the sign is
+// derived from the mode -- see its comment, and docs/HERMES.md section 5.
+//
+// KEEP THIS TABLE POSITIVE. It is shared with the mode/passband readback and
+// with the operator's stored eSSB pair, both of which want magnitudes; pushing
+// a signed pair from here would put the sideband decision in two places at
+// once, which is the fault applyModeAndFilter() exists to keep in one.
 //
 // Voice stays at the established 300..2700 rather than inheriting the wider RX
 // window — that width is deliberate (see Hl2TxDsp::Config), and widening every
@@ -1898,15 +1903,12 @@ RadioCapabilities Hl2Backend::capabilities() const
     // setSliceFmToneRxValue or setSliceFmDtcs, all of which are no-op virtuals
     // in IRadioBackend.
     //
-    // AND THE MODE CANNOT BE KEYED AT ALL, which is the fact that does not move
-    // with the build. FM and NFM are on receiveOnlyModes below, so
-    // RadioModel::refuseKeyInReceiveOnlyMode() refuses every TxActivity in
-    // them. Resting the argument there rather than on the modulator is
-    // deliberate: the modulator is chosen at build time by AETHER_HL2_TX_TXA
-    // (default ON = a WDSP TXA channel; OFF = the in-tree phasing modulator),
-    // and a comment that described only one of the two would be half wrong in
-    // every build. TXA's own chain does carry fmmod, which is exactly why the
-    // honest gate is the declaration and not the DSP.
+    // AND THE MODE CANNOT BE KEYED AT ALL. FM and NFM are on receiveOnlyModes
+    // below, so RadioModel::refuseKeyInReceiveOnlyMode() refuses every
+    // TxActivity in them. Resting the argument there rather than on the
+    // modulator is deliberate: the modulator is a WDSP TXA channel, and TXA's
+    // own chain does carry fmmod, which is exactly why the honest gate is the
+    // declaration and not the DSP.
     //
     // Hidden is the honest value and is the one both widgets read to WITHDRAW
     // the tone controls rather than show a control that does nothing -- by
@@ -2240,12 +2242,38 @@ RadioCapabilities Hl2Backend::capabilities() const
     //
     // The comment that stood here said the HL2 "transmits in whatever mode WDSP
     // is told to build — there is no mode it receives and cannot send", and left
-    // the list empty on that basis. **The transmit chain is not WDSP.**
-    // Hl2TxDsp is a hand-written phasing SSB modulator: setMode() stores the
-    // mode and the only reader is isLowerSideband(), which returns true for Lsb,
-    // Cwl and Digl and false for everything else. So AM, SAM, DSB, FM, NFM, WBFM
-    // and DRM all take the upper-sideband branch and go on the air as SSB,
-    // announcing nothing.
+    // the list empty on that basis. It was false when it was written, for a
+    // reason that has since stopped being true: the transmit chain was then a
+    // hand-written phasing SSB modulator whose setMode() only stored the mode
+    // for isLowerSideband(), so AM, SAM, DSB, FM, NFM, WBFM and DRM all took the
+    // upper-sideband branch and went on the air as SSB, announcing nothing.
+    //
+    // THAT PREMISE IS GONE AND THE LIST STAYS. The phasing modulator was
+    // removed and the transmit chain IS WDSP now: Hl2TxDsp::setMode() reaches
+    // applyModeAndFilter() → WdspChannel::setMode() → SetTXAMode, so these modes
+    // would be pushed at TXA as themselves rather than silently becoming SSB.
+    // The wrong-sideband emission is therefore no longer the reason, and the
+    // reason that replaces it is weaker but still sufficient:
+    //
+    //   NOTHING HAS MEASURED THIS CHAIN IN ANY OF THEM. "TXA accepts a mode
+    //   index" is not evidence that this radio transmits correctly in that
+    //   mode. docs/hl2-txa-configuration-diff.md §7 states the gap in its own
+    //   words — "Any mode but SSB. No AM, DSB, SAM, FM or CW channel was
+    //   opened." — and every characterisation behind #5678 and #5779 is
+    //   SSB-family. Leaving a mode on this list costs an operator a refusal
+    //   they can see; taking it off an unmeasured chain costs them an emission
+    //   they cannot hear, which is the asymmetry this radio has already been
+    //   caught by once.
+    //
+    //   AND WBFM IS NOT MERELY UNMEASURED: WDSP TX HAS NO WBFM MODE.
+    //   WdspChannel::validateConfig() refuses a Transmit channel configured for
+    //   it — "WDSP TX does not define a WBFM mode" — and the note beside that
+    //   check records what setMode() does NOT do about it. This list is what
+    //   keeps that from mattering on the air; it is not what makes the mode
+    //   index safe to push.
+    //
+    // Taking any entry off is a capability decision that wants a measurement
+    // first (#5678 rows 1.2 / 6.2 / 6.3), and it is not a comment's to make.
     //
     // WHAT STAYS OFF THE LIST, deliberately:
     //
@@ -2294,9 +2322,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // correctly, and tune is an ACTIVITY, which a list of mode names has no
     // vocabulary for.
     //
-    // What the list itself reports is only what the modulator does today. When a
-    // mode genuinely transmits — the WDSP TXA chain carries all of these — its
-    // entry comes back off this list and the tune refusal lifts with it.
+    // What the list reports is what has been DEMONSTRATED today, not what the
+    // chain would accept. When a mode is measured through this chain and found
+    // correct, its entry comes back off this list and the tune refusal lifts
+    // with it. WBFM is the one entry that cannot come off on a measurement
+    // alone, because WDSP TX defines no mode for it to be measured in.
     c.receiveOnlyModes = {QStringLiteral("AM"),   QStringLiteral("SAM"),
                           QStringLiteral("DSB"),  QStringLiteral("FM"),
                           QStringLiteral("NFM"),  QStringLiteral("WBFM"),
@@ -2871,21 +2901,12 @@ void Hl2Backend::beginDspSetup()
         return;
 
     const int actualNumRx = m_pendingConnect->actualNumRx;
-    // WHETHER THE TRANSMIT CHAIN IS A STEP DEPENDS ON THE BUILD, because what
-    // Hl2TxDsp::configure() does depends on the build.
-    //
-    // In the PHASING build it designs two FIR kernels and returns — it opens no
-    // WDSP channel and measures no FFTW plan. Counting it inflated the
-    // denominator with a step that completes in microseconds and put a
-    // "Preparing the transmit chain…" label on screen for work that was
-    // already over.
-    //
-    // In the TXA build it opens a WDSP TRANSMIT CHANNEL, which is FFTW
-    // planning and is the most expensive single thing in the connect on a cold
-    // cache. Leaving it uncounted there is the opposite error: the receive
-    // label would sit at "2 of 2" for a second or more with the dialog
-    // apparently finished and the radio not yet ready.
-    const int total = actualNumRx + (AETHER_HL2_TX_TXA ? 1 : 0);
+    // THE TRANSMIT CHAIN IS A STEP, and the +1 is it. Hl2TxDsp::configure()
+    // opens a WDSP TRANSMIT CHANNEL, which is FFTW planning and is the most
+    // expensive single thing in the connect on a cold cache. Leaving it
+    // uncounted would sit the receive label at "2 of 2" for a second or more
+    // with the dialog apparently finished and the radio not yet ready.
+    const int total = actualNumRx + 1;
 
     // The chains to open, snapshotted on THIS thread. m_rx is GUI-thread-only
     // (see its declaration), so the I/O thread gets a plain vector of the
@@ -2971,11 +2992,8 @@ void Hl2Backend::beginDspSetup()
             else
                 break;   // the GUI thread trims from here; opening past it is waste
         }
-        // Announced only in the build where it is a real step -- see `total`
-        // above. In the phasing build this stays silent, because announcing a
-        // step that is over before the label repaints is worse than saying
-        // nothing.
-        if (AETHER_HL2_TX_TXA && self) {
+        // A real step, counted in `total` above, so it is announced.
+        if (self) {
             const QString stage = tr("Preparing the transmit chain…");
             const int done = static_cast<int>(chains.size());
             QMetaObject::invokeMethod(self, [self, stage, done, total] {
@@ -5755,48 +5773,57 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
     if (txDsp) {
         QVariantMap e;
         e[QStringLiteral("chain")] = QStringLiteral("hl2-tx");
-        if (!txDsp->isConfigured()) {
+        // ONE SHAPE PER STATE, and the channel is part of the state rather than
+        // a second axis of it. isConfigured() already implies a live channel:
+        // configure() clears m_configured on entry and sets it only after
+        // buildModulator() returns true, and buildModulator() returns false
+        // whenever WdspChannel::create() yields null -- the one place m_channel
+        // is ever assigned. What used to stand below was a second, softer
+        // fallback for a configured chain with no channel behind it: a
+        // `dsp-config` level, an omitted wdspChannelId, and Hl2TxDsp's own
+        // requested figures in place of the channel's accepted ones. No state
+        // of this object can reach it.
+        //
+        // It is removed rather than left as cheap defence, because it is not
+        // defence: it would answer a broken invariant with a plausible reading
+        // one level further from the DSP, labelled as though that were a
+        // deliberate choice, and docs/automation-bridge.md already tells a
+        // client the channel is always there. A reader of either now gets the
+        // same answer. Principle VIII: a branch nothing exercises is a claim,
+        // not a safeguard.
+        const WdspChannel::Config* channel = txDsp->channelConfig();
+        if (!txDsp->isConfigured() || !channel) {
             e[QStringLiteral("level")] = QStringLiteral("not-configured");
             chains.append(e);
             return chains;
         }
         const Hl2TxDsp::Config& t = txDsp->config();
-        // WHICH MODULATOR THIS BINARY CARRIES. There is no runtime switch --
-        // AETHER_HL2_TX_TXA decides it at compile time and the other chain is
-        // not in the process -- so an operator cannot be on the wrong one. They
-        // can be on the wrong BUILD, though, and a transmit report that does
-        // not say which modulator produced the signal is not actionable. This
-        // is what makes the build visible without making it switchable.
+        // WHICH MODULATOR THIS BINARY CARRIES. There is exactly one and it is
+        // not selectable, so this is not a control -- it is the field that lets
+        // a transmit report name the chain that produced the signal without the
+        // reporter having to know how the binary was built. It is reported
+        // rather than assumed for the same reason the version string is.
         e[QStringLiteral("modulator")] =
             QString::fromLatin1(Hl2TxDsp::modulatorName());
-        // TXA reports the configuration accepted by WdspChannel; the phasing
-        // implementation reports its local DSP configuration. Neither is RF
-        // readback from the radio.
-        const int txChannelId = txDsp->wdspChannelId();
-        const WdspChannel::Config* channel = txDsp->channelConfig();
-        e[QStringLiteral("level")] = channel ? QStringLiteral("channel-config")
-                                             : QStringLiteral("dsp-config");
-        if (txChannelId >= 0) {
-            e[QStringLiteral("wdspChannelId")] = txChannelId;
-            // Blocks the modulator could not place on the wire. NOT omitted
-            // when it is zero: "no faults" and "nobody counted" must not look
-            // the same, which is the whole lesson of the silent TXA failure
-            // this build flag exists for.
-            e[QStringLiteral("modulatorFaultBlocks")] =
-                static_cast<qulonglong>(txDsp->modulatorFaultBlocks());
-            e[QStringLiteral("modulatorBlocks")] =
-                static_cast<qulonglong>(txDsp->modulatorBlocks());
-        }
+        // The configuration accepted by WdspChannel, which is not RF readback
+        // from the radio.
+        e[QStringLiteral("level")] = QStringLiteral("channel-config");
+        e[QStringLiteral("wdspChannelId")] = txDsp->wdspChannelId();
+        // Blocks the modulator could not place on the wire. NOT omitted
+        // when it is zero: "no faults" and "nobody counted" must not look
+        // the same, which is the whole lesson of the silent TXA failure that
+        // made this counter worth having.
+        e[QStringLiteral("modulatorFaultBlocks")] =
+            static_cast<qulonglong>(txDsp->modulatorFaultBlocks());
+        e[QStringLiteral("modulatorBlocks")] =
+            static_cast<qulonglong>(txDsp->modulatorBlocks());
         e[QStringLiteral("inputRateHz")] = t.inputSampleRateHz;
         e[QStringLiteral("outputRateHz")] = t.outputSampleRateHz;
-        e[QStringLiteral("dspBlockSize")] = channel
-            ? static_cast<int>(channel->dspBlockSize) : t.dspBlockSize;
-        if (channel) {
-            e[QStringLiteral("inputBlockSize")] = static_cast<int>(channel->inputBlockSize);
-            e[QStringLiteral("dspRateHz")] = channel->dspSampleRate;
-        }
-        e[QStringLiteral("filterLowHz")] = channel ? channel->filterLowHz : t.filterLowHz;
-        e[QStringLiteral("filterHighHz")] = channel ? channel->filterHighHz : t.filterHighHz;
+        e[QStringLiteral("dspBlockSize")] = static_cast<int>(channel->dspBlockSize);
+        e[QStringLiteral("inputBlockSize")] = static_cast<int>(channel->inputBlockSize);
+        e[QStringLiteral("dspRateHz")] = channel->dspSampleRate;
+        e[QStringLiteral("filterLowHz")] = channel->filterLowHz;
+        e[QStringLiteral("filterHighHz")] = channel->filterHighHz;
         e[QStringLiteral("alcEnabled")] = t.alcEnabled;
         e[QStringLiteral("alcTargetPeak")] = t.alcTargetPeak;
         e[QStringLiteral("alcReleaseSec")] = t.alcReleaseSec;

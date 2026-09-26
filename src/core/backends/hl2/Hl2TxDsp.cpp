@@ -15,37 +15,21 @@ static Q_LOGGING_CATEGORY(lcTxMod, "aether.hl2.tx")
 
 namespace AetherSDR::hl2 {
 
-#if !AETHER_HL2_TX_TXA
-namespace {
-
-constexpr double kPi = 3.14159265358979323846;
-
-// Blackman window — ~58 dB sidelobes, which is what sets the achievable
-// opposite-sideband suppression.
-double blackman(std::size_t n, std::size_t N)
-{
-    const double x = 2.0 * kPi * static_cast<double>(n) / static_cast<double>(N - 1);
-    return 0.42 - 0.5 * std::cos(x) + 0.08 * std::cos(2.0 * x);
-}
-
-}  // namespace
-#endif
-
 Hl2TxDsp::Hl2TxDsp(QObject* parent) : QObject(parent) {}
 Hl2TxDsp::~Hl2TxDsp() = default;
 
-// ── WHICH MODULATOR, AND WHY IT IS A BUILD FLAG ─────────────────────────────
+// ── ONE TRANSMIT PATH, AND THE HISTORY THAT ALMOST MADE IT TWO ──────────────
 //
-// AETHER_HL2_TX_TXA selects one of the two implementations below AT COMPILE
-// TIME. The other one is not in the binary. That is the point, and it is the
-// condition #5678 was approved on: a compile flag gives a way back without
-// giving an operator a way to be on the wrong one, because two silent transmit
-// paths are worse than one.
+// This backend has exactly one SSB modulator: a WDSP TXA channel. It is not
+// selectable at run time and it is not selectable at build time either, so a
+// transmit bug report names the chain that produced the signal by naming the
+// binary. Two silent transmit paths are worse than one, and that argument does
+// not stop applying at a compile flag.
 //
-// WHAT THE PHASING MODULATOR WAS FOR, stated fairly, because it was right at
-// the time. WDSP's transmit path always WORKED -- wdsp_channel_test drove a TXA
-// channel and got IQ out of it -- so "WDSP TX is broken" was never the claim.
-// The claim was narrower: driven from THIS backend's configuration a TXA
+// WHAT THE MODULATOR THIS REPLACED WAS FOR, stated fairly, because it was right
+// at the time. WDSP's transmit path always WORKED -- wdsp_channel_test drove a
+// TXA channel and got IQ out of it -- so "WDSP TX is broken" was never the
+// claim. The claim was narrower: driven from THIS backend's configuration a TXA
 // channel returned Underrun on most blocks and zeros on the rest, and the
 // failure mode was SILENT. Fifty lines of arithmetic whose correctness is a
 // number a test can print beat a canonical chain that can fail without saying
@@ -70,29 +54,32 @@ Hl2TxDsp::~Hl2TxDsp() = default;
 // defaults -- SetTXAMode and SetTXABandpassFreqs -- which applyModeAndFilter()
 // makes and which WdspChannel already wraps.
 //
-// AND WHAT THE MIGRATION IS WORTH, narrowly, because the wide claim is wrong.
+// AND WHAT THE MIGRATION WAS WORTH, narrowly, because the wide claim is wrong.
 // Measured on the same instrument, at the live geometry, in the same units:
 //
 //     tone    mode    phasing modulator      TXA
-//     150 Hz  DIGU          22.06 dB      >= 180.6 dB
-//       1 kHz  USB          87.15 dB      >= 297.2 dB
+//     150 Hz  DIGU          22.06 dB      floor-limited
+//       1 kHz  USB          87.15 dB      floor-limited
 //
-// The 1 kHz column is worth NOTHING. MetisProtocol.cpp's ep2WriteTxIq packs I
-// and Q as signed 16-bit, so EP2 quantises the transmit stream at roughly 96 dB
+// The 1 kHz row is worth NOTHING. MetisProtocol.cpp's ep2WriteTxIq packs I and
+// Q as signed 16-bit, so EP2 quantises the transmit stream at roughly 96 dB
 // before a sample reaches the radio: the incumbent's 87 dB is already at the
 // wire's own floor and TXA's advantage there is below the wire and unusable.
 //
-// THE ENTIRE RETURN IS THE LOW EDGE -- 22 dB against >= 180 dB at 150 Hz, on
-// the {150, 3000} passband, in DIGU and DIGL. That is the modes WSJT-X
-// transmits in and nothing else. Seventy decibels the wire could carry and 255
-// taps do not fill.
+// THE ENTIRE RETURN IS THE LOW EDGE -- 22 dB against an image this instrument
+// cannot resolve at 150 Hz, on the {150, 3000} passband, in DIGU and DIGL. That
+// is the modes WSJT-X transmits in and nothing else. Seventy decibels the wire
+// could carry and 255 taps do not fill.
 //
-// Every TXA figure above is a LOWER BOUND, not a value: the image bin sits at
-// the measuring instrument's own numerical floor, established by a halving
-// probe rather than assumed. And every one of them was read off a unit test's
+// THE TXA COLUMN IS NOT A NUMBER AND MUST NOT BE QUOTED AS ONE. An earlier
+// version of this comment printed ">= 180.6 dB" and called the figures LOWER
+// BOUNDS. #5810 retracted that in hl2_txdsp_test and it was never corrected
+// here: the correlation error is a complex vector, so it can oppose the image
+// as easily as add to it, and a reading at the instrument's own numerical floor
+// is UNRESOLVED -- neither a bound nor a measurement. What the measurement
+// supports is the comparison: at every asserted point the incumbent's image is
+// resolvable and TXA's is not. Every figure above was read off a unit test's
 // emitted IQ. No radio was keyed for any of it.
-
-#if AETHER_HL2_TX_TXA
 
 bool Hl2TxDsp::buildModulator(std::string* error)
 {
@@ -136,8 +123,8 @@ bool Hl2TxDsp::buildModulator(std::string* error)
     if (!m_channel) {
         // A REFUSAL, reported. Hl2Backend::beginDspSetup already carries a
         // txOk/txErr pair back to the GUI thread for exactly this, and it was
-        // dead weight until now because the phasing modulator could only fail
-        // its own argument validation.
+        // dead weight until the migration, because the modulator this replaced
+        // could only ever fail its own argument validation.
         if (error) {
             *error = err.empty() ? "WDSP transmit channel refused" : err;
         }
@@ -262,10 +249,11 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
             continue;
         }
         for (std::size_t k = 0; k < outBlock; ++k) {
-            // NO CONJUGATION, and that is the opposite of the phasing build.
+            // NO CONJUGATION, and that is the opposite of the convention the
+            // modulator this replaced used.
             // fir_bandpass builds exp(-j*w_osc*pos), so the signed passband
             // applied in applyModeAndFilter() already selects the half that
-            // gives the HPSDR wire's handedness. Adding the phasing modulator's
+            // gives the HPSDR wire's handedness. Adding that modulator's
             // -imag() here would transmit every SSB mode on the wrong sideband,
             // which is the recommendation the S6 study made and the mutation
             // that falsified it: flipping LSB's passband sign back to positive
@@ -297,144 +285,6 @@ unsigned long long Hl2TxDsp::modulatorBlocks() const noexcept
     return m_txBlocks;
 }
 
-#else   // !AETHER_HL2_TX_TXA — the in-tree phasing modulator, the way back
-
-// A windowed-sinc bandpass and a matching quadrature filter, sharing one delay
-// line. Fifty lines, no hidden state, and its correctness is a number
-// hl2_txdsp_test measures directly.
-bool Hl2TxDsp::buildModulator(std::string* error)
-{
-    (void)error;
-    const double fs = static_cast<double>(m_config.outputSampleRateHz);
-    const double lo = m_config.filterLowHz / fs;      // normalised
-    const double hi = m_config.filterHighHz / fs;
-    const std::size_t N = kTaps;
-    const double mid = static_cast<double>(N - 1) / 2.0;
-
-    m_bandpass.assign(N, 0.0f);
-    m_hilbert.assign(N, 0.0f);
-
-    for (std::size_t n = 0; n < N; ++n) {
-        const double k = static_cast<double>(n) - mid;
-        const double w = blackman(n, N);
-
-        // Bandpass = difference of two lowpass sincs.
-        double bp;
-        if (k == 0.0) {
-            bp = 2.0 * (hi - lo);
-        } else {
-            bp = (std::sin(2.0 * kPi * hi * k) - std::sin(2.0 * kPi * lo * k))
-                 / (kPi * k);
-        }
-        m_bandpass[n] = static_cast<float>(bp * w);
-
-        // Quadrature filter = the IMAGINARY part of the same analytic bandpass,
-        // NOT a wideband Hilbert transformer.
-        //
-        // This distinction is the whole correctness of the modulator. A textbook
-        // Hilbert (2/(pi*k) on odd taps) is all-pass in magnitude: it passes
-        // out-of-band audio at FULL amplitude with a 90-degree shift. Pairing it
-        // with a band-limited I meant energy above the passband arrived in Q
-        // only — which is a REAL signal, so it came out double-sideband on both
-        // sides of the carrier. Measured: a 5 kHz tone against a 2700 Hz filter
-        // appeared at both +5 kHz and -5 kHz, just 6 dB down, i.e. splatter
-        // outside our own passband.
-        //
-        // Deriving both filters from one analytic prototype,
-        //   ha[k] = (exp(j*2*pi*hi*k) - exp(j*2*pi*lo*k)) / (j*2*pi*k),
-        // makes I and Q share a passband by construction, and keeps their group
-        // delay identical for free.
-        double hq;
-        if (k == 0.0) {
-            hq = 0.0;
-        } else {
-            hq = (std::cos(2.0 * kPi * lo * k) - std::cos(2.0 * kPi * hi * k))
-                 / (kPi * k);
-        }
-        m_hilbert[n] = static_cast<float>(hq * w);
-    }
-
-    m_hist.assign(N, 0.0f);
-    m_histPos = 0;
-    return true;
-}
-
-void Hl2TxDsp::applyModeAndFilter()
-{
-    // The mode is read per block by isLowerSideband() and the passband is baked
-    // into the kernels, so a passband change is a rebuild and a mode change is
-    // nothing at all. configure()/setFilter() call buildModulator() directly.
-}
-
-void Hl2TxDsp::resetModulatorState()
-{
-    std::fill(m_hist.begin(), m_hist.end(), 0.0f);
-    m_histPos = 0;
-}
-
-void Hl2TxDsp::modulate(std::span<const float> audio)
-{
-    const std::size_t N = m_bandpass.size();
-    if (N == 0) {
-        return;
-    }
-    const bool lsb = isLowerSideband();
-
-    for (const float in : audio) {
-        for (int u = 0; u < m_upsample; ++u) {
-            // Zero-stuff: only the first sub-sample carries energy. The bandpass
-            // below doubles as the anti-imaging filter, and the m_upsample
-            // factor restores the amplitude that stuffing divides away.
-            const float x = (u == 0) ? in * static_cast<float>(m_upsample) : 0.0f;
-
-            m_hist[m_histPos] = x;
-
-            // One pass over the shared history feeding both filters.
-            float bi = 0.0f, bq = 0.0f;
-            std::size_t idx = m_histPos;
-            for (std::size_t k = 0; k < N; ++k) {
-                const float h = m_hist[idx];
-                bi += h * m_bandpass[k];
-                bq += h * m_hilbert[k];
-                idx = (idx == 0) ? N - 1 : idx - 1;
-            }
-            m_histPos = (m_histPos + 1) % N;
-
-            // bi and bq are the in-phase and quadrature halves of the analytic
-            // signal; negating Q mirrors the spectrum, which is the sideband
-            // choice.
-            const float q = lsb ? -bq : bq;
-
-            // CONJUGATE FOR THE WIRE.
-            //
-            // The HPSDR wire order has the OPPOSITE handedness to the standard
-            // analytic convention — the receive path already compensates for
-            // exactly this, conjugating with -imag() before handing IQ to WDSP.
-            // Transmit needs the same correction in the same place and did not
-            // have it, so every transmission went out on the wrong sideband.
-            //
-            // Caught on the air, not on the bench: the operator's Yaesu heard
-            // our LSB on its USB. It is invisible from inside this application
-            // because the panadapter reads the same wire order, so our own
-            // display and our own transmission agreed with each other while
-            // both disagreed with the rest of the band.
-            //
-            // A TXA CHANNEL MUST NOT HAVE THIS. See the TXA build above.
-            m_iq.emplace_back(bi, -q);
-        }
-    }
-}
-
-const char* Hl2TxDsp::modulatorName() noexcept { return "phasing"; }
-int Hl2TxDsp::wdspChannelId() const noexcept { return -1; }
-const WdspChannel::Config* Hl2TxDsp::channelConfig() const noexcept { return nullptr; }
-// Arithmetic cannot starve. Always zero, so a health snapshot reports the same
-// field in both builds rather than omitting it in one.
-unsigned long long Hl2TxDsp::modulatorFaultBlocks() const noexcept { return 0; }
-unsigned long long Hl2TxDsp::modulatorBlocks() const noexcept { return 0; }
-
-#endif  // AETHER_HL2_TX_TXA
-
 bool Hl2TxDsp::configure(const Config& config, std::string* error)
 {
     m_configured = false;
@@ -451,11 +301,12 @@ bool Hl2TxDsp::configure(const Config& config, std::string* error)
     m_config = config;
     m_upsample = config.outputSampleRateHz / config.inputSampleRateHz;
     m_inBuffer.clear();
-    // The modulator may REFUSE now, which it could not before: the TXA build
-    // opens a WDSP channel here and a channel can be refused (the pool is 32
-    // wide and shared with every receiver). Leaving m_configured false on that
-    // path is what makes the readback honest -- Hl2Backend already carries the
-    // txOk/txErr pair back for it.
+    // The modulator can REFUSE here, which the arithmetic one it replaced could
+    // not: this opens a WDSP channel and a channel can be refused (the pool is
+    // 32 wide and shared with every receiver). Leaving m_configured false on
+    // that path is what makes the readback honest -- Hl2Backend already carries
+    // the txOk/txErr pair back for it, and gatherDspChains reports
+    // `not-configured` rather than a plausible set of requested figures.
     if (!buildModulator(error)) {
         return false;
     }
@@ -466,9 +317,11 @@ bool Hl2TxDsp::configure(const Config& config, std::string* error)
 void Hl2TxDsp::setMode(WdspChannel::Mode mode)
 {
     m_config.mode = mode;
-    // In the TXA build this is NOT a no-op and must not become one: the
-    // sideband rides on the sign of the passband, so a mode change has to
-    // re-push the passband too. applyModeAndFilter() does both.
+    // This is NOT a no-op and must not become one: the sideband rides on the
+    // sign of the passband, so a mode change has to re-push the passband too.
+    // applyModeAndFilter() does both. (The modulator this replaced read the
+    // mode per block and needed no push at all, so a reader coming from that
+    // code has exactly the wrong intuition here.)
     applyModeAndFilter();
 }
 
@@ -476,16 +329,12 @@ void Hl2TxDsp::setFilter(double lowHz, double highHz)
 {
     m_config.filterLowHz = lowHz;
     m_config.filterHighHz = highHz;
-#if AETHER_HL2_TX_TXA
     // A control call on the open channel, not a rebuild: SetTXABandpassFreqs is
     // cheap and a rebuild would be FFTW planning on the I/O thread. The census
     // shows a running channel keeps producing across an accepted setFilter
     // (0.0705 RMS before, 0.0709 after) and REFUSES an inverted pair rather
     // than going silent.
     applyModeAndFilter();
-#else
-    buildModulator(nullptr);
-#endif
 }
 
 void Hl2TxDsp::setMicGain(double linear)
@@ -510,9 +359,9 @@ void Hl2TxDsp::reset()
     m_inBuffer.clear();
     // Re-arm the mid-buffer source-change warning for the next transmission.
     m_sourceChangeWarned = false;
-    // The modulator's own state, per build. In the phasing build this is the
-    // delay line; in the TXA build it deliberately does NOT rebuild the
-    // channel. See resetModulatorState().
+    // The modulator's own state, and it deliberately does NOT rebuild the
+    // channel -- a rebuild would be FFTW planning on the I/O thread. See
+    // resetModulatorState().
     resetModulatorState();
 }
 
@@ -746,19 +595,18 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
         m_levelled[s] = in;
     }
 
-    // ── AND HERE IS THE ONLY LINE THE BUILD FLAG MOVES ─────────────────────
+    // ── AND HERE IS THE SEAM BETWEEN LEVEL AND EMISSION ────────────────────
     //
-    // Everything above this point is the LEVEL chain and is identical in both
-    // builds: mic gain, the ALC and its client-leveled ceiling, the hold, the
-    // hard clamp and all three meters. Everything below is emission. The
-    // modulator is the single step between them, and it is the only thing
-    // AETHER_HL2_TX_TXA selects.
+    // Everything above this point is the LEVEL chain: mic gain, the ALC and its
+    // client-leveled ceiling, the hold, the hard clamp and all three meters.
+    // Everything below is emission. The modulator is the single step between
+    // them.
     //
     // That cut is deliberate and it is narrower than "the transmit path". The
     // level chain is what #4796, #5646 and #5647 are about, it is pinned by
-    // most of hl2_txdsp_test, and duplicating it per modulator would be two
-    // level policies to keep in step -- which is the same failure shape as two
-    // runtime transmit paths, one level down.
+    // most of hl2_txdsp_test, and it stays separate from the modulator so that
+    // a future second modulator -- if one is ever proposed again -- cannot
+    // arrive with a level policy of its own.
     modulate(std::span<const float>(m_levelled.data(), consumed));
 
     m_inBuffer.erase(m_inBuffer.begin(),

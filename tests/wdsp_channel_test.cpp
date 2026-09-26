@@ -1923,8 +1923,9 @@ TransmitRun runTransmitChannelSettled(int plane, double toneHz,
 }
 
 // Goertzel-style complex-bin correlation. The same instrument hl2_txdsp_test
-// runs on the phasing modulator, extended only to take each sample's absolute
-// index so a dropped block does not silently become a phase step.
+// runs, extended only to take each sample's absolute index so a dropped block
+// does not silently become a phase step. The two files share the arithmetic
+// and no code, which is what makes their agreement worth something.
 double binPower(const std::vector<std::complex<float>>& iq,
                 const std::vector<std::size_t>& index, double hz, double fs,
                 std::size_t count = 0)
@@ -2223,8 +2224,9 @@ bool runTransmitLiveGeometryTest()
 // ── The characterisation sweep, run against a TXA channel ────────────────
 //
 // WHAT THIS IS. tests/hl2_txdsp_test.cpp carries a CHARACTERISATION SWEEP over
-// four modes and fourteen tones that measures the PHASING MODULATOR's
-// opposite-sideband suppression at the passband each mode actually gets. That
+// four modes and fourteen tones, at the passband each mode actually gets. Its
+// BASELINE TABLE is the opposite-sideband suppression of the modulator this
+// migration replaced; the sweep itself now runs against TXA. That
 // sweep is the instrument this migration is judged by, and it was pointed at
 // today's code first, deliberately, so that it was known to discriminate before
 // it was asked to judge a replacement.
@@ -2234,8 +2236,8 @@ bool runTransmitLiveGeometryTest()
 // a WDSP TXA channel opened at the LIVE HL2 transmit geometry.
 //
 // IT WAS WRITTEN AS A MEASUREMENT OF A CANDIDATE and it is now a measurement of
-// the DEFAULT BUILD's transmit modulator: AETHER_HL2_TX_TXA is on, Hl2TxDsp
-// opens a channel at this geometry, and the phasing modulator is compiled out.
+// the ONLY transmit modulator this backend has: Hl2TxDsp opens a channel at
+// this geometry and there is nothing else to open.
 // What this case still is, and why it stays separate from hl2_txdsp_test, is a
 // measurement of the RAW CHANNEL -- opened here, by this file, with no level
 // chain in front of it. hl2_txdsp_test measures the same quantity through the
@@ -2243,7 +2245,9 @@ bool runTransmitLiveGeometryTest()
 // DIGU 150 Hz) is worth more than either figure alone, because the two harnesses
 // share no code but the arithmetic.
 //
-// WHERE IT DIFFERS FROM THE PHASING MODULATOR'S SWEEP, AND WHY. Three
+// WHERE IT DIFFERS FROM THE SWEEP THAT PRODUCED THE BASELINE TABLE, AND WHY.
+// That table was taken on the modulator this migration replaced, through
+// Hl2TxDsp, before hl2_txdsp_test's sweep was repointed at TXA. Three
 // deliberate differences, each forced by what a TXA channel is:
 //
 //  1. THE PASSBAND SIGN CARRIES THE SIDEBAND, NOT THE MODE. TXASetupBPFilters
@@ -2255,8 +2259,8 @@ bool runTransmitLiveGeometryTest()
 //     Hl2Backend::defaultTxPassbandForMode returns today. The MODE is still set
 //     per row, because a migration would set it.
 //
-//  2. THE ALC CANNOT BE SWITCHED OFF, SO IT IS MEASURED INSTEAD. The phasing
-//     modulator's sweep runs with Hl2TxDsp's ALC off. A TXA channel has no such
+//  2. THE ALC CANNOT BE SWITCHED OFF, SO IT IS MEASURED INSTEAD. The baseline
+//     table was taken with Hl2TxDsp's ALC off. A TXA channel has no such
 //     switch: create_txa brings alc up with run = 1, max_gain = 1.0 and
 //     out_targ = 1.0. It cannot BOOST -- max_gain 1.0 is unity -- but it will
 //     pull down anything that reaches the target, and a sweep run through a
@@ -2278,8 +2282,9 @@ bool runTransmitLiveGeometryTest()
 //  3. THE CAPTURE IS INDEXED. runTransmitChannel records each sample's ABSOLUTE
 //     position and restarts collection after any non-Ok block, because at
 //     bfo = 0 an underrun slips the output stream by a whole DSP buffer
-//     permanently (see the census in runTransmitLiveGeometryTest). The phasing
-//     modulator has no such seam.
+//     permanently (see the census in runTransmitLiveGeometryTest). The
+//     convolution that produced the baseline table had no such seam, which is
+//     why its table needed no indexing and this one does.
 //
 // AND THE WIRE CANNOT CARRY WHAT THIS MEASURES. MetisProtocol.cpp's
 // ep2WriteTxIq packs I and Q as SIGNED 16-BIT samples -- `v * 32767.0f`, two
@@ -2486,11 +2491,12 @@ bool runTransmitSuppressionSweepTest()
             // against Hl2TxDsp's 255, so a tone below the low edge is not
             // merely attenuated, it is GONE: at 100 Hz on {300, 2700} both
             // bins land near 1e-11, which is the chain's own numerical floor
-            // and has no handedness at all. The phasing modulator passes that
-            // same tone about 12 dB down with 14.3 dB of sideband suppression,
-            // so its sweep can meaningfully assert a wire bin out of band and
-            // this one cannot. Out-of-band rows are printed as a REJECTION
-            // figure, which is what they are evidence about.
+            // and has no handedness at all. The modulator this replaced passed
+            // that same tone about 12 dB down with 14.3 dB of sideband
+            // suppression, which is why its baseline table carries meaningful
+            // out-of-band rows and neither sweep can produce one against TXA.
+            // Out-of-band rows are printed as a REJECTION figure, which is what
+            // they are evidence about.
             const bool inBand = (toneHz >= absLow && toneHz <= absHigh);
 
             char line[224];
@@ -2544,21 +2550,25 @@ bool runTransmitSuppressionSweepTest()
 
     // ONE FLOOR, NOT hl2_txdsp_test's TWO, and the difference is the finding.
     //
-    // That sweep needs a second, tighter bound above 500 Hz because the phasing
-    // modulator's curve VARIES -- 22 dB at the low edge, 87 dB at mid-band --
-    // so a single floor set from the low edge is passed by degradations that
-    // only show up where the filter has settled. TXA's curve does not vary:
-    // every in-band point in the table above is against the instrument's floor,
-    // the low edge included. A second tier would be measuring the same thing
-    // twice.
+    // That sweep carries a low-edge floor alongside its main one because the
+    // modulator it was written against had a curve that VARIED -- 22 dB at the
+    // low edge, 87 dB at mid-band -- so a single floor set from the low edge is
+    // passed by degradations that only show up where the filter has settled.
+    // TXA's curve does not vary: every in-band point in the table above is
+    // against the instrument's floor, the low edge included. (Which is why
+    // those two floors now hold the same value there, and why a second tier
+    // here would be measuring the same thing twice.)
     //
-    // 100 dB is chosen to sit ABOVE THE PHASING MODULATOR'S BEST MEASURED
-    // POINT. hl2_txdsp_test's sweep measures the incumbent at 87.15 dB at its
-    // strongest (USB, 1 kHz) and 22.06 dB at its weakest (DIGU, 150 Hz). So
-    // this assertion reads: TXA's WORST in-band point still beats the phasing
-    // modulator's BEST one. Today it does so with 63 dB to spare. If a future
-    // change brings TXA anywhere near the chain it is replacing, the migration
-    // has lost the argument it was made on, and this is the line that says so.
+    // 100 dB IS CHOSEN TO SIT ABOVE THE BEST POINT EVER MEASURED ON THE
+    // MODULATOR THIS REPLACED -- 87.15 dB at its strongest (USB, 1 kHz),
+    // 22.06 dB at its weakest (DIGU, 150 Hz), both recorded in
+    // hl2_txdsp_test's baseline table. So this assertion reads: TXA's WORST
+    // in-band point still beats that chain's BEST one. Today it does so with
+    // 63 dB to spare. The comparison outlives the code it was made against on
+    // purpose -- that chain is gone from the tree and the number it set is the
+    // only thing that made this migration worth doing, so if a future change
+    // brings TXA anywhere near it, this is the line that says the argument has
+    // been lost.
     //
     // It is not a tight bound and is not meant to be. What it catches is a
     // channel that has been MIS-OPENED -- the wrong passband sign, bp0 not run,

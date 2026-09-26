@@ -1490,23 +1490,23 @@ inside AetherSDR on the host, not in radio firmware (#5401).
   more than one chain and they need not share a vocabulary, so key off `chain`
   rather than guessing from which fields are present. `rx-wdsp` entries also
   carry `receiver` — the **DDC index**, not a slice id.
-- `backend.chains[].modulator` — **which transmit modulator this binary was
-  built with**, on an `hl2-tx` entry: `wdsp-txa` (WDSP's TXA chain, selected
-  by default on a fresh configure or explicitly with `-DAETHER_HL2_TX_TXA=ON`)
-  or `phasing` (the in-tree fallback, selected with `-DAETHER_HL2_TX_TXA=OFF`).
-  Existing build caches retain their configured choice. It is decided by the
-  `AETHER_HL2_TX_TXA` compile flag and there is **no runtime switch** — the
-  other chain is not in the process, so an operator cannot select the wrong
-  one. It is reported because they can be running the wrong **build**, and a
-  transmit report that does not say which modulator produced the signal is not
-  actionable.
-- On TXA entries, `level` is `channel-config` and `filterLowHz` / `filterHighHz`
-  are the signed passband last accepted by the channel (negative for LSB/DIGL).
-  `dspBlockSize` is the channel's DSP-rate size; `inputBlockSize` is its audio-rate
-  size, and `dspRateHz` names the DSP rate. Refused requests leave applied values unchanged. Phasing entries retain
-  `dsp-config` and audio-domain positive passband magnitudes.
-- `wdspChannelId`, `modulatorBlocks`, `modulatorFaultBlocks` — present only
-  when the modulator has a WDSP channel behind it (so, `wdsp-txa` only).
+- `backend.chains[].modulator` — **which transmit modulator produced the
+  signal**, on an `hl2-tx` entry. Always `wdsp-txa`: the Hermes-Lite 2 has
+  exactly one transmit path, it is not selectable at run time and not at build
+  time either, and there is no second value to expect. The field is reported
+  rather than omitted because a transmit report that does not name the chain is
+  not actionable, and because a future second modulator — if one is ever
+  proposed again — must not arrive as a silent change of meaning. A reader
+  should treat an unrecognised value as "a modulator this client does not know
+  about", never as a failure.
+- On a **configured** `hl2-tx` entry, `level` is `channel-config` and `filterLowHz` /
+  `filterHighHz` are the signed passband last accepted by the channel (negative
+  for LSB/DIGL). `dspBlockSize` is the channel's DSP-rate size; `inputBlockSize`
+  is its audio-rate size, and `dspRateHz` names the DSP rate. Refused requests
+  leave applied values unchanged.
+- `wdspChannelId`, `modulatorBlocks`, `modulatorFaultBlocks` — present on a
+  configured `hl2-tx` entry, because the modulator always has a WDSP channel
+  behind it.
   `modulatorFaultBlocks` counts blocks the modulator could not place on the
   wire, and is present **even at zero**: "no blocks were dropped" and "nobody
   counted" must not look the same. Non-zero means the modulator is being fed

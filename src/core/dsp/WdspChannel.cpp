@@ -661,6 +661,11 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
     return true;
 }
 
+// NO DIRECTION/MODE VALIDATION HERE, DELIBERATELY NOT SILENTLY. validateConfig()
+// refuses a Transmit channel in Mode::Wbfm because WDSP TX defines no such
+// mode; this call does not, so SetTXAMode can still be handed that index on an
+// already-open channel. See the block beside that check in validateConfig() for
+// why mirroring it here would make things worse rather than better.
 bool WdspChannel::setMode(Mode mode) noexcept
 {
     if (!beginControlOperation()) {
@@ -1083,6 +1088,39 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         setError(error, "WDSP filter edges are invalid");
         return false;
     }
+    // WDSP TX HAS NO WBFM MODE, AND THIS IS THE ONLY PLACE THAT SAYS SO.
+    //
+    // TXA's mode table stops short of the RXA one: there is a wide-FM
+    // DEMODULATOR and no wide-FM modulator, so Mode::Wbfm has no TXA meaning
+    // and SetTXAMode would be handed an index WDSP does not define. Refusing
+    // the whole channel here is the honest answer -- a transmit chain that
+    // cannot do what it was asked for should not open.
+    //
+    // WHAT THIS DOES NOT COVER, recorded because the only note of it used to
+    // live in a test block that has since been deleted (#5906, and pre-existing
+    // since #5779). This check runs at CREATE time only. setMode() below makes
+    // no direction/mode check at all: it returns true and issues
+    // SetTXAMode(m_channelId, wdspMode(Wbfm)) on a live channel. That path is
+    // reachable -- Hl2Backend pushes the TX slice's mode straight through on a
+    // TX-slice mode change, on a TX-slice move, and again on connect -- and
+    // Hl2Backend::modeFromString maps both "WBFM" and "WFM" onto Mode::Wbfm.
+    //
+    // Nothing is emitted, because "WBFM" and "WFM" are both on the HL2's
+    // receiveOnlyModes and RadioModel::refuseKeyInReceiveOnlyMode() refuses
+    // every TxActivity in them, and a return to a real mode re-pushes. What
+    // reaches WDSP is an undefined TXA mode index on an open channel.
+    //
+    // IT IS NOT FIXED BY ADDING THE SAME TWO LINES TO setMode(). A create-time
+    // refusal leaves nothing configured; a setMode() refusal leaves a LIVE
+    // channel half-updated, because the caller pushes mode and passband as a
+    // pair -- Hl2TxDsp::applyModeAndFilter() calls setMode() and then
+    // setFilter(), and the passband's SIGN is derived from the new mode. Refuse
+    // only the mode half and the channel keeps the old mode under a passband
+    // signed for the new one, which is exactly the invisible wrong-sideband
+    // fault applyModeAndFilter()'s own comment exists to prevent. The refusal
+    // has to be of the PAIR, above this class, and choosing what a refused
+    // transmit mode change should leave behind is a design decision rather than
+    // a guard.
     if (config.direction == Direction::Transmit && config.mode == Mode::Wbfm) {
         setError(error, "WDSP TX does not define a WBFM mode");
         return false;

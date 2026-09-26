@@ -1008,8 +1008,8 @@ public:
     //
     // Each entry describes ONE chain and must carry a `chain` key naming which
     // — a backend may run more than one, and they need not share a vocabulary.
-    // A Hermes-Lite 2 runs WDSP on receive and a hand-written phasing modulator
-    // on transmit, whose config is a different struct entirely; reporting both
+    // A Hermes-Lite 2 runs a WDSP receive channel and a WDSP TXA transmit
+    // channel, whose config is a different struct entirely; reporting both
     // under one shape would mean inventing a union that describes neither. A
     // reader keys off `chain` rather than guessing from which fields are
     // present.

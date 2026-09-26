@@ -15,11 +15,10 @@
 //     has no CTCSS encoder anywhere and cannot key an FM carrier at all.
 //
 // THE ARGUMENT RESTS ON receiveOnlyModes, NOT ON THE MODULATOR, and that is a
-// deliberate choice this target enforces. The HL2's transmit modulator is
-// selected at BUILD time by AETHER_HL2_TX_TXA (default ON = a WDSP TXA channel,
-// whose chain does carry fmmod; OFF = the in-tree phasing SSB modulator), so
-// any assertion phrased about the modulator would be half wrong in every build.
-// What holds in both is that FM and NFM are declared receive-only, which is
+// deliberate choice this target enforces. The HL2's transmit modulator is a
+// WDSP TXA channel, and TXA's chain does carry fmmod, so an assertion phrased
+// about the modulator would argue the wrong way: the DSP could key an FM
+// carrier. What stops it is that FM and NFM are declared receive-only, which is
 // what RadioModel::refuseKeyInReceiveOnlyMode() reads.
 //
 // WHY THESE TWO AND NOT FM ITSELF. Nothing here says the HL2 cannot RECEIVE FM;

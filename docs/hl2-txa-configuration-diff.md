@@ -17,15 +17,15 @@ RelWithDebInfo. Both are in the default `ctest` graph. **Nothing here touches ha
 nothing keys a transmitter** — it is buffers and tests only. What was *not* measured is
 listed in §7 and is listed there in full.
 
-> **Status, added when TXA landed.** This document was written while TXA was a
-> *candidate*. It is now a BUILD OPTION, `AETHER_HL2_TX_TXA`, and it is
-> **ON by default since #5779**: a stock build now opens a TXA channel at the
-> geometry derived here and compiles the phasing modulator out, and
-> `-DAETHER_HL2_TX_TXA=OFF` is the way back to it. The default WAS OFF because
-> #5678's approval asked for hardware time and §7 recorded that there had been
-> none; §7 now records the runs that supplied it, **and the limits of what they
-> observed** — read that section rather than this sentence before relying on
-> the change. The configuration in
+> **Status, updated when the fallback was removed.** This document was written
+> while TXA was a *candidate*. It became a build option, `AETHER_HL2_TX_TXA`,
+> ON by default since #5779; **the option and the in-tree phasing modulator are
+> now gone, so a Hermes-Lite 2 binary has exactly one transmit path and there is
+> no way back short of a revert.** The comparison below is therefore a record of
+> why the migration was made, not a description of a choice anyone can still
+> make. §7 records the hardware runs and **the limits of what they observed** —
+> read that section rather than this sentence before relying on the change. The
+> configuration in
 > §1 and §2 is what `Hl2TxDsp::buildModulator` and `applyModeAndFilter` now do;
 > the measurements in §3 and §4 stand as written. Two details have moved on:
 > `hl2_txdsp_test`'s DIGU low-edge block is an **assertion** rather than a
@@ -460,8 +460,8 @@ precondition is now met rather than worked around.
 
 | build | result | failures |
 |---|---|---|
-| `AETHER_HL2_TX_TXA=ON` (opt-in) | **461 / 463** | `tgxl_docked_parity_test`, `vkamp_connection_test` |
-| `AETHER_HL2_TX_TXA=OFF` (phasing) | **462 / 463** | `tgxl_docked_parity_test` |
+| `AETHER_HL2_TX_TXA=ON` (then opt-in, now the only path) | **461 / 463** | `tgxl_docked_parity_test`, `vkamp_connection_test` |
+| `AETHER_HL2_TX_TXA=OFF` (phasing, since removed) | **462 / 463** | `tgxl_docked_parity_test` |
 
 `wdsp_channel_test` and `hl2_txdsp_test` pass in both.
 

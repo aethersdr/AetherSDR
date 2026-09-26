@@ -5183,8 +5183,9 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         // DSP, and the symptom is "the control does nothing".
         //
         // Every entry names its `chain`, because a backend may run more than one
-        // and they need not share a vocabulary — a Hermes-Lite 2 runs WDSP on
-        // receive and a hand-written phasing modulator on transmit. Each also
+        // and they need not share a vocabulary — a Hermes-Lite 2 runs a WDSP
+        // receive channel and a WDSP TXA transmit channel, and the two are
+        // configured by different structs. Each also
         // names its `level`, because "read-back" is used loosely and the
         // difference decides what a mismatch proves: `channel-config` is what
         // the channel was opened with, `dsp-config` is the DSP's own state, and
