@@ -5146,6 +5146,22 @@ target_include_directories(icom_family_test PRIVATE src)
 target_link_libraries(icom_family_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME icom_family_test COMMAND icom_family_test)
 
+# #5920 follow-up (@jensenpat, non-blocking review): the channels out of
+# MainWindow::sendPanDimensionsToRadio() -- Flex wire delivery, ANAN typed
+# dispatch, Icom's no-command path. Two halves, for the reason the test's own
+# header gives: no test target constructs a MainWindow, and the block cannot
+# move down into RadioModel without failing check_command_plane.py, whose
+# src/models/RadioModel.cpp row is shrink-only. Part A builds every family
+# through the production family switch and reads the two predicates that call
+# site consults (no socket, no device, no radio); Part B reads the call site
+# itself as TEXT, which is what AETHER_SOURCE_DIR is for here.
+add_executable(pan_dimension_routing_test tests/pan_dimension_routing_test.cpp)
+target_include_directories(pan_dimension_routing_test PRIVATE src tests)
+target_compile_definitions(pan_dimension_routing_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pan_dimension_routing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pan_dimension_routing_test COMMAND pan_dimension_routing_test)
+
 add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)
 target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
