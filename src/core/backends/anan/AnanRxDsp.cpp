@@ -112,8 +112,9 @@ AnanRxDsp::RebuildResult AnanRxDsp::buildChannel(const Config& config)
     wc.agcMode = config.agcMode;
     wc.maximumAgcGainDb = config.maximumAgcGainDb;
     wc.blockForOutput = config.blockForOutput;
-    wc.noiseBlankerEnabled = config.noiseBlankerEnabled;
+    wc.noiseBlanker = config.noiseBlanker;
     wc.noiseBlankerLevel = config.noiseBlankerLevel;
+    wc.noiseBlankerFill = config.noiseBlankerFill;
     // filterTaps left at WdspChannel::Config's own default (2048): this
     // phase has no manual notch filter, so there is no narrow-notch floor to
     // widen it for (contrast Hl2RxDsp::kRxFilterTaps, which exists solely
@@ -222,8 +223,9 @@ void AnanRxDsp::installChannel(RebuildResult result)
         result.channel->setShift(m_shiftHz);
     // Sent even when it matches what the channel was built with: the operator
     // may have moved the NB button while the background build ran.
-    if (!result.channel->setNoiseBlanker(m_config.noiseBlankerEnabled,
-                                         m_config.noiseBlankerLevel)) {
+    if (!result.channel->setNoiseBlanker(m_config.noiseBlanker,
+                                         m_config.noiseBlankerLevel,
+                                         m_config.noiseBlankerFill)) {
         qCWarning(lcAnanRxDsp) << "noise blanker refused by the rebuilt channel";
     }
     // The hold flag belongs to the channel, so a rebuild loses it. A rate
@@ -310,19 +312,23 @@ void AnanRxDsp::setAudioMuted(bool muted)
         m_channel->setNoiseBlankerHold(muted);
 }
 
-void AnanRxDsp::setNoiseBlanker(bool on, int level)
+void AnanRxDsp::setNoiseBlanker(WdspChannel::NoiseBlanker kind, int level,
+                                WdspChannel::NoiseBlankerFill fill)
 {
-    m_config.noiseBlankerEnabled = on;
+    m_config.noiseBlanker = kind;
     m_config.noiseBlankerLevel = std::clamp(level, 0, 100);
+    m_config.noiseBlankerFill = fill;
     if (!m_channel || m_rebuildInFlight)
         return;
     // WdspChannel refuses, rather than blocks on, a control call that races
     // another one. Logged so a refused toggle is not silent; m_config keeps
     // the request and the next rebuild applies it.
-    if (!m_channel->setNoiseBlanker(m_config.noiseBlankerEnabled,
-                                    m_config.noiseBlankerLevel)) {
-        qCWarning(lcAnanRxDsp) << "noise blanker" << (on ? "on" : "off")
+    if (!m_channel->setNoiseBlanker(m_config.noiseBlanker,
+                                    m_config.noiseBlankerLevel,
+                                    m_config.noiseBlankerFill)) {
+        qCWarning(lcAnanRxDsp) << "noise blanker kind" << static_cast<int>(kind)
                                << "level" << m_config.noiseBlankerLevel
+                               << "fill" << static_cast<int>(fill)
                                << "refused by the channel";
     }
     publishNoiseBlankerState();
@@ -332,8 +338,10 @@ void AnanRxDsp::publishNoiseBlankerState()
 {
     // Read the applied channel even after refusal, never the requested config.
     const int state = m_channel
-        ? (m_channel->noiseBlankerEnabled() ? kNbEnabledOffset : 0)
-              + m_channel->config().noiseBlankerLevel
+        ? m_channel->config().noiseBlankerLevel
+              + kNbLevelStride * static_cast<int>(m_channel->noiseBlankerKind())
+              + kNbLevelStride * kNbKindStride
+                    * static_cast<int>(m_channel->noiseBlankerFill())
         : -1;
     m_nbAppliedState.store(state, std::memory_order_relaxed);
 }

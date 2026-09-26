@@ -127,6 +127,56 @@ void SetEXTANBAdvtime(int id, double time);
 void SetEXTANBBacktau(int id, double tau);
 void SetEXTANBThreshold(int id, double thresh);
 
+// ── The second impulse blanker (NOB, nobII.c) ──────────────────────────────
+//
+// Everything said above about the ANB holds here — not in the RXA chain, its
+// own table of 32 ids, interleaved-double buffers, in-place safe, handedness
+// irrelevant, the same threshold/times meaning, the same arming delay after a
+// flush. This is what deskHPSDR, pihpsdr and Thetis all label NB2.
+//
+// THE DIFFERENCE IS WHAT FILLS THE BLANKED WINDOW. The ANB gates it to zero;
+// the NOB runs two filters over the samples either side of the impulse and can
+// fill the hole with a reconstruction. `mode` chooses which (nobII.c, the switch
+// on a->mode):
+//
+//   0 zero            same as the ANB
+//   1 sample-and-hold hold the filtered sample from BEFORE the impulse
+//   2 mean-hold       the mean of the filtered samples either side of it
+//   3 hold-sample     hold the filtered sample from AFTER the impulse
+//   4 interpolate     a straight line from the one before to the one after
+//
+// That makes it the better instrument when the impulse lands ON a wanted signal,
+// because the window keeps carrying something signal-shaped, and the worse one
+// when noise is dense enough that the "clean" samples either side are not clean.
+// Which is why every reference client offers both and replaces neither.
+//
+// ONE MORE TIME CONSTANT, hidden: create_nob() takes a max_imp_seq_time, fixed
+// at 0.025 s by create_nobEXT, that caps how long a single impulse sequence may
+// be before the stage declares an overflow and stops reconstructing it. Not
+// exposed by the EXT API, so not ours to move.
+//
+// RUNNING BOTH BLANKERS AT ONCE IS MEANINGLESS. They share a detector and a
+// window: the second would reconstruct, or zero, what the first already
+// blanked. A host with both created must keep at most one running.
+void create_nobEXT(int id, int run, int mode, int buffsize, double samplerate,
+                   double slewtime, double hangtime, double advtime,
+                   double backtau, double threshold);
+void destroy_nobEXT(int id);
+// Resets the state machine and the delay line, and re-arms as described above.
+void flush_nobEXT(int id);
+// In-place safe: pass the same pointer for both.
+void xnobEXT(int id, double* in, double* out);
+void SetEXTNOBRun(int id, int run);
+// 0..4, per the table above. Stored under the stage's lock; nothing is resized.
+void SetEXTNOBMode(int id, int mode);
+void SetEXTNOBBuffsize(int id, int size);
+void SetEXTNOBSamplerate(int id, int rate);
+void SetEXTNOBTau(int id, double tau);
+void SetEXTNOBHangtime(int id, double time);
+void SetEXTNOBAdvtime(int id, double time);
+void SetEXTNOBBacktau(int id, double tau);
+void SetEXTNOBThreshold(int id, double thresh);
+
 // ── Manual notch filters (the notched-bandpass stage, nbp0) ────────────────
 //
 // This is the host-side equivalent of a Flex TNF, and on a direct-sampling

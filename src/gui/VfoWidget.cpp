@@ -2081,7 +2081,8 @@ void VfoWidget::buildTabContent()
 
         // DSP button tooltips
         m_nrBtn->setToolTip("Radio-side noise reduction \u2014 attenuates uncorrelated background noise.");
-        m_nbBtn->setToolTip("Noise blanker \u2014 detects and removes fast impulse noise from sparks and switching sources.");
+        m_nbBtn->setToolTip("Noise blanker \u2014 detects and removes fast impulse noise from sparks and switching sources. "
+                            "Where this host runs the blanker, clicking again selects NB2, which reconstructs the blanked window instead of silencing it.");
         m_anfBtn->setToolTip("Auto notch filter \u2014 detects and cancels persistent unwanted tones.");
         m_apfBtn->setToolTip("CW audio peaking filter \u2014 narrows the audio passband around the CW pitch frequency to improve S/N.");
         m_nrlBtn->setToolTip("Leaky LMS adaptive filter \u2014 preserves correlated signals while removing uncorrelated noise. Best for daily SSB/CW.");
@@ -2133,6 +2134,63 @@ void VfoWidget::buildTabContent()
             m_apfContainer->setEnabled(false);
             m_apfContainer->hide();
             dspVb->addWidget(m_apfContainer);
+        }
+
+        // NB2 fill mode — what WDSP's second blanker puts in the window it
+        // blanked. Its own row rather than a cell in the toggle grid, because it
+        // is a choice among five and not a switch, and it appears only while NB2
+        // is the running blanker: the same rule the shared level row follows, for
+        // the same reason. On a radio whose blanker is its own firmware it never
+        // appears at all, since NB2 is not reachable there.
+        {
+            m_nbFillContainer = new QWidget;
+            auto* fillHb = new QHBoxLayout(m_nbFillContainer);
+            fillHb->setContentsMargins(0, 2, 0, 0);
+            fillHb->setSpacing(3);
+
+            // Styled through ThemeManager rather than a bare setStyleSheet, as
+            // the shared level row's label is: the colour comes from a token
+            // instead of a literal, and the colour ratchet counts call sites, so
+            // a new one would raise the count whatever colour it carried.
+            auto* lbl = new QLabel("NB2");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(lbl,
+                "QLabel { color: {{color.text.primary}}; font-size: 13px;"
+                "  font-weight: bold; min-width: 26px; }");
+            lbl->setFixedWidth(26);
+            fillHb->addWidget(lbl);
+
+            m_nbFillCombo = new GuardedComboBox;
+            // Addressable by the automation bridge, like the DSP toggles: a
+            // control the bridge cannot name is a control no script can prove.
+            m_nbFillCombo->setObjectName(QStringLiteral("dspNB2FillCombo"));
+            m_nbFillCombo->setAccessibleName("NB2 fill");
+            m_nbFillCombo->setAccessibleDescription(
+                "What the second noise blanker puts in the window it blanked.");
+            m_nbFillCombo->setFixedHeight(26);
+            // Order and index ARE WDSP's mode numbering — see
+            // AetherSDR::NoiseBlankerFill — so the index is the value and there
+            // is no table here to fall out of step with the engine.
+            m_nbFillCombo->addItems({"Zero", "Sample hold", "Mean hold",
+                                     "Hold sample", "Interpolate"});
+            AetherSDR::applyComboStyle(m_nbFillCombo);
+            m_nbFillCombo->setToolTip(
+                "NB2 fill — Zero blanks the impulse to silence, as NB does. "
+                "The others reconstruct the blanked window from the samples "
+                "either side, which sounds better when the impulse lands on a "
+                "signal and worse when the noise is dense.");
+            fillHb->addWidget(m_nbFillCombo, 1);
+
+            connect(m_nbFillCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int index) {
+                if (m_updatingFromModel || !m_slice
+                    || !AetherSDR::isValidNoiseBlankerFill(index)) {
+                    return;
+                }
+                m_slice->setNbFill(static_cast<AetherSDR::NoiseBlankerFill>(index));
+            });
+
+            m_nbFillContainer->hide();
+            dspVb->addWidget(m_nbFillContainer);
         }
 
         // RTTY Mark/Shift controls (hidden unless RTTY mode)
@@ -2587,7 +2645,47 @@ void VfoWidget::buildTabContent()
             });
         };
         wireLeveledDsp(m_nrBtn,   &SliceModel::setNr,   LvlNR);
-        wireLeveledDsp(m_nbBtn,   &SliceModel::setNb,   LvlNB);
+        // NB is the one leveled DSP that is NOT a plain toggle, because WDSP has
+        // two impulse blankers and only one may run. Where this host runs them
+        // the button cycles Off -> NB -> NB2 -> Off; everywhere else it is the
+        // toggle it always was, since a radio-side blanker has no second state
+        // to offer.
+        //
+        // Wired on toggled() like its siblings, so the shared level row keeps
+        // tracking it, with the NB2 leg reached by RE-CHECKING the button inside
+        // the handler that saw it go off. The alternative — a clicked() handler
+        // driving check state itself — would have to fight Qt's own toggle on
+        // every press.
+        connect(m_nbBtn, &QPushButton::toggled, this, [this](bool on) {
+            if (m_updatingFromModel || !m_slice) {
+                if (on) pushDspLevelTarget(LvlNB);
+                else    popDspLevelTarget(LvlNB);
+                return;
+            }
+            if (on) {
+                m_slice->setNbKind(AetherSDR::NoiseBlankerKind::Impulse);
+                pushDspLevelTarget(LvlNB);
+                refreshNbControls();
+                return;
+            }
+            // Going off. On a host-blanker radio that is the middle of the
+            // cycle: NB2 next, and the button goes straight back to checked
+            // without the model ever seeing an Off it did not ask for.
+            if (m_hasHostNoiseBlanker
+                && m_slice->nbKind() == AetherSDR::NoiseBlankerKind::Impulse) {
+                m_slice->setNbKind(AetherSDR::NoiseBlankerKind::Advanced);
+                m_updatingFromModel = true;
+                QSignalBlocker sb(m_nbBtn);
+                m_nbBtn->setChecked(true);
+                m_updatingFromModel = false;
+                pushDspLevelTarget(LvlNB);
+                refreshNbControls();
+                return;
+            }
+            m_slice->setNbKind(AetherSDR::NoiseBlankerKind::Off);
+            popDspLevelTarget(LvlNB);
+            refreshNbControls();
+        });
         wireLeveledDsp(m_anfBtn,  &SliceModel::setAnf,  LvlAnf);
         wireLeveledDsp(m_nrlBtn,  &SliceModel::setNrl,  LvlNrl);
         wireLeveledDsp(m_nrsBtn,  &SliceModel::setNrs,  LvlNrs);
@@ -3444,6 +3542,45 @@ void VfoWidget::setHasHostNoiseBlanker(bool has)
         return;
     applyRadioSideDspVisibility();
     relayoutDspGrid();
+    // A radio that does not run the blanker here cannot reach NB2, so the fill
+    // row goes away with the capability rather than lingering from the last one.
+    refreshNbControls();
+}
+
+void VfoWidget::refreshNbControls()
+{
+    if (!m_nbBtn || !m_nbFillContainer || !m_nbFillCombo)
+        return;
+    const AetherSDR::NoiseBlankerKind kind =
+        m_slice ? m_slice->nbKind() : AetherSDR::NoiseBlankerKind::Off;
+    const bool advanced = kind == AetherSDR::NoiseBlankerKind::Advanced;
+    // The label IS the state readout. A cycling button whose face never changes
+    // leaves the operator counting clicks to know which blanker is running.
+    m_nbBtn->setText(advanced ? QStringLiteral("NB2") : QStringLiteral("NB"));
+    m_nbBtn->setAccessibleName(advanced ? QStringLiteral("Noise blanker 2")
+                                        : QStringLiteral("Noise blanker"));
+    // The objectName does NOT follow the label: the bridge addresses this button
+    // by it, and a control that renames itself as its state changes is a control
+    // no script can hold on to.
+    const bool showFill = advanced && m_hasHostNoiseBlanker;
+    // Whether this call CHANGES the row's visibility, because only then does the
+    // panel have to be refitted -- and it does have to be. The DSP tab's height
+    // is pinned to its page's size hint (syncTabStackHeightToCurrentPage), so a
+    // row that appears inside an already-sized panel is simply clipped by the
+    // bottom edge: the combo was half a widget tall and unusable. Same treatment
+    // the shared level row gets in setDspLevelTarget(), queued for the same
+    // reason -- the new row has to be laid out before its height can be read.
+    const bool visibilityChanged = m_nbFillContainer->isHidden() == showFill;
+    m_nbFillContainer->setVisible(showFill);
+    const int index = m_slice ? static_cast<int>(m_slice->nbFill())
+                              : static_cast<int>(AetherSDR::kDefaultNoiseBlankerFill);
+    if (m_nbFillCombo->currentIndex() != index) {
+        QSignalBlocker sb(m_nbFillCombo);
+        m_nbFillCombo->setCurrentIndex(index);
+    }
+    if (visibilityChanged && m_activeTab == 1 && m_tabStack && m_tabStack->isVisible()) {
+        QTimer::singleShot(0, this, [this] { relayoutToCurrentContent(); });
+    }
 }
 
 void VfoWidget::setHasExtendedDsp(bool has)
@@ -4805,6 +4942,12 @@ void VfoWidget::setSlice(SliceModel* slice)
         });
     };
     connectLeveledDsp(&SliceModel::nbChanged,   m_nbBtn,   LvlNB);
+    // The kind on top of the bool: same button, but its label says which blanker
+    // and the fill row appears with NB2.
+    connect(m_slice, &SliceModel::nbKindChanged, this,
+            [this](AetherSDR::NoiseBlankerKind) { refreshNbControls(); });
+    connect(m_slice, &SliceModel::nbFillChanged, this,
+            [this](AetherSDR::NoiseBlankerFill) { refreshNbControls(); });
     connectLeveledDsp(&SliceModel::nrChanged,   m_nrBtn,   LvlNR);
     connectLeveledDsp(&SliceModel::anfChanged,  m_anfBtn,  LvlAnf);
     connectLeveledDsp(&SliceModel::nrlChanged,  m_nrlBtn,  LvlNrl);
@@ -5204,6 +5347,7 @@ void VfoWidget::syncFromSlice()
         QSignalBlocker sb(btn); btn->setChecked(on);
     };
     syncDsp(m_nbBtn,  m_slice->nbOn());
+    refreshNbControls();
     syncDsp(m_nrBtn,  m_slice->nrOn());
     syncDsp(m_anfBtn, m_slice->anfOn());
     syncDsp(m_nrlBtn, m_slice->nrlOn());

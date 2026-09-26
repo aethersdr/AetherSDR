@@ -41,6 +41,35 @@ public:
         Wbfm
     };
 
+    // WHICH of WDSP's two impulse blankers runs ahead of the channel. Both are
+    // created for the life of a receive channel and at most one runs; see
+    // openNoiseBlanker().
+    //
+    // Values are the seam's (AetherSDR::NoiseBlankerKind) and are asserted equal
+    // where the two meet, in core/backends/WdspNoiseBlanker.h. This enum is
+    // declared here rather than included from there because core/dsp is a leaf:
+    // it depends on Qt and the standard library and nothing else in this tree,
+    // and an engine that had to include the seam's vocabulary to blank an
+    // impulse would be the wrong dependency direction to open for two enums.
+    enum class NoiseBlanker
+    {
+        Off = 0,
+        Impulse = 1,   // ANB, nob.c — zeroes the window
+        Advanced = 2,  // NOB, nobII.c — reconstructs it, per NoiseBlankerFill
+    };
+
+    // WDSP's own numbering for what fills the blanked window (nobII.c, the
+    // switch on a->mode), so pushing it to SetEXTNOBMode is a cast and not a
+    // table. Advanced only; Impulse always zeroes.
+    enum class NoiseBlankerFill
+    {
+        Zero = 0,
+        SampleHold = 1,
+        MeanHold = 2,
+        HoldSample = 3,
+        Interpolate = 4,
+    };
+
     struct Config
     {
         Direction direction = Direction::Receive;
@@ -113,10 +142,15 @@ public:
         // sample-rate or block-size change) rebuilds the channel with the
         // operator's blanker rather than silently switching it off, the same
         // way the shift and the AGC are carried.
-        bool noiseBlankerEnabled = false;
+        NoiseBlanker noiseBlanker = NoiseBlanker::Off;
         // 0..100, the seam's units. Mapped to WDSP's threshold by
-        // noiseBlankerThresholdForLevel().
+        // noiseBlankerThresholdForLevel(). Shared by both blankers, as it is in
+        // deskHPSDR — the trigger is the same detector in both stages, so one
+        // number keeps a switch between them from also changing sensitivity.
         int noiseBlankerLevel = 50;
+        // What Advanced puts in the blanked window. Carried even while Impulse
+        // runs, so switching between them does not reset the operator's choice.
+        NoiseBlankerFill noiseBlankerFill = NoiseBlankerFill::Zero;
     };
 
     enum class ProcessResult
@@ -426,13 +460,19 @@ public:
     // from the processIq() callback.
     bool setFmDeviation(double deviationHz) noexcept;
 
-    // ── Impulse noise blanker ─────────────────────────────────────────────
+    // ── Impulse noise blankers ────────────────────────────────────────────
     //
-    // WDSP's ANB (nob.c), run on the RAW IQ ahead of the channel. It has to be
-    // ahead: an impulse is short in time and wide in frequency, so once the
-    // bandpass has smeared it across milliseconds there is no longer a spike to
-    // blank. That is also why it cannot be an RXA stage — WDSP does not put one
-    // there, and both reference clients call it outside the channel too.
+    // WDSP's ANB (nob.c) and NOB (nobII.c), run on the RAW IQ ahead of the
+    // channel. They have to be ahead: an impulse is short in time and wide in
+    // frequency, so once the bandpass has smeared it across milliseconds there
+    // is no longer a spike to blank. That is also why neither can be an RXA
+    // stage — WDSP does not put one there, and every reference client calls
+    // them outside the channel too.
+    //
+    // AT MOST ONE RUNS. They are not complementary stages to be cascaded: both
+    // watch the same detector and blank the same window, so running both would
+    // have the second one reconstructing what the first one just zeroed. Every
+    // reference client treats this as one 3-way choice for the same reason.
     //
     // Receive channels only. A transmit channel returns false rather than
     // blanking the operator's own audio.
@@ -444,9 +484,13 @@ public:
     // place that inversion happens.
     //
     // Control-path work, guarded exactly like setMode(); not callable from
-    // processIq(). Turning the blanker ON flushes it first, so it starts from a
+    // processIq(). Turning a blanker ON flushes it first, so it starts from a
     // known state rather than from whatever the last enabled period left.
-    bool setNoiseBlanker(bool on, int level) noexcept;
+    //
+    // `fill` is pushed whatever the kind, because it is Advanced's parameter
+    // and not its switch: a later switch to Advanced must not need the caller
+    // to remember to re-send it.
+    bool setNoiseBlanker(NoiseBlanker kind, int level, NoiseBlankerFill fill) noexcept;
     // Real-time-safe suspend, for a backend that clocks the channel with
     // SILENCE while transmitting.
     //
@@ -466,9 +510,19 @@ public:
     // it stores an atomic and the flush it schedules writes only into buffers
     // the stage already owns.
     void setNoiseBlankerHold(bool hold) noexcept;
+    // Kept as a bool question because that is what most callers ask — a meter,
+    // a readback or a test that wants to know whether anything is blanking.
     [[nodiscard]] bool noiseBlankerEnabled() const noexcept
     {
-        return m_config.noiseBlankerEnabled;
+        return m_config.noiseBlanker != NoiseBlanker::Off;
+    }
+    [[nodiscard]] NoiseBlanker noiseBlankerKind() const noexcept
+    {
+        return m_config.noiseBlanker;
+    }
+    [[nodiscard]] NoiseBlankerFill noiseBlankerFill() const noexcept
+    {
+        return m_config.noiseBlankerFill;
     }
     // The seam-level -> WDSP-threshold map, exposed because it is a policy
     // decision rather than an implementation detail and a test should be able
@@ -608,12 +662,17 @@ private:
 
     void open() noexcept;
     void close() noexcept;
-    // Create/destroy the ANB stage alongside the channel. The blanker's id IS
-    // the channel id: nob.c keeps its own table of 32, WDSP's channel table is
-    // also 32, and this class already owns the allocation and release of that
-    // number — so borrowing it gives the two objects one lifetime instead of
-    // two that can fall out of step. Nothing else in this process may create an
-    // ANB without going through here.
+    // Create/destroy BOTH blanker stages alongside the channel. Each blanker's
+    // id IS the channel id: nob.c and nobII.c each keep their own table of 32,
+    // WDSP's channel table is also 32, and this class already owns the
+    // allocation and release of that number — so borrowing it gives the objects
+    // one lifetime instead of three that can fall out of step. Nothing else in
+    // this process may create an ANB or a NOB without going through here.
+    //
+    // Both are created even though at most one runs, and even when the operator
+    // has no blanker on at all: create_nobEXT allocates, and a channel that
+    // built its stages lazily would be allocating on a live real-time path the
+    // first time someone clicked NB2.
     void openNoiseBlanker() noexcept;
     void closeNoiseBlanker() noexcept;
     bool beginControlOperation() noexcept;
@@ -642,19 +701,26 @@ private:
 
     // ── Noise blanker state ───────────────────────────────────────────────
     //
-    // m_nbOpen tracks the WDSP-side stage (created for the life of a receive
-    // channel whether or not it is running); m_nbActive is what processIq()
-    // reads to decide whether to pay for the interleave at all. Separate,
-    // because the stage exists while switched off and the real-time path must
-    // not consult m_config across a control-thread write.
+    // m_nbOpen tracks the WDSP-side stages (created for the life of a receive
+    // channel whether or not either is running); m_nbActive is what processIq()
+    // reads to decide whether to pay for the interleave at all, and m_nbKind
+    // which of the two to feed. Separate from m_config, because the stages exist
+    // while switched off and the real-time path must not consult m_config across
+    // a control-thread write.
+    //
+    // TWO atomics rather than one enum atomic the real-time path compares
+    // against Off: the gate is read every block and the kind only inside it, and
+    // keeping the gate a bool leaves the hot check exactly what it was before
+    // NB2 existed.
     bool m_nbOpen = false;
     std::atomic<bool> m_nbActive {false};
+    std::atomic<NoiseBlanker> m_nbKind {NoiseBlanker::Off};
     // Set on a transmit edge; processIq() skips the stage while it is true so
     // the running average is FROZEN rather than dragged into the mute path's
     // silence. No companion "flush on release" flag: re-arming the stage on
     // every T->R edge is the defect this hold exists to avoid, not part of it.
     std::atomic<bool> m_nbHold {false};
-    // ANB works on WDSP's interleaved-double buffer, in place; processIq()
+    // Both blankers work on WDSP's interleaved-double buffer, in place; processIq()
     // takes separate float planes. These three are the staging buffers for
     // that conversion, sized once in open() so the real-time path never
     // allocates. Blanking has to happen before the channel sees the samples,
@@ -669,3 +735,8 @@ private:
 // invokeMethod just warns and DROPS the call, which would silently break mode
 // switching.
 Q_DECLARE_METATYPE(WdspChannel::Mode)
+// Same reason, for the same reason it matters: both backends marshal the blanker
+// verb onto the thread that owns the DSP object, so an unregistered enum here
+// would silently drop every NB and NB2 click instead of failing.
+Q_DECLARE_METATYPE(WdspChannel::NoiseBlanker)
+Q_DECLARE_METATYPE(WdspChannel::NoiseBlankerFill)

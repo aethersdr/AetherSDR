@@ -2,6 +2,8 @@
 
 #include <optional>
 
+#include "core/backends/NoiseBlankerKind.h"
+
 #include <QMetaType>
 #include <QString>
 #include <QStringList>
@@ -58,7 +60,14 @@ struct SliceDelta {
     std::optional<QString>     txAntenna;
 
     // DSP toggles
+    // `nb` is the RADIO's answer: a bool, because a radio-side blanker is one
+    // blanker. A host-side backend that runs WDSP's second blanker sets nbKind
+    // instead, and SliceModel prefers it — see applyChanges(). Setting both is
+    // allowed and the kind wins; setting only nb keeps a host kind that is
+    // already on, so an echo can never downgrade NB2 to NB.
     std::optional<bool>        nb;
+    std::optional<AetherSDR::NoiseBlankerKind> nbKind;
+    std::optional<AetherSDR::NoiseBlankerFill> nbFill;
     std::optional<bool>        nr;
     std::optional<bool>        anf;
     std::optional<bool>        nrl;

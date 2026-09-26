@@ -21,6 +21,7 @@
 #include "core/backends/GpsDelta.h"
 #include "core/backends/MemoryDelta.h"
 #include "core/backends/MeterDef.h"
+#include "core/backends/NoiseBlankerKind.h"
 #include "core/backends/NotchDelta.h"
 #include "core/backends/ProfileDelta.h"
 #include "core/backends/FrontEndOverload.h"
@@ -756,9 +757,24 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
-    virtual void setSliceNoiseBlanker(int sliceId, bool on, int level)
+    // THREE-STATE, unlike its siblings, because WDSP has two impulse blankers
+    // and a host that runs them has to say which. A radio whose blanker is its
+    // own firmware has one, and treats anything but Off as on — that is a
+    // faithful reading of the request, not a silent downgrade: the operator can
+    // only reach Advanced on a radio that publishes hasHostNoiseBlanker.
+    //
+    // `fill` is Advanced's parameter — what goes in the blanked window — and is
+    // carried on every call so a backend never has to remember it separately
+    // from the kind. Meaningless for Impulse and for a radio-side blanker, which
+    // ignore it.
+    //
+    // Level and fill travel with the kind for the reason stated above: one call
+    // carries the whole state, so no ordering between "which blanker" and "how
+    // hard" can exist to get wrong.
+    virtual void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                                      int level, AetherSDR::NoiseBlankerFill fill)
     {
-        Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
+        Q_UNUSED(sliceId); Q_UNUSED(kind); Q_UNUSED(level); Q_UNUSED(fill);
     }
     virtual void setSliceAutoNotch(int sliceId, bool on)
     {

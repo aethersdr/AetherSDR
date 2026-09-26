@@ -69,7 +69,8 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
-    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                              int level, AetherSDR::NoiseBlankerFill fill) override;
     void setPanCenter(const QString& panId, double hz, PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanFrameRate(const QString& panId, int fps) override;
@@ -122,8 +123,19 @@ public:
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
     [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
-    [[nodiscard]] bool noiseBlankerOnForTest() const noexcept { return m_nbOn; }
+    [[nodiscard]] bool noiseBlankerOnForTest() const noexcept
+    {
+        return m_nbKind != AetherSDR::NoiseBlankerKind::Off;
+    }
+    [[nodiscard]] AetherSDR::NoiseBlankerKind noiseBlankerKindForTest() const noexcept
+    {
+        return m_nbKind;
+    }
     [[nodiscard]] int noiseBlankerLevelForTest() const noexcept { return m_nbLevel; }
+    [[nodiscard]] AetherSDR::NoiseBlankerFill noiseBlankerFillForTest() const noexcept
+    {
+        return m_nbFill;
+    }
     // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
     // smoothing and publish tick can be tested without a live radio.
     void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
@@ -341,8 +353,9 @@ private:
     // reconnect. emitSliceState() also publishes the pair when a different
     // radio gets a fresh slice, keeping its NB button in agreement with the
     // retained setting. Defaults match AnanRxDsp::Config's.
-    bool m_nbOn = false;
+    AetherSDR::NoiseBlankerKind m_nbKind = AetherSDR::NoiseBlankerKind::Off;
     int m_nbLevel = 50;
+    AetherSDR::NoiseBlankerFill m_nbFill = AetherSDR::kDefaultNoiseBlankerFill;
 
     // Fixed identifiers -- Phase 1b is exactly one slice, one pan.
     static constexpr int kSliceId = 0;

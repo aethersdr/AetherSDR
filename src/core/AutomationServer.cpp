@@ -1741,6 +1741,12 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
         {QStringLiteral("diversityChild"), s->isDiversityChild()},
         {QStringLiteral("diversityIndex"), s->diversityIndex()},
         {QStringLiteral("nb"),         s->nbOn()},
+        // WHICH blanker, and NB2's fill. `nb` stays the bool it always was, so
+        // an existing script reads the same field; a script that cares about the
+        // second blanker reads these. This is the REQUEST — `get hostnb` is what
+        // the DSP actually took.
+        {QStringLiteral("nbKind"),     static_cast<int>(s->nbKind())},
+        {QStringLiteral("nbFill"),     static_cast<int>(s->nbFill())},
         {QStringLiteral("nbLevel"),    s->nbLevel()},
         {QStringLiteral("nr"),         s->nrOn()},
         {QStringLiteral("nrLevel"),    s->nrLevel()},
@@ -8116,7 +8122,7 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            {QStringLiteral("agcThreshold"), s->agcThreshold()}};
     }
     if (action == QLatin1String("dsp")) {
-        // "slice dsp <nr|nb|anf|squelch> <on|off> [level 0..100]"
+        // "slice dsp <nr|nb|nb2|anf|squelch> <on|off> [level 0..100] [fill 0..4]"
         //
         // Drives the same operator setters the applets use, so the change emits
         // the *CommandIssued intent and reaches the seam. Added because the
@@ -8130,9 +8136,16 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                                 Qt::SkipEmptyParts);
         if (parts.size() < 2)
             return err(QStringLiteral(
-                "slice dsp requires '<nr|nb|anf|squelch> <on|off> [level]'"));
+                "slice dsp requires '<nr|nb|nb2|anf|squelch> <on|off> [level] "
+                "[fill]'"));
         const QString which = parts[0].toLower();
+        // `nb2` is its own control name rather than a third state of `nb`,
+        // because the grammar here is <control> <on|off> and bending it into
+        // <control> <off|nb|nb2> would break every existing caller of `nb off`.
+        // Turning nb2 ON is what selects the second blanker; turning either off
+        // turns the blanker off, which is what the operator's button does too.
         static const QStringList kWhich{QStringLiteral("nr"), QStringLiteral("nb"),
+                                        QStringLiteral("nb2"),
                                         QStringLiteral("anf"), QStringLiteral("squelch")};
         if (!kWhich.contains(which))
             return err(QStringLiteral("slice dsp control must be one of: ")
@@ -8147,6 +8160,21 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             level = parts[2].toInt(&okL);
             if (!okL || level < 0 || level > 100)
                 return err(QStringLiteral("slice dsp level must be an integer 0..100"));
+        }
+        // A FOURTH argument, and only nb2 has one: WDSP's fill mode, 0..4. Left
+        // alone when absent, so a script that only switches blankers does not
+        // silently reset the operator's choice of fill.
+        int fill = -1;
+        if (parts.size() >= 4) {
+            if (which != QLatin1String("nb2"))
+                return err(QStringLiteral("only 'nb2' takes a fill argument"));
+            bool okF = false;
+            fill = parts[3].toInt(&okF);
+            if (!okF || !AetherSDR::isValidNoiseBlankerFill(fill))
+                return err(QStringLiteral(
+                    "slice dsp nb2 fill must be an integer 0..4 "
+                    "(0 zero, 1 sample-hold, 2 mean-hold, 3 hold-sample, "
+                    "4 interpolate)"));
         }
 
         SliceModel* s = nullptr;
@@ -8164,9 +8192,14 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         if (which == QLatin1String("nr")) {
             if (level >= 0) s->setNrLevel(level);
             s->setNr(on);
-        } else if (which == QLatin1String("nb")) {
+        } else if (which == QLatin1String("nb") || which == QLatin1String("nb2")) {
             if (level >= 0) s->setNbLevel(level);
-            s->setNb(on);
+            if (fill >= 0)
+                s->setNbFill(static_cast<AetherSDR::NoiseBlankerFill>(fill));
+            const bool advanced = which == QLatin1String("nb2");
+            s->setNbKind(!on ? AetherSDR::NoiseBlankerKind::Off
+                             : advanced ? AetherSDR::NoiseBlankerKind::Advanced
+                                        : AetherSDR::NoiseBlankerKind::Impulse);
         } else if (which == QLatin1String("anf")) {
             s->setAnf(on);
         } else {

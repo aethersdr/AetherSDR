@@ -487,10 +487,10 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
 
     // ── Noise blanker, ahead of the channel ───────────────────────────────
     //
-    // Inside the allocation-guarded window deliberately: xanb() allocates
-    // nothing today, and if a future WDSP snapshot changes that, this reports
-    // AllocationViolation rather than letting a malloc land on the real-time
-    // path unnoticed.
+    // Inside the allocation-guarded window deliberately: neither xanb() nor
+    // xnob() allocates today, and if a future WDSP snapshot changes that, this
+    // reports AllocationViolation rather than letting a malloc land on the
+    // real-time path unnoticed.
     const float* channelI = inputI.data();
     const float* channelQ = inputQ.data();
     if (m_nbActive.load(std::memory_order_relaxed)) {
@@ -521,8 +521,15 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
                 m_nbInterleaved[2 * k] = static_cast<double>(inputI[k]);
                 m_nbInterleaved[2 * k + 1] = static_cast<double>(inputQ[k]);
             }
-            // In place: ANB reads and writes the same buffer.
-            xanbEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+            // In place: both blankers read and write the same buffer. Which one
+            // is a relaxed load of the kind, inside the gate that already told
+            // us one of them is running — the control path stores both, gate
+            // last, so a kind seen here is a stage that is running.
+            if (m_nbKind.load(std::memory_order_relaxed) == NoiseBlanker::Advanced) {
+                xnobEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+            } else {
+                xanbEXT(m_channelId, m_nbInterleaved.data(), m_nbInterleaved.data());
+            }
             for (std::size_t k = 0; k < n; ++k) {
                 m_nbI[k] = static_cast<float>(m_nbInterleaved[2 * k]);
                 m_nbQ[k] = static_cast<float>(m_nbInterleaved[2 * k + 1]);
@@ -1145,21 +1152,41 @@ void WdspChannel::openNoiseBlanker() noexcept
     m_nbI.assign(m_config.inputBlockSize, 0.0f);
     m_nbQ.assign(m_config.inputBlockSize, 0.0f);
 
-    // Created whether or not the operator has it switched on, so that enabling
-    // it later is a run-flag store rather than an allocation on a live channel.
-    // Times are pihpsdr's (receiver.c create_anbEXT); only the threshold is
-    // ours to move, because only the threshold has a control above the seam.
+    // Created whether or not the operator has one switched on, so that enabling
+    // one later is a run-flag store rather than an allocation on a live channel.
+    // Times are pihpsdr's and deskHPSDR's (receiver.c create_anbEXT /
+    // create_nobEXT, identical in both); only the threshold is ours to move,
+    // because only the threshold has a control above the seam.
+    const int runAnb = m_config.noiseBlanker == NoiseBlanker::Impulse ? 1 : 0;
+    const int runNob = m_config.noiseBlanker == NoiseBlanker::Advanced ? 1 : 0;
+    const double threshold = noiseBlankerThresholdForLevel(m_config.noiseBlankerLevel);
     create_anbEXT(m_channelId,
-                  m_config.noiseBlankerEnabled ? 1 : 0,
+                  runAnb,
                   static_cast<int>(m_config.inputBlockSize),
                   static_cast<double>(m_config.inputSampleRate),
                   0.0001,   // tau       — signal<->zero transition time
                   0.0001,   // hangtime  — hold at zero after the impulse
                   0.0001,   // advtime   — blank this far ahead of it
                   0.05,     // backtau   — averaging time for the trigger level
-                  noiseBlankerThresholdForLevel(m_config.noiseBlankerLevel));
+                  threshold);
+    // Same numbers in the same order, with the fill mode NOB adds. Deliberately
+    // the same: a switch between the two blankers is meant to change what fills
+    // the window, not how the impulse is detected, so the detector's four times
+    // and its trigger stay put.
+    create_nobEXT(m_channelId,
+                  runNob,
+                  static_cast<int>(m_config.noiseBlankerFill),
+                  static_cast<int>(m_config.inputBlockSize),
+                  static_cast<double>(m_config.inputSampleRate),
+                  0.0001,   // slewtime — nobII names tau this way
+                  0.0001,   // hangtime
+                  0.0001,   // advtime
+                  0.05,     // backtau
+                  threshold);
     m_nbOpen = true;
-    m_nbActive.store(m_config.noiseBlankerEnabled, std::memory_order_relaxed);
+    m_nbKind.store(m_config.noiseBlanker, std::memory_order_relaxed);
+    m_nbActive.store(m_config.noiseBlanker != NoiseBlanker::Off,
+                     std::memory_order_relaxed);
 }
 
 void WdspChannel::closeNoiseBlanker() noexcept
@@ -1168,11 +1195,14 @@ void WdspChannel::closeNoiseBlanker() noexcept
         return;
     }
     m_nbActive.store(false, std::memory_order_relaxed);
+    m_nbKind.store(NoiseBlanker::Off, std::memory_order_relaxed);
     destroy_anbEXT(m_channelId);
+    destroy_nobEXT(m_channelId);
     m_nbOpen = false;
 }
 
-bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
+bool WdspChannel::setNoiseBlanker(NoiseBlanker kind, int level,
+                                  NoiseBlankerFill fill) noexcept
 {
     if (m_config.direction != Direction::Receive) {
         return false;
@@ -1180,21 +1210,35 @@ bool WdspChannel::setNoiseBlanker(bool on, int level) noexcept
     if (!beginControlOperation()) {
         return false;
     }
-    m_config.noiseBlankerEnabled = on;
+    m_config.noiseBlanker = kind;
     m_config.noiseBlankerLevel = std::clamp(level, 0, 100);
+    m_config.noiseBlankerFill = fill;
     if (m_nbOpen) {
-        SetEXTANBThreshold(m_channelId,
-                           noiseBlankerThresholdForLevel(m_config.noiseBlankerLevel));
-        if (on) {
-            // Flush BEFORE running. Whatever the delay line holds is a fragment
-            // of the last enabled period, and on the HL2 that can be a
-            // transmit-era gap; playing it out is an audible tick at the exact
-            // moment the operator asked for less noise.
+        const double threshold =
+            noiseBlankerThresholdForLevel(m_config.noiseBlankerLevel);
+        SetEXTANBThreshold(m_channelId, threshold);
+        SetEXTNOBThreshold(m_channelId, threshold);
+        SetEXTNOBMode(m_channelId, static_cast<int>(fill));
+        // Flush BEFORE running, and only the stage being started. Whatever its
+        // delay line holds is a fragment of the last enabled period, and on the
+        // HL2 that can be a transmit-era gap; playing it out is an audible tick
+        // at the exact moment the operator asked for less noise. The stage being
+        // STOPPED is not flushed: it is about to stop being read, and flushing it
+        // would only cost time on the control path.
+        if (kind == NoiseBlanker::Impulse) {
             flush_anbEXT(m_channelId);
+        } else if (kind == NoiseBlanker::Advanced) {
+            flush_nobEXT(m_channelId);
         }
-        SetEXTANBRun(m_channelId, on ? 1 : 0);
+        // Run flags for both, every time, so the two can never both be running:
+        // the stage that is not chosen is explicitly stopped rather than left as
+        // it was.
+        SetEXTANBRun(m_channelId, kind == NoiseBlanker::Impulse ? 1 : 0);
+        SetEXTNOBRun(m_channelId, kind == NoiseBlanker::Advanced ? 1 : 0);
     }
-    m_nbActive.store(on && m_nbOpen, std::memory_order_relaxed);
+    m_nbKind.store(m_nbOpen ? kind : NoiseBlanker::Off, std::memory_order_relaxed);
+    m_nbActive.store(kind != NoiseBlanker::Off && m_nbOpen,
+                     std::memory_order_relaxed);
     endControlOperation();
     return true;
 }

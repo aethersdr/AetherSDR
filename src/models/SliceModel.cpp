@@ -366,10 +366,34 @@ void SliceModel::setQsk(bool on)
 
 void SliceModel::setNb(bool on)
 {
-    m_nb = on;
+    setNbKind(on ? AetherSDR::NoiseBlankerKind::Impulse
+                 : AetherSDR::NoiseBlankerKind::Off);
+}
+
+void SliceModel::setNbKind(AetherSDR::NoiseBlankerKind kind)
+{
+    m_nbKind = kind;
+    // The wire text stays a bool, and stays being sent unconditionally. It is a
+    // Flex command, a Flex has one blanker, and Advanced is not reachable on a
+    // radio whose blanker is its own — so "any blanker" is the whole truth this
+    // command can carry. Deliberately not suppressed for Advanced: a slice that
+    // somehow got there on a Flex should have its blanker ON rather than silently
+    // left off.
+    const bool on = kind != AetherSDR::NoiseBlankerKind::Off;
     sendCommand(QString("slice set %1 nb=%2").arg(m_id).arg(on ? 1 : 0));
-    emit noiseBlankerCommandIssued(on, m_nbLevel);
+    emit noiseBlankerCommandIssued(kind, m_nbLevel, m_nbFill);
     emit nbChanged(on);
+    emit nbKindChanged(kind);
+}
+
+void SliceModel::setNbFill(AetherSDR::NoiseBlankerFill fill)
+{
+    if (m_nbFill == fill) return;
+    m_nbFill = fill;
+    // No wire text: there is no Flex command for it. This is a parameter of a
+    // blanker that only exists on this host.
+    emit noiseBlankerCommandIssued(m_nbKind, m_nbLevel, fill);
+    emit nbFillChanged(fill);
 }
 
 void SliceModel::setNr(bool on)
@@ -466,7 +490,7 @@ void SliceModel::setNbLevel(int v)
     if (m_nbLevel == v) return;
     m_nbLevel = v;
     sendCommand(QString("slice set %1 nb_level=%2").arg(m_id).arg(v));
-    emit noiseBlankerCommandIssued(m_nb, v);
+    emit noiseBlankerCommandIssued(m_nbKind, v, m_nbFill);
     emit nbLevelChanged(v);
 }
 
@@ -1478,9 +1502,25 @@ void SliceModel::applyChanges(const SliceDelta& d)
         m_qsk = *d.qsk;
         emit qskChanged(m_qsk);
     }
-    if (d.nb.has_value()) {
-        m_nb = *d.nb;
-        emit nbChanged(m_nb);
+    if (d.nbFill.has_value()) {
+        m_nbFill = *d.nbFill;
+        emit nbFillChanged(m_nbFill);
+    }
+    if (d.nbKind.has_value() || d.nb.has_value()) {
+        // The KIND wins where a backend sent one: it knows which blanker is
+        // running. A bare `nb` is a radio's echo, and a bool is all a radio-side
+        // blanker has to say — so it must not clobber a host kind with a
+        // downgrade. "Blanker on" is still true of a slice running Advanced, so
+        // only the Off<->on transitions are taken from it.
+        if (d.nbKind.has_value()) {
+            m_nbKind = *d.nbKind;
+        } else if (!*d.nb) {
+            m_nbKind = AetherSDR::NoiseBlankerKind::Off;
+        } else if (m_nbKind == AetherSDR::NoiseBlankerKind::Off) {
+            m_nbKind = AetherSDR::NoiseBlankerKind::Impulse;
+        }
+        emit nbChanged(nbOn());
+        emit nbKindChanged(m_nbKind);
     }
     if (d.nr.has_value()) {
         m_nr = *d.nr;

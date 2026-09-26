@@ -1,6 +1,7 @@
 #include "core/backends/anan/AnanBackend.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/AnanDroopDefaults.h"
+#include "core/backends/WdspNoiseBlanker.h"
 #include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
 
@@ -664,8 +665,9 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     m_pendingDspConfig.maximumAgcGainDb = 60.0;
     // This backend retains the NB request across reconnects. emitSliceState()
     // also supplies that pair if a different radio requires a fresh slice.
-    m_pendingDspConfig.noiseBlankerEnabled = m_nbOn;
+    m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
     m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
+    m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
 
     ++m_connectGeneration;
     beginDspSetup();
@@ -918,14 +920,18 @@ void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     emitSliceState();
 }
 
-void AnanBackend::setSliceNoiseBlanker(int sliceId, bool on, int level)
+void AnanBackend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                                       int level, AetherSDR::NoiseBlankerFill fill)
 {
     Q_UNUSED(sliceId);   // one slice in this phase
-    m_nbOn = on;
+    m_nbKind = kind;
     m_nbLevel = std::clamp(level, 0, 100);
+    m_nbFill = fill;
     if (m_dsp) {
         QMetaObject::invokeMethod(m_dsp, "setNoiseBlanker", Qt::QueuedConnection,
-            Q_ARG(bool, m_nbOn), Q_ARG(int, m_nbLevel));
+            Q_ARG(WdspChannel::NoiseBlanker, AetherSDR::toWdsp(m_nbKind)),
+            Q_ARG(int, m_nbLevel),
+            Q_ARG(WdspChannel::NoiseBlankerFill, AetherSDR::toWdsp(m_nbFill)));
     }
 }
 
@@ -1065,8 +1071,9 @@ void AnanBackend::beginRateChange(int newRateKsps)
     m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
     m_pendingDspConfig.agcMode = m_agcMode;
     m_pendingDspConfig.maximumAgcGainDb = m_agcCeilingDb;
-    m_pendingDspConfig.noiseBlankerEnabled = m_nbOn;
+    m_pendingDspConfig.noiseBlanker = AetherSDR::toWdsp(m_nbKind);
     m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
+    m_pendingDspConfig.noiseBlankerFill = AetherSDR::toWdsp(m_nbFill);
 
     m_rateChanging = true;
     ++m_connectGeneration;   // orphans any in-flight prior connect/reconfigure/rebuild
@@ -1376,10 +1383,17 @@ void AnanBackend::invokeExtension(const QString& ns, const QString& verb,
             const QVariantMap receiver{
                 {QStringLiteral("ddc"), 0},
                 {QStringLiteral("panId"), kPanId},
-                {QStringLiteral("on"), applied.on},
+                // `on` stays, and stays first: it is what every existing script
+                // reads. `kind` is the same fact with the second blanker in it.
+                {QStringLiteral("on"), applied.on()},
+                {QStringLiteral("kind"), static_cast<int>(applied.kind)},
                 {QStringLiteral("level"), applied.level},
-                {QStringLiteral("requestedOn"), m_nbOn},
+                {QStringLiteral("fill"), static_cast<int>(applied.fill)},
+                {QStringLiteral("requestedOn"),
+                 m_nbKind != AetherSDR::NoiseBlankerKind::Off},
+                {QStringLiteral("requestedKind"), static_cast<int>(m_nbKind)},
                 {QStringLiteral("requestedLevel"), m_nbLevel},
+                {QStringLiteral("requestedFill"), static_cast<int>(m_nbFill)},
                 {QStringLiteral("hasChain"), applied.hasChain},
                 {QStringLiteral("threshold"),
                  WdspChannel::noiseBlankerThresholdForLevel(applied.level)},
@@ -1479,8 +1493,10 @@ void AnanBackend::emitSliceState()
     d.active = true;
     // A different radio replaces the slice model but retains this backend.
     // Publish the retained NB request so that fresh model agrees with the DSP.
-    d.nb = m_nbOn;
+    d.nb = m_nbKind != AetherSDR::NoiseBlankerKind::Off;
+    d.nbKind = m_nbKind;
     d.nbLevel = m_nbLevel;
+    d.nbFill = m_nbFill;
     // Without this, RadioModel::sliceChanged's handler never assigns the
     // slice a panId (SliceDelta::panId is std::optional and SliceModel::
     // applyChanges() only touches it when set) -- the slice materialised by

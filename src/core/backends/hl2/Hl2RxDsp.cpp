@@ -97,7 +97,7 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     // in effect to what this function did as one block before the split — the
     // split exists so a live rate change can put the two halves on DIFFERENT
     // threads and keep the old channel producing audio in between.
-    RebuildResult result = buildChannel(config, m_nbOn, m_nbLevel);
+    RebuildResult result = buildChannel(config, m_nbKind, m_nbLevel, m_nbFill);
     if (!result.channel) {
         if (error)
             *error = result.error;
@@ -107,9 +107,9 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     return true;
 }
 
-Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(const Config& config,
-                                               bool noiseBlankerEnabled,
-                                               int noiseBlankerLevel)
+Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(
+    const Config& config, WdspChannel::NoiseBlanker noiseBlanker,
+    int noiseBlankerLevel, WdspChannel::NoiseBlankerFill noiseBlankerFill)
 {
     RebuildResult result;
 
@@ -155,8 +155,9 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(const Config& config,
     // stage is not re-armed (and therefore briefly deaf to impulses) on a rate
     // change. Config deliberately does not carry the blanker — it survives a
     // rebuild in its own members — so it is passed in; see the header.
-    wc.noiseBlankerEnabled = noiseBlankerEnabled;
+    wc.noiseBlanker = noiseBlanker;
     wc.noiseBlankerLevel = noiseBlankerLevel;
+    wc.noiseBlankerFill = noiseBlankerFill;
     // Filter length. WDSP's default of 2048 is fine for a passband edge, but it
     // also sets the NARROWEST POSSIBLE NOTCH — min_notch_width is
     // 1600 / (nc/256) Hz at 48 kHz, so 2048 taps floors a notch at 200 Hz and
@@ -177,8 +178,9 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(const Config& config,
         return result;
     result.outputBlockSize = channel->outputBlockSize();
     result.built = config;
-    result.builtNbOn = noiseBlankerEnabled;
+    result.builtNbKind = noiseBlanker;
     result.builtNbLevel = noiseBlankerLevel;
+    result.builtNbFill = noiseBlankerFill;
     // Constructed HERE, not at install, because it plans an FFT and that is the
     // other half of what makes a rebuild slow. Hl2Spectrum's constructor takes
     // WdspChannel::fftwSetupLock() (see its own comment), which is the same
@@ -324,16 +326,18 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     m_channel->setNoiseBlankerHold(m_audioMuted);
     // The channel was OPENED with the blanker buildChannel() was handed, so
     // that pair — not the current request — is what has definitively landed.
-    m_nbAppliedOn.store(result.builtNbOn, std::memory_order_relaxed);
+    m_nbAppliedKind.store(result.builtNbKind, std::memory_order_relaxed);
     m_nbAppliedLevel.store(result.builtNbLevel, std::memory_order_relaxed);
+    m_nbAppliedFill.store(result.builtNbFill, std::memory_order_relaxed);
     // AND THEN THE CURRENT REQUEST, if the operator moved the NB button while a
     // background build was running. setNoiseBlanker() deliberately does not push
     // at the channel during a rebuild (it would block this thread on WDSP's
     // setup mutex), so without this the swap would come back with the blanker
     // the operator had a rebuild ago and the readback would agree with it.
     // Goes through setNoiseBlanker() so the refusal handling stays in one place.
-    if (m_nbOn != result.builtNbOn || m_nbLevel != result.builtNbLevel)
-        setNoiseBlanker(m_nbOn, m_nbLevel);
+    if (m_nbKind != result.builtNbKind || m_nbLevel != result.builtNbLevel
+        || m_nbFill != result.builtNbFill)
+        setNoiseBlanker(m_nbKind, m_nbLevel, m_nbFill);
     // The ADC-peak reading belongs to the channel that produced it. A rebuild
     // is a NEW channel at a possibly different rate, so carrying the old value
     // across would answer healthSnapshot() with a level measured through a
@@ -386,10 +390,12 @@ void Hl2RxDsp::armMeterSettle()
                    kWdspDspSampleRateHz);
 }
 
-void Hl2RxDsp::setNoiseBlanker(bool on, int level)
+void Hl2RxDsp::setNoiseBlanker(WdspChannel::NoiseBlanker kind, int level,
+                               WdspChannel::NoiseBlankerFill fill)
 {
-    m_nbOn = on;
+    m_nbKind = kind;
     m_nbLevel = std::clamp(level, 0, 100);
+    m_nbFill = fill;
     if (!canPushToChannel())
         return;   // no chain yet, or a rebuild holds the setup mutex; the
                   // request is held and the swap opens/re-applies with it
@@ -398,14 +404,16 @@ void Hl2RxDsp::setNoiseBlanker(bool on, int level)
     // blocking. Swallowing that would leave this object — and therefore the NB
     // button and the bridge readback — claiming a blanker the channel is not
     // running, which is the one failure this whole feature is built to avoid.
-    if (!m_channel->setNoiseBlanker(m_nbOn, m_nbLevel)) {
-        qCWarning(lcHl2RxDsp) << "noise blanker" << (m_nbOn ? "on" : "off") << "level"
-                         << m_nbLevel << "refused by the channel; the request is "
+    if (!m_channel->setNoiseBlanker(m_nbKind, m_nbLevel, m_nbFill)) {
+        qCWarning(lcHl2RxDsp) << "noise blanker kind" << static_cast<int>(m_nbKind)
+                         << "level" << m_nbLevel << "fill" << static_cast<int>(m_nbFill)
+                         << "refused by the channel; the request is "
                             "held and re-applied on the next configure()";
         return;
     }
-    m_nbAppliedOn.store(m_nbOn, std::memory_order_relaxed);
+    m_nbAppliedKind.store(m_nbKind, std::memory_order_relaxed);
     m_nbAppliedLevel.store(m_nbLevel, std::memory_order_relaxed);
+    m_nbAppliedFill.store(m_nbFill, std::memory_order_relaxed);
 }
 
 void Hl2RxDsp::setMode(WdspChannel::Mode mode)

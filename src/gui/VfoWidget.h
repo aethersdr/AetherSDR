@@ -717,6 +717,14 @@ private:
     // Pick a sensible initial target from the current slice's enable
     // flags; called when m_slice is set and on mode-driven re-visibility.
     void refreshDspLevelTarget();
+    // NB2's fill row. Visible only while NB2 is the running blanker; see
+    // refreshNbControls().
+    QWidget*   m_nbFillContainer{nullptr};
+    QComboBox* m_nbFillCombo{nullptr};
+    // Button text, visibility of the fill row and the combo's index, from
+    // whatever the slice now says. One place, called from the click handler, the
+    // model signals and the slice-switch sync, so the three cannot disagree.
+    void refreshNbControls();
     QWidget* m_apfContainer{nullptr};
     QSlider* m_apfSlider{nullptr};
     QLabel*  m_apfValueLbl{nullptr};
