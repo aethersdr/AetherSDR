@@ -5,6 +5,7 @@
 #include <QHostAddress>
 #include <QTimer>
 #include <QList>
+#include <QSet>
 #include <QObject>
 
 #include <complex>
@@ -78,6 +79,37 @@ public:
         // would say so. See setSampleRate()'s standing comment: a field that
         // shares a rebuild with another has to be carried, not re-defaulted.
         bool bandscope = false;
+
+        // ---- hardware-variant options (Hl2HardwareOptions decides these) ----
+        //
+        // THE CONFIG-REGISTER PAIR RIDES HERE FOR THE SAME MEASURED REASON
+        // ocFilterByte and bandscope do: setSampleRate() and setReceiverCount()
+        // REBUILD the config bank from Params, so a field that shares that
+        // register and is not carried here gets silently dropped the next time
+        // an unrelated control changes. For the dither bit that would mean a
+        // SquareSDR 2's loudspeaker switching itself off when the operator
+        // changed the panadapter span.
+        bool ditherBit = false;
+        bool randomBit = false;
+
+        // Whether this radio has a local audio codec (HL2+ or SquareSDR 2), and
+        // so whether the EP2 audio slot may carry samples at all. FALSE is not
+        // "no audio", it is "that slot is EADDR" — see ep2WriteTxAudio().
+        bool hasCodec = false;
+
+        // Whether the VersaClock should be locked to an external 10 MHz
+        // reference at CL1. Carried here so start() can re-send the sequence:
+        // the radio boots on its crystal, so every connect is a change.
+        bool cl1RefClock = false;
+
+        // WHICH radio this session is for, by serial. Carried for exactly one
+        // reason: the CL1 latch below is per-radio and this object is not. A
+        // MetisClient is built once in Hl2Backend's constructor and destroyed
+        // in its destructor, so it outlives every connect AND every swap
+        // between two HL2s — a latch without an identity on it would follow
+        // the operator from one radio to the next. Empty when the serial is
+        // not known yet, which the latch treats as "do not act".
+        QString radioSerial;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -249,6 +281,37 @@ public:
     // recorded from this declaration, and `std::uint8_t` does not normalize to
     // the same string as `unsigned char`.
     Q_INVOKABLE void setBandFilter(int ocFilterByte);
+
+    // The config register's dither and random bits. ONE setter for the pair
+    // because they share C3 and a setter per bit would have to read the other
+    // one back out of m_ccConfig to avoid clearing it.
+    //
+    // What the dither bit MEANS is not decided here — see kConfigDither and
+    // Hl2HardwareOptions::ditherBitOnWire(). This level only puts it on the
+    // wire and keeps it across a register rebuild.
+    Q_INVOKABLE void setDitherRandomBits(bool dither, bool random);
+
+    // Declare whether this radio has a local audio codec. Gates the EP2 audio
+    // slot: false leaves it at zero, which is what a bare HL2's EADDR requires.
+    // Turning it off also drops whatever speaker audio was queued, because that
+    // audio has nowhere to go and must not leak into EADDR on the next frame.
+    Q_INVOKABLE void setLocalCodec(bool present);
+
+    // Stereo speaker audio for a codec radio: interleaved int16 L,R at 48 kHz,
+    // the EP2 rate. Ignored outright when no codec is declared. Bounded — see
+    // kSpeakerAudioCapSamples — because this is fed from the audio thread and a
+    // stalled EP2 pacer must not grow a queue without limit.
+    Q_INVOKABLE void submitSpeakerAudio(const QByteArray& interleavedInt16);
+
+    // Lock the VersaClock to an external 10 MHz reference at CL1, or return it
+    // to the onboard crystal. Queues the twenty-four-bank reprogramming
+    // sequence; see versaClockCl1Banks().
+    Q_INVOKABLE void setCl1RefClock(bool externalRef);
+
+    // Raise or clear the gateware's ATU tune request (0x09[20]). Rides the
+    // drive-level bank, so this restates the current drive rather than being a
+    // register of its own.
+    Q_INVOKABLE void setAtuTuneRequest(bool request);
     // Push the TRANSMIT frequency to the HL2 IO Board (I2C2 chip 0x1D) so an
     // attached amplifier, antenna relay or transverter follows the band.
     //
@@ -917,7 +980,73 @@ private:
     // array of banks rather than one bank with a varying payload.
     std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
+    // Queue (or re-queue) the twenty-four VersaClock banks, and remove any
+    // still waiting. Private because the ORDER and the replace-don't-append
+    // rule are part of the contract and a caller outside this class cannot
+    // honour them; setCl1RefClock() is the way in.
+    void queueCl1Sequence(bool externalRef);
+    void dropQueuedCl1Banks();
+    // True for a bank this class queued as part of a VersaClock sequence. One
+    // predicate, because three sites ask the question — the drop, the drain and
+    // the send confirmation — and a fourth spelling of it is how they diverge.
+    [[nodiscard]] static bool isCl1Bank(const Cc& bank) noexcept;
+    // THE RECOVERY RULE, named once. True when start() must send the OFF table
+    // for this radio even though the setting is clear: this process switched it
+    // on and never confirmed switching it back. start() reads it, and it is the
+    // property hl2_cl1_reference_test asserts — the condition is the whole of
+    // the fix for #5923's first blocker, so it is worth a name rather than an
+    // expression buried in a 200-line function.
+    [[nodiscard]] bool cl1RecoveryPending() const noexcept
+    {
+        return !m_params.radioSerial.isEmpty()
+            && m_cl1MaybeOn.contains(m_params.radioSerial);
+    }
+
+    // EVERY RADIO THIS PROCESS MAY HAVE LEFT ON CL1, by serial. The only record
+    // that a still-powered radio is running from an external reference the
+    // operator has since cleared; nothing on the wire can be asked. Survives
+    // stop() and start() on purpose.
+    //
+    // A SET AND NOT ONE SERIAL. With a single QString, switching a SECOND radio
+    // on overwrote the first one's record, and the first radio then never got
+    // its off table — it stayed on CL1 with nothing left that knew (#5923
+    // review). This object outlives a radio swap, so the record has to as well.
+    //
+    // ADDED PESSIMISTICALLY, at queue time, because a sequence interrupted
+    // half-way may have switched the part already. REMOVED ONLY ON PROOF: see
+    // m_cl1BanksUnsent.
+    QSet<QString> m_cl1MaybeOn;
+    // The sequence currently draining out of m_oneShot: whose it is, whether it
+    // is the OFF table, and how many of its banks have not yet been CONFIRMED
+    // SENT. Only when the last one is confirmed does its radio leave
+    // m_cl1MaybeOn.
+    //
+    // WHY CONFIRMED AND NOT MERELY QUEUED. queueCl1Sequence() used to clear the
+    // record the instant the OFF table was queued, before any of its twenty-four
+    // writes reached the transport. A disconnect in that window had stop() drop
+    // the remainder AND left start() with nothing to recover from, so a radio
+    // that was still powered stayed on the external reference for good. Counting
+    // confirmations instead means an interrupted sequence simply never finishes
+    // its countdown, the record stands, and the next connect re-sends the whole
+    // table — which is the behaviour stop()'s own comment already claimed.
+    QString m_cl1SequenceRadio;
+    bool    m_cl1SequenceIsOff = false;
+    int     m_cl1BanksUnsent = 0;
+    // Mirrors m_requestOnBuiltPacket: the packet just built carried a CL1 bank,
+    // and onControlPacketSent() decides whether it counts.
+    bool    m_cl1BankOnBuiltPacket = false;
+
     Cc m_ccTxDrive{};
+    // The ATU tune request's standing state, held because it shares 0x09 with
+    // the drive level: setTxDriveLevel() has to re-assert it or a drive change
+    // mid-tune would drop the request.
+    bool m_atuTune = false;
+    // Speaker audio awaiting the EP2 pacer, interleaved L,R at 48 kHz.
+    std::deque<std::int16_t> m_speakerAudio;
+    // ~250 ms of stereo at 48 kHz. Deep enough to ride out the audio thread's
+    // block jitter, shallow enough that a stall is heard as a gap rather than
+    // as a quarter-second of delay that never recovers.
+    static constexpr std::size_t kSpeakerAudioCapSamples = 48000 / 4 * 2;
 
     bool m_txAllowed = false;   // gate; see enableTransmit()
     std::deque<std::complex<float>> m_txIq;   // pending transmit samples

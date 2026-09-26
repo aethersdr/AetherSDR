@@ -16,6 +16,7 @@
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/Hl2CapabilityAnnouncer.h"
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "core/backends/hl2/Hl2HardwareOptions.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
 #include "core/backends/hl2/Hl2TelemetryCadence.h"  // Hl2LinkState (#15)
 #include "core/backends/hl2/Hl2TelemetryService.h"  // borrowed, owned by RadioModel
@@ -600,6 +601,12 @@ private:
     // Clamp, persist, adopt, re-push — the single path for a calibration change
     // whoever asked for it (setup dialog, automation bridge, connect).
     void applyFreqCalPpb(int ppb, bool persist);
+    // Enforce "CL1 on means zero manual ppb" — §4 of
+    // docs/architecture/hl2-frequency-calibration.md. Returns true when it had to
+    // change something, so a live caller knows to re-push frequencies. Called
+    // from applyHardwareOptions() AND from connectRadio(), because the two
+    // documents are persisted separately and can disagree on disk.
+    bool normalizeCl1Calibration(const char* why);
 
     // The operator's calibration for THIS radio and the derived scale applied to
     // every commanded frequency. 0 / 1.0 is "uncalibrated" — the behaviour every
@@ -610,6 +617,30 @@ private:
     // the calibration loads and stores per radio rather than globally: it
     // describes one physical crystal. Empty until connectRadio().
     QString m_radioSerial;
+
+    // ---- which HL2 variant this actually is ----
+    //
+    // Loaded per radio at connect, from the same scope and for the same reason
+    // as the calibration above: a bare HL2, an HL2+ and a SquareSDR 2 are
+    // indistinguishable on the wire, and the dither bit means three different
+    // things across them. See Hl2HardwareOptions.
+    Hl2HardwareOptions m_hw;
+    // Adopt a new set: persist (or not), push every field that changed to the
+    // wire, and re-evaluate the band filter. The single path for a hardware
+    // change whoever asked for it (setup dialog, automation bridge, connect).
+    void applyHardwareOptions(const Hl2HardwareOptions& next, bool persist);
+    // Raise or clear the gateware ATU request, honouring m_hw.atuGateware.
+    // Called from the same two places that start and end a TUNE.
+    void applyAtuTuneRequest(bool tuning);
+    // Hand the mixed speaker feed to the radio's own codec, resampled to the
+    // EP2 rate. No-op unless this radio has a codec.
+    void forwardSpeakerAudioToCodec(const std::vector<float>& mixed);
+    // Carry for the 24 kHz -> 48 kHz doubling in forwardSpeakerAudioToCodec():
+    // the last stereo frame of the previous block, so the interpolated sample
+    // that straddles a block boundary is interpolated rather than repeated.
+    float m_codecLastL = 0.0f;
+    float m_codecLastR = 0.0f;
+    bool m_codecHavePrev = false;
 
     // ---- per-receiver state ----
     //

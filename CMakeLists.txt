@@ -849,6 +849,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2TelemetryService.cpp # owns the poller ABOVE the backend (#15)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
+    src/core/backends/hl2/Hl2HardwareOptions.cpp # which HL2 variant: codec, dither bit, filter board, CL1, ATU
     src/core/backends/anan/P2Protocol.cpp    # aetherd ANAN P2 Phase 1b (openHPSDR Protocol 2 wire codec)
     src/core/backends/anan/P2Client.cpp      # aetherd ANAN P2 Phase 1b (UDP wire + DDC0 ingest)
     src/core/backends/anan/AnanDiscovery.cpp # aetherd ANAN P2 Phase 1b (P2 discovery -> picker)

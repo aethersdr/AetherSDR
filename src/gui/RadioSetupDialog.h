@@ -132,6 +132,24 @@ private:
     // Mirrors buildCalibrationTab()'s own shape (gated on the capability, not
     // the family; a m_droopReseed lambda re-synced the same two ways).
     QWidget* buildDroopCalibrationTab();
+    // Which Hermes-Lite 2 variant is on the other end: local audio codec, the
+    // dither bit's three incompatible meanings, the companion filter board, the
+    // CL1 reference clock and the gateware ATU. Protocol 1 exposes none of it,
+    // so the operator is the only source — see Hl2HardwareOptions.
+    //
+    // Gated on the backend's DECLARED extension namespace, like the two pages
+    // above are gated on declared capabilities. What no backend can answer is
+    // the value — "does this radio have an AK4951 companion board" — which is
+    // why these are settings; that is a different question from which backend
+    // answers the verbs, and the backend states the latter itself. Every
+    // control writes through the hl2 extension namespace, which refuses
+    // anything else.
+    QWidget* buildHl2HardwareTab();
+    // Whether the connected backend declares the "hl2" extension namespace —
+    // i.e. whether anything will answer the hw.get / hw.set verbs this page is
+    // built on. NOT a family-string check: #5554 bars new ones, and the name a
+    // backend carries is a different question from the verbs it answers.
+    bool declaresHl2Extension() const;
     QWidget* buildAudioTab();
     QWidget* buildFiltersTab();
     QWidget* buildXvtrTab();
@@ -273,6 +291,21 @@ private:
     // commit that stale number to whichever radio is connected now.
     std::function<void()>     m_calibrationReseed;
     int                       m_droopCalibrationPageIndex{-1};
+    int                       m_hl2HardwarePageIndex{-1};
+    // Same reason as m_calibrationReseed: the page is built once per process
+    // and the dialog is a persistent singleton, so a different HL2 connected
+    // later would otherwise be shown — and written — with the first one's
+    // hardware options.
+    std::function<void()>     m_hl2HardwareReseed;
+    // Whether the connected HL2 is locked to an external 10 MHz reference at
+    // CL1. Cached from the HL2 Hardware page's hw.get reply because the control
+    // it gates — the manual ppb spin box — lives on the CALIBRATION page, which
+    // reads its own value straight out of the settings scope and has no reason
+    // to issue an hl2 extension call of its own. §4 of
+    // docs/architecture/hl2-frequency-calibration.md requires that control to
+    // be disabled under a locked reference; the backend refuses the verb too,
+    // so a stale cache dims the wrong thing at worst and never writes one.
+    bool                      m_hl2ExternalRefLocked = false;
     // Same reason as m_calibrationReseed above, for the Droop Correction page.
     std::function<void()>     m_droopReseed;
     // Re-fills the Audio page's PC Input/Output combos from a LIVE device
