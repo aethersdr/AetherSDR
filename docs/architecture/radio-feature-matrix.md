@@ -16,6 +16,19 @@ committed record**, machine-readable half in
 that enforces *a* change, not *the right* change, and a counter can be paid off
 with a comment. A diff cannot.
 
+**A hidden cell is a record of today's state, not a verdict that it is right.**
+The #5262 M3a ruling
+([`theme-style-guide.md` §4a](../style/theme-style-guide.md#4a-three-state-controls))
+is that *individual controls are never shown or hidden per radio*: a control
+this radio lacks stays on screen, dimmed, with its reason announced to a screen
+reader, and hiding survives only for a whole applet.
+[`radio-capabilities-map.md`](radio-capabilities-map.md) records that *"the
+migration of the remaining hide sites is M3b"*. So this register splits the
+hidden cells in two — `H`, an applet hidden wholesale, which the ruling
+permits, and `M`, a single control gated away, which is migration still owed —
+and every one of the 89 hidden cells today is `M`. See
+[Hidden cells: `H` and `M`](#hidden-cells-h-and-m).
+
 ---
 
 ## Two tables, two derivations — and the test that decides which
@@ -57,7 +70,8 @@ instead of being scored.
 | `D` | **dead** — the control exists but the path terminates (e.g. the base is `Q_UNUSED`) |
 | `P` | **phantom** — reports success without the radio moving; reads back cached state. Two grounds, and they are different repairs — see below |
 | `R` | **refuses visibly** — the user is told no |
-| `H` | **hidden** — the GUI gates the control away on a capability |
+| `H` | **hidden with its applet** — the whole applet is hidden on a capability, which #5262 M3a permits. No cell carries it today |
+| `M` | **gated per control, pending M3b** — the GUI hides one control, disables it without an announced reason, or relabels it, where §4a requires it to stay visible and dim with a reason |
 | `U` | **unverified** — the generator could not decide |
 | `V` | **verified on real hardware** — hand-added, and it carries a citation to a run |
 | `∅` | on a row: **no capability field exists for this at all**, for any backend |
@@ -75,7 +89,8 @@ discriminator is PROVENANCE — not the value of any field.** The question is
   default offered the control on its behalf: that is a gap in the default, one
   assignment repairs it, and the cell is **`P`**.
 - It asked for the control to be **off**, or inherited an off default: the
-  operator sees nothing either way, and the cell is **`H`**.
+  operator is not offered it either way, and the cell is **`H`** or **`M`**
+  by the granularity of the gate (see below) — not by provenance.
 
 Reading a field's *value* as the discriminator gets the FM rows right by
 accident and will be wrong on the next backend that writes a permissive value
@@ -86,7 +101,7 @@ defaults to `true` and the Demo backend never mentions it, so it never asked,
 and the repeater rows one line below are `P`. Two adjacent rows, opposite
 verdicts, and only provenance separates them. The HL2 held both halves of this
 example until it declared `Hidden` and `false` outright; all six of its FM rows
-are now `H`.
+are now `M`.
 
 The generator enforces exactly this: `PERMISSIVE` is reachable only from
 `DEFAULT_TRUE`, which is returned only when `capabilities()` carries no
@@ -97,8 +112,9 @@ a `D` into an `R` removes the entire operator harm — they stop being lied to �
 at a fraction of the cost of turning it into a `W`. A vocabulary that scored
 them alike would make the cheap fix invisible.
 
-**`H` is a good cell, not a gap.** On a receive-only radio a hidden transmit
-control is the app being correct. Read `H` as *done*.
+**`H` and `M` are both hidden, and neither means *done*.** One is the design
+the #5262 M3a ruling keeps and the other is migration still owed; see
+[Hidden cells: `H` and `M`](#hidden-cells-h-and-m) below.
 
 **`W` does not mean the radio obeyed.** It means the call reaches an
 implementation. Reachability is necessary and not sufficient; only `V` claims
@@ -145,6 +161,59 @@ so `feature-matrix-drift` fires beside the alt-path error.
 run until the `alt_path` entry is deleted from the sidecar and the `*` dropped
 from that cell here.
 
+### Hidden cells: `H` and `M`
+
+**Neither code means *done*.** Both say the operator is not offered a working
+control on this radio. They differ in whether the way that is done is the
+design or a debt.
+
+The ruling is §4a of
+[`theme-style-guide.md`](../style/theme-style-guide.md#4a-three-state-controls):
+*"Individual controls are never shown or hidden per radio. Every control renders
+in one of three states, and hiding exists only at applet granularity"* — and a
+control in the unavailable state *"must carry a reason, and the reason must
+reach a screen reader"*, because *"a hidden control tells a blind operator
+nothing at all"*. [`radio-capabilities-map.md`](radio-capabilities-map.md)
+places what is left: *"The migration of the remaining hide sites is M3b"*,
+scheduled after M4.
+
+- **`H`** — the gate hides a **whole applet**. That is the one form of hiding
+  the ruling keeps, and it is the design, not a debt. **No cell in this
+  register is `H` today**: its rows are single controls, and none of them is
+  hidden by hiding the applet it sits in.
+- **`M`** — the gate acts on **one control**, and the control is not in the
+  three-state form §4a asks for. Every hidden cell here is `M`: 89 of 366.
+
+The generator decides only *that* a control is gated away. *How* is a fact
+about widgets, which a parser cannot settle, so each record with a hidden cell
+carries an authored `hide` block in the JSON sidecar: the granularity, the
+observed form, the file and symbol of the gate, and one line of why. The
+checker holds it to the code: every hidden cell needs one, the cell code must
+match its granularity, and every named site must still contain its symbol
+outside a comment. The observed forms today:
+
+| form | cells | what the operator gets |
+|---|--:|---|
+| `hidden` | 60 | the control is removed with `setVisible(false)` or left out of a menu — NR/NB/ANF/MN, preamp and attenuator, the +TNF entry, TX filter cuts, the CWX status-bar toggle, the FM tone combos |
+| `disabled` | 10 | the control stays and is disabled, with the reason in a tooltip at most, never in `accessibleDescription` — AGC-T, ATU, repeater offset and shift |
+| `relabelled` | 11 | the same widget stands for a different control on this radio — the filter row carries the operator's widths instead of radio presets; the XFC button wears REV |
+| `not-closed` | 8 | the generator derives hidden, and the control is still on screen — the RX antenna selector (defect 7) and the status-bar TNF toggle |
+
+**Where the classification was not clear, the cell is `M`, and the record says
+why.** `relabelled` and `not-closed` are not forms §4a names, and
+`rx/filter-preset`, `tx/freq-check`, `rx/antenna` and `dsp/notch-enable` say
+so in their notes. Marking them `H` would claim a compliance the ruling does
+not state. `not-closed` also means the generator's "hidden" is the
+capability's verdict, not what the operator sees. Those two rows are left
+as derived and flagged, not rescored by hand.
+
+**Receive-only radios are not an exception.** It is tempting to read a transmit
+control missing from an RTL dongle as the app being correct, and on the question
+*should this radio be offered a working ATU* it is. But §4a names no
+exception for transmit: a blind operator learns nothing from a hidden CWX
+toggle, and a disabled ATU button whose reason is only in a tooltip tells them
+no more. Those cells are `M` too.
+
 ---
 
 ## The GUI matrix
@@ -173,16 +242,16 @@ and scoring them per radio would be wrong.
 | `rx/frequency` | W | W | V | W | W | W | VFO tuning — dial, keypad, band buttons, click-tune |
 | `rx/mode` | W | W | W | W | W | W | mode selection (USB/LSB/CW/AM/FM/DIGU/…) |
 | `rx/filter` | W* | W | V | W | P | W | receive filter width / passband edges |
-| `rx/filter-preset` | H | H | H | H | H | H | stored RX filter preset (FIL1/FIL2/FIL3) |
+| `rx/filter-preset` | M | M | M | M | M | M | stored RX filter preset (FIL1/FIL2/FIL3) |
 | `rx/agc` | W | W | W | W | D | W | AGC mode — off / slow / med / fast |
-| `rx/agc-threshold` | W* | H | W | W | H | W | AGC-T threshold slider |
+| `rx/agc-threshold` | W* | M | W | W | M | W | AGC-T threshold slider |
 | `rx/pan-center` | W* | W | W | W | W | W | drag the spectrum or waterfall (pan centre) |
 | `rx/pan-bandwidth` | W* | W | V | W | W | D | zoom / span |
 | `rx/pan-framerate` | W* | D | W | W | W | D | waterfall / spectrum frame rate |
 | `rx/rf-gain` | W* | W | V | W | W | D | RF gain slider (ANT panel) |
-| `rx/preamp` | H | W | H | H | H | H | preamp step (named positions) |
-| `rx/attenuator` | H | W | H | H | H | H | attenuator step |
-| `rx/antenna` | W* | W | H | H | H | H | receive antenna selection |
+| `rx/preamp` | M | W | M | M | M | M | preamp step (named positions) |
+| `rx/attenuator` | M | W | M | M | M | M | attenuator step |
+| `rx/antenna` | W* | W | M | M | M | M | receive antenna selection |
 | `rx/audio-mute` | W* | D | W | D | W | D | slice mute |
 | `rx/audio-gain` | W* | W | W | D | W | D | slice audio gain |
 | `rx/audio-pan` | W* | D | W | D | W | D | slice audio pan |
@@ -196,14 +265,14 @@ and scoring them per radio would be wrong.
 
 | feature | Flex | Icom | HL2 | ANAN | RTL | Demo | control |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|---|
-| `dsp/noise-reduction` | W* | W | H | H | H | H | NR button and level |
-| `dsp/noise-blanker` | W* | W | W | W | H | H | NB button and level |
-| `dsp/auto-notch` | W* | W | H | H | H | H | ANF button |
-| `dsp/manual-notch` | H | W | H | H | H | H | MN per-slice manual notch |
-| `dsp/notch-create` | W | H | W | H | H | H | tracking notch (TNF): create |
-| `dsp/notch-edit` | W | H | W | H | H | H | tracking notch: move / resize / depth |
-| `dsp/notch-remove` | W | H | W | H | H | H | tracking notch: remove |
-| `dsp/notch-enable` | W | H | W | H | H | H | tracking notches on/off |
+| `dsp/noise-reduction` | W* | W | M | M | M | M | NR button and level |
+| `dsp/noise-blanker` | W* | W | W | W | M | M | NB button and level |
+| `dsp/auto-notch` | W* | W | M | M | M | M | ANF button |
+| `dsp/manual-notch` | M | W | M | M | M | M | MN per-slice manual notch |
+| `dsp/notch-create` | W | M | W | M | M | M | tracking notch (TNF): create |
+| `dsp/notch-edit` | W | M | W | M | M | M | tracking notch: move / resize / depth |
+| `dsp/notch-remove` | W | M | W | M | M | M | tracking notch: remove |
+| `dsp/notch-enable` | W | M | W | M | M | M | tracking notches on/off |
 | `dsp/squelch` ∅ | W* | W | D | D | D | D | SQL button and threshold slider |
 
 ### Transmit
@@ -214,13 +283,13 @@ and scoring them per radio would be wrong.
 | `tx/tune` | W | W | W | R | R | R | TUNE |
 | `tx/power` | W* | W | V | D | D | D | RF power |
 | `tx/mic-gain` | W* | W | W | D | D | D | microphone gain |
-| `tx/filter` | W* | W | V | H | H | H | TX filter low/high cuts |
+| `tx/filter` | W* | W | V | M | M | M | TX filter low/high cuts |
 | `tx/monitor` | W* | W | D | D | D | D | TX monitor on / level |
 | `tx/audio-monitor` | D | W | W | D | D | D | TX audio monitor toggle |
 | `tx/speech-processor` | W* | W | D | D | D | D | speech processor (PROC) |
 | `tx/vox` | W* | W | D | D | D | D | VOX |
-| `tx/atu` | W | W | H | H | H | H | ATU / antenna tuner |
-| `tx/freq-check` | H | W | H | H | H | H | transmit frequency check |
+| `tx/atu` | W | W | M | M | M | M | ATU / antenna tuner |
+| `tx/freq-check` | M | W | M | M | M | M | transmit frequency check |
 | `tx/tx-slice` | W* | D | W | D | D | D | which slice transmits |
 
 ### CW
@@ -231,19 +300,19 @@ and scoring them per radio would be wrong.
 | `cw/speed` | W* | W | D | D | D | D | CW speed (WPM) |
 | `cw/pitch` | W* | W | W | W | D | D | CW pitch |
 | `cw/break-in` | W* | W | D | D | D | D | CW break-in |
-| `cw/text-send` | W* | W | H | H | H | H | text keyer: send |
-| `cw/text-abort` | W | W | H | H | H | H | text keyer: abort |
+| `cw/text-send` | W* | W | M | M | M | M | text keyer: send |
+| `cw/text-abort` | W | W | M | M | M | M | text keyer: abort |
 
 ### FM repeater and tone
 
 | feature | Flex | Icom | HL2 | ANAN | RTL | Demo | control |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|---|
-| `fm/tone-mode` | W* | W | H | H | H | D | CTCSS / DTCS tone mode |
-| `fm/tone-tx` | W* | W | H | H | H | D | TX tone frequency |
-| `fm/tone-rx` | D | W | H | H | H | D | RX tone frequency |
-| `fm/dtcs` | D | W | H | H | H | D | DTCS code and reverse flags |
-| `fm/repeater-dir` | W* | W | H | P | H | P | repeater shift direction |
-| `fm/repeater-offset` | W* | W | H | P | H | P | repeater offset (Hz) |
+| `fm/tone-mode` | W* | W | M | M | M | D | CTCSS / DTCS tone mode |
+| `fm/tone-tx` | W* | W | M | M | M | D | TX tone frequency |
+| `fm/tone-rx` | D | W | M | M | M | D | RX tone frequency |
+| `fm/dtcs` | D | W | M | M | M | D | DTCS code and reverse flags |
+| `fm/repeater-dir` | W* | W | M | P | M | P | repeater shift direction |
+| `fm/repeater-offset` | W* | W | M | P | M | P | repeater offset (Hz) |
 
 ### Memories, slices and panadapters
 
@@ -489,7 +558,7 @@ one and prints the split rather than a single tally.
 
 | ground | cells | what it is | repair |
 |---|---|---|---|
-| **inherited default** | `fm/repeater-dir` and `fm/repeater-offset` on ANAN and Demo (4) | The backend never mentions `hasFmRepeaterOffset`, which is declared `= true`. Both readers spell the gate `!connected \|\| caps.hasFmRepeaterOffset`, so the control is offered unless a *connected* radio actively denies it. **Nobody decided to offer it.** On the ANAN it is a repeater duplex control on a radio with no transmitter. The HL2 carried the same two cells until it made the assignment this column prescribes; both are now `H`. | One assignment per backend: `c.hasFmRepeaterOffset = false;` |
+| **inherited default** | `fm/repeater-dir` and `fm/repeater-offset` on ANAN and Demo (4) | The backend never mentions `hasFmRepeaterOffset`, which is declared `= true`. Both readers spell the gate `!connected \|\| caps.hasFmRepeaterOffset`, so the control is offered unless a *connected* radio actively denies it. **Nobody decided to offer it.** On the ANAN it is a repeater duplex control on a radio with no transmitter. The HL2 carried the same two cells until it made the assignment this column prescribes; both are now `M`. | One assignment per backend: `c.hasFmRepeaterOffset = false;` |
 | **cached readback** | `rx/filter` on RTL (1) | The backend **did** ask: `RtlSdrBackend::setSliceFilter` validates the edges, stores them, pushes them to `RtlSdrDdc::setSliceFilter`, and echoes a `SliceDelta`. The DDC stores them into two atomics that **nothing in the tree reads**. The edges round-trip through `currentOperatingState()`/`applyRestoredState()`, so they survive a reconnect and the GUI shows exactly what the operator set — and never affect a sample. | Real work in `RtlSdrDdc`: consume the edges, or stop claiming them |
 
 The second ground is why `P` is not simply "the permissive-default class". A
@@ -498,11 +567,12 @@ implemented a store, and confirms it back to the operator is the more
 misleading case, and the vocabulary's *"reads back cached state"* clause is
 there for exactly it.
 
-ANAN's four **tone** rows are `H`, not `P`, and the reason is the same rule read
+ANAN's four **tone** rows are `M`, not `P`, and the reason is the same rule read
 the other way: `AnanBackend` does not mention `fmTonePresentation` anywhere, and
 that field's default is `Hidden`. A default the backend never requested is only
-a phantom when it is **permissive**; an off default hides the control, the app
-and the radio agree, and the cell is honest.
+a phantom when it is **permissive**. An off default hides the control, so the
+app and the radio agree and nothing is claimed that is false. The hide is still
+per control, so it is `M` like every other.
 
 ---
 
@@ -564,7 +634,9 @@ as more than it is: whether the radio obeyed (only `V` claims that); whether a
 control reaches its signal, since the widget-to-model wiring is Qt lambdas in
 constructor bodies; whether a model gate refuses visibly or drops silently (the
 `visible` flag is authored, not derived); and whether an override that reaches
-the wire writes the **right** register.
+the wire writes the **right** register. The split of a hidden cell into `H` or
+`M` is authored too — the checker verifies the named gate is still in its file,
+not that the granularity was read correctly.
 
 ---
 
@@ -627,8 +699,15 @@ Recorded here, not filed. Each is a candidate for its own issue.
   any cell that disagrees with the source, on a `V` without a citation, on a
   `∅` row whose capability field has since been added, on an alternate path
   that has **rotted** — as against one that **retired**, which it reports as
-  progress and does not fail — on a gate the GUI no longer applies, and on the
-  document disagreeing with its own JSON sidecar.
+  progress and does not fail — on a gate the GUI no longer applies, on a
+  hidden cell with no `hide` classification or a code that contradicts it, on
+  a `hide` site whose symbol has left its file, and on the document
+  disagreeing with its own JSON sidecar.
+- **When an M3b migration lands, the cell moves.** A control that stops being
+  gated away derives something other than hidden, the `M` fails as drift, and
+  the row's `hide` block fails as stale until it is deleted. A control moved
+  into an applet of its own that hides wholesale is reclassified
+  `granularity: applet`, and its cells become `H`.
 - **When a `*` retires, delete the record.** The check prints a
   `feature-matrix-alt-path-retired` notice naming the row and the family; the
   repair is to remove that family's `alt_path` from the sidecar and the `*`

@@ -34,6 +34,7 @@
     "shows": "93 chunks swept 0.29-31.74 MHz on the real radio; 8/8 broadcast spans clear the floor by 15 dB, loudest 71.4 dB at 9.592 MHz - the commanded frequency changes what the radio receives"
    }
   },
+  "hide": {},
   "note": "Pure virtual: the compiler forces every family to implement it. The headless cell is NOT the GUI cell — validCoverage() additionally demands minimumHz > 0, which Flex and ANAN do not declare."
  },
  "rx/mode": {
@@ -66,6 +67,7 @@
    }
   },
   "verified": {},
+  "hide": {},
   "note": "Pure virtual. On a Flex this override is the ONLY path: SliceModel::setMode deliberately emits no wire text, it raises modeChangeRequested instead."
  },
  "rx/filter": {
@@ -114,6 +116,7 @@
     "shows": "S-meter -108.52 -> -99.15 dBm across a commanded 500->3000 Hz passband, noise density flat, slope 0.219 dB/dB against a 0.40 bound, forward and reverse legs agreeing"
    }
   },
+  "hide": {},
   "note": "Pure virtual. RTL overrides it and the DDC stores the edges without ever reading them back: the backend ASKED for this control, so it is not the inherited-default phantom but the cached-readback one, and the repair is real work rather than one assignment."
  },
  "rx/filter-preset": {
@@ -128,16 +131,31 @@
   "runtime_gate": {},
   "phantom": {},
   "cells": {
-   "flex": "H",
-   "icom": "H",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "flex": "M",
+   "icom": "M",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
-  "note": "Icom's presets come from a per-model profile; every other family leaves the record empty, which closes the control rather than offering an inert one."
+  "hide": {
+   "granularity": "control",
+   "form": "relabelled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "hasCompleteRxFilterPresets"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "hasCompleteRxFilterPresets"
+    }
+   ],
+   "why": "The filter button row never hides. With no radio presets declared, its buttons carry the operator's width presets instead of FIL1/FIL2/FIL3, so the radio-preset meaning is withdrawn without a reason."
+  },
+  "note": "Icom's presets come from a per-model profile; every other family leaves the record empty, which closes the control rather than offering an inert one. Pending because ambiguous: nothing is hidden, the same buttons change meaning per radio, and section 4a does not say which state that is. Recorded as pending migration rather than as compliant."
  },
  "rx/agc": {
   "control": "AGC mode — off / slow / med / fast",
@@ -158,6 +176,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "Pure virtual, so every family implements it — but RTL's override discards all three arguments."
  },
  "rx/agc-threshold": {
@@ -179,14 +198,29 @@
   "phantom": {},
   "cells": {
    "flex": "W",
-   "icom": "H",
+   "icom": "M",
    "hl2": "W",
    "anan": "W",
-   "rtl": "H",
+   "rtl": "M",
    "sim": "W"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "disabled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "syncAgcSliderFromSlice"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "updateAgcSliderFromSlice"
+    }
+   ],
+   "why": "The AGC-T slider stays on screen and is disabled. The reason is in the tooltip only; its accessibleDescription does not carry it, and section 4a says a tooltip is not enough."
+  },
   "note": "The same seam verb as rx/agc, carrying the second half of the pair; the row exists separately because it has its own gate."
  },
  "rx/pan-center": {
@@ -225,6 +259,7 @@
    }
   },
   "verified": {},
+  "hide": {},
   "note": "Pure virtual. FlexBackend's override is reachable from neither plane today — RadioModel's seam branch is guarded !m_flexBackend and receivePanCenterControl is nullopt."
  },
  "rx/pan-bandwidth": {
@@ -268,6 +303,7 @@
     "shows": "delivered EP6 rates 48000.8 / 95999.8 / 192002.3 / 383992.6 Hz counted from sequence numbers across four zoom levels; the 48 k floor and 384 k ceiling both proven by extra clicks that change nothing"
    }
   },
+  "hide": {},
   "note": ""
  },
  "rx/pan-framerate": {
@@ -295,6 +331,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "rx/rf-gain": {
@@ -327,6 +364,7 @@
     "shows": "LNA code 31 = -53.20 dBFS against code 32 = -97.75 dBFS, a -44.55 dB step; all seven wrapped codes land on their mod-32 twins within 0.52 dB"
    }
   },
+  "hide": {},
   "note": "No capability field and no published range on the seam, so nothing hides the slider on a family that cannot act on it."
  },
  "rx/preamp": {
@@ -341,15 +379,26 @@
   },
   "phantom": {},
   "cells": {
-   "flex": "H",
+   "flex": "M",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumOverlayMenu.cpp",
+     "symbol": "refreshFrontEndButtons"
+    }
+   ],
+   "why": "The overlay menu hides the preamp row, one row for one control, when the published label list has fewer than two entries."
+  },
   "note": "Gated on a LIST the backend publishes, not on a capability: an empty label list means the stage does not exist and the control never appears."
  },
  "rx/attenuator": {
@@ -364,15 +413,26 @@
   },
   "phantom": {},
   "cells": {
-   "flex": "H",
+   "flex": "M",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumOverlayMenu.cpp",
+     "symbol": "refreshFrontEndButtons"
+    }
+   ],
+   "why": "The overlay menu hides the attenuator row, one row for one control, when the published label list has fewer than two entries."
+  },
   "note": "Same published-list gate as the preamp."
  },
  "rx/antenna": {
@@ -395,14 +455,29 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
-  "note": "RxApplet falls back to inventing ANT1/ANT2 when the list is empty, so the published-list gate does not fully close this control. See the defects section."
+  "hide": {
+   "granularity": "control",
+   "form": "not-closed",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "rxAntennaOptions"
+    },
+    {
+     "file": "src/gui/SpectrumOverlayMenu.cpp",
+     "symbol": "append(QStringLiteral(\"ANT1\"))"
+    }
+   ],
+   "why": "The generator derives H from the empty published list, but the selector stays on screen and falls back to invented ANT1/ANT2 entries (defect 7)."
+  },
+  "note": "RxApplet falls back to inventing ANT1/ANT2 when the list is empty, so the published-list gate does not fully close this control. See the defects section. Pending because ambiguous: the control is not hidden at all, so H here is the capability's verdict rather than what the operator sees. Whatever the right cell is, it is not a compliant hide."
  },
  "rx/audio-mute": {
   "control": "slice mute",
@@ -440,6 +515,7 @@
    }
   },
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "rx/audio-gain": {
@@ -478,6 +554,7 @@
    }
   },
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "rx/audio-pan": {
@@ -505,6 +582,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "rx/dial-lock": {
@@ -532,6 +610,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "hasRadioDialLock is read in exactly one file above the seam, RadioModel.cpp -- which is the read the D cells rest on. Below the seam IcomCivBackend.cpp reads it too, in its own dispatch and decode, on the one family whose cell is W. There is NO GUI gate: the control is on screen everywhere and the intent is dropped one layer up, silently."
  },
  "rx/rit-enable": {
@@ -564,6 +643,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "rx/rit-offset": {
@@ -596,6 +676,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "rx/xit-enable": {
@@ -628,6 +709,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "rx/xit-offset": {
@@ -660,6 +742,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "The base body is an ALIAS into setRitOffset, so the generator declines to score it: reachable, but not necessarily this control. On an Icom the alias is correct — 21 00 is one shared shift register. On a two-register radio it would silently write the wrong one."
  },
  "dsp/noise-reduction": {
@@ -682,13 +765,24 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "applyRadioSideDspVisibility"
+    }
+   ],
+   "why": "VfoWidget hides the NR button individually with setVisible(false)."
+  },
   "note": "Radio-side NR only. The host AetherDSP noise modules are a different control that works on every family and is deliberately not in this matrix."
  },
  "dsp/noise-blanker": {
@@ -714,11 +808,22 @@
    "icom": "W",
    "hl2": "W",
    "anan": "W",
-   "rtl": "H",
-   "sim": "H"
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "applyRadioSideDspVisibility"
+    }
+   ],
+   "why": "VfoWidget hides the NB button individually with setVisible(false)."
+  },
   "note": "The only OR gate in the GUI: VfoWidget spells it m_nbModeOk && (m_hasRadioSideDsp || m_hasHostNoiseBlanker), which is why the HL2 and the ANAN keep the button for a blanker this host runs in WDSP."
  },
  "dsp/auto-notch": {
@@ -741,13 +846,24 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "applyRadioSideDspVisibility"
+    }
+   ],
+   "why": "VfoWidget hides the ANF button individually with setVisible(false)."
+  },
   "note": ""
  },
  "dsp/manual-notch": {
@@ -762,15 +878,26 @@
   "runtime_gate": {},
   "phantom": {},
   "cells": {
-   "flex": "H",
+   "flex": "M",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "applyRadioSideDspVisibility"
+    }
+   ],
+   "why": "VfoWidget hides the MN button individually with setVisible(false)."
+  },
   "note": ""
  },
  "dsp/notch-create": {
@@ -786,14 +913,29 @@
   "phantom": {},
   "cells": {
    "flex": "W",
-   "icom": "H",
+   "icom": "M",
    "hl2": "W",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumOverlayMenu.cpp",
+     "symbol": "kBtnAddTnf"
+    },
+    {
+     "file": "src/gui/SpectrumWidget.cpp",
+     "symbol": "Add TNF at"
+    }
+   ],
+   "why": "The +TNF overlay button and the Add TNF context-menu entry are left out individually on a radio with maxNotchFilters == 0."
+  },
   "note": ""
  },
  "dsp/notch-edit": {
@@ -809,14 +951,25 @@
   "phantom": {},
   "cells": {
    "flex": "W",
-   "icom": "H",
+   "icom": "M",
    "hl2": "W",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumWidget.cpp",
+     "symbol": "tnfCreateRequested"
+    }
+   ],
+   "why": "Follows notch-create: with no way to create a notch no marker exists, so its move, resize and depth menu never appears."
+  },
   "note": ""
  },
  "dsp/notch-remove": {
@@ -832,14 +985,25 @@
   "phantom": {},
   "cells": {
    "flex": "W",
-   "icom": "H",
+   "icom": "M",
    "hl2": "W",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/SpectrumWidget.cpp",
+     "symbol": "tnfCreateRequested"
+    }
+   ],
+   "why": "Follows notch-create: with no way to create a notch no marker exists, so its remove menu never appears."
+  },
   "note": ""
  },
  "dsp/notch-enable": {
@@ -855,15 +1019,30 @@
   "phantom": {},
   "cells": {
    "flex": "W",
-   "icom": "H",
+   "icom": "M",
    "hl2": "W",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
-  "note": ""
+  "hide": {
+   "granularity": "control",
+   "form": "not-closed",
+   "sites": [
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_tnfIndicator"
+    },
+    {
+     "file": "src/gui/SpectrumWidget.cpp",
+     "symbol": "Extended TNF"
+    }
+   ],
+   "why": "Only the Extended TNF context entry is left out. The status-bar TNF toggle is deliberately ungated in MainWindow::applyCapabilitiesToUi and stays on screen."
+  },
+  "note": "Pending because ambiguous: the main on/off control is not hidden, so H is the capability's verdict rather than what the operator sees."
  },
  "dsp/squelch": {
   "control": "SQL button and threshold slider",
@@ -895,6 +1074,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "RadioCapabilities has exactly one squelch field, hasModeIndependentSquelch, and its own comment shows it is a POLICY refinement — in which modes squelch may be set — not a support declaration. The GUI never asks whether the radio has squelch at all."
  },
  "tx/keying": {
@@ -938,6 +1118,7 @@
     "shows": "MOX set on 7744 EP2 frames over 10.16 s keyed, corroborated by two independent instruments: sustained forward power 0.652 W and PA temperature +4.97 degC"
    }
   },
+  "hide": {},
   "note": "The one control in the app that refuses a receive-only radio before any optimistic mutation, with a message the operator sees. It is the model the rest of the transmit block should follow."
  },
  "tx/tune": {
@@ -965,6 +1146,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "tx/power": {
@@ -997,6 +1179,7 @@
     "shows": "the radio's own forward-power detector read 1.6 / 115 / 115 / 126 / 154 / 225 / 332 / 434 / 476 across drive 0->100 %, monotone above 10 % and better than 3x from 25 to 100 % (RESULT.md; OBSERVATION.md's external-meter leg is retracted as unreadable)"
    }
   },
+  "hide": {},
   "note": "No canTransmit guard anywhere on this path: the keying sites were hardened and the setpoints were not."
  },
  "tx/mic-gain": {
@@ -1024,6 +1207,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "tx/filter": {
@@ -1047,9 +1231,9 @@
    "flex": "W",
    "icom": "W",
    "hl2": "V",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {
@@ -1057,6 +1241,17 @@
     "run": "d110-usb-geometry-low-edge",
     "shows": "TX passband commanded 300/2700 -> 150/3000 and read back, measured at a remote receiver: USB window +13.8 dB, LSB -13.2 dB, a 27.0 dB split against a pre-registered >=+10 / <=-10 / >=20; corroborated at wire level by d125's 54.81 dB CW-passband suppression"
    }
+  },
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/PhoneApplet.cpp",
+     "symbol": "setTxFilterControlsAvailable"
+    }
+   ],
+   "why": "PhoneApplet hides the TX low/high cut widget, a section inside the applet rather than an applet of its own."
   },
   "note": ""
  },
@@ -1085,6 +1280,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "tx/audio-monitor": {
@@ -1106,6 +1302,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "No capability field, no alternate path on any family that does not override it, and its only caller is RadioCertification — a diagnostic whose own result depends on the monitor having opened."
  },
  "tx/speech-processor": {
@@ -1133,6 +1330,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "tx/vox": {
@@ -1160,6 +1358,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "tx/atu": {
@@ -1176,13 +1375,24 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "disabled",
+   "sites": [
+    {
+     "file": "src/gui/TxApplet.cpp",
+     "symbol": "updateAtuAvailability"
+    }
+   ],
+   "why": "The ATU button stays on screen and is disabled. The reason is in the tooltip only; its accessibleDescription stays the static 'Start automatic antenna tuner'."
+  },
   "note": ""
  },
  "tx/freq-check": {
@@ -1203,16 +1413,31 @@
   "runtime_gate": {},
   "phantom": {},
   "cells": {
-   "flex": "H",
+   "flex": "M",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
-  "note": ""
+  "hide": {
+   "granularity": "control",
+   "form": "relabelled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureRepeaterReverseControl"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureRepeaterReverseControl"
+    }
+   ],
+   "why": "The shared button wears REV instead of XFC when hasTransmitFrequencyCheck is false, so the transmit-frequency-check control is replaced rather than hidden or dimmed."
+  },
+  "note": "Pending because ambiguous: one button carries two controls and changes personality per radio, which section 4a does not address. Recorded as pending migration rather than as compliant."
  },
  "tx/tx-slice": {
   "control": "which slice transmits",
@@ -1239,6 +1464,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "cw/keying": {
@@ -1266,6 +1492,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "On a Flex the CW key rides the legacy plane through NetCW with a TCP backstop; the seam branch is guarded !usesFlexCommandPlane()."
  },
  "cw/speed": {
@@ -1299,6 +1526,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "RadioModel drops this one layer above the seam, where no backend audit can see it. On an Icom that gate is hasRadioSideCwKeyer = profile.cwTextKeyer.has_value() — a question about the CI-V 17 TEXT keyer, used to answer a question about speed."
  },
  "cw/pitch": {
@@ -1333,6 +1561,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "TWO RadioModel forwards, and the second is why this is not dead on the HL2 or the ANAN: hostModulates carries the pitch into an engine-side BFO, with a connect-edge re-push so a session that never touches the control still agrees with the backend."
  },
  "cw/break-in": {
@@ -1366,6 +1595,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "cw/text-send": {
@@ -1394,13 +1624,28 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_cwxIndicator->setVisible(cwx)"
+    },
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_cwKeyerAction->setVisible"
+    }
+   ],
+   "why": "The status-bar CWX/CWK toggle and the Tools-menu action are hidden, and the CWX panel with them. radio-capabilities-map.md names this status-bar row as superseded by M3a."
+  },
   "note": ""
  },
  "cw/text-abort": {
@@ -1417,13 +1662,28 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
-   "sim": "H"
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
+   "sim": "M"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_cwxIndicator->setVisible(cwx)"
+    },
+    {
+     "file": "src/gui/MainWindow.cpp",
+     "symbol": "m_cwKeyerAction->setVisible"
+    }
+   ],
+   "why": "The status-bar CWX/CWK toggle and the Tools-menu action are hidden, and the CWX panel with them. radio-capabilities-map.md names this status-bar row as superseded by M3a."
+  },
   "note": ""
  },
  "fm/tone-mode": {
@@ -1446,13 +1706,28 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
    "sim": "D"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureFmToneControls"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureFmToneControls"
+    }
+   ],
+   "why": "The tone-mode combo is hidden individually inside the FM row when fmTonePresentation is Hidden."
+  },
   "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
  },
  "fm/tone-tx": {
@@ -1475,13 +1750,28 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
    "sim": "D"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureFmToneControls"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureFmToneControls"
+    }
+   ],
+   "why": "The TX tone combo is hidden individually inside the FM row when fmTonePresentation is Hidden."
+  },
   "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
  },
  "fm/tone-rx": {
@@ -1498,13 +1788,28 @@
   "cells": {
    "flex": "D",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
    "sim": "D"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureFmToneControls"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureFmToneControls"
+    }
+   ],
+   "why": "The RX tone combo is hidden individually inside the FM row when fmTonePresentation is Hidden."
+  },
   "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
  },
  "fm/dtcs": {
@@ -1521,13 +1826,28 @@
   "cells": {
    "flex": "D",
    "icom": "W",
-   "hl2": "H",
-   "anan": "H",
-   "rtl": "H",
+   "hl2": "M",
+   "anan": "M",
+   "rtl": "M",
    "sim": "D"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "hidden",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "configureFmToneControls"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "configureFmToneControls"
+    }
+   ],
+   "why": "The DTCS code and polarity combos is hidden individually inside the FM row when fmTonePresentation is Hidden."
+  },
   "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
  },
  "fm/repeater-dir": {
@@ -1550,13 +1870,28 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
+   "hl2": "M",
    "anan": "P",
-   "rtl": "H",
+   "rtl": "M",
    "sim": "P"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "disabled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "m_offsetSpin->setEnabled(repeaterAvailable)"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "m_fmOffsetSpin->setEnabled(repeaterAvailable)"
+    }
+   ],
+   "why": "The offset spin and the -/Simplex/+ buttons stay on screen and are disabled with no stated reason. REV beside them does carry an accessibleDescription."
+  },
   "note": "hasFmRepeaterOffset is declared = true in RadioCapabilities.h and both readers spell the gate !connected || caps.hasFmRepeaterOffset, so the control is offered unless a CONNECTED radio actively denies it. A backend that never mentions the field never asked for this control - that is the inherited-default ground for P, and one assignment repairs it."
  },
  "fm/repeater-offset": {
@@ -1579,13 +1914,28 @@
   "cells": {
    "flex": "W",
    "icom": "W",
-   "hl2": "H",
+   "hl2": "M",
    "anan": "P",
-   "rtl": "H",
+   "rtl": "M",
    "sim": "P"
   },
   "headless": {},
   "verified": {},
+  "hide": {
+   "granularity": "control",
+   "form": "disabled",
+   "sites": [
+    {
+     "file": "src/gui/RxApplet.cpp",
+     "symbol": "m_offsetSpin->setEnabled(repeaterAvailable)"
+    },
+    {
+     "file": "src/gui/VfoWidget.cpp",
+     "symbol": "m_fmOffsetSpin->setEnabled(repeaterAvailable)"
+    }
+   ],
+   "why": "The offset spin and the -/Simplex/+ buttons stay on screen and are disabled with no stated reason. REV beside them does carry an accessibleDescription."
+  },
   "note": ""
  },
  "mem/recall": {
@@ -1613,6 +1963,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "Deliberately NOT gated on canApplyMemories: RadioModel::recallCachedMemory calls the seam whenever nativeFilter > 0, and that flag is only ever set by the Icom decoder. The base body returns TRUE having called four no-ops."
  },
  "mem/refresh": {
@@ -1640,6 +1991,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "canRefreshMemories is read only in RadioModel.cpp, so this is a model gate and not a GUI gate."
  },
  "slice/create": {
@@ -1673,6 +2025,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": "canCreateSlices is read only in RadioModel.cpp, which refuses with a translated reason through sliceLifecycleFailed — a visible refusal, not a silent drop."
  },
  "slice/remove": {
@@ -1706,6 +2059,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "slice/active": {
@@ -1733,6 +2087,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "pan/create": {
@@ -1762,6 +2117,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  },
  "pan/remove": {
@@ -1791,6 +2147,7 @@
   },
   "headless": {},
   "verified": {},
+  "hide": {},
   "note": ""
  }
 }

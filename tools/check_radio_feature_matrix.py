@@ -30,7 +30,7 @@ WHAT IS DERIVABLE, AND IT IS EXACTLY FOUR QUESTIONS.
      src/models (the GUI gate), or in RadioModel (the model gate, which drops
      the intent one layer up where no backend audit can see it).
 
-Those four decide W, D, P and H. Everything else this checker declines to
+Those four decide W, D, P and H/M. Everything else this checker declines to
 decide and emits U, which is a legitimate committed value.
 
 THE STATES, which are ON8ST's vocabulary and not this tool's:
@@ -45,7 +45,12 @@ THE STATES, which are ON8ST's vocabulary and not this tool's:
                            reads (real work). A backend that asked and simply
                            did not implement is D, not P — see gate_state()
   R  refuses visibly     — the user is told no
-  H  hidden              — the GUI gates the control away on a capability
+  H  hidden, applet-wide — the whole applet is hidden, which the #5262 M3a
+                           ruling permits (theme-style-guide.md §4a)
+  M  gated per control, pending M3b — the GUI gates ONE control away on a
+                           capability (hides it, disables it without an
+                           announced reason, or relabels it), where §4a says
+                           it must stay visible and dim with a reason
   U  unverified          — the generator could not decide
   V  VERIFIED ON REAL HARDWARE — hand-added, never generated, must cite a run
 
@@ -80,6 +85,14 @@ read as more than it is:
   * WHETHER A MODEL GATE REFUSES VISIBLY OR DROPS SILENTLY. The `visible` flag
     on a model_gate is AUTHORED. The checker verifies the gate exists; it
     cannot read a tr() string and know the operator saw it.
+  * WHICH OF H AND M A HIDDEN CELL IS. The generator derives "gated away";
+    whether the gate is an applet hidden wholesale (H, compliant with M3a) or
+    a single control (M, pending M3b) is a fact about widgets, and widgets do
+    not yield to a parser. The record's `hide` block is AUTHORED: it names the
+    granularity, the observed form and the sites. The checker holds it to
+    three things — every cell that derives hidden has one, the cell code
+    agrees with its granularity, and every site still names a symbol that is
+    in its file — so the classification cannot outlive the code it describes.
   * AN OVERRIDE THAT REACHES THE WIRE BUT WRITES THE WRONG REGISTER. The base
     IRadioBackend::setXitOffset is an alias into setRitOffset; a backend that
     overrides the target and not the alias is reachable and wrong. The checker
@@ -127,7 +140,13 @@ BACKENDS = {
 }
 BACKEND_ORDER = list(BACKENDS)
 
-STATES = set("WDPRHUV")
+STATES = set("WDPRHMUV")
+
+# The authored half of a hidden cell. See the docstring: the generator decides
+# THAT a control is gated away, the record says HOW, and these are the only
+# answers the record may give.
+HIDE_GRANULARITY = {"applet": "H", "control": "M"}
+HIDE_FORMS = ("hidden", "disabled", "relabelled", "not-closed")
 
 # ---- anti-vacuity floors -----------------------------------------------------
 # Each one is "the parser found so little that it cannot have worked". Raise
@@ -392,6 +411,7 @@ def gate_census(fields: set[str]) -> dict[str, int]:
 
 class Source:
     def __init__(self) -> None:
+        self._site_text: dict[str, str] = {}
         for path in (SEAM_HEADER, CAPS_HEADER, RADIO_MODEL):
             if not path.exists():
                 raise SystemExit(f"check_radio_feature_matrix: {path} not found")
@@ -496,6 +516,23 @@ class Source:
         backend emitting it.
         """
         return bool(wire) and wire in self.bodies[fam]
+
+    def names_symbol(self, rel: str, symbol: str) -> bool:
+        """Does repo file `rel` still contain `symbol` outside a comment?
+
+        The anti-rot half of an authored `hide` block, the same shape as the
+        alt_path check: a classification that names a site the code has left
+        is a claim about a control nobody can find. Comment-free, so a symbol
+        surviving only in a comment above a migrated gate does not count.
+        """
+        if not rel or not symbol:
+            return False
+        path = (REPO / rel).resolve()
+        if REPO.resolve() not in path.parents or not path.is_file():
+            return False
+        if rel not in self._site_text:
+            self._site_text[rel] = strip_comments(path.read_text(encoding="utf-8"))
+        return symbol in self._site_text[rel]
 
     def publishes(self, fam: str, token: str) -> bool:
         """Does this backend ever mention a runtime-published control descriptor?
@@ -878,7 +915,7 @@ class Source:
 # ---- the committed record ----------------------------------------------------
 
 RECORD_KEYS = ("control", "seam", "capability", "model_gate", "absent_probe",
-               "alt_path", "cells", "headless", "verified", "note")
+               "alt_path", "cells", "headless", "verified", "hide", "note")
 
 
 def load_matrix() -> dict:
@@ -927,7 +964,7 @@ def doc_cells() -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
         for col, raw in zip(columns, parts[1:]):
             if col is None:
                 continue
-            code = re.sub(r"[^WDPRHUV∅]", "", raw)
+            code = re.sub(r"[^WDPRHMUV∅]", "", raw)
             target.setdefault(rid, {})[col] = code[:1] if code else raw
     return gui, headless
 
@@ -973,6 +1010,8 @@ def main() -> int:
     reasons: dict[str, list[str]] = {}
     grounds: dict[str, list[str]] = {}
     cell_count = 0
+    hidden_rows: set[str] = set()
+    hide_forms: dict[str, list[str]] = {}
 
     named_caps: set[str] = set()
     for row in matrix.values():
@@ -1061,6 +1100,34 @@ def main() -> int:
                     f"from that cell in radio-feature-matrix.md; this line repeats "
                     f"until someone does.")
 
+        hide = row.get("hide") or {}
+        hide_code = None
+        if hide:
+            hide_code = HIDE_GRANULARITY.get(hide.get("granularity"))
+            if hide_code is None:
+                errors.append(f"::error file={where},title=feature-matrix-hide-record::"
+                              f"{rid} has hide.granularity {hide.get('granularity')!r}; it "
+                              f"must be one of {', '.join(HIDE_GRANULARITY)}. The two are "
+                              f"different verdicts under #5262 M3a, so there is no third.")
+            if hide.get("form") not in HIDE_FORMS:
+                errors.append(f"::error file={where},title=feature-matrix-hide-record::"
+                              f"{rid} has hide.form {hide.get('form')!r}; it must be one of "
+                              f"{', '.join(HIDE_FORMS)}.")
+            if not hide.get("why"):
+                errors.append(f"::error file={where},title=feature-matrix-hide-record::"
+                              f"{rid} classifies its hidden cells without saying why.")
+            if not hide.get("sites"):
+                errors.append(f"::error file={where},title=feature-matrix-hide-record::"
+                              f"{rid} classifies its hidden cells with no site. A "
+                              f"classification nobody can locate cannot be checked.")
+            for site in hide.get("sites") or []:
+                if not src.names_symbol(site.get("file", ""), site.get("symbol", "")):
+                    errors.append(f"::error file={where},title=feature-matrix-stale-hide-site::"
+                                  f"{rid} says its control is gated at "
+                                  f"{site.get('file')}::{site.get('symbol')}, and that file "
+                                  f"no longer contains it outside a comment. The gate moved "
+                                  f"or was migrated; re-read it and reclassify the row.")
+
         cells = row["cells"]
         if set(cells) != set(BACKEND_ORDER):
             errors.append(f"::error file={where},title=feature-matrix-columns::"
@@ -1082,9 +1149,28 @@ def main() -> int:
             if committed not in STATES:
                 errors.append(f"::error file={where},title=feature-matrix-vocabulary::"
                               f"{rid}/{fam} is {committed!r}, which is not one of "
-                              f"W D P R H U V. The vocabulary is fixed; a cell that needs "
+                              f"W D P R H M U V. The vocabulary is fixed; a cell that needs "
                               f"a new state needs the document's legend changed first.")
                 continue
+
+            # The generator says "hidden"; the authored record says at which
+            # granularity, and so which of the two codes the cell must carry.
+            if derived == "H":
+                hidden_rows.add(rid)
+                if hide_code is None:
+                    if not hide:
+                        errors.append(
+                            f"::error file={where},title=feature-matrix-hide-unclassified::"
+                            f"{rid}/{fam} derives hidden ({reason}) and the record has no "
+                            f"`hide` block. Under #5262 M3a an applet hidden wholesale (H) "
+                            f"and a single control hidden or dimmed without a reason (M, "
+                            f"pending M3b) are different verdicts, so the record has to "
+                            f"say which one this is, and where.")
+                    continue
+                derived = hide_code
+                reason = f"{reason}; the hide record classifies it as {hide['granularity']}-level"
+                if hide_code == "M":
+                    hide_forms.setdefault(hide.get("form"), []).append(f"{rid}/{fam}")
 
             if committed == "V":
                 # V is the one mark a static read cannot produce. Both halves
@@ -1111,6 +1197,14 @@ def main() -> int:
                               f"derives {derived} ({reason}). The matrix is generated and "
                               f"diffed, not hand-maintained: change the code, or correct "
                               f"the cell — a comment will not settle this.")
+
+    for rid, row in matrix.items():
+        if row.get("hide") and rid not in hidden_rows:
+            errors.append(f"::error file=docs/architecture/radio-feature-matrix.json,"
+                          f"title=feature-matrix-stale-hide-record::{rid} carries a `hide` "
+                          f"classification and no cell of it derives hidden any more. The "
+                          f"gate it describes is gone; delete the block rather than leave "
+                          f"a verdict about a control that is now on screen.")
 
     # The markdown is the half people read.
     doc, doc_head = doc_cells()
@@ -1189,12 +1283,17 @@ def main() -> int:
     for line in notices:
         print(line)
 
-    shape = " ".join(f"{k}={tally.get(k, 0)}" for k in "WDPRHUV")
+    shape = " ".join(f"{k}={tally.get(k, 0)}" for k in "WDPRHMUV")
     if grounds:
         print("radio-feature-matrix: the P cells, by provenance — the split is the "
               "repair, not a nuance:")
         for ground, where in sorted(grounds.items()):
             print(f"  {len(where):3d}  {ground}  ({', '.join(where)})")
+    print(f"radio-feature-matrix: the hidden cells, by granularity (#5262 M3a) — "
+          f"H applet-level {tally.get('H', 0)}, M per-control pending M3b "
+          f"{tally.get('M', 0)}:")
+    for form, where in sorted(hide_forms.items()):
+        print(f"  {len(where):3d}  M/{form}")
     if retired:
         print(f"radio-feature-matrix: {len(retired)} alternate path(s) RETIRED — the "
               f"bypass is gone and the seam carries the control now. Progress, not "
