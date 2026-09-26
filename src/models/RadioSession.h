@@ -7,6 +7,8 @@
 
 #include <array>
 
+class QThread;
+
 namespace AetherSDR {
 
 // RadioSession — the aggregate that constitutes "a connected radio".
@@ -32,8 +34,12 @@ namespace AetherSDR {
 // BODY, which the language guarantees runs before the m_radioModel
 // member destructs. The old manual delete-before-members dance in
 // MainWindow's shutdown path remains only for its *early* teardown
-// requirement (DAX stream-remove commands must reach the radio while
-// audio is already stopped) and now routes through shutdownTciServer().
+// requirement (TCI must stop while model and AudioEngine are still alive)
+// and now routes through shutdownTciServer().
+//
+// TciServer remains on the model thread and owns its private TciIo worker.
+// shutdownTciServer() destroys the controller, which stops and joins that
+// worker before the model is destroyed.
 //
 // Planned v3+ scope (see #3445) — corrected after the v2 landing:
 //   • The wireDiscovery/wireRadioModel/wirePanLifecycle bodies do NOT

@@ -82,6 +82,31 @@ public:
         // pihpsdr runs 8192 by comparison.
         int filterTaps = 2048;
         bool minimumPhase = false;
+        // FM detector deviation in Hz — the receiver's ASSUMPTION about how
+        // wide the incoming signal is deviated, not a filter width. WDSP turns
+        // it into an inverse audio gain (again = rate / (deviation * TWOPI)),
+        // so this scales recovered audio and narrows nothing; see the block
+        // above SetRXAFMDeviation in aether_wdsp.h. 5000 is what RXA.c builds
+        // the stage with, so the default changes nothing on its own.
+        //
+        // IN Config RATHER THAN ONLY A SETTER, for the same reason the noise
+        // blanker is: reconfigure() closes and reopens the channel, which frees
+        // the fmd stage and everything set on it. A deviation held only in a
+        // runtime setter would revert to 5 kHz on the next sample-rate or
+        // block-size change, silently and with nothing to read that says so.
+        //
+        // BOUNDED, AND THE BOUND IS THE REFUSAL. A sign check is not enough:
+        // 1e-40 is positive and finite, and `again = rate / (deviation *
+        // TWOPI)` then runs away until the detector's float output is inf.
+        // That was measured on this branch before these two numbers existed,
+        // not reasoned about. One pair, shared by setFmDeviation(),
+        // validateConfig() and RtlReceiverRegistry::boundedDsp(), so the three
+        // doors cannot drift apart. The floor sits below any narrow-FM service
+        // in use (2.5 kHz in Europe); the ceiling sits above broadcast FM's
+        // 75 kHz, which this detector does not demodulate anyway.
+        static constexpr double kMinFmDeviationHz = 100.0;
+        static constexpr double kMaxFmDeviationHz = 100000.0;
+        double fmDeviationHz = 5000.0;
         bool blockForOutput = false;
         // Impulse noise blanker — see the setNoiseBlanker() block below. Kept
         // in Config, not just as a runtime setter, so that reconfigure() (a
@@ -284,6 +309,30 @@ public:
     // already in flight. Control-path work, guarded exactly like setMode(); it
     // must not be called from the processIq() callback.
     bool setAgc(int agcMode, double maximumGainDb) noexcept;
+    // Runtime FM detector deviation, in Hz. Receive channels only.
+    //
+    // Applies in every mode but is only AUDIBLE in FM: RXA builds one fmd stage
+    // per channel and runs it only when the mode selects it, so this is
+    // accepted and stored on an SSB channel and takes effect if and when the
+    // mode becomes FM. That is deliberate — refusing by mode would make the
+    // value depend on the order the caller sets mode and deviation in.
+    //
+    // NOT WBFM. Broadcast FM is a different demodulator, not this one with a
+    // wider number: SetRXAMode clears setFMDRun() for every mode and its
+    // case RXA_WBFM raises wbfm.p->run WITHOUT putting fmd back, so xfmd's
+    // if (a->run) never fires and the value this writes is inert. wbfm.c runs
+    // an atan2 quadrature discriminator whose scale is fixed at construction
+    // (disc_gain_comp = rate / (TWOPI * 75000.0)), create_wbfm() takes no
+    // deviation argument, and WDSP exposes no SetRXAWBFMDeviation to reach it.
+    //
+    // Returns false on a transmit channel (SetRXAFMDeviation has no TX
+    // counterpart; TX deviation is SetTXAFMDeviation on a different stage), on
+    // a value outside Config::kMinFmDeviationHz..kMaxFmDeviationHz — WDSP
+    // divides by it, so 0 and anything near it drive the audio gain to
+    // infinity — or if a control operation is already in flight.
+    // Control-path work, guarded exactly like setMode(); it must not be called
+    // from the processIq() callback.
+    bool setFmDeviation(double deviationHz) noexcept;
     // ── Impulse noise blanker ─────────────────────────────────────────────
     //
     // WDSP's ANB (nob.c), run on the RAW IQ ahead of the channel. It has to be
@@ -430,13 +479,26 @@ public:
     static uint64_t allocationSequenceForTest() noexcept;
     static uint64_t outstandingAllocationsForTest() noexcept;
 
-    // Shared FFTW-planner serialization guard. Anything outside this class
-    // that calls fftw_plan_*/fftw_destroy_plan directly (today: AnanSpectrum,
-    // off the real-time path) must hold this for the call, or it can race a
-    // concurrent WdspChannel::create()/reconfigure() on a DIFFERENT channel
-    // and corrupt FFTW's process-global plan cache -- the same reason
-    // open()/close() and every control call below already take it. Held only
-    // around the planner call itself, not the whole construction.
+    // Shared FFTW-planner serialization guard. FORWARDS to
+    // AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h), which owns
+    // the mutex; this spelling is kept only so existing call sites and tests
+    // need no churn. NEW CODE OUTSIDE THIS CLASS SHOULD TAKE
+    // fftwPlannerLock() DIRECTLY -- the lock is a property of FFTW, not of a
+    // WDSP channel, and reaching it through this header is the dependency
+    // edge that kept SpectralNR on a mutex of its own.
+    //
+    // THE CENSUS THIS COMMENT USED TO CARRY WAS THE BUG. It said "today:
+    // AnanSpectrum", which was already wrong when #5424 added Hl2Spectrum and
+    // stayed wrong while SpectralNR guarded the same planner with a private
+    // static (#5895). A list that has to be edited by hand goes stale
+    // silently, so the authoritative one now lives next to the lock in
+    // FftwPlannerLock.h and this comment deliberately keeps none.
+    //
+    // It also said "Held only around the planner call itself, not the whole
+    // construction." That is FALSE and was already false: Hl2Spectrum holds
+    // it across its fftw_malloc/fftw_free too, deliberately, because the
+    // frames TSan named in #5424 are memalign and free rather than the
+    // planner. Width is per call site and the allocations belong inside.
     [[nodiscard]] static std::unique_lock<std::mutex> fftwSetupLock();
 
 private:

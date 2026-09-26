@@ -1,0 +1,4 @@
+interface:
+  display_name: "AetherSDR Tag Release"
+  short_description: "Cut an AetherSDR release: signed tag on main, release, verified assets, Store draft, website post"
+  default_prompt: "Use $tag-release to tag, publish, verify and announce the specified AetherSDR release version from its merged prep."

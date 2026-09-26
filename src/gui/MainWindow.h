@@ -29,17 +29,20 @@
 #include "gui/CenterLockRebindTracker.h"
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
+#include "gui/SplitAudioProfile.h"       // #2242 remembered split audio arrangement
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
 #endif
-#include "core/SmartLinkClient.h"
-#include "core/WanConnection.h"
+#include "core/backends/flex/SmartLinkClient.h"
+#include "core/backends/flex/WanConnection.h"
 #include "core/CwDecoder.h"
 #include "models/CwRxModel.h"
 #include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
+#include "models/DecoderAudioModel.h"
 #include "core/QsoRecorder.h"
+#include "RxPlaybackTransmitter.h"
 #include "core/ClientPuduMonitor.h"
 #include "core/AudioOutputRouter.h"
 #include "core/DxClusterClient.h"
@@ -64,6 +67,7 @@
 #include "models/RadioSession.h"
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #ifdef HAVE_MIDI
@@ -530,6 +534,53 @@ private:
     void syncTxWaterfallSliceToSpectrums();
     void updateSplitState();
     void disableSplit();
+    // The split pair, derived from model truth (#3726) rather than from the
+    // GUI-only m_split*SliceId triple, so everything below works on a split
+    // that rigctld, CAT, TCI or the front panel started. Shared with
+    // updateSplitState(), which is where the pairing rules are explained.
+    void resolveSplitPairs(QHash<QString, SliceModel*>& txByPan,
+                           QHash<QString, SliceModel*>& rxByPan) const;
+    bool activeSplitPair(SliceModel*& rx, SliceModel*& tx) const;
+    // The pair on sliceId's own panadapter only — no fallback to another pan,
+    // so a control on one slice can never retune a split somewhere else.
+    bool splitPairForSlice(int sliceId, SliceModel*& rx, SliceModel*& tx) const;
+    // Split audio memory (#2242): learn the arrangement the operator left, put
+    // it back next split. armSplitAudioMirror() subscribes; the mirror IS the
+    // record, because by the time the TX slice is torn down its model object is
+    // already gone (onSliceRemoved) and cannot be read.
+    void armSplitAudioMirror(SliceModel* rx, SliceModel* tx,
+                             const AetherSDR::SplitAudioApplyResult& applied);
+    void applyAndArmSplitAudio(SliceModel* rx, SliceModel* tx);
+    // deferRestore: the slice was removed out of band, and the radio's status
+    // burst for the remaining slice is already queued behind this call. A
+    // synchronous restore would be overwritten by that stale status (Flex
+    // does not echo our own audio_pan back), so it runs one event-loop turn
+    // later, after the burst. Verified on a FLEX-8600.
+    void recordSplitAudioMirror(bool deferRestore = false);
+    void disarmSplitAudioMirror();
+    // End a Monitor TX hold that involves any slice on panId, or sliceId.
+    // Called on the edges where a temporary hold mute would otherwise be
+    // captured as real state: a band recall and a KiwiSDR takeover.
+    void endSplitMonitorForPan(const QString& panId);
+    void endSplitMonitorForSlice(int sliceId, bool deferWrites = false);
+    AetherSDR::SplitAudioProfile loadSplitAudioProfile() const;
+    void saveSplitAudioProfile(const AetherSDR::SplitAudioProfile& p);
+    // Momentary Monitor TX — the Icom XFC / Kenwood TF-SET / Yaesu TXW control.
+    bool handleSplitMonitorShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    void beginSplitMonitor(bool keyHeld = false);
+    void endSplitMonitor(bool deferWrites = false);
+    // A release that found its slices parked for a reconnect (alive, but not
+    // in the live map) waits here until RadioModel reclaims them.
+    void tryCompletePendingMonitorRelease();
+    // Enter split on rxSliceId: create the TX slice offsetMhz above it, or at
+    // the mode default (CW 1 kHz, otherwise 5 kHz) when none is given.
+    void enterSplit(int rxSliceId, std::optional<double> offsetMhz = std::nullopt);
+    // Why enterSplit(rxSliceId) would refuse, or empty when it would not.
+    QString splitEntryBlocker(int rxSliceId) const;
+    // Split Up N kHz (#311): retunes the TX slice, never the RX slice; with no
+    // split yet, enters one at RX + N on rxSliceId (the active slice if -1).
+    void applySplitOffsetKHz(double offsetKHz, int rxSliceId = -1);
+    void showSplitBadgeMenu(int sliceId, const QPoint& globalPos);
     // One status-bar notice per connect session for a control this radio
     // cannot honor. Shared by the commandDropped path and by the
     // capability gates that refuse BEFORE the send (M0, #5263).
@@ -568,6 +619,7 @@ private:
     bool m_rxMutedForPlayback{false};
     void wirePanStreamTxSink();               // MainWindow_Session.cpp
     void wireTxAudioAuthority();              // MainWindow_Session.cpp
+    QMetaObject::Connection m_tciPcmConnection;
     void wirePanStreamTciSinks();             // MainWindow_Session.cpp
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
@@ -774,6 +826,8 @@ private:
     void setDecoderPanelVisibleOnly(PanadapterApplet* target, bool shouldShow,
                                     void (PanadapterApplet::*setter)(bool));
     void refreshCwDecodeState();
+    void refreshCwInputStatus();
+    void stopCwRx();
     // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
     // service → contact card on the CW decode panel + lookup dialog.
     void wireCallsignLookup();
@@ -782,6 +836,7 @@ private:
     void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
+    void refreshRttyInputStatus();
     // The RTTY pane's ✕: persist "operator does not want this window" and
     // re-run the refresh, which stops the decoder (#5353).
     void onRttyPanelCloseRequested();
@@ -850,6 +905,13 @@ private:
     // just raises the existing instance.  Returns nullptr only if construction
     // failed (e.g. allocation failure).
     AetherRxDialog* ensureAetherRxDialog();
+    // Push the record/play state the AetherRX window should show: the QSO
+    // recorder's in client-side mode, the active slice's in radio-side mode.
+    void syncAetherRxRecordButtons();
+    // AetherRX's "TX Playback": transmit the last Client-Side recording over
+    // the active slice under `input`, the operator's request captured at the
+    // click; a second choice while one is transmitting stops it.
+    void toggleRxPlaybackTransmit(const TxCoordinator::Request& input);
 
     // Toggle helper for the AetherDSP Settings dialog: open it when hidden,
     // close it when visible.  Gives the per-slice DSP-tab ADSP button the same
@@ -1116,6 +1178,7 @@ private:
     // the heartbeat does; the dialog resets it when it starts reading.
     std::unique_ptr<UiTickLagMeter> m_uiTickLagMeter;
     QsoRecorder*      m_qsoRecorder{nullptr};
+    std::unique_ptr<RxPlaybackTransmitter> m_rxPlaybackTx;  // AetherRX "TX Playback"
     // The one live QSO-recorder notice, if any (#4629 review). Held so a
     // repeating condition raises the existing dialog instead of stacking a new
     // one on top — QMessageBox::warning() spins a nested event loop, so a
@@ -1165,10 +1228,6 @@ private:
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_DEEPFIST
-    QPointer<SliceModel> m_cwRxSlice;
-    QMetaObject::Connection m_cwRxFrequencyConnection;
-    QMetaObject::Connection m_cwRxModeConnection;
-    void refreshCwRxContext();
     void selectCwRxBackend(const QString& backend);
     void cwRxModelAction();
     void refreshCwRxStatus();
@@ -1176,11 +1235,13 @@ private:
     void refreshCwRxBackend();
 #endif
     CwRxModel         m_cwDecoder;
+    std::unique_ptr<DecoderAudioModel> m_cwAudio;
     float             m_cwLastPitchHz{0.0f};
     float             m_cwLastSpeedWpm{0.0f};
     CwDecoder         m_cwDecoderTx;
     CwCallsignSpotter m_cwCallsignSpotter;
     RttyDecoder       m_rttyDecoder;
+    std::unique_ptr<DecoderAudioModel> m_rttyAudio;
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
 #ifdef HAVE_MQTT
@@ -1669,6 +1730,35 @@ private:
     bool m_splitActive{false};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
+    // Split audio memory (#2242). The recorder holds what the operator did to
+    // the two slices during this split and outlives the TX slice model, which
+    // onSliceRemoved has already destroyed by the time it runs. It is fed ONLY
+    // from the *CommandIssued signals — those do not fire for radio status
+    // echoes, so a pan moved by another client never becomes a preference
+    // (Principle II). See gui/SplitAudioProfile.h.
+    AetherSDR::SplitAudioRecorder m_splitAudioRecorder;
+    QVector<QMetaObject::Connection> m_splitAudioConns;
+    int m_splitAudioRxSliceId{-1};
+    // The RX slice OBJECT the recorder was armed on. The RX-pan restore only
+    // goes to that object: a reconnect reclaims the same object, while a new
+    // slice that reuses the id (a later session, a recreated slice) is not
+    // the split's RX and must not have its pan moved.
+    QPointer<SliceModel> m_splitAudioRxSlice;
+    // True while WE are moving slice audio (applying a profile, or a Monitor TX
+    // hold). Suppresses mirror recording so the app's own writes are never
+    // mistaken for the operator's choices.
+    bool m_splitAudioApplying{false};
+    bool m_splitAudioNoticeShown{false};
+    // Momentary Monitor TX. Records which native mute it actually changed, so
+    // a release restores exactly that and never a replacement-owned one.
+    AetherSDR::SplitMonitorHold<SliceModel> m_splitMonitor;
+    // True when the hold came from the keyboard. Only a held key can lose its
+    // release to another window, so only it is ended on deactivation; a
+    // FlexControl/HID toggle stays in step with the operator's last press.
+    bool m_splitMonitorKeyHeld{false};
+    // A released hold whose slices were parked (disconnected) at release time.
+    // Completed on slotOccupancyChanged when the same objects are reclaimed.
+    AetherSDR::SplitMonitorHold<SliceModel> m_splitMonitorPendingRelease;
     int  m_pendingMemoryRevealSliceId{-1};
     double m_pendingMemoryRevealTargetMhz{0.0};
     int  m_pendingSpectrumTargetSliceId{-1};

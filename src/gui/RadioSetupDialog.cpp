@@ -14,7 +14,7 @@
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
 #include "core/NetworkSettings.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
 #include "KiwiPublicReceiverPicker.h"
 #include "core/LogManager.h"
@@ -37,7 +37,7 @@
 #include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
-#include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
+#include "core/backends/flex/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
 #include "models/AntennaGeniusModel.h"
@@ -118,34 +118,39 @@ static const QString kGroupStyle =
 static const QString kLabelStyle =
     "QLabel { color: #c8d8e8; font-size: 12px; }";
 
-static const QString kValueStyle =
-    "QLabel { color: #00c8ff; font-size: 12px; font-weight: bold; }";
-
-// kValueStyle's colour, as the token it is a copy of. AGENTS.md: "every colour
-// resolves through a ThemeManager token ... never hardcode a colour literal",
-// and tools/migrate_colours.py already maps both #00c8ff and the token's own
-// #00c8f0 to color.accent.bright. Only ThemeManager::applyStyleSheet registers
-// a widget for re-resolution on themeChanged; a plain setStyleSheet does not,
-// so a label carrying the literal keeps its dark-theme cyan after View > Theme
-// switches to Default Light, where color.accent.bright is #0098c0.
+// The value colour, as the token rather than as a copy of it. AGENTS.md:
+// "every colour resolves through a ThemeManager token ... never hardcode a
+// colour literal", and tools/migrate_colours.py already maps both the retired
+// literal #00c8ff and the token's own #00c8f0 to color.accent.bright. Only
+// ThemeManager::applyStyleSheet registers a widget for re-resolution on
+// themeChanged; a plain setStyleSheet does not, so a label carrying a literal
+// keeps its dark-theme cyan after View > Theme switches to Default Light,
+// where color.accent.bright is #0098c0.
+//
+// The literal this replaced -- kValueStyle, "color: #00c8ff" -- is deleted
+// rather than left unused, so no site can regress onto it by copy-paste. It
+// was not even the dark theme's own value: color.accent.bright is #00c8f0
+// under Default Dark, one step off in the blue channel.
 static const QString kValueStyleTemplate =
     "QLabel { color: {{color.accent.bright}}; font-size: 12px; font-weight: bold; }";
 
-// The shared value style, paired with its QLabel once. The four Radio
-// Information fields -- Serial:, Region:, HW Version:, Options: -- route
-// through here, which is what makes them byte-identical to each other: the
-// invariant #5507 item 2 is about, and the one the test asserts.
+// The shared value style, paired with its QLabel once. Every value label in
+// this dialog routes through here, which is what makes them byte-identical to
+// each other -- the invariant #5507 item 2 is about and #5857 extends to the
+// rest of the file.
 //
-// This is NOT a whole-file fold. 14 direct setStyleSheet(kValueStyle) sites and
-// two applyStyleSheet(..., kValueStyle) sites elsewhere in this file still carry
-// the literal, untouched on purpose -- migrating them is a file-wide change that
-// does not belong in a fix for one field.
+// That sentence is checkable, not aspirational: kValueStyleTemplate has exactly
+// one reference, the applyStyleSheet call below, so `grep kValueStyleTemplate`
+// returning more than the definition and that call is a site built by hand.
+// The network pair (gatewayLbl, networkNameLbl) were the last two -- built as
+// new QLabel + an explicit applyStyleSheet, carrying the right colour by the
+// right route and still outside the helper -- and they are also the pair #5857
+// names as the sites that looked correct at every other level.
 //
 // It also answers tools/audit_colours.py's ratchet, which counts setStyleSheet()
-// CALL SITES and not colours. The bespoke ThemeManager template Region: used to
-// carry was never counted, so replacing it with a counted setStyleSheet() read
-// as +1 even though no colour moved. Folding four fields onto one applyStyleSheet
-// retires three counted sites and adds none.
+// CALL SITES and not colours: ThemeManager::applyStyleSheet contains no
+// setStyleSheet substring, so folding a site onto this helper retires a counted
+// call site and adds none.
 static QLabel* makeValueLabel(const QString& text)
 {
     auto* label = new QLabel(text);
@@ -1514,8 +1519,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         grid->setColumnStretch(0, 1);
         grid->setColumnStretch(1, 1);
 
-        m_modelLabel = new QLabel(displayOrDash(m_model->model()));
-        m_modelLabel->setStyleSheet(kValueStyle);
+        m_modelLabel = makeValueLabel(displayOrDash(m_model->model()));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Model"),
                                               QStringLiteral("Model:"),
                                               m_modelLabel),
@@ -1647,17 +1651,15 @@ QWidget* RadioSetupDialog::buildRadioTab()
         grid->setColumnStretch(1, 1);
 
         // Row 0: Subscription | Expiration
-        m_licSubscriptionLabel = new QLabel(
+        m_licSubscriptionLabel = makeValueLabel(
             m_model->licenseSubscription().isEmpty() ? "—" : m_model->licenseSubscription());
-        m_licSubscriptionLabel->setStyleSheet(kValueStyle);
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Subscription"),
                                               QStringLiteral("Subscription:"),
                                               m_licSubscriptionLabel),
                         0, 0);
 
-        m_licExpirationLabel = new QLabel(
+        m_licExpirationLabel = makeValueLabel(
             m_model->licenseExpirationDate().isEmpty() ? "—" : m_model->licenseExpirationDate());
-        m_licExpirationLabel->setStyleSheet(kValueStyle);
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Expiration"),
                                               QStringLiteral("Expiration:"),
                                               m_licExpirationLabel,
@@ -1665,17 +1667,15 @@ QWidget* RadioSetupDialog::buildRadioTab()
                         0, 1);
 
         // Row 1: Radio ID | Licensed version
-        m_licRadioIdLabel = new QLabel(
+        m_licRadioIdLabel = makeValueLabel(
             m_model->licenseRadioId().isEmpty() ? "—" : m_model->licenseRadioId());
-        m_licRadioIdLabel->setStyleSheet(kValueStyle);
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Radio ID"),
                                               QStringLiteral("Radio ID:"),
                                               m_licRadioIdLabel),
                         1, 0);
 
-        m_licMaxVersionLabel = new QLabel(
+        m_licMaxVersionLabel = makeValueLabel(
             m_model->licenseMaxVersion().isEmpty() ? "—" : m_model->licenseMaxVersion());
-        m_licMaxVersionLabel->setStyleSheet(kValueStyle);
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Licensed version"),
                                               QStringLiteral("Licensed version:"),
                                               m_licMaxVersionLabel,
@@ -1713,8 +1713,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // Current version row
         auto* infoRow = new QHBoxLayout;
         infoRow->addWidget(new QLabel("FW Version:"));
-        auto* curFw = new QLabel(displayOrDash(m_model->softwareVersion()));
-        curFw->setStyleSheet(kValueStyle);
+        auto* curFw = makeValueLabel(displayOrDash(m_model->softwareVersion()));
         infoRow->addWidget(makeCopyableValueLabel(QStringLiteral("FW Version"), curFw), 1);
         vlay->addLayout(infoRow);
 
@@ -1979,28 +1978,23 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         grid->setColumnStretch(3, 1);
 
         grid->addWidget(new QLabel("IP Address:"), 0, 0);
-        auto* ipLbl = new QLabel(displayOrDash(m_model->ip()));
-        ipLbl->setStyleSheet(kValueStyle);
+        auto* ipLbl = makeValueLabel(displayOrDash(m_model->ip()));
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("IP Address"), ipLbl), 0, 1);
 
         grid->addWidget(new QLabel("Subnet Mask:"), 0, 2);
-        auto* maskLbl = new QLabel(displayOrDash(m_model->netmask()));
-        maskLbl->setStyleSheet(kValueStyle);
+        auto* maskLbl = makeValueLabel(displayOrDash(m_model->netmask()));
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("Subnet Mask"), maskLbl), 0, 3);
 
         grid->addWidget(new QLabel("MAC Address:"), 1, 0);
-        auto* macLbl = new QLabel(displayOrDash(m_model->mac()));
-        macLbl->setStyleSheet(kValueStyle);
+        auto* macLbl = makeValueLabel(displayOrDash(m_model->mac()));
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("MAC Address"), macLbl), 1, 1);
 
         grid->addWidget(new QLabel("Default Gateway:"), 1, 2);
-        auto* gatewayLbl = new QLabel(displayOrDash(m_model->gateway()));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(gatewayLbl, kValueStyle);
+        auto* gatewayLbl = makeValueLabel(displayOrDash(m_model->gateway()));
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("Default Gateway"), gatewayLbl), 1, 3);
 
         grid->addWidget(new QLabel("Network Name:"), 2, 0);
-        auto* networkNameLbl = new QLabel(displayOrDash(m_model->networkName()));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(networkNameLbl, kValueStyle);
+        auto* networkNameLbl = makeValueLabel(displayOrDash(m_model->networkName()));
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("Network Name"), networkNameLbl),
                         2, 1, 1, 3);
 
@@ -2558,8 +2552,7 @@ QWidget* RadioSetupDialog::buildGpsTab()
             auto* lbl = new QLabel(label);
             lbl->setStyleSheet(kLabelStyle);
             grid->addWidget(lbl, row, col * 2);
-            auto* val = new QLabel(value);
-            val->setStyleSheet(kValueStyle);
+            auto* val = makeValueLabel(value);
             grid->addWidget(val, row, col * 2 + 1);
         };
 
@@ -4013,8 +4006,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     auto* lineoutSlider = new GuardedSlider(Qt::Horizontal);
     lineoutSlider->setRange(0, 100);
     lineoutSlider->setValue(m_model->lineoutGain());
-    auto* lineoutValue = new QLabel(QString::number(m_model->lineoutGain()));
-    lineoutValue->setStyleSheet(kValueStyle);
+    auto* lineoutValue = makeValueLabel(QString::number(m_model->lineoutGain()));
     lineoutValue->setFixedWidth(30);
     auto* lineoutMute = new QPushButton("Mute");
     lineoutMute->setCheckable(true);
@@ -4043,8 +4035,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     auto* hpSlider = new GuardedSlider(Qt::Horizontal);
     hpSlider->setRange(0, 100);
     hpSlider->setValue(m_model->headphoneGain());
-    auto* hpValue = new QLabel(QString::number(m_model->headphoneGain()));
-    hpValue->setStyleSheet(kValueStyle);
+    auto* hpValue = makeValueLabel(QString::number(m_model->headphoneGain()));
     hpValue->setFixedWidth(30);
     auto* hpMute = new QPushButton("Mute");
     hpMute->setCheckable(true);
@@ -5080,8 +5071,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
 
         int row = 1;
         for (const QString& token : tokens) {
-            auto* port = new QLabel(token);
-            port->setStyleSheet(kValueStyle);
+            auto* port = makeValueLabel(token);
             grid->addWidget(port, row, 0);
 
             auto* edit = new QLineEdit(m_model->antennaAlias(token));
@@ -7537,6 +7527,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             "BandZoom", "SegmentZoom",
             "NextSlice", "PrevSlice",
             "SplitActiveSlice",
+            "SplitMonitorTx",
             "ToggleAgc", "VolumeUp", "VolumeDown",
             "WheelFrequency", "WheelVolume", "WheelPower",
             "WheelRit", "WheelXit",
@@ -7650,6 +7641,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             {"VolumeUp",         "Volume Up (+5)"},
             {"VolumeDown",       "Volume Down (-5)"},
             {"SplitActiveSlice", "Toggle Split"},
+            {"SplitMonitorTx",   "Monitor TX Frequency"},
         };
 
         // 8 keys laid out as 2 columns of 4
@@ -7834,6 +7826,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             {"VolumeUp",         "Volume Up (+5)"},
             {"VolumeDown",       "Volume Down (-5)"},
             {"SplitActiveSlice", "Toggle Split"},
+            {"SplitMonitorTx",   "Monitor TX Frequency"},
         };
 
         static const char* kTMate2KeyDefaults[6] = {
@@ -10035,9 +10028,8 @@ QWidget* RadioSetupDialog::buildQrzTab()
 
     auto* cacheRow = new QHBoxLayout;
     cacheRow->setSpacing(8);
-    auto* cacheCount = new QLabel;
+    auto* cacheCount = makeValueLabel(QString());
     cacheCount->setObjectName("qrzCacheCount");
-    cacheCount->setStyleSheet(kValueStyle);
     auto refreshCacheCount = [cacheCount] {
         cacheCount->setText(QStringLiteral("%1 cached callsign(s)")
             .arg(CallsignLookupService::instance().cacheEntryCount()));

@@ -27,6 +27,7 @@
 // The session harness is `hl2_gain_restore_test`'s, deliberately: same
 // socket-free connect, same "no event loop is pumped" constraint.
 
+#include "SeamThreadAffinityProbe.h"
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/RadioStateMemory.h"
@@ -71,6 +72,19 @@ RestoredRadioState rememberedGain()
     return state;
 }
 
+// IRadioBackend contract rule 2 for autoRfGainArmSettled, observed rather
+// than tabled: this binary is the only socket-free test that makes the
+// signal fire, so every backend it drives carries the seam probe and the
+// label names the offending emission when one crosses a thread.
+void checkSeam(const test::SeamThreadAffinityProbe& seam, const char* where)
+{
+    const QStringList v = seam.violations();
+    check(v.isEmpty(),
+          qPrintable(QStringLiteral("%1: every seam signal arrived on the backend's thread (rule 2)%2")
+                         .arg(QLatin1String(where),
+                              v.isEmpty() ? QString() : QStringLiteral(" -- ") + v.join(QStringLiteral("; ")))));
+}
+
 // Exercise synchronous connect seeding without starting transport, exactly as
 // hl2_gain_restore_test does: boardMaxRx skips the unicast discovery socket and
 // no event loop is pumped, so finishDspSetup never runs.
@@ -79,9 +93,11 @@ public:
     QString panId;
     int echoedGain = 999;
     hl2::Hl2Backend backend;
+    test::SeamThreadAffinityProbe seam{&backend};   // after backend: torn down first
 
     explicit Session(const RestoredRadioState& state)
     {
+        test::attachAllSeamSignals(seam);
         QObject::connect(&backend, &IRadioBackend::panCenterBandwidthChanged,
                          &backend, [this](const QString& id, double, double) {
             panId = id;
@@ -98,7 +114,11 @@ public:
         backend.connectRadio(request);
         backend.setSliceFrequency(0, state.rfFrequencyHz);
     }
-    ~Session() { backend.disconnectRadio(); }
+    ~Session()
+    {
+        backend.disconnectRadio();
+        checkSeam(seam, "session");
+    }
 
     int healthLive() const
     {
@@ -498,6 +518,8 @@ int main(int argc, char** argv)
         // bridge verb; autoRfGainArmSettled is what lets one handler cover all
         // three. Counted, so a no-op request is seen NOT to fire.
         hl2::Hl2Backend spoken;
+        test::SeamThreadAffinityProbe seam(&spoken);   // rule 2, see checkSeam()
+        test::attachAllSeamSignals(seam);
         int settled = 0;
         bool lastArmed = true;
         QObject::connect(&spoken, &IRadioBackend::autoRfGainArmSettled,
@@ -512,6 +534,9 @@ int main(int argc, char** argv)
         check(settled == 3 && !lastArmed, "a disarm settles as not armed");
         spoken.setAutoRfGain(false);
         check(settled == 3, "a request that changes nothing settles nothing");
+        check(seam.count(QStringLiteral("autoRfGainArmSettled")) == 3,
+              "the probe saw every emission the direct handler counted");
+        checkSeam(seam, "spoken");
     }
 
     if (failures == 0) {

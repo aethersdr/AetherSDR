@@ -1,6 +1,7 @@
 // A transport sequence gap must not be transformed across.
 //
-// THE DEFECT. Hl2Spectrum (and its ANAN twin AnanSpectrum) builds one FFT frame
+// THE DEFECT. Hl2Spectrum (and, until the ANAN panadapter moved to WDSP's
+// analyzer, its ANAN twin AnanSpectrum) builds one FFT frame
 // out of MANY transport blocks: process() pushes samples into an accumulator and
 // transforms only when it reaches exactly fftSize, carrying a partial frame
 // across calls. An EP6 block is 126 IQ samples, so the 1024-point frame both
@@ -35,10 +36,12 @@
 //      across calls and still produces the identical stitched frame. This is the
 //      claim that would catch a "fix" that simply stopped carrying partial
 //      frames.
-//   3. AnanSpectrum behaves identically, because the two classes are twins and
-//      the fix must not land on one of them.
-//   4. The DSP stages act on the gap: Hl2RxDsp::onSequenceGap() and
-//      AnanRxDsp::onSequenceGap() discard the partial frame and count it, and
+//   3. (Formerly: AnanSpectrum, the HL2 class's ANAN twin, behaved identically.
+//      The ANAN panadapter now runs on WDSP's display analyzer; its staging
+//      block plays the partial frame's part, and 4b covers it.)
+//   4. The DSP stages act on the gap: Hl2RxDsp::onSequenceGap() discards the
+//      partial frame, AnanRxDsp::onSequenceGap() the partly staged analyzer
+//      block, and each counts it, and
 //      only when there WAS one -- a gap on a frame boundary corrupts nothing and
 //      must not be counted, or the counter degenerates into a worse copy of the
 //      dropped-packet row.
@@ -64,13 +67,14 @@
 
 #include "core/backends/anan/P2Client.h"
 #include "core/backends/anan/AnanRxDsp.h"
-#include "core/backends/anan/AnanSpectrum.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2Spectrum.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QThread>
 
 #include <cmath>
 #include <complex>
@@ -79,6 +83,7 @@
 #include <cstdio>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace AetherSDR::hl2 {
@@ -197,8 +202,18 @@ static void verifyContinuity(const char* name, std::uint32_t first, std::uint32_
     std::fprintf(stderr, "Continuity case: %s\n", name);
     Dsp dsp;
     Client client;
+    // HL2 builds one 1024-point FFT synchronously from its accumulator. ANAN's
+    // panadapter is WDSP's analyzer, whose frames arrive from worker threads
+    // after 16k samples, so the FRAME checks below are HL2-only; the ordering,
+    // drop-accounting and discard checks apply to both. ANAN's discard counter
+    // keeps the same meaning: a 1024-sample staging block stands where the
+    // partial FFT frame did.
+    constexpr bool kSyncFrames = !std::is_same_v<Dsp, anan::AnanRxDsp>;
     typename Dsp::Config cfg;
-    cfg.fftSize = 1024;
+    if constexpr (kSyncFrames)
+        cfg.fftSize = 1024;
+    else
+        cfg.panPoints = 1024;
     cfg.inputSampleRateHz = 48000;
     cfg.audioSampleRateHz = 24000;
     cfg.dspBlockSize = 1024;
@@ -217,15 +232,17 @@ static void verifyContinuity(const char* name, std::uint32_t first, std::uint32_
     for (std::uint32_t i = 0; i < 8; ++i) {
         feed(client, first + i, false);
     }
-    check(frames == 0, "eight 126-sample blocks leave a partial 1024-point FFT");
+    if constexpr (kSyncFrames)
+        check(frames == 0, "eight 126-sample blocks leave a partial 1024-point FFT");
     check(dsp.spectrumGapDiscards() == 0, "initial contiguous run discards nothing");
     order.clear();
     feed(client, next, true);
     check(order == (discontinuous ? "GB" : "B"), "discontinuity precedes sample delivery");
     check(client.droppedPackets() == expectedDrops, "legacy packet-loss accounting is unchanged");
-    check(frames == (discontinuous ? 0 : 1), "only contiguous samples may complete the pending FFT");
+    if constexpr (kSyncFrames)
+        check(frames == (discontinuous ? 0 : 1), "only contiguous samples may complete the pending FFT");
     check(dsp.spectrumGapDiscards() == (discontinuous ? 1u : 0u), "only discontinuities discard the pending window");
-    if (discontinuous) {
+    if (kSyncFrames && discontinuous) {
         for (std::uint32_t i = 1; i < 9; ++i) {
             feed(client, next + i, true);
         }
@@ -321,26 +338,6 @@ int main(int argc, char** argv)
               "a stitched frame and a clean frame are not the same frame");
     }
 
-    // ---- 3 · AnanSpectrum, the twin --------------------------------------
-    {
-        anan::AnanSpectrum spec(N);
-        std::vector<float> bins;
-        const auto postGap = tone(N, 21, 0.5f);
-        check(spec.reset() == 0, "ANAN: a fresh accumulator discards nothing");
-        const auto preGap = tone(N, 10, 0.5f);   // a named local: std::span must
-                                                 // not be built from a temporary
-        spec.process(std::span(preGap).subspan(0, kPartial), bins);
-        check(spec.reset() == static_cast<std::size_t>(kPartial),
-              "ANAN: reset() reports the partial frame it discarded");
-        check(spec.process(postGap, bins) == 1, "ANAN: one frame after the gap");
-
-        anan::AnanSpectrum clean(N);
-        std::vector<float> cleanBins;
-        clean.process(postGap, cleanBins);
-        check(binsEqual(bins, cleanBins),
-              "ANAN: the frame after a gap is built from post-gap samples ONLY");
-    }
-
     // ---- 4a · Hl2RxDsp acts on the gap ------------------------------------
     //
     // One stage up: the DSP owns the spectrum and is what the backend calls.
@@ -424,73 +421,110 @@ int main(int argc, char** argv)
     }
 
     // ---- 4b · AnanRxDsp acts on the gap -----------------------------------
+    //
+    // ANAN's panadapter is WDSP's analyzer. AnanRxDsp stages IQ into
+    // 1024-sample blocks for it, and a gap drops the partly staged block --
+    // which is what a kPartial-sample pre-gap feed is, so those samples never
+    // reach the analyzer at all and the post-gap frame is exactly the frame a
+    // stage fed only the post-gap samples produces. A frame needs one full
+    // analyzer FFT (16384 samples) and arrives from a WDSP worker thread, so
+    // this section feeds that many and waits for it.
     {
         const int rate = 48000;
+        constexpr int kAnalyzerFft = 16384;   // AnanPanAnalyzer::kMinFftSize
         auto makeDsp = [&](anan::AnanRxDsp& dsp, std::string* err) {
             anan::AnanRxDsp::Config cfg;
             cfg.inputSampleRateHz = rate;
             cfg.audioSampleRateHz = 24000;
             cfg.dspBlockSize = 1024;
-            cfg.fftSize = N;
+            cfg.panPoints = 1024;
             cfg.mode = WdspChannel::Mode::Usb;
             cfg.filterLowHz = 150.0;
             cfg.filterHighHz = 3000.0;
             cfg.blockForOutput = true;
             return dsp.configure(cfg, err);
         };
+        // Feed `iq`, then poll with empty blocks until the first frame lands.
+        auto firstFrameAfter = [](anan::AnanRxDsp& dsp,
+                                  const std::vector<std::complex<float>>& iq) {
+            std::vector<float> frame;
+            bool got = false;
+            const auto conn = QObject::connect(&dsp, &anan::AnanRxDsp::spectrumReady,
+                [&](const std::vector<float>& b) {
+                    if (!got) { frame = b; got = true; }
+                });
+            dsp.processIqBlock(iq);
+            const std::vector<std::complex<float>> none;
+            QElapsedTimer t;
+            t.start();
+            while (!got && t.elapsed() < 10000) {
+                QThread::msleep(2);
+                dsp.processIqBlock(none);
+            }
+            QObject::disconnect(conn);
+            return frame;
+        };
 
         const auto preGap = wireTone(kPartial, 1000.0, rate, 0.5f);
-        const auto postGap = wireTone(N, 5000.0, rate, 0.5f);
+        const auto postGap = wireTone(kAnalyzerFft, 5000.0, rate, 0.5f);
 
-        std::vector<float> afterGap;
         anan::AnanRxDsp dspA;
         std::string errA;
         check(makeDsp(dspA, &errA), ("ANAN DSP configures: " + errA).c_str());
-        QObject::connect(&dspA, &anan::AnanRxDsp::spectrumReady, &dspA,
-                         [&](const std::vector<float>& b) { afterGap = b; });
         check(dspA.spectrumGapDiscards() == 0, "ANAN: no discards before any gap");
         dspA.processIqBlock(preGap);
         dspA.onSequenceGap();
         check(dspA.spectrumGapDiscards() == 1,
-              "ANAN: a gap with a partial frame in flight is counted once");
-        dspA.processIqBlock(postGap);
-        check(afterGap.size() == static_cast<std::size_t>(N),
-              "ANAN: a frame is emitted after the gap");
+              "ANAN: a gap with a partly staged block is counted once");
+        const std::vector<float> afterGap = firstFrameAfter(dspA, postGap);
+        check(afterGap.size() == 1024u, "ANAN: a frame is emitted after the gap");
 
-        // Equality against a stage fed only the post-gap samples. Both runs
-        // start with fresh per-bin smoothing state and emit the same number of
-        // frames from the same input, so the smoother cannot account for a
-        // difference -- any difference would be a surviving pre-gap sample.
-        std::vector<float> cleanOnly;
+        // Equality against a stage fed only the post-gap samples. Each stage's
+        // first frame is exactly one FFT (the analyzer seeds its average from
+        // it), so any difference would be a surviving pre-gap sample.
         anan::AnanRxDsp dspB;
         std::string errB;
         check(makeDsp(dspB, &errB), ("ANAN control DSP configures: " + errB).c_str());
-        QObject::connect(&dspB, &anan::AnanRxDsp::spectrumReady, &dspB,
-                         [&](const std::vector<float>& b) { cleanOnly = b; });
-        dspB.processIqBlock(postGap);
+        const std::vector<float> cleanOnly = firstFrameAfter(dspB, postGap);
         check(binsEqual(afterGap, cleanOnly),
-              "ANAN: the post-gap frame contains no pre-gap sample");
+              "ANAN: a sub-block gap (the partly staged block dropped) leaves the "
+              "post-gap frame free of pre-gap samples");
 
-        std::vector<float> stitched;
+        // A WHOLE staging block fed before the gap is already inside the
+        // analyzer's input ring, and the analyzer's history is deliberately
+        // left alone (AnanRxDsp::onSequenceGap()), so the next 16k-point FFT
+        // straddles the seam: the post-gap frame is a documented blend, not a
+        // clean frame. Pinned so the tradeoff is stated rather than implied.
+        anan::AnanRxDsp dspE;
+        std::string errE;
+        check(makeDsp(dspE, &errE), ("ANAN whole-block DSP configures: " + errE).c_str());
+        dspE.processIqBlock(wireTone(1024 + kPartial, 1000.0, rate, 0.5f));
+        dspE.onSequenceGap();
+        check(dspE.spectrumGapDiscards() == 1,
+              "ANAN whole-block: only the partial block is discarded");
+        const std::vector<float> blended = firstFrameAfter(dspE, postGap);
+        check(!blended.empty() && !binsEqual(blended, cleanOnly),
+              "ANAN: whole blocks fed before a gap stay in the analyzer's ring and "
+              "blend into the post-gap frame -- the documented tradeoff, not a purge");
+
         anan::AnanRxDsp dspC;
         std::string errC;
         check(makeDsp(dspC, &errC), ("ANAN no-loss DSP configures: " + errC).c_str());
-        QObject::connect(&dspC, &anan::AnanRxDsp::spectrumReady, &dspC,
-                         [&](const std::vector<float>& b) { stitched = b; });
         dspC.processIqBlock(preGap);
-        dspC.processIqBlock(postGap);
+        const std::vector<float> stitched = firstFrameAfter(dspC, postGap);
         check(dspC.spectrumGapDiscards() == 0,
               "ANAN no-loss: nothing is discarded when nothing was lost");
-        check(!binsEqual(stitched, cleanOnly),
+        check(!stitched.empty() && !binsEqual(stitched, cleanOnly),
               "ANAN no-loss: the stitched frame still stitches -- the fix is gap-only");
 
+        // A whole number of staging blocks leaves nothing in flight.
         anan::AnanRxDsp dspD;
         std::string errD;
         check(makeDsp(dspD, &errD), ("ANAN boundary DSP configures: " + errD).c_str());
         dspD.processIqBlock(postGap);
         dspD.onSequenceGap();
         check(dspD.spectrumGapDiscards() == 0,
-              "ANAN: a gap on a frame boundary discards nothing and is not counted");
+              "ANAN: a gap on a block boundary discards nothing and is not counted");
     }
 
     // ---- 5 · MetisClient emits the gap, and emits it FIRST -----------------
@@ -625,17 +659,14 @@ int main(int argc, char** argv)
     {
         const auto pre = tone(128, 10, 0.5f);
         const auto post = tone(64, 21, 0.5f);
+        // HL2 only: ANAN has no rolling window -- its analyzer staging block
+        // is covered in 4b.
         hl2::Hl2Spectrum h(64), hc(64);
-        anan::AnanSpectrum a(64), ac(64);
-        std::vector<float> hb, hcb, ab, acb;
+        std::vector<float> hb, hcb;
         h.accumulate(pre);
-        a.accumulate(pre);
         check(h.reset() == 63, "HL2 reset discards capped rolling window");
-        check(a.reset() == 63, "ANAN reset discards capped rolling window");
         h.process(post, hb); hc.process(post, hcb);
-        a.process(post, ab); ac.process(post, acb);
         check(binsEqual(hb, hcb), "HL2 accumulated pre-gap data is absent");
-        check(binsEqual(ab, acb), "ANAN accumulated pre-gap data is absent");
     }
 
     if (g_failures == 0)

@@ -278,20 +278,6 @@ private:
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
 
-    // Peak hold for fwd gauge
-    // Peak-hold ballistics, the same shape TxApplet uses (#2561): hold, then
-    // decay at a rate scaled to the gauge full-scale so the visual feel is
-    // ~2.5 s from peak to floor on every range. This gauge used to hold for
-    // 2.5 s and then snap the marker to zero, which reads as the peak being
-    // lost rather than falling, and did not match the TX Controls applet
-    // sitting next to it.
-    QTimer* m_peakTick{nullptr};
-    float   m_peakFwd{0.0f};
-    float   m_peakDecayStart{0.0f};
-    float   m_peakDecayWattsPerSec{80.0f};   // 200 W gauge / 2.5 s
-    bool    m_peakHoldRunning{false};
-    QElapsedTimer m_peakHoldTimer;
-    static constexpr qint64 kPeakHoldMs = 2000;
     // Throttles the numeric PWR/SWR text; the bar itself is not throttled.
     QElapsedTimer m_readoutClock;
 

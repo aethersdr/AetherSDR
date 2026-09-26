@@ -109,6 +109,10 @@ inline constexpr const char* kCwRightPaddleActionName = "Trigger CW Right Paddle
 // event filter drives press/release directly and must look the binding up by
 // this id so a rebound key actually transmits (#3879).
 inline constexpr const char* kPttHoldActionId = "ptt_hold";
+// Momentary "hear where I am about to transmit" (#2242). Like ptt_hold it is
+// driven from the app-level event filter, because QShortcut has no released
+// signal and a hold control needs both edges.
+inline constexpr const char* kSplitMonitorActionId = "split_monitor_tx";
 
 // ─── AetherSweep SWR-sweep tuning constants ─────────────────────────────────
 //
