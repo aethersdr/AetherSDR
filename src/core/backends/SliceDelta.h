@@ -8,6 +8,11 @@
 
 namespace AetherSDR {
 
+// Desktop setter publication contract. Confirmed backends own both requested
+// state and asynchronous adoption; only their slice/pan reports are live.
+// Existing backends retain their historical optimistic setter behavior.
+enum class ReceiveControlPolicy { Optimistic, Confirmed };
+
 // Normalized, vendor-neutral slice-status delta (aetherd RFC 2.3 — SliceModel
 // touchpoint). A backend populates only the fields the wire reported
 // (std::optional engaged == "present"); SliceModel::applyChanges applies exactly
@@ -31,6 +36,9 @@ struct SliceDelta {
 
     // Core state
     std::optional<bool>        active;
+    // Whether the complete guarded receive passband is inside this slice's
+    // capture stream. Independent of active, which means selected/focused.
+    std::optional<bool>        inCapture;
     std::optional<bool>        txSlice;
     std::optional<double>      rfGain;
     std::optional<double>      audioGain;

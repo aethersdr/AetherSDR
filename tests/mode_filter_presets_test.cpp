@@ -4,6 +4,7 @@
 // the widget, and anything after it, has to keep them.
 
 #include "gui/ModeFilterPresets.h"
+#include "core/backends/RadioCapabilities.h"
 
 #include <QtTest>
 
@@ -15,11 +16,14 @@ class ModeFilterPresetsTest : public QObject {
 private slots:
     void ssbPinsItsLowCutAndDerivesTheHigh();
     void cwCentresOnTheCarrier();
+    void amAndFmStraddleIt_data();
     void amAndFmStraddleIt();
     void diguCentresOnItsOffsetAndClampsAt95();
     void rttyStraddlesMarkAndSpace();
     void laddersAreNarrowToWide();
     void unknownModesGetTheSsbLadder();
+    void fmLaddersRequireDeclaredControl();
+    void fmPresetsRespectDeclaredEdges();
 };
 
 void ModeFilterPresetsTest::ssbPinsItsLowCutAndDerivesTheHigh()
@@ -49,13 +53,20 @@ void ModeFilterPresetsTest::cwCentresOnTheCarrier()
     }
 }
 
+void ModeFilterPresetsTest::amAndFmStraddleIt_data()
+{
+    QTest::addColumn<QString>("mode");
+    for (const char* mode : {"AM", "SAM", "DSB", "FM", "NFM", "FMN", "WFM", "DFM"}) {
+        QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+}
+
 void ModeFilterPresetsTest::amAndFmStraddleIt()
 {
-    for (const char* mode : {"AM", "SAM", "DSB", "FM", "NFM", "DFM"}) {
-        const Edges e = edgesForWidth(QString::fromLatin1(mode), 8000, {});
-        QCOMPARE(e.lo, -4000);
-        QCOMPARE(e.hi, 4000);
-    }
+    QFETCH(QString, mode);
+    const Edges e = edgesForWidth(mode, 8000, {});
+    QCOMPARE(e.lo, -4000);
+    QCOMPARE(e.hi, 4000);
 }
 
 void ModeFilterPresetsTest::diguCentresOnItsOffsetAndClampsAt95()
@@ -108,6 +119,43 @@ void ModeFilterPresetsTest::unknownModesGetTheSsbLadder()
 {
     QCOMPARE(widthsForMode(QStringLiteral("NOT-A-MODE")),
              widthsForMode(QStringLiteral("USB")));
+}
+
+void ModeFilterPresetsTest::fmLaddersRequireDeclaredControl()
+{
+    const AetherSDR::ReceiveFilterControl control{
+        AetherSDR::SliceFrequencyControl::Authority::Engine,
+        {{QStringLiteral("FM"), -21600, -1, 1, 21600, 2, 43200},
+         {QStringLiteral("FMN"), -21600, -1, 1, 21600, 2, 43200}}};
+    for (const char* spelling : {"FM", "FMN", "NFM"}) {
+        const QString mode = QString::fromLatin1(spelling);
+        QVERIFY(widthsForMode(mode).isEmpty()); // unchanged fixed-FM default
+        const QVector<int> widths = widthsForMode(mode, &control);
+        QVERIFY(!widths.isEmpty());
+        QVERIFY(widths.contains(16000));
+        for (int width : widths) {
+            const Edges edges = edgesForWidth(mode, width, {});
+            QCOMPARE(edges.lo, -edges.hi);
+            QVERIFY(acceptsFmEdges(mode, &control, edges));
+        }
+    }
+    QVERIFY(widthsForMode(QStringLiteral("WFM"), &control).isEmpty());
+    QVERIFY(!acceptsFmEdges(QStringLiteral("WFM"), &control, {-8000, 8000}));
+    QCOMPARE(widthsForMode(QStringLiteral("USB"), &control),
+             widthsForMode(QStringLiteral("USB")));
+}
+
+void ModeFilterPresetsTest::fmPresetsRespectDeclaredEdges()
+{
+    const AetherSDR::ReceiveFilterControl control{
+        AetherSDR::SliceFrequencyControl::Authority::Engine,
+        {{QStringLiteral("FMN"), -6000, -1, 1, 6000, 2, 12000}}};
+    const QVector<int> expected{6000, 8000, 10000, 12000};
+    QCOMPARE(widthsForMode(QStringLiteral("FMN"), &control), expected);
+    QVERIFY(!acceptsFmEdges(QStringLiteral("FMN"), &control, {95, 8000}));
+    QVERIFY(!acceptsFmEdges(QStringLiteral("FMN"), &control, {-8000, 8000}));
+    QVERIFY(!acceptsFmEdges(QStringLiteral("FMN"), &control, {1000, -1000}));
+    QVERIFY(acceptsFmEdges(QStringLiteral("FMN"), &control, {-4000, 6000}));
 }
 
 QTEST_MAIN(ModeFilterPresetsTest)

@@ -11,6 +11,8 @@
 #include <QJsonObject>
 #include <cstdio>
 #include <memory>
+#include <numbers>
+#include <cmath>
 
 using namespace AetherSDR;
 
@@ -107,11 +109,38 @@ int main(int argc, char** argv)
 
     // Feed 4096 synthetic complex float IQ samples
     QVector<std::complex<float>> syntheticSamples(4096, std::complex<float>(0.5f, 0.5f));
-    ddc.processIqData(syntheticSamples);
+    // A display frame now requires a complete continuous observation.
+    for (int i = 0; i < rtl::RtlSdrDdc::kSpectrumBinCount / syntheticSamples.size(); ++i) {
+        ddc.processIqData(syntheticSamples);
+    }
 
     check(spectrumEmitted, "RtlSdrDdc emitted spectrumFrameReady");
     check(waterfallEmitted, "RtlSdrDdc emitted waterfallRowReady");
     check(audioEmitted, "RtlSdrDdc emitted audioFrameReady");
+
+    // WFM keeps its existing demodulation. Its independent tap must remain
+    // identical while monitor mute clocks silence at the same 24 kHz rate.
+    {
+        rtl::RtlSdrDdc audible, muted;
+        muted.setAudioMute(true); muted.setAudioGain(0);
+        QByteArray reference, tap, silent;
+        QObject::connect(&audible, &rtl::RtlSdrDdc::audioFrameReady,
+            [&](const QByteArray&, const QByteArray& preMonitor) { reference.append(preMonitor); });
+        QObject::connect(&muted, &rtl::RtlSdrDdc::audioFrameReady,
+            [&](const QByteArray& monitor, const QByteArray& preMonitor) { silent.append(monitor); tap.append(preMonitor); });
+        QVector<std::complex<float>> samples(8192);
+        for (int block = 0; block < 32; ++block) {
+            for (int i = 0; i < samples.size(); ++i) {
+                const double t = (block * samples.size() + i) / 2400000.0;
+                const double phase = 50 * std::sin(2 * std::numbers::pi * 1000 * t);
+                samples[i] = {float(0.5 * std::cos(phase)), float(0.5 * std::sin(phase))};
+            }
+            audible.processIqData(samples); muted.processIqData(samples);
+        }
+        check(!reference.isEmpty() && reference == tap, "WFM pre-monitor samples unchanged by mute/gain");
+        check(silent.size() == tap.size(), "muted WFM keeps truthful PCM duration");
+        check(std::ranges::all_of(silent, [](char byte) { return byte == 0; }), "muted WFM monitor is silence");
+    }
 
     // 5. Test direct sampling mode persistence contract
     RestoredRadioState hfState;

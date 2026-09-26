@@ -40,6 +40,9 @@ public:
     // Display state
     double centerMhz() const { return m_centerMhz; }
     bool centerKnown() const { return m_centerKnown; }
+    // Invalidates deferred native frames when geometry changes or a retained
+    // pan enters a new session, including an A -> B -> A range transition.
+    quint64 geometryRevision() const { return m_geometryRevision; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // True when a target frequency (MHz) lies within this pan's current span
     // [center - bw/2, center + bw/2]. The source of truth for the CAT
@@ -284,6 +287,7 @@ private:
     QString     m_clientHandle;
     quint32     m_ownerHandle{0};   // parsed m_clientHandle; 0 = unknown (#3977)
     double      m_centerMhz{14.1};
+    quint64     m_geometryRevision{0};
     bool        m_centerKnown{false}; // true after a normalized center update
     std::optional<qint64> m_reportedCenterHz;
     std::optional<qint64> m_reportedBandwidthHz;

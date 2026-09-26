@@ -3,6 +3,7 @@
 #include "IndependentTxControl.h"
 
 #include "core/RadioSettingsIdentity.h"
+#include "core/RadioSettingsScope.h"
 #include "core/TxCoordinator.h"
 #include "core/PcmFrame.h"
 
@@ -28,6 +29,7 @@
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/SpectrumCoverage.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
 #include "core/backends/TxAudioSource.h"
@@ -241,6 +243,17 @@ public:
     virtual bool ownsRxAudio() const { return false; }
 
     // ---- connection lifecycle ----
+    // Model-owned identity handoff for feature-document owners. A backend
+    // must not reconstruct this scope from a later USB/discovery observation.
+    virtual void configureSettingsScope(const RadioSettingsScope& scope, const RadioSerialIdentity& identity)
+    { Q_UNUSED(scope); Q_UNUSED(identity); }
+    // nullopt retains generic OperatingState ownership. A feature owner
+    // returns its atomic-write result, including refusal, so a failed write
+    // never falls through into a second overlapping writer.
+    virtual std::optional<bool> storeOperatingState(const RadioSettingsScope& scope,
+                                                   const RestoredRadioState& state)
+    { Q_UNUSED(scope); Q_UNUSED(state); return std::nullopt; }
+
     // Typed restore handoff (RFC #4603 proposal B): called by RadioModel
     // BEFORE connectRadio(), and only when this backend's declared
     // clientSettingsDomains is non-empty. The backend stashes what it wants
@@ -256,13 +269,19 @@ public:
     // declared clientSettingsDomains is non-empty reports its operating state
     // here on demand, and emits operatingStateChanged() (see signals) when it
     // moves. RadioModel debounces the signal and persists the snapshot via
-    // RadioStateMemory::store — the backend never touches the settings store.
+    // storeOperatingState when handled, otherwise RadioStateMemory::store.
     virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
 
     // ---- intents DOWN: canonical core-profile verbs (grow per burndown) ----
     // The backend translates each to its vendor wire protocol.
+    // Opt-in for slice frequency/mode/filter, monitor gain/pan/mute and pan
+    // center/bandwidth. Dispatch is never acknowledgment: Confirmed backends
+    // publish accepted values through sliceChanged/panCenterBandwidthChanged,
+    // including after deferred DSP adoption. Refusal/rollback leaves the last
+    // observation intact. This does not grant any capability.
+    virtual ReceiveControlPolicy receiveControlPolicy() const { return ReceiveControlPolicy::Optimistic; }
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;
@@ -312,6 +331,21 @@ public:
     // parameter, and there is exactly one caller.
     virtual void setPanCenter(const QString& panId, double hz,
                               PanCenterIntent intent) = 0;
+
+    // A confirmed-control backend admits the receiver and its display intent
+    // together. False means neither intent was accepted; true is admission,
+    // not completion. Observations still arrive only after capture adoption.
+    enum class ReceiveTuneView { Preserve, Reveal, Center };
+    virtual bool requestReceiveTune(int sliceId, double hz, ReceiveTuneView view)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(hz); Q_UNUSED(view);
+        return false;
+    }
+    virtual bool recenterReceiveCapture(const QString& panId)
+    {
+        Q_UNUSED(panId);
+        return false;
+    }
 
     // Change the panadapter's SPAN — how much spectrum the window covers.
     //
@@ -1393,7 +1427,11 @@ signals:
     // Declared here so backends have a normalized outlet for spectrum/waterfall/
     // audio; the concrete zero-copy/binary frame formats are step-4 work. Until
     // then a backend may relay the existing in-tree frame types.
-    void spectrumFrameReady(int panId, const QByteArray& frame);
+    // A producer may attach wider, same-observation RF coverage. Existing
+    // producers omit it; consumers interested only in the viewport keep their
+    // two-argument connection. One emission owns spectrum + paced history.
+    void spectrumFrameReady(int panId, const QByteArray& frame,
+                            const AetherSDR::SpectrumCoverage& coverage = AetherSDR::SpectrumCoverage());
     void waterfallRowReady(int panId, const QByteArray& row);
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 

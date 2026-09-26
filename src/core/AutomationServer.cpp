@@ -1718,6 +1718,7 @@ QJsonObject sliceSnapshot(const SliceModel* s, int linkedTo,
         {QStringLiteral("filterPresetId"), filterControl.selectedPresetId},
         {QStringLiteral("filterPreset"), filterPreset},
         {QStringLiteral("active"),     s->isActive()},
+        {QStringLiteral("inCapture"),  s->inCapture()},
         {QStringLiteral("txSlice"),    s->isTxSlice()},
         {QStringLiteral("rxAntenna"),  s->rxAntenna()},
         {QStringLiteral("txAntenna"),  s->txAntenna()},   // live TX antenna — lets a driver enforce the dummy-load gate before keying (#3646)

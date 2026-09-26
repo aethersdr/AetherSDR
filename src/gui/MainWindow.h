@@ -811,6 +811,7 @@ private:
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
+    void scheduleClientFftAverageSave(int panIndex, int average, bool weighted);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();

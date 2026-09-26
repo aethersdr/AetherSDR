@@ -388,6 +388,22 @@ int main(int argc, char** argv)
         }
     }
 
+    // FMN is the RTL spelling of NFM. A sideband-shaped status must not
+    // remain above the carrier simply because this alias was omitted.
+    {
+        SliceModel s(3);
+        s.applyChanges(delta([](SliceDelta& d) {
+            d.mode = QStringLiteral("FMN");
+            d.filterLow = 95;
+            d.filterHigh = 8000;
+        }));
+        EXPECT_EQ(s.filterLow(), -8000);
+        EXPECT_EQ(s.filterHigh(), 8000);
+        s.setFilterWidth(-4000, 6000);
+        EXPECT_EQ(s.filterLow(), -4000);
+        EXPECT_EQ(s.filterHigh(), 6000);
+    }
+
     // ── Filter polarity mirror (#3434). FlexLib reports FDV passbands as
     // USB-form (positive lo/hi) for BOTH sidebands; FDVL is lower-sideband and
     // must be mirrored to negative offsets so the overlay draws below the

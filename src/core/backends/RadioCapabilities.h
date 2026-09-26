@@ -61,12 +61,28 @@ struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
 };
+// Native slice squelch semantics. Absence preserves the legacy desktop shape;
+// this record alone grants no headless-control verb. Explicit modes make an
+// unsupported demodulator distinguishable from a supported control set to Off.
+struct ReceiveSquelchModel {
+    QStringList modes;
+    double referenceDb = -160.0;
+    double stepDb = 1.0;
+    QString unit = QStringLiteral("dBm");
+};
 struct ReceivePanRangeControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     qint64 minimumHz{0};
     qint64 maximumHz{0};
     // Declaring center support promises no implicit slice retune. Declaring
     // bandwidth support promises no slice creation/removal or retune.
+};
+
+// Desktop capture-placement control. It preserves every receiver's RF and
+// passband while relocating the shared capture away from converter DC. This
+// record alone grants no headless-control verb or hardware acknowledgement.
+struct ReceiveCapturePlacement {
+    qint64 minimumDcSeparationHz = 0;
 };
 
 // What the panadapter's SPAN is made of. Absent means NO BACKEND HAS BEEN READ
@@ -127,6 +143,14 @@ struct BackendPanAveraging {
     // that engages this has to state its own unit rather than inherit
     // ANAN's by forgetting to.
     int msPerAverageStep;
+    // Explicit client persistence owner for these two local display controls.
+    // False preserves a family's existing settings behavior. This is separate
+    // from computing an average: ANAN already computes one without this owner.
+    bool clientPersistsAveraging;
+    // Empty preserves existing UI wording. A backend with different averaging
+    // units or weighted semantics supplies the descriptions of its controls.
+    QString averageDescription;
+    QString weightedDescription;
 };
 
 struct PanAmplitudeModel {
@@ -346,6 +370,7 @@ struct RadioCapabilities {
     // answers when it is absent, so read it through the accessors below rather
     // than unwrapping it at the call site.
     std::optional<PanSpanModel> panSpanModel;
+    std::optional<ReceiveCapturePlacement> receiveCapturePlacement;
     std::optional<PanAmplitudeModel> panAmplitude;
     // See BackendPanAveraging. Absent = the widget averages client-side.
     std::optional<BackendPanAveraging> backendPanAveraging;
@@ -418,6 +443,7 @@ struct RadioCapabilities {
     std::optional<ReceiveModeControl> receiveModeControl;
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
+    std::optional<ReceiveSquelchModel> receiveSquelchModel;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
     // Engaged when the radio can deliver a wideband converter view; see the
@@ -660,6 +686,7 @@ struct RadioCapabilities {
         Memories    = 1u << 5,  // host-side memory bank documents (#4590 fold-in)
         Agc         = 1u << 6,  // AGC mode + threshold (client-side WDSP AGC)
         Cw          = 1u << 7,  // client-side keyer/sidetone setpoints; never keying
+        RtlSlices   = 1u << 8,  // accepted RTL capture and stable receiver documents
     };
     Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
     ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing

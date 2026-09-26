@@ -1,4 +1,5 @@
 #include "core/backends/rtl/RtlReceiverRegistry.h"
+#include "core/backends/rtl/RtlRfExtractor.h"
 
 #include <QThreadPool>
 
@@ -38,6 +39,9 @@ bool validCapture(const Registry::Capture& capture)
 
 bool boundedDsp(const WdspChannel::Config& config)
 {
+    if (config.fmReceive && (config.mode != WdspChannel::Mode::Fm
+        || !std::isfinite(config.fmDeviationHz) || config.fmDeviationHz <= 0
+        || config.fmDeviationHz >= config.dspSampleRate / 2.0)) { return false; }
     const auto blockSize = [](std::size_t value) {
         return value >= 64 && value <= 16384 && (value & (value - 1)) == 0;
     };
@@ -88,11 +92,27 @@ bool boundedDsp(const WdspChannel::Config& config)
         std::isfinite(config.muteSlewDownSec) && config.muteSlewDownSec >= 0 && config.muteSlewDownSec <= 1;
 }
 
-class WdspReceiver final : public Registry::Receiver {
+class WdspReceiver final : public Registry::Receiver, private RtlRfExtractor::Sink {
 public:
-    explicit WdspReceiver(std::unique_ptr<WdspChannel> channel)
+    WdspReceiver(std::unique_ptr<WdspChannel> channel, const Registry::ReceiverSpec& spec)
         : m_channel(std::move(channel)), m_left(m_channel->outputBlockSize()),
-          m_right(m_channel->outputBlockSize()) {}
+          m_right(m_channel->outputBlockSize()), m_spec(spec)
+    {
+        if (spec.extractRf) {
+            m_extractor = std::make_unique<RtlRfExtractor>(RtlRfExtractor::Config{
+                spec.capture, spec.passband, spec.dsp.inputSampleRate, spec.dsp.inputBlockSize});
+        }
+    }
+    bool valid() const noexcept { return !m_extractor || m_extractor->valid(); }
+    bool processCapture(const Registry::SampleBlock& block, Registry::AudioSink& sink) noexcept override
+    {
+        if (!m_extractor || block.session != m_spec.handle.session) { return false; }
+        m_sink = &sink;
+        const bool success = m_extractor->process(block.capture, block.firstSample,
+            block.samples, *this, block.discontinuity);
+        m_sink = nullptr;
+        return success;
+    }
     WdspChannel::ProcessResult processIq(std::span<const float> i,
         std::span<const float> q) noexcept override
     {
@@ -107,6 +127,21 @@ private:
     std::unique_ptr<WdspChannel> m_channel;
     std::vector<float> m_left;
     std::vector<float> m_right;
+    const Registry::ReceiverSpec m_spec;
+    std::unique_ptr<RtlRfExtractor> m_extractor;
+    Registry::AudioSink* m_sink = nullptr;
+    bool m_first = true;
+    bool iqBlock(std::span<const float> i, std::span<const float> q,
+                 std::uint64_t firstSample) noexcept override
+    {
+        // Nonblocking WDSP fexchange2 advances its ring even on underrun.
+        // Withdraw this instance rather than later publishing a stale ring
+        // position as current audio. Its replacement is prepared off-thread.
+        if (processIq(i, q) != WdspChannel::ProcessResult::Ok) { return false; }
+        m_sink->audioBlock(m_spec, firstSample, m_left, m_right, m_first);
+        m_first = false;
+        return true;
+    }
 };
 
 std::unique_ptr<Registry::Receiver> prepareWdsp(const Registry::ReceiverSpec& spec,
@@ -116,7 +151,9 @@ std::unique_ptr<Registry::Receiver> prepareWdsp(const Registry::ReceiverSpec& sp
     if (!channel) {
         return nullptr;
     }
-    return std::make_unique<WdspReceiver>(std::move(channel));
+    auto receiver = std::make_unique<WdspReceiver>(std::move(channel), spec);
+    if (!receiver->valid()) { error = "Invalid RF extraction geometry"; return nullptr; }
+    return receiver;
 }
 
 struct Request {
@@ -130,7 +167,7 @@ struct Bank {
     // Keep unused reservations too: injected preparation cannot bypass actual
     // shared-pool admission. Production consumes each into a WdspChannel.
     std::optional<WdspChannel::Reservation> reservation;
-    std::array<std::unique_ptr<Registry::Receiver>, Registry::kMaxSlots> receivers;
+    std::array<std::shared_ptr<Registry::Receiver>, Registry::kMaxSlots> receivers;
 };
 struct BankSlot {
     std::atomic<Stage> stage {Stage::Free};
@@ -228,6 +265,7 @@ struct RtlReceiverRegistry::Executor : std::enable_shared_from_this<Executor> {
             std::unique_ptr<Bank> retired;
             int index = -1;
             std::optional<Request> request;
+            std::array<std::shared_ptr<Receiver>, kMaxSlots> reused;
             {
                 const std::scoped_lock lock(mutex);
                 // Destruction has priority over preparing the coalesced state.
@@ -266,6 +304,20 @@ struct RtlReceiverRegistry::Executor : std::enable_shared_from_this<Executor> {
                                     state = pending->state;
                                     index = static_cast<int>(i);
                                     request = pending->request;
+                                    // Only the executor releases shared ownership. The
+                                    // callback borrows raw pointers and cannot destroy
+                                    // the old bank while this copy is made under mutex.
+                                    for (const BankSlot& active : state->banks) {
+                                        if (active.stage.load(std::memory_order_acquire) != Stage::Active) { continue; }
+                                        for (std::size_t next = 0; next < request->count; ++next) {
+                                            for (std::size_t prior = 0; prior < active.request.count; ++prior) {
+                                                if (request->receivers[next].extractRf
+                                                    && request->receivers[next] == active.request.receivers[prior]) {
+                                                    reused[next] = active.bank->receivers[prior];
+                                                }
+                                            }
+                                        }
+                                    }
                                     state->banks[i].request = *request;
                                     state->banks[i].stage.store(Stage::Preparing, std::memory_order_relaxed);
                                     pending.reset();
@@ -298,8 +350,12 @@ struct RtlReceiverRegistry::Executor : std::enable_shared_from_this<Executor> {
             std::unique_ptr<Bank> prepared = std::make_unique<Bank>();
             std::string error;
             Result result = Result::Accepted;
-            if (request->count != 0) {
-                prepared->reservation = WdspChannel::reserveChannels(request->count);
+            prepared->receivers = std::move(reused);
+            const std::size_t newCount = static_cast<std::size_t>(std::count_if(
+                prepared->receivers.begin(), prepared->receivers.begin() + request->count,
+                [](const auto& receiver) { return !receiver; }));
+            if (newCount != 0) {
+                prepared->reservation = WdspChannel::reserveChannels(newCount);
                 if (!prepared->reservation) {
                     result = Result::ResourceLimit;
                     error = "The shared WDSP pool cannot reserve the complete receiver bank";
@@ -312,6 +368,7 @@ struct RtlReceiverRegistry::Executor : std::enable_shared_from_this<Executor> {
                         result = Result::Closed;
                         break;
                     }
+                    if (prepared->receivers[i]) { continue; }
                     prepared->receivers[i] = state->prepare(request->receivers[i], *prepared->reservation, error);
                     if (!prepared->receivers[i]) {
                         result = Result::PreparationFailed;
@@ -441,6 +498,38 @@ std::optional<RtlReceiverRegistry::Handle> RtlReceiverRegistry::reserveSlot(std:
     return std::nullopt;
 }
 
+bool RtlReceiverRegistry::slotAwaitingRetirement(int slot) const
+{
+    if (!m_state || slot < 0 || static_cast<std::size_t>(slot) >= m_state->limits.slotCount) {
+        return false;
+    }
+    const std::shared_ptr<Executor> controller = executor();
+    const std::scoped_lock lock(controller->mutex);
+    const std::uint64_t session = m_state->session.load(std::memory_order_acquire);
+    if (!session) { return false; }
+    for (const BankSlot& bank : m_state->banks) {
+        const Stage stage = bank.stage.load(std::memory_order_acquire);
+        if ((stage != Stage::Retired && stage != Stage::Destroying)
+            || bank.request.session != session) { continue; }
+        const auto last = bank.request.receivers.begin() + bank.request.count;
+        if (std::any_of(bank.request.receivers.begin(), last,
+                [slot](const ReceiverSpec& spec) { return spec.handle.slot == slot; })) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<RtlReceiverRegistry::Handle> RtlReceiverRegistry::currentHandle(int slot) const
+{
+    if (!m_state || slot < 0 || static_cast<std::size_t>(slot) >= m_state->limits.slotCount) { return {}; }
+    const auto controller = executor();
+    const std::scoped_lock lock(controller->mutex);
+    const Handle handle = m_state->reservations[slot];
+    return handle.session && handle.session == m_state->session.load()
+        ? std::optional<Handle>(handle) : std::nullopt;
+}
+
 RtlReceiverRegistry::Result RtlReceiverRegistry::cancelReservation(Handle handle)
 {
     if (!m_state) {
@@ -462,9 +551,17 @@ RtlReceiverRegistry::Result RtlReceiverRegistry::cancelReservation(Handle handle
 
 RtlReceiverRegistry::Result RtlReceiverRegistry::submit(const Capture& capture, std::span<const ReceiverSpec> desired)
 {
-    if (!m_state) {
-        return Result::Closed;
-    }
+    return submitImpl(capture, desired, false);
+}
+RtlReceiverRegistry::Result RtlReceiverRegistry::submitVerifiedRollback(const Capture& capture,
+    std::span<const ReceiverSpec> desired)
+{
+    return submitImpl(capture, desired, true);
+}
+RtlReceiverRegistry::Result RtlReceiverRegistry::submitImpl(const Capture& capture,
+    std::span<const ReceiverSpec> desired, bool verifiedRollback)
+{
+    if (!m_state) { return Result::Closed; }
     const std::shared_ptr<Executor> controller = executor();
     const std::scoped_lock lock(controller->mutex);
     State& state = *m_state;
@@ -482,7 +579,7 @@ RtlReceiverRegistry::Result RtlReceiverRegistry::submit(const Capture& capture, 
                 return bank.stage.load(std::memory_order_acquire) == Stage::Active &&
                     bank.request.session == state.session.load() && bank.request.capture == capture;
             });
-        if (!stillActive) {
+        if (!stillActive && !verifiedRollback) {
             return Result::Invalid;
         }
     }
@@ -496,7 +593,10 @@ RtlReceiverRegistry::Result RtlReceiverRegistry::submit(const Capture& capture, 
         const int slot = spec.handle.slot;
         if (slot < 0 || static_cast<std::size_t>(slot) >= state.limits.slotCount || used[slot] ||
             spec.handle.session != state.session.load() || state.reservations[slot] != spec.handle ||
-            spec.passband.stableId != slot || !boundedDsp(spec.dsp)) {
+            spec.passband.stableId != slot || !boundedDsp(spec.dsp)
+            || (spec.extractRf && (spec.dsp.inputSampleRate != 48000
+                || spec.dsp.dspSampleRate != 48000 || spec.dsp.outputSampleRate != 48000
+                || spec.dsp.inputBlockSize != 1024 || spec.dsp.dspBlockSize != 1024))) {
             return Result::Invalid;
         }
         used[slot] = true;
@@ -520,6 +620,7 @@ RtlReceiverRegistry::Result RtlReceiverRegistry::submit(const Capture& capture, 
     request.capture = capture;
     request.count = desired.size();
     std::copy(desired.begin(), desired.end(), request.receivers.begin());
+    for (std::size_t i = 0; i < request.count; ++i) { request.receivers[i].capture = capture; }
     // Omitted live handles remain valid until their last bank retires. If
     // preparation fails, the caller can still resubmit the complete old set.
     state.desiredSlots = used;
@@ -629,7 +730,34 @@ void RtlReceiverRegistry::SampleReader::stop()
     m_state.reset(); // off callback; Executor retains State until retirement
 }
 
-bool RtlReceiverRegistry::SampleReader::processBlock(const SampleBlock& block, BlockProcessor& processor) noexcept
+bool RtlReceiverRegistry::SampleReader::adoptPrepared(std::uint64_t session, const Capture& capture,
+    std::uint64_t revision) noexcept
+{
+    if (!m_state || !session || m_state->session.load(std::memory_order_acquire) != session) { return false; }
+    State& state = *m_state;
+    const int offered = state.offered.load(std::memory_order_acquire);
+    if (offered < 0) { return activeRevision() == revision; }
+    BankSlot& slot = state.banks[static_cast<std::size_t>(offered)];
+    if (slot.request.session != session || slot.request.revision != revision
+        || slot.request.revision != state.revision.load(std::memory_order_acquire)
+        || slot.request.capture != capture) { return false; }
+    const int previous = m_active;
+    m_continuous = m_continuous && previous >= 0
+        && state.banks[static_cast<std::size_t>(previous)].request.capture == capture;
+    slot.stage.store(Stage::Active, std::memory_order_release);
+    m_active = offered;
+    if (previous >= 0) { state.banks[static_cast<std::size_t>(previous)].stage.store(Stage::Retired, std::memory_order_release); }
+    state.offered.store(-1, std::memory_order_release);
+    return true;
+}
+
+std::uint64_t RtlReceiverRegistry::SampleReader::activeRevision() const noexcept
+{
+    return m_state && m_active >= 0 ? m_state->banks[static_cast<std::size_t>(m_active)].request.revision : 0;
+}
+
+bool RtlReceiverRegistry::SampleReader::processBlock(const SampleBlock& block, BlockProcessor& processor,
+    std::uint64_t adoptionRevision) noexcept
 {
     if (!m_state) {
         return false;
@@ -655,14 +783,16 @@ bool RtlReceiverRegistry::SampleReader::processBlock(const SampleBlock& block, B
         BankSlot& slot = state.banks[static_cast<std::size_t>(offered)];
         const bool stale = slot.request.session != session ||
             slot.request.revision != state.revision.load(std::memory_order_acquire);
-        if (stale || (validBlock && slot.request.capture == block.capture)) {
+        if (stale || (validBlock && slot.request.capture == block.capture
+            && (adoptionRevision == 0 || slot.request.revision == adoptionRevision))) {
             if (stale) {
                 slot.stage.store(Stage::Retired, std::memory_order_release);
             } else {
                 const int previous = m_active;
                 slot.stage.store(Stage::Active, std::memory_order_release);
                 m_active = offered;
-                m_continuous = false;
+                m_continuous = m_continuous && previous >= 0 &&
+                    state.banks[static_cast<std::size_t>(previous)].request.capture == block.capture;
                 if (previous >= 0) {
                     state.banks[static_cast<std::size_t>(previous)].stage.store(Stage::Retired, std::memory_order_release);
                 }
@@ -673,14 +803,12 @@ bool RtlReceiverRegistry::SampleReader::processBlock(const SampleBlock& block, B
         }
     }
     if (session == 0 || m_active < 0 || !validBlock) {
-        m_continuous = false;
+        // Stale delivery must not poison an otherwise continuous live stream.
+        if (block.session == session) { m_continuous = false; }
         return false;
     }
     BankSlot& active = state.banks[static_cast<std::size_t>(m_active)];
-    if (active.request.capture != block.capture) {
-        m_continuous = false;
-        return false;
-    }
+    if (active.request.capture != block.capture) { return false; }
     std::array<ReceiverView, kMaxSlots> views;
     for (std::size_t i = 0; i < active.request.count; ++i) {
         views[i] = {&active.request.receivers[i], active.bank->receivers[i].get()};

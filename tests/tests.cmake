@@ -170,6 +170,22 @@ add_test(NAME rx_client_effects_test COMMAND rx_client_effects_test)
 set_tests_properties(rx_client_effects_test PROPERTIES TIMEOUT 30)
 
 # Pure shared-capture geometry policy: no sockets, settings, DSP or hardware.
+# Socket-free complete capture transaction, including injected USB failures.
+add_executable(rtl_capture_transaction_test
+    tests/rtl_capture_transaction_test.cpp
+    src/core/backends/rtl/RtlCaptureTransaction.cpp
+    src/core/SharedCapturePolicy.cpp
+)
+target_include_directories(rtl_capture_transaction_test PRIVATE src)
+set_target_properties(rtl_capture_transaction_test PROPERTIES AUTOMOC OFF)
+add_test(NAME rtl_capture_transaction_test COMMAND rtl_capture_transaction_test)
+
+# Genuine FFT-bin viewport geometry, no sockets, settings or hardware.
+add_executable(rtl_viewport_test tests/rtl_viewport_test.cpp)
+target_include_directories(rtl_viewport_test PRIVATE src)
+set_target_properties(rtl_viewport_test PROPERTIES AUTOMOC OFF)
+add_test(NAME rtl_viewport_test COMMAND rtl_viewport_test)
+
 add_executable(shared_capture_policy_test
     tests/shared_capture_policy_test.cpp
     src/core/SharedCapturePolicy.cpp
@@ -1349,7 +1365,93 @@ target_link_libraries(hl2_link_stats_model_test PRIVATE aethercore Qt6::Core Qt6
 add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
 ]==]
 
+add_executable(wdsp_allocation_scope_test tests/wdsp_allocation_scope_test.cpp)
+target_link_libraries(wdsp_allocation_scope_test PRIVATE aether_wdsp Threads::Threads)
+add_test(NAME wdsp_allocation_scope_test COMMAND wdsp_allocation_scope_test)
+
+add_executable(rtl_receive_pipeline_test tests/rtl_receive_pipeline_test.cpp)
+target_include_directories(rtl_receive_pipeline_test PRIVATE src)
+target_link_libraries(rtl_receive_pipeline_test PRIVATE aethercore aether_wdsp Qt6::Core)
+add_test(NAME rtl_receive_pipeline_test COMMAND rtl_receive_pipeline_test)
+set_tests_properties(rtl_receive_pipeline_test PROPERTIES TIMEOUT 45)
+add_executable(flex_slice_mode_intent_test tests/flex_slice_mode_intent_test.cpp)
+target_include_directories(flex_slice_mode_intent_test PRIVATE src tests)
+target_link_libraries(flex_slice_mode_intent_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME flex_slice_mode_intent_test COMMAND flex_slice_mode_intent_test)
+set_tests_properties(flex_slice_mode_intent_test PROPERTIES TIMEOUT 30)
+add_executable(rtl_fm_audio_test tests/rtl_fm_audio_test.cpp)
+target_link_libraries(rtl_fm_audio_test PRIVATE aethercore)
+add_test(NAME rtl_fm_audio_test COMMAND rtl_fm_audio_test)
+set_tests_properties(rtl_fm_audio_test PROPERTIES TIMEOUT 90)
+add_executable(rtl_dc_audio_test tests/rtl_dc_audio_test.cpp)
+target_link_libraries(rtl_dc_audio_test PRIVATE aethercore)
+add_test(NAME rtl_dc_audio_test COMMAND rtl_dc_audio_test)
+set_tests_properties(rtl_dc_audio_test PROPERTIES TIMEOUT 180)
+add_executable(rtl_squelch_test tests/rtl_squelch_test.cpp)
+target_include_directories(rtl_squelch_test PRIVATE src)
+add_test(NAME rtl_squelch_test COMMAND rtl_squelch_test)
+
+add_executable(rtl_audio_mixer_test tests/rtl_audio_mixer_test.cpp
+    src/core/backends/rtl/RtlAudioMixer.cpp)
+target_include_directories(rtl_audio_mixer_test PRIVATE src)
+add_test(NAME rtl_audio_mixer_test COMMAND rtl_audio_mixer_test)
+
+# Generated IQ, no USB or socket peer; also built with RTL disabled.
+add_executable(rtl_rf_extractor_test tests/rtl_rf_extractor_test.cpp
+    src/core/backends/rtl/RtlRfExtractor.cpp src/core/SharedCapturePolicy.cpp src/core/Resampler.cpp)
+target_include_directories(rtl_rf_extractor_test PRIVATE src third_party/r8brain)
+target_link_libraries(rtl_rf_extractor_test PRIVATE Qt6::Core)
+add_test(NAME rtl_rf_extractor_test COMMAND rtl_rf_extractor_test)
+
 if(AETHER_BACKEND_RTL)
+    # Real model/worker; injected USB and generated callbacks, no socket peer.
+    add_executable(rtl_model_acceptance_test tests/rtl_model_acceptance_test.cpp)
+    target_include_directories(rtl_model_acceptance_test PRIVATE src tests)
+    target_link_libraries(rtl_model_acceptance_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_model_acceptance_test COMMAND rtl_model_acceptance_test)
+    set_tests_properties(rtl_model_acceptance_test PROPERTIES TIMEOUT 60)
+
+    # Inject the C API into the private adapter; no USB, sockets or driver load.
+    add_executable(rtl_usb_controls_test tests/rtl_usb_controls_test.cpp
+        src/core/backends/rtl/RtlCaptureTransaction.cpp src/core/SharedCapturePolicy.cpp)
+    target_include_directories(rtl_usb_controls_test PRIVATE src
+        $<TARGET_PROPERTY:${RTLSDR_TARGET},INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:${RTL_FFTW3F_TARGET},INTERFACE_INCLUDE_DIRECTORIES>)
+    target_link_libraries(rtl_usb_controls_test PRIVATE Qt6::Core)
+    add_test(NAME rtl_usb_controls_test COMMAND rtl_usb_controls_test)
+
+    add_executable(rtl_runtime_settings_test tests/rtl_runtime_settings_test.cpp)
+    target_include_directories(rtl_runtime_settings_test PRIVATE src tests)
+    target_link_libraries(rtl_runtime_settings_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_runtime_settings_test COMMAND rtl_runtime_settings_test)
+
+    # Injected device operations and real adoption/persistence; no sockets or USB.
+    add_executable(rtl_device_controls_test tests/rtl_device_controls_test.cpp)
+    target_include_directories(rtl_device_controls_test PRIVATE src tests)
+    target_link_libraries(rtl_device_controls_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_device_controls_test COMMAND rtl_device_controls_test)
+
+    # Injected device operations; no sockets, USB enumeration or RF.
+    add_executable(rtl_capture_worker_test tests/rtl_capture_worker_test.cpp)
+    target_include_directories(rtl_capture_worker_test PRIVATE src tests)
+    target_link_libraries(rtl_capture_worker_test PRIVATE aethercore Qt6::Core Qt6::Test)
+    add_test(NAME rtl_capture_worker_test COMMAND rtl_capture_worker_test)
+    set_tests_properties(rtl_capture_worker_test PROPERTIES TIMEOUT 20)
+
+    # Generated IQ only: genuine resolution, continuity, gain and detector independence.
+    add_executable(rtl_spectrum_resolution_test tests/rtl_spectrum_resolution_test.cpp)
+    target_include_directories(rtl_spectrum_resolution_test PRIVATE src)
+    target_link_libraries(rtl_spectrum_resolution_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_spectrum_resolution_test COMMAND rtl_spectrum_resolution_test)
+    set_tests_properties(rtl_spectrum_resolution_test PROPERTIES TIMEOUT 30)
+
+    # Generated IQ through the real averaging seam; no sockets or USB.
+    add_executable(rtl_spectrum_averaging_test tests/rtl_spectrum_averaging_test.cpp)
+    target_include_directories(rtl_spectrum_averaging_test PRIVATE src tests)
+    target_link_libraries(rtl_spectrum_averaging_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_spectrum_averaging_test COMMAND rtl_spectrum_averaging_test)
+    set_tests_properties(rtl_spectrum_averaging_test PROPERTIES TIMEOUT 30)
+
     # Socket-free RTL-SDR backend seam, DSP, and discovery contract.
     add_executable(rtl_backend_test tests/rtl_backend_test.cpp)
     target_include_directories(rtl_backend_test PRIVATE src)
@@ -1777,6 +1879,36 @@ add_executable(panadapter_model_rx_antenna_test
 target_include_directories(panadapter_model_rx_antenna_test PRIVATE src)
 target_link_libraries(panadapter_model_rx_antenna_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME panadapter_model_rx_antenna_test COMMAND panadapter_model_rx_antenna_test)
+
+# The real SpectrumWidget currently belongs to the desktop executable. Keep
+# this socket-free gesture lane opt-in; no GUI-library refactor or extra full
+# desktop compilation in the default test graph is needed for this regression.
+option(AETHER_BUILD_SPECTRUM_GESTURE_TEST "Build real SpectrumWidget gesture regression" OFF)
+if(AETHER_BUILD_SPECTRUM_GESTURE_TEST)
+    # Optional desktop sources (MIDI, FreeDV, device dialogs, shader resources)
+    # are appended to AetherSDR after GUI_SOURCES is declared. Mirror its final
+    # source set so the test uses the same configured desktop implementation.
+    get_target_property(_spectrum_gesture_sources AetherSDR SOURCES)
+    list(REMOVE_ITEM _spectrum_gesture_sources src/main.cpp)
+    add_executable(spectrum_confirmed_geometry_test
+        tests/spectrum_confirmed_geometry_test.cpp ${_spectrum_gesture_sources})
+    target_include_directories(spectrum_confirmed_geometry_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(spectrum_confirmed_geometry_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_DEFINITIONS>)
+    target_compile_options(spectrum_confirmed_geometry_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,COMPILE_OPTIONS>)
+    target_link_libraries(spectrum_confirmed_geometry_test PRIVATE
+        $<TARGET_PROPERTY:AetherSDR,LINK_LIBRARIES>)
+    add_test(NAME spectrum_confirmed_geometry_test COMMAND spectrum_confirmed_geometry_test)
+    set_tests_properties(spectrum_confirmed_geometry_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;AETHER_AUTOMATION_NO_TX=1")
+endif()
+
+add_executable(pan_frame_guard_test tests/pan_frame_guard_test.cpp)
+target_include_directories(pan_frame_guard_test PRIVATE src)
+target_link_libraries(pan_frame_guard_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pan_frame_guard_test COMMAND pan_frame_guard_test)
 
 add_executable(packet_loss_concealment_test
     tests/packet_loss_concealment_test.cpp
@@ -2667,6 +2799,8 @@ add_executable(firmware_close_dialog_test
     tests/firmware_close_dialog_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -2687,6 +2821,8 @@ add_executable(flex_control_visibility_test
     tests/flex_control_visibility_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -2718,6 +2854,8 @@ add_executable(radio_setup_region_field_test
     tests/radio_setup_region_field_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -2743,6 +2881,8 @@ add_executable(radio_setup_label_theme_token_test
     tests/radio_setup_label_theme_token_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -5177,6 +5317,27 @@ target_include_directories(rtl_slice_settings_test PRIVATE src tests)
 target_link_libraries(rtl_slice_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_slice_settings_test COMMAND rtl_slice_settings_test)
 
+# Exact-device controls, without hardware or transport.
+# Production settings widget through an injected extension seam; no socket/device.
+add_executable(rtl_receiver_settings_widget_test
+    tests/rtl_receiver_settings_widget_test.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
+    src/gui/ControlAvailabilityRegistry.cpp)
+target_include_directories(rtl_receiver_settings_widget_test PRIVATE src tests)
+target_link_libraries(rtl_receiver_settings_widget_test PRIVATE aetherdesktop_support Qt6::Widgets)
+add_test(NAME rtl_receiver_settings_widget_test COMMAND rtl_receiver_settings_widget_test)
+set_tests_properties(rtl_receiver_settings_widget_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Socket-free numerical IQ correction: real samples, no radio peer.
+add_executable(rtl_dc_blocker_test tests/rtl_dc_blocker_test.cpp)
+target_include_directories(rtl_dc_blocker_test PRIVATE src)
+add_test(NAME rtl_dc_blocker_test COMMAND rtl_dc_blocker_test)
+
+add_executable(rtl_device_settings_test tests/rtl_device_settings_test.cpp)
+target_include_directories(rtl_device_settings_test PRIVATE src tests)
+target_link_libraries(rtl_device_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_device_settings_test COMMAND rtl_device_settings_test)
+
 add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
 target_include_directories(radio_state_memory_test PRIVATE src tests)
 target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -6362,6 +6523,7 @@ add_test(NAME client_display_settings_test COMMAND client_display_settings_test)
 add_executable(rx_applet_squelch_reconciliation_test
     tests/rx_applet_squelch_reconciliation_test.cpp
     src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
@@ -6386,11 +6548,42 @@ add_test(NAME rx_applet_squelch_reconciliation_test
 set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# FM filter capability and edge routing through the real RX and VFO widgets.
+# Injects capability data; no socket, USB access or synthetic firmware peer.
+add_executable(fm_filter_controls_test
+    tests/fm_filter_controls_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(fm_filter_controls_test PRIVATE src)
+target_link_libraries(fm_filter_controls_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME fm_filter_controls_test
+         COMMAND fm_filter_controls_test)
+set_tests_properties(fm_filter_controls_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The VFO flag's AetherRX / AetherTX launchers stay the same width on every
 # mode's DSP grid. Same socket-free build as the squelch test above.
 add_executable(vfo_dsp_launcher_width_test
     tests/vfo_dsp_launcher_width_test.cpp
     src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
@@ -6419,6 +6612,7 @@ set_tests_properties(vfo_dsp_launcher_width_test PROPERTIES
 add_executable(gui_nested_lifetime_test
     tests/gui_nested_lifetime_test.cpp
     src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp
     src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
@@ -6651,7 +6845,15 @@ set(AETHER_SETTINGS_CONSUMERS
     client_display_settings_test
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
+    fm_filter_controls_test
+    spectrum_confirmed_geometry_test
+    flex_slice_mode_intent_test
     rtl_slice_settings_test
+    rtl_device_settings_test
+    rtl_receiver_settings_widget_test
+    rtl_runtime_settings_test
+    rtl_device_controls_test
+    rtl_model_acceptance_test
     automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test

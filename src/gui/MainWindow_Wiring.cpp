@@ -39,6 +39,7 @@
 #include "OwnedSingleShotTimer.h"
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
+#include "ReceiveCaptureAction.h"
 #include "PanadapterMessageOverlay.h"
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
@@ -730,7 +731,7 @@ bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool send
             // #4142 — defer, never drop. requestPanCenter() advances the local
             // model only when the command actually reaches the wire, and queues
             // it for replay when a profile load is holding radio-state writes.
-            centerDeferred = !m_radioModel.requestPanCenter(panId, targetCenterMhz);
+            centerDeferred = !requestSlicePanCenter(m_radioModel, slice->sliceId(), targetCenterMhz);
         } else {
             // Local-only snap: the caller explicitly wants no radio write, so
             // there is no wire command for the model to diverge from.
@@ -787,6 +788,10 @@ void MainWindow::resyncPanGeometryToView(const QString& panId)
     auto* sw = m_panStack->spectrum(panId);
     if (!pan || !sw)
         return;
+    if (m_radioModel.confirmsReceiveControls()) {
+        sw->observeFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
+        return;
+    }
     // Effective (pending-else-model) geometry: a deferred write in flight —
     // e.g. the leave-kiwi reconcile parked behind a profile-load hold (#4142)
     // — supersedes the model value; re-pushing the superseded span here would
@@ -1405,6 +1410,9 @@ bool MainWindow::autoSquelchShouldRunOnSpectrum(
         return panId == s->panId();
     }
 
+    const auto sql = m_radioModel.backendCapabilities().receiveSquelchModel;
+    if (sql && (!sql->modes.contains(s->mode()) || panId != s->panId())) { return false; }
+
     return kiwiSdrProfileForPan(panId).isEmpty()
         && (!spectrum || !spectrum->kiwiSdrWaterfallActive());
 }
@@ -1915,6 +1923,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Push overlay for this slice to the spectrum widget
     pushSliceOverlay(s);
+    connect(s, &SliceModel::inCaptureChanged, this, [this, s](bool) {
+        pushSliceOverlay(s);
+    });
 
     // Set the panadapter applet's slice label (e.g. "Slice B") based on
     // which pan this slice belongs to
@@ -1978,7 +1989,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         const bool dragTargetSlice =
             m_sliceDragTargetSliceId >= 0
             && (s->sliceId() == m_sliceDragTargetSliceId || dragDiversityPartner);
-        if (dragEchoHoldActive && dragTargetSlice
+        const bool confirmedControls = m_radioModel.confirmsReceiveControls();
+        if (!confirmedControls && dragEchoHoldActive && dragTargetSlice
             && m_sliceDragTargetMhz > 0.0 && !memoryRevealPending) {
             const int sliceId = s->sliceId();
             QTimer::singleShot(0, this, [this, sliceId]() {
@@ -1998,7 +2010,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
             });
             return;
         }
-        if (activeTuning
+        if (!confirmedControls && activeTuning
             && (s->sliceId() == m_activeSliceId || activeDiversityPartner)
             && !memoryRevealPending) {
             return;
@@ -3121,6 +3133,24 @@ void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
     });
 }
 
+void MainWindow::scheduleClientFftAverageSave(int panIndex, int average, bool weighted)
+{
+    const auto averaging = m_radioModel.backendCapabilities().backendPanAveraging;
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!m_radioModel.shapesDisplayRatesLocally() || !averaging
+        || !averaging->clientPersistsAveraging || scope.radioId().isEmpty() || panIndex < 0) {
+        return;
+    }
+    // Distinct from waterfall cadence; edits to either feature must survive
+    // coalescing. Capture scope now so a later radio switch cannot redirect it.
+    const QString key = QStringLiteral("fft:") + QString::number(scope.family().size())
+        + QLatin1Char(':') + scope.family() + QString::number(scope.radioId().size())
+        + QLatin1Char(':') + scope.radioId() + QLatin1Char(':') + QString::number(panIndex);
+    m_pendingDisplayWrites.schedule(key, [scope, panIndex, average, weighted] {
+        ClientDisplaySettings::saveFftAverage(scope, panIndex, true, {average, weighted});
+    });
+}
+
 void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
                                       PanadapterModel* pan)
 {
@@ -3194,7 +3224,23 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     // branch below — a pan re-wired after switching from a self-shaping backend
     // to a Flex has to be told the law changed back.
     sw->setWfRateShapedLocally(m_radioModel.shapesDisplayRatesLocally());
+    const auto averaging = m_radioModel.backendCapabilities().backendPanAveraging;
+    if (SpectrumOverlayMenu* menu = sw->overlayMenu()) {
+        menu->setFftAverageDescriptions(averaging ? averaging->averageDescription : QString{},
+                                       averaging ? averaging->weightedDescription : QString{});
+    }
     if (m_radioModel.shapesDisplayRatesLocally()) {
+        if (averaging && averaging->clientPersistsAveraging) {
+            if (pan->average() >= 0) {
+                // A live model wins over disk on applet/layout rebuild.
+                sw->setFftAverage(pan->average());
+                sw->setFftWeightedAvg(pan->weightedAverage());
+            } else if (const auto saved = ClientDisplaySettings::fftAverage(
+                           m_radioModel.settingsScope(), sw->panIndex(), true)) {
+                sw->setFftAverage(saved->average);
+                sw->setFftWeightedAvg(saved->weighted);
+            }
+        }
         if (const auto savedRate = ClientDisplaySettings::waterfallRate(
                 m_radioModel.settingsScope(), sw->panIndex(), true)) {
             sw->setWfLineDuration(*savedRate);
@@ -3334,7 +3380,9 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         // requestPanAverage()/requestPanDisplayRates() reject an empty id;
         // weighted-average still needs this guard on its raw command path.
         if (!targetPanId.isEmpty()) {
-            m_radioModel.requestPanAverage(targetPanId, src->fftAverage());
+            if (m_radioModel.requestPanAverage(targetPanId, src->fftAverage())) {
+                scheduleClientFftAverageSave(dst->panIndex(), src->fftAverage(), src->fftWeightedAvg());
+            }
             if (!m_radioModel.requestLocalPanWeightedAverage(targetPanId,
                                                              src->fftWeightedAvg())) {
                 m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
@@ -3659,6 +3707,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
+    if (!sw->capturePlacementAction()) {
+        sw->setCapturePlacementAction(new ReceiveCaptureAction(m_radioModel,
+            [applet] { return applet->panId(); }, sw));
+    }
     if (profileLoadRadioStateWritesHeld()) {
         // Profile recall briefly rebuilds pan topology and pixel dimensions.
         // Keep auto noise-floor from sliding the client-side dBm scale during
@@ -4063,6 +4115,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // before connect is happily running.
         sw->setPanBinsAbsolute(m_radioModel.isConnected()
                                && m_radioModel.backendCapabilities().panBinsAbsolute());
+        const auto sql = m_radioModel.isConnected()
+            ? m_radioModel.backendCapabilities().receiveSquelchModel : std::nullopt;
+        sw->setSquelchScale(sql ? sql->referenceDb : -160.0,
+            sql ? sql->stepDb : 1.0, sql ? sql->unit : QString());
 
         wirePanDisplayStatus(applet, pan);
     }
@@ -4578,7 +4634,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 true, margin, true);
         } else {
             s->setSquelch(true, level);
-            sw->setSquelchLine(true, level);
+            sw->setSquelchLine(s->squelchOn(), s->squelchLevel());
         }
     });
     // Auto-squelch margin: now driven by the RX Applet's SQL slider when
@@ -4654,7 +4710,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::fftAverageChanged,
             this, [this, applet, sw](int v) {
         sw->setFftAverage(v);
-        m_radioModel.requestPanAverage(applet->panId(), v);
+        if (m_radioModel.requestPanAverage(applet->panId(), v)) {
+            scheduleClientFftAverageSave(sw->panIndex(), v, sw->fftWeightedAvg());
+        }
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
             this, [this, applet, sw](int v) {
@@ -4673,6 +4731,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), on)) {
             m_radioModel.sendCommand(
                 QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
+        } else {
+            scheduleClientFftAverageSave(sw->panIndex(), sw->fftAverage(), on);
         }
     });
     connect(menu, &SpectrumOverlayMenu::wfColorSchemeChanged,
@@ -4951,7 +5011,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // so the reset doesn't fight the congestion-aware cap. The SpectrumWidget
         // values above (sw->setFftFps / sw->setWfLineDuration) are already updated,
         // so they become the new restore targets when the throttle lifts.
-        m_radioModel.requestPanAverage(applet->panId(), 0);
+        if (m_radioModel.requestPanAverage(applet->panId(), 0)) {
+            scheduleClientFftAverageSave(sw->panIndex(), 0, false);
+        }
         if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), false)) {
             m_radioModel.sendCommand(
                 QString("display pan set %1 weighted_average=0").arg(applet->panId()));
@@ -5192,6 +5254,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // Center Lock stands down for the whole duration of a slice drag so it
     // doesn't fight the drag (in-window tune or edge auto-pan) with per-tick
     // recenters; on release it recenters once so the locked pan re-asserts.
+    connect(sw, &SpectrumWidget::sliceDragCancelled, this, [this]() {
+        m_sliceDragInProgress = false;
+        m_sliceDragTargetSliceId = -1;
+        m_sliceDragTargetMhz = 0.0;
+        m_sliceDragEchoHoldUntilMs = 0;
+    });
     connect(sw, &SpectrumWidget::sliceDragActiveChanged, this, [this](bool active) {
         m_sliceDragInProgress = active;
         if (active) {

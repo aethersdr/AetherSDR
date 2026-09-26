@@ -37,6 +37,7 @@ struct WdspThreadStart
     void* context;
 };
 
+static _Thread_local uint64_t g_threadAllocationSequence = 0;
 static _Atomic uint64_t g_allocationSequence = 0;
 static _Atomic uint64_t g_outstandingAllocations = 0;
 // AetherSDR patch 13: see wdspPortHandoffPauseForTest() below.
@@ -380,6 +381,7 @@ void* wdspAlignedAllocate(size_t size, size_t alignment)
     {
         return NULL;
     }
+    ++g_threadAllocationSequence;
     atomic_fetch_add_explicit(&g_allocationSequence, 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&g_outstandingAllocations, 1, memory_order_relaxed);
     return pointer;
@@ -392,6 +394,11 @@ void wdspAlignedFree(void* pointer)
         atomic_fetch_sub_explicit(&g_outstandingAllocations, 1, memory_order_relaxed);
         free(pointer);
     }
+}
+
+uint64_t wdspPortThreadAllocationSequence(void)
+{
+    return g_threadAllocationSequence;
 }
 
 uint64_t wdspPortAllocationSequence(void)
@@ -483,6 +490,7 @@ void OutputDebugStringA(const char* text)
 #undef _aligned_malloc
 #undef _aligned_free
 
+static __declspec(thread) uint64_t g_threadAllocationSequence = 0;
 static volatile LONG64 g_allocationSequence = 0;
 static volatile LONG64 g_outstandingAllocations = 0;
 
@@ -491,6 +499,7 @@ void* wdspAlignedAllocate(size_t size, size_t alignment)
     void* pointer = _aligned_malloc(size, alignment);
     if (pointer != NULL)
     {
+        ++g_threadAllocationSequence;
         InterlockedIncrement64(&g_allocationSequence);
         InterlockedIncrement64(&g_outstandingAllocations);
     }
@@ -504,6 +513,11 @@ void wdspAlignedFree(void* pointer)
         InterlockedDecrement64(&g_outstandingAllocations);
         _aligned_free(pointer);
     }
+}
+
+uint64_t wdspPortThreadAllocationSequence(void)
+{
+    return g_threadAllocationSequence;
 }
 
 uint64_t wdspPortAllocationSequence(void)

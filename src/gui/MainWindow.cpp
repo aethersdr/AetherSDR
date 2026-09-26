@@ -7783,6 +7783,9 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         for (SpectrumWidget* spectrum : spectra) {
             spectrum->setRadioOwnsDbmScale(radioOwnsScale);
             spectrum->setPanBinsAbsolute(binsAbsolute);
+            const auto sql = connected ? caps.receiveSquelchModel : std::nullopt;
+            spectrum->setSquelchScale(sql ? sql->referenceDb : -160.0,
+                sql ? sql->stepDb : 1.0, sql ? sql->unit : QString());
         }
     }
 
@@ -8167,6 +8170,7 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
     if (!sw) {
         return;
     }
+    sw->setPanGeometryConfirmationRequired(m_radioModel.confirmsReceiveControls());
     auto* menu = sw->overlayMenu();
     if (menu) {
         menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
@@ -8475,6 +8479,21 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
         m_midiTuneTargetMhz = -1.0;
         m_midiTuneIdleTimer.stop();
 #endif
+    }
+
+    if (m_radioModel.confirmsReceiveControls()) {
+        if (m_radioModel.slice(slice->sliceId()) != slice) { return; }
+        IRadioBackend::ReceiveTuneView view = IRadioBackend::ReceiveTuneView::Preserve;
+        if (intent == TuneIntent::CommandedTargetCenter || centerLockActiveForSlice(slice)) {
+            view = IRadioBackend::ReceiveTuneView::Center;
+        } else if (intent != TuneIntent::IncrementalTune || panFollowEnabled()) {
+            view = IRadioBackend::ReceiveTuneView::Reveal;
+        }
+        // Receiver and display intent are admitted together. A refusal leaves
+        // both observations intact; pending hardware/DSP never moves a flag.
+        m_radioModel.requestConfirmedReceiveTune(slice->sliceId(), mhz, view);
+        pushSliceFrequencyToOverlays(slice, slice->frequency());
+        return;
     }
 
     holdCenterLockTuneTarget(slice, mhz);
@@ -9024,6 +9043,7 @@ void MainWindow::pushSliceOverlay(SliceModel* s)
         s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq(),
         s->diversity(), s->isDiversityParent(),
         s->isDiversityChild(), s->diversityIndex());
+    sw->setSliceOverlayInCapture(s->sliceId(), s->inCapture());
 }
 
 void MainWindow::syncTxWaterfallSliceToSpectrums()
@@ -10718,7 +10738,7 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
     // into waterfall history. requestPanCenter() defers and replays it instead.
     bool centerDeferred = false;
     if (!kiwiDisplayActive && forceRadioCenter && m_radioModel.isConnected()) {
-        centerDeferred = !m_radioModel.requestPanCenter(s->panId(), targetMhz);
+        centerDeferred = !requestSlicePanCenter(m_radioModel, s->sliceId(), targetMhz);
     }
 
     // Keep the local spectrum centered immediately so the active slice marker is
@@ -11104,7 +11124,7 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
                 if (pan) {
                     // Push current state to the spectrum widget
                     applet->spectrumWidget()->setDbmRange(pan->minDbm(), pan->maxDbm());
-                    applet->spectrumWidget()->setFrequencyRange(
+                    applet->spectrumWidget()->observeFrequencyRange(
                         pan->centerMhz(), pan->bandwidthMhz());
                 }
             }

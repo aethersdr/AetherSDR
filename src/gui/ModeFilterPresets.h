@@ -3,6 +3,8 @@
 #include <QString>
 #include <QVector>
 
+namespace AetherSDR { struct ReceiveFilterControl; }
+
 namespace AetherSDR::ModeFilters {
 
 // The per-mode filter ladders and the width -> passband-edges rule, lifted out
@@ -29,12 +31,21 @@ struct Edges {
     int hi = 0;
 };
 
-// The ladder for a mode, narrow to wide. Empty for modes with no presets (FM);
+// The ladder for a mode, narrow to wide. Empty for analog FM without a
+// declared adjustable-filter capability;
 // unknown modes get the SSB ladder, as they always have.
 const QVector<int>& widthsForMode(const QString& mode);
 
+// FM defaults above describe fixed radio filters. A receiver which declares
+// adjustable FM edges can use the existing DFM ladder within those bounds.
+// The conservative headless record does not gate unrelated desktop modes.
+QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* control);
+// Analog FM spellings. DFM retains its existing separate preset behavior.
+bool isFmMode(const QString& mode);
+
 // The passband a labelled width means in this mode.
 Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx);
+bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Edges edges);
 
 // A passband's labelled width, for matching a ladder entry against what the
 // slice is actually running. The inverse of edgesForWidth for every mode whose

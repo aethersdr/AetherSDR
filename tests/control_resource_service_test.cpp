@@ -711,7 +711,8 @@ bool testSimBackendEndToEnd()
                    && hasExactlyKeys(sliceValue,
                                      {"id", "letter", "panadapterId", "owned",
                                       "frequencyHz", "frequencyObservation", "mode", "filter", "active",
-                                      "txSlice", "locked", "audio", "receive", "receiveObservation"})
+                                      "inCapture", "txSlice", "locked", "audio", "receive",
+                                      "receiveObservation"})
                    && hasExactlyKeys(sliceValue.value(QStringLiteral("filter")).toObject(),
                                      {"lowHz", "highHz"})
                    && hasExactlyKeys(sliceValue.value(QStringLiteral("audio")).toObject(),
@@ -742,7 +743,94 @@ bool testSimBackendEndToEnd()
         return false;
     }
 
+    SliceModel* captureSlice = radio.slice(0);
+    if (!check(captureSlice && captureSlice->inCapture()
+                   && sliceValue.value(QStringLiteral("inCapture")).isBool()
+                   && sliceValue.value(QStringLiteral("inCapture")).toBool(),
+               "non-capture-limited backends must publish the in-capture default")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+
     QList<QJsonObject> events = drain(client);
+    const quint64 beforeParkRevision = store.get(sliceAddress)->revision;
+    const bool focusedBeforePark = captureSlice->isActive();
+    const qint64 frequencyBeforePark =
+        store.get(sliceAddress)->value.value(QStringLiteral("frequencyHz")).toInteger();
+    // Inject the normalized seam observation without creating a fake radio or
+    // claiming the simulator itself has a bounded capture stream.
+    SliceDelta park;
+    park.inCapture = false;
+    radio.emitBackendSliceChangedForTest(0, park);
+    const std::optional<ResourceSnapshot> parked = store.get(sliceAddress);
+    const QList<QJsonObject> parkEvents = drain(client);
+    const QJsonObject parkedReply = invoke(
+        &service, &client, QStringLiteral("park-get"),
+        QStringLiteral("resource.get"),
+        {{QStringLiteral("resource"),
+          exactResource(QStringLiteral("slice"), QStringLiteral("radio-1"),
+                        QStringLiteral("0"))}});
+    const QJsonObject parkedValue = parkedReply.value(QStringLiteral("result"))
+                                        .toObject().value(QStringLiteral("value")).toObject();
+    if (!check(parked && parked->revision > beforeParkRevision
+                   && !parked->value.value(QStringLiteral("inCapture")).toBool()
+                   && parked->value.value(QStringLiteral("active")).toBool()
+                          == focusedBeforePark
+                   && parked->value.value(QStringLiteral("frequencyHz")).toInteger()
+                          == frequencyBeforePark
+                   && parkedValue.value(QStringLiteral("inCapture")).isBool()
+                   && !parkedValue.value(QStringLiteral("inCapture")).toBool()
+                   && parkEvents.size() == 1
+                   && parkEvents.first().value(QStringLiteral("event")).toString()
+                          == QStringLiteral("resource.changed")
+                   && parkEvents.first().value(QStringLiteral("resource")).toObject()
+                          == sliceAddress.toJson()
+                   && parkEvents.first().value(QStringLiteral("revision")).toInteger()
+                          == qint64(parked->revision)
+                   && parkEvents.first().value(QStringLiteral("value")).toObject()
+                          .value(QStringLiteral("inCapture")).isBool()
+                   && !parkEvents.first().value(QStringLiteral("value")).toObject()
+                           .value(QStringLiteral("inCapture")).toBool(),
+               "parking must advance the slice resource and observer event without moving RF or focus")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+    events.append(parkEvents);
+
+    radio.emitBackendSliceChangedForTest(0, park);
+    if (!check(store.get(sliceAddress)->revision == parked->revision
+                   && drain(client).isEmpty(),
+               "an identical parked observation must not create another revision")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+
+    SliceDelta resume;
+    resume.inCapture = true;
+    radio.emitBackendSliceChangedForTest(0, resume);
+    const std::optional<ResourceSnapshot> resumed = store.get(sliceAddress);
+    const QList<QJsonObject> resumeEvents = drain(client);
+    if (!check(resumed && resumed->revision > parked->revision
+                   && resumed->value.value(QStringLiteral("inCapture")).toBool()
+                   && resumed->value.value(QStringLiteral("frequencyHz")).toInteger()
+                          == frequencyBeforePark
+                   && resumeEvents.size() == 1
+                   && resumeEvents.first().value(QStringLiteral("event")).toString()
+                          == QStringLiteral("resource.changed")
+                   && resumeEvents.first().value(QStringLiteral("resource")).toObject()
+                          == sliceAddress.toJson()
+                   && resumeEvents.first().value(QStringLiteral("revision")).toInteger()
+                          == qint64(resumed->revision)
+                   && resumeEvents.first().value(QStringLiteral("value")).toObject()
+                          .value(QStringLiteral("inCapture")).isBool()
+                   && resumeEvents.first().value(QStringLiteral("value")).toObject()
+                          .value(QStringLiteral("inCapture")).toBool(),
+               "resuming must advance the same slice resource and observer event")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
+    events.append(resumeEvents);
+
     PanadapterModel* modelPan = radio.panadapter(QStringLiteral("0x40000000"));
     if (!check(modelPan && !modelPan->weightedAverageKnown(),
                "weighted averaging must begin unknown before its first report")) {

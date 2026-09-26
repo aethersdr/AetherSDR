@@ -238,6 +238,7 @@ void RadioResourceAdapter::attachSlice(SliceModel* slice)
     connect(slice, &SliceModel::modeChanged, this, refresh);
     connect(slice, &SliceModel::filterChanged, this, refresh);
     connect(slice, &SliceModel::activeChanged, this, refresh);
+    connect(slice, &SliceModel::inCaptureChanged, this, refresh);
     connect(slice, &SliceModel::txSliceChanged, this, refresh);
     connect(slice, &SliceModel::audioGainChanged, this, refresh);
     connect(slice, &SliceModel::audioPanChanged, this, refresh);
@@ -429,6 +430,7 @@ void RadioResourceAdapter::publishSlice(SliceModel* slice)
              {QStringLiteral("lowHz"), slice->filterLow()},
              {QStringLiteral("highHz"), slice->filterHigh()}}},
         {QStringLiteral("active"), slice->isActive()},
+        {QStringLiteral("inCapture"), slice->inCapture()},
         {QStringLiteral("txSlice"), slice->isTxSlice()},
         {QStringLiteral("locked"), slice->isLocked()},
         {QStringLiteral("audio"), QJsonObject{

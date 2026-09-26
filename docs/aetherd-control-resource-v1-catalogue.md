@@ -247,7 +247,14 @@ control methods are specified in
 - `frequencyObservation.known`, `.hz`, `.authority`: last backend publication,
   with `hz:null` while unknown. Authority is `radio`, `engine` or `unknown`;
   engine configuration is not a hardware acknowledgement or DSP completion.
-- `active`, `txSlice`, `locked`.
+- `active`, `inCapture`, `txSlice`, `locked`. `active` is the existing selected
+  slice flag, which can reflect an optimistic desktop selection until backend
+  status arrives. `inCapture` is separate capture membership: RTL publishes true
+  only when the slice's full guarded passband fits its confirmed usable capture.
+  False retains the configured slice and RF frequency while reception is parked.
+  Backends that do not publish this field retain the model default of true;
+  that default does not establish physical capture coverage. Neither field
+  implies signal presence, hardware settling, or a control grant.
 - `audio.gain`, `audio.pan`, `audio.muted`.
 - `receiveObservation.mode` and `receiveObservation.audio.gain` / `.muted`:
   `{known, value, authority}` with null value when unknown. Mode is a string,

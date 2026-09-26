@@ -1,6 +1,9 @@
 #include "RxApplet.h"
+#include <QScopeGuard>
 #include "SplitAudioProfile.h"
 #include "AgcModeAvailability.h"
+#include "ControlAvailabilityRegistry.h"
+#include "ModeFilterPresets.h"
 #include "ScopedChildWidget.h"
 #include "gui/CtcssToneLabel.h"
 
@@ -279,7 +282,9 @@ static const ModeSettings& modeSettingsFor(const QString& mode)
     if (isCwMode(mode))                  return cwSettings;
     if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return digSettings;
     if (mode == "RTTY")                  return rttySettings;
-    if (mode == "FM" || mode == "NFM" || mode == "DFM") return fmSettings;
+    if (ModeFilters::isFmMode(mode) || mode == "DFM") {
+        return fmSettings;
+    }
     if (mode.startsWith("FDV"))          return digSettings;  // FreeDV digital voice
     return ssbSettings;  // fallback for unknown modes
 }
@@ -697,7 +702,11 @@ void RxApplet::buildUI()
         m_filterPassband->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         connect(m_filterPassband, &AetherSDR::FilterPassbandWidget::filterChanged,
                 this, [this](int lo, int hi) {
-            if (m_slice) m_slice->setFilterWidth(lo, hi);
+            if (acceptsFilterEdges(lo, hi)) {
+                m_slice->setFilterWidth(lo, hi);
+            } else if (m_slice) {
+                m_filterPassband->setFilter(m_slice->filterLow(), m_slice->filterHigh());
+            }
         });
         leftCol->addWidget(m_filterPassband);
     }
@@ -1318,6 +1327,17 @@ void RxApplet::buildUI()
 void RxApplet::applySqlModeVisuals()
 {
     if (!m_sqlBtn) return;
+    const auto describeThreshold = qScopeGuard([this] {
+        if (!m_receiveSquelchModel || usingExternalReceiveSquelch()
+            || !m_sqlSlider || !m_sqlSlider->isEnabled()) { return; }
+        const auto& sql = *m_receiveSquelchModel;
+        const QString description = m_sqlMode == SqlMode::Auto
+            ? tr("Auto squelch: margin in dB above the measured spectrum noise floor (%1)").arg(sql.unit)
+            : tr("Squelch 0–100 maps to %1–%2 %3. A signal above this threshold opens audio.")
+                .arg(sql.referenceDb).arg(sql.referenceDb + 100 * sql.stepDb).arg(sql.unit);
+        m_sqlSlider->setToolTip(description);
+        m_sqlSlider->setAccessibleDescription(description);
+    });
     // Off: base style, "SQL" label, dim.
     // Manual: green active, "SQL" label.
     // Auto: amber active, "AUTO" label.  Distinct color so the operator can
@@ -1403,6 +1423,7 @@ void RxApplet::applySqlModeVisuals()
 
 void RxApplet::cycleSqlMode()
 {
+    if (m_slice && !squelchAvailableInMode(m_slice->mode())) { return; }
     const SqlMode next =
         (m_sqlMode == SqlMode::Off)    ? SqlMode::Manual :
         (m_sqlMode == SqlMode::Manual) ? SqlMode::Auto   :
@@ -1524,13 +1545,19 @@ void RxApplet::loadClientSquelchIntent()
     const RadioSettingsScope scope = m_radioModel->settingsScope();
     // Icom SQL Off erases the radio threshold. Flex retains it independently
     // and must continue to use its own radio-owned state, without client replay.
-    if (scope.family() != QLatin1String("icom") || !scope.hasRadioIdentity()) {
+    if ((scope.family() != QLatin1String("icom") && !m_receiveSquelchModel) || !scope.hasRadioIdentity()) {
         return;
     }
+    // Engine-owned native squelch keeps each stable receiver's manual/Auto
+    // preference separate. The backend's RtlSlices document remains the sole
+    // owner of accepted enabled/absolute-threshold state.
+    m_clientSquelchFeature = m_receiveSquelchModel
+        ? QStringLiteral("ReceiveSquelchIntent-%1").arg(m_slice->sliceId())
+        : QStringLiteral("SquelchIntent");
     m_clientSquelchScope = scope;
     m_clientSqlAwaitingReport = true;
     int version = 0;
-    const QJsonObject doc = scope.featureExact(QStringLiteral("SquelchIntent"), &version);
+    const QJsonObject doc = scope.featureExact(m_clientSquelchFeature, &version);
     if (version != 1) {
         return;
     }
@@ -1555,11 +1582,12 @@ void RxApplet::saveClientSquelchIntent()
     const RadioSettingsScope scope = m_clientSquelchScope;
     const int manualLevel = sqlManualLevel();
     const bool autoEnabled = m_sqlMode == SqlMode::Auto;
-    m_pendingSquelchWrites.schedule(QStringLiteral("squelch"), [scope, manualLevel, autoEnabled] {
+    const QString feature = m_clientSquelchFeature;
+    m_pendingSquelchWrites.schedule(QStringLiteral("squelch"), [scope, feature, manualLevel, autoEnabled] {
         int version = 0;
         AppSettings::FeatureReadStatus status;
         QJsonObject doc = scope.featureExact(
-            QStringLiteral("SquelchIntent"), &version, &status);
+            feature, &version, &status);
         if (version > 1 || status == AppSettings::FeatureReadStatus::Corrupt
             || status == AppSettings::FeatureReadStatus::Unavailable) {
             qWarning() << "SquelchIntent: refusing to replace unreadable or newer settings";
@@ -1567,7 +1595,7 @@ void RxApplet::saveClientSquelchIntent()
         }
         doc.insert(QStringLiteral("manualLevel"), manualLevel);
         doc.insert(QStringLiteral("autoEnabled"), autoEnabled);
-        if (!scope.setFeature(QStringLiteral("SquelchIntent"), 1, doc)) {
+        if (!scope.setFeature(feature, 1, doc)) {
             qWarning() << "SquelchIntent: settings write did not persist";
         }
     });
@@ -1628,9 +1656,12 @@ void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
     if (propagateToRadio && m_slice) {
         saveClientSquelchIntent();
         const bool sqOn = (m != SqlMode::Off);
-        const int level = (m == SqlMode::Auto)
+        const int level = (m == SqlMode::Auto && !m_receiveSquelchModel)
             ? autoSqlMarginDb()
             : sqlManualLevel();
+        // For an absolute detector Auto starts from the accepted/manual
+        // threshold. A dB margin is not an absolute threshold; the next FFT
+        // supplies that through the spectrum's declared scale.
         m_slice->setSquelch(sqOn, level);
     }
 }
@@ -1980,7 +2011,44 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         disconnect(m_radioModel, &RadioModel::transmitFrequencyCheckChanged,
                    this, nullptr);
     }
+    delete m_filterAvailability;
+    m_filterAvailability = nullptr;
     m_radioModel = radioModel;
+    m_receiveFilterControl = m_radioModel && m_radioModel->isConnected()
+        ? m_radioModel->backendCapabilities().receiveFilterControl : std::nullopt;
+    m_receiveSquelchModel = m_radioModel && m_radioModel->isConnected()
+        ? m_radioModel->backendCapabilities().receiveSquelchModel : std::nullopt;
+    if (!m_radioModel) {
+        m_filterPassband->setEnabled(true);
+        m_filterPassband->setAccessibleDescription(
+            tr("Visual filter passband with draggable edges"));
+    }
+    if (m_radioModel) {
+        m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
+        const auto supportsSquelch = [this](bool, const RadioCapabilities& caps) {
+            return !caps.receiveSquelchModel || usingExternalReceiveSquelch()
+                || (m_slice && caps.receiveSquelchModel->modes.contains(m_slice->mode()));
+        };
+        m_filterAvailability->registerWidget(m_sqlBtn,
+            tr("Squelch is unavailable in this receive mode"), supportsSquelch,
+            [this] { return m_sqlMode != SqlMode::Off; });
+        m_filterAvailability->registerWidget(m_sqlSlider,
+            tr("Enable squelch in a supported receive mode to adjust its threshold"),
+            [this, supportsSquelch](bool connected, const RadioCapabilities& caps) {
+                return supportsSquelch(connected, caps) && m_sqlMode != SqlMode::Off;
+            },
+            [this] { return m_sqlMode != SqlMode::Off; });
+        m_filterAvailability->registerWidget(m_filterPassband,
+            tr("Receive filter adjustment is unavailable in this mode"),
+            [this](bool, const RadioCapabilities& caps) {
+                if (!m_slice || !ModeFilters::isFmMode(m_slice->mode())
+                    || !m_radioFilterWidths.isEmpty()) {
+                    return true;
+                }
+                return !ModeFilters::widthsForMode(m_slice->mode(),
+                    caps.receiveFilterControl ? &*caps.receiveFilterControl : nullptr).isEmpty();
+            }, [] { return true; });
+    }
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &RxApplet::updateAntennaButtons);
@@ -1994,7 +2062,12 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
             updateSliceButtons(m_radioModel->slices(), active);
         });
         connect(m_radioModel, &RadioModel::capabilitiesChanged, this,
-                [this](bool, const RadioCapabilities&) {
+                [this](bool connected, const RadioCapabilities& caps) {
+            m_receiveFilterControl = connected ? caps.receiveFilterControl : std::nullopt;
+            m_receiveSquelchModel = connected ? caps.receiveSquelchModel : std::nullopt;
+            if (m_receiveSquelchModel && m_slice && !m_clientSquelchScope.hasRadioIdentity()) {
+                setSlice(m_slice);
+            }
             configureRepeaterReverseControl();
             configureFmToneControls();
             syncAgcSliderFromSlice();
@@ -2039,6 +2112,10 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     configureRepeaterReverseControl();
     configureFmToneControls();
     syncAgcSliderFromSlice();
+    if (m_slice) {
+        if (m_receiveSquelchModel) { setSlice(m_slice); }
+        updateModeSettings(m_slice->mode());
+    }
 }
 
 void RxApplet::configureFmToneControls()
@@ -2914,69 +2991,13 @@ void RxApplet::applyFilterPreset(int widthHz)
 {
     if (!m_slice) return;
 
-    int lo, hi;
-    const QString& mode = m_slice->mode();
+    const ModeFilters::Edges edges = ModeFilters::edgesForWidth(
+        m_slice->mode(), widthHz,
+        {m_slice->diguOffset(), m_slice->diglOffset(), m_slice->rttyShift()});
 
-    if (mode == "DIGU") {
-        if (widthHz < 3000) {
-            int offset = m_slice->diguOffset();
-            lo = offset - widthHz / 2;
-            hi = offset + widthHz / 2;
-            if (lo < 95) { hi += (95 - lo); lo = 95; }
-        } else {
-            lo = 95; hi = widthHz;
-        }
-    } else if (mode == "DIGL") {
-        if (widthHz < 3000) {
-            int offset = m_slice->diglOffset();
-            hi = -offset + widthHz / 2;
-            lo = -offset - widthHz / 2;
-            if (hi > -95) { lo -= (hi + 95); hi = -95; }
-        } else {
-            lo = -widthHz; hi = -95;
-        }
-    } else if (mode == "LSB") {
-        // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
-        // filter); the high cut is derived as lo + width so the effective
-        // passband equals the labeled width. Mirror of USB below the
-        // carrier: edge nearest the carrier is -100 Hz. (#3292)
-        hi = -100;
-        lo = -100 - widthHz;
-    } else if (mode == "RTTY") {
-        // RTTY: RF_frequency = mark. Filter is relative to mark.
-        // Space is at -rttyShift. Passband should encompass both tones.
-        // Expand symmetrically around the midpoint between mark(0) and space(-shift).
-        int shift = m_slice ? m_slice->rttyShift() : 170;
-        int mid = -shift / 2;  // midpoint between mark(0) and space(-shift)
-        lo = mid - widthHz / 2;
-        hi = mid + widthHz / 2;
-    } else if (isCwMode(mode)) {
-        // Centered on carrier — the radio's BFO/demodulator applies the
-        // pitch offset internally so signals at 0 Hz are heard at the sidetone.
-        lo = -widthHz / 2;
-        hi =  widthHz / 2;
-    } else if (mode == "AM" || mode == "SAM" || mode == "DSB") {
-        // Double-sideband: split width equally around carrier
-        lo = -(widthHz / 2);
-        hi =  (widthHz / 2);
-    } else if (mode == "FDVL") {
-        lo = -widthHz; hi = -95;
-    } else if (mode == "USB") {
-        // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
-        // filter); the high cut is derived as lo + width so the effective
-        // passband equals the labeled width. Previously this sent lo=95,
-        // hi=width, which yielded an effective width of (label-95) — e.g.
-        // the 2.9k preset produced ~2805 Hz — and left the active-preset
-        // matcher comparing against off-by-95 widths. (#3292)
-        lo = 100;
-        hi = 100 + widthHz;
-    } else {
-        // FDVU, FDV, etc. — low cut at 95 Hz to reject carrier/hum
-        lo = 95;
-        hi = widthHz;
+    if (acceptsFilterEdges(edges.lo, edges.hi)) {
+        m_slice->setFilterWidth(edges.lo, edges.hi);
     }
-
-    m_slice->setFilterWidth(lo, hi);
 }
 
 void RxApplet::stepFilterWidth(int steps)
@@ -3000,7 +3021,9 @@ void RxApplet::updateFilterButtons()
     static constexpr int kMaxRxFilters = 6;
     const QString key = QStringLiteral("FilterPresets_%1").arg(m_slice->mode());
     const QString saved = AppSettings::instance().value(key, "").toString();
-    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()
+        && (!ModeFilters::isFmMode(m_slice->mode())
+            || !defaultFilterWidths(m_slice->mode()).isEmpty())) {
         QVector<int> loadedWidths;
         QVector<int> loadedLo;
         QVector<int> loadedHi;
@@ -3011,7 +3034,9 @@ void RxApplet::updateFilterButtons()
                 bool okLo, okHi;
                 int lo = parts[0].toInt(&okLo);
                 int hi = parts[1].toInt(&okHi);
-                if (!okLo || !okHi || hi <= lo) continue;
+                if (!okLo || !okHi || hi <= lo || !acceptsFilterEdges(lo, hi)) {
+                    continue;
+                }
                 loadedWidths.append(hi - lo);
                 loadedLo.append(lo);
                 loadedHi.append(hi);
@@ -3019,15 +3044,21 @@ void RxApplet::updateFilterButtons()
                 bool ok;
                 int w = s.toInt(&ok);
                 if (!ok || w <= 0) continue;
+                const ModeFilters::Edges edges = ModeFilters::edgesForWidth(
+                    m_slice->mode(), w,
+                    {m_slice->diguOffset(), m_slice->diglOffset(), m_slice->rttyShift()});
+                if (!acceptsFilterEdges(edges.lo, edges.hi)) {
+                    continue;
+                }
                 loadedWidths.append(w);
                 loadedLo.append(INT_MIN);
                 loadedHi.append(INT_MIN);
             }
             if (loadedWidths.size() >= kMaxRxFilters) break;
         }
-        if (loadedWidths != m_filterWidths
+        if (!loadedWidths.isEmpty() && (loadedWidths != m_filterWidths
                 || loadedLo != m_filterCustomLo
-                || loadedHi != m_filterCustomHi) {
+                || loadedHi != m_filterCustomHi)) {
             m_filterWidths = loadedWidths;
             m_filterCustomLo = loadedLo;
             m_filterCustomHi = loadedHi;
@@ -3081,6 +3112,9 @@ QString RxApplet::formatStepLabel(int hz)
 
 bool RxApplet::squelchAvailableInMode(const QString& mode) const
 {
+    if (m_receiveSquelchModel && !usingExternalReceiveSquelch()) {
+        return m_receiveSquelchModel->modes.contains(mode);
+    }
     const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
         && m_radioModel->backendCapabilities().hasModeIndependentSquelch
         && !(m_slice && m_slice->externalReceiveReplacementActive());
@@ -3090,9 +3124,7 @@ bool RxApplet::squelchAvailableInMode(const QString& mode) const
 
 void RxApplet::updateModeSettings(const QString& mode)
 {
-    const auto& settings = modeSettingsFor(mode);
-
-    const bool isFM = (mode == "FM" || mode == "NFM" || mode == "DFM");
+    const bool isFM = (mode == "FM" || mode == "NFM" || mode == "FMN" || mode == "DFM");
 
     // Load custom filter presets from AppSettings, fall back to defaults.
     // RxApplet shows at most 6 (first 6 of VfoWidget's 8).
@@ -3103,7 +3135,9 @@ void RxApplet::updateModeSettings(const QString& mode)
     m_filterWidths.clear();
     m_filterCustomLo.clear();
     m_filterCustomHi.clear();
-    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()) {
+    if (m_radioFilterWidths.isEmpty() && !saved.isEmpty()
+        && (!ModeFilters::isFmMode(m_slice->mode())
+            || !defaultFilterWidths(m_slice->mode()).isEmpty())) {
         for (const auto& s : saved.split(',', Qt::SkipEmptyParts)) {
             if (s.contains(':')) {
                 const auto parts = s.split(':');
@@ -3111,7 +3145,9 @@ void RxApplet::updateModeSettings(const QString& mode)
                 bool okLo, okHi;
                 int lo = parts[0].toInt(&okLo);
                 int hi = parts[1].toInt(&okHi);
-                if (!okLo || !okHi || hi <= lo) continue;
+                if (!okLo || !okHi || hi <= lo || !acceptsFilterEdges(lo, hi)) {
+                    continue;
+                }
                 m_filterWidths.append(hi - lo);
                 m_filterCustomLo.append(lo);
                 m_filterCustomHi.append(hi);
@@ -3119,6 +3155,12 @@ void RxApplet::updateModeSettings(const QString& mode)
                 bool ok;
                 int w = s.toInt(&ok);
                 if (!ok || w <= 0) continue;
+                const ModeFilters::Edges edges = ModeFilters::edgesForWidth(
+                    m_slice->mode(), w,
+                    {m_slice->diguOffset(), m_slice->diglOffset(), m_slice->rttyShift()});
+                if (!acceptsFilterEdges(edges.lo, edges.hi)) {
+                    continue;
+                }
                 m_filterWidths.append(w);
                 m_filterCustomLo.append(INT_MIN);
                 m_filterCustomHi.append(INT_MIN);
@@ -3127,12 +3169,16 @@ void RxApplet::updateModeSettings(const QString& mode)
         }
     }
     if (m_filterWidths.isEmpty()) {
-        m_filterWidths = settings.filterWidths;
+        m_filterWidths = defaultFilterWidths(mode);
         m_filterCustomLo.fill(INT_MIN, m_filterWidths.size());
         m_filterCustomHi.fill(INT_MIN, m_filterWidths.size());
     }
     rebuildFilterButtons();
-    m_filterContainer->setVisible(!m_filterWidths.isEmpty() && !isFM);
+    m_filterContainer->setVisible(!effectiveFilterWidths().isEmpty()
+                                  || ModeFilters::isFmMode(mode));
+    if (m_filterAvailability) {
+        m_filterAvailability->refreshEngaged();
+    }
 
     // Show/hide FM vs SSB/CW controls
     m_fmContainer->setVisible(isFM);
@@ -3156,6 +3202,8 @@ void RxApplet::updateModeSettings(const QString& mode)
     // Slider enabled when the mode allows squelch AND we're not in SqlMode::Off.
     // Manual mode = threshold input; Auto mode = dB margin input.
     m_sqlSlider->setEnabled(!sqlDisabled && m_sqlMode != SqlMode::Off);
+    if (m_filterAvailability) { m_filterAvailability->refreshEngaged(); }
+    applySqlModeVisuals();
     if (sqlDisabled && m_slice) {
         // Only digital/RTTY modes get a client-side squelch-off override (#2504).
         // CW/CWL squelch is radio-managed — no client push, so no "save" either,
@@ -3180,13 +3228,39 @@ void RxApplet::updateModeSettings(const QString& mode)
     if (m_slice) updateFilterButtons();
 }
 
+bool RxApplet::acceptsFilterEdges(int low, int high) const
+{
+    if (!m_slice) {
+        return false;
+    }
+    if (!ModeFilters::isFmMode(m_slice->mode()) || !m_radioFilterWidths.isEmpty()) {
+        return true;
+    }
+    return ModeFilters::acceptsFmEdges(m_slice->mode(),
+        m_receiveFilterControl ? &*m_receiveFilterControl : nullptr, {low, high});
+}
+
+QVector<int> RxApplet::defaultFilterWidths(const QString& mode) const
+{
+    if (ModeFilters::isFmMode(mode)) {
+        const QVector<int> widths = ModeFilters::widthsForMode(mode,
+            m_receiveFilterControl ? &*m_receiveFilterControl : nullptr);
+        return widths.mid(0, 6);
+    }
+    return modeSettingsFor(mode).filterWidths;
+}
+
 void RxApplet::setRadioFilterWidths(const QList<int>& widthsHz)
 {
     QVector<int> wanted(widthsHz.begin(), widthsHz.end());
     if (wanted == m_radioFilterWidths)
         return;   // rides capabilitiesChanged, which repeats on every edge
     m_radioFilterWidths = wanted;
-    rebuildFilterButtons();
+    if (m_slice) {
+        updateModeSettings(m_slice->mode());
+    } else {
+        rebuildFilterButtons();
+    }
 }
 
 void RxApplet::setRadioFilterControl(const RxFilterControl& control)
@@ -3208,7 +3282,11 @@ void RxApplet::setRadioFilterControl(const RxFilterControl& control)
                                         control.maximumWidthHz,
                                         control.widthStepHz);
     }
-    rebuildFilterButtons();
+    if (m_slice) {
+        updateModeSettings(m_slice->mode());
+    } else {
+        rebuildFilterButtons();
+    }
 }
 
 void RxApplet::rebuildFilterButtons()
@@ -3216,6 +3294,22 @@ void RxApplet::rebuildFilterButtons()
     // Remove old buttons
     for (auto* btn : m_filterBtns) delete btn;
     m_filterBtns.clear();
+    delete m_filterUnavailable;
+    m_filterUnavailable = nullptr;
+    if (m_filterAvailability) {
+        m_filterAvailability->refreshEngaged();
+    }
+    if (m_slice && ModeFilters::isFmMode(m_slice->mode())
+        && effectiveFilterWidths().isEmpty()) {
+        m_filterUnavailable = mkToggle(tr("Filter unavailable"));
+        m_filterUnavailable->setAccessibleName(tr("Receive filter"));
+        m_filterGrid->addWidget(m_filterUnavailable, 0, 0, 1, 3);
+        if (m_filterAvailability) {
+            m_filterAvailability->registerWidget(m_filterUnavailable,
+                tr("This receiver does not support adjustable filters in this mode"),
+                [](bool, const RadioCapabilities&) { return false; });
+        }
+    }
 
     // Create new buttons matching current mode's filter widths
     const QVector<int>& widths = effectiveFilterWidths();
@@ -3254,7 +3348,9 @@ void RxApplet::rebuildFilterButtons()
                 return;
             }
             if (customisable && m_filterCustomLo[i] != INT_MIN) {
-                m_slice->setFilterWidth(m_filterCustomLo[i], m_filterCustomHi[i]);
+                if (acceptsFilterEdges(m_filterCustomLo[i], m_filterCustomHi[i])) {
+                    m_slice->setFilterWidth(m_filterCustomLo[i], m_filterCustomHi[i]);
+                }
             } else {
                 applyFilterPreset(live[i]);
             }
@@ -3316,7 +3412,9 @@ void RxApplet::rebuildFilterButtons()
                     }
                     int lo = loSpin->value();
                     int hi = hiSpin->value();
-                    if (hi <= lo) return;
+                    if (hi <= lo || !acceptsFilterEdges(lo, hi)) {
+                        return;
+                    }
                     m_filterCustomLo[i] = lo;
                     m_filterCustomHi[i] = hi;
                     m_filterWidths[i] = hi - lo;
@@ -3326,7 +3424,7 @@ void RxApplet::rebuildFilterButtons()
                 });
                 menu.addAction("Reset to Default", btn, [this, i] {
                     if (!m_slice) return;
-                    const auto& factory = modeSettingsFor(m_slice->mode()).filterWidths;
+                    const QVector<int> factory = defaultFilterWidths(m_slice->mode());
                     if (i >= factory.size()) return;
                     m_filterWidths[i] = factory[i];
                     m_filterCustomLo[i] = INT_MIN;

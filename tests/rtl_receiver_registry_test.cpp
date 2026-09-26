@@ -639,6 +639,58 @@ void reconnectAndRegistryBound()
     check(static_cast<bool>(fresh), "stopped readers release process-wide registry capacity");
 }
 
+void retainedRfHistoryAndAdoption()
+{
+    const auto stats = std::make_shared<Stats>();
+    Registry registry({4, 2, 4}, factory(stats));
+    const std::uint64_t session = registry.beginSession(capture());
+    const auto a = registry.reserveSlot(0);
+    if (!a) { check(false, "reuse slots reserved"); return; }
+    std::array desired{spec(*a), Registry::ReceiverSpec{}};
+    for (auto& receiver : desired) { receiver.extractRf = true; }
+    auto reader = registry.attachReader();
+    Probe probe; probe.session = session;
+    registry.submit(capture(), std::span(desired).first(1));
+    check(ready(registry, 1), "first RF receiver prepared");
+    auto delivery = block(); delivery.session = session;
+    check(!reader.processBlock(delivery, probe, 2) && reader.activeRevision() == 0,
+        "prepared bank cannot adopt before matching transaction revision");
+    check(reader.processBlock(delivery, probe, 1) && reader.activeRevision() == 1,
+        "explicit transaction revision adopts prepared bank");
+    const auto b = registry.reserveSlot(2);
+    if (!b) { check(false, "new sibling slot reserved"); return; }
+    desired[1] = spec(*b); desired[1].extractRf = true;
+    registry.submit(capture(), desired);
+    check(ready(registry, 2) && stats->calls == 2, "adding a slice prepares only the new receiver");
+    check(deliver(reader, probe, block(capture(), 64)) && !probe.discontinuity,
+        "adding sibling preserves capture continuity and survivor history");
+    check(until(registry, [](const auto& status) { return status.residentReceivers == 2; }),
+        "old bank ownership retires");
+    check(stats->destroyed == 0, "retiring old bank cannot destroy reused receiver");
+    registry.submit(capture(), std::span(desired).first(1));
+    check(ready(registry, 3) && stats->calls == 2, "removal needs no replacement DSP");
+    check(deliver(reader, probe, block(capture(), 128)) && !probe.discontinuity && probe.count == 1,
+        "removing sibling preserves survivor sample clock");
+    check(until(registry, [&](const auto&) { return stats->destroyed == 1; }),
+        "removed receiver retires off acquisition");
+    ++desired[0].epoch;
+    registry.submit(capture(), std::span(desired).first(1));
+    check(ready(registry, 4) && stats->calls == 3, "fault epoch forces fresh receiver history");
+    // A prepared bank still cannot cross the transaction adoption fence.
+    delivery = block(capture(), 192); delivery.session = session;
+    check(reader.processBlock(delivery, probe, 3)
+        && reader.activeRevision() == 3, "unacknowledged preparation cannot replace live receiver");
+    check(deliver(reader, probe, block(capture(), 256)) && reader.activeRevision() == 4,
+        "matching acknowledgment adopts the fresh receiver history");
+    auto stale = block(capture(), 320); stale.session = session + 1;
+    check(!deliver(reader, probe, stale), "old acquisition identity refused");
+    check(deliver(reader, probe, block(capture(), 320)) && !probe.discontinuity,
+        "stale delivery cannot withdraw healthy receiver history");
+    reader.stop();
+    check(until(registry, [&](const auto&) { return stats->live == 0; }), "all shared receiver owners retire");
+    check(stats->callbackDestruction == 0, "reused receiver never destructs on callback");
+}
+
 void actualPreparedDsp()
 {
     Registry registry({1, 1, 2}); // production factory, real reserved WDSP channel
@@ -693,6 +745,7 @@ int main(int argc, char** argv)
     preparationExceptions(); drain();
     capacityAndStoppedPreparation(); drain();
     reconnectAndRegistryBound(); drain();
+    retainedRfHistoryAndAdoption(); drain();
     actualPreparedDsp(); drain();
     check(totalCallbackAllocations == 0, "all acquisition callback paths remained free of ordinary C++ allocations");
     std::cout << "RTL receiver registry: " << checks << " checks, " << failures << " failures\n";
