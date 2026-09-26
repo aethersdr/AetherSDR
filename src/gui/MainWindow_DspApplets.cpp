@@ -57,6 +57,61 @@
 
 namespace AetherSDR {
 
+void MainWindow::updateTxAudioPathNotice()
+{
+    const bool pcAudioOn = AppSettings::instance()
+        .value("PcAudioEnabled", "True").toString() == "True";
+    QString detail;
+    QString compact;
+    bool warning = false;
+
+    if (!m_radioModel.isConnected()) {
+        if (!pcAudioOn) {
+            detail = tr("PC Audio is off. AetherTX processes a microphone "
+                        "connected to this computer; a mic plugged into the "
+                        "radio bypasses its effects. Connect a radio to see "
+                        "its audio routing requirements.");
+            compact = tr("PC Audio is off. A radio mic bypasses AetherTX; "
+                         "use a computer mic.");
+        }
+    } else {
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        const auto& tx = m_radioModel.transmitModel();
+        if (caps.canTransmit && !caps.hostModulates) {
+            if (caps.takesTxAudioOverSeam && !pcAudioOn) {
+                // Icom-style PCM transport: PC Audio controls TX capture too.
+                detail = tr("PC Audio is off, so this radio cannot receive "
+                            "AetherTX audio from your computer. Connect your "
+                            "microphone to the computer and turn on PC Audio "
+                            "in the main window. A mic on the radio bypasses "
+                            "AetherTX.");
+                compact = tr("PC Audio is off. Use a computer mic and turn on "
+                             "PC Audio for AetherTX.");
+                warning = true;
+            } else if (caps.hasSelectableMicInputs) {
+                // Flex-style stream: PC Audio controls RX playback, while the
+                // radio's MIC input selects the TX microphone path.
+                if (tx.micSelection() != QStringLiteral("PC")) {
+                    detail = tr("AetherTX uses a microphone connected to this "
+                                "computer. A mic plugged into the radio bypasses "
+                                "its effects. To use AetherTX on this radio, "
+                                "select PC as the MIC input.");
+                    compact = tr("A radio mic bypasses AetherTX. Use a computer "
+                                 "mic and select PC as the MIC input.");
+                    warning = true;
+                }
+            }
+        }
+    }
+
+    if (m_aetherialStrip) {
+        m_aetherialStrip->setAudioPathNotice(detail, warning);
+    }
+    if (m_appletPanel && m_appletPanel->clientChainApplet()) {
+        m_appletPanel->clientChainApplet()->setTxAudioPathNotice(compact, warning);
+    }
+}
+
 QString MainWindow::activeAetherDspMethod() const
 {
     if (!m_audio) {
@@ -162,6 +217,7 @@ void MainWindow::wirePooDooTiles()
         connect(m_titleBar, &TitleBar::pcAudioToggled, this,
                 [this, chain](bool on) {
             chain->setRxPcAudioEnabled(on);
+            updateTxAudioPathNotice();
         });
 
         // DSP — aggregate of every client-side NR module.  These are
@@ -221,6 +277,7 @@ void MainWindow::wirePooDooTiles()
         const bool pcOn = AppSettings::instance()
             .value("PcAudioEnabled", "True").toString() == "True";
         chain->setRxPcAudioEnabled(pcOn);
+        updateTxAudioPathNotice();
         dspState->nr2  = m_audio->nr2Enabled();
         dspState->rn2  = m_audio->rn2Enabled();
         dspState->nr4  = m_audio->nr4Enabled();

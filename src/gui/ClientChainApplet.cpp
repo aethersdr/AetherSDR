@@ -186,6 +186,13 @@ ClientChainApplet::ClientChainApplet(QWidget* parent) : QWidget(parent)
         outer->addLayout(row);
     }
 
+    m_pcAudioNotice = new QLabel;
+    m_pcAudioNotice->setObjectName(QStringLiteral("chainTxPcAudioNotice"));
+    m_pcAudioNotice->setAccessibleName(tr("AetherTX audio path guidance"));
+    m_pcAudioNotice->setWordWrap(true);
+    outer->addWidget(m_pcAudioNotice);
+    m_pcAudioNotice->hide();
+
     // ── Chain strips (TX + RX), stacked — only one visible at a time.
     // Phase 0: the RX strip ships with three live status tiles
     // (RADIO / DSP / SPEAK) bracketing five "coming soon" placeholders
@@ -287,6 +294,22 @@ void ClientChainApplet::setMicInputReady(bool ready)
     if (m_chain) m_chain->setMicInputReady(ready);
     m_micReady = ready;
     updateMonitorButtonEnables();
+}
+
+void ClientChainApplet::setTxAudioPathNotice(const QString& text, bool warning)
+{
+    if (!m_pcAudioNotice) return;
+    m_audioPathNoticeVisible = !text.isEmpty();
+    m_pcAudioNotice->setText(text);
+    m_pcAudioNotice->setAccessibleDescription(text);
+    ThemeManager::instance().applyStyleSheet(m_pcAudioNotice, warning
+        ? "QLabel { background: {{color.background.warning}}; "
+          "color: {{color.accent.warning}}; border: 1px solid {{color.accent.warning}}; "
+          "border-radius: 3px; padding: 4px; font-size: 10px; }"
+        : "QLabel { background: {{color.background.1}}; "
+          "color: {{color.text.primary}}; border: 1px solid {{color.border.strong}}; "
+          "border-radius: 3px; padding: 4px; font-size: 10px; }");
+    m_pcAudioNotice->setVisible(m_audioPathNoticeVisible && m_mode == ChainMode::Tx);
 }
 
 void ClientChainApplet::setMonitorRecording(bool on)
@@ -399,6 +422,9 @@ void ClientChainApplet::setMode(ChainMode m)
     // Hint text applies to whichever chain is showing — both sides
     // now support the click-bypass / double-click-edit gestures.
     if (m_hint)       m_hint->setVisible(true);
+    if (m_pcAudioNotice) {
+        m_pcAudioNotice->setVisible(tx && m_audioPathNoticeVisible);
+    }
 
     // BYPASS button visual must reflect the *current* tab's bypass
     // state.  Each side has its own engine-owned snapshot; the

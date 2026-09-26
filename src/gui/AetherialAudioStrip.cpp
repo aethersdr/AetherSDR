@@ -220,6 +220,13 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     m_bodyLayout = body;
     root->addWidget(content, 1);
 
+    m_pcAudioNotice = new QLabel(content);
+    m_pcAudioNotice->setObjectName(QStringLiteral("aetherTxPcAudioNotice"));
+    m_pcAudioNotice->setAccessibleName(tr("AetherTX audio path guidance"));
+    m_pcAudioNotice->setWordWrap(true);
+    body->addWidget(m_pcAudioNotice);
+    m_pcAudioNotice->hide();
+
     // The transmit chain, one stage to a page, with the column down the left
     // standing in for the horizontal chain strip this window used to carry.
     // Same component AetherRX uses — the two windows are the same idea
@@ -612,6 +619,21 @@ void AetherialAudioStrip::showSettings()
 }
 
 AetherialAudioStrip::~AetherialAudioStrip() = default;
+
+void AetherialAudioStrip::setAudioPathNotice(const QString& text, bool warning)
+{
+    if (!m_pcAudioNotice) return;
+    m_pcAudioNotice->setText(text);
+    m_pcAudioNotice->setAccessibleDescription(text);
+    ThemeManager::instance().applyStyleSheet(m_pcAudioNotice, warning
+        ? "QLabel { background: {{color.background.warning}}; "
+          "color: {{color.accent.warning}}; border: 1px solid {{color.accent.warning}}; "
+          "border-radius: 4px; padding: 7px; font-size: 11px; }"
+        : "QLabel { background: {{color.background.1}}; "
+          "color: {{color.text.primary}}; border: 1px solid {{color.border.strong}}; "
+          "border-radius: 4px; padding: 7px; font-size: 11px; }");
+    m_pcAudioNotice->setVisible(!text.isEmpty());
+}
 
 void AetherialAudioStrip::setFramelessMode(bool on)
 {

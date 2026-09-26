@@ -53,6 +53,7 @@ public:
     ~AetherialAudioStrip() override;
 
     void setFramelessMode(bool on);
+    void setAudioPathNotice(const QString& text, bool warning);
 
     // Forward radio TX filter cutoffs to the embedded EQ canvas so the
     // dashed yellow filter-edge guide lines render here too.  MainWindow
@@ -124,6 +125,7 @@ private:
     QPushButton* m_monPlayBtn{nullptr};
 
     QLabel* m_micDot{nullptr};
+    QLabel* m_pcAudioNotice{nullptr};
     QLabel* m_micLabel{nullptr};
     QLabel* m_txDot{nullptr};
     QLabel* m_txLabel{nullptr};

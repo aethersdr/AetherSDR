@@ -10042,6 +10042,7 @@ void MainWindow::toggleAetherialStrip()
         const bool ready = (tx.micSelection() == "PC") && !tx.daxOn();
         m_aetherialStrip->setMicInputReady(ready);
         m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
+        updateTxAudioPathNotice();
     }
     // windowIsShowing() rather than isVisible(): a minimized strip still
     // reports isVisible(), so the bare check sent it down the hide() branch and
