@@ -5,6 +5,12 @@
 // does not swamp a real tone — mirroring the tools/hl2/spectrum.py behavior.
 
 #include "core/backends/hl2/Hl2Spectrum.h"
+#include "core/dsp/WdspChannel.h"
+
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <thread>
 
 #include <cmath>
 #include <complex>
@@ -251,6 +257,98 @@ int main()
         check(avgBins[peakBin] < beforeGap,
               "...and it is a blend rather than a freeze -- the quiet frame "
               "still moves the estimator down");
+    }
+
+    // ---- the FFTW planner lock, which merged with nothing covering it ----
+    //
+    // FFTW's planner is process-global and NOT thread-safe. Hl2Backend::
+    // beginDspSetup() constructs an Hl2Spectrum on its worker while
+    // WdspChannel::open() plans, allocates and frees through FFTW on another
+    // thread -- on EVERY HL2 connect. #5424 serialised it by taking
+    // WdspChannel::fftwSetupLock() in this class's constructor and destructor.
+    //
+    // It landed untested, and says so: the TSan evidence came from
+    // radiomodel_pan_id_mapping_test, one of the eight tests deleted as
+    // intermittent, and #5443 records the consequence in its own words --
+    // "#5424 ... now merges with nothing covering it, because the test that
+    // proved it was one of the eight". The race is not intermittent; only the
+    // instrument was. This is that coverage, and it needs no sanitizer: hold
+    // the lock and observe that construction and destruction WAIT for it.
+    //
+    // WHAT THIS DOES AND DOES NOT PROVE. It proves the two call sites take the
+    // shared lock, which is the fact that can be deleted by an edit. It does
+    // not reproduce the race, and no single-threaded assertion could.
+    {
+        using namespace std::chrono;
+
+        // POSITIVE CONTROL FIRST, so the blocking assertions below cannot pass
+        // merely because constructing an Hl2Spectrum is slow. Unlocked, both
+        // construction and destruction are microseconds at N=64.
+        const auto t0 = steady_clock::now();
+        { Hl2Spectrum warm(N); }
+        const auto unlockedMs = duration_cast<milliseconds>(steady_clock::now() - t0).count();
+        check(unlockedMs < 100,
+              "control: an unguarded construct+destroy is far below the wait "
+              "window, so a blocked one is the lock and not the work");
+
+        // The window. Generous against a loaded machine, and 2.5x the bound the
+        // control above asserts on the unlocked cost.
+        constexpr auto kWindow = milliseconds(250);
+
+        // ---- constructor ----
+        {
+            std::atomic<bool> entered{false};
+            std::atomic<bool> constructed{false};
+            std::unique_ptr<Hl2Spectrum> spec;
+
+            auto held = WdspChannel::fftwSetupLock();
+            std::thread t([&] {
+                entered.store(true, std::memory_order_release);
+                spec = std::make_unique<Hl2Spectrum>(N);
+                constructed.store(true, std::memory_order_release);
+            });
+            while (!entered.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            std::this_thread::sleep_for(kWindow);
+            check(!constructed.load(std::memory_order_acquire),
+                  "Hl2Spectrum's constructor BLOCKS while fftwSetupLock() is "
+                  "held on another thread (#5424, #5443's defect 1)");
+            held.unlock();
+            t.join();
+            check(constructed.load(std::memory_order_acquire) && spec != nullptr,
+                  "and completes as soon as the lock is released");
+        }
+
+        // ---- destructor ----
+        //
+        // Its own assertion rather than a corollary: #5424 guards the frees as
+        // well as the plan because the edge TSan named was a free against an
+        // allocation, so a patch that kept only the constructor's lock would
+        // still leave the reported half open.
+        {
+            auto spec = std::make_unique<Hl2Spectrum>(N);
+            std::atomic<bool> entered{false};
+            std::atomic<bool> destroyed{false};
+
+            auto held = WdspChannel::fftwSetupLock();
+            std::thread t([&] {
+                entered.store(true, std::memory_order_release);
+                spec.reset();
+                destroyed.store(true, std::memory_order_release);
+            });
+            while (!entered.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            std::this_thread::sleep_for(kWindow);
+            check(!destroyed.load(std::memory_order_acquire),
+                  "~Hl2Spectrum BLOCKS on the same lock -- the teardown half "
+                  "of the edge, guarded for its own reason");
+            held.unlock();
+            t.join();
+            check(destroyed.load(std::memory_order_acquire) && spec == nullptr,
+                  "and completes as soon as the lock is released");
+        }
     }
 
     if (g_failures == 0)

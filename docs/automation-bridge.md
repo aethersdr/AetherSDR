@@ -3562,12 +3562,23 @@ modulator never heard about it.
 
 `rows` is ordered as the dialog renders it; `section` appears on the first row
 of each group and is absent on the rest. A `value` of `null` means **the radio
-never reported this**, which is distinct from a zero — "the FIFO is empty" and
-"we were never told" are different answers, and collapsing them is what makes a
-readout unable to detect its own failure. An empty `rows` array with
-`"ok":true` is a real state too: nothing connected and no stream-free source
-aimed, or a family that publishes no health rows. Check `connected` to tell
-those apart.
+is not reporting this** — either it never did, or what it last reported has
+expired and is no longer being measured. Either way it is distinct from a zero:
+"the FIFO is empty" and "we were never told" are different answers, and
+collapsing them is what makes a readout unable to detect its own failure. An
+empty `rows` array with `"ok":true` is a real state too: nothing connected and
+no stream-free source aimed, or a family that publishes no health rows. Check
+`connected` to tell those apart.
+
+**Where a row can expire, a companion age row tells you which silence it is.**
+The HL2's four converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcCrestDb` and
+`adcClippedPerBlock` — come from a gated sensor, and they go `null` once the
+newest block has stopped describing now, which includes the whole of any
+transmission longer than about three seconds. `adcObservedAgoMs` is deliberately
+**not** expired with them: a `null` beside an age of `46810` means *reported,
+then expired*, while a `null` beside a `null` age means *never reported*. A
+script that reads these must treat `null` as a refusal to answer rather than as
+a number it can coerce.
 
 **Reading `health` is itself a demand signal.** A stream-free source polls only
 while something is watching, so each read renews a 5 s demand window and keeps

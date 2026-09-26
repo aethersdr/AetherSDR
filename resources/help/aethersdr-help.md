@@ -187,6 +187,40 @@ The exact controls change with mode. For example:
 
 That is why it is better to think of the VFO as a live mode-sensitive operating surface, not just a frequency label.
 
+### Split operation
+
+Clicking `SPLIT` on a slice makes it the receive slice and creates a transmit
+slice on the same panadapter, 1 kHz up in CW and 5 kHz up in other modes. The
+receive slice's badge turns red; the transmit slice's badge becomes `SWAP`,
+which exchanges the two frequencies without changing which one transmits.
+Clicking the red `SPLIT` badge again ends the split and removes the transmit
+slice.
+
+**Right-click either badge** for the controls that go with split operation:
+
+- `Split Up 1 / 5 / 10 kHz` — move the transmit slice that far above the
+  receive slice. The receive frequency stays where it is. With no split
+  running, the same choice starts one at that offset.
+- `Monitor TX` — choose what the `Monitor TX (Hold)` key does while you hold
+  it: `Solo TX frequency` silences the receive slice so you hear only where you
+  are about to transmit, as `XFC`, `TF-SET` or `TXW` does on a conventional
+  transceiver; `Hear both` makes both slices audible for the hold, the way a
+  second receiver would. Releasing the key puts both mutes back as they were. Bind the key in `Settings → Keyboard Shortcuts`, or put it on
+  a FlexControl, RC-28 or HID controller, where it toggles rather than holds.
+- `Forget remembered audio` — clear the arrangement described below.
+
+**AetherSDR remembers how you set up the audio.** The transmit slice starts
+muted, as it always has. If you change that — unmute it, set its level, pan it
+to one ear and the receive slice to the other — the next split you start comes
+back the same way, with no clicks, and keeps coming back until you change it.
+Only the transmit slice's mute, level and pan are remembered, plus the receive
+slice's pan if you moved it; the receive slice's own volume and mute are never
+touched, and its original pan is restored when the split ends. If you mute the
+transmit slice yourself before ending a split, what was remembered is cleared,
+so muting it once is enough to go back to the original behaviour.
+Splits started by a logging program or another client over
+CAT, Hamlib or TCI are left alone.
+
 ## The Applet Panel
 
 The applet panel is a persistent right-side control column. It has two always-visible toggle rows, a separate S-meter section, and a reorderable vertical stack of applets below.

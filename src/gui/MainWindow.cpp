@@ -50,6 +50,7 @@
 #include "models/PanadapterModel.h"
 #include "models/RadioStatusOwnership.h"
 #include "models/Nr2SettingsModel.h"
+#include "PanZoomModeGate.h"
 #include "SpectrumWidget.h"
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -1606,10 +1607,11 @@ MainWindow::MainWindow(QWidget* parent)
     // before child widgets (buttons, combos) consume the key event.
     qApp->installEventFilter(this);
 
-    // Ctrl+M toggle — keep this as the single real shortcut owner.  Registering
-    // the same chord on the menu action can make Qt report an ambiguous
-    // shortcut on Windows, and the menu bar is hidden in minimal mode anyway.
-    auto* minimalShortcut = new QShortcut(QKeySequence("Ctrl+M"), this);
+    // Ctrl+Shift+M toggle — keep this as the single real shortcut owner.
+    // Registering the same chord on the menu action can make Qt report an
+    // ambiguous shortcut on Windows, and the menu bar is hidden in minimal
+    // mode anyway. Ctrl+M remains available for standard macOS Minimize.
+    auto* minimalShortcut = new QShortcut(QKeySequence("Ctrl+Shift+M"), this);
     minimalShortcut->setContext(Qt::ApplicationShortcut);
     minimalShortcut->setAutoRepeat(false);
     connect(minimalShortcut, &QShortcut::activated,
@@ -1835,6 +1837,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── AF gain from applet panel → radio per-slice audio_level ─────────
     connect(m_appletPanel->rxApplet(), &RxApplet::afGainChanged, this, [this](int v) {
+        AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
         if (auto* s = activeSlice()) s->setAudioGain(v);
     });
 
@@ -4124,8 +4127,14 @@ void MainWindow::changeEvent(QEvent* event)
     // event filter — the flag would stay set and TX would stay keyed. Force the
     // whole family back to RX on deactivation. (Belt-and-suspenders for the
     // app-backgrounded case lives in eventFilter via ApplicationStateChange.)
-    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow()) {
         failSafeMomentaryKeyingToRx("window-deactivate");
+        // A held Monitor TX key loses its KeyRelease exactly the same way, and
+        // would leave the split's audio rearranged with nothing to release.
+        // (A FlexControl/HID toggle has no release to lose; it stays on.)
+        if (m_splitMonitorKeyHeld)
+            endSplitMonitor();
+    }
 
     // A DIALOG DOES NOT FOLLOW ITS PARENT INTO A FULL-SCREEN SPACE (#5788).
     //
@@ -5383,7 +5392,9 @@ void MainWindow::buildUI()
             return;
         }
         applet->spectrumWidget()->setBandSegmentZoomAvailable(
-            m_radioModel.isConnected() && m_radioModel.usesFlexCommandPlane());
+            bandSegmentZoomAvailable(
+                m_radioModel.isConnected(),
+                m_radioModel.backendCapabilities().panZoomModes.has_value()));
         // The two capability switches onConnectionStateChanged() applies for
         // the same reason: a pan created after connect would otherwise keep
         // the widget defaults (no edge crop, client EMA on) until the next
@@ -6437,27 +6448,31 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Band/segment zoom only ever works on Flex (see SpectrumWidget::
-    // setBandSegmentZoomAvailable()'s own comment) -- usesFlexCommandPlane()
-    // is a direct family() == "flex" check (RadioModel.h), not merely "some
-    // connection object exists": SimBackend/demo mode owns a RadioConnection
-    // too but isn't Flex and doesn't understand band_zoom=/segment_zoom=, so
-    // the plain hasCommandPlane() this used before was one indirection looser
-    // than the actual question being asked. Edge taper is keyed off
-    // RadioCapabilities::hasDdcPanEdgeRolloff instead (see its own comment)
-    // -- a future DDC-based backend gets that automatically instead of
-    // needing its own family string added here. Re-evaluate both on every
-    // connect and disconnect, since usesFlexCommandPlane()/
-    // backendCapabilities() only know the CURRENTLY connected radio.
+    // Band/segment zoom is a DECLARED capability, not a family string. It reads
+    // RadioCapabilities::panZoomModes -- a per-feature record FlexBackend
+    // engages and every other backend sets to nullopt explicitly -- exactly as
+    // the edge taper one line below reads hasDdcPanEdgeRolloff. An earlier
+    // revision asked RadioModel::usesFlexCommandPlane(), which is a direct
+    // family() == "flex" check, and #5554's standing notice says not to add
+    // one of those; the plain hasCommandPlane() before THAT was looser still,
+    // since SimBackend/demo mode owns a RadioConnection and understands no
+    // band_zoom=/segment_zoom=. A second family that gains the verb now
+    // engages the record and needs no edit here. Re-evaluate both on every
+    // connect and disconnect, since backendCapabilities() only knows the
+    // CURRENTLY connected radio.
     if (m_panStack) {
-        const bool bandSegmentZoomAvailable = connected && m_radioModel.usesFlexCommandPlane();
+        // One predicate with the command paths in MainWindow_Shortcuts.cpp, so
+        // "the button is grey" and "the keystroke is refused" cannot drift
+        // apart on the capability (PanZoomModeGate.h).
+        const bool zoomAvailable = AetherSDR::bandSegmentZoomAvailable(
+            connected, m_radioModel.backendCapabilities().panZoomModes.has_value());
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
             connected && m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
-                applet->spectrumWidget()->setBandSegmentZoomAvailable(bandSegmentZoomAvailable);
+                applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
                     !backendAverages);
@@ -9050,6 +9065,11 @@ void MainWindow::disableSplit()
 
     m_splitActive = false;
 
+    // Learn this split's audio arrangement and put the RX pan back, BEFORE the
+    // TX slice is destroyed below — once it is gone its values are unreadable
+    // (which is also why the mirror exists at all). (#2242)
+    recordSplitAudioMirror();
+
     // Move TX back to the RX slice
     if (auto* rxSlice = m_radioModel.slice(m_splitRxSliceId))
         rxSlice->setTxSlice(true);
@@ -9065,20 +9085,12 @@ void MainWindow::disableSplit()
     updateSplitState();
 }
 
-void MainWindow::updateSplitState()
+void MainWindow::resolveSplitPairs(QHash<QString, SliceModel*>& txByPan,
+                                   QHash<QString, SliceModel*>& rxByPan) const
 {
-    // Derive the split-pair visualization from model truth so the panadapter
-    // reflects split regardless of who initiated it — GUI button, rigctld, CAT,
-    // TCI, or front panel. A slice is "TX-in-split" when it is the TX slice and a
-    // distinct RX slice shares its panadapter; that RX slice is "RX-in-split".
-    // (#3726) This drops the rendering dependence on the GUI-only m_splitActive/
-    // m_splitTxSliceId/m_splitRxSliceId flags — those still drive the SWAP/teardown
-    // *actions*, which need the GUI-created TX slice id. Consistent with RFC #3715:
-    // consumers derive from the model, not per-consumer state.
-
     // Resolve, per pan, the TX slice and its RX partner.
-    QHash<QString, SliceModel*> txByPan;     // panId -> TX slice
-    QHash<QString, SliceModel*> rxByPan;     // panId -> chosen RX partner
+    txByPan.clear();
+    rxByPan.clear();
     for (auto* s : m_radioModel.slices())
         if (s && s->isTxSlice())
             txByPan.insert(s->panId(), s);
@@ -9106,6 +9118,22 @@ void MainWindow::updateSplitState()
         else if (s->sliceId() == m_splitRxSliceId) chosen = s;
         else if (s->sliceId() == m_activeSliceId)  chosen = s;
     }
+}
+
+void MainWindow::updateSplitState()
+{
+    // Derive the split-pair visualization from model truth so the panadapter
+    // reflects split regardless of who initiated it — GUI button, rigctld, CAT,
+    // TCI, or front panel. A slice is "TX-in-split" when it is the TX slice and a
+    // distinct RX slice shares its panadapter; that RX slice is "RX-in-split".
+    // (#3726) This drops the rendering dependence on the GUI-only m_splitActive/
+    // m_splitTxSliceId/m_splitRxSliceId flags — those still drive the SWAP/teardown
+    // *actions*, which need the GUI-created TX slice id. Consistent with RFC #3715:
+    // consumers derive from the model, not per-consumer state.
+
+    QHash<QString, SliceModel*> txByPan;     // panId -> TX slice
+    QHash<QString, SliceModel*> rxByPan;     // panId -> chosen RX partner
+    resolveSplitPairs(txByPan, rxByPan);
 
     auto applyToSpectrum = [&](SpectrumWidget* sw) {
         if (!sw) return;
@@ -10102,7 +10130,7 @@ void MainWindow::toggleMinimalMode(bool on)
             s.value("MinimalModeGeometry", "").toByteArray());
         // Re-anchor as well as restore: this window is already mapped, so Qt
         // reapplies its caption-reserving clamp on every entry and the #4328
-        // gap would come straight back on one Ctrl+M round trip — then stick,
+        // gap would come straight back on one Ctrl+Shift+M round trip — then stick,
         // because closeEvent() saves whatever origin is current.
         if (!geom.isEmpty() && restoreGeometry(geom))
             reanchorCustomFrameGeometry(geom);
@@ -10125,7 +10153,7 @@ void MainWindow::toggleMinimalMode(bool on)
         // If the WM/double-click maximized or fullscreened us before we
         // got here, the current geometry is the maximized rect — not a
         // useful "minimal mode" geometry to persist.  Un-maximize first
-        // and skip the save.  The normal Ctrl+M / maximize-button paths
+        // and skip the save.  The normal Ctrl+Shift+M / maximize-button paths
         // arrive at minimal width with no abnormal state and save as usual.
         const bool abnormalState =
             windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen);
