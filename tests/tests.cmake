@@ -370,6 +370,19 @@ target_include_directories(backend_capability_revision_test PRIVATE src tests)
 target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
 
+# #5347: injected Icom model profiles, no session/transport/device.
+add_executable(icom_panadapter_capacity_test tests/icom_panadapter_capacity_test.cpp)
+target_include_directories(icom_panadapter_capacity_test PRIVATE src tests)
+target_link_libraries(icom_panadapter_capacity_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_panadapter_capacity_test COMMAND icom_panadapter_capacity_test)
+
+# #5890: bounded concrete-backend receive contracts. No bound socket, fake
+# firmware peer or hardware connection; Demo uses its own synthetic source.
+add_executable(backend_receive_contract_test tests/backend_receive_contract_test.cpp)
+target_include_directories(backend_receive_contract_test PRIVATE src tests)
+target_link_libraries(backend_receive_contract_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME backend_receive_contract_test COMMAND backend_receive_contract_test)
+
 # ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
 # backend records setAtu(); no sockets, no radio.
 add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
@@ -6592,6 +6605,8 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_label_theme_token_test
     atu_seam_gate_test
     backend_capability_revision_test
+    icom_panadapter_capacity_test
+    backend_receive_contract_test
     radio_capacity_declaration_test
     extension_namespace_gate_test
     control_availability_registry_test
