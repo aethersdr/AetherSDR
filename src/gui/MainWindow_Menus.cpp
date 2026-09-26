@@ -66,6 +66,7 @@
 #include <QCheckBox>
 #include <QDesktopServices>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeySequence>
@@ -76,6 +77,7 @@
 #include <QNetworkRequest>
 #include <QPointer>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QShortcut>
@@ -1954,6 +1956,53 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
         connect(a, &QAction::triggered, this,
                 [this, khz, sliceId]() { applySplitOffsetKHz(khz, sliceId); });
     }
+
+    // Keep client-side split-on-QSY policy beside the other split actions.
+    menu.addSeparator();
+    QMenu* splitQsyMenu = menu.addMenu(tr("Split QSY Option"));
+
+    auto* closeSplitCheck = new QCheckBox(
+        tr("Close split on QSY"), splitQsyMenu);
+    closeSplitCheck->setObjectName(QStringLiteral("splitCloseOnQsy"));
+    closeSplitCheck->setAccessibleName(tr("Close split on QSY"));
+    closeSplitCheck->setChecked(m_splitQsySettings.closeSplitOnQsy);
+    auto* closeSplitAction = new QWidgetAction(splitQsyMenu);
+    closeSplitAction->setDefaultWidget(closeSplitCheck);
+    splitQsyMenu->addAction(closeSplitAction);
+
+    QWidget* thresholdRow = new QWidget(splitQsyMenu);
+    auto* thresholdLayout = new QHBoxLayout(thresholdRow);
+    thresholdLayout->setContentsMargins(12, 4, 12, 4);
+    auto* thresholdLabel = new QLabel(
+        tr("QSY change threshold to close split:"), thresholdRow);
+    auto* thresholdSpin = new QSpinBox(thresholdRow);
+    thresholdLabel->setBuddy(thresholdSpin);
+    thresholdLayout->addWidget(thresholdLabel);
+    thresholdSpin->setObjectName(QStringLiteral("splitQsyThresholdHz"));
+    thresholdSpin->setRange(AetherSDR::SplitQsySettings::kMinimumThresholdHz,
+                            AetherSDR::SplitQsySettings::kMaximumThresholdHz);
+    thresholdSpin->setValue(m_splitQsySettings.thresholdHz);
+    thresholdSpin->setSuffix(tr(" Hz"));
+    thresholdSpin->setAccessibleName(
+        tr("QSY change threshold to close split"));
+    thresholdSpin->setAccessibleDescription(
+        tr("Enter a frequency change from 1 to 200000 Hz."));
+    thresholdLayout->addWidget(thresholdSpin);
+    auto* thresholdAction = new QWidgetAction(splitQsyMenu);
+    thresholdAction->setDefaultWidget(thresholdRow);
+    splitQsyMenu->addAction(thresholdAction);
+    thresholdSpin->setEnabled(m_splitQsySettings.closeSplitOnQsy);
+
+    connect(closeSplitCheck, &QCheckBox::toggled, this, [this, thresholdSpin](bool enabled) {
+        m_splitQsySettings.closeSplitOnQsy = enabled;
+        thresholdSpin->setEnabled(enabled);
+        m_splitQsySettings.save();
+    });
+    connect(thresholdSpin, qOverload<int>(&QSpinBox::valueChanged), this,
+            [this](int thresholdHz) {
+        m_splitQsySettings.thresholdHz = thresholdHz;
+        m_splitQsySettings.save();
+    });
 
     // ── Monitor TX ───────────────────────────────────────────────────────
     menu.addSeparator();

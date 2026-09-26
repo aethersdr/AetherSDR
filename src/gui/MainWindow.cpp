@@ -1134,6 +1134,8 @@ MainWindow::MainWindow(QWidget* parent)
     , m_session(m_sessions.front().get())
     , m_radioModel(m_session->radioModel())
 {
+    m_splitQsySettings = AetherSDR::SplitQsySettings::load();
+
     // Status bar is the only top-level shell besides the spectrum / applet
     // rail / titlebar that the operator can directly retheme.  Declare its
     // container here — statusBar() lazy-creates the QStatusBar on first
