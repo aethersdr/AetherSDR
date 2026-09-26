@@ -116,6 +116,7 @@ enum class SpectrumRenderMode : int {
 // waterfall rendering. Otherwise falls back to QPainter (QWidget).
 class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_OBJECT
+    friend struct SpectrumOffscreenTestAccess;
     // Expose the measured FFT noise floor (and the pan index that identifies
     // which spectrum this is) to the automation bridge so a driver can read
     // them generically via QObject::property() in dumpTree — without coupling

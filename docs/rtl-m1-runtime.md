@@ -14,6 +14,18 @@ policy for pan-driven capture moves. Ozy approved implementation and receive-onl
 validation; Jeremy's maintainer decision on this UX/RFC change remains required
 before merge. This revision does not raise production receiver admission.
 
+**Offscreen reveal correction (2026-09-26):** the offscreen indicator's
+single click and full Qt double-click sequence now use the existing confirmed
+receiver `Center` intent at its preserved RF. A zoom-style `Range` request is
+still constrained to current capture and cannot stand in for a deliberate reveal.
+Center-lock uses the same owner dispatch; Kiwi display routing and optimistic
+backends retain their previous pan request. A zoom arriving before capture
+adoption coalesces its span without replacing the pending reveal's target.
+The opt-in real-widget regression injects USB below the production worker and
+covers left/right, narrow/full spans, captured/parked slices, trailing release,
+readback failure/compensation and newer pan supersession. Offline Flex command
+capture and Hermes receiver-state checks do not claim live hardware coverage.
+
 ## Acquisition and ownership
 
 The RTL transaction owns one capture stream. Its complete desired state includes

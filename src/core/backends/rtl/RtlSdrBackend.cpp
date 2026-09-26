@@ -692,7 +692,10 @@ void RtlSdrBackend::setPanCenter(const QString& panId, double hz, PanCenterInten
 {
     if (!m_connected || !std::isfinite(hz)
         || (!panId.isEmpty() && panId != QLatin1String("0xe1000000"))) { return; }
-    m_viewCenterRequestHz = hz;
+    // A zoom pair comes from the still-accepted axis. Keep an unadopted
+    // deliberate Center reveal at its requested RF while its span coalesces.
+    m_viewCenterRequestHz = intent == PanCenterIntent::Range && m_capture.busy()
+        && m_requested.centeredView ? m_requested.centeredView->centerHz : hz;
     requestViewport(intent == PanCenterIntent::Drag);
 }
 

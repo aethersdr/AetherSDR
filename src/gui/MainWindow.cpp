@@ -10651,7 +10651,7 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
     // into waterfall history. requestPanCenter() defers and replays it instead.
     bool centerDeferred = false;
     if (!kiwiDisplayActive && forceRadioCenter && m_radioModel.isConnected()) {
-        centerDeferred = !m_radioModel.requestPanCenter(s->panId(), targetMhz);
+        centerDeferred = !requestSlicePanCenter(m_radioModel, s->sliceId(), targetMhz);
     }
 
     // Keep the local spectrum centered immediately so the active slice marker is

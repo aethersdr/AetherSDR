@@ -726,7 +726,7 @@ bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool send
             // #4142 — defer, never drop. requestPanCenter() advances the local
             // model only when the command actually reaches the wire, and queues
             // it for replay when a profile load is holding radio-state writes.
-            centerDeferred = !m_radioModel.requestPanCenter(panId, targetCenterMhz);
+            centerDeferred = !requestSlicePanCenter(m_radioModel, slice->sliceId(), targetCenterMhz);
         } else {
             // Local-only snap: the caller explicitly wants no radio write, so
             // there is no wire command for the model to diverge from.

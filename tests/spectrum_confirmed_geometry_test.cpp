@@ -1,6 +1,15 @@
 // Opt-in real-widget test: no sockets, radio, USB, or synthetic firmware peer.
 #include "TestSettingsProfile.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/MainWindowHelpers.h"
+#include "RtlInjectedDevice.h"
+#include "core/backends/flex/FlexBackend.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/rtl/RtlSdrBackend.h"
+#include "models/SliceModel.h"
+#include "models/PanadapterModel.h"
+#include <QImage>
+#include <QPainter>
 
 #include <QApplication>
 #include <QMouseEvent>
@@ -11,6 +20,37 @@
 
 using namespace AetherSDR;
 
+namespace AetherSDR {
+struct SpectrumOffscreenTestAccess {
+    static QPoint marker(SpectrumWidget& widget) {
+        QImage image(widget.size(), QImage::Format_ARGB32);
+        QPainter painter(&image);
+        widget.drawOffScreenSlices(painter, QRect(0, 0, widget.width(), widget.spectrumPixelHeight()));
+        return widget.m_offScreenRects.front().center();
+    }
+};
+}
+namespace AetherSDR::rtl {
+struct RtlCaptureBackendTestAccess {
+    static void start(RtlSdrBackend& backend, std::unique_ptr<RtlSdrWorker::Device> device) {
+        backend.m_requested.hardware = {100'000'000, 2'400'000, 0, 0, 0, 240};
+        backend.m_requested.receivers = {{{0, 100'000'000, -6000, 6000, 0, 3000, 3000}, RtlCaptureTransaction::Mode::Fm}};
+        backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device)));
+    }
+    static bool idle(const RtlSdrBackend& backend) { return !backend.m_capture.busy(); }
+};
+}
+namespace AetherSDR::hl2 {
+struct Hl2DspReadbackTestAccess {
+    static void receiver(Hl2Backend& backend) {
+        backend.m_rx.resize(1);
+        backend.m_ids.reset(1);
+        backend.m_rx[0].sliceFreqHz = 14'200'000;
+        backend.m_rx[0].ncoHz = 14'000'000;
+    }
+    static double frequency(const Hl2Backend& backend) { return backend.m_rx[0].sliceFreqHz; }
+};
+}
 namespace {
 void mouse(SpectrumWidget& widget, QEvent::Type type, int x, int y)
 {
@@ -165,6 +205,117 @@ int main(int argc, char** argv)
     widget.observeFrequencyRange(460.3, 0.125);
     check(near(widget.centerMhz(), optimistic), "Flex retains stale-echo hold during drag");
     mouse(widget, QEvent::MouseButtonRelease, 300, 150);
+    // Real marker -> the owner dispatch helper -> RadioModel -> RTL worker.
+    // Routing reveal as Range must fail: that request cannot leave capture.
+    {
+        RadioModel model;
+        check(model.rebuildBackendForTest("rtl"), "offscreen RTL model initialized");
+        auto& backend = *static_cast<rtl::RtlSdrBackend*>(model.backend());
+        auto usb = std::make_shared<test::DeviceState>();
+        rtl::RtlCaptureBackendTestAccess::start(backend, std::make_unique<test::InjectedDevice>(usb));
+        usb->releaseReadback();
+        const auto settle = [&]() {
+            for (int i = 0; i < 2500; ++i) {
+                usb->block(); QApplication::processEvents(); QThread::msleep(2);
+                if (model.slice(0) && rtl::RtlCaptureBackendTestAccess::idle(backend)) { return true; }
+            }
+            return false;
+        };
+        check(settle(), "offscreen real FM receiver adopted");
+        SliceModel* slice = model.slice(0);
+        PanadapterModel* pan = slice ? model.panadapter(slice->panId()) : nullptr;
+        if (pan) {
+            SpectrumWidget reveal;
+            reveal.resize(1200, 600);
+            reveal.setPanGeometryConfirmationRequired(true);
+            int tunes = 0, reveals = 0;
+            QObject::connect(&reveal, &SpectrumWidget::frequencyClicked, &model, [&](double) { ++tunes; });
+            QObject::connect(&reveal, &SpectrumWidget::offScreenSliceCenterRequested,
+                &model, [&](int id) { ++reveals; requestSlicePanCenter(model, id, model.slice(id)->frequency()); });
+            QObject::connect(pan, &PanadapterModel::infoChanged, &reveal,
+                [&](double center, double span) { reveal.observeFrequencyRange(center, span); });
+            struct RevealCase { double center; double span; bool parked; bool doubleClick; };
+            for (const RevealCase fixture : {
+                    RevealCase{104.0, 2.16, true, true},
+                    RevealCase{96.0, 2.16, true, true},
+                    RevealCase{104.0, 0.2, true, false},
+                    RevealCase{96.0, 0.2, true, true},
+                    RevealCase{100.3, 0.2, false, true},
+                    RevealCase{99.7, 0.2, false, false}}) {
+                const double center = fixture.center;
+                model.requestPanCenter(pan->panId(), pan->centerMhz(), fixture.span);
+                model.requestPanCenter(pan->panId(), center, -1.0, IRadioBackend::PanCenterIntent::Drag);
+                check(settle() && slice->inCapture() != fixture.parked, "offscreen fixture has expected capture membership");
+                reveal.observeFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
+                reveal.setSliceOverlay(0, slice->frequency(), -6000, 6000, false, true, "FM");
+                reveal.setSliceOverlayInCapture(0, slice->inCapture());
+                const QPoint marker = SpectrumOffscreenTestAccess::marker(reveal);
+                const int before = reveals;
+                mouse(reveal, QEvent::MouseButtonPress, marker.x(), marker.y());
+                mouse(reveal, QEvent::MouseButtonRelease, marker.x(), marker.y());
+                check(settle() && slice->inCapture() && std::abs(pan->centerMhz() - 100.0) < 0.0006,
+                      "indicator press resumes parked RF and centers full view within half bin");
+                // Paint after adoption, so the marker has disappeared before
+                // the Qt double-click and its trailing release arrive.
+                SpectrumOffscreenTestAccess::marker(reveal);
+                if (fixture.doubleClick) {
+                    mouse(reveal, QEvent::MouseButtonDblClick, marker.x(), marker.y());
+                    mouse(reveal, QEvent::MouseButtonRelease, marker.x(), marker.y());
+                }
+                check(reveals == before + 1 && tunes == 0 && slice->frequency() == 100.0,
+                      "full Qt double-click sequence cannot retune after marker disappears");
+            }
+            model.requestPanCenter(pan->panId(), 104.0, 2.16, IRadioBackend::PanCenterIntent::Drag);
+            check(settle() && !slice->inCapture(), "rollback fixture parks receiver");
+            const double parkedCenter = pan->centerMhz();
+            {
+                std::lock_guard lock(usb->mutex); usb->holdReadback = true;
+            }
+            usb->failWriteAt = usb->writes + 5;
+            requestSlicePanCenter(model, 0, 100.0);
+            wait(100);
+            check(pan->centerMhz() == parkedCenter && !slice->inCapture(),
+                  "pending reveal cannot publish requested geometry or membership");
+            usb->releaseReadback();
+            check(settle() && !slice->inCapture() && pan->centerMhz() == parkedCenter
+                && slice->frequency() == 100.0,
+                  "failed reveal compensates and preserves accepted RF/view/membership");
+            {
+                std::lock_guard lock(usb->mutex); usb->holdReadback = true;
+            }
+            requestSlicePanCenter(model, 0, 100.0);
+            wait(50);
+            model.requestPanCenter(pan->panId(), 96.0, -1.0, IRadioBackend::PanCenterIntent::Drag);
+            usb->releaseReadback();
+            check(settle() && !slice->inCapture() && std::abs(pan->centerMhz() - 96.0) < 0.0006,
+                  "newer free pan supersedes pending reveal without publishing it");
+            requestSlicePanCenter(model, 0, 100.0);
+            model.requestPanCenter(pan->panId(), pan->centerMhz(), 0.2);
+            check(settle() && slice->inCapture() && std::abs(pan->centerMhz() - 100.0) < 0.0006
+                && pan->bandwidthMhz() < 0.201,
+                  "zoom coalesces with reveal placement while preserving selected RF");
+            reveal.prepareForShutdown();
+        }
+        backend.disconnectRadio();
+    }
+    // Independent pan windows keep the historical Range dispatch. Offline
+    // command capture and receiver state only: no Flex/Hermes connection.
+    {
+        FlexBackend flex;
+        QStringList commands;
+        flex.setSliceCommandSink([&](const QString& command) { commands << command; });
+        flex.setPanCenter("0x40000000", 14'200'000, IRadioBackend::PanCenterIntent::Range);
+        check(commands == QStringList{"display pan set 0x40000000 center=14.200000"},
+              "Flex Range centering dispatch retains its independent pan command");
+        hl2::Hl2Backend hermes;
+        hl2::Hl2DspReadbackTestAccess::receiver(hermes);
+        double center = 0;
+        QObject::connect(&hermes, &IRadioBackend::panCenterBandwidthChanged, &hermes,
+            [&](const QString&, double mhz, double) { center = mhz; });
+        hermes.setPanCenter({}, 14'200'000, IRadioBackend::PanCenterIntent::Range);
+        check(center == 14.2 && hl2::Hl2DspReadbackTestAccess::frequency(hermes) == 14'200'000,
+              "Hermes Range centering moves its DDC pan while preserving slice RF");
+    }
     widget.prepareForShutdown();
     return failures ? 1 : 0;
 }
