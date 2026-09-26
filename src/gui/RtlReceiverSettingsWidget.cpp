@@ -75,10 +75,13 @@ RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget*
     const auto available = [](bool connected, const RadioCapabilities& caps) {
         return connected && supportsSettings(caps);
     };
-    for (QWidget* control : {static_cast<QWidget*>(m_ppm), static_cast<QWidget*>(apply), static_cast<QWidget*>(m_dc)}) {
+    for (QWidget* control : {static_cast<QWidget*>(m_ppm), static_cast<QWidget*>(apply)}) {
         m_availability->registerWidget(control,
             tr("The connected radio does not provide RTL receiver corrections."), available);
     }
+    m_availability->registerWidget(m_dc,
+        tr("The connected radio does not provide RTL receiver corrections."), available,
+        [this] { return m_haveState && m_confirmed.value(QStringLiteral("dcSuppression")).toBool(); });
     connect(m_ppm, &QSpinBox::valueChanged, this, [this] { m_ppmEdited = true; });
     connect(apply, &QPushButton::clicked, this, [this] {
         submit(QStringLiteral("ppm.set"), m_ppm->value(), m_ppmRequest);
@@ -163,6 +166,7 @@ void RtlReceiverSettingsWidget::acceptStatus(const QVariantMap& status)
     const QSignalBlocker ppmBlock(m_ppm), dcBlock(m_dc);
     if (!m_ppmEdited) { m_ppm->setValue(status.value(QStringLiteral("ppm")).toInt()); }
     m_dc->setChecked(status.value(QStringLiteral("dcSuppression")).toBool());
+    m_availability->refreshEngaged();
     renderStatus();
 }
 

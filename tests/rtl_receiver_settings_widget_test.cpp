@@ -93,6 +93,8 @@ int main(int argc, char** argv)
         && !dc->isChecked() && applied->text().endsWith("off"), "DC checkbox remains confirmed while DSP change is pending");
     source->confirm();
     check(dc->isChecked() && applied->text().endsWith("on"), "DC checkbox follows DSP adoption");
+    check(dc->accessibleDescription().isEmpty(),
+        "checked DC control does not also announce an inactive state");
     ppm->setValue(-12); apply->click();
     emit source->extensionError(source->pendingId, "readback failed");
     check(applied->text().contains("19 ppm") && status->text().contains("readback failed"), "refusal preserves applied value and exposes reason");
