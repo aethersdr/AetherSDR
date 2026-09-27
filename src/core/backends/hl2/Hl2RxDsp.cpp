@@ -449,7 +449,7 @@ void Hl2RxDsp::setMode(WdspChannel::Mode mode)
     }
 }
 
-void Hl2RxDsp::applyFilterTaps(int notchCount)
+bool Hl2RxDsp::applyFilterTaps(int notchCount)
 {
     // The length follows mode, passband and notch set (rxFilterTapsFor). A
     // change is WdspChannel::setFilterTaps(): the notch database and shift
@@ -465,12 +465,14 @@ void Hl2RxDsp::applyFilterTaps(int notchCount)
                                                     current),
                                     m_channel->config().dspBlockSize);
     if (wanted == current)
-        return;
-    if (!m_channel->setFilterTaps(wanted)) {
+        return true;
+    if (m_refuseFilterTapsForTest || !m_channel->setFilterTaps(wanted)) {
         qCWarning(lcHl2RxDsp) << "could not change the RX filter length" << current
                               << "->" << wanted << "taps; it stays at" << current
                               << "until the next mode, filter or notch change";
+        return false;
     }
+    return true;
 }
 
 void Hl2RxDsp::applyMinimumPhaseForMode()
@@ -602,12 +604,20 @@ void Hl2RxDsp::addNotch(int index, double centerHz, double widthHz, bool active)
     // mutex the background build holds, which is the whole starvation
     // beginRebuild() exists to prevent.
     //
-    // THE LENGTH GOES UP FIRST. The first notch needs kRxFilterTaps for its
-    // 50 Hz floor; added to the 4096-tap filter, WDSP would build the mask
-    // with it widened to 100 Hz, and the chain would briefly run a notch
-    // wider than the one drawn. Raising first means it never exists at all.
-    if (canPushToChannel())
-        applyFilterTaps(static_cast<int>(m_notches.size()) + 1);
+    // THE LENGTH GOES UP FIRST, AND IT IS CHECKED. The first notch needs
+    // kRxFilterTaps for its 50 Hz floor; added to the 4096-tap filter, WDSP
+    // would build the mask with it widened to 100 Hz -- a notch wider than
+    // the one drawn, kept until something happened to re-attempt the raise.
+    // So a raise that did not land REFUSES the notch, by the same path as a
+    // notch WDSP itself refused (neither WDSP nor the mirror takes it). The
+    // next notch edit, mode or filter change retries the raise. Found by
+    // aethersdr-agent in review of #5981.
+    if (canPushToChannel() && !applyFilterTaps(static_cast<int>(m_notches.size()) + 1)) {
+        qCWarning(lcHl2RxDsp) << "notch at" << centerHz << "Hz not applied: the RX filter"
+                              << "could not be lengthened to the" << kRxFilterTaps
+                              << "taps its" << widthHz << "Hz width needs";
+        return;
+    }
     if (canPushToChannel() && !m_channel->addNotch(index, centerHz, widthHz, active))
         return;
     m_notches.insert(m_notches.begin() + index, Notch {centerHz, widthHz, active});

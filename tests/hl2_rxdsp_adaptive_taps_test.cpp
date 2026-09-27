@@ -135,8 +135,9 @@ std::vector<double> magnitude(const std::vector<float>& h, int maxHz)
     return m;
 }
 
-// Impulse response of the whole RXA chain, CWU at `taps`, passband lo..hi Hz.
-std::vector<double> cwResponse(double lo, double hi, int taps)
+// Impulse response of the whole RXA chain, CWU at `taps`, passband lo..hi Hz,
+// from the sample the impulse went in.
+std::vector<float> cwImpulse(double lo, double hi, int taps)
 {
     std::string err;
     auto ch = WdspChannel::create(channelConfig(WdspChannel::Mode::Cwu, lo, hi, taps, false), &err);
@@ -151,8 +152,28 @@ std::vector<double> cwResponse(double lo, double hi, int taps)
     if (!run(*ch, in, out))
         return {};
     // Everything the impulse produced: pipeline + taps fit well inside 24 blocks.
-    std::vector<float> h(out.begin() + static_cast<std::ptrdiff_t>(at), out.end());
-    return magnitude(h, 3000);
+    return std::vector<float>(out.begin() + static_cast<std::ptrdiff_t>(at), out.end());
+}
+
+std::vector<double> cwResponse(double lo, double hi, int taps)
+{
+    const auto h = cwImpulse(lo, hi, taps);
+    return h.empty() ? std::vector<double>{} : magnitude(h, 3000);
+}
+
+// Centre of energy of an impulse response, in samples. For a linear-phase
+// (symmetric) FIR it is EXACTLY the group delay plus the chain's fixed
+// pipeline, whatever the skirt looks like -- unlike a half-amplitude onset,
+// which adds each length's own step-response rise (review of #5981).
+double energyCentre(const std::vector<float>& h)
+{
+    double e = 0.0, m = 0.0;
+    for (std::size_t k = 0; k < h.size(); ++k) {
+        const double p = static_cast<double>(h[k]) * h[k];
+        e += p;
+        m += p * static_cast<double>(k);
+    }
+    return e > 0.0 ? m / e : -1.0;
 }
 
 struct Shape {
@@ -395,10 +416,28 @@ int main(int argc, char** argv)
         longOk = longOk && shapes[w][std::size(lengths) - 1].at50 <= kStopDb;
     check(longOk, "control: the 8192-tap filter is >= 60 dB down 50 Hz outside every width");
 
-    // Latency: what the short length buys in CW.
-    check(cwOnset[1] > 0.0 && cwOnset[2] > 0.0, "CW onsets measured");
-    check(std::fabs((cwOnset[2] - cwOnset[1]) - 1000.0 * (kLong - kShort) / 2.0 / kFs) < 1.0,
-          "CW: 8192 -> 4096 taps takes (8192-4096)/2 samples = 42.67 ms off the onset");
+    // Latency: what the short length buys in CW. ASSERTED on the impulse
+    // response's centre of energy, which for a symmetric FIR is the group
+    // delay exactly and does not depend on the skirt; the onset above is the
+    // operator-facing figure but includes each length's own rise, which is
+    // not the same shape at 4096 and 8192.
+    const double cShort = energyCentre(cwImpulse(550.0, 850.0, kShort));
+    const double cLong = energyCentre(cwImpulse(550.0, 850.0, kLong));
+    std::printf("    CWU 550-850 Hz impulse centre of energy: %.2f samples at %d, "
+                "%.2f at %d, delta %.2f (expected %d)\n",
+                cShort, kShort, cLong, kLong, cLong - cShort, (kLong - kShort) / 2);
+    check(cShort > 0.0 && cLong > 0.0, "CW impulse responses measured");
+    check(std::fabs((cLong - cShort) - (kLong - kShort) / 2.0) < 2.0,
+          "CW: 8192 -> 4096 taps moves the group delay by (8192-4096)/2 = 2048 "
+          "samples (42.67 ms), within 2 samples");
+    // The onset delta, loosely: 2048 samples PLUS the difference between the
+    // two lengths' rise to half amplitude, which is not zero in principle
+    // because their skirts differ. 3 ms (144 samples) is the bound review
+    // proposed; it still tells 4096 from 2048 or 8192 by more than 18 ms,
+    // and the exact figure is carried by the centre-of-energy check above.
+    check(cwOnset[1] > 0.0 && cwOnset[2] > 0.0
+              && std::fabs((cwOnset[2] - cwOnset[1]) - 1000.0 * (kLong - kShort) / 2.0 / kFs) < 3.0,
+          "CW: the half-amplitude onset moves by the same 42.67 ms, within 3 ms");
     // Why the policy leaves every other mode long: at minimum phase the length
     // barely moves the onset.
     check(usbMpLong > 0.0 && usbMpShort > 0.0 && std::fabs(usbMpLong - usbMpShort) < 2.0,
@@ -484,6 +523,59 @@ int main(int argc, char** argv)
               "rebuild: the replayed notch set holds the long length");
         check(dsp.minimumNotchWidthInForceHz() <= 50.0 + 1e-9,
               "rebuild: the replayed notch is at the 50 Hz floor");
+    }
+    {
+        // Rebuild with NO notches, where the mode moved while the build ran:
+        // the chain is built for the Config it was handed, so only
+        // installChannel()'s own applyFilterTaps() can correct its length.
+        // (Pinned both ways, per review of #5981; deleting that line turns
+        // both red.)
+        const Hl2RxDsp::Config cwCfg = dspConfig(M::Cwu, 550.0, 850.0);
+        const Hl2RxDsp::Config usbCfg = dspConfig(M::Usb, 150.0, 3000.0);
+        {
+            Hl2RxDsp dsp;
+            std::string err;
+            check(dsp.configure(cwCfg, &err), "rebuild CW->USB: configures");
+            dsp.beginRebuild(cwCfg);
+            dsp.setMode(M::Usb);   // deferred: a rebuild is in flight
+            check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(cwCfg, false, 0)),
+                  "rebuild CW->USB: installs");
+            check(dsp.rxFilterTapsInForce() == kLong,
+                  "rebuild: built for CW (4096), USB set mid-build -> installed at 8192");
+        }
+        {
+            Hl2RxDsp dsp;
+            std::string err;
+            check(dsp.configure(usbCfg, &err), "rebuild USB->CW: configures");
+            dsp.beginRebuild(usbCfg);
+            dsp.setMode(M::Cwu);
+            dsp.setFilter(550.0, 850.0);
+            check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(usbCfg, false, 0)),
+                  "rebuild USB->CW: installs");
+            check(dsp.rxFilterTapsInForce() == kShort,
+                  "rebuild: built for USB (8192), CW 300 Hz set mid-build -> installed at 4096");
+        }
+    }
+    {
+        // A RAISE THAT FAILS REFUSES THE NOTCH (review of #5981). With the
+        // length change refused, the first notch must not land on the 4096
+        // filter, where WDSP would widen it to 100 Hz: neither WDSP nor the
+        // mirror may hold it. Once the raise works again, the next notch lands
+        // long.
+        Hl2RxDsp dsp;
+        std::string err;
+        check(dsp.configure(dspConfig(M::Cwu, 550.0, 850.0), &err), "refused raise: configures");
+        dsp.setNotchTuneFrequency(kTuneHz);
+        dsp.setRefuseFilterTapsChangesForTest(true);
+        dsp.addNotch(0, kTuneHz + 1500.0, 50.0, true);
+        check(dsp.rxFilterTapsInForce() == kShort, "refused raise: the length stayed at 4096");
+        check(dsp.wdspNotchCount() == 0 && dsp.notchCount() == 0,
+              "refused raise: the notch is NOT applied at 4096 (WDSP and mirror both empty)");
+        dsp.setRefuseFilterTapsChangesForTest(false);
+        dsp.addNotch(0, kTuneHz + 1500.0, 50.0, true);
+        check(dsp.rxFilterTapsInForce() == kLong && dsp.wdspNotchCount() == 1
+                  && dsp.notchCount() == 1,
+              "refused raise: the next attempt raises and lands the notch");
     }
 
     // ==== 4. the live switch, and the notch across it =====================

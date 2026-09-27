@@ -494,6 +494,14 @@ public:
     // test of the wiring cannot agree with itself.
     [[nodiscard]] int rxFilterTapsInForce() const;
     [[nodiscard]] double minimumNotchWidthInForceHz() const;
+    // TEST ONLY: every filter-length change is treated as refused, as
+    // WdspChannel::setFilterTaps() refuses one that loses
+    // beginControlOperation() to a concurrent control call. That race cannot
+    // be constructed from Hl2RxDsp's single thread, and every other control
+    // verb shares the same fence, so refusing at the WdspChannel would refuse
+    // the notch too and prove nothing. This is the smallest hook that lets a
+    // test pin what addNotch() does when only the raise fails.
+    void setRefuseFilterTapsChangesForTest(bool on) noexcept { m_refuseFilterTapsForTest = on; }
 
     // Mute the DEMODULATOR while transmitting.
     //
@@ -672,7 +680,9 @@ private:
     // `notchCount` is passed rather than read so addNotch() can raise the
     // length for the notch it is ABOUT to add. Same call sites as the phase,
     // plus the notch verbs and setFilter.
-    void applyFilterTaps(int notchCount);
+    // Returns whether the wanted length is in force afterwards; addNotch()
+    // refuses a notch the filter cannot realise when it is not.
+    bool applyFilterTaps(int notchCount);
     // True when the next panadapter frame may be computed. Stays true until one
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
@@ -740,6 +750,7 @@ private:
         bool active = true;
     };
     std::vector<Notch> m_notches;
+    bool m_refuseFilterTapsForTest = false;
     bool m_notchesEnabled = true;
     double m_notchTuneHz = 0.0;
 
