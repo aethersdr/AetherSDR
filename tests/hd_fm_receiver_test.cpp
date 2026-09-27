@@ -1,4 +1,7 @@
 #include "core/backends/rtl/HdFmReceiver.h"
+#include "core/backends/rtl/RtlReceivePipeline.h"
+#include <QCoreApplication>
+#include <QThreadPool>
 #include "core/Resampler.h"
 // The pinned C API header does not declare C++ linkage guards.
 extern "C" {
@@ -143,8 +146,9 @@ static Registry::ReceiverSpec spec()
     value.hdFm = AetherSDR::rtl::HdFmRecipe{0};
     return value;
 }
-int main()
+int main(int argc, char** argv)
 {
+    QCoreApplication app(argc, argv);
     // Query the actual converter before starting the worker or its freshness clock.
     const int speakerDelayInput = AetherSDR::Resampler(44100, 48000, 2048).groupDelayInputFrames();
     const auto recipe = spec(); Control control; Sink sink; std::string error;
@@ -154,11 +158,11 @@ int main()
     std::array<std::complex<float>, 8192> iq{};
     std::uint64_t captureFirst = 0, revision = 9;
     const auto step = [&] {
-        const bool result = receiver->processCapture({1, recipe.capture, captureFirst, false, iq, 8, revision}, sink);
+        const bool result = receiver->processCapture({1, recipe.capture, captureFirst, captureFirst == 0, iq, 8, revision}, sink);
         captureFirst += iq.size(); return result;
     };
     check(step() && sink.speakerFrames > 0 && sink.tapFrames == 0 && !sink.last.audioValid,
-        "acquiring supplies complete intentional-zero speaker quanta and no fabricated decoded tap");
+        "fresh graph accepts the initial discontinuity and supplies intentional-zero speaker quanta without a decoded tap");
     // Four native frames fill playout. Hold the worker after its callbacks so
     // loss can occur exactly during the readiness publication, before taps.
     control.command(4, true); check(step() && control.wait(true), "worker reached deterministic post-audio hold");
@@ -246,7 +250,19 @@ int main()
     check(step() && sink.lastSpeaker.revision == 9 && sink.lastSpeaker.producedMonotonicMs > 0,
         "buffered speaker prefix retains original token/time across a monitor-only revision");
     check(sink.last.observationSequence >= measuredSequence, "control changes do not invent decoder measurements");
+    check(!receiver->processCapture({1, recipe.capture, captureFirst, true, iq, 8, revision}, sink)
+        && !sink.last.audioValid,
+        "later explicit discontinuity withdraws even at the expected contiguous sample position");
     control.releaseQuietly(); receiver.reset();
+
+    Control gap; Sink gapSink;
+    auto gapReceiver = prepareHdFmReceiver(recipe, error, std::make_unique<Pipe>(gap));
+    check(gapReceiver && gapReceiver->processCapture({1, recipe.capture, 0, true, iq, 8, 9}, gapSink),
+        "independent gap fixture accepts its first marked boundary");
+    check(gapReceiver && !gapReceiver->processCapture({1, recipe.capture, iq.size() + 1, false, iq, 8, 9}, gapSink)
+        && !gapSink.last.audioValid,
+        "later unmarked sample-position gap still withdraws");
+    gapReceiver.reset();
 
     // Global resident reservation covers offered + active decoder workers.
     Control one, two, three;
@@ -281,6 +297,63 @@ int main()
     check(refused && !overflowSink.last.audioValid && overflowSink.last.iqDrops == 1,
         "acquisition never blocks on a full IQ queue and withdraws truthfully");
     overload.releaseQuietly(); bounded.reset();
+
+    // Exercise the real Pipeline -> SampleReader -> native receiver dispatch.
+    // SampleReader marks this first delivery discontinuous even though the
+    // public pipeline caller passes only an ordinary first IQ block.
+    using Pipeline = AetherSDR::rtl::RtlReceivePipeline;
+    Pipeline::Transaction::State state;
+    state.token = {81, 4}; state.capture = recipe.capture;
+    state.hardware.centerHz = 100000000; state.hardware.sampleRateHz = 1000000;
+    Pipeline::Transaction::Receiver selected{recipe.passband, Pipeline::Transaction::Mode::Wfm};
+    selected.wfmHdStereo = true;
+    state.receivers = {selected}; state.receivingIds = {0};
+    auto pipeline = std::make_unique<Pipeline>(1, true);
+    const bool submitted = pipeline->prepare(state, true);
+    bool adopted = false;
+    if (submitted) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto status = pipeline->service();
+            if (status == Pipeline::Preparation::Failed) { break; }
+            if (status == Pipeline::Preparation::Ready) { adopted = pipeline->adopt(); break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    check(adopted, "native HD pipeline prepares and adopts without hardware or an injected decoder");
+    if (adopted) {
+        check(pipeline->process(0, iq) && !pipeline->needsRepair(),
+            "registry-marked first capture block starts the native HD graph without repair");
+        Pipeline::HdFmObservation observation;
+        bool observed = false, observationsValid = true;
+        std::uint64_t audioEpoch = 0;
+        while (pipeline->takeHdObservation(observation)) {
+            observed = true; audioEpoch = observation.audioEpoch;
+            observationsValid &= observation.token == state.token && observation.slot == 0
+                && observation.instance > 0 && observation.receiverEpoch > 0 && observation.captureEpoch > 0
+                && audioEpoch > 0 && observation.reception.sessionId == state.token.session
+                && observation.reception.revision == state.token.revision && !observation.reception.audioValid;
+        }
+        check(observed && observationsValid, "initial acquiring observation carries the accepted publication identity");
+        Pipeline::Packet packet;
+        std::uint64_t speakerFrames = 0;
+        bool packetsValid = true;
+        while (pipeline->takePacket(packet)) {
+            packetsValid &= packet.token == state.token && packet.slot == -1 && packet.sampleRateHz == 48000
+                && packet.channelCount == 2 && packet.audioEpoch == audioEpoch && packet.producedMonotonicMs == 0
+                && packet.frames > 0 && packet.frames <= 1024;
+            if (packet.frames <= 1024) {
+                packetsValid &= std::all_of(packet.samples.begin(), packet.samples.begin() + 2 * packet.frames,
+                    [](float value) { return value == 0; });
+            }
+            speakerFrames += packet.frames;
+        }
+        check(speakerFrames > 0 && packetsValid, "initial native pipeline supplies complete intentional-zero 48000 speaker PCM");
+        check(pipeline->process(iq.size(), iq) && !pipeline->needsRepair(),
+            "native HD pipeline continues after its initial registry boundary");
+    }
+    pipeline->stop(); pipeline.reset();
+    check(QThreadPool::globalInstance()->waitForDone(5000), "native pipeline worker retires within the bounded test teardown");
     std::printf("%s — %d failure(s)\n", failures ? "FAIL" : "ALL PASS", failures);
     return failures ? 1 : 0;
 }

@@ -112,8 +112,11 @@ public:
     std::span<const float> right() const noexcept override { return {}; }
     bool processCapture(const Registry::SampleBlock& block, Registry::AudioSink& sink) noexcept override
     {
+        // The registry marks the first adopted delivery discontinuous. A new
+        // prepared decoder has no prior stream to preserve; later boundaries
+        // must still withdraw instead of splicing independent RF histories.
         if (!m_valid || block.session != m_spec.handle.session || block.capture != m_spec.capture
-            || block.discontinuity || !block.publicationSession || !block.publicationRevision
+            || (block.discontinuity && m_haveInput) || !block.publicationSession || !block.publicationRevision
             || block.samples.empty() || block.samples.data() == nullptr || block.samples.size() > 8192
             || block.firstSample > std::numeric_limits<std::uint64_t>::max() - block.samples.size()
             || (m_haveInput && block.firstSample != m_nextInput)) { return fail(sink); }
