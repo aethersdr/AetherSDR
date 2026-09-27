@@ -122,4 +122,25 @@ hashes, actual metadata, distinct-channel statistics, native callback bursts,
 and gaps measured on the source sample clock. It opens no USB device or socket
 and does not play or export audio. Recorded decoding is separate from the
 bounded worker, speaker playout, GUI, live 104.7 MHz reception, or listening.
+A separate explicit `hd_fm_worker_recording_probe` target replays the same CU8
+recording at absolute 1× source-clock deadlines through the production pipeline,
+registry, native decoder worker and shared mixer:
+
+```sh
+cmake --build build --parallel 4 --target hd_fm_worker_recording_probe
+./build/hd_fm_worker_recording_probe sample.cu8 --program 0 --compressed-source sample.xz
+```
+
+It reports delivered 44.1 kHz slice and 48 kHz speaker PCM, original time/identity
+checks, readiness transitions, queue-drop and mixer-fault counters, scheduling
+lateness, process CPU and measured teardown. Acquiring speaker silence is
+separate from source-produced PCM. Rejected real PCM, expiry or observed faults
+cannot be hidden by a short successful prefix. It drains immediately on the
+same thread and applies owner-like acceptance checks; it does not instantiate
+the backend, GUI, audio device or USB conversion/DC suppression path. End of
+file adds no RF padding or decoder flush, so totals describe the delivered
+prefix, with a pending tail discarded at stop. Queue occupancy is not measured.
+The process has a 120-second watchdog; teardown is measured for this input,
+not guaranteed for arbitrary decoder behavior.
+
 Native Windows/Mac/ARM and current sanitizer qualification remain outstanding.

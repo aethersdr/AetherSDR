@@ -2690,6 +2690,10 @@ if(TARGET aether_nrsc5)
     # embedded decoder. It is never run by CTest or built by the default target.
     add_executable(hd_fm_recording_probe EXCLUDE_FROM_ALL tools/hd_fm_recording_probe.cpp)
     target_link_libraries(hd_fm_recording_probe PRIVATE aethercore aether_nrsc5 Qt6::Core)
+    # Separate source-clock-paced production worker/mixer diagnostic. No USB,
+    # sockets or audio devices; intentionally absent from default builds/CTest.
+    add_executable(hd_fm_worker_recording_probe EXCLUDE_FROM_ALL tools/hd_fm_worker_recording_probe.cpp)
+    target_link_libraries(hd_fm_worker_recording_probe PRIVATE aethercore aether_nrsc5 Qt6::Core)
 endif()
 
 # Ulanzi Dial backend — one per platform.  All three implementations
