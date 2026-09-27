@@ -135,7 +135,8 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **Show TX in Waterfall:** **Settings → Radio Setup... → Transmit → Show TX in Waterfall** lets the waterfall draw spectrum rows over the TX passband while transmitting. It starts off, and AetherSDR remembers your choice separately for each HL2 across reconnects and restarts. The control does not key the radio.
 - **Max Power:** **Settings → Radio Setup... → Transmit → Max Power** shows the HL2's rated watts, read-only. The power gauge uses a 5 W scale, and forward power reads near PEP on speech.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
-- **Modes that refuse to transmit:** AM, SAM, DSB, FM, NFM, WBFM and DRM refuse MOX and TUNE, because the HL2 modulator is SSB only. A mode the HL2 cannot demodulate is refused everywhere.
+- **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
+- **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
 - **TX drive and LNA gain** are remembered per band.
 
 > **Upgrading from an older version:** CW keys at the same carrier level as TUNE, about 6 dB (four times the power) above earlier versions at the same RF power setting. Check your RF power before you key CW into an amplifier or a low-power load.
@@ -197,9 +198,9 @@ The receivers share one sample rate, and only one pane controls it.
 
 ### MOX or TUNE is refused
 
-The HL2 modulator is SSB only, so AM, SAM, DSB, FM, NFM, WBFM and DRM refuse to transmit.
+SAM is receive-only. WBFM has no transmit modulator, and DRM has no encoder, so those modes also refuse to transmit.
 
-1. Switch the slice to USB, LSB, CW or a data mode before keying.
+1. Switch the slice to USB, LSB, AM, DSB, FM, CW or a data mode before keying.
 
 ### The Calibration controls are disabled
 

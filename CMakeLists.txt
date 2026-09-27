@@ -179,7 +179,8 @@ option(REQUIRE_RTL "Fail configuration unless the RTL backend and float FFTW are
 #       signed-16-bit wire (MetisProtocol.cpp, ep2WriteTxIq), so TXA's
 #       advantage THERE is below the wire and unusable.
 # OFF — the in-tree phasing modulator, unchanged. The fallback for a machine or
-#       a report where TXA misbehaves.
+#       a report where TXA misbehaves. SSB and digital only: AM, DSB and FM
+#       stay receive-only in this build.
 #
 #       THIS LINE USED TO SAY "kept building and kept tested" AND THE FLIP
 #       BELOW MAKES THAT FALSE. `grep AETHER_HL2_TX_TXA .github/workflows/*.yml`
@@ -234,7 +235,7 @@ option(REQUIRE_RTL "Fail configuration unless the RTL backend and float FFTW are
 # radio was keyed. No antenna port was observed." -- now exists, and it is named
 # rather than asserted.
 option(AETHER_HL2_TX_TXA
-       "Hermes-Lite 2 SSB transmit modulator: ON (default) uses WDSP's TXA chain, OFF the in-tree phasing modulator"
+       "Hermes-Lite 2 transmit modulator: ON (default) uses WDSP's TXA chain, OFF the in-tree phasing modulator (SSB only)"
        ON)
 # Lets AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS replace the
 # firmware catalog and add firmware-signing keys, for testing a publisher's own
