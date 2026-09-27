@@ -306,6 +306,8 @@ int main(int argc, char** argv)
     state.token = {81, 4}; state.capture = recipe.capture;
     state.hardware.centerHz = 100000000; state.hardware.sampleRateHz = 1000000;
     Pipeline::Transaction::Receiver selected{recipe.passband, Pipeline::Transaction::Mode::Wfm};
+    selected.passband.guardLowHz = WdspChannel::WbfmReceive::kRfTransitionGuardHz;
+    selected.passband.guardHighHz = WdspChannel::WbfmReceive::kRfTransitionGuardHz;
     selected.wfmHdStereo = true;
     state.receivers = {selected}; state.receivingIds = {0};
     auto pipeline = std::make_unique<Pipeline>(1, true);
