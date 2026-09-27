@@ -110,13 +110,15 @@ bool Hl2TxDsp::buildModulator(std::string* error)
     // audio I/O thread. The fix for an underrun is the caller's cadence.
     c.blockForOutput = false;
 
-    // Signed, from the mode. See applyModeAndFilter().
-    const double lo = std::min(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    const double hi = std::max(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    c.filterLowHz = isLowerSideband() ? -hi : lo;
-    c.filterHighHz = isLowerSideband() ? -lo : hi;
+    // Signed, from the mode. See applyModeAndFilter() and txaPassband().
+    const auto [signedLow, signedHigh] =
+        txaPassband(m_config.mode, m_config.filterLowHz, m_config.filterHighHz);
+    c.filterLowHz = signedLow;
+    c.filterHighHz = signedHigh;
+    // AM carrier and FM deviation. WdspChannel::open() pushes both, and turns
+    // TXA's default-on CTCSS encoder off, on every open.
+    c.txAmCarrierLevel = m_config.amCarrierLevel;
+    c.txFmDeviationHz = m_config.fmDeviationHz;
 
     std::string err;
     m_channel = WdspChannel::create(c, &err);
@@ -160,12 +162,8 @@ void Hl2TxDsp::applyModeAndFilter()
     // sideband with the mode readout saying LSB -- the same class of fault as
     // the missing conjugation, and just as invisible from inside this
     // application, because the panadapter reads the same wire order.
-    const double lo = std::min(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    const double hi = std::max(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    const double lowHz = isLowerSideband() ? -hi : lo;
-    const double highHz = isLowerSideband() ? -lo : hi;
+    const auto [lowHz, highHz] =
+        txaPassband(m_config.mode, m_config.filterLowHz, m_config.filterHighHz);
 
     if (!m_channel->setMode(m_config.mode)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: mode change refused";
@@ -365,15 +363,27 @@ void Hl2TxDsp::reset()
     resetModulatorState();
 }
 
-bool Hl2TxDsp::isLowerSideband() const
+std::pair<double, double> Hl2TxDsp::txaPassband(WdspChannel::Mode mode,
+                                                double lowHz,
+                                                double highHz) noexcept
 {
-    switch (m_config.mode) {
+    const double lo = std::min(std::abs(lowHz), std::abs(highHz));
+    const double hi = std::max(std::abs(lowHz), std::abs(highHz));
+    switch (mode) {
     case WdspChannel::Mode::Lsb:
     case WdspChannel::Mode::Cwl:
     case WdspChannel::Mode::Digl:
-        return true;
+        return {-hi, -lo};
+    // Carrier-straddling: TXASetupBPFilters' second case (TXA_DSB, TXA_AM,
+    // TXA_SAM, TXA_FM) runs bp0 on these edges BEFORE the modulator, so they
+    // are an audio low-pass, not a sideband selection. See the header.
+    case WdspChannel::Mode::Am:
+    case WdspChannel::Mode::Sam:
+    case WdspChannel::Mode::Dsb:
+    case WdspChannel::Mode::Fm:
+        return {-hi, hi};
     default:
-        return false;
+        return {lo, hi};
     }
 }
 

@@ -154,9 +154,12 @@ int main(int argc, char** argv)
     // review raised, answered against the declaration rather than by assertion.
     hl2::Hl2Backend backend;
     const RadioCapabilities caps = backend.capabilities();
+    // AM, DSB and FM joined when the WDSP TXA chain was configured for them;
+    // SAM stays receive-only (see Hl2Backend::capabilities()).
     static const QStringList kTransmittable = {
         QStringLiteral("LSB"), QStringLiteral("USB"), QStringLiteral("CW"),
         QStringLiteral("CWL"), QStringLiteral("DIGU"), QStringLiteral("DIGL"),
+        QStringLiteral("AM"),  QStringLiteral("DSB"), QStringLiteral("FM"),
     };
     for (const QString& m : std::as_const(published)) {
         check(kTransmittable.contains(m) || caps.receiveOnlyModes.contains(m),

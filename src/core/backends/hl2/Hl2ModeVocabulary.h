@@ -68,8 +68,9 @@
 // RadioCapabilities::modeIsReceiveOnly() is a case-insensitive MEMBERSHIP test,
 // not alias normalisation, and RadioModel::refuseKeyInReceiveOnlyMode() runs it
 // on what the slice holds. Every pair below is therefore listed BOTH WAYS in
-// Hl2Backend::capabilities()'s receiveOnlyModes (FM and NFM, WBFM and WFM) or
-// on NEITHER (CW and CWU both transmit correctly through the gateware keyer).
+// Hl2Backend::capabilities()'s receiveOnlyModes (WBFM and WFM) or on NEITHER
+// (CW and CWU both transmit correctly through the gateware keyer; FM and NFM
+// are one TXA FM mode and both transmit).
 // Collapsing one spelling onto the other moves nothing across that boundary --
 // hl2_mode_vocabulary_test pins the equivalence for every accepted spelling.
 // The duplicate entries stay, and the reason has NARROWED rather than gone:

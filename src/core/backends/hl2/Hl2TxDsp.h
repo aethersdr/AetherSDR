@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/dsp/WdspChannel.h"
+#include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/TxCoordinator.h"
 
 #include <QObject>
@@ -10,13 +11,15 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 #include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR::hl2 {
 
-// SSB transmit chain for the Hermes-Lite 2: processed TX audio in, baseband IQ
-// out, ready for EP2.
+// Transmit chain for the Hermes-Lite 2 -- SSB, digital, AM, DSB and FM: processed
+// TX audio in, baseband IQ out, ready for EP2. (CW never reaches it: the gateware
+// keys CW at the TX NCO.)
 //
 // The audio arrives already shaped — AudioEngine's TX chain has applied the test
 // tone, compressor and EQ before we see it — so this stage is only modulation.
@@ -56,7 +59,8 @@ namespace AetherSDR::hl2 {
 //
 // Config::filterLowHz/filterHighHz stay the POSITIVE, audio-domain pair
 // Hl2Backend pushes for every mode. applyModeAndFilter() applies the sign
-// itself, from the mode. Do not move that into Hl2Backend: its table is shared
+// itself, from the mode -- see txaPassband() for the three shapes (upper,
+// lower, and symmetric for the carrier-straddling modes). Do not move that into Hl2Backend: its table is shared
 // with the readback and with the operator's stored eSSB pair, and both want
 // magnitudes.
 //
@@ -78,6 +82,11 @@ public:
         // splatter outside this is other people's problem, not ours.
         double filterLowHz = 300.0;
         double filterHighHz = 2700.0;
+        // TXA's AM carrier level and FM peak deviation. Inert outside AM/DSB
+        // and FM respectively. Defaults and their provenance are in
+        // Hl2TxLevelPolicy.h; there is no operator control for either today.
+        double amCarrierLevel = kTxAmCarrierLevel;
+        double fmDeviationHz = kTxFmDeviationHz;
 
         // Automatic level control, PROTECTION ONLY: it may reduce gain, never
         // add it. The ceiling is unity and there is no field that can raise it.
@@ -150,6 +159,28 @@ public:
     // — if one is ever proposed again — must not arrive as a silent change of
     // meaning in a field that was quietly dropped.
     [[nodiscard]] static const char* modulatorName() noexcept;
+
+    // The SIGNED passband handed to SetTXABandpassFreqs for `mode`, from the
+    // positive audio-domain pair Hl2Backend pushes. Pure, and public so a test
+    // pins the mapping the modulator actually runs rather than a re-typed copy.
+    //
+    //   USB, DIGU, CWU and anything unlisted   [+lo, +hi]
+    //   LSB, DIGL, CWL                          [-hi, -lo]
+    //   AM, SAM, DSB, FM                        [-hi, +hi]   (low edge unused)
+    //
+    // THE SYMMETRIC ROW IS NOT A SIDEBAND CHOICE, it is where bp0 sits. xtxa
+    // runs bp0 BEFORE xammod and xfmmod, and both of those read only the I
+    // component of what bp0 hands them. A one-sided band there makes the audio
+    // analytic and halves the real part the modulator reads (-6 dB of AM
+    // modulation and FM deviation); a symmetric band is a real low-pass that
+    // leaves the audio as it was. piHPSDR transmitter.c tx_set_filter() uses
+    // the same (-high, high) for AM, SAM and DSB. It diverges for FM, widening
+    // to +/-(deviation + 3000) -- but bp0 is pre-modulation, so that widens the
+    // AUDIO the modulator sees, not the RF; fmmod carries its own post-
+    // modulation bandpass at +/-(deviation + 3000) and that is what bounds the
+    // emission. So FM takes the voice band here like AM does.
+    [[nodiscard]] static std::pair<double, double>
+    txaPassband(WdspChannel::Mode mode, double lowHz, double highHz) noexcept;
 
     // The WDSP channel behind the modulator; -1 only before configure() has
     // succeeded, because m_channel is the thing configure() succeeds at.
@@ -306,7 +337,6 @@ private:
     // is not part of the modulator and does not change with it.
     void modulate(std::span<const float> audio);
     void resetModulatorState();
-    bool isLowerSideband() const;
 
     Config m_config;
     TxCoordinator::Context m_txContext;

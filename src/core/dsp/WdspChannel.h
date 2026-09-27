@@ -107,6 +107,30 @@ public:
         static constexpr double kMinFmDeviationHz = 100.0;
         static constexpr double kMaxFmDeviationHz = 100000.0;
         double fmDeviationHz = 5000.0;
+        // ── Transmit-only: TXA's AM and FM modulator stages ───────────────
+        //
+        // SEPARATE FIELDS FROM fmDeviationHz ABOVE, which is the RXA detector's
+        // and is refused on a transmit channel by setFmDeviation(). These are
+        // the TXA modulator's (ammod.c, fmmod.c), pushed by open() on every
+        // transmit open and ignored on receive. Both are inert outside their
+        // mode: SetTXAMode raises ammod for AM/SAM/DSB and fmmod for FM only.
+        //
+        // The defaults are create_txa()'s own (TXA.c: ammod c_level 0.5,
+        // fmmod deviation 5000.0), stated rather than inherited so that a
+        // reconfigure() -- which rebuilds the TXA stages -- cannot drift from
+        // what a caller asked for.
+        //
+        // txAmCarrierLevel is ammod's c_level: out = (c + (1 - c) * audio) /
+        // sqrt(2) on I and Q, so the envelope never goes negative for |audio|
+        // <= 1 and full-scale audio is 100 % modulation at the same PEP as a
+        // full-scale SSB peak. [0, 1]; refused outside it.
+        //
+        // txFmDeviationHz is fmmod's peak deviation for unit audio at the
+        // modulator's input; it also sets fmmod's post-modulation bandpass to
+        // +/-(deviation + 3000 Hz). Bounded by the same kMin/kMax pair as the
+        // RX figure.
+        double txAmCarrierLevel = 0.5;
+        double txFmDeviationHz = 5000.0;
         bool blockForOutput = false;
         // Impulse noise blanker — see the setNoiseBlanker() block below. Kept
         // in Config, not just as a runtime setter, so that reconfigure() (a

@@ -490,6 +490,15 @@ in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
   TXA's bandpass both reach it through `CalcBandpassFilter`/`fir_bandpass` with
   `rtype = 1`, so this one function is the mechanism behind both the RX bullet
   above and the TX correction here.
+- **TX AM, DSB and FM take a SYMMETRIC passband, and that is not a sideband
+  rule.** For `TXA_AM`, `TXA_DSB`, `TXA_SAM` and `TXA_FM`, `TXASetupBPFilters`
+  runs `bp0` *before* `xammod`/`xfmmod`, and both modulators read only the I
+  output — so the band is an audio low-pass. `Hl2TxDsp::txaPassband()` maps the
+  positive `{100, 3000}` to `[-3000, +3000]` (piHPSDR's `tx_set_filter` uses the
+  same `(-high, high)` for AM and DSB); a one-sided band there halves the
+  modulation. `WdspChannel::open()` also turns off the CTCSS encoder
+  `create_txa` builds switched **on** (100 Hz, level 0.10), and pushes the AM
+  carrier (0.5) and FM deviation (5000 Hz) from `Hl2TxLevelPolicy.h`.
 
 The trap: RXA and `Hl2TxDsp` use **opposite conventions**, and both look
 plausible. A table written for one and reused for the other is silently wrong on

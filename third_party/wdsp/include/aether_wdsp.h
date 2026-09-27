@@ -238,6 +238,14 @@ void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 void SetRXAFMDeviation(int channel, double deviationHz);
 void SetTXAMode(int channel, int mode);
 void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
+// TXA's AM and FM modulator stages (ammod.c, fmmod.c). create_txa() builds
+// ammod with a 0.5 carrier and fmmod with a 5000 Hz deviation and -- the one
+// that matters -- ctcss_run = 1 at 100 Hz, level 0.10: a TXA channel put in FM
+// transmits a CTCSS tone nobody asked for unless SetTXACTCSSRun turns it off.
+// WdspChannel::open() pushes all three on every transmit open.
+void SetTXAAMCarrierLevel(int channel, double carrierLevel);
+void SetTXAFMDeviation(int channel, double deviationHz);
+void SetTXACTCSSRun(int channel, int run);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength
 // meters. RXA_ADC_PK / RXA_ADC_AV measure the POST-DDC slice, which is a
 // different question from the HL2's own pre-DDC full-spectrum clip

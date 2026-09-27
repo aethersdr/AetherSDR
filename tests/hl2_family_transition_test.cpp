@@ -90,32 +90,22 @@ int main(int argc, char** argv)
 
     // ---- The modes the LIVE HL2 backend declares it will not transmit in ----
     //
-    // THIS IS NOW THE ONLY TEST BEHIND THE LIST, AND IT ASSERTS THE
-    // DECLARATION RATHER THAN THE MODULATOR. hl2_txdsp_test used to prove the
-    // modulator half -- AM/SAM/DSB/FM/WBFM/DRM each produced IQ bit-identical
-    // to USB, so none was a distinct modulation -- but that block only ever
-    // compiled against the in-tree phasing modulator, was guarded out when the
-    // WDSP TXA modulator became the default, and was deleted with it. TXA
-    // implements AM, SAM, FM and DSB as real WDSP transmit modes
-    // (Hl2TxDsp::applyModeAndFilter calls WdspChannel::setMode), so the
-    // bit-identity premise no longer holds and the list is a policy statement
-    // awaiting a capability decision -- #5678 rows 1.2, 6.2 and 6.3.
-    // What this block still catches is drift in the declaration itself: delete
-    // a string from Hl2Backend::capabilities()'s receiveOnlyModes and nothing
-    // else notices.
+    // THIS ASSERTS THE DECLARATION; hl2_txdsp_test asserts the modulator. The
+    // list was eight strings while the transmit chain was a phasing SSB
+    // modulator that sent every non-SSB mode as USB. With the WDSP TXA chain
+    // configured for them (symmetric bp0, CTCSS forced off, explicit carrier
+    // and deviation), AM, DSB, FM and NFM came off it, and hl2_txdsp_test is
+    // where the emitted IQ is shown to be AM, DSB and FM.
     //
-    // EIGHT strings, SIX enumerators: modeFromString() maps NFM onto Mode::Fm
-    // and WFM onto Mode::Wbfm, and refuseKeyInReceiveOnlyMode() compares the
-    // string the SLICE holds rather than the enumerator this backend would have
-    // mapped it to — so dropping either alias leaves that spelling keying while
-    // its twin is refused. That is the load-bearing claim, and nothing asserted
-    // it before this block.
+    // FOUR strings, THREE enumerators: modeFromString() maps WFM onto
+    // Mode::Wbfm, and refuseKeyInReceiveOnlyMode() compares the string the
+    // SLICE holds rather than the enumerator this backend would have mapped it
+    // to -- so dropping either spelling leaves that one keying while its twin
+    // is refused. FM and NFM are the same pair the other way round: both off.
     {
         const RadioCapabilities caps = model.backendCapabilities();
         const QStringList declared = {
-            QStringLiteral("AM"),   QStringLiteral("SAM"),
-            QStringLiteral("DSB"),  QStringLiteral("FM"),
-            QStringLiteral("NFM"),  QStringLiteral("WBFM"),
+            QStringLiteral("SAM"),  QStringLiteral("WBFM"),
             QStringLiteral("WFM"),  QStringLiteral("DRM"),
         };
         for (const QString& m : declared) {
@@ -123,20 +113,21 @@ int main(int argc, char** argv)
                   qPrintable(QStringLiteral("HL2 declares %1 receive-only").arg(m)));
         }
         // Exactly these. An ADDITION is a mode in which the operator silently
-        // loses MOX, CW keying and TUNE, so it must not arrive without the
-        // bit-identity evidence landing beside it.
+        // loses MOX, CW keying and TUNE.
         check(caps.receiveOnlyModes.size() == declared.size(),
               "HL2 declares exactly these modes receive-only");
-        // The deliberate exclusions: SSB modulates correctly, and CW keys the
-        // gateware NCO through MetisClient::setCwKeyDown without ever reaching
-        // Hl2TxDsp. If one of these ever appears on the list it takes an
-        // operator's transmit mode away.
+        // What transmits: the SSB family, CW through the gateware keyer, and
+        // -- since the TXA chain was configured for them -- AM, DSB, FM and
+        // its NFM alias. Both spellings of the FM pair, and case-insensitively,
+        // because the guard compares whatever string the slice holds.
         for (const QString& m : {QStringLiteral("USB"),  QStringLiteral("LSB"),
                                  QStringLiteral("DIGU"), QStringLiteral("DIGL"),
                                  QStringLiteral("CW"),   QStringLiteral("CWU"),
-                                 QStringLiteral("CWL")}) {
+                                 QStringLiteral("CWL"),  QStringLiteral("AM"),
+                                 QStringLiteral("DSB"),  QStringLiteral("FM"),
+                                 QStringLiteral("NFM"),  QStringLiteral("nfm")}) {
             check(!modeIsReceiveOnly(caps, m),
-                  qPrintable(QStringLiteral("HL2 still transmits in %1").arg(m)));
+                  qPrintable(QStringLiteral("HL2 transmits in %1").arg(m)));
         }
     }
 

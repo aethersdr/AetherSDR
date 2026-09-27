@@ -727,8 +727,9 @@ void hl2DeclaredModesDriveTheControlPlane()
     // THE REQUEST SIDE OF THE FM DECLARATION, said out loud because it is what
     // the change widens: slice.setMode mode="FM" is accepted here where it was
     // refused "request.out_of_range". Keying is a different list --
-    // receiveOnlyModes -- and hl2_fm_controls_declaration_test pins that FM
-    // and NFM are still on it.
+    // receiveOnlyModes -- which FM has since left, because the TXA chain now
+    // modulates it; hl2_fm_controls_declaration_test pins that the tone and
+    // duplex controls stay withdrawn regardless.
     expect("USB", "FM", "result", "and FM can be ASKED for, not only sat in");
     // THE ALIAS SPELLINGS ARE REFUSED, and that is the intended shape rather
     // than a gap. "CWU" and "NFM" are not on this list, so a request for one

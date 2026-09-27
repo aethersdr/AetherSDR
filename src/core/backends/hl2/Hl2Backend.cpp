@@ -1878,9 +1878,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.twoToneGenerator = std::nullopt;
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
-    // NO REPEATER DUPLEX AND NO TONE ENCODE, because this radio cannot key FM
-    // at all -- receiveOnlyModes below says so, and these two controls are the
-    // surface that still implied otherwise.
+    // NO REPEATER DUPLEX AND NO TONE ENCODE -- and that stays true now that
+    // this radio KEYS FM (AM, DSB, FM and NFM came off receiveOnlyModes below
+    // once the TXA chain was configured for them). Being able to transmit FM
+    // is not the same as having a verb for either of these, and the HL2 has
+    // neither; #5879's reasoning is unchanged by the mode becoming keyable.
     //
     // hasFmRepeaterOffset was never DECLARED here; it was INHERITED. The struct
     // defaults it true, so a radio that omits it claims a duplex offset, and
@@ -1897,18 +1899,18 @@ RadioCapabilities Hl2Backend::capabilities() const
     //
     // fmTonePresentation WAS declared, as Legacy, and Legacy is the value that
     // fills the tone-mode combo from legacyFmToneModes() -- i.e. it OFFERS
-    // CTCSS ENCODE. There is no CTCSS encoder on this path: grep the whole of
-    // src/core/backends/hl2/ for "ctcss" and nothing answers, and this backend
+    // CTCSS ENCODE. There is no CTCSS encoder this backend CONTROLS: it
     // overrides none of setSliceFmToneMode, setSliceFmToneValue,
     // setSliceFmToneRxValue or setSliceFmDtcs, all of which are no-op virtuals
     // in IRadioBackend.
     //
-    // AND THE MODE CANNOT BE KEYED AT ALL. FM and NFM are on receiveOnlyModes
-    // below, so RadioModel::refuseKeyInReceiveOnlyMode() refuses every
-    // TxActivity in them. Resting the argument there rather than on the
-    // modulator is deliberate: the modulator is a WDSP TXA channel, and TXA's
-    // own chain does carry fmmod, which is exactly why the honest gate is the
-    // declaration and not the DSP.
+    // TXA DOES CARRY ONE, and it is forced OFF rather than offered. fmmod is
+    // built by create_txa() with ctcss_run = 1 (100 Hz, level 0.10), and
+    // WdspChannel::open() calls SetTXACTCSSRun(ch, 0) on every transmit open,
+    // so an FM over from this radio carries no sub-audible tone. Wiring the
+    // tone controls to that stage is a feature someone can propose; until
+    // then Hidden is the honest value, and it is what makes "no tone" the
+    // state the operator sees as well as the state that is transmitted.
     //
     // Hidden is the honest value and is the one both widgets read to WITHDRAW
     // the tone controls rather than show a control that does nothing -- by
@@ -1924,8 +1926,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     //
     // WHAT THIS DOES NOT TOUCH: receive. FM and NFM demodulate exactly as
     // before -- WDSP's FM demodulator is unaffected by either field. What is
-    // withdrawn is a set of TRANSMIT-side controls for a mode this backend
-    // already refuses to key in.
+    // withdrawn is a set of TRANSMIT-side controls with no verb behind them;
+    // simplex FM without a tone is what this radio transmits.
     c.hasFmRepeaterOffset = false;
     c.fmTonePresentation = FmTonePresentation::Hidden;
     c.fmDtcsCodes = {};
@@ -2162,15 +2164,14 @@ RadioCapabilities Hl2Backend::capabilities() const
     //
     // NOTE WHAT THIS ALSO WIDENS, because the list is read twice and this is
     // the other read: slice.setMode mode="FM" is now accepted where it was
-    // refused "request.out_of_range". KEYING IS UNAFFECTED, and
-    // that is checked rather than assumed -- receiveOnlyModes below carries
-    // FM and NFM, RadioCapabilities::modeIsReceiveOnly() is a
-    // case-insensitive membership test on exactly that list, and
-    // RadioModel::refuseKeyInReceiveOnlyMode() runs it inside
-    // beginTxActivity() (plus forwardNonFlexCwKeying() for the CW element
-    // path), which is the common entry for MOX, TUNE, ATU and CWX alike.
+    // refused "request.out_of_range". KEYING IS DECIDED ELSEWHERE:
     // receiveModeControl reaches ModelReceiveControlTarget and
-    // RadioResourceAdapter and nothing on the transmit side at all.
+    // RadioResourceAdapter and nothing on the transmit side at all. Whether FM
+    // keys is receiveOnlyModes' question -- RadioModel::refuseKeyInReceiveOnly
+    // Mode() runs a case-insensitive membership test on that list inside
+    // beginTxActivity() -- and FM has since come OFF it, because the TXA chain
+    // now modulates FM (see the declaration below). The two lists were always
+    // independent; this one did not change when that one did.
     //
     // THE DEMODULATOR RESERVATIONS STAND, and declaring the mode does not
     // answer them -- it only stops the answer being "the slice is stuck":
@@ -2240,96 +2241,79 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.canTransmit = m_txAllowed;
     // THE MODES THIS RADIO DEMODULATES AND CANNOT MODULATE.
     //
-    // The comment that stood here said the HL2 "transmits in whatever mode WDSP
-    // is told to build — there is no mode it receives and cannot send", and left
-    // the list empty on that basis. It was false when it was written, for a
-    // reason that has since stopped being true: the transmit chain was then a
-    // hand-written phasing SSB modulator whose setMode() only stored the mode
-    // for isLowerSideband(), so AM, SAM, DSB, FM, NFM, WBFM and DRM all took the
-    // upper-sideband branch and went on the air as SSB, announcing nothing.
+    // HISTORY, because the list has now been wrong in both directions. #5680
+    // declared AM, SAM, DSB, FM, NFM, WBFM, WFM and DRM here when the transmit
+    // chain was a hand-written phasing SSB modulator whose setMode() only
+    // stored the mode for a lower-sideband test: every one of those modes went
+    // on the air as upper-sideband SSB, announcing nothing. That modulator is
+    // gone (#5906) and the chain IS a WDSP TXA channel, so Hl2TxDsp::setMode()
+    // reaches SetTXAMode and each mode is modulated as itself.
     //
-    // THAT PREMISE IS GONE AND THE LIST STAYS. The phasing modulator was
-    // removed and the transmit chain IS WDSP now: Hl2TxDsp::setMode() reaches
-    // applyModeAndFilter() → WdspChannel::setMode() → SetTXAMode, so these modes
-    // would be pushed at TXA as themselves rather than silently becoming SSB.
-    // The wrong-sideband emission is therefore no longer the reason, and the
-    // reason that replaces it is weaker but still sufficient:
+    // AM, DSB, FM AND NFM ARE OFF THE LIST NOW, and what took them off is the
+    // configuration those modes need on top of SetTXAMode, not the mode index:
     //
-    //   NOTHING HAS MEASURED THIS CHAIN IN ANY OF THEM. "TXA accepts a mode
-    //   index" is not evidence that this radio transmits correctly in that
-    //   mode. docs/hl2-txa-configuration-diff.md §7 states the gap in its own
-    //   words — "Any mode but SSB. No AM, DSB, SAM, FM or CW channel was
-    //   opened." — and every characterisation behind #5678 and #5779 is
-    //   SSB-family. Leaving a mode on this list costs an operator a refusal
-    //   they can see; taking it off an unmeasured chain costs them an emission
-    //   they cannot hear, which is the asymmetry this radio has already been
-    //   caught by once.
+    //   * PASSBAND. TXASetupBPFilters runs bp0 BEFORE xammod/xfmmod for
+    //     TXA_AM, TXA_DSB and TXA_FM, and both modulators read only its I
+    //     output, so the band there is an audio low-pass and must be symmetric
+    //     -- Hl2TxDsp::txaPassband() maps the positive {100, 3000} this backend
+    //     pushes to [-3000, +3000]. The SSB rule (sign selects sideband) would
+    //     have halved the modulation.
+    //   * CTCSS. create_txa() builds fmmod with ctcss_run = 1, a 100 Hz tone at
+    //     level 0.10. WdspChannel::open() now turns it off on every transmit
+    //     open; without that, every FM over would have carried a sub-audible
+    //     tone the operator never chose and could not see.
+    //   * AM carrier 0.5 and FM deviation 5000 Hz, pushed explicitly, with
+    //     their provenance in Hl2TxLevelPolicy.h.
     //
-    //   AND WBFM IS NOT MERELY UNMEASURED: WDSP TX HAS NO WBFM MODE.
-    //   WdspChannel::validateConfig() refuses a Transmit channel configured for
-    //   it — "WDSP TX does not define a WBFM mode" — and the note beside that
-    //   check records what setMode() does NOT do about it. This list is what
-    //   keeps that from mattering on the air; it is not what makes the mode
-    //   index safe to push.
+    // WHAT PROVES IT, and what does not yet. hl2_txdsp_test drives a real TXA
+    // channel at the live geometry and reads the emitted IQ: AM is a carrier
+    // plus two equal sidebands at the level ammod's formula predicts, DSB the
+    // same with the carrier suppressed, FM a constant envelope whose
+    // instantaneous frequency tracks the tone with no 100 Hz component. That is
+    // OFFLINE evidence: nothing here was keyed. A dummy-load run on the radio
+    // is the next check and this comment should cite it when it exists.
     //
-    // Taking any entry off is a capability decision that wants a measurement
-    // first (#5678 rows 1.2 / 6.2 / 6.3), and it is not a comment's to make.
+    // NFM goes with FM because it IS FM here: modeFromString() maps both onto
+    // Mode::Fm, so they share one TXA mode and one deviation. The alias pair is
+    // on NEITHER list rather than both, which is the other state
+    // Hl2ModeVocabulary.h's alias argument accepts.
     //
-    // WHAT STAYS OFF THE LIST, deliberately:
+    // WHAT STAYS ON THE LIST, and why each:
     //
-    //   * USB / LSB / DIGU / DIGL are the SSB family and modulate correctly.
-    //   * CW / CWU / CWL keys a carrier the GATEWARE shapes at the TX NCO
-    //     (MetisClient::setCwKeyDown). That path never reaches Hl2TxDsp, so the
-    //     sideband switch above does not apply to it and CW transmits correctly.
+    //   * SAM. TXA would transmit it -- TXA_SAM shares TXA_AM's case in both
+    //     SetTXAMode and TXASetupBPFilters, so it would be plain AM -- but SAM
+    //     is a choice of RECEIVE detector, not an emission, and no SAM-keyed
+    //     over has been looked at. An operator who wants AM on the air selects
+    //     AM. Lifting it is one line when wanted; Hl2TxDsp::txaPassband()
+    //     already treats it as AM.
+    //   * WBFM / WFM. WDSP TX has no WBFM mode: WdspChannel::validateConfig()
+    //     refuses a transmit channel configured for it, and broadcast FM is
+    //     nothing this radio should emit. Cannot come off on a measurement.
+    //   * DRM. TXA_DRM is only the SSB bandpass case; there is no DRM encoder
+    //     anywhere in this tree, so keying it would transmit voice-band SSB
+    //     labelled DRM.
+    //
+    // WHAT WAS NEVER ON IT: USB/LSB/DIGU/DIGL (the SSB family) and CW/CWU/CWL,
+    // which key a carrier the GATEWARE shapes at the TX NCO
+    // (MetisClient::setCwKeyDown) and never reach Hl2TxDsp.
     //
     // These strings are the neutral vocabulary SliceModel carries, and both
-    // spellings of each mode appear because modeFromString() accepts both:
-    // refuseKeyInReceiveOnlyMode() compares what the slice holds, not what this
-    // backend would have mapped it to, so listing only one spelling would leave
-    // the other keying.
+    // spellings of each remaining alias pair appear because modeFromString()
+    // accepts both: refuseKeyInReceiveOnlyMode() compares what the slice
+    // holds, not what this backend would have mapped it to, so listing only
+    // one spelling would leave the other keying.
     //
-    // THIS DECLARATION ALSO WITHDRAWS TUNE IN THESE MODES. Say so here rather
-    // than let an operator discover it.
-    //
-    // refuseKeyInReceiveOnlyMode() is not a MOX-and-CW guard.
-    // RadioModel::beginLocalTxActivity() runs it for EVERY TxActivity, ahead of
-    // the per-activity capability checks, so TxActivity::Tune is refused too —
-    // and that one is a real loss, not a theoretical one. setTune() below raises
-    // the carrier from the GATEWARE test-tone generator at zero offset
-    // (MetisClient::setTxTestTone), a path that never reaches Hl2TxDsp, exactly
-    // like the CW keyer exempted above. This radio could put a clean tune
-    // carrier on the air with the TX slice in AM or FM; after this list it will
-    // not, and the operator is told "Choose a transmit mode first" and has to
-    // move the slice to a mode that transmits. (TxActivity::Atu was already
-    // refused here for want of hasTuner, so the plain TUNE button is the only
-    // behaviour this changes.)
-    //
-    // ACCEPTED, deliberately, on two grounds:
-    //
-    //   * It is what this capability already MEANS. The IC-705 declares WFM
-    //     receive-only (#5040) and is refused on this same guard, with a second
-    //     wire backstop in IcomCivBackend::refuseKeyingInReceiveOnlyMode() that
-    //     its setTune() converges on through setKeying() — "shared by every path
-    //     here that can start an emission", in its own words. HL2 is inheriting
-    //     a settled contract, not inventing one.
-    //   * receiveOnlyModes is ONE list of mode names with no per-activity
-    //     granularity, so exempting tune is not expressible from a backend at
-    //     all: it would mean changing RadioModel above the family seam, for
-    //     every family at once. That is a maintainer's call.
-    //
-    // The CW/tune asymmetry is in the SHAPE of the list, not in the reasoning
-    // behind it: CW stays off because CW is a MODE this radio transmits
-    // correctly, and tune is an ACTIVITY, which a list of mode names has no
-    // vocabulary for.
-    //
-    // What the list reports is what has been DEMONSTRATED today, not what the
-    // chain would accept. When a mode is measured through this chain and found
-    // correct, its entry comes back off this list and the tune refusal lifts
-    // with it. WBFM is the one entry that cannot come off on a measurement
-    // alone, because WDSP TX defines no mode for it to be measured in.
-    c.receiveOnlyModes = {QStringLiteral("AM"),   QStringLiteral("SAM"),
-                          QStringLiteral("DSB"),  QStringLiteral("FM"),
-                          QStringLiteral("NFM"),  QStringLiteral("WBFM"),
+    // THIS DECLARATION ALSO WITHDRAWS TUNE IN THESE MODES.
+    // RadioModel::beginLocalTxActivity() runs refuseKeyInReceiveOnlyMode() for
+    // EVERY TxActivity, ahead of the per-activity checks, so TxActivity::Tune
+    // is refused too, even though setTune() raises its carrier from the
+    // GATEWARE test-tone generator (MetisClient::setTxTestTone) and never
+    // reaches Hl2TxDsp. With AM, DSB and FM off the list, TUNE works from them
+    // again; from SAM, WBFM or DRM the operator is still told "Choose a
+    // transmit mode first". That is the settled contract (the IC-705 declares
+    // WFM the same way, #5040) -- receiveOnlyModes has no per-activity
+    // granularity, and exempting tune would be a change above the family seam.
+    c.receiveOnlyModes = {QStringLiteral("SAM"),  QStringLiteral("WBFM"),
                           QStringLiteral("WFM"),  QStringLiteral("DRM")};
     c.hostModulates = true;
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
@@ -3420,9 +3404,9 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
     // IT CANNOT WEAKEN THE KEY REFUSAL, which is the one property
     // Hl2ModeVocabulary.h asks of any collapse. modeIsReceiveOnly() is a
     // case-insensitive membership test and capabilities()'s receiveOnlyModes
-    // lists every alias pair BOTH ways (FM and NFM, WBFM and WFM) or on
-    // NEITHER (CW and CWU, both of which key correctly through the gateware
-    // keyer), so each pair's two spellings are equivalent across that boundary
+    // lists every alias pair BOTH ways (WBFM and WFM) or on NEITHER (CW and
+    // CWU, both of which key correctly through the gateware keyer; FM and NFM,
+    // one TXA FM mode), so each pair's two spellings are equivalent across that boundary
     // by construction -- hl2_mode_vocabulary_test pins that equivalence for
     // every accepted spelling. Collapsing one onto the other moves nothing.
     //

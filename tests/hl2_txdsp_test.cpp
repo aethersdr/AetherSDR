@@ -2346,6 +2346,277 @@ int main(int argc, char** argv)
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // AM, DSB AND FM THROUGH THE TXA CHAIN
+    //
+    // These modes came off Hl2Backend::capabilities()'s receiveOnlyModes on the
+    // strength of what follows, so it has to show the EMISSION, not the
+    // configuration: a carrier plus two equal sidebands for AM, the same with
+    // the carrier gone for DSB, and a constant envelope whose instantaneous
+    // frequency follows the tone -- with no CTCSS -- for FM. Offline, from the
+    // modulator's own IQ; no radio was keyed.
+    //
+    // THE SIGN OF THE WIRE DOES NOT MATTER HERE, unlike every SSB case above:
+    // AM and DSB are symmetric about the carrier, and conjugating an FM signal
+    // is a time shift of a sine modulation. So these cases read magnitudes and
+    // are blind to the handedness question on purpose, not by omission.
+    // ════════════════════════════════════════════════════════════════════════
+
+    // ---- the passband each mode is handed: the pure mapping ----
+    //
+    // Pinned from the function the modulator runs, not a re-typed table. The
+    // symmetric row is where TXA's bp0 sits for these modes -- BEFORE ammod and
+    // fmmod, which read only its I output -- so it is an audio low-pass, and a
+    // one-sided band would halve the modulation. See Hl2TxDsp::txaPassband.
+    {
+        using M = WdspChannel::Mode;
+        const auto [txLo, txHi] = defaultTxPassbandForModeName("AM");
+        auto is = [](std::pair<double, double> p, double lo, double hi) {
+            return p.first == lo && p.second == hi;
+        };
+        for (const M m : {M::Am, M::Dsb, M::Fm, M::Sam}) {
+            check(is(Hl2TxDsp::txaPassband(m, txLo, txHi), -txHi, +txHi),
+                  "AM/DSB/FM/SAM take a SYMMETRIC TXA passband [-hi, +hi]");
+        }
+        check(is(Hl2TxDsp::txaPassband(M::Usb, 300, 2700), 300, 2700),
+              "USB keeps the positive pair");
+        check(is(Hl2TxDsp::txaPassband(M::Lsb, 300, 2700), -2700, -300),
+              "LSB keeps the negated, swapped pair");
+        check(is(Hl2TxDsp::txaPassband(M::Am, -3000, -100), -3000, 3000),
+              "a negative pair handed in for AM still yields the symmetric band");
+        // The defaults and where they came from are Hl2TxLevelPolicy.h's; the
+        // Config inherits them rather than restating them.
+        const Hl2TxDsp::Config d{};
+        check(d.amCarrierLevel == kTxAmCarrierLevel && kTxAmCarrierLevel == 0.5,
+              "the AM carrier level defaults to create_txa's 0.5");
+        check(d.fmDeviationHz == kTxFmDeviationHz && kTxFmDeviationHz == 5000.0,
+              "the FM deviation defaults to create_txa's 5000 Hz");
+    }
+
+    // ---- ...and what the open channel actually holds, per mode ----
+    //
+    // channelConfig() is the WDSP channel's own record of what it accepted,
+    // so this is level 4 for the mode and the passband: what reached
+    // SetTXAMode/SetTXABandpassFreqs, and what open() pushed at ammod/fmmod.
+    for (const WdspChannel::Mode m : {WdspChannel::Mode::Am, WdspChannel::Mode::Dsb,
+                                      WdspChannel::Mode::Fm}) {
+        Hl2TxDsp tx;
+        Hl2TxDsp::Config cfg;
+        cfg.mode = m;
+        cfg.filterLowHz = 100.0;
+        cfg.filterHighHz = 3000.0;
+        std::string err;
+        const bool ok = tx.configure(cfg, &err);
+        check(ok, "AM/DSB/FM: the modulator configures");
+        const WdspChannel::Config* c = tx.channelConfig();
+        check(ok && c && c->mode == m, "the TXA channel holds the requested mode");
+        check(ok && c && c->filterLowHz == -3000.0 && c->filterHighHz == 3000.0,
+              "the TXA channel holds the symmetric [-3000, +3000] passband");
+        check(ok && c && c->txAmCarrierLevel == 0.5 && c->txFmDeviationHz == 5000.0,
+              "the TXA channel was opened with the policy's carrier and deviation");
+    }
+    // A MODE CHANGE ON A RUNNING CHANNEL gets the symmetric band too: that is
+    // applyModeAndFilter()'s path, and the one the live backend takes when the
+    // operator switches the TX slice from USB to AM.
+    {
+        Hl2TxDsp tx;
+        Hl2TxDsp::Config cfg;
+        cfg.mode = WdspChannel::Mode::Usb;
+        std::string err;
+        if (tx.configure(cfg, &err)) {
+            tx.setFilter(100.0, 3000.0);
+            tx.setMode(WdspChannel::Mode::Am);
+            const WdspChannel::Config* c = tx.channelConfig();
+            check(c && c->mode == WdspChannel::Mode::Am
+                      && c->filterLowHz == -3000.0 && c->filterHighHz == 3000.0,
+                  "setMode(Am) on an open USB channel moves mode AND passband");
+            tx.setMode(WdspChannel::Mode::Usb);
+            check(c && c->filterLowHz == 100.0 && c->filterHighHz == 3000.0,
+                  "and back to USB restores the one-sided band");
+        } else {
+            check(false, "mode-change passband case configures");
+        }
+    }
+
+    // ---- the spectral instrument for these three modes ----
+    //
+    // One paced run at an explicit Config, retried if starved (see modulate()).
+    // Trimmed like every capture in this file: kSettleSamples dropped, then a
+    // whole number of 100 Hz periods (480 samples), which is also whole for
+    // every multiple of 100 Hz probed below -- the carrier at 0 Hz, the tone,
+    // its harmonics, and the 100 Hz CTCSS probe.
+    auto runAt = [&](const Hl2TxDsp::Config& base, double toneHz, double amplitude,
+                     double seconds) {
+        std::vector<std::complex<float>> out;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            out.clear();
+            Hl2TxDsp tx;
+            TxTestAuthority auth;
+            Hl2TxDsp::Config cfg = base;
+            cfg.alcEnabled = false;
+            std::string err;
+            if (!tx.configure(cfg, &err)) {
+                check(false, "AM/DSB/FM spectral case configures");
+                return out;
+            }
+            tx.setMicGain(1.0);
+            QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                             [&out](const std::vector<std::complex<float>>& iq) {
+                out.insert(out.end(), iq.begin(), iq.end());
+            });
+            const int fs = cfg.inputSampleRateHz;
+            const int total = static_cast<int>(seconds * fs);
+            constexpr int kChunk = 240;
+            std::vector<float> chunk(kChunk);
+            for (int off = 0; off + kChunk <= total; off += kChunk) {
+                for (int n = 0; n < kChunk; ++n)
+                    chunk[static_cast<std::size_t>(n)] = static_cast<float>(
+                        amplitude * std::sin(2.0 * M_PI * toneHz * (off + n) / fs));
+                feed(tx, chunk, TxAudioSource::Microphone, auth.context);
+            }
+            if (tx.modulatorFaultBlocks() == 0)
+                break;
+            std::fprintf(stderr, "AM/DSB/FM case starved (%llu blocks), retrying\n",
+                         tx.modulatorFaultBlocks());
+            out.clear();
+        }
+        check(!out.empty(), "AM/DSB/FM capture reached the wire unstarved");
+        if (out.size() <= kSettleSamples)
+            return std::vector<std::complex<float>>{};
+        const std::size_t n = ((out.size() - kSettleSamples) / 480) * 480;
+        return std::vector<std::complex<float>>(
+            out.begin() + static_cast<std::ptrdiff_t>(kSettleSamples),
+            out.begin() + static_cast<std::ptrdiff_t>(kSettleSamples + n));
+    };
+    // Complex bin magnitude at `hz` over an already-trimmed capture.
+    auto bin = [](const std::vector<std::complex<float>>& iq, double hz) {
+        std::complex<double> acc{0.0, 0.0};
+        const double w = -2.0 * M_PI * hz / kFsOut;
+        for (std::size_t n = 0; n < iq.size(); ++n) {
+            const double ph = w * static_cast<double>(n);
+            acc += std::complex<double>(iq[n].real(), iq[n].imag())
+                 * std::complex<double>(std::cos(ph), std::sin(ph));
+        }
+        return iq.empty() ? 0.0 : std::abs(acc) / static_cast<double>(iq.size());
+    };
+    auto db = [](double a, double b) {
+        return 20.0 * std::log10((a + kSidebandEps) / (b + kSidebandEps));
+    };
+    Hl2TxDsp::Config voice;
+    voice.filterLowHz = 100.0;
+    voice.filterHighHz = 3000.0;
+
+    // ---- AM: a carrier and two equal sidebands, at ammod's own arithmetic ----
+    //
+    // ammod: I = Q = (c + (1 - c) * x) / sqrt(2), so the complex output is
+    // (1 + j)/sqrt(2) times a real envelope: the carrier bin reads c and each
+    // sideband (1 - c) * A / 2. At c = 0.5 and A = 0.5 that is 0.5 and 0.125,
+    // sidebands 12.04 dB under the carrier -- 50 % modulation. The magnitude is
+    // asserted, not just the shape, because a one-sided bp0 would have halved
+    // the sidebands (-18.06 dB) while leaving a carrier and two sidebands.
+    {
+        Hl2TxDsp::Config cfg = voice;
+        cfg.mode = WdspChannel::Mode::Am;
+        const auto iq = runAt(cfg, kTone, 0.5, 1.0);
+        const double carrier = bin(iq, 0.0);
+        const double up = bin(iq, +kTone);
+        const double lo = bin(iq, -kTone);
+        const double h2 = std::max(bin(iq, +2 * kTone), bin(iq, -2 * kTone));
+        std::fprintf(stderr, "AM: carrier %.5f, sidebands %.5f / %.5f (%.2f dBc), "
+                             "2nd harmonic %.2f dBc\n",
+                     carrier, up, lo, db(up, carrier), db(h2, carrier));
+        check(std::fabs(db(carrier, 0.5)) < 1.0,
+              "AM: the carrier sits at ammod's c_level (0.5) within 1 dB");
+        check(std::fabs(db(up, carrier) - (-12.04)) < 1.0
+                  && std::fabs(db(lo, carrier) - (-12.04)) < 1.0,
+              "AM: both sidebands sit 12 dB under the carrier (50 % modulation)");
+        check(std::fabs(db(up, lo)) < 0.5, "AM: the two sidebands are equal");
+        check(db(h2, carrier) < -40.0, "AM: no second-harmonic sidebands");
+    }
+
+    // ---- DSB: the same two sidebands with the carrier gone ----
+    {
+        Hl2TxDsp::Config cfg = voice;
+        cfg.mode = WdspChannel::Mode::Dsb;
+        const auto iq = runAt(cfg, kTone, 0.5, 1.0);
+        const double carrier = bin(iq, 0.0);
+        const double up = bin(iq, +kTone);
+        const double lo = bin(iq, -kTone);
+        std::fprintf(stderr, "DSB: carrier %.3g, sidebands %.5f / %.5f, "
+                             "carrier %.1f dB under a sideband\n",
+                     carrier, up, lo, db(up, carrier));
+        // ammod mode 1: I = Q = x / sqrt(2), so each sideband reads A / 2.
+        check(std::fabs(db(up, 0.25)) < 1.0 && std::fabs(db(lo, 0.25)) < 1.0,
+              "DSB: each sideband is A/2 (0.25) within 1 dB");
+        check(std::fabs(db(up, lo)) < 0.5, "DSB: the two sidebands are equal");
+        check(db(up, carrier) > 60.0, "DSB: the carrier is suppressed by > 60 dB");
+    }
+
+    // ---- FM: constant envelope, deviation that follows the setting, no CTCSS ----
+    //
+    // The instantaneous frequency is arg(z[n] conj(z[n-1])) * fs / 2pi. Its
+    // component at the tone is the deviation that tone produced; its component
+    // at 100 Hz is the CTCSS create_txa switches ON by default (level 0.10 of a
+    // 5000 Hz deviation: about 450 Hz). WdspChannel::open() turns it off, and
+    // this is the assertion that says the air agrees.
+    struct FmRead { double envSpread; double devHz; double ctcssHz; };
+    auto readFm = [&](const std::vector<std::complex<float>>& iq, double toneHz) {
+        FmRead r{1.0, 0.0, 1e9};
+        if (iq.size() < 2)
+            return r;
+        double mn = 1e9, mx = 0.0, sum = 0.0;
+        for (const auto& z : iq) {
+            const double a = std::abs(z);
+            mn = std::min(mn, a); mx = std::max(mx, a); sum += a;
+        }
+        r.envSpread = (mx - mn) / (sum / static_cast<double>(iq.size()));
+        std::vector<double> f(iq.size() - 1);
+        for (std::size_t n = 1; n < iq.size(); ++n)
+            f[n - 1] = std::arg(std::complex<double>(iq[n]) *
+                                std::conj(std::complex<double>(iq[n - 1])))
+                       * kFsOut / (2.0 * M_PI);
+        // Whole cycles of 100 Hz again, one sample shorter after differencing.
+        const std::size_t len = (f.size() / 480) * 480;
+        auto comp = [&](double hz) {
+            std::complex<double> acc{0.0, 0.0};
+            for (std::size_t n = 0; n < len; ++n) {
+                const double ph = -2.0 * M_PI * hz * static_cast<double>(n) / kFsOut;
+                acc += f[n] * std::complex<double>(std::cos(ph), std::sin(ph));
+            }
+            return len ? 2.0 * std::abs(acc) / static_cast<double>(len) : 0.0;
+        };
+        r.devHz = comp(toneHz);
+        r.ctcssHz = comp(100.0);
+        return r;
+    };
+    {
+        Hl2TxDsp::Config cfg = voice;
+        cfg.mode = WdspChannel::Mode::Fm;
+        constexpr double kFmTone = 2000.0;
+        const FmRead a = readFm(runAt(cfg, kFmTone, 0.5, 1.0), kFmTone);
+        const FmRead b = readFm(runAt(cfg, kFmTone, 0.25, 1.0), kFmTone);
+        Hl2TxDsp::Config narrow = cfg;
+        narrow.fmDeviationHz = 2500.0;
+        const FmRead c = readFm(runAt(narrow, kFmTone, 0.5, 1.0), kFmTone);
+        std::fprintf(stderr, "FM: A=0.5 dev %.1f Hz (envelope spread %.4f, "
+                             "100 Hz component %.2f Hz); A=0.25 dev %.1f Hz; "
+                             "2.5 kHz setting dev %.1f Hz\n",
+                     a.devHz, a.envSpread, a.ctcssHz, b.devHz, c.devHz);
+        check(a.envSpread < 0.05, "FM: the envelope is constant (spread < 5 %)");
+        // Pre-emphasis sits between the audio and fmmod (emph.c: -20 dB at
+        // 300 Hz rising to 0 dB at 3 kHz), so a 2 kHz tone at 0.5 deviates
+        // somewhat under 0.5 x 5000. Bounded, not predicted to the hertz.
+        check(a.devHz > 1000.0 && a.devHz < 2500.0,
+              "FM: a 2 kHz tone at 0.5 deviates between 1.0 and 2.5 kHz");
+        check(std::fabs(a.devHz / b.devHz - 2.0) < 0.1,
+              "FM: deviation is linear in audio level");
+        check(std::fabs(a.devHz / c.devHz - 2.0) < 0.1,
+              "FM: halving the deviation setting halves the deviation "
+              "(SetTXAFMDeviation reached fmmod)");
+        check(a.ctcssHz < 5.0,
+              "FM: no 100 Hz CTCSS on the air -- TXA's default-on encoder is off");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_txdsp_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

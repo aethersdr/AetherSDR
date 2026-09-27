@@ -250,4 +250,40 @@ defaultTxPassbandForModeName(std::string_view mode) noexcept
     return {300, 2700};   // USB/LSB and anything else: the voice default
 }
 
+// ---- AM and FM modulator settings ------------------------------------------
+//
+// NEITHER NUMBER IS OURS. Both are what create_txa() in
+// third_party/wdsp/upstream/TXA.c builds the stages with, and both agree with
+// the other WDSP hosts on this machine's reference shelf:
+//
+//   kTxAmCarrierLevel = 0.5   TXA.c create_ammod(..., 0.5) "carrier level";
+//                             piHPSDR transmitter.c tx->am_carrier_level=0.5.
+//                             With ammod's out = (c + (1-c)*audio)/sqrt(2),
+//                             0.5 is the level at which full-scale audio is
+//                             exactly 100 % modulation and the PEP equals a
+//                             full-scale SSB peak: carrier power is a quarter
+//                             of PEP (about 1.25 W carrier at the HL2's 5 W).
+//
+//   kTxFmDeviationHz = 5000   TXA.c create_fmmod(..., 5000.0, ...) and the
+//                             value RXA's fmd is built with, which this backend
+//                             never changes (see Hl2Backend::capabilities) --
+//                             so our own receiver demodulates what we send at
+//                             the level it expects. piHPSDR defaults to 2500
+//                             (the European 12.5 kHz-channel figure); that is a
+//                             real alternative, not an error, and it is why the
+//                             value is a named constant rather than a literal.
+//
+// WHAT "PEAK DEVIATION" MEANS HERE. It is fmmod's deviation for UNIT audio at
+// the modulator's input, which is AFTER TXA's FM pre-emphasis. That stage
+// (emph.c create_emphp: g0 = -20 dB at 300 Hz rising to g1 = 0 dB at 3000 Hz)
+// attenuates everything below 3 kHz, so full-scale audio at 1 kHz deviates
+// roughly a third of this and nothing the level chain can deliver exceeds it.
+//
+// NO OPERATOR CONTROL reaches either value today: the HL2 does not declare
+// hasAmCarrierLevel, so the phone applet's carrier slider stays hidden, and no
+// slice FM-deviation setter reaches Hl2TxDsp. Stated here so a reader does not
+// go looking for one.
+inline constexpr double kTxAmCarrierLevel = 0.5;
+inline constexpr double kTxFmDeviationHz = 5000.0;
+
 }  // namespace AetherSDR::hl2

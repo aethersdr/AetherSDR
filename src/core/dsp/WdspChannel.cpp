@@ -1125,6 +1125,22 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         setError(error, "WDSP TX does not define a WBFM mode");
         return false;
     }
+    // The TXA modulator stages open() pushes. Transmit-only, the mirror of the
+    // RX deviation check below: a receive Config never reaches either call.
+    if (config.direction == Direction::Transmit &&
+        (!std::isfinite(config.txAmCarrierLevel) || config.txAmCarrierLevel < 0.0 ||
+         config.txAmCarrierLevel > 1.0)) {
+        setError(error, "WDSP TX AM carrier level must be within [0, 1]");
+        return false;
+    }
+    if (config.direction == Direction::Transmit &&
+        (!std::isfinite(config.txFmDeviationHz) ||
+         config.txFmDeviationHz < Config::kMinFmDeviationHz ||
+         config.txFmDeviationHz > Config::kMaxFmDeviationHz)) {
+        setError(error,
+            "WDSP TX FM deviation is outside Config::kMinFmDeviationHz..kMaxFmDeviationHz");
+        return false;
+    }
     // Receive only: filterTaps reaches WDSP solely through open()'s RXASetNC
     // and is read only by minimumNotchWidthHz(), both of which are RX-side. A
     // transmit channel has none of the six cores RXASetNC addresses, so
@@ -1291,6 +1307,19 @@ void WdspChannel::open() noexcept
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
+        // The AM and FM modulator stages. Pushed for every transmit mode, not
+        // only AM/FM: a later setMode() into AM or FM on this open channel must
+        // find them already set, and SetTXAMode touches neither value.
+        SetTXAAMCarrierLevel(m_channelId, m_config.txAmCarrierLevel);
+        SetTXAFMDeviation(m_channelId, m_config.txFmDeviationHz);
+        // CTCSS ENCODE OFF, UNCONDITIONALLY. create_txa() builds fmmod with
+        // ctcss_run = 1, a 100 Hz tone at level 0.10 -- so an FM transmission
+        // from a stock TXA channel carries a sub-audible tone the operator
+        // never chose and no control in this application shows. Nothing in
+        // this tree has a tone-encode verb for a host-modulated radio (the HL2
+        // declares FmTonePresentation::Hidden, #5879), so there is no value to
+        // carry in Config: the only correct setting is off.
+        SetTXACTCSSRun(m_channelId, 0);
     }
     // Cache what this open measured, right now, while we still hold the setup
     // lock -- a kill or a crash before exit must not throw the measurement away.

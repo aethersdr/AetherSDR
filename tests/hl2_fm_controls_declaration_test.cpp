@@ -11,20 +11,21 @@
 //
 //   * fmTonePresentation WAS declared, as Legacy — the capability map's row was
 //     wrong about this half. Legacy is the value that fills the tone-mode combo
-//     from legacyFmToneModes(), i.e. it offers CTCSS ENCODE, on a backend that
-//     has no CTCSS encoder anywhere and cannot key an FM carrier at all.
+//     from legacyFmToneModes(), i.e. it offers CTCSS ENCODE, on a backend with
+//     no tone-encode verb.
 //
-// THE ARGUMENT RESTS ON receiveOnlyModes, NOT ON THE MODULATOR, and that is a
-// deliberate choice this target enforces. The HL2's transmit modulator is a
-// WDSP TXA channel, and TXA's chain does carry fmmod, so an assertion phrased
-// about the modulator would argue the wrong way: the DSP could key an FM
-// carrier. What stops it is that FM and NFM are declared receive-only, which is
-// what RadioModel::refuseKeyInReceiveOnlyMode() reads.
+// FM NOW KEYS, AND BOTH WITHDRAWALS STAND. This target used to rest its
+// argument on FM being receive-only. That premise is gone: the WDSP TXA chain
+// was configured for FM and FM/NFM came off receiveOnlyModes, which is
+// asserted below so that the change is visible here rather than inferred. The
+// argument that survives is the one that was always sufficient on its own:
+// there is no VERB behind either control. The repeater offset has no override
+// on this backend, and TXA's own CTCSS encoder -- create_txa() builds fmmod
+// with it ON -- is forced off by WdspChannel::open() rather than exposed;
+// hl2_txdsp_test shows an FM over carries no 100 Hz component.
 //
-// WHY THESE TWO AND NOT FM ITSELF. Nothing here says the HL2 cannot RECEIVE FM;
-// it can, and this test asserts that it still declares FM receive-only rather
-// than absent. What is withdrawn is a transmit-side control surface for a mode
-// the backend already refuses to key in.
+// Nothing here says the HL2 cannot RECEIVE FM; it can. What is withdrawn is a
+// transmit-side control surface with nothing behind it.
 //
 // WHY A SEPARATE TARGET. Same reason tests.cmake gives beside
 // hl2_pan_limits_declaration_test: the fake-radio fixture that would naturally
@@ -109,36 +110,23 @@ int main(int argc, char** argv)
     // the rule. The constructed hl2::Hl2Backend above is what makes this the
     // HL2 descriptor; every line below reads a capability.
 
-    // ---- the reason both controls are dead, read from production ----
+    // ---- FM keys now, which is what makes the rest of this file matter ----
     //
-    // Not a re-typed premise: receiveOnlyModes is the SAME list the key-on
-    // guard reads (RadioModel::refuseKeyInReceiveOnlyMode). If FM ever leaves
-    // it — which is what a real TX chain landing would mean — this assertion is
-    // the one that fails, and the two declarations below become re-openable
-    // questions rather than settled ones.
-    check(caps.receiveOnlyModes.contains(QStringLiteral("FM"))
-              && caps.receiveOnlyModes.contains(QStringLiteral("NFM")),
-          "FM and NFM are RECEIVE-ONLY here — the radio will not key in them");
-    // AND THAT IS THE WHOLE SAFETY ARGUMENT FOR DECLARING THEM ON
-    // receiveModeControl, so the two facts are pinned side by side rather than
-    // one of them being left to a comment. FM is on the RECEIVE control list
-    // (an operator who picks it out of the mode menu can be steered back out;
-    // before that it latched the slice shut) and on the RECEIVE-ONLY list (the
-    // radio still refuses to key in it). Those are different lists read by
-    // different code: receiveModeControl reaches ModelReceiveControlTarget and
-    // RadioResourceAdapter and nothing on the transmit side, while
-    // receiveOnlyModes is what RadioModel::refuseKeyInReceiveOnlyMode() reads
-    // inside beginTxActivity(). If a future change ever moves FM off the
-    // second list — which is what a real FM transmit chain landing would mean
-    // — this line fails and the two declarations below become re-openable.
+    // Read from production, not re-typed: receiveOnlyModes is the list the
+    // key-on guard reads (RadioModel::refuseKeyInReceiveOnlyMode). While FM
+    // was on it, a dead tone control was a dead control on a mode nobody could
+    // transmit in; now that it is off, the withdrawals below are what stand
+    // between an operator and a control that claims a tone the air never gets.
+    check(!modeIsReceiveOnly(caps, QStringLiteral("FM"))
+              && !modeIsReceiveOnly(caps, QStringLiteral("NFM")),
+          "FM and NFM TRANSMIT here — the TXA chain modulates them");
     check(caps.receiveModeControl
               && caps.receiveModeControl->modes.contains(QStringLiteral("FM")),
-          "FM is STEERABLE and still unkeyable — receive control and receive-only agree");
-    // NFM is on receiveOnlyModes and NOT on receiveModeControl, and the
-    // asymmetry is deliberate rather than an oversight. receiveOnlyModes is a
-    // membership test run on whatever string a slice holds, so it lists every
-    // alias both ways and stays correct however the mode got there;
-    // receiveModeControl is a REQUEST surface, and an alias on it would be
+          "FM is still STEERABLE on the receive control surface");
+    // NFM is NOT on receiveModeControl, and that is deliberate rather than an
+    // oversight. receiveOnlyModes is a membership test run on whatever string a
+    // slice holds, so it treats every alias alike (FM and NFM are now both
+    // off it); receiveModeControl is a REQUEST surface, and an alias on it would be
     // rewritten by Hl2Backend::setSliceMode and then never match the pending
     // observation ModelReceiveControlTarget is waiting for. Asserted, because
     // "the lists differ" is exactly the shape a careless edit would repair.
