@@ -5543,9 +5543,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             autoGain->setArmed(on);
         }
         // READ BACK WHAT ACTUALLY HAPPENED, regardless. The backend may DECLINE
-        // to arm -- the HL2 refuses from a gain baseline inside the register
-        // region where #5354 measured +48 dB reading identically to +18 dB --
-        // and a checkbox that stayed ticked over a control that is not running
+        // to arm -- the HL2 refuses from a gain baseline above its arming
+        // ceiling -- and a checkbox that stayed ticked over a control that is not running
         // would be the #5395 defect exactly: a UI reporting one state while the
         // radio is in another. The settled signal normally lands first, inside
         // setArmed(); this is the guard for a backend that settled silently.

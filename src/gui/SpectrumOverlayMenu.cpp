@@ -3058,8 +3058,8 @@ void SpectrumOverlayMenu::setAutoRfGainEnabled(bool on)
         applyAutoRfGainToSlider(on);
         return;
     }
-    // A backend may DECLINE to arm (an RF Gain baseline in the region where
-    // this radio's gain axis is not trusted). The checkbox has to be able to
+    // A backend may DECLINE to arm (an RF Gain baseline above its arming
+    // ceiling). The checkbox has to be able to
     // come back down without that looking like the operator unticking it, so
     // this path must not emit.
     QSignalBlocker b(m_autoRfGainCheck);

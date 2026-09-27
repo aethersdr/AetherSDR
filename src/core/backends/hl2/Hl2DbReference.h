@@ -28,11 +28,12 @@ namespace AetherSDR::hl2 {
 // estimation. Within that range a gain change provably cannot move a reported
 // dBm value.
 //
-// A fold above code 31 was reported on one board in upstream issue #177.
-// Its scope is unresolved: ad9866.v at 883a338 passes all six gain bits when
-// the native-format flag is set, as AetherSDR sets it. Keep the documented
-// range and existing reference until the measured behavior is reconciled with
-// that command path; do not reinterpret stored gains from this observation.
+// A fold above code 31 was reported on one board (upstream issue #177, and
+// aethersdr/AetherSDR#5354). On that board it was a hardware defect: a bad
+// joint at AD9866 pin 1 (Tx[5], RX gain bit 5 while receiving) held the bit
+// high. Repaired, the same radio steps monotonically through -12..+48 dB,
+// consistent with ad9866.v at 883a338 passing all six gain bits in native
+// format (aethersdr/AetherSDR#5943). The documented range stands.
 // https://github.com/softerhardware/Hermes-Lite2/issues/177
 //
 // This object knows the commanded gain, not the analog response of a board.
@@ -161,20 +162,14 @@ public:
     // WITHDRAWN. DL1YCF's "-34 dBm clipping at +33 dB of gain" arithmetically
     // gives -1 dBm and was quoted here as agreeing "to the digit" -- with a
     // figure now known to be 4 dB out, which is the tell. It also assumes +33
-    // dB was DELIVERED, and on one measured unit it was not: a commanded +33
-    // is code 45, and if that code folds `& 0x1F` it lands on 13, i.e. +1 dB
-    // applied, which makes the same measurement give -33 dBm instead.
+    // dB was DELIVERED, which cannot be established from the published figure.
     //
-    // WHETHER IT FOLDS IS OPEN. #5752 looked at exactly this and declined to
-    // treat the fold as general: it clamped connect parameters without changing
-    // the native range, left -12..+48 and the +20 dB default standing, and
-    // recorded that the single-unit observation in softerhardware/Hermes-Lite2
-    // #177 "remains unresolved against the native bit-6-selected RTL path".
-    // So this cross-check is indeterminate for two independent reasons --
-    // commanded-versus-applied cannot be established from the published figure,
-    // and the fold that would decide it is itself unsettled. It confirms
-    // nothing in either direction and is recorded here only so nobody
-    // re-derives it.
+    // THE FOLD IS NOT A REASON TO DOUBT IT. The one unit seen to fold `& 0x1F`
+    // above code 31 had a hardware defect (RX gain bit 5 stuck high, since
+    // repaired; aethersdr/AetherSDR#5354, #5943); a healthy HL2 delivers the
+    // commanded gain across -12..+48. The cross-check stays indeterminate only
+    // because commanded-versus-applied is unknown for DL1YCF's own radio. It
+    // confirms nothing and is recorded here only so nobody re-derives it.
     //
     // NONE OF WHICH TOUCHES THE DERIVATION BELOW. kFullScaleDbmAtZeroGain is a
     // figure AT 0 dB LNA gain, taken from the AD9866 datasheet and the input

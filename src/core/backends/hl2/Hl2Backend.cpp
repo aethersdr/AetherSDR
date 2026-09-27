@@ -577,15 +577,16 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         publishWideState();
         // THE OPERATOR'S AUTOMATIC-GAIN SWITCH, restored last.
         //
-        // Last because setAutoRfGain() refuses to arm from a baseline above
+        // Last because setAutoRfGain() checks the baseline against
         // kAutoRfGainMaxBaselineDb, and the restored baseline only reaches
         // m_lnaGainDb in pushInitialState() above. Arming earlier would consult
-        // a number that had not been restored yet and refuse — or worse, not.
+        // a number that had not been restored yet.
         //
-        // A REFUSAL HERE IS CORRECT AND IS LOGGED BY setAutoRfGain: the control
+        // The ceiling is the top of the native range, so a restored baseline
+        // (clamped to that range) always arms. The refusal branch is kept as a
+        // guard; if it ever fires it is logged by setAutoRfGain, the control
         // stays off, the operator's preference stays recorded, and they are
-        // told why. What must not happen is arming silently against a gain axis
-        // this radio is not trusted on.
+        // told why.
         if (m_autoRfGainWanted && !m_autoRfGainEnabled) {
             setAutoRfGain(true);
         }
@@ -7801,19 +7802,17 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // has never expressed a preference, and they get the control switched off.
     //
     // NOT A JUDGEMENT ABOUT WHETHER THE LOOP IS GOOD -- RFC #5535 approved it
-    // and asked for it armed by default. It is that arming from the shipped
-    // default cannot work: this radio's constructed LNA default is +20 dB
-    // (kLnaDefaultGainDb, which #5752 examined and deliberately preserved) and
-    // kAutoRfGainMaxBaselineDb is +19, so the connect edge would call
-    // setAutoRfGain(true), the baseline guard would refuse, and every new
-    // operator would get a warning in the log about a control they never asked
-    // for. Defaulting to true here would ship exactly that.
+    // and asked for it armed by default. The reason this stayed off was
+    // arithmetic: the +20 dB LNA default (kLnaDefaultGainDb) sat above a +19 dB
+    // arming ceiling, so default-on would have refused on every fresh connect.
+    // That ceiling came from a "fold" that was one unit's hardware defect (RX
+    // gain bit 5 stuck high by a bad joint; repaired, the same radio steps
+    // monotonically through -12..+48 dB -- #5354, #5943), and the ceiling is
+    // now the top of the native range, so the obstacle is gone.
     //
-    // The default-on half of #5535 waits on a trustworthy gain axis at the
-    // shipped default -- the AD9866 fold reconciled against the gateware RTL or
-    // replicated on a second board, or a default gain inside the trusted
-    // region. An operator who wants the loop today switches it on and that
-    // choice is persisted here.
+    // DEFAULT-ON IS STILL NOT DECIDED HERE. Flipping it is a separate change
+    // for #5535's default-on half. An operator who wants the loop today
+    // switches it on and that choice is persisted here.
     m_autoRfGainWanted =
         rfGain.value(QStringLiteral("autoEnabled")).toBool(false);
     const QJsonObject lnaByBand =
@@ -8218,6 +8217,11 @@ void Hl2Backend::setAutoRfGain(bool on)
         // REFUSED, NOT CLAMPED. See kAutoRfGainMaxBaselineDb. Moving the
         // operator's own number so the feature could be switched on would be a
         // UI reporting one value while the wire carried another.
+        //
+        // DEFENSIVE. The ceiling is the top of the native range and every
+        // writer of m_lnaGainDb clamps to that range, so this is reachable only
+        // if a baseline above it ever exists. It is kept because it is still
+        // the correct answer if one does.
         if (m_lnaGainDb > kAutoRfGainMaxBaselineDb) {
             // THE ASKING SURVIVES THE REFUSAL. This is what makes the invariant
             // on m_autoRfGainWanted true rather than merely stated: the
@@ -8239,20 +8243,18 @@ void Hl2Backend::setAutoRfGain(bool on)
             //
             // tr(), AND WITHOUT THE ISSUE NUMBER, because this sentence stopped
             // being a log line the moment it was kept: it is shown on the
-            // panadapter and read out by a screen reader. "#5354" is provenance
-            // for us and noise to an operator, so it stays on the qWarning --
-            // which is where the next person debugging this actually looks --
-            // and the operator gets the baseline, the ceiling and the remedy.
+            // panadapter and read out by a screen reader. An issue number is
+            // provenance for us and noise to an operator; the operator gets the
+            // baseline, the ceiling and the remedy.
             m_autoRfGainRefusal = tr(
                        "Auto RF gain declined — the RF Gain baseline is "
-                       "%1 dB and this radio's gain axis is not trusted above "
-                       "%2 dB. Lower RF Gain to %2 dB or below and try again. "
+                       "%1 dB, above this radio's %2 dB maximum. Lower RF "
+                       "Gain to %2 dB or below and try again. "
                        "Your setting has not been changed.")
                        .arg(m_lnaGainDb)
                        .arg(kAutoRfGainMaxBaselineDb);
             qWarning().noquote()
-                << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal
-                     + QStringLiteral(" (#5354: +48 dB measures like +18 dB)");
+                << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal;
             // SETTLED AS NOT ARMED, and said so. A refusal that only the
             // caller's own readback could discover was invisible on the two
             // routes that have no readback: the restore below and the bridge.

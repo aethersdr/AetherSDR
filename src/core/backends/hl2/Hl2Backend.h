@@ -201,13 +201,13 @@ public:
     // baseline. The second of exactly two numbers the operator owns; the first
     // is the on/off switch.
     //
-    // DEFAULT 26 dB, a CHOSEN value inside a MEASURED bound. From the stock
-    // +20 dB baseline it reaches -6 dB, which is the gain
-    // aethersdr/AetherSDR#5354's own sweep measures as the first clean one on
-    // this station. The bound is that measurement; the choice is here. Anything
-    // deeper reaches past what the measurement supports and into a range where
-    // the receiver is internally noise-limited on a quiet band for no evidence
-    // at all.
+    // DEFAULT 26 dB. From the stock +20 dB baseline it reaches -6 dB, which
+    // aethersdr/AetherSDR#5354's sweep labelled the first clean gain on this
+    // station. THAT BOUND IS NOT WHAT IT SAID: the sweep ran on a unit with RX
+    // gain bit 5 stuck high (since repaired, #5943), so every label in
+    // -12..+19 was 32 dB low and its "-6 dB first clean" was a true +26 dB.
+    // The value is unchanged here; the floor is to be re-derived from a sweep
+    // on a healthy radio.
     //
     // Everything else in Hl2AutoGainPolicy.h is deliberately NOT operator-
     // settable. Nine knobs is nine ways to build a loop that hunts, and none of
@@ -274,20 +274,20 @@ public:
     }
     [[nodiscard]] QString autoRfGainMode() const { return m_autoGainMode; }
 
-    // The highest baseline from which the automatic control will arm.
+    // The highest baseline from which the automatic control will arm: the top
+    // of the native range, so every baseline the slider offers can arm.
     //
-    // Above this the AD9866's gain axis is not trustworthy on this hardware:
-    // aethersdr/AetherSDR#5354 records +48 dB measuring identically to +18 dB
-    // on a Hermes-Lite 2, and neither the gateware decode nor the AD9866's
-    // stated -12..+48 dB / 1 dB / 6-bit geometry accounts for it.
+    // This was +19 until the premise behind it was traced to one faulty unit.
+    // aethersdr/AetherSDR#5354 recorded "+48 dB measures like +18 dB" on a
+    // Hermes-Lite 2 whose AD9866 pin 1 (the FPGA -> AD9866 Tx[5] line, which
+    // carries RX gain bit 5 while receiving) had a bad joint holding the bit
+    // high. Repaired, the same radio steps monotonically through -12..+48 dB as
+    // the protocol, the gateware and the datasheet all say
+    // (aethersdr/AetherSDR#5354 and #5943, correction comments 2026-09-27).
     //
-    // A REFUSAL, NOT A CLAMP. The control declines to arm and says why, rather
-    // than moving the operator's number to somewhere it will work -- a UI
-    // reporting one value while the wire carries another is the defect #5395
-    // was closed over. Note this bounds where the loop may START, not where it
-    // may go: the axis only ever attenuates, so from a baseline at or below
-    // this the fold region is unreachable by construction (Hl2GainSplit.h).
-    static constexpr int kAutoRfGainMaxBaselineDb = 19;
+    // Still A REFUSAL, NOT A CLAMP, for any value outside the range: the control
+    // declines to arm and says why rather than moving the operator's number.
+    static constexpr int kAutoRfGainMaxBaselineDb = hl2::kLnaGainMaxDb;
 
     // dspChains()' gather, over the two things it may read.
     //
@@ -1089,21 +1089,14 @@ private:
     //     with no `autoEnabled` key reads as FALSE. The control ships OFF and
     //     an operator turns it on.
     //
-    // OFF BY DEFAULT, AND THE REASON IS THE GAIN AXIS RATHER THAN CAUTION.
-    // RFC #5535 approved this loop and asked for it armed by default; that is
-    // not shippable yet, and the obstacle is arithmetic rather than judgement.
-    // This radio's constructed LNA default is +20 dB (kLnaDefaultGainDb, which
-    // #5752 examined and deliberately preserved), and +20 is one dB ABOVE
-    // kAutoRfGainMaxBaselineDb -- so arming from a fresh connect REFUSES, by
-    // design, every time. Defaulting the wish to true would ship a control that
-    // announces itself and then declines to run, which is worse than one that
-    // is honestly off.
-    //
-    // WHAT WOULD CHANGE IT is a trustworthy gain axis at the shipped default:
-    // either the AD9866 fold reconciled against the gateware RTL or replicated
-    // on a second board -- the evidence bar #5752 set -- or a default gain that
-    // starts inside the region the loop trusts. Neither is this PR's to decide,
-    // and #5535's default-on half waits on whichever lands first.
+    // OFF BY DEFAULT. RFC #5535 approved this loop and asked for it armed by
+    // default. What stood in the way was arithmetic: the +20 dB LNA default
+    // (kLnaDefaultGainDb) sat one dB above a +19 dB arming ceiling, so a
+    // default-on control would have refused on every fresh connect. That
+    // ceiling rested on a gain "fold" that was one unit's hardware defect (RX
+    // gain bit 5 stuck high; repaired, #5354 / #5943), and it is now the top
+    // of the native range -- the obstacle is removed. Flipping the default is
+    // left for a separate change under #5535.
     //
     // NO TIMER. The policy is evaluated on the existing telemetry publish,
     // which is where the observation arrives; the window length is an input

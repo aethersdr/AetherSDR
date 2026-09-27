@@ -25,6 +25,12 @@
 //     LNA -12 dB -> 0 % clipping        LNA  +0 dB -> 86 % clipping
 //     LNA  -6 dB -> 0 % clipping        LNA  +6 dB -> 100 % clipping
 //
+// THOSE LABELS ARE 32 dB LOW. The unit had RX gain bit 5 stuck high by a bad
+// joint (since repaired, #5943), so each row ran 32 dB hotter than labelled:
+// "-6 dB first clean" was a true +26 dB. The 6 dB transition width is
+// unaffected; the absolute positions, and any floor sized from them, are to
+// be re-derived from a sweep on a healthy radio.
+//
 // SIX DECIBELS SPANS THE ENTIRE 0 % -> 86 % TRANSITION. The smallest attack
 // step worth taking is 3 dB — half of that. A controller whose step is half its
 // plant's whole linear region is not a servo; it is a two-state switch wearing
@@ -112,9 +118,8 @@
 //
 // `offsetDb` is a NON-NEGATIVE attenuation below the operator's baseline (see
 // Hl2GainSplit.h). This law has no way to express a gain above the number the
-// operator set, so it cannot make the radio louder than they asked and cannot
-// reach the AD9866 register region above +19 dB unless they are already in it.
-// The only automatic action in the loud direction is undoing one of its own.
+// operator set, so it cannot make the radio louder than they asked. The only
+// automatic action in the loud direction is undoing one of its own.
 
 #include <cstdint>
 
@@ -429,22 +434,19 @@ struct AutoGainConfig {
 //       remainder is narrower than the measured knee and could stall inside it.
 //       The operator owns this number.
 //
-//       AND IT IS PROBABLY LARGER THAN THE HARDWARE HAS. This 24 was sized
-//       when the LNA axis was believed to span 31 dB. ON8ST retracted that on
-//       #5535 (2026-09-12): the gain folds `& 0x1F` above code 31
-//       (Hermes-Lite2 #177, design intent per softerhardware) and codes 28-31
-//       sit within 0.07 dB on his board, leaving about 17.8 dB USABLE -- one
-//       board, measured once, confirmed by nobody else.
+//       A 2026-09-12 note on #5535 said the gain folds `& 0x1F` above code
+//       31, leaving about 17.8 dB usable. WITHDRAWN: that was one unit's
+//       hardware defect (RX gain bit 5 stuck high by a bad joint), and
+//       repaired the same radio steps monotonically through -12..+48 dB
+//       (#5354, #5943). The native axis does span the full range.
 //
-//       IT IS NOT CHANGED HERE, deliberately. How deep an automatic control
-//       may dig is one of exactly two numbers the operator owns, the
-//       replacement figure rests on a single unreplicated board, and #5535 is
-//       unanswered. Picking a new ceiling from one measurement would be
-//       deciding in code the thing the RFC exists to decide. What the loop
-//       does meanwhile is safe rather than silent: Hl2GainSplit.h clamps to
-//       the register floor and reports the offset ACTUALLY applied, and the
-//       AtFloor branch below lights the "the front end needs attenuation ahead
-//       of the radio" warning rather than attacking into a fold forever.
+//       How deep an automatic control may dig is one of exactly two numbers
+//       the operator owns, and this default is to be re-derived from a sweep
+//       on a healthy radio rather than from the #5354 table, whose labels
+//       were 32 dB low. Hl2GainSplit.h clamps to the register floor and
+//       reports the offset ACTUALLY applied, and the AtFloor branch below
+//       lights the "the front end needs attenuation ahead of the radio"
+//       warning rather than attacking against the clamp forever.
 //
 //   baseProbeIntervalMs = 30000
 //       The floor on it is the cost: one failed probe per interval is 100 ms of

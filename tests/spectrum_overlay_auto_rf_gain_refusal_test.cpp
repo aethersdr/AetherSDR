@@ -46,9 +46,9 @@ void report(const char* name, bool ok)
 // business and is asserted in hl2_gain_split_test; all this file needs is that
 // it is non-empty and distinguishable from the help text.
 const QString kWhy = QStringLiteral(
-    "Auto RF gain declined — the RF Gain baseline is 20 dB and this radio's "
-    "gain axis is not trusted above 19 dB. Lower RF Gain to 19 dB or below and "
-    "try again. Your setting has not been changed.");
+    "Auto RF gain declined — the RF Gain baseline is 49 dB, above this "
+    "radio's 48 dB maximum. Lower RF Gain to 48 dB or below and try again. "
+    "Your setting has not been changed.");
 
 } // namespace
 

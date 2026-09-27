@@ -37,10 +37,11 @@
 //     its own;
 //   * there is no "automatic ceiling" to design, document or explain, because
 //     the ceiling IS the operator's number;
-//   * the AD9866 register region above +19 dB, where this lab measured +48 dB
-//     reading identically to +18 dB, is unreachable unless the operator is
-//     already in it. Nothing here caps or moves their number to achieve that;
-//     the axis simply cannot express it.
+//   * no gain above the operator's own number is reachable automatically.
+//     Nothing here caps or moves their number to achieve that; the axis simply
+//     cannot express it. (An earlier note here cited +48 dB measuring like
+//     +18 dB; that was one unit's hardware defect, RX gain bit 5 stuck high,
+//     since repaired -- aethersdr/AetherSDR#5354, #5943.)
 //
 // WHY THIS RETURNS THE APPLIED OFFSET AS WELL
 //
