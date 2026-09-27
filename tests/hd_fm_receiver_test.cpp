@@ -1,4 +1,5 @@
 #include "core/backends/rtl/HdFmReceiver.h"
+#include "core/Resampler.h"
 // The pinned C API header does not declare C++ linkage guards.
 extern "C" {
 #include <nrsc5.h>
@@ -93,7 +94,8 @@ struct Pipe final : Decoder::Pipe {
 struct Sink final : Registry::AudioSink {
     Raw last;
     std::uint64_t publication = 0, tapFrames = 0, speakerFrames = 0, nonzeroSpeaker = 0;
-    std::uint64_t tapEpoch = 0, tapNext = 0;
+    std::uint64_t tapEpoch = 0, tapNext = 0, producedSpeakerFrames = 0;
+    bool speakerPaired = false;
     bool ordered = true, paired = false, zeroWhileAcquiring = true, releasePassed = false;
     Identity lastSpeaker;
     Control* retireAtReady = nullptr;
@@ -123,9 +125,11 @@ struct Sink final : Registry::AudioSink {
         std::span<const float> left, std::span<const float> right, bool) noexcept override
     {
         lastSpeaker = identity; speakerFrames += left.size();
+        if (identity.producedMonotonicMs) { producedSpeakerFrames += left.size(); }
         ordered &= left.size() == right.size() && left.size() % 128 == 0;
         for (std::size_t i = 0; i < left.size(); ++i) {
             if (left[i] != 0 || right[i] != 0) { ++nonzeroSpeaker; }
+            speakerPaired |= left[i] != right[i];
             if (!last.audioValid) { zeroWhileAcquiring &= left[i] == 0 && right[i] == 0; }
             ordered &= std::isfinite(left[i]) && std::isfinite(right[i]);
         }
@@ -141,6 +145,8 @@ static Registry::ReceiverSpec spec()
 }
 int main()
 {
+    // Query the actual converter before starting the worker or its freshness clock.
+    const int speakerDelayInput = AetherSDR::Resampler(44100, 48000, 2048).groupDelayInputFrames();
     const auto recipe = spec(); Control control; Sink sink; std::string error;
     auto receiver = prepareHdFmReceiver(recipe, error, std::make_unique<Pipe>(control));
     check(bool(receiver), "injected pipe prepares the production bounded HD receiver");
@@ -163,8 +169,76 @@ int main()
     // The loss callback also emitted one new native frame. It must remain held
     // until three more complete its own prebuffer, with no lost initial tap.
     control.command(3); check(step() && control.wait(false), "new epoch produced its remaining prebuffer");
-    check(step() && sink.last.audioValid && sink.tapFrames == 8192 && sink.paired && sink.nonzeroSpeaker > 0,
-        "new-epoch prefill publishes all ordered original 44100 frames and paired explicit 48000 playout");
+    const bool prefillStep = step();
+    const bool prefillPassed = prefillStep && sink.last.audioValid && sink.tapFrames == 8192
+        && sink.paired && sink.ordered;
+    if (!prefillPassed) {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::fprintf(stderr,
+            "HD prefill diagnostic: step=%d valid=%d synced=%d audioValid=%d tapFrames=%llu paired=%d "
+            "speakerFrames=%llu nonzeroSpeaker=%llu tapEpoch=%llu tapNext=%llu rawEpoch=%llu "
+            "speakerEpoch=%llu speakerRevision=%llu speakerProducedMs=%llu nowMs=%lld "
+            "publication=%llu observation=%llu audioSequence=%llu iqDrops=%llu pcmDrops=%llu underruns=%llu "
+            "ordered=%d zeroWhileAcquiring=%d observations=%zu\n",
+            prefillStep, sink.last.valid, sink.last.synced, sink.last.audioValid,
+            static_cast<unsigned long long>(sink.tapFrames), sink.paired,
+            static_cast<unsigned long long>(sink.speakerFrames), static_cast<unsigned long long>(sink.nonzeroSpeaker),
+            static_cast<unsigned long long>(sink.tapEpoch), static_cast<unsigned long long>(sink.tapNext),
+            static_cast<unsigned long long>(sink.last.audioEpoch), static_cast<unsigned long long>(sink.lastSpeaker.audioEpoch),
+            static_cast<unsigned long long>(sink.lastSpeaker.revision), static_cast<unsigned long long>(sink.lastSpeaker.producedMonotonicMs),
+            static_cast<long long>(ms), static_cast<unsigned long long>(sink.last.publicationSequence),
+            static_cast<unsigned long long>(sink.last.observationSequence), static_cast<unsigned long long>(sink.last.audioSequence),
+            static_cast<unsigned long long>(sink.last.iqDrops), static_cast<unsigned long long>(sink.last.pcmDrops),
+            static_cast<unsigned long long>(sink.last.playoutUnderruns), sink.ordered, sink.zeroWhileAcquiring,
+            sink.observations.size());
+    }
+    check(prefillPassed,
+        "new-epoch prefill publishes all 8192 ordered original paired 44100 frames");
+    // prewarm() consumes r8brain's no-output interval, but its acoustic delay
+    // remains. Advance only capture time: no extra decoder AUDIO event can
+    // hide a lost prefix, reset, or insufficient replacement-epoch prefill.
+    const std::uint64_t audioEpoch = sink.last.audioEpoch;
+    const std::uint64_t delayOutput = (static_cast<std::uint64_t>(std::max(0, speakerDelayInput)) * 48000 + 44099) / 44100;
+    const std::uint64_t captureRate = static_cast<std::uint64_t>(recipe.capture.achievedSampleRateHz);
+    const std::uint64_t maximumStepFrames = ((iq.size() * 48000 + captureRate - 1) / captureRate + 127) / 128 * 128;
+    const std::uint64_t minimumStepFrames = iq.size() * 48000 / captureRate / 128 * 128;
+    // Readiness can precede the final fixture step. Subtract all audio already
+    // consumed, and reserve one callback for the revision-preservation check.
+    const std::uint64_t remainingFrames = 8192 - std::min<std::uint64_t>(8192, sink.producedSpeakerFrames);
+    const std::uint64_t availableSteps = remainingFrames / maximumStepFrames;
+    const std::uint64_t maximumDrainSteps = availableSteps > 0 ? availableSteps - 1 : 0;
+    const bool delayFits = speakerDelayInput >= 0
+        && delayOutput + 128 <= sink.producedSpeakerFrames + maximumDrainSteps * minimumStepFrames;
+    bool drainSucceeded = true;
+    std::uint64_t drainSteps = 0;
+    if (prefillPassed && delayFits) {
+        while (drainSteps < maximumDrainSteps
+            && (sink.producedSpeakerFrames < delayOutput + 128 || !sink.nonzeroSpeaker || !sink.speakerPaired)) {
+            ++drainSteps;
+            if (!step()) { drainSucceeded = false; break; }
+        }
+    }
+    const bool speakerPassed = prefillPassed && delayFits && drainSucceeded
+        && sink.producedSpeakerFrames >= delayOutput + 128 && sink.nonzeroSpeaker > 0 && sink.speakerPaired
+        && sink.tapFrames == 8192 && sink.tapNext == 8192 && sink.tapEpoch == audioEpoch && sink.ordered
+        && sink.last.audioValid && sink.last.audioEpoch == audioEpoch && sink.lastSpeaker.audioEpoch == audioEpoch
+        && sink.lastSpeaker.revision == 9 && sink.lastSpeaker.producedMonotonicMs > 0
+        && sink.last.iqDrops == 0 && sink.last.pcmDrops == 0 && sink.last.playoutUnderruns == 0;
+    if (!speakerPassed) {
+        std::fprintf(stderr,
+            "HD speaker diagnostic: delayInput=%d delayOutput=%llu steps=%llu/%llu producedFrames=%llu "
+            "nonzero=%llu paired=%d tapFrames=%llu epoch=%llu rawEpoch=%llu valid=%d ordered=%d "
+            "iqDrops=%llu pcmDrops=%llu underruns=%llu\n",
+            speakerDelayInput, static_cast<unsigned long long>(delayOutput),
+            static_cast<unsigned long long>(drainSteps), static_cast<unsigned long long>(maximumDrainSteps),
+            static_cast<unsigned long long>(sink.producedSpeakerFrames), static_cast<unsigned long long>(sink.nonzeroSpeaker),
+            sink.speakerPaired, static_cast<unsigned long long>(sink.tapFrames), static_cast<unsigned long long>(audioEpoch),
+            static_cast<unsigned long long>(sink.last.audioEpoch), sink.last.audioValid, sink.ordered,
+            static_cast<unsigned long long>(sink.last.iqDrops), static_cast<unsigned long long>(sink.last.pcmDrops),
+            static_cast<unsigned long long>(sink.last.playoutUnderruns));
+    }
+    check(speakerPassed, "bounded capture-only playout produces nonzero distinct 48000 channels after converter delay without losing native taps");
     const std::uint64_t measuredSequence = sink.last.observationSequence;
     check(sink.ordered && sink.zeroWhileAcquiring && sink.last.publicationSequence > 0,
         "measurement and delivery transitions preserve order without false valid audio");
@@ -207,6 +281,6 @@ int main()
     check(refused && !overflowSink.last.audioValid && overflowSink.last.iqDrops == 1,
         "acquisition never blocks on a full IQ queue and withdraws truthfully");
     overload.releaseQuietly(); bounded.reset();
-    std::printf("ALL PASS — %d failure(s)\n", failures);
+    std::printf("%s — %d failure(s)\n", failures ? "FAIL" : "ALL PASS", failures);
     return failures ? 1 : 0;
 }
