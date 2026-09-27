@@ -272,6 +272,31 @@ public:
     // button stayed lit. Anything that must outlive a rebuild lives in its own
     // member and is re-applied at the end of configure().
     Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    // Receive squelch (#5678 row 1.5). `level` is the slice model's 0..100.
+    //
+    // WdspChannel owns everything that depends on the mode — which of WDSP's
+    // three squelch stages runs, and each one's threshold map — and re-applies
+    // it on every setMode(), so this class only has to hold the operator's pair
+    // and make it survive a rebuild.
+    //
+    // Held OUTSIDE Config, like the blanker and for the same reason: configure()
+    // replaces m_config, and a rate change carrying a caller's default would
+    // open the squelch while the SQL button stayed lit. installChannel()
+    // re-applies it to every freshly built channel before that channel has
+    // processed a block — install runs on the thread that calls processIq().
+    Q_INVOKABLE void setSquelch(bool on, int level);
+    [[nodiscard]] bool squelchEnabled() const noexcept { return m_squelchOn; }
+    [[nodiscard]] int squelchLevel() const noexcept { return m_squelchLevel; }
+    // What the channel last WROTE to WDSP (stage, run flags, threshold), or
+    // nullopt before configure(). Forwarded, not mirrored, for the reason
+    // channelConfig() gives below.
+    [[nodiscard]] std::optional<WdspChannel::AppliedSquelch> appliedSquelch() const
+    {
+        if (!m_channel)
+            return std::nullopt;
+        return m_channel->appliedSquelch();
+    }
+
     // What the operator ASKED for. Survives configure() and is what a rebuild
     // re-applies.
     [[nodiscard]] bool noiseBlankerEnabled() const { return m_nbOn; }
@@ -651,6 +676,9 @@ private:
     // reason the bridge readback reports the applied pair.
     bool m_nbOn = false;
     int  m_nbLevel = 50;      // 0..100, the slice model's units
+    // Squelch request — see setSquelch(). Defaults mirror SliceModel's.
+    bool m_squelchOn = false;
+    int  m_squelchLevel = 20;
     std::atomic<bool> m_nbAppliedOn {false};
     std::atomic<int>  m_nbAppliedLevel {50};
     // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and

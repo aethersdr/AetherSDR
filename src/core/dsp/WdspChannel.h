@@ -117,6 +117,39 @@ public:
         // 0..100, the seam's units. Mapped to WDSP's threshold by
         // noiseBlankerThresholdForLevel().
         int noiseBlankerLevel = 50;
+        // Receive squelch — see setSquelch() below. In Config for the same
+        // reason as the blanker and the FM deviation: reconfigure() frees all
+        // three WDSP squelch stages, so a squelch held only in a runtime setter
+        // would silently open on the next sample-rate change. The level is
+        // the seam's 0..100 (SliceModel's), and 20 is SliceModel's default.
+        bool squelchEnabled = false;
+        int squelchLevel = 20;
+    };
+
+    // Which WDSP squelch stage a mode uses — see squelchStageFor().
+    enum class SquelchStage
+    {
+        None,   // no squelch in this mode; every stage is held off
+        Fm,     // fmsq.c — detector-noise squelch
+        Am,     // amsq.c — carrier-level squelch
+        Voice   // ssql.c — WU2O syllabic squelch
+    };
+
+    // What the last squelch application actually WROTE to WDSP: one run flag
+    // per stage and the threshold handed to the stage that is running (in that
+    // stage's own units — linear noise for Fm, dB for Am, 0..1 for Voice; 0
+    // when the stage is None). Recorded at the call site, under the same lock,
+    // so it is a record of the calls rather than a restatement of the request.
+    struct AppliedSquelch
+    {
+        SquelchStage stage = SquelchStage::None;
+        bool fmRun = false;
+        bool amRun = false;
+        bool voiceRun = false;
+        double threshold = 0.0;
+        // How many times the three run flags have been written. Lets a caller
+        // tell "re-applied, same answer" from "never applied".
+        unsigned applications = 0;
     };
 
     enum class ProcessResult
@@ -426,6 +459,56 @@ public:
     // from the processIq() callback.
     bool setFmDeviation(double deviationHz) noexcept;
 
+    // ── Receive squelch ───────────────────────────────────────────────────
+    //
+    // ONE CONTROL, THREE WDSP STAGES, chosen by the mode. RXA builds fmsq, amsq
+    // and ssql on every receive channel with run = 0, and each one only makes
+    // sense for one family of modes, so the operator's single SQL button and
+    // level are routed to the stage for the mode in force and the other two
+    // are forced off. The routing and the three level maps are pihpsdr's
+    // rx_set_squelch() (dl1ycf/pihpsdr src/receiver.c, master f9ab6ee594),
+    // taken as-is so the level means on this receiver what it means on the
+    // reference client every HL2 owner already knows:
+    //
+    //   FM              -> fmsq, threshold 10^(-2 * level / 100): 1.0 .. 0.01
+    //   AM, SAM         -> amsq, threshold -160 + 1.6 * level dB: -160 .. 0 dB
+    //   LSB, USB, DSB   -> ssql, threshold 0.0075 * level:        0.0 .. 0.75
+    //   everything else -> none
+    //
+    // Level 0 is fully open and 100 fully engaged in every family, which is
+    // the direction a Flex squelch_level and an Icom SQL percentage run, so the
+    // one slider keeps one meaning across radios.
+    //
+    // DEPARTURES FROM pihpsdr, both deliberate:
+    //   * CW gets NO squelch here; pihpsdr routes CWL/CWU to amsq. The app's
+    //     SQL control is disabled in CW (and data) unless a backend declares
+    //     hasModeIndependentSquelch, and it deliberately does not push a
+    //     squelch-off when entering CW (#3263). A CW amsq here would therefore
+    //     be a squelch the operator can neither see nor turn off.
+    //   * DIGU/DIGL/SPEC/DRM/WBFM get none either — pihpsdr's default case, and
+    //     for WBFM also because fmsq's trigger is fmd's output, which WBFM
+    //     does not run.
+    //
+    // Mode changes MOVE the squelch: setMode() re-applies it, so a squelch
+    // turned on in FM is carried by amsq after a switch to AM and by nothing
+    // in CW, and comes back on fmsq on the way back to FM.
+    //
+    // Receive channels only; a transmit channel returns false. Also false when
+    // a control operation is already in flight. Control-path work, guarded
+    // like setMode(); not callable from processIq(). `level` is clamped to
+    // 0..100.
+    bool setSquelch(bool on, int level) noexcept;
+    [[nodiscard]] static SquelchStage squelchStageFor(Mode mode) noexcept;
+    // The three maps above, exposed so the conversion lives in one place and
+    // tests can pin it. Each clamps level to 0..100.
+    [[nodiscard]] static double fmSquelchThresholdForLevel(int level) noexcept;
+    [[nodiscard]] static double amSquelchThresholdDbForLevel(int level) noexcept;
+    [[nodiscard]] static double voiceSquelchThresholdForLevel(int level) noexcept;
+    [[nodiscard]] const AppliedSquelch& appliedSquelch() const noexcept
+    {
+        return m_appliedSquelch;
+    }
+
     // ── Impulse noise blanker ─────────────────────────────────────────────
     //
     // WDSP's ANB (nob.c), run on the RAW IQ ahead of the channel. It has to be
@@ -610,6 +693,10 @@ private:
     // caller that sets one without the other gets notches that sit exactly one
     // shift away from where they were placed.
     void applyNotchShift() noexcept;
+    // Writes all three squelch run flags (and the running stage's threshold)
+    // for `mode` from m_config's squelch pair. Caller holds g_setupMutex and
+    // has checked the channel is a receive channel.
+    void applySquelchLocked(Mode mode) noexcept;
     static std::size_t computeOutputBlockSize(const Config& config) noexcept;
 
     void open() noexcept;
@@ -645,6 +732,7 @@ private:
     // block, the same way it consults m_nbActive — the control handshake
     // already orders the write, this keeps the read from being a data race.
     std::atomic<bool> m_running {false};
+    AppliedSquelch m_appliedSquelch;
 
     // ── Noise blanker state ───────────────────────────────────────────────
     //

@@ -14,6 +14,7 @@
 #include <mutex>
 #include <numbers>
 #include <numeric>
+#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -3419,6 +3420,256 @@ bool runFmDeviationTest()
     return ok;
 }
 
+// ── Receive squelch (#5678 row 1.5) ──────────────────────────────────────
+//
+// Two halves. The ROUTING half pins what WdspChannel writes to WDSP — which of
+// fmsq/amsq/ssql runs, with what threshold — per mode, across mode changes and
+// across a rebuild; it reads the record the channel makes at the call site.
+// The BEHAVIOUR half is what that record cannot show: that the stage it names
+// really gates the audio. Noise alone must come out muted with the squelch
+// on, audible with it off, and a signal above threshold must open it.
+
+bool nearly(double a, double b, double tol = 1.0e-9)
+{
+    return std::abs(a - b) <= tol;
+}
+
+bool runSquelchRoutingTest()
+{
+    using Stage = WdspChannel::SquelchStage;
+    bool ok = true;
+
+    // The three pihpsdr maps (receiver.c rx_set_squelch), at both ends and the
+    // middle, plus the clamp.
+    ok = require(nearly(WdspChannel::fmSquelchThresholdForLevel(0), 1.0) &&
+                 nearly(WdspChannel::fmSquelchThresholdForLevel(50), 0.1) &&
+                 nearly(WdspChannel::fmSquelchThresholdForLevel(100), 0.01) &&
+                 nearly(WdspChannel::fmSquelchThresholdForLevel(250), 0.01),
+                 "FM squelch map is not 10^(-2*level/100)") && ok;
+    ok = require(nearly(WdspChannel::amSquelchThresholdDbForLevel(0), -160.0) &&
+                 nearly(WdspChannel::amSquelchThresholdDbForLevel(50), -80.0) &&
+                 nearly(WdspChannel::amSquelchThresholdDbForLevel(100), 0.0) &&
+                 nearly(WdspChannel::amSquelchThresholdDbForLevel(-5), -160.0),
+                 "AM squelch map is not -160 + 1.6*level dB") && ok;
+    ok = require(nearly(WdspChannel::voiceSquelchThresholdForLevel(0), 0.0) &&
+                 nearly(WdspChannel::voiceSquelchThresholdForLevel(20), 0.15) &&
+                 nearly(WdspChannel::voiceSquelchThresholdForLevel(100), 0.75),
+                 "voice squelch map is not 0.0075*level") && ok;
+
+    const std::pair<WdspChannel::Mode, Stage> routes[] = {
+        {WdspChannel::Mode::Fm, Stage::Fm},     {WdspChannel::Mode::Am, Stage::Am},
+        {WdspChannel::Mode::Sam, Stage::Am},    {WdspChannel::Mode::Lsb, Stage::Voice},
+        {WdspChannel::Mode::Usb, Stage::Voice}, {WdspChannel::Mode::Dsb, Stage::Voice},
+        {WdspChannel::Mode::Cwl, Stage::None},  {WdspChannel::Mode::Cwu, Stage::None},
+        {WdspChannel::Mode::Digu, Stage::None}, {WdspChannel::Mode::Digl, Stage::None},
+        {WdspChannel::Mode::Spec, Stage::None}, {WdspChannel::Mode::Drm, Stage::None},
+        {WdspChannel::Mode::Wbfm, Stage::None},
+    };
+    for (const auto& [mode, stage] : routes) {
+        ok = require(WdspChannel::squelchStageFor(mode) == stage,
+                     "a mode routes to the wrong squelch stage") && ok;
+    }
+
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.mode = WdspChannel::Mode::Usb;
+    std::string error;
+    auto channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, "squelch routing test failed to open a channel")) {
+        return false;
+    }
+    // Only one run flag may ever be up, and only the one for `stage`.
+    const auto expect = [&](Stage stage, bool on, double threshold, const char* what) {
+        const auto& a = channel->appliedSquelch();
+        const bool shape = a.stage == stage &&
+                           a.fmRun == (on && stage == Stage::Fm) &&
+                           a.amRun == (on && stage == Stage::Am) &&
+                           a.voiceRun == (on && stage == Stage::Voice) &&
+                           nearly(a.threshold, threshold);
+        if (!shape) {
+            std::cerr << "  squelch applied: stage " << static_cast<int>(a.stage)
+                      << " fm " << a.fmRun << " am " << a.amRun << " voice "
+                      << a.voiceRun << " threshold " << a.threshold << '\n';
+        }
+        ok = require(shape, what) && ok;
+    };
+
+    ok = require(channel->appliedSquelch().applications >= 1,
+                 "open() did not apply the squelch at all") && ok;
+    expect(Stage::Voice, false, 0.15, "a fresh channel is not squelch-off at the default level");
+
+    ok = require(channel->setSquelch(true, 50), "setSquelch was refused") && ok;
+    expect(Stage::Voice, true, 0.375, "USB squelch on did not run ssql alone");
+    ok = require(channel->setMode(WdspChannel::Mode::Am), "setMode(AM) refused") && ok;
+    expect(Stage::Am, true, -80.0, "AM did not move the squelch to amsq");
+    ok = require(channel->setMode(WdspChannel::Mode::Fm), "setMode(FM) refused") && ok;
+    expect(Stage::Fm, true, 0.1, "FM did not move the squelch to fmsq");
+    ok = require(channel->setMode(WdspChannel::Mode::Cwu), "setMode(CWU) refused") && ok;
+    expect(Stage::None, true, 0.0, "CW left a squelch stage running");
+    ok = require(channel->setMode(WdspChannel::Mode::Digu), "setMode(DIGU) refused") && ok;
+    expect(Stage::None, true, 0.0, "DIGU left a squelch stage running");
+    ok = require(channel->setMode(WdspChannel::Mode::Fm), "setMode(FM) refused") && ok;
+    expect(Stage::Fm, true, 0.1, "returning to FM did not restore fmsq");
+    ok = require(channel->setSquelch(true, 80), "setSquelch level change refused") && ok;
+    expect(Stage::Fm, true, std::pow(10.0, -1.6), "a level change did not reach fmsq");
+    ok = require(channel->config().squelchEnabled && channel->config().squelchLevel == 80,
+                 "the squelch pair is not in the channel's Config") && ok;
+
+    // Across a rebuild: reconfigure() frees all three stages; the Config
+    // carries the pair and open() must put it back on the right stage.
+    WdspChannel::Config rebuilt = channel->config();
+    rebuilt.inputBlockSize = 512;
+    rebuilt.dspBlockSize = 512;
+    if (!require(channel->reconfigure(rebuilt, &error), "squelch channel failed to reconfigure")) {
+        return false;
+    }
+    expect(Stage::Fm, true, std::pow(10.0, -1.6), "reconfigure() lost the squelch");
+
+    ok = require(channel->setSquelch(false, 80), "squelch off refused") && ok;
+    expect(Stage::Fm, false, std::pow(10.0, -1.6), "squelch off left fmsq running");
+    ok = require(channel->setSquelch(true, 400) && channel->config().squelchLevel == 100,
+                 "an out-of-range level was not clamped to 100") && ok;
+
+    WdspChannel::Config tx;
+    tx.direction = WdspChannel::Direction::Transmit;
+    tx.inputBlockSize = 256;
+    tx.dspBlockSize = 256;
+    auto transmit = WdspChannel::create(tx, &error);
+    if (!require(transmit != nullptr, "squelch test failed to open a TX channel")) {
+        return false;
+    }
+    ok = require(!transmit->setSquelch(true, 50),
+                 "a transmit channel accepted a receive squelch") && ok;
+    return ok;
+}
+
+bool runSquelchGateTest()
+{
+    // One FM case and one AM case, because they are the two stages whose
+    // trigger is signal-dependent in opposite senses (fmsq: detector NOISE
+    // falling below a threshold; amsq: carrier LEVEL rising above one), so
+    // each can be "wired but inverted" in a way the other cannot catch. SSB's
+    // ssql is left to the routing test: it opens on syllabic frequency
+    // movement, not on level, so no steady test signal is a fair stimulus.
+    constexpr int kRate = 48000;
+    constexpr std::size_t kBlock = 256;
+    constexpr std::size_t kSettleBlocks = 60;   // mute ramp + fmsq's 100 ms arm delay
+    constexpr std::size_t kMeasureBlocks = 80;
+    std::mt19937 rng(5678);
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+
+    enum class Input { Noise, FmTone, AmCarrier };
+    const auto measure = [&](WdspChannel& ch, Input input, float noiseRms,
+                             std::size_t& clock) -> double {
+        std::vector<float> i(kBlock), q(kBlock), left(ch.outputBlockSize()),
+            right(ch.outputBlockSize());
+        double energy = 0.0;
+        for (std::size_t block = 0; block < kSettleBlocks + kMeasureBlocks; ++block) {
+            if (input == Input::FmTone) {
+                fillFmTone(i, q, kRate, 1000.0, 2500.0, clock);
+            } else if (input == Input::AmCarrier) {
+                // Carrier at 0 Hz offset, 50% modulated by 1 kHz: 0.1 peak
+                // carrier, i.e. -20 dBFS.
+                for (std::size_t n = 0; n < kBlock; ++n) {
+                    const double t = static_cast<double>(clock + n) / kRate;
+                    i[n] = static_cast<float>(
+                        0.1 * (1.0 + 0.5 * std::sin(2.0 * std::numbers::pi * 1000.0 * t)));
+                    q[n] = 0.0f;
+                }
+            } else {
+                std::fill(i.begin(), i.end(), 0.0f);
+                std::fill(q.begin(), q.end(), 0.0f);
+            }
+            for (std::size_t n = 0; n < kBlock; ++n) {
+                i[n] += noiseRms * gauss(rng);
+                q[n] += noiseRms * gauss(rng);
+            }
+            clock += kBlock;
+            if (ch.processIq(i, q, left, right) != WdspChannel::ProcessResult::Ok) {
+                return -1.0;
+            }
+            if (block >= kSettleBlocks) {
+                energy += rms(left);
+            }
+        }
+        return energy / static_cast<double>(kMeasureBlocks);
+    };
+
+    bool ok = true;
+    struct Case {
+        const char* name;
+        WdspChannel::Mode mode;
+        double low, high;
+        int level;
+        float noiseRms;
+        Input signal;
+        int agcMode;
+    };
+    // FM: level 50 is a 0.1 detector-noise threshold, and pure receiver noise
+    // drives the discriminator far above it — at ANY noise amplitude, since a
+    // discriminator fed noise alone outputs the noise's random phase, not its
+    // size; 0.01 rms per rail puts the 0.5 test carrier ~31 dB above it, a
+    // quieting signal. (At 0.05, ~17 dB, fmsq measured 84% open: it chatters
+    // on the threshold, which is squelch doing its job on a marginal signal
+    // and not what this case is for.) AGC is irrelevant there
+    // (SetRXAMode(FM) stops it). AM: level 50 is -80 dBFS; the noise is 1e-5
+    // rms per rail (-100 dBFS, less again after the 8 kHz passband), the
+    // carrier -20 dBFS. AM runs WITH the AGC so the squelch-off noise is
+    // loud enough to prove the squelched reading is a mute and not just a
+    // small number: amsq captures its trigger BEFORE the AGC and gates after
+    // it, so the AGC moves neither the decision nor the muted zero.
+    const Case cases[] = {
+        {"FM", WdspChannel::Mode::Fm, -8000.0, 8000.0, 50, 0.01f, Input::FmTone, 0},
+        {"AM", WdspChannel::Mode::Am, -4000.0, 4000.0, 50, 1.0e-5f, Input::AmCarrier, 3},
+    };
+    for (const Case& c : cases) {
+        WdspChannel::Config config;
+        config.inputBlockSize = kBlock;
+        config.dspBlockSize = kBlock;
+        config.mode = c.mode;
+        config.filterLowHz = c.low;
+        config.filterHighHz = c.high;
+        config.agcMode = c.agcMode;
+        config.agcFixedGainDb = 0.0;
+        config.blockForOutput = true;
+        std::string error;
+        auto open = WdspChannel::create(config, &error);
+        config.squelchEnabled = true;
+        config.squelchLevel = c.level;
+        auto closed = WdspChannel::create(config, &error);
+        if (!require(open && closed, "squelch gate test failed to open channels")) {
+            return false;
+        }
+        std::size_t clockOpen = 0;
+        std::size_t clockClosed = 0;
+        const double noiseOpen = measure(*open, Input::Noise, c.noiseRms, clockOpen);
+        const double noiseClosed = measure(*closed, Input::Noise, c.noiseRms, clockClosed);
+        const double signalOpen = measure(*open, c.signal, c.noiseRms, clockOpen);
+        const double signalClosed = measure(*closed, c.signal, c.noiseRms, clockClosed);
+        std::cout << c.name << " squelch level " << c.level << ": noise "
+                  << noiseOpen << " open / " << noiseClosed << " squelched; signal "
+                  << signalOpen << " open / " << signalClosed << " squelched\n";
+        if (!require(noiseOpen > 0.0 && noiseClosed >= 0.0 && signalOpen > 0.0 &&
+                     signalClosed >= 0.0, "a squelch gate measurement failed to run")) {
+            return false;
+        }
+        // Muted means muted: amsq and fmsq both apply a gain of exactly 0 in
+        // MUTED, so the only thing left is float residue.
+        ok = require(noiseClosed < 1.0e-6,
+                     "noise alone was not muted with the squelch on") && ok;
+        // And the reference really was audible, or "muted" measured nothing.
+        ok = require(noiseOpen > 100.0 * std::max(noiseClosed, 1.0e-9),
+                     "noise with the squelch off was not audible -- the muted "
+                     "reading proves nothing") && ok;
+        // Opened: the signal comes through at the squelch-off level. 10% is for
+        // the noise riding on it being a different draw on each channel.
+        ok = require(signalClosed > 0.9 * signalOpen && signalClosed < 1.1 * signalOpen,
+                     "a signal above threshold did not open the squelch") && ok;
+    }
+    return ok;
+}
+
 bool runTransmitDiscardTest()
 {
     WdspChannel::Config config = liveTransmitConfig(WdspChannel::Mode::Usb, 300.0, 2700.0);
@@ -3507,6 +3758,8 @@ int main()
     check(runLeakChecked("notch survives tap change test",
                          runNotchSurvivesTapChangeTest));
     check(runLeakChecked("FM deviation test", runFmDeviationTest));
+    check(runLeakChecked("squelch routing test", runSquelchRoutingTest));
+    check(runLeakChecked("squelch gate test", runSquelchGateTest));
     // LAST, and deliberately so: see the ordering note above. Anything added
     // later belongs ABOVE this line, not below it.
     check(runLeakChecked("close-after-stopped-clocking test",

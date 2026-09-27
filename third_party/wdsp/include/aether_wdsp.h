@@ -236,6 +236,40 @@ void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 // output is linear. `wdsp_channel_test`'s ratio assertion depends on that and
 // is what will say so if the limiter is ever switched on.
 void SetRXAFMDeviation(int channel, double deviationHz);
+
+// ── Receive squelch: three stages, one per mode family ────────────────────
+//
+// NO VENDORED PATCH IS INVOLVED, for exactly the reason the block above gives:
+// `upstream/wdsp.h` (upstream's generated public interface) declares all six.
+// `fmsq.h` omitting SetRXAFMSQRun is the per-module header being an unreliable
+// negative, not a hidden symbol. All three .c files are in the default glob in
+// CMakeLists.txt, and RXA.c creates all three stages with run = 0.
+//
+// WHICH STAGE HEARS WHAT (RXA.c xrxa):
+//   fmsq — runs after xfmd and triggers on the NOISE in the FM detector's
+//          output above 5 kHz (create_fmsq's cutoff). Meaningful only in FM:
+//          outside it the trigger buffer is an fmd output nothing refreshes.
+//          Mutes when the averaged noise exceeds the threshold, so a LARGER
+//          threshold is a MORE OPEN squelch. SetRXAFMSQThreshold sets the tail
+//          threshold to `threshold` and the unmute threshold to 0.9x it.
+//   amsq — captures its trigger (xamsqcap) right after the notched bandpass,
+//          BEFORE the AGC, and gates at the very end of the chain. It measures
+//          averaged carrier MAGNITUDE, so the threshold is an absolute level:
+//          SetRXAAMSQThreshold takes dB and converts with 10^(dB/20) against
+//          the wire's full scale (unmute at that level, tail at 0.9x).
+//   ssql — WU2O's syllabic ("voice") squelch, new in WDSP 1.21. Level-blind:
+//          it converts frequency to voltage and opens on the syllabic
+//          frequency movement of speech. SetRXASSQLThreshold takes 0..1 and
+//          stores half of it as the window threshold; LARGER is TIGHTER.
+//
+// Each Set* takes ch[channel].csDSP, so they are control-path calls. None of
+// them allocates.
+void SetRXAFMSQRun(int channel, int run);
+void SetRXAFMSQThreshold(int channel, double threshold);
+void SetRXAAMSQRun(int channel, int run);
+void SetRXAAMSQThreshold(int channel, double thresholdDb);
+void SetRXASSQLRun(int channel, int run);
+void SetRXASSQLThreshold(int channel, double threshold);
 void SetTXAMode(int channel, int mode);
 void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength

@@ -294,6 +294,11 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     applyMinimumPhaseForMode();
     m_channel->setFilter(m_config.filterLowHz, m_config.filterHighHz);
     m_channel->setAgc(m_config.agcMode, m_config.maximumAgcGainDb);
+    // The squelch, AFTER setMode above so WdspChannel routes it to the stage
+    // for the mode actually in force. A fresh channel opens with every
+    // squelch stage off; without this a rate change would open the squelch
+    // under a lit SQL button.
+    m_channel->setSquelch(m_squelchOn, m_squelchLevel);
     // A rebuild (rate change) creates a fresh channel; restore the operator's
     // current slice offset rather than silently snapping the slice to centre.
     if (m_shiftHz != 0.0)
@@ -406,6 +411,20 @@ void Hl2RxDsp::setNoiseBlanker(bool on, int level)
     }
     m_nbAppliedOn.store(m_nbOn, std::memory_order_relaxed);
     m_nbAppliedLevel.store(m_nbLevel, std::memory_order_relaxed);
+}
+
+void Hl2RxDsp::setSquelch(bool on, int level)
+{
+    m_squelchOn = on;
+    m_squelchLevel = std::clamp(level, 0, 100);
+    if (!canPushToChannel())
+        return;   // held; installChannel() applies it at the swap
+    if (!m_channel->setSquelch(m_squelchOn, m_squelchLevel)) {
+        qCWarning(lcHl2RxDsp) << "squelch" << (m_squelchOn ? "on" : "off") << "level"
+                              << m_squelchLevel << "refused by the channel; the "
+                                 "request is held and re-applied on the next "
+                                 "configure()";
+    }
 }
 
 void Hl2RxDsp::setMode(WdspChannel::Mode mode)

@@ -670,6 +670,10 @@ bool WdspChannel::setMode(Mode mode) noexcept
         const std::scoped_lock setupLock(g_setupMutex);
         if (m_config.direction == Direction::Receive) {
             SetRXAMode(m_channelId, wdspMode(mode));
+            // The squelch belongs to a mode family, so a mode change moves it
+            // to the new family's stage and stops the old one — see
+            // setSquelch() in the header.
+            applySquelchLocked(mode);
         } else {
             SetTXAMode(m_channelId, wdspMode(mode));
         }
@@ -724,6 +728,117 @@ bool WdspChannel::setFmDeviation(double deviationHz) noexcept
     m_config.fmDeviationHz = deviationHz;
     endControlOperation();
     return true;
+}
+
+bool WdspChannel::setSquelch(bool on, int level) noexcept
+{
+    if (m_config.direction != Direction::Receive || !beginControlOperation()) {
+        return false;
+    }
+    m_config.squelchEnabled = on;
+    m_config.squelchLevel = std::clamp(level, 0, 100);
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        applySquelchLocked(m_config.mode);
+    }
+    endControlOperation();
+    return true;
+}
+
+WdspChannel::SquelchStage WdspChannel::squelchStageFor(Mode mode) noexcept
+{
+    // pihpsdr rx_set_squelch()'s switch, less its CW case — see the header.
+    switch (mode) {
+    case Mode::Fm:
+        return SquelchStage::Fm;
+    case Mode::Am:
+    case Mode::Sam:
+        return SquelchStage::Am;
+    case Mode::Lsb:
+    case Mode::Usb:
+    case Mode::Dsb:
+        return SquelchStage::Voice;
+    case Mode::Cwl:
+    case Mode::Cwu:
+    case Mode::Digu:
+    case Mode::Digl:
+    case Mode::Spec:
+    case Mode::Drm:
+    case Mode::Wbfm:
+        break;
+    }
+    return SquelchStage::None;
+}
+
+// The three level maps are pihpsdr's, verbatim in effect (dl1ycf/pihpsdr
+// src/receiver.c rx_set_squelch, master f9ab6ee594; the older g0orx tree's
+// radio.c setSquelch carries the same AM and FM lines). Its comment gives the
+// ranges: "AM squelch: -160.0 ... 0.00 dBm linear interpolation / FM squelch:
+// 1.0 ... 0.01 expon. interpolation / Voice squelch: 0.0 ... 0.75 linear
+// interpolation". pihpsdr normalises the 24-bit wire by (1 << 23) - 1 exactly
+// as this host does (MetisProtocol.h kFullScale), so the AM figure is the same
+// dBFS on both.
+
+double WdspChannel::fmSquelchThresholdForLevel(int level) noexcept
+{
+    // fmsq mutes when averaged detector noise EXCEEDS the threshold, so 1.0 at
+    // level 0 lets essentially anything through and 0.01 at 100 needs a
+    // near-quieting signal. Exponential because the noise it compares against
+    // falls roughly exponentially as the carrier rises out of the noise.
+    const double clamped = std::clamp(static_cast<double>(level), 0.0, 100.0);
+    return std::pow(10.0, -2.0 * clamped / 100.0);
+}
+
+double WdspChannel::amSquelchThresholdDbForLevel(int level) noexcept
+{
+    const double clamped = std::clamp(static_cast<double>(level), 0.0, 100.0);
+    return (clamped / 100.0) * 160.0 - 160.0;
+}
+
+double WdspChannel::voiceSquelchThresholdForLevel(int level) noexcept
+{
+    // ssql.c's own note puts WU2O's recommended default at 0.16, which is
+    // level ~21 here — next to SliceModel's default of 20.
+    const double clamped = std::clamp(static_cast<double>(level), 0.0, 100.0);
+    return 0.0075 * clamped;
+}
+
+void WdspChannel::applySquelchLocked(Mode mode) noexcept
+{
+    // ALL THREE RUN FLAGS, EVERY TIME. Writing only the stage being turned on
+    // would leave the previous mode's stage running after a mode change: amsq
+    // left on across AM -> USB gates SSB on carrier level, and fmsq left on
+    // outside FM gates on a trigger buffer nothing refreshes any more.
+    AppliedSquelch applied;
+    applied.stage = squelchStageFor(mode);
+    applied.applications = m_appliedSquelch.applications + 1;
+    const bool on = m_config.squelchEnabled;
+    const int level = m_config.squelchLevel;
+    switch (applied.stage) {
+    case SquelchStage::Fm:
+        applied.threshold = fmSquelchThresholdForLevel(level);
+        SetRXAFMSQThreshold(m_channelId, applied.threshold);
+        applied.fmRun = on;
+        break;
+    case SquelchStage::Am:
+        applied.threshold = amSquelchThresholdDbForLevel(level);
+        SetRXAAMSQThreshold(m_channelId, applied.threshold);
+        applied.amRun = on;
+        break;
+    case SquelchStage::Voice:
+        // Tau mute/unmute are left at create_ssql's 0.1 s, which is what
+        // pihpsdr re-sets them to on every call.
+        applied.threshold = voiceSquelchThresholdForLevel(level);
+        SetRXASSQLThreshold(m_channelId, applied.threshold);
+        applied.voiceRun = on;
+        break;
+    case SquelchStage::None:
+        break;
+    }
+    SetRXAFMSQRun(m_channelId, applied.fmRun ? 1 : 0);
+    SetRXAAMSQRun(m_channelId, applied.amRun ? 1 : 0);
+    SetRXASSQLRun(m_channelId, applied.voiceRun ? 1 : 0);
+    m_appliedSquelch = applied;
 }
 
 bool WdspChannel::setAgc(int agcMode, double maximumGainDb) noexcept
@@ -1255,6 +1370,10 @@ void WdspChannel::open() noexcept
         // again by close(), so this has to be re-pushed on every open or a
         // reconfigure() silently returns the operator to a 5 kHz assumption.
         SetRXAFMDeviation(m_channelId, m_config.fmDeviationHz);
+        // Same reason again: create_rxa builds all three squelch stages with
+        // run = 0 and close() frees them, so a reconfigure() would otherwise
+        // open the operator's squelch without anything saying so.
+        applySquelchLocked(m_config.mode);
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);

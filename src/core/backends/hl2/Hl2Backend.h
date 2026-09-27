@@ -126,6 +126,7 @@ public:
     // the radio-side DSP family (NR, ANF) are deliberately NOT implemented and
     // stay hidden, because implementing one of them is not implementing all.
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceSquelch(int sliceId, bool on, int level) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
@@ -691,6 +692,13 @@ private:
         bool nbOn = false;
         int  nbLevel = 50;
 
+        // Authoritative squelch state, for the blanker's reasons: nothing on
+        // this radio echoes it and every rebuilt chain opens with it off.
+        // Defaults mirror SliceModel's (off, level 20). The mode decides which
+        // WDSP stage carries it — WdspChannel::setSquelch() — not this struct.
+        bool squelchOn = false;
+        int  squelchLevel = 20;
+
         // Host-side per-slice audio. The radio mixes nothing for us — a Flex
         // sums its slices on-radio and sends one stream, and an HL2 demodulates
         // every receiver here — so mute, level and balance are ours to apply.
@@ -796,6 +804,8 @@ private:
     // blanker off, so without this a reconnect or an added panadapter silently
     // turns off a blanker the operator's slice still shows as on.
     void pushNoiseBlanker(const Receiver& r);
+    // Same, for the squelch, and needed at the same places for the same reason.
+    void pushSquelch(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC.
     //
