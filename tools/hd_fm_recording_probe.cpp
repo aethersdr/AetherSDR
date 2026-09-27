@@ -15,7 +15,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+// The pinned C API header does not declare C++ linkage guards.
+extern "C" {
 #include <nrsc5.h>
+}
 #include <algorithm>
 #include <array>
 #include <bit>

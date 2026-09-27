@@ -1,5 +1,8 @@
 #include "core/backends/rtl/HdFmReceiver.h"
+// The pinned C API header does not declare C++ linkage guards.
+extern "C" {
 #include <nrsc5.h>
+}
 #include <algorithm>
 #include <array>
 #include <chrono>

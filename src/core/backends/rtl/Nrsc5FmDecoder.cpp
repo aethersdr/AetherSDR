@@ -7,7 +7,10 @@
 #include <cmath>
 #include <limits>
 #ifdef AETHER_ENABLE_NRSC5
+// The pinned C API header does not declare C++ linkage guards.
+extern "C" {
 #include <nrsc5.h>
+}
 #endif
 
 namespace AetherSDR::rtl {
