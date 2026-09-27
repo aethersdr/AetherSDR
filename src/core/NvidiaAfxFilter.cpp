@@ -12,6 +12,11 @@
 Q_LOGGING_CATEGORY(lcNvAfx, "aether.nvafx")
 
 #if defined(_WIN32)
+// windows.h's min/max function-like macros otherwise clobber std::min and
+// std::numeric_limits<>::max() at their use sites (MSVC error C2589).
+#  ifndef NOMINMAX
+#  define NOMINMAX
+#  endif
 #  include <windows.h>
 #else
 #  include <dlfcn.h>
@@ -78,6 +83,10 @@ using fn_GetU32        = int (*)(NvAFX_Handle, const char* param, unsigned int* 
 using fn_Load          = int (*)(NvAFX_Handle);
 using fn_Run           = int (*)(NvAFX_Handle, const float** in, float** out,
                                  unsigned num_samples, unsigned num_channels);
+// SDK 1.x declared NvAFX_Reset(effect); later SDKs add a per-stream reset
+// list. Called with the list form: a one-argument implementation ignores the
+// trailing arguments under both the SysV x86-64 and Win64 conventions.
+using fn_Reset         = int (*)(NvAFX_Handle, bool* reset_list, unsigned list_length);
 using fn_InitLogger    = int (*)(int level, int target, const char* file,
                                  void* cb, void* userdata);
 
@@ -107,6 +116,7 @@ struct NvidiaAfxFilter::Api {
     fn_GetU32        GetU32{nullptr};
     fn_Load          Load{nullptr};
     fn_Run           Run{nullptr};
+    fn_Reset         Reset{nullptr};
 };
 
 // ─── Pack resolution ────────────────────────────────────────────────────────
@@ -251,6 +261,7 @@ bool NvidiaAfxFilter::loadRuntime(const QString& packDir)
     m_api->GetU32        = reinterpret_cast<fn_GetU32>(sym("NvAFX_GetU32"));
     m_api->Load          = reinterpret_cast<fn_Load>(sym("NvAFX_Load"));
     m_api->Run           = reinterpret_cast<fn_Run>(sym("NvAFX_Run"));
+    m_api->Reset         = reinterpret_cast<fn_Reset>(sym("NvAFX_Reset"));
 
     if (!m_api->CreateEffect || !m_api->SetU32 || !m_api->SetString ||
         !m_api->SetFloat || !m_api->GetU32 || !m_api->Load || !m_api->Run ||
@@ -298,7 +309,21 @@ bool NvidiaAfxFilter::createDenoiser(const QString& packDir, void** handle)
     m_afxFrame = frame > 0 ? static_cast<int>(frame) : kRequestedFrame;
 
     m_api->SetFloat(*handle, P_INTENSITY, m_intensity.load());
+    resetEffect(*handle);
     return true;
+}
+
+// A new effect is not guaranteed a clean state. While another denoiser effect
+// keeps the SDK loaded, an effect created after one is destroyed starts from
+// that effect's leftover recurrent state, and its first ~0.5 s differs from a
+// fresh start by up to the full signal level. NvAFX_Reset clears it.
+void NvidiaAfxFilter::resetEffect(void* handle)
+{
+    if (!handle || !m_api->Reset) {
+        return;
+    }
+    bool resetStream = true;
+    m_api->Reset(handle, &resetStream, 1);
 }
 
 void NvidiaAfxFilter::setIntensity(float ratio)
@@ -422,8 +447,12 @@ void NvidiaAfxFilter::createResamplers()
 
 void NvidiaAfxFilter::reset()
 {
-    // Flush jitter accumulators and rebuild the resamplers so no stale or
-    // pre-discontinuity audio carries into the next block.
+    // Flush jitter accumulators, rebuild the resamplers and clear the effects'
+    // recurrent state so no stale or pre-discontinuity audio carries into the
+    // next block.
+    for (void* handle : m_handles) {
+        resetEffect(handle);
+    }
     for (auto& accum : m_inAccum) {
         accum.clear();
     }

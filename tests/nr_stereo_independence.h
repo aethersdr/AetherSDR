@@ -11,9 +11,17 @@
 //     all make one side's output depend on the other side's input.
 //
 //   panStepSettles
-//     A signal hard-panned left snaps hard right. The left output must fall
-//     silent within the filter's own latency. The mono path used to re-derive
-//     the balance with a ~1 s power envelope, so this took about five seconds.
+//     A signal hard-panned left snaps hard right. The left output must be
+//     40 dB down within 300 ms, a fixed bound above every method's latency
+//     (NNR's ~190 ms on the 24 kHz path is the largest). The mono path used to
+//     re-derive the balance with a ~1 s power envelope, so this took about
+//     five seconds.
+//
+//   attenuatesNoise
+//     Broadband noise on both channels comes out quieter on each. The three
+//     checks above also hold for a filter that does nothing, so this is what
+//     tells a silent fallback to passthrough (a failed plan or model on one
+//     channel) apart from noise reduction.
 
 #include <QByteArray>
 
@@ -168,6 +176,28 @@ inline bool panStepSettles(const MakeProcess& make, int rate, int settleMs = 300
     const double residualDb = panStepResidualDb(make, rate, settleMs);
     std::printf("  pan step: left residual %.1f dB after %d ms\n", residualDb, settleMs);
     return residualDb < -40.0;
+}
+
+// Stationary white noise on both channels, different on each. Measured over the
+// second half so learning periods and startup latency are behind it.
+inline bool attenuatesNoise(const MakeProcess& make, int rate, double minReductionDb = 3.0)
+{
+    const int frames = rate * 3;
+    const QByteArray input = makeStereo(rate, frames, {0xa11ceu, 0.0f, 0.2f},
+                                        {0xb0bu, 0.0f, 0.2f});
+    const QByteArray output = runBlocks(make(), input);
+    const int outputFrames = output.size() / (2 * static_cast<int>(sizeof(float)));
+    const int last = std::min(frames, outputFrames);
+    const int first = rate * 3 / 2;
+    bool ok = last > first;
+    for (int channel = 0; channel < 2 && ok; ++channel) {
+        const double reductionDb = 20.0 * std::log10(
+            std::max(channelRms(output, channel, first, last), 1.0e-12)
+            / channelRms(input, channel, first, last));
+        std::printf("  noise: channel %d changed %.1f dB\n", channel, reductionDb);
+        ok = reductionDb <= -minReductionDb;
+    }
+    return ok;
 }
 
 } // namespace NrStereoIndependence

@@ -3724,7 +3724,16 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
             return completedAutomationDspProbe(requestedMode, input, [this]() {
                 std::shared_ptr<SpectralNR> nr2 =
                     createNr2Filter(QStringLiteral("automation probe"));
+                if (!nr2) {
+                    // Plan creation failed after the check above succeeded.
+                    // An empty result fails the independence comparison.
+                    return AutomationDspProcess([](const QByteArray&) { return QByteArray(); });
+                }
                 applyNr2Settings(*nr2);
+                // post2 injects white noise seeded from each instance's own
+                // address, so the three probe runs would differ for a reason
+                // that has nothing to do with channel independence.
+                nr2->setPost2Run(false);
                 return AutomationDspProcess([nr2](const QByteArray& block) {
                     QByteArray output;
                     processNr2Stereo(
@@ -3834,19 +3843,13 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
 
         if (requestedMode == QLatin1String("BNR")) {
 #ifdef HAVE_NVIDIA_AFX
-            {
-                // Released before the probe runs: denoiser effects alive at
-                // the same time in one process are not isolated from each
-                // other, so an idle availability check would leak into the
-                // filters under test.
-                NvidiaAfxFilter bnr;
-                if (!bnr.isValid()) {
-                    return unavailableAutomationDspProbe(
-                        requestedMode,
-                        bnr.lastError().isEmpty()
-                            ? QStringLiteral("BNR/NVIDIA AFX runtime unavailable")
-                            : bnr.lastError());
-                }
+            NvidiaAfxFilter bnr;
+            if (!bnr.isValid()) {
+                return unavailableAutomationDspProbe(
+                    requestedMode,
+                    bnr.lastError().isEmpty()
+                        ? QStringLiteral("BNR/NVIDIA AFX runtime unavailable")
+                        : bnr.lastError());
             }
             return completedAutomationDspProbe(requestedMode, input, []() {
                 auto bnr = std::make_shared<NvidiaAfxFilter>();

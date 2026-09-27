@@ -119,7 +119,11 @@ int main(int argc, char** argv)
     using Samples = unsigned (*)();
     const Samples nvSamples = reinterpret_cast<Samples>(
         library.resolve("aetherTestProcessedSamples"));
-    if (!nvSamples) {
+    const Samples nvResets = reinterpret_cast<Samples>(
+        library.resolve("aetherTestResets"));
+    const Samples nvUnresetRuns = reinterpret_cast<Samples>(
+        library.resolve("aetherTestUnresetRuns"));
+    if (!nvSamples || !nvResets || !nvUnresetRuns) {
         return 1;
     }
 
@@ -182,6 +186,16 @@ int main(int argc, char** argv)
     check(df24Concurrent == baselineDf, "concurrent48 leaves DFNR24 output unchanged");
     check(nv24Concurrent == baselineNv, "concurrent48 leaves NVIDIA24 output unchanged");
 
+    // Every effect is reset after Load, before its first Run: the real SDK can
+    // otherwise hand a new effect a destroyed one's leftover state.
+    check(nvUnresetRuns() == 0, "NVIDIA effects are reset before their first Run");
+    {
+        NvidiaAfxFilter resettable(pack, 48000);
+        const unsigned before = nvResets();
+        resettable.reset();
+        check(nvResets() - before == 2, "NVIDIA reset() resets both channel effects");
+    }
+
     // Each channel runs its own instance, as RN2 does: nothing is mixed to
     // mono, so neither side hears the other and a hard pan is immediate.
     for (const int rate : {24000, 48000}) {
@@ -200,15 +214,21 @@ int main(int argc, char** argv)
               rate == 24000 ? "DFNR24 channels are independent"
                             : "DFNR48 channels are independent");
         check(NrStereoIndependence::panStepSettles(makeDf, rate),
-              rate == 24000 ? "DFNR24 hard pan step settles within latency"
-                            : "DFNR48 hard pan step settles within latency");
+              rate == 24000 ? "DFNR24 hard pan step settles within 300 ms"
+                            : "DFNR48 hard pan step settles within 300 ms");
+        check(NrStereoIndependence::attenuatesNoise(makeDf, rate),
+              rate == 24000 ? "DFNR24 both channels reach the algorithm"
+                            : "DFNR48 both channels reach the algorithm");
         check(NrStereoIndependence::leftIgnoresRight(makeNv, rate)
                   && NrStereoIndependence::rightIgnoresLeft(makeNv, rate),
               rate == 24000 ? "NVIDIA24 channels are independent"
                             : "NVIDIA48 channels are independent");
         check(NrStereoIndependence::panStepSettles(makeNv, rate),
-              rate == 24000 ? "NVIDIA24 hard pan step settles within latency"
-                            : "NVIDIA48 hard pan step settles within latency");
+              rate == 24000 ? "NVIDIA24 hard pan step settles within 300 ms"
+                            : "NVIDIA48 hard pan step settles within 300 ms");
+        check(NrStereoIndependence::attenuatesNoise(makeNv, rate),
+              rate == 24000 ? "NVIDIA24 both channels reach the algorithm"
+                            : "NVIDIA48 both channels reach the algorithm");
     }
 
     if (createdFixture) {

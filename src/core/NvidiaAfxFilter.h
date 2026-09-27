@@ -46,9 +46,8 @@ public:
     // (same format, same byte count). No-op passthrough until the engine is ready.
     QByteArray process(const QByteArray& pcmStereo);
 
-    // Flush wrapper jitter accumulators and resamplers.
-    // This does not reset SDK recurrent state. Recreate the complete filter
-    // for a new source or discontinuity that requires a clean algorithm epoch.
+    // Flush wrapper jitter accumulators and resamplers, and reset the SDK
+    // effects' recurrent state (NvAFX_Reset).
     void reset();
 
     // True once the effect is created, model loaded, and the engine is ready.
@@ -66,6 +65,7 @@ private:
     bool loadRuntime(const QString& packDir);   // dlopen the pack libs + dlsym API
     bool createDenoiser(const QString& packDir, void** handle); // CreateEffect..Load
     void createResamplers();
+    void resetEffect(void* handle);
     void teardown();
 
     struct Api;                                 // dlsym'd NvAFX_* function pointers

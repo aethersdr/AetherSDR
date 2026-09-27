@@ -529,8 +529,10 @@ void test_channels_are_independent()
                NrStereoIndependence::leftIgnoresRight(make, rate), detail);
         report("right output ignores left input",
                NrStereoIndependence::rightIgnoresLeft(make, rate), detail);
-        report("hard pan step settles within latency",
+        report("hard pan step settles within 300 ms",
                NrStereoIndependence::panStepSettles(make, rate), detail);
+        report("both channels attenuate noise",
+               NrStereoIndependence::attenuatesNoise(make, rate), detail);
     }
 }
 

@@ -113,7 +113,8 @@ When receiving, the current ordering is:
    NR2, NR4, DFNR, NNR, BNR, or macOS MNR), and every one of them denoises L
    and R as two independent channels: each side has its own algorithm state
    and, where the method resamples, its own SRC pair. Nothing is averaged to
-   mono, so radio pan and a hard-panned diversity pair pass through intact.
+   mono, so each side keeps its own content: a hard-panned diversity pair keeps
+   one antenna per ear, and a pan change is heard immediately.
 3. `writeAudio()` runs the client RX strip in this fixed order:
    `ClientEqRx`, `ClientGateRx`, `ClientCompRx`, `ClientDeEssRx`,
    `ClientTubeRx`, `ClientPuduRx`.
@@ -134,9 +135,10 @@ but the live RX speaker strip is the explicit order inside `writeAudio()`.
 ### Pan handling
 
 Radio speaker audio enters as stereo with the radio's per-slice pan already
-applied. Every client NR method processes L and R independently, so that
-balance is preserved through NR, through the RX chain, and through the RX
-upsampler described below.
+applied. Every client NR method denoises L and R independently, preserving
+channel separation. Level-dependent suppression may slightly shift an
+off-centre signal's L/R level ratio; the RX chain and the RX upsampler
+described below preserve their input balance.
 
 ### 24 kHz to 48 kHz upsampling
 

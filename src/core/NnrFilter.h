@@ -46,8 +46,10 @@ public:
     NnrFilter(const NnrFilter&) = delete;
     NnrFilter& operator=(const NnrFilter&) = delete;
 
-    // Process a block of 24/48 kHz stereo float32 PCM.
-    // Returns the processed block (same format, same size).
+    // Process a block of 24/48 kHz stereo float32 PCM. Returns the processed
+    // audio in the same format, released in whole NNR blocks: a call can
+    // return fewer or more frames than it was given, and none while the first
+    // block is still filling.
     QByteArray process(const QByteArray& pcmStereo);
 
     bool isValid() const { return m_nnr[0] != nullptr && m_nnr[1] != nullptr; }
