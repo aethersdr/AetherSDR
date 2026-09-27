@@ -85,8 +85,8 @@ then 44.1 kHz, then 24 kHz through the shared stereo-preserving policy. A 24 kHz
 fallback is usable but cannot retain 15 kHz audio, and the actual device rate
 is reported independently of the producer. Deferred requests check the current
 producer lease and sink generation. Same-rate epochs and brief retirement gaps
-do not reopen the sink. Legacy 24 kHz policy and fixed CW/Quindar/RADE contracts
-remain unchanged; speaker-only changes retain producer queues and effects.
+do not renegotiate the sink rate. Legacy 24 kHz policy and fixed CW/Quindar/RADE
+contracts remain unchanged; speaker-only changes retain producer queues and effects.
 
 ## Qualification evidence and limits
 
