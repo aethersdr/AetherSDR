@@ -3568,10 +3568,11 @@ QByteArray replaceAutomationDspProbeChannel(const QByteArray& input, int channel
     return replaced;
 }
 
-// Largest per-sample difference on one channel; -1 when the lengths differ.
+// Largest per-sample difference on one channel; -1 when the lengths differ or
+// there is no output to compare, since two empty runs prove nothing.
 double automationDspProbeChannelMaxError(const QByteArray& a, const QByteArray& b, int channel)
 {
-    if (a.size() != b.size()) {
+    if (a.isEmpty() || a.size() != b.size()) {
         return -1.0;
     }
     const auto* sa = reinterpret_cast<const float*>(a.constData());
