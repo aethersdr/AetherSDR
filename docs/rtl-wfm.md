@@ -21,14 +21,17 @@ interpolation; interpolation never expands captured coverage.
 
 Filter width is an RF selection, not an audio low-pass. The preserved default
 200 kHz selection is not a flat 200 kHz usable-bandwidth claim: the fixed
-192 kHz decoder conversion measured flat response through ±90 kHz, about
--0.195 dB at ±93 kHz, and -6.02 dB at ±96 kHz. The ±100 kHz edge is already
-strongly attenuated. Narrower filters intentionally trade modulation sidebands
-for adjacent-channel rejection. Saved edges are never silently resized on
+192 kHz decoder conversion measured flat response at the sampled positive
+offsets through +90 kHz, about -0.195 dB at +93 kHz, and -6.02 dB at +96 kHz.
+The +100 kHz edge is already strongly attenuated. The corresponding negative
+response is inferred from the symmetric filter; this sweep did not measure it.
+Narrower filters intentionally trade modulation sidebands for adjacent-channel
+rejection. Saved edges are never silently resized on
 restore; entering WFM from a narrow incompatible mode selects the existing
-200 kHz broadcast preset. Saved sessions bootstrap with muted, narrow legacy AM before adopting their
-original receiver ID and recipe. This keeps the sole native reservation free
-for sparse IDs and avoids FM's automatic DC placement moving capture.
+200 kHz broadcast preset. Nonempty saved sessions bootstrap with muted, narrow
+legacy AM before adopting their original receiver ID and recipe. This keeps the
+sole native reservation free for sparse IDs and avoids FM's automatic DC
+placement moving capture.
 Old WFM could store narrow filters it did not apply. A saved WFM interval
 outside the new declared range is preserved and refused with a configuration
 warning, leaving the bootstrap muted. The operator must explicitly choose a
