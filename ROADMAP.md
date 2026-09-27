@@ -61,11 +61,11 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   v26.9.5 implemented RFC #5517 in the app: an IC-7300MK2 identified by CI-V
   over built-in Ethernet/RS-BA1 connects as a **supported** radio, with no
   experimental badge or disclaimer, while every other model keeps the
-  experimental treatment. Remaining: transmit confirmation beyond the 705, the per-model SET-menu item
-  numbers the MOD Input check needs, audio gain/mute/pan, VOX and CW break-in, an
-  automation verb making the modulation sources assertable without parsing Radio
-  Health text, and the once-a-second FT8 transmit dropout still under
-  investigation.
+  experimental treatment. Remaining: transmit confirmation on additional Icom
+  models, the per-model SET-menu item numbers the MOD Input check needs, audio
+  gain/mute/pan, VOX and CW break-in, an automation verb making the modulation
+  sources assertable without parsing Radio Health text, and the once-a-second
+  FT8 transmit dropout still under investigation.
 - **ANAN-G2 — experimental, receive-only** ([RFC #4970](https://github.com/aethersdr/AetherSDR/issues/4970), approved) — openHPSDR Protocol 2 discovery
   with a single receive path, spectrum and audio, live tuning and zoom, arrived
   in v26.9.2. v26.9.3 removed the session rebuild behind a zoom change — `p2app`
@@ -134,7 +134,8 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   deferred the unmute past the T/R turnaround so the PA's own carrier no longer
   reaches the demodulator; let the operator declare the board variant (bare
   HL2, AK4951 companion, SquareSDR 2); routed the second receiver's S-meter to
-  its slice; and re-asks a silent radio to stream before declaring the link down.
+  its slice; and made the client re-ask a silent radio to stream before declaring
+  the link down.
   **The experimental → supported call itself is still open**; what remains
   before making it is panadapter/waterfall parity with the Flex path, arming
   automatic RF gain by default, and field time on the TXA chain beyond one
