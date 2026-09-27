@@ -330,6 +330,19 @@ bool stereoAndPilot()
     ok = require(channel->setRunning(false) && channel->wbfmStereoDetected() == false,
                  "stop immediately invalidates previous stereo indication") && ok;
     ok = require(!channel->wbfmReceptionDiagnostics(), "stop invalidates completed-block diagnostics") && ok;
+    // A stop only arms WDSP's down-slew. An immediate restart cancels it,
+    // retaining decoder history because no flush occurred. Clock its 480-frame
+    // fade and 256-frame zero tail through three blocking 256-frame exchanges;
+    // setRunning(true) then waits for the completed fade's real flush worker.
+    std::array<float, kInputBlock> drainInput{};
+    std::vector<float> drainLeft(channel->outputBlockSize()), drainRight(channel->outputBlockSize());
+    for (int block = 0; block < 3; ++block) {
+        if (!require(channel->processIq(drainInput, drainInput, drainLeft, drainRight)
+                == WdspChannel::ProcessResult::Ok,
+                "stop clocks the real down-slew before reception-history flush")) { return false; }
+        ok = require(!channel->wbfmReceptionDiagnostics(),
+                     "clocking the stopped channel does not republish reception") && ok;
+    }
     if (!require(channel->setRunning(true), "WFM restarts")) { return false; }
     const Measurement resumed = run(*channel, Vector::Mono, 3.0, 2.0);
     ok = require(resumed.finite && channel->wbfmStereoDetected() == false
