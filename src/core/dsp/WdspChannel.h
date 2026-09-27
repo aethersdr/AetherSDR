@@ -606,6 +606,12 @@ public:
     // overwrote the input block the worker had not yet copied out. 0 restores
     // the shipping path.
     static void setWorkerHandoffPauseForTest(unsigned microseconds) noexcept;
+    // Test-only deterministic counterpart: arm the next worker handoff, then
+    // acknowledge that one worker is held until explicitly released. Fixtures
+    // serialize use, keep other channels idle, and release BEFORE destruction
+    // or reconfiguration. The default is inactive; this never holds acquisition.
+    static void setWorkerHandoffHoldForTest(bool enabled) noexcept;
+    [[nodiscard]] static bool workerHandoffHeldForTest() noexcept;
 
     // Shared FFTW-planner serialization guard. FORWARDS to
     // AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h), which owns

@@ -1,6 +1,8 @@
 #include "core/backends/rtl/RtlRfExtractor.h"
 #include "CallbackAllocationProbe.h"
+#include "CDSPResampler.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -58,6 +60,86 @@ static double toneMagnitude(std::span<const float> samples, double hz)
         sum += double(samples[n]) * std::complex<double>(std::cos(phase), std::sin(phase));
     }
     return std::abs(sum) / samples.size();
+}
+static void wfmUsbCallbackBursts()
+{
+    constexpr std::size_t kUsbIqFrames = 8192; // 16384 interleaved RTL U8 bytes.
+    constexpr std::size_t kWfmIqBlock = 2048;
+    constexpr int kWfmIqRate = 384000;
+    constexpr std::array<int, 9> rates{
+        225001, 250000, 300000, 1000000, 1536000, 1843200, 2000000, 2400000, 3000000};
+    static_assert(kUsbIqFrames % Extractor::kInputChunk == 0);
+    struct CountingSink final : Extractor::Sink {
+        std::size_t callbackBlocks = 0;
+        std::uint64_t next = 0;
+        bool continuous = true;
+        bool iqBlock(std::span<const float> i, std::span<const float> q,
+                     std::uint64_t first) noexcept override
+        {
+            if (i.size() != kWfmIqBlock || q.size() != i.size() || first != next || first % 8 != 0) {
+                continuous = false;
+                return false;
+            }
+            ++callbackBlocks;
+            next += i.size();
+            return true;
+        }
+    };
+    std::array<std::complex<float>, kUsbIqFrames> input;
+    input.fill({0.25f, -0.125f});
+    for (const int rate : rates) {
+        const Extractor::Config cfg{{1, 1, 100e6, double(rate), 0.45 * rate, 0.45 * rate},
+            {0, 100e6, -90000, 90000, 0, 1000, 1000}, kWfmIqRate, kWfmIqBlock, 48000};
+        Extractor extractor(cfg);
+        check(extractor.valid(), "WFM callback observation uses an admitted full passband");
+        if (!extractor.valid()) { continue; }
+
+        // Same converter recipe as the production extractor/Resampler. r8brain
+        // composes each stage's getMaxOutLen() into this prepared bound; it is
+        // independent of startup state and of the observations below. A full
+        // USB callback performs 32 conversions, even with a partial input
+        // chunk already staged, and can begin with 2047 staged output frames.
+        r8b::CDSPResampler24 converterBound(rate, kWfmIqRate, Extractor::kInputChunk, 10.0);
+        const int maxChunkOutput = converterBound.getMaxOutLen(Extractor::kInputChunk);
+        check(maxChunkOutput > 0 && maxChunkOutput <= 16384, "converter output bound fits extractor storage");
+        if (maxChunkOutput <= 0 || maxChunkOutput > 16384) { continue; }
+        const std::size_t boundBlocks = (kWfmIqBlock - 1
+            + (kUsbIqFrames / Extractor::kInputChunk) * std::size_t(maxChunkOutput)) / kWfmIqBlock;
+        CountingSink sink;
+        std::size_t callbacks = 0;
+        std::size_t maxBlocks = 0;
+        std::uint64_t maxCaptureFirst = 0;
+        std::uint64_t captureFrames = 0;
+        bool accepted = true;
+        // Two seconds rounded up to whole production USB callbacks. This is
+        // sample time, with no sleeps, elapsed-time assertions, WDSP or radio.
+        while (captureFrames < 2 * std::uint64_t(rate)) {
+            sink.callbackBlocks = 0;
+            inCallback = true;
+            accepted = extractor.process(cfg.capture, captureFrames, input, sink);
+            inCallback = false;
+            if (!accepted) { break; }
+            if (sink.callbackBlocks > maxBlocks) {
+                maxBlocks = sink.callbackBlocks;
+                maxCaptureFirst = captureFrames;
+            }
+            ++callbacks;
+            captureFrames += input.size();
+        }
+        check(accepted && sink.continuous && !extractor.withdrawn(),
+            "WFM USB callbacks preserve exact fixed-block IQ and final-audio positions");
+        check(sink.next > 0 && sink.next == extractor.outputFrames(), "WFM burst observation emitted real blocks");
+        check(maxBlocks <= boundBlocks, "observed callback burst respects composed converter bound");
+        // This bound covers ONE callback, not consecutive queued callbacks
+        // without WDSP progress, and is not a realtime/latency qualification.
+        std::printf("WFM_EXTRACTOR_BURST rate=%d callbacks=%zu captureFrames=%llu iqFrames=%llu "
+            "maxBlocks=%zu maxCaptureFirst=%llu chunkOutputBound=%d callbackBlockBound=%zu "
+            "maxAudioFrames=%zu audioFrameBound=%zu continuous=%d\n",
+            rate, callbacks, static_cast<unsigned long long>(captureFrames),
+            static_cast<unsigned long long>(sink.next), maxBlocks,
+            static_cast<unsigned long long>(maxCaptureFirst), maxChunkOutput, boundBlocks,
+            maxBlocks * 256, boundBlocks * 256, accepted && sink.continuous);
+    }
 }
 static void firstFailureObservation()
 {
@@ -135,6 +217,7 @@ static void firstFailureObservation()
 int main()
 {
     firstFailureObservation();
+    wfmUsbCallbackBursts();
     Extractor extractor(config());
     check(extractor.valid(), "valid readback and full passband prepare extraction");
     std::vector<std::complex<float>> input(65536, {0.5f, 0});

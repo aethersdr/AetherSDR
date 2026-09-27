@@ -11,6 +11,7 @@
 #include <limits>
 #include <numbers>
 #include <thread>
+#include <utility>
 #include <vector>
 #ifdef AETHER_BACKEND_RTL
 #include "core/backends/rtl/RtlSdrDdc.h"
@@ -121,6 +122,93 @@ struct RtlReceivePipelineTestAccess {
         return pipeline.takeTraceEvent(event) && event.captureFirst == 123456
             && !pipeline.takeTraceEvent(event) && !pipeline.takePacket(packet)
             && pipeline.diagnostics().droppedTraceEvents == offered - capacity + 1;
+    }
+    // Exercise the production extractor, pipeline publication, mixer and
+    // queues. Fixed PCM replaces only demodulation: no async WDSP scheduling
+    // is involved in this sample-coordinate regression.
+    static bool commonLatticeOrigin(RtlReceivePipeline& pipeline, std::uint64_t rate,
+                                    std::uint64_t expectedOrigin)
+    {
+        struct ExtractedPcm final : RtlReceiverRegistry::Receiver, RtlRfExtractor::Sink {
+            RtlReceiverRegistry::ReceiverSpec spec;
+            RtlRfExtractor extractor;
+            RtlReceiverRegistry::AudioSink* sink = nullptr;
+            std::array<float, 256> pcm{};
+            bool first = true;
+            explicit ExtractedPcm(RtlReceiverRegistry::ReceiverSpec value)
+                : spec(value), extractor({value.capture, value.passband, 384000, 2048, 48000})
+            { pcm.fill(0.25f); }
+            WdspChannel::ProcessResult processIq(std::span<const float>, std::span<const float>) noexcept override
+            { return WdspChannel::ProcessResult::Ok; }
+            std::span<const float> left() const noexcept override { return pcm; }
+            std::span<const float> right() const noexcept override { return pcm; }
+            bool processCapture(const RtlReceiverRegistry::SampleBlock& block,
+                                RtlReceiverRegistry::AudioSink& target) noexcept override
+            {
+                sink = &target;
+                const bool accepted = extractor.process(block.capture, block.firstSample, block.samples, *this);
+                sink = nullptr;
+                return accepted;
+            }
+            bool iqBlock(std::span<const float> i, std::span<const float> q, std::uint64_t position) noexcept override
+            {
+                if (i.size() != 2048 || q.size() != 2048 || position % 8) { return false; }
+                sink->audioBlock(spec, position / 8, pcm, pcm, first);
+                first = false;
+                return true;
+            }
+        };
+        pipeline.m_legacy = false; pipeline.m_token = {47, 1}; pipeline.m_captureEpoch = 17;
+        pipeline.m_capture = {47, 1, 100000000, double(rate), rate * 0.45, rate * 0.45};
+        RtlReceiverRegistry::ReceiverSpec spec;
+        spec.handle = {47, 93, 3}; spec.epoch = 11; spec.capture = pipeline.m_capture;
+        spec.passband = {3, 100000000, -90000, 90000, 0, 1000, 1000};
+        spec.dsp.inputSampleRate = 384000; spec.dsp.inputBlockSize = 2048;
+        spec.dsp.dspSampleRate = 192000; spec.dsp.dspBlockSize = 1024;
+        spec.dsp.outputSampleRate = 48000;
+        spec.dsp.wbfmReceive.emplace(); // preserve native fixed PCM on the observation path
+        ExtractedPcm receiver(spec);
+        if (!receiver.extractor.valid()) { return false; }
+        const std::array<RtlReceiverRegistry::ReceiverView, 1> views{{{&receiver.spec, &receiver}}};
+        std::array<std::complex<float>, 257> input{};
+        RtlReceivePipeline::Packet packet;
+        std::array<bool, 2> seen{};
+        std::array<std::uint64_t, 2> first{}, next{};
+        bool continuous = true;
+        // Every tested origin is an exact known lattice point. Feed through
+        // the coprime wait, then far enough past the existing 2048-frame deadline.
+        const std::uint64_t end = expectedOrigin * rate / 48000 + rate / 12;
+        for (std::uint64_t position = 25; position < end;) {
+            const std::size_t count = std::min<std::uint64_t>(input.size(), end - position);
+            const RtlReceiverRegistry::SampleBlock block{47, pipeline.m_capture, position, false,
+                std::span(input).first(count)};
+            inCallback = true;
+            pipeline.process(block, views);
+            inCallback = false;
+            position += count;
+            while (pipeline.takePacket(packet)) {
+                const int stream = packet.slot < 0 ? 1 : 0;
+                if (!seen[stream]) { first[stream] = packet.firstSample; seen[stream] = true; }
+                else { continuous &= packet.firstSample == next[stream]; }
+                next[stream] = packet.firstSample + packet.frames;
+            }
+            RtlReceivePipeline::TraceEvent event;
+            while (pipeline.takeTraceEvent(event)) {} // retain production counters, avoid observation overflow
+        }
+        const auto diagnostic = pipeline.diagnostics();
+        std::printf("LATTICE rate=%llu tap=%llu speaker=%llu late=%llu\n",
+            static_cast<unsigned long long>(rate), static_cast<unsigned long long>(first[0]),
+            static_cast<unsigned long long>(first[1]), static_cast<unsigned long long>(diagnostic.mixerLateFrames));
+        // Same epoch configure is allowed to update inputs, never to relocate
+        // already queued healthy audio or its next speaker position.
+        const std::array<RtlAudioMixer::Input, 1> mixerInputs{{{3, 93, 11}}};
+        const std::uint64_t preserved = pipeline.m_mixer.nextSample();
+        const bool retained = pipeline.m_mixer.configure(47, 17, mixerInputs, preserved + 10000)
+            && pipeline.m_mixer.nextSample() == preserved;
+        return retained && seen[0] && seen[1] && continuous && first[0] == expectedOrigin
+            && first[1] == first[0] && diagnostic.mixerLateFrames == 0
+            && diagnostic.mixerRejectedBlocks == 0 && diagnostic.droppedPackets == 0
+            && diagnostic.mixerConfigurationFailures == 0 && !pipeline.needsRepair();
     }
     static void exhaustEpoch(RtlReceivePipeline& pipeline)
     { pipeline.m_nextEpoch = std::numeric_limits<std::uint64_t>::max(); }
@@ -358,6 +446,12 @@ int main(int argc, char** argv)
         inCallback = false;
         check(observed, "first-failure identity/copy, exact missing mask, trace FIFO/full/wrap and independent audio delivery");
         check(callbackAllocations == 0, "trace capture, overflow and delivery perform no callback allocation");
+    }
+    for (const auto [rate, origin] : std::array<std::pair<std::uint64_t, std::uint64_t>, 3>{{
+        {2400000, 1}, {1843200, 5}, {225001, 48000}}}) {
+        auto aligned = std::make_unique<Pipeline>();
+        check(AetherSDR::rtl::RtlReceivePipelineTestAccess::commonLatticeOrigin(*aligned, rate, origin),
+            "new speaker epoch starts at the actual extractor origin without premature missing contributions");
     }
     measureParkAndResume();
     measureSingleFmReceiver(T::Mode::Fm);

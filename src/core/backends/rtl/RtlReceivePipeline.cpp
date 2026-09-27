@@ -2,9 +2,28 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 
 namespace AetherSDR::rtl {
 namespace {
+std::optional<std::uint64_t> mixerOrigin(std::uint64_t firstSample, double rateHz) noexcept
+{
+    // The extractor accepts only integral, bounded achieved rates. Validate
+    // before casting and share its alignment so these clocks cannot diverge.
+    if (!std::isfinite(rateHz) || rateHz != std::floor(rateHz)
+        || rateHz < 225001 || rateHz > 3000000) { return std::nullopt; }
+    const auto rate = static_cast<std::uint64_t>(rateHz);
+    const auto captureFirst = RtlRfExtractor::alignedCaptureFirst(firstSample, rate, 48000);
+    if (!captureFirst) { return std::nullopt; }
+    const std::uint64_t common = std::gcd(rate, std::uint64_t{48000});
+    const std::uint64_t periods = *captureFirst / (rate / common);
+    const std::uint64_t framesPerPeriod = 48000 / common;
+    constexpr std::uint64_t margin = RtlAudioMixer::kQuantum + RtlAudioMixer::kDeadlineFrames;
+    if (periods > (std::numeric_limits<std::uint64_t>::max() - margin) / framesPerPeriod) {
+        return std::nullopt;
+    }
+    return periods * framesPerPeriod;
+}
 WdspChannel::Mode dspMode(RtlCaptureTransaction::Mode mode)
 {
     using M = RtlCaptureTransaction::Mode;
@@ -164,6 +183,9 @@ RtlReceivePipeline::Preparation RtlReceivePipeline::service()
 bool RtlReceivePipeline::adopt() noexcept
 {
     if (!m_reader.adoptPrepared(m_session, m_nextCapture, m_prepared)) { return false; }
+    if (m_token.session != m_nextToken.session || m_captureEpoch != m_nextEpoch) {
+        m_mixerOrigin.reset();
+    }
     const bool resetSquelch = m_captureEpoch != m_nextEpoch;
     for (std::size_t slot = 0; slot < m_monitor.size(); ++slot) {
         m_monitor[slot].store(m_nextMonitor[slot], std::memory_order_relaxed);
@@ -214,12 +236,14 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
     m_traceCaptureFirst = block.firstSample;
     m_traceCaptureFrames = block.samples.size();
     m_traceCaptureClock = clock(block.firstSample + block.samples.size());
-    if (!m_mixer.configure(m_token.session, m_captureEpoch,
-            std::span(inputs).first(views.size()), clock(block.firstSample))) {
+    if (!m_mixerOrigin) { m_mixerOrigin = mixerOrigin(block.firstSample, m_capture.achievedSampleRateHz); }
+    if (!m_mixerOrigin || !m_mixer.configure(m_token.session, m_captureEpoch,
+            std::span(inputs).first(views.size()), *m_mixerOrigin)) {
         // No stale map/audio may survive a rejected configuration. This is a
         // defensive invariant failure: normal registry handles and validated
         // transaction tokens cannot reach it. Repair through the existing owner.
         m_mixer.reset();
+        m_mixerOrigin.reset();
         m_mixerConfigurationFailures.fetch_add(1, std::memory_order_relaxed);
         m_observed.store(true, std::memory_order_release);
         m_faults.fetch_or(0xff, std::memory_order_release);

@@ -1134,6 +1134,16 @@ void WdspChannel::setWorkerHandoffPauseForTest(unsigned microseconds) noexcept
     wdspPortSetHandoffPauseForTest(microseconds);
 }
 
+void WdspChannel::setWorkerHandoffHoldForTest(bool enabled) noexcept
+{
+    wdspPortSetHandoffHoldForTest(enabled ? 1 : 0);
+}
+
+bool WdspChannel::workerHandoffHeldForTest() noexcept
+{
+    return wdspPortHandoffHeldForTest() != 0;
+}
+
 std::unique_lock<std::mutex> WdspChannel::fftwSetupLock()
 {
     // Forwards, and keeps its name so Hl2Spectrum, AnanPanAnalyzer and

@@ -57,6 +57,10 @@ public:
         virtual bool iqBlock(std::span<const float> i, std::span<const float> q,
                              std::uint64_t firstSample) noexcept = 0;
     };
+    // First integral capture sample coinciding with the requested sample
+    // lattice. Fixed integer arithmetic; nullopt preserves overflow refusal.
+    static std::optional<std::uint64_t> alignedCaptureFirst(std::uint64_t firstSample,
+        std::uint64_t captureRateHz, std::uint64_t alignmentRateHz) noexcept;
     static constexpr std::size_t kInputChunk = 256;
     static constexpr std::size_t kMaxInput = 65536;
     explicit RtlRfExtractor(Config config);

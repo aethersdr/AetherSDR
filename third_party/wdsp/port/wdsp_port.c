@@ -6,6 +6,10 @@
  * shutdown through its run flags and semaphores.
  */
 
+// Default-inactive, one-worker test rendezvous at the existing handoff hook.
+// No extra upstream callsite and no shipping scheduling/ring change.
+enum WdspHandoffHoldState { WDSP_HOLD_OFF, WDSP_HOLD_ARMED, WDSP_HOLD_ENTERED };
+
 #ifndef _WIN32
 
 #include "wdsp_port.h"
@@ -42,6 +46,7 @@ static _Atomic uint64_t g_allocationSequence = 0;
 static _Atomic uint64_t g_outstandingAllocations = 0;
 // AetherSDR patch 13: see wdspPortHandoffPauseForTest() below.
 static _Atomic unsigned g_handoffPauseMicroseconds = 0;
+static _Atomic int g_handoffHoldState = WDSP_HOLD_OFF;
 
 static uint64_t monotonicMilliseconds(void)
 {
@@ -422,8 +427,31 @@ void wdspPortSetHandoffPauseForTest(unsigned microseconds)
     atomic_store_explicit(&g_handoffPauseMicroseconds, microseconds, memory_order_relaxed);
 }
 
+void wdspPortSetHandoffHoldForTest(int enabled)
+{
+    atomic_store_explicit(&g_handoffHoldState,
+        enabled ? WDSP_HOLD_ARMED : WDSP_HOLD_OFF, memory_order_release);
+}
+
+int wdspPortHandoffHeldForTest(void)
+{
+    return atomic_load_explicit(&g_handoffHoldState, memory_order_acquire) == WDSP_HOLD_ENTERED;
+}
+
 void wdspPortHandoffPauseForTest(void)
 {
+    if (atomic_load_explicit(&g_handoffHoldState, memory_order_relaxed) == WDSP_HOLD_ARMED)
+    {
+        int expected = WDSP_HOLD_ARMED;
+        if (atomic_compare_exchange_strong_explicit(&g_handoffHoldState, &expected,
+                WDSP_HOLD_ENTERED, memory_order_acq_rel, memory_order_relaxed))
+        {
+            while (atomic_load_explicit(&g_handoffHoldState, memory_order_acquire) == WDSP_HOLD_ENTERED)
+            {
+                Sleep(1);
+            }
+        }
+    }
     const unsigned microseconds =
         atomic_load_explicit(&g_handoffPauseMicroseconds, memory_order_relaxed);
     if (microseconds != 0)
@@ -534,14 +562,36 @@ uint64_t wdspPortOutstandingAllocations(void)
 // millisecond resolution, so a non-zero request rounds UP to whole milliseconds
 // -- a longer window, never a shorter one.
 static volatile LONG g_handoffPauseMicroseconds = 0;
+static volatile LONG g_handoffHoldState = WDSP_HOLD_OFF;
 
 void wdspPortSetHandoffPauseForTest(unsigned microseconds)
 {
     InterlockedExchange(&g_handoffPauseMicroseconds, (LONG)microseconds);
 }
 
+void wdspPortSetHandoffHoldForTest(int enabled)
+{
+    InterlockedExchange(&g_handoffHoldState, enabled ? WDSP_HOLD_ARMED : WDSP_HOLD_OFF);
+}
+
+int wdspPortHandoffHeldForTest(void)
+{
+    return InterlockedCompareExchange(&g_handoffHoldState, 0, 0) == WDSP_HOLD_ENTERED;
+}
+
 void wdspPortHandoffPauseForTest(void)
 {
+    // Aligned LONG reads are atomic on Windows. Only an armed test performs a
+    // modifying interlocked operation, so inactive workers do not contend.
+    if (g_handoffHoldState == WDSP_HOLD_ARMED &&
+        InterlockedCompareExchange(&g_handoffHoldState, WDSP_HOLD_ENTERED,
+            WDSP_HOLD_ARMED) == WDSP_HOLD_ARMED)
+    {
+        while (InterlockedCompareExchange(&g_handoffHoldState, 0, 0) == WDSP_HOLD_ENTERED)
+        {
+            Sleep(1);
+        }
+    }
     const LONG microseconds = InterlockedCompareExchange(&g_handoffPauseMicroseconds, 0, 0);
     if (microseconds != 0)
     {

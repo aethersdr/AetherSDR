@@ -1,6 +1,7 @@
 #include "core/backends/rtl/RtlReceivePipeline.h"
 #include "core/backends/rtl/RtlRfExtractor.h"
 #include "core/backends/rtl/RtlSdrDdc.h"
+#include "core/dsp/WdspChannel.h"
 
 #include <QCoreApplication>
 #include <QThreadPool>
@@ -292,6 +293,114 @@ void nativeRouting()
           "paced WFM integration keeps bounded queues and valid mixer positions");
     pipeline->stop();
 }
+void workerUnderrunTrace()
+{
+    using Registry = AetherSDR::rtl::RtlReceiverRegistry;
+    auto pipeline = std::make_unique<Pipeline>(1, true);
+    Transaction::State current = state();
+    const bool installed = pipeline->prepare(current, true) && ready(*pipeline) && pipeline->adopt();
+    check(installed && !pipeline->legacy(), "underrun fixture prepares the actual nonblocking WFM receiver");
+    if (!installed || pipeline->legacy()) { pipeline->stop(); return; }
+
+    // The first worker to reach the existing handoff point is the sole WFM
+    // worker in this fixture. Destruction order releases it before the pipeline
+    // can join/retire WDSP, including every failed-assertion/early-return path.
+    struct HandoffHold {
+        HandoffHold() { WdspChannel::setWorkerHandoffHoldForTest(true); }
+        ~HandoffHold() { release(); }
+        void release() { WdspChannel::setWorkerHandoffHoldForTest(false); }
+    } hold;
+    std::uint64_t position = 0;
+    std::uint64_t failedCaptureFirst = 0;
+    std::size_t slicePackets = 0;
+    Pipeline::Packet firstSlice;
+    std::array<std::complex<float>, 256> iq;
+    const auto feed = [&] {
+        for (std::size_t i = 0; i < iq.size(); ++i) {
+            iq[i] = referenceIq(position + i, current.capture.achievedSampleRateHz);
+        }
+        check(pipeline->process(position, iq), "continuous capture remains admitted while WDSP is held");
+        if (pipeline->needsRepair()) { failedCaptureFirst = position; }
+        position += iq.size();
+        Pipeline::Packet packet;
+        while (pipeline->takePacket(packet)) {
+            if (packet.slot == 3) {
+                if (slicePackets == 0) { firstSlice = packet; }
+                check(packet.firstSample == slicePackets * 256,
+                      "successful pre-fault slice PCM retains its exact 48 kHz positions");
+                ++slicePackets;
+            }
+        }
+    };
+    // Small capture partitions produce at most one WDSP block per call. Stop
+    // after the first output, then wait for an explicit worker acknowledgement;
+    // no elapsed sleep is assumed to imply that the worker has been scheduled.
+    for (unsigned chunk = 0; chunk < 512 && slicePackets == 0 && !pipeline->needsRepair(); ++chunk) { feed(); }
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!WdspChannel::workerHandoffHeldForTest() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    const bool held = WdspChannel::workerHandoffHeldForTest();
+    check(held && slicePackets == 1 && !pipeline->needsRepair(),
+          "first real worker handoff is acknowledged before the next exchange");
+    if (!held || slicePackets != 1 || pipeline->needsRepair()) { hold.release(); pipeline->stop(); return; }
+
+    // 256 output frames start prefilled, and the acknowledged handoff publishes
+    // another 256. With the worker held, the third 2048-frame IQ block has no
+    // output credit. This forces real fexchange2 -2, without a fabricated result
+    // or a scheduler-speed assumption. Mutating -2 to Ok must fail withdrawal.
+    for (unsigned chunk = 0; chunk < 512 && !pipeline->needsRepair(); ++chunk) { feed(); }
+    check(pipeline->needsRepair() && slicePackets == 2,
+          "real nonblocking WFM exchange withdraws at exhausted output credit");
+    const std::uint64_t faultCaptureFirst = failedCaptureFirst;
+    // Subsequent continuous RF cannot publish stale decoder output or a second
+    // first-fault record from the withdrawn receiver.
+    for (unsigned chunk = 0; chunk < 8; ++chunk) { feed(); }
+    check(slicePackets == 2, "withdrawn WFM receiver emits no stale independent PCM");
+    unsigned faultEvents = 0;
+    Pipeline::TraceEvent event;
+    while (pipeline->takeTraceEvent(event)) {
+        if (event.kind != Pipeline::TraceEvent::Kind::ReceiverFailure) { continue; }
+        ++faultEvents;
+        check(event.token == current.token && event.hardwareGeneration == current.capture.generation
+                  && event.captureEpoch == firstSlice.captureEpoch && event.slot == 3 && event.stableId == 3
+                  && event.instance == firstSlice.instance && event.receiverEpoch == firstSlice.receiverEpoch,
+              "real underrun trace retains the accepted receiver and capture identity");
+        check(event.captureFirst == faultCaptureFirst && event.captureFrames == 256,
+              "real underrun trace names the exact failing capture callback");
+        check(event.failure.has_value(), "real underrun trace carries a typed first failure");
+        if (event.failure) {
+            const auto& failure = *event.failure;
+            check(failure.reason == Registry::ProcessingFailureReason::DspProcess
+                      && failure.processResult == WdspChannel::ProcessResult::Underrun,
+                  "first fault reports actual WDSP Underrun rather than a capture gap");
+            check(failure.hasExpectedCaptureFirst && failure.expectedCaptureFirst == faultCaptureFirst
+                      && failure.captureFirst == faultCaptureFirst && failure.captureFrames == 256
+                      && failure.hasIqFirst && failure.iqFirst == 4096 && failure.iqFrames == 2048,
+                  "first fault proves continuous capture and identifies the third exact IQ block");
+            check(failure.extraction && failure.extraction->reason == Extractor::FailureReason::SinkRejected,
+                  "RF extraction reports downstream rejection of the actual failing WDSP block");
+        }
+    }
+    check(faultEvents == 1 && pipeline->diagnostics().droppedTraceEvents == 0,
+          "one retained first-fault event survives later RF without diagnostic loss");
+    hold.release(); // mandatory before control-side repair can retire the held worker
+    current.token.revision++;
+    const bool repaired = pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt();
+    check(repaired, "unchanged WFM recipe repairs after the real worker is released");
+    if (repaired) {
+        const auto audio = run(*pipeline, current, position, 2.0);
+        check(audio[0].seen && audio[1].seen && audio[0].receiverEpoch != firstSlice.receiverEpoch
+                  && audio[1].captureEpoch != firstSlice.captureEpoch
+                  && audio[0].discontinuity && audio[1].discontinuity,
+              "underrun repair replaces decoder and speaker histories");
+        check(audio[0].stereo && amplitude(audio[0].left, 1000) > 0.001
+                  && amplitude(audio[0].right, 2000) > 0.001
+                  && amplitude(audio[1].left, 1000) > 0.001 && amplitude(audio[1].right, 2000) > 0.001,
+              "released-worker repair delivers actual paired reference audio and pilot acquisition");
+    }
+    pipeline->stop();
+}
 void boundedBenchmark()
 {
     // Opt-in pipeline plus production DDC/spectrum throughput qualification.
@@ -488,6 +597,7 @@ int main(int argc, char** argv)
     outputClockAlignment();
     admission();
     nativeRouting();
+    workerUnderrunTrace();
     if (qEnvironmentVariableIntValue("AETHER_WFM_BENCHMARK") == 1) { boundedBenchmark(); }
     QThreadPool::globalInstance()->waitForDone();
     std::printf("rtl_wfm_pipeline_test: %d failures\n", failures);

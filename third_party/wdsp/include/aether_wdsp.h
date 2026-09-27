@@ -424,6 +424,11 @@ uint64_t wdspPortOutstandingAllocations(void);
 // which is the window in which #5734's input overwrite happened. 0 (the
 // default) is a single relaxed load and no sleep. Process-global.
 void wdspPortSetHandoffPauseForTest(unsigned microseconds);
+// TEST ONLY: arm the next worker at that same handoff; only the claiming worker
+// waits. Poll the acknowledgement outside acquisition. Serialize fixtures and
+// release (enabled=0) before retiring/closing that worker or arming another.
+void wdspPortSetHandoffHoldForTest(int enabled);
+int wdspPortHandoffHeldForTest(void);
 
 #ifdef __cplusplus
 }

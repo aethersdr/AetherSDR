@@ -47,6 +47,16 @@ RtlRfExtractor::RtlRfExtractor(Config config) : m_config(std::move(config))
     m_blockQ.resize(m_config.blockSize);
     m_valid = true;
 }
+std::optional<std::uint64_t> RtlRfExtractor::alignedCaptureFirst(std::uint64_t firstSample,
+    std::uint64_t captureRateHz, std::uint64_t alignmentRateHz) noexcept
+{
+    if (captureRateHz < 225001 || captureRateHz > 3000000
+        || alignmentRateHz == 0 || alignmentRateHz > 384000) { return std::nullopt; }
+    const std::uint64_t period = captureRateHz / std::gcd(captureRateHz, alignmentRateHz);
+    const std::uint64_t skip = (period - firstSample % period) % period;
+    if (firstSample > std::numeric_limits<std::uint64_t>::max() - skip) { return std::nullopt; }
+    return firstSample + skip;
+}
 RtlRfExtractor::~RtlRfExtractor() = default;
 int RtlRfExtractor::groupDelayInputFrames() const noexcept { return m_i ? m_i->groupDelayInputFrames() : 0; }
 bool RtlRfExtractor::process(const SharedCapturePolicy::CaptureDescriptor& capture, std::uint64_t firstSample,
@@ -98,12 +108,9 @@ bool RtlRfExtractor::process(const SharedCapturePolicy::CaptureDescriptor& captu
         const auto rate = static_cast<std::uint64_t>(capture.achievedSampleRateHz);
         const int alignmentRate = m_config.alignmentRateHz != 0
             ? m_config.alignmentRateHz : m_config.outputRateHz;
-        const std::uint64_t period = rate / std::gcd(rate, static_cast<std::uint64_t>(alignmentRate));
-        const std::uint64_t skip = (period - firstSample % period) % period;
-        if (firstSample > std::numeric_limits<std::uint64_t>::max() - skip) {
-            return fail(FailureReason::AlignmentOverflow);
-        }
-        m_startInput = firstSample + skip;
+        const auto start = alignedCaptureFirst(firstSample, rate, static_cast<std::uint64_t>(alignmentRate));
+        if (!start) { return fail(FailureReason::AlignmentOverflow); }
+        m_startInput = *start;
         m_seenInput = true;
     }
     m_nextInput = firstSample + input.size();

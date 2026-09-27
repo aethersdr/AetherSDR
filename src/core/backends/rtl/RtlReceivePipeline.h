@@ -123,6 +123,9 @@ private:
     bool m_legacy = true;
     std::uint8_t m_receivingMask = 0;
     RtlAudioMixer m_mixer;
+    // Set on the first capture block of a new mixer epoch, then retained.
+    // Unchanged epochs must keep their existing sample coordinate and buffers.
+    std::optional<std::uint64_t> m_mixerOrigin;
     std::array<int, 8> m_traceStableIds{};
     std::uint64_t m_traceCaptureFirst = 0;
     std::uint64_t m_traceCaptureFrames = 0;
