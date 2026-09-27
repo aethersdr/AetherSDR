@@ -16,8 +16,12 @@ RtlRfExtractor::RtlRfExtractor(Config config) : m_config(std::move(config))
     if (!std::isfinite(capture.achievedSampleRateHz)
         || capture.achievedSampleRateHz != std::floor(capture.achievedSampleRateHz)
         || capture.achievedSampleRateHz < 225001 || capture.achievedSampleRateHz > 3000000
-        || m_config.outputRateHz < 48000 || m_config.outputRateHz > 192000
-        || m_config.outputRateHz > capture.achievedSampleRateHz
+        || m_config.outputRateHz < 48000 || m_config.outputRateHz > 384000
+        || m_config.outputRateHz > 2 * capture.achievedSampleRateHz
+        || m_config.alignmentRateHz < 0
+        || (m_config.alignmentRateHz != 0
+            && (m_config.alignmentRateHz > m_config.outputRateHz
+                || m_config.outputRateHz % m_config.alignmentRateHz != 0))
         || m_config.blockSize < 64 || m_config.blockSize > 4096
         || (m_config.blockSize & (m_config.blockSize - 1)) != 0
         || slice.filterLowHz < -0.45 * m_config.outputRateHz
@@ -35,7 +39,8 @@ RtlRfExtractor::RtlRfExtractor(Config config) : m_config(std::move(config))
     // The 10% transition leaves the declared +/-45% DSP-rate passband intact.
     m_i = std::make_unique<Resampler>(capture.achievedSampleRateHz, m_config.outputRateHz, kInputChunk, 10.0);
     m_q = std::make_unique<Resampler>(capture.achievedSampleRateHz, m_config.outputRateHz, kInputChunk, 10.0);
-    // Downsampling only; room includes r8brain's burst output from its staging.
+    // At most 2x upsampling; room includes r8brain's staging burst. The RF
+    // fit still uses actual capture coverage, never the interpolated IQ rate.
     m_convertedI.reserve(16384 * sizeof(float));
     m_convertedQ.reserve(16384 * sizeof(float));
     m_blockI.resize(m_config.blockSize);
@@ -64,7 +69,9 @@ bool RtlRfExtractor::process(const SharedCapturePolicy::CaptureDescriptor& captu
         // All supported rates are integral hardware readbacks. This wait is
         // bounded by one second even for coprime rates; it consumes no storage.
         const auto rate = static_cast<std::uint64_t>(capture.achievedSampleRateHz);
-        const std::uint64_t period = rate / std::gcd(rate, static_cast<std::uint64_t>(m_config.outputRateHz));
+        const int alignmentRate = m_config.alignmentRateHz != 0
+            ? m_config.alignmentRateHz : m_config.outputRateHz;
+        const std::uint64_t period = rate / std::gcd(rate, static_cast<std::uint64_t>(alignmentRate));
         const std::uint64_t skip = (period - firstSample % period) % period;
         if (firstSample > std::numeric_limits<std::uint64_t>::max() - skip) {
             m_withdrawn = true; return false;
@@ -76,12 +83,18 @@ bool RtlRfExtractor::process(const SharedCapturePolicy::CaptureDescriptor& captu
     if (!m_started) {
         if (m_nextInput <= m_startInput) { return true; }
         input = input.subspan(static_cast<std::size_t>(m_startInput - firstSample));
-        const long double origin = static_cast<long double>(m_startInput)
-            * m_config.outputRateHz / capture.achievedSampleRateHz;
-        if (origin > std::numeric_limits<std::uint64_t>::max() - kMaxInput) {
+        const auto rate = static_cast<std::uint64_t>(capture.achievedSampleRateHz);
+        const int alignmentRate = m_config.alignmentRateHz != 0
+            ? m_config.alignmentRateHz : m_config.outputRateHz;
+        const std::uint64_t common = std::gcd(rate, static_cast<std::uint64_t>(alignmentRate));
+        const std::uint64_t periods = m_startInput / (rate / common);
+        const std::uint64_t framesPerPeriod = static_cast<std::uint64_t>(m_config.outputRateHz) / common;
+        if (periods > (std::numeric_limits<std::uint64_t>::max() - kMaxInput) / framesPerPeriod) {
             m_withdrawn = true; return false;
         }
-        m_outputOrigin = static_cast<std::uint64_t>(std::round(origin));
+        // Exact integer time mapping also holds beyond floating-point's exact
+        // integer range. The RF oscillator separately retains its phase model.
+        m_outputOrigin = periods * framesPerPeriod;
         const long double phase = std::remainder(-2 * std::numbers::pi_v<long double>
             * (m_config.slice.carrierHz + m_config.slice.translationHz - capture.centerHz)
             * m_startInput / capture.achievedSampleRateHz, 2 * std::numbers::pi_v<long double>);

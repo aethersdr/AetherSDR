@@ -675,6 +675,13 @@ void SliceModel::setAgcOffLevel(int value)
     emit agcOffLevelChanged(value);
 }
 
+void SliceModel::setWfmDeemphasis(int microseconds)
+{
+    if (microseconds != 50 && microseconds != 75) { return; }
+    // Requests never update observed state, even on optimistic legacy slices.
+    emit wfmDeemphasisRequested(microseconds);
+}
+
 void SliceModel::setSquelch(bool on, int level)
 {
     if (m_externalReceiveAudioReplacement) {
@@ -1045,6 +1052,7 @@ void SliceModel::setAudioMute(bool mute)
 void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
                                                         bool restoreMute)
 {
+    const bool previousReplacement = m_externalReceiveAudioReplacement;
     const bool previousVisibleMute = audioMute();
     const float previousVisibleGain = audioGain();
     const int previousVisiblePan = audioPan();
@@ -1122,6 +1130,9 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
     }
     if (m_externalReceiveAutoSquelch != previousExternalAutoSquelch) {
         emit externalReceiveAutoSquelchChanged(m_externalReceiveAutoSquelch);
+    }
+    if (m_externalReceiveAudioReplacement != previousReplacement) {
+        emit externalReceiveReplacementChanged(m_externalReceiveAudioReplacement);
     }
 }
 
@@ -1648,6 +1659,25 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.agcOffLevel.has_value()) {
         m_agcOffLevel = *d.agcOffLevel;
         emit agcOffLevelChanged(m_agcOffLevel);
+    }
+    if (d.wfmDeemphasisUs && (*d.wfmDeemphasisUs == 50 || *d.wfmDeemphasisUs == 75)
+        && m_wfmDeemphasisUs != *d.wfmDeemphasisUs) {
+        m_wfmDeemphasisUs = *d.wfmDeemphasisUs;
+        emit wfmDeemphasisChanged(m_wfmDeemphasisUs);
+    }
+    if (d.wfmStereoStatus) {
+        const WfmStereoStatus status = *d.wfmStereoStatus;
+        switch (status) {
+        case WfmStereoStatus::Unavailable:
+        case WfmStereoStatus::Acquiring:
+        case WfmStereoStatus::Mono:
+        case WfmStereoStatus::Stereo:
+            if (m_wfmStereoStatus != status) {
+                m_wfmStereoStatus = status;
+                emit wfmStereoStatusChanged(status);
+            }
+            break;
+        }
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
         m_squelchOnKnown |= d.squelchOn.has_value();

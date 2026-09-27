@@ -77,10 +77,13 @@ public:
     // with no reason is the accessibility defect this milestone exists to close
     // (#4896). Applied immediately, so a widget built after connect is correct
     // without a second push.
+    // Pass availableWhenDisconnected=false for controls requiring a live
+    // receiver; existing controls retain their permissive disconnected state.
     void registerWidget(QWidget* widget,
                         QString reason,
                         AvailabilityPredicate available,
-                        EngagedPredicate engaged = {});
+                        EngagedPredicate engaged = {},
+                        bool availableWhenDisconnected = true);
 
     // Same contract for a menu entry or toolbar action.
     void registerAction(QAction* action,
@@ -107,6 +110,7 @@ private:
         AvailabilityPredicate available;
         EngagedPredicate engaged;
         ControlAvailability state{ControlAvailability::Unavailable};
+        bool availableWhenDisconnected = true;
     };
 
     void applyAll(bool connected, const RadioCapabilities& caps);

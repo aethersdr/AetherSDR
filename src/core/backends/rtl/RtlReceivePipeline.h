@@ -35,10 +35,19 @@ public:
         std::uint64_t firstSample = 0;
         int slot = -1;
         std::size_t frames = 0;
+        int sampleRateHz = 48000;
+        int channelCount = 2;
         bool discontinuity = false;
+        // Present only on the independent WFM slice packet. Travels with the
+        // same accepted session/revision and receiver epoch as its PCM.
+        std::optional<bool> wfmStereoDetected;
         std::array<float, 2048> samples{};
     };
-    explicit RtlReceivePipeline(std::size_t capacity = 1);
+    // One internal build gate: qualification fixtures opt in explicitly. The
+    // backend uses the same constant for its controls and legacy publication.
+    static constexpr bool kQualifiedWfmEnabled = true;
+    explicit RtlReceivePipeline(std::size_t capacity = 1,
+                                bool enableWfm = kQualifiedWfmEnabled);
     enum class Submission { Accepted, RetryRetiringSlot, RetryPlannerBusy, Failed };
     Submission prepareDetailed(const Transaction::State& state, bool resetCapture = false,
                                bool verifiedRollback = false);
@@ -63,8 +72,11 @@ private:
     void process(const RtlReceiverRegistry::SampleBlock&, std::span<const RtlReceiverRegistry::ReceiverView>) noexcept override;
     void audioBlock(const RtlReceiverRegistry::ReceiverSpec&, std::uint64_t,
                     std::span<const float>, std::span<const float>, bool) noexcept override;
+    void audioBlockWithStatus(const RtlReceiverRegistry::ReceiverSpec&, std::uint64_t,
+                    std::span<const float>, std::span<const float>, bool, std::optional<bool>) noexcept override;
     void speakerBlock(std::uint64_t, std::span<const float>, bool) noexcept override;
     bool enqueue(const Packet&) noexcept;
+    const bool m_enableWfm;
     RtlReceiverRegistry m_registry;
     RtlReceiverRegistry::SampleReader m_reader;
     std::uint64_t m_session = 0;

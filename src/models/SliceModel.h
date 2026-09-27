@@ -177,6 +177,9 @@ public:
         return m_externalReceiveAutoSquelch;
     }
     int     squelchLevel()const { return m_squelchLevel; }
+    // Zero means not observed; never present a default as adopted DSP state.
+    int wfmDeemphasisUs() const { return m_wfmDeemphasisUs; }
+    WfmStereoStatus wfmStereoStatus() const { return m_wfmStereoStatus; }
     int     flexSquelchLevel() const { return m_squelchLevel; }
     int     receiveSquelchLevel() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveSquelchLevel
@@ -328,6 +331,7 @@ public:
     void setAgcThreshold(int value);
     void setAgcOffLevel(int value);
     void setSquelch(bool on, int level);
+    void setWfmDeemphasis(int microseconds);
     // For genuine operator-driven manual squelch input only (a VFO flag's
     // own SQL controls, a controller-mapped squelch knob) — setSquelch()
     // plus recording the level as the operator's manual choice, in one
@@ -515,7 +519,11 @@ signals:
     void externalReceiveAgcThresholdChanged(int value);
     void externalReceiveAgcOffLevelChanged(int value);
     void externalReceiveAutoSquelchChanged(bool on);
+    void externalReceiveReplacementChanged(bool active);
     void squelchChanged(bool on, int level);
+    void wfmDeemphasisChanged(int microseconds);
+    void wfmStereoStatusChanged(AetherSDR::WfmStereoStatus status);
+    void wfmDeemphasisRequested(int microseconds);
     void externalReceiveSquelchChanged(bool on, int level);
     void stepChanged(int hz, const QVector<int>& stepList);
     void ritChanged(bool on, int hz);
@@ -662,6 +670,8 @@ private:
     bool m_squelchLevelKnown{false};
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
+    int m_wfmDeemphasisUs{0};
+    WfmStereoStatus m_wfmStereoStatus{WfmStereoStatus::Unavailable};
     int     m_manualSquelchLevel{20};
     bool    m_squelchEchoIsManual{true};
     int     m_stepHz{100};

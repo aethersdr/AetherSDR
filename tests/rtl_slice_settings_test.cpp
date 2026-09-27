@@ -188,6 +188,50 @@ int main(int argc, char** argv)
         check(!RtlSliceSettings::decode(bad, decoded, reason) && decoded.captureCenterHz == 42,
               "malformed field rejects entire document without partial output");
     }
+    {
+        const RadioSettingsScope wfmScope("rtl", "wfm-deemphasis");
+        RtlSliceSettings wfm(wfmScope);
+        auto selected = slice(3);
+        selected.mode = QStringLiteral("WFM");
+        selected.filterLowHz = -90000; selected.filterHighHz = 90000;
+        selected.wfmDeemphasisUs = 50;
+        check(wfm.patch(100'000'000, 2'400'000, {selected})
+            && wfm.load().document.slices.value(3).wfmDeemphasisUs == 50,
+            "accepted 50 us deemphasis persists per stable slice");
+        selected.mode = QStringLiteral("FM");
+        check(wfm.patch(100'000'000, 2'400'000, {selected})
+            && wfm.load().document.slices.value(3).wfmDeemphasisUs == 50,
+            "leaving WFM retains the accepted broadcast deemphasis choice");
+        selected.mode = QStringLiteral("WFM"); selected.wfmDeemphasisUs = 75;
+        check(wfm.patch(100'000'000, 2'400'000, {selected})
+            && wfm.load().document.slices.value(3).wfmDeemphasisUs == 75,
+            "accepted 75 us selection replaces only its slice setting");
+        QJsonObject old = wfmScope.featureExact(feature);
+        QJsonObject oldEntries = old.value("slices").toObject();
+        QJsonObject oldEntry = oldEntries.value("3").toObject();
+        oldEntry.remove("wfmDeemphasisUs"); oldEntries.insert("3", oldEntry);
+        old.insert("slices", oldEntries);
+        RtlSliceSettings::Document restored;
+        check(RtlSliceSettings::decode(old, restored, reason)
+            && restored.slices.value(3).wfmDeemphasisUs == 75,
+            "existing schema-one documents retain the legacy 75 us response");
+        for (const QJsonValue& invalid : {QJsonValue(0), QJsonValue(60), QJsonValue(75.5),
+                                        QJsonValue("50"), QJsonValue(QJsonValue::Null)}) {
+            QJsonObject malformed = old;
+            QJsonObject items = oldEntries, item = oldEntry;
+            item.insert("wfmDeemphasisUs", invalid); items.insert("3", item);
+            malformed.insert("slices", items);
+            restored.captureCenterHz = 42;
+            check(!RtlSliceSettings::decode(malformed, restored, reason)
+                && restored.captureCenterHz == 42,
+                "invalid deemphasis refuses the complete document atomically");
+        }
+        const auto beforeInvalid = wfmScope.featureExact(feature);
+        selected.wfmDeemphasisUs = 60;
+        check(!wfm.patch(100'000'000, 2'400'000, {selected})
+            && wfmScope.featureExact(feature) == beforeInvalid,
+            "invalid deemphasis cannot overwrite accepted settings");
+    }
     QJsonObject bad = valid;
     entries = bad.value("slices").toObject();
     entries.insert("00", entries.take("0"));

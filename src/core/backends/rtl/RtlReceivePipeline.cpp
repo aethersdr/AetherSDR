@@ -12,6 +12,7 @@ WdspChannel::Mode dspMode(RtlCaptureTransaction::Mode mode)
     case M::Am: return WdspChannel::Mode::Am;
     case M::Sam: return WdspChannel::Mode::Sam;
     case M::Fm: case M::Fmn: return WdspChannel::Mode::Fm;
+    case M::Wfm: return WdspChannel::Mode::Wbfm;
     case M::Lsb: return WdspChannel::Mode::Lsb;
     case M::Cw: return WdspChannel::Mode::Cwu;
     case M::Cwr: return WdspChannel::Mode::Cwl;
@@ -19,8 +20,8 @@ WdspChannel::Mode dspMode(RtlCaptureTransaction::Mode mode)
     }
 }
 }
-RtlReceivePipeline::RtlReceivePipeline(std::size_t capacity)
-    : m_registry({8, capacity, std::min<std::size_t>(32, capacity * 2)})
+RtlReceivePipeline::RtlReceivePipeline(std::size_t capacity, bool enableWfm)
+    : m_enableWfm(enableWfm), m_registry({8, capacity, std::min<std::size_t>(32, capacity * 2)})
 {
     for (auto& monitor : m_monitor) { monitor.store(100 | (50 << 8)); }
 }
@@ -34,13 +35,19 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
     std::array<bool, 8> validated{};
     for (const auto& receiver : state.receivers) {
         const int id = receiver.passband.stableId;
-        if (id < 0 || id >= 8 || validated[id] || receiver.audioGain < 0
+        if (id < 0 || id >= 8 || validated[id]
+            || receiver.mode < Transaction::Mode::Am || receiver.mode > Transaction::Mode::Cwr
+            || receiver.audioGain < 0
             || receiver.audioGain > 100 || receiver.audioPan < 0 || receiver.audioPan > 100
-            || receiver.squelchLevel < 0 || receiver.squelchLevel > 100) { return Submission::Failed; }
+            || receiver.squelchLevel < 0 || receiver.squelchLevel > 100
+            || (receiver.wfmDeemphasisUs != 50 && receiver.wfmDeemphasisUs != 75)
+            || (receiver.mode == Transaction::Mode::Wfm && receiver.squelchEnabled)) { return Submission::Failed; }
         validated[id] = true;
     }
+    const unsigned faults = m_faults.load(std::memory_order_acquire);
     std::array<bool, 8> receiving{};
     bool legacy = false;
+    bool wfmTransition = false;
     std::uint8_t receivingMask = 0;
     for (int id : state.receivingIds) {
         if (id < 0 || id >= 8 || receiving[id] || !validated[id]) { return Submission::Failed; }
@@ -50,12 +57,28 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
             return value.passband.stableId == id;
         });
         legacy = legacy || (receiver->mode != Transaction::Mode::Fm
-            && receiver->mode != Transaction::Mode::Fmn);
+            && receiver->mode != Transaction::Mode::Fmn
+            && !(m_enableWfm && receiver->mode == Transaction::Mode::Wfm));
         if (legacy && receiver->squelchEnabled) { return Submission::Failed; }
+        const auto& prior = m_specs[id];
+        const bool wide = m_enableWfm && receiver->mode == Transaction::Mode::Wfm;
+        if (wide || prior.dsp.wbfmReceive) {
+            const auto deemphasis = receiver->wfmDeemphasisUs == 50
+                ? WdspChannel::WbfmReceive::Deemphasis::Us50
+                : WdspChannel::WbfmReceive::Deemphasis::Us75;
+            wfmTransition |= (wide && (faults & (1u << id)))
+                || !wide || !prior.dsp.wbfmReceive
+                || prior.passband != receiver->passband
+                || prior.dsp.wbfmReceive->deemphasis != deemphasis;
+        }
     }
     if (legacy && (state.receivers.size() != 1 || state.receivingIds.size() != 1)) { return Submission::Failed; }
+    // WFM changes the causal decoder graph even when final PCM stays 48 kHz.
+    // Give the speaker a discontinuity too, retiring the previous graph's
+    // queued waveform and client-effect history instead of appending its tail.
+    // A withdrawn WFM receiver has lost that graph even if its recipe is unchanged.
     const bool advanceCaptureEpoch = resetCapture || legacy != m_legacy
-        || receivingMask != m_receivingMask;
+        || receivingMask != m_receivingMask || wfmTransition;
     if (advanceCaptureEpoch && m_nextEpoch == std::numeric_limits<std::uint64_t>::max()) { return Submission::Failed; }
     auto epochs = m_epochs;
     auto specs = m_specs;
@@ -64,7 +87,6 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
         m_reader = m_registry.attachReader();
         if (!m_session || !m_reader) { return Submission::Failed; }
     }
-    const unsigned faults = m_faults.load(std::memory_order_acquire);
     std::array<RtlReceiverRegistry::ReceiverSpec, 8> desired;
     std::array<bool, 8> used{};
     std::size_t count = 0;
@@ -88,8 +110,20 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
             spec.handle = *m_handles[id]; spec.passband = receiver.passband;
             spec.capture = state.capture; spec.extractRf = true;
             spec.dsp.mode = dspMode(receiver.mode);
-            spec.dsp.fmReceive = WdspChannel::FmReceive{};
-            spec.dsp.fmDeviationHz = receiver.mode == Transaction::Mode::Fmn ? 2500.0 : 5000.0;
+            if (receiver.mode == Transaction::Mode::Wfm) {
+                spec.dsp.inputSampleRate = 384000;
+                spec.dsp.inputBlockSize = 2048;
+                spec.dsp.dspSampleRate = 192000;
+                spec.dsp.dspBlockSize = 1024;
+                spec.dsp.outputSampleRate = 48000;
+                spec.dsp.wbfmReceive = WdspChannel::WbfmReceive{};
+                spec.dsp.wbfmReceive->deemphasis = receiver.wfmDeemphasisUs == 50
+                    ? WdspChannel::WbfmReceive::Deemphasis::Us50
+                    : WdspChannel::WbfmReceive::Deemphasis::Us75;
+            } else {
+                spec.dsp.fmReceive = WdspChannel::FmReceive{};
+                spec.dsp.fmDeviationHz = receiver.mode == Transaction::Mode::Fmn ? 2500.0 : 5000.0;
+            }
             spec.dsp.filterLowHz = receiver.passband.filterLowHz;
             spec.dsp.filterHighHz = receiver.passband.filterHighHz;
             if (resetCapture || (faults & (1u << id)) || m_specs[id].handle != spec.handle
@@ -194,7 +228,7 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
             gate.configure(m_squelchConfig[slot].enabled, m_squelchConfig[slot].level, true);
             m_squelchEpoch[slot] = view.spec->epoch;
         }
-        if (m_spectrumFresh) {
+        if (m_spectrumFresh && !view.spec->dsp.wbfmReceive) {
             const auto& passband = view.spec->passband;
             const double binHz = m_capture.achievedSampleRateHz / m_spectrum.size();
             const double offset = passband.carrierHz - m_capture.centerHz;
@@ -231,15 +265,24 @@ RtlReceivePipeline::Diagnostics RtlReceivePipeline::diagnostics() const noexcept
 void RtlReceivePipeline::audioBlock(const RtlReceiverRegistry::ReceiverSpec& spec, std::uint64_t first,
     std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept
 {
+    audioBlockWithStatus(spec, first, left, right, discontinuity, std::nullopt);
+}
+void RtlReceivePipeline::audioBlockWithStatus(const RtlReceiverRegistry::ReceiverSpec& spec, std::uint64_t first,
+    std::span<const float> left, std::span<const float> right, bool discontinuity,
+    std::optional<bool> wfmStereoDetected) noexcept
+{
     Packet packet;
     packet.token = m_token; packet.captureEpoch = m_captureEpoch;
     packet.instance = spec.handle.instance; packet.receiverEpoch = spec.epoch;
     packet.slot = spec.handle.slot; packet.firstSample = first;
     packet.frames = left.size(); packet.discontinuity = discontinuity;
+    packet.wfmStereoDetected = wfmStereoDetected;
     if (left.size() != right.size() || left.size() > 1024) { return; }
     std::array<float, 1024> gatedLeft{}, gatedRight{};
     for (std::size_t i = 0; i < left.size(); ++i) {
-        const float gain = m_squelch[packet.slot].gain(first + i);
+        // WBFM already applies WDSP's internal automatic squelch and the
+        // qualified paired-channel gain before this independent tap.
+        const float gain = spec.dsp.wbfmReceive ? 1.0f : m_squelch[packet.slot].gain(first + i);
         gatedLeft[i] = left[i] * gain; gatedRight[i] = right[i] * gain;
         packet.samples[2 * i] = gatedLeft[i]; packet.samples[2 * i + 1] = gatedRight[i];
     }

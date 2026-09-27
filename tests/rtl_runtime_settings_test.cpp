@@ -8,6 +8,9 @@
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include <QCoreApplication>
 #include <QJsonObject>
+#include <QStringList>
+#include <array>
+#include <cmath>
 #include <cstdio>
 using namespace AetherSDR;
 namespace AetherSDR {
@@ -49,13 +52,32 @@ struct RtlCaptureBackendTestAccess {
         backend.m_receiverCapacity = 4;
         backend.m_capture = RtlCaptureTransaction({8, 4});
         backend.m_requested.hardware = {100000000, 2400000, 0, 0, 0, 240};
-        backend.m_requested.receivers = {{{0, 100000000, -100000, 100000, 0, 0, 0}, RtlCaptureTransaction::Mode::Wfm}};
+        const double wfmGuard = RtlReceivePipeline::kQualifiedWfmEnabled ? 3000 : 0;
+        backend.m_requested.receivers = {{{0, 100000000, -100000, 100000, 0, wfmGuard, wfmGuard}, RtlCaptureTransaction::Mode::Wfm}};
         backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device), nullptr, 4));
     }
+    static void startRestored(RtlSdrBackend& backend, std::unique_ptr<RtlSdrWorker::Device> device)
+    {
+        // Keep applyRestoredState's real bootstrap choice. Replace only the USB
+        // entry, then use the production transaction, worker and restore path.
+        backend.m_requested = {};
+        backend.m_requested.hardware = {static_cast<std::uint32_t>(backend.m_panCenterHz),
+            backend.m_sampleRateHz, 0, 0, backend.m_ppmCorrection, 240};
+        backend.m_requested.dcSuppression = backend.m_dcSuppression;
+        backend.m_requested.receivers = {backend.initialReceiver()};
+        backend.startCapture(std::make_unique<RtlSdrWorker>(std::move(device)));
+    }
+    static bool bootstrapMuted(const RtlSdrBackend& backend)
+    { return backend.m_requested.receivers.front().audioMute; }
     static bool restored(const RtlSdrBackend& backend)
     {
         return backend.m_settingsActive && backend.m_restoreAttempted && !backend.m_restoreToken.revision
             && backend.m_lastPublished && backend.m_lastPublished->receivers.front().passband.stableId == 1;
+    }
+    static bool restoreFinished(const RtlSdrBackend& backend)
+    {
+        return backend.m_settingsActive && backend.m_restoreAttempted && !backend.m_restoreToken.revision
+            && backend.m_lastPublished && !backend.m_capture.busy();
     }
     static std::optional<RtlCaptureTransaction::State> state(const RtlSdrBackend& backend)
     { return backend.m_lastPublished; }
@@ -72,6 +94,178 @@ static QJsonObject legacy()
     return {{"rfFrequencyHz", 100000000.0}, {"mode", "FM"}, {"filterLowHz", -8000},
         {"filterHighHz", 8000}, {"sampleRateHz", 2400000},
         {"ext", QJsonObject{{"rfGain", QJsonObject{{"gainDb", 24}}}}}, {"future", "preserve"}};
+}
+static void reconnectAtCaptureLimits()
+{
+    struct SavedCapture {
+        std::uint32_t centerHz;
+        std::uint32_t rateHz;
+        const char* mode;
+        int filterHz;
+    };
+    // The first two need a smaller provisional receiver at the lowest legal
+    // rate. The others straddle the WFM RF+transition guard's lower RF edge.
+    constexpr std::array<SavedCapture, 5> cases{{
+        {100'000'000, 225'001, "WFM", 90'000},
+        {100'000'000, 225'001, "FM", 7'000},
+        {100'000, 2'400'000, "WFM", 90'000},
+        {102'999, 2'400'000, "FM", 7'000},
+        {103'000, 2'400'000, "WFM", 90'000}
+    }};
+    for (const SavedCapture& capture : cases) {
+        const QString serial = QStringLiteral("bootstrap-%1-%2-%3")
+            .arg(capture.centerHz).arg(capture.rateHz).arg(QLatin1String(capture.mode));
+        const RadioSettingsScope scope("rtl", serial);
+        RtlSliceSettings::Slice saved;
+        saved.id = 1; saved.frequencyHz = capture.centerHz;
+        saved.mode = QLatin1String(capture.mode);
+        saved.filterLowHz = -capture.filterHz; saved.filterHighHz = capture.filterHz;
+        saved.wfmDeemphasisUs = 50;
+        check(RtlSliceSettings(scope).patch(capture.centerHz, capture.rateHz, {saved}),
+              "capture-limit reconnect fixture preserves a valid saved receiver");
+        const QJsonObject original = scope.featureExact("RtlSlices");
+        rtl::RtlSdrBackend receiver;
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            std::fprintf(stderr, "RTL_RECONNECT center=%u rate=%u mode=%s attempt=%d\n",
+                capture.centerHz, capture.rateHz, capture.mode, attempt);
+            receiver.configureSettingsScope(scope, {serial, false});
+            receiver.applyRestoredState({});
+            check(receiver.currentOperatingState().sampleRateHz == int(capture.rateHz),
+                  "real bootstrap retains the saved capture rate before USB startup");
+            auto device = std::make_shared<test::DeviceState>();
+            rtl::RtlCaptureBackendTestAccess::startRestored(receiver,
+                std::make_unique<test::InjectedDevice>(device));
+            check(rtl::RtlCaptureBackendTestAccess::bootstrapMuted(receiver),
+                  "saved restoration keeps the provisional speaker muted until adoption");
+            device->releaseReadback();
+            QElapsedTimer deadline; deadline.start();
+            int queued = 0;
+            qint64 nextBlockMs = 0;
+            const int callbackMs = static_cast<int>(std::ceil(8192.0 * 1000 / capture.rateHz));
+            while (deadline.elapsed() < 8000 && !device->destroyed
+                && !(rtl::RtlCaptureBackendTestAccess::restored(receiver)
+                    && !rtl::RtlCaptureBackendTestAccess::busy(receiver))) {
+                // Never burst queued callbacks while WDSP is still preparing.
+                if (device->starts > 0 && device->callbacks >= queued
+                    && deadline.elapsed() >= nextBlockMs) {
+                    device->block(); ++queued;
+                    nextBlockMs = deadline.elapsed() + callbackMs;
+                }
+                QCoreApplication::processEvents(); QThread::msleep(1);
+            }
+            const auto accepted = rtl::RtlCaptureBackendTestAccess::state(receiver);
+            const bool restored = receiver.isConnected()
+                && rtl::RtlCaptureBackendTestAccess::restored(receiver)
+                && !rtl::RtlCaptureBackendTestAccess::busy(receiver);
+            check(restored && accepted && accepted->hardware.centerHz == capture.centerHz
+                && accepted->hardware.sampleRateHz == capture.rateHz
+                && accepted->receivers.size() == 1 && accepted->receivingIds == std::vector<int>{1},
+                "low-rate and RF-boundary reconnect preserves capture and restores the receiving sparse slice");
+            if (restored && accepted) {
+                const auto& actual = accepted->receivers.front();
+                const auto expectedMode = saved.mode == QLatin1String("WFM")
+                    ? rtl::RtlCaptureTransaction::Mode::Wfm : rtl::RtlCaptureTransaction::Mode::Fm;
+                check(actual.mode == expectedMode && actual.passband.carrierHz == saved.frequencyHz
+                    && actual.passband.filterLowHz == saved.filterLowHz
+                    && actual.passband.filterHighHz == saved.filterHighHz
+                    && actual.wfmDeemphasisUs == 50 && actual.audioMute == saved.audioMute,
+                    "provisional bootstrap does not resize or replace saved receiver choices");
+                check(device->starts == 1 && device->writes == 6 && device->cancels == 0,
+                    "accepted saved receivers restore without a second hardware capture transaction");
+                check(receiver.storeOperatingState(scope, receiver.currentOperatingState()).value_or(false),
+                    "accepted restored receiver remains owned by the RTL settings writer");
+            }
+            check(scope.featureExact("RtlSlices") == original,
+                  "reconnect and accepted persistence preserve the complete saved slice document");
+            receiver.disconnectRadio();
+        }
+    }
+}
+static void unsupportedStoredWfmRemainsIntact()
+{
+    if (!rtl::RtlReceivePipeline::kQualifiedWfmEnabled) { return; }
+    const QString serial = QStringLiteral("legacy-wfm-narrow-filter");
+    const RadioSettingsScope scope("rtl", serial);
+    RtlSliceSettings::Slice saved;
+    // Old WFM ignored these stored RF edges. They must not acquire new RF
+    // meaning or be silently migrated when the native decoder is enabled.
+    saved.id = 0; saved.frequencyHz = 100'100'000; saved.mode = QStringLiteral("WFM");
+    saved.filterLowHz = -4000; saved.filterHighHz = 4000;
+    saved.audioMute = false; saved.audioGain = 23; saved.audioPan = 71;
+    saved.agcMode = QStringLiteral("slow"); saved.agcThreshold = 17;
+    saved.squelchEnabled = true; saved.squelchLevel = 42;
+    check(RtlSliceSettings(scope).patch(100'000'000, 2'400'000, {saved}),
+          "seed schema-valid legacy WFM with unsupported native RF edges");
+    QJsonObject original = scope.featureExact("RtlSlices");
+    original.insert(QStringLiteral("futureDocument"), QJsonObject{{"keep", "document extension"}});
+    QJsonObject slices = original.value(QStringLiteral("slices")).toObject();
+    QJsonObject entry = slices.value(QStringLiteral("0")).toObject();
+    entry.remove(QStringLiteral("wfmDeemphasisUs")); // Genuine old schema-one entry.
+    entry.insert(QStringLiteral("futureSlice"), QJsonObject{{"keep", "slice extension"}});
+    QJsonObject squelch = entry.value(QStringLiteral("squelch")).toObject();
+    squelch.insert(QStringLiteral("futureSquelch"), 91);
+    entry.insert(QStringLiteral("squelch"), squelch);
+    slices.insert(QStringLiteral("0"), entry);
+    original.insert(QStringLiteral("slices"), slices);
+    check(scope.setFeature("RtlSlices", RtlSliceSettings::kSchemaVersion, original),
+          "retain old optional-field absence and unknown members in the legacy document");
+
+    RadioModel model;
+    check(model.rebuildBackendForTest("rtl"), "legacy WFM restore uses the real model settings owner");
+    auto& receiver = *static_cast<rtl::RtlSdrBackend*>(model.backend());
+    QStringList warnings;
+    QObject::connect(&receiver, &IRadioBackend::configurationWarning, &model,
+        [&](const QString& warning) { warnings.append(warning); });
+    RadioModelSliceLifecycleTestAccess::restore(model, serial);
+    check(receiver.currentOperatingState().mode == QLatin1String("AM"),
+          "real restored-state application chooses the provisional AM bootstrap");
+    auto device = std::make_shared<test::DeviceState>();
+    rtl::RtlCaptureBackendTestAccess::startRestored(receiver,
+        std::make_unique<test::InjectedDevice>(device));
+    check(rtl::RtlCaptureBackendTestAccess::bootstrapMuted(receiver),
+          "unsupported saved WFM never starts audible provisional AM");
+    device->releaseReadback();
+    QElapsedTimer deadline; deadline.start();
+    int queued = 0;
+    qint64 nextBlockMs = 0;
+    while (deadline.elapsed() < 8000 && !device->destroyed
+        && !(device->starts > 0 && rtl::RtlCaptureBackendTestAccess::restoreFinished(receiver))) {
+        if (device->starts > 0 && device->callbacks >= queued && deadline.elapsed() >= nextBlockMs) {
+            device->block(); ++queued;
+            nextBlockMs = deadline.elapsed() + 4; // 8192 / 2.4 MS/s, rounded up.
+        }
+        QCoreApplication::processEvents(); QThread::msleep(1);
+    }
+    const auto accepted = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    check(receiver.isConnected() && rtl::RtlCaptureBackendTestAccess::restoreFinished(receiver)
+              && accepted && accepted->hardware.centerHz == 100'000'000
+              && accepted->hardware.sampleRateHz == 2'400'000
+              && accepted->receivers.size() == 1
+              && accepted->receivers.front().passband.stableId == 0
+              && accepted->receivers.front().mode == rtl::RtlCaptureTransaction::Mode::Am
+              && accepted->receivers.front().audioMute,
+          "unsupported WFM remains unadopted while the confirmed provisional AM receiver stays muted");
+    bool explained = false;
+    for (const QString& warning : warnings) {
+        const QString text = warning.toLower();
+        explained |= text.contains(QStringLiteral("wfm")) && text.contains(QStringLiteral("filter"))
+            && (text.contains(QStringLiteral("saved")) || text.contains(QStringLiteral("stored")))
+            && (text.contains(QStringLiteral("unsupported")) || text.contains(QStringLiteral("not supported")));
+    }
+    check(explained, "typed configuration warning explains the unsupported stored WFM filter");
+    check(device->starts == 1 && device->writes == 6 && device->cancels == 0,
+          "unsupported stored WFM does not trigger a replacement hardware capture");
+    check(scope.featureExact("RtlSlices") == original,
+          "bootstrap and refused WFM restore preserve the complete saved document");
+    check(receiver.storeOperatingState(scope, receiver.currentOperatingState()).value_or(false),
+          "RTL settings owner handles the accepted provisional-state store");
+    RadioModelSliceLifecycleTestAccess::forcePendingFlush(model);
+    check(scope.featureExact("RtlSlices") == original,
+          "explicit store and model flush cannot overwrite or resize the omitted legacy WFM entry");
+    RadioModelSliceLifecycleTestAccess::queueDisconnectFlush(model);
+    receiver.disconnectRadio();
+    check(!receiver.isConnected() && scope.featureExact("RtlSlices") == original,
+          "disconnect flush preserves all legacy WFM choices and unknown document members");
 }
 int main(int argc, char** argv)
 {
@@ -260,6 +454,8 @@ int main(int argc, char** argv)
             "drag persists the new capture center without changing saved slice RF or monitor settings");
         live.disconnectRadio();
     }
+    reconnectAtCaptureLimits();
+    unsupportedStoredWfmRemainsIntact();
     std::fprintf(stderr, "rtl_runtime_settings_test: %d failures\n", failures);
     return failures ? 1 : 0;
 }

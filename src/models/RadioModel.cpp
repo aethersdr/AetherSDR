@@ -2234,6 +2234,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TxCoordinator::StopRequest>();
     qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
+    qRegisterMetaType<WfmStereoStatus>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
@@ -10269,6 +10270,16 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThro
         if (canDispatch() && (geometryThroughBackend || s->confirmsControls())) {
             m_backend->setSliceSquelch(s->sliceId(), on, level);
         }
+    }, Qt::DirectConnection);
+    connect(s, &SliceModel::wfmDeemphasisRequested, this,
+            [this, s, canDispatch](int microseconds) {
+        if (!canDispatch() || !m_backend->isConnected() || slice(s->sliceId()) != s
+            || s->mode() != QLatin1String("WFM") || s->externalReceiveReplacementActive()) {
+            return;
+        }
+        const std::optional<BroadcastFmReceive> feature = m_backend->capabilities().broadcastFmReceive;
+        if (!feature || !feature->deemphasisUs.contains(microseconds)) { return; }
+        m_backend->setSliceWfmDeemphasis(s->sliceId(), microseconds);
     }, Qt::DirectConnection);
     connect(s, &SliceModel::audioGainCommandIssued, this,
             [this, s, canDispatch](int gainPercent) {

@@ -1227,6 +1227,35 @@ void RxApplet::buildUI()
 
     root->addLayout(columns);
 
+    // Broadcast FM remains discoverable on every receiver. Enablement follows
+    // the declared capability and current slice; the displayed value is observed.
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+        m_wfmLabel = new QLabel(tr("Broadcast FM"), this);
+        m_wfmDeemphasis = new GuardedComboBox(this);
+        m_wfmDeemphasis->setObjectName(QStringLiteral("wfmDeemphasis"));
+        m_wfmDeemphasis->setAccessibleName(tr("Broadcast FM deemphasis"));
+        m_wfmDeemphasis->setPlaceholderText(tr("Unknown"));
+        m_wfmDeemphasis->setFocusPolicy(Qt::StrongFocus);
+        applyComboStyle(m_wfmDeemphasis);
+        m_wfmStatus = new QLabel(this);
+        m_wfmStatus->setObjectName(QStringLiteral("wfmStereoStatus"));
+        row->addWidget(m_wfmLabel);
+        row->addWidget(m_wfmDeemphasis);
+        row->addWidget(m_wfmStatus, 1);
+        root->addLayout(row);
+        connect(m_wfmDeemphasis, &QComboBox::activated, this, [this](int index) {
+            if (m_slice && m_wfmDeemphasis->isEnabled()) {
+                m_slice->setWfmDeemphasis(m_wfmDeemphasis->itemData(index).toInt());
+            }
+            // A refused/asynchronous request must not leave the requested value
+            // painted as if adopted. The backend report is the only authority.
+            refreshBroadcastFm();
+        });
+        refreshBroadcastFm();
+    }
+
     // The adaptive RX filter controls (RFC #3878) live solely in the VFO flag —
     // a single host avoids syncing the enable/bounds/preset state across two
     // widgets. The applet's filter-width readout still shows "AUTO" while a fit
@@ -1979,6 +2008,7 @@ void RxApplet::setSlice(SliceModel* slice)
     loadClientSquelchIntent();
     if (m_slice) connectSlice(m_slice);
     updateFreqLabel();
+    refreshBroadcastFm();
 }
 
 void RxApplet::setAntennaList(const QStringList& ants)
@@ -1998,6 +2028,9 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
                 if (!connected) {
                     m_pendingSquelchWrites.flush();
                 }
+                m_broadcastFmReceive = connected && m_radioModel
+                    ? m_radioModel->backendCapabilities().broadcastFmReceive : std::nullopt;
+                refreshBroadcastFm();
             });
     }
     if (m_radioModel) {
@@ -2018,6 +2051,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         ? m_radioModel->backendCapabilities().receiveFilterControl : std::nullopt;
     m_receiveSquelchModel = m_radioModel && m_radioModel->isConnected()
         ? m_radioModel->backendCapabilities().receiveSquelchModel : std::nullopt;
+    m_broadcastFmReceive = m_radioModel && m_radioModel->isConnected()
+        ? m_radioModel->backendCapabilities().broadcastFmReceive : std::nullopt;
     if (!m_radioModel) {
         m_filterPassband->setEnabled(true);
         m_filterPassband->setAccessibleDescription(
@@ -2025,6 +2060,20 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     }
     if (m_radioModel) {
         m_filterAvailability = new ControlAvailabilityRegistry(*m_radioModel, this);
+        const auto supportsBroadcastFm = [this](bool connected, const RadioCapabilities& caps) {
+            return connected && m_broadcastFmReceive && caps.broadcastFmReceive
+                && !caps.broadcastFmReceive->deemphasisUs.isEmpty() && m_slice
+                && m_slice->mode() == QLatin1String("WFM")
+                && !m_slice->externalReceiveReplacementActive()
+                && m_radioModel->slice(m_slice->sliceId()) == m_slice;
+        };
+        const QString wfmReason = tr("Select WFM on a connected receiver that supports broadcast FM stereo and deemphasis");
+        for (QWidget* widget : {static_cast<QWidget*>(m_wfmLabel),
+                               static_cast<QWidget*>(m_wfmDeemphasis),
+                               static_cast<QWidget*>(m_wfmStatus)}) {
+            m_filterAvailability->registerWidget(widget, wfmReason, supportsBroadcastFm,
+                [] { return true; }, false);
+        }
         const auto supportsSquelch = [this](bool, const RadioCapabilities& caps) {
             return !caps.receiveSquelchModel || usingExternalReceiveSquelch()
                 || (m_slice && caps.receiveSquelchModel->modes.contains(m_slice->mode()));
@@ -2065,6 +2114,8 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
                 [this](bool connected, const RadioCapabilities& caps) {
             m_receiveFilterControl = connected ? caps.receiveFilterControl : std::nullopt;
             m_receiveSquelchModel = connected ? caps.receiveSquelchModel : std::nullopt;
+            m_broadcastFmReceive = connected ? caps.broadcastFmReceive : std::nullopt;
+            refreshBroadcastFm();
             if (m_receiveSquelchModel && m_slice && !m_clientSquelchScope.hasRadioIdentity()) {
                 setSlice(m_slice);
             }
@@ -2115,6 +2166,70 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     if (m_slice) {
         if (m_receiveSquelchModel) { setSlice(m_slice); }
         updateModeSettings(m_slice->mode());
+    }
+    refreshBroadcastFm();
+}
+
+void RxApplet::refreshBroadcastFm()
+{
+    if (!m_wfmDeemphasis || !m_wfmStatus) { return; }
+    const QString previousValue = m_wfmDeemphasis->currentText();
+    const QVector<int> values = m_broadcastFmReceive
+        ? m_broadcastFmReceive->deemphasisUs : QVector<int>{50, 75};
+    {
+        const QSignalBlocker blocker(m_wfmDeemphasis);
+        bool sameChoices = m_wfmDeemphasis->count() == values.size();
+        for (int index = 0; sameChoices && index < values.size(); ++index) {
+            sameChoices = m_wfmDeemphasis->itemData(index).toInt() == values[index];
+        }
+        if (!sameChoices) {
+            m_wfmDeemphasis->clear();
+            for (int value : values) {
+                m_wfmDeemphasis->addItem(tr("%1 µs").arg(value), value);
+            }
+        }
+        m_wfmDeemphasis->setCurrentIndex(m_slice && m_broadcastFmReceive
+            ? m_wfmDeemphasis->findData(m_slice->wfmDeemphasisUs()) : -1);
+    }
+    if (m_wfmDeemphasis->currentText() != previousValue) {
+        QAccessibleValueChangeEvent event(m_wfmDeemphasis, m_wfmDeemphasis->currentText());
+        QAccessible::updateAccessibility(&event);
+    }
+    if (m_filterAvailability) {
+        m_filterAvailability->refreshEngaged();
+    } else {
+        const QString reason = tr("Connect a receiver and select WFM to use broadcast FM controls");
+        for (QWidget* widget : {static_cast<QWidget*>(m_wfmLabel),
+                               static_cast<QWidget*>(m_wfmDeemphasis),
+                               static_cast<QWidget*>(m_wfmStatus)}) {
+            widget->setEnabled(false);
+            widget->setAccessibleDescription(reason);
+            widget->setToolTip(reason);
+            ThemeManager::instance().setWidgetForegroundToken(widget, QStringLiteral("color.control.unavailable"));
+        }
+    }
+    const WfmStereoStatus status = m_wfmDeemphasis->isEnabled() && m_slice
+        ? m_slice->wfmStereoStatus() : WfmStereoStatus::Unavailable;
+    QString text;
+    switch (status) {
+    case WfmStereoStatus::Unavailable:
+        text = tr("Unavailable");
+        break;
+    case WfmStereoStatus::Acquiring:
+        text = tr("Acquiring");
+        break;
+    case WfmStereoStatus::Mono:
+        text = tr("Mono");
+        break;
+    case WfmStereoStatus::Stereo:
+        text = tr("Stereo");
+        break;
+    }
+    if (m_wfmStatus->text() != text) {
+        m_wfmStatus->setText(text);
+        m_wfmStatus->setAccessibleName(tr("Broadcast FM stereo status: %1").arg(text));
+        QAccessibleEvent event(m_wfmStatus, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
     }
 }
 
@@ -2595,7 +2710,11 @@ void RxApplet::connectSlice(SliceModel* s)
         int idx = m_modeCombo->findText(mode);
         if (idx >= 0) m_modeCombo->setCurrentIndex(idx);
         updateModeSettings(mode);
+        refreshBroadcastFm();
     });
+    connect(s, &SliceModel::wfmDeemphasisChanged, this, &RxApplet::refreshBroadcastFm);
+    connect(s, &SliceModel::wfmStereoStatusChanged, this, &RxApplet::refreshBroadcastFm);
+    connect(s, &SliceModel::externalReceiveReplacementChanged, this, &RxApplet::refreshBroadcastFm);
 
     // Initialize filter/step arrays for the current mode
     updateModeSettings(s->mode());

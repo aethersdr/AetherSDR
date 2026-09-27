@@ -70,6 +70,15 @@ public:
         virtual ~AudioSink() = default;
         virtual void audioBlock(const ReceiverSpec& spec, std::uint64_t firstSample,
             std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept = 0;
+        // Optional decoder observation for the same live receiver. The decoder
+        // publishes its latest completed DSP block, not an RF arrival timestamp.
+        virtual void audioBlockWithStatus(const ReceiverSpec& spec, std::uint64_t firstSample,
+            std::span<const float> left, std::span<const float> right, bool discontinuity,
+            std::optional<bool> wfmStereoDetected) noexcept
+        {
+            (void)wfmStereoDetected;
+            audioBlock(spec, firstSample, left, right, discontinuity);
+        }
     };
     // Injection is for deterministic preparation failures/delays. The default
     // constructs real WDSP channels and output buffers on the Qt worker pool.

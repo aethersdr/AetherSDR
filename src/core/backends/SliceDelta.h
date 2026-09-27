@@ -13,6 +13,9 @@ namespace AetherSDR {
 // Existing backends retain their historical optimistic setter behavior.
 enum class ReceiveControlPolicy { Optimistic, Confirmed };
 
+// Observed analog broadcast stereo state; mode selection alone proves no pilot.
+enum class WfmStereoStatus { Unavailable, Acquiring, Mono, Stereo };
+
 // Normalized, vendor-neutral slice-status delta (aetherd RFC 2.3 — SliceModel
 // touchpoint). A backend populates only the fields the wire reported
 // (std::optional engaged == "present"); SliceModel::applyChanges applies exactly
@@ -99,6 +102,8 @@ struct SliceDelta {
     std::optional<int>         agcOffLevel;
     std::optional<bool>        squelchOn;
     std::optional<int>         squelchLevel;
+    std::optional<int>         wfmDeemphasisUs;
+    std::optional<WfmStereoStatus> wfmStereoStatus;
     std::optional<bool>        ritOn;
     std::optional<int>         ritFreq;
     std::optional<bool>        xitOn;
@@ -139,3 +144,4 @@ struct SliceDelta {
 // to a synchronous DirectConnection, but the registration keeps it correct if a
 // backend is ever moved to a worker thread.)
 Q_DECLARE_METATYPE(AetherSDR::SliceDelta)
+Q_DECLARE_METATYPE(AetherSDR::WfmStereoStatus)

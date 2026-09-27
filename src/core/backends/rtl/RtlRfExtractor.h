@@ -25,6 +25,9 @@ public:
         SharedCapturePolicy::SliceDescriptor slice;
         int outputRateHz = 48000;
         std::size_t blockSize = 1024;
+        // The final audio lattice can be slower than the extracted IQ clock.
+        // Zero preserves the existing outputRateHz alignment.
+        int alignmentRateHz = 0;
     };
     class Sink {
     public:

@@ -53,6 +53,7 @@ QJsonObject encodeSlice(const RtlSliceSettings::Slice& slice, QJsonObject previo
     previous.insert(QStringLiteral("audioGain"), slice.audioGain);
     previous.insert(QStringLiteral("audioMute"), slice.audioMute);
     previous.insert(QStringLiteral("audioPan"), slice.audioPan);
+    previous.insert(QStringLiteral("wfmDeemphasisUs"), slice.wfmDeemphasisUs);
     return previous;
 }
 
@@ -111,6 +112,12 @@ bool RtlSliceSettings::decode(const QJsonObject& object, Document& output, QStri
             || !entry.value(QStringLiteral("audioMute")).isBool()
             || !entry.value(QStringLiteral("squelch")).isObject()) {
             return false;
+        }
+        if (entry.contains(QStringLiteral("wfmDeemphasisUs"))) {
+            double microseconds = 0;
+            if (!number(entry, QStringLiteral("wfmDeemphasisUs"), 50, 75, microseconds, true)
+                || (microseconds != 50 && microseconds != 75)) { return false; }
+            slice.wfmDeemphasisUs = static_cast<int>(microseconds);
         }
         const QJsonObject squelch = entry.value(QStringLiteral("squelch")).toObject();
         if (!squelch.value(QStringLiteral("enabled")).isBool()
