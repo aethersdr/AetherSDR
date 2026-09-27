@@ -12,6 +12,7 @@
 #include <QElapsedTimer>
 #include <QPointer>
 #include <cstdio>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -58,10 +59,17 @@ struct RtlCaptureBackendTestAccess {
     }
     static bool idle(const RtlSdrBackend& backend) { return !backend.m_capture.busy() && !backend.m_pendingDrag; }
     static T::State state(const RtlSdrBackend& backend) { return *backend.m_capture.confirmed(); }
-    static void pilot(RtlSdrBackend& backend, int id, T::Token token, bool stereo)
+    static void pilot(RtlSdrBackend& backend, int id, T::Token token, bool stereo,
+                      std::uint32_t sequence = 2, double magnitude = 0.1)
     {
         RtlReceivePipeline::Packet packet;
-        packet.slot = id; packet.token = token; packet.wfmStereoDetected = stereo;
+        const auto& receivers = backend.m_lastPublished->receivers;
+        const auto receiver = std::ranges::find_if(receivers,
+            [id](const auto& value) { return value.passband.stableId == id; });
+        packet.slot = id; packet.token = token;
+        packet.wfmStereoDetected = stereo && !receiver->wfmForceMono;
+        packet.wfmReception = WfmReceptionDiagnostics{true, magnitude, stereo,
+            stereo ? 5000U : 0U, 0, 0, 6000, 5000, 0.06, 0.03, 100, 0, 93, 187, sequence};
         backend.observeWfm(packet);
     }
     static void expirePilot(RtlSdrBackend& backend, int id)
@@ -405,12 +413,15 @@ int main(int argc, char** argv)
         const auto acceptedWfmSettings = scope.featureExact("RtlSlices");
         slice->setFilterWidth(-90000, 90000);
         slice->setWfmDeemphasis(50);
+        slice->setWfmForceMono(true);
+        check(!slice->wfmForceMono(), "forced Mono request is not optimistic accepted state");
         check(slice->filterLow() == -100000 && slice->wfmDeemphasisUs() == 75
             && scope.featureExact("RtlSlices") == acceptedWfmSettings,
             "WFM filter and deemphasis requests remain intent until adopted");
         check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend)
             && slice->filterLow() == -90000 && slice->filterHigh() == 90000
-            && slice->wfmDeemphasisUs() == 50; }), "WFM filter and deemphasis adopt together");
+            && slice->wfmDeemphasisUs() == 50 && slice->wfmForceMono(); }),
+            "WFM filter, deemphasis and forced Mono adopt together");
         slice->setSquelch(true, 75);
         slice->setWfmDeemphasis(60);
         check(rtl::RtlCaptureBackendTestAccess::idle(backend) && !slice->squelchOn()
@@ -419,20 +430,43 @@ int main(int argc, char** argv)
         RadioModelSliceLifecycleTestAccess::flush(model);
         check(RtlSliceSettings(scope).load().document.slices.value(3).wfmDeemphasisUs == 50,
               "only accepted WFM deemphasis reaches persisted receiver state");
+        check(RtlSliceSettings(scope).load().document.slices.value(3).wfmForceMono,
+              "only adopted forced Mono reaches persisted settings");
         const auto token = rtl::RtlCaptureBackendTestAccess::state(backend).token;
         rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, token, true);
-        check(slice->wfmStereoStatus() == WfmStereoStatus::Stereo,
-              "current receiving WFM decoder observation publishes stereo");
+        check(slice->wfmStereoStatus() == WfmStereoStatus::Mono,
+              "current forced Mono output is reported independently of acquired pilot");
+        check(slice->wfmForceMono() && slice->wfmReceptionDiagnostics().valid
+            && slice->wfmReceptionDiagnostics().pilotLocked,
+            "actual pilot observation is distinct from selected forced Mono");
         rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, {token.session, token.revision - 1}, false);
         rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, {token.session + 1, token.revision}, false);
-        check(slice->wfmStereoStatus() == WfmStereoStatus::Stereo,
+        check(slice->wfmStereoStatus() == WfmStereoStatus::Mono
+            && slice->wfmReceptionDiagnostics().pilotLocked,
               "old revision and foreign session cannot change WFM observation");
         rtl::RtlCaptureBackendTestAccess::expirePilot(backend, 3);
-        check(slice->wfmStereoStatus() == WfmStereoStatus::Acquiring,
+        check(slice->wfmStereoStatus() == WfmStereoStatus::Acquiring
+            && !slice->wfmReceptionDiagnostics().valid,
               "stopped decoder observations expire rather than retaining stereo");
-        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, token, false);
+        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, token, true);
+        check(!slice->wfmReceptionDiagnostics().valid,
+              "cached decoder sequence cannot refresh expired reception");
+        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, token, true, 4,
+            std::numeric_limits<double>::quiet_NaN());
+        check(!slice->wfmReceptionDiagnostics().valid, "invalid magnitude cannot refresh reception");
+        rtl::RtlCaptureBackendTestAccess::pilot(backend, 3, token, false, 4);
         check(slice->wfmStereoStatus() == WfmStereoStatus::Mono,
               "current no-pilot observation reports mono");
+        slice->setWfmForceMono(false);
+        check(slice->wfmForceMono(), "Auto Stereo remains intent until decoder adoption");
+        check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend)
+            && !slice->wfmForceMono(); }), "Auto Stereo adoption confirms the selection");
+        check(!slice->wfmReceptionDiagnostics().valid
+            || slice->wfmReceptionDiagnostics().observationDurationMs < 6000,
+            "new decoder revision cannot retain the old reception history");
+        RadioModelSliceLifecycleTestAccess::flush(model);
+        check(!RtlSliceSettings(scope).load().document.slices.value(3).wfmForceMono,
+              "accepted Auto Stereo replaces only the chosen persistent policy");
     } else {
         const int wfmLow = slice->filterLow();
         const int wfmHigh = slice->filterHigh();

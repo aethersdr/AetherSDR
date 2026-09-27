@@ -243,6 +243,25 @@ void nativeRouting()
           "deemphasis replaces both decoder and speaker epochs");
 
     current.token.revision++;
+    current.receivers[0].wfmForceMono = true;
+    check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(), "Force Mono prepares an accepted decoder recipe");
+    const auto mono = run(*pipeline, current, position, 4.0);
+    for (const Audio& audio : mono) {
+        check(audio.seen && audio.peak > 0.001 && audio.left == audio.right,
+              "Force Mono is identical nonzero L/R at independent tap and speaker");
+        check(audio.discontinuity, "Force Mono retires both audio lifetimes");
+    }
+    check(!mono[0].stereo && mono[0].receiverEpoch != changed[0].receiverEpoch
+        && mono[1].captureEpoch != changed[1].captureEpoch,
+        "Force Mono reports mono output while replacing decoder and speaker epochs");
+    current.token.revision++;
+    current.receivers[0].wfmForceMono = false;
+    check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(), "Auto Stereo readopts");
+    const auto automatic = run(*pipeline, current, position, 4.0);
+    check(amplitude(automatic[0].left, 1000) > 100 * amplitude(automatic[0].right, 1000)
+        && amplitude(automatic[1].right, 2000) > 100 * amplitude(automatic[1].left, 2000),
+        "Auto Stereo restores separated native tap and speaker audio");
+    current.token.revision++;
     current.receivingIds.clear();
     check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(), "parking admits an empty active bank");
     const auto parked = run(*pipeline, current, position, 0.05);

@@ -675,6 +675,12 @@ void SliceModel::setAgcOffLevel(int value)
     emit agcOffLevelChanged(value);
 }
 
+void SliceModel::setWfmForceMono(bool forceMono)
+{
+    // Selection is intent until the prepared decoder revision is accepted.
+    emit wfmForceMonoRequested(forceMono);
+}
+
 void SliceModel::setWfmDeemphasis(int microseconds)
 {
     if (microseconds != 50 && microseconds != 75) { return; }
@@ -1665,6 +1671,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
         m_wfmDeemphasisUs = *d.wfmDeemphasisUs;
         emit wfmDeemphasisChanged(m_wfmDeemphasisUs);
     }
+    if (d.wfmForceMono && m_wfmForceMono != *d.wfmForceMono) {
+        m_wfmForceMono = *d.wfmForceMono;
+        emit wfmForceMonoChanged(m_wfmForceMono);
+    }
     if (d.wfmStereoStatus) {
         const WfmStereoStatus status = *d.wfmStereoStatus;
         switch (status) {
@@ -1677,6 +1687,23 @@ void SliceModel::applyChanges(const SliceDelta& d)
                 emit wfmStereoStatusChanged(status);
             }
             break;
+        }
+    }
+    if (d.wfmReceptionDiagnostics) {
+        WfmReceptionDiagnostics value = *d.wfmReceptionDiagnostics;
+        if (!value.valid || !std::isfinite(value.pilotMagnitude)
+            || value.pilotMagnitude < 0.0
+            || !std::isfinite(value.pilotEngageThreshold) || !std::isfinite(value.pilotReleaseThreshold)
+            || value.pilotReleaseThreshold < 0.0
+            || value.pilotEngageThreshold <= value.pilotReleaseThreshold
+            || value.engageBlocks == 0 || value.releaseBlocks == 0
+            || value.stableDurationMs > 5000
+            || value.lockDurationMs > value.observationDurationMs
+            || value.stableDurationMs > value.observationDurationMs
+            || (!value.pilotLocked && value.lockDurationMs != 0)) { value = {}; }
+        if (m_wfmReceptionDiagnostics != value) {
+            m_wfmReceptionDiagnostics = value;
+            emit wfmReceptionDiagnosticsChanged(value);
         }
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {

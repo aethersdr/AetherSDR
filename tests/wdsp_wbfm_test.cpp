@@ -269,6 +269,17 @@ bool stereoAndPilot()
     ok = require(stereo.finite && leftSeparation >= 40 && rightSeparation >= 40,
                  "reference stereo separates correctly oriented L/R >=40dB") && ok;
     ok = require(channel->wbfmStereoDetected() == true, "real pilot acquires stereo indication") && ok;
+    const auto acquired = channel->wbfmReceptionDiagnostics();
+    ok = require(acquired && acquired->valid && acquired->pilotLocked
+        && acquired->pilotMagnitude > acquired->pilotEngageThreshold
+        && acquired->pilotEngageThreshold == 0.06 && acquired->pilotReleaseThreshold == 0.03
+        && acquired->engageBlocks == 93 && acquired->releaseBlocks == 187
+        && acquired->consecutiveHighBlocks >= acquired->engageBlocks
+        && acquired->consecutiveLowBlocks == 0
+        && acquired->lockLossCount == 0 && acquired->reacquisitionCount == 0
+        && acquired->observationDurationMs >= 5900 && acquired->lockDurationMs >= 5000
+        && acquired->stableDurationMs == 5000,
+        "completed decoder snapshot reports real pilot thresholds, hysteresis and sample-clock duration") && ok;
     ok = require(stereo.peak < 0.95 && stereo.clipped == 0,
                  "stereo reference preserves unclipped headroom") && ok;
     for (const Vector vector : {Vector::StereoLowAudio, Vector::StereoHighAudio, Vector::StereoHighModulation}) {
@@ -292,6 +303,13 @@ bool stereoAndPilot()
     ok = require(channel->wbfmStereoDetected() == false && lost.finite
                  && std::sqrt(lost.differenceEnergy / lost.frames) < 1.0e-6,
                  "pilot loss returns truthful mono with identical L/R") && ok;
+    const auto loss = channel->wbfmReceptionDiagnostics();
+    ok = require(loss && loss->valid && !loss->pilotLocked && loss->lockDurationMs == 0
+        && loss->lockLossCount == 1 && loss->reacquisitionCount == 0
+        && acquired && loss->observationSequence != acquired->observationSequence
+        && loss->pilotMagnitude < loss->pilotReleaseThreshold
+        && loss->consecutiveLowBlocks >= loss->releaseBlocks,
+        "pilot loss is counted in DSP even between UI snapshots") && ok;
     // RF amplitude changes must not change valid FM audio gain or stereo
     // orientation; these clean vectors are not a weak-noisy-station claim.
     const Measurement weak = run(*channel, Vector::Stereo, 5.0, 2.0, 0.0, 0.001);
@@ -299,6 +317,10 @@ bool stereoAndPilot()
                  && std::abs(weak.left(0) / stereo.left(0) - 1.0) < 0.01
                  && std::abs(weak.right(1) / stereo.right(1) - 1.0) < 0.01,
                  "clean40dB lower RF amplitude retains FM level and stereo") && ok;
+    const auto reacquired = channel->wbfmReceptionDiagnostics();
+    ok = require(reacquired && reacquired->pilotLocked && reacquired->lockLossCount == 1
+        && reacquired->reacquisitionCount == 1,
+        "reacquisition excludes first acquisition and retains measured loss") && ok;
     const Measurement noise = run(*channel, Vector::Noise, 4.0, 2.0);
     std::cout << "No-signal noise peak=" << noise.peak << " pilot="
               << channel->wbfmStereoDetected().value_or(true) << '\n';
@@ -307,11 +329,28 @@ bool stereoAndPilot()
                  "internal automatic squelch suppresses no-signal noise without a false pilot") && ok;
     ok = require(channel->setRunning(false) && channel->wbfmStereoDetected() == false,
                  "stop immediately invalidates previous stereo indication") && ok;
+    ok = require(!channel->wbfmReceptionDiagnostics(), "stop invalidates completed-block diagnostics") && ok;
     if (!require(channel->setRunning(true), "WFM restarts")) { return false; }
     const Measurement resumed = run(*channel, Vector::Mono, 3.0, 2.0);
     ok = require(resumed.finite && channel->wbfmStereoDetected() == false
                  && resumed.peak < 0.95 && resumed.clipped == 0,
                  "restart on mono never retains old station's stereo flag") && ok;
+    const auto fresh = channel->wbfmReceptionDiagnostics();
+    ok = require(fresh && !fresh->pilotLocked && fresh->lockLossCount == 0
+        && fresh->reacquisitionCount == 0 && fresh->observationDurationMs < 3100,
+        "flush starts new reception counters and sample-clock history") && ok;
+    auto forced = config(); forced.wbfmReceive->forceMono = true;
+    if (!require(channel->reconfigure(forced, &error), error.c_str())) { return false; }
+    const Measurement mono = run(*channel, Vector::Stereo, 4.0);
+    const auto monoReception = channel->wbfmReceptionDiagnostics();
+    ok = require(mono.finite && mono.peak > 0.001 && mono.differenceEnergy == 0.0
+        && channel->wbfmStereoDetected() == false && monoReception && monoReception->pilotLocked,
+        "Force Mono produces identical nonzero L/R while truthfully observing the actual pilot") && ok;
+    if (!require(channel->reconfigure(config(), &error), error.c_str())) { return false; }
+    const Measurement automatic = run(*channel, Vector::Stereo, 4.0);
+    ok = require(automatic.finite && automatic.left(0) > 100 * automatic.right(0)
+        && automatic.right(1) > 100 * automatic.left(1),
+        "return to Auto Stereo restores the decoder matrix") && ok;
     return ok;
 }
 

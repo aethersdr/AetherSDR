@@ -44,6 +44,7 @@ class PhoneApplet;
 class EqApplet;
 class WaveApplet;
 class AetherClockApplet;
+class WfmApplet;
 class MiniPanApplet;
 class ClientEqApplet;
 class ClientCompApplet;
@@ -114,6 +115,7 @@ public:
     EqApplet*       eqApplet()       { return m_eqApplet; }
     WaveApplet*     waveApplet() const { return m_waveApplet; }
     AetherClockApplet* aetherClockApplet() const { return m_aetherClockApplet; }
+    WfmApplet* wfmApplet() const { return m_wfmApplet; }
     MiniPanApplet*  miniPanApplet() const { return m_miniPanApplet; }
     // Phase 7.1: each side has its own CEQ applet — clientEqTxApplet()
     // is the original "ceq" tile bound to TX, clientEqRxApplet() is
@@ -386,6 +388,7 @@ private:
                                    const QString& appletKey,
                                    bool available);
     void markHardwareConditional(const QString& id);
+    void setWfmAvailable(bool available);
     void persistVuMeterSettings() const;
     void showStandardMeterContextMenu(QWidget* source, const QPoint& position);
     static const int kFavoriteCount = 5;
@@ -423,6 +426,7 @@ private:
     EqApplet*      m_eqApplet{nullptr};
     WaveApplet*    m_waveApplet{nullptr};
     AetherClockApplet* m_aetherClockApplet{nullptr};
+    WfmApplet* m_wfmApplet{nullptr};
     MiniPanApplet* m_miniPanApplet{nullptr};
     ClientEqApplet* m_clientEqTxApplet{nullptr};
     ClientEqApplet* m_clientEqRxApplet{nullptr};

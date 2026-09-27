@@ -3,7 +3,7 @@
 Implementation of RFC #5468 section 4, layered on the capture/parking work in
 draft #5924. Production receiver admission remains one. This does not qualify
 multiple receivers, transmit, other radio families, or new architecture limits.
-The free-pan amendment and placement/styling of the new RX controls remain
+The free-pan amendment and placement/styling of the dedicated WFM applet remain
 subject to maintainer review. The new recipe is enabled in this candidate after
 generated-signal qualification. The previous installed WFM build is retained for
 live comparison and rollback; this draft does not claim release qualification.
@@ -57,12 +57,51 @@ coefficients, noise gain and refresh instructions.
 ## Confirmed controls and observations
 
 The optional `broadcastFmReceive` capability declares supported de-emphasis
-values and is backed by a typed backend verb. RX controls expose 50 and 75 µs;
+values and typed control/diagnostic support backed by backend verbs. The dedicated
+WFM applet exposes 50 and 75 µs;
 old schema-one settings without this optional per-slice field retain the previous
 75 µs response. Changes become observed and persistent only after DSP adoption.
 Unsupported values, stale model owners and foreign-thread requests do not dispatch.
 The existing RtlSlices owner retains the setting across other modes and restart.
 Pilot status is never persisted.
+
+The WFM applet follows the selected owned slice and is presented only while a
+connected backend declares broadcast FM reception and that slice's accepted mode
+is WFM. The standard applet container owns its dock/float placement, button and
+open/closed choice. Temporary unavailability suppresses presentation without
+closing the saved workspace item. Generic RX controls retain their behavior;
+the broadcast-specific row is removed from RX.
+
+The single Mono/Stereo button requests a prepared receiver recipe. Mono selects
+real L+R mono output; Stereo selects automatic pilot-based stereo with ordinary
+mono fallback. The accepted per-slice choice persists in RtlSlices and defaults
+to the previous automatic behavior for older settings. The button cannot claim
+accepted state before DSP adoption. Decoder observations remain separate from
+that selection, with current stereo shown through a success theme token and
+plain accessible text. A missing pilot alone is not a poor-signal verdict.
+
+The applet Settings drawer independently persists Lock Scope and Diagnostics
+visibility in one nested client UI object. The scope plots measured 19 kHz pilot
+magnitude and the detector's actual acquire/release thresholds in relative
+normalized discriminator units. It retains at most 160 observations and up to
+40 seconds; hiding it clears history and stops its plotting/history work without
+stopping the receiver. Receiver changes and stale observations clear the scope.
+This is not a PLL, SNR, calibrated RF-power or channel-separation instrument.
+
+Diagnostics describe the measured pilot detector's consecutive-block hysteresis,
+lock duration, loss/reacquisition counts and up to five seconds of unchanged
+pilot state. Durations come from completed decoder samples. The optional C
+snapshot is coherently read with bounded atomic retries, carried by the existing
+receiver PCM lifetime fences and published to the model at most four times per
+second plus actual status changes. Unknown or stale measurements are unavailable;
+no quality percentage is invented. Configuration and processing-health readouts
+are distinct from reception measurements.
+
+Native NRSC-5/HD FM is a separately requested next checkpoint and RFC amendment,
+not covered by the existing analog architecture approval or the qualification
+below. The analog checkpoint exposes no ineffective HD state or empty metadata
+controls. Future HD program/ID3 metadata and analog RDS have different decoder
+sources; RDS remains separate from the requested native HD implementation.
 
 The stereo indicator reports the last completed decoder block carried by a
 current-session/current-revision independent audio packet. It is unavailable

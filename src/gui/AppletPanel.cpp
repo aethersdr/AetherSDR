@@ -21,6 +21,7 @@
 #include "PhoneApplet.h"
 #include "EqApplet.h"
 #include "AetherClockApplet.h"
+#include "WfmApplet.h"
 #include "MiniPanApplet.h"
 #include "WaveApplet.h"
 #include "ClientEqApplet.h"
@@ -171,7 +172,7 @@ constexpr int kStackBottomMargin = 8;
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
+    "PWR", "RX", "WFM", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "GHE", "CLOCK"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -625,6 +626,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                 // lowering = hide it.  The manager owns the window
                 // so we just toggle the container's visibility.
                 if (c->isFloating()) {
+                    if (c->isPresentationManaged()) {
+                        c->setContainerVisible(checked);
+                    }
                     if (auto* w = c->window())
                         w->setVisible(checked);
                     return;
@@ -751,6 +755,16 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_rxApplet = new RxApplet;
     m_appletOrder.append(makeEntry("RX", "RX Controls", m_rxApplet, true, m_drawer, m_drawerLayout));
+
+    // A cohesive broadcast receiver tile follows the selected slice. The
+    // container owns docking, floating, layout and the operator's open/closed
+    // choice; temporary mode/capability loss must not overwrite that choice.
+    m_wfmApplet = new WfmApplet;
+    m_appletOrder.append(makeEntry("WFM", "WFM", m_wfmApplet, true,
+                                   m_drawer, m_drawerLayout));
+    markHardwareConditional("WFM");
+    connect(m_wfmApplet, &WfmApplet::availabilityChanged,
+            this, &AppletPanel::setWfmAvailable);
 
     // Tuner / Amp entries use makeEntry like everything else;
     // MainWindow toggles tray-button visibility via setTunerVisible /
@@ -1108,6 +1122,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // Place the drawer toggle into the favorites row, then apply the
     // saved (or default) favorites layout to populate both strips.
     loadButtonLayout();
+    setWfmAvailable(m_wfmApplet->isAvailable());
     applyBarLayout();
 
     // Restore drawer open/closed state (default closed).  Signals blocked
@@ -1381,6 +1396,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
     // a category keep panel order.
     static const QMap<QString, QString> kCategory = {
         {QStringLiteral("RX"),    QStringLiteral("Receive")},
+        {QStringLiteral("WFM"),   QStringLiteral("Receive")},
         {QStringLiteral("MPAN"),  QStringLiteral("Receive")},
         {QStringLiteral("KSDR"),  QStringLiteral("Receive")},
         {QStringLiteral("DEMO"),  QStringLiteral("Receive")},
@@ -1495,7 +1511,7 @@ void AppletPanel::setAppletVisible(const QString& id, bool visible)
                     w->setVisible(visible);
                 // Keep the container itself shown: it is the window's content,
                 // and the window is what visibility means for a floating tile.
-                c->setContainerVisible(true);
+                c->setContainerVisible(c->isPresentationManaged() ? visible : true);
                 if (entry.btn) {
                     QSignalBlocker b(entry.btn);
                     entry.btn->setChecked(visible);
@@ -1727,6 +1743,30 @@ void AppletPanel::applyCapabilityVisibility(const QString& id,
     applyBarLayout();
 }
 
+void AppletPanel::setWfmAvailable(bool available)
+{
+    // Availability suppresses presentation, never workspace membership or the
+    // requested open state. Generic capability hiding emits visibilityChanged
+    // and would incorrectly mark this temporarily unavailable tile as closed
+    // in the active workspace. The container/window gate also survives recall.
+    for (BarButton& button : m_barButtons) {
+        if (button.id != QLatin1String("WFM")) {
+            continue;
+        }
+        button.hardwareAvailable = available;
+        if (available && !m_buttonOrder.contains(button.id)
+            && !m_hiddenButtons.contains(button.id)) {
+            m_buttonOrder.append(button.id);
+            saveButtonLayout();
+        }
+        break;
+    }
+    if (ContainerWidget* container = m_containerMgr->container(QStringLiteral("WFM"))) {
+        container->setPresentationAvailable(available);
+    }
+    applyBarLayout();
+}
+
 void AppletPanel::setRadioFilterWidths(const QList<int>& widthsHz)
 {
     if (m_rxApplet)
@@ -1868,6 +1908,9 @@ void AppletPanel::setControlsLocked(bool locked)
 void AppletPanel::setSlice(SliceModel* slice)
 {
     m_rxApplet->setSlice(slice);
+    if (m_wfmApplet) {
+        m_wfmApplet->setSlice(slice);
+    }
     if (m_aetherClockApplet)
         m_aetherClockApplet->setSlice(slice);
 

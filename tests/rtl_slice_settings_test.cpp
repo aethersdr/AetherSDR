@@ -195,9 +195,12 @@ int main(int argc, char** argv)
         selected.mode = QStringLiteral("WFM");
         selected.filterLowHz = -90000; selected.filterHighHz = 90000;
         selected.wfmDeemphasisUs = 50;
+        selected.wfmForceMono = true;
         check(wfm.patch(100'000'000, 2'400'000, {selected})
             && wfm.load().document.slices.value(3).wfmDeemphasisUs == 50,
             "accepted 50 us deemphasis persists per stable slice");
+        check(wfm.load().document.slices.value(3).wfmForceMono,
+              "accepted forced Mono persists under the existing per-slice owner");
         selected.mode = QStringLiteral("FM");
         check(wfm.patch(100'000'000, 2'400'000, {selected})
             && wfm.load().document.slices.value(3).wfmDeemphasisUs == 50,
@@ -209,12 +212,22 @@ int main(int argc, char** argv)
         QJsonObject old = wfmScope.featureExact(feature);
         QJsonObject oldEntries = old.value("slices").toObject();
         QJsonObject oldEntry = oldEntries.value("3").toObject();
-        oldEntry.remove("wfmDeemphasisUs"); oldEntries.insert("3", oldEntry);
+        oldEntry.remove("wfmDeemphasisUs"); oldEntry.remove("wfmForceMono"); oldEntries.insert("3", oldEntry);
         old.insert("slices", oldEntries);
         RtlSliceSettings::Document restored;
         check(RtlSliceSettings::decode(old, restored, reason)
             && restored.slices.value(3).wfmDeemphasisUs == 75,
             "existing schema-one documents retain the legacy 75 us response");
+        check(!restored.slices.value(3).wfmForceMono, "old documents retain Auto Stereo");
+        for (const QJsonValue& invalid : {QJsonValue(0), QJsonValue(1), QJsonValue("false"),
+                                        QJsonValue(QJsonValue::Null), QJsonValue(QJsonObject{})}) {
+            QJsonObject malformed = old;
+            QJsonObject items = oldEntries, item = oldEntry;
+            item.insert("wfmForceMono", invalid); items.insert("3", item);
+            malformed.insert("slices", items); restored.captureCenterHz = 42;
+            check(!RtlSliceSettings::decode(malformed, restored, reason) && restored.captureCenterHz == 42,
+                  "malformed Mono selection refuses the whole document without partial adoption");
+        }
         for (const QJsonValue& invalid : {QJsonValue(0), QJsonValue(60), QJsonValue(75.5),
                                         QJsonValue("50"), QJsonValue(QJsonValue::Null)}) {
             QJsonObject malformed = old;

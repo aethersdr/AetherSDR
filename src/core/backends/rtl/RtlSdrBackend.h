@@ -78,6 +78,7 @@ public:
     void setSliceAudioPan(int sliceId, int panPercent) override;
     void setSliceSquelch(int sliceId, bool enabled, int level) override;
     void setSliceWfmDeemphasis(int sliceId, int microseconds) override;
+    void setSliceWfmForceMono(int sliceId, bool forceMono) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
@@ -226,6 +227,15 @@ private:
     std::unique_ptr<RtlSdrWorker> m_worker;
     std::array<WfmStereoStatus, 8> m_wfmStatus{};
     std::array<QElapsedTimer, 8> m_wfmObservationAge;
+    std::array<QElapsedTimer, 8> m_wfmPublicationAge;
+    std::array<WfmReceptionDiagnostics, 8> m_wfmReception;
+    struct WfmObservationIdentity {
+        std::uint64_t instance = 0;
+        std::uint64_t epoch = 0;
+        std::uint32_t sequence = 0;
+        bool operator==(const WfmObservationIdentity&) const = default;
+    };
+    std::array<std::optional<WfmObservationIdentity>, 8> m_wfmLastObservation;
     RtlReceivePipeline::Diagnostics m_diagnostics; // owner-thread health cache
     RtlSdrDdc* ddc();
 };

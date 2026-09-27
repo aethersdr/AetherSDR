@@ -88,7 +88,8 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
             wfmTransition |= (wide && (faults & (1u << id)))
                 || !wide || !prior.dsp.wbfmReceive
                 || prior.passband != receiver->passband
-                || prior.dsp.wbfmReceive->deemphasis != deemphasis;
+                || prior.dsp.wbfmReceive->deemphasis != deemphasis
+                || prior.dsp.wbfmReceive->forceMono != receiver->wfmForceMono;
         }
     }
     if (legacy && (state.receivers.size() != 1 || state.receivingIds.size() != 1)) { return Submission::Failed; }
@@ -136,6 +137,7 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
                 spec.dsp.dspBlockSize = 1024;
                 spec.dsp.outputSampleRate = 48000;
                 spec.dsp.wbfmReceive = WdspChannel::WbfmReceive{};
+                spec.dsp.wbfmReceive->forceMono = receiver.wfmForceMono;
                 spec.dsp.wbfmReceive->deemphasis = receiver.wfmDeemphasisUs == 50
                     ? WdspChannel::WbfmReceive::Deemphasis::Us50
                     : WdspChannel::WbfmReceive::Deemphasis::Us75;
@@ -304,16 +306,20 @@ void RtlReceivePipeline::audioBlock(const RtlReceiverRegistry::ReceiverSpec& spe
 {
     audioBlockWithStatus(spec, first, left, right, discontinuity, std::nullopt);
 }
-void RtlReceivePipeline::audioBlockWithStatus(const RtlReceiverRegistry::ReceiverSpec& spec, std::uint64_t first,
-    std::span<const float> left, std::span<const float> right, bool discontinuity,
-    std::optional<bool> wfmStereoDetected) noexcept
+void RtlReceivePipeline::audioBlockWithStatus(const RtlReceiverRegistry::ReceiverSpec& spec,
+    std::uint64_t first, std::span<const float> left, std::span<const float> right,
+    bool discontinuity, std::optional<AetherSDR::WfmReceptionDiagnostics> reception) noexcept
 {
     Packet packet;
     packet.token = m_token; packet.captureEpoch = m_captureEpoch;
     packet.instance = spec.handle.instance; packet.receiverEpoch = spec.epoch;
     packet.slot = spec.handle.slot; packet.firstSample = first;
     packet.frames = left.size(); packet.discontinuity = discontinuity;
-    packet.wfmStereoDetected = wfmStereoDetected;
+    packet.wfmReception = reception;
+    if (reception) {
+        packet.wfmStereoDetected = reception->pilotLocked
+            && !(spec.dsp.wbfmReceive && spec.dsp.wbfmReceive->forceMono);
+    }
     if (left.size() != right.size() || left.size() > 1024) { return; }
     std::array<float, 1024> gatedLeft{}, gatedRight{};
     for (std::size_t i = 0; i < left.size(); ++i) {

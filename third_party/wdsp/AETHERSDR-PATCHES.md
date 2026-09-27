@@ -919,3 +919,64 @@ On upstream refresh, retain the explicit legacy depth reset, prepared field on
 all rebuilds, matching create/flush prefix, and bytes-before-credit edge unless
 upstream supplies equivalent semantics. Do not increase global `DSP_MULT`,
 weaken non-OK withdrawal, or move the test readiness query onto acquisition.
+
+
+## Patch 16 — selected WFM mono and bounded pilot reception snapshot
+
+Local changes to `upstream/wbfm.c`, `upstream/wbfm.h`, the public WDSP header,
+and the narrow `include/aether_wdsp.h` / `aether_wbfm_observation.h` facade,
+against the same pinned upstream 2.10 revision. This is an AetherSDR extension,
+not an upstream PLL or a calibrated signal-quality measurement.
+
+`SetRXAWBFMForceMono` selects the existing L+R-only matrix branch while leaving
+INDY and automatic squelch running. The default remains Auto Stereo. RTL sets
+this only while preparing an immutable receiver recipe; accepted state and
+persistence follow the matching receiver revision, including failure/rollback.
+A changed recipe retires both slice and speaker PCM epochs. Other WDSP owners
+retain the false default, and rebuilding a configured receiver reapplies its
+selection. Mono is real identical-channel audio, not merely a changed badge. Packet/model
+stereo status describes the actual selected output: forced mono remains Mono
+even when the independent reception diagnostics report an acquired pilot.
+
+`GetRXAWBFMReception` publishes one coherent latest-completed-block snapshot.
+The worker publishes a fixed sequence plus 17 interlocked 32-bit payload words;
+each exact double is copied into two words, never read nonatomically across
+threads. A reader makes at most four attempts and returns unavailable on a
+collision. No DSP mutex, wait, allocation, wall clock or logging enters the
+acquisition path. Both publication and reading use the port's existing
+sequentially consistent interlocked operations. The sequence advances only on
+completed blocks or an explicitly invalidating reset, allowing backend freshness
+to reject repeated cached observations while exchange credits are consumed.
+
+The amplitude is INDY's actual `sqrt(filtIstable^2 + filtQstable^2)` after the
+19 kHz filter and before pilot AGC, in FM-discriminator units normalized to
+75 kHz peak deviation. It is not RF power, dBm, dBFS, SNR, a quality percentage,
+or PLL phase/frequency/lock. Exact low/high thresholds and consecutive-low/high
+block counters plus their configured off/on block counts are included. At
+192 kHz / 1,024 frames those thresholds are 0.03/0.06 and the integer hysteresis
+counts are 187/93; readback uses the actual fields rather than duplicated UI
+constants. Absent pilot is ordinary mono fallback.
+
+Lock duration, observation duration and time since either indicator transition
+are computed from processed DSP samples. The recent stable duration is capped
+at 5,000 ms. Loss and reacquisition counts cover every completed block between
+UI updates; the first acquisition is excluded from reacquisitions. Durations
+and counts saturate at `INT32_MAX`. Construction, flush, rate/size rebuild and
+new receiver lifetimes invalidate/reset the measurements. These durations do
+not include audio-ring/device latency or assert wall-clock continuity.
+
+The RTL owner publishes diagnostics at most four times per second plus actual
+indicator transitions/invalidation, under the accepted PCM session/revision.
+Only a new valid decoder sequence refreshes its 500 ms freshness clock. Retune,
+park, mode/session changes and expiry clear the model's reception claim; raw
+measurements are never persisted. Processing health remains a separate surface.
+
+Generated `wdsp_wbfm_test` vectors cover exact nonzero paired Mono output with
+an honestly retained pilot, Auto Stereo restoration, measured hysteresis,
+loss/reacquisition and flush reset. `rtl_wfm_pipeline_test` checks both the
+independent tap and speaker with new epochs. Settings/model fixtures cover
+request-versus-adoption, strict boolean decoding, old-document defaults, replay
+freshness and retired observations. These tests are added validation obligations;
+their results must come from a subsequent exact-source Nobara run. On upstream
+refresh retain this extension unless equivalent typed, bounded, race-free
+semantics replace it, and do not label INDY as a PLL.

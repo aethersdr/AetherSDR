@@ -93,9 +93,9 @@ public:
         // publishes its latest completed DSP block, not an RF arrival timestamp.
         virtual void audioBlockWithStatus(const ReceiverSpec& spec, std::uint64_t firstSample,
             std::span<const float> left, std::span<const float> right, bool discontinuity,
-            std::optional<bool> wfmStereoDetected) noexcept
+            std::optional<AetherSDR::WfmReceptionDiagnostics> reception) noexcept
         {
-            (void)wfmStereoDetected;
+            (void)reception;
             audioBlock(spec, firstSample, left, right, discontinuity);
         }
     };

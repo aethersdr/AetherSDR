@@ -38,6 +38,10 @@ public:
     ContainerWidget* releaseContainer();
     ContainerWidget* container() const { return m_container; }
 
+    // Retain the outer window's explicit show/hide request while the hosted
+    // container is temporarily unavailable. The content itself stays shown.
+    void setVisible(bool visible) override;
+
     // AppSettings key under which to store geometry (serialized as
     // base64 of QByteArray returned by saveGeometry()).  Empty = no
     // persistence.
@@ -77,8 +81,13 @@ protected:
 
 private:
     void saveGeometryToKey() const;
+    void applyPresentation();
 
     ContainerWidget* m_container{nullptr};
+    QMetaObject::Connection m_presentationConnection;
+    QMetaObject::Connection m_containerVisibilityConnection;
+    QMetaObject::Connection m_containerDestroyedConnection;
+    bool             m_requestedVisible{false};
     QVBoxLayout*     m_layout{nullptr};
     QString          m_geometryKey;
     bool             m_restoring{false};

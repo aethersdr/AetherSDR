@@ -74,6 +74,8 @@ struct ReceiveSquelchModel {
 // Engaged only when setSliceWfmDeemphasis and observed stereo status work.
 struct BroadcastFmReceive {
     QVector<int> deemphasisUs;
+    bool forceMonoControl = false;
+    bool receptionDiagnostics = false;
 };
 struct ReceivePanRangeControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};

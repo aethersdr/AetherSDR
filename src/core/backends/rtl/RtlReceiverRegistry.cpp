@@ -205,7 +205,7 @@ private:
             return false;
         }
         m_sink->audioBlockWithStatus(m_spec, firstSample / ratio, m_left, m_right, m_first,
-                                    m_channel->wbfmStereoDetected());
+                                       m_channel->wbfmReceptionDiagnostics());
         m_first = false;
         return true;
     }

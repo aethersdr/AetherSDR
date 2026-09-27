@@ -90,6 +90,15 @@ public:
     void setContainerVisible(bool visible);
     bool isContainerVisible() const { return m_visible; }
 
+    // Transient presentation only: unavailable applets retain their logical
+    // open/closed intent and workspace home. Direct show() calls from layout
+    // recall obey this gate too. Floating content stays shown inside its
+    // independently gated outer window. Other containers default available.
+    void setPresentationAvailable(bool available);
+    bool isPresentationAvailable() const { return m_presentationAvailable; }
+    bool isPresentationManaged() const { return m_presentationManaged; }
+    void setVisible(bool visible) override;
+
     // Access to the titlebar — callers can hide its close button
     // for root containers or customise the title dynamically.
     ContainerTitleBar* titleBar() { return m_titleBar; }
@@ -136,6 +145,9 @@ signals:
     // Fired after setContainerVisible() changes state.
     void visibilityChanged(bool visible);
 
+    // Does not emit visibilityChanged: availability is never a user close.
+    void presentationAvailabilityChanged(bool available);
+
     // Fired after dockMode() changes — manager uses this to keep the
     // titlebar button label in sync.
     void dockModeChanged(DockMode mode);
@@ -170,6 +182,9 @@ private:
     QWidget*           m_content{nullptr};
     DockMode           m_dockMode{DockMode::PanelDocked};
     bool               m_visible{true};
+    bool               m_presentationAvailable{true};
+    bool               m_presentationManaged{false};
+    bool               m_requestedVisible{true};
     QSize              m_defaultFloatingSize;
     QHash<QWidget*, int> m_savedMaxWidths;  // child → docked maximumWidth (#3451)
 };

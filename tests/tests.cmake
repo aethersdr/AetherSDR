@@ -6590,6 +6590,8 @@ set_tests_properties(fm_filter_controls_test PROPERTIES
 
 add_executable(wfm_controls_test
     tests/wfm_controls_test.cpp
+    src/gui/WfmApplet.cpp
+    src/gui/WfmLockScope.cpp
     src/gui/RxApplet.cpp
     src/gui/ControlAvailabilityRegistry.cpp
     src/gui/VfoWidget.cpp

@@ -183,7 +183,6 @@ private:
     void refreshFilterWidth();   // "AUTO" while adaptive is live, else the width
     void updateModeSettings(const QString& mode);
     bool squelchAvailableInMode(const QString& mode) const;
-    void refreshBroadcastFm();
     void rebuildFilterButtons();
     QVector<int> defaultFilterWidths(const QString& mode) const;
     bool acceptsFilterEdges(int low, int high) const;
@@ -221,10 +220,6 @@ private:
     ControlAvailabilityRegistry* m_filterAvailability{nullptr};
     std::optional<ReceiveFilterControl> m_receiveFilterControl;
     std::optional<ReceiveSquelchModel> m_receiveSquelchModel;
-    std::optional<BroadcastFmReceive> m_broadcastFmReceive;
-    QLabel* m_wfmLabel{nullptr};
-    QComboBox* m_wfmDeemphasis{nullptr};
-    QLabel* m_wfmStatus{nullptr};
     QPushButton* m_filterUnavailable{nullptr};
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
     QStringList m_antList{"ANT1", "ANT2"};   // populated from ant_list key

@@ -609,8 +609,20 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
                 outputRight[sample] *= static_cast<float>(m_wbfm->gain);
             }
         }
-        const bool stereo = wdspError == 0 && m_running.load(std::memory_order_relaxed)
-            && GetRXAWBFMStereoIndicator(m_channelId) != 0;
+        m_wbfmReception.reset();
+        AetherWdspWbfmObservation observation{};
+        if (wdspError == 0 && m_running.load(std::memory_order_relaxed)
+            && GetRXAWBFMReception(m_channelId, &observation) && observation.valid) {
+            m_wbfmReception = AetherSDR::WfmReceptionDiagnostics{
+                true, observation.pilotMagnitude, observation.pilotLocked != 0,
+                observation.lockDurationMs, observation.lockLossCount, observation.reacquisitionCount,
+                observation.observationDurationMs, observation.stableDurationMs,
+                observation.pilotEngageThreshold, observation.pilotReleaseThreshold,
+                observation.consecutiveHighBlocks, observation.consecutiveLowBlocks,
+                observation.engageBlocks, observation.releaseBlocks, observation.observationSequence};
+        }
+        const bool stereo = m_wbfmReception && m_wbfmReception->pilotLocked
+            && !m_config.wbfmReceive->forceMono;
         m_wbfmStereo.store(stereo ? 1 : 0, std::memory_order_relaxed);
     }
     const uint64_t allocationsAfter = wdspPortThreadAllocationSequence();
@@ -677,6 +689,7 @@ bool WdspChannel::setRunning(bool running) noexcept
     if (m_wbfm) {
         if (running) { flush_bps(m_wbfm->filter.get()); }
         m_wbfmStereo.store(0, std::memory_order_relaxed);
+        m_wbfmReception.reset();
     }
     SetChannelState(m_channelId, running ? 1 : 0, 0);
     m_running.store(running, std::memory_order_relaxed);
@@ -1404,9 +1417,11 @@ bool WdspChannel::open() noexcept
         if (m_config.wbfmReceive) {
             m_wbfm = std::make_unique<WbfmState>(m_config);
             SetRXAWBFMDiscriminatorCompensation(m_channelId, 1);
+            SetRXAWBFMForceMono(m_channelId, m_config.wbfmReceive->forceMono ? 1 : 0);
             SetRXAWBFMdmph(m_channelId, 1,
                 m_config.wbfmReceive->deemphasis == WbfmReceive::Deemphasis::Us50 ? 1 : 0);
             m_wbfmStereo.store(0, std::memory_order_relaxed);
+            m_wbfmReception.reset();
         } else {
             SetRXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
             RXANBPSetFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);
@@ -1536,6 +1551,7 @@ void WdspChannel::close() noexcept
         closeNoiseBlanker();
         m_wbfm.reset();
         m_wbfmStereo.store(-1, std::memory_order_relaxed);
+        m_wbfmReception.reset();
     }
     m_open = false;
 }

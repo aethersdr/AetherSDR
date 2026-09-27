@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include "core/WfmReceptionDiagnostics.h"
 
 #include <QMetaType>
 #include <QString>
@@ -13,7 +14,8 @@ namespace AetherSDR {
 // Existing backends retain their historical optimistic setter behavior.
 enum class ReceiveControlPolicy { Optimistic, Confirmed };
 
-// Observed analog broadcast stereo state; mode selection alone proves no pilot.
+// Observed broadcast output state: forced mono is Mono even with an acquired
+// pilot. Independent pilot observations live in WfmReceptionDiagnostics.
 enum class WfmStereoStatus { Unavailable, Acquiring, Mono, Stereo };
 
 // Normalized, vendor-neutral slice-status delta (aetherd RFC 2.3 — SliceModel
@@ -103,6 +105,8 @@ struct SliceDelta {
     std::optional<bool>        squelchOn;
     std::optional<int>         squelchLevel;
     std::optional<int>         wfmDeemphasisUs;
+    std::optional<bool>        wfmForceMono;
+    std::optional<WfmReceptionDiagnostics> wfmReceptionDiagnostics;
     std::optional<WfmStereoStatus> wfmStereoStatus;
     std::optional<bool>        ritOn;
     std::optional<int>         ritFreq;
@@ -145,3 +149,4 @@ struct SliceDelta {
 // backend is ever moved to a worker thread.)
 Q_DECLARE_METATYPE(AetherSDR::SliceDelta)
 Q_DECLARE_METATYPE(AetherSDR::WfmStereoStatus)
+Q_DECLARE_METATYPE(AetherSDR::WfmReceptionDiagnostics)

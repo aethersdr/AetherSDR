@@ -42,6 +42,7 @@ public:
         // Present only on the independent WFM slice packet. Travels with the
         // same accepted session/revision and receiver epoch as its PCM.
         std::optional<bool> wfmStereoDetected;
+        std::optional<AetherSDR::WfmReceptionDiagnostics> wfmReception;
         std::array<float, 2048> samples{};
     };
     // Bounded acquisition observations; no formatting, clock reads, allocation,
@@ -96,7 +97,7 @@ private:
     void audioBlock(const RtlReceiverRegistry::ReceiverSpec&, std::uint64_t,
                     std::span<const float>, std::span<const float>, bool) noexcept override;
     void audioBlockWithStatus(const RtlReceiverRegistry::ReceiverSpec&, std::uint64_t,
-                    std::span<const float>, std::span<const float>, bool, std::optional<bool>) noexcept override;
+                    std::span<const float>, std::span<const float>, bool, std::optional<AetherSDR::WfmReceptionDiagnostics>) noexcept override;
     void speakerBlock(std::uint64_t, std::span<const float>, bool) noexcept override;
     bool enqueue(const Packet&) noexcept;
     void missingFrames(const RtlAudioMixer::Input&, std::uint64_t, std::uint64_t,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "aether_wbfm_observation.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,6 +56,10 @@ void SetRXAMode(int channel, int mode);
 void SetRXAWBFMDiscriminatorCompensation(int channel, int enabled);
 void SetRXAWBFMdmph(int channel, int run, int continent);
 int GetRXAWBFMStereoIndicator(int channel);
+// Construction/control only; actual matrix output becomes paired L+R in mono.
+void SetRXAWBFMForceMono(int channel, int forceMono);
+// Fixed four-attempt atomic snapshot; 0 means retry later, never wait on DSP.
+int GetRXAWBFMReception(int channel, AetherWdspWbfmObservation* observation);
 
 // Host-owned WFM RF prefilter. WBFM intentionally disables RXA's internal
 // RF filters, so this existing overlap-save stage runs at the input rate

@@ -121,6 +121,7 @@ static void reconnectAtCaptureLimits()
         saved.mode = QLatin1String(capture.mode);
         saved.filterLowHz = -capture.filterHz; saved.filterHighHz = capture.filterHz;
         saved.wfmDeemphasisUs = 50;
+        saved.wfmForceMono = true;
         check(RtlSliceSettings(scope).patch(capture.centerHz, capture.rateHz, {saved}),
               "capture-limit reconnect fixture preserves a valid saved receiver");
         const QJsonObject original = scope.featureExact("RtlSlices");
@@ -168,7 +169,8 @@ static void reconnectAtCaptureLimits()
                 check(actual.mode == expectedMode && actual.passband.carrierHz == saved.frequencyHz
                     && actual.passband.filterLowHz == saved.filterLowHz
                     && actual.passband.filterHighHz == saved.filterHighHz
-                    && actual.wfmDeemphasisUs == 50 && actual.audioMute == saved.audioMute,
+                    && actual.wfmDeemphasisUs == 50 && actual.wfmForceMono
+                    && actual.audioMute == saved.audioMute,
                     "provisional bootstrap does not resize or replace saved receiver choices");
                 check(device->starts == 1 && device->writes == 6 && device->cancels == 0,
                     "accepted saved receivers restore without a second hardware capture transaction");
