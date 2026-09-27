@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <limits>
 #include <numbers>
+#include <type_traits>
 #include <vector>
 
 using Extractor = AetherSDR::rtl::RtlRfExtractor;
@@ -58,8 +59,82 @@ static double toneMagnitude(std::span<const float> samples, double hz)
     }
     return std::abs(sum) / samples.size();
 }
+static void firstFailureObservation()
+{
+    static_assert(std::is_trivially_copyable_v<Extractor::Failure>);
+    static_assert(std::is_trivially_copyable_v<std::optional<Extractor::Failure>>);
+    struct RejectingSink final : Extractor::Sink {
+        int calls = 0;
+        bool iqBlock(std::span<const float>, std::span<const float>, std::uint64_t) noexcept override
+        { ++calls; return false; }
+    } sink;
+    const auto process = [&sink](Extractor& extractor, std::uint64_t first,
+                                std::span<const std::complex<float>> input, bool discontinuity = false) {
+        inCallback = true;
+        const bool result = extractor.process(config().capture, first, input, sink, discontinuity);
+        inCallback = false;
+        return result;
+    };
+    std::array<std::complex<float>, 64> shortInput{};
+    Extractor gap(config());
+    check(!gap.failure(), "new extractor has no failure observation");
+    check(process(gap, 25, shortInput), "nonzero origin starts without a complete DSP block");
+    check(!process(gap, 90, shortInput) && gap.withdrawn(), "one missing capture sample still withdraws");
+    const auto gapFailure = gap.failure();
+    check(gapFailure && gapFailure->reason == Extractor::FailureReason::CapturePositionMismatch
+        && gapFailure->hasExpectedCaptureFirst && gapFailure->expectedCaptureFirst == 89
+        && gapFailure->captureFirst == 90 && gapFailure->captureFrames == 64
+        && gapFailure->hasIqFirst && gapFailure->iqFirst == 1 && gapFailure->iqFrames == 0,
+        "gap observation names exact expected/actual capture and next IQ positions");
+    check(!process(gap, 89, shortInput) && gap.failure() == gapFailure,
+        "withdrawn retry cannot erase or replace the first gap");
+
+    Extractor discontinuous(config());
+    check(process(discontinuous, 25, shortInput), "explicit-discontinuity fixture starts");
+    check(!process(discontinuous, 89, shortInput, true), "explicit discontinuity remains a refusal");
+    check(discontinuous.failure()
+        && discontinuous.failure()->reason == Extractor::FailureReason::Discontinuity
+        && discontinuous.failure()->captureFirst == discontinuous.failure()->expectedCaptureFirst,
+        "explicit discontinuity differs from a positional gap");
+
+    Extractor invalid(config());
+    shortInput[3] = {std::numeric_limits<float>::quiet_NaN(), 0};
+    check(!process(invalid, 50, shortInput), "nonfinite input remains refused");
+    const auto invalidFailure = invalid.failure();
+    check(invalidFailure && invalidFailure->reason == Extractor::FailureReason::NonFiniteInput
+        && invalidFailure->captureFirst == 50 && invalidFailure->captureFrames == 64
+        && !invalidFailure->hasExpectedCaptureFirst && !invalidFailure->hasIqFirst,
+        "pre-conversion failure does not invent an IQ or previous capture position");
+    shortInput[3] = {};
+    check(!process(invalid, 50, shortInput) && invalid.failure() == invalidFailure,
+        "later finite input retains the nonfinite first cause");
+
+    Extractor overflow(config());
+    check(!process(overflow, std::numeric_limits<std::uint64_t>::max() - 31, shortInput),
+        "capture end overflow remains refused");
+    check(overflow.failure() && overflow.failure()->reason == Extractor::FailureReason::CapturePositionOverflow,
+        "capture overflow has its own precise reason");
+
+    Extractor empty(config());
+    check(!process(empty, 10, {}) && empty.failure()
+        && empty.failure()->reason == Extractor::FailureReason::EmptyInput,
+        "empty input has a distinct first-failure reason");
+
+    Extractor rejected(config());
+    std::vector<std::complex<float>> input(65536);
+    check(!process(rejected, 0, input) && rejected.withdrawn(), "sink rejection still withdraws immediately");
+    const auto rejectedFailure = rejected.failure();
+    check(rejectedFailure && rejectedFailure->reason == Extractor::FailureReason::SinkRejected
+        && rejectedFailure->captureFirst == 0 && rejectedFailure->captureFrames == input.size()
+        && rejectedFailure->hasIqFirst && rejectedFailure->iqFirst == 0 && rejectedFailure->iqFrames == 1024
+        && rejected.outputFrames() == 0 && sink.calls == 1,
+        "sink failure names the attempted full IQ block without counting it as emitted");
+    check(!process(rejected, input.size(), shortInput) && rejected.failure() == rejectedFailure && sink.calls == 1,
+        "withdrawal preserves sink cause and never calls it again");
+}
 int main()
 {
+    firstFailureObservation();
     Extractor extractor(config());
     check(extractor.valid(), "valid readback and full passband prepare extraction");
     std::vector<std::complex<float>> input(65536, {0.5f, 0});
@@ -118,7 +193,11 @@ int main()
         auto stale = config().capture; ++stale.generation;
         check(!changed.process(stale, 0, input, output) && !changed.withdrawn(),
               "stale capture generation cannot consume current history");
+        const auto mismatch = changed.failure();
+        check(mismatch && mismatch->reason == Extractor::FailureReason::CaptureMismatch,
+              "non-withdrawing metadata rejection is observable");
         check(changed.process(config().capture, 0, input, output), "matching generation still works");
+        check(changed.failure() == mismatch, "success does not reset the first observation");
         check(!changed.process(config().capture, input.size() + 1, input, output) && changed.withdrawn(),
               "gap withdraws history without realtime reset");
         check(!changed.process(config().capture, input.size(), input, output), "withdrawn extractor cannot resume stale history");

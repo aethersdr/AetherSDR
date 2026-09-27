@@ -119,23 +119,53 @@ public:
     bool valid() const noexcept { return !m_extractor || m_extractor->valid(); }
     bool processCapture(const Registry::SampleBlock& block, Registry::AudioSink& sink) noexcept override
     {
-        if (!m_extractor || block.session != m_spec.handle.session) { return false; }
+        if (!m_extractor || block.session != m_spec.handle.session) {
+            if (!m_failure) {
+                m_failure.emplace();
+                m_failure->reason = !m_extractor ? Registry::ProcessingFailureReason::NoExtractor
+                                                : Registry::ProcessingFailureReason::SessionMismatch;
+                m_failure->captureFirst = block.firstSample;
+                m_failure->captureFrames = block.samples.size();
+            }
+            return false;
+        }
+        const bool hadFailure = m_failure.has_value();
         m_sink = &sink;
         const bool success = m_extractor->process(block.capture, block.firstSample,
             block.samples, *this, block.discontinuity);
         m_sink = nullptr;
+        if (!success && !hadFailure) {
+            if (!m_failure) { m_failure.emplace(); }
+            m_failure->extraction = m_extractor->failure();
+            if (m_failure->extraction) {
+                const auto& failure = *m_failure->extraction;
+                m_failure->expectedCaptureFirst = failure.expectedCaptureFirst;
+                m_failure->captureFirst = failure.captureFirst;
+                m_failure->captureFrames = failure.captureFrames;
+                m_failure->hasExpectedCaptureFirst = failure.hasExpectedCaptureFirst;
+                m_failure->iqFirst = failure.iqFirst;
+                m_failure->iqFrames = failure.iqFrames;
+                m_failure->hasIqFirst = failure.hasIqFirst;
+            }
+        }
         return success;
     }
     WdspChannel::ProcessResult processIq(std::span<const float> i,
         std::span<const float> q) noexcept override
     {
-        if (i.data() == nullptr || q.data() == nullptr) {
-            return WdspChannel::ProcessResult::InvalidBuffer;
+        const WdspChannel::ProcessResult result = i.data() == nullptr || q.data() == nullptr
+            ? WdspChannel::ProcessResult::InvalidBuffer : m_channel->processIq(i, q, m_left, m_right);
+        if (result != WdspChannel::ProcessResult::Ok && !m_failure) {
+            m_failure.emplace();
+            m_failure->reason = Registry::ProcessingFailureReason::DspProcess;
+            m_failure->processResult = result;
+            m_failure->iqFrames = i.size();
         }
-        return m_channel->processIq(i, q, m_left, m_right);
+        return result;
     }
     std::span<const float> left() const noexcept override { return m_left; }
     std::span<const float> right() const noexcept override { return m_right; }
+    std::optional<Registry::ProcessingFailure> processingFailure() const noexcept override { return m_failure; }
 private:
     std::unique_ptr<WdspChannel> m_channel;
     std::vector<float> m_left;
@@ -144,19 +174,36 @@ private:
     std::unique_ptr<RtlRfExtractor> m_extractor;
     Registry::AudioSink* m_sink = nullptr;
     bool m_first = true;
+    std::optional<Registry::ProcessingFailure> m_failure;
     bool iqBlock(std::span<const float> i, std::span<const float> q,
                  std::uint64_t firstSample) noexcept override
     {
         // Nonblocking WDSP fexchange2 advances its ring even on underrun.
         // Withdraw this instance rather than later publishing a stale ring
         // position as current audio. Its replacement is prepared off-thread.
-        if (processIq(i, q) != WdspChannel::ProcessResult::Ok) { return false; }
+        const bool hadFailure = m_failure.has_value();
+        if (processIq(i, q) != WdspChannel::ProcessResult::Ok) {
+            if (!hadFailure) {
+                m_failure->iqFirst = firstSample;
+                m_failure->hasIqFirst = true;
+            }
+            return false;
+        }
         // The extractor positions name IQ frames. The sink and mixer name
         // final audio frames. Preparation aligns the first IQ block with that
         // slower lattice; every fixed block advances it by an exact ratio.
         const auto ratio = static_cast<std::uint64_t>(
             m_spec.dsp.inputSampleRate / m_spec.dsp.outputSampleRate);
-        if (ratio == 0 || firstSample % ratio != 0) { return false; }
+        if (ratio == 0 || firstSample % ratio != 0) {
+            if (!m_failure) {
+                m_failure.emplace();
+                m_failure->reason = Registry::ProcessingFailureReason::AudioLattice;
+                m_failure->iqFirst = firstSample;
+                m_failure->iqFrames = i.size();
+                m_failure->hasIqFirst = true;
+            }
+            return false;
+        }
         m_sink->audioBlockWithStatus(m_spec, firstSample / ratio, m_left, m_right, m_first,
                                     m_channel->wbfmStereoDetected());
         m_first = false;

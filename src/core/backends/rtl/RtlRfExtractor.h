@@ -7,6 +7,7 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -20,6 +21,27 @@ namespace rtl {
 // the callback. Configuration and capture readback are immutable for its life.
 class RtlRfExtractor final {
 public:
+    enum class FailureReason {
+        InvalidConfiguration, CaptureMismatch, EmptyInput, NullInput, InputTooLarge,
+        CapturePositionOverflow, Discontinuity, CapturePositionMismatch, NonFiniteInput,
+        AlignmentOverflow, OutputOriginOverflow, ConvertedCountMismatch,
+        ConvertedCountOutOfRange, NonFiniteOutput, OutputPositionOverflow, SinkRejected
+    };
+    struct Failure {
+        FailureReason reason = FailureReason::InvalidConfiguration;
+        std::uint64_t expectedCaptureFirst = 0;
+        std::uint64_t captureFirst = 0;
+        std::uint64_t captureFrames = 0;
+        // The next/attempted IQ block, including any samples already staged.
+        // hasIqFirst is false before an exact output origin is established.
+        std::uint64_t iqFirst = 0;
+        std::uint64_t iqFrames = 0;
+        bool hasExpectedCaptureFirst = false;
+        bool hasIqFirst = false;
+        int convertedI = 0;
+        int convertedQ = 0;
+        bool operator==(const Failure&) const = default;
+    };
     struct Config {
         SharedCapturePolicy::CaptureDescriptor capture;
         SharedCapturePolicy::SliceDescriptor slice;
@@ -41,6 +63,9 @@ public:
     ~RtlRfExtractor();
     bool valid() const noexcept { return m_valid; }
     bool withdrawn() const noexcept { return m_withdrawn; }
+    // Acquisition context only, or after it stops. The first failure survives
+    // later calls, including attempts to use an already withdrawn instance.
+    std::optional<Failure> failure() const noexcept { return m_failure; }
     const Config& config() const noexcept { return m_config; }
     int groupDelayInputFrames() const noexcept;
     std::uint64_t outputFrames() const noexcept { return m_outputFrames; }
@@ -54,6 +79,7 @@ private:
     const Config m_config;
     bool m_valid = false;
     bool m_withdrawn = false;
+    std::optional<Failure> m_failure;
     bool m_started = false;
     bool m_seenInput = false;
     std::uint64_t m_startInput = 0;

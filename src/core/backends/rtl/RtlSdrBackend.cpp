@@ -21,6 +21,8 @@ namespace AetherSDR::rtl {
 
 namespace {
 
+Q_LOGGING_CATEGORY(lcRtlReceive, "aether.rtl.receive", QtWarningMsg)
+
 constexpr double kMinTuneHz = 24'000.0;
 constexpr double kMaxTuneHz = 1'766'000'000.0;
 
@@ -1269,7 +1271,35 @@ void RtlSdrBackend::serviceCapture()
     if (!m_worker) { return; }
     const QPointer<RtlSdrWorker> producer(m_worker.get());
     m_worker->serviceCancellation();
+    const std::uint64_t previousTraceDrops = m_diagnostics.droppedTraceEvents;
     m_diagnostics = m_worker->diagnostics();
+    if (m_diagnostics.droppedTraceEvents != previousTraceDrops) {
+        qCDebug(lcRtlReceive).nospace() << "RtlReceive ms=" << QDateTime::currentMSecsSinceEpoch()
+            << " kind=trace_overflow trace_drops=" << m_diagnostics.droppedTraceEvents;
+    }
+    RtlReceivePipeline::TraceEvent trace;
+    for (unsigned count = 0; count < RtlReceivePipeline::kTraceEvents
+         && m_worker->takeTraceEvent(trace); ++count) {
+        const auto failure = trace.failure.value_or(RtlReceiverRegistry::ProcessingFailure{});
+        const auto extraction = failure.extraction.value_or(RtlRfExtractor::Failure{});
+        qCDebug(lcRtlReceive).nospace() << "RtlReceive ms=" << QDateTime::currentMSecsSinceEpoch()
+            << " kind=" << (trace.kind == RtlReceivePipeline::TraceEvent::Kind::ReceiverFailure ? "failure" : "missing")
+            << " session=" << trace.token.session << " revision=" << trace.token.revision
+            << " generation=" << trace.hardwareGeneration << " capture_epoch=" << trace.captureEpoch
+            << " slot=" << trace.slot << " receiver=" << trace.stableId
+            << " instance=" << trace.instance << " receiver_epoch=" << trace.receiverEpoch
+            << " capture_first=" << trace.captureFirst << " capture_frames=" << trace.captureFrames
+            << " capture_clock=" << trace.captureClock << " quantum_first=" << trace.quantumFirst
+            << " missing_lo=" << QString::number(trace.missingMask[0], 16)
+            << " missing_hi=" << QString::number(trace.missingMask[1], 16)
+            << " has_failure=" << trace.failure.has_value() << " reason=" << int(failure.reason)
+            << " process_result=" << int(failure.processResult)
+            << " has_expected=" << failure.hasExpectedCaptureFirst << " expected_capture=" << failure.expectedCaptureFirst
+            << " has_iq=" << failure.hasIqFirst << " iq_first=" << failure.iqFirst << " iq_frames=" << failure.iqFrames
+            << " has_extraction=" << failure.extraction.has_value() << " extraction_reason=" << int(extraction.reason)
+            << " converted_i=" << extraction.convertedI << " converted_q=" << extraction.convertedQ
+            << " trace_drops=" << m_diagnostics.droppedTraceEvents;
+    }
     if (const auto result = m_worker->takeResult()) {
         const auto completion = m_capture.complete(*result);
         qCDebug(lcPerf).nospace() << "RtlCapture phase=complete ms=" << QDateTime::currentMSecsSinceEpoch()

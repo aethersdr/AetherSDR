@@ -204,12 +204,16 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
     for (std::size_t i = 0; i < views.size(); ++i) {
         const auto& spec = *views[i].spec;
         const unsigned monitor = m_monitor[spec.handle.slot].load(std::memory_order_relaxed);
+        m_traceStableIds[spec.handle.slot] = spec.passband.stableId;
         inputs[i] = {spec.handle.slot, spec.handle.instance, spec.epoch,
             (monitor & 255) / 100.0f, ((monitor >> 8) & 255) / 100.0f, (monitor & (1 << 16)) != 0};
     }
     const auto clock = [this](std::uint64_t sample) {
         return static_cast<std::uint64_t>(static_cast<long double>(sample) * 48000 / m_capture.achievedSampleRateHz);
     };
+    m_traceCaptureFirst = block.firstSample;
+    m_traceCaptureFrames = block.samples.size();
+    m_traceCaptureClock = clock(block.firstSample + block.samples.size());
     if (!m_mixer.configure(m_token.session, m_captureEpoch,
             std::span(inputs).first(views.size()), clock(block.firstSample))) {
         // No stale map/audio may survive a rejected configuration. This is a
@@ -246,11 +250,19 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
             gate.observe(peak, clock(m_spectrumFirstSample));
         }
         if (!view.receiver->processCapture(block, *this)) {
-            m_faults.fetch_or(1u << view.spec->handle.slot, std::memory_order_release);
+            const unsigned bit = 1u << slot;
+            if (!(m_faults.fetch_or(bit, std::memory_order_release) & bit)) {
+                TraceEvent event = traceContext();
+                event.slot = slot; event.stableId = view.spec->passband.stableId;
+                event.instance = view.spec->handle.instance;
+                event.receiverEpoch = view.spec->epoch;
+                event.failure = view.receiver->processingFailure();
+                enqueueTrace(event);
+            }
         }
     }
     m_spectrumFresh = false;
-    m_mixer.drain(clock(block.firstSample + block.samples.size()), *this);
+    m_mixer.drain(m_traceCaptureClock, *this);
     m_mixerLate.store(m_mixer.lateFrames(), std::memory_order_relaxed);
     m_mixerRejected.store(m_mixer.rejectedBlocks(), std::memory_order_relaxed);
     m_observed.store(true, std::memory_order_release);
@@ -260,7 +272,8 @@ RtlReceivePipeline::Diagnostics RtlReceivePipeline::diagnostics() const noexcept
     return {m_observed.load(std::memory_order_acquire),
         m_drops.load(std::memory_order_relaxed), m_mixerLate.load(std::memory_order_relaxed),
         m_mixerRejected.load(std::memory_order_relaxed),
-        m_mixerConfigurationFailures.load(std::memory_order_relaxed)};
+        m_mixerConfigurationFailures.load(std::memory_order_relaxed),
+        m_traceDrops.load(std::memory_order_relaxed)};
 }
 void RtlReceivePipeline::audioBlock(const RtlReceiverRegistry::ReceiverSpec& spec, std::uint64_t first,
     std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept
@@ -297,6 +310,44 @@ void RtlReceivePipeline::speakerBlock(std::uint64_t first, std::span<const float
     packet.firstSample = first; packet.frames = samples.size() / 2; packet.discontinuity = discontinuity;
     std::copy(samples.begin(), samples.end(), packet.samples.begin());
     enqueue(packet);
+}
+RtlReceivePipeline::TraceEvent RtlReceivePipeline::traceContext() const noexcept
+{
+    TraceEvent event;
+    event.token = m_token; event.hardwareGeneration = m_capture.generation;
+    event.captureEpoch = m_captureEpoch;
+    event.captureFirst = m_traceCaptureFirst; event.captureFrames = m_traceCaptureFrames;
+    event.captureClock = m_traceCaptureClock;
+    return event;
+}
+void RtlReceivePipeline::missingFrames(const RtlAudioMixer::Input& input, std::uint64_t first,
+    std::uint64_t captureClock, const RtlAudioMixer::MissingMask& missing) noexcept
+{
+    TraceEvent event = traceContext();
+    event.kind = TraceEvent::Kind::MixerMissing;
+    event.slot = input.slot; event.stableId = m_traceStableIds[input.slot];
+    event.instance = input.instance; event.receiverEpoch = input.epoch;
+    event.captureClock = captureClock; event.quantumFirst = first; event.missingMask = missing;
+    enqueueTrace(event);
+}
+void RtlReceivePipeline::enqueueTrace(const TraceEvent& event) noexcept
+{
+    const unsigned write = m_traceWrite.load(std::memory_order_relaxed);
+    const unsigned next = (write + 1) % kTraceEvents;
+    if (next == m_traceRead.load(std::memory_order_acquire)) {
+        m_traceDrops.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    m_traceEvents[write] = event;
+    m_traceWrite.store(next, std::memory_order_release);
+}
+bool RtlReceivePipeline::takeTraceEvent(TraceEvent& output) noexcept
+{
+    const unsigned read = m_traceRead.load(std::memory_order_relaxed);
+    if (read == m_traceWrite.load(std::memory_order_acquire)) { return false; }
+    output = m_traceEvents[read];
+    m_traceRead.store((read + 1) % kTraceEvents, std::memory_order_release);
+    return true;
 }
 bool RtlReceivePipeline::enqueue(const Packet& packet) noexcept
 {

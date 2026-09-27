@@ -21,6 +21,107 @@ using T = AetherSDR::rtl::RtlCaptureTransaction;
 using namespace std::chrono_literals;
 namespace AetherSDR::rtl {
 struct RtlReceivePipelineTestAccess {
+    // Observation seam only: the receiver supplies a fixed failure; this does
+    // not claim to reproduce the underlying WDSP underrun.
+    static bool traceObservation(RtlReceivePipeline& pipeline)
+    {
+        struct FailingReceiver final : RtlReceiverRegistry::Receiver {
+            RtlReceiverRegistry::ProcessingFailure failure;
+            mutable unsigned observations = 0;
+            WdspChannel::ProcessResult processIq(std::span<const float>, std::span<const float>) noexcept override
+            { return WdspChannel::ProcessResult::Ok; }
+            std::span<const float> left() const noexcept override { return {}; }
+            std::span<const float> right() const noexcept override { return {}; }
+            bool processCapture(const RtlReceiverRegistry::SampleBlock&, RtlReceiverRegistry::AudioSink&) noexcept override
+            { return false; }
+            std::optional<RtlReceiverRegistry::ProcessingFailure> processingFailure() const noexcept override
+            { ++observations; return failure; }
+        } receiver;
+        receiver.failure.reason = RtlReceiverRegistry::ProcessingFailureReason::DspProcess;
+        receiver.failure.processResult = WdspChannel::ProcessResult::Underrun;
+        receiver.failure.captureFirst = receiver.failure.expectedCaptureFirst = 5000;
+        receiver.failure.captureFrames = 6400;
+        receiver.failure.iqFirst = 800; receiver.failure.iqFrames = 2048;
+        receiver.failure.hasExpectedCaptureFirst = receiver.failure.hasIqFirst = true;
+        receiver.failure.extraction.emplace();
+        receiver.failure.extraction->reason = RtlRfExtractor::FailureReason::SinkRejected;
+        receiver.failure.extraction->iqFirst = 800;
+        receiver.failure.extraction->iqFrames = 2048;
+        const auto originalFailure = receiver.failure;
+        pipeline.m_legacy = false; pipeline.m_token = {42, 19}; pipeline.m_captureEpoch = 91;
+        pipeline.m_capture = {88, 37, 100000000, 2400000, 1080000, 1080000};
+        RtlReceiverRegistry::ReceiverSpec spec;
+        spec.handle = {999, 0xabcdef, 3}; spec.epoch = 77; spec.passband.stableId = 6;
+        const std::array<RtlReceiverRegistry::ReceiverView, 1> views{{{&spec, &receiver}}};
+        std::array<std::complex<float>, 6400> iq{};
+        RtlReceiverRegistry::SampleBlock block{999, pipeline.m_capture, 5000, false, iq};
+        pipeline.process(block, views);
+        if (!pipeline.needsRepair() || receiver.observations != 1) { return false; }
+        // The first queued event must own its failure, not borrow this value.
+        receiver.failure.processResult = WdspChannel::ProcessResult::Busy;
+        receiver.failure.captureFirst = 999999;
+        std::array<float, 126> present; present.fill(0.25f);
+        if (!pipeline.m_mixer.push(3, spec.handle.instance, spec.epoch, 101, present, present)) { return false; }
+        block.firstSample = 107400; // end clock 2276: first quantum's exact deadline
+        pipeline.process(block, views);
+        if (receiver.observations != 1) { return false; } // one report per faulted bank
+        RtlReceivePipeline::TraceEvent event;
+        if (!pipeline.takeTraceEvent(event)
+            || event.kind != RtlReceivePipeline::TraceEvent::Kind::ReceiverFailure
+            || event.token != pipeline.m_token || event.hardwareGeneration != 37 || event.captureEpoch != 91
+            || event.slot != 3 || event.stableId != 6 || event.instance != 0xabcdef || event.receiverEpoch != 77
+            || event.captureFirst != 5000 || event.captureFrames != 6400 || event.captureClock != 228
+            || event.failure != originalFailure) { return false; }
+        if (!pipeline.takeTraceEvent(event)
+            || event.kind != RtlReceivePipeline::TraceEvent::Kind::MixerMissing
+            || event.token != pipeline.m_token || event.hardwareGeneration != 37 || event.captureEpoch != 91
+            || event.slot != 3 || event.stableId != 6 || event.instance != 0xabcdef || event.receiverEpoch != 77
+            || event.captureFirst != 107400 || event.captureFrames != 6400 || event.captureClock != 2276
+            || event.quantumFirst != 100 || event.missingMask != RtlAudioMixer::MissingMask{1, std::uint64_t{1} << 63}
+            || event.failure || pipeline.takeTraceEvent(event)) { return false; }
+        RtlReceivePipeline::Packet packet;
+        if (!pipeline.takePacket(packet) || packet.slot != -1 || packet.firstSample != 100 || packet.frames != 128
+            || packet.samples[0] != 0 || packet.samples[2] != 0.25f || packet.samples[254] != 0
+            || pipeline.takePacket(packet) || pipeline.diagnostics().mixerLateFrames != 2) { return false; }
+
+        // Fill the independent trace ring, then partially drain and wrap it.
+        // Every accepted event must survive in FIFO order; only new ones drop.
+        constexpr unsigned capacity = RtlReceivePipeline::kTraceEvents - 1;
+        constexpr unsigned offered = RtlReceivePipeline::kTraceEvents + 4;
+        constexpr unsigned drained = 17;
+        event.failure = originalFailure;
+        for (unsigned n = 0; n < offered; ++n) {
+            event.captureFirst = n;
+            pipeline.enqueueTrace(event);
+        }
+        if (pipeline.diagnostics().droppedTraceEvents != offered - capacity) { return false; }
+        for (unsigned n = 0; n < drained; ++n) {
+            if (!pipeline.takeTraceEvent(event) || event.captureFirst != n || event.failure != originalFailure) { return false; }
+        }
+        for (unsigned n = 0; n < drained; ++n) {
+            event.captureFirst = offered + n;
+            pipeline.enqueueTrace(event);
+        }
+        pipeline.enqueueTrace(event); // full again; cannot overwrite oldest
+        if (pipeline.diagnostics().droppedTraceEvents != offered - capacity + 1) { return false; }
+        std::array<float, 256> audio; audio.fill(0.5f);
+        pipeline.speakerBlock(333, audio, false);
+        if (!pipeline.takePacket(packet) || packet.firstSample != 333 || packet.frames != 128
+            || packet.token != pipeline.m_token || packet.samples[0] != 0.5f || packet.samples[255] != 0.5f
+            || pipeline.droppedPackets() != 0) { return false; }
+        for (unsigned n = drained; n < capacity; ++n) {
+            if (!pipeline.takeTraceEvent(event) || event.captureFirst != n || event.failure != originalFailure) { return false; }
+        }
+        for (unsigned n = 0; n < drained; ++n) {
+            if (!pipeline.takeTraceEvent(event) || event.captureFirst != offered + n || event.failure != originalFailure) { return false; }
+        }
+        if (pipeline.takeTraceEvent(event)) { return false; }
+        event.captureFirst = 123456;
+        pipeline.enqueueTrace(event);
+        return pipeline.takeTraceEvent(event) && event.captureFirst == 123456
+            && !pipeline.takeTraceEvent(event) && !pipeline.takePacket(packet)
+            && pipeline.diagnostics().droppedTraceEvents == offered - capacity + 1;
+    }
     static void exhaustEpoch(RtlReceivePipeline& pipeline)
     { pipeline.m_nextEpoch = std::numeric_limits<std::uint64_t>::max(); }
     static std::uint64_t requested(RtlReceivePipeline& pipeline)
@@ -250,6 +351,14 @@ static void measureParkAndResume()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    {
+        auto traced = std::make_unique<Pipeline>();
+        inCallback = true;
+        const bool observed = AetherSDR::rtl::RtlReceivePipelineTestAccess::traceObservation(*traced);
+        inCallback = false;
+        check(observed, "first-failure identity/copy, exact missing mask, trace FIFO/full/wrap and independent audio delivery");
+        check(callbackAllocations == 0, "trace capture, overflow and delivery perform no callback allocation");
+    }
     measureParkAndResume();
     measureSingleFmReceiver(T::Mode::Fm);
     measureSingleFmReceiver(T::Mode::Fmn);

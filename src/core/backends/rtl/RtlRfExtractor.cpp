@@ -52,16 +52,43 @@ int RtlRfExtractor::groupDelayInputFrames() const noexcept { return m_i ? m_i->g
 bool RtlRfExtractor::process(const SharedCapturePolicy::CaptureDescriptor& capture, std::uint64_t firstSample,
                             std::span<const std::complex<float>> input, Sink& sink, bool discontinuity) noexcept
 {
-    if (!m_valid || m_withdrawn || capture != m_config.capture) { return false; }
-    if (input.empty() || !input.data() || input.size() > kMaxInput
-        || firstSample > std::numeric_limits<std::uint64_t>::max() - input.size()
-        || (m_seenInput && (discontinuity || firstSample != m_nextInput))
-        || !std::ranges::all_of(input, [](const auto& sample) {
-            return std::isfinite(sample.real()) && std::isfinite(sample.imag());
-        })) {
-        m_withdrawn = true;
+    const std::uint64_t captureFrames = input.size();
+    const std::uint64_t expectedCaptureFirst = m_nextInput;
+    const bool hasExpectedCaptureFirst = m_seenInput;
+    const auto fail = [&](FailureReason reason, bool withdraw = true,
+                          int convertedI = 0, int convertedQ = 0) {
+        if (!m_failure) {
+            Failure failure;
+            failure.reason = reason;
+            failure.expectedCaptureFirst = expectedCaptureFirst;
+            failure.captureFirst = firstSample;
+            failure.captureFrames = captureFrames;
+            failure.hasExpectedCaptureFirst = hasExpectedCaptureFirst;
+            failure.iqFrames = m_stagedOutput;
+            failure.hasIqFirst = m_started
+                && m_outputOrigin <= std::numeric_limits<std::uint64_t>::max() - m_outputFrames;
+            if (failure.hasIqFirst) { failure.iqFirst = m_outputOrigin + m_outputFrames; }
+            failure.convertedI = convertedI;
+            failure.convertedQ = convertedQ;
+            m_failure = failure;
+        }
+        if (withdraw) { m_withdrawn = true; }
         return false;
+    };
+    if (!m_valid) { return fail(FailureReason::InvalidConfiguration, false); }
+    if (m_withdrawn) { return false; }
+    if (capture != m_config.capture) { return fail(FailureReason::CaptureMismatch, false); }
+    if (input.empty()) { return fail(FailureReason::EmptyInput); }
+    if (!input.data()) { return fail(FailureReason::NullInput); }
+    if (input.size() > kMaxInput) { return fail(FailureReason::InputTooLarge); }
+    if (firstSample > std::numeric_limits<std::uint64_t>::max() - input.size()) {
+        return fail(FailureReason::CapturePositionOverflow);
     }
+    if (m_seenInput && discontinuity) { return fail(FailureReason::Discontinuity); }
+    if (m_seenInput && firstSample != m_nextInput) { return fail(FailureReason::CapturePositionMismatch); }
+    if (!std::ranges::all_of(input, [](const auto& sample) {
+        return std::isfinite(sample.real()) && std::isfinite(sample.imag());
+    })) { return fail(FailureReason::NonFiniteInput); }
     if (!m_seenInput) {
         // New receivers join the SAME rational sample lattice as siblings.
         // Wait for the next capture/output coincidence, rather than rounding
@@ -74,7 +101,7 @@ bool RtlRfExtractor::process(const SharedCapturePolicy::CaptureDescriptor& captu
         const std::uint64_t period = rate / std::gcd(rate, static_cast<std::uint64_t>(alignmentRate));
         const std::uint64_t skip = (period - firstSample % period) % period;
         if (firstSample > std::numeric_limits<std::uint64_t>::max() - skip) {
-            m_withdrawn = true; return false;
+            return fail(FailureReason::AlignmentOverflow);
         }
         m_startInput = firstSample + skip;
         m_seenInput = true;
@@ -90,7 +117,7 @@ bool RtlRfExtractor::process(const SharedCapturePolicy::CaptureDescriptor& captu
         const std::uint64_t periods = m_startInput / (rate / common);
         const std::uint64_t framesPerPeriod = static_cast<std::uint64_t>(m_config.outputRateHz) / common;
         if (periods > (std::numeric_limits<std::uint64_t>::max() - kMaxInput) / framesPerPeriod) {
-            m_withdrawn = true; return false;
+            return fail(FailureReason::OutputOriginOverflow);
         }
         // Exact integer time mapping also holds beyond floating-point's exact
         // integer range. The RF oscillator separately retains its phase model.
@@ -111,18 +138,23 @@ bool RtlRfExtractor::process(const SharedCapturePolicy::CaptureDescriptor& captu
         const int countI = m_i->process(m_inputI.data(), kInputChunk, m_convertedI);
         const int countQ = m_q->process(m_inputQ.data(), kInputChunk, m_convertedQ);
         m_stagedInput = 0;
-        if (countI != countQ || countI < 0 || countI > 16384) { m_withdrawn = true; return false; }
+        if (countI != countQ) { return fail(FailureReason::ConvertedCountMismatch, true, countI, countQ); }
+        if (countI < 0 || countI > 16384) {
+            return fail(FailureReason::ConvertedCountOutOfRange, true, countI, countQ);
+        }
         for (int index = 0; index < countI; ++index) {
             std::memcpy(&m_blockI[m_stagedOutput], m_convertedI.constData() + index * sizeof(float), sizeof(float));
             std::memcpy(&m_blockQ[m_stagedOutput], m_convertedQ.constData() + index * sizeof(float), sizeof(float));
             if (!std::isfinite(m_blockI[m_stagedOutput]) || !std::isfinite(m_blockQ[m_stagedOutput])) {
-                m_withdrawn = true; return false;
+                return fail(FailureReason::NonFiniteOutput, true, countI, countQ);
             }
             if (++m_stagedOutput != m_config.blockSize) { continue; }
             if (m_outputFrames > std::numeric_limits<std::uint64_t>::max() - m_config.blockSize
-                || m_outputOrigin > std::numeric_limits<std::uint64_t>::max() - m_outputFrames - m_config.blockSize
-                || !sink.iqBlock(m_blockI, m_blockQ, m_outputOrigin + m_outputFrames)) {
-                m_withdrawn = true; return false;
+                || m_outputOrigin > std::numeric_limits<std::uint64_t>::max() - m_outputFrames - m_config.blockSize) {
+                return fail(FailureReason::OutputPositionOverflow);
+            }
+            if (!sink.iqBlock(m_blockI, m_blockQ, m_outputOrigin + m_outputFrames)) {
+                return fail(FailureReason::SinkRejected);
             }
             m_outputFrames += m_config.blockSize;
             m_stagedOutput = 0;
