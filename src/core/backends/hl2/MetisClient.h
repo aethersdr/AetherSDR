@@ -831,7 +831,41 @@ private:
     // metis-start so the DDC latches sample rate / NCO / receiver count from a
     // real C&C frame; a stream started before any C&C has landed emits ADC-idle
     // samples (Q pinned to zero) until one does.
+    //
+    // BLOCKING, and only start() may call it: that runs before the EP2 pacer
+    // and the EP6 stream exist, so the two msleep(10) stall nothing. A restart
+    // on a LIVE stream must not sleep on this thread -- see
+    // advanceReceiverCountRestart().
     void sendPrimingBurst(int countPerBank);
+    // One bank of the priming burst: countPerBank C&C frames, back to back.
+    void sendPrimingBank(int countPerBank);
+    // A 64-byte run/stop datagram to the radio (unicast, m_host:m_port), through
+    // m_commandSinkForTest when a test installed one. Used by the receiver-count
+    // restart and the bandscope run byte; start(), stop() and the start retry
+    // still write the socket directly.
+    qint64 sendCommandDatagram(const std::array<std::uint8_t, 64>& cmd);
+    bool hasCommandTransport() const noexcept
+    {
+        return m_socket != nullptr || static_cast<bool>(m_commandSinkForTest);
+    }
+    // setReceiverCount()'s stop -> prime -> start -> prime sequence, driven by
+    // m_restartTimer instead of msleep so the I/O thread's event loop keeps
+    // turning -- the EP2 pacer keeps feeding the radio and EP6 keeps draining --
+    // while the banks are spaced. Each call performs the next step once at least
+    // kPrimingBankSpacingMs has passed since the previous one.
+    void advanceReceiverCountRestart();
+    // Arm the timer for the step after this one, measuring from now.
+    void scheduleReceiverCountRestartStep();
+    // Abandon a restart in flight (stop(), or a newer setReceiverCount()).
+    void cancelReceiverCountRestart() noexcept;
+    // True between a restart's metis-stop and its metis-start: every datagram
+    // that reaches the socket then is in the OLD payload layout, and no run byte
+    // may go out, because any run byte with bit 0 set IS a start.
+    bool restartAwaitingStart() const noexcept
+    {
+        return m_restartStep == RestartStep::PrimeBeforeStart
+            || m_restartStep == RestartStep::Start;
+    }
     // Seed the start-retry budget and start its timer. The datagram itself is
     // NOT sent here: the three callers put different bytes on the wire --
     // start() and setReceiverCount() send metisStart(), onWatchdogTick()'s
@@ -923,6 +957,23 @@ private:
     QTimer* m_connectWatchdog = nullptr;  // single-shot: first-EP6 deadline
     QTimer* m_startRetryTimer = nullptr;  // re-sends metis-start until EP6 flows
     int     m_startAttempts = 0;          // start datagrams sent this connect
+    // The receiver-count restart in flight, if any. The step names what the
+    // NEXT timeout does. See advanceReceiverCountRestart().
+    enum class RestartStep : std::uint8_t {
+        Idle,              // no restart in flight
+        PrimeBeforeStart,  // send the second pre-start priming bank
+        Start,             // discard stale EP6, send metis-start, first post-start bank
+        PrimeAfterStart,   // send the second post-start bank
+        Finish,            // arm the start retry, re-apply the bandscope gate
+    };
+    // The spacing the two msleep(10) calls in sendPrimingBurst() gave each bank.
+    // A FLOOR: a step that fires early is re-armed for the remainder.
+    static constexpr int kPrimingBankSpacingMs = 10;
+    static constexpr int kPrimingFramesPerBank = 3;
+    QTimer* m_restartTimer = nullptr;     // single-shot: the next restart step
+    QElapsedTimer m_restartStepClock;     // since the previous restart step
+    RestartStep m_restartStep = RestartStep::Idle;
+    int m_restartStalePackets = 0;        // old-layout datagrams discarded this restart
     QElapsedTimer m_ep2Clock;             // pacer reference clock
     QElapsedTimer m_sinceLastEp6;         // silence detection
     // A recovery is in flight for the CURRENT silence. Set when the watchdog
@@ -1044,6 +1095,7 @@ private:
     // rotation to come back around.
     friend struct MetisClientTestAccess; // socket-free transport-state injection
     std::function<qint64(const std::array<std::uint8_t, kUsbPacketSize>&)> m_packetSinkForTest;
+    std::function<qint64(const std::array<std::uint8_t, 64>&)> m_commandSinkForTest;
     std::deque<Cc> m_oneShot;           // which register pair to send next
     // The single RQST slot. Drained AFTER m_oneShot, never before: a one-shot is
     // a write the operator asked for, and letting a read-back overtake it would

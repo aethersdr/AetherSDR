@@ -158,12 +158,11 @@ int main(int argc, char** argv)
     const int stopsBefore = stopsSeen;
     client.setReceiverCount(2);
 
-    // SETTLE BEFORE ASSERTING ANYTHING. setReceiverCount blocks in
-    // sendPrimingBurst's msleeps with no event loop running, so at the instant it
-    // returns the fake radio has not yet seen the stop or the start — they are
-    // sitting in its socket, and so are the stragglers it sent before them. Both
-    // ends of this test live in one event loop; a real radio and a real host do
-    // not, which is exactly the asymmetry the retry has to survive.
+    // SETTLE BEFORE ASSERTING ANYTHING. setReceiverCount returns after the stop
+    // and the first priming bank; the start follows >= 20 ms later from the
+    // client's restart timer, and the whole sequence ends >= 40 ms after the
+    // call. Both ends of this test live in one event loop; a real radio and a
+    // real host do not, which is exactly the asymmetry the retry has to survive.
     spin(60);
     check(stopsSeen == stopsBefore + 1, "the restart stopped the stream first");
     check(startsSeen == startsBefore + 1, "and sent one start, which the radio lost");
