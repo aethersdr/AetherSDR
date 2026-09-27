@@ -71,6 +71,14 @@ public:
     // time the fps slider moved. This frame-count form stays for fixtures that
     // want an exact 1/N, and setting it clears any averaging time.
     //
+    // RFC #5782 q3, DECIDED in #5980: this accumulator is deliberately
+    // HL2-private, not a shared helper in src/core/dsp/. It has one consumer —
+    // the ANAN needs none, WDSP's analyzer averages there — and a shared
+    // component with a single user is a guess at the second user's needs.
+    // The RTL backend is that second user (RadioModel::requestPanAverage
+    // still names it as not averaging); the change that wires it should MOVE
+    // this into src/core/dsp/ and share it, not write it a third time.
+    //
     // Changing the depth DROPS the accumulated state: an exponential state
     // built at one alpha does not mean anything at another, and carrying it
     // would make the first frames after a change describe a blend of two
@@ -127,6 +135,15 @@ public:
     // 25 fps integrates ~12 and at 5 fps ~2.5. Integrating every periodogram
     // instead would mean computing the FFTs the shaper exists to skip, which
     // is the cost decision Hl2RxDsp documents and not this class's to undo.
+    //
+    // A TRANSPORT GAP DOES NOT ADVANCE THIS CLOCK. reset() clears the partial
+    // IQ frame but neither m_samplesSinceFrame nor the average, and lost EP6
+    // samples are never counted. So after a dropout of any length the first
+    // frame back is blended with dt ~ fftSize / fs (21 ms at 48 kHz), and the
+    // pre-gap average is held, then decays over tau of STREAM time rather
+    // than wall time. Deliberate: nothing is known about the signal during
+    // the gap, and holding the last estimate is more honest than inventing a
+    // decay toward a spectrum nobody measured.
     //
     // Changing the time DROPS the state, as a depth change does, and clears
     // any frame depth. Without a sample rate (constructed with 0) the setting
