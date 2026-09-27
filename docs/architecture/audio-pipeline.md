@@ -72,15 +72,11 @@ flowchart TD
     E --> G
     F --> G
     G --> H["AudioEngine::feedAudioData()"]
-    H --> I{"BNR enabled?"}
-    I -->|yes| BNR["processBnr()<br/>mono BNR path<br/>bypasses RX strip and RX boost"]
-    I -->|no| NR["Optional NR path<br/>NR2 may collapse to mono"]
-    NR --> J["Client RX EQ -> Gate -> Comp -> DeEss -> Tube -> PUDU"]
+    H --> NR["Optional client NR<br/>(one method; each channel denoised independently)"]
+    NR --> J["Client RX chain, operator order"]
     J --> K["Optional 24 kHz -> 48 kHz upsample"]
     K --> L["RX boost, output trim, scopes"]
-    BNR --> L2["Optional 24 kHz -> 48 kHz upsample<br/>output trim, scopes"]
     L --> M["RX ring buffer cap/drop oldest"]
-    L2 --> M
     M --> N["10 ms speaker drain timer"]
     N --> O["QAudioSink speaker output"]
 ```
@@ -113,26 +109,32 @@ RX DSP strip and writes the received PCM to the output path directly.
 When receiving, the current ordering is:
 
 1. Radio-decoded 24 kHz float32 stereo enters `feedAudioData()`.
-2. Optional RX noise reduction runs first:
-   - `rn2`, `nr4`, and `dfnr` process the buffer and then re-apply RX pan.
-   - `nr2` explicitly averages L/R to mono with `(L+R)/2`, processes mono, then
-     duplicates mono back to stereo and re-applies RX pan.
-   - macOS MNR runs through its own processor.
-   - BNR averages stereo to mono, upsamples 24 kHz mono to 48 kHz mono, runs BNR,
-     downsamples to 24 kHz mono, and duplicates the result to stereo. The BNR
-     branch writes its own output buffer and currently bypasses the client RX
-     strip and RX boost.
-3. For non-BNR RX audio, `writeAudio()` runs the client RX strip in this fixed order:
+2. Optional RX noise reduction runs first. Exactly one method is active (RN2,
+   NR2, NR4, DFNR, NNR, BNR, or macOS MNR), and every one of them denoises L
+   and R as two independent channels: each side has its own algorithm state
+   and, where the method resamples, its own SRC pair. Nothing is averaged to
+   mono, so each side keeps its own content: a hard-panned diversity pair keeps
+   one antenna per ear, and a pan change is heard as soon as the audio carrying
+   it arrives. This is a deliberate trade. A signal present in both channels,
+   whether an off-centre slice or a centred one in the radio's mixed stereo
+   stream, is suppressed separately on each side, so its L/R balance is not
+   held. The quieter copy has the lower SNR and is usually suppressed harder:
+   measured on synthetic tones, the shift is under about 1.5 dB with a strong
+   signal and grows to several dB as the quieter side nears the noise floor.
+   DFNR and BNR can remove a quiet steady carrier on one side entirely. Keeping
+   each side's own content and an immediate pan is preferred over the shared
+   mask and mono envelope that used to hold the balance.
+3. `writeAudio()` runs the client RX strip in this fixed order:
    `ClientEqRx`, `ClientGateRx`, `ClientCompRx`, `ClientDeEssRx`,
    `ClientTubeRx`, `ClientPuduRx`.
 4. The RX EQ analyzer tap is taken after RX EQ and before the remaining RX strip.
    It averages L/R to mono for the analyzer buffer.
 5. If the selected output sink is running at 48 kHz, `AudioEngine::resampleStereo()`
-   upsamples 24 kHz stereo to 48 kHz stereo. The BNR branch performs this step
-   inside `processBnr()`.
-6. Optional RX boost applies `tanh(2*x)` to every sample on the non-BNR path.
-7. RX output trim applies a dB gain multiplier to every sample. BNR applies
-   output trim but not RX boost.
+   upsamples 24 kHz stereo to 48 kHz stereo.
+6. Optional RX boost applies `tanh(2*x)` to every sample.
+7. RX output trim applies a dB gain multiplier to every sample. For a virtual
+   KiwiSDR profile, whose pan is client-side, `applyRxPanInPlace()` then applies
+   that profile's pan when it is not centred.
 8. `rxPostChainScopeReady` is emitted from the post-chain stereo signal after
    averaging L/R to mono.
 9. Audio is appended to `m_rxBuffer`; a 10 ms timer drains the buffer to the
@@ -141,19 +143,16 @@ When receiving, the current ordering is:
 `AudioEngine::applyClientRxDspFloat32()` currently exists as a dispatcher stub,
 but the live RX speaker strip is the explicit order inside `writeAudio()`.
 
-### Pan handling and mono collapses
+### Pan handling
 
-Most radio speaker audio enters as stereo. Some RX processors are mono
-internally:
-
-- `processNr2()` averages L/R to mono and duplicates mono back to stereo.
-- `processBnr()` averages L/R to mono, runs the BNR path at mono rates, and
-  duplicates mono back to stereo.
-- The RN2/NR4/DFNR path comments note that those processors can lose radio pan;
-  `applyRxPanInPlace()` is called after them to restore the client RX pan.
-
-Radio pan is preserved through the normal non-NR RX strip and through the RX
-upsampler described below.
+Radio speaker audio enters as stereo with the radio's per-slice pan already
+applied. Every client NR method denoises L and R independently, preserving
+channel separation but not the balance of a signal present in both channels
+(see step 2 above). The RX strip and the RX upsampler described below preserve
+their input balance. The only client pan stage is `applyRxPanInPlace()` in
+`processMixedRxAudioData()`, after output trim, and it runs only for virtual
+KiwiSDR profiles: Flex and the legacy Kiwi stream keep the orientation already
+present in their input.
 
 ### 24 kHz to 48 kHz upsampling
 
@@ -871,11 +870,11 @@ Radio-provided taps:
 | Radio speaker decode, reduced | `PanadapterStream::decodeReducedBwAudio()` | VITA PCC `0x0123`, big-endian Int16 mono | float32 stereo | 24 kHz | 1 -> 2 | Duplicates mono to L/R |
 | Radio Opus RX decode | `PanadapterStream::decodeOpusAudio()` | VITA PCC `0x8005`, Opus | float32 stereo | 24 kHz | 2 | Decodes Opus to Int16 stereo, then converts to float32 |
 | RX NR entry | `AudioEngine::feedAudioData()` | float32 stereo | float32 stereo | 24 kHz | 2 | Optional NR; bypassed while radio is transmitting |
-| RX NR2 | `AudioEngine::processNr2()` | float32 stereo | float32 stereo | 24 kHz | 2 -> 1 -> 2 | Averages L/R, duplicates mono, reapplies RX pan |
-| RX BNR | `AudioEngine::processBnr()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz -> 24 kHz | 2 -> 1 -> 2 | Averages L/R, mono BNR, duplicates mono |
+| RX NR2 | `AudioEngine::processNr2()` | float32 stereo | float32 stereo | producer rate | 2 | One `SpectralNR` estimate and mask per channel |
+| RX BNR | `NvidiaAfxFilter::process()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz -> 24 kHz, or native 48 kHz | 2 | One AFX denoiser effect per channel |
 | RX client strip | `AudioEngine::writeAudio()` | float32 stereo | float32 stereo | 24 kHz | 2 | EQ, Gate, Comp, DeEss, Tube, PUDU |
 | RX output upsample | `AudioEngine::resampleStereo()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz | 2 | Uses separate L/R resamplers to preserve pan |
-| RX output gain stages | `AudioEngine::writeAudio()` / `processBnr()` | float32 stereo | float32 stereo | 24 or 48 kHz | 2 | Non-BNR path applies optional RX boost and output trim; BNR applies output trim only; post-chain scope |
+| RX output gain stages | `AudioEngine::processMixedRxAudioData()` | float32 stereo | float32 stereo | 24 or 48 kHz | 2 | Optional RX boost, then output trim, whichever NR method ran; post-chain scope |
 | Speaker write | RX drain timer in `AudioEngine::startRxStream()` | float32 stereo buffers | `QAudioSink` writes | 24 or 48 kHz | 2 | Caps buffers and mixes RADE decoded speech |
 | CW sidetone | `CwSidetoneGenerator` | key state | float32 stereo | normally 48 kHz | 2 | Local-only sidetone sink |
 | Quindar local monitor | `QuindarLocalSink` | tone state | float32 stereo | 48 kHz | 2 | Local-only Quindar monitor sink |
@@ -920,8 +919,6 @@ warning before it is discarded and regenerated.
 | `Resampler::processMonoToStereo()` | Resample and duplicate | float32 mono | float32 stereo | Duplicates resampled mono to L/R |
 | `Resampler::processStereoToStereo()` | Downmix, resample, duplicate | float32 stereo | float32 stereo | Averages `(L+R)/2`, resamples mono, duplicates result |
 | `AudioEngine::resampleStereo()` | Resample without downmix | float32 stereo | float32 stereo | Uses independent L/R resamplers; preserves pan |
-| `AudioEngine::processNr2()` | Downmix and duplicate | float32 stereo | float32 stereo | Averages L/R, NR2 mono processing, duplicates, reapplies pan |
-| `AudioEngine::processBnr()` | Downmix, 24->48, 48->24, duplicate | float32 stereo | float32 stereo | BNR path is mono internally |
 | `TxMicChannelNormalizer`, mono input | Duplicate canonical mono | Int16 mono | Int16 stereo | Direct Int16 mono duplication at the negotiated device rate |
 | `TxMicChannelNormalizer`, stereo input | Canonicalize and duplicate | Int16 stereo | Int16 stereo | Auto Left/Right/Average avoids one-sided stereo 6.02 dB loss; retains device rate |
 | `TxVoiceProcessor`, ingress | Format conversion, resample, duplicate | canonical Int16 stereo at device rate | float32 stereo 48 kHz | Takes one canonical channel, converts to float once, uses mono `Resampler::process()` when needed, then duplicates |

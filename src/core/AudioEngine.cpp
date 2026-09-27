@@ -3545,11 +3545,69 @@ QJsonObject unavailableAutomationDspProbe(const QString& mode, const QString& re
     };
 }
 
+// A fresh, configured filter's block-processing function. The probe runs
+// several independent filters, so each run must start from a clean state.
+using AutomationDspProcess = std::function<QByteArray(const QByteArray&)>;
+using AutomationDspFactory = std::function<AutomationDspProcess()>;
+
+// The probe input with one channel replaced by unrelated content: different
+// tones, level and envelope. Used to show the other channel does not hear it.
+QByteArray replaceAutomationDspProbeChannel(const QByteArray& input, int channel,
+                                            int sampleRate = AudioEngine::DEFAULT_SAMPLE_RATE)
+{
+    QByteArray replaced = input;
+    auto* samples = reinterpret_cast<float*>(replaced.data());
+    const int frames = replaced.size() / (2 * static_cast<int>(sizeof(float)));
+    for (int i = 0; i < frames; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const double envelope = 0.55 + 0.45 * std::sin(2.0 * std::numbers::pi * 2.7 * t);
+        samples[2 * i + channel] = static_cast<float>(
+            envelope * (0.25 * std::sin(2.0 * std::numbers::pi * 510.0 * t)
+                        + 0.12 * std::sin(2.0 * std::numbers::pi * 1630.0 * t)));
+    }
+    return replaced;
+}
+
+// Largest per-sample difference on one channel; -1 when the lengths differ or
+// there is no output to compare, since two empty runs prove nothing.
+double automationDspProbeChannelMaxError(const QByteArray& a, const QByteArray& b, int channel)
+{
+    if (a.isEmpty() || a.size() != b.size()) {
+        return -1.0;
+    }
+    const auto* sa = reinterpret_cast<const float*>(a.constData());
+    const auto* sb = reinterpret_cast<const float*>(b.constData());
+    const int frames = a.size() / (2 * static_cast<int>(sizeof(float)));
+    double maxError = 0.0;
+    for (int i = 0; i < frames; ++i) {
+        maxError = std::max(maxError, static_cast<double>(
+            std::fabs(sa[2 * i + channel] - sb[2 * i + channel])));
+    }
+    return maxError;
+}
+
+// Every client NR method denoises L and R independently. The verdict is that
+// contract: each side's output is bit-identical whatever the other side
+// carries, and both sides stay audible. The L/R balance is reported but not
+// judged: independent level-dependent suppression treats the louder and
+// quieter copies of one off-centre signal differently, so balance is not held.
 QJsonObject completedAutomationDspProbe(const QString& mode,
                                         const QByteArray& input,
-                                        const QByteArray& output)
+                                        const AutomationDspFactory& makeProcess)
 {
     constexpr double kMinOutputInputRmsRatio = 0.02;
+    const QByteArray output = processAutomationDspProbeBlocks(input, makeProcess());
+    const QByteArray rightReplaced = processAutomationDspProbeBlocks(
+        replaceAutomationDspProbeChannel(input, 1), makeProcess());
+    const QByteArray leftReplaced = processAutomationDspProbeBlocks(
+        replaceAutomationDspProbeChannel(input, 0), makeProcess());
+    const double leftIndependenceError =
+        automationDspProbeChannelMaxError(output, rightReplaced, 0);
+    const double rightIndependenceError =
+        automationDspProbeChannelMaxError(output, leftReplaced, 1);
+    const bool leftIndependent = leftIndependenceError == 0.0;
+    const bool rightIndependent = rightIndependenceError == 0.0;
+
     const QJsonObject inputRms =
         stereoRmsRatio(input, kAutomationDspProbeDiscardFrames);
     const QJsonObject outputRms =
@@ -3566,10 +3624,10 @@ QJsonObject completedAutomationDspProbe(const QString& mode,
     const bool audible =
         leftLevelRatio >= kMinOutputInputRmsRatio
         && rightLevelRatio >= kMinOutputInputRmsRatio;
-    const bool preserved = ratioError < 0.08 && audible;
+    const bool independent = leftIndependent && rightIndependent;
 
     return QJsonObject{
-        {QStringLiteral("ok"), preserved},
+        {QStringLiteral("ok"), independent && audible},
         {QStringLiteral("mode"), mode},
         {QStringLiteral("available"), true},
         {QStringLiteral("skipped"), false},
@@ -3584,7 +3642,11 @@ QJsonObject completedAutomationDspProbe(const QString& mode,
         {QStringLiteral("rightLevelRatio"), rightLevelRatio},
         {QStringLiteral("minimumLevelRatio"), kMinOutputInputRmsRatio},
         {QStringLiteral("audible"), audible},
-        {QStringLiteral("preserved"), preserved},
+        {QStringLiteral("leftIndependent"), leftIndependent},
+        {QStringLiteral("rightIndependent"), rightIndependent},
+        {QStringLiteral("leftIndependenceMaxError"), leftIndependenceError},
+        {QStringLiteral("rightIndependenceMaxError"), rightIndependenceError},
+        {QStringLiteral("channelsIndependent"), independent},
     };
 }
 
@@ -3651,9 +3713,7 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
 
     const auto probeOne = [this, &input, &rn2Options](const QString& requestedMode) -> QJsonObject {
         if (requestedMode == QLatin1String("NR2")) {
-            std::unique_ptr<SpectralNR> nr2 = createNr2Filter(
-                QStringLiteral("automation probe"));
-            if (!nr2) {
+            if (!createNr2Filter(QStringLiteral("automation probe"))) {
                 return QJsonObject{
                     {QStringLiteral("ok"), false},
                     {QStringLiteral("mode"), requestedMode},
@@ -3662,14 +3722,33 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                     {QStringLiteral("error"), QStringLiteral("NR2 plan creation failed")},
                 };
             }
-            applyNr2Settings(*nr2);
-            QByteArray output;
-            processNr2StereoSharedMask(
-                *nr2,
-                reinterpret_cast<const float*>(input.constData()),
-                input.size() / (2 * static_cast<int>(sizeof(float))),
-                output);
-            return completedAutomationDspProbe(requestedMode, input, output);
+            QJsonObject result = completedAutomationDspProbe(requestedMode, input, [this]() {
+                std::shared_ptr<SpectralNR> nr2 =
+                    createNr2Filter(QStringLiteral("automation probe"));
+                if (!nr2) {
+                    // Plan creation failed after the check above succeeded.
+                    // An empty result fails the independence comparison.
+                    return AutomationDspProcess([](const QByteArray&) { return QByteArray(); });
+                }
+                applyNr2Settings(*nr2);
+                // post2 injects white noise seeded from each instance's own
+                // address, so the three probe runs would differ for a reason
+                // that has nothing to do with channel independence.
+                nr2->setPost2Run(false);
+                return AutomationDspProcess([nr2](const QByteArray& block) {
+                    QByteArray output;
+                    processNr2Stereo(
+                        *nr2,
+                        reinterpret_cast<const float*>(block.constData()),
+                        block.size() / (2 * static_cast<int>(sizeof(float))),
+                        output);
+                    return output;
+                });
+            });
+            // The measured chain differs from the live one by post2; say so
+            // in the result rather than only in the docs.
+            result[QStringLiteral("post2Disabled")] = true;
+            return result;
         }
 
         if (requestedMode == QLatin1String("RN2")) {
@@ -3717,10 +3796,12 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                 return unavailableAutomationDspProbe(
                     requestedMode, QStringLiteral("NR4/specbleach unavailable"));
             }
-            applyNr4SettingsFromAppSettings(nr4);
-            const QByteArray output = processAutomationDspProbeBlocks(
-                input, [&nr4](const QByteArray& block) { return nr4.process(block); });
-            return completedAutomationDspProbe(requestedMode, input, output);
+            return completedAutomationDspProbe(requestedMode, input, []() {
+                auto nr4 = std::make_shared<SpecbleachFilter>();
+                applyNr4SettingsFromAppSettings(*nr4);
+                return AutomationDspProcess(
+                    [nr4](const QByteArray& block) { return nr4->process(block); });
+            });
 #else
             return unavailableAutomationDspProbe(
                 requestedMode, QStringLiteral("NR4 not built in this configuration"));
@@ -3734,10 +3815,12 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                 return unavailableAutomationDspProbe(
                     requestedMode, QStringLiteral("MNR/Accelerate initialization failed"));
             }
-            mnr.setStrength(m_mnrStrength.load());
-            const QByteArray output = processAutomationDspProbeBlocks(
-                input, [&mnr](const QByteArray& block) { return mnr.process(block); });
-            return completedAutomationDspProbe(requestedMode, input, output);
+            return completedAutomationDspProbe(requestedMode, input, [this]() {
+                auto mnr = std::make_shared<MacNRFilter>();
+                mnr->setStrength(m_mnrStrength.load());
+                return AutomationDspProcess(
+                    [mnr](const QByteArray& block) { return mnr->process(block); });
+            });
 #else
             return unavailableAutomationDspProbe(
                 requestedMode, QStringLiteral("MNR is macOS-only"));
@@ -3751,10 +3834,12 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                 return unavailableAutomationDspProbe(
                     requestedMode, QStringLiteral("DFNR model/runtime unavailable"));
             }
-            applyDfnrSettingsFromAppSettings(dfnr);
-            const QByteArray output = processAutomationDspProbeBlocks(
-                input, [&dfnr](const QByteArray& block) { return dfnr.process(block); });
-            return completedAutomationDspProbe(requestedMode, input, output);
+            return completedAutomationDspProbe(requestedMode, input, []() {
+                auto dfnr = std::make_shared<DeepFilterFilter>();
+                applyDfnrSettingsFromAppSettings(*dfnr);
+                return AutomationDspProcess(
+                    [dfnr](const QByteArray& block) { return dfnr->process(block); });
+            });
 #else
             return unavailableAutomationDspProbe(
                 requestedMode, QStringLiteral("DFNR not built in this configuration"));
@@ -3771,10 +3856,12 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                         ? QStringLiteral("BNR/NVIDIA AFX runtime unavailable")
                         : bnr.lastError());
             }
-            bnr.setIntensity(NvidiaBnrSettings::intensity());
-            const QByteArray output = processAutomationDspProbeBlocks(
-                input, [&bnr](const QByteArray& block) { return bnr.process(block); });
-            return completedAutomationDspProbe(requestedMode, input, output);
+            return completedAutomationDspProbe(requestedMode, input, []() {
+                auto bnr = std::make_shared<NvidiaAfxFilter>();
+                bnr->setIntensity(NvidiaBnrSettings::intensity());
+                return AutomationDspProcess(
+                    [bnr](const QByteArray& block) { return bnr->process(block); });
+            });
 #else
             return unavailableAutomationDspProbe(
                 requestedMode, QStringLiteral("BNR not built in this configuration"));
@@ -3789,16 +3876,19 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                 return unavailableAutomationDspProbe(
                     requestedMode, QStringLiteral("NNR/WDSP create_nnr() failed"));
             }
-            nnr.setStrength(NnrSettings::strength());
-            nnr.setModel(NnrSettings::model());
-            nnr.setAlpha(NnrSettings::alpha());
-            nnr.setAlphaKnee(NnrSettings::alphaKnee());
-            nnr.setTau(NnrSettings::tau());
-            nnr.setMaxGain(NnrSettings::maxGain());
-            nnr.setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
-            const QByteArray output = processAutomationDspProbeBlocks(
-                input, [&nnr](const QByteArray& block) { return nnr.process(block); });
-            return completedAutomationDspProbe(requestedMode, input, output);
+            return completedAutomationDspProbe(requestedMode, input, []() {
+                auto nnr = std::make_shared<NnrFilter>();
+                nnr->setStrength(NnrSettings::strength());
+                nnr->setModel(NnrSettings::model());
+                nnr->setAlpha(NnrSettings::alpha());
+                nnr->setAlphaKnee(NnrSettings::alphaKnee());
+                nnr->setTau(NnrSettings::tau());
+                nnr->setMaxGain(NnrSettings::maxGain());
+                nnr->setSmoothing(NnrSettings::smoothAttackMs(),
+                                  NnrSettings::smoothReleaseMs());
+                return AutomationDspProcess(
+                    [nnr](const QByteArray& block) { return nnr->process(block); });
+            });
         }
 
         return QJsonObject{
@@ -8301,24 +8391,24 @@ void AudioEngine::processNr2(const QByteArray& stereoPcm,
         return;
     }
 
-    // Compute one NR2 mask from mono analysis, then apply it to both original
-    // channels.  Flex remote_audio_rx is already a radio-mixed stereo stream;
-    // duplicating a mono NR output and panning from the active slice loses the
-    // per-slice balance inside that stream (#4035).
-    processNr2StereoSharedMask(*nr2, src, stereoFrames, output);
+    // Each channel gets its own NR2 estimate and mask. Flex remote_audio_rx
+    // is already a radio-mixed stereo stream, so the channels carry the
+    // per-slice balance (#4035) and, for a hard-panned diversity pair, two
+    // antennas whose noise floors have nothing in common.
+    processNr2Stereo(*nr2, src, stereoFrames, output);
 }
 
-void AudioEngine::processNr2StereoSharedMask(SpectralNR& nr2,
-                                             const float* src,
-                                             int stereoFrames,
-                                             QByteArray& output)
+void AudioEngine::processNr2Stereo(SpectralNR& nr2,
+                                   const float* src,
+                                   int stereoFrames,
+                                   QByteArray& output)
 {
     // Hard-clamp to ±1.0: if gainMax was tuned above 1.0 (not recommended),
     // unclamped samples would cause digital crackling at the audio sink (#1507).
     const int outBytes = stereoFrames * 2 * static_cast<int>(sizeof(float));
     output.resize(outBytes);
     auto* dst = reinterpret_cast<float*>(output.data());
-    nr2.processStereoSharedMask(src, dst, stereoFrames);
+    nr2.processStereo(src, dst, stereoFrames);
     for (int i = 0; i < stereoFrames * 2; ++i) {
         dst[i] = std::clamp(dst[i], -1.0f, 1.0f);
     }

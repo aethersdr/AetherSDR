@@ -1,9 +1,9 @@
 #pragma once
 
-#include "MonoDspStereoAdapter.h"
 #include "NnrControls.h"
 
 #include <QByteArray>
+#include <array>
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -16,9 +16,10 @@ class Resampler;
 // method in the ADSP suite beside DFNR and RN2 (RFC #5684).
 //
 // Shaped after DeepFilterFilter deliberately: same input/output domain of
-// 24 or 48 kHz stereo float32, same mono analysis with a delayed stereo
-// level-balance through MonoDspStereoAdapter, same "recreate for a new rate"
-// contract. The differences are WDSP's, not ours:
+// 24 or 48 kHz stereo float32, same one-instance-per-channel processing (as
+// RN2 does it, so each side of a diversity pair is denoised against its own
+// noise), same "recreate for a new rate" contract. The differences are
+// WDSP's, not ours:
 //
 //   - NNR's rate must be an integer multiple of 16 kHz, so the 24 kHz path
 //     resamples to 48 and back exactly as processBnr() already does, while a
@@ -45,11 +46,13 @@ public:
     NnrFilter(const NnrFilter&) = delete;
     NnrFilter& operator=(const NnrFilter&) = delete;
 
-    // Process a block of 24/48 kHz stereo float32 PCM.
-    // Returns the processed block (same format, same size).
+    // Process a block of 24/48 kHz stereo float32 PCM. Returns the processed
+    // audio in the same format, released in whole NNR blocks: a call can
+    // return fewer or more frames than it was given, and none while the first
+    // block is still filling.
     QByteArray process(const QByteArray& pcmStereo);
 
-    bool isValid() const { return m_nnr != nullptr; }
+    bool isValid() const { return m_nnr[0] != nullptr && m_nnr[1] != nullptr; }
     int sampleRate() const { return m_sampleRate; }
 
     // Clears the FIFO, overlap-add state and the network's recurrent state.
@@ -57,7 +60,7 @@ public:
 
     // End-to-end delay through this filter, in samples at sampleRate() --
     // NNR's own plus the resamplers' group delay on the 24 kHz path, where the
-    // latter is the larger of the two.
+    // latter is the larger of the two. Both channels have the same delay.
     int delaySamples() const;
 
     // ── The documented operator controls ──────────────────────────────────
@@ -86,17 +89,19 @@ private:
     int totalLatencyFrames() const;
 
     const int m_sampleRate;
-    void* m_nnr{nullptr};                   // NNR, opaque to keep WDSP out of this header
+    // Everything below is per channel, indexed 0 = left, 1 = right.
+    std::array<void*, 2> m_nnr{};           // NNR, opaque to keep WDSP out of this header
 
-    std::unique_ptr<Resampler> m_up;        // 24 kHz mono -> 48 kHz mono
-    std::unique_ptr<Resampler> m_down;      // 48 kHz mono -> 24 kHz mono
+    std::array<std::unique_ptr<Resampler>, 2> m_up;    // 24 kHz -> 48 kHz
+    std::array<std::unique_ptr<Resampler>, 2> m_down;  // 48 kHz -> 24 kHz
 
-    std::vector<float>  m_monoInput;
-    std::vector<double> m_blockIn;          // interleaved I/Q, m_blockFrames complex
-    std::vector<double> m_blockOut;
-    std::vector<float>  m_processed48k;
-    QByteArray m_inAccum;                   // 48 kHz mono float awaiting a full block
-    MonoDspStereoAdapter m_stereoAdapter;
+    std::array<std::vector<float>, 2>  m_channelInput;
+    std::array<std::vector<double>, 2> m_blockIn;   // interleaved I/Q, m_blockFrames complex
+    std::array<std::vector<double>, 2> m_blockOut;
+    std::array<std::vector<float>, 2>  m_processed48k;
+    std::array<QByteArray, 2> m_inAccum;    // 48 kHz float awaiting a full block
+    std::array<QByteArray, 2> m_channelOutput;
+    bool m_lockstepWarned{false};                      // L/R output length mismatch logged
 
     int m_blockFrames{0};
 

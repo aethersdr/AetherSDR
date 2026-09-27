@@ -827,6 +827,16 @@ target_link_libraries(nnr_filter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME nnr_filter_test COMMAND nnr_filter_test)
 set_tests_properties(nnr_filter_test PROPERTIES TIMEOUT 300)
 
+# Every client RX NR method denoises L and R independently, as RN2 does: one
+# side's output never depends on the other side's input, and a hard pan step
+# settles within the filter's latency. Real NR2/NR4/NNR, plus DFNR and BNR
+# when their model or GPU pack is present (nr_rate_domain_test covers those
+# two everywhere through stand-in C APIs).
+add_executable(nr_stereo_independence_test tests/nr_stereo_independence_test.cpp)
+target_link_libraries(nr_stereo_independence_test PRIVATE aethercore Qt6::Core)
+add_test(NAME nr_stereo_independence_test COMMAND nr_stereo_independence_test)
+set_tests_properties(nr_stereo_independence_test PROPERTIES TIMEOUT 300)
+
 add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
 target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_receiver_registry_test COMMAND rtl_receiver_registry_test)
@@ -2462,7 +2472,6 @@ if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCES
     add_executable(nvidia_afx_filter_test
         tests/nvidia_afx_filter_test.cpp
         src/core/NvidiaAfxFilter.cpp
-        src/core/MonoDspStereoAdapter.cpp
         src/core/Resampler.cpp
     )
     target_compile_definitions(nvidia_afx_filter_test PRIVATE HAVE_NVIDIA_AFX)
@@ -2957,14 +2966,6 @@ target_include_directories(biquad_test PRIVATE src)
 add_test(NAME biquad_test COMMAND biquad_test)
 
 
-add_executable(mono_dsp_stereo_adapter_test
-    tests/mono_dsp_stereo_adapter_test.cpp
-    src/core/MonoDspStereoAdapter.cpp
-)
-target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
-target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
-add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
-
 # Socket/device-free tests of the real optional wrappers. The local C API
 # substitutes only apply half-gain and expose sample counts; these tests do
 # not load a downloaded model, SDK pack or GPU and do not claim inference.
@@ -2975,7 +2976,6 @@ add_executable(nr_rate_domain_test
     tests/nr_test_df_api.cpp
     src/core/DeepFilterFilter.cpp
     src/core/NvidiaAfxFilter.cpp
-    src/core/MonoDspStereoAdapter.cpp
     src/core/Resampler.cpp
 )
 target_compile_definitions(nr_rate_domain_test PRIVATE HAVE_DFNR HAVE_NVIDIA_AFX)
@@ -2993,7 +2993,6 @@ if(ENABLE_SPECBLEACH)
         tests/specbleach_rate_domain_test.cpp
         src/core/SpecbleachFilter.cpp
         src/core/dsp/FftwPlannerLock.cpp
-        src/core/MonoDspStereoAdapter.cpp
         ${SPECBLEACH_SOURCES}
     )
     target_compile_definitions(specbleach_rate_domain_test PRIVATE HAVE_SPECBLEACH)
