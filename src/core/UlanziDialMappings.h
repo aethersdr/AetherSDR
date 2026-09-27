@@ -30,7 +30,8 @@ public:
     // is honoured. (The key predates this document, hence a separate flat key.)
     static QString enabledSettingsKey();
     static bool enabled();
-    static void setEnabled(bool on);
+    // Persist and verify on disk; false (and a warning) if it did not commit.
+    static bool setEnabled(bool on);
 
     // Bound action for a pill, or an empty string when the document has no
     // entry (the caller supplies its own built-in default).

@@ -107,10 +107,17 @@ struct PillSpec {
 // firmware property; the function bound to each pill is configurable.
 // Rotary (vfo_tune) is intentionally absent — the rotary signal is
 // routed by MainWindow directly, separate from the button mapper.
+//
+// NO DEFAULT KEYS THE TRANSMITTER (Constitution VI). The dial is claimed as
+// soon as it is detected, and these defaults dispatch on first launch with
+// the mapper never opened, so a TX-bearing default would make a media key the
+// operator never bound into MOX or TUNE — on Windows, which cannot grab the
+// dial, while the key also still reaches the OS. Transmit actions are only
+// ever the operator's own binding. ulanzi_mapping_migration_test pins this.
 constexpr PillSpec kPillSpecs[] = {
-    {"top_left",   "Top Left",   "KEY_PREVIOUSSONG",  "shortcut:mox_toggle",   0.21, 0.06, 0},
+    {"top_left",   "Top Left",   "KEY_PREVIOUSSONG",  "None",                  0.21, 0.06, 0},
     {"top_middle", "Top Middle", "KEY_PLAYPAUSE",     "shortcut:rit_toggle",   0.50, 0.06, 0},
-    {"top_right",  "Top Right",  "KEY_NEXTSONG",      "shortcut:tune_toggle",  0.79, 0.06, 0},
+    {"top_right",  "Top Right",  "KEY_NEXTSONG",      "None",                  0.79, 0.06, 0},
     {"side_lt",    "Left Top",   "Ctrl+V",            "None",                  0.04, 0.52, 3},
     {"side_lb",    "Left Bottom","Ctrl+C",            "None",                  0.04, 0.68, 3},
     {"side_rt",    "Right Top",  "Ctrl+Y",            "shortcut:next_slice",   0.96, 0.52, 1},
@@ -232,11 +239,17 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
                 this, &UlanziDialMapperDialog::onButtonEvent);
         connect(m_manager, &UlanziDialBackend::connectionChanged,
                 this, &UlanziDialMapperDialog::onConnectionChanged);
+        connect(m_manager, &UlanziDialBackend::stateReported,
+                this, &UlanziDialMapperDialog::onConnectionChanged);
 #ifdef Q_OS_LINUX
         connect(m_manager, &UlanziDialBackend::accessRequired,
                 this, &UlanziDialMapperDialog::onAccessRequired);
+        connect(m_manager, &UlanziDialBackend::accessCleared,
+                this, &UlanziDialMapperDialog::onAccessCleared);
 #endif
-        onConnectionChanged(m_manager->isConnected(), m_manager->deviceName());
+        // Ask rather than read: the backend lives on the external-controller
+        // thread (Linux, Windows), so its state is only safe to read there.
+        refreshStatus();
     } else {
         m_statusLabel->setText(tr("Manager unavailable (Linux build only)"));
     }
@@ -645,18 +658,21 @@ void UlanziDialMapperDialog::showEvent(QShowEvent* event)
     // The dialog is persistent and usually opened long after launch, when the
     // backend's scan has already reported. Re-read the state that decides what
     // the status line should say rather than waiting for an edge.
+    refreshStatus();
+}
+
+void UlanziDialMapperDialog::refreshStatus()
+{
     if (!UlanziDialMappings::enabled()) {
         showDisabledStatus();
-        return;
     }
-#ifdef Q_OS_LINUX
-    // A dial found blocked at launch announced it before this dialog existed;
-    // ask again so the Grant access button can appear.
+    // Even when off: the reply is what clears a stale connected line. On
+    // Linux it also re-announces a dial found blocked at launch, before this
+    // dialog existed, so the Grant access button can appear.
     if (m_manager) {
-        QMetaObject::invokeMethod(m_manager, &UlanziDialBackend::reportAccessState,
+        QMetaObject::invokeMethod(m_manager, &UlanziDialBackend::reportState,
                                   Qt::QueuedConnection);
     }
-#endif
 }
 
 void UlanziDialMapperDialog::showDisabledStatus()
@@ -664,9 +680,24 @@ void UlanziDialMapperDialog::showDisabledStatus()
     if (!m_statusLabel) return;
     m_statusLabel->setText(
         tr("Turned off in Radio Setup → Serial & Controllers"));
-    ThemeManager::instance().applyStyleSheet(
-        m_statusLabel, QStringLiteral("QLabel { color: {{color.text.secondary}}; }"));
+    // The label's neutral starting colour. Registering it with ThemeManager
+    // would pin this template over the other states on the next theme change.
+    m_statusLabel->setStyleSheet("QLabel { color: #8ea8c0; }");
+#ifdef Q_OS_LINUX
+    if (m_grantAccessBtn)
+        m_grantAccessBtn->setVisible(false);
+#endif
 }
+
+#ifdef Q_OS_LINUX
+void UlanziDialMapperDialog::onAccessCleared()
+{
+    if (m_grantAccessBtn)
+        m_grantAccessBtn->setVisible(false);
+    // Re-derive the line: the blocked dial went away or the backend stopped.
+    refreshStatus();
+}
+#endif
 
 void UlanziDialMapperDialog::onConnectionChanged(bool connected, const QString& name)
 {

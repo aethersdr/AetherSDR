@@ -79,7 +79,11 @@ void EvdevEncoderManager::start()
 void EvdevEncoderManager::stop()
 {
     m_accessRetryTimer->stop();
+    const bool wasBlocked = m_access.blocked();
     m_access.update(QString());
+    if (wasBlocked) {
+        emit accessCleared();
+    }
     closeFd();
     if (m_watcher) {
         m_watcher->deleteLater();
@@ -97,6 +101,7 @@ void EvdevEncoderManager::onInputDirChanged()
         // access rule isn't installed.  Surface it so the UI can offer to
         // install the rule, rather than silently reading as "disconnected",
         // and keep checking so a granted ACL is picked up without a replug.
+        const bool wasBlocked = m_access.blocked();
         if (m_access.update(blockedName)) {
             qCWarning(lcDevices)
                 << "EvdevEncoderManager:" << blockedName
@@ -109,11 +114,18 @@ void EvdevEncoderManager::onInputDirChanged()
             m_accessRetryTimer->start();
         } else {
             m_accessRetryTimer->stop();
+            if (wasBlocked) {
+                emit accessCleared();  // the blocked dial went away
+            }
         }
         return;
     }
+    const bool wasBlocked = m_access.blocked();
     m_access.update(QString());
     m_accessRetryTimer->stop();
+    if (wasBlocked) {
+        emit accessCleared();
+    }
     if (openAndGrab(path)) {
         qCInfo(lcDevices) << "EvdevEncoderManager: attached"
                           << m_deviceName << "at" << m_devicePath;
@@ -121,8 +133,9 @@ void EvdevEncoderManager::onInputDirChanged()
     }
 }
 
-void EvdevEncoderManager::reportAccessState()
+void EvdevEncoderManager::reportState()
 {
+    emit stateReported(m_fd >= 0, m_deviceName);
     if (m_fd < 0 && m_access.blocked()) {
         emit accessRequired(m_access.blockedName());
     }

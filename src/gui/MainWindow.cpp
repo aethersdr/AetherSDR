@@ -3741,9 +3741,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         // unrelated settings change is harmless. Toggling the HID checkbox
         // from off → on is the moment the OS TCC prompt fires — with user
         // context — instead of every launch (#3257).
-        auto& s = AppSettings::instance();
         applyUlanziDialEnabled();
 #ifdef HAVE_HIDAPI
+        auto& s = AppSettings::instance();
         if (m_hidEncoder &&
             s.value("HidEncoderEnabled", "False").toString() == "True") {
             QMetaObject::invokeMethod(m_hidEncoder, [this] {

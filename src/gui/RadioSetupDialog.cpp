@@ -7099,8 +7099,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
     // ── USB control surfaces (Ulanzi Dial, StreamDeck+) (#3257) ──────────
     // The Ulanzi Dial is on by default: every backend detects the dial before
     // claiming it, so only a present dial reaches the macOS Input Monitoring
-    // prompt. HID encoders stay opt-in because the first call into that
-    // backend triggers the macOS Input Monitoring permission prompt (kIOHIDOptionsTypeSeizeDevice
+    // prompt. HID encoders stay opt-in because the first call into the HID
+    // encoder backend triggers that prompt (kIOHIDOptionsTypeSeizeDevice
     // in the IOKit-direct backend, hid_open() in HIDAPI). Defaulting them off
     // means the prompt only ever fires for users who actually own and want to
     // use the hardware.

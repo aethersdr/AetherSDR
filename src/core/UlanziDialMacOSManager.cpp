@@ -7,7 +7,6 @@
 
 #include <QDebug>
 #include <QJsonArray>
-#include <QTimer>
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDManager.h>
@@ -214,20 +213,29 @@ QString openResultName(bool attempted, qint32 result)
     return QStringLiteral("error");
 }
 
-// Whether a Ulanzi Dial is attached, asked of a HID manager that is never
-// opened. Enumeration reads the IOKit registry; it is IOHIDManagerOpen (the
-// claim in start()) that raises the Input Monitoring prompt (#3257), so this
-// lets the dial be on by default without prompting users who do not own one.
-// diagnostics() has always enumerated the same way.
-bool ulanziDialPresent()
+// A HID manager matching only the dial, which the caller never opens.
+// Enumeration and matching read the IOKit registry; it is IOHIDManagerOpen
+// (the claim in start()) that raises the Input Monitoring prompt (#3257), so
+// the dial can be on by default without prompting users who do not own one.
+// diagnostics() and the presence watcher share this so they cannot drift.
+IOHIDManagerRef createProbeManager()
 {
     IOHIDManagerRef probe = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     if (!probe) {
-        return false;
+        return nullptr;
     }
     CFMutableDictionaryRef match = makeMatchDict();
     IOHIDManagerSetDeviceMatching(probe, match);
     CFRelease(match);
+    return probe;
+}
+
+bool ulanziDialPresent()
+{
+    IOHIDManagerRef probe = createProbeManager();
+    if (!probe) {
+        return false;
+    }
     CFSetRef matched = IOHIDManagerCopyDevices(probe);
     const bool present = matched && CFSetGetCount(matched) > 0;
     if (matched) {
@@ -236,8 +244,6 @@ bool ulanziDialPresent()
     CFRelease(probe);
     return present;
 }
-
-constexpr int kPresencePollMs = 3000;
 
 } // namespace
 
@@ -265,23 +271,15 @@ void UlanziDialMacOSManager::start()
 {
     if (m_manager) return;
     // Detect before claiming: only a dial that is actually attached reaches
-    // IOHIDManagerOpen and its permission prompt. Until then, poll the
-    // registry the way the Windows backend polls hidapi.
+    // IOHIDManagerOpen and its permission prompt. A dial already attached is
+    // found by enumeration right here; one that arrives later is announced by
+    // the matching callback on an unopened probe manager, so a Mac without a
+    // dial does no periodic work.
     if (!ulanziDialPresent()) {
-        if (!m_presenceTimer) {
-            m_presenceTimer = new QTimer(this);
-            m_presenceTimer->setInterval(kPresencePollMs);
-            connect(m_presenceTimer, &QTimer::timeout, this, &UlanziDialMacOSManager::start);
-        }
-        if (!m_presenceTimer->isActive()) {
-            qCInfo(lcDevices) << "UlanziDialMacOSManager: waiting for a Ulanzi Dial";
-            m_presenceTimer->start();
-        }
+        startPresenceWatch();
         return;
     }
-    if (m_presenceTimer) {
-        m_presenceTimer->stop();
-    }
+    stopPresenceWatch();
     if (m_suppressedService) {
         restoreSystemEventSuppression();
         if (m_suppressedService) {
@@ -569,14 +567,9 @@ QJsonObject UlanziDialMacOSManager::diagnostics() const
 {
     QJsonArray devices;
 
-    IOHIDManagerRef probe = IOHIDManagerCreate(kCFAllocatorDefault,
-                                               kIOHIDOptionsTypeNone);
+    IOHIDManagerRef probe = createProbeManager();
     const bool inventoryAvailable = probe != nullptr;
     if (probe) {
-        CFMutableDictionaryRef match = makeMatchDict();
-        IOHIDManagerSetDeviceMatching(probe, match);
-        CFRelease(match);
-
         CFSetRef matched = IOHIDManagerCopyDevices(probe);
         const CFIndex count = matched ? CFSetGetCount(matched) : 0;
         std::vector<const void*> values(static_cast<std::size_t>(count));
@@ -637,11 +630,52 @@ QJsonObject UlanziDialMacOSManager::diagnostics() const
     };
 }
 
+void UlanziDialMacOSManager::reportState()
+{
+    emit stateReported(m_anyOpen, m_deviceName);
+}
+
+void UlanziDialMacOSManager::startPresenceWatch()
+{
+    if (m_presenceManager) {
+        return;
+    }
+    IOHIDManagerRef probe = createProbeManager();
+    if (!probe) {
+        qCWarning(lcDevices) << "UlanziDialMacOSManager: failed to create presence probe";
+        return;
+    }
+    IOHIDManagerRegisterDeviceMatchingCallback(probe,
+        reinterpret_cast<IOHIDDeviceCallback>(&UlanziDialMacOSManager::presenceMatchedCb), this);
+    IOHIDManagerScheduleWithRunLoop(probe, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+    m_presenceManager = probe;
+    qCInfo(lcDevices) << "UlanziDialMacOSManager: waiting for a Ulanzi Dial";
+}
+
+void UlanziDialMacOSManager::stopPresenceWatch()
+{
+    if (!m_presenceManager) {
+        return;
+    }
+    IOHIDManagerRef probe = static_cast<IOHIDManagerRef>(m_presenceManager);
+    IOHIDManagerUnscheduleFromRunLoop(probe, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+    CFRelease(probe);
+    m_presenceManager = nullptr;
+}
+
+void UlanziDialMacOSManager::presenceMatchedCb(void* ctx, int /*result*/, void* /*sender*/,
+                                              void* /*device*/)
+{
+    // Scheduling a probe also reports devices already present, and this runs
+    // inside the probe's own callback: claim on the next event-loop turn, which
+    // is where start() releases the probe.
+    auto* self = static_cast<UlanziDialMacOSManager*>(ctx);
+    QMetaObject::invokeMethod(self, &UlanziDialMacOSManager::start, Qt::QueuedConnection);
+}
+
 void UlanziDialMacOSManager::stop()
 {
-    if (m_presenceTimer) {
-        m_presenceTimer->stop();
-    }
+    stopPresenceWatch();
     restoreSystemEventSuppression();
     if (!m_manager) return;
     IOHIDManagerRef mgr = static_cast<IOHIDManagerRef>(m_manager);

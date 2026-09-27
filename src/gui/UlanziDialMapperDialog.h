@@ -73,7 +73,12 @@ public:
     // Bind an action to a pill and persist immediately.
     static void setActionForPill(const QString& pillId, const QString& actionId);
 
-    // Built-in default action for a pill (e.g. "shortcut:mox_toggle"),
+    // Re-derive the status line from the backend's current state and the
+    // enable setting. MainWindow calls it after the setting changes, so an
+    // open (or later reopened) dialog never keeps a stale line.
+    void refreshStatus();
+
+    // Built-in default action for a pill (e.g. "shortcut:rit_toggle"),
     // used by MainWindow's dispatcher as the AppSettings fallback so
     // bindings work on first launch even if the user has never opened
     // this dialog.  Returns "None" for unknown pillIds.
@@ -90,6 +95,7 @@ private slots:
     // Dial present but its evdev node isn't accessible — offer to install the
     // udev access rule via polkit.
     void onAccessRequired(const QString& deviceName);
+    void onAccessCleared();
     void onGrantAccessClicked();
 #endif
 

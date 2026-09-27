@@ -83,6 +83,11 @@ void UlanziDialWindowsManager::start()
     m_hotplugTimer->start();
 }
 
+void UlanziDialWindowsManager::reportState()
+{
+    emit stateReported(!m_devices.isEmpty(), m_deviceName);
+}
+
 void UlanziDialWindowsManager::stop()
 {
     m_pollTimer->stop();
@@ -164,6 +169,7 @@ void UlanziDialWindowsManager::poll()
         const QString name = m_deviceName;
         m_deviceName.clear();
         m_pollTimer->stop();
+        qCInfo(lcDevices) << "UlanziDialWindowsManager: detached" << name;
         emit connectionChanged(false, name);
     }
 }

@@ -388,7 +388,9 @@ void MainWindow::applyUlanziDialEnabled()
     // scans, and nothing else in the log would explain a dial that is ignored.
     if (enabled != m_ulanziDialEnabledLogged) {
         m_ulanziDialEnabledLogged = enabled;
-        if (!enabled) {
+        if (enabled) {
+            qCInfo(lcDevices) << "Ulanzi Dial: on; a connected dial is used when detected";
+        } else {
             qCInfo(lcDevices) << "Ulanzi Dial: turned off in Radio Setup → Serial &"
                               << "Controllers; a connected dial is left to the OS";
         }
@@ -397,6 +399,11 @@ void MainWindow::applyUlanziDialEnabled()
                               enabled ? &UlanziDialBackend::start
                                       : &UlanziDialBackend::stop,
                               Qt::QueuedConnection);
+    // Queued behind start()/stop() on the same thread, so the dialog's reply
+    // describes the backend after the change.
+    if (m_ulanziMapperDialog) {
+        m_ulanziMapperDialog->refreshStatus();
+    }
 }
 
 void MainWindow::syncFlexControlIndicatorForSettings()

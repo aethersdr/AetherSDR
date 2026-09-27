@@ -45,10 +45,14 @@ public:
 
     void start();        // begin scanning + watching for hot-plug
     void stop();         // release grab + close fd
-    // Re-announce a present-but-blocked dial. The mapper dialog calls this
-    // when it opens: the scan that first found the dial blocked usually ran at
-    // launch, before any dialog existed to hear accessRequired.
-    void reportAccessState();
+    // Re-announce the current state through stateReported() for the mapper
+    // dialog, which opens long after the edges it would otherwise have heard.
+    // Deliberately NOT connectionChanged(): that edge also drives the dial's
+    // TX disconnect fence, and a re-report must never look like a detach.
+    // On Linux this also re-announces a present-but-blocked dial: the scan
+    // that first found it blocked usually ran at launch, before any dialog
+    // existed to hear accessRequired.
+    void reportState();
 
     bool isConnected() const { return m_fd >= 0; }
     QString deviceName() const { return m_deviceName; }
@@ -62,6 +66,10 @@ signals:
     // be opened (EACCES) — i.e. the udev access rule isn't installed. The UI
     // uses this to offer a one-click, polkit-authenticated rule install.
     void accessRequired(const QString& deviceName);
+    // The blocked dial went away, or the backend stopped: withdraw the offer.
+    void accessCleared();
+    // Current state, emitted only from reportState(). Not an edge.
+    void stateReported(bool connected, const QString& name);
 
 private slots:
     void onReadable();
