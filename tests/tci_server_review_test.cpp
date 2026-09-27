@@ -3,6 +3,7 @@
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
 #include "core/RadioDiscovery.h"
+#include "core/TciIoWorker.h"
 #include "core/TciServer.h"
 #include "core/TciTrxMap.h"
 #include "core/backends/sim/SimBackend.h"
@@ -115,6 +116,49 @@ QString findLine(const QStringList& lines, const char* prefix)
 class TciServerReviewTest
 {
 public:
+    // A client that stops answering keepalive is torn down, and one that
+    // answers is left alone.
+    //
+    // Driven by calling checkKeepAlive() directly and moving the recorded
+    // probe time, rather than by waiting: the real deadline is fifteen
+    // seconds, and a test that sleeps for it would be slow AND flaky. The
+    // socket is never connected -- ping() on an unconnected socket does
+    // nothing, and what is under test is the decision, not the frame.
+    static bool keepAliveClosesOnlySilentClients()
+    {
+        TciIoWorker worker;
+        auto* socket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, &worker);
+        TciIoWorker::Client client;
+        client.socket = socket;
+        client.lifetime = std::make_shared<TciClientLifetime>();
+        const quint64 id = client.lifetime->id;
+        worker.m_clients.insert(id, client);
+        worker.m_keepAliveClock.start();
+
+        const auto live = [&worker, id] {
+            const auto it = worker.m_clients.constFind(id);
+            return it != worker.m_clients.cend()
+                   && it->lifetime->live.load(std::memory_order_acquire);
+        };
+
+        // First pass arms a probe and tears nothing down.
+        worker.checkKeepAlive();
+        if (!worker.m_clients[id].awaitingPong || !live()) { return false; }
+
+        // A pong clears the probe; the client survives indefinitely.
+        worker.m_clients[id].awaitingPong = false;
+        worker.checkKeepAlive();
+        worker.checkKeepAlive();
+        if (!live()) { return false; }
+
+        // Silence past the deadline closes it.
+        worker.m_clients[id].awaitingPong = true;
+        worker.m_clients[id].pingSentAtMs
+            = worker.m_keepAliveClock.elapsed() - (TciIoWorker::kKeepAliveDeadlineMs + 1000);
+        worker.checkKeepAlive();
+        return !live();
+    }
+
     static bool deferredAbortIsClientScoped()
     {
         RadioModel model;
@@ -2267,6 +2311,10 @@ int main(int argc, char** argv)
     std::printf("%s  TX_CHRONO stall counts late polls and catch-up bursts\n",
                 chronoCatchUp ? "PASS" : "FAIL");
 
+    const bool keepAlive = AetherSDR::TciServerReviewTest::keepAliveClosesOnlySilentClients();
+    std::printf("%s  keepalive closes a silent client and spares an answering one\n",
+                keepAlive ? "PASS" : "FAIL");
+
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
     const bool inputFence = AetherSDR::TciServerReviewTest::ingressReleaseFencesEarlierCommands();
@@ -2274,7 +2322,7 @@ int main(int argc, char** argv)
     std::printf("%s  worker streams and revokes TX while owner is stalled\n", workerStall ? "PASS" : "FAIL");
     std::printf("%s  late key abort runs on model owner\n", lateKeyAbort ? "PASS" : "FAIL");
 
-    return workerStall && lateKeyAbort && inputFence && validProfile && deferredAbort && observableFailure
+    return keepAlive && workerStall && lateKeyAbort && inputFence && validProfile && deferredAbort && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap && ownershipJoin
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
