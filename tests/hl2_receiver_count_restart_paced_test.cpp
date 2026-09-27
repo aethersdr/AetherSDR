@@ -60,6 +60,7 @@ struct MetisClientTestAccess {
         c.handleDatagram(bytes);
     }
     static int stalePackets(const MetisClient& c) { return c.m_restartStalePackets; }
+    static int lastRunByte(const MetisClient& c) { return c.m_lastBandscopeRunByte; }
     static bool restartIdle(const MetisClient& c)
     {
         return c.m_restartStep == MetisClient::RestartStep::Idle;
@@ -158,6 +159,7 @@ int main(int argc, char** argv)
             }
         });
     }
+    const int runByteBefore = MetisClientTestAccess::lastRunByte(client);
     const double callAt = nowMs();
     QElapsedTimer callTimer;
     callTimer.start();
@@ -166,6 +168,8 @@ int main(int argc, char** argv)
     // Inside the stop-to-start window: this arms the gate at once, which would
     // put a 0x03 run byte -- an early start -- on the wire if nothing held it.
     client.setBandscopeEnabled(true);
+    check(MetisClientTestAccess::lastRunByte(client) == runByteBefore,
+          "the held run byte is not recorded as sent");
     std::fprintf(stderr, "     setReceiverCount() returned in %.3f ms\n", callNs / 1e6);
     check(callNs < 10'000'000, "setReceiverCount() returns without waiting out the 10 ms banks");
     check(!MetisClientTestAccess::restartIdle(client),
@@ -213,7 +217,9 @@ int main(int argc, char** argv)
             prevCc = e.tMs;
         }
         std::fprintf(stderr, "     largest C&C gap across the restart: %.2f ms\n", maxGap);
-        check(maxGap < 8.0, "EP2 keeps flowing through the restart (no C&C gap near 10 ms)");
+        // < 10, not tighter: the blocking form gapped >= 10 ms by construction,
+        // and anything under that fails it without flaking a loaded runner.
+        check(maxGap < 9.9, "EP2 keeps flowing through the restart (no C&C gap near 10 ms)");
 
         int ccAfterStart = 0;
         for (const Ev& e : ev)
@@ -271,6 +277,11 @@ int main(int argc, char** argv)
     client.setReceiverCount(2);
     const double stopAt = nowMs();
     client.stop();
+    // SYNCHRONOUSLY, before any spin: advanceReceiverCountRestart() would also
+    // bail on !m_running at the next timeout, so only an observation taken
+    // before that timeout distinguishes stop()'s own cancel from the bail.
+    check(MetisClientTestAccess::restartIdle(client),
+          "stop() cancels the restart at once, not on its next timeout");
     spin(60);
     {
         int runs = 0;

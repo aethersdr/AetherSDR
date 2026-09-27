@@ -163,7 +163,9 @@ int main(int argc, char** argv)
     // client's restart timer, and the whole sequence ends >= 40 ms after the
     // call. Both ends of this test live in one event loop; a real radio and a
     // real host do not, which is exactly the asymmetry the retry has to survive.
-    spin(60);
+    // 150 ms, not 60: ~40 ms of this is now the client's own schedule, and the
+    // retry is still 300 ms past the restart's Finish step, so the slack is free.
+    spin(150);
     check(stopsSeen == stopsBefore + 1, "the restart stopped the stream first");
     check(startsSeen == startsBefore + 1, "and sent one start, which the radio lost");
     check(!streaming, "the radio is stopped — the start it lost never started it");

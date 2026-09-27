@@ -467,6 +467,14 @@ void MetisClient::onWatchdogTick()
 {
     if (!m_running || !m_linkUp)
         return;
+    // Inside a receiver-count restart's stop-to-start window the silence is
+    // ours, and stage 1's run command (bit 0 set) would be a metis-start ahead
+    // of the priming. m_sinceLastEp6 is restarted at the stop, so this only
+    // matters if the thread stalls for kSilenceTimeoutMs inside the window --
+    // but the restart's spacing is a floor with no ceiling, so it is gated here
+    // structurally rather than by that arithmetic.
+    if (restartAwaitingStart())
+        return;
     if (m_sinceLastEp6.isValid() && m_sinceLastEp6.elapsed() > kSilenceTimeoutMs) {
         const qint64 silentMs = m_sinceLastEp6.elapsed();
         // ---- STAGE 1: ASK THE RADIO AGAIN BEFORE GIVING UP ON IT ----
@@ -974,7 +982,8 @@ void MetisClient::advanceReceiverCountRestart()
         }
         if (m_restartStalePackets > 0)
             qInfo() << "MetisClient: discarded" << m_restartStalePackets
-                    << "EP6 packet(s) in the old layout across the restart";
+                    << "datagram(s) received between the restart's stop and start"
+                       " (old-layout EP6, plus any EP4 or stray reply)";
 
         // The decode buffers describe the OLD layout; drop them so the first packet
         // after the restart sizes them from the new m_ccRxFreq.
@@ -2369,14 +2378,16 @@ void MetisClient::sendBandscopeRunByte(bool wideSpectrum)
     // That hole was disclosed on PR #5650 as one we could not close without a
     // send seam; this is the seam, and both mutants now fail hl2_ep4_gate_test.
     const auto cmd = metisRunCommand(wideSpectrum, m_watchdogEnabled);
-    m_lastBandscopeRunByte = cmd[3];
-    if (!hasCommandTransport())
-        return;
     // Every run byte has bit 0 set. Inside a receiver-count restart's
     // stop-to-start window that is a metis-start ahead of the priming, so it
-    // is held back; the restart's Start step resets the gate and its Finish
-    // step re-applies it.
+    // is held back -- and NOT recorded, because the record means "what this
+    // call site put on the wire" and nothing went. The restart's Start step
+    // resets the gate and its Finish step re-applies it. (A restart needs a
+    // transport, so this cannot hide a byte from a socket-free test.)
     if (restartAwaitingStart())
+        return;
+    m_lastBandscopeRunByte = cmd[3];
+    if (!hasCommandTransport())
         return;
     // The run byte is a bit field and `run` must STAY set: this goes out while
     // already streaming, where re-asserting bit 0 is a no-op in the gateware's
