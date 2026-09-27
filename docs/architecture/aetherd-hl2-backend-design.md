@@ -133,7 +133,7 @@ where the same field would be a wire command.
 | `meterUpdate("s-meter", v)` | `Hl2Dsp` S-meter (dBFS → dBm via a calibration constant; TBD, refine like `flex-meter-learnings.md`). |
 | `panCenterBandwidthChanged(panId, ctr, span)` | Center = RX1 NCO MHz; span = sample-rate MHz. Backend-emitted from its own config. |
 | `panRfGainChanged(panId, gain)` | LNA gain (−12…+48 dB) reflected back. |
-| `spectrumFrameReady` / `waterfallRowReady` / `audioFrameReady` | The DSP outlets — **but see §5 for how these actually reach the UI in Phase 1** (the interface's `QByteArray` data-plane signals are not the live path yet). |
+| `spectrumFrameReady` / `audioFrameReady` | The DSP outlets — **but see §5 for how these actually reach the UI in Phase 1** (the interface's `QByteArray` data-plane signals are not the live path yet). |
 
 Signals HL2 simply never emits in Phase 1 (no such hardware/wire): `transmitChanged`,
 `amplifierChanged`, `tunerChanged`, `gpsChanged`, `memoryChanged`, `profileChanged`,

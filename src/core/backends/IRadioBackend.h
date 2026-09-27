@@ -101,7 +101,7 @@ struct MemoryRecallDetails {
 //
 //  2. EVERY SEAM SIGNAL IS EMITTED FROM THAT THREAD. This includes the
 //     high-rate data plane (audioFrameReady, sliceAudioFrameReady,
-//     spectrumFrameReady, waterfallRowReady, meterUpdate) and the cadence
+//     spectrumFrameReady, meterUpdate) and the cadence
 //     signals (linkStatsUpdated). A backend whose socket, DSP or timer lives
 //     on a worker thread brings the result back to its own thread FIRST — a
 //     queued connection with `this` as the receiver context, or
@@ -1393,8 +1393,17 @@ signals:
     // Declared here so backends have a normalized outlet for spectrum/waterfall/
     // audio; the concrete zero-copy/binary frame formats are step-4 work. Until
     // then a backend may relay the existing in-tree frame types.
+    //
+    // There is deliberately NO separate waterfall outlet. RadioModel derives
+    // the waterfall row from spectrumFrameReady (onBackendSpectrumFrame, paced
+    // by the pan's waterfall rate), so a backend's spectrum frame IS its row.
+    // A waterfallRowReady(int, QByteArray) used to be declared here; RTL-SDR
+    // emitted it with the byte-identical frame and nothing ever connected it
+    // (#5678 row 2.5). Wiring it would have fed RTL every row twice and
+    // bypassed the pacing gate. A backend with a genuinely separate waterfall
+    // plane (as Flex has, via PanadapterStream) adds an outlet together with
+    // its consumer, in the same change.
     void spectrumFrameReady(int panId, const QByteArray& frame);
-    void waterfallRowReady(int panId, const QByteArray& row);
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 
 protected:
