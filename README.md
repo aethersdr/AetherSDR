@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.9.4** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.9.5** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -26,7 +26,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **Multi-slice & multi-panadapter** — colour-coded VFO overlays, independent TX assignment, diversity/ESC beamforming, and up to 8 detachable pans with native VITA-49 waterfall tiles and per-flag S-meter / **SmartMTR** views
 - **KiwiSDR and Web-888 public-receiver browser** — find and connect to public receivers worldwide through an API-policy-aware directory, with diversity receive and receive-only TX inhibit
 - **AetherTX and AetherRX** — the transmit and receive chains, one window each. AetherTX is the channel strip (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and scope; AetherRX puts noise reduction, gate, EQ, compressor, tube, AetherVoice and the output meter on tabs down its left edge
-- **Seven client-side noise-reduction engines** — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), NNR (WDSP's Neural Noise Reduction), DFNR (DeepFilterNet3), BNR (the NVIDIA Maxine denoiser, in-process on a local RTX/GeForce GPU, Linux + Windows — [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)) and MNR (macOS)
+- **Seven client-side noise-reduction engines**, each denoising left and right independently so pans and diversity survive them — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), NNR (WDSP's Neural Noise Reduction), DFNR (DeepFilterNet3), BNR (the NVIDIA Maxine denoiser, in-process on a local RTX/GeForce GPU, Linux + Windows — [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)) and MNR (macOS)
 - **DAX virtual audio + IQ** — up to 8 RX audio channels (radio-dependent) plus 1 TX, and 4 channels of raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, with a per-slice **WFM demodulator** for satellite data
 - **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, a WIDE1-1 fill-in digipeater, and an **APRS client** (station map, GPS beacon, messaging) on a Direwolf-derived VHF demodulator
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading and interpolated bandwidth at SWR ≤ 1.5 / 2.0
@@ -83,26 +83,32 @@ amplifiers over TCP control with UDP telemetry.
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.
 
-**Other radio families** ride the vendor-neutral `IRadioBackend` seam. Neither
-is a supported family yet, and FlexRadio remains the supported target:
+**Other radio families** ride the vendor-neutral `IRadioBackend` seam. None is
+a supported family yet (one Icom model is supported on its own, below), and
+FlexRadio remains the supported target:
 
 - **Hermes-Lite 2** — **experimental**. Four independent receivers, SSB voice
   through WDSP's TXA modulator with a reduction-only ALC, CW/RTTY decoding,
   AX.25 packet, band switching with hardware filters, manual notch filters, a
   host-side impulse noise blanker, host frequency calibration, a derived dBm
-  reference, an on-demand wideband bandscope and per-radio state restore
-  (including AGC mode and threshold).
+  reference, an on-demand wideband bandscope, minimum-phase receive filtering
+  outside CW, a declared board variant (bare HL2, AK4951 companion or
+  SquareSDR 2) and per-radio state restore (including AGC mode and threshold).
 - **Networked Icom** — **early**. CI-V over the RS-BA1 UDP transport, brought up
   on the IC-705 (receive, scope, transmit, FT8) and completed against a live
   IC-7300MK2 (controls, meters, ATU, WSPR, PC Audio routing and the CW decoder).
   The connect path asks the radio for its own CI-V address rather than assuming
   one. Only the IC-705 and IC-7300MK2 are verified against their own CI-V guides
   — an unrecognised model gets no scope and no transmit rather than optimistic
-  defaults.
+  defaults. The **IC-7300MK2 over built-in Ethernet/RS-BA1 is supported** as of
+  v26.9.5 ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517));
+  every other Icom model keeps the early, experimental treatment.
 - **ANAN-G2** — **experimental, receive-only**. openHPSDR Protocol 2 discovery
   with a single receive path, spectrum and audio, live tuning and zoom, live DDC
   rate changes, and DDC0 edge-droop compensation derived from the Saturn
-  gateware (an in-app calibration can override it). Transmit is a future phase.
+  gateware (an in-app calibration can override it). The panadapter is computed
+  by WDSP's display analyzer at one point per screen pixel, and the S-meter,
+  noise blanker and RF-gain attenuator work. Transmit is a future phase.
 - **RTL-SDR** — **experimental, receive-only**. Discovers supported USB dongles
   through `librtlsdr` and provides one panadapter and one host-demodulated slice.
 
@@ -214,8 +220,9 @@ Currently in flight:
   receive control, bounded telemetry and credential-bound transmit grants with
   Flex PTT handoff have landed; per-client propagation, transmit for the other
   families and a thin client to replace direct model access have not.
-- **Non-Flex backends** — Hermes-Lite 2 (experimental), networked Icom (early),
-  and ANAN-G2 and RTL-SDR (experimental, receive-only). Current coverage and
+- **Non-Flex backends** — Hermes-Lite 2 (experimental), networked Icom (early;
+  the IC-7300MK2 over RS-BA1 is supported), and ANAN-G2 and RTL-SDR
+  (experimental, receive-only). Current coverage and
   remaining work for each is under [Supported Hardware](#supported-hardware).
 - **Workspace canvas** — an experimental alternative shell; remaining work is
   live cross-window drag and field time against the Classic shell.
