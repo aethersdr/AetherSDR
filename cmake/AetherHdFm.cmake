@@ -93,8 +93,10 @@ function(aether_add_hd_fm_dependencies)
     add_library(aether_nrsc5 STATIC ${nrsc5_sources})
     target_include_directories(aether_nrsc5 SYSTEM PUBLIC "${nrsc5_root}/include")
     target_include_directories(aether_nrsc5 PRIVATE "${config_root}")
+    # Upstream separately defines HAVE_FAAD2 for output.h declarations;
+    # generated USE_FAAD2 enables their implementation in output.c.
     target_compile_definitions(aether_nrsc5 PRIVATE
-        _GNU_SOURCE GIT_COMMIT_HASH="0225922b6f68109df39d07391f4d855464598ab8")
+        _GNU_SOURCE HAVE_FAAD2=1 GIT_COMMIT_HASH="0225922b6f68109df39d07391f4d855464598ab8")
     target_compile_definitions(aether_nrsc5 INTERFACE AETHER_ENABLE_NRSC5=1)
     target_link_libraries(aether_nrsc5 PRIVATE aether_faad_hdc
         "${RTL_FFTW3F_TARGET}" "${RTLSDR_TARGET}" Threads::Threads "${AETHER_HD_MATH_LIBRARY}")
