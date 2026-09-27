@@ -110,6 +110,7 @@ struct Audio {
     std::uint64_t captureEpoch = 0;
     bool seen = false;
     bool stereo = false;
+    bool pilot = false;
     bool discontinuity = false;
     double peak = 0;
     std::size_t clipped = 0;
@@ -129,6 +130,7 @@ struct Audio {
         seen = true;
         next = packet.firstSample + packet.frames;
         stereo |= packet.wfmStereoDetected.value_or(false);
+        pilot |= packet.wfmReception && packet.wfmReception->pilotLocked;
         for (std::size_t i = 0; i < packet.frames; ++i) {
             const float l = packet.samples[2 * i];
             const float r = packet.samples[2 * i + 1];
@@ -177,8 +179,20 @@ std::array<Audio, 2> run(Pipeline& pipeline, const Transaction::State& current,
         while (pipeline.takePacket(packet)) {
             check(packet.token == current.token, "PCM and decoder status retain the accepted capture token");
             check(packet.slot == -1 || packet.slot == 3, "native routing preserves sparse slice identity");
-            check(packet.slot < 0 ? !packet.wfmStereoDetected.has_value() : packet.wfmStereoDetected.has_value(),
-                  "pilot observation belongs only to the independent WFM receiver");
+            if (packet.slot < 0) {
+                check(!packet.wfmStereoDetected && !packet.wfmReception,
+                      "speaker mix does not claim an independent receiver observation");
+            } else {
+                // Prefilled D8 PCM can precede the first completed decoder
+                // observation. Absence is truthful; status must not be invented.
+                check(packet.wfmStereoDetected.has_value() == packet.wfmReception.has_value(),
+                      "slice output status is published only with a decoder observation");
+                if (packet.wfmReception) {
+                    check(packet.wfmReception->valid && packet.wfmStereoDetected
+                              == (packet.wfmReception->pilotLocked && !current.receivers[0].wfmForceMono),
+                          "observed output status honors the accepted mono selection and independent pilot");
+                }
+            }
             result[packet.slot < 0 ? 1 : 0].accept(packet);
         }
         std::this_thread::sleep_until(started + std::chrono::microseconds(
@@ -251,9 +265,9 @@ void nativeRouting()
               "Force Mono is identical nonzero L/R at independent tap and speaker");
         check(audio.discontinuity, "Force Mono retires both audio lifetimes");
     }
-    check(!mono[0].stereo && mono[0].receiverEpoch != changed[0].receiverEpoch
+    check(!mono[0].stereo && mono[0].pilot && mono[0].receiverEpoch != changed[0].receiverEpoch
         && mono[1].captureEpoch != changed[1].captureEpoch,
-        "Force Mono reports mono output while replacing decoder and speaker epochs");
+        "Force Mono reports mono output with real pilot detection while replacing decoder and speaker epochs");
     current.token.revision++;
     current.receivers[0].wfmForceMono = false;
     check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(), "Auto Stereo readopts");

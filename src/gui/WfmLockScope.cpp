@@ -158,9 +158,22 @@ void WfmLockScope::paintEvent(QPaintEvent*)
                          Qt::AlignCenter, QStringLiteral("Awaiting pilot telemetry"));
         return;
     }
-    const QRectF plot(6, lineHeight + 7, width() - 12,
-                      std::max(20, height() - 3 * lineHeight - 28));
     const Sample& latest = m_samples.last();
+    // Fixed, disjoint legend cells keep nearly equal thresholds readable;
+    // the guide lines below still use their actual measured y positions.
+    const int legendWidth = (width() - 12) / 2;
+    const QRect acquireLegend(6, lineHeight + 5, legendWidth, lineHeight);
+    const QRect releaseLegend(6 + legendWidth, lineHeight + 5, legendWidth, lineHeight);
+    painter.setPen(success);
+    painter.drawText(acquireLegend, Qt::AlignLeft | Qt::AlignVCenter,
+        fontMetrics().elidedText(QStringLiteral("Acquire %1").arg(latest.acquire, 0, 'g', 3),
+                                 Qt::ElideRight, legendWidth - 4));
+    painter.setPen(warning);
+    painter.drawText(releaseLegend, Qt::AlignLeft | Qt::AlignVCenter,
+        fontMetrics().elidedText(QStringLiteral("Release %1").arg(latest.release, 0, 'g', 3),
+                                 Qt::ElideRight, legendWidth - 4));
+    const QRectF plot(6, 2 * lineHeight + 11, width() - 12,
+                      std::max(20, height() - 4 * lineHeight - 32));
     double maximum = latest.acquire;
     for (const Sample& sample : m_samples) {
         maximum = std::max(maximum, sample.magnitude);
@@ -177,13 +190,9 @@ void WfmLockScope::paintEvent(QPaintEvent*)
     painter.setPen(QPen(success, 1, Qt::DashLine));
     painter.drawLine(QPointF(plot.left(), yOf(latest.acquire)),
                      QPointF(plot.right(), yOf(latest.acquire)));
-    painter.drawText(QPointF(plot.left() + 2, yOf(latest.acquire) - 2),
-                     QStringLiteral("Acquire %1").arg(latest.acquire, 0, 'g', 3));
     painter.setPen(QPen(warning, 1, Qt::DotLine));
     painter.drawLine(QPointF(plot.left(), yOf(latest.release)),
                      QPointF(plot.right(), yOf(latest.release)));
-    painter.drawText(QPointF(plot.left() + 2, yOf(latest.release) - 2),
-                     QStringLiteral("Release %1").arg(latest.release, 0, 'g', 3));
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(QPen(trace, 1.5));
     QPolygonF points;
