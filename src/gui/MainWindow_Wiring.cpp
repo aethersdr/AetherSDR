@@ -18,6 +18,7 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include "WfmBroadcastOverlay.h"
 #include "models/CwDecodeSettings.h"
 #include "core/backends/AutoRfGainControl.h"
 #include "core/ClientDisplaySettings.h"
@@ -3708,6 +3709,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
+    auto* broadcast = sw->findChild<WfmBroadcastOverlay*>(QStringLiteral("wfmBroadcastOverlay"),
+        Qt::FindDirectChildrenOnly);
+    if (!broadcast) {
+        broadcast = new WfmBroadcastOverlay(sw);
+        broadcast->setObjectName(QStringLiteral("wfmBroadcastOverlay"));
+        connect(broadcast, &WfmBroadcastOverlay::overlaysChanged,
+            sw, &SpectrumWidget::setBroadcastOverlays);
+    }
+    broadcast->bind(&m_radioModel, applet->panId());
     if (!sw->capturePlacementAction()) {
         sw->setCapturePlacementAction(new ReceiveCaptureAction(m_radioModel,
             [applet] { return applet->panId(); }, sw));

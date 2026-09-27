@@ -175,7 +175,7 @@ public:
     {
         // Catches forced 24k producer interpretation,
         // stereo downmix, unbounded packets and last-client-only accounting.
-        for (int sourceRate : {24000,48000}) {
+        for (int sourceRate : {24000,44100,48000}) {
             Fixture f;
             f.backend->add(3);
             PcmProducer producer;

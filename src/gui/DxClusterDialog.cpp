@@ -45,6 +45,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 #include "core/ThemeManager.h"
+#include "WfmPresentationSettings.h"
 
 namespace AetherSDR {
 
@@ -2728,6 +2729,17 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             save("IsMemorySpotsEnabled", on ? "True" : "False");
         });
         toggleRow->addWidget(memoriesToggle);
+
+        auto* wfmRdsToggle = makeToggle("WFM RDS",
+            WfmPresentationSettings::instance().broadcastOverlayEnabled(),
+            "Show current broadcast station and now-playing labels on the panadapter. "
+            "HD Radio metadata is labeled HD Radio. Does not stop decoding or applet text.");
+        wfmRdsToggle->setObjectName(QStringLiteral("wfmRdsToggle"));
+        wfmRdsToggle->setAccessibleName(QStringLiteral("WFM RDS"));
+        wfmRdsToggle->setAccessibleDescription(wfmRdsToggle->toolTip());
+        connect(wfmRdsToggle, &QPushButton::toggled,
+            &WfmPresentationSettings::instance(), &WfmPresentationSettings::setBroadcastOverlayEnabled);
+        toggleRow->addWidget(wfmRdsToggle);
 
         auto* kiwiDxToggle = makeToggle("Kiwi DX", kiwiDxSpots,
             "Overlay KiwiSDR Community DX database spots (beacons, utilities, time signals) on the band plan strip.");

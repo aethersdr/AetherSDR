@@ -14424,6 +14424,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
             drawSwrSweep(frequencyPainter, specRect);
             drawSliceMarkers(frequencyPainter, specRect, wfRect);
+            drawBroadcastOverlays(frequencyPainter, specRect);
             drawOffScreenSlices(frequencyPainter, specRect);
 
             m_overlayStatic.fill(Qt::transparent);
@@ -15609,6 +15610,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
     drawSwrSweep(p, specRect);
     drawSliceMarkers(p, specRect, wfRect);
+    drawBroadcastOverlays(p, specRect);
     drawSmartMtrValueLabels(p);
     drawOffScreenSlices(p, specRect);
 
@@ -16480,6 +16482,49 @@ static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm)
         tip += QString("<br>Spotted: %1 UTC").arg(
             QDateTime::fromMSecsSinceEpoch(sm.timestampMs, QTimeZone::utc()).toString("yyyy-MM-dd HH:mm:ss"));
     return tip;
+}
+
+void SpectrumWidget::setBroadcastOverlays(const QVector<WfmBroadcastOverlayRecord>& records)
+{
+    const QVector<WfmBroadcastOverlayRecord> bounded = records.mid(0, 8);
+    if (bounded == m_broadcastOverlays) { return; }
+    m_broadcastOverlays = bounded;
+    markOverlayDirty();
+    update();
+}
+
+void SpectrumWidget::drawBroadcastOverlays(QPainter& p, const QRect& specRect)
+{
+    if (m_broadcastOverlays.isEmpty() || specRect.width() < 40) { return; }
+    p.save();
+    p.setClipRect(specRect, Qt::IntersectClip);
+    QFont labelFont = p.font();
+    labelFont.setPixelSize(12);
+    p.setFont(labelFont);
+    const QFontMetrics metrics(labelFont);
+    const int rowHeight = metrics.height() + 6;
+    const int maxWidth = std::min(420, specRect.width() - 12);
+    ThemeManager& theme = ThemeManager::instance();
+    int row = 0;
+    for (const WfmBroadcastOverlayRecord& record : m_broadcastOverlays) {
+        const int x = mhzToX(record.frequencyHz / 1.0e6);
+        if (x < specRect.left() || x > specRect.right()) { continue; }
+        // Below slice flags, in a bounded independent row. Never enters spot
+        // clustering, hit testing, trigger/remove commands or smart filters.
+        const int y = specRect.top() + 52 + row * (rowHeight + 2);
+        if (y + rowHeight > specRect.bottom()) { break; }
+        const QString label = metrics.elidedText(record.displayText(), Qt::ElideRight, maxWidth - 12);
+        const int width = std::min(maxWidth, metrics.horizontalAdvance(label) + 12);
+        const int left = std::clamp(x - width / 2, specRect.left() + 6, specRect.right() - width - 5);
+        const QRect box(left, y, width, rowHeight);
+        p.fillRect(box, theme.brush(this, "color.background.0", box));
+        p.setPen(theme.color(this, "color.border.subtle"));
+        p.drawRect(box.adjusted(0, 0, -1, -1));
+        p.setPen(theme.color(this, "color.text.primary"));
+        p.drawText(box.adjusted(6, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, label);
+        ++row;
+    }
+    p.restore();
 }
 
 void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)

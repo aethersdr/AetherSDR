@@ -79,6 +79,8 @@ public:
     void setSliceSquelch(int sliceId, bool enabled, int level) override;
     void setSliceWfmDeemphasis(int sliceId, int microseconds) override;
     void setSliceWfmForceMono(int sliceId, bool forceMono) override;
+    void setSliceWfmAudioMode(int sliceId, WfmAudioMode mode) override;
+    void setSliceHdProgram(int sliceId, int program) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
@@ -128,6 +130,9 @@ private:
     void drainAudio();
     void observeWfm(const RtlReceivePipeline::Packet& packet);
     void expireWfmObservations();
+    void drainHdObservations();
+    void observeHd(const RtlReceivePipeline::HdFmObservation& observation);
+    void expireHdObservations();
     void publishLegacyPcm(const QByteArray& pcm, const QByteArray& preMonitor);
     void retireNativeAudio();
     void emitSliceState(const RtlCaptureTransaction::Receiver& receiver);
@@ -201,6 +206,8 @@ private:
         quint64 captureEpoch = 0;
         quint64 instance = 0;
         quint64 receiverEpoch = 0;
+        quint64 audioEpoch = 0;
+        int sampleRateHz = 48000;
         quint64 nextSample = 0;
     };
     NativeAudio m_speakerAudio;
@@ -229,6 +236,18 @@ private:
     std::array<QElapsedTimer, 8> m_wfmObservationAge;
     std::array<QElapsedTimer, 8> m_wfmPublicationAge;
     std::array<WfmReceptionDiagnostics, 8> m_wfmReception;
+    std::array<HdFmReception, 8> m_hdReception;
+    struct HdObservationIdentity {
+        quint64 instance = 0, receiverEpoch = 0, audioEpoch = 0, captureEpoch = 0;
+        quint64 publicationSequence = 0, observationSequence = 0, audioSequence = 0;
+        bool expired = false;
+    };
+    std::array<HdObservationIdentity, 8> m_hdIdentity;
+    bool m_hdDiagnosticsObserved = false;
+    std::array<quint64, 3> m_hdDiagnosticTotals{};
+    std::array<std::array<quint64, 3>, 8> m_hdPriorCounters{};
+    std::array<QElapsedTimer, 8> m_hdObservationAge, m_hdAudioAge, m_hdPublicationAge;
+    std::array<quint64, 8> m_hdObservationProducedMs{}, m_hdAudioProducedMs{};
     struct WfmObservationIdentity {
         std::uint64_t instance = 0;
         std::uint64_t epoch = 0;

@@ -33,6 +33,8 @@ public:
         std::uint64_t captureEpoch = 0;
         std::uint64_t instance = 0;
         std::uint64_t receiverEpoch = 0;
+        std::uint64_t audioEpoch = 0; // nonzero for HD, separately retired on sync/audio loss
+        std::uint64_t producedMonotonicMs = 0; // oldest decoded contribution; zero for intentional HD silence
         std::uint64_t firstSample = 0;
         int slot = -1;
         std::size_t frames = 0;
@@ -45,6 +47,16 @@ public:
         std::optional<AetherSDR::WfmReceptionDiagnostics> wfmReception;
         std::array<float, 2048> samples{};
     };
+    struct HdFmObservation {
+        Transaction::Token token;
+        std::uint64_t captureEpoch = 0;
+        std::uint64_t instance = 0;
+        std::uint64_t receiverEpoch = 0;
+        std::uint64_t audioEpoch = 0;
+        int slot = -1;
+        HdFmRawReception reception;
+    };
+    bool takeHdObservation(HdFmObservation& output) noexcept;
     // Bounded acquisition observations; no formatting, clock reads, allocation,
     // or logging on the sample callback. The owner drains across bank adoption
     // so repair cannot erase the fault that requested it.
@@ -124,6 +136,18 @@ private:
     bool m_legacy = true;
     std::uint8_t m_receivingMask = 0;
     RtlAudioMixer m_mixer;
+    void hdObservation(const RtlReceiverRegistry::ReceiverSpec&, const HdFmRawReception&) noexcept override;
+    void hdDecodedAudio(const RtlReceiverRegistry::ReceiverSpec&, const HdFmAudioIdentity&, std::uint64_t,
+        std::span<const float>, std::span<const float>, bool) noexcept override;
+    void hdSpeakerAudio(const RtlReceiverRegistry::ReceiverSpec&, const HdFmAudioIdentity&, std::uint64_t,
+        std::span<const float>, std::span<const float>, bool) noexcept override;
+    static constexpr unsigned kHdObservations = 64;
+    std::array<HdFmObservation, kHdObservations> m_hdObservations;
+    alignas(64) std::atomic<unsigned> m_hdWrite{0};
+    alignas(64) std::atomic<unsigned> m_hdRead{0};
+    std::uint64_t m_hdSpeakerEpoch = 0;
+    std::array<HdFmAudioIdentity, RtlAudioMixer::kCapacity> m_hdSpeakerIdentities{};
+    bool m_hdAudioValid = false;
     // Set on the first capture block of a new mixer epoch, then retained.
     // Unchanged epochs must keep their existing sample coordinate and buffers.
     std::optional<std::uint64_t> m_mixerOrigin;

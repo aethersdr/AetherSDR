@@ -1,5 +1,7 @@
 #pragma once
 
+#include "HdFmTypes.h"
+
 #include "core/SharedCapturePolicy.h"
 #include "core/backends/rtl/RtlRfExtractor.h"
 #include "core/dsp/WdspChannel.h"
@@ -51,6 +53,7 @@ public:
         Capture capture;
         bool extractRf = false;
         std::uint64_t epoch = 0; // reprepare on a gap without reusing DSP history
+        std::optional<HdFmRecipe> hdFm; // alternative native decoder; analog edges remain in passband
         bool operator==(const ReceiverSpec&) const = default;
     };
 
@@ -89,6 +92,11 @@ public:
         virtual ~AudioSink() = default;
         virtual void audioBlock(const ReceiverSpec& spec, std::uint64_t firstSample,
             std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept = 0;
+        virtual void hdObservation(const ReceiverSpec&, const HdFmRawReception&) noexcept {}
+        virtual void hdDecodedAudio(const ReceiverSpec&, const HdFmAudioIdentity&, std::uint64_t,
+            std::span<const float>, std::span<const float>, bool) noexcept {}
+        virtual void hdSpeakerAudio(const ReceiverSpec&, const HdFmAudioIdentity&, std::uint64_t,
+            std::span<const float>, std::span<const float>, bool) noexcept {}
         // Optional decoder observation for the same live receiver. The decoder
         // publishes its latest completed DSP block, not an RF arrival timestamp.
         virtual void audioBlockWithStatus(const ReceiverSpec& spec, std::uint64_t firstSample,
@@ -117,6 +125,10 @@ public:
         std::uint64_t firstSample = 0;
         bool discontinuity = false;
         std::span<const std::complex<float>> samples;
+        // Capture transaction identity, captured before queuing asynchronous IQ.
+        // The registry's independent session above must not substitute for it.
+        std::uint64_t publicationSession = 0;
+        std::uint64_t publicationRevision = 0;
     };
     class BlockProcessor {
     public:

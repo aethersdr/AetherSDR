@@ -2,6 +2,7 @@
 
 #include <optional>
 #include "core/WfmReceptionDiagnostics.h"
+#include "core/HdFmReception.h"
 
 #include <QMetaType>
 #include <QString>
@@ -106,6 +107,9 @@ struct SliceDelta {
     std::optional<int>         squelchLevel;
     std::optional<int>         wfmDeemphasisUs;
     std::optional<bool>        wfmForceMono;
+    std::optional<WfmAudioMode> wfmAudioMode;
+    std::optional<int> hdProgram;
+    std::optional<HdFmReception> hdFmReception;
     std::optional<WfmReceptionDiagnostics> wfmReceptionDiagnostics;
     std::optional<WfmStereoStatus> wfmStereoStatus;
     std::optional<bool>        ritOn;

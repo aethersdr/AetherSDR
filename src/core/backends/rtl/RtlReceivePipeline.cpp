@@ -61,6 +61,16 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
             || receiver.squelchLevel < 0 || receiver.squelchLevel > 100
             || (receiver.wfmDeemphasisUs != 50 && receiver.wfmDeemphasisUs != 75)
             || (receiver.mode == Transaction::Mode::Wfm && receiver.squelchEnabled)) { return Submission::Failed; }
+        if (receiver.mode == Transaction::Mode::Wfm && receiver.wfmHdStereo) {
+            if (!m_enableWfm) { return Submission::Failed; }
+#ifndef AETHER_ENABLE_NRSC5
+            return Submission::Failed;
+#else
+            if (receiver.hdProgram < 0 || receiver.hdProgram >= 8 || state.receivers.size() != 1) {
+                return Submission::Failed;
+            }
+#endif
+        }
         validated[id] = true;
     }
     const unsigned faults = m_faults.load(std::memory_order_acquire);
@@ -89,7 +99,9 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
                 || !wide || !prior.dsp.wbfmReceive
                 || prior.passband != receiver->passband
                 || prior.dsp.wbfmReceive->deemphasis != deemphasis
-                || prior.dsp.wbfmReceive->forceMono != receiver->wfmForceMono;
+                || prior.dsp.wbfmReceive->forceMono != receiver->wfmForceMono
+                || prior.hdFm.has_value() != receiver->wfmHdStereo
+                || (prior.hdFm && prior.hdFm->program != receiver->hdProgram);
         }
     }
     if (legacy && (state.receivers.size() != 1 || state.receivingIds.size() != 1)) { return Submission::Failed; }
@@ -145,10 +157,14 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
                 spec.dsp.fmReceive = WdspChannel::FmReceive{};
                 spec.dsp.fmDeviationHz = receiver.mode == Transaction::Mode::Fmn ? 2500.0 : 5000.0;
             }
+            if (receiver.mode == Transaction::Mode::Wfm && receiver.wfmHdStereo) {
+                spec.hdFm = HdFmRecipe{receiver.hdProgram};
+            }
             spec.dsp.filterLowHz = receiver.passband.filterLowHz;
             spec.dsp.filterHighHz = receiver.passband.filterHighHz;
             if (resetCapture || (faults & (1u << id)) || m_specs[id].handle != spec.handle
-                || m_specs[id].passband != spec.passband || m_specs[id].dsp != spec.dsp) {
+                || m_specs[id].passband != spec.passband || m_specs[id].dsp != spec.dsp
+                || m_specs[id].hdFm != spec.hdFm) {
                 if (epochs[id] == std::numeric_limits<std::uint64_t>::max()) { return Submission::Failed; }
                 ++epochs[id];
             }
@@ -187,6 +203,7 @@ bool RtlReceivePipeline::adopt() noexcept
     if (!m_reader.adoptPrepared(m_session, m_nextCapture, m_prepared)) { return false; }
     if (m_token.session != m_nextToken.session || m_captureEpoch != m_nextEpoch) {
         m_mixerOrigin.reset();
+        m_hdSpeakerEpoch = 0; m_hdAudioValid = false; m_hdSpeakerIdentities.fill({});
     }
     const bool resetSquelch = m_captureEpoch != m_nextEpoch;
     for (std::size_t slot = 0; slot < m_monitor.size(); ++slot) {
@@ -204,7 +221,8 @@ bool RtlReceivePipeline::adopt() noexcept
 bool RtlReceivePipeline::process(std::uint64_t firstSample,
     std::span<const std::complex<float>> samples) noexcept
 {
-    return m_reader.processBlock({m_session, m_capture, firstSample, false, samples}, *this,
+    return m_reader.processBlock({m_session, m_capture, firstSample, false, samples,
+        m_token.session, m_token.revision}, *this,
         m_reader.activeRevision());
 }
 void RtlReceivePipeline::stop() { m_reader.stop(); }
@@ -229,7 +247,7 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
         const auto& spec = *views[i].spec;
         const unsigned monitor = m_monitor[spec.handle.slot].load(std::memory_order_relaxed);
         m_traceStableIds[spec.handle.slot] = spec.passband.stableId;
-        inputs[i] = {spec.handle.slot, spec.handle.instance, spec.epoch,
+        inputs[i] = {spec.handle.slot, spec.handle.instance, spec.hdFm ? m_hdSpeakerEpoch : spec.epoch,
             (monitor & 255) / 100.0f, ((monitor >> 8) & 255) / 100.0f, (monitor & (1 << 16)) != 0};
     }
     const auto clock = [this](std::uint64_t sample) {
@@ -338,8 +356,89 @@ void RtlReceivePipeline::speakerBlock(std::uint64_t first, std::span<const float
     Packet packet;
     packet.token = m_token; packet.captureEpoch = m_captureEpoch;
     packet.firstSample = first; packet.frames = samples.size() / 2; packet.discontinuity = discontinuity;
+    packet.audioEpoch = m_hdSpeakerEpoch;
+    if (m_hdSpeakerEpoch) {
+        for (std::size_t i = 0; i < packet.frames; ++i) {
+            const auto& source = m_hdSpeakerIdentities[(first + i) % RtlAudioMixer::kCapacity];
+            if (source.producedMonotonicMs && (packet.producedMonotonicMs == 0
+                || source.revision < packet.token.revision
+                || (source.revision == packet.token.revision
+                    && source.producedMonotonicMs < packet.producedMonotonicMs))) {
+                packet.token = {source.sessionId, source.revision};
+                packet.producedMonotonicMs = source.producedMonotonicMs;
+            }
+        }
+    }
     std::copy(samples.begin(), samples.end(), packet.samples.begin());
     enqueue(packet);
+}
+void RtlReceivePipeline::hdObservation(const RtlReceiverRegistry::ReceiverSpec& spec,
+    const HdFmRawReception& reception) noexcept
+{
+    if (!spec.hdFm || reception.sessionId == 0 || reception.revision == 0) { return; }
+    // There is initially one HD wide receiver. Temporarily withdrawing its
+    // mixer input flushes queued contributions before the next zero/PCM push.
+    // HD supplies complete 128-frame quanta, so no old partial tail survives.
+    if ((m_hdAudioValid && !reception.audioValid) || m_hdSpeakerEpoch != reception.audioEpoch) {
+        m_mixer.configure(m_token.session, m_captureEpoch, {}, m_mixer.nextSample());
+        m_hdSpeakerIdentities.fill({});
+    }
+    m_hdAudioValid = reception.audioValid;
+    m_hdSpeakerEpoch = reception.audioEpoch;
+    const unsigned write = m_hdWrite.load(std::memory_order_relaxed);
+    const unsigned next = (write + 1) % kHdObservations;
+    if (next == m_hdRead.load(std::memory_order_acquire)) {
+        m_drops.fetch_add(1, std::memory_order_relaxed);
+        m_faults.fetch_or(1u << spec.handle.slot, std::memory_order_release);
+        return;
+    }
+    m_hdObservations[write] = {{reception.sessionId, reception.revision}, m_captureEpoch,
+        spec.handle.instance, spec.epoch, reception.audioEpoch, spec.handle.slot, reception};
+    m_hdWrite.store(next, std::memory_order_release);
+}
+bool RtlReceivePipeline::takeHdObservation(HdFmObservation& output) noexcept
+{
+    const unsigned read = m_hdRead.load(std::memory_order_relaxed);
+    if (read == m_hdWrite.load(std::memory_order_acquire)) { return false; }
+    output = m_hdObservations[read];
+    m_hdRead.store((read + 1) % kHdObservations, std::memory_order_release);
+    return true;
+}
+void RtlReceivePipeline::hdDecodedAudio(const RtlReceiverRegistry::ReceiverSpec& spec,
+    const HdFmAudioIdentity& identity, std::uint64_t first, std::span<const float> left,
+    std::span<const float> right, bool discontinuity) noexcept
+{
+    if (!spec.hdFm || left.empty() || left.size() != right.size() || left.size() > 1024
+        || (m_faults.load(std::memory_order_acquire) & (1u << spec.handle.slot))) { return; }
+    Packet packet;
+    packet.token = {identity.sessionId, identity.revision}; packet.captureEpoch = m_captureEpoch;
+    packet.instance = spec.handle.instance; packet.receiverEpoch = spec.epoch;
+    packet.audioEpoch = identity.audioEpoch; packet.producedMonotonicMs = identity.producedMonotonicMs;
+    packet.slot = spec.handle.slot; packet.firstSample = first; packet.frames = left.size();
+    packet.sampleRateHz = 44100; packet.discontinuity = discontinuity;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        packet.samples[2 * i] = left[i]; packet.samples[2 * i + 1] = right[i];
+    }
+    enqueue(packet); // Native decoded tap; no monitor gain/pan/mute and no resampling.
+}
+void RtlReceivePipeline::hdSpeakerAudio(const RtlReceiverRegistry::ReceiverSpec& spec,
+    const HdFmAudioIdentity& identity, std::uint64_t first,
+    std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept
+{
+    (void)discontinuity; // Receiver/audio epoch retirement owns PCM lifetime changes.
+    if (!spec.hdFm || left.empty() || left.size() != right.size() || left.size() > 1024
+        || (m_faults.load(std::memory_order_acquire) & (1u << spec.handle.slot))) { return; }
+    const unsigned monitor = m_monitor[spec.handle.slot].load(std::memory_order_relaxed);
+    const RtlAudioMixer::Input input{spec.handle.slot, spec.handle.instance, identity.audioEpoch,
+        (monitor & 255) / 100.0f, ((monitor >> 8) & 255) / 100.0f, (monitor & (1 << 16)) != 0};
+    if (!m_mixer.configure(m_token.session, m_captureEpoch, std::span(&input, 1), first)) {
+        m_mixerConfigurationFailures.fetch_add(1); m_faults.fetch_or(1u << spec.handle.slot); return;
+    }
+    m_hdSpeakerEpoch = identity.audioEpoch;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        m_hdSpeakerIdentities[(first + i) % RtlAudioMixer::kCapacity] = identity;
+    }
+    m_mixer.push(spec.handle.slot, spec.handle.instance, identity.audioEpoch, first, left, right);
 }
 RtlReceivePipeline::TraceEvent RtlReceivePipeline::traceContext() const noexcept
 {
