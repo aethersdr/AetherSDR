@@ -131,24 +131,24 @@ public:
     {
         None,   // no squelch in this mode; every stage is held off
         Fm,     // fmsq.c — detector-noise squelch
-        Am,     // amsq.c — carrier-level squelch
-        Voice   // ssql.c — WU2O syllabic squelch
+        Level   // amsq.c — carrier/signal-level squelch (AM and SSB families)
     };
 
     // What the last squelch application actually WROTE to WDSP: one run flag
-    // per stage and the threshold handed to the stage that is running (in that
-    // stage's own units — linear noise for Fm, dB for Am, 0..1 for Voice; 0
-    // when the stage is None). Recorded at the call site, under the same lock,
-    // so it is a record of the calls rather than a restatement of the request.
+    // per stage and the threshold handed to the stage the mode selects (in
+    // that stage's own units — linear detector noise for Fm, dBFS for Level;
+    // 0 when the stage is None). Recorded at the call site, under the same
+    // lock, so it is a record of the calls rather than a restatement of the
+    // request. `stage` is the mode's stage even when nothing runs (squelch
+    // off, or level 0), so the routing stays visible.
     struct AppliedSquelch
     {
         SquelchStage stage = SquelchStage::None;
         bool fmRun = false;
         bool amRun = false;
-        bool voiceRun = false;
         double threshold = 0.0;
-        // How many times the three run flags have been written. Lets a caller
-        // tell "re-applied, same answer" from "never applied".
+        // How many times the run flags have been written. Lets a caller tell
+        // "re-applied, same answer" from "never applied".
         unsigned applications = 0;
     };
 
@@ -461,49 +461,88 @@ public:
 
     // ── Receive squelch ───────────────────────────────────────────────────
     //
-    // ONE CONTROL, THREE WDSP STAGES, chosen by the mode. RXA builds fmsq, amsq
-    // and ssql on every receive channel with run = 0, and each one only makes
-    // sense for one family of modes, so the operator's single SQL button and
-    // level are routed to the stage for the mode in force and the other two
-    // are forced off. The routing and the three level maps are pihpsdr's
-    // rx_set_squelch() (dl1ycf/pihpsdr src/receiver.c, master f9ab6ee594),
-    // taken as-is so the level means on this receiver what it means on the
-    // reference client every HL2 owner already knows:
+    // ONE CONTROL, TWO WDSP STAGES, chosen by the mode, the other forced off:
     //
+    //   level 0         -> NOTHING RUNS, in every mode. "0 = open" is a
+    //                      guarantee made here, not a threshold that happens
+    //                      to be low (see ssql below for why that matters).
     //   FM              -> fmsq, threshold 10^(-2 * level / 100): 1.0 .. 0.01
-    //   AM, SAM         -> amsq, threshold -160 + 1.6 * level dB: -160 .. 0 dB
-    //   LSB, USB, DSB   -> ssql, threshold 0.0075 * level:        0.0 .. 0.75
-    //   everything else -> none
+    //   AM, SAM, DSB,
+    //   LSB, USB        -> amsq, threshold -140 + 0.7 * level dBFS
+    //   CW, DIG, other  -> none
     //
-    // Level 0 is fully open and 100 fully engaged in every family, which is
-    // the direction a Flex squelch_level and an Icom SQL percentage run, so the
-    // one slider keeps one meaning across radios.
+    // Level 100 is always tightest, the direction a Flex squelch_level and an
+    // Icom SQL percentage run.
     //
-    // DEPARTURES FROM pihpsdr, both deliberate:
-    //   * CW gets NO squelch here; pihpsdr routes CWL/CWU to amsq. The app's
-    //     SQL control is disabled in CW (and data) unless a backend declares
-    //     hasModeIndependentSquelch, and it deliberately does not push a
-    //     squelch-off when entering CW (#3263). A CW amsq here would therefore
-    //     be a squelch the operator can neither see nor turn off.
-    //   * DIGU/DIGL/SPEC/DRM/WBFM get none either — pihpsdr's default case, and
-    //     for WBFM also because fmsq's trigger is fmd's output, which WBFM
-    //     does not run.
+    // FM IS pihpsdr's map (dl1ycf/pihpsdr src/receiver.c rx_set_squelch,
+    // master f9ab6ee594), unchanged; it measured right on the radio (d155:
+    // band noise on 40 m muted at 50, open at 0).
     //
-    // Mode changes MOVE the squelch: setMode() re-applies it, so a squelch
-    // turned on in FM is carried by amsq after a switch to AM and by nothing
-    // in CW, and comes back on fmsq on the way back to FM.
+    // THE LEVEL MAP IS NOT pihpsdr's, and the reason is measured. pihpsdr maps
+    // 0..100 linearly onto -160..0 dB. amsq compares the 10 ms average of
+    // |IQ| right after the receive bandpass (xamsqcap, before the AGC) with
+    // 10^(dB/20), in wire-full-scale units, which is the same dBFS this host
+    // and pihpsdr both normalise to. On the HL2 at default RF gain, on an
+    // EFHW (hl2-lab d156, descending level sweeps through that map):
+    //     no signal, 11.000 MHz, +-4 kHz:     gate opened between 25 and 30,
+    //                                         i.e. -120 .. -112 dBFS
+    //     AM broadcast carrier, 9.420 MHz:    opened between 40 and 45,
+    //                                         i.e. -96 .. -88 dBFS
+    //     busy 40 m, 7.150 MHz:               opened between 50 and 55,
+    //                                         i.e. -80 .. -72 dBFS
+    // So everything a receiver actually meets lives in the bottom half of
+    // pihpsdr's scale, and its midpoint (-80 dBFS) mutes a strong broadcast
+    // station (d155: 9.420 muted at 50). -140 + 0.7 * level spans -139.3
+    // (level 1) to -70 dBFS (level 100) — 20 dB under the measured floor to
+    // just above the busiest band measured — and puts the midpoint at
+    // -105 dBFS: about 10 dB over the floor and 15 dB under the broadcast
+    // carrier. Through it the measured windows become: band noise mutes from
+    // level 29..40 up, the 9.420 carrier stays open up to 63..74, and the busy
+    // band up to 86..97.
     //
-    // Receive channels only; a transmit channel returns false. Also false when
-    // a control operation is already in flight. Control-path work, guarded
-    // like setMode(); not callable from processIq(). `level` is clamped to
-    // 0..100.
+    // THE FIGURES ARE dBFS AND SO MOVE WITH RF GAIN: raising the LNA gain
+    // raises signal and antenna noise together, and the operator's level
+    // meets both a few dB higher. Same as every level squelch on a radio
+    // without a calibrated S-meter in the loop.
+    //
+    // WHY NOT ssql FOR SSB (pihpsdr's choice, WU2O's syllabic squelch): it is
+    // level-blind by design, but its frequency-to-voltage converter counts a
+    // zero crossing only if the step across it exceeds a fixed 0.01 (ssql.c
+    // create_ftov, eps) — i.e. only in LOUD audio: a 1 kHz tone needs ~0.08
+    // peak (-22 dBFS). This chain's audio sits well below that (AGC ceiling
+    // 39 dB by default; band noise at -45 dBFS), so no crossing is ever
+    // counted, the detector output is constant, and the window detector's
+    // |x - average| > threshold never fires — even at threshold 0. Measured:
+    // d155/d156, USB 7.150, muted at levels 0, 1, 10 and 50. amsq in SSB is
+    // what g0orx pihpsdr ran (radio.c setSquelch runs amsq in every mode) and
+    // is the same level squelch a Flex applies in SSB.
+    //
+    // CW gets NO squelch: the app's SQL control is disabled in CW (and data)
+    // unless a backend declares hasModeIndependentSquelch, and it deliberately
+    // does not push squelch-off when entering CW (#3263), so a CW stage would
+    // be a squelch the operator can neither see nor switch off. WBFM has none
+    // either: fmsq's trigger is fmd's output, which WBFM does not run.
+    //
+    // TIMING. Opening is fast: amsq's 10 ms average plus a 70 ms raised-cosine
+    // ramp; fmsq's 50 ms ramp (plus a 100 ms arm delay after a flush).
+    // CLOSING IS NOT: both stages hold a tail before muting — amsq up to
+    // 1.5 s, fmsq up to 1.2 s, scaled by how far below threshold the signal
+    // sits — then ramp down. So a setting that should mute takes up to ~1.6 s
+    // to be heard doing it, and anything measuring the gate has to wait that
+    // long. Both stages also keep their state while switched off, so turning
+    // one back on resumes from wherever it was (usually UNMUTED -> tail).
+    //
+    // Mode changes MOVE the squelch: setMode() re-applies it. Receive channels
+    // only; a transmit channel returns false. Also false when a control
+    // operation is already in flight. Control-path work, guarded like
+    // setMode(); not callable from processIq(). `level` is clamped to 0..100.
     bool setSquelch(bool on, int level) noexcept;
     [[nodiscard]] static SquelchStage squelchStageFor(Mode mode) noexcept;
-    // The three maps above, exposed so the conversion lives in one place and
-    // tests can pin it. Each clamps level to 0..100.
+    // The two maps above, so the conversion lives in one place and tests can
+    // pin it. Each clamps level to 0..100 (level 0 is never applied — see
+    // above — but the maps are still defined there).
     [[nodiscard]] static double fmSquelchThresholdForLevel(int level) noexcept;
-    [[nodiscard]] static double amSquelchThresholdDbForLevel(int level) noexcept;
-    [[nodiscard]] static double voiceSquelchThresholdForLevel(int level) noexcept;
+    [[nodiscard]] static double levelSquelchThresholdDbfsForLevel(int level) noexcept;
     [[nodiscard]] const AppliedSquelch& appliedSquelch() const noexcept
     {
         return m_appliedSquelch;

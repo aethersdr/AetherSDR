@@ -42,13 +42,11 @@ static bool applied(const Hl2RxDsp& dsp, Stage stage, bool on, double threshold)
     if (!a)
         return false;
     const bool match = a->stage == stage && a->fmRun == (on && stage == Stage::Fm)
-        && a->amRun == (on && stage == Stage::Am)
-        && a->voiceRun == (on && stage == Stage::Voice)
+        && a->amRun == (on && stage == Stage::Level)
         && std::abs(a->threshold - threshold) < 1e-9;
     if (!match) {
-        std::fprintf(stderr, "  applied: stage %d fm %d am %d voice %d threshold %g\n",
-                     static_cast<int>(a->stage), a->fmRun, a->amRun, a->voiceRun,
-                     a->threshold);
+        std::fprintf(stderr, "  applied: stage %d fm %d am %d threshold %g\n",
+                     static_cast<int>(a->stage), a->fmRun, a->amRun, a->threshold);
     }
     return match;
 }
@@ -72,21 +70,23 @@ int main(int argc, char** argv)
     check(dsp.squelchEnabled() && dsp.squelchLevel() == 40, "request is held without a channel");
     std::string err;
     check(dsp.configure(cfg, &err), "configure");
-    check(applied(dsp, Stage::Voice, true, 0.0075 * 40),
-          "a squelch set before configure() lands on ssql in USB");
+    check(applied(dsp, Stage::Level, true, -140.0 + 0.7 * 40),
+          "a squelch set before configure() lands on amsq in USB");
 
     // 2. Mode moves it.
     dsp.setMode(WdspChannel::Mode::Fm);
     check(applied(dsp, Stage::Fm, true, std::pow(10.0, -0.8)), "FM moves it to fmsq");
     dsp.setMode(WdspChannel::Mode::Sam);
-    check(applied(dsp, Stage::Am, true, -160.0 + 1.6 * 40), "SAM moves it to amsq");
+    check(applied(dsp, Stage::Level, true, -140.0 + 0.7 * 40), "SAM moves it to amsq");
     dsp.setMode(WdspChannel::Mode::Cwu);
-    check(applied(dsp, Stage::None, true, 0.0), "CW runs no squelch stage");
+    check(applied(dsp, Stage::None, false, 0.0), "CW runs no squelch stage");
     dsp.setMode(WdspChannel::Mode::Am);
     dsp.setSquelch(true, 70);
-    check(applied(dsp, Stage::Am, true, -160.0 + 1.6 * 70), "a level change reaches amsq");
+    check(applied(dsp, Stage::Level, true, -140.0 + 0.7 * 70), "a level change reaches amsq");
+    dsp.setSquelch(true, 0);
+    check(applied(dsp, Stage::Level, false, -140.0), "level 0 stops amsq (open)");
     dsp.setSquelch(false, 70);
-    check(applied(dsp, Stage::Am, false, -160.0 + 1.6 * 70), "off stops amsq");
+    check(applied(dsp, Stage::Level, false, -140.0 + 0.7 * 70), "off stops amsq");
     dsp.setSquelch(true, 70);
 
     // 3. configure() replaces Config; the Config handed in here knows nothing
@@ -94,7 +94,7 @@ int main(int argc, char** argv)
     Hl2RxDsp::Config wider = cfg;
     wider.inputSampleRateHz = 96000;
     check(dsp.configure(wider, &err), "reconfigure at 96 kHz");
-    check(applied(dsp, Stage::Voice, true, 0.0075 * 70),
+    check(applied(dsp, Stage::Level, true, -140.0 + 0.7 * 70),
           "configure() keeps the squelch and routes it for the new Config's mode");
 
     // 4. Asynchronous rebuild with changes made mid-build.

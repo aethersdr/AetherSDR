@@ -237,15 +237,13 @@ void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 // is what will say so if the limiter is ever switched on.
 void SetRXAFMDeviation(int channel, double deviationHz);
 
-// ── Receive squelch: three stages, one per mode family ────────────────────
+// ── Receive squelch: fmsq and amsq ────────────────────────────────────────
 //
 // NO VENDORED PATCH IS INVOLVED, for exactly the reason the block above gives:
-// `upstream/wdsp.h` (upstream's generated public interface) declares all six.
+// `upstream/wdsp.h` (upstream's generated public interface) declares these.
 // `fmsq.h` omitting SetRXAFMSQRun is the per-module header being an unreliable
-// negative, not a hidden symbol. All three .c files are in the default glob in
-// CMakeLists.txt, and RXA.c creates all three stages with run = 0.
+// negative, not a hidden symbol. RXA.c creates both stages with run = 0.
 //
-// WHICH STAGE HEARS WHAT (RXA.c xrxa):
 //   fmsq — runs after xfmd and triggers on the NOISE in the FM detector's
 //          output above 5 kHz (create_fmsq's cutoff). Meaningful only in FM:
 //          outside it the trigger buffer is an fmd output nothing refreshes.
@@ -253,14 +251,13 @@ void SetRXAFMDeviation(int channel, double deviationHz);
 //          threshold is a MORE OPEN squelch. SetRXAFMSQThreshold sets the tail
 //          threshold to `threshold` and the unmute threshold to 0.9x it.
 //   amsq — captures its trigger (xamsqcap) right after the notched bandpass,
-//          BEFORE the AGC, and gates at the very end of the chain. It measures
-//          averaged carrier MAGNITUDE, so the threshold is an absolute level:
-//          SetRXAAMSQThreshold takes dB and converts with 10^(dB/20) against
-//          the wire's full scale (unmute at that level, tail at 0.9x).
-//   ssql — WU2O's syllabic ("voice") squelch, new in WDSP 1.21. Level-blind:
-//          it converts frequency to voltage and opens on the syllabic
-//          frequency movement of speech. SetRXASSQLThreshold takes 0..1 and
-//          stores half of it as the window threshold; LARGER is TIGHTER.
+//          BEFORE the AGC, and gates at the very end of the chain. It compares
+//          a 10 ms average of |IQ| with 10^(thresholdDb/20) in wire-full-scale
+//          units (unmute above it, tail below 0.9x), so the threshold is dBFS
+//          at the passband. Not AM-specific: it is a level squelch in any mode.
+//
+// ssql (WU2O's syllabic squelch) is deliberately NOT declared here: it does
+// not work on this chain's audio levels — see WdspChannel::setSquelch().
 //
 // Each Set* takes ch[channel].csDSP, so they are control-path calls. None of
 // them allocates.
@@ -268,8 +265,6 @@ void SetRXAFMSQRun(int channel, int run);
 void SetRXAFMSQThreshold(int channel, double threshold);
 void SetRXAAMSQRun(int channel, int run);
 void SetRXAAMSQThreshold(int channel, double thresholdDb);
-void SetRXASSQLRun(int channel, int run);
-void SetRXASSQLThreshold(int channel, double threshold);
 void SetTXAMode(int channel, int mode);
 void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength

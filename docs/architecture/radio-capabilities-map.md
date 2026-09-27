@@ -223,8 +223,9 @@ The shared RX/VFO/Phone/CW surfaces consume these declarations through
 - `hasModeIndependentSquelch` keeps MK2 squelch usable in CW/data. Other
   profiles keep their existing mode rules.
   HL2 declares it FALSE explicitly: its squelch is host-side WDSP, routed by
-  mode family (FM → `fmsq`, AM/SAM → `amsq`, LSB/USB/DSB → syllabic `ssql`,
-  pihpsdr's level maps) and CW/data have no stage, so the existing client rule
+  mode family (FM → `fmsq` on pihpsdr's map; AM/SAM/DSB/LSB/USB → the level
+  squelch `amsq`, -140 + 0.7·level dBFS, measured on the radio; level 0 runs
+  nothing) and CW/data have no stage, so the existing client rule
   that disables SQL there is the honest face (`WdspChannel::setSquelch`).
 - `hasFmRepeaterOffset` dims offset magnitude and direction when absent.
   MK2 has split operation, but not CI-V repeater commands 0C/0D or 0F 10–12;

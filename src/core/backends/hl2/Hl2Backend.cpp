@@ -2418,8 +2418,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // not implemented, not because they could not be.
     c.hasHostNoiseBlanker = true;
     // SQUELCH IS HOST-SIDE TOO, and PER MODE FAMILY (#5678 row 1.5): FM on
-    // WDSP's fmsq, AM/SAM on amsq, LSB/USB/DSB on the syllabic ssql — see
-    // WdspChannel::setSquelch() for the routing and the pihpsdr level maps.
+    // WDSP's fmsq, AM/SAM/DSB/LSB/USB on the level squelch amsq, level 0
+    // always open — see WdspChannel::setSquelch() for the routing and the
+    // level maps (FM pihpsdr's, amsq's measured on this radio).
     // CW and the data modes have NO squelch stage here, and FALSE is how that
     // is said: it keeps the existing client policy (RxApplet/VfoWidget
     // squelchAvailableInMode) that disables SQL in CW and data, so those modes
