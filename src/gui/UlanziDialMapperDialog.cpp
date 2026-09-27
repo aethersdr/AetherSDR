@@ -184,7 +184,7 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
     bottomRow->setSpacing(10);
 
     m_statusLabel = new QLabel(tr("Disconnected"));
-    m_statusLabel->setStyleSheet("QLabel { color: #8ea8c0; }");
+    setStatusStyle("QLabel { color: #8ea8c0; }");
     bottomRow->addWidget(m_statusLabel);
 
 #ifdef Q_OS_LINUX
@@ -675,14 +675,23 @@ void UlanziDialMapperDialog::refreshStatus()
     }
 }
 
+void UlanziDialMapperDialog::setStatusStyle(const QString& css)
+{
+    // The disabled line is themed through ThemeManager, which re-applies its
+    // template on every theme change. Drop that tracking first, or a later
+    // theme change would repaint a connected or permission line in the
+    // disabled colour.
+    ThemeManager::instance().clearWidgetTracking(m_statusLabel);
+    m_statusLabel->setStyleSheet(css);
+}
+
 void UlanziDialMapperDialog::showDisabledStatus()
 {
     if (!m_statusLabel) return;
     m_statusLabel->setText(
         tr("Turned off in Radio Setup → Serial & Controllers"));
-    // The label's neutral starting colour. Registering it with ThemeManager
-    // would pin this template over the other states on the next theme change.
-    m_statusLabel->setStyleSheet("QLabel { color: #8ea8c0; }");
+    ThemeManager::instance().applyStyleSheet(
+        m_statusLabel, QStringLiteral("QLabel { color: {{color.text.secondary}}; }"));
 #ifdef Q_OS_LINUX
     if (m_grantAccessBtn)
         m_grantAccessBtn->setVisible(false);
@@ -712,7 +721,7 @@ void UlanziDialMapperDialog::onConnectionChanged(bool connected, const QString& 
     m_statusLabel->setText(connected
         ? tr("Connected — %1").arg(display)
         : tr("Disconnected"));
-    m_statusLabel->setStyleSheet(connected
+    setStatusStyle(connected
         ? "QLabel { color: #4dd87a; }"
         : "QLabel { color: #cc3333; }");
 #ifdef Q_OS_LINUX
@@ -730,7 +739,7 @@ void UlanziDialMapperDialog::onAccessRequired(const QString& deviceName)
     if (display.endsWith(QStringLiteral(" Keyboard"), Qt::CaseInsensitive))
         display.chop(QStringLiteral(" Keyboard").size());
     m_statusLabel->setText(tr("%1 detected — needs permission").arg(display));
-    m_statusLabel->setStyleSheet("QLabel { color: #e0a030; }");
+    setStatusStyle("QLabel { color: #e0a030; }");
     if (m_grantAccessBtn) {
         m_grantAccessBtn->setVisible(true);
         m_grantAccessBtn->setEnabled(true);
@@ -781,7 +790,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
         }
         if (m_statusLabel) {
             m_statusLabel->setText(tr("Access install failed"));
-            m_statusLabel->setStyleSheet("QLabel { color: #cc3333; }");
+            setStatusStyle("QLabel { color: #cc3333; }");
         }
     });
     connect(proc, &QProcess::finished, this,
@@ -792,7 +801,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
         if (code == 0) {
             if (m_statusLabel) {
                 m_statusLabel->setText(tr("Access granted — connecting…"));
-                m_statusLabel->setStyleSheet("QLabel { color: #4dd87a; }");
+                setStatusStyle("QLabel { color: #4dd87a; }");
             }
             // The udev trigger applies the ACL asynchronously; give logind a
             // moment, then ask the backend to rescan. If that misses, the user
@@ -811,7 +820,7 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
                 m_statusLabel->setText(code == 126 || code == 127
                     ? tr("Authorization cancelled")
                     : tr("Access install failed"));
-                m_statusLabel->setStyleSheet("QLabel { color: #cc3333; }");
+                setStatusStyle("QLabel { color: #cc3333; }");
             }
         }
     });

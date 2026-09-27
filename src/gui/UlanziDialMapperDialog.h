@@ -91,6 +91,8 @@ private slots:
     // Status line for a dial turned off in Radio Setup: without it the dialog
     // reads "Disconnected" with nothing to say why.
     void showDisabledStatus();
+    // Plain (untracked) status-line style; see the definition.
+    void setStatusStyle(const QString& css);
 #ifdef Q_OS_LINUX
     // Dial present but its evdev node isn't accessible — offer to install the
     // udev access rule via polkit.
