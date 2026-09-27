@@ -21,13 +21,12 @@ selects the wrapper's processing domain.
 | Specbleach | Existing library rate and 40 ms frame request | Native48000 library rate and the same 40 ms request |
 | macOS MNR | Existing 512-point FFT / 256-sample hop | 1024-point FFT / 512-sample hop; same frequency resolution and elapsed estimator history |
 
-DeepFilterNet and NVIDIA retain their existing mono algorithm and stereo
-level-balance behavior. They do not become independent stereo denoisers in this
-change. The default playback path and native stereo RNNoise/MNR do not inherit
-that limitation. `MonoDspStereoAdapter` takes its rate as the second constructor
-argument; its five-second queue cap and power-envelope timing follow that rate.
-Legacy24 coefficients remain unchanged. DeepFilterNet's three-hop model delay
-is expressed in the selected producer domain before pairing delayed stereo.
+Every wrapper denoises stereo as two independent channels, the way RNNoise's
+`PreserveRxStereo` does: each side has its own algorithm state (and, on the
+24 kHz paths, its own SRC pair), and both advance through the same frame
+count per block so the image cannot drift. Nothing is mixed to mono, so a
+hard-panned diversity pair keeps one antenna per ear and a pan change is heard
+as soon as the audio carrying it arrives.
 
 Each concurrently processed source must own its wrappers. Alternating main48
 and Kiwi24 through one instance is invalid even when the rates happen to match:

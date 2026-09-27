@@ -3281,6 +3281,22 @@ The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 base64 `pcmBase64`. Use `audioCapture status` for metadata only and
 `audioCapture stop` to stop early.
 
+#### DSP stereo probe: NR2, NR4, MNR, DFNR, BNR, NNR
+
+`audioCapture probeDspStereo <mode>` (or `all`, optionally with `strict`) runs
+the same deterministic three-second stereo signal through three fresh filters
+of that method: once as generated, once with the right channel replaced by
+unrelated tones, and once with the left replaced. Every client NR method
+denoises L and R independently, as RN2 does, so `ok` means each side's output
+is bit-identical whatever the other side carries (`leftIndependent`,
+`rightIndependent`, `channelsIndependent`) and both sides stay `audible`.
+
+The RMS `input`/`output`, `ratioError`, and level-ratio fields are reported
+but not judged: independent, level-dependent suppression can treat the louder
+and quieter copies of one off-centre signal slightly differently, so a small
+L/R balance shift under heavy suppression is expected. A method that removes
+the probe's steady tones entirely (BNR does) reports `audible: false`.
+
 #### RN2 deterministic stereo probe
 
 `audioCapture probeDspStereo RN2` is an automation-only, synthetic RX proof

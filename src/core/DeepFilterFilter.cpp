@@ -4,8 +4,10 @@
 #include "Resampler.h"
 #include "deep_filter.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <vector>
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -179,65 +181,67 @@ static QByteArray findModelPath()
 
 DeepFilterFilter::DeepFilterFilter(int sampleRate)
     : m_sampleRate(sampleRate)
-    , m_stereoAdapter(0, sampleRate)
 {
-    if (!m_stereoAdapter.isValid()) {
+    if (sampleRate != 24000 && sampleRate != 48000) {
         qWarning() << "DeepFilterFilter: unsupported sample rate" << sampleRate;
         return;
     }
-    if (sampleRate == 24000) {
-        m_up = std::make_unique<Resampler>(24000, 48000);
-        m_down = std::make_unique<Resampler>(48000, 24000);
+    createStates();
+    if (isValid()) {
+        qDebug() << "DeepFilterFilter: initialized, frame size =" << m_frameSize;
+    }
+}
+
+DeepFilterFilter::~DeepFilterFilter()
+{
+    freeStates();
+}
+
+void DeepFilterFilter::createStates()
+{
+    for (int channel = 0; channel < 2; ++channel) {
+        if (m_sampleRate == 24000) {
+            m_up[channel] = std::make_unique<Resampler>(24000, 48000);
+            m_down[channel] = std::make_unique<Resampler>(48000, 24000);
+        }
     }
     QByteArray modelPath = findModelPath();
     if (modelPath.isEmpty()) {
         return;
     }
     qDebug() << "DeepFilterFilter: loading model from" << modelPath;
-    m_state = df_create(modelPath.constData(), m_attenLimit.load(), nullptr);
-    if (m_state) {
-        m_frameSize = static_cast<int>(df_get_frame_length(m_state));
-        // The bundled DFN3 model uses fft_size=960, hop_size=480 and two
-        // lookahead frames. Its documented delay is
-        // (fft_size - hop_size) + lookahead * hop_size = 3 hops at 48 kHz.
-        m_stereoAdapter.setProcessingLatencyFrames(3 * m_frameSize * m_sampleRate / 48000);
-        qDebug() << "DeepFilterFilter: initialized, frame size =" << m_frameSize;
-    } else {
-        qWarning() << "DeepFilterFilter: df_create() failed!";
+    for (auto& state : m_states) {
+        state = df_create(modelPath.constData(), m_attenLimit.load(), nullptr);
     }
+    if (!isValid()) {
+        qWarning() << "DeepFilterFilter: df_create() failed!";
+        freeStates();
+        return;
+    }
+    m_frameSize = static_cast<int>(df_get_frame_length(m_states[0]));
 }
 
-DeepFilterFilter::~DeepFilterFilter()
+void DeepFilterFilter::freeStates()
 {
-    if (m_state) {
-        df_free(m_state);
+    for (auto& state : m_states) {
+        if (state) {
+            df_free(state);
+            state = nullptr;
+        }
     }
 }
 
 void DeepFilterFilter::reset()
 {
-    if (!m_stereoAdapter.isValid()) {
+    if (m_sampleRate != 24000 && m_sampleRate != 48000) {
         return;
     }
-    if (m_state) {
-        df_free(m_state);
-        m_state = nullptr;
+    freeStates();
+    createStates();
+    for (auto& accum : m_inAccum) {
+        accum.clear();
     }
-    QByteArray modelPath = findModelPath();
-    if (!modelPath.isEmpty()) {
-        m_state = df_create(modelPath.constData(), m_attenLimit.load(), nullptr);
-        if (m_state) {
-            m_frameSize = static_cast<int>(df_get_frame_length(m_state));
-            m_stereoAdapter.setProcessingLatencyFrames(3 * m_frameSize * m_sampleRate / 48000);
-        }
-    }
-    if (m_sampleRate == 24000) {
-        m_up = std::make_unique<Resampler>(24000, 48000);
-        m_down = std::make_unique<Resampler>(48000, 24000);
-    }
-    m_inAccum.clear();
     m_outAccum.clear();
-    m_stereoAdapter.reset();
     m_paramsDirty.store(true);
 }
 
@@ -255,84 +259,87 @@ void DeepFilterFilter::setPostFilterBeta(float beta)
 
 QByteArray DeepFilterFilter::process(const QByteArray& pcmStereo)
 {
-    if (!m_state || m_frameSize <= 0 || pcmStereo.isEmpty()) {
+    if (!isValid() || m_frameSize <= 0 || pcmStereo.isEmpty()) {
         return pcmStereo;
     }
 
     // Apply any pending parameter changes (main thread writes atomic, audio thread reads here)
     if (m_paramsDirty.exchange(false)) {
-        df_set_atten_lim(m_state, m_attenLimit.load());
-        df_set_post_filter_beta(m_state, m_postFilterBeta.load());
+        for (auto state : m_states) {
+            df_set_atten_lim(state, m_attenLimit.load());
+            df_set_post_filter_beta(state, m_postFilterBeta.load());
+        }
     }
 
     const auto* src = reinterpret_cast<const float*>(pcmStereo.constData());
     const int stereoFrames = pcmStereo.size() / (2 * static_cast<int>(sizeof(float)));
-    m_stereoAdapter.pushDryStereo(pcmStereo);
 
-    // 1. Downmix, then upsample legacy24 or pass native48 directly to the model.
-    // The dry stereo stays queued so DeepFilterNet attenuation preserves balance.
-    m_monoInput.resize(stereoFrames);
-    for (int i = 0; i < stereoFrames; ++i) {
-        m_monoInput[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
-    }
-    QByteArray mono48k = m_up
-        ? m_up->process(m_monoInput.data(), stereoFrames)
-        : QByteArray(reinterpret_cast<const char*>(m_monoInput.data()),
-                     stereoFrames * static_cast<int>(sizeof(float)));
-
-    // Already float32 in [-1, 1] range — DeepFilterNet's native format
-    const auto* mono48kSamples = reinterpret_cast<const float*>(mono48k.constData());
-    const int monoSamples48k = mono48k.size() / static_cast<int>(sizeof(float));
-
-    // 2. Append to input accumulator and process complete frames
-    const int prevAccumSamples = m_inAccum.size() / static_cast<int>(sizeof(float));
-    {
-        const int startIdx = prevAccumSamples;
-        m_inAccum.resize((startIdx + monoSamples48k) * sizeof(float));
-        auto* floatBuf = reinterpret_cast<float*>(m_inAccum.data());
-        for (int i = 0; i < monoSamples48k; ++i) {
-            floatBuf[startIdx + i] = mono48kSamples[i];
+    // Both channels see the same sample counts through identically configured
+    // resamplers, so they reach the same whole-frame count and their
+    // DeepFilterNet states advance in lockstep.
+    int completeFrames = std::numeric_limits<int>::max();
+    std::array<int, 2> totalAccumSamples{0, 0};
+    for (int channel = 0; channel < 2; ++channel) {
+        // 1. Split out this channel, then upsample legacy24 or pass native48
+        //    directly to the model.
+        auto& channelInput = m_channelInput[channel];
+        channelInput.resize(stereoFrames);
+        for (int i = 0; i < stereoFrames; ++i) {
+            channelInput[i] = src[i * 2 + channel];
         }
-    }
+        QByteArray input48k = m_up[channel]
+            ? m_up[channel]->process(channelInput.data(), stereoFrames)
+            : QByteArray(reinterpret_cast<const char*>(channelInput.data()),
+                         stereoFrames * static_cast<int>(sizeof(float)));
 
-    const int totalAccumSamples = prevAccumSamples + monoSamples48k;
-    const int completeFrames = totalAccumSamples / m_frameSize;
+        // 2. Append to this channel's accumulator.
+        const int samples48k = input48k.size() / static_cast<int>(sizeof(float));
+        const int prevAccumSamples =
+            m_inAccum[channel].size() / static_cast<int>(sizeof(float));
+        m_inAccum[channel].append(input48k);
+        totalAccumSamples[channel] = prevAccumSamples + samples48k;
+        completeFrames = std::min(completeFrames,
+                                  totalAccumSamples[channel] / m_frameSize);
+    }
 
     if (completeFrames > 0) {
-        auto* accumData = reinterpret_cast<float*>(m_inAccum.data());
-        m_processed48k.resize(
-            static_cast<std::size_t>(completeFrames)
-            * static_cast<std::size_t>(m_frameSize));
-
-        for (int f = 0; f < completeFrames; ++f) {
-            df_process_frame(m_state,
-                             &accumData[f * m_frameSize],
-                             &m_processed48k[f * m_frameSize]);
-        }
-
-        // Keep leftover input samples
         const int consumedSamples = completeFrames * m_frameSize;
-        const int leftoverSamples = totalAccumSamples - consumedSamples;
-        if (leftoverSamples > 0) {
-            QByteArray leftover(reinterpret_cast<const char*>(&accumData[consumedSamples]),
-                                leftoverSamples * sizeof(float));
-            m_inAccum = leftover;
-        } else {
-            m_inAccum.clear();
+        int outputFrames = std::numeric_limits<int>::max();
+        for (int channel = 0; channel < 2; ++channel) {
+            auto* accumData = reinterpret_cast<float*>(m_inAccum[channel].data());
+            auto& processed = m_processed48k[channel];
+            processed.resize(static_cast<std::size_t>(consumedSamples));
+            for (int f = 0; f < completeFrames; ++f) {
+                df_process_frame(m_states[channel],
+                                 &accumData[f * m_frameSize],
+                                 &processed[f * m_frameSize]);
+            }
+
+            // Keep leftover input samples
+            const int leftoverSamples = totalAccumSamples[channel] - consumedSamples;
+            m_inAccum[channel].remove(0, consumedSamples * static_cast<int>(sizeof(float)));
+            Q_ASSERT(m_inAccum[channel].size()
+                     == leftoverSamples * static_cast<int>(sizeof(float)));
+
+            // 3. Convert the model output only for legacy24.
+            m_channelOutput[channel] = m_down[channel]
+                ? m_down[channel]->process(processed.data(), consumedSamples)
+                : QByteArray(reinterpret_cast<const char*>(processed.data()),
+                             consumedSamples * static_cast<int>(sizeof(float)));
+            outputFrames = std::min(
+                outputFrames,
+                static_cast<int>(m_channelOutput[channel].size() / sizeof(float)));
         }
 
-        // 3. Convert the model output only for legacy24, then restore the
-        //    existing delayed stereo level balance at the configured rate.
-        const int outputMonoSamples = completeFrames * m_frameSize;
-
-        QByteArray downsampled = m_down
-            ? m_down->process(m_processed48k.data(), outputMonoSamples)
-            : QByteArray(reinterpret_cast<const char*>(m_processed48k.data()),
-                         outputMonoSamples * static_cast<int>(sizeof(float)));
-        const auto* downsampledMono = reinterpret_cast<const float*>(downsampled.constData());
-        const int downsampledFrames = downsampled.size() / static_cast<int>(sizeof(float));
-
-        m_outAccum.append(m_stereoAdapter.takeProcessedMono(downsampledMono, downsampledFrames));
+        const auto* left = reinterpret_cast<const float*>(m_channelOutput[0].constData());
+        const auto* right = reinterpret_cast<const float*>(m_channelOutput[1].constData());
+        const int start = m_outAccum.size() / static_cast<int>(sizeof(float));
+        m_outAccum.resize((start + outputFrames * 2) * static_cast<int>(sizeof(float)));
+        auto* stereo = reinterpret_cast<float*>(m_outAccum.data()) + start;
+        for (int i = 0; i < outputFrames; ++i) {
+            stereo[i * 2] = std::clamp(left[i], -1.0f, 1.0f);
+            stereo[i * 2 + 1] = std::clamp(right[i], -1.0f, 1.0f);
+        }
     }
 
     // 4. Return exactly the same number of bytes as input

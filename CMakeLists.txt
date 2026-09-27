@@ -926,7 +926,6 @@ set(CORE_SOURCES
     src/core/TxCoordinator.cpp
     src/core/TxGrantManager.cpp
     src/core/SpectralNR.cpp
-    src/core/MonoDspStereoAdapter.cpp
     src/core/TimeFrameVoter.cpp
     src/core/WwvDecoder.cpp
     src/core/WwvbDecoder.cpp
