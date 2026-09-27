@@ -360,8 +360,8 @@
   "headless": {},
   "verified": {
    "hl2": {
-    "run": "d103-gain-fold",
-    "shows": "LNA code 31 = -53.20 dBFS against code 32 = -97.75 dBFS, a -44.55 dB step; all seven wrapped codes land on their mod-32 twins within 0.52 dB"
+    "run": "d146-gain-ladder-after-reflow",
+    "shows": "on the repaired radio (the d103 fold was a hardware defect, AD9866 pin 1 / Tx[5] stuck high, reflowed 2026-09-27): LNA codes 0..60 rise -97.4 -> -42.2 dBFS on the 80 m EFHW, code 32 over code 0 +33.6 dB (was 0.0), repeat ladder on the dummy identical to 0.10 dB"
    }
   },
   "hide": {},
@@ -1114,8 +1114,8 @@
   },
   "verified": {
    "hl2": {
-    "run": "d126-ep2-cw-drive40",
-    "shows": "MOX set on 7744 EP2 frames over 10.16 s keyed, corroborated by two independent instruments: sustained forward power 0.652 W and PA temperature +4.97 degC"
+    "run": "d152-modes-drive-filter",
+    "shows": "on the repaired radio: PTT keyed and held in USB, LSB and CW (12/12 health polls keyed each), forward power 844 / 842 / 842.5 raw at 40 %; the EP2 tone sits at -1000 Hz for USB and +1000 Hz for LSB, the other side 91.5 / 96.2 dB down on the wire"
    }
   },
   "hide": {},
@@ -1175,8 +1175,8 @@
   "headless": {},
   "verified": {
    "hl2": {
-    "run": "d99-drive-sweep",
-    "shows": "the radio's own forward-power detector read 1.6 / 115 / 115 / 126 / 154 / 225 / 332 / 434 / 476 across drive 0->100 %, monotone above 10 % and better than 3x from 25 to 100 % (RESULT.md; OBSERVATION.md's external-meter leg is retracted as unreadable)"
+    "run": "d152-modes-drive-filter",
+    "shows": "on the repaired radio the HL2's own forward detector reads 2 / 580.5 / 677 / 906.5 / 1224.5 / 1648 raw across RF power 0 / 10 / 25 / 50 / 75 / 100 %, monotone, with the host IQ unchanged at 0.50 FS (supersedes d99, taken on the faulty radio)"
    }
   },
   "hide": {},
@@ -1238,8 +1238,8 @@
   "headless": {},
   "verified": {
    "hl2": {
-    "run": "d110-usb-geometry-low-edge",
-    "shows": "TX passband commanded 300/2700 -> 150/3000 and read back, measured at a remote receiver: USB window +13.8 dB, LSB -13.2 dB, a 27.0 dB split against a pre-registered >=+10 / <=-10 / >=20; corroborated at wire level by d125's 54.81 dB CW-passband suppression"
+    "run": "d152-modes-drive-filter",
+    "shows": "TX passband commanded through the GUI and read back: a 200 Hz tone at 40 % gives forward power 2 raw (EP2 RMS 0.0005 FS) with 300/2700, 763.5 raw (0.46 FS) with 150/3000, and 2 raw again back at 300/2700 - about 60 dB on the wire; repaired radio, dummy load (supersedes d110, taken on the faulty radio)"
    }
   },
   "hide": {
