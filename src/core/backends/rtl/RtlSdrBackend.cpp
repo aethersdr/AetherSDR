@@ -535,18 +535,20 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
     if (!m_connected) { return {}; }
     HealthSnapshot snapshot;
     snapshot.order = {QStringLiteral("rtlQueueDrops"), QStringLiteral("rtlMixerLateFrames"),
-        QStringLiteral("rtlMixerRejectedBlocks"), QStringLiteral("rtlMixerConfigurationFailures")};
+        QStringLiteral("rtlMixerRejectedBlocks"), QStringLiteral("rtlMixerConfigurationFailures"),
+        QStringLiteral("rtlReceiveTraceDrops")};
     snapshot.sections.insert(snapshot.order.front(), tr("RTL receive pipeline (since connect)"));
     snapshot.labels = {{snapshot.order[0], tr("Audio queue dropped packets")},
         {snapshot.order[1], tr("Mixer missing receiver frames at deadline")},
         {snapshot.order[2], tr("Mixer rejected audio blocks")},
-        {snapshot.order[3], tr("Mixer configuration failures")}};
+        {snapshot.order[3], tr("Mixer configuration failures")},
+        {snapshot.order[4], tr("Receive diagnostic records dropped")}};
     // Legacy-only sessions have not observed this pipeline. Missing values
     // report "not reported", never a fabricated successful zero measurement.
     if (m_diagnostics.observed) {
-        const std::array<std::uint64_t, 4> counters{m_diagnostics.droppedPackets,
+        const std::array<std::uint64_t, 5> counters{m_diagnostics.droppedPackets,
             m_diagnostics.mixerLateFrames, m_diagnostics.mixerRejectedBlocks,
-            m_diagnostics.mixerConfigurationFailures};
+            m_diagnostics.mixerConfigurationFailures, m_diagnostics.droppedTraceEvents};
         for (int i = 0; i < snapshot.order.size(); ++i) {
             snapshot.values.insert(snapshot.order[i], QVariant::fromValue<qulonglong>(counters[i]));
         }
@@ -555,7 +557,9 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         const auto& capture = m_lastPublished->capture;
         const QStringList keys{QStringLiteral("rtlCaptureCenterHz"), QStringLiteral("rtlCaptureRateHz"),
             QStringLiteral("rtlCaptureLowHz"), QStringLiteral("rtlCaptureHighHz"),
-            QStringLiteral("rtlCaptureDcClear"), QStringLiteral("rtlCaptureRequest")};
+            QStringLiteral("rtlCaptureDcClear"), QStringLiteral("rtlCaptureRequest"),
+            QStringLiteral("rtlCaptureSession"), QStringLiteral("rtlCaptureRevision"),
+            QStringLiteral("rtlCaptureRequestedRevision")};
         snapshot.sections.insert(keys.front(), tr("RTL accepted capture"));
         snapshot.order.append(keys);
         snapshot.labels.insert(keys[0], tr("Capture center / converter DC (Hz)"));
@@ -564,6 +568,9 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         snapshot.labels.insert(keys[3], tr("Usable capture high edge (Hz)"));
         snapshot.labels.insert(keys[4], tr("FM receivers clear of converter DC"));
         snapshot.labels.insert(keys[5], tr("Last capture request"));
+        snapshot.labels.insert(keys[6], tr("Capture session"));
+        snapshot.labels.insert(keys[7], tr("Accepted capture revision"));
+        snapshot.labels.insert(keys[8], tr("Requested capture revision"));
         snapshot.values.insert(keys[0], capture.centerHz);
         snapshot.values.insert(keys[1], capture.achievedSampleRateHz);
         snapshot.values.insert(keys[2], std::max(0.0, capture.centerHz - capture.usableLeftHz));
@@ -572,6 +579,11 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
             ? QVariant(RtlCaptureTransaction::dcClear(*m_lastPublished))
             : QVariant(tr("No receiving FM or FM-N slice")));
         snapshot.values.insert(keys[5], m_captureStatus);
+        // Read existing owner-thread tokens so steady-state validation can see
+        // repair requests/publications even when detailed logging is disabled.
+        snapshot.values.insert(keys[6], QVariant::fromValue<qulonglong>(m_published.session));
+        snapshot.values.insert(keys[7], QVariant::fromValue<qulonglong>(m_published.revision));
+        snapshot.values.insert(keys[8], QVariant::fromValue<qulonglong>(m_capture.requested().revision));
     }
     return snapshot;
 }

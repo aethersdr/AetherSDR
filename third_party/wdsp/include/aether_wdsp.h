@@ -27,6 +27,13 @@ void OpenChannel(int channel, int inputSize, int dspSize, int inputSampleRate,
                  int dspSampleRate, int outputSampleRate, int type, int state,
                  double delayUp, double slewUp, double delayDown,
                  double slewDown, int blockForOutput);
+// Prepared ring depth, fixed for this channel lifetime and its rebuilds.
+// Returns 0 before touching the channel for an invalid channel/depth; otherwise
+// the ordinary OpenChannel parameter/lifetime contract applies. Depth is 2..8.
+int OpenChannelWithExchangeDepth(int channel, int inputSize, int dspSize,
+    int inputSampleRate, int dspSampleRate, int outputSampleRate, int type,
+    int state, double delayUp, double slewUp, double delayDown, double slewDown,
+    int blockForOutput, int exchangeDepth);
 void CloseChannel(int channel);
 // Channel run state. state 1 = running, 0 = stopped. dmode 1 makes a stop
 // BLOCK until the channel has flushed (bounded by WDSP's own 100 ms timeout),
@@ -429,6 +436,15 @@ void wdspPortSetHandoffPauseForTest(unsigned microseconds);
 // release (enabled=0) before retiring/closing that worker or arming another.
 void wdspPortSetHandoffHoldForTest(int enabled);
 int wdspPortHandoffHeldForTest(void);
+// Same lifetime/serialization contract, but immediately BEFORE output memcpy.
+void wdspPortSetOutputCopyHoldForTest(int enabled);
+int wdspPortOutputCopyHeldForTest(void);
+// Locks existing exchange then ring-count sections. Test/control only; caller owns
+// an open channel and excludes destruction. Never an acquisition readiness API.
+int GetChannelOutputSamplesForTest(int channel);
+// After count readiness, wait for the previous handoff hook/DSP to finish.
+// Test/control only; never call with either worker hold armed or entered.
+void SynchronizeChannelWorkerForTest(int channel);
 
 #ifdef __cplusplus
 }

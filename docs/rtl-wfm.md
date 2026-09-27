@@ -78,7 +78,31 @@ new receiver and speaker epochs. Startup positions align to the final 48 kHz
 sample lattice, including nonzero and coprime capture-rate origins. Each packet
 declares 48 kHz, stereo layout and actual frame count. Monitor mute, gain and
 balance affect the speaker mix after the independent slice tap. Queued stale PCM
-and observations remain fenced by capture/session/receiver lifetime.
+and observations remain fenced by capture/session/receiver lifetime. The mixer
+starts each new epoch at the same exact capture/audio lattice point as extraction;
+it does not demand rounded-down samples that the extractor cannot produce.
+
+Nonblocking opted-in WFM prepares eight WDSP exchange slots. The seven initial
+output credits cover the largest single 8192-complex-sample USB callback burst
+at the admitted capture rates. This is finite headroom, not a guarantee against
+arbitrary queued callbacks or worker starvation. WDSP still reports a real
+underrun when exhausted, and the receiver still withdraws immediately. Output
+bytes and their write cursor are complete before WDSP publishes output credit.
+Blocking WFM and legacy channels retain depth two, including reused channel IDs.
+
+The prepared WFM exchange contributes 2048 audio frames (42.667 ms) of transport
+delay, including the prior-output worker stage, versus 512 frames (10.667 ms)
+at depth two. The extra delay is 32 ms; filter, device and other DSP delays are
+additional. Ring storage increases from 72 to 288 KiB per opted-in channel.
+The mixer's unchanged 2048-frame missing-contribution deadline is a separate
+capture-position bound, not a total audio-latency limit.
+
+The `aether.rtl.receive` debug category is disabled by default. When explicitly
+enabled, owner-thread records identify the first failing process result,
+extractor reason, capture/IQ positions and exact missing mixer frames. Its fixed
+queue reports overflow separately; acquisition performs no logging or allocation.
+Health status also exposes the existing accepted/requested capture revisions and
+trace-drop count, allowing bounded observation with detailed logging disabled.
 
 Accepted 48 kHz speaker PCM also drives RX device negotiation: prefer 48 kHz,
 then 44.1 kHz, then 24 kHz through the shared stereo-preserving policy. A 24 kHz

@@ -390,7 +390,10 @@ std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
         return nullptr;
     }
     --reservation.m_count;
-    channel->open();
+    if (!channel->open()) {
+        setError(error, "WDSP refused the prepared exchange depth");
+        return nullptr;
+    }
     return channel;
 }
 
@@ -694,7 +697,11 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
     close();
     m_config = config;
     m_outputBlockSize = computeOutputBlockSize(m_config);
-    open();
+    if (!open()) {
+        setError(error, "WDSP refused the prepared exchange depth");
+        endControlOperation();
+        return false;
+    }
     if (!wasRunning) {
         // Restore the state this found, the way WDSP's own rebuilds do
         // (channel.c SetDSPBuffsize: oldstate = SetChannelState(0,1) ... then
@@ -1144,6 +1151,26 @@ bool WdspChannel::workerHandoffHeldForTest() noexcept
     return wdspPortHandoffHeldForTest() != 0;
 }
 
+void WdspChannel::setWorkerOutputCopyHoldForTest(bool enabled) noexcept
+{
+    wdspPortSetOutputCopyHoldForTest(enabled ? 1 : 0);
+}
+
+bool WdspChannel::workerOutputCopyHeldForTest() noexcept
+{
+    return wdspPortOutputCopyHeldForTest() != 0;
+}
+
+int WdspChannel::outputSamplesReadyForTest() const noexcept
+{
+    return GetChannelOutputSamplesForTest(m_channelId);
+}
+
+void WdspChannel::synchronizeWorkerForTest() const noexcept
+{
+    SynchronizeChannelWorkerForTest(m_channelId);
+}
+
 std::unique_lock<std::mutex> WdspChannel::fftwSetupLock()
 {
     // Forwards, and keeps its name so Hl2Spectrum, AnanPanAnalyzer and
@@ -1331,11 +1358,21 @@ void WdspChannel::setNoiseBlankerHold(bool hold) noexcept
     m_nbHold.store(hold, std::memory_order_relaxed);
 }
 
-void WdspChannel::open() noexcept
+bool WdspChannel::open() noexcept
 {
     const std::scoped_lock setupLock(g_setupMutex);
     loadWisdomOnce();   // import cached FFTW wisdom so PATIENT plans don't re-measure
-    OpenChannel(m_channelId,
+    // Seven exchanges can emerge from one approved 8192-sample RTL callback.
+    // Depth 8 prepares seven output credits plus the existing worker stage:
+    // 2048 frames / 42.667 ms exchange-stage delay, 32 ms more than depth 2.
+    // It does not cover arbitrary starvation; every non-OK still withdraws.
+    const bool preparedWbfm = m_config.wbfmReceive && !m_config.blockForOutput;
+    const auto openChannel = [preparedWbfm](auto... args) {
+        if (preparedWbfm) { return OpenChannelWithExchangeDepth(args..., 8) != 0; }
+        OpenChannel(args...); // Explicit legacy depth 2, including reused slots.
+        return true;
+    };
+    if (!openChannel(m_channelId,
                 static_cast<int>(m_config.inputBlockSize),
                 static_cast<int>(m_config.dspBlockSize),
                 m_config.inputSampleRate,
@@ -1350,7 +1387,9 @@ void WdspChannel::open() noexcept
                 0,
                 m_config.muteDelayUpSec, m_config.muteSlewUpSec,
                 m_config.muteDelayDownSec, m_config.muteSlewDownSec,
-                m_config.blockForOutput ? 1 : 0);
+                m_config.blockForOutput ? 1 : 0)) {
+        return false;
+    }
     if (m_config.direction == Direction::Receive) {
         SetRXAMode(m_channelId, wdspMode(m_config.mode));
         if (m_config.fmReceive) {
@@ -1403,6 +1442,7 @@ void WdspChannel::open() noexcept
     SetChannelState(m_channelId, 1, 0);
     m_running.store(true, std::memory_order_relaxed);
     m_open = true;
+    return true;
 }
 
 void WdspChannel::close() noexcept

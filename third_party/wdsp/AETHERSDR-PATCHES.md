@@ -848,3 +848,74 @@ mutex to the acquisition-side getter. Keep the discriminator/DC changes
 explicitly opt-in unless a separately reviewed upstream equivalent preserves
 both continuous-waveform response and low-frequency stereo phase. Regenerate
 the FIR from its polynomial and rerun analytic fixtures if its geometry changes.
+
+
+## Patch 15 — prepared WFM exchange headroom and output publication (RFC #5468)
+
+`upstream/channel.{h,c}` and `upstream/iobuffs.c` add an immutable prepared
+`exchangeDepth` per channel. `OpenChannelWithExchangeDepth()` rejects channel
+indices outside the table and depths outside 2..8 before modifying any state,
+then shares the existing construction body. Its other arguments retain the
+ordinary `OpenChannel()` contract. Every legacy `OpenChannel()` explicitly
+selects `DSP_MULT` (still 2), including a reused former WFM slot. Existing
+size/rate rebuilds retain the prepared field. Both creation and flush seed the
+same output prefix from `r2_active_buffsize - r2_size`.
+
+The facade selects 8 only for its opt-in nonblocking `WbfmReceive` recipe:
+384 kHz / 2048 IQ input, 192 kHz / 1024 DSP, 48 kHz / 256 paired output.
+Blocking WFM, legacy WBFM, other RX, and TX retain depth 2. Measured continuous
+8192-sample extraction callbacks realize a maximum of seven complete IQ
+exchanges at the lowest approved capture rates (225001 and 250000 Hz). The
+composed converter bound is seven; no wall-clock scheduler assumption is used
+to derive it. The tests-only RED against `2e44eb04` accepted two exchanges with
+the worker held after its first handoff, then reported the actual `Underrun`.
+Live first-fault telemetry had independently observed `Underrun` with continuous
+capture, so a missing capture packet is not needed to produce this failure.
+
+At this geometry the two rings occupy 288 KiB per depth-8 channel, versus
+72 KiB at depth 2: 216 KiB additional prepared memory. Seven seeded output
+blocks plus the existing previous-chain-output worker stage delay audio by
+2048 frames / 42.667 ms, exactly six blocks / 1536 frames / 32 ms more than
+blocking depth 2. These are exchange-stage costs only; RF filtering, rate
+conversion, decoder, mixer waiting and device buffering are additional. One
+callback's bound does not promise survival of arbitrary host starvation or
+multiple queued callbacks without worker progress. Depth 8 is not a relaxed
+mixer deadline and does not extend the existing 2048-frame hole-wait policy.
+
+For equal exchange/DSP transfers, S successful host calls and P worker
+handoffs satisfy S-P <= D-1. The worker has copied each input before publishing
+its corresponding credit. The next host write therefore cannot overwrite an
+unread input before the first failure. The failing call can occupy the final
+slot, so no further call is safe: every non-OK still withdraws that receiver,
+and repair prepares a new epoch off acquisition. No retries or substitute silence on underrun,
+callback allocations, new waits or new threads are introduced.
+
+A separate existing publication race incremented `r2_havesamps` before copying
+the output bytes. `dexchange()` now copies the output and advances its private
+write index first, then publishes credit under the existing count lock. The
+copy remains outside that lock. This shared correctness repair is not claimed
+as the established cause of the observed underrun.
+
+The default-inactive port rendezvous immediately before `copy_output_to_ring`
+copies bytes and the test/control-only locked output-count readback provide
+scheduler-independent regression barriers. A test-only `csDSP` rendezvous,
+after count readiness and before arming a hold, also lets the previous block's
+post-publication hook finish, so it cannot claim the next block's hold. The
+count query takes `csEXCH` then the count lock to cover asynchronous flush.
+Production calls none of these readiness helpers. Fixtures serialize the global
+holds, keep other workers idle, and release before teardown/reprepare.
+`wdsp_wbfm_test` compares nonzero paired output against the unchanged blocking
+reference through a warm eight-exchange held burst, wraparound, and release,
+with the exact six-block displacement removed. It checks repeated preparation,
+clocked flush, legacy slot reuse, bounded API refusal, and genuinely unpublished
+output: seven seeded calls succeed, the eighth must underrun while the copy is
+held. Moving publication before the helper must fail that assertion.
+`rtl_wfm_pipeline_test` acknowledges the first completed handoff, accepts eight
+calls total, then requires the ninth's actual underrun, one typed first fault,
+receiver withdrawal, no stale PCM, and a fresh nonzero stereo PCM repair epoch.
+These are socket-free deterministic DSP tests, not hardware latency proof.
+
+On upstream refresh, retain the explicit legacy depth reset, prepared field on
+all rebuilds, matching create/flush prefix, and bytes-before-credit edge unless
+upstream supplies equivalent semantics. Do not increase global `DSP_MULT`,
+weaken non-OK withdrawal, or move the test readiness query onto acquisition.

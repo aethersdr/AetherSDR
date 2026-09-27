@@ -345,18 +345,25 @@ void workerUnderrunTrace()
           "first real worker handoff is acknowledged before the next exchange");
     if (!held || slicePackets != 1 || pipeline->needsRepair()) { hold.release(); pipeline->stop(); return; }
 
-    // 256 output frames start prefilled, and the acknowledged handoff publishes
-    // another 256. With the worker held, the third 2048-frame IQ block has no
-    // output credit. This forces real fexchange2 -2, without a fabricated result
-    // or a scheduler-speed assumption. Mutating -2 to Ok must fail withdrawal.
+    // An 8192-sample USB callback can produce seven WFM IQ blocks at the
+    // slowest admitted capture rates. Prepared headroom must accept that finite
+    // burst without needing the held worker to run. This fails on the old D2
+    // exchange, independently of host speed or an arbitrary sleep duration.
+    for (unsigned chunk = 0; chunk < 512 && slicePackets < 7 && !pipeline->needsRepair(); ++chunk) { feed(); }
+    check(slicePackets == 7 && !pipeline->needsRepair(),
+          "nonblocking WFM accepts the bounded seven-block USB burst while its worker is held");
+    // D8 has seven prefilled output blocks plus the first acknowledged worker
+    // handoff. Exhaustion therefore occurs on the ninth IQ block. It remains a
+    // real fexchange2 -2; treating -2 as Ok must still fail this withdrawal.
     for (unsigned chunk = 0; chunk < 512 && !pipeline->needsRepair(); ++chunk) { feed(); }
-    check(pipeline->needsRepair() && slicePackets == 2,
-          "real nonblocking WFM exchange withdraws at exhausted output credit");
+    check(pipeline->needsRepair() && slicePackets == 8,
+          "real nonblocking WFM exchange withdraws beyond its bounded eight-block credit");
+    std::printf("WFM_HELD_BURST successful_blocks=%zu repair=%d\n", slicePackets, pipeline->needsRepair());
     const std::uint64_t faultCaptureFirst = failedCaptureFirst;
     // Subsequent continuous RF cannot publish stale decoder output or a second
     // first-fault record from the withdrawn receiver.
     for (unsigned chunk = 0; chunk < 8; ++chunk) { feed(); }
-    check(slicePackets == 2, "withdrawn WFM receiver emits no stale independent PCM");
+    check(slicePackets == 8, "withdrawn WFM receiver emits no stale independent PCM");
     unsigned faultEvents = 0;
     Pipeline::TraceEvent event;
     while (pipeline->takeTraceEvent(event)) {
@@ -376,8 +383,8 @@ void workerUnderrunTrace()
                   "first fault reports actual WDSP Underrun rather than a capture gap");
             check(failure.hasExpectedCaptureFirst && failure.expectedCaptureFirst == faultCaptureFirst
                       && failure.captureFirst == faultCaptureFirst && failure.captureFrames == 256
-                      && failure.hasIqFirst && failure.iqFirst == 4096 && failure.iqFrames == 2048,
-                  "first fault proves continuous capture and identifies the third exact IQ block");
+                      && failure.hasIqFirst && failure.iqFirst == 16384 && failure.iqFrames == 2048,
+                  "first fault proves continuous capture and identifies the ninth exact IQ block");
             check(failure.extraction && failure.extraction->reason == Extractor::FailureReason::SinkRejected,
                   "RF extraction reports downstream rejection of the actual failing WDSP block");
         }

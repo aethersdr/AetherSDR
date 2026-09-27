@@ -612,6 +612,15 @@ public:
     // or reconfiguration. The default is inactive; this never holds acquisition.
     static void setWorkerHandoffHoldForTest(bool enabled) noexcept;
     [[nodiscard]] static bool workerHandoffHeldForTest() noexcept;
+    // Same serialized-fixture lifetime contract, before output bytes/credit.
+    static void setWorkerOutputCopyHoldForTest(bool enabled) noexcept;
+    [[nodiscard]] static bool workerOutputCopyHeldForTest() noexcept;
+    // Test/control thread only: locks existing exchange/output-count sections. The
+    // caller owns this open channel and excludes control/destruction.
+    [[nodiscard]] int outputSamplesReadyForTest() const noexcept;
+    // After output-count readiness, wait for the last hook and DSP body before
+    // arming another hold. Test/control only; NEVER call while a hold is armed.
+    void synchronizeWorkerForTest() const noexcept;
 
     // Shared FFTW-planner serialization guard. FORWARDS to
     // AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h), which owns
@@ -647,7 +656,7 @@ private:
     void applyNotchShift() noexcept;
     static std::size_t computeOutputBlockSize(const Config& config) noexcept;
 
-    void open() noexcept;
+    [[nodiscard]] bool open() noexcept;
     void close() noexcept;
     // Create/destroy the ANB stage alongside the channel. The blanker's id IS
     // the channel id: nob.c keeps its own table of 32, WDSP's channel table is

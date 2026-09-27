@@ -30,6 +30,7 @@ warren@wpratt.com
 // Declared here rather than in a port header so the same line serves the POSIX
 // port and the native Windows build alike.
 void wdspPortHandoffPauseForTest (void);
+void wdspPortOutputCopyHoldForTest (void);
 
 /********************************************************************************************************
 *																										*
@@ -404,16 +405,16 @@ void create_iobuffs (int channel)
 		a->r2_size = a->out_size;
 	else
 		a->r2_size = a->r2_insize;
-	a->r1_active_buffsize = DSP_MULT * a->r1_size;
-	a->r2_active_buffsize = DSP_MULT * a->r2_size;
+	a->r1_active_buffsize = ch[channel].exchangeDepth * a->r1_size;
+	a->r2_active_buffsize = ch[channel].exchangeDepth * a->r2_size;
 	a->r1_baseptr = (double*) malloc0 (a->r1_active_buffsize * sizeof (complex));
 	a->r2_baseptr = (double*) malloc0 (a->r2_active_buffsize * sizeof (complex));
 	a->r1_inidx = 0;
 	a->r1_outidx = 0;
 	a->r1_unqueuedsamps = 0;
-	a->r2_inidx = (DSP_MULT - 1) * a->r2_size;
+	a->r2_inidx = (a->r2_active_buffsize - a->r2_size);
 	a->r2_outidx = 0;
-	a->r2_havesamps = (DSP_MULT - 1) * a->r2_size;
+	a->r2_havesamps = (a->r2_active_buffsize - a->r2_size);
 	n = a->r2_havesamps / a->out_size;
 	a->r2_unqueuedsamps = a->r2_havesamps - n * a->out_size;
 	InitializeCriticalSectionAndSpinCount(&a->r2_ControlSection, 2500);
@@ -504,9 +505,9 @@ void flush_iobuffs (int channel)
 	a->r1_inidx = 0;
 	a->r1_outidx = 0;
 	a->r1_unqueuedsamps = 0;
-	a->r2_inidx = (DSP_MULT - 1) * a->r2_size;
+	a->r2_inidx = (a->r2_active_buffsize - a->r2_size);
 	a->r2_outidx = 0;
-	a->r2_havesamps = (DSP_MULT - 1) * a->r2_size;
+	a->r2_havesamps = (a->r2_active_buffsize - a->r2_size);
 	while (!WaitForSingleObject (a->Sem_BuffReady, 1));
 	n = a->r2_havesamps / a->out_size;
 	a->r2_unqueuedsamps = a->r2_havesamps - n * a->out_size;
@@ -635,6 +636,42 @@ void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *
 	}
 }
 
+// Test/control-thread observation only. Caller excludes channel teardown.
+// Production exchange does not call this or poll for worker readiness.
+PORT
+int GetChannelOutputSamplesForTest (int channel)
+{
+	IOB a = ch[channel].iob.pc;
+	int samples;
+	// flush_iobuffs resets the count under csEXCH, outside the count lock.
+	// Test-only observation takes the same order as fexchange, covering both.
+	EnterCriticalSection (&ch[channel].csEXCH);
+	EnterCriticalSection (&a->r2_ControlSection);
+	samples = a->r2_havesamps;
+	LeaveCriticalSection (&a->r2_ControlSection);
+	LeaveCriticalSection (&ch[channel].csEXCH);
+	return samples;
+}
+
+// After the output-count barrier proves all submitted handoffs were published,
+// this control/test-only rendezvous also waits for the last hook and DSP body.
+// Never call while a test hold is armed/entered; production does not call it.
+PORT
+void SynchronizeChannelWorkerForTest (int channel)
+{
+	EnterCriticalSection (&ch[channel].csDSP);
+	LeaveCriticalSection (&ch[channel].csDSP);
+}
+
+static void copy_output_to_ring (IOB a, const double* in)
+{
+	// Default-inactive fixture rendezvous BEFORE the actual bytes are copied.
+	wdspPortOutputCopyHoldForTest ();
+	memcpy (a->r2_baseptr + 2 * a->r2_inidx, in, a->r2_insize * sizeof (complex));
+	if ((a->r2_inidx += a->r2_insize) == a->r2_active_buffsize)
+		a->r2_inidx = 0;
+}
+
 int dexchange (int channel, double* in, double* out)
 {
 	int n;
@@ -681,12 +718,12 @@ int dexchange (int channel, double* in, double* out)
 	if ((a->r1_outidx += a->r1_outsize) == a->r1_active_buffsize)
 		a->r1_outidx = 0;
 
+	// AetherSDR patch 15: publish only bytes already copied. The memcpy stays
+	// OUTSIDE the existing short credit lock; no longer acquisition lock span.
+	copy_output_to_ring (a, in);
 	EnterCriticalSection (&a->r2_ControlSection);
 	a->r2_havesamps += a->r2_insize;
 	LeaveCriticalSection (&a->r2_ControlSection);
-	memcpy (a->r2_baseptr + 2 * a->r2_inidx, in, a->r2_insize * sizeof (complex));
-	if ((a->r2_inidx += a->r2_insize) == a->r2_active_buffsize)
-		a->r2_inidx = 0;
 	if (a->bfo && (a->r2_unqueuedsamps += a->r2_insize) >= a->out_size)
 	{
 		n = a->r2_unqueuedsamps / a->out_size;

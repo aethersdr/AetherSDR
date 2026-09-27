@@ -1,7 +1,9 @@
 #include "core/dsp/WdspChannel.h"
+#include "../third_party/wdsp/include/aether_wdsp.h"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -11,6 +13,7 @@
 #include <numbers>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -359,6 +362,247 @@ bool clockPilotAndNoise()
     return ok;
 }
 
+// These barriers are test-thread observations, never acquisition policy. A
+// deadline only detects a stuck worker; accepted exchange count is independent
+// of CPU timing. Holds are released before any return can destroy the channel.
+template<class Predicate>
+bool awaitWorker(Predicate&& predicate)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!predicate()) {
+        if (std::chrono::steady_clock::now() >= deadline) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+struct WorkerHold {
+    explicit WorkerHold(bool beforeCopy = false) : copy(beforeCopy)
+    {
+        if (copy) { WdspChannel::setWorkerOutputCopyHoldForTest(true); }
+        else { WdspChannel::setWorkerHandoffHoldForTest(true); }
+    }
+    ~WorkerHold() { release(); }
+    void release()
+    {
+        if (copy) { WdspChannel::setWorkerOutputCopyHoldForTest(false); }
+        else { WdspChannel::setWorkerHandoffHoldForTest(false); }
+    }
+    bool entered() const
+    {
+        return copy ? WdspChannel::workerOutputCopyHeldForTest()
+                    : WdspChannel::workerHandoffHeldForTest();
+    }
+    bool copy;
+};
+
+struct ExchangeVector {
+    static constexpr std::size_t kBlocks = 480;
+    static constexpr std::size_t kAudioBlock = 256;
+    std::vector<float> i = std::vector<float>(kBlocks * kInputBlock);
+    std::vector<float> q = std::vector<float>(kBlocks * kInputBlock);
+    ExchangeVector()
+    {
+        for (std::size_t frame = 0; frame < i.size(); ++frame) {
+            const double time = static_cast<double>(frame) / kInputRate;
+            const auto sineIntegral = [time](double hz) {
+                return -std::cos(kTwoPi * hz * time) / hz;
+            };
+            const auto stereoIntegral = [time](double hz) {
+                return 0.5 * (std::sin(kTwoPi * (38000.0 - hz) * time) / (38000.0 - hz)
+                    - std::sin(kTwoPi * (38000.0 + hz) * time) / (38000.0 + hz));
+            };
+            // Non-harmonic-to-block L/R tones distinguish temporal order as
+            // well as channel order. Analytically integrated continuous FM.
+            const double phase = 75000.0 * (0.225 * (sineIntegral(731.0)
+                + sineIntegral(1279.0) + stereoIntegral(731.0) - stereoIntegral(1279.0))
+                + 0.1 * sineIntegral(19000.0));
+            i[frame] = static_cast<float>(0.1 * std::cos(phase));
+            q[frame] = static_cast<float>(0.1 * std::sin(phase));
+        }
+    }
+    WdspChannel::ProcessResult process(WdspChannel& channel, std::size_t block,
+                                       std::span<float> left, std::span<float> right) const
+    {
+        return channel.processIq(std::span(i).subspan(block * kInputBlock, kInputBlock),
+            std::span(q).subspan(block * kInputBlock, kInputBlock), left, right);
+    }
+};
+
+bool exchangeOrder()
+{
+    const ExchangeVector signal;
+    constexpr std::size_t audioBlock = ExchangeVector::kAudioBlock;
+    constexpr std::size_t extraBlocks = 6;
+    constexpr std::size_t heldBlock = 384; // >2 seconds of real pilot acquisition.
+    constexpr int readySamples = 7 * audioBlock;
+    std::string error;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(config(), &error);
+    if (!require(channel != nullptr, error.c_str())) { return false; }
+    bool ok = require(channel->outputSamplesReadyForTest() == audioBlock,
+                      "blocking WFM retains depth2 startup geometry");
+    std::vector<float> referenceLeft(signal.kBlocks * audioBlock);
+    std::vector<float> referenceRight(referenceLeft.size());
+    for (std::size_t block = 0; block < signal.kBlocks; ++block) {
+        if (!require(signal.process(*channel, block,
+                std::span(referenceLeft).subspan(block * audioBlock, audioBlock),
+                std::span(referenceRight).subspan(block * audioBlock, audioBlock))
+                == WdspChannel::ProcessResult::Ok, "blocking ordered-audio reference succeeds")) {
+            return false;
+        }
+    }
+    WdspChannel::Config native = config();
+    native.blockForOutput = false;
+    if (!require(channel->reconfigure(native, &error), error.c_str())) { return false; }
+    std::array<float, audioBlock> left{}, right{};
+    // Reuse the same owner/slot twice; each preparation must restore the
+    // exact prefix, and all wraps and queued input after release are compared.
+    for (int preparation = 0; preparation < 2; ++preparation) {
+        if (preparation != 0 && !require(channel->reconfigure(native, &error), error.c_str())) {
+            return false;
+        }
+        if (!require(channel->outputSamplesReadyForTest() == readySamples,
+                     "nonblocking WFM prepares seven credits on every rebuild")) { return false; }
+        double maximumError = 0.0;
+        bool finite = true;
+        double burstEnergy = 0.0;
+        double stereoEnergy = 0.0;
+        const std::uint64_t allocations = WdspChannel::allocationSequenceForTest();
+        for (std::size_t block = 0; block < signal.kBlocks; ++block) {
+            static_assert(heldBlock + 8 < ExchangeVector::kBlocks);
+            std::optional<WorkerHold> hold;
+            if (block == heldBlock) {
+                // Ready count alone precedes the previous handoff's hook. Do
+                // not let the new hold accidentally claim that previous block.
+                channel->synchronizeWorkerForTest();
+                hold.emplace();
+            }
+            const std::size_t count = hold ? 8 : 1;
+            for (std::size_t part = 0; part < count; ++part) {
+                const std::size_t current = block + part;
+                if (!require(signal.process(*channel, current, left, right)
+                        == WdspChannel::ProcessResult::Ok,
+                        "prepared nonblocking WFM accepts ordered bounded burst")) { return false; }
+                if (block == heldBlock && part == 0
+                    && !require(awaitWorker([] { return WdspChannel::workerHandoffHeldForTest(); }),
+                                "ordered burst starts after acknowledged worker handoff")) { return false; }
+                finite = finite && std::ranges::all_of(left, [](float sample) { return std::isfinite(sample); })
+                    && std::ranges::all_of(right, [](float sample) { return std::isfinite(sample); });
+                if (current >= extraBlocks) {
+                    for (std::size_t frame = 0; frame < audioBlock; ++frame) {
+                        const std::size_t expected = (current - extraBlocks) * audioBlock + frame;
+                        maximumError = std::max({maximumError,
+                            std::abs(static_cast<double>(left[frame]) - referenceLeft[expected]),
+                            std::abs(static_cast<double>(right[frame]) - referenceRight[expected])});
+                        if (block == heldBlock) {
+                            burstEnergy += left[frame] * left[frame] + right[frame] * right[frame];
+                            stereoEnergy += (left[frame] - right[frame]) * (left[frame] - right[frame]);
+                        }
+                    }
+                }
+            }
+            if (hold) { hold->release(); }
+            if (!require(awaitWorker([&] { return channel->outputSamplesReadyForTest() == readySamples; }),
+                         "worker publishes all completed burst output without extra input")) { return false; }
+            block += count - 1;
+        }
+        std::cout << "WFM_EXCHANGE_ORDER preparation=" << preparation << " extra_frames="
+                  << extraBlocks * audioBlock << " max_error=" << maximumError
+                  << " burst_energy=" << burstEnergy << " stereo_energy=" << stereoEnergy << '\n';
+        ok = require(finite && maximumError < 2.0e-5 && burstEnergy > 1.0 && stereoEnergy > 0.5,
+                     "nonzero paired output matches blocking reference with exactly1536 added frames") && ok;
+        ok = require(WdspChannel::allocationSequenceForTest() == allocations,
+                     "prepared bursts allocate no WDSP memory") && ok;
+    }
+    return ok;
+}
+
+// A held copy must not grant credit for bytes it has not written. This also
+// tests the cold zero prefix after a genuine clocked stop/flush. A faulted
+// channel is never fed again: release, then reprepare off the acquisition path.
+bool unpublishedOutput(WdspChannel& channel, const ExchangeVector& signal)
+{
+    constexpr int audioBlock = ExchangeVector::kAudioBlock;
+    std::array<float, audioBlock> left{}, right{};
+    channel.synchronizeWorkerForTest();
+    WorkerHold hold(true);
+    bool ok = true;
+    for (std::size_t block = 0; block < 7; ++block) {
+        if (!require(signal.process(channel, block, left, right) == WdspChannel::ProcessResult::Ok,
+                     "seven seeded output blocks remain available while next copy is held")) { return false; }
+        if (block == 0) {
+            if (!require(awaitWorker([&] { return hold.entered(); }),
+                         "worker acknowledged before actual output memcpy")) { return false; }
+            ok = require(channel.outputSamplesReadyForTest() == 6 * audioBlock,
+                         "unpublished output never grants a premature credit") && ok;
+        }
+        ok = require(std::ranges::all_of(left, [](float sample) { return sample == 0.0f; })
+                     && std::ranges::all_of(right, [](float sample) { return sample == 0.0f; }),
+                     "prepared or flushed prefix contains actual paired silence") && ok;
+    }
+    ok = require(signal.process(channel, 7, left, right) == WdspChannel::ProcessResult::Underrun,
+                 "eighth exchange underruns while output memcpy is unpublished") && ok;
+    return ok;
+}
+
+bool exchangePreparation()
+{
+    const ExchangeVector signal;
+    WdspChannel::Config native = config(); native.blockForOutput = false;
+    std::string error;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(native, &error);
+    if (!require(channel != nullptr, error.c_str())) { return false; }
+    bool ok = true;
+    const std::uint64_t allocations = WdspChannel::allocationSequenceForTest();
+    for (const int depth : {-1, 0, 1, 9, std::numeric_limits<int>::max()}) {
+        ok = require(OpenChannelWithExchangeDepth(channel->channelId(), 2048, 1024,
+                         384000, 192000, 48000, 0, 0, 0.01, 0.025, 0.0, 0.01, 0, depth) == 0,
+                     "invalid prepared depth refuses before changing a live channel") && ok;
+    }
+    for (const int id : {-1, 32}) {
+        ok = require(OpenChannelWithExchangeDepth(id, 2048, 1024,
+                         384000, 192000, 48000, 0, 0, 0.01, 0.025, 0.0, 0.01, 0, 8) == 0,
+                     "prepared creation rejects invalid channel identity") && ok;
+    }
+    ok = require(WdspChannel::allocationSequenceForTest() == allocations
+                 && channel->outputSamplesReadyForTest() == 7 * 256,
+                 "refused preparation leaves existing ring and allocations intact") && ok;
+    ok = unpublishedOutput(*channel, signal) && ok;
+    for (int round = 0; round < 2; ++round) {
+        if (!require(channel->reconfigure(native, &error), error.c_str())) { return false; }
+        std::array<float, ExchangeVector::kAudioBlock> left{}, right{};
+        for (std::size_t block = 0; block < 64; ++block) {
+            if (!require(signal.process(*channel, block, left, right) == WdspChannel::ProcessResult::Ok
+                    && awaitWorker([&] { return channel->outputSamplesReadyForTest() == 7 * 256; }),
+                         "flush fixture warms actual worker with bounded exchanges")) { return false; }
+        }
+        if (!require(channel->setRunning(false), "clocked flush stop accepted")) { return false; }
+        // Config's 480-frame down-slew plus the WDSP 256-frame zero tail
+        // completes within three 256-frame exchanges. Each handoff is awaited;
+        // setRunning(true) then waits for that completed fade's flush worker.
+        for (std::size_t block = 0; block < 3; ++block) {
+            if (!require(signal.process(*channel, block, left, right) == WdspChannel::ProcessResult::Ok
+                    && awaitWorker([&] { return channel->outputSamplesReadyForTest() == 7 * 256; }),
+                         "stop clocks real fade and flush without starving worker")) { return false; }
+        }
+        if (!require(channel->setRunning(true), "flushed WFM restarts without rebuilding")) { return false; }
+        ok = require(channel->outputSamplesReadyForTest() == 7 * 256,
+                     "flush retains prepared depth8 credits") && ok;
+        ok = unpublishedOutput(*channel, signal) && ok;
+    }
+    // The same slot must not retain its former depth when a legacy owner opens
+    // it. Blocking WFM, legacy WBFM, ordinary receive and transmit stay at2.
+    std::array<WdspChannel::Config, 4> legacy{config(), config(), WdspChannel::Config{}, WdspChannel::Config{}};
+    legacy[1].wbfmReceive.reset(); legacy[1].blockForOutput = false;
+    legacy[3].direction = WdspChannel::Direction::Transmit;
+    for (const WdspChannel::Config& candidate : legacy) {
+        if (!require(channel->reconfigure(candidate, &error), error.c_str())) { return false; }
+        ok = require(channel->outputSamplesReadyForTest() == static_cast<int>(channel->outputBlockSize()),
+                     "legacy and blocking owners reset reused slot to depth2") && ok;
+    }
+    return ok;
+}
+
 bool invalidConfiguration()
 {
     using Deemphasis = WdspChannel::WbfmReceive::Deemphasis;
@@ -397,6 +641,8 @@ bool invalidConfiguration()
 int main()
 {
     const std::uint64_t allocations = WdspChannel::outstandingAllocationsForTest();
+    const bool order = exchangeOrder();
+    const bool preparation = exchangePreparation();
     const bool filter = filterAndHeadroom();
     const bool response = deemphasis();
     const bool envelope = rfEnvelope();
@@ -405,5 +651,7 @@ int main()
     const bool validation = invalidConfiguration();
     const bool leaks = require(WdspChannel::outstandingAllocationsForTest() == allocations,
                                "WFM channel teardown frees tracked allocations");
-    return filter && response && envelope && stereo && conditions && validation && leaks ? 0 : 1;
+    const bool ok = order && preparation && filter && response && envelope && stereo && conditions && validation && leaks;
+    std::cout << "WDSP_WBFM_TEST completed success=" << ok << '\n';
+    return ok ? 0 : 1;
 }
