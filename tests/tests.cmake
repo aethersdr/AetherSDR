@@ -784,6 +784,11 @@ endif()
 # Standalone DSP smoke tests. Built alongside the main target so they share
 # the same toolchain and warning flags. Run manually with ./build/<target>.
 
+add_executable(wdsp_wbfm_test tests/wdsp_wbfm_test.cpp)
+target_link_libraries(wdsp_wbfm_test PRIVATE aethercore)
+add_test(NAME wdsp_wbfm_test COMMAND wdsp_wbfm_test)
+set_tests_properties(wdsp_wbfm_test PROPERTIES TIMEOUT 120)
+
 add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
