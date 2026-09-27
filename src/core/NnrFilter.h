@@ -101,6 +101,7 @@ private:
     std::array<std::vector<float>, 2>  m_processed48k;
     std::array<QByteArray, 2> m_inAccum;    // 48 kHz float awaiting a full block
     std::array<QByteArray, 2> m_channelOutput;
+    bool m_lockstepWarned{false};                      // L/R output length mismatch logged
 
     int m_blockFrames{0};
 

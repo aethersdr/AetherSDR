@@ -173,6 +173,11 @@ NvidiaAfxFilter::NvidiaAfxFilter(const QString& packDir, int sampleRate)
     }
     if (!loadRuntime(dir))
         return;
+    // One single-stream effect per channel, not one effect with
+    // NVAFX_PARAM_NUM_STREAMS = 2. The batched form was tried: one pointer per
+    // stream crashed inside the SDK, and a single stream-major buffer leaked
+    // audio between streams. Two effects cost a second TensorRT engine (VRAM
+    // and enable time) but keep the channels isolated.
     for (void*& handle : m_handles) {
         if (!createDenoiser(dir, &handle))
             return;
@@ -405,7 +410,13 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcmStereo)
         }
         // Identical resamplers fed identical counts stay in lockstep, so the
         // min above never drops a sample. A mismatch would be a silent,
-        // cumulative L/R skew; make it loud in debug builds.
+        // cumulative L/R skew: log it once in release, abort in debug.
+        if (m_channelOutput[0].size() != m_channelOutput[1].size()
+            && !m_lockstepWarned) {
+            m_lockstepWarned = true;
+            qCWarning(lcNvAfx) << "NvidiaAfxFilter: L/R output lengths diverged"
+                   << m_channelOutput[0].size() << m_channelOutput[1].size();
+        }
         Q_ASSERT(m_channelOutput[0].size() == m_channelOutput[1].size());
 
         const auto* left = reinterpret_cast<const float*>(m_channelOutput[0].constData());

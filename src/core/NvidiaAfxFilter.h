@@ -84,6 +84,7 @@ private:
     std::array<std::vector<float>, 2> m_channelInput;
     std::array<std::vector<float>, 2> m_runScratch;    // reused NvAFX_Run output buffer
     std::array<QByteArray, 2> m_channelOutput;         // configured-rate float output
+    bool m_lockstepWarned{false};                      // L/R output length mismatch logged
     QByteArray m_outAccum;                       // configured-rate stereo float output
     int        m_outReadPos{0};                 // read cursor into m_outAccum
 

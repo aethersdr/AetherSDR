@@ -132,7 +132,9 @@ When receiving, the current ordering is:
 5. If the selected output sink is running at 48 kHz, `AudioEngine::resampleStereo()`
    upsamples 24 kHz stereo to 48 kHz stereo.
 6. Optional RX boost applies `tanh(2*x)` to every sample.
-7. RX output trim applies a dB gain multiplier to every sample.
+7. RX output trim applies a dB gain multiplier to every sample. For a virtual
+   KiwiSDR profile, whose pan is client-side, `applyRxPanInPlace()` then applies
+   that profile's pan when it is not centred.
 8. `rxPostChainScopeReady` is emitted from the post-chain stereo signal after
    averaging L/R to mono.
 9. Audio is appended to `m_rxBuffer`; a 10 ms timer drains the buffer to the
@@ -145,9 +147,12 @@ but the live RX speaker strip is the explicit order inside `writeAudio()`.
 
 Radio speaker audio enters as stereo with the radio's per-slice pan already
 applied. Every client NR method denoises L and R independently, preserving
-channel separation. Level-dependent suppression may slightly shift an
-off-centre signal's L/R level ratio; the RX chain and the RX upsampler
-described below preserve their input balance.
+channel separation but not the balance of a signal present in both channels
+(see step 2 above). The RX strip and the RX upsampler described below preserve
+their input balance. The only client pan stage is `applyRxPanInPlace()` in
+`processMixedRxAudioData()`, after output trim, and it runs only for virtual
+KiwiSDR profiles: Flex and the legacy Kiwi stream keep the orientation already
+present in their input.
 
 ### 24 kHz to 48 kHz upsampling
 

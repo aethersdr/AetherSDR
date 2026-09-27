@@ -332,7 +332,13 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcmStereo)
         }
         // Identical resamplers fed identical counts stay in lockstep, so the
         // min above never drops a sample. A mismatch would be a silent,
-        // cumulative L/R skew; make it loud in debug builds.
+        // cumulative L/R skew: log it once in release, abort in debug.
+        if (m_channelOutput[0].size() != m_channelOutput[1].size()
+            && !m_lockstepWarned) {
+            m_lockstepWarned = true;
+            qWarning() << "DeepFilterFilter: L/R output lengths diverged"
+                   << m_channelOutput[0].size() << m_channelOutput[1].size();
+        }
         Q_ASSERT(m_channelOutput[0].size() == m_channelOutput[1].size());
 
         const auto* left = reinterpret_cast<const float*>(m_channelOutput[0].constData());

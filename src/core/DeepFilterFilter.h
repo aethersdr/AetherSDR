@@ -68,6 +68,7 @@ private:
     std::array<std::vector<float>, 2> m_channelInput;
     std::array<std::vector<float>, 2> m_processed48k;
     std::array<QByteArray, 2> m_channelOutput;         // configured-rate float output
+    bool m_lockstepWarned{false};                      // L/R output length mismatch logged
     QByteArray m_outAccum;                  // accumulate configured-rate stereo float output
     std::atomic<float> m_attenLimit{100.0f};
     std::atomic<float> m_postFilterBeta{0.0f};

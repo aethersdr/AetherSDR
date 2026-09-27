@@ -3299,7 +3299,8 @@ return `preserved`, the old L/R-ratio verdict; read `channelsIndependent` and
 `ok` instead (RN2 keeps `preserved`). `leftIndependenceMaxError` and
 `rightIndependenceMaxError` give the largest per-sample difference behind each
 verdict, or `-1` when the runs differ in length or produced no output. The NR2 run disables post2, whose per-instance random comfort noise
-would otherwise make the three runs differ. A method that removes the probe's
+would otherwise make the three runs differ, and says so with
+`post2Disabled: true`. A method that removes the probe's
 steady tones entirely (BNR does) reports `audible: false`.
 
 #### RN2 deterministic stereo probe

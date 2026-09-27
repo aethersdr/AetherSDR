@@ -3722,7 +3722,7 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                     {QStringLiteral("error"), QStringLiteral("NR2 plan creation failed")},
                 };
             }
-            return completedAutomationDspProbe(requestedMode, input, [this]() {
+            QJsonObject result = completedAutomationDspProbe(requestedMode, input, [this]() {
                 std::shared_ptr<SpectralNR> nr2 =
                     createNr2Filter(QStringLiteral("automation probe"));
                 if (!nr2) {
@@ -3745,6 +3745,10 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                     return output;
                 });
             });
+            // The measured chain differs from the live one by post2; say so
+            // in the result rather than only in the docs.
+            result[QStringLiteral("post2Disabled")] = true;
+            return result;
         }
 
         if (requestedMode == QLatin1String("RN2")) {

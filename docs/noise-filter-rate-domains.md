@@ -28,6 +28,13 @@ count per block so the image cannot drift. Nothing is mixed to mono, so a
 hard-panned diversity pair keeps one antenna per ear and a pan change is heard
 as soon as the audio carrying it arrives.
 
+The cost is one instance per channel: about twice the per-block work for every
+method, two DeepFilterNet3 models on the DSP thread for DFNR, and two NVIDIA
+AFX denoiser effects, each with its own TensorRT engine, for BNR, which roughly
+doubles BNR's VRAM and its enable time. BNR uses two single-stream effects
+rather than one effect with `NVAFX_PARAM_NUM_STREAMS = 2`, because the batched
+form did not isolate the streams.
+
 Each concurrently processed source must own its wrappers. Alternating main48
 and Kiwi24 through one instance is invalid even when the rates happen to match:
 algorithm history and queued samples belong to one source. Revoke admission,
@@ -36,10 +43,10 @@ state at a rate, session, source, or discontinuity boundary. Construction may
 load models and allocate; it belongs outside an active processing callback.
 
 `MacNRFilter::reset()` clears its complete state. DeepFilterNet's reset recreates
-the model. NVIDIA's existing reset only clears wrapper FIFOs/SRC, and
-Specbleach's existing reset clears its noise profile and stereo adapter while
-the library may retain overlap history. For a strict new epoch, recreate the
-complete NVIDIA/Specbleach object. A2 must apply this lifecycle rule to main,
+both channels' models. NVIDIA's reset clears wrapper FIFOs/SRC and calls
+`NvAFX_Reset` on both effects. Specbleach's reset clears each channel's noise
+profile while the library may retain overlap history. For a strict new epoch,
+recreate the complete NVIDIA/Specbleach object. A2 must apply this lifecycle rule to main,
 legacy Kiwi and each managed Kiwi source, preserving effect configuration.
 
 The tests distinguish evidence layers. `nr_rate_domain_test` compiles the real
