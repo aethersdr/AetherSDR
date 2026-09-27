@@ -217,7 +217,14 @@ public:
     {
         return m_autoGainConfig.maxOffsetDb;
     }
-    static constexpr int kAutoRfGainFloorMaxDb = 31;
+    // The deepest floor the operator may configure: the whole native span, so
+    // from any armable baseline (up to +48) the loop can be allowed to dig to
+    // the register floor and AtFloor really means "no gain left to give". It
+    // was 31, which was exactly the span from the old +19 arming ceiling to
+    // -12; with the ceiling at the top of the range that equality would have
+    // stranded up to 29 dB of attenuation the knob could not reach. The
+    // DEFAULT floor (Hl2AutoGainPolicy.h maxOffsetDb = 26) is unchanged.
+    static constexpr int kAutoRfGainFloorMaxDb = hl2::kLnaGainMaxDb - hl2::kLnaGainMinDb;
 
     // Which of Hl2AutoGainPolicy.h's configurations the loop runs.
     //

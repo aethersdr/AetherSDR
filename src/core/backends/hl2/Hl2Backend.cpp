@@ -7810,9 +7810,15 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // monotonically through -12..+48 dB -- #5354, #5943), and the ceiling is
     // now the top of the native range, so the obstacle is gone.
     //
-    // DEFAULT-ON IS STILL NOT DECIDED HERE. Flipping it is a separate change
-    // for #5535's default-on half. An operator who wants the loop today
-    // switches it on and that choice is persisted here.
+    // DEFAULT-ON IS STILL NOT DECIDED HERE for a profile that never expressed
+    // a wish. It IS the effective outcome for one that did: #5828 made the ask
+    // survive a refusal, so an operator who ticked the switch on a stock +20
+    // baseline (always refused before the ceiling moved) has autoEnabled=true
+    // on disk with the loop never having run. From the first connect after
+    // this change that profile arms. The direction is the safe one --
+    // attenuate-only, on clip evidence, with the AtFloor warning -- and it is
+    // what those operators asked for; flipping the default for everyone else
+    // remains #5535's separate change.
     m_autoRfGainWanted =
         rfGain.value(QStringLiteral("autoEnabled")).toBool(false);
     const QJsonObject lnaByBand =

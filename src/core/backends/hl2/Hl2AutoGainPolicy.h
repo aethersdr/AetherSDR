@@ -446,7 +446,12 @@ struct AutoGainConfig {
 //       were 32 dB low. Hl2GainSplit.h clamps to the register floor and
 //       reports the offset ACTUALLY applied, and the AtFloor branch below
 //       lights the "the front end needs attenuation ahead of the radio"
-//       warning rather than attacking against the clamp forever.
+//       warning rather than attacking against the clamp forever. That warning
+//       is only true when the operator's floor spans the gain actually
+//       available: kAutoRfGainFloorMaxDb is therefore the whole native span
+//       (60), so the knob can always be set deep enough to reach -12; at the
+//       default of 26 from a high baseline, AtFloor means "at the configured
+//       floor", not "at the register floor".
 //
 //   baseProbeIntervalMs = 30000
 //       The floor on it is the cost: one failed probe per interval is 100 ms of
