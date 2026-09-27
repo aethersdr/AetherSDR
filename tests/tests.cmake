@@ -1199,6 +1199,16 @@ target_include_directories(hl2_rxdsp_unmute_return_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_unmute_return_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_unmute_return_test COMMAND hl2_rxdsp_unmute_return_test)
 
+# #5578 / #5678 row 4.1: the RX bandpass length follows mode, passband and
+# notch count, so CW opens short and buys 8192 taps only when a notch or a
+# narrow filter needs them. Measures the magnitude response and onset latency
+# at each length through a real WdspChannel, then the policy and the live
+# switch through a real Hl2RxDsp; socket-free.
+add_executable(hl2_rxdsp_adaptive_taps_test tests/hl2_rxdsp_adaptive_taps_test.cpp)
+target_include_directories(hl2_rxdsp_adaptive_taps_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_adaptive_taps_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_adaptive_taps_test COMMAND hl2_rxdsp_adaptive_taps_test)
+
 # The host-side impulse noise blanker (WDSP ANB) ahead of the demodulator. The
 # HL2 runs no firmware DSP, so this stage is the only noise blanker the radio
 # has and there is no wire traffic to assert against — the test measures the
