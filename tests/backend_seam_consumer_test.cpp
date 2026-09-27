@@ -44,6 +44,14 @@ void check(bool ok, const QString& what)
 
 // QObject::isSignalConnected() is protected. Naming it through a derived class
 // yields a pointer-to-member of QObject that may be applied to any QObject.
+// WHAT A GREEN RUN DOES NOT PROVE. isSignalConnected() says that SOMETHING is
+// connected, not WHO. IRadioBackend's own constructor connects `connected`,
+// `disconnected` and `sliceRemoved` to itself for PCM session bookkeeping
+// (IRadioBackend.h), so those three pass here even on a family where nothing
+// above the seam listens -- on flex and sim, RadioModel wires `connected` and
+// `disconnected` in the same `if (!m_connection)` block as the two exemptions
+// below. The pin this test exists for still holds: a NEWLY declared outlet is
+// not self-connected, so a waterfallRowReady-shaped orphan is still caught.
 struct ConnectedPeek : QObject {
     static bool connected(const QObject* obj, const QMetaMethod& sig)
     {
