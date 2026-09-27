@@ -3292,9 +3292,9 @@ is bit-identical whatever the other side carries (`leftIndependent`,
 `rightIndependent`, `channelsIndependent`) and both sides stay `audible`.
 
 The RMS `input`/`output`, `ratioError`, and level-ratio fields are reported
-but not judged: independent, level-dependent suppression can treat the louder
-and quieter copies of one off-centre signal slightly differently, so a small
-L/R balance shift under heavy suppression is expected. These modes no longer
+but not judged: independent, level-dependent suppression treats the louder
+and quieter copies of one off-centre signal differently, so the L/R balance
+is not held (see the RX DSP ordering in `docs/architecture/audio-pipeline.md`). These modes no longer
 return `preserved`, the old L/R-ratio verdict; read `channelsIndependent` and
 `ok` instead (RN2 keeps `preserved`). `leftIndependenceMaxError` and
 `rightIndependenceMaxError` give the largest per-sample difference behind each

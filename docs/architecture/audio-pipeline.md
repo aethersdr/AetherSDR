@@ -114,7 +114,16 @@ When receiving, the current ordering is:
    and R as two independent channels: each side has its own algorithm state
    and, where the method resamples, its own SRC pair. Nothing is averaged to
    mono, so each side keeps its own content: a hard-panned diversity pair keeps
-   one antenna per ear, and a pan change is heard immediately.
+   one antenna per ear, and a pan change is heard as soon as the audio carrying
+   it arrives. This is a deliberate trade. A signal present in both channels,
+   whether an off-centre slice or a centred one in the radio's mixed stereo
+   stream, is suppressed separately on each side, so its L/R balance is not
+   held. The quieter copy has the lower SNR and is usually suppressed harder:
+   measured on synthetic tones, the shift is under about 1.5 dB with a strong
+   signal and grows to several dB as the quieter side nears the noise floor.
+   DFNR and BNR can remove a quiet steady carrier on one side entirely. Keeping
+   each side's own content and an immediate pan is preferred over the shared
+   mask and mono envelope that used to hold the balance.
 3. `writeAudio()` runs the client RX strip in this fixed order:
    `ClientEqRx`, `ClientGateRx`, `ClientCompRx`, `ClientDeEssRx`,
    `ClientTubeRx`, `ClientPuduRx`.
@@ -860,7 +869,7 @@ Radio-provided taps:
 | RX BNR | `NvidiaAfxFilter::process()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz -> 24 kHz, or native 48 kHz | 2 | One AFX denoiser effect per channel |
 | RX client strip | `AudioEngine::writeAudio()` | float32 stereo | float32 stereo | 24 kHz | 2 | EQ, Gate, Comp, DeEss, Tube, PUDU |
 | RX output upsample | `AudioEngine::resampleStereo()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz | 2 | Uses separate L/R resamplers to preserve pan |
-| RX output gain stages | `AudioEngine::writeAudio()` / `processBnr()` | float32 stereo | float32 stereo | 24 or 48 kHz | 2 | Non-BNR path applies optional RX boost and output trim; BNR applies output trim only; post-chain scope |
+| RX output gain stages | `AudioEngine::processMixedRxAudioData()` | float32 stereo | float32 stereo | 24 or 48 kHz | 2 | Optional RX boost, then output trim, whichever NR method ran; post-chain scope |
 | Speaker write | RX drain timer in `AudioEngine::startRxStream()` | float32 stereo buffers | `QAudioSink` writes | 24 or 48 kHz | 2 | Caps buffers and mixes RADE decoded speech |
 | CW sidetone | `CwSidetoneGenerator` | key state | float32 stereo | normally 48 kHz | 2 | Local-only sidetone sink |
 | Quindar local monitor | `QuindarLocalSink` | tone state | float32 stereo | 48 kHz | 2 | Local-only Quindar monitor sink |

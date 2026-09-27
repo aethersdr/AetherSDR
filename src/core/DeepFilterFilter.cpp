@@ -330,6 +330,10 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcmStereo)
                 outputFrames,
                 static_cast<int>(m_channelOutput[channel].size() / sizeof(float)));
         }
+        // Identical resamplers fed identical counts stay in lockstep, so the
+        // min above never drops a sample. A mismatch would be a silent,
+        // cumulative L/R skew; make it loud in debug builds.
+        Q_ASSERT(m_channelOutput[0].size() == m_channelOutput[1].size());
 
         const auto* left = reinterpret_cast<const float*>(m_channelOutput[0].constData());
         const auto* right = reinterpret_cast<const float*>(m_channelOutput[1].constData());

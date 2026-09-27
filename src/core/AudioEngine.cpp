@@ -3589,8 +3589,8 @@ double automationDspProbeChannelMaxError(const QByteArray& a, const QByteArray& 
 // Every client NR method denoises L and R independently. The verdict is that
 // contract: each side's output is bit-identical whatever the other side
 // carries, and both sides stay audible. The L/R balance is reported but not
-// judged: independent level-dependent suppression may treat the louder and
-// quieter copies of one off-centre signal slightly differently.
+// judged: independent level-dependent suppression treats the louder and
+// quieter copies of one off-centre signal differently, so balance is not held.
 QJsonObject completedAutomationDspProbe(const QString& mode,
                                         const QByteArray& input,
                                         const AutomationDspFactory& makeProcess)
