@@ -80,6 +80,14 @@ declares 48 kHz, stereo layout and actual frame count. Monitor mute, gain and
 balance affect the speaker mix after the independent slice tap. Queued stale PCM
 and observations remain fenced by capture/session/receiver lifetime.
 
+Accepted 48 kHz speaker PCM also drives RX device negotiation: prefer 48 kHz,
+then 44.1 kHz, then 24 kHz through the shared stereo-preserving policy. A 24 kHz
+fallback is usable but cannot retain 15 kHz audio, and the actual device rate
+is reported independently of the producer. Deferred requests check the current
+producer lease and sink generation. Same-rate epochs and brief retirement gaps
+do not reopen the sink. Legacy 24 kHz policy and fixed CW/Quindar/RADE contracts
+remain unchanged; speaker-only changes retain producer queues and effects.
+
 ## Qualification evidence and limits
 
 `wdsp_wbfm_test` uses analytical continuous-FM IQ (75 kHz peak deviation scale,
@@ -111,6 +119,12 @@ Injected-device model/runtime tests verify accepted controls, persistence,
 capture guards, low-rate reconnect and stale status. `wfm_controls_test` verifies
 capability gating, confirmed selection, keyboard behavior and accessible state.
 No new test binds a socket or represents third-party firmware.
+
+The no-device `audio_engine_rates_test` admits real typed PCM, dispatches the
+queued speaker-rate change, and checks actual final output at 48/44.1 kHz and
+the 24 kHz fallback. It checks 15 kHz content, independent channels, stale
+requests, retirement gaps and retained auxiliary queues. The injected boundary
+is device opening; physical sink behavior still requires live validation.
 
 The opt-in `AETHER_WFM_BENCHMARK=1` fixture additionally runs production capture
 DDC, the 65,536-bin display FFT at 25 FPS, extraction, WDSP, paired taps and mixer.

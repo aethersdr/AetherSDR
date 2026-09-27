@@ -2177,8 +2177,10 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
             m_rxZombieTickCount = 0;
             qCWarning(lcAudio) << "AudioEngine: sink appears zombie (bytesFree stuck at 0 for"
                                << kZombieTickThreshold * 10 << "ms), restarting RX (#1361)";
-            QMetaObject::invokeMethod(this, [this]() {
-                if (!m_audioSink) return;
+            QMetaObject::invokeMethod(this, [this, generation = m_rxSinkGeneration]() {
+                if (!m_audioSink || generation != m_rxSinkGeneration) {
+                    return;
+                }
                 stopRxStream();
                 startRxStream();
             }, Qt::QueuedConnection);
@@ -2206,8 +2208,10 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
         qCWarning(lcAudio) << "AudioEngine: no audio data received for"
                            << m_lastAudioFeedTime.elapsed() << "ms, restarting RX (#1411)";
         m_lastAudioFeedTime.start();  // prevent repeated rapid restarts
-        QMetaObject::invokeMethod(this, [this]() {
-            if (!m_audioSink) return;
+        QMetaObject::invokeMethod(this, [this, generation = m_rxSinkGeneration]() {
+            if (!m_audioSink || generation != m_rxSinkGeneration) {
+                return;
+            }
             stopRxStream();
             startRxStream();
         }, Qt::QueuedConnection);
@@ -2748,8 +2752,10 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
                 qCWarning(lcAudio) << "AudioEngine: sink appears stale (processedUSecs stuck at"
                                    << processed << "for" << kStaleTickThreshold * 10
                                    << "ms), restarting RX (#1569)";
-                QMetaObject::invokeMethod(this, [this]() {
-                    if (!m_audioSink) return;
+                QMetaObject::invokeMethod(this, [this, generation = m_rxSinkGeneration]() {
+                    if (!m_audioSink || generation != m_rxSinkGeneration) {
+                        return;
+                    }
                     stopRxStream();
                     startRxStream();
                 }, Qt::QueuedConnection);
@@ -4126,6 +4132,35 @@ bool AudioEngine::startRxStream()
     m_lastProcessedUSecs = 0;
     m_lastAudioFeedTime.start();  // initialize liveness watchdog (#1411)
 
+    const int producerRate = mainPcmSourceOwnsDisplay()
+        ? m_rxProducerRate.load() : DEFAULT_SAMPLE_RATE;
+    if (!openRxSink(producerRate)) {
+        return false;
+    }
+    // Open the dedicated sidetone + Quindar local sinks alongside RX. Cheap when
+    // disabled (timers write silence to a tiny primed buffer). NOTE: the old
+    // Windows branch returned before startQuindarLocalSink(), so the Quindar
+    // local monitor never opened on Windows — unifying the path fixes that.
+    startSidetoneStream();
+    startQuindarLocalSink();
+    emit rxStarted();
+    return true;
+}
+
+bool AudioEngine::openRxSink(int producerRate)
+{
+    ++m_rxSinkGeneration;
+    m_rxZombieTickCount = 0;
+    m_rxStaleTickCount = 0;
+    m_lastProcessedUSecs = 0;
+    const bool opened = m_rxSinkOpener
+        ? m_rxSinkOpener(producerRate) : openRxSinkDevice(producerRate);
+    m_rxSinkProducerRate = opened ? producerRate : 0;
+    return opened;
+}
+
+bool AudioEngine::openRxSinkDevice(int producerRate)
+{
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
     bool rxFallbackOccurred = false;
     QStringList rxFallbackReasons;
@@ -4202,14 +4237,15 @@ bool AudioEngine::startRxStream()
     // Negotiate the output format via the consolidated factory (#3306). RX audio
     // is written as Float PCM, so we walk only the Float rungs of the ladder —
     // but the ladder supplies, in ONE place with no per-OS #ifdef: the preferred
-    // rate (Windows/macOS 48k to dodge the WASAPI 24k resampler artifacts #2120
-    // and keep macOS A2DP devices off the HFP/telephony route; Linux native 24k),
+    // rate (native 48k producers first; otherwise the existing per-OS 24k
+    // producer policy, including Windows/macOS 48k),
     // the universal 44.1 kHz fallback (#3385), and the device preferredFormat
     // catch-all. Each rung is tried with a real start(), so reliable backends and
     // WASAPI's probe-at-open are handled identically.
     const QList<QAudioFormat> rxLadder = AudioDeviceNegotiator::formatLadder(
         dev, AudioFormatNegotiator::Direction::Output,
-        AudioFormatNegotiator::ResamplerPolicy::PreservePan);
+        AudioFormatNegotiator::ResamplerPolicy::PreservePan,
+        AudioFormatNegotiator::hostTargetOs(), producerRate);
 
     m_audioSink = nullptr;
     m_audioDevice = nullptr;
@@ -4276,8 +4312,8 @@ bool AudioEngine::startRxStream()
     // (#1149 / #1303). IdleState restart removed — it looped on Windows (#1405);
     // the zombie-sink watchdog handles stale WASAPI sessions after idle/sleep.
     connect(m_audioSink, &QAudioSink::stateChanged, this,
-            [this](QAudio::State state) {
-        if (state != QAudio::StoppedState) {
+            [this, generation = m_rxSinkGeneration](QAudio::State state) {
+        if (generation != m_rxSinkGeneration || state != QAudio::StoppedState) {
             return;
         }
         m_audioDevice = nullptr;
@@ -4290,8 +4326,10 @@ bool AudioEngine::startRxStream()
                                << error;
             return;
         }
-        QMetaObject::invokeMethod(this, [this]() {
-            if (!m_audioSink) return;
+        QMetaObject::invokeMethod(this, [this, generation]() {
+            if (!m_audioSink || generation != m_rxSinkGeneration) {
+                return;
+            }
             qCWarning(lcAudio) << "AudioEngine: QAudioSink stopped unexpectedly, restarting RX (#1303)";
             stopRxStream();
             startRxStream();
@@ -4309,14 +4347,72 @@ bool AudioEngine::startRxStream()
     summary.fallbackOccurred = rxFallbackOccurred;
     summary.fallbackReason = rxFallbackReasons.join(QStringLiteral("; "));
     AudioSummaryLogger::logRxSink(summary);
-    // Open the dedicated sidetone + Quindar local sinks alongside RX. Cheap when
-    // disabled (timers write silence to a tiny primed buffer). NOTE: the old
-    // Windows branch returned before startQuindarLocalSink(), so the Quindar
-    // local monitor never opened on Windows — unifying the path fixes that.
-    startSidetoneStream();
-    startQuindarLocalSink();
-    emit rxStarted();
     return true;
+}
+
+void AudioEngine::requestRxSinkRate()
+{
+    // Device lifecycle runs only on the existing AudioEngine owner thread.
+    // Retirement can also be noticed by an auxiliary ingress caller.
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, &AudioEngine::requestRxSinkRate,
+                                  Qt::QueuedConnection);
+        return;
+    }
+    if (!m_audioDevice || m_rxSinkProducerRate == 0) {
+        return; // receiving PCM must not start a stopped speaker
+    }
+    const int producerRate = m_rxProducerRate.load();
+    if (producerRate == m_rxSinkProducerRate) {
+        m_pendingRxSinkRate.reset();
+        return;
+    }
+    const QList<AudioFormatNegotiator::FormatCandidate> ladder =
+        AudioFormatNegotiator::buildLadder(
+            AudioFormatNegotiator::hostTargetOs(),
+            AudioFormatNegotiator::Direction::Output, {},
+            AudioFormatNegotiator::ResamplerPolicy::PreservePan, producerRate);
+    if (!ladder.isEmpty() && ladder.first().rate == m_rxOutputRate.load()) {
+        // Windows/macOS may already have opened the preferred 48 kHz sink
+        // before the first native48 frame arrived. Preserve that live sink.
+        m_rxSinkProducerRate = producerRate;
+        m_pendingRxSinkRate.reset();
+        return;
+    }
+    RxSinkRateRequest request{producerRate, m_rxSinkGeneration, std::nullopt};
+    if (mainPcmSourceOwnsDisplay()) {
+        request.lease = m_mainPcmFrame->epochLease();
+    }
+    m_pendingRxSinkRate = std::move(request);
+    if (!m_rxSinkRateChangeQueued) {
+        m_rxSinkRateChangeQueued = true;
+        QMetaObject::invokeMethod(this, &AudioEngine::applyPendingRxSinkRate,
+                                  Qt::QueuedConnection);
+    }
+}
+
+void AudioEngine::applyPendingRxSinkRate()
+{
+    m_rxSinkRateChangeQueued = false;
+    const std::optional<RxSinkRateRequest> pending = std::move(m_pendingRxSinkRate);
+    m_pendingRxSinkRate.reset();
+    if (!pending || !m_audioDevice || m_rxSinkProducerRate == 0
+        || pending->sinkGeneration != m_rxSinkGeneration
+        || pending->producerRate != m_rxProducerRate.load()) {
+        return;
+    }
+    if (pending->lease) {
+        if (!pending->lease->current() || !mainPcmSourceOwnsDisplay()
+            || pending->lease->stream() != m_mainPcmFrame->stream()) {
+            return;
+        }
+    } else if (mainPcmSourceOwnsDisplay() || pending->producerRate != DEFAULT_SAMPLE_RATE) {
+        return;
+    }
+    // Only the speaker changes format. Dedicated CW/Quindar sinks and their
+    // timers remain live; setRxDeviceRate expires old device-domain queues.
+    closeRxSink();
+    openRxSink(pending->producerRate);
 }
 
 void AudioEngine::stopRxStream()
@@ -4350,22 +4446,32 @@ void AudioEngine::stopRxStream()
     m_rxBufferSampleRate.store(DEFAULT_SAMPLE_RATE);
     m_rxPlaybackQueuedMs.store(0, std::memory_order_relaxed);
 
+    closeRxSink();
+    emit rxStopped();
+}
+
+void AudioEngine::closeRxSink()
+{
+    ++m_rxSinkGeneration;
+    m_pendingRxSinkRate.reset();
+    m_rxSinkProducerRate = 0;
+    m_audioDevice = nullptr;
+    m_rxPlaybackQueuedMs.store(0, std::memory_order_relaxed);
     if (m_audioSink) {
         // Null out m_audioSink BEFORE stopping so that the stateChanged
-        // handler's "if (!m_audioSink) return" guard prevents a cascading
+        // handler's generation/sink guard prevents a cascading
         // restart loop.  Without this, stop() emits stateChanged(StoppedState)
         // synchronously while m_audioSink is still non-null, causing the
         // handler to queue another stopRx+startRx — which repeats
         // indefinitely and prevents audio from ever playing. (#1441)
         auto* sink = m_audioSink;
         m_audioSink   = nullptr;
-        m_audioDevice = nullptr;
         // Guard: same stale-device-handle crash can occur on the RX side (#1059).
-        if (sink->state() != QAudio::StoppedState)
+        if (sink->state() != QAudio::StoppedState) {
             sink->stop();
+        }
         delete sink;
     }
-    emit rxStopped();
 }
 
 void AudioEngine::setRxVolume(float v)
@@ -4840,44 +4946,35 @@ bool AudioEngine::retireInvalidPcmSources()
         flushRxDevice();
         updateRxBufferStats();
     }
+    // A revoked epoch can be a brief filter/park transition. Keep the sink
+    // policy until an accepted replacement or actual legacy PCM adopts a rate.
     return retired;
 }
 
 void AudioEngine::setRxDeviceRate(int rate)
 {
-    // Called only after successful output negotiation. The producer rate is
-    // unchanged; old device-format bytes and every converter history expire.
-    //
-    // The optional NR chain is deliberately NOT rebuilt here. startRxStream()
-    // reaches this on every sink open — including the #1361 zombie-sink and
-    // #1411 liveness watchdogs, which fire on real hardware and run on the GUI
-    // thread — and those filters belong to the producer domain, which this call
-    // does not touch. Rebuilding them anyway put a model load on each of those
-    // recovery paths, freezing the UI at the exact moment the user is already
-    // hearing a glitch.
+    // Only already-converted bytes and converter histories belong to the old
+    // device format. Raw queues, packet tails and effect/NR histories remain
+    // in each producer's domain and survive a speaker-only renegotiation.
+    // Full start/stop and source retirement reset their own producer state.
     std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     m_rxOutputRate.store(rate);
-    resetMainPcmState(m_rxProducerRate.load(), /*rebuildDsp=*/false);
+    m_rxBufferSampleRate.store(rate);
+    m_rxOutputBuffer.clear();
+    m_rxResampler.reset();
+    m_rxResamplerR.reset();
     m_radeRxBuffer.clear();
     m_radeRxResampler.reset();
-    m_kiwiSdrRxBuffer.clear();
-    m_kiwiSdrRxPackets.clear();
     m_kiwiSdrOutputBuffer.clear();
     m_kiwiSdrRxResampler.reset();
     m_kiwiSdrRxResamplerR.reset();
-    resetLegacyKiwiDspState();
     for (const auto& source : m_externalKiwiSources) {
         if (!source) {
             continue;
         }
-        source->rxBuffer.clear();
-        source->rxPackets.clear();
         source->outputBuffer.clear();
-        source->nr2Output.clear();
         source->rxResampler.reset();
         source->rxResamplerR.reset();
-        resetExternalKiwiDspState(*source);
-        source->prebuffering = true;
     }
     updateRxBufferStats();
 }
@@ -4904,6 +5001,9 @@ void AudioEngine::feedPcmFrame(const PcmFrame& frame)
         flushRxDevice();
     }
     m_mainPcmFrame = frame;
+    if (transition) {
+        requestRxSinkRate();
+    }
     const int channels = frame.stream().format.channels();
     QByteArray pcm(frame.frameCount() * 2 * sizeof(float), Qt::Uninitialized);
     auto* output = reinterpret_cast<float*>(pcm.data());
@@ -4985,6 +5085,9 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
     }
     if (m_rxProducerRate.load() != DEFAULT_SAMPLE_RATE) {
         resetMainPcmState(DEFAULT_SAMPLE_RATE);
+    }
+    if (pcm.size() >= 2 * static_cast<qsizetype>(sizeof(float))) {
+        requestRxSinkRate();
     }
     captureAutomationAudio(QStringLiteral("raw"), QStringLiteral("flex"),
                            QString(), pcm, DEFAULT_SAMPLE_RATE, 2);

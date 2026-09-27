@@ -16,9 +16,16 @@ namespace {
 // 44.1k rung and the device-preferred rung are appended by buildLadder() so
 // every sink gets the SAME complete fallback set (no more "Quindar has no
 // fallback / RX never tries 44.1k" divergence — #3306, #3385).
-QList<int> primaryRateOrder(TargetOs os, Direction dir, int internalRate)
+QList<int> primaryRateOrder(TargetOs os, Direction dir,
+                            ResamplerPolicy policy, int internalRate)
 {
     if (dir == Direction::Output) {
+        if (internalRate == 48000 && policy == ResamplerPolicy::PreservePan) {
+            // Preserve a native 48 kHz stereo producer's bandwidth when possible.
+            // Keep 24 kHz as an explicit last fallback: an advertised preferred
+            // 48 kHz format does not guarantee that opening it will succeed.
+            return {48000, 44100, 24000};
+        }
         switch (os) {
         // Windows: force 48k — WASAPI's shared-mode resampler adds artifacts at
         // 24k that become audible once radio-side NR removes the noise floor;
@@ -29,8 +36,8 @@ QList<int> primaryRateOrder(TargetOs os, Direction dir, int internalRate)
         case TargetOs::MacOS:   return {48000, internalRate};
         // Linux: native 24k is fine (no WASAPI resampler in the path) — avoid an
         // unnecessary upsample. Deliberate, documented divergence from Win/Mac.
-        // RX is still canonically 24 kHz, so this stays 24k-first even though
-        // the Linux *input* ladder now leads with 48k for the TX voice strip.
+        // Callers using the default 24 kHz producer retain this order even
+        // though the Linux input ladder leads with 48k for the TX voice strip.
         case TargetOs::Linux:   return {internalRate, 48000};
         }
     } else { // Input (mic / TX capture)
@@ -233,7 +240,7 @@ QList<FormatCandidate> buildLadder(TargetOs os,
     }
 
     // Main per-OS rate order × format order.
-    const QList<int> rates = primaryRateOrder(os, dir, internalRate);
+    const QList<int> rates = primaryRateOrder(os, dir, policy, internalRate);
     for (int rate : rates) {
         for (SampleFmt fmt : fmts) {
             QString reason = (rate == rates.first())

@@ -1102,6 +1102,26 @@ private:
     // RX
     QAudioSink*   m_audioSink{nullptr};
     QPointer<QIODevice> m_audioDevice;   // sink-owned device, may vanish on hot-unplug
+    // A negotiated fallback still satisfies one producer-domain attempt. Keep
+    // this separate from m_rxOutputRate so a 48 -> 24 fallback cannot reopen on
+    // every packet or same-rate epoch. Zero means no managed speaker is open.
+    int m_rxSinkProducerRate{0};
+    quint64 m_rxSinkGeneration{0};
+    struct RxSinkRateRequest {
+        int producerRate{DEFAULT_SAMPLE_RATE};
+        quint64 sinkGeneration{0};
+        std::optional<PcmEpochLease> lease;
+    };
+    std::optional<RxSinkRateRequest> m_pendingRxSinkRate;
+    bool m_rxSinkRateChangeQueued{false};
+    // The existing friend fixture injects just the external device-open
+    // boundary. An empty callback uses the real QAudioSink opener below.
+    std::function<bool(int)> m_rxSinkOpener;
+    bool openRxSink(int producerRate);
+    bool openRxSinkDevice(int producerRate);
+    void closeRxSink();
+    void requestRxSinkRate();
+    void applyPendingRxSinkRate();
 
     // Dedicated low-latency sink for the local CW sidetone — kept separate
     // from the RX sink so the RX path keeps its 100 ms jitter cushion.
