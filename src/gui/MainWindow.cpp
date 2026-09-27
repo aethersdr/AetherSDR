@@ -6990,12 +6990,23 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!call.isEmpty() && !m_rbnClient->isConnected())
                     QMetaObject::invokeMethod(m_rbnClient, [=, this] { m_rbnClient->connectToCluster(host, rPort, call); });
             }
-            // Auto-start WSJT-X listener if enabled
-            if (cs.value("WsjtxAutoStart", "False").toString() == "True") {
-                QString wAddr = cs.value("WsjtxAddress", "224.0.0.1").toString();
-                quint16 wPort = static_cast<quint16>(cs.value("WsjtxPort", 2237).toInt());
-                if (!m_wsjtxClient->isListening())
-                    QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(wAddr, wPort); });
+            // Auto-start WSJT-X listener if enabled for spots, or if any pan has
+            // the Rx/Tx overlay enabled (#4526). Per-pan key: bare
+            // "WsjtxShowFreqOverlay" for pan 0, "WsjtxShowFreqOverlay_N" for pan N.
+            {
+                bool needListener = cs.value("WsjtxAutoStart", "False").toString() == "True";
+                if (!needListener && cs.value("WsjtxShowFreqOverlay", "False").toString() == "True")
+                    needListener = true;
+                for (int i = 1; i < 8 && !needListener; ++i) {
+                    if (cs.value(QString("WsjtxShowFreqOverlay_%1").arg(i), "False").toString() == "True")
+                        needListener = true;
+                }
+                if (needListener) {
+                    QString wAddr = cs.value("WsjtxAddress", "224.0.0.1").toString();
+                    quint16 wPort = static_cast<quint16>(cs.value("WsjtxPort", 2237).toInt());
+                    if (!m_wsjtxClient->isListening())
+                        QMetaObject::invokeMethod(m_wsjtxClient, [=, this] { m_wsjtxClient->startListening(wAddr, wPort); });
+                }
             }
             // Auto-start POTA polling if enabled
             if (cs.value("PotaAutoStart", "False").toString() == "True") {
