@@ -1455,8 +1455,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         // piHPSDR's local/PC keyer likewise transmits host-generated IQ under
         // MOX. Five milliseconds is long enough to suppress key clicks while
         // staying short against a 40 ms dit at 30 WPM. A raised cosine has zero
-        // slope at both ends, unlike a linear edge.
-        constexpr double kCwCarrierAmplitude = 0.5;
+        // slope at both ends, unlike a linear edge. The plateau is full scale,
+        // matching TUNE; the TX drive register remains the power control.
         constexpr int kCwRampSamples = 5 * kEp2AudioRateHz / 1000;
         constexpr double kRampStep = 1.0 / static_cast<double>(kCwRampSamples);
         constexpr double kPi = 3.14159265358979323846;
@@ -1468,7 +1468,7 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
                 m_cwEnvelope = std::max(0.0, m_cwEnvelope - kRampStep);
             }
             const double shaped = 0.5 - 0.5 * std::cos(kPi * m_cwEnvelope);
-            sample = {static_cast<float>(kCwCarrierAmplitude * shaped), 0.0f};
+            sample = {static_cast<float>(kHl2CarrierAmplitude * shaped), 0.0f};
         }
         ep2WriteTxIq(pkt, block);
     } else if (keyed && m_toneAmp > 0.0) {

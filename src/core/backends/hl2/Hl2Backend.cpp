@@ -5083,7 +5083,7 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
             applyDrive(tunePowerPercent);
             m_rfDriveOwed = true;
         }
-        setTxTestTone(0.0, kTuneCarrierAmplitude, operation);
+        setTxTestTone(0.0, kHl2CarrierAmplitude, operation);
         m_toneFromTune = true;   // set AFTER: setTxTestTone clears the flag
         setKeying(true, operation, completion);
     } else {

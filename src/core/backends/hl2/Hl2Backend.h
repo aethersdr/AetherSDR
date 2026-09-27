@@ -1057,9 +1057,6 @@ private:
     // what the transmitter runs. setTxFilter() is the one push that bypasses this;
     // see the definition.
     void pushTxPassband(const QString& mode);
-    // Tune-carrier amplitude, full scale. Radiated power is set by the TX drive
-    // register; scaling here too would make the power control non-linear.
-    static constexpr double kTuneCarrierAmplitude = 1.0;
     int m_lastFwdRaw = -1;
 
     // Meter ballistics: the S-meter's rate gate and EMA are SMeterSmoother's
