@@ -51,6 +51,7 @@
 #include "models/RadioStatusOwnership.h"
 #include "models/Nr2SettingsModel.h"
 #include "PanZoomModeGate.h"
+#include "ClientFftSmoothingGate.h"
 #include "SpectrumWidget.h"
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -5405,7 +5406,8 @@ void MainWindow::buildUI()
         applet->spectrumWidget()->setPanEdgeTaperEnabled(
             connected && caps.hasDdcPanEdgeRolloff);
         applet->spectrumWidget()->setClientFftSmoothingEnabled(
-            !(connected && caps.backendPanAveraging.has_value()));
+            AetherSDR::clientFftSmoothingEnabled(
+                connected, caps.backendPanAveraging.has_value()));
     });
 
     // Band stack panel signal wiring
@@ -6469,13 +6471,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
-            connected && m_radioModel.backendCapabilities().backendPanAveraging.has_value();
+            m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
                 applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
-                    !backendAverages);
+                    AetherSDR::clientFftSmoothingEnabled(connected, backendAverages));
             }
         }
     }

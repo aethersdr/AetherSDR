@@ -242,6 +242,32 @@ public:
     // holds across a sample-rate change without needing to be recomputed.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
 
+    // Panadapter averaging: the operator's FFT AVG as a time constant in ms
+    // (0 = none), and the weighted toggle as the averaging DOMAIN (true =
+    // log-recursive, false = power). See Hl2Spectrum::setAverageTimeMs() and
+    // setLogAverage() for what each means and why it is a time.
+    //
+    // HELD HERE, NOT IN Config, and re-applied in installChannel(). Config is
+    // assigned whole by configure(), and every zoom constructs a fresh
+    // Hl2Spectrum; a setting kept in either would silently fall back to "no
+    // averaging" on the first span change — the same reason the noise blanker
+    // lives in m_nbOn rather than in Config.
+    Q_INVOKABLE void setSpectrumAverageMs(int ms);
+    Q_INVOKABLE void setSpectrumLogAverage(bool on);
+    // The NCO moved: forget the running average so bins integrated at the old
+    // frequency do not ghost across the new one. Not a transport gap — see
+    // Hl2Spectrum::reset() for why the two are different answers.
+    Q_INVOKABLE void dropSpectrumAverage();
+    // What the installed spectrum is actually running, for tests. DSP thread.
+    [[nodiscard]] double spectrumAverageMsApplied() const noexcept
+    {
+        return m_spectrum ? m_spectrum->averageTimeMs() : -1.0;
+    }
+    [[nodiscard]] bool spectrumLogAverageApplied() const noexcept
+    {
+        return m_spectrum && m_spectrum->logAverage();
+    }
+
     // Impulse noise blanker, on the raw IQ ahead of the demodulator.
     //
     // THE ONLY NOISE BLANKER THIS RADIO HAS. The HL2 ships raw IQ and runs no
@@ -645,6 +671,9 @@ private:
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
+    // The operator's panadapter averaging; see setSpectrumAverageMs().
+    int m_spectrumAverageMs = 0;
+    bool m_spectrumLogAverage = false;
     // Noise-blanker state, kept out of m_config so configure() cannot clear it.
     // m_nbOn/m_nbLevel are the REQUEST; m_nbApplied* are what the WDSP stage
     // took. They diverge exactly when something went wrong, which is the whole

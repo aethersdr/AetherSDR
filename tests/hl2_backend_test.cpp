@@ -31,6 +31,7 @@
 #include "TestDspBuildWait.h"
 
 #include "core/backends/hl2/Hl2Backend.h"
+#include "gui/ClientFftSmoothingGate.h"
 
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
@@ -189,6 +190,18 @@ int main(int argc, char** argv)
     // set, so it is an interactive run and may transmit.
     check(caps.canTransmit, "canTransmit is true for an interactive run");
     check(caps.maxSlices == 1, "one slice");
+    // RFC #5782 §8: the HL2 averages its own panadapter (Hl2Spectrum, per
+    // FFT AVG), so it must engage the record that turns SpectrumWidget's
+    // SMOOTH_ALPHA EMA off, or the two averages stack.
+    check(caps.backendPanAveraging.has_value()
+              && caps.backendPanAveraging->msPerAverageStep == Hl2Backend::kMsPerAverageStep
+              && Hl2Backend::kMsPerAverageStep == 10,
+          "backendPanAveraging engaged at 10 ms per FFT AVG step");
+    check(!AetherSDR::clientFftSmoothingEnabled(true, caps.backendPanAveraging.has_value()),
+          "connected to an HL2, the widget's own EMA is skipped");
+    check(AetherSDR::clientFftSmoothingEnabled(false, caps.backendPanAveraging.has_value())
+              && AetherSDR::clientFftSmoothingEnabled(true, false),
+          "control: disconnected, or a backend that does not average, keeps the EMA");
     check(caps.sampleRatesHz.contains(48000) && caps.sampleRatesHz.contains(384000), "sample rates");
     // "hl2" since manual frequency calibration landed (freqcal.get / .set /
     // .set_live). This field is the handshake a client pre-checks before it

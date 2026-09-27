@@ -2016,9 +2016,14 @@ private:
     //   nominal, since Hl2Spectrum's Hanning window weights the ends down and
     //   the effective span is shorter still -- and at rate 10
     //   localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 -- 0.66 %,
-    //   an upper bound. Production depth is one window: Hl2Spectrum::setAverageFrames
-    //   defaults to 1 and only hl2_spectrum_test calls it (#5833), so m_avgPower
-    //   is present and unwired and the emitted frame is still unaveraged. m_acc
+    //   an upper bound -- at FFT AVG 0. Above 0 the frame is Hl2Spectrum's
+    //   time-constant average (Hl2Backend::setPanAverage, 10 ms per step), so
+    //   the row that lands here integrates the displayed frames of roughly the
+    //   last FFT AVG x 10 ms, exponentially weighted: a burst any pan frame
+    //   caught stays in the history, decaying, instead of being lost unless its
+    //   own frame hits the gate. That window is the operator's AVERAGING time,
+    //   not localRowIntervalMs, and it still integrates displayed frames only,
+    //   so a burst that falls between PAN frames is still unseen. m_acc
     //   holds only the partial IQ window the NEXT frame completes from, which is
     //   why HERMES 15.2.1 says the accumulator keeps filling on a skipped
     //   interval. The frames between rows never reach the waterfall at all:

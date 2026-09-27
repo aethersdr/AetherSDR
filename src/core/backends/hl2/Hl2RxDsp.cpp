@@ -185,7 +185,9 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(const Config& config,
     // process-wide lock OpenChannel above runs under — so building this on a
     // background thread is serialised against every other FFTW planner user in
     // the process, including a concurrent connect on the I/O thread.
-    result.spectrum = std::make_unique<Hl2Spectrum>(config.fftSize);
+    // The IQ rate is what turns the averaging time into a blend weight.
+    result.spectrum = std::make_unique<Hl2Spectrum>(
+        config.fftSize, static_cast<double>(config.inputSampleRateHz));
     result.channel = std::move(channel);
     return result;
 }
@@ -265,6 +267,13 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     }
     m_channel = std::move(result.channel);
     m_spectrum = std::move(result.spectrum);
+    // The operator's averaging, which the fresh spectrum does not know. A new
+    // span is new geometry, so the average starts over (it was constructed
+    // empty) — but at the operator's time constant, not at none.
+    if (m_spectrum) {
+        m_spectrum->setAverageTimeMs(static_cast<double>(m_spectrumAverageMs));
+        m_spectrum->setLogAverage(m_spectrumLogAverage);
+    }
 
     m_iqBuffer.clear();
     m_i.assign(static_cast<std::size_t>(config.dspBlockSize), 0.0f);
@@ -516,6 +525,29 @@ void Hl2RxDsp::setSpectrumRateFps(int fps)
     // immediate extra one — an operator dragging the FPS slider would
     // otherwise fire a frame per drag step, which is exactly the burst this
     // cap exists to prevent.
+}
+
+void Hl2RxDsp::setSpectrumAverageMs(int ms)
+{
+    m_spectrumAverageMs = ms > 0 ? ms : 0;
+    // Not gated on canPushToChannel(): the spectrum is ours, not WDSP's, and
+    // touching it takes no WDSP lock. A rebuild in flight will re-apply this
+    // from the member at the swap anyway.
+    if (m_spectrum)
+        m_spectrum->setAverageTimeMs(static_cast<double>(m_spectrumAverageMs));
+}
+
+void Hl2RxDsp::setSpectrumLogAverage(bool on)
+{
+    m_spectrumLogAverage = on;
+    if (m_spectrum)
+        m_spectrum->setLogAverage(on);
+}
+
+void Hl2RxDsp::dropSpectrumAverage()
+{
+    if (m_spectrum)
+        m_spectrum->dropAverage();
 }
 
 void Hl2RxDsp::setShift(double shiftHz)

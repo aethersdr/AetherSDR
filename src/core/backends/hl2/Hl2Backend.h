@@ -145,6 +145,31 @@ private:
 
 public:
     void setPanFrameRate(const QString& panId, int fps) override;
+    // The operator's FFT AVG (0..100) and weighted toggle. This backend owns
+    // the panadapter's averaging (RFC #5782's ruling: the host's backend layer
+    // averages), so both land in the receiver's Hl2Spectrum; see
+    // averageTimeMsForStep() for what one step means and
+    // Hl2Spectrum::setAverageTimeMs() for why it is a time.
+    void setPanAverage(const QString& panId, int average) override;
+    void setPanWeightedAverage(const QString& panId, bool on) override;
+
+    // One FFT AVG step is 10 ms of averaging TIME CONSTANT, so 0..100 spans
+    // 0..1 s. The same unit as the ANAN (AnanBackend's kMsPerAverageStep,
+    // deskHPSDR's), deliberately: both host-averaged families then turn one
+    // number into one time constant, by the same exponential law, and an
+    // operator with both radios sees the same smoothing at the same setting.
+    //
+    // A TIME, NOT A FRAME COUNT, because the frames that reach the average are
+    // the displayed ones: a depth in frames would span 5x the time at 5 fps
+    // that it spans at 25, and move whenever the fps slider did.
+    //
+    // It will not match a Flex at the same number, and does not claim to:
+    // FlexLib passes `average=` through to firmware with no documented unit.
+    static constexpr int kMsPerAverageStep = 10;
+    [[nodiscard]] static constexpr int averageTimeMsForStep(int average) noexcept
+    {
+        return (average < 0 ? 0 : (average > 100 ? 100 : average)) * kMsPerAverageStep;
+    }
     bool createPanadapter() override;
     bool removePanadapter(const QString& panId) override;
     void createNotch(double centerHz, double widthHz) override;
@@ -691,6 +716,12 @@ private:
         bool nbOn = false;
         int  nbLevel = 50;
 
+        // The operator's panadapter averaging, held for the same reason: a
+        // chain built on reconnect or for an added pan starts at none.
+        // panAverage is the operator's 0..100; see averageTimeMsForStep().
+        int  panAverage = 0;
+        bool panWeightedAverage = false;
+
         // Host-side per-slice audio. The radio mixes nothing for us — a Flex
         // sums its slices on-radio and sends one stream, and an HL2 demodulates
         // every receiver here — so mute, level and balance are ours to apply.
@@ -796,6 +827,11 @@ private:
     // blanker off, so without this a reconnect or an added panadapter silently
     // turns off a blanker the operator's slice still shows as on.
     void pushNoiseBlanker(const Receiver& r);
+    // Same, for the panadapter averaging (Receiver::panAverage / weighted).
+    void pushPanAveraging(const Receiver& r);
+    // This receiver's NCO just moved: the averaged bins describe the old
+    // frequency axis. Called beside pushNotchTune() at the two retune sites.
+    void dropPanAverage(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC.
     //

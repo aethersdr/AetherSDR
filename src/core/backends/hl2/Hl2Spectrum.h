@@ -2,6 +2,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <vector>
 
@@ -18,7 +19,11 @@ namespace AetherSDR::hl2 {
 // so construct instances off the real-time path (single-channel today).
 class Hl2Spectrum {
 public:
-    explicit Hl2Spectrum(int fftSize = 1024);
+    // `sampleRateHz` is the IQ rate this object is fed at. It is what turns a
+    // count of samples into TIME for setAverageTimeMs() below; 0 (the default,
+    // kept for the fixtures that only look at one frame) leaves time-based
+    // averaging unavailable and every other behaviour unchanged.
+    explicit Hl2Spectrum(int fftSize = 1024, double sampleRateHz = 0.0);
     ~Hl2Spectrum();
     Hl2Spectrum(const Hl2Spectrum&) = delete;
     Hl2Spectrum& operator=(const Hl2Spectrum&) = delete;
@@ -60,17 +65,11 @@ public:
     // step-to-depth mapping the setPanAverage() wiring chooses, not a defect
     // here.
     //
-    // NOTHING CALLS THIS YET, DELIBERATELY. RFC #5782 has since ruled the seam
-    // (q2): IRadioBackend::setPanAverage() carries the operator's 0..100 FFT
-    // AVG, and what one step means is the backend's call. Wiring HL2 to it is
-    // that PR's work, and it owes three things: the step-to-depth mapping;
-    // what setPanWeightedAverage() means here (on ANAN it selects WDSP's
-    // log-recursive mode, so HL2 either offers a dB-domain blend behind it or
-    // says it ignores it); and engaging RadioCapabilities::backendPanAveraging
-    // IN THE SAME CHANGE, so SpectrumWidget's own EMA does not stack on this
-    // one. Whether this accumulator moves to src/core/dsp/ (q3) is that PR's
-    // call too. This signature is in FRAMES precisely so it is not mistaken
-    // for the operator's number.
+    // THE OPERATOR'S CONTROL DOES NOT COME THROUGH HERE. It arrives as a
+    // TIME, through setAverageTimeMs() below, precisely because of the
+    // paragraph above: a depth in frames would change its time constant every
+    // time the fps slider moved. This frame-count form stays for fixtures that
+    // want an exact 1/N, and setting it clears any averaging time.
     //
     // Changing the depth DROPS the accumulated state: an exponential state
     // built at one alpha does not mean anything at another, and carrying it
@@ -96,6 +95,71 @@ public:
     // live instance from another thread.)
     void setAverageFrames(int frames) noexcept;
     [[nodiscard]] int averageFrames() const noexcept { return m_averageFrames; }
+
+    // Average over a TIME CONSTANT, in milliseconds; 0 = no averaging. This is
+    // what the operator's FFT AVG reaches (Hl2Backend::setPanAverage, via
+    // Hl2RxDsp::setSpectrumAverageMs), and it is the fix for the fps coupling
+    // described above.
+    //
+    // Each emitted frame is blended with weight
+    //
+    //     alpha = 1 - exp(-dt / tau)
+    //
+    // where dt is the time since the PREVIOUS emitted frame, measured in IQ
+    // SAMPLES divided by the sample rate — every sample handed to process() or
+    // accumulate(), including those accumulate() then discards. The stream is
+    // the clock, so the answer does not depend on the wall clock, the GUI
+    // thread or scheduling jitter, and it is exact in a test.
+    //
+    // WHY THIS FORM. A continuous-time exponential with time constant tau,
+    // sampled at arbitrary instants, is exactly this recursion; so the
+    // estimator's memory is tau seconds whether frames arrive every 21 ms or
+    // every 200 ms, and moving the fps slider mid-average needs no drop and no
+    // re-derivation — the next frame's dt simply carries the new interval.
+    // It is the same law WDSP's analyzer uses on the ANAN (AnanPanAnalyzer:
+    // history weight exp(-1 / (fftsPerSecond * tau))), so one FFT AVG number
+    // means one time constant on both host-averaged families.
+    //
+    // WHAT IT DOES NOT FIX. The RESPONSE time is fps-invariant; the amount of
+    // NOISE REDUCTION is not, because only displayed frames are integrated
+    // (see "FRAMES ARE DISPLAY FRAMES" above). Over one tau the average sees
+    // tau / displayInterval independent periodograms, so a 500 ms average at
+    // 25 fps integrates ~12 and at 5 fps ~2.5. Integrating every periodogram
+    // instead would mean computing the FFTs the shaper exists to skip, which
+    // is the cost decision Hl2RxDsp documents and not this class's to undo.
+    //
+    // Changing the time DROPS the state, as a depth change does, and clears
+    // any frame depth. Without a sample rate (constructed with 0) the setting
+    // is stored but inert.
+    void setAverageTimeMs(double tauMs) noexcept;
+    [[nodiscard]] double averageTimeMs() const noexcept { return m_averageTimeMs; }
+
+    // The blend weight one frame gets after dtSeconds, at time constant
+    // tauSeconds. Exposed so the mapping is testable without an FFT; tau <= 0
+    // means no averaging and returns 1 (the new frame replaces the state).
+    [[nodiscard]] static double blendAlpha(double dtSeconds, double tauSeconds) noexcept;
+
+    // WHICH DOMAIN the average runs in. false (the default) integrates POWER
+    // and takes the log once at emit — the arithmetically correct estimator,
+    // per the paragraph at the top of this block and #5794. true blends the
+    // dBFS values instead: log-recursive, WDSP's average mode 3 and deskHPSDR's
+    // default look, which sits ~2.5 dB lower on noise and crushes bursts, and
+    // which some operators prefer precisely because it flattens the floor.
+    //
+    // This is what the operator's weighted-average toggle selects
+    // (Hl2Backend::setPanWeightedAverage), with the same meaning it has on the
+    // ANAN (AnanBackend::setPanWeightedAverage): on = log, off = power. The
+    // widget's default is off, so the default on this radio is power.
+    //
+    // A change DROPS the state: a vector of powers is not a vector of dB.
+    void setLogAverage(bool on) noexcept;
+    [[nodiscard]] bool logAverage() const noexcept { return m_logAverage; }
+
+    // Forget the running average and take the next frame whole. For a change
+    // of the FREQUENCY AXIS (the NCO moved), which rebuilds nothing — see the
+    // paragraph on reset() below for why that is a different answer from a
+    // transport gap's. The partial IQ frame is left alone.
+    void dropAverage() noexcept;
 
     // Append IQ samples; each time a full frame accumulates, compute one
     // spectrum. `binsDbfs` is resized to fftSize (DC at index fftSize/2) and
@@ -172,14 +236,11 @@ public:
     // frequencies for the better part of a second. #5794's own constraint,
     // that state must be dropped across a geometry change, covers this axis.
     //
-    // Harmless TODAY only because nothing on the shipping path calls
-    // setAverageFrames() — only hl2_spectrum_test does.
-    // Whoever wires RFC #5782's operator control owes the retune a DISTINCT
-    // drop — a dropAverage(), or a flag on this function — and must not simply
-    // call reset() from it: a transport gap and a retune want OPPOSITE answers
-    // about the frames already integrated, which is the whole reason this
-    // paragraph exists. Deliberately not implemented here; it is unreachable
-    // until that wiring lands, and the hook belongs with its caller.
+    // That retune drop is dropAverage() above, called by Hl2Backend wherever
+    // it moves a receiver's NCO (setPanCenter, and setSliceFrequency when the
+    // slice leaves the window). It is deliberately NOT this function: a
+    // transport gap and a retune want OPPOSITE answers about the frames
+    // already integrated, which is the whole reason this paragraph exists.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = m_acc.size();
@@ -199,8 +260,17 @@ private:
     // same normalisation: (mag/g)^2 == (re^2 + im^2)/g^2.
     double m_coherentGainSq = 1.0;
     int m_averageFrames = 1;                  // 1 = no averaging (the default)
-    // Per-bin EMA state in POWER, fftshifted the same way the emitted bins
-    // are. Sized once at construction so setAverageFrames() and computeFrame()
+    // Time-constant averaging; see setAverageTimeMs(). 0 = off. Takes
+    // precedence over m_averageFrames, and each setter clears the other.
+    double m_sampleRateHz = 0.0;
+    double m_averageTimeMs = 0.0;
+    bool m_logAverage = false;                // see setLogAverage()
+    // IQ samples received since the last frame was computed — the dt of the
+    // time-constant blend. Counts accumulate()'s discards too: they are time
+    // that passed, whether or not they reach a transform.
+    std::uint64_t m_samplesSinceFrame = 0;
+    // Per-bin EMA state, fftshifted the same way the emitted bins are: in
+    // POWER, or in dBFS while m_logAverage is set. Sized once at construction so setAverageFrames() and computeFrame()
     // never allocate — process() promises that in the header above.
     std::vector<double> m_avgPower;
     // Whether m_avgPower holds a frame yet. An EMA seeded at zero would show

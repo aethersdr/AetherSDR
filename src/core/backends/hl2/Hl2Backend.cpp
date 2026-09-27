@@ -1293,6 +1293,7 @@ bool Hl2Backend::createPanadapter()
     // inheriting RX1's — which for a receiver that has never been configured is
     // the default of off.
     pushNoiseBlanker(r);
+    pushPanAveraging(r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -2405,6 +2406,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasManualNotch = false;
     c.hasTransmitFrequencyCheck = false;
     c.hasDdcPanEdgeRolloff = false;
+    // The panadapter is averaged HERE, in Hl2Spectrum, per the operator's FFT
+    // AVG (setPanAverage). Engaged in the same change that added that
+    // averaging, as RFC #5782 ruled: SpectrumWidget skips its own fixed
+    // SMOOTH_ALPHA EMA while this is set, so the two never stack.
+    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep};
     // No band/segment zoom: this backend vends no command plane at all, so
     // `display pan set ... band_zoom=` is dropped inside RadioModel::sendCmd.
     // Declaring absence is what makes the control refuse rather than lie.
@@ -3526,6 +3532,8 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
         // tunes across the band and the notches follow them, which is precisely
         // the behaviour a TRACKING notch exists to avoid.
         pushNotchTune(*r);
+        // The averaged panadapter is on the old axis too.
+        dropPanAverage(*r);
     }
 
     // Shift by the slice's offset from the NCO, with the SAME sign.
@@ -4136,6 +4144,10 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     // The NCO moved, so the notch axis has to move with it. See the note at the
     // matching site in setSliceFrequency.
     pushNotchTune(*r);
+    // So has the panadapter's frequency axis. A drag delivers ~30 of these a
+    // second, so while the operator drags, the display is effectively
+    // unaveraged — which is right: an average of a moving axis is smear.
+    dropPanAverage(*r);
     // Panning one receiver can move it onto another band, which changes what the
     // SHARED filter board should be doing. Re-evaluate across every receiver.
     applyBandFilter("pan");
@@ -4674,6 +4686,48 @@ void Hl2Backend::setPanFrameRate(const QString& panId, int fps)
         return;
     QMetaObject::invokeMethod(r->dsp, "setSpectrumRateFps", Qt::QueuedConnection,
         Q_ARG(int, fps));
+}
+
+void Hl2Backend::setPanAverage(const QString& panId, int average)
+{
+    // Per pan, like the frame rate: each receiver has its own spectrum.
+    // Stored first, so a chain that does not exist yet (or is rebuilt on
+    // reconnect) picks it up in pushPanAveraging().
+    Receiver* r = rx(ddcForPan(panId));
+    if (!r)
+        return;
+    r->panAverage = std::clamp(average, 0, 100);
+    pushPanAveraging(*r);
+}
+
+void Hl2Backend::setPanWeightedAverage(const QString& panId, bool on)
+{
+    Receiver* r = rx(ddcForPan(panId));
+    if (!r)
+        return;
+    r->panWeightedAverage = on;
+    pushPanAveraging(*r);
+}
+
+void Hl2Backend::pushPanAveraging(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // Queued: the spectrum's state is read on the DSP thread (see
+    // Hl2Spectrum::setAverageFrames on why no other thread may touch it).
+    // Both pushed every time; each is a no-op in Hl2Spectrum when unchanged,
+    // so a replay does not throw the running average away.
+    QMetaObject::invokeMethod(r.dsp, "setSpectrumAverageMs", Qt::QueuedConnection,
+        Q_ARG(int, averageTimeMsForStep(r.panAverage)));
+    QMetaObject::invokeMethod(r.dsp, "setSpectrumLogAverage", Qt::QueuedConnection,
+        Q_ARG(bool, r.panWeightedAverage));
+}
+
+void Hl2Backend::dropPanAverage(const Receiver& r)
+{
+    if (!r.dsp || r.panAverage <= 0)
+        return;
+    QMetaObject::invokeMethod(r.dsp, "dropSpectrumAverage", Qt::QueuedConnection);
 }
 
 void Hl2Backend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
@@ -8796,6 +8850,8 @@ void Hl2Backend::pushInitialState()
         // so a reconnect into a session that had it on would leave the slice's
         // NB button lit over a chain that is not blanking anything.
         pushNoiseBlanker(r);
+        // And the panadapter averaging, for the same reason.
+        pushPanAveraging(r);
     }
     if (m_txDsp) {
         const Receiver* txRx = rx(m_txDdc);

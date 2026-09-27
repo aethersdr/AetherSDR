@@ -1160,6 +1160,15 @@ target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
 target_link_libraries(hl2_spectrum_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
 add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
 
+# #5678 row 2.1 on HL2: FFT AVG as a time constant in Hl2Spectrum (RFC #5782).
+# The mapping, the variance reduction on noise against theory, fps-invariance of
+# the step response (with a frame-depth control), the domain toggle, the retune
+# drop, and re-application across an Hl2RxDsp rebuild.
+add_executable(hl2_pan_averaging_test tests/hl2_pan_averaging_test.cpp)
+target_include_directories(hl2_pan_averaging_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(hl2_pan_averaging_test PRIVATE aethercore Qt6::Core Qt6::Network ${FFTW3_LIBRARIES})
+add_test(NAME hl2_pan_averaging_test COMMAND hl2_pan_averaging_test)
+
 # Transport discontinuities must invalidate partial FFTs before IQ delivery.
 # Covers both spectrum classes, both DSP stages, and both production ingest
 # handlers through socket-free friend seams. Qt6::Network is needed by the
