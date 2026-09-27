@@ -284,12 +284,24 @@ public:
     // open the squelch while the SQL button stayed lit. installChannel()
     // re-applies it to every freshly built channel before that channel has
     // processed a block — install runs on the thread that calls processIq().
+    //
+    // CONVERGES AFTER A REFUSAL. WdspChannel refuses a control operation that
+    // races another one (a processIq() callback in flight) and returns false
+    // rather than blocking. A refused squelch is not dropped: it is marked
+    // pending and retried at the top of the next processIqBlock() — on this
+    // same thread, before this block's processIq(), so nothing of ours is in
+    // flight — and on every later block until the channel takes it. A newer
+    // setSquelch() or a channel install supersedes it. squelchPending() says
+    // whether the channel is currently behind the request.
     Q_INVOKABLE void setSquelch(bool on, int level);
+    [[nodiscard]] bool squelchPending() const noexcept { return m_squelchPending; }
     [[nodiscard]] bool squelchEnabled() const noexcept { return m_squelchOn; }
     [[nodiscard]] int squelchLevel() const noexcept { return m_squelchLevel; }
     // What the channel last WROTE to WDSP (stage, run flags, threshold), or
     // nullopt before configure(). Forwarded, not mirrored, for the reason
-    // channelConfig() gives below.
+    // channelConfig() gives below. The record itself is a by-value snapshot
+    // safe from any thread; m_channel is not, so call this on this object's
+    // thread.
     [[nodiscard]] std::optional<WdspChannel::AppliedSquelch> appliedSquelch() const
     {
         if (!m_channel)
@@ -493,6 +505,13 @@ public:
     // returned this class's own copy of the request would be certifying its own
     // input. Null when no channel exists, which the caller must report as
     // "not configured" rather than as zeros.
+    // Test only: forwards WdspChannel::refuseControlOperationsForTest() to the
+    // current channel, so the squelch retry path can be driven offline.
+    void refuseChannelControlForTest(unsigned count) noexcept
+    {
+        if (m_channel)
+            m_channel->refuseControlOperationsForTest(count);
+    }
     [[nodiscard]] const WdspChannel::Config* channelConfig() const noexcept
     {
         return m_channel ? &m_channel->config() : nullptr;
@@ -633,6 +652,9 @@ private:
     // Pushes rxMinimumPhaseFor(m_config.mode) to the live channel. Only
     // called where the control verbs may reach it (setMode, installChannel).
     void applyMinimumPhaseForMode();
+    // One attempt to put the squelch request on the channel; marks it pending
+    // on refusal. Caller has checked canPushToChannel().
+    void pushSquelchToChannel();
     // True when the next panadapter frame may be computed. Stays true until one
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
@@ -679,6 +701,8 @@ private:
     // Squelch request — see setSquelch(). Defaults mirror SliceModel's.
     bool m_squelchOn = false;
     int  m_squelchLevel = 20;
+    // True while the channel has refused the current request; see setSquelch().
+    bool m_squelchPending = false;
     std::atomic<bool> m_nbAppliedOn {false};
     std::atomic<int>  m_nbAppliedLevel {50};
     // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and

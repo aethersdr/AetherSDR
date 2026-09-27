@@ -543,10 +543,13 @@ public:
     // above — but the maps are still defined there).
     [[nodiscard]] static double fmSquelchThresholdForLevel(int level) noexcept;
     [[nodiscard]] static double levelSquelchThresholdDbfsForLevel(int level) noexcept;
-    [[nodiscard]] const AppliedSquelch& appliedSquelch() const noexcept
-    {
-        return m_appliedSquelch;
-    }
+    // A SNAPSHOT, BY VALUE, and safe from any thread. The record is written
+    // by applySquelchLocked() on the control thread; handing out a reference
+    // would let a reader on another thread (a bridge readback, say) see a
+    // struct half-written. Guarded by its own small mutex rather than
+    // g_setupMutex, which is the process-wide FFTW planner lock and can be
+    // held for the length of a plan — a readback must not wait on that.
+    [[nodiscard]] AppliedSquelch appliedSquelch() const;
 
     // ── Impulse noise blanker ─────────────────────────────────────────────
     //
@@ -699,6 +702,14 @@ public:
     // overwrote the input block the worker had not yet copied out. 0 restores
     // the shipping path.
     static void setWorkerHandoffPauseForTest(unsigned microseconds) noexcept;
+    // Test only: the next `count` control operations on THIS channel are
+    // refused exactly as a racing processIq() callback would refuse them, so
+    // a caller's refused-then-converges path can be driven deterministically.
+    // 0 (the default) costs one relaxed load per control operation.
+    void refuseControlOperationsForTest(unsigned count) noexcept
+    {
+        m_refuseControlForTest.store(count, std::memory_order_relaxed);
+    }
 
     // Shared FFTW-planner serialization guard. FORWARDS to
     // AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h), which owns
@@ -771,7 +782,11 @@ private:
     // block, the same way it consults m_nbActive — the control handshake
     // already orders the write, this keeps the read from being a data race.
     std::atomic<bool> m_running {false};
+    // Written under m_appliedSquelchMutex (with g_setupMutex already held,
+    // always in that order); read under it alone — see appliedSquelch().
+    mutable std::mutex m_appliedSquelchMutex;
     AppliedSquelch m_appliedSquelch;
+    std::atomic<unsigned> m_refuseControlForTest {0};
 
     // ── Noise blanker state ───────────────────────────────────────────────
     //

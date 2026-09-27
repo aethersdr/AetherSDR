@@ -794,7 +794,10 @@ void WdspChannel::applySquelchLocked(Mode mode) noexcept
     // outside FM gates on a trigger buffer nothing refreshes any more.
     AppliedSquelch applied;
     applied.stage = squelchStageFor(mode);
-    applied.applications = m_appliedSquelch.applications + 1;
+    {
+        const std::scoped_lock recordLock(m_appliedSquelchMutex);
+        applied.applications = m_appliedSquelch.applications + 1;
+    }
     // Level 0 runs nothing: "open" by construction, whatever the stage would
     // have made of its bottom threshold.
     const bool run = m_config.squelchEnabled && m_config.squelchLevel > 0;
@@ -815,7 +818,14 @@ void WdspChannel::applySquelchLocked(Mode mode) noexcept
     }
     SetRXAFMSQRun(m_channelId, applied.fmRun ? 1 : 0);
     SetRXAAMSQRun(m_channelId, applied.amRun ? 1 : 0);
+    const std::scoped_lock recordLock(m_appliedSquelchMutex);
     m_appliedSquelch = applied;
+}
+
+WdspChannel::AppliedSquelch WdspChannel::appliedSquelch() const
+{
+    const std::scoped_lock recordLock(m_appliedSquelchMutex);
+    return m_appliedSquelch;
 }
 
 bool WdspChannel::setAgc(int agcMode, double maximumGainDb) noexcept
@@ -1468,6 +1478,11 @@ void WdspChannel::close() noexcept
 
 bool WdspChannel::beginControlOperation() noexcept
 {
+    // Test hook — see refuseControlOperationsForTest().
+    if (m_refuseControlForTest.load(std::memory_order_relaxed) != 0) {
+        m_refuseControlForTest.fetch_sub(1, std::memory_order_relaxed);
+        return false;
+    }
     bool expected = false;
     if (!m_controlOperation.compare_exchange_strong(expected, true,
                                                     std::memory_order_seq_cst)) {

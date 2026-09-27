@@ -10,6 +10,8 @@
 //   1. A request made before any channel exists is held and lands at configure().
 //   2. A mode change moves the squelch to the new family's stage, and CW has none.
 //   3. configure() — which REPLACES Config — keeps the squelch (a rate change).
+//   5. (below 4) A squelch change the channel REFUSES converges: it is held as
+//      pending and applied at the next IQ block, without another setSquelch.
 //   4. The asynchronous rebuild: a squelch change made WHILE a background build
 //      runs is not pushed at the old channel, and lands on the new one at the
 //      swap, on the mode that was set during the build too.
@@ -21,6 +23,8 @@
 #include <QCoreApplication>
 
 #include <cmath>
+#include <complex>
+#include <vector>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -112,6 +116,32 @@ int main(int argc, char** argv)
     check(dsp.installRebuiltChannel(std::move(result)), "install");
     check(applied(dsp, Stage::Fm, true, std::pow(10.0, -1.8)),
           "the swap applies the squelch set during the build, on the mode set during it");
+
+    // 5. Refused, then converges on the next IQ block.
+    dsp.setSquelch(true, 30);
+    check(applied(dsp, Stage::Fm, true, std::pow(10.0, -0.6)) && !dsp.squelchPending(),
+          "baseline FM/30 applied");
+    const unsigned beforeRefusal = dsp.appliedSquelch()->applications;
+    dsp.refuseChannelControlForTest(1);
+    dsp.setSquelch(true, 60);
+    check(dsp.squelchPending(), "a refused squelch is marked pending");
+    check(dsp.appliedSquelch()->applications == beforeRefusal
+              && applied(dsp, Stage::Fm, true, std::pow(10.0, -0.6)),
+          "the refused request did not reach WDSP (the channel still runs FM/30)");
+    // One EP6-sized block of silence; the retry runs before it is processed.
+    dsp.processIqBlock(std::vector<std::complex<float>>(126));
+    check(!dsp.squelchPending(), "the next IQ block clears pending");
+    check(applied(dsp, Stage::Fm, true, std::pow(10.0, -1.2)),
+          "the next IQ block applies the refused request (FM/60)");
+    // A refusal that persists keeps retrying until the channel takes it.
+    dsp.refuseChannelControlForTest(3);
+    dsp.setSquelch(false, 60);
+    dsp.processIqBlock(std::vector<std::complex<float>>(126));
+    dsp.processIqBlock(std::vector<std::complex<float>>(126));
+    check(dsp.squelchPending(), "still pending while the channel keeps refusing");
+    dsp.processIqBlock(std::vector<std::complex<float>>(126));
+    check(!dsp.squelchPending() && applied(dsp, Stage::Fm, false, std::pow(10.0, -1.2)),
+          "converges once the channel accepts (squelch off)");
 
     std::printf(g_failures == 0 ? "hl2_rxdsp_squelch_test: all passed\n"
                                 : "hl2_rxdsp_squelch_test: %d failure(s)\n", g_failures);
