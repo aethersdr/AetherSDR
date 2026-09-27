@@ -1658,8 +1658,8 @@ void RtlSdrBackend::observeHd(const RtlReceivePipeline::HdFmObservation& observa
     }
     previous = {observation.instance, observation.receiverEpoch, observation.audioEpoch,
         observation.captureEpoch, raw.publicationSequence,
-        newReceiver ? raw.observationSequence : std::max(previous.observationSequence, raw.observationSequence),
-        newAudio ? raw.audioSequence : std::max(previous.audioSequence, raw.audioSequence), !raw.valid};
+        newReceiver ? raw.observationSequence : std::max<quint64>(previous.observationSequence, raw.observationSequence),
+        newAudio ? raw.audioSequence : std::max<quint64>(previous.audioSequence, raw.audioSequence), !raw.valid};
     m_hdObservationProducedMs[id] = raw.observationMonotonicMs;
     m_hdObservationAge[id].restart();
     m_hdReception[id] = std::move(value);
