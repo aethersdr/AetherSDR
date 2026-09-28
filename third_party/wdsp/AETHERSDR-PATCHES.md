@@ -596,6 +596,10 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   it; plus the one-line `wdspPortHandoffPauseForTest()` call after the release.
   Look at the ORDER, not for an added line: upstream's fix, if it comes, is a
   move, and the pause call is ours alone.
+- **patch 14** -- in `dexchange()`, the `memcpy` into `r2` (and its
+  `r2_inidx` advance) sits **before** the `r2_havesamps` increment; plus the
+  added read-only `GetChannelOutputReady()` in `iobuffs.c` (declared in
+  `iobuffs.h` and `include/aether_wdsp.h`).
 
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
@@ -740,3 +744,48 @@ no release, so nothing moves relative to it.
 When updating WDSP, keep this unless upstream's `dexchange()` reads `r1` before
 it releases `Sem_OutReady`. Keep the pause call (and its declaration at the top
 of `iobuffs.c`) regardless: it is AetherSDR's own test surface.
+
+## Patch 14 — a non-blocking host can ask whether an output block is ready
+
+`upstream/iobuffs.c` gains `GetChannelOutputReady(channel)`: 1 when
+`r2_havesamps >= out_size`, i.e. when the next `fexchange*` would find a whole
+output block and not underrun. Read-only, under `r2_ControlSection`, which is
+the lock `fexchange*` itself takes to read the same count. And `dexchange()`
+now copies a produced block into `r2` **before** counting it into
+`r2_havesamps`; upstream counts first and copies second.
+
+**Why a non-blocking host needs it.** Every production channel here is opened
+with `bfo = 0`, so a host cannot wait inside `fexchange*`. `Hl2TxDsp` is handed
+audio in the capture backend's delivery quantum, and Qt 6.8's macOS
+`QAudioSource` flushes 4096 bytes (1024 frames of 16-bit stereo) whatever the
+device rate. At 24 kHz -- a Bluetooth headset microphone -- that is two TXA
+blocks per delivery. Exchanging them back-to-back underruns the second:
+`fexchange2` zeroes it, advances `r2_outidx` without consuming, and from then
+on the two-slot (`DSP_MULT` = 2) output ring is read out of step with the
+worker, so every later block boundary is a splice of a stale or torn block.
+The fault counter sees the one underrun and nothing after it. On the simulator
+(hl2-lab d161) a 1 kHz tone through a 24 kHz input had a phase discontinuity at
+every 21.3 ms block boundary -- 252 in 5.5 s -- with `modulatorFaultBlocks` at 2;
+by ear, "chopped" speech. A time-based spacing between exchanges was tried
+first and failed under `ctest -j6`: a loaded worker outlasted it. The worker's
+own count is the only reliable signal, so the host asks for it.
+
+**Why the reorder has to come with it.** Upstream publishes the count before
+the data. That is harmless to a host that runs a whole block behind the worker
+(the normal paced case: it reads the slot written a cycle earlier). It is
+exactly wrong for a host that exchanges the moment the count says ready: it
+could read the slot the worker is still copying. With the copy first, "ready"
+means "in the ring". The reorder moves no value and changes no count; it only
+moves when the count becomes visible.
+
+**Who it reaches.** `Hl2TxDsp` (TXA build) calls `GetChannelOutputReady()`
+through `WdspChannel::outputReady()` before every exchange; nothing else calls
+it. The reorder applies to every channel, blocking and non-blocking; in
+blocking mode the host is released by `Sem_OutReady`, which is signalled after
+both the copy and the count either way. `hl2_txdsp_capture_burst_test` pins
+the behaviour: a 24 kHz capture delivered as Qt delivers it gives zero faults
+and a phase-continuous tone with the patch, and 1 fault and ~120 splices in two
+seconds without it.
+
+When updating WDSP, keep this unless upstream grows an equivalent query; keep
+the reorder unless upstream's `dexchange()` already copies before it counts.

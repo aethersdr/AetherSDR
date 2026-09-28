@@ -463,6 +463,21 @@ WdspChannel::~WdspChannel()
     releaseChannelId(m_channelId);
 }
 
+bool WdspChannel::outputReady() noexcept
+{
+    if (m_controlOperation.load(std::memory_order_seq_cst)) {
+        return false;
+    }
+    m_callbacksInFlight.fetch_add(1, std::memory_order_seq_cst);
+    if (m_controlOperation.load(std::memory_order_seq_cst)) {
+        m_callbacksInFlight.fetch_sub(1, std::memory_order_seq_cst);
+        return false;
+    }
+    const bool ready = GetChannelOutputReady(m_channelId) != 0;
+    m_callbacksInFlight.fetch_sub(1, std::memory_order_seq_cst);
+    return ready;
+}
+
 WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
                                                   std::span<const float> inputQ,
                                                   std::span<float> outputLeft,

@@ -3,6 +3,7 @@
 #include "core/dsp/WdspChannel.h"
 #include "core/TxCoordinator.h"
 
+#include <QElapsedTimer>
 #include <QObject>
 
 #include <complex>
@@ -12,6 +13,8 @@
 #include <string>
 #include <vector>
 #include "core/backends/TxAudioSource.h"
+
+class QTimer;
 
 namespace AetherSDR::hl2 {
 
@@ -252,10 +255,20 @@ public slots:
     // fexchange2 advances r2_outidx on the miss without consuming, so the
     // stream thereafter runs one whole DSP buffer AHEAD, permanently.
     //
-    // The live caller is paced: AudioEngine's TX poll hands this stage audio as
-    // the sound card produces it. Every OTHER caller -- a test, a bench
-    // harness, an offline render -- has to pace itself or it is measuring
-    // starvation. It will not be told quietly: a starved block is counted in
+    // The live caller is paced ON AVERAGE: AudioEngine's TX poll hands this
+    // stage audio as the audio backend delivers it. That is not the same as
+    // one block at a time: Qt 6.8's macOS QAudioSource flushes 4096 bytes --
+    // 1024 frames of 16-bit stereo -- whatever the rate, so at 24 kHz (a
+    // Bluetooth headset microphone) every delivery carries two blocks, and
+    // exchanging them back-to-back underran the second one and left the
+    // channel's output ring out of step for the rest of the over: the
+    // "chopped" transmit audio of hl2-lab d160/d161. So the TXA build waits
+    // for the channel to report each block's output ready before exchanging
+    // the next, with a timer on this object's thread taking the rest (see
+    // exchangeDueBlocks()); a burst is absorbed, and a steadily paced caller
+    // never waits. What it cannot absorb is a caller that is faster than real
+    // time on average -- a test, a bench harness, an offline render must still
+    // pace itself, and a starved block is still counted in
     // modulatorFaultBlocks() and logged.
     //
     // THIS IS ORTHOGONAL TO THE SOURCE ARGUMENT ABOVE. The rate coupling is a
@@ -342,6 +355,32 @@ private:
     std::vector<float> m_outQ;
     unsigned long long m_txBlocks = 0;
     unsigned long long m_txFaultBlocks = 0;
+
+    // ── Exchange pacing: one capture delivery can carry several blocks ──
+    //
+    // The channel is non-blocking, so a second processIq() issued before
+    // WDSP's worker has produced the previous block's output returns Underrun;
+    // fexchange2 zeroes that block and advances its read index anyway, and the
+    // two-slot output ring is then read out of step with the worker for the
+    // rest of the over -- a splice at every block boundary. Qt 6.8's macOS
+    // QAudioSource flushes 1024 frames whatever the rate, so at 24 kHz (a
+    // Bluetooth headset microphone) every delivery is two blocks. The average
+    // cadence is right; only the grouping is not, and the grouping belongs to
+    // the audio backend.
+    //
+    // So levelled audio waits here, and a block is exchanged only when the
+    // channel reports the previous block's output ready
+    // (WdspChannel::outputReady(), local WDSP patch 14); a 1 ms single-shot
+    // timer on this object's thread retries the rest. Nothing blocks the I/O
+    // thread, and a steadily paced caller never waits. A worker that has not
+    // answered within exchangeStallNs() is exchanged anyway, counted and
+    // logged, so a stall cannot become unbounded latency.
+    void exchangeDueBlocks();
+    void onExchangeTimer();
+    qint64 exchangeStallNs() const noexcept;
+    std::vector<float> m_exchangePending;
+    QTimer* m_exchangeTimer = nullptr;
+    QElapsedTimer m_lastExchange;
 #else
     // ── Phasing modulator ────────────────────────────────────
     //

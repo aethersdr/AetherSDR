@@ -570,6 +570,23 @@ void fexchange0 (int channel, double* in, double* out, int* error)
 	}
 }
 
+// AetherSDR patch 14: would the next fexchange* find a whole output block?
+// Read-only. A non-blocking host (bfo = 0) that is handed more than one input
+// block at once must not exchange the second before the worker has produced
+// the first one's output: that call underruns, advances r2_outidx without
+// consuming, and every block after it is read out of step with the worker in
+// a two-slot ring. See AETHERSDR-PATCHES.md patch 14.
+PORT
+int GetChannelOutputReady (int channel)
+{
+	int ready;
+	IOB a = ch[channel].iob.pe;
+	EnterCriticalSection (&a->r2_ControlSection);
+	ready = a->r2_havesamps >= a->out_size;
+	LeaveCriticalSection (&a->r2_ControlSection);
+	return ready;
+}
+
 PORT	//separate I/Q buffers
 void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *Qout, int* error)
 {
@@ -681,12 +698,18 @@ int dexchange (int channel, double* in, double* out)
 	if ((a->r1_outidx += a->r1_outsize) == a->r1_active_buffsize)
 		a->r1_outidx = 0;
 
-	EnterCriticalSection (&a->r2_ControlSection);
-	a->r2_havesamps += a->r2_insize;
-	LeaveCriticalSection (&a->r2_ControlSection);
+	// AetherSDR patch 14: PUBLISH AFTER THE COPY. Upstream counts the block
+	// into r2_havesamps before it is in r2, so a non-blocking fexchange* that
+	// runs in between reads a slot the worker is still writing. Harmless while
+	// the host is a whole block behind the worker; it is exactly the moment a
+	// host that waits for GetChannelOutputReady() reads. See
+	// AETHERSDR-PATCHES.md patch 14.
 	memcpy (a->r2_baseptr + 2 * a->r2_inidx, in, a->r2_insize * sizeof (complex));
 	if ((a->r2_inidx += a->r2_insize) == a->r2_active_buffsize)
 		a->r2_inidx = 0;
+	EnterCriticalSection (&a->r2_ControlSection);
+	a->r2_havesamps += a->r2_insize;
+	LeaveCriticalSection (&a->r2_ControlSection);
 	if (a->bfo && (a->r2_unqueuedsamps += a->r2_insize) >= a->out_size)
 	{
 		n = a->r2_unqueuedsamps / a->out_size;

@@ -39,6 +39,10 @@ int SetChannelState(int channel, int state, int dmode);
 int DiscardTXAChannelData(int channel);
 void fexchange2(int channel, float* inputI, float* inputQ,
                 float* outputLeft, float* outputRight, int* error);
+// Local patch 14: 1 when the next fexchange* would find a whole output block
+// (it would not underrun), else 0. Read-only; for a non-blocking host that
+// must pace a burst of input blocks against the worker.
+int GetChannelOutputReady(int channel);
 void SetRXAMode(int channel, int mode);
 void SetRXABandpassFreqs(int channel, double lowHz, double highHz);
 // Canonical passband setter. RXASetPassband() is what both reference clients

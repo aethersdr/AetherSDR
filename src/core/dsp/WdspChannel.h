@@ -167,6 +167,14 @@ public:
                             std::span<const float> inputQ,
                             std::span<float> outputLeft,
                             std::span<float> outputRight) noexcept;
+    // Would the next processIq() find a whole output block waiting, i.e. not
+    // return Underrun? For a non-blocking channel whose caller is handed more
+    // than one block at once: exchanging the second before WDSP's worker has
+    // produced the first one's output does not just underrun that block, it
+    // puts the channel's two-slot output ring out of step for good. Same
+    // thread and same fence as processIq(); false while a control operation is
+    // in progress. Local WDSP patch 14.
+    [[nodiscard]] bool outputReady() noexcept;
 
     // ── Start and stop, which are NOT teardown ────────────────────────────
     //
