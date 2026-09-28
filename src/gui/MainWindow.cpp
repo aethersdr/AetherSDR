@@ -49,6 +49,7 @@
 #include "core/StreamStatus.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioStatusOwnership.h"
+#include "models/ReceiverSlotCount.h"
 #include "models/Nr2SettingsModel.h"
 #include "PanZoomModeGate.h"
 #include "SpectrumWidget.h"
@@ -1931,12 +1932,28 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_appletPanel->rxApplet(), &RxApplet::calibrateAgcTRequested,
             this, &MainWindow::showAgcCalibrationDialog);
     // Sync slice tab capacity after radio info/status reports actual capacity.
+    // This edge runs at the START of a connect, which is what lets a Flex draw
+    // its tabs before the first slice arrives (#2243).
     connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
         if (m_radioModel.model().isEmpty()) {
             return;
         }
 
-        m_appletPanel->setMaxSlices(m_radioModel.maxSlices());
+        m_appletPanel->setMaxSlices(ReceiverSlotCount::forCeiling(
+            m_radioModel.maxSlices(), m_radioModel.slices()));
+        m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+    });
+    // ...and on every later edge that can move the count (#5775). A
+    // backend that declares its own capacity may only know it once the link is
+    // up, and may revise it mid-session; that arrives on capabilitiesChanged,
+    // which the edge above never sees. Disconnect (count 0) is left to
+    // onConnectionStateChanged, which clears the tabs itself.
+    auto* receiverSlots = new ReceiverSlotCount(&m_radioModel, this);
+    connect(receiverSlots, &ReceiverSlotCount::countChanged, this, [this](int count) {
+        if (count <= 0) {
+            return;
+        }
+        m_appletPanel->setMaxSlices(count);
         m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
     });
 

@@ -4585,6 +4585,14 @@ target_link_libraries(rigctl_rf_gain_pan_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME rigctl_rf_gain_pan_test COMMAND rigctl_rf_gain_pan_test)
 
+# #5775 / #5776: the receiver letters (slice tabs, CAT VFO targets) follow a
+# backend's capacity declared after connect. Injected backend, no socket.
+add_executable(receiver_slot_count_test tests/receiver_slot_count_test.cpp)
+target_include_directories(receiver_slot_count_test PRIVATE src tests)
+target_link_libraries(receiver_slot_count_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME receiver_slot_count_test COMMAND receiver_slot_count_test)
+
 # #5499 item 3: the noise-blanker hold invariant, read out of WdspChannel.cpp as
 # TEXT (same limitation, and same reason, as meter_surfaces_test above — the
 # facts never meet at compile time). Links nothing but Qt6::Core: it opens the
