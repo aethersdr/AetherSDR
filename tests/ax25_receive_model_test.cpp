@@ -469,7 +469,12 @@ void boundedOutput(QCoreApplication& app)
 {
     Fixture fixture;
     Ax25ReceiveModel model(fixture.radio);
-    bind(model, fixture);
+    // The output queue contract is independent of demodulator lane count.
+    // Use one supported lane for this 260-second fixture; other scenarios retain A+.
+    model.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200,
+        Ax25TonePolarity::Normal, VhfMode::A));
+    model.setSlice(fixture.a);
+    model.setEnabled(true);
     PcmProducer producer;
     producer.start(PcmPurpose::Slice, 3, {24000, PcmLayout::Mono});
     emit fixture.source->sliceAudioFrameReady(3, *producer.produce({0.0f}));
