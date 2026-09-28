@@ -170,8 +170,13 @@ int main(int argc, char** argv)
     check(step() && sink.releasePassed, "loss injected between ready speaker buffer and tap dispatch");
     check(sink.tapFrames == 0 && !sink.last.audioValid && sink.zeroWhileAcquiring,
         "replacement audio epoch cannot inherit old prefill or leak queued native tap");
-    // The loss callback also emitted one new native frame. It must remain held
-    // until three more complete its own prebuffer, with no lost initial tap.
+    // The loss callback completed one replacement AUDIO block before returning.
+    // Drain that epoch's speaker queue before submitting any further AUDIO so
+    // its own insufficient prefill is observed independently of the reset.
+    check(step() && !sink.last.audioValid && sink.tapFrames == 0
+        && sink.producedSpeakerFrames == 0 && sink.lastSpeaker.producedMonotonicMs == 0,
+        "partial replacement prefill stays acquiring with no native tap or produced speaker PCM");
+    // Three more complete its own prebuffer, with no lost initial tap.
     control.command(3); check(step() && control.wait(false), "new epoch produced its remaining prebuffer");
     const bool prefillStep = step();
     const bool prefillPassed = prefillStep && sink.last.audioValid && sink.tapFrames == 8192
