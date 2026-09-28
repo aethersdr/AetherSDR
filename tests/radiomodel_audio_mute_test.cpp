@@ -151,6 +151,24 @@ int main(int argc, char** argv)
         spin(50);
     check(model.isConnected(), "precondition: connected to the demo backend");
 
+    // The title bar subscribes to audioOutputChanged, so an unsolicited
+    // backend status must publish both mute and unmute even though no setter
+    // ran. Inject at the seam; no socket or synthetic firmware is involved.
+    if (IRadioBackend* backend = model.backend()) {
+        audio.clear();
+        RadioDelta externalMute;
+        externalMute.lineoutMute = true;
+        emit backend->radioChanged(externalMute);
+        check(model.lineoutMute() && audio.count() == 1,
+              "external line out mute updates the model and publishes audioOutputChanged");
+
+        RadioDelta externalUnmute;
+        externalUnmute.lineoutMute = false;
+        emit backend->radioChanged(externalUnmute);
+        check(!model.lineoutMute() && audio.count() == 2,
+              "external line out unmute updates the model and publishes audioOutputChanged");
+    }
+
     model.setHeadphoneMute(true);
     model.setLineoutMute(true);
     model.setFrontSpeakerMute(true);
@@ -158,6 +176,7 @@ int main(int argc, char** argv)
     check(model.headphoneMute() && model.lineoutMute() && model.frontSpeakerMute(),
           "precondition: all three mutes set before disconnect");
 
+    audio.clear();
     model.disconnectFromRadio();
     // isConnected() goes false BEFORE onDisconnected() runs its state reset, so
     // waiting on the connection flag alone races the thing under test. Wait for
@@ -170,6 +189,8 @@ int main(int argc, char** argv)
     check(!model.frontSpeakerMute(), "disconnect clears front speaker mute");
     check(model.headphoneGain() == 50,
           "disconnect still resets the gains it always did");
+    check(audio.count() >= 1,
+          "disconnect publishes the reset output state to title-bar subscribers");
 
     if (g_failures == 0)
         std::fprintf(stderr, "radiomodel_audio_mute_test: PASS\n");

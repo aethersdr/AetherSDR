@@ -701,6 +701,15 @@ struct RadioCapabilities {
     bool hasClientNetworkConfig = false; // client may write the radio's IP configuration
     bool hasFlexControlIntegration = false; // FlexControl/AetherControl verbs are supported
     bool hasAudioCompression = false; // selectable compressed radio-audio transport
+    // Radio-owned Line Out mute has a command and status readback. The title-bar
+    // speaker reflects this value; host PC audio mute is a separate control.
+    // Flex uses mixer lineout mute and radio lineout_mute status. Backends
+    // without both halves leave the record absent so the control is dimmed.
+    struct RadioLineoutMuteControl {
+        SliceFrequencyControl::Authority authority{
+            SliceFrequencyControl::Authority::Unknown};
+    };
+    std::optional<RadioLineoutMuteControl> lineoutMuteControl;
     bool hasSharpFilters = false;    // radio implements the sharp-filter settings page
     // The radio's streaming data plane uses VITA-49. This currently gates the
     // receive-socket buffer and network MTU controls; it describes the transport,

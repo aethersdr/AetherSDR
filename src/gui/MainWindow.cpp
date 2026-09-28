@@ -28,6 +28,7 @@
 #include "ClientDisconnectDialog.h"
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
+#include "ControlAvailabilityRegistry.h"
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
 #ifdef AETHER_ASR_ENABLED
@@ -2130,16 +2131,24 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::applyMasterVolume);
     connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
             &m_radioModel, &RadioModel::setHeadphoneGain);
-    connect(m_titleBar, &TitleBar::lineoutMuteChanged, this, [this](bool muted) {
-        m_audio->setMuted(muted);
-        m_radioModel.sendCommand(QString("mixer lineout mute %1").arg(muted ? 1 : 0));
-    });
+    connect(m_titleBar, &TitleBar::lineoutMuteChanged,
+            &m_radioModel, &RadioModel::setLineoutMute);
     connect(m_audio, &AudioEngine::mutedChanged, this, [this](bool muted) {
-        m_titleBar->setLineoutMuted(muted);
         auto& s = AppSettings::instance();
         s.setValue("PcAudioMuted", muted ? "True" : "False");
         s.save();
     });
+
+    auto* lineoutAvailability = new ControlAvailabilityRegistry(m_radioModel, this);
+    lineoutAvailability->registerWidget(
+        m_titleBar->lineoutMuteButton(),
+        tr("This radio does not support Line Out mute control"),
+        [](bool, const RadioCapabilities& caps) {
+            return caps.lineoutMuteControl.has_value()
+                && caps.lineoutMuteControl->authority
+                    == SliceFrequencyControl::Authority::Radio;
+        },
+        [this]() { return m_radioModel.lineoutMute(); });
 
     // PooDoo RX chain status tiles → wirePooDooTiles()
     // (MainWindow_DspApplets.cpp, #3351 Phase 2d).
@@ -2147,9 +2156,12 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_titleBar, &TitleBar::headphoneMuteChanged,
             &m_radioModel, &RadioModel::setHeadphoneMute);
-    connect(&m_radioModel, &RadioModel::audioOutputChanged, this, [this]() {
+    connect(&m_radioModel, &RadioModel::audioOutputChanged, this,
+            [this, lineoutAvailability]() {
+        m_titleBar->setLineoutMuted(m_radioModel.lineoutMute());
         m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
         m_titleBar->setHeadphoneMuted(m_radioModel.headphoneMute());
+        lineoutAvailability->refreshEngaged();
     });
 
     // Multi-Flex: show when another client is transmitting

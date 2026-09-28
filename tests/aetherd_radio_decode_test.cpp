@@ -30,6 +30,10 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     qRegisterMetaType<RadioDelta>();
     FlexBackend b;
+    const RadioCapabilities caps = b.capabilities();
+    CHECK(caps.lineoutMuteControl.has_value()
+          && caps.lineoutMuteControl->authority
+              == SliceFrequencyControl::Authority::Radio);
 
     // ---- key renames + typed values + "1"→bool ----
     {
@@ -42,6 +46,7 @@ int main(int argc, char** argv)
             {QStringLiteral("cal_freq"), QStringLiteral("10.0")},
             {QStringLiteral("rtty_mark_default"), QStringLiteral("2295")},
             {QStringLiteral("lineout_gain"), QStringLiteral("55")},
+            {QStringLiteral("lineout_mute"), QStringLiteral("1")},
         });
         CHECK(d.model.has_value() && *d.model == QStringLiteral("FLEX-8600"));
         CHECK(d.slicesAvailable.has_value() && *d.slicesAvailable == 4);
@@ -51,7 +56,17 @@ int main(int argc, char** argv)
         CHECK(d.calFreqMhz.has_value() && qFuzzyCompare(*d.calFreqMhz, 10.0));
         CHECK(d.rttyMarkDefault.has_value() && *d.rttyMarkDefault == 2295);
         CHECK(d.lineoutGain.has_value() && *d.lineoutGain == 55);
+        CHECK(d.lineoutMute.has_value() && *d.lineoutMute);
         CHECK(!d.nickname.has_value());   // absent → disengaged
+    }
+
+    // An external client can also unmute Line Out. A present false must not
+    // be confused with an absent field and dropped before the UI sees it.
+    {
+        const RadioDelta d = decode(b, {
+            {QStringLiteral("lineout_mute"), QStringLiteral("0")},
+        });
+        CHECK(d.lineoutMute.has_value() && !*d.lineoutMute);
     }
 
     // ---- ok-guard: malformed present numeric dropped ----

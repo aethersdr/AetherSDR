@@ -294,6 +294,8 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasClientNetworkConfig = true;
     caps.hasFlexControlIntegration = true;
     caps.hasAudioCompression = true;
+    caps.lineoutMuteControl = RadioCapabilities::RadioLineoutMuteControl{
+        SliceFrequencyControl::Authority::Radio};
     caps.hasSharpFilters = true;
     caps.usesVita49Transport = true;
     caps.hasNetworkConfigurationReadback = true;

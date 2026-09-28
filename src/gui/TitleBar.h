@@ -49,6 +49,7 @@ public:
     // back to, unlike a Flex.
     void setPcAudioLocked(bool locked);
     void setPcAudioDevices(const QString& inputDevice, const QString& outputDevice);
+    QPushButton* lineoutMuteButton() const { return m_speakerBtn; }
     void setLineoutMuted(bool muted);
     void setHeadphoneMuted(bool muted);
     void setMasterVolume(int pct);
