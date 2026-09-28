@@ -2792,8 +2792,11 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         // in one round trip, using the same parser the broadcast sweep uses.
         // Short timeout: this is on the connect path, and a board that does not
         // answer just leaves us with the conservative default below.
-        QMetaObject::invokeMethod(m_metis, [this, &host] {
+        QMetaObject::invokeMethod(m_metis, [this, &host, &mp] {
             for (const auto& d : m_metis->discover(400, host, kMetisPort)) {
+                // Keep the interface even when an older/short discovery reply
+                // omits byte 20; it is still the route that reached the radio.
+                mp.localAddress = d.localAddress;
                 if (d.reply.numRx > 0) {
                     m_boardMaxRx = d.reply.numRx;
                     break;

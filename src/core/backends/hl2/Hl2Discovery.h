@@ -7,6 +7,7 @@
 
 #include <QHash>
 #include <QHostAddress>
+#include <QList>
 #include <QObject>
 #include <QString>
 
@@ -90,6 +91,8 @@ private slots:
     void onSweepTimer();
 
 private:
+    void refreshSockets();
+
     // Radios not seen for this many consecutive sweeps are reported lost. Two
     // sweeps of slack absorbs a single dropped reply on a busy LAN.
     static constexpr int kMissedSweepsBeforeLost = 3;
@@ -99,7 +102,11 @@ private:
         int missedSweeps = 0;
     };
 
-    QUdpSocket* m_socket = nullptr;
+    // One socket per eligible local IPv4 address. Binding the discovery socket
+    // to the interface is important on multi-homed Windows hosts: a wildcard
+    // bind lets the route table choose an interface, which can leave a
+    // link-local HL2 invisible until another client has discovered it first.
+    QList<QUdpSocket*> m_sockets;
     QTimer* m_timer = nullptr;
     QHash<QString, Seen> m_seen;   // keyed by serial (the MAC string)
 };
