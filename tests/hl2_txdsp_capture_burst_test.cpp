@@ -200,7 +200,12 @@ static void expectClean(const char* name, std::size_t chunk)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
-#if !AETHER_HL2_TX_TXA
+    // Skip ONLY in a build that explicitly selects the phasing modulator
+    // (AETHER_HL2_TX_TXA=0). A bare `#if !AETHER_HL2_TX_TXA` reads an UNDEFINED
+    // macro as 0, so once #5906 removes the build option -- TXA then being the
+    // only modulator, and the macro defined nowhere -- this test would skip
+    // itself, report Passed, and run none of its checks.
+#if defined(AETHER_HL2_TX_TXA) && !AETHER_HL2_TX_TXA
     std::fprintf(stderr, "phasing modulator: synchronous, cadence cannot starve it -- skipped\n");
     return 0;
 #else
