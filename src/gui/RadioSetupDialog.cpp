@@ -2802,23 +2802,54 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* mpLbl = new QLabel("Max Power:");
         applyLabelStyle(mpLbl);
         grid->addWidget(mpLbl, 0, 0);
+        // maxPowerLevel() has two producers and they do not share a unit
+        // (#5637). A Flex reports `max_power_level` in its transmit status — a
+        // percent, and writable with `transmit set max_power_level=`. A backend
+        // that declares txPowerBands has it set by
+        // RadioModel::refreshTxPowerLimit() from the band's rated WATTS (the
+        // Hermes-Lite 2's 5 W power class), which is how the forward-power
+        // gauges already read it. So the unit follows the producer, and the
+        // field is only editable where a command plane exists to carry the
+        // write: without one the old handler's text was dropped and the next
+        // open read the rating back, which is the reported "reverts to 5".
+        const bool maxPowerIsRatedWatts =
+            !m_model->backendCapabilities().txPowerBands.isEmpty();
+        const bool maxPowerWritable = m_model->hasCommandPlane();
+
         auto* mpRow = new QHBoxLayout;
         auto* mpEdit = new QLineEdit(QString::number(tx.maxPowerLevel()));
         applyEditStyle(mpEdit);
         mpEdit->setFixedWidth(50);
+        mpEdit->setAccessibleName(tr("Max Power"));
         mpRow->addWidget(mpEdit);
-        auto* mpUnit = new QLabel("%");
+        auto* mpUnit = new QLabel(maxPowerIsRatedWatts ? QStringLiteral("W")
+                                                       : QStringLiteral("%"));
         applyLabelStyle(mpUnit);
         mpRow->addWidget(mpUnit);
         mpRow->addStretch(1);
         grid->addLayout(mpRow, 0, 1);
 
-        connect(mpEdit, &QLineEdit::editingFinished, this, [this, mpEdit] {
-            int val = qBound(0, mpEdit->text().toInt(), 100);
-            mpEdit->setText(QString::number(val));
-            m_model->sendCommand(
-                QString("transmit set max_power_level=%1").arg(val));
-        });
+        if (maxPowerWritable) {
+            connect(mpEdit, &QLineEdit::editingFinished, this, [this, mpEdit] {
+                int val = qBound(0, mpEdit->text().toInt(), 100);
+                mpEdit->setText(QString::number(val));
+                m_model->sendCommand(
+                    QString("transmit set max_power_level=%1").arg(val));
+            });
+        } else {
+            // Read-only rather than disabled: the value is still the radio's
+            // real power class and stays readable and focusable. The reason
+            // rides on accessibleDescription because a tooltip never reaches a
+            // screen reader (docs/a11y.md, #4896).
+            const QString why = maxPowerIsRatedWatts
+                ? tr("The radio's rated output. This radio does not accept a "
+                     "maximum power setting from here.")
+                : tr("This radio does not accept a maximum power setting "
+                     "from here.");
+            mpEdit->setReadOnly(true);
+            mpEdit->setToolTip(why);
+            mpEdit->setAccessibleDescription(why);
+        }
 
         auto* swLbl = new QLabel("Show TX in Waterfall:");
         applyLabelStyle(swLbl);
