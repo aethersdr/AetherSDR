@@ -7494,7 +7494,7 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // the gate off for m_mox, for the radio's OWN ptt, and for
     // kBandscopeUnkeyHoldoffMs after unkey, and bandscopeArm() refuses
     // silently on it — so no block arrives while keyed, and three seconds into
-    // an over these four rows read as dashes (JSON null on the bridge) until
+    // an over these six rows read as dashes (JSON null on the bridge) until
     // unkey plus the hold-off plus one gate period. The honest answer: the
     // converter is being shown our own PA rather than the band, the sensor is
     // not sampling it, and the last pre-key number presented as current is
@@ -7519,6 +7519,25 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // (#5802.)
     put("adcRmsDbfs", QStringLiteral("ADC RMS, AC (uncalibrated pre-DDC dBFS)"),
         dbfs(rms));
+    // The mean the RMS row just removed, published rather than discarded
+    // (#5856): with the RMS AC-referred and the peak absolute, a large crest
+    // below means EITHER a peaky signal OR a large mean under a quiet band,
+    // and this is the row that says which.
+    //
+    // LABELLED BY WHERE IT IS MEASURED, NOT BY A CAUSE. It is the DC level at
+    // the converter's output; on at least one bench it tracks analog gain, so
+    // "converter offset" would assert a mechanism nobody has shown. Same
+    // scale and same gate as its neighbours: absent before a block and after
+    // the expiry above. See Ep4Stats::dcDbfs() for the floor rule — a
+    // non-zero mean under half a code reports below kEp4FloorDbfs rather than
+    // being clamped to it, as adcRmsDbfs does.
+    put("adcDcDbfs", QStringLiteral("ADC DC level (uncalibrated pre-DDC dBFS)"),
+        dbfs(haveBlock ? m_bandscopeBlock.dcDbfs() : 0.0));
+    // The SAME mean, signed, in raw codes. A dBFS magnitude cannot say which
+    // rail the level sits toward, and the sign is part of reading it.
+    put("adcDcCodes", QStringLiteral("ADC DC level (signed codes)"),
+        haveBlock ? QVariant(QString::number(m_bandscopeBlock.meanCodes(), 'f', 2))
+                  : QVariant());
     // Peak-to-RMS, which is the one figure here that IS scale-free: it
     // survives the missing calibration intact, because both terms carry the
     // same unknown offset and it cancels.
@@ -7529,9 +7548,8 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // inflated the denominator and dragged the reading toward the carrier end
     // whatever the antenna was doing. With the RMS now AC-referred and the
     // peak still absolute (ruled on PR #5832), a large crest means EITHER a
-    // peaky signal OR a large DC offset under a quiet band; surfacing the
-    // offset itself (an adcDcDbfs row) is #5856, and until it exists this row
-    // cannot tell those two apart.
+    // peaky signal OR a large DC level under a quiet band; this row alone
+    // cannot tell those two apart, and adcDcDbfs above is what does (#5856).
     //
     // NOT REPORTED, rather than fabricated, when either term is at or below
     // the floor: that constant is a sentinel meaning "below the smallest code

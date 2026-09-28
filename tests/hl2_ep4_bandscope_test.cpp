@@ -512,6 +512,113 @@ int main()
         check(!silent->crestDb().has_value(), "an all-zero block reports no crest");
     }
 
+    // ---- 12 · the DC level the RMS removes is published, with its sign (#5856) ----
+    //
+    // rmsDbfs() is AC-referred and peakDbfs() is absolute, so a large crest
+    // means EITHER a peaky signal OR a large mean under a quiet band. dcDbfs()
+    // is what tells those apart, and meanCodes() keeps the polarity a dBFS
+    // magnitude cannot carry.
+    //
+    // WHERE, NOT WHY. This is the mean of the codes at the converter's output.
+    // Nothing here says the converter produced it — on at least one bench the
+    // level tracks analog gain, so its cause is open.
+    {
+        constexpr int kDc = 1200;
+        const double expectedDbfs =
+            20.0 * std::log10(static_cast<double>(kDc) / static_cast<double>(kEp4FullScale));
+
+        // PURE PEDESTAL, positive. The whole record is its mean.
+        const auto up = ep4Stats(makeEp4(0, {kDc}));
+        check(up.has_value(), "the positive pedestal fixture parses");
+        if (!up.has_value()) {
+            return 1;
+        }
+        check(approx(up->dcDbfs(), expectedDbfs, 1e-9),
+              "a +K pedestal reads 20*log10(K/kEp4FullScale)");
+        check(approx(up->meanCodes(), static_cast<double>(kDc), 1e-12),
+              "...and its signed mean is +K codes");
+
+        // NEGATIVE PEDESTAL. Same magnitude, so the same dBFS — the sign is
+        // exactly what the dBFS row cannot say and the codes row must.
+        const auto down = ep4Stats(makeEp4(0, {-kDc}));
+        check(down.has_value(), "the negative pedestal fixture parses");
+        if (!down.has_value()) {
+            return 1;
+        }
+        check(approx(down->dcDbfs(), expectedDbfs, 1e-9),
+              "a -K pedestal reads the SAME dBFS as +K");
+        check(approx(down->meanCodes(), -static_cast<double>(kDc), 1e-12),
+              "...and its signed mean is -K codes, not +K");
+
+        // ZERO MEAN with real AC: the floor sentinel, not -inf and not NaN.
+        const auto ac = ep4Stats(makeEp4(0, {400, -400}));
+        check(ac.has_value(), "the zero-mean fixture parses");
+        if (!ac.has_value()) {
+            return 1;
+        }
+        check(approx(ac->meanCodes(), 0.0, 1e-12), "a symmetric record has zero mean");
+        check(ac->dcDbfs() == kEp4FloorDbfs, "a zero-mean block reads the floor sentinel");
+
+        // An all-zero block and an empty record: the floor too.
+        const auto silent = ep4Stats(makeEp4(0, {0}));
+        check(silent.has_value() && silent->dcDbfs() == kEp4FloorDbfs,
+              "an all-zero block reads the floor sentinel");
+        const Ep4Stats empty;
+        check(empty.dcDbfs() == kEp4FloorDbfs, "a record with no samples reads the floor");
+        check(empty.meanCodes() == 0.0, "...and claims no mean");
+
+        // SUB-HALF-CODE MEAN: reported BELOW the floor, not clamped to it —
+        // the same choice rmsDbfs() makes for a sub-half-code deviation. The
+        // sentinel means "nothing to report"; a mean of 1/512 of a code is
+        // something, just very small, and a reader thresholding on the floor
+        // sees it as below it either way.
+        std::vector<int> oneCode(kEp4SamplesPerPacket, 0);
+        oneCode[0] = 1;
+        const auto tiny = ep4Stats(makeEp4(0, oneCode));
+        check(tiny.has_value(), "the one-code fixture parses");
+        if (!tiny.has_value()) {
+            return 1;
+        }
+        const double tinyExpected =
+            20.0 * std::log10((1.0 / static_cast<double>(kEp4SamplesPerPacket))
+                              / static_cast<double>(kEp4FullScale));
+        check(tiny->dcDbfs() < kEp4FloorDbfs,
+              "a sub-half-code mean computes BELOW the floor, not at it");
+        check(approx(tiny->dcDbfs(), tinyExpected, 1e-9),
+              "...at the level its mean actually has");
+
+        // MERGED BLOCK: one mean over the whole 2048-sample concatenation.
+        // The pedestals differ per packet AND differ in sign, so each wrong
+        // answer is distinguishable: the mean of the four is +300, the mean of
+        // their magnitudes is 750, and an average of four per-packet dBFS
+        // figures is neither.
+        const int pedestals[kEp4PacketsPerBlock] = {300, 600, -900, 1200};
+        Ep4Stats block;
+        double perPacketDbfs = 0.0;
+        for (int p = 0; p < kEp4PacketsPerBlock; ++p) {
+            const int dc = pedestals[p];
+            const auto pkt =
+                ep4Stats(makeEp4(static_cast<std::uint32_t>(p), {400 + dc, -400 + dc}));
+            check(pkt.has_value(), "the per-packet pedestal fixtures parse");
+            if (!pkt.has_value()) {
+                return 1;
+            }
+            perPacketDbfs += pkt->dcDbfs();
+            block.merge(*pkt);
+        }
+        perPacketDbfs /= static_cast<double>(kEp4PacketsPerBlock);
+        const double blockMean = (300.0 + 600.0 - 900.0 + 1200.0) / 4.0;
+        const double blockExpected =
+            20.0 * std::log10(blockMean / static_cast<double>(kEp4FullScale));
+        check(block.samples == kEp4BlockSamples, "four packets make a block");
+        check(approx(block.meanCodes(), blockMean, 1e-9),
+              "the block's mean is the concatenation's, sign included");
+        check(approx(block.dcDbfs(), blockExpected, 1e-9),
+              "the block's DC dBFS is taken once over the concatenation");
+        check(!approx(block.dcDbfs(), perPacketDbfs, 1e-3),
+              "...and is NOT an average of the four packets' answers");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_ep4_bandscope_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

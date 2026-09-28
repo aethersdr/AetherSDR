@@ -3593,8 +3593,8 @@ no stream-free source aimed, or a family that publishes no health rows. Check
 `connected` to tell those apart.
 
 **Where a row can expire, a companion age row tells you which silence it is.**
-The HL2's four converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcCrestDb` and
-`adcClippedPerBlock` — come from a gated sensor, and they go `null` once the
+The HL2's six converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcDcDbfs`,
+`adcDcCodes`, `adcCrestDb` and `adcClippedPerBlock` — come from a gated sensor, and they go `null` once the
 newest block has stopped describing now, which includes the whole of any
 transmission longer than about three seconds. `adcObservedAgoMs` is deliberately
 **not** expired with them: a `null` beside an age of `46810` means *reported,

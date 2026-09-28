@@ -39,6 +39,7 @@
 #include <QVariant>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <span>
@@ -294,6 +295,18 @@ int main(int argc, char** argv)
         // looked at".
         check(!has("adcPeakDbfs") && !has("adcRmsDbfs") && !has("adcCrestDb"),
               "the headroom rows are ABSENT, not zero, before any block");
+        // The DC-level pair too (#5856): a mean of 0 codes would read as "no
+        // pedestal", which is an answer, and nothing has been measured yet.
+        check(!has("adcDcDbfs") && !has("adcDcCodes"),
+              "the DC-level rows are ABSENT, not zero, before any block");
+        // ...and DECLARED: absent is a withheld value, not a missing row, so
+        // the dialog shows a dash in place rather than a list that changes
+        // shape when the first block lands.
+        check(snap.order.contains(QStringLiteral("adcDcDbfs"))
+                  && snap.labels.contains(QStringLiteral("adcDcDbfs"))
+                  && snap.order.contains(QStringLiteral("adcDcCodes"))
+                  && snap.labels.contains(QStringLiteral("adcDcCodes")),
+              "the DC-level rows keep their place and label before any block");
 
         // The verb. Counted rather than spied so this target needs no Qt6::Test.
         int results = 0;
@@ -401,6 +414,15 @@ int main(int argc, char** argv)
                   && value(fresh, "adcCrestDb").toString()
                          == QString::number(*blk.crestDb(), 'f', 2),
               "...and the crest row carries this block's crest");
+        // The DC-level pair (#5856), gated by the same expiry. This block has
+        // no mean, so the dBFS row is the floor and the codes row is zero --
+        // still REPORTED, because "measured, and zero" is an answer.
+        check(value(fresh, "adcDcDbfs").toString()
+                  == QString::number(blk.dcDbfs(), 'f', 2),
+              "...and the DC-level row carries this block's DC dBFS");
+        check(value(fresh, "adcDcCodes").toString()
+                  == QString::number(blk.meanCodes(), 'f', 2),
+              "...and the signed-mean row carries this block's mean");
         check(has(fresh, "adcObservedAgoMs")
                   && value(fresh, "adcObservedAgoMs").toLongLong() < kHeadroomMaxAgeMs,
               "...and the age row reports an age inside the expiry");
@@ -415,6 +437,8 @@ int main(int argc, char** argv)
         check(!has(stale, "adcPeakDbfs"), "an expired block withholds the peak");
         check(!has(stale, "adcRmsDbfs"), "an expired block withholds the RMS");
         check(!has(stale, "adcCrestDb"), "an expired block withholds the crest");
+        check(!has(stale, "adcDcDbfs"), "an expired block withholds the DC level");
+        check(!has(stale, "adcDcCodes"), "an expired block withholds the signed mean");
         check(!has(stale, "adcClippedPerBlock"),
               "an expired block withholds the rail count -- a frozen zero reads "
               "as 'not clipping', which is the dangerous direction");
@@ -423,7 +447,8 @@ int main(int argc, char** argv)
         // reverted on PR #5650 round 3; put() keeps the key in order and labels
         // and withholds only the value, and that is what a reader sees.
         check(listed(stale, "adcPeakDbfs") && listed(stale, "adcRmsDbfs")
-                  && listed(stale, "adcCrestDb") && listed(stale, "adcClippedPerBlock"),
+                  && listed(stale, "adcCrestDb") && listed(stale, "adcClippedPerBlock")
+                  && listed(stale, "adcDcDbfs") && listed(stale, "adcDcCodes"),
               "...while the rows keep their place and their labels");
 
         // AND THE AGE ROW SURVIVES THE EXPIRY IT CAUSED. Four dashes and no age
@@ -497,7 +522,8 @@ int main(int argc, char** argv)
             }
 
             for (const char* key : {"adcPeakDbfs", "adcRmsDbfs",
-                                    "adcCrestDb", "adcClippedPerBlock"}) {
+                                    "adcCrestDb", "adcClippedPerBlock",
+                                    "adcDcDbfs", "adcDcCodes"}) {
                 const QString k = QString::fromLatin1(key);
                 check(!offlineRows.values.contains(k),
                       "Hl2TelemetryService must not publish a converter row the "
@@ -508,8 +534,11 @@ int main(int argc, char** argv)
             }
         }
 
-        // NOT A LATCH: a new block restores the rows.
+        // NOT A LATCH: a new block restores the rows. This one carries a
+        // NEGATIVE mean of 32 codes, so the sign survives the backend: the
+        // dBFS row cannot say which way the pedestal sits and adcDcCodes must.
         blk.peakAbs = 1024;
+        blk.sum = -32.0 * static_cast<double>(kEp4BlockSamples);
         Hl2HealthBlockTestAccess::deliverBlock(backend, blk);
         const AetherSDR::IRadioBackend::HealthSnapshot again = backend.healthSnapshot();
         check(has(again, "adcPeakDbfs")
@@ -519,6 +548,12 @@ int main(int argc, char** argv)
         check(again.values.value(QStringLiteral("adcPeakDbfs"))
                   != fresh.values.value(QStringLiteral("adcPeakDbfs")),
               "...and the new level is the new block's, not the expired one's");
+        check(again.values.value(QStringLiteral("adcDcCodes")).toString()
+                  == QStringLiteral("-32.00"),
+              "the signed-mean row reports a negative pedestal as negative");
+        check(again.values.value(QStringLiteral("adcDcDbfs")).toString()
+                  == QString::number(20.0 * std::log10(32.0 / kEp4FullScale), 'f', 2),
+              "...and the DC-level row reports its magnitude in dBFS");
     }
 
     if (g_failures == 0)

@@ -1306,10 +1306,11 @@ struct Ep4Stats {
     // MIXED REFERENCE ON PURPOSE, and RULED: the maintainer settled #5802
     // question 1 on 2026-09-20 -- peakAbs STAYS absolute. So this pairing is a
     // decision, not an omission, and nothing here should be read as having
-    // pre-empted it. A signed pedestal row to sit beside these is tracked at
-    // #5856, which is where a reader should go next rather than to #5802 --
-    // including for the bench evidence that the removed mean tracks analog
-    // gain, so it is not a converter offset on at least one radio.
+    // pre-empted it. The mean the RMS removes is published beside these by
+    // dcDbfs() and meanCodes() below (#5856), which is where a reader should
+    // go next rather than to #5802 -- including for the bench evidence that
+    // the removed mean tracks analog gain, so it is not a converter offset on
+    // at least one radio.
     [[nodiscard]] double peakDbfs() const noexcept;
     [[nodiscard]] double rmsDbfs()  const noexcept;
     // Peak-to-RMS in dB, or nullopt when the record cannot support one.
@@ -1333,6 +1334,33 @@ struct Ep4Stats {
     // peak and RMS rows still report what they each computed; only the derived
     // ratio declines to exist. (#5802, and the floor nit on PR #5832.)
     [[nodiscard]] std::optional<double> crestDb() const noexcept;
+    // The MEAN of the record — the DC level rmsDbfs() removes — published
+    // rather than discarded, so a large crest can be read as a peaky signal
+    // or as a large mean under a quiet band, which the crest alone cannot
+    // tell apart. (#5856.)
+    //
+    // WHERE IT IS MEASURED, NOT WHAT CAUSES IT. This is the level at the
+    // converter's output, on the same uncalibrated pre-DDC scale as the peak
+    // and RMS. It is deliberately not called a converter offset: on at least
+    // one bench it grew about 21-fold across a 31 dB analog-gain sweep, which
+    // a static offset after the analog gain would not do, so its cause is
+    // open. Name and describe it by where it is seen.
+    //
+    // dcDbfs() is 20*log10(|mean| / kEp4FullScale). kEp4FloorDbfs is returned
+    // ONLY when there is nothing to report — no samples, or a mean of exactly
+    // zero — and a non-zero mean smaller than half a code computes BELOW the
+    // floor rather than being clamped to it. That is rmsDbfs()'s choice for a
+    // sub-half-code deviation, taken for the same reason: the sentinel means
+    // "no level", and a tiny level is still a level. crestDb() already treats
+    // anything <= the floor as unusable, so nothing downstream is misled.
+    [[nodiscard]] double dcDbfs() const noexcept;
+    // The same mean, SIGNED, in raw converter codes (-2048..+2047 scale). A
+    // dBFS magnitude cannot tell a pedestal sitting toward the positive rail
+    // from its mirror, and on a mean this large that distinction is part of
+    // the diagnosis. 0.0 for a record with no samples; callers that must
+    // distinguish "no record" from "zero mean" check `samples` first, exactly
+    // as healthSnapshot() gates every row here.
+    [[nodiscard]] double meanCodes() const noexcept;
     // Fold another packet's statistics in. Peak takes the max, everything else
     // sums — which is what makes a block's stats the same shape as a packet's.
     // `sum` sums for exactly the reason sumSquares does: both are linear in
