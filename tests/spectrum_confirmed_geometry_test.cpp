@@ -5,6 +5,8 @@
 #include "gui/MainWindowHelpers.h"
 #include "RtlInjectedDevice.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/ThemeManager.h"
+#include <QDir>
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include "models/SliceModel.h"
@@ -25,6 +27,24 @@ using namespace AetherSDR;
 
 namespace AetherSDR {
 struct SpectrumOffscreenTestAccess {
+    static QImage broadcast(SpectrumWidget& widget, const QColor& field, const QBrush& inherited,
+                            bool& brushRestored, QPoint& backgroundSample) {
+        widget.updateBroadcastOverlayTicker(QRect(0, 0, widget.width(), widget.height()));
+        QImage image(widget.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(field);
+        QPainter painter(&image);
+        painter.setBrush(inherited); // Same state left by the real slice marker.
+        widget.drawBroadcastOverlays(painter, QRect(0, 0, widget.width(), widget.height()));
+        brushRestored = painter.brush() == inherited;
+        const int width = widget.m_broadcastTickers.front().labelWidth() + 12;
+        const int x = widget.mhzToX(widget.m_broadcastOverlays.front().frequencyHz / 1.0e6);
+        const int left = std::clamp(x - width / 2, 6, widget.width() - width - 6);
+        QFont font = widget.font(); font.setPixelSize(12);
+        backgroundSample = QPoint(left + 2, 52 + (QFontMetrics(font).height() + 6) / 2);
+        painter.end();
+        return image;
+    }
+
     static const QVector<float>& trace(const SpectrumWidget& widget) { return widget.displaySpectrumBins(); }
     static QVector<float> supplemental(const SpectrumWidget& widget, const QVector<float>& bins,
                                        double low, double high, bool sameScale) {
@@ -99,6 +119,41 @@ int main(int argc, char** argv)
         std::printf("[%s] %s\n", ok ? "OK" : "FAIL", name);
         failures += !ok;
     };
+    {
+        ThemeManager& theme = ThemeManager::instance();
+        const QString originalTheme = theme.activeTheme();
+        SpectrumWidget broadcast;
+        broadcast.resize(800, 200);
+        broadcast.observeFrequencyRange(100.3, 2.4);
+        const WfmBroadcastOverlayRecord record{3, 11, 22, 33, 100300000, 0,
+            QStringLiteral("Station"), QStringLiteral("A complete broadcast title"), QStringLiteral("Artist")};
+        broadcast.setBroadcastOverlays({record});
+        check(broadcast.accessibleDescription().contains(record.displayText()),
+              "broadcast paging retains full metadata in the composed accessible description");
+        for (const QString& name : {QStringLiteral("Default Dark"), QStringLiteral("Default Light")}) {
+            check(theme.setActiveTheme(name), "bundled broadcast contrast theme loads");
+            for (const QString& fieldToken : {QStringLiteral("color.background.0"), QStringLiteral("color.text.primary")}) {
+                const QBrush inherited(theme.color(QStringLiteral("color.slice.a")));
+                bool restored = false; QPoint sample;
+                const QImage image = SpectrumOffscreenTestAccess::broadcast(
+                    broadcast, theme.color(fieldToken), inherited, restored, sample);
+                check(image.pixelColor(sample) == theme.color(QStringLiteral("color.background.0")),
+                      "broadcast border does not repaint themed background with inherited slice brush");
+                check(restored, "broadcast painting restores the caller brush");
+                const QString output = qEnvironmentVariable("AETHER_WFM_APPLET_SCREENSHOT_DIR");
+                if (!output.isEmpty()) {
+                    const QString file = QStringLiteral("broadcast-fixture-%1-%2.png")
+                        .arg(name.endsWith(QStringLiteral("Dark")) ? QStringLiteral("dark") : QStringLiteral("light"))
+                        .arg(fieldToken.endsWith(QStringLiteral("primary")) ? QStringLiteral("bright-field") : QStringLiteral("dark-field"));
+                    check(image.save(QDir(output).filePath(file)), "broadcast contrast fixture image saved");
+                }
+            }
+        }
+        check(theme.setActiveTheme(originalTheme), "original isolated theme restored after broadcast fixture");
+        broadcast.setBroadcastOverlays({});
+        check(!broadcast.accessibleDescription().contains(record.displayText()),
+              "overlay off removes full metadata from accessible presentation");
+    }
     {
         SpectrumWidget trace;
         trace.updateSpectrum(QVector<float>(32,-80));

@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/backends/SliceDelta.h"
 #include "gui/WfmBroadcastOverlay.h"
+#include "gui/WfmBroadcastTicker.h"
 #include "gui/WfmPresentationSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -75,6 +76,111 @@ class BroadcastOverlayTest : public QObject {
     Q_OBJECT
 private slots:
     void init() { AppSettings::instance().remove(QStringLiteral("WfmApplet")); }
+    void tickerPagesUseWordBoundariesAndReadableEndpointPauses()
+    {
+        WfmBroadcastOverlayRecord record{3, 11, 22, 33, 100300000, 0,
+            QStringLiteral("Station"), QStringLiteral("One two three four five six seven eight nine ten eleven twelve"), {}};
+        const WfmBroadcastOverlayRecord original = record;
+        QFont font; font.setPixelSize(12);
+        const QFontMetrics metrics(font);
+        const int width = metrics.horizontalAdvance(QStringLiteral("One two three"));
+        WfmBroadcastTicker ticker;
+        QVERIFY(ticker.setContent(record));
+        QVERIFY(ticker.layout(font, width));
+        QVERIFY(ticker.pages().size() > 3);
+        QCOMPARE(ticker.pages().join(QLatin1Char(' ')), record.displayText().simplified());
+        for (const QString& page : ticker.pages()) { QVERIFY(metrics.horizontalAdvance(page) <= width); }
+        const int stableWidth = ticker.labelWidth();
+        QVERIFY(!ticker.advance(100, true));
+        QVERIFY(!ticker.advance(5099, true));
+        QVERIFY(ticker.advance(5100, true));
+        QCOMPARE(ticker.pageIndex(), 1);
+        QVERIFY(!ticker.advance(8099, true));
+        QVERIFY(ticker.advance(8100, true));
+        qint64 now = 8100;
+        while (ticker.pageIndex() < ticker.pages().size() - 1) {
+            now += 3000;
+            QVERIFY(ticker.advance(now, true));
+        }
+        QVERIFY(!ticker.advance(now + 4999, true));
+        QVERIFY(ticker.advance(now + 5000, true));
+        QCOMPARE(ticker.pageIndex(), 0);
+        QCOMPARE(ticker.labelWidth(), stableWidth);
+        QVERIFY(record == original); // Paging never mutates/reinserts metadata.
+    }
+    void tickerIgnoresControlRevisionsButResetsContentServiceAndGeneration()
+    {
+        WfmBroadcastOverlayRecord record{3, 11, 22, 33, 100300000, 0,
+            QStringLiteral("Station"), QStringLiteral("A longer station announcement with many words for paging"), {}};
+        QFont font; font.setPixelSize(12);
+        WfmBroadcastTicker ticker;
+        ticker.setContent(record); ticker.layout(font, 100);
+        ticker.advance(0, true); QVERIFY(ticker.advance(5000, true));
+        const int page = ticker.pageIndex();
+        ++record.revision;
+        QVERIFY(!ticker.setContent(record));
+        QVERIFY(!ticker.layout(font, 100));
+        QCOMPARE(ticker.pageIndex(), page);
+        QVERIFY(!ticker.advance(6000, false));
+        QVERIFY(!ticker.advance(90000, true)); // Hidden time is not catch-up work.
+        QCOMPARE(ticker.pageIndex(), page);
+        QVERIFY(!ticker.advance(92999, true));
+        QVERIFY(ticker.advance(93000, true));
+        record.title = QStringLiteral("Replacement text at the same frequency");
+        QVERIFY(ticker.setContent(record)); ticker.layout(font, 100);
+        QCOMPARE(ticker.pageIndex(), 0);
+        QVERIFY(!ticker.fullText().contains(QStringLiteral("announcement")));
+        for (int change = 0; change < 4; ++change) {
+            ticker.advance(0, true); QVERIFY(ticker.advance(5000, true));
+            if (change == 0) { ++record.program; }
+            if (change == 1) { ++record.receiverEpoch; }
+            if (change == 2) { ++record.sessionId; }
+            if (change == 3) { ++record.frequencyHz; }
+            QVERIFY(ticker.setContent(record)); ticker.layout(font, 100);
+            QCOMPARE(ticker.pageIndex(), 0);
+        }
+        record.title.clear(); record.stationName.clear(); record.artist.clear();
+        QVERIFY(ticker.setContent(record)); ticker.layout(font, 400);
+        QCOMPARE(ticker.pages().size(), 1);
+        QVERIFY(!ticker.advance(0, true)); QVERIFY(!ticker.advance(100000, true));
+        QCOMPARE(ticker.pageText(), record.displayText());
+        ticker = {}; // Overlay off/loss removes presentation state entirely.
+        QVERIFY(ticker.fullText().isEmpty()); QVERIFY(ticker.pages().isEmpty());
+        QVERIFY(!ticker.advance(200000, true));
+        ticker.setContent(record); ticker.layout(font, 400);
+        QCOMPARE(ticker.pageIndex(), 0);
+    }
+    void tickerLongWordsPreserveUnicodeGraphemesAndAlwaysAdvance()
+    {
+        QFont font; font.setPixelSize(12);
+        const QString cluster = QString::fromUtf8("👩🏽‍🚀");
+        const QString combining = QString::fromUtf8("é");
+        WfmBroadcastOverlayRecord record{3, 11, 22, 33, 100300000, 0,
+            {}, cluster.repeated(20) + combining.repeated(20), {}};
+        WfmBroadcastTicker ticker;
+        ticker.setContent(record);
+        const int width = std::max(QFontMetrics(font).horizontalAdvance(cluster),
+                                   QFontMetrics(font).horizontalAdvance(QStringLiteral("HD Radio")));
+        ticker.layout(font, width);
+        QVERIFY(ticker.pages().size() > 2);
+        QString reconstructed;
+        for (const QString& page : ticker.pages()) { QVERIFY(!page.isEmpty()); reconstructed += page; }
+        QString expected = ticker.fullText(); expected.remove(QLatin1Char(' '));
+        reconstructed.remove(QLatin1Char(' '));
+        QCOMPARE(reconstructed, expected);
+        for (const QString& page : ticker.pages()) {
+            QString remainder = page;
+            remainder.remove(cluster); remainder.remove(combining);
+            QVERIFY(!remainder.contains(QChar(0x200d))); // No partial joiner sequence.
+            QVERIFY(!remainder.contains(QChar(0x0301))); // No detached combining mark.
+            for (const QChar ch : remainder) { QVERIFY(!ch.isSurrogate()); }
+        }
+        ticker.layout(font, 1); // Even an oversized glyph beside a space must progress.
+        reconstructed.clear();
+        for (const QString& page : ticker.pages()) { QVERIFY(!page.isEmpty()); reconstructed += page; }
+        reconstructed.remove(QLatin1Char(' '));
+        QCOMPARE(reconstructed, expected);
+    }
     void freshDefaultAndExplicitFalseHaveOnePersistentOwner()
     {
         auto& settings = WfmPresentationSettings::instance();

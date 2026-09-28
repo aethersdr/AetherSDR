@@ -3,6 +3,7 @@
 #include "AutoBlackMode.h"
 #include "RfGainPresentation.h"
 #include "WfmBroadcastOverlay.h"
+#include "WfmBroadcastTicker.h"
 
 #include <limits>
 #include <algorithm>
@@ -1056,6 +1057,7 @@ private:
                         const QRect& wfRect = QRect());
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
     void drawBroadcastOverlays(QPainter& p, const QRect& specRect);
+    void updateBroadcastOverlayTicker(const QRect& specRect, bool presentPages = true);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
     void drawSquelchLine(QPainter& p, const QRect& specRect);
@@ -2104,6 +2106,8 @@ private:
     bool m_tnfGlobalEnabled{true};
     QVector<SpotMarker> m_spotMarkers;
     QVector<WfmBroadcastOverlayRecord> m_broadcastOverlays;
+    QVector<WfmBroadcastTicker> m_broadcastTickers;
+    QElapsedTimer m_broadcastClock;
     QVector<SwrSweepPoint> m_swrSweepPoints;
     bool   m_swrSweepRunning{false};
     double m_swrSweepCurrentFreqMhz{-1.0};
