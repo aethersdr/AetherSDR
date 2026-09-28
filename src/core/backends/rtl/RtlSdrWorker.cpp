@@ -328,15 +328,37 @@ void RtlSdrWorker::rtlsdrCallback(unsigned char* buf, std::uint32_t len, void* c
         return;
     }
     const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+    RtlStartupTrace* const trace = worker->m_startupTrace.get();
+    const std::uint64_t attemptsBefore = trace ? trace->packetAttempts : 0;
+    const std::uint64_t dropsBefore = trace ? trace->packetDrops : 0;
+    if (trace) {
+        trace->callbackStartNs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(started.time_since_epoch()).count());
+        trace->callbackIndex = worker->m_callbackCount.load(std::memory_order_relaxed) + 1;
+        if (command == Command::Receiver) {
+            trace->markProducer(RtlStartupTrace::WorkerAdoptBegin, worker->m_work->token.session,
+                worker->m_work->token.revision, worker->m_firstSample);
+        }
+    }
     const bool adopting = command == Command::Receiver && worker->m_pipeline->adopt();
-    if (adopting) { worker->applyDdc(worker->m_work->target); }
+    if (adopting) {
+        worker->applyDdc(worker->m_work->target);
+        if (trace) {
+            trace->markProducer(RtlStartupTrace::WorkerAdoptEnd, worker->m_applied.session,
+                worker->m_applied.revision, worker->m_firstSample);
+        }
+    }
     worker->handleCallback(buf, len);
     // Complete is the release of ALL references into m_work, including DSP
     // output during this block. The control side may destroy it immediately.
     if (adopting) { worker->m_command.store(Command::Complete, std::memory_order_release); }
+    const auto ended = std::chrono::steady_clock::now();
     const std::uint64_t durationNs = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
+        std::chrono::duration_cast<std::chrono::nanoseconds>(ended - started).count());
     worker->recordCallback(durationNs, len / 2);
+    if (trace) {
+        trace->finishCallback(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            ended.time_since_epoch()).count()), len / 2, attemptsBefore, dropsBefore);
+    }
 }
 
 void RtlSdrWorker::handleCallback(unsigned char* buf, std::uint32_t len)

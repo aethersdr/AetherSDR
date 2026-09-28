@@ -437,6 +437,9 @@ RtlCaptureTransaction::Receiver RtlSdrBackend::initialReceiver() const
 void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
 {
     m_worker = std::move(worker);
+    m_startupTrace = qgetenv("AETHER_AUTOMATION") == "1" && qgetenv("AETHER_RTL_STARTUP_TRACE") == "1"
+        ? std::make_shared<RtlStartupTrace>() : nullptr;
+    m_worker->setStartupTrace(m_startupTrace);
     m_diagnostics = {};
     m_pcmDiagnostics.fill({});
     m_wfmStatus.fill(WfmStereoStatus::Unavailable);
@@ -565,6 +568,9 @@ void RtlSdrBackend::disconnectRadio()
         connect(worker.get(), &QThread::finished, worker.get(), &QObject::deleteLater);
         if (!worker->stopReading()) {
             worker.release();
+        } else if (m_startupTrace) {
+            qCWarning(lcRtlReceive).noquote().nospace() << "RtlStartupTrace "
+                << QString::fromUtf8(m_startupTrace->jsonAfterJoin());
         }
     }
     worker.reset();
@@ -1523,13 +1529,24 @@ bool RtlSdrBackend::acceptsFrame(quint64 session, quint64 revision) const
     return m_connected && m_published == RtlCaptureTransaction::Token{session, revision};
 }
 
+void RtlSdrBackend::markStartup(RtlStartupTrace::Kind kind, int slot)
+{
+    if (!m_startupTrace || m_startupTrace->ownerExpired) { return; }
+    m_startupTrace->markOwner(kind, m_published.session, m_published.revision,
+        m_capture.requested().revision, m_worker ? m_worker->startupDroppedPackets() : 0,
+        m_worker ? m_worker->startupQueuedPackets() : 0, slot);
+}
+
 void RtlSdrBackend::serviceCapture()
 {
     if (!m_worker) { return; }
+    markStartup(RtlStartupTrace::ServiceBegin);
     const QPointer<RtlSdrWorker> producer(m_worker.get());
     m_worker->serviceCancellation();
+    markStartup(RtlStartupTrace::ControlDone);
     const std::uint64_t previousTraceDrops = m_diagnostics.droppedTraceEvents;
     m_diagnostics = m_worker->diagnostics();
+    markStartup(RtlStartupTrace::SnapshotDone);
     if (m_diagnostics.droppedTraceEvents != previousTraceDrops) {
         qCDebug(lcRtlReceive).nospace() << "RtlReceive ms=" << QDateTime::currentMSecsSinceEpoch()
             << " kind=trace_overflow trace_drops=" << m_diagnostics.droppedTraceEvents;
@@ -1570,7 +1587,11 @@ void RtlSdrBackend::serviceCapture()
             return;
         }
         if (completion == RtlCaptureTransaction::Completion::Published) {
+            markStartup(RtlStartupTrace::PublishBegin);
             publishCapture();
+            if (producer && producer.data() == m_worker.get()) {
+                markStartup(RtlStartupTrace::PublishEnd);
+            }
             finishExtensions(true, result->token);
         } else if (completion == RtlCaptureTransaction::Completion::Failed && !m_capture.busy()) {
             const auto& state = *m_capture.confirmed();
@@ -1596,8 +1617,12 @@ void RtlSdrBackend::serviceCapture()
         }
     }
     if (m_worker) {
+        if (producer && producer.data() == m_worker.get()) {
+            markStartup(RtlStartupTrace::DrainBegin);
+        }
         drainAudio();
         if (!producer || producer.data() != m_worker.get()) { return; }
+        markStartup(RtlStartupTrace::DrainEnd);
         expireWfmObservations();
         if (!producer || producer.data() != m_worker.get()) { return; }
         if (!m_capture.busy() && m_worker->needsRepair()) { requestCapture(m_requested); }
@@ -1608,6 +1633,9 @@ void RtlSdrBackend::serviceCapture()
         if (m_pendingDrag && !m_capture.busy() && !m_waitingCaptureFrame) {
             requestViewport(true);
         }
+    }
+    if (producer && producer.data() == m_worker.get()) {
+        markStartup(RtlStartupTrace::ServiceEnd);
     }
 }
 
@@ -1949,7 +1977,14 @@ void RtlSdrBackend::emitSliceState(const RtlCaptureTransaction::Receiver& receiv
     delta.wfmReceptionDiagnostics = m_wfmReception[id];
     delta.wfmStereoStatus = m_wfmStatus[id];
     delta.modeList = capabilities().receiveModeControl->modes;
+    const QPointer<RtlSdrWorker> traceWorker(m_worker.get());
+    markStartup(RtlStartupTrace::SliceBegin, id);
     emit sliceChanged(id, delta);
+    // A synchronous observer may replace the session. Its trace cannot own
+    // an end marker from this retired publication.
+    if (traceWorker && traceWorker.data() == m_worker.get()) {
+        markStartup(RtlStartupTrace::SliceEnd, id);
+    }
 }
 
 void RtlSdrBackend::publishCapture()

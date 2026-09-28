@@ -3,6 +3,7 @@
 #include "RtlCaptureTransaction.h"
 #include "RtlReceiverRegistry.h"
 #include "RtlSquelchGate.h"
+#include "RtlStartupTrace.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -120,6 +121,9 @@ public:
     bool needsRepair() const noexcept { return m_faults.load(std::memory_order_acquire) != 0; }
     std::uint64_t droppedPackets() const noexcept { return m_drops.load(std::memory_order_relaxed); }
     bool legacy() const noexcept { return m_legacy; }
+    void setStartupTrace(RtlStartupTrace* trace) noexcept { m_startupTrace = trace; }
+    std::uint64_t startupQueuedPackets() const noexcept
+    { return (m_write.load(std::memory_order_acquire) + kPackets - m_read.load(std::memory_order_acquire)) % kPackets; }
 private:
     friend struct RtlReceivePipelineTestAccess;
     void process(const RtlReceiverRegistry::SampleBlock&, std::span<const RtlReceiverRegistry::ReceiverView>) noexcept override;
@@ -133,6 +137,7 @@ private:
                        const RtlAudioMixer::MissingMask&) noexcept override;
     void enqueueTrace(const TraceEvent&) noexcept;
     TraceEvent traceContext() const noexcept;
+    RtlStartupTrace* m_startupTrace = nullptr; // fixed before acquisition; worker retains ownership
     const bool m_enableWfm;
     RtlReceiverRegistry m_registry;
     RtlReceiverRegistry::SampleReader m_reader;

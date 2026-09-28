@@ -236,6 +236,8 @@ private:
 
     // Worker thread (owns async USB reader & RtlSdrDdc engine)
     std::unique_ptr<RtlSdrWorker> m_worker;
+    std::shared_ptr<RtlStartupTrace> m_startupTrace;
+    void markStartup(RtlStartupTrace::Kind kind, int slot = -1);
     std::array<WfmStereoStatus, 8> m_wfmStatus{};
     std::array<QElapsedTimer, 8> m_wfmObservationAge;
     std::array<QElapsedTimer, 8> m_wfmPublicationAge;

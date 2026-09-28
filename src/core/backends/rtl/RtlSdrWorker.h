@@ -13,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <utility>
 
 struct rtlsdr_dev;
 
@@ -58,6 +59,10 @@ public:
     RtlReceivePipeline::Diagnostics diagnostics() const;
     bool takeTraceEvent(RtlReceivePipeline::TraceEvent& event) { return m_pipeline->takeTraceEvent(event); }
     bool needsRepair() const { return m_pipeline->needsRepair(); }
+    void setStartupTrace(std::shared_ptr<RtlStartupTrace> trace)
+    { m_startupTrace = std::move(trace); m_pipeline->setStartupTrace(m_startupTrace.get()); }
+    std::uint64_t startupDroppedPackets() const { return m_pipeline->droppedPackets(); }
+    std::uint64_t startupQueuedPackets() const { return m_pipeline->startupQueuedPackets(); }
     void setMonitor(int slot, int gain, int pan, bool mute) { m_pipeline->setMonitor(slot, gain, pan, mute); }
 
 signals:
@@ -80,6 +85,7 @@ private:
     void cancelReading();
     void recordCallback(std::uint64_t durationNs, std::uint32_t iqSamples) noexcept;
 
+    std::shared_ptr<RtlStartupTrace> m_startupTrace;
     std::unique_ptr<Device> m_device;
     std::atomic<bool> m_readerRunning{false};
     std::atomic<bool> m_stopRequested{false};

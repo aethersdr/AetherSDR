@@ -250,6 +250,10 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
     std::span<const RtlReceiverRegistry::ReceiverView> views) noexcept
 {
     if (m_legacy) { return; }
+    if (m_startupTrace && !m_startupTrace->nativeFirstNs) {
+        m_startupTrace->markProducer(RtlStartupTrace::FirstNativeBlock, m_token.session,
+            m_token.revision, block.firstSample, -1, 0, block.samples.size());
+    }
     std::array<RtlAudioMixer::Input, 8> inputs;
     for (std::size_t i = 0; i < views.size(); ++i) {
         const auto& spec = *views[i].spec;
@@ -511,12 +515,37 @@ bool RtlReceivePipeline::enqueue(const Packet& packet) noexcept
     const unsigned write = m_write.load(std::memory_order_relaxed);
     const unsigned next = (write + 1) % kPackets;
     const unsigned read = m_read.load(std::memory_order_acquire);
-    if (next == read) { m_drops.fetch_add(1, std::memory_order_relaxed); return false; }
+    if (m_startupTrace) { ++m_startupTrace->packetAttempts; }
+    if (next == read) {
+        m_drops.fetch_add(1, std::memory_order_relaxed);
+        if (m_startupTrace) {
+            ++m_startupTrace->packetDrops;
+            if (!m_startupTrace->firstDrop) {
+                m_startupTrace->firstDrop = true;
+                m_startupTrace->markProducer(RtlStartupTrace::FirstDrop, packet.token.session,
+                    packet.token.revision, m_traceCaptureFirst, packet.slot, packet.firstSample,
+                    packet.frames, kPackets - 1);
+            }
+        }
+        return false;
+    }
+    if (m_startupTrace && m_startupTrace->firstDrop && !m_startupTrace->firstRecovery) {
+        m_startupTrace->firstRecovery = true;
+        m_startupTrace->markProducer(RtlStartupTrace::FirstRecovery, packet.token.session,
+            packet.token.revision, m_traceCaptureFirst, packet.slot, packet.firstSample,
+            packet.frames, (write + kPackets - read) % kPackets);
+    }
     m_packets[write] = packet;
     m_packets[write].enqueuedMonotonicNs = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
     const std::uint64_t queued = (next + kPackets - read) % kPackets;
+    if (m_startupTrace && queued == kPackets - 1 && !m_startupTrace->firstFull) {
+        m_startupTrace->firstFull = true;
+        m_startupTrace->markProducer(RtlStartupTrace::FirstQueueFull, packet.token.session,
+            packet.token.revision, m_traceCaptureFirst, packet.slot, packet.firstSample,
+            packet.frames, queued);
+    }
     // Sole producer: no compare/exchange loop or callback contention needed.
     if (queued > m_packetQueueHighWater.load(std::memory_order_relaxed)) {
         m_packetQueueHighWater.store(queued, std::memory_order_relaxed);
