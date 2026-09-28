@@ -616,6 +616,7 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         };
         value("rtlQueuedPackets", m_diagnostics.queuedPackets);
         value("rtlPacketQueueHighWater", m_diagnostics.packetQueueHighWater);
+        value("rtlPacketQueueCapacity", m_diagnostics.packetQueueCapacity);
         value("rtlCallbackCount", m_diagnostics.callbackCount);
         value("rtlCallbackIqSamples", m_diagnostics.callbackIqSamples);
         value("rtlMalformedCallbacks", m_diagnostics.malformedCallbacks);
@@ -684,6 +685,7 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         {QStringLiteral("rtlEvaluationProfile"), tr("Unqualified evaluation profile enabled")},
         {QStringLiteral("rtlQueuedPackets"), tr("Audio packets currently queued")},
         {QStringLiteral("rtlPacketQueueHighWater"), tr("Audio packet queue high-water mark")},
+        {QStringLiteral("rtlPacketQueueCapacity"), tr("Audio packet queue usable capacity")},
         {QStringLiteral("rtlCallbackCount"), tr("USB callbacks processed")},
         {QStringLiteral("rtlCallbackIqSamples"), tr("IQ samples delivered by USB callbacks")},
         {QStringLiteral("rtlMalformedCallbacks"), tr("Malformed USB callbacks")},

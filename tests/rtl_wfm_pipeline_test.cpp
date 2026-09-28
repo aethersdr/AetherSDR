@@ -157,8 +157,52 @@ std::complex<float> referenceIq(std::uint64_t position, double rate)
         - 0.045 * (cosineIntegral(36000) - cosineIntegral(40000)) + 0.1 * sineIntegral(19000));
     return {float(0.3 * std::cos(phase)), float(0.3 * std::sin(phase))};
 }
+void printRunFailure(Pipeline& pipeline, const Transaction::State& current,
+                     const char* phase, std::uint64_t origin,
+                     std::uint64_t position, std::uint64_t end)
+{
+    // The fault is latched until adoption. Report only after this phase ends;
+    // keep diagnostic work out of the generated-IQ feed and its pacing.
+    const auto diagnostics = pipeline.diagnostics();
+    std::fprintf(stderr, "WFM_RUN_REPAIR phase=%s session=%llu revision=%llu origin=%llu position=%llu end=%llu mixer_configuration_failures=%llu trace_drops=%llu\n",
+        phase, static_cast<unsigned long long>(current.token.session),
+        static_cast<unsigned long long>(current.token.revision), static_cast<unsigned long long>(origin),
+        static_cast<unsigned long long>(position), static_cast<unsigned long long>(end),
+        static_cast<unsigned long long>(diagnostics.mixerConfigurationFailures),
+        static_cast<unsigned long long>(diagnostics.droppedTraceEvents));
+    for (std::size_t slot = 0; slot < diagnostics.receiverWithdrawals.size(); ++slot) {
+        if (diagnostics.receiverWithdrawals[slot] == 0) { continue; }
+        std::fprintf(stderr, "WFM_RUN_WITHDRAWALS phase=%s slot=%zu count=%llu\n", phase, slot,
+            static_cast<unsigned long long>(diagnostics.receiverWithdrawals[slot]));
+    }
+    Pipeline::TraceEvent event;
+    unsigned traceCount = 0;
+    for (; traceCount < Pipeline::kTraceEvents && pipeline.takeTraceEvent(event); ++traceCount) {
+        std::fprintf(stderr, "WFM_RUN_TRACE phase=%s kind=%d session=%llu revision=%llu generation=%llu capture_epoch=%llu slot=%d stable_id=%d instance=%llu receiver_epoch=%llu capture_first=%llu capture_frames=%llu capture_clock=%llu quantum_first=%llu\n",
+            phase, static_cast<int>(event.kind), static_cast<unsigned long long>(event.token.session),
+            static_cast<unsigned long long>(event.token.revision), static_cast<unsigned long long>(event.hardwareGeneration),
+            static_cast<unsigned long long>(event.captureEpoch), event.slot, event.stableId,
+            static_cast<unsigned long long>(event.instance), static_cast<unsigned long long>(event.receiverEpoch),
+            static_cast<unsigned long long>(event.captureFirst), static_cast<unsigned long long>(event.captureFrames),
+            static_cast<unsigned long long>(event.captureClock), static_cast<unsigned long long>(event.quantumFirst));
+        if (event.failure) {
+            const auto& failure = *event.failure;
+            std::fprintf(stderr, "WFM_RUN_FAILURE phase=%s processing_reason=%d wdsp_result=%d has_expected=%d expected_capture_first=%llu capture_first=%llu capture_frames=%llu has_iq_first=%d iq_first=%llu iq_frames=%llu extraction_reason=%d converted_i=%d converted_q=%d\n",
+                phase, static_cast<int>(failure.reason), static_cast<int>(failure.processResult),
+                failure.hasExpectedCaptureFirst, static_cast<unsigned long long>(failure.expectedCaptureFirst),
+                static_cast<unsigned long long>(failure.captureFirst), static_cast<unsigned long long>(failure.captureFrames),
+                failure.hasIqFirst, static_cast<unsigned long long>(failure.iqFirst),
+                static_cast<unsigned long long>(failure.iqFrames),
+                failure.extraction ? static_cast<int>(failure.extraction->reason) : -1,
+                failure.extraction ? failure.extraction->convertedI : 0,
+                failure.extraction ? failure.extraction->convertedQ : 0);
+        }
+    }
+    // An empty or dropped trace is missing evidence, not an inferred DSP cause.
+    std::fprintf(stderr, "WFM_RUN_TRACE_END phase=%s events=%u\n", phase, traceCount);
+}
 std::array<Audio, 2> run(Pipeline& pipeline, const Transaction::State& current,
-                         std::uint64_t& position, double seconds)
+                         std::uint64_t& position, double seconds, const char* phase)
 {
     std::array<Audio, 2> result;
     for (Audio& audio : result) {
@@ -200,7 +244,9 @@ std::array<Audio, 2> run(Pipeline& pipeline, const Transaction::State& current,
         std::this_thread::sleep_until(started + std::chrono::microseconds(
             std::uint64_t((position - origin) * 1'000'000.0 / rate)));
     }
-    check(!pipeline.needsRepair(), "real WDSP processing does not withdraw the receiver");
+    const bool repair = pipeline.needsRepair();
+    if (repair) { printRunFailure(pipeline, current, phase, origin, position, end); }
+    check(!repair, "real WDSP processing does not withdraw the receiver");
     return result;
 }
 double amplitude(const std::vector<float>& samples, double hz)
@@ -223,7 +269,7 @@ void nativeRouting()
           "qualified WFM prepares and adopts the production native graph");
     if (pipeline->legacy()) { pipeline->stop(); return; }
     std::uint64_t position = 25;
-    const auto output = run(*pipeline, current, position, 4.0);
+    const auto output = run(*pipeline, current, position, 4.0, "initial-stereo");
     for (const Audio& audio : output) {
         const double left = amplitude(audio.left, 1000);
         const double leftLeak = amplitude(audio.left, 2000);
@@ -244,7 +290,7 @@ void nativeRouting()
     current.token.revision++;
     current.receivers[0].audioMute = true;
     check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(), "monitor mute adopts without replacing the receiver");
-    const auto muted = run(*pipeline, current, position, 0.5);
+    const auto muted = run(*pipeline, current, position, 0.5, "monitor-muted");
     check(muted[0].peak > 0.001 && muted[1].peak == 0, "monitor mute silences speakers while the independent tap remains live");
     check(muted[0].receiverEpoch == output[0].receiverEpoch, "monitor edits retain the decoder epoch");
 
@@ -252,7 +298,7 @@ void nativeRouting()
     current.receivers[0].audioMute = false;
     current.receivers[0].wfmDeemphasisUs = 50;
     check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(), "50 us deemphasis prepares a fresh immutable decoder recipe");
-    const auto changed = run(*pipeline, current, position, 1.0);
+    const auto changed = run(*pipeline, current, position, 1.0, "deemphasis-50us");
     check(changed[0].seen && changed[1].seen && changed[0].discontinuity && changed[1].discontinuity,
           "deemphasis changes mark both slice and speaker discontinuities");
     check(changed[0].receiverEpoch != output[0].receiverEpoch && changed[1].captureEpoch != output[1].captureEpoch,
@@ -261,7 +307,7 @@ void nativeRouting()
     current.token.revision++;
     current.receivers[0].wfmForceMono = true;
     check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(), "Force Mono prepares an accepted decoder recipe");
-    const auto mono = run(*pipeline, current, position, 4.0);
+    const auto mono = run(*pipeline, current, position, 4.0, "force-mono");
     for (const Audio& audio : mono) {
         check(audio.seen && audio.peak > 0.001 && audio.left == audio.right,
               "Force Mono is identical nonzero L/R at independent tap and speaker");
@@ -273,14 +319,14 @@ void nativeRouting()
     current.token.revision++;
     current.receivers[0].wfmForceMono = false;
     check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(), "Auto Stereo readopts");
-    const auto automatic = run(*pipeline, current, position, 4.0);
+    const auto automatic = run(*pipeline, current, position, 4.0, "auto-stereo");
     check(amplitude(automatic[0].left, 1000) > 100 * amplitude(automatic[0].right, 1000)
         && amplitude(automatic[1].right, 2000) > 100 * amplitude(automatic[1].left, 2000),
         "Auto Stereo restores separated native tap and speaker audio");
     current.token.revision++;
     current.receivingIds.clear();
     check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(), "parking admits an empty active bank");
-    const auto parked = run(*pipeline, current, position, 0.05);
+    const auto parked = run(*pipeline, current, position, 0.05, "parked");
     check(!parked[0].seen && !parked[1].seen, "parked WFM emits neither stale audio nor pilot observations");
     current.token.revision++;
     current.receivingIds = {3};
@@ -297,7 +343,7 @@ void nativeRouting()
     }
     check(resume == Pipeline::Submission::Accepted && ready(*pipeline) && pipeline->adopt(),
           "resuming waits for safe retirement before constructing a fresh WFM receiver");
-    const auto resumed = run(*pipeline, current, position, 1.5);
+    const auto resumed = run(*pipeline, current, position, 1.5, "resumed");
     check(resumed[0].seen && resumed[0].instance != changed[0].instance
               && resumed[0].discontinuity && resumed[1].discontinuity,
           "resumed WFM cannot inherit the retired receiver's PCM or pilot lifetime");
@@ -316,7 +362,7 @@ void nativeRouting()
     current.token.revision++;
     check(pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt(),
           "an unchanged WFM recipe can repair its withdrawn decoder");
-    const auto repaired = run(*pipeline, current, position, 1.0);
+    const auto repaired = run(*pipeline, current, position, 1.0, "capture-gap-repaired");
     check(repaired[0].seen && repaired[1].seen
               && repaired[0].receiverEpoch != resumed[0].receiverEpoch
               && repaired[1].captureEpoch != resumed[1].captureEpoch
@@ -431,7 +477,7 @@ void workerUnderrunTrace()
     const bool repaired = pipeline->prepare(current) && ready(*pipeline) && pipeline->adopt();
     check(repaired, "unchanged WFM recipe repairs after the real worker is released");
     if (repaired) {
-        const auto audio = run(*pipeline, current, position, 2.0);
+        const auto audio = run(*pipeline, current, position, 2.0, "held-worker-repaired");
         check(audio[0].seen && audio[1].seen && audio[0].receiverEpoch != firstSlice.receiverEpoch
                   && audio[1].captureEpoch != firstSlice.captureEpoch
                   && audio[0].discontinuity && audio[1].discontinuity,

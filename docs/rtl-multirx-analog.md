@@ -87,3 +87,25 @@ each, including CPU/thermal headroom, callback latency, queue growth, saturated
 history RSS, planning and teardown. Report failures without changing their
 thresholds after observing the result. Linux x86_64 evidence does not qualify
 Linux aarch64, macOS, Windows, mixed legacy/native rates or multiple HD workers.
+
+## Startup delivery headroom
+
+The packet ring is allocated once from the immutable process receiver capacity.
+Its usable slots are 127, 170, 254 and 424 for one, two, four and eight receivers;
+only two and four are exposed by the current evaluation launcher. Native WFM
+produces one 256-frame tap per receiver plus a shared 128-frame speaker stream
+at 48 kHz. Scaling by that packet rate preserves at least the original one-RX
+nominal 225.8 ms buffering time. The qualified one-RX queue stays at 128 allocated
+slots, including its empty sentinel. No allocation occurs during acquisition.
+
+A four-WFM startup trace showed 151 ms spent synchronously publishing the bank,
+with all 53 observed packet drops inside that span. The former shared 127-slot
+usable ring covered only 112.9 ms at four WFM receivers. The scaled ring retains
+publication order and the existing 128-packet per-service drain bound; it does
+not shorten UI work or tolerate sustained overload. A process admitted for four
+receivers retains its larger ring even with fewer receivers currently active,
+so it can hold more queued latency in that state. `rtlPacketQueueCapacity`
+reports actual usable slots. Occupancy is sampled current backlog; drops and
+high-water remain lifetime observations.
+Old 127-packet high-water screening results remain historical comparisons and
+must not be described as the current ring's full condition.

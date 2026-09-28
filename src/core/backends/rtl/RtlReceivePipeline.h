@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <optional>
+#include <memory>
 
 namespace AetherSDR::rtl {
 // One acquisition context and one serialized control owner. Preparation,
@@ -27,6 +28,7 @@ public:
         std::uint64_t droppedTraceEvents = 0;
         std::uint64_t queuedPackets = 0;
         std::uint64_t packetQueueHighWater = 0;
+        std::uint64_t packetQueueCapacity = 0; // usable packets, excluding the SPSC sentinel
         std::array<std::uint64_t, 8> receiverWithdrawals{};
         // The worker fills these acquisition-lifetime observations in its
         // snapshot. A pipeline-only fixture truthfully leaves them at zero.
@@ -123,7 +125,7 @@ public:
     bool legacy() const noexcept { return m_legacy; }
     void setStartupTrace(RtlStartupTrace* trace) noexcept { m_startupTrace = trace; }
     std::uint64_t startupQueuedPackets() const noexcept
-    { return (m_write.load(std::memory_order_acquire) + kPackets - m_read.load(std::memory_order_acquire)) % kPackets; }
+    { return (m_write.load(std::memory_order_acquire) + m_packetSlots - m_read.load(std::memory_order_acquire)) % m_packetSlots; }
 private:
     friend struct RtlReceivePipelineTestAccess;
     void process(const RtlReceiverRegistry::SampleBlock&, std::span<const RtlReceiverRegistry::ReceiverView>) noexcept override;
@@ -195,8 +197,10 @@ private:
     bool m_spectrumFresh = false;
     // SPSC queue. Overflow drops the new packet; the consumer observes the
     // sample-position gap and marks its next typed frame discontinuous.
-    static constexpr unsigned kPackets = 128;
-    std::array<Packet, kPackets> m_packets;
+    // Fixed before acquisition. Preserve the singleton's nominal buffering
+    // time as independent analog taps share the existing speaker queue.
+    const unsigned m_packetSlots;
+    std::unique_ptr<Packet[]> m_packets;
     alignas(64) std::atomic<unsigned> m_write{0};
     alignas(64) std::atomic<unsigned> m_read{0};
     std::atomic<std::uint64_t> m_drops{0};

@@ -7,6 +7,19 @@
 
 namespace AetherSDR::rtl {
 namespace {
+unsigned packetSlots(std::size_t capacity)
+{
+    // Native WFM is the highest analog packet rate: one 256-frame tap per
+    // receiver plus two 128-frame speaker packets, all at 48 kHz. The old
+    // 127 usable packets cover ~225 ms for one receiver but only ~113 ms for
+    // four. Startup UI publication measured 151 ms with no owner drain.
+    // Scale the same nominal headroom, rounded up, once before acquisition;
+    // the qualified singleton remains exactly 128 allocated slots. This is
+    // finite jitter tolerance, not permission to block the owner indefinitely.
+    constexpr unsigned kSingleReceiverUsablePackets = 127;
+    const unsigned receivers = static_cast<unsigned>(std::clamp<std::size_t>(capacity, 1, 8));
+    return 1 + (kSingleReceiverUsablePackets * (receivers + 2) + 2) / 3;
+}
 std::optional<std::uint64_t> mixerOrigin(std::uint64_t firstSample, double rateHz) noexcept
 {
     // The extractor accepts only integral, bounded achieved rates. Validate
@@ -41,7 +54,8 @@ WdspChannel::Mode dspMode(RtlCaptureTransaction::Mode mode)
 }
 }
 RtlReceivePipeline::RtlReceivePipeline(std::size_t capacity, bool enableWfm)
-    : m_enableWfm(enableWfm), m_registry({8, capacity, std::min<std::size_t>(32, capacity * 2)})
+    : m_enableWfm(enableWfm), m_registry({8, capacity, std::min<std::size_t>(32, capacity * 2)}),
+      m_packetSlots(packetSlots(capacity)), m_packets(std::make_unique<Packet[]>(m_packetSlots))
 {
     for (auto& monitor : m_monitor) { monitor.store(100 | (50 << 8)); }
 }
@@ -331,9 +345,10 @@ RtlReceivePipeline::Diagnostics RtlReceivePipeline::diagnostics() const noexcept
         m_mixerRejected.load(std::memory_order_relaxed),
         m_mixerConfigurationFailures.load(std::memory_order_relaxed),
         m_traceDrops.load(std::memory_order_relaxed)};
-    result.queuedPackets = (m_write.load(std::memory_order_acquire) + kPackets
-        - m_read.load(std::memory_order_acquire)) % kPackets;
+    result.queuedPackets = (m_write.load(std::memory_order_acquire) + m_packetSlots
+        - m_read.load(std::memory_order_acquire)) % m_packetSlots;
     result.packetQueueHighWater = m_packetQueueHighWater.load(std::memory_order_relaxed);
+    result.packetQueueCapacity = m_packetSlots - 1;
     for (std::size_t slot = 0; slot < m_receiverWithdrawals.size(); ++slot) {
         result.receiverWithdrawals[slot] = m_receiverWithdrawals[slot].load(std::memory_order_relaxed);
     }
@@ -513,7 +528,7 @@ bool RtlReceivePipeline::takeTraceEvent(TraceEvent& output) noexcept
 bool RtlReceivePipeline::enqueue(const Packet& packet) noexcept
 {
     const unsigned write = m_write.load(std::memory_order_relaxed);
-    const unsigned next = (write + 1) % kPackets;
+    const unsigned next = (write + 1) % m_packetSlots;
     const unsigned read = m_read.load(std::memory_order_acquire);
     if (m_startupTrace) { ++m_startupTrace->packetAttempts; }
     if (next == read) {
@@ -524,7 +539,7 @@ bool RtlReceivePipeline::enqueue(const Packet& packet) noexcept
                 m_startupTrace->firstDrop = true;
                 m_startupTrace->markProducer(RtlStartupTrace::FirstDrop, packet.token.session,
                     packet.token.revision, m_traceCaptureFirst, packet.slot, packet.firstSample,
-                    packet.frames, kPackets - 1);
+                    packet.frames, m_packetSlots - 1);
             }
         }
         return false;
@@ -533,14 +548,14 @@ bool RtlReceivePipeline::enqueue(const Packet& packet) noexcept
         m_startupTrace->firstRecovery = true;
         m_startupTrace->markProducer(RtlStartupTrace::FirstRecovery, packet.token.session,
             packet.token.revision, m_traceCaptureFirst, packet.slot, packet.firstSample,
-            packet.frames, (write + kPackets - read) % kPackets);
+            packet.frames, (write + m_packetSlots - read) % m_packetSlots);
     }
     m_packets[write] = packet;
     m_packets[write].enqueuedMonotonicNs = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
-    const std::uint64_t queued = (next + kPackets - read) % kPackets;
-    if (m_startupTrace && queued == kPackets - 1 && !m_startupTrace->firstFull) {
+    const std::uint64_t queued = (next + m_packetSlots - read) % m_packetSlots;
+    if (m_startupTrace && queued == m_packetSlots - 1 && !m_startupTrace->firstFull) {
         m_startupTrace->firstFull = true;
         m_startupTrace->markProducer(RtlStartupTrace::FirstQueueFull, packet.token.session,
             packet.token.revision, m_traceCaptureFirst, packet.slot, packet.firstSample,
@@ -558,7 +573,7 @@ bool RtlReceivePipeline::takePacket(Packet& output) noexcept
     const unsigned read = m_read.load(std::memory_order_relaxed);
     if (read == m_write.load(std::memory_order_acquire)) { return false; }
     output = m_packets[read];
-    m_read.store((read + 1) % kPackets, std::memory_order_release);
+    m_read.store((read + 1) % m_packetSlots, std::memory_order_release);
     return true;
 }
 } // namespace AetherSDR::rtl

@@ -317,25 +317,71 @@ struct RtlReceivePipelineTestAccess {
     { return pipeline.m_registry.service().requested; }
     static std::uint64_t receiverEpoch(RtlReceivePipeline& pipeline, int slot)
     { return pipeline.m_specs[slot].epoch; }
-    static bool packetQueueAccounting(RtlReceivePipeline& pipeline)
+    static bool packetQueueAccounting(RtlReceivePipeline& pipeline, unsigned expectedCapacity)
     {
         RtlReceivePipeline::Packet packet;
-        packet.producedMonotonicMs = 1234; // a decoded timestamp must not become mailbox time
-        constexpr unsigned capacity = RtlReceivePipeline::kPackets - 1;
-        for (unsigned i = 0; i < capacity; ++i) {
-            packet.firstSample = i;
-            if (!pipeline.enqueue(packet)) { return false; }
-        }
-        const auto full = pipeline.diagnostics();
-        if (full.queuedPackets != capacity || full.packetQueueHighWater != capacity
-            || full.droppedPackets != 0 || pipeline.enqueue(packet)) { return false; }
-        for (unsigned i = 0; i < capacity; ++i) {
-            if (!pipeline.takePacket(packet) || packet.firstSample != i
-                || packet.enqueuedMonotonicNs == 0 || packet.producedMonotonicMs != 1234) { return false; }
+        packet.token = {7, 11}; packet.slot = 3; packet.captureEpoch = 19;
+        packet.receiverEpoch = 23; packet.frames = 256; packet.samples[0] = .375f;
+        packet.producedMonotonicMs = 1234; // decoded time must not become mailbox time
+        if (pipeline.diagnostics().packetQueueCapacity != expectedCapacity) { return false; }
+        // Repeated fills cross the physical wrap. Drop-new must retain every
+        // accepted packet and preserve a genuine position gap on resumption.
+        for (unsigned cycle = 0; cycle < 3; ++cycle) {
+            const std::uint64_t first = cycle * (expectedCapacity + 1);
+            for (unsigned i = 0; i < expectedCapacity; ++i) {
+                packet.firstSample = first + i;
+                if (!pipeline.enqueue(packet)) { return false; }
+            }
+            const auto full = pipeline.diagnostics();
+            packet.firstSample = first + expectedCapacity;
+            if (full.queuedPackets != expectedCapacity || full.packetQueueHighWater != expectedCapacity
+                || full.droppedPackets != cycle || pipeline.enqueue(packet)) { return false; }
+            for (unsigned i = 0; i < expectedCapacity; ++i) {
+                if (!pipeline.takePacket(packet) || packet.firstSample != first + i
+                    || packet.token != RtlReceivePipeline::Transaction::Token{7, 11}
+                    || packet.slot != 3 || packet.captureEpoch != 19 || packet.receiverEpoch != 23
+                    || packet.frames != 256 || packet.samples[0] != .375f || packet.discontinuity
+                    || packet.enqueuedMonotonicNs == 0 || packet.producedMonotonicMs != 1234) { return false; }
+            }
+            if (pipeline.takePacket(packet)) { return false; }
         }
         const auto empty = pipeline.diagnostics();
-        return empty.queuedPackets == 0 && empty.packetQueueHighWater == capacity
-            && empty.droppedPackets == 1 && !pipeline.takePacket(packet);
+        return empty.queuedPackets == 0 && empty.packetQueueHighWater == expectedCapacity
+            && empty.droppedPackets == 3;
+    }
+    static bool publicationHeadroom(RtlReceivePipeline& pipeline, unsigned receivers)
+    {
+        // 192 ms without an owner drain, below the original singleton's
+        // nominal 225 ms headroom. Four UI publications measured 151 ms.
+        // Replay the real analog packet cadence: each receiver's 256-frame
+        // tap plus the shared speaker's two 128-frame quanta, at 48 kHz.
+        RtlReceivePipeline::Packet packet;
+        packet.token = {1, 3};
+        bool accepted = true;
+        for (std::uint64_t first = 0; first < 9216; first += 256) {
+            for (unsigned slot = 0; slot < receivers; ++slot) {
+                packet.slot = static_cast<int>(slot); packet.firstSample = first; packet.frames = 256;
+                accepted = pipeline.enqueue(packet) && accepted;
+            }
+            for (unsigned half = 0; half < 2; ++half) {
+                packet.slot = -1; packet.firstSample = first + half * 128; packet.frames = 128;
+                accepted = pipeline.enqueue(packet) && accepted;
+            }
+        }
+        if (!accepted || pipeline.droppedPackets() != 0) { return false; }
+        for (std::uint64_t first = 0; first < 9216; first += 256) {
+            for (unsigned slot = 0; slot < receivers; ++slot) {
+                if (!pipeline.takePacket(packet) || packet.token != RtlReceivePipeline::Transaction::Token{1, 3}
+                    || packet.slot != static_cast<int>(slot) || packet.firstSample != first
+                    || packet.frames != 256) { return false; }
+            }
+            for (unsigned half = 0; half < 2; ++half) {
+                if (!pipeline.takePacket(packet) || packet.token != RtlReceivePipeline::Transaction::Token{1, 3}
+                    || packet.slot != -1 || packet.firstSample != first + half * 128
+                    || packet.frames != 128) { return false; }
+            }
+        }
+        return !pipeline.takePacket(packet);
     }
     static bool rejectMalformedMixer(RtlReceivePipeline& pipeline)
     {
@@ -600,13 +646,35 @@ int main(int argc, char** argv)
         check(result.bounded, "epoch-prefix handling creates no missing frames, queue loss or receiver repair");
         check(callbackAllocations == allocationsBefore, "epoch-prefix publication and mixer validation allocate no callback memory");
     }
-    {
-        auto queued = std::make_unique<Pipeline>();
+    for (const auto [receivers, usable] : std::array<std::pair<unsigned, unsigned>, 4>{{
+             {1, 127}, {2, 170}, {4, 254}, {8, 424}}}) {
+        auto queued = std::make_unique<Pipeline>(receivers);
+        const auto allocationsBefore = callbackAllocations;
         inCallback = true;
-        const bool observed = AetherSDR::rtl::RtlReceivePipelineTestAccess::packetQueueAccounting(*queued);
+        const bool observed = AetherSDR::rtl::RtlReceivePipelineTestAccess::packetQueueAccounting(*queued, usable);
         inCallback = false;
-        check(observed, "bounded packet queue reports occupancy, lifetime high-water and overflow without losing accepted FIFO data");
-        check(callbackAllocations == 0, "packet queue observations allocate no callback memory");
+        check(observed, "bounded packet queue retains exact capacity, FIFO identity and drop-new gaps across wraps");
+        check(callbackAllocations == allocationsBefore, "packet queue observations allocate no callback memory");
+    }
+    for (std::size_t invalidCapacity : {std::size_t{0}, std::size_t{9},
+                                       std::numeric_limits<std::size_t>::max()}) {
+        auto invalid = std::make_unique<Pipeline>(invalidCapacity);
+        T::State requested;
+        requested.token = {42, 1}; requested.hardware.centerHz = 100000000;
+        requested.capture = {42, 1, 100000000, 2400000, 1080000, 1080000};
+        requested.receivers.push_back({{0, 100400000, -15000, 15000, 0, 3000, 3000}, T::Mode::Fm});
+        requested.receivingIds.push_back(0);
+        check(invalid->diagnostics().packetQueueCapacity <= 424 && !invalid->prepare(requested, true),
+              "invalid receiver capacity remains refused and cannot allocate an unbounded packet ring");
+    }
+    for (unsigned receivers : {1U, 2U, 4U, 8U}) {
+        auto queued = std::make_unique<Pipeline>(receivers);
+        const auto allocationsBefore = callbackAllocations;
+        inCallback = true;
+        const bool retained = AetherSDR::rtl::RtlReceivePipelineTestAccess::publicationHeadroom(*queued, receivers);
+        inCallback = false;
+        check(retained, "each admitted analog bank retains the singleton publication headroom with exact FIFO tap/speaker data");
+        check(callbackAllocations == allocationsBefore, "publication headroom allocates no acquisition or delivery memory");
     }
     {
         auto traced = std::make_unique<Pipeline>();
