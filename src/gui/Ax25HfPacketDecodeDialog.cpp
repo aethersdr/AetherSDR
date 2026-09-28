@@ -845,10 +845,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     theme::setContainer(this, QStringLiteral("dialog/ax25Decode"));
     setMinimumSize(1080, 680);
 
-    m_shim = new AetherAx25LibmodemShim();
-    m_shim->moveToThread(&m_shimThread);
-    connect(&m_shimThread, &QThread::finished, m_shim, &QObject::deleteLater);
-    m_shimThread.start();
+    if (m_radio) {
+        m_receive = std::make_unique<Ax25ReceiveModel>(*m_radio);
+    }
     m_kissServer = new KissTncServer(this);
     configureTncAuthority(true);
     m_heard = new HeardList(this);
@@ -1163,51 +1162,35 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             this, &Ax25HfPacketDecodeDialog::startTransmitFromUi);
     connect(m_txPaceTimer, &QTimer::timeout,
             this, &Ax25HfPacketDecodeDialog::paceTransmitAudio);
-    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded,
-            this, &Ax25HfPacketDecodeDialog::appendFrame);
-#ifdef HAVE_MQTT
-    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded,
-            this, &Ax25HfPacketDecodeDialog::publishFrameMqtt);
-#endif
-    // RX -> KISS clients: forward every decoded frame to connected hosts.
-    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded, this,
-            [this](const Ax25DecodedFrame& frame) {
-        if (m_kissServer && m_kissServer->isListening() && !frame.ax25FrameNoFcs.isEmpty()) {
-            m_kissServer->broadcastAx25Frame(frame.ax25FrameNoFcs);
-            ++m_kissRxCount;
-            refreshTncStatus();
-        }
-    });
-    // RX -> Mailbox: feed every decoded frame to the PMS (heard list always;
-    // connected-mode handling only for frames addressed to our PMS callsign).
-    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded, this,
-            [this](const Ax25DecodedFrame& frame) {
-        if (frame.ax25FrameNoFcs.isEmpty())
-            return;
-        // Record into the shared heard log once (drives MHEARD + quick-connect),
-        // then through the APRS parser into the station roster + messenger.
-        if (auto decoded = ax25::Frame::decode(frame.ax25FrameNoFcs)) {
-            if (m_heard)
-                m_heard->record(*decoded);
-            if (auto packet = aprs::parseFrame(*decoded)) {
-                if (m_aprsStations)
-                    m_aprsStations->record(*packet);
-                if (m_aprsMessenger)
-                    m_aprsMessenger->onPacket(*packet);
-            }
-            if (frame.fcsOk && m_enableDecode && m_enableDecode->isChecked()) {
-                m_digi->receiveFrame(frame.ax25FrameNoFcs);
-            }
-        }
-        if (m_pms)
-            m_pms->onAirFrame(frame.ax25FrameNoFcs);
-        if (m_terminal)
-            m_terminal->onAirFrame(frame.ax25FrameNoFcs);
-    });
-    connect(m_shim, &AetherAx25LibmodemShim::diagnosticsUpdated,
-            this, &Ax25HfPacketDecodeDialog::updateDiagnostics);
-    connect(m_shim, &AetherAx25LibmodemShim::statusChanged,
-            this, &Ax25HfPacketDecodeDialog::refreshStatus);
+    if (m_receive) {
+        connect(m_receive.get(), &Ax25ReceiveModel::frameDecoded,
+                this, &Ax25HfPacketDecodeDialog::handleDecodedFrame);
+        connect(m_receive.get(), &Ax25ReceiveModel::diagnosticsUpdated, this,
+            [this](const Ax25DecoderDiagnostics& diagnostics, const Ax25ReceiveContext& context) {
+                updateDiagnostics(diagnostics, context);
+            });
+        connect(m_receive.get(), &Ax25ReceiveModel::statusChanged,
+                this, &Ax25HfPacketDecodeDialog::refreshStatus);
+        connect(m_receive.get(), &Ax25ReceiveModel::routeStatusChanged,
+                this, &Ax25HfPacketDecodeDialog::refreshStatus);
+        connect(m_receive.get(), &Ax25ReceiveModel::sourceReset, this, [this] {
+            const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+            m_lastDiagnostics = {};
+            m_lastDiagnosticsUtc = {};
+            m_lastActivityHdlc = 0;
+            m_lastActivityAccepted = 0;
+            if (m_captureActive) { finishAudioCapture(false); }
+            if (!guard) { return; }
+            refreshStatus();
+        });
+        connect(m_receive.get(), &Ax25ReceiveModel::pcmReady, this,
+            [this](const DecoderPcmBlock& block, const Ax25ReceiveContext& context) {
+                if (!context.current()) { return; }
+                handleRxAudio(QByteArray(reinterpret_cast<const char*>(block.samples.constData()),
+                    block.samples.size() * static_cast<qsizetype>(sizeof(float))),
+                    DecoderPcmBlock::kSampleRateHz, context);
+            });
+    }
     connect(m_heartbeatTimer, &QTimer::timeout,
             this, &Ax25HfPacketDecodeDialog::updateHeartbeat);
 
@@ -1226,12 +1209,6 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             if (m_txActive || m_txPendingStream)
                 finishTransmit(true, QStringLiteral("PTT blocked: %1").arg(message));
         });
-    }
-
-    if (m_audio) {
-        connect(m_audio, &AudioEngine::tncRxAudioReady,
-                this, &Ax25HfPacketDecodeDialog::handleRxAudio,
-                Qt::QueuedConnection);
     }
 
     // KISS TNC server wiring.
@@ -1457,14 +1434,14 @@ Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
         finishAudioCapture(false);
     if (m_kissServer)
         m_kissServer->stop();
-    if (m_audio)
-        m_audio->setTncRxTapEnabled(false);
-    m_shimThread.quit();
-    m_shimThread.wait();
+    m_receive.reset();
 }
 
 void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    if (m_receive) { m_receive->setSlice(slice); }
+    if (!guard) { return; }
     if (m_attachedSlice == slice) {
         logAttachedSliceState(QStringLiteral("slice state refresh"));
         refreshStatus();
@@ -1505,6 +1482,7 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
 
 void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool persist)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
     m_shimConfig = ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal);
     if (m_digi) { m_digi->setBaud(m_shimConfig.baud); }
     if (m_digiEnable) { m_digiEnable->setEnabled(m_shimConfig.baud == 1200); }
@@ -1513,9 +1491,8 @@ void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool pe
     // mid-sweep — and the sweep would be measuring the wrong preamble.
     if (m_terminalTxPreamble)
         m_shimConfig.txPreambleFlags = m_terminalTxPreamble->value();
-    QMetaObject::invokeMethod(m_shim, [shim = m_shim, cfg = m_shimConfig]() {
-        shim->configure(cfg);
-    }, Qt::QueuedConnection);
+    if (m_receive) { m_receive->configure(m_shimConfig); }
+    if (!guard) { return; }
     m_lastDiagnostics = {};
     m_lastDiagnosticsUtc = {};
 
@@ -2082,6 +2059,10 @@ void Ax25HfPacketDecodeDialog::enableDecodeForProgram(TxProgram kind)
 
 void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    // Retire receive work before any callback from shutdown/control cleanup.
+    if (m_receive) { m_receive->setEnabled(enabled); }
+    if (!guard) { return; }
     if (!enabled) {
         for (std::size_t i = 0; i < m_txPrograms.size(); ++i) {
             (void)setTxProgram(static_cast<TxProgram>(i), false);
@@ -2090,17 +2071,14 @@ void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
     }
     if (!enabled && m_digi) { m_digi->setEnabled(false); }
     if (enabled) {
-        QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
         m_lastDiagnostics = {};
         m_enabledUtc = QDateTime::currentDateTimeUtc();
         m_lastDiagnosticsUtc = {};
         m_lastNoAudioNoticeUtc = {};
         m_lastActivityHdlc = 0;
         m_lastActivityAccepted = 0;
-        if (m_audio)
-            m_audio->setTncRxTapEnabled(true);
         appendSystemLine(QStringLiteral(
-            "Modem enabled. RX tap requested; waiting for 24 kHz PC RX audio."));
+            "Modem enabled. Waiting for selected receive audio converted to 24 kHz mono."));
     } else {
         if (m_captureActive)
             finishAudioCapture(false);
@@ -2131,9 +2109,6 @@ void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
         if (m_pms)
             m_pms->dropLink();
 
-        if (m_audio)
-            m_audio->setTncRxTapEnabled(false);
-        QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
         m_lastDiagnostics = {};
         m_lastDiagnosticsUtc = {};
         m_lastActivityHdlc = 0;
@@ -2146,8 +2121,51 @@ void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
     refreshPmsStatus();
 }
 
-void Ax25HfPacketDecodeDialog::handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate)
+void Ax25HfPacketDecodeDialog::handleDecodedFrame(
+    const Ax25DecodedFrame& frame, const Ax25ReceiveContext& context)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    const auto current = [&] { return guard && context.current(); };
+    if (!current()) { return; }
+    appendFrame(frame, context);
+    if (!current()) { return; }
+#ifdef HAVE_MQTT
+    publishFrameMqtt(frame);
+    if (!current()) { return; }
+#endif
+    if (m_kissServer && m_kissServer->isListening() && !frame.ax25FrameNoFcs.isEmpty()) {
+        m_kissServer->broadcastAx25Frame(frame.ax25FrameNoFcs);
+        if (!current()) { return; }
+        ++m_kissRxCount;
+        refreshTncStatus();
+        if (!current()) { return; }
+    }
+    if (frame.ax25FrameNoFcs.isEmpty()) { return; }
+    if (auto decoded = ax25::Frame::decode(frame.ax25FrameNoFcs)) {
+        if (m_heard) { m_heard->record(*decoded); }
+        if (!current()) { return; }
+        if (auto packet = aprs::parseFrame(*decoded)) {
+            if (m_aprsStations) { m_aprsStations->record(*packet); }
+            if (!current()) { return; }
+            if (m_aprsMessenger) { m_aprsMessenger->onPacket(*packet); }
+            if (!current()) { return; }
+        }
+        if (frame.fcsOk && m_enableDecode && m_enableDecode->isChecked()) {
+            m_digi->receiveFrame(frame.ax25FrameNoFcs);
+            if (!current()) { return; }
+        }
+    }
+    if (m_pms) { m_pms->onAirFrame(frame.ax25FrameNoFcs); }
+    if (!current()) { return; }
+    if (m_terminal) { m_terminal->onAirFrame(frame.ax25FrameNoFcs); }
+}
+
+void Ax25HfPacketDecodeDialog::handleRxAudio(
+    const QByteArray& monoFloat32Pcm, int sampleRate, const Ax25ReceiveContext& context)
+{
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    const auto current = [&] { return guard && context.current(); };
+    if (!current()) { return; }
     if (m_captureActive && !monoFloat32Pcm.isEmpty()) {
         if (m_captureSampleRate == 0) {
             m_captureSampleRate = sampleRate;
@@ -2157,12 +2175,14 @@ void Ax25HfPacketDecodeDialog::handleRxAudio(const QByteArray& monoFloat32Pcm, i
             appendSystemLine(QStringLiteral("Audio capture armed: %1 seconds at %2 Hz.")
                 .arg(kAudioCaptureSeconds)
                 .arg(sampleRate));
+            if (!current() || !m_captureActive) { return; }
         }
 
         if (sampleRate != m_captureSampleRate) {
             appendSystemLine(QStringLiteral("Audio capture cancelled: sample rate changed from %1 to %2 Hz.")
                 .arg(m_captureSampleRate)
                 .arg(sampleRate));
+            if (!current() || !m_captureActive) { return; }
             finishAudioCapture(false);
         } else {
             const qsizetype remaining = m_captureTargetBytes - m_capturePcm.size();
@@ -2174,9 +2194,6 @@ void Ax25HfPacketDecodeDialog::handleRxAudio(const QByteArray& monoFloat32Pcm, i
         }
     }
 
-    QMetaObject::invokeMethod(m_shim, [shim = m_shim, pcm = monoFloat32Pcm, sr = sampleRate]() {
-        shim->feedAudio(pcm, sr);
-    }, Qt::QueuedConnection);
 }
 
 void Ax25HfPacketDecodeDialog::startAudioCapture()
@@ -2186,6 +2203,9 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
         return;
     }
 
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    if (m_receive) { m_receive->reset(); }
+    if (!guard) { return; }
     m_capturePcm.clear();
     m_captureId = makeAx25AudioCaptureId();
     m_captureSampleRate = 0;
@@ -2193,7 +2213,6 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
     m_captureTxSequence = 0;
     m_captureIcomPostResampleActive = false;
     m_captureActive = true;
-    QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
     m_lastDiagnostics = {};
     m_lastDiagnosticsUtc = {};
     m_lastActivityHdlc = 0;
@@ -2203,6 +2222,7 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
     if (m_captureButton)
         m_captureButton->setText(QStringLiteral("Cancel Capture"));
     appendSystemLine(QStringLiteral("Decoder state reset for RX audio capture."));
+    if (!guard) { return; }
     appendSystemLine(QStringLiteral(
         "Starting %1 second RX/TX audio capture (%2); transmit several packets now.")
         .arg(kAudioCaptureSeconds)
@@ -2211,7 +2231,9 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
 
 void Ax25HfPacketDecodeDialog::finishAudioCapture(bool save)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
     finishIcomPostResampleCapture();
+    if (!guard) { return; }
     const QByteArray capture = m_capturePcm;
     const QString captureId = m_captureId;
     const int sampleRate = m_captureSampleRate;
@@ -3130,21 +3152,32 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     }
 }
 
-void Ax25HfPacketDecodeDialog::appendFrame(const Ax25DecodedFrame& frame)
+void Ax25HfPacketDecodeDialog::appendFrame(
+    const Ax25DecodedFrame& frame, const Ax25ReceiveContext& context)
 {
-    if (!frame.fcsOk)
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    const auto current = [&] { return guard && context.current(); };
+    if (!current() || !frame.fcsOk)
         return;
     ++m_frameCount;
     m_lastDecodeUtc = frame.timestampUtc;
     m_log->append(formatTerminalLine(frame));
+    if (!current()) { return; }
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
-    if (m_packetActivity)
+    if (!current()) { return; }
+    if (m_packetActivity) {
         m_packetActivity->recordFrame();
+    }
+    if (!current()) { return; }
     refreshStatus();
 }
 
-void Ax25HfPacketDecodeDialog::updateDiagnostics(const Ax25DecoderDiagnostics& diagnostics)
+void Ax25HfPacketDecodeDialog::updateDiagnostics(
+    const Ax25DecoderDiagnostics& diagnostics, const Ax25ReceiveContext& context)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    const auto current = [&] { return guard && context.current(); };
+    if (!current()) { return; }
     const bool firstAudio = !m_lastDiagnosticsUtc.isValid();
     m_lastDiagnostics = diagnostics;
     m_lastDiagnosticsUtc = QDateTime::currentDateTimeUtc();
@@ -3152,9 +3185,12 @@ void Ax25HfPacketDecodeDialog::updateDiagnostics(const Ax25DecoderDiagnostics& d
         appendSystemLine(QStringLiteral("RX audio stream detected: %1 Hz, %2 samples/window.")
             .arg(diagnostics.sampleRate)
             .arg(diagnostics.audioSamples));
+        if (!current()) { return; }
     }
-    if (m_diagnosticsDebugEnabled)
-        appendDiagnosticsLine(diagnostics);
+    if (m_diagnosticsDebugEnabled) {
+        appendDiagnosticsLine(diagnostics, context);
+        if (!current()) { return; }
+    }
     refreshStatus();
 }
 
@@ -3196,13 +3232,13 @@ void Ax25HfPacketDecodeDialog::updateHeartbeat()
         if (waited >= 2
             && (!m_lastNoAudioNoticeUtc.isValid() || m_lastNoAudioNoticeUtc.secsTo(now) >= 5)) {
             appendSystemLine(QStringLiteral(
-                "Waiting for RX audio blocks. Confirm PC Audio is enabled, a slice is active, and AetherSDR is receiving the packet audio stream."));
+                "Waiting for RX audio blocks. Check the selected receiver and receive source shown in modem status."));
             m_lastNoAudioNoticeUtc = now;
         }
     } else if (m_lastDiagnosticsUtc.secsTo(now) >= 4
                && (!m_lastNoAudioNoticeUtc.isValid() || m_lastNoAudioNoticeUtc.secsTo(now) >= 5)) {
         appendSystemLine(QStringLiteral(
-            "No fresh RX audio diagnostics for %1 s. The tap is enabled, but audio may be paused or PC Audio may be off.")
+            "No fresh RX audio diagnostics for %1 s. The selected receive source may be paused or unavailable.")
             .arg(m_lastDiagnosticsUtc.secsTo(now)));
         m_lastNoAudioNoticeUtc = now;
     }
@@ -3231,7 +3267,31 @@ void Ax25HfPacketDecodeDialog::refreshStatus()
         status = m_attachedSliceId >= 0 ? QStringLiteral("Standby") : QStringLiteral("No slice attached");
     }
 
+    QString sourceText = QStringLiteral("RX: unavailable");
+    if (m_receive) {
+        switch (m_receive->routeStatus()) {
+        case DecoderAudioModel::RouteStatus::Bound:
+            sourceText = QStringLiteral("RX: selected slice");
+            break;
+        case DecoderAudioModel::RouteStatus::SharedRxAudio:
+            sourceText = QStringLiteral("RX: shared audio (audible slice mix; gain and mute apply)");
+            break;
+        case DecoderAudioModel::RouteStatus::DaxTransportUnavailable:
+            sourceText = QStringLiteral("RX: assigned DAX transport unavailable");
+            break;
+        case DecoderAudioModel::RouteStatus::Inactive:
+            sourceText = QStringLiteral("RX: inactive");
+            break;
+        }
+    }
+    status += QStringLiteral(" | ") + sourceText;
     if (m_modemStatusValue) {
+        QString sourceDescription = sourceText;
+        if (m_receive && (m_receive->routeStatus() == DecoderAudioModel::RouteStatus::SharedRxAudio
+            || m_receive->routeStatus() == DecoderAudioModel::RouteStatus::DaxTransportUnavailable)) {
+            sourceDescription += QStringLiteral(". Assign a DAX RX channel to isolate a Flex slice; no channel is assigned automatically.");
+        }
+        m_modemStatusValue->setAccessibleDescription(sourceDescription);
         const QString stateText = m_lastDiagnostics.inFrame
             ? QStringLiteral("frame")
             : m_lastDiagnostics.inPreamble ? QStringLiteral("preamble") : QStringLiteral("search");
@@ -3319,10 +3379,7 @@ void Ax25HfPacketDecodeDialog::setDiagnosticsDebugEnabled(bool enabled, bool per
         return;
 
     m_diagnosticsDebugEnabled = enabled;
-    if (m_shim)
-        QMetaObject::invokeMethod(m_shim, [shim = m_shim, enabled]() {
-            shim->setDiagnosticsLoggingEnabled(enabled);
-        }, Qt::QueuedConnection);
+    if (m_receive) { m_receive->setDiagnosticsLoggingEnabled(enabled); }
     if (m_terminal)
         m_terminal->setVerbose(enabled); // echo protocol detail inline in the terminal
     if (m_packetActivity)
@@ -3372,6 +3429,7 @@ void Ax25HfPacketDecodeDialog::logAttachedSliceState(const QString& reason)
 
 void Ax25HfPacketDecodeDialog::appendSystemLine(const QString& text)
 {
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
     if (!m_log)
         return;
     qCDebug(lcAx25).noquote() << text;
@@ -3380,6 +3438,7 @@ void Ax25HfPacketDecodeDialog::appendSystemLine(const QString& text)
         "<span style=\"color:#8190a3;\">MODEM</span>&nbsp;&nbsp;"
         "<span style=\"color:#9aa7ba;\">%2</span>")
         .arg(utcClock().toHtmlEscaped(), text.toHtmlEscaped()));
+    if (!guard) { return; }
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
 }
 
@@ -3406,9 +3465,11 @@ void Ax25HfPacketDecodeDialog::appendTransmitLine(const Ax25TransmitFrame& frame
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
 }
 
-void Ax25HfPacketDecodeDialog::appendDiagnosticsLine(const Ax25DecoderDiagnostics& diagnostics)
+void Ax25HfPacketDecodeDialog::appendDiagnosticsLine(
+    const Ax25DecoderDiagnostics& diagnostics, const Ax25ReceiveContext& context)
 {
-    if (!m_log || !m_diagnosticsDebugEnabled)
+    const QPointer<Ax25HfPacketDecodeDialog> guard(this);
+    if (!context.current() || !m_log || !m_diagnosticsDebugEnabled)
         return;
 
     const QString state = diagnostics.inFrame
@@ -3465,6 +3526,7 @@ void Ax25HfPacketDecodeDialog::appendDiagnosticsLine(const Ax25DecoderDiagnostic
         "<span style=\"color:#8ea0b8;\">DIAG</span>&nbsp;&nbsp;"
         "<span style=\"color:#9aa7ba;\">%2</span>")
         .arg(utcClock().toHtmlEscaped(), line.toHtmlEscaped()));
+    if (!guard || !context.current()) { return; }
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
 }
 

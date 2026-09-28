@@ -1614,6 +1614,7 @@ const char* PanadapterStream::daxConsumerName(DaxConsumer who)
     case DaxConsumer::Clock:  return "clock";
     case DaxConsumer::CwDecoder: return "cw-decoder";
     case DaxConsumer::RttyDecoder: return "rtty-decoder";
+    case DaxConsumer::Ax25Decoder: return "ax25-decoder";
     }
     return "?";
 }
@@ -1749,7 +1750,7 @@ QVector<PanadapterStream::DaxChannelSnapshot> PanadapterStream::daxChannelSnapsh
         s.createPending = it->createPending;
         for (DaxConsumer who : {DaxConsumer::Bridge, DaxConsumer::Tci, DaxConsumer::Rade,
                                 DaxConsumer::Clock, DaxConsumer::CwDecoder,
-                                DaxConsumer::RttyDecoder}) {
+                                DaxConsumer::RttyDecoder, DaxConsumer::Ax25Decoder}) {
             if (it->holders & daxHolderBit(who))
                 s.holders << QString::fromLatin1(daxConsumerName(who));
         }
