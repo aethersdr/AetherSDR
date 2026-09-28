@@ -377,6 +377,15 @@ target_include_directories(atu_seam_gate_test PRIVATE src tests)
 target_link_libraries(atu_seam_gate_test PRIVATE aethercore Qt6::Core)
 add_test(NAME atu_seam_gate_test COMMAND atu_seam_gate_test)
 
+# #5637 §1: a TransmitModel verb the backend already applied through the seam
+# (rfpower, miclevel, TX passband, cw pitch) raises no commandDropped on a
+# backend with no command plane, while an unrouted verb still does. Injected
+# backend records the seam calls; no sockets, no radio.
+add_executable(transmit_seam_drop_notice_test tests/transmit_seam_drop_notice_test.cpp)
+target_include_directories(transmit_seam_drop_notice_test PRIVATE src tests)
+target_link_libraries(transmit_seam_drop_notice_test PRIVATE aethercore Qt6::Core)
+add_test(NAME transmit_seam_drop_notice_test COMMAND transmit_seam_drop_notice_test)
+
 # Socket-free frequency control: a recording engine backend and normalized
 # observations exercise the production target/service. LocalControlServer
 # instances only test startup binding; neither listens or opens an endpoint.
@@ -6664,6 +6673,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_region_field_test
     radio_setup_label_theme_token_test
     atu_seam_gate_test
+    transmit_seam_drop_notice_test
     backend_capability_revision_test
     radio_capacity_declaration_test
     extension_namespace_gate_test

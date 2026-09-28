@@ -2200,6 +2200,72 @@ void RadioModel::evaluateTxFilterAudioLoss(float scFilt1, float scFilt2)
         tx ? tx->panId() : QString());
 }
 
+namespace {
+// Whether TransmitModel's Flex text `command` duplicates a typed intent that
+// the constructor's seam connections below have ALREADY handed to a backend
+// declaring `caps` — i.e. whether, on a backend with no command plane, dropping
+// the text loses nothing (#5637).
+//
+// Each verb names the sibling connection that carries it, and is honoured only
+// under the capability that says the backend's setter does something. The
+// connection alone is not enough: IRadioBackend's setters default to no-ops,
+// and the ANAN declares drive ownership while implementing no setTxPower(), so
+// its RF-power text must keep reporting a drop.
+//
+//   transmit set rfpower=       rfPowerCommandIssued  -> setTxPower()
+//                               canTransmit + transmitDriveControl declared
+//   transmit set miclevel=      micLevelCommandIssued -> setMicGain()
+//                               canTransmit
+//   transmit set filter_low= filter_high=
+//                               txFilterCommandIssued -> setTxFilter()
+//                               hasTxFilterControls
+//   cw pitch N                  cwPitchChanged / cwPitchCommandIssued -> setCwPitch()
+//                               hostModulates || hasRadioSideCwKeyer (the two
+//                               gates those connections apply)
+//
+// NOT listed, deliberately: vox_*, mon/mon_gain_sb, speech_processor_*,
+// `cw wpm`, `cw break_in`. They have seam connections too, but the Hermes-Lite
+// 2 implements none of those setters, so on it the drop notice is the truth.
+// Adding one here needs the capability that proves the setter is real.
+//
+// A `transmit set` line qualifies only if EVERY key in it is routed, so text
+// that also carries an unrouted key still reaches the loud drop.
+bool transmitCommandDeliveredThroughSeam(const QString& command,
+                                         const RadioCapabilities& caps)
+{
+    static const QString kCwPitch = QStringLiteral("cw pitch ");
+    if (command.startsWith(kCwPitch)) {
+        return caps.hostModulates || caps.hasRadioSideCwKeyer;
+    }
+
+    static const QString kTransmitSet = QStringLiteral("transmit set ");
+    if (!command.startsWith(kTransmitSet)) {
+        return false;
+    }
+    const QMap<QString, QString> kvs =
+        CommandParser::parseKVs(command.mid(kTransmitSet.size()));
+    if (kvs.isEmpty()) {
+        return false;
+    }
+    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
+        const QString& key = it.key();
+        bool routed = false;
+        if (key == QLatin1String("rfpower")) {
+            routed = caps.canTransmit && caps.transmitDriveControl.has_value();
+        } else if (key == QLatin1String("miclevel")) {
+            routed = caps.canTransmit;
+        } else if (key == QLatin1String("filter_low")
+                   || key == QLatin1String("filter_high")) {
+            routed = caps.hasTxFilterControls;
+        }
+        if (!routed) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
+
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
     , m_txCoordinator([this](const TxCoordinator::Operation& operation,
@@ -2631,6 +2697,21 @@ RadioModel::RadioModel(QObject* parent)
                                  kvs.value(QStringLiteral("filter_high"))));
                 }
             }
+        }
+
+        // The Flex text for a verb this backend already received as a typed
+        // intent is NOT a dropped command (#5637): the value was applied, and
+        // reporting it as dropped both misdirected a bug report and spent the
+        // once-per-session "nothing was sent to the radio" notice on a control
+        // that works. Only that case is withheld; every other verb still falls
+        // through to sendCmd()'s loud drop, which is how the controls that
+        // really do nothing on this radio are found (#5263).
+        if (!hasCommandPlane() && m_backend
+            && transmitCommandDeliveredThroughSeam(trimmed, m_backend->capabilities())) {
+            qCDebug(lcProtocol).noquote()
+                << "RadioModel: no command plane; value already delivered through the seam:"
+                << cmd;
+            return;
         }
 
         sendCmd(cmd);
