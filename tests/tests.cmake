@@ -84,6 +84,12 @@ target_link_libraries(decoder_audio_routing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME decoder_audio_routing_test COMMAND decoder_audio_routing_test)
 set_tests_properties(decoder_audio_routing_test PROPERTIES TIMEOUT 30)
 
+# Injected typed PCM and the real modem worker; no sockets, sound device or RF.
+add_executable(ax25_receive_model_test tests/ax25_receive_model_test.cpp)
+target_link_libraries(ax25_receive_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ax25_receive_model_test COMMAND ax25_receive_model_test)
+set_tests_properties(ax25_receive_model_test PROPERTIES TIMEOUT 60)
+
 # CW waveform at the selected pre-monitor boundary; no decoder, socket or TX.
 add_executable(cw_pcm_consumer_test tests/cw_pcm_consumer_test.cpp)
 target_link_libraries(cw_pcm_consumer_test PRIVATE aethercore Qt6::Core)
@@ -1478,6 +1484,14 @@ if(AETHER_BACKEND_RTL)
     target_link_libraries(rtl_capture_worker_test PRIVATE aethercore Qt6::Core Qt6::Test)
     add_test(NAME rtl_capture_worker_test COMMAND rtl_capture_worker_test)
     set_tests_properties(rtl_capture_worker_test PROPERTIES TIMEOUT 20)
+
+    # Independent AX25/Bell202 CU8 fixture through actual RTL worker and model.
+    # USB device operations are injected; no sockets, USB enumeration or RF.
+    add_executable(rtl_aprs_receive_test tests/rtl_aprs_receive_test.cpp)
+    target_include_directories(rtl_aprs_receive_test PRIVATE src tests)
+    target_link_libraries(rtl_aprs_receive_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME rtl_aprs_receive_test COMMAND rtl_aprs_receive_test)
+    set_tests_properties(rtl_aprs_receive_test PROPERTIES TIMEOUT 60)
 
     # Generated IQ only: genuine resolution, continuity, gain and detector independence.
     add_executable(rtl_spectrum_resolution_test tests/rtl_spectrum_resolution_test.cpp)
@@ -6888,6 +6902,8 @@ set(AETHER_SETTINGS_CONSUMERS
     tci_rx_audio_test
     bandscope_trace_render_test
     decoder_audio_routing_test
+    ax25_receive_model_test
+    rtl_aprs_receive_test
     cw_pcm_consumer_test
     noise_floor_auto_adjust_gate_test
     qso_recorder_rates_test
@@ -7360,3 +7376,17 @@ target_include_directories(cw_rx_model_test PRIVATE src)
 target_link_libraries(cw_rx_model_test PRIVATE aethercore Qt6::Core)
 add_test(NAME cw_rx_model_test COMMAND cw_rx_model_test)
 set_tests_properties(cw_rx_model_test PROPERTIES TIMEOUT 15)
+
+# The native Windows C adapter owns no sockets or radio transport. Exercise
+# its actual complex arithmetic and mutex/condition subset with clang-cl.
+if(WIN32 AND ENABLE_HD_FM AND TARGET aether_nrsc5)
+    aether_hd_windows_c_objects(hd_compat_objects compat-test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/nrsc5_windows_compat_test.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nrsc5/compat/msvc" "")
+    add_executable(nrsc5_windows_compat_test ${hd_compat_objects})
+    set_target_properties(nrsc5_windows_compat_test PROPERTIES LINKER_LANGUAGE C
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    target_link_libraries(nrsc5_windows_compat_test PRIVATE "${AETHER_HD_COMPILER_RT}")
+    add_test(NAME nrsc5_windows_compat_test COMMAND nrsc5_windows_compat_test)
+    set_tests_properties(nrsc5_windows_compat_test PROPERTIES TIMEOUT 30)
+endif()

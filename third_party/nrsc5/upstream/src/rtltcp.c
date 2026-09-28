@@ -1,7 +1,8 @@
 #include <stdlib.h>
 #include <string.h>
-#ifdef __MINGW32__
-#include <windows.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <errno.h>
 #else
 #include <arpa/inet.h>
 #include <errno.h>
@@ -71,7 +72,7 @@ error:
 
 void rtltcp_close(rtltcp_t *st)
 {
-#ifdef __MINGW32__
+#ifdef _WIN32
     closesocket(st->socket);
 #else
     close(st->socket);
@@ -158,7 +159,7 @@ int rtltcp_reset_buffer(rtltcp_t *st, size_t cnt)
     char buf[1024];
     unsigned int recvd = 0;
     int flags = 0;
-#ifdef __MINGW32__
+#ifdef _WIN32
     unsigned long mode = 1;
     ioctlsocket(st->socket, FIONBIO, &mode);
 #else
@@ -172,7 +173,7 @@ int rtltcp_reset_buffer(rtltcp_t *st, size_t cnt)
             break;
         recvd += err;
     }
-#ifdef __MINGW32__
+#ifdef _WIN32
     mode = 0;
     ioctlsocket(st->socket, FIONBIO, &mode);
 #endif

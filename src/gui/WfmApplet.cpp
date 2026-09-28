@@ -27,7 +27,9 @@
 #include <QResizeEvent>
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <optional>
+#include <tuple>
 #include <QStringList>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -87,36 +89,63 @@ private:
 };
 namespace {
 
-// A popup may outlive a selected receiver. Preserve its opening binding even
-// after hidePopup(): Qt can deliver activated after closing the popup window.
+// A popup may outlive its receiver binding or HD reception/service identity.
+// Preserve both witnesses after hidePopup(): Qt can deliver activated later.
 class WfmReceiverComboBox final : public GuardedComboBox {
 public:
     using GuardedComboBox::GuardedComboBox;
     void setBinding(quint64 binding)
     {
         m_binding = binding;
+        invalidateInteraction();
+    }
+    void invalidateInteraction()
+    {
+        ++m_generation;
         hidePopup();
+    }
+    void setReception(const HdFmReception& value)
+    {
+        const Context context{value.sessionId, value.receiverEpoch, value.revision,
+                              value.frequencyHz, value.selectedProgram};
+        if (context == m_context) { return; }
+        m_context = context;
+        invalidateInteraction();
     }
     quint64 takeActivationBinding()
     {
-        const quint64 binding = m_origin.value_or(m_binding);
+        const Origin origin = m_origin.value_or(Origin{m_binding, m_generation});
         m_origin.reset();
-        return binding;
+        // Bound controls use nonzero slice generations. Zero cannot authorize
+        // an activation whose HD reception or service membership was retired.
+        return origin.generation == m_generation ? origin.binding : 0;
     }
     void showPopup() override
     {
-        m_origin = m_binding;
+        m_origin = Origin{m_binding, m_generation};
         GuardedComboBox::showPopup();
     }
 protected:
     void keyPressEvent(QKeyEvent* event) override
     {
-        if (!view()->isVisible()) { m_origin = m_binding; }
+        if (!view()->isVisible()) { m_origin = Origin{m_binding, m_generation}; }
         GuardedComboBox::keyPressEvent(event);
     }
+    void wheelEvent(QWheelEvent* event) override
+    {
+        if (!view()->isVisible()) { m_origin = Origin{m_binding, m_generation}; }
+        GuardedComboBox::wheelEvent(event);
+    }
 private:
+    struct Origin {
+        quint64 binding;
+        quint64 generation;
+    };
+    using Context = std::tuple<quint64, quint64, quint64, qint64, int>;
+    Context m_context{0, 0, 0, 0, -1};
     quint64 m_binding{0};
-    std::optional<quint64> m_origin;
+    quint64 m_generation{0};
+    std::optional<Origin> m_origin;
 };
 
 void setReadout(QLabel* label, const QString& text, const QString& name)
@@ -280,10 +309,18 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
     });
     connect(m_hdProgram, &QComboBox::activated, this, [this](int index) {
         const quint64 binding = static_cast<WfmReceiverComboBox*>(m_hdProgram)->takeActivationBinding();
-        if (acceptsControl(m_hdProgram, binding) && index >= 0 && index < m_hdProgram->count()) {
-            m_slice->setHdProgram(m_hdProgram->itemData(index).toInt());
+        bool validProgram = false;
+        const int program = m_hdProgram->itemData(index).toInt(&validProgram);
+        if (acceptsControl(m_hdProgram, binding) && index >= 0 && index < m_hdProgram->count()
+            && validProgram && hasCurrentHdReception()
+            && program != m_slice->hdProgram()) {
+            const QVector<HdFmService>& services = m_slice->hdFmReception().services;
+            const bool available = std::ranges::any_of(services, [program](const HdFmService& service) {
+                return service.program == program && service.audioAvailable;
+            });
+            if (available) { m_slice->setHdProgram(program); }
         }
-        refresh();
+        refresh(); // The displayed selection remains backend-confirmed.
     });
     connect(m_deemphasis, &QComboBox::activated, this, [this](int index) {
         const quint64 binding = static_cast<WfmReceiverComboBox*>(m_deemphasis)->takeActivationBinding();
@@ -336,6 +373,7 @@ bool WfmApplet::acceptsControl(const QWidget* control, quint64 binding) const
 void WfmApplet::setRadioModel(RadioModel* model)
 {
     const quint64 binding = ++m_modelBinding;
+    static_cast<WfmReceiverComboBox*>(m_hdProgram)->invalidateInteraction();
     for (const auto& connection : m_modelConnections) { disconnect(connection); }
     m_modelConnections.clear();
     m_availability.reset();
@@ -675,17 +713,39 @@ void WfmApplet::refreshHd()
 {
     const QString previous = m_hdProgram->currentText();
     const QSignalBlocker blocker(m_hdProgram);
-    m_hdProgram->clear();
     const bool current = hasCurrentHdReception();
+    auto* programCombo = static_cast<WfmReceiverComboBox*>(m_hdProgram);
+    programCombo->setReception(current ? m_slice->hdFmReception() : HdFmReception{});
+    std::array<QString, 8> labels;
+    QVector<int> programs;
     if (current) {
         for (const HdFmService& service : m_slice->hdFmReception().services) {
             if (!service.audioAvailable) { continue; }
-            const QString label = service.name.isEmpty() ? tr("P%1").arg(service.program + 1)
+            labels[service.program] = service.name.isEmpty() ? tr("P%1").arg(service.program + 1)
                 : tr("P%1 · %2").arg(service.program + 1).arg(service.name);
-            m_hdProgram->addItem(label, service.program);
         }
     }
-    m_hdProgram->setCurrentIndex(m_available ? m_hdProgram->findData(m_slice->hdProgram()) : -1);
+    for (int program = 0; program < static_cast<int>(labels.size()); ++program) {
+        if (!labels[program].isEmpty()) { programs.append(program); }
+    }
+    // Decoder telemetry may reorder services or rename them without changing
+    // their identity. Keep rows and the popup highlight stable in that case.
+    bool membershipChanged = m_hdProgram->count() != programs.size();
+    for (int row = 0; !membershipChanged && row < programs.size(); ++row) {
+        membershipChanged = m_hdProgram->itemData(row).toInt() != programs[row];
+    }
+    if (membershipChanged) {
+        programCombo->invalidateInteraction();
+        m_hdProgram->clear();
+        for (int program : programs) { m_hdProgram->addItem(labels[program], program); }
+    } else {
+        for (int row = 0; row < programs.size(); ++row) {
+            if (m_hdProgram->itemText(row) != labels[programs[row]]) {
+                m_hdProgram->setItemText(row, labels[programs[row]]);
+            }
+        }
+    }
+    m_hdProgram->setCurrentIndex(current ? m_hdProgram->findData(m_slice->hdProgram()) : -1);
     announceCombo(m_hdProgram, previous);
     if (m_availability) { m_availability->refreshEngaged(); }
     QString metadata = tr("Digital metadata unavailable");

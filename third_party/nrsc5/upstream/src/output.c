@@ -20,7 +20,9 @@
 #include <limits.h>
 #include <string.h>
 #include <time.h>
+#ifndef _WIN32
 #include <sys/time.h>
+#endif
 
 #include "defines.h"
 #include "output.h"

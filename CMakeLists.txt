@@ -1097,6 +1097,7 @@ endif()
 
 set(MODEL_SOURCES
     src/models/DecoderAudioModel.cpp
+    src/models/Ax25ReceiveModel.cpp
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
