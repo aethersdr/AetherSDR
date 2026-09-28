@@ -86,6 +86,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QPointer>
+#include <QScopedValueRollback>
 #include <QSet>
 
 #include <optional>
@@ -97,10 +98,6 @@
 #include <cmath>
 
 namespace AetherSDR {
-
-namespace {
-constexpr double kSplitQsyThresholdMhz = 0.002;
-}
 
 void MainWindow::wireStatusBarMessages()
 {
@@ -1959,8 +1956,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Connect slice state changes → spectrum overlay updates
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double mhz) {
-        if (m_splitActive && s->sliceId() == m_splitRxSliceId
-            && std::abs(mhz - m_splitRxFrequencyMhz) > kSplitQsyThresholdMhz) {
+        if (AetherSDR::shouldCloseSplitOnQsy(
+                m_splitQsySettings, m_splitActive,
+                s->sliceId() == m_splitRxSliceId,
+                m_splitSwapTuneInProgress, mhz, m_splitRxFrequencyMhz)) {
             qCDebug(lcDevices) << "Disabling split after RX QSY from"
                                << m_splitRxFrequencyMhz << "to" << mhz;
             disableSplit();
@@ -6135,7 +6134,16 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         if (!rx || !tx) return;
         double rxFreq = rx->frequency();
         double txFreq = tx->frequency();
-        applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune, "split-swap-rx");
+        {
+            // Retuning RX is part of this swap, not an operator QSY; keep the
+            // split alive while the two frequency requests are applied.
+            QScopedValueRollback<bool> swapTune(m_splitSwapTuneInProgress, true);
+            applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune,
+                             "split-swap-rx");
+        }
+        if (m_splitActive && m_splitRxSliceId == rx->sliceId()) {
+            m_splitRxFrequencyMhz = rx->frequency();
+        }
         applyTuneRequest(tx, rxFreq, TuneIntent::IncrementalTune, "split-swap-tx");
     });
 

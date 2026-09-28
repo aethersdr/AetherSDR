@@ -30,6 +30,7 @@
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "gui/SplitAudioProfile.h"       // #2242 remembered split audio arrangement
+#include "gui/SplitQsySettings.h"
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -1735,6 +1736,7 @@ private:
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
     double m_splitRxFrequencyMhz{0.0};
+    bool m_splitSwapTuneInProgress{false};
     // Split audio memory (#2242). The recorder holds what the operator did to
     // the two slices during this split and outlives the TX slice model, which
     // onSliceRemoved has already destroyed by the time it runs. It is fed ONLY
@@ -1742,6 +1744,7 @@ private:
     // echoes, so a pan moved by another client never becomes a preference
     // (Principle II). See gui/SplitAudioProfile.h.
     AetherSDR::SplitAudioRecorder m_splitAudioRecorder;
+    AetherSDR::SplitQsySettings m_splitQsySettings;
     QVector<QMetaObject::Connection> m_splitAudioConns;
     int m_splitAudioRxSliceId{-1};
     // The RX slice OBJECT the recorder was armed on. The RX-pan restore only
