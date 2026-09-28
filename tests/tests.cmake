@@ -4576,6 +4576,15 @@ target_link_libraries(rigctl_strength_slevel_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME rigctl_strength_slevel_test COMMAND rigctl_strength_slevel_test)
 
+# #5774: socket-free rigctl `L RF` / `l RF`. An injected backend records the pan
+# RF gain it is handed; the pan is materialised through the seam's geometry
+# signal. Nothing is bound, opened or keyed.
+add_executable(rigctl_rf_gain_pan_test tests/rigctl_rf_gain_pan_test.cpp)
+target_include_directories(rigctl_rf_gain_pan_test PRIVATE src tests)
+target_link_libraries(rigctl_rf_gain_pan_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME rigctl_rf_gain_pan_test COMMAND rigctl_rf_gain_pan_test)
+
 # #5499 item 3: the noise-blanker hold invariant, read out of WdspChannel.cpp as
 # TEXT (same limitation, and same reason, as meter_surfaces_test above — the
 # facts never meet at compile time). Links nothing but Qt6::Core: it opens the

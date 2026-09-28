@@ -1,5 +1,6 @@
 #include "RigctlProtocol.h"
 #include "LogManager.h"
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -8,6 +9,9 @@
 #include <QMetaObject>
 #include <QStringList>
 #include <QtGlobal>
+
+#include <algorithm>
+#include <cmath>
 
 namespace AetherSDR {
 
@@ -221,6 +225,36 @@ QString antMaskToName(int mask, const QStringList& available)
     int m = mask;
     while (m > 1) { m >>= 1; bit++; }
     return (bit < available.size()) ? available[bit] : available.first();
+}
+
+// RIG_LEVEL_RF (#5774). The operator's RF Gain control — the ANT panel slider,
+// the controller wheel, the bridge's `pan rfgain` — is the PANADAPTER's, on
+// every family, in the range its backend published (PanadapterModel::
+// rfGainLow/High/Step: a Flex's rfgain_info reply, the HL2's -12..+48 dB LNA).
+// Hamlib's level is normalized 0.0-1.0, so it is spread across that range and
+// snapped to the published step; it was treated as 0-100 %, which cannot
+// express a negative gain at all.
+//
+// The pan the addressed slice sits on, or nullptr.
+PanadapterModel* rfGainPanFor(const RadioModel* model, const SliceModel* slice)
+{
+    if (!model || !slice || slice->panId().isEmpty()) {
+        return nullptr;
+    }
+    return model->panadapter(slice->panId());
+}
+
+int rfLevelToPanGain(double level, int low, int high, int step)
+{
+    const double span = static_cast<double>(high - low);
+    const int stepSize = std::max(step, 1);
+    const long steps = std::lround(qBound(0.0, level, 1.0) * span / stepSize);
+    return std::clamp(low + static_cast<int>(steps) * stepSize, low, high);
+}
+
+double panGainToRfLevel(int gain, int low, int high)
+{
+    return qBound(0.0, static_cast<double>(gain - low) / (high - low), 1.0);
 }
 
 } // namespace
@@ -1430,6 +1464,16 @@ QString RigctlProtocol::cmdGetLevel(const QString& arg)
         return makeResponse(formatRigLevelValue(af));
     }
     if (level == "RF") {
+        // The pan's gain, which is what the operator's slider shows (#5774).
+        // Read from the slice's own copy, `l RF` echoed the client's last
+        // write and never a gain set anywhere else.
+        if (const auto* pan = rfGainPanFor(m_model, slice)) {
+            if (pan->rfGainHigh() <= pan->rfGainLow()) return rprt(-11);
+            return makeResponse(formatRigLevelValue(panGainToRfLevel(
+                pan->rfGain(), pan->rfGainLow(), pan->rfGainHigh())));
+        }
+        // No pan: the slice's own rfgain, which only a command plane can carry.
+        if (!m_model->hasCommandPlane()) return rprt(-11);  // RIG_ENAVAIL
         const double rf = qBound(0.0f, slice->rfGain(), 100.0f) / 100.0;
         return makeResponse(formatRigLevelValue(rf));
     }
@@ -1645,6 +1689,25 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
         return rprt(0);
     }
     if (level == "RF") {
+        // Through the pan, the same route the ANT panel's slider takes on every
+        // family (#5774). RadioModel::setPanRfGainFor sends it as wire text
+        // where the radio has a command plane and through
+        // IRadioBackend::setPanRfGain where it does not — the HL2's AD9866 LNA
+        // is reachable only that way.
+        if (const auto* pan = rfGainPanFor(m_model, slice)) {
+            if (pan->rfGainHigh() <= pan->rfGainLow()) return rprt(-11);
+            const int gain = rfLevelToPanGain(val, pan->rfGainLow(),
+                                              pan->rfGainHigh(), pan->rfGainStep());
+            const QString panId = slice->panId();
+            QMetaObject::invokeMethod(m_model, [model = m_model, panId, gain]() {
+                model->setPanRfGainFor(panId, gain);
+            }, Qt::QueuedConnection);
+            return rprt(0);
+        }
+        // No pan: the slice's own rfgain, as the slider itself falls back to.
+        // That setter is wire text, so without a command plane it would be
+        // dropped at the sink — refuse rather than acknowledge a no-op.
+        if (!m_model->hasCommandPlane()) return rprt(-11);  // RIG_ENAVAIL
         const float gain = static_cast<float>(qBound(0.0, val * 100.0, 100.0));
         QMetaObject::invokeMethod(slice, [slice, gain]() {
             slice->setRfGain(gain);
