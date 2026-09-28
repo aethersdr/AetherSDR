@@ -5,7 +5,11 @@
 //                 of an EP2 frame's two C&C banks (aethersdr/AetherSDR#4579);
 //   section 5     the frame's audio slot stays untouched unless a codec has
 //                 been DECLARED, because on a bare HL2 that slot is the
-//                 extended address register.
+//                 extended address register;
+//   section 6     a live-control setter called while STOPPED queues nothing,
+//                 so the first frames of the next session are its own
+//                 start-up state and not a bank left over from before it
+//                 (the remainder of #4579).
 //
 // SOCKET-FREE ON PURPOSE. It drives MetisClient's own packet builder, which is
 // public for exactly this reason ("Exists so the gate can be tested on the exact
@@ -60,6 +64,14 @@ struct MetisClientTestAccess {
     // that filled by mistake must still not reach the wire". Production cannot
     // reach it — which is exactly why the gate is otherwise untestable.
     static void forgetCodecWithoutDraining(MetisClient& c) { c.m_params.hasCodec = false; }
+    // Section 6. How many one-shot banks are waiting, read directly: the bytes
+    // alone cannot tell a queued RX1 bank from the rotation's own RX1 slot.
+    static std::size_t oneShotQueued(const MetisClient& c) { return c.m_oneShot.size(); }
+    // The session boundary without a socket, as hl2_tx_gate_test does it. What
+    // start() adds beyond m_running is Params, the counters and the wire; it
+    // does not touch m_oneShot, so for the question section 6 asks -- what is
+    // already queued when the first frame is built -- this is the same state.
+    static void setStreaming(MetisClient& c) { c.m_running = true; }
 };
 }  // namespace AetherSDR::hl2
 
@@ -74,6 +86,18 @@ static bool isConfigBank(const std::uint8_t* cc)
     return static_cast<std::uint8_t>(cc[0] & ~kC0MoxBit) == kC0Config;
 }
 static int rateCodeOf(const std::uint8_t* cc) { return cc[1] & 0x03; }
+static std::uint8_t addrOf(const std::uint8_t* cc)
+{
+    return static_cast<std::uint8_t>(cc[0] & ~kC0MoxBit);
+}
+static std::uint32_t payloadOf(const std::uint8_t* cc)
+{
+    return (std::uint32_t(cc[1]) << 24) | (std::uint32_t(cc[2]) << 16)
+         | (std::uint32_t(cc[3]) << 8) | std::uint32_t(cc[4]);
+}
+// 0x09 C2: bit 3 is the PA enable (DATA[19]), bit 4 the ATU tune request (DATA[20]).
+static bool paEnabledIn(const std::uint8_t* cc) { return (cc[2] & 0x08) != 0; }
+static bool tuneRequestedIn(const std::uint8_t* cc) { return (cc[2] & 0x10) != 0; }
 // Open-collector outputs are C2[7:1] -- the one-bit shift ccConfig() applies.
 static std::uint8_t ocByteOf(const std::uint8_t* cc)
 {
@@ -267,6 +291,109 @@ int main(int argc, char** argv)
                   "a queue that filled by mistake still does not reach the wire — "
                   "the packet builder gates on the DECLARATION, not on the queue");
         }
+    }
+
+    // ---- 6. a setter called while stopped reaches no later session ----
+    //
+    // #4579's remainder. m_oneShot is cleared by neither start() nor stop() --
+    // stop() on purpose keeps "unrelated one-shot setup" -- and four setters
+    // pushed into it with no m_running guard: setRxFrequencyHz,
+    // setTxFrequencyHz, setTxDriveLevel and setAtuTuneRequest. Whatever they
+    // queued while the radio was stopped went out in the next session's
+    // priming burst, ahead of anything that session asserted for itself. The
+    // drive bank carries the PA enable and the ATU bank the tune request, and
+    // start() clears m_atuTune precisely because "re-asserting a tune nobody
+    // asked for would start one".
+    //
+    // Guarded at the push, not cleared at start(): see
+    // MetisClient::queueOneShotIfRunning().
+    {
+        constexpr std::uint32_t kRxHz = 14'074'000;
+        constexpr std::uint32_t kTxHz = 14'076'000;
+        constexpr int kDrive = 200;
+
+        MetisClient c;                          // never started: m_running is false
+        c.enableTransmit(true);                 // so the drive is not clamped to 0
+        c.setRxFrequencyHz(kRxHz);
+        c.setTxFrequencyHz(kTxHz);
+        c.setTxDriveLevel(kDrive);
+        c.setAtuTuneRequest(true);
+        check(MetisClientTestAccess::oneShotQueued(c) == 0,
+              "stopped: the four live-control setters queue no one-shot bank");
+
+        // The next session. Its rotation is RX1 NCO, gain, ADC assignment
+        // (one receiver), so the first frames' bank B must be exactly that.
+        MetisClientTestAccess::setStreaming(c);
+        const Ep2 first = c.buildNextControlPacket();
+        const Ep2 second = c.buildNextControlPacket();
+        check(addrOf(bank(first, 1)) == kC0Rx1Freq && payloadOf(bank(first, 1)) == kRxHz,
+              "the first frame of the next session carries the new RX1 frequency");
+        check(addrOf(bank(second, 1)) == kC0AdcGain,
+              "and the second is the rotation's gain slot -- the frequency came "
+              "from the rotation, not from a one-shot queued while stopped");
+
+        bool sawTxFreq = false, sawDrive = false, sawPa = false, sawTune = false;
+        const Ep2* firstTwo[2] = {&first, &second};
+        const auto scan = [&](const Ep2& pkt) {
+            for (int w = 0; w < 2; ++w) {
+                const std::uint8_t* cc = bank(pkt, w);
+                sawTxFreq = sawTxFreq || addrOf(cc) == kC0TxFreq;
+                if (addrOf(cc) == kC0TxDrive) {
+                    sawDrive = true;
+                    sawPa = sawPa || paEnabledIn(cc);
+                    sawTune = sawTune || tuneRequestedIn(cc);
+                }
+            }
+        };
+        for (const Ep2* pkt : firstTwo)
+            scan(*pkt);
+        for (int i = 0; i < 16; ++i)            // several rotations past the priming burst
+            scan(c.buildNextControlPacket());
+        check(!sawTxFreq, "no TX frequency bank set while stopped reaches the next session");
+        check(!sawDrive, "no drive bank set while stopped reaches the next session");
+        check(!sawPa, "the PA enable asked for while stopped is not on the wire");
+        check(!sawTune, "the ATU tune request made while stopped is not on the wire");
+    }
+
+    // ---- 6b. and the guard is not wider than the stop ----
+    //
+    // The same four setters on a RUNNING client still go out on the very next
+    // frame, ahead of the rotation. Without this, a guard that refused
+    // everything would pass section 6.
+    {
+        constexpr std::uint32_t kRxHz = 7'074'000;
+        constexpr std::uint32_t kTxHz = 7'076'000;
+        constexpr int kDrive = 120;
+
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+
+        c.setTxFrequencyHz(kTxHz);
+        const Ep2 tx = c.buildNextControlPacket();
+        check(addrOf(bank(tx, 1)) == kC0TxFreq && payloadOf(bank(tx, 1)) == kTxHz,
+              "running: a TX frequency change is on the next frame");
+
+        c.setTxDriveLevel(kDrive);
+        const Ep2 drive = c.buildNextControlPacket();
+        check(addrOf(bank(drive, 1)) == kC0TxDrive && bank(drive, 1)[1] == kDrive
+                  && paEnabledIn(bank(drive, 1)),
+              "running: a drive change is on the next frame, PA enabled");
+
+        c.setAtuTuneRequest(true);
+        const Ep2 tune = c.buildNextControlPacket();
+        check(addrOf(bank(tune, 1)) == kC0TxDrive && tuneRequestedIn(bank(tune, 1)),
+              "running: an ATU tune request is on the next frame");
+
+        // Drain what is left of the queue first, so the RX1 bank below cannot
+        // be the rotation's own slot arriving by coincidence of phase.
+        check(MetisClientTestAccess::oneShotQueued(c) == 0, "running: nothing else was queued");
+        c.setRxFrequencyHz(kRxHz);
+        check(MetisClientTestAccess::oneShotQueued(c) == 1,
+              "running: an RX frequency change queues exactly one bank");
+        const Ep2 rx = c.buildNextControlPacket();
+        check(addrOf(bank(rx, 1)) == kC0Rx1Freq && payloadOf(bank(rx, 1)) == kRxHz,
+              "running: and it is on the next frame");
     }
 
     if (g_failures == 0)

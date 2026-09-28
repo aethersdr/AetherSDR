@@ -773,7 +773,32 @@ void MetisClient::setRxFrequencyHz(int rxIndex, std::uint32_t hz)
     //
     // This used to append a 0x39 filter-pipeline reset behind the frequency.
     // That WEDGED THE RADIO -- see requestPipelineReset() for the full story.
-    m_oneShot.push_back(m_ccRxFreq[static_cast<std::size_t>(rxIndex)]);
+    //
+    // Not while stopped: see queueOneShotIfRunning(). The bank above is still
+    // recorded, and the rotation carries m_ccRxFreq from the first frame of a
+    // session -- start() rebuilds it from Params, which is authoritative there.
+    queueOneShotIfRunning(m_ccRxFreq[static_cast<std::size_t>(rxIndex)]);
+}
+
+void MetisClient::queueOneShotIfRunning(const Cc& bank)
+{
+    // A ONE-SHOT BELONGS TO THE SESSION IT WAS ASKED FOR IN. m_oneShot is not
+    // cleared by start(), and stop() keeps everything but an unfinished IO-board
+    // write, so a bank queued while stopped would go out in the priming burst of
+    // whatever session starts next -- ahead of the backend's own start-up state,
+    // and for the drive bank ahead of the drive-0 Hl2Backend asserts once start()
+    // returns. Guarding the push rather than clearing the queue leaves stop()'s
+    // "preserve unrelated one-shot setup" meaning what it says (#4579).
+    //
+    // The setting itself is not dropped: every caller records it before this
+    // runs. What reaches the next session is decided by that session's own
+    // start-up -- the RX NCOs by start()'s Params and the rotation, the drive by
+    // the zero Hl2Backend writes after start(), the TX NCO by pushInitialState()
+    // on linkUp -- and not by a bank left over from before it began.
+    if (!m_running) {
+        return;
+    }
+    m_oneShot.push_back(bank);
 }
 
 void MetisClient::setSampleRate(SampleRate rate)
@@ -1050,6 +1075,12 @@ void MetisClient::clearSpeakerAudio()
 
 void MetisClient::setAtuTuneRequest(bool request)
 {
+    // Refused outright while stopped, not merely left unsent: start() clears
+    // m_atuTune because "re-asserting a tune nobody asked for would start one",
+    // and a request with no session behind it is one nobody asked for yet.
+    if (!m_running) {
+        return;
+    }
     if (request == m_atuTune)
         return;
     m_atuTune = request;
@@ -1058,7 +1089,7 @@ void MetisClient::setAtuTuneRequest(bool request)
     // the PA-enable rule in setTxDriveLevel()'s hands — there is exactly one
     // place that decides whether the amplifier is on, and this is not it.
     m_ccTxDrive = ccTxDrive(m_ccTxDrive[1], m_ccTxDrive[1] > 0, m_atuTune);
-    m_oneShot.push_back(m_ccTxDrive);
+    queueOneShotIfRunning(m_ccTxDrive);
 }
 
 void MetisClient::setIoBoardTxFrequencyHz(quint64 hz)
@@ -1328,7 +1359,7 @@ void MetisClient::setTxFrequencyHz(std::uint32_t hz)
     // keying up and listening.
     qCDebug(lcHl2) << "HL2: TX NCO <-" << hz << "Hz (commanded)";
     m_ccTxFreq = ccTxFreq(hz);
-    m_oneShot.push_back(m_ccTxFreq);
+    queueOneShotIfRunning(m_ccTxFreq);
 }
 
 void MetisClient::setTxDriveLevel(int level)
@@ -1346,7 +1377,7 @@ void MetisClient::setTxDriveLevel(int level)
     // The ATU request is re-asserted, not re-decided: it shares this register,
     // so rebuilding the bank without it would clear a tune in progress.
     m_ccTxDrive = ccTxDrive(level, level > 0, m_atuTune);
-    m_oneShot.push_back(m_ccTxDrive);
+    queueOneShotIfRunning(m_ccTxDrive);
 }
 
 void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation)
