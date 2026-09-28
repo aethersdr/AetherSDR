@@ -18237,11 +18237,14 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
     };
 
     // Double line: one at each edge of the mode's occupied bandwidth,
-    // centred on the reported (dial + audio-offset) frequency.
+    // freqMhz is the lower audio edge of the signal (WSJT-X "Rx DF" convention
+    // reports the start of the decode subband, not the center). Draw one line
+    // at the lower edge and one at the upper edge so the signal occupies the
+    // space between them.
     auto drawModeWidthLines = [&](double freqMhz, const QColor& col, const QString& mode) {
-        const double halfHz = wsjtxModeWidthHz(mode) / 2.0;
-        drawFrequencyLine(mhzToX(freqMhz - halfHz / 1.0e6), col);
-        drawFrequencyLine(mhzToX(freqMhz + halfHz / 1.0e6), col);
+        const double widthHz = wsjtxModeWidthHz(mode);
+        drawFrequencyLine(mhzToX(freqMhz), col);
+        drawFrequencyLine(mhzToX(freqMhz + widthHz / 1.0e6), col);
     };
 
     QFont labelFont = p.font();
@@ -18256,7 +18259,9 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
         if (rxMhz >= startMhz && rxMhz <= endMhz) {
             drawModeWidthLines(rxMhz, rxColor, marker.mode);
             p.setPen(rxColor);
-            p.drawText(mhzToX(rxMhz) + 3, labelY,
+            // Label at the centre of the bracket (lower edge + half width).
+            const double rxCenterMhz = rxMhz + wsjtxModeWidthHz(marker.mode) / 2.0 / 1.0e6;
+            p.drawText(mhzToX(rxCenterMhz) + 3, labelY,
                        QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
         }
 
