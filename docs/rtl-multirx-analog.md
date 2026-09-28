@@ -51,6 +51,14 @@ own counter update and USB transit time. A callback exceeding its actual
 sample duration increments a separate deadline counter. Histogram percentile
 bounds are conservative; the final bucket is unbounded.
 
+`rtlReceiverRecipes` reports each last-published accepted receiver recipe,
+including its `stableId`, current `selected` identity, `receiving`/`parked`
+membership, `carrierHz`, `mode`, `filterLowHz`/`filterHighHz`, `wfmForceMono`,
+`wfmHdStereo`, `wfmDeemphasisUs`, and `audioGain`/`audioPan`/`audioMute`.
+An observer can freeze every receiver's accepted settings without moving
+selection to inspect an applet. These are accepted control recipes, not an
+independent measurement of the demodulated signal or observed stereo lock.
+
 `rtlPcmStreams` contains eight stable receiver slots followed by the speaker
 mix. Frames, nonzero samples, nonfinite input samples, delivered discontinuities,
 left/right energy, peak, queue residence and delivery gaps are cumulative

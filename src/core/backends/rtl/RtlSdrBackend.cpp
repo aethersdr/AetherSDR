@@ -647,6 +647,31 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         snapshot.values.insert(QStringLiteral("rtlReceiverWithdrawals"), withdrawals);
         snapshot.values.insert(QStringLiteral("rtlPcmStreams"), pcm);
     }
+    if (m_lastPublished) {
+        QVariantList recipes;
+        for (const auto& receiver : m_lastPublished->receivers) {
+            const int stableId = receiver.passband.stableId;
+            const bool receiving = std::ranges::find(m_lastPublished->receivingIds, stableId)
+                != m_lastPublished->receivingIds.end();
+            QVariantMap recipe;
+            recipe.insert(QStringLiteral("stableId"), stableId);
+            recipe.insert(QStringLiteral("selected"), stableId == m_activeSliceId);
+            recipe.insert(QStringLiteral("receiving"), receiving);
+            recipe.insert(QStringLiteral("parked"), !receiving);
+            recipe.insert(QStringLiteral("carrierHz"), receiver.passband.carrierHz);
+            recipe.insert(QStringLiteral("mode"), modeName(receiver.mode));
+            recipe.insert(QStringLiteral("filterLowHz"), receiver.passband.filterLowHz);
+            recipe.insert(QStringLiteral("filterHighHz"), receiver.passband.filterHighHz);
+            recipe.insert(QStringLiteral("wfmForceMono"), receiver.wfmForceMono);
+            recipe.insert(QStringLiteral("wfmHdStereo"), receiver.wfmHdStereo);
+            recipe.insert(QStringLiteral("wfmDeemphasisUs"), receiver.wfmDeemphasisUs);
+            recipe.insert(QStringLiteral("audioGain"), receiver.audioGain);
+            recipe.insert(QStringLiteral("audioPan"), receiver.audioPan);
+            recipe.insert(QStringLiteral("audioMute"), receiver.audioMute);
+            recipes.append(recipe);
+        }
+        snapshot.values.insert(QStringLiteral("rtlReceiverRecipes"), recipes);
+    }
     const QList<QPair<QString, QString>> diagnosticRows{
         {QStringLiteral("rtlReceiverCapacity"), tr("Configured receiver capacity")},
         {QStringLiteral("rtlQualifiedReceiverCapacity"), tr("Qualified default receiver capacity")},
@@ -664,7 +689,8 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         {QStringLiteral("rtlCallbackDurationBuckets"), tr("Callback duration histogram")},
         {QStringLiteral("rtlCallbackDurationUpperBoundsNs"), tr("Callback histogram upper bounds (ns)")},
         {QStringLiteral("rtlReceiverWithdrawals"), tr("Processing-fault withdrawals by stable receiver")},
-        {QStringLiteral("rtlPcmStreams"), tr("PCM observations for receivers A-H, then speaker")}};
+        {QStringLiteral("rtlPcmStreams"), tr("PCM observations for receivers A-H, then speaker")},
+        {QStringLiteral("rtlReceiverRecipes"), tr("Accepted recipes by stable receiver")}};
     snapshot.sections.insert(diagnosticRows.front().first, tr("RTL evaluation measurements (since connect)"));
     for (const auto& row : diagnosticRows) {
         snapshot.order.append(row.first);
