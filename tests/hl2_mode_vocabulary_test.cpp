@@ -49,6 +49,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2ModeVocabulary.h"
 #include "core/backends/RestoredRadioState.h"
+#include "core/backends/SliceDelta.h"
 
 #include <QCoreApplication>
 #include <QSet>
@@ -255,6 +256,58 @@ int main(int argc, char** argv)
               QStringLiteral("a document holding %1 restores as %2, which the "
                              "menu can display (or is a named residual)")
                   .arg(m, restored));
+    }
+
+    // THE RUN-TIME SETTER HOLDS THE SAME BOUNDARY AS THE RESTORE (#5580, #5678
+    // row 1.3). setSliceMode() is where every path that bypasses the combo
+    // ends -- rigctl set_mode, SmartCAT ZZMD, TCI modulation, memory recall,
+    // the Mode shortcuts, MIDI, the VFO quick-mode buttons, the net scheduler,
+    // a Kiwi spot click -- because SliceModel::setMode checks nothing and
+    // forwards through modeChangeRequested. It stored an unknown string
+    // verbatim: the slice then READ "RTTY" while modeFromString() demodulated
+    // USB. A mode this radio cannot demodulate is now refused here, and the
+    // slice is re-published as it really is, so the indicator snaps back.
+    {
+        hl2::Hl2Backend backend;
+        QString lastMode;
+        int lastLow = 0, lastHigh = 0;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                         [&](int, const SliceDelta& d) {
+            if (d.mode)       lastMode = *d.mode;
+            if (d.filterLow)  lastLow  = *d.filterLow;
+            if (d.filterHigh) lastHigh = *d.filterHigh;
+        });
+
+        backend.setSliceMode(0, QStringLiteral("LSB"));
+        const QString baseMode = lastMode;
+        const int baseLow = lastLow, baseHigh = lastHigh;
+        check(baseMode == QLatin1String("LSB"),
+              QStringLiteral("setup: the slice is in LSB — got \"%1\"").arg(baseMode));
+
+        for (const QString& rejected : {QStringLiteral("RTTY"), QStringLiteral("DFM"),
+                                        QStringLiteral("DSTR"), QStringLiteral("NONSENSE")}) {
+            lastMode.clear();
+            backend.setSliceMode(0, rejected);
+            check(lastMode == baseMode,
+                  QStringLiteral("%1 is refused at run time and the slice is "
+                                 "re-published as %2 — got \"%3\"")
+                      .arg(rejected, baseMode, lastMode));
+            check(lastLow == baseLow && lastHigh == baseHigh,
+                  QStringLiteral("%1 leaves the passband at %2..%3 — got %4..%5")
+                      .arg(rejected).arg(baseLow).arg(baseHigh)
+                      .arg(lastLow).arg(lastHigh));
+        }
+
+        // Positive control: the refusal is not wider than the vocabulary. Every
+        // spelling modeFromString() maps is still applied, in its offered form.
+        for (const QString& m : std::as_const(accepted)) {
+            lastMode.clear();
+            backend.setSliceMode(0, m);
+            check(lastMode == hl2::canonicalOfferedMode(m),
+                  QStringLiteral("%1 is still applied at run time, as %2 — got "
+                                 "\"%3\"").arg(m, hl2::canonicalOfferedMode(m),
+                                               lastMode));
+        }
     }
 
     if (failures == 0) {

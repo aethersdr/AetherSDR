@@ -591,13 +591,19 @@ void productionCapabilityContracts()
     hl2.setSliceMode(0, QStringLiteral("NFM"));
     check(observed.mode == QStringLiteral("FM"),
         "and NFM collapses onto FM for the same reason, at the same seam");
-    // A string the vocabulary does not know is passed through UNTOUCHED, not
-    // merely upper-cased: isKnownModeString() gates the collapse exactly as
+    // A string the vocabulary does not know is NOT normalised into something
+    // else: isKnownModeString() gates the collapse exactly as
     // applyRestoredState() gates it, so nothing outside the three alias pairs
-    // changes shape here.
+    // changes shape here. Nor is it STORED any more: this used to assert the
+    // string came back verbatim, which is how a slice could read "RTTY" while
+    // modeFromString() demodulated USB (#5580, #5678 row 1.3). Now it is
+    // refused and the slice re-published as it was -- FM, from the leg above.
+    // "RADE" is a fair unknown here: it is client-side only and never reaches
+    // a backend in production (RxApplet / VfoWidget return before setMode()).
     hl2.setSliceMode(0, QStringLiteral("RADE"));
-    check(observed.mode == QStringLiteral("RADE"),
-        "an unknown mode string is left alone, not normalised into something else");
+    check(observed.mode == QStringLiteral("FM"),
+        "an unknown mode string is refused -- neither stored nor normalised; "
+        "the slice stays in FM");
     hl2.setSliceMode(0, QStringLiteral("USB"));
     // WHAT THIS CANNOT SEE, stated rather than implied: that CWL and CWU select
     // DIFFERENT detectors. They share one passband entry by design (the pitch

@@ -3616,11 +3616,27 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
     // by construction -- hl2_mode_vocabulary_test pins that equivalence for
     // every accepted spelling. Collapsing one onto the other moves nothing.
     //
-    // isKnownModeString() FIRST, exactly as applyRestoredState() does it: a
-    // string the vocabulary does not know is passed through untouched rather
-    // than merely upper-cased, so this changes nothing for anything outside
-    // the three alias pairs.
-    const QString mode = isKnownModeString(requested) ? canonicalOfferedMode(requested) : requested;
+    // isKnownModeString() FIRST, exactly as applyRestoredState() does it -- and
+    // now with the same outcome. A string the vocabulary does not know used to
+    // be passed through untouched, so the slice READ "RTTY" (or DFM, DSTR, any
+    // string at all) while modeFromString() fell through to USB: the indicator
+    // and the detector disagreeing, with nothing logged (#5580, #5678 row
+    // 1.3). Every route that bypasses the combo ends here -- rigctl set_mode,
+    // SmartCAT ZZMD, TCI modulation, memory recall, the Mode shortcuts, MIDI,
+    // the VFO quick-mode buttons, the net scheduler, a spot click -- because
+    // SliceModel::setMode forwards whatever it is given. Such a request is now
+    // REFUSED, and the slice is re-published as it is: SliceModel set its mode
+    // optimistically, and the delta carrying the unchanged mode moves every
+    // indicator back to what the DSP is doing. Kept inside this backend on
+    // purpose: a SliceModel-level guard would change every family's behaviour,
+    // and that is a maintainer's call (#5580).
+    if (!isKnownModeString(requested)) {
+        qCWarning(lcHl2) << "HL2: refusing mode" << requested
+                         << "- this radio demodulates only" << publishedModeStrings();
+        emitSliceState(ddc);
+        return;
+    }
+    const QString mode = canonicalOfferedMode(requested);
 
     const QString previous = r->mode;
     r->mode = mode;
