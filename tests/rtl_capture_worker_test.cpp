@@ -19,6 +19,7 @@
 #include <cstring>
 #include <mutex>
 #include <numbers>
+#include <optional>
 
 using namespace AetherSDR;
 using T = rtl::RtlCaptureTransaction;
@@ -43,6 +44,7 @@ struct RtlCaptureBackendTestAccess {
     { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
     static void waterfall(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
     { emit backend.m_worker->waterfallRowReady(token.session, token.revision, 0, frame); }
+    static void service(RtlSdrBackend& backend) { backend.serviceCapture(); }
     static bool stopWorker(RtlSdrBackend& backend) { return backend.m_worker->stopReading(); }
     static RtlReceivePipeline::Diagnostics diagnostics(const RtlSdrBackend& backend)
     { return backend.m_worker->diagnostics(); }
@@ -243,37 +245,96 @@ static void receiverTuneKeepsDisplayAverage()
     rtl::RtlSdrBackend receiver;
     rtl::RtlCaptureBackendTestAccess::start(receiver, std::make_unique<InjectedDevice>(device));
     device->releaseReadback();
-    check(waitFor([&] { return receiver.isConnected(); }), "averaging worker connects");
+    const bool connected = waitFor([&] { return receiver.isConnected(); });
+    check(connected, "averaging worker connects");
+    if (!connected) { receiver.disconnectRadio(); return; }
     receiver.setPanAverage({}, 100);
     int frames = 0;
     float lastDc = -999;
     int waterfallRows = 0;
+    bool captureCorrected = false;
+    int correctedFrames = 0;
+    std::optional<float> firstCorrectedDc;
+    T::Token firstCorrectedToken;
     QObject::connect(&receiver, &IRadioBackend::spectrumFrameReady,
         [&](int, const QByteArray& frame, const SpectrumCoverage&) {
             ++frames;
             std::memcpy(&lastDc, frame.constData() + frame.size() / 2, sizeof(lastDc));
+            const T::State accepted = rtl::RtlCaptureBackendTestAccess::state(receiver);
+            if (captureCorrected && accepted.dcSuppression) {
+                ++correctedFrames;
+                if (!firstCorrectedDc) {
+                    firstCorrectedDc = lastDc;
+                    firstCorrectedToken = accepted.token;
+                }
+            }
         });
     QObject::connect(&receiver, &IRadioBackend::waterfallRowReady,
         [&](int, const QByteArray&) { ++waterfallRows; });
-    for (int i = 0; i < 8; ++i) { device->block(); }
+
+    // Grant only one callback and wait for its completion before granting the
+    // next. Polling predicates must not enqueue work: waitFor evaluates its
+    // predicate again on return, and DeviceState retains permits across USB
+    // restarts. Bursts also outrun native WFM's nonblocking WDSP output ring.
+    const unsigned long callbackMicroseconds = static_cast<unsigned long>(std::ceil(
+        1.0e6 * (device->callbackBytes.load() / 2.0) / 2'400'000));
+    const auto clockBlock = [&] {
+        {
+            std::lock_guard lock(device->mutex);
+            check(device->blocks == 0, "averaging callback clock has no queued permits");
+            if (device->blocks != 0) { return false; }
+        }
+        const int completed = device->callbacks + 1;
+        device->block();
+        const bool finished = waitFor([&] { return device->callbacks >= completed; });
+        check(finished, "averaging callback clock waits for actual completion");
+        if (!finished) { return false; }
+        QThread::usleep(callbackMicroseconds);
+        // Publish an acknowledged adoption on its owner thread before another
+        // callback can complete its first FFT under an unpublished revision.
+        rtl::RtlCaptureBackendTestAccess::service(receiver);
+        QCoreApplication::processEvents();
+        const bool exact = device->callbacks == completed;
+        check(exact, "averaging callback clock delivers exactly one block");
+        return exact;
+    };
+    const auto clockBlocks = [&](int count) {
+        for (int i = 0; i < count; ++i) {
+            if (!clockBlock()) { return false; }
+        }
+        return true;
+    };
+    const auto adoptWithClock = [&] {
+        QElapsedTimer timer;
+        timer.start();
+        while (rtl::RtlCaptureBackendTestAccess::busy(receiver) && timer.elapsed() < 3000) {
+            if (!clockBlock()) { return false; }
+        }
+        return timer.elapsed() < 3000 && !rtl::RtlCaptureBackendTestAccess::busy(receiver);
+    };
+
+    if (!clockBlocks(8)) { receiver.disconnectRadio(); return; }
     check(waitFor([&] { return frames > 0; }), "averaging worker seeds a complete observation");
     const int writes = device->writes;
-    device->iqLevel = 190;
     receiver.setSliceFrequency(0, 100'100'000);
-    check(waitFor([&] { device->block(); return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
-          "receiver-only tune adopts through the actual USB callback");
+    const bool tuned = adoptWithClock();
+    check(tuned, "receiver-only tune adopts through the actual USB callback");
+    if (!tuned) { receiver.disconnectRadio(); return; }
+    // Keep the weak seed unchanged while asynchronous preparation runs. Its
+    // duration must not age the old average with the stronger test input.
+    device->iqLevel = 190;
     const int beforeFrames = frames;
-    for (int i = 0; i < 8; ++i) { device->block(); }
+    if (!clockBlocks(8)) { receiver.disconnectRadio(); return; }
     check(waitFor([&] { return frames > beforeFrames; }), "tuned receiver emits new accepted FFT");
     const double raw = 20 * std::log10(std::sqrt(2.) * (190 - 127.5) / 127.5
                                       * .35875 * (65535. / 65536));
     check(device->writes == writes && lastDc < raw - 8,
           "receiver-only adoption preserves display smoothing with unchanged hardware");
     receiver.setPanRfGain({}, 25);
-    check(waitFor([&] { device->block(); return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
+    check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
           "gain change adopts through verified hardware path");
     const int beforeGainFrames = frames;
-    for (int i = 0; i < 8; ++i) { device->block(); }
+    if (!clockBlocks(8)) { receiver.disconnectRadio(); return; }
     check(waitFor([&] { return frames > beforeGainFrames; }), "new gain emits complete frame");
     check(std::abs(lastDc - raw) < .02,
           "gain transition discards incompatible amplitude history");
@@ -300,7 +361,7 @@ static void receiverTuneKeepsDisplayAverage()
     rtl::RtlCaptureBackendTestAccess::waterfall(receiver, obsolete, beforePpm.token);
     check(frames == beforePpmFrames && waterfallRows == beforePpmRows,
           "PPM adoption rejects queued spectrum and waterfall from the old capture");
-    for (int i = 0; i < 8; ++i) { device->block(); }
+    if (!clockBlocks(8)) { receiver.disconnectRadio(); return; }
     check(waitFor([&] { return frames > beforePpmFrames; }), "PPM change emits complete observation");
     const double weak = 20 * std::log10(std::sqrt(2.) * (130 - 127.5) / 127.5
                                        * .35875 * (65535. / 65536));
@@ -308,14 +369,26 @@ static void receiverTuneKeepsDisplayAverage()
         && std::abs(lastDc - weak) < .02,
           "PPM change cannot reinterpret the previous RF history");
     device->iqLevel = 190;
+    captureCorrected = true; // Arm before intent; never substitute a later FFT.
     receiver.invokeExtension("rtl", "dc_suppression.set", 2, true);
-    check(waitFor([&] {
-        device->block(); QThread::msleep(20);
-        return !rtl::RtlCaptureBackendTestAccess::busy(receiver);
-    }), "DC correction adopts on a real callback boundary");
-    const int beforeDcFrames = frames;
-    for (int i = 0; i < 8; ++i) { device->block(); }
-    check(waitFor([&] { return frames > beforeDcFrames; }), "DC correction emits complete observation");
+    const bool correctedAdopted = adoptWithClock();
+    check(correctedAdopted, "DC correction adopts on a real callback boundary");
+    if (!correctedAdopted) { receiver.disconnectRadio(); return; }
+    const T::State afterDc = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    const int afterDcCallbacks = device->callbacks;
+    check(afterDc.dcSuppression && afterDc.token.session == afterPpm.token.session
+        && afterDc.token.revision > afterPpm.token.revision && correctedFrames == 0,
+          "DC adoption publishes before its first complete corrected window");
+    // Adoption processes one 8192-sample block. Six more still cannot fill
+    // the 65536-sample FFT; precisely the seventh completes its first window.
+    if (!clockBlocks(6)) { receiver.disconnectRadio(); return; }
+    check(correctedFrames == 0, "DC correction cannot publish a partial first window");
+    if (!clockBlock()) { receiver.disconnectRadio(); return; }
+    check(waitFor([&] { return firstCorrectedDc.has_value(); }), "DC correction emits complete observation");
+    check(correctedFrames == 1 && firstCorrectedToken == afterDc.token
+        && rtl::RtlCaptureBackendTestAccess::state(receiver).token == afterDc.token
+        && device->callbacks == afterDcCallbacks + 7,
+          "DC observation is exactly the first complete window of the accepted revision");
     const double pole = std::exp(-2 * std::numbers::pi * rtl::RtlDcBlocker::kCornerHz / 2'400'000);
     double correctedWindowGain = 0;
     for (int i = 0; i < 65536; ++i) {
@@ -326,8 +399,15 @@ static void receiverTuneKeepsDisplayAverage()
     const double corrected = 20 * std::log10(std::sqrt(2.) * (190 - 127.5) / 127.5
                                             * (1 + pole) / 2 * correctedWindowGain);
     check(rtl::RtlCaptureBackendTestAccess::state(receiver).dcSuppression
-        && std::abs(lastDc - corrected) < .03,
+        && firstCorrectedDc && std::abs(*firstCorrectedDc - corrected) < .03,
           "DC mode change discards old estimates and shows the actual first corrected window");
+    const auto measured = rtl::RtlCaptureBackendTestAccess::diagnostics(receiver);
+    check(std::ranges::all_of(measured.receiverWithdrawals, [](std::uint64_t count) { return count == 0; }),
+          "paced averaging fixture never withdraws a native receiver for repair");
+    {
+        std::lock_guard lock(device->mutex);
+        check(device->blocks == 0, "averaging fixture finishes without queued callback permits");
+    }
     receiver.disconnectRadio();
 }
 
