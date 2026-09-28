@@ -2,6 +2,7 @@
 #include "core/backends/rtl/RtlSdrBackend.h"
 #include <QCoreApplication>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -312,6 +313,41 @@ void fixedRfGridDoesNotDiffuse()
               "invalidated converter evidence seeds measured RF rather than erasing current bins");
     }
 }
+
+void alignedGridValidityAndReuse()
+{
+    for (bool logarithmic : {false, true}) {
+        SpectrumTemporalAverage average(6);
+        // With a 500 ms time constant, this interval retains exactly half.
+        const double halfLife = .5 * std::log(2.);
+        const auto matches = [logarithmic](const std::array<float, 6>& actual,
+                                          const std::array<float, 6>& expectedDomain) {
+            for (std::size_t i = 0; i < actual.size(); ++i) {
+                const double expected = logarithmic ? expectedDomain[i]
+                    : 10 * std::log10(expectedDomain[i]);
+                if (!(std::abs(actual[i] - expected) < .00001)) { return false; }
+            }
+            return true;
+        };
+        std::array<float, 6> values{2, 4, 6, 8, 10, 12};
+        check(average.processFrame(values, 50, logarithmic, halfLife, 1000, 1, 1, 5) == 0
+              && matches(values, {2, 4, 6, 8, 10, 12}),
+              "aligned first frame displays actual observations with no reused history");
+
+        average.invalidate(1002, 1002);
+        values = {20, 40, 60, 80, 100, 120};
+        check(average.processFrame(values, 50, logarithmic, halfLife, 1000, 1, 2, 4) == 1,
+              "aligned reuse counts only old-valid bins inside the current usable interval");
+        check(matches(values, {20, 22, 60, 44, 55, 120}),
+              "narrowing usable RF retains old-valid output for this frame while invalidated bins seed current observations");
+
+        values = {200, 400, 600, 800, 1000, 1200};
+        check(average.processFrame(values, 50, logarithmic, halfLife, 1000, 1, 1, 5) == 2,
+              "aligned widening reuses only the two bins retained inside the previous usable interval");
+        check(matches(values, {200, 400, 330, 422, 1000, 1200}),
+              "newly exposed aligned bins seed observations instead of resurrecting excluded history");
+    }
+}
 }
 int main(int argc, char** argv)
 {
@@ -356,5 +392,6 @@ int main(int argc, char** argv)
     amountChangeContinuity();
     captureTransitionContinuity();
     fixedRfGridDoesNotDiffuse();
+    alignedGridValidityAndReuse();
     return failures ? 1 : 0;
 }
