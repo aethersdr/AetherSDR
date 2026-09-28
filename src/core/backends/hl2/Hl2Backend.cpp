@@ -3513,14 +3513,17 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     // Stay clear of the band edges: the passband rolls off there, and a slice
     // parked in the roll-off would be attenuated for no visible reason.
     const double usableHz = halfSpanHz * kUsablePassbandFraction;
-    if (std::abs(hz - r->ncoHz) > usableHz) {
-        r->ncoHz = hz;
+    // The window is judged on where the receiver LISTENS (dial + RIT on the
+    // transmit receiver), so a RIT offset past the edge moves the NCO too.
+    const double tunedHz = rxTunedHz(*r);
+    if (std::abs(tunedHz - r->ncoHz) > usableHz) {
+        r->ncoHz = tunedHz;
         if (m_metis)
             // THIS receiver's NCO register, not RX1's. The two-argument overload
             // is the whole reason the receivers can sit on different bands.
             QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
                 Q_ARG(int, ddc),
-                Q_ARG(std::uint32_t, ncoCommandHz(hz)));
+                Q_ARG(std::uint32_t, ncoCommandHz(tunedHz)));
         // Notch centres are measured from the NCO, so moving it without saying
         // so leaves every notch parked at its old RF frequency — the operator
         // tunes across the band and the notches follow them, which is precisely
@@ -3901,6 +3904,11 @@ void Hl2Backend::setTxSlice(int sliceId)
     // The band filter's keyed-TX override follows m_txDdc, so re-evaluate it.
     applyBandFilter("tx slice");
     publishWideState();
+    // RIT belongs to the transmit receiver, so it leaves one and joins the other.
+    if (m_ritOn && m_ritHz != 0) {
+        retuneReceiver(previous);
+        retuneReceiver(ddc);
+    }
 
     // Republish BOTH slices: the one that lost transmit and the one that gained
     // it. Publishing only the new one would leave the old indicator lit, and two
@@ -5260,8 +5268,13 @@ void Hl2Backend::setTxFrequency(double hz)
     // TX is single-stage: there is no software shift behind this the way there
     // is on receive, so the 1 Hz register granularity is the floor here. At
     // 10 ppm on 28 MHz that is a 280 Hz error corrected to under 1 Hz.
+    //
+    // XIT lands here and ONLY here: every caller passes the transmit receiver's
+    // dial, so the offset reaches the TX register on every path that writes it
+    // (tune, TX slice move, reconnect, calibration) and never the receive side.
+    const double txHz = hz + (m_xitOn ? m_xitHz : 0);
     QMetaObject::invokeMethod(m_metis, "setTxFrequencyHz", Qt::QueuedConnection,
-        Q_ARG(std::uint32_t, ncoCommandHz(hz)));
+        Q_ARG(std::uint32_t, ncoCommandHz(txHz)));
 }
 
 std::uint32_t Hl2Backend::ncoCommandHz(double trueHz) const noexcept
@@ -5300,7 +5313,76 @@ double Hl2Backend::rxShiftHz(const Receiver& r) const noexcept
     // Unscaled by the frequency calibration on purpose: this term is an audio
     // offset, not an RF frequency. Scaling it would be applying a crystal
     // correction to the operator's sidetone pitch.
-    return dspShiftHz(r.sliceFreqHz, r.ncoHz) - cwBfoHz(r.mode);
+    return dspShiftHz(rxTunedHz(r), r.ncoHz) - cwBfoHz(r.mode);
+}
+
+double Hl2Backend::rxTunedHz(const Receiver& r) const noexcept
+{
+    // RIT is radio-wide at the seam (no slice id), and it only means anything
+    // relative to the transmit frequency — so it belongs to the receiver that
+    // owns transmit. Added before dspShiftHz() so it stays in the TRUE-RF
+    // domain the frequency calibration already corrects.
+    const bool ownsTx = (&r == rx(m_txDdc));
+    return r.sliceFreqHz + ((m_ritOn && ownsTx) ? m_ritHz : 0);
+}
+
+void Hl2Backend::retuneReceiver(int ddc)
+{
+    // The same re-run setPanSampleRate() uses: re-centres the NCO only if the
+    // receive frequency left the window, re-pushes the shift, re-emits state.
+    const Hl2ReceiverIds* ids = m_ids.byDdc(ddc);
+    const Receiver* r = rx(ddc);
+    if (ids && r) {
+        setSliceFrequency(ids->uiNumber, r->sliceFreqHz);
+    }
+}
+
+void Hl2Backend::setRitEnabled(bool on)
+{
+    if (on == m_ritOn) {
+        return;
+    }
+    m_ritOn = on;
+    if (m_ritHz != 0) {
+        retuneReceiver(m_txDdc);
+    }
+}
+
+void Hl2Backend::setRitOffset(int hz)
+{
+    hz = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
+    if (hz == m_ritHz) {
+        return;
+    }
+    m_ritHz = hz;
+    if (m_ritOn) {
+        retuneReceiver(m_txDdc);
+    }
+}
+
+void Hl2Backend::setXitEnabled(bool on)
+{
+    if (on == m_xitOn) {
+        return;
+    }
+    m_xitOn = on;
+    const Receiver* txRx = rx(m_txDdc);
+    if (m_xitHz != 0 && txRx) {
+        setTxFrequency(txRx->sliceFreqHz);
+    }
+}
+
+void Hl2Backend::setXitOffset(int hz)
+{
+    hz = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
+    if (hz == m_xitHz) {
+        return;
+    }
+    m_xitHz = hz;
+    const Receiver* txRx = rx(m_txDdc);
+    if (m_xitOn && txRx) {
+        setTxFrequency(txRx->sliceFreqHz);
+    }
 }
 
 void Hl2Backend::setCwPitch(int hz)

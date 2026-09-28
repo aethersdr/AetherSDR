@@ -165,6 +165,16 @@ public:
     void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
+    // RIT / XIT (#5386). The seam carries no slice id, so both are radio-wide
+    // here and follow transmit: RIT offsets the RECEIVE of the transmit-owning
+    // receiver (m_txDdc) only, XIT the TX NCO register only. Neither moves the
+    // published slice frequency — that stays the dial.
+    void setRitEnabled(bool on) override;
+    void setRitOffset(int hz) override;
+    void setXitEnabled(bool on) override;
+    // Overridden, not inherited: the base forwards to setRitOffset() for a radio
+    // with one shared register, and the HL2's RX and TX paths are independent.
+    void setXitOffset(int hz) override;
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
     // Opt-in only — never enabled by a default.
@@ -370,6 +380,9 @@ private:
     // the mirror age, so the converter rows' expiry can be exercised without a
     // radio, a socket or an EP4 stream. Reaches nothing else.
     friend struct Hl2HealthBlockTestAccess;
+    // Reads the receive shift/NCO and adds a second receiver's state without a
+    // socket or DSP, for hl2_rit_xit_test. Reaches nothing else.
+    friend struct Hl2RitXitTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
@@ -741,6 +754,17 @@ private:
     // the BFO, so the detector's zero sits a pitch BELOW the marker (CWU) and
     // the marker itself lands on the pitch.
     [[nodiscard]] double rxShiftHz(const Receiver& r) const noexcept;
+    // Where a receiver actually listens: its dial, plus RIT when it owns
+    // transmit. Feeds the NCO window and the shift; sliceFreqHz stays the dial.
+    [[nodiscard]] double rxTunedHz(const Receiver& r) const noexcept;
+    // Re-run one receiver's tune after its share of RIT changed.
+    void retuneReceiver(int ddc);
+    // SmartCatProtocol's kRitMaxHz: the range the rest of the app assumes.
+    static constexpr int kRitXitMaxHz = 9999;
+    bool m_ritOn = false;
+    int m_ritHz = 0;
+    bool m_xitOn = false;
+    int m_xitHz = 0;
 
     // The operator's CW pitch, mirrored from TransmitModel through
     // setCwPitch(). Defaults to TransmitModel's own 600 so a receiver built
