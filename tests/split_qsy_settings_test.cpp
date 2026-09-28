@@ -25,11 +25,11 @@ QJsonObject parseObject(const char* json)
 void testDefaults()
 {
     const AetherSDR::SplitQsySettings settings;
-    check(settings.closeSplitOnQsy, "QSY split closure defaults on");
+    check(!settings.closeSplitOnQsy, "QSY split closure defaults off");
     check(settings.thresholdHz == 20, "threshold defaults to 20 Hz");
 
     const auto empty = AetherSDR::SplitQsySettings::fromJson({});
-    check(empty.closeSplitOnQsy, "empty settings keep QSY split closure on");
+    check(!empty.closeSplitOnQsy, "empty settings keep QSY split closure off");
     check(empty.thresholdHz == 20, "empty settings keep the 20 Hz threshold");
 }
 
@@ -57,21 +57,22 @@ void testClampAndMalformedValues()
 
     const auto malformed = AetherSDR::SplitQsySettings::fromJson(
         parseObject(R"({"v":1,"closeSplitOnQsy":"yes","thresholdHz":"20"})"));
-    check(malformed.closeSplitOnQsy,
-          "wrong-typed enable setting falls back to enabled");
+    check(!malformed.closeSplitOnQsy,
+          "wrong-typed enable setting falls back to disabled");
     check(malformed.thresholdHz == 20,
           "wrong-typed threshold falls back to 20 Hz");
 
     const auto future = AetherSDR::SplitQsySettings::fromJson(
         parseObject(R"({"v":2,"closeSplitOnQsy":false,"thresholdHz":100})"));
-    check(future.closeSplitOnQsy,
+    check(!future.closeSplitOnQsy,
           "unknown version is not partially read for same-named fields");
     check(future.thresholdHz == 20, "unknown version uses current defaults");
 }
 
 void testQsyClosePolicy()
 {
-    const AetherSDR::SplitQsySettings settings;
+    AetherSDR::SplitQsySettings settings;
+    settings.closeSplitOnQsy = true;
     check(!AetherSDR::shouldCloseSplitOnQsy(
               settings, true, true, false, 14.000020, 14.000000),
           "frequency change at the threshold keeps split active");

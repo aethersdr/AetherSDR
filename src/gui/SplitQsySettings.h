@@ -18,7 +18,7 @@ struct SplitQsySettings {
     static constexpr int kVersion = 1;
     static constexpr const char* kSettingsKey = "SplitBehavior";
 
-    bool closeSplitOnQsy{true};
+    bool closeSplitOnQsy{false};
     int thresholdHz{kDefaultThresholdHz};
 
     static SplitQsySettings fromJson(const QJsonObject& object)
