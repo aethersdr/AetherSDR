@@ -5,14 +5,30 @@
 #include <QCheckBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHideEvent>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
 namespace {
+class RtlPpmSpinBox final : public QSpinBox {
+public:
+    using QSpinBox::QSpinBox;
+protected:
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        QSpinBox::keyPressEvent(event);
+        // Commit through the native editor, but do not let Return activate the
+        // settings dialog's default Close button before the debounce can fire.
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) { event->accept(); }
+    }
+};
+
 quint64 nextRequest()
 {
     // All calls run on the GUI thread. Keep IDs distinct across page lifetimes
@@ -32,7 +48,7 @@ RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget*
     : QWidget(parent), m_model(model),
       m_availability(new ControlAvailabilityRegistry(model, this)),
       m_controls(new QGroupBox(tr("Receiver corrections"), this)),
-      m_ppm(new QSpinBox(m_controls)), m_dc(new QCheckBox(tr("Suppress IQ DC"), m_controls)),
+      m_ppm(new RtlPpmSpinBox(m_controls)), m_ppmTimer(new QTimer(this)), m_dc(new QCheckBox(tr("Suppress IQ DC"), m_controls)),
       m_applied(new QLabel(this)), m_status(new QLabel(this)), m_identity(new QLabel(this))
 {
     setObjectName(QStringLiteral("rtlReceiverSettings"));
@@ -44,8 +60,11 @@ RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget*
     m_ppm->setRange(-1000, 1000);
     m_ppm->setSuffix(tr(" ppm"));
     m_ppm->setKeyboardTracking(false);
+    m_ppmTimer->setSingleShot(true);
+    m_ppmTimer->setInterval(200);
     auto* apply = new QPushButton(tr("Apply frequency correction"), m_controls);
     apply->setObjectName(QStringLiteral("rtlPpmApply"));
+    apply->setAutoDefault(false);
     form->addRow(tr("Frequency correction:"), m_ppm);
     form->addRow(apply);
     m_dc->setObjectName(QStringLiteral("rtlDcSuppression"));
@@ -60,6 +79,9 @@ RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget*
     layout->addWidget(m_applied);
     layout->addWidget(m_status);
     auto* explanation = new QLabel(tr(
+        "Frequency correction applies automatically after an arrow adjustment or a completed entry (Enter or focus change). "
+        "Rapid adjustments are combined; reception briefly reacquires after a correction. "
+        "Closing this window does not undo an applied correction.\n\n"
         "PPM uses whole numbers. A positive value corrects a fast device clock. "
         "If a known reference appears too low, increase the correction; if it appears too high, decrease it. "
         "Allow the receiver to warm up and use a known stable reference.\n\n"
@@ -82,10 +104,14 @@ RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget*
     m_availability->registerWidget(m_dc,
         tr("The connected radio does not provide RTL receiver corrections."), available,
         [this] { return m_haveState && m_confirmed.value(QStringLiteral("dcSuppression")).toBool(); });
-    connect(m_ppm, &QSpinBox::valueChanged, this, [this] { m_ppmEdited = true; });
-    connect(apply, &QPushButton::clicked, this, [this] {
-        submit(QStringLiteral("ppm.set"), m_ppm->value(), m_ppmRequest);
+    connect(m_ppm, &QSpinBox::valueChanged, this, [this] {
+        if (!isVisible() || !m_haveState) { return; }
+        m_ppmEdited = true;
+        m_ppmTimer->start();
+        renderStatus();
     });
+    connect(m_ppmTimer, &QTimer::timeout, this, &RtlReceiverSettingsWidget::submitPpm);
+    connect(apply, &QPushButton::clicked, this, &RtlReceiverSettingsWidget::submitPpm);
     connect(m_dc, &QCheckBox::clicked, this, [this](bool requested) {
         const QSignalBlocker block(m_dc);
         m_dc->setChecked(m_confirmed.value(QStringLiteral("dcSuppression")).toBool());
@@ -101,6 +127,7 @@ RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget*
 
 void RtlReceiverSettingsWidget::bindBackend()
 {
+    m_ppmTimer->stop();
     disconnect(m_statusConnection); disconnect(m_resultConnection); disconnect(m_errorConnection);
     m_backend = m_model.backend();
     const quint64 generation = ++m_bindingGeneration;
@@ -141,7 +168,12 @@ void RtlReceiverSettingsWidget::bindBackend()
                 || (id != m_queryRequest && id != m_ppmRequest && id != m_dcRequest)) { return; }
             const bool queryFailed = id == m_queryRequest;
             if (queryFailed) { m_queryRequest = 0; }
-            if (id == m_ppmRequest) { m_ppmRequest = 0; }
+            if (id == m_ppmRequest) {
+                m_ppmRequest = 0;
+                // Never retry the refused intent. A newer operator edit is a
+                // separate request and keeps its debounce deadline.
+                if (m_ppm->value() == m_submittedPpm) { m_ppmTimer->stop(); }
+            }
             if (id == m_dcRequest) { m_dcRequest = 0; }
             m_error = tr("Request refused: %1").arg(reason);
             if (!queryFailed) { queryStatus(); }
@@ -170,6 +202,37 @@ void RtlReceiverSettingsWidget::acceptStatus(const QVariantMap& status)
     renderStatus();
 }
 
+void RtlReceiverSettingsWidget::hideEvent(QHideEvent* event)
+{
+    m_ppmTimer->stop();
+    // Discard only unsent input. An accepted in-flight correction is not a
+    // preview and is still allowed to complete and persist after the page closes.
+    const QSignalBlocker block(m_ppm);
+    m_ppm->setValue(m_ppmRequest ? m_submittedPpm : m_confirmed.value(QStringLiteral("ppm")).toInt());
+    m_ppmEdited = m_ppmRequest != 0;
+    renderStatus();
+    QWidget::hideEvent(event);
+}
+
+void RtlReceiverSettingsWidget::submitPpm()
+{
+    m_ppmTimer->stop();
+    if (!isVisible() || !m_haveState || !m_model.isConnected() || m_backend != m_model.backend()
+        || !supportsSettings(m_model.backendCapabilities())) { return; }
+    const int requested = m_ppm->value();
+    // Returning to the applied value must supersede a different pending value.
+    // Only the backend owns the active/latest-pending hardware transaction.
+    if (m_ppmRequest && requested == m_submittedPpm) { renderStatus(); return; }
+    if (!m_ppmRequest && !m_confirmed.value(QStringLiteral("pending")).toBool()
+        && requested == m_confirmed.value(QStringLiteral("ppm")).toInt()) {
+        m_ppmEdited = false;
+        renderStatus();
+        return;
+    }
+    m_submittedPpm = requested;
+    submit(QStringLiteral("ppm.set"), requested, m_ppmRequest);
+}
+
 void RtlReceiverSettingsWidget::submit(const QString& verb, const QVariant& value, quint64& pending)
 {
     if (!m_haveState || !m_model.isConnected() || m_backend != m_model.backend()
@@ -192,6 +255,7 @@ void RtlReceiverSettingsWidget::renderStatus()
     QStringList lines;
     if (!usable) { lines << tr("Waiting for a connected receiver's confirmed settings."); }
     else {
+        if (m_ppmTimer->isActive()) { lines << tr("Frequency correction will apply after this adjustment."); }
         if (m_ppmRequest || m_dcRequest || m_confirmed.value(QStringLiteral("pending")).toBool()) {
             lines << tr("Applying request; the applied values above remain in use until confirmation.");
         }
