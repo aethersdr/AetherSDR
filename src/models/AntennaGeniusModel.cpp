@@ -19,6 +19,9 @@ static constexpr quint16 kAgPort = 9007;
 static constexpr int kKeepAliveMs = 30000;
 // Discovery timeout: remove device if no broadcast in 5 seconds.
 static constexpr int kDiscoveryTimeoutMs = 5000;
+// Never evict a blocked target: churn must not replenish its retry budget.
+// At capacity, unknown targets stay blocked until a tracked budget is reset.
+static constexpr qsizetype kMaxAuthTargets = 128;
 
 static QString authTarget(const QString& host, quint16 port)
 {
@@ -86,8 +89,7 @@ void AntennaGeniusModel::setAuthCode(const QString& code)
     m_authCode = code;
     m_userAuthCode = !code.isEmpty();
     m_userAuthEndpoint = m_userAuthCode ? m_attemptEndpoint : QString();
-    m_authBlockedTargets.remove(m_attemptEndpoint);
-    m_authTimeoutsByTarget.remove(m_attemptEndpoint);
+    m_authFailuresByTarget.remove(m_attemptEndpoint);
     if (code.isEmpty() && m_waitingForAuthCode) {
         failAuthentication("Authorization code required");
     }
@@ -100,8 +102,7 @@ void AntennaGeniusModel::resetAuthBudgetFor(const AgDeviceInfo& info)
     if (target.isEmpty()) {
         return;
     }
-    m_authBlockedTargets.remove(target);
-    m_authTimeoutsByTarget.remove(target);
+    m_authFailuresByTarget.remove(target);
 }
 
 void AntennaGeniusModel::setAuthCodeForAttempt(quint64 attempt, const QString& code,
@@ -131,7 +132,29 @@ bool AntennaGeniusModel::isConnecting() const
 
 bool AntennaGeniusModel::isAuthBlockedFor(const QString& host, quint16 port) const
 {
-    return m_authBlockedTargets.contains(authTarget(host, port));
+    return authBlockedForTarget(authTarget(host, port));
+}
+
+bool AntennaGeniusModel::authBlockedForTarget(const QString& target) const
+{
+    if (target.isEmpty()) {
+        return false;
+    }
+    const auto entry = m_authFailuresByTarget.constFind(target);
+    return entry == m_authFailuresByTarget.cend()
+        ? m_authFailuresByTarget.size() >= kMaxAuthTargets : entry.value() >= 3;
+}
+
+int AntennaGeniusModel::recordAuthFailure()
+{
+    if (m_attemptEndpoint.isEmpty()) {
+        return 0;
+    }
+    if (!m_authFailuresByTarget.contains(m_attemptEndpoint)
+        && m_authFailuresByTarget.size() >= kMaxAuthTargets) {
+        return 3;
+    }
+    return recordPeripheralAuthFailure(m_authFailuresByTarget[m_attemptEndpoint]);
 }
 
 bool AntennaGeniusModel::isAuthBlockedFor(const AgDeviceInfo& info) const
@@ -338,8 +361,7 @@ void AntennaGeniusModel::beginAttempt()
 
 void AntennaGeniusModel::onAuthTimeout()
 {
-    int& timeouts = m_authTimeoutsByTarget[m_attemptEndpoint];
-    failAuthentication("Authentication timed out", peripheralAuthFailureBlocks(timeouts));
+    failAuthentication("Authentication timed out", recordAuthFailure() >= 3);
 }
 
 void AntennaGeniusModel::connectToAddress(const QHostAddress& ip, quint16 port)
@@ -442,10 +464,8 @@ void AntennaGeniusModel::onTcpDisconnected()
     m_authPending = false;
     m_waitingForAuthCode = false;
     if (rejectedDuringAuth && !m_deliberateDisconnect) {
-        int& timeouts = m_authTimeoutsByTarget[m_attemptEndpoint];
-        const bool blocked = peripheralAuthFailureBlocks(timeouts);
+        const bool blocked = recordAuthFailure() >= 3;
         if (blocked) {
-            m_authBlockedTargets.insert(m_attemptEndpoint);
             m_authCode.clear();
             m_userAuthCode = false;
             m_userAuthEndpoint.clear();
@@ -559,10 +579,14 @@ void AntennaGeniusModel::processTcpBytes(const QByteArray& bytes)
                 const quint32 result = fields.size() >= 2
                     ? fields.at(1).toUInt(&validResult, 16) : 0;
                 // The 4O3A AG API says the echoed sequence is 1 for this
-                // command and a zero hex result means success; the optional
-                // message field may be empty or omitted with its delimiter.
+                // command and a zero hex result means success. Also constrain
+                // the body: sibling TGXL documents a zero-result Unauthorized
+                // rejection. AG firmware responses still need live validation.
+                const bool acceptedBody = fields.size() == 2
+                    || (fields.size() == 3 && (fields.at(2).isEmpty()
+                        || fields.at(2) == QLatin1String("OK")));
                 if (fields.size() >= 2 && fields.at(0) == QLatin1String("R1")
-                    && validResult && result == 0) {
+                    && validResult && result == 0 && acceptedBody) {
                     m_authTimer->stop();
                     m_authPending = false;
                     const QString acceptedCode = m_userAuthCode ? m_authCode : QString();
@@ -590,8 +614,7 @@ void AntennaGeniusModel::processTcpBytes(const QByteArray& bytes)
 
 void AntennaGeniusModel::completePrologue()
 {
-    m_authBlockedTargets.remove(m_attemptEndpoint);
-    m_authTimeoutsByTarget.remove(m_attemptEndpoint);
+    m_authFailuresByTarget.remove(m_attemptEndpoint);
     // If connected via manual IP, enrich from UDP-discovered list.
     if (m_device.serial.endsWith("-manual") || m_device.serial.startsWith("manual-")) {
         for (const AgDeviceInfo& discovered : m_discoveredDevices) {
@@ -669,10 +692,10 @@ void AntennaGeniusModel::failAuthentication(const QString& reason, bool blockRec
     m_authTimer->stop();
     m_authPending = false;
     m_waitingForAuthCode = false;
-    if (blockReconnect) {
-        m_authBlockedTargets.insert(m_attemptEndpoint);
-    } else {
-        m_authBlockedTargets.remove(m_attemptEndpoint);
+    if (blockReconnect && !m_attemptEndpoint.isEmpty()
+        && (m_authFailuresByTarget.contains(m_attemptEndpoint)
+            || m_authFailuresByTarget.size() < kMaxAuthTargets)) {
+        m_authFailuresByTarget.insert(m_attemptEndpoint, 3);
     }
     if (blockReconnect) {
         m_authCode.clear();

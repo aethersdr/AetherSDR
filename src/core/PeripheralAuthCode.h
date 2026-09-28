@@ -7,12 +7,12 @@ namespace AetherSDR {
 
 inline constexpr int kMaxPeripheralLineLength = 64 * 1024;
 
-inline bool peripheralAuthFailureBlocks(int& consecutiveFailures)
+inline int recordPeripheralAuthFailure(int& consecutiveFailures)
 {
     if (consecutiveFailures < 3) {
         ++consecutiveFailures;
     }
-    return consecutiveFailures >= 3;
+    return consecutiveFailures;
 }
 
 enum class PeripheralAuthProtocol { Tgxl, Pgxl, AntennaGenius };

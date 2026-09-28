@@ -128,7 +128,7 @@ private:
     bool       m_authPending{false};
     bool       m_waitingForAuthCode{false};
     bool       m_authBlocked{false};
-    int        m_authTimeouts{0};
+    int        m_authFailures{0};
     quint64    m_authAttempt{0};
     QTimer     m_authTimer;
     QString    m_authCode;

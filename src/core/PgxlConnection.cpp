@@ -33,7 +33,7 @@ PgxlConnection::PgxlConnection(QObject* parent)
 
 void PgxlConnection::onAuthTimeout()
 {
-    failAuthentication("Authentication timed out", peripheralAuthFailureBlocks(m_authTimeouts));
+    failAuthentication("Authentication timed out", recordPeripheralAuthFailure(m_authFailures) >= 3);
 }
 
 void PgxlConnection::setAuthCode(const QString& code)
@@ -45,7 +45,7 @@ void PgxlConnection::setAuthCode(const QString& code)
         ? m_lastHost.trimmed().toLower() + QLatin1Char('|') + QString::number(m_lastPort)
         : QString();
     m_authBlocked = false;
-    m_authTimeouts = 0;
+    m_authFailures = 0;
     if (wasBlocked) {
         emit authBlockCleared();
     }
@@ -165,7 +165,7 @@ void PgxlConnection::onDisconnected()
     m_authPending = false;
     m_waitingForAuthCode = false;
     if (rejectedDuringAuth && !m_deliberateDisconnect) {
-        m_authBlocked = peripheralAuthFailureBlocks(m_authTimeouts);
+        m_authBlocked = recordPeripheralAuthFailure(m_authFailures) >= 3;
         if (m_authBlocked) {
             m_authCode.clear();
             m_userAuthCode = false;
@@ -389,7 +389,7 @@ void PgxlConnection::processLine(const QString& line)
 void PgxlConnection::finishHandshake()
 {
     m_authBlocked = false;
-    m_authTimeouts = 0;
+    m_authFailures = 0;
     sendCommand("info");
     // Setup writes carry the whole group; read it before controls are enabled.
     m_setupReadSeq = sendCommand("setup read");

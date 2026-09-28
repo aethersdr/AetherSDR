@@ -8,7 +8,6 @@
 #include <QHash>
 #include <QByteArray>
 #include <QList>
-#include <QSet>
 #include <functional>
 
 class QUdpSocket;
@@ -106,7 +105,7 @@ public:
     // Getters
     bool isConnected()   const { return m_connected; }
     bool isConnecting() const;
-    bool isAuthBlocked() const { return m_authBlockedTargets.contains(m_attemptEndpoint); }
+    bool isAuthBlocked() const { return authBlockedForTarget(m_attemptEndpoint); }
     bool isAuthBlockedFor(const QString& host, quint16 port) const;
     bool isAuthBlockedFor(const AgDeviceInfo& info) const;
     bool isPresent()     const { return !m_discoveredDevices.isEmpty(); }
@@ -189,6 +188,8 @@ private:
     void processLine(const QString& line);
     void processResponse(int seq, int code, const QString& body);
     void processStatus(const QString& body);
+    bool authBlockedForTarget(const QString& target) const;
+    int recordAuthFailure();
     void completePrologue();
     void sendAuthentication();
     void failAuthentication(const QString& reason, bool blockReconnect = true);
@@ -219,8 +220,7 @@ private:
     bool m_gotPrologue{false};
     bool m_authPending{false};
     bool m_waitingForAuthCode{false};
-    QSet<QString> m_authBlockedTargets;
-    QHash<QString, int> m_authTimeoutsByTarget;
+    QHash<QString, int> m_authFailuresByTarget;
     quint64 m_authAttempt{0};
     QString m_authCode;
     bool m_userAuthCode{false};

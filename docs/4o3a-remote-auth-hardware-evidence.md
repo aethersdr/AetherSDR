@@ -176,7 +176,45 @@ dialog regression first failed against the original ordering, then passed
 after the dialog retired the previous attempt before marking the replacement
 code pending. It exercises the TGXL, PGXL, and AG Connect buttons and checks
 that a later unchallenged greeting says the replacement code was not saved.
-The test makes outbound connection attempts to reserved documentation
-addresses, with no listener or simulated firmware peer, and injects the
-greetings directly into the connection handlers. This is UI-state evidence,
-not a live device handshake.
+The test injects the production connect-ordering callback and feeds greetings
+directly into the connection handlers. It opens no outbound connection and
+uses no listener or simulated firmware peer. This is UI-state evidence, not
+a live device handshake.
+
+
+## PR #6008 review follow-up
+
+AG authorization now requires sequence 1, a zero result, and either an omitted,
+empty, or exactly `OK` message. Unknown bodies, extra fields, and zero-result
+`Unauthorized` / `Denied` replies are rejected before connected state or
+credential acceptance is signaled. The `OK` allowlist is a defensive client
+policy tested with injected frames, not a claim that AG hardware emitted it.
+The vendor API explicitly documents `V<a.b.c> AG[ AUTH]`, so the AG identifier
+requirement is retained. A live AG check must capture both the WAN greeting
+(in particular whether it retains `AG`) and accepted/rejected reply bodies;
+TGXL's tokenless greeting alone is not evidence of AG behavior.
+
+Auth failure counters include both timeouts and mid-auth socket closes. AG
+tracks at most 128 failed targets, ignores empty targets, and does not evict
+old blocks to admit new targets. At capacity, untracked targets are blocked
+until a tracked target's budget is reset or the model is restarted. This
+bounds discovery-churn memory without silently granting old targets retries.
+
+A failed Keychain Clear now retains the cached credential as well as the
+vault record. Cache removal waits for successful deletion, and an older
+queued delete cannot erase a newer session save. The credential tests cover
+denied deletes, delete/save ordering, and consecutive queued clears.
+
+The six CodeGuard path-traversal advisories identify a protocol comment and
+unchanged MainWindow label/bundle-path code, not new path operations in this
+PR. No code change is warranted for those findings. Applet-indicator design
+and central settings placement remain subject to the maintainer's decision.
+
+Local review validation rebuilt and passed the socket-free handshake and
+Keychain tests. The committed PR dialog sources were compiled separately
+against the updated libraries and passed; the workspace's uncommitted
+Peripherals redesign is excluded from this review patch. Mutation checks for
+the AG body guard, empty-target guard, retry-history cap, and failed-delete
+cache handling each failed with the respective fix removed, then passed after
+restoration. Static registration, manifest, engine-boundary, capability-record,
+command-plane, and whitespace checks found no new blocker.

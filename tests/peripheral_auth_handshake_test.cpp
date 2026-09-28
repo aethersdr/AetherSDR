@@ -53,12 +53,12 @@ int main(int argc, char** argv)
     CHECK(peripheralAuthCommand(PeripheralAuthProtocol::AntennaGenius, QStringLiteral("sample"))
           == QByteArray("C1|auth code=sample\r")); // vendor-documented form
     int strikes = 0;
-    CHECK(!peripheralAuthFailureBlocks(strikes));
-    CHECK(!peripheralAuthFailureBlocks(strikes));
-    CHECK(peripheralAuthFailureBlocks(strikes));
-    CHECK(peripheralAuthFailureBlocks(strikes)); // saturates instead of overflowing
+    CHECK(recordPeripheralAuthFailure(strikes) < 3);
+    CHECK(recordPeripheralAuthFailure(strikes) < 3);
+    CHECK(recordPeripheralAuthFailure(strikes) == 3);
+    CHECK(recordPeripheralAuthFailure(strikes) == 3); // saturates instead of overflowing
     strikes = 0; // a successful handshake or newly entered code resets the budget
-    CHECK(!peripheralAuthFailureBlocks(strikes));
+    CHECK(recordPeripheralAuthFailure(strikes) < 3);
     {
         TgxlConnection connection;
         connection.setAuthCode("test-code");
@@ -400,6 +400,7 @@ int main(int argc, char** argv)
     }
     {
         AntennaGeniusModel connection;
+        prepareAg(connection);
         QSignalSpy failed(&connection, &AntennaGeniusModel::connectionError);
         CHECK(QMetaObject::invokeMethod(&connection, "processTcpBytes", Qt::DirectConnection,
                                         Q_ARG(QByteArray, QByteArray(64 * 1024 + 1, 'x'))));
@@ -447,7 +448,7 @@ int main(int argc, char** argv)
                                         Q_ARG(QByteArray, QByteArray("V4.0.22 AG AUTH\r\n"))));
         CHECK(QMetaObject::invokeMethod(&connection, "processTcpBytes", Qt::DirectConnection,
                                         Q_ARG(QByteArray, QByteArray("R1|0|OK\r\n"))));
-        CHECK(connected.size() == 1); // optional vendor response message
+        CHECK(connected.size() == 1); // explicitly allowlisted success body
         connection.disconnectFromDevice();
     }
     {
@@ -477,6 +478,57 @@ int main(int argc, char** argv)
         CHECK(connected.isEmpty());
         CHECK(failed.size() == 1);
         CHECK(connection.isAuthBlocked());
+    }
+    for (const QByteArray& reply : {QByteArray("R1|0|Unauthorized\r\n"),
+                                   QByteArray("R1|0|Denied\r\n"),
+                                   QByteArray("R1|0|unknown\r\n"),
+                                   QByteArray("R1|0|OK|Unauthorized\r\n"),
+                                   QByteArray("R2|0|OK\r\n")}) {
+        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        prepareAg(connection);
+        connection.setAuthCode(QStringLiteral("rejected-code"));
+        QSignalSpy accepted(&connection, &AntennaGeniusModel::authCodeAccepted);
+        QSignalSpy connected(&connection, &AntennaGeniusModel::connected);
+        QSignalSpy failed(&connection, &AntennaGeniusModel::connectionError);
+        CHECK(QMetaObject::invokeMethod(&connection, "processTcpBytes", Qt::DirectConnection,
+                                        Q_ARG(QByteArray, QByteArray("V4.0.22 AG AUTH\r\n"))));
+        CHECK(QMetaObject::invokeMethod(&connection, "processTcpBytes", Qt::DirectConnection,
+                                        Q_ARG(QByteArray, reply)));
+        CHECK(accepted.isEmpty()); // no rejected credential may reach the vault
+        CHECK(connected.isEmpty());
+        CHECK(!connection.isConnected());
+        CHECK(failed.size() == 1);
+        CHECK(connection.isAuthBlocked());
+    }
+    {
+        AntennaGeniusModel connection;
+        prepareAg(connection, {}, 0);
+        CHECK(QMetaObject::invokeMethod(&connection, "onAuthTimeout", Qt::DirectConnection));
+        CHECK(QMetaObject::invokeMethod(&connection, "processTcpBytes", Qt::DirectConnection,
+                                        Q_ARG(QByteArray, QByteArray(64 * 1024 + 1, 'x'))));
+        CHECK(!connection.isAuthBlocked());
+        CHECK(!connection.isAuthBlockedFor({}, 9007));
+        CHECK(!connection.isAuthBlockedFor(QStringLiteral("192.0.2.10"), 0));
+    }
+    {
+        // Discovery churn cannot evict an old block or grow retry history forever.
+        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        for (int target = 0; target < 256; ++target) {
+            prepareAg(connection, QStringLiteral("target-%1.example").arg(target));
+            CHECK(QMetaObject::invokeMethod(&connection, "onAuthTimeout", Qt::DirectConnection));
+        }
+        CHECK(connection.isAuthBlockedFor(QStringLiteral("unknown.example"), 9007));
+        CHECK(!connection.isAuthBlockedFor(QStringLiteral("target-0.example"), 9007));
+        prepareAg(connection, QStringLiteral("target-0.example"));
+        CHECK(QMetaObject::invokeMethod(&connection, "onAuthTimeout", Qt::DirectConnection));
+        CHECK(QMetaObject::invokeMethod(&connection, "onAuthTimeout", Qt::DirectConnection));
+        CHECK(connection.isAuthBlocked());
+        AgDeviceInfo reset;
+        reset.host = QStringLiteral("target-1.example");
+        reset.port = 9007;
+        connection.resetAuthBudgetFor(reset);
+        CHECK(!connection.isAuthBlockedFor(QStringLiteral("unknown.example"), 9007));
+        CHECK(connection.isAuthBlockedFor(QStringLiteral("target-0.example"), 9007));
     }
     {
         // AG and ShackSwitch share a model, but their failure budgets and
@@ -587,6 +639,7 @@ int main(int argc, char** argv)
     }
     {
         AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        prepareAg(connection);
         QSignalSpy required(&connection, &AntennaGeniusModel::authCodeRequired);
         QSignalSpy failed(&connection, &AntennaGeniusModel::connectionError);
         for (int strike = 1; strike <= 3; ++strike) {
@@ -612,6 +665,7 @@ int main(int argc, char** argv)
     }
     for (const char* failureMethod : {"onTcpDisconnected", "onAuthTimeout"}) {
         AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        prepareAg(connection);
         QSignalSpy required(&connection, &AntennaGeniusModel::authCodeRequired);
         for (int strike = 1; strike <= 3; ++strike) {
             CHECK(QMetaObject::invokeMethod(&connection, "beginAttempt", Qt::DirectConnection));
@@ -636,6 +690,7 @@ int main(int argc, char** argv)
     }
     {
         AntennaGeniusModel connection;
+        prepareAg(connection);
         QSignalSpy required(&connection, &AntennaGeniusModel::authCodeRequired);
         QSignalSpy failed(&connection, &AntennaGeniusModel::connectionError);
         CHECK(QMetaObject::invokeMethod(&connection, "processTcpBytes", Qt::DirectConnection,

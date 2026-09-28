@@ -39,6 +39,7 @@ struct PendingLoad {
 struct PendingWrite {
     QString endpoint;
     QString code;
+    quint64 saveRevision;
     QPointer<QObject> context;
     std::function<void(bool)> callback;
 };
@@ -53,6 +54,7 @@ struct Entry {
 #ifdef HAVE_KEYCHAIN
     std::deque<PendingWrite> writes;
     bool writing{false};
+    quint64 saveRevision{0};
 #endif
 };
 std::array<Entry, 3> g_entries;
@@ -122,6 +124,14 @@ void startNextWrite(PeripheralAuthStore::Device device)
         result.writing = false;
         const bool ok = finished->error() == QKeychain::NoError
                      || (deleting && finished->error() == QKeychain::EntryNotFound);
+        // Keep the cached credential until deletion is confirmed. A later
+        // save owns the cache and must survive an older delete completion.
+        if (ok && deleting && request.saveRevision == result.saveRevision) {
+            result.code.clear();
+            result.endpoint.clear();
+            result.status = PeripheralAuthStore::LoadStatus::Missing;
+            result.loaded = true;
+        }
         if (!ok) {
             qCWarning(lcPeripheralAuth) << "keychain write failed:"
                                         << finished->errorString();
@@ -250,13 +260,20 @@ void PeripheralAuthStore::save(Device device, const QString& endpoint, const QSt
         return;
     }
     Entry& entry = g_entries[indexOf(device)];
-    entry.code = code;
-    entry.endpoint = code.isEmpty() ? QString() : endpoint;
-    entry.status = code.isEmpty() ? LoadStatus::Missing : LoadStatus::Found;
-    entry.loaded = true;
+#ifdef HAVE_KEYCHAIN
+    if (!code.isEmpty()) {
+        ++entry.saveRevision;
+#else
+    {
+#endif
+        entry.code = code;
+        entry.endpoint = code.isEmpty() ? QString() : endpoint;
+        entry.status = code.isEmpty() ? LoadStatus::Missing : LoadStatus::Found;
+        entry.loaded = true;
+    }
 
 #ifdef HAVE_KEYCHAIN
-    entry.writes.push_back({endpoint, code, context, std::move(callback)});
+    entry.writes.push_back({endpoint, code, entry.saveRevision, context, std::move(callback)});
     startNextWrite(device);
 #else
     const QJsonObject object{{QStringLiteral("version"), 1},

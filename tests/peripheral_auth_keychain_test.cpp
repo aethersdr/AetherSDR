@@ -117,5 +117,35 @@ int main(int argc, char** argv)
     QKeychain::TestControl::pendingDelete->finish(QKeychain::AccessDenied);
     drain();
     CHECK(deleteDeniedReported);
+    PeripheralAuthStore::load(PeripheralAuthStore::Device::AntennaGenius, second, &app,
+        [&](const PeripheralAuthStore::LoadResult& result) { loaded = result; });
+    drain();
+    CHECK(loaded.status == PeripheralAuthStore::LoadStatus::Found);
+    CHECK(loaded.code == QStringLiteral("another-code"));
+
+    // An older successful delete must not erase a newer session save.
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius, {}, {}, &app, {});
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius, second,
+        QStringLiteral("newer-code"), &app, {});
+    QKeychain::TestControl::pendingDelete->finish();
+    drain();
+    PeripheralAuthStore::load(PeripheralAuthStore::Device::AntennaGenius, second, &app,
+        [&](const PeripheralAuthStore::LoadResult& result) { loaded = result; });
+    drain();
+    CHECK(loaded.code == QStringLiteral("newer-code"));
+    QKeychain::TestControl::pendingWrite->finish();
+    drain();
+
+    // Two queued clears: the first success remains authoritative if the next fails.
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius, {}, {}, &app, {});
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius, {}, {}, &app, {});
+    QKeychain::TestControl::pendingDelete->finish();
+    drain();
+    QKeychain::TestControl::pendingDelete->finish(QKeychain::AccessDenied);
+    drain();
+    PeripheralAuthStore::load(PeripheralAuthStore::Device::AntennaGenius, second, &app,
+        [&](const PeripheralAuthStore::LoadResult& result) { loaded = result; });
+    drain();
+    CHECK(loaded.status == PeripheralAuthStore::LoadStatus::Missing);
     return failures == 0 ? 0 : 1;
 }
