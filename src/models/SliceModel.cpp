@@ -188,7 +188,16 @@ void SliceModel::setMode(const QString& mode)
     // aetherd RFC 2.3: express intent; FlexBackend builds "slice set N mode=…"
     // and routes it through the TX-inhibit-guarded slice sink.
     emit modeChangeRequested(mode);
-    emit modeChanged(mode);
+    // A backend may answer the request synchronously and refuse it -- the HL2
+    // refuses a mode it cannot demodulate and re-publishes the slice, which
+    // lands in applyChanges() before this line and has already set m_mode
+    // back and announced the real mode. Announcing `mode` now would repaint
+    // every modeChanged subscriber with the refused mode (VfoWidget paints the
+    // mode tab from the argument). Family-neutral: a backend that does not
+    // answer synchronously leaves m_mode == mode, and this emits exactly as
+    // before.
+    if (m_mode == mode)
+        emit modeChanged(mode);
 
     // The passband belongs to the mode. Changing mode without re-checking it
     // leaves the previous mode's filter in place — switching USB -> AM kept

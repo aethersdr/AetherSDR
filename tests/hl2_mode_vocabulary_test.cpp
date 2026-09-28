@@ -50,6 +50,7 @@
 #include "core/backends/hl2/Hl2ModeVocabulary.h"
 #include "core/backends/RestoredRadioState.h"
 #include "core/backends/SliceDelta.h"
+#include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QSet>
@@ -308,6 +309,65 @@ int main(int argc, char** argv)
                                  "\"%3\"").arg(m, hl2::canonicalOfferedMode(m),
                                                lastMode));
         }
+    }
+
+    // WHAT THE OPERATOR SEES, with a SliceModel in the loop (#6007 review). The
+    // block above watches the raw SliceDelta and cannot see the signal a
+    // widget paints from. Wired as RadioModel wires it -- modeChangeRequested
+    // to setSliceMode, sliceChanged to applyChanges, both direct -- the
+    // backend's correction runs INSIDE SliceModel::setMode(), so anything
+    // setMode() emits after its request must not re-announce the refused
+    // mode. VfoWidget paints the mode tab from modeChanged's ARGUMENT.
+    //
+    // FDV is the case that decides HOW this may be fixed: it is refused here
+    // but is USB-family in SliceModel::filterPolarityUsbFamily(), and
+    // setMode() normalises the filter polarity against m_mode after its emits.
+    // A correction deferred past setMode() would leave m_mode == "FDV" at that
+    // point and flip the LSB passband to USB polarity, on the wire.
+    {
+        hl2::Hl2Backend backend;
+        SliceModel slice(0);
+        QObject::connect(&slice, &SliceModel::modeChangeRequested, &backend,
+                         [&backend](const QString& m) { backend.setSliceMode(0, m); });
+        QObject::connect(&backend, &IRadioBackend::sliceChanged, &slice,
+                         [&slice](int, const SliceDelta& d) { slice.applyChanges(d); });
+        QString lastAnnounced;
+        QObject::connect(&slice, &SliceModel::modeChanged, &slice,
+                         [&lastAnnounced](const QString& m) { lastAnnounced = m; });
+
+        slice.setMode(QStringLiteral("LSB"));
+        const int baseLow = slice.filterLow(), baseHigh = slice.filterHigh();
+        check(slice.mode() == QLatin1String("LSB") && baseHigh <= 0,
+              QStringLiteral("setup: SliceModel in LSB with an LSB passband — got "
+                             "%1 %2..%3").arg(slice.mode()).arg(baseLow).arg(baseHigh));
+
+        for (const QString& rejected : {QStringLiteral("RTTY"), QStringLiteral("DFM"),
+                                        QStringLiteral("DSTR"), QStringLiteral("FDV")}) {
+            lastAnnounced.clear();
+            slice.setMode(rejected);
+            check(slice.mode() == QLatin1String("LSB"),
+                  QStringLiteral("SliceModel refused %1 and holds LSB — got \"%2\"")
+                      .arg(rejected, slice.mode()));
+            // Empty is allowed: SliceModel may refuse on its own before the
+            // backend is asked (DSTR without D-STAR support), and then nothing
+            // is announced at all. What must never be announced LAST is the
+            // refused mode.
+            check(lastAnnounced.isEmpty() || lastAnnounced == QLatin1String("LSB"),
+                  QStringLiteral("the LAST modeChanged after refusing %1 says LSB "
+                                 "(or nothing), which is what a widget paints — got "
+                                 "\"%2\"").arg(rejected, lastAnnounced));
+            check(slice.filterLow() == baseLow && slice.filterHigh() == baseHigh,
+                  QStringLiteral("refusing %1 leaves the LSB passband %2..%3 alone "
+                                 "— got %4..%5").arg(rejected).arg(baseLow)
+                      .arg(baseHigh).arg(slice.filterLow()).arg(slice.filterHigh()));
+        }
+
+        // Control: an accepted change is still announced exactly as requested.
+        lastAnnounced.clear();
+        slice.setMode(QStringLiteral("USB"));
+        check(slice.mode() == QLatin1String("USB") && lastAnnounced == QLatin1String("USB"),
+              QStringLiteral("an accepted USB is applied and announced — got %1 / %2")
+                  .arg(slice.mode(), lastAnnounced));
     }
 
     if (failures == 0) {
