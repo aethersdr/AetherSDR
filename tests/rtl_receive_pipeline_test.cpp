@@ -395,7 +395,28 @@ static void measureParkAndResume()
     state.capture = {111, 1, 100'000'000, 2'400'000, 1'080'000, 1'080'000};
     state.receivers = {{{0, 100'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
     state.receivingIds = {0};
-    check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
+    const auto prepareAndAdopt = [&] {
+        const auto end = std::chrono::steady_clock::now() + 15s;
+        bool submitted = false;
+        while (std::chrono::steady_clock::now() < end) {
+            // Match the owner's control-side service: adoption only marks the
+            // old bank retired; slot reuse waits for off-thread destruction.
+            (void)pipeline->service();
+            if (!submitted) {
+                const auto result = pipeline->prepareDetailed(state, true);
+                if (result == Pipeline::Submission::Failed) { return false; }
+                submitted = result == Pipeline::Submission::Accepted;
+            }
+            if (submitted) {
+                const auto status = pipeline->service();
+                if (status == Pipeline::Preparation::Ready) { return pipeline->adopt(); }
+                if (status == Pipeline::Preparation::Failed) { return false; }
+            }
+            std::this_thread::sleep_for(1ms);
+        }
+        return false;
+    };
+    check(prepareAndAdopt(),
           "captured receiver prepares before parking");
     std::array<std::complex<float>, 8192> iq;
     iq.fill({0.25f, 0.0f});
@@ -409,6 +430,7 @@ static void measureParkAndResume()
                       "audio keeps the adopted capture revision");
                 observed = true;
             }
+            (void)pipeline->service(); // owner timer reaps banks outside the sample callback
             std::this_thread::sleep_for(3ms);
         }
         check(observed == expectAudio,
@@ -421,7 +443,7 @@ static void measureParkAndResume()
     state.capture.centerHz = 103'000'000;
     state.hardware.centerHz = 103'000'000;
     state.receivingIds.clear();
-    check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
+    check(prepareAndAdopt(),
           "all-parked capture retains a valid empty receiver bank");
     consume(2, false);
 
@@ -430,7 +452,7 @@ static void measureParkAndResume()
     state.capture.centerHz = 100'000'000;
     state.hardware.centerHz = 100'000'000;
     state.receivingIds = {0};
-    check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
+    check(prepareAndAdopt(),
           "returning capture rebuilds the preserved receiver");
     consume(3, true);
     pipeline->stop();

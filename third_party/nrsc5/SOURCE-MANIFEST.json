@@ -16,7 +16,13 @@
     "support/sample.xz",
     "support/win-cross-compile"
   ],
-  "patches": [],
+  "patches": [
+    {
+      "pathFromRepositoryRoot": "third_party/nrsc5/patches/windows-msvc.patch",
+      "sha256": "89b7ed3f881182ea9d2b48fe13869ae9a413980234f53a1b448c537409c3f1bd",
+      "description": "AetherSDR native Windows include/platform guards; no decoder algorithm changes."
+    }
+  ],
   "files": [
     {
       "upstreamPath": "CMakeLists.txt",
@@ -208,7 +214,7 @@
       "upstreamPath": "src/output.c",
       "vendoredPath": "upstream/src/output.c",
       "upstreamSha256": "fa4d4ffa5c09edfdd2334f7029bcd2328174b617c7cbbdb2385f369b0796d999",
-      "vendoredSha256": "fa4d4ffa5c09edfdd2334f7029bcd2328174b617c7cbbdb2385f369b0796d999"
+      "vendoredSha256": "087e3ff34d540a6d2591a788b5daef8cbc5b742d814749e93191603e7eb5eb13"
     },
     {
       "upstreamPath": "src/output.h",
@@ -256,7 +262,7 @@
       "upstreamPath": "src/rtltcp.c",
       "vendoredPath": "upstream/src/rtltcp.c",
       "upstreamSha256": "a0a3db4502a0591814c497d98d22281d43f8d3b2d4467d36f34337b8c537aa4b",
-      "vendoredSha256": "a0a3db4502a0591814c497d98d22281d43f8d3b2d4467d36f34337b8c537aa4b"
+      "vendoredSha256": "1936422e824f8d0228ebe0a3a3c103168dde0eb45e0f02d229402767bd1742b6"
     },
     {
       "upstreamPath": "src/rtltcp.h",
@@ -302,5 +308,19 @@
     }
   ],
   "fileCount": 47,
-  "vendoredBytes": 401223
+  "vendoredBytes": 401223,
+  "localAdapters": [
+    {
+      "pathFromRepositoryRoot": "third_party/nrsc5/compat/msvc/complex.h",
+      "sha256": "c755f845f66c719326b07ff8cc6feac0240a09d91f35049df78521ff826c6d75",
+      "license": "GPL-3.0-or-later",
+      "description": "AetherSDR authored native Windows compatibility adapter, private to nrsc5 C objects."
+    },
+    {
+      "pathFromRepositoryRoot": "third_party/nrsc5/compat/msvc/pthread.h",
+      "sha256": "37976fd853ee5376eae317f37319026b21b5fdef677029b41395db91ce671423",
+      "license": "GPL-3.0-or-later",
+      "description": "AetherSDR authored native Windows compatibility adapter, private to nrsc5 C objects."
+    }
+  ]
 }

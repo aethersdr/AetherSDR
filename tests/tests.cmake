@@ -7360,3 +7360,17 @@ target_include_directories(cw_rx_model_test PRIVATE src)
 target_link_libraries(cw_rx_model_test PRIVATE aethercore Qt6::Core)
 add_test(NAME cw_rx_model_test COMMAND cw_rx_model_test)
 set_tests_properties(cw_rx_model_test PROPERTIES TIMEOUT 15)
+
+# The native Windows C adapter owns no sockets or radio transport. Exercise
+# its actual complex arithmetic and mutex/condition subset with clang-cl.
+if(WIN32 AND ENABLE_HD_FM AND TARGET aether_nrsc5)
+    aether_hd_windows_c_objects(hd_compat_objects compat-test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/nrsc5_windows_compat_test.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nrsc5/compat/msvc" "")
+    add_executable(nrsc5_windows_compat_test ${hd_compat_objects})
+    set_target_properties(nrsc5_windows_compat_test PROPERTIES LINKER_LANGUAGE C
+        AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    target_link_libraries(nrsc5_windows_compat_test PRIVATE "${AETHER_HD_COMPILER_RT}")
+    add_test(NAME nrsc5_windows_compat_test COMMAND nrsc5_windows_compat_test)
+    set_tests_properties(nrsc5_windows_compat_test PROPERTIES TIMEOUT 30)
+endif()

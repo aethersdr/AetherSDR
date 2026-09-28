@@ -1,19 +1,31 @@
 # Experimental native digital FM receiver
 
 This is a separate draft amendment to RFC #5468, stacked on the analog WFM
-applet work. Maintainer architecture approval and native qualification are
-pending. The approved analog WFM work does not approve these dependencies,
+applet work. Maintainer architecture approval remains pending. Native build,
+recorded-input and packaged-startup evidence is recorded separately for each
+tested checkpoint. The approved analog WFM work does not approve these dependencies,
 worker, or digital receiver. No merge or release readiness is implied.
 
 ## Build and dependency boundary
 
-`ENABLE_HD_FM` defaults OFF. Its initial opt-in build supports Linux with GNU C
-and the existing enabled RTL/FFTW3f dependencies; other toolchains fail configure
-when explicitly opted in. Default Mac/Windows builds retain analog WFM.
+`ENABLE_HD_FM` defaults OFF. Opt-in build paths support Linux with GNU C,
+macOS with AppleClang, and Windows x64 with MSVC plus an installed `clang-cl`
+and matching LLVM compiler-rt builtins. Other compiler/platform combinations
+fail configure when explicitly opted in. Each path requires the existing
+enabled RTL/FFTW3f dependencies; none downloads a compiler or runtime. Default
+builds on every platform retain analog WFM.
+
+On Windows, the application and FAAD HDC decoder remain on MSVC. Only nrsc5's
+C11 complex/VLA translation units use `clang-cl`, the same Windows SDK/MSVC
+ABI, and the matching shared CRT (`/MD`, or `/MDd` for Debug). Compiler-rt
+supplies the complex arithmetic helpers. `cmake/AetherHdFmWindows.cmake`
+keeps these compiler options local to the decoder; it does not switch the
+application's compiler or global C dialect. The private compatibility headers
+under `third_party/nrsc5/compat/msvc` do not change the upstream source pins.
+
 Application release workflows and the local macOS/Windows packaging scripts
-explicitly set
-`-DENABLE_HD_FM=OFF`; an evaluation build can still opt in with
-`-DENABLE_HD_FM=ON`.
+explicitly set `-DENABLE_HD_FM=OFF`; an isolated evaluation build can still
+opt in with `-DENABLE_HD_FM=ON`.
 
 The embedded sources are pinned to nrsc5
 `0225922b6f68109df39d07391f4d855464598ab8` and FAAD2 2.11.2
@@ -147,4 +159,12 @@ prefix, with a pending tail discarded at stop. Queue occupancy is not measured.
 The process has a 120-second watchdog; teardown is measured for this input,
 not guaranteed for arbitrary decoder behavior.
 
-Native Windows/Mac/ARM and current sanitizer qualification remain outstanding.
+Native qualification is specific to the tested architecture, compiler and
+checkpoint. The Apple Silicon lane uses AppleClang and the Windows lane uses
+MSVC/clang-cl on x64; neither qualifies Intel Mac, Windows ARM, or other ARM
+systems. A compiled executable is not packaged-startup evidence. Preserve the
+HD-ON tests, HD-OFF tests, direct/worker recording probes, dependency audits and
+clean-extraction startup results separately with their source/binary hashes.
+Current sanitizer and live RF/listening qualification remain separate work.
+See [portable packaging](rtl-hd-fm-portable-packaging.md) for source delivery,
+isolated settings, runtime closure and clean-start checks.

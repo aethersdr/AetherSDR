@@ -13,6 +13,12 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QThreadPool>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 // The pinned C API header does not declare C++ linkage guards.
 extern "C" {
 #include <nrsc5.h>
@@ -28,6 +34,7 @@ extern "C" {
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -49,6 +56,22 @@ std::uint64_t nowMs()
 { return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count(); }
 QJsonValue number(std::uint64_t value) { return QJsonValue(static_cast<qint64>(value)); }
 double seconds(Clock::duration value) { return std::chrono::duration<double>(value).count(); }
+std::optional<double> processCpuSeconds()
+{
+#ifdef Q_OS_WIN
+    // The Microsoft CRT's clock() measures elapsed wall time, not CPU time.
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) { return {}; }
+    const auto ticks = [](const FILETIME& value) {
+        return (static_cast<std::uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime;
+    };
+    return (static_cast<double>(ticks(kernel)) + static_cast<double>(ticks(user))) / 10000000.0;
+#else
+    const std::clock_t value = std::clock();
+    if (value == std::clock_t(-1)) { return {}; }
+    return double(value) / CLOCKS_PER_SEC;
+#endif
+}
 void output(const QJsonObject& result)
 {
     const auto bytes = QJsonDocument(result).toJson(QJsonDocument::Indented);
@@ -300,7 +323,7 @@ int main(int argc, char** argv)
     std::vector<double> callbackLatenessMs, processUs; callbackLatenessMs.reserve(16384); processUs.reserve(16384);
     Observations observations(program); QString error;
     std::uint64_t inputBytes = 0, inputFrames = 0, calls = 0, catchup = 0, maxCatchup = 0;
-    const auto playbackStart = Clock::now(); const auto cpuStart = std::clock();
+    const auto playbackStart = Clock::now(); const auto cpuStart = processCpuSeconds();
     const auto utcStart = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     while (inputBytes < static_cast<std::uint64_t>(inputInfo.size())) {
         if (Clock::now() - start > 110s) { error = QStringLiteral("Playback reached soft wall budget; reserving teardown time"); break; }
@@ -321,7 +344,7 @@ int main(int argc, char** argv)
         observations.drain(*pipeline, inputFrames);
         if (!accepted || pipeline->needsRepair()) { error = QStringLiteral("Production receiver/pipeline withdrew; no repair or retry is hidden"); break; }
     }
-    const auto cpuEnd = std::clock(); const double playbackWallSeconds = seconds(Clock::now() - playbackStart);
+    const auto cpuEnd = processCpuSeconds(); const double playbackWallSeconds = seconds(Clock::now() - playbackStart);
     observations.drain(*pipeline, inputFrames);
     if (observations.ready) { observations.longestReady = std::max(observations.longestReady, inputFrames / kRate - observations.readyStart); }
     const auto finalDiagnostics = pipeline->diagnostics(); const bool repair = pipeline->needsRepair();
@@ -371,8 +394,8 @@ int main(int argc, char** argv)
         {"scope", "real pipeline, registry, native worker and shared mixer; owner-like identity/age analysis, not full backend normalization/high-water acceptance or GUI/audio-device/USB/live RF proof"},
         {"queueOccupancyMeasured", false},
         {"eofPolicy", "no RF padding or flush; stop discards pending worker/converter/playout tail; totals describe delivered prefix only"}};
-    if (cpuStart != std::clock_t(-1) && cpuEnd != std::clock_t(-1)) {
-        result.insert("playbackProcessCpuSeconds", double(cpuEnd - cpuStart) / CLOCKS_PER_SEC);
+    if (cpuStart && cpuEnd && *cpuEnd >= *cpuStart) {
+        result.insert("playbackProcessCpuSeconds", *cpuEnd - *cpuStart);
     }
 #ifdef AETHER_GIT_SHA
     result.insert("aetherBuildRevision", QStringLiteral(AETHER_GIT_SHA));

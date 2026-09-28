@@ -2,15 +2,17 @@
 # only: they include download fallbacks, CLI/shared targets and install hooks.
 include_guard(GLOBAL)
 
-option(ENABLE_HD_FM "Build experimental embedded HD FM (Linux GNU C only)" OFF)
+option(ENABLE_HD_FM "Build experimental embedded HD FM" OFF)
 if(NOT ENABLE_HD_FM)
     return()
 endif()
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
+if(NOT (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        AND NOT (APPLE AND CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+        AND NOT (WIN32 AND MSVC))
     message(FATAL_ERROR
-        "ENABLE_HD_FM currently supports qualification builds on Linux with GNU C only. "
-        "macOS, MSVC, MinGW and Clang have not been qualified. Use -DENABLE_HD_FM=OFF.")
+        "ENABLE_HD_FM supports Linux/GNU C, macOS/AppleClang, and Windows/MSVC qualification builds. "
+        "This compiler/platform has not been qualified. Use -DENABLE_HD_FM=OFF.")
 endif()
 if(NOT AETHER_BACKEND_RTL)
     message(FATAL_ERROR "ENABLE_HD_FM requires the enabled RTL backend and its existing dependencies.")
@@ -30,25 +32,37 @@ function(aether_add_hd_fm_dependencies)
     include(CheckSymbolExists)
     include(CheckCSourceCompiles)
     find_package(Threads REQUIRED)
-    find_library(AETHER_HD_MATH_LIBRARY NAMES m REQUIRED)
+    if(NOT WIN32)
+        find_library(AETHER_HD_MATH_LIBRARY NAMES m REQUIRED)
+    endif()
     get_filename_component(vendor_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../third_party" ABSOLUTE)
     set(nrsc5_root "${vendor_root}/nrsc5/upstream")
     set(faad_root "${vendor_root}/faad_hdc/upstream")
     set(config_root "${CMAKE_CURRENT_BINARY_DIR}/aether-hd-fm")
 
-    set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
-    set(CMAKE_REQUIRED_LIBRARIES "${AETHER_HD_MATH_LIBRARY}")
-    string(APPEND CMAKE_REQUIRED_FLAGS " -std=gnu11")
-    check_c_source_compiles("#include <complex.h>\nint main(void) { float complex z = 1.0f + 2.0f * I; return crealf(z) != 1.0f; }"
-        AETHER_NRSC5_HAVE_C_COMPLEX)
-    if(NOT AETHER_NRSC5_HAVE_C_COMPLEX)
-        message(FATAL_ERROR "ENABLE_HD_FM requires working GNU C11 complex arithmetic.")
+    if(WIN32)
+        include("${CMAKE_CURRENT_FUNCTION_LIST_DIR}/AetherHdFmWindows.cmake")
+        aether_hd_windows_compiler()
+        set(AETHER_NRSC5_HAVE_STRNDUP OFF)
+        set(AETHER_NRSC5_HAVE_CMPLXF ON)
+        set(AETHER_NRSC5_HAVE_COMPLEX_I ON)
+        set(AETHER_NRSC5_HAVE_IMAGINARY_I OFF)
+        check_symbol_exists(lrintf "math.h" AETHER_FAAD_HAVE_LRINTF)
+    else()
+        set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
+        set(CMAKE_REQUIRED_LIBRARIES "${AETHER_HD_MATH_LIBRARY}")
+        string(APPEND CMAKE_REQUIRED_FLAGS " -std=gnu11")
+        check_c_source_compiles("#include <complex.h>\nint main(void) { float complex z = 1.0f + 2.0f * I; return crealf(z) != 1.0f; }"
+            AETHER_NRSC5_HAVE_C_COMPLEX)
+        if(NOT AETHER_NRSC5_HAVE_C_COMPLEX)
+            message(FATAL_ERROR "ENABLE_HD_FM requires working GNU C11 complex arithmetic.")
+        endif()
+        check_symbol_exists(strndup "string.h" AETHER_NRSC5_HAVE_STRNDUP)
+        check_symbol_exists(CMPLXF "complex.h" AETHER_NRSC5_HAVE_CMPLXF)
+        check_symbol_exists(_Imaginary_I "complex.h" AETHER_NRSC5_HAVE_IMAGINARY_I)
+        check_symbol_exists(_Complex_I "complex.h" AETHER_NRSC5_HAVE_COMPLEX_I)
+        check_symbol_exists(lrintf "math.h" AETHER_FAAD_HAVE_LRINTF)
     endif()
-    check_symbol_exists(strndup "string.h" AETHER_NRSC5_HAVE_STRNDUP)
-    check_symbol_exists(CMPLXF "complex.h" AETHER_NRSC5_HAVE_CMPLXF)
-    check_symbol_exists(_Imaginary_I "complex.h" AETHER_NRSC5_HAVE_IMAGINARY_I)
-    check_symbol_exists(_Complex_I "complex.h" AETHER_NRSC5_HAVE_COMPLEX_I)
-    check_symbol_exists(lrintf "math.h" AETHER_FAAD_HAVE_LRINTF)
 
     set(USE_FAAD2 ON)
     set(HAVE_STRNDUP "${AETHER_NRSC5_HAVE_STRNDUP}")
@@ -70,28 +84,39 @@ function(aether_add_hd_fm_dependencies)
         sbr_syntax.c sbr_tf_grid.c specrec.c ssr.c ssr_fb.c ssr_ipqf.c syntax.c tns.c)
     list(TRANSFORM faad_sources PREPEND "${faad_root}/libfaad/")
     add_library(aether_faad_hdc STATIC ${faad_sources})
-    target_include_directories(aether_faad_hdc SYSTEM PUBLIC "${faad_root}/include")
+    # These pinned headers must precede package-manager includes: a stock FAAD
+    # header can exist beside FFTW but does not declare the HDC entry point.
+    target_include_directories(aether_faad_hdc PUBLIC "${faad_root}/include")
     target_include_directories(aether_faad_hdc PRIVATE "${faad_root}/libfaad")
     target_compile_definitions(aether_faad_hdc PRIVATE
         HDC_SUPPORT APPLY_DRC HAVE_INTTYPES_H=1 HAVE_MEMCPY=1 HAVE_STRING_H=1
-        HAVE_STRINGS_H=1 HAVE_SYS_STAT_H=1 HAVE_SYS_TYPES_H=1 PACKAGE_VERSION="2.11.2")
+        HAVE_SYS_STAT_H=1 HAVE_SYS_TYPES_H=1 PACKAGE_VERSION="2.11.2")
+    if(NOT WIN32)
+        target_compile_definitions(aether_faad_hdc PRIVATE HAVE_STRINGS_H=1)
+    endif()
     if(AETHER_FAAD_HAVE_LRINTF)
         target_compile_definitions(aether_faad_hdc PRIVATE HAVE_LRINTF=1)
     endif()
     # Match the pinned FAAD GNU compiler setting, without changing other targets.
-    target_compile_options(aether_faad_hdc PRIVATE -ffloat-store)
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(aether_faad_hdc PRIVATE -ffloat-store)
+    endif()
     target_link_libraries(aether_faad_hdc PRIVATE "${AETHER_HD_MATH_LIBRARY}")
 
     # BUILD_CLI=OFF by construction: neither upstream CMakeLists is evaluated.
-    # rtltcp/device symbols remain upstream-identical but Aether's wrapper uses
+    # The retained rtltcp/device API is not exposed; Aether's wrapper uses
     # only open_pipe/pipe_samples_cf32/close; it is the sole USB capture owner.
     set(nrsc5_sources
         acquire.c decode.c frame.c here_images.c input.c nrsc5.c output.c
         pids.c rtltcp.c sync.c firdecim_cf32.c conv_dec.c rs_init.c rs_decode.c
         unicode.c strndup.c)
     list(TRANSFORM nrsc5_sources PREPEND "${nrsc5_root}/src/")
-    add_library(aether_nrsc5 STATIC ${nrsc5_sources})
-    target_include_directories(aether_nrsc5 SYSTEM PUBLIC "${nrsc5_root}/include")
+    if(WIN32)
+        aether_hd_windows_nrsc5("${nrsc5_sources}")
+    else()
+        add_library(aether_nrsc5 STATIC ${nrsc5_sources})
+    endif()
+    target_include_directories(aether_nrsc5 PUBLIC "${nrsc5_root}/include")
     target_include_directories(aether_nrsc5 PRIVATE "${config_root}")
     # Upstream separately defines HAVE_FAAD2 for output.h declarations;
     # generated USE_FAAD2 enables their implementation in output.c.

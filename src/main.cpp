@@ -533,8 +533,9 @@ int main(int argc, char* argv[])
     //
     // Idempotent: skips items whose target already exists, then removes the
     // old dir if it ends up empty.  Subsequent launches early-return because
-    // the old dir no longer exists.
-    {
+    // the old dir no longer exists. An explicitly isolated profile must never
+    // migrate files out of the operator's ordinary profile.
+    if (qEnvironmentVariableIsEmpty("AETHER_SETTINGS_DIR")) {
         const QString newDir = QStandardPaths::writableLocation(
                                    QStandardPaths::GenericConfigLocation)
                                + QStringLiteral("/AetherSDR");
@@ -585,8 +586,9 @@ int main(int argc, char* argv[])
     // listing (which was getting crowded with 50+ aethersdr-*.log files
     // sitting alongside the actual settings).  GenericConfigLocation +
     // app name still avoids the AppConfigLocation double-nest.
-    const QString configRoot = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                               + "/AetherSDR";
+    // Honour the same explicit profile as the settings store. An isolated
+    // qualification launch must not migrate or prune the operator's logs.
+    const QString configRoot = AetherSDR::SettingsPaths::configDir();
     const QString logDir = configRoot + "/logs";
     QDir().mkpath(logDir);
     // Source-feed logs (dxcluster.log, rbn.log, wsjtx.log, …) live in
