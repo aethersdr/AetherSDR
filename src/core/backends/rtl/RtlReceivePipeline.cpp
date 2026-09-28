@@ -1,5 +1,6 @@
 #include "RtlReceivePipeline.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -61,6 +62,13 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
             || receiver.squelchLevel < 0 || receiver.squelchLevel > 100
             || (receiver.wfmDeemphasisUs != 50 && receiver.wfmDeemphasisUs != 75)
             || (receiver.mode == Transaction::Mode::Wfm && receiver.squelchEnabled)) { return Submission::Failed; }
+        // Parking changes reception membership, not the configured graph's
+        // admission contract. A legacy recipe cannot hide outside the capture
+        // and then resume alongside a native 48 kHz receiver.
+        const bool native = receiver.mode == Transaction::Mode::Fm
+            || receiver.mode == Transaction::Mode::Fmn
+            || (m_enableWfm && receiver.mode == Transaction::Mode::Wfm);
+        if (!native && state.receivers.size() != 1) { return Submission::Failed; }
         if (receiver.mode == Transaction::Mode::Wfm && receiver.wfmHdStereo) {
             if (!m_enableWfm) { return Submission::Failed; }
 #ifndef AETHER_ENABLE_NRSC5
@@ -296,6 +304,7 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
         if (!view.receiver->processCapture(block, *this)) {
             const unsigned bit = 1u << slot;
             if (!(m_faults.fetch_or(bit, std::memory_order_release) & bit)) {
+                m_receiverWithdrawals[slot].fetch_add(1, std::memory_order_relaxed);
                 TraceEvent event = traceContext();
                 event.slot = slot; event.stableId = view.spec->passband.stableId;
                 event.instance = view.spec->handle.instance;
@@ -313,11 +322,18 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
 }
 RtlReceivePipeline::Diagnostics RtlReceivePipeline::diagnostics() const noexcept
 {
-    return {m_observed.load(std::memory_order_acquire),
+    Diagnostics result{m_observed.load(std::memory_order_acquire),
         m_drops.load(std::memory_order_relaxed), m_mixerLate.load(std::memory_order_relaxed),
         m_mixerRejected.load(std::memory_order_relaxed),
         m_mixerConfigurationFailures.load(std::memory_order_relaxed),
         m_traceDrops.load(std::memory_order_relaxed)};
+    result.queuedPackets = (m_write.load(std::memory_order_acquire) + kPackets
+        - m_read.load(std::memory_order_acquire)) % kPackets;
+    result.packetQueueHighWater = m_packetQueueHighWater.load(std::memory_order_relaxed);
+    for (std::size_t slot = 0; slot < m_receiverWithdrawals.size(); ++slot) {
+        result.receiverWithdrawals[slot] = m_receiverWithdrawals[slot].load(std::memory_order_relaxed);
+    }
+    return result;
 }
 void RtlReceivePipeline::audioBlock(const RtlReceiverRegistry::ReceiverSpec& spec, std::uint64_t first,
     std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept
@@ -482,8 +498,17 @@ bool RtlReceivePipeline::enqueue(const Packet& packet) noexcept
 {
     const unsigned write = m_write.load(std::memory_order_relaxed);
     const unsigned next = (write + 1) % kPackets;
-    if (next == m_read.load(std::memory_order_acquire)) { m_drops.fetch_add(1, std::memory_order_relaxed); return false; }
+    const unsigned read = m_read.load(std::memory_order_acquire);
+    if (next == read) { m_drops.fetch_add(1, std::memory_order_relaxed); return false; }
     m_packets[write] = packet;
+    m_packets[write].enqueuedMonotonicNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    const std::uint64_t queued = (next + kPackets - read) % kPackets;
+    // Sole producer: no compare/exchange loop or callback contention needed.
+    if (queued > m_packetQueueHighWater.load(std::memory_order_relaxed)) {
+        m_packetQueueHighWater.store(queued, std::memory_order_relaxed);
+    }
     m_write.store(next, std::memory_order_release);
     return true;
 }

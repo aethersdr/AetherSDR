@@ -34,6 +34,14 @@ std::uint64_t hdMonotonicMs()
 constexpr double kMinTuneHz = 24'000.0;
 constexpr double kMaxTuneHz = 1'766'000'000.0;
 
+bool supportsAnalogBank(const RtlCaptureTransaction::Receiver& receiver)
+{
+    return receiver.mode == RtlCaptureTransaction::Mode::Fm
+        || receiver.mode == RtlCaptureTransaction::Mode::Fmn
+        || (RtlReceivePipeline::kQualifiedWfmEnabled
+            && receiver.mode == RtlCaptureTransaction::Mode::Wfm && !receiver.wfmHdStereo);
+}
+
 bool hasReceivingNarrowFm(const RtlCaptureTransaction::State& state)
 {
     return std::ranges::any_of(state.receivers, [&state](const auto& receiver) {
@@ -122,6 +130,16 @@ uint32_t RtlSdrBackend::clampSampleRate(uint32_t requestedHz)
 RtlSdrBackend::RtlSdrBackend(QObject* parent)
     : IRadioBackend(parent)
 {
+    // Process-only, opt-in qualification profile. This does not raise the
+    // shipped capacity or persist an unqualified limit in a radio profile.
+#if defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
+    const QByteArray evaluation = qgetenv("AETHER_RTL_EVALUATION_RECEIVERS");
+    if (qgetenv("AETHER_AUTOMATION") == "1" && (evaluation == "2" || evaluation == "4")) {
+        m_receiverCapacity = evaluation.toInt();
+        m_capture = RtlCaptureTransaction({8, static_cast<std::size_t>(m_receiverCapacity)});
+        qCWarning(lcRtlReceive) << "Unqualified RTL analog evaluation capacity:" << m_receiverCapacity;
+    }
+#endif
     m_captureTimer.setInterval(10);
     connect(&m_captureTimer, &QTimer::timeout, this, &RtlSdrBackend::serviceCapture);
 }
@@ -420,6 +438,7 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
 {
     m_worker = std::move(worker);
     m_diagnostics = {};
+    m_pcmDiagnostics.fill({});
     m_wfmStatus.fill(WfmStereoStatus::Unavailable);
     m_wfmReception.fill({});
     m_hdReception.fill({}); m_hdIdentity.fill({});
@@ -432,6 +451,7 @@ void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
     for (auto& age : m_wfmPublicationAge) { age.invalidate(); }
     for (auto& age : m_wfmObservationAge) { age.invalidate(); }
     m_capture.beginSession();
+    m_activeSliceId = -1;
     m_published = {};
     m_lastPublished.reset();
     m_viewport.reset();
@@ -516,6 +536,7 @@ void RtlSdrBackend::disconnectRadio()
     for (auto& age : m_wfmObservationAge) { age.invalidate(); }
     m_captureTimer.stop();
     m_capture.endSession();
+    m_activeSliceId = -1;
     m_published = {};
     m_pendingViewport = {};
     m_pendingDrag = false;
@@ -563,6 +584,9 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
 {
     if (!m_connected) { return {}; }
     HealthSnapshot snapshot;
+    snapshot.values.insert(QStringLiteral("rtlReceiverCapacity"), m_receiverCapacity);
+    snapshot.values.insert(QStringLiteral("rtlQualifiedReceiverCapacity"), kQualifiedReceiverCapacity);
+    snapshot.values.insert(QStringLiteral("rtlEvaluationProfile"), m_receiverCapacity > kQualifiedReceiverCapacity);
     snapshot.order = {QStringLiteral("rtlQueueDrops"), QStringLiteral("rtlMixerLateFrames"),
         QStringLiteral("rtlMixerRejectedBlocks"), QStringLiteral("rtlMixerConfigurationFailures"),
         QStringLiteral("rtlReceiveTraceDrops")};
@@ -581,6 +605,70 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         for (int i = 0; i < snapshot.order.size(); ++i) {
             snapshot.values.insert(snapshot.order[i], QVariant::fromValue<qulonglong>(counters[i]));
         }
+        const auto value = [&](const char* key, std::uint64_t count) {
+            snapshot.values.insert(QString::fromLatin1(key), QVariant::fromValue<qulonglong>(count));
+        };
+        value("rtlQueuedPackets", m_diagnostics.queuedPackets);
+        value("rtlPacketQueueHighWater", m_diagnostics.packetQueueHighWater);
+        value("rtlCallbackCount", m_diagnostics.callbackCount);
+        value("rtlCallbackIqSamples", m_diagnostics.callbackIqSamples);
+        value("rtlMalformedCallbacks", m_diagnostics.malformedCallbacks);
+        value("rtlCallbackTotalNs", m_diagnostics.callbackTotalNs);
+        value("rtlCallbackMaxNs", m_diagnostics.callbackMaxNs);
+        value("rtlCallbackDeadlineMisses", m_diagnostics.callbackDeadlineMisses);
+        value("rtlUsbReadStarts", m_diagnostics.usbReadStarts);
+        value("rtlUsbCancelRequests", m_diagnostics.usbCancelRequests);
+        QVariantList histogram, bounds, withdrawals, pcm;
+        for (std::size_t i = 0; i < m_diagnostics.callbackDurationBuckets.size(); ++i) {
+            histogram.append(QVariant::fromValue<qulonglong>(m_diagnostics.callbackDurationBuckets[i]));
+            bounds.append(QVariant::fromValue<qulonglong>(RtlSdrWorker::kCallbackDurationUpperBoundsNs[i]));
+        }
+        for (const auto count : m_diagnostics.receiverWithdrawals) {
+            withdrawals.append(QVariant::fromValue<qulonglong>(count));
+        }
+        for (const auto& stream : m_pcmDiagnostics) {
+            QVariantMap row;
+            row.insert(QStringLiteral("packets"), QVariant::fromValue<qulonglong>(stream.packets));
+            row.insert(QStringLiteral("frames"), QVariant::fromValue<qulonglong>(stream.frames));
+            row.insert(QStringLiteral("nonzeroSamples"), QVariant::fromValue<qulonglong>(stream.nonzeroSamples));
+            row.insert(QStringLiteral("nonfiniteSamples"), QVariant::fromValue<qulonglong>(stream.nonfiniteSamples));
+            row.insert(QStringLiteral("discontinuities"), QVariant::fromValue<qulonglong>(stream.discontinuities));
+            row.insert(QStringLiteral("queueAgeTotalNs"), QVariant::fromValue<qulonglong>(stream.queueAgeTotalNs));
+            row.insert(QStringLiteral("queueAgeMaxNs"), QVariant::fromValue<qulonglong>(stream.queueAgeMaxNs));
+            row.insert(QStringLiteral("maxDeliveryGapMs"), QVariant::fromValue<qulonglong>(stream.maxDeliveryGapMs));
+            row.insert(QStringLiteral("lastDeliveryMs"), QVariant::fromValue<qulonglong>(stream.lastDeliveryMs));
+            row.insert(QStringLiteral("peak"), stream.peak);
+            row.insert(QStringLiteral("sumSquaresLeft"), stream.sumSquaresLeft);
+            row.insert(QStringLiteral("sumSquaresRight"), stream.sumSquaresRight);
+            pcm.append(row);
+        }
+        snapshot.values.insert(QStringLiteral("rtlCallbackDurationBuckets"), histogram);
+        snapshot.values.insert(QStringLiteral("rtlCallbackDurationUpperBoundsNs"), bounds);
+        snapshot.values.insert(QStringLiteral("rtlReceiverWithdrawals"), withdrawals);
+        snapshot.values.insert(QStringLiteral("rtlPcmStreams"), pcm);
+    }
+    const QList<QPair<QString, QString>> diagnosticRows{
+        {QStringLiteral("rtlReceiverCapacity"), tr("Configured receiver capacity")},
+        {QStringLiteral("rtlQualifiedReceiverCapacity"), tr("Qualified default receiver capacity")},
+        {QStringLiteral("rtlEvaluationProfile"), tr("Unqualified evaluation profile enabled")},
+        {QStringLiteral("rtlQueuedPackets"), tr("Audio packets currently queued")},
+        {QStringLiteral("rtlPacketQueueHighWater"), tr("Audio packet queue high-water mark")},
+        {QStringLiteral("rtlCallbackCount"), tr("USB callbacks processed")},
+        {QStringLiteral("rtlCallbackIqSamples"), tr("IQ samples delivered by USB callbacks")},
+        {QStringLiteral("rtlMalformedCallbacks"), tr("Malformed USB callbacks")},
+        {QStringLiteral("rtlCallbackTotalNs"), tr("Total callback processing time (ns)")},
+        {QStringLiteral("rtlCallbackMaxNs"), tr("Maximum callback processing time (ns)")},
+        {QStringLiteral("rtlCallbackDeadlineMisses"), tr("Callbacks exceeding their sample duration")},
+        {QStringLiteral("rtlUsbReadStarts"), tr("USB asynchronous read starts")},
+        {QStringLiteral("rtlUsbCancelRequests"), tr("USB asynchronous read cancellations")},
+        {QStringLiteral("rtlCallbackDurationBuckets"), tr("Callback duration histogram")},
+        {QStringLiteral("rtlCallbackDurationUpperBoundsNs"), tr("Callback histogram upper bounds (ns)")},
+        {QStringLiteral("rtlReceiverWithdrawals"), tr("Processing-fault withdrawals by stable receiver")},
+        {QStringLiteral("rtlPcmStreams"), tr("PCM observations for receivers A-H, then speaker")}};
+    snapshot.sections.insert(diagnosticRows.front().first, tr("RTL evaluation measurements (since connect)"));
+    for (const auto& row : diagnosticRows) {
+        snapshot.order.append(row.first);
+        snapshot.labels.insert(row.first, row.second);
     }
     if (m_hdDiagnosticsObserved) {
         const QStringList keys{QStringLiteral("rtlHdIqDrops"), QStringLiteral("rtlHdPcmDrops"),
@@ -637,8 +725,11 @@ bool RtlSdrBackend::createSlice(const QString& panId, double frequencyHz)
 {
     if (!m_connected || !m_capture.confirmed() || !std::isfinite(frequencyHz) || m_capture.busy()
         || (panId != QStringLiteral("0xe1000000") && !panId.isEmpty())
-        || m_requested.receivers.size() >= static_cast<std::size_t>(m_receiverCapacity)
-        || std::ranges::any_of(m_requested.receivers, [](const auto& receiver) { return receiver.mode != RtlCaptureTransaction::Mode::Fm && receiver.mode != RtlCaptureTransaction::Mode::Fmn; })) { return false; }
+        || m_requested.receivers.size() >= static_cast<std::size_t>(m_receiverCapacity)) { return false; }
+    if (!std::ranges::all_of(m_requested.receivers, supportsAnalogBank)) {
+        emit configurationWarning(tr("Additional RTL slices support FM, FM-N and analog WFM only. HD and AM/SSB/CW require a single configured receiver."));
+        return false;
+    }
     auto desired = m_requested;
     for (int id = 0; id < 8; ++id) {
         if (std::ranges::any_of(desired.receivers, [id](const auto& value) { return value.passband.stableId == id; })) { continue; }
@@ -668,6 +759,27 @@ bool RtlSdrBackend::hasAcceptedSlice(int sliceId) const
         && std::ranges::any_of(m_lastPublished->receivers, [sliceId](const auto& receiver) {
             return receiver.passband.stableId == sliceId;
         });
+}
+
+void RtlSdrBackend::setActiveSlice(int sliceId)
+{
+    if (!hasAcceptedSlice(sliceId)) { return; }
+    m_activeSliceId = sliceId;
+    const auto token = m_published;
+    const auto receivers = m_lastPublished->receivers;
+    // Copy membership before signalling: a receiver may be removed or a new
+    // selection made reentrantly by a model/UI observer.
+    for (const auto& receiver : receivers) {
+        if (!acceptsFrame(token.session, token.revision) || m_activeSliceId != sliceId) { return; }
+        if (receiver.passband.stableId == sliceId) { continue; }
+        SliceDelta delta;
+        delta.active = false;
+        emit sliceChanged(receiver.passband.stableId, delta);
+    }
+    if (!acceptsFrame(token.session, token.revision) || m_activeSliceId != sliceId) { return; }
+    SliceDelta delta;
+    delta.active = true;
+    emit sliceChanged(sliceId, delta);
 }
 
 void RtlSdrBackend::setSliceFrequency(int sliceId, double hz)
@@ -735,7 +847,12 @@ void RtlSdrBackend::setSliceMode(int sliceId, const QString& mode)
     if (receiver == desired.receivers.end()) { return; }
     const auto modeValue = captureMode(canonical);
     const bool narrowFm = modeValue == RtlCaptureTransaction::Mode::Fm || modeValue == RtlCaptureTransaction::Mode::Fmn;
-    if (!narrowFm && desired.receivers.size() != 1) { return; }
+    auto candidate = *receiver;
+    candidate.mode = modeValue;
+    if (desired.receivers.size() != 1 && !supportsAnalogBank(candidate)) {
+        emit configurationWarning(tr("This RTL mode requires a single configured receiver. Multiple receivers support FM, FM-N and analog WFM."));
+        return;
+    }
     if (narrowFm && (receiver->passband.filterLowHz < -21600 || receiver->passband.filterHighHz > 21600
         || receiver->passband.filterLowHz >= 0 || receiver->passband.filterHighHz <= 0)) {
         // The existing wide/sideband passband cannot describe the FM graph.
@@ -795,6 +912,10 @@ void RtlSdrBackend::setSliceWfmAudioMode(int sliceId, WfmAudioMode mode)
     const bool forceMono = mode == WfmAudioMode::Mono;
     if (!RtlReceivePipeline::kQualifiedWfmEnabled || !hasAcceptedSlice(sliceId)) { return; }
     auto desired = m_requested;
+    if (hd && desired.receivers.size() != 1) {
+        emit configurationWarning(tr("HD reception currently requires a single configured RTL receiver. Select Mono or Stereo for multiple analog receivers."));
+        return;
+    }
     const auto receiver = std::ranges::find_if(desired.receivers,
         [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
     if (receiver == desired.receivers.end() || receiver->mode != RtlCaptureTransaction::Mode::Wfm
@@ -1188,11 +1309,11 @@ void RtlSdrBackend::restoreAcceptedSlices()
             unsupportedWfmFilter = true;
             continue;
         }
+        const bool bankCompatible = !wide || (nativeWfm && !slice.wfmHdStereo);
         if ((!wide && (slice.filterLowHz < -21600 || slice.filterHighHz > 21600
             || slice.filterLowHz >= 0 || slice.filterHighHz <= 0))
-            || (wide && !desired.receivers.empty())
-            || (!desired.receivers.empty() && desired.receivers.front().mode != RtlCaptureTransaction::Mode::Fm
-                && desired.receivers.front().mode != RtlCaptureTransaction::Mode::Fmn)) { continue; }
+            || (!desired.receivers.empty() && (!bankCompatible
+                || !std::ranges::all_of(desired.receivers, supportsAnalogBank)))) { continue; }
         desired.receivers.push_back({descriptor, captureMode(slice.mode), slice.audioGain, slice.audioPan,
             slice.audioMute, !wide && slice.squelchEnabled, slice.squelchLevel, slice.wfmDeemphasisUs, slice.wfmForceMono,
             slice.wfmHdStereo, slice.hdProgram});
@@ -1554,6 +1675,10 @@ void RtlSdrBackend::drainAudio()
         }
         QVector<float> samples(static_cast<qsizetype>(2 * packet.frames));
         std::copy_n(packet.samples.begin(), samples.size(), samples.begin());
+        auto& statistics = m_pcmDiagnostics[packet.slot < 0 ? 8 : packet.slot];
+        for (const float sample : samples) {
+            statistics.nonfiniteSamples += !std::isfinite(sample);
+        }
         const auto frame = output.producer->produce(std::move(samples), packet.firstSample,
             packet.discontinuity || packet.firstSample != output.nextSample);
         output.nextSample = packet.firstSample + packet.frames;
@@ -1561,6 +1686,29 @@ void RtlSdrBackend::drainAudio()
             observeWfm(packet);
             if (!worker || worker.data() != m_worker.get()
                 || !acceptsFrame(packet.token.session, packet.token.revision)) { return; }
+            ++statistics.packets;
+            statistics.frames += packet.frames;
+            statistics.discontinuities += frame->discontinuity();
+            const auto deliveredNs = static_cast<quint64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+            if (packet.enqueuedMonotonicNs && packet.enqueuedMonotonicNs <= deliveredNs) {
+                const auto age = deliveredNs - packet.enqueuedMonotonicNs;
+                statistics.queueAgeTotalNs += age;
+                statistics.queueAgeMaxNs = std::max(statistics.queueAgeMaxNs, age);
+            }
+            const quint64 deliveredMs = deliveredNs / 1'000'000;
+            if (statistics.lastDeliveryMs) {
+                statistics.maxDeliveryGapMs = std::max(statistics.maxDeliveryGapMs,
+                    deliveredMs - statistics.lastDeliveryMs);
+            }
+            statistics.lastDeliveryMs = deliveredMs;
+            for (std::size_t sample = 0; sample < 2 * packet.frames; ++sample) {
+                const double amplitude = packet.samples[sample];
+                statistics.nonzeroSamples += std::abs(amplitude) > 1e-9;
+                statistics.peak = std::max(statistics.peak, std::abs(amplitude));
+                if (sample % 2 == 0) { statistics.sumSquaresLeft += amplitude * amplitude; }
+                else { statistics.sumSquaresRight += amplitude * amplitude; }
+            }
             if (packet.slot < 0) { emit audioFrameReady(*frame); }
             else { emit sliceAudioFrameReady(packet.slot, *frame); }
         }
@@ -1763,7 +1911,7 @@ void RtlSdrBackend::emitSliceState(const RtlCaptureTransaction::Receiver& receiv
     delta.filterHigh = static_cast<int>(receiver.passband.filterHighHz);
     delta.audioGain = m_monitors[id].gain; delta.audioMute = m_monitors[id].mute; delta.audioPan = m_monitors[id].pan;
     delta.squelchOn = receiver.squelchEnabled; delta.squelchLevel = receiver.squelchLevel;
-    delta.panId = QStringLiteral("0xe1000000"); delta.active = id == m_requested.receivers.front().passband.stableId;
+    delta.panId = QStringLiteral("0xe1000000"); delta.active = id == m_activeSliceId;
     delta.inCapture = m_lastPublished && std::ranges::find(m_lastPublished->receivingIds, id)
         != m_lastPublished->receivingIds.end();
     delta.wfmDeemphasisUs = receiver.wfmDeemphasisUs;
@@ -1816,6 +1964,11 @@ void RtlSdrBackend::publishCapture()
         else { retirePcmStreams(); }
     }
     const auto prior = m_lastPublished;
+    if (std::ranges::none_of(state.receivers, [this](const auto& receiver) {
+            return receiver.passband.stableId == m_activeSliceId;
+        })) {
+        m_activeSliceId = state.receivers.empty() ? -1 : state.receivers.front().passband.stableId;
+    }
     const bool restoring = m_restoreToken == state.token;
     if (restoring) {
         for (const auto& receiver : state.receivers) {

@@ -9,6 +9,7 @@
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QEvent>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -42,6 +43,9 @@ struct RtlCaptureBackendTestAccess {
     { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
     static void waterfall(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
     { emit backend.m_worker->waterfallRowReady(token.session, token.revision, 0, frame); }
+    static bool stopWorker(RtlSdrBackend& backend) { return backend.m_worker->stopReading(); }
+    static RtlReceivePipeline::Diagnostics diagnostics(const RtlSdrBackend& backend)
+    { return backend.m_worker->diagnostics(); }
 };
 }
 static int failures = 0;
@@ -58,6 +62,61 @@ template<class Predicate> bool waitFor(Predicate predicate)
         QCoreApplication::processEvents(); QThread::msleep(1);
     }
     return predicate();
+}
+
+static void callbackMeasurement()
+{
+    auto device = std::make_shared<DeviceState>();
+    rtl::RtlSdrBackend backend;
+    rtl::RtlCaptureBackendTestAccess::start(backend, std::make_unique<InjectedDevice>(device), 2);
+    device->releaseReadback();
+    const bool connected = waitFor([&] { return backend.isConnected() && device->starts == 1; });
+    check(connected, "callback measurement fixture establishes actual USB-worker acquisition");
+    if (!connected) { backend.disconnectRadio(); return; }
+    // Deliver one block at a time through Device::readAsync, including malformed
+    // lengths that must be counted without touching their purported samples.
+    constexpr std::array<std::uint32_t, 6> bytes{16384, 4096, 2, 0, 1, 16385};
+    for (const std::uint32_t length : bytes) {
+        const int expected = device->callbacks + 1;
+        device->callbackBytes = length;
+        device->block();
+        check(waitFor([&] { return device->callbacks >= expected; }),
+              "measurement fixture completes each actual callback before changing its length");
+    }
+    check(rtl::RtlCaptureBackendTestAccess::stopWorker(backend),
+          "callback counters are frozen only after acquisition joins");
+    const auto measured = rtl::RtlCaptureBackendTestAccess::diagnostics(backend);
+    check(measured.callbackCount == 3 && measured.callbackIqSamples == 8192 + 2048 + 1
+          && measured.malformedCallbacks == 3,
+          "valid callback sample totals exclude zero, odd and oversized blocks");
+    check(measured.usbReadStarts == static_cast<std::uint64_t>(device->starts.load())
+          && measured.usbCancelRequests == static_cast<std::uint64_t>(device->cancels.load())
+          && measured.usbCancelRequests > 0,
+          "worker USB counters count actual read and cancellation API invocations");
+    std::uint64_t histogramCount = 0;
+    std::uint64_t histogramLowerTotal = 0;
+    std::uint64_t histogramUpperTotal = 0;
+    for (std::size_t i = 0; i < measured.callbackDurationBuckets.size(); ++i) {
+        const std::uint64_t count = measured.callbackDurationBuckets[i];
+        histogramCount += count;
+        if (count == 0) { continue; }
+        const std::uint64_t lower = i == 0 ? 0 : rtl::RtlSdrWorker::kCallbackDurationUpperBoundsNs[i - 1] + 1;
+        // Exact observed maximum safely bounds even the final overflow bucket.
+        const std::uint64_t upper = std::min(measured.callbackMaxNs,
+            rtl::RtlSdrWorker::kCallbackDurationUpperBoundsNs[i]);
+        check(measured.callbackMaxNs >= lower,
+              "occupied duration bucket agrees with the measured maximum");
+        histogramLowerTotal += lower * count;
+        histogramUpperTotal += upper * count;
+    }
+    check(histogramCount == measured.callbackCount
+          && measured.callbackTotalNs > 0 && measured.callbackMaxNs > 0
+          && measured.callbackTotalNs >= histogramLowerTotal
+          && measured.callbackTotalNs <= histogramUpperTotal
+          && measured.callbackTotalNs >= measured.callbackMaxNs
+          && measured.callbackDeadlineMisses <= measured.callbackCount,
+          "joined callback histogram, total, maximum and deadline accounting are consistent");
+    backend.disconnectRadio();
 }
 
 // A held pointer keeps issuing newer centers before each hardware readback.
@@ -275,6 +334,7 @@ static void receiverTuneKeepsDisplayAverage()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    callbackMeasurement();
     sustainedPanProgress(false);
     sustainedPanProgress(true);
     receiverTuneKeepsDisplayAverage();

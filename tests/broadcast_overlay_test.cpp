@@ -235,6 +235,66 @@ private slots:
         QCOMPARE(overlay.records().first().title, QStringLiteral("Song 29 <not markup>"));
         QCOMPARE(source->commands, 0);
     }
+    void simultaneousMetadataRemainsWithItsOriginAcrossFocusParkingAndReuse()
+    {
+        RadioModel model;
+        Backend* source = attach(model);
+        SliceDelta second = hdSlice(1, 100900000);
+        second.hdFmReception->receiverEpoch = 44;
+        second.hdFmReception->stationName = QStringLiteral("Other station");
+        second.hdFmReception->title = QStringLiteral("Other song");
+        emit source->sliceChanged(4, second);
+        WfmBroadcastOverlay overlay;
+        overlay.bind(&model, model.slice(3)->panId());
+        QCOMPARE(overlay.records().size(), 2);
+        const WfmBroadcastOverlayRecord firstRecord = overlay.records().at(0);
+        const WfmBroadcastOverlayRecord secondRecord = overlay.records().at(1);
+        QCOMPARE(firstRecord.sliceId, 3);
+        QCOMPARE(secondRecord.sliceId, 4);
+        QCOMPARE(secondRecord.frequencyHz, qint64{100900000});
+        QCOMPARE(secondRecord.program, 1);
+        for (int pass = 0; pass < 20; ++pass) {
+            model.slice(3)->setActive(pass % 2 == 0);
+            model.slice(4)->setActive(pass % 2 != 0);
+            QCOMPARE(overlay.records().at(0), firstRecord);
+            QCOMPARE(overlay.records().at(1), secondRecord);
+        }
+        SliceDelta update;
+        update.hdFmReception = reception();
+        update.hdFmReception->title = QStringLiteral("First station new song");
+        emit source->sliceChanged(3, update);
+        QCOMPARE(overlay.records().at(0).title, QStringLiteral("First station new song"));
+        QCOMPARE(overlay.records().at(1), secondRecord);
+        WfmPresentationSettings::instance().setBroadcastOverlayEnabled(false);
+        QVERIFY(overlay.records().isEmpty());
+        QCOMPARE(model.slice(3)->hdFmReception().title, QStringLiteral("First station new song"));
+        QCOMPARE(model.slice(4)->hdFmReception().title, QStringLiteral("Other song"));
+        WfmPresentationSettings::instance().setBroadcastOverlayEnabled(true);
+        QCOMPARE(overlay.records().size(), 2);
+        QCOMPARE(overlay.records().at(1), secondRecord);
+        update = {}; update.inCapture = false;
+        emit source->sliceChanged(3, update);
+        QCOMPARE(overlay.records().size(), 1);
+        QCOMPARE(overlay.records().first(), secondRecord);
+        emit source->sliceRemoved(3);
+        QCOMPARE(overlay.records().first(), secondRecord);
+        SliceDelta replacement = hdSlice();
+        replacement.hdFmReception = HdFmReception{};
+        emit source->sliceChanged(3, replacement);
+        QCOMPARE(overlay.records().size(), 1);
+        QCOMPARE(overlay.records().first(), secondRecord);
+        replacement.hdFmReception = reception();
+        replacement.hdFmReception->receiverEpoch = 99;
+        replacement.hdFmReception->stationName = QStringLiteral("Replacement station");
+        emit source->sliceChanged(3, replacement);
+        QCOMPARE(overlay.records().size(), 2);
+        QCOMPARE(overlay.records().at(0).receiverEpoch, quint64{99});
+        QCOMPARE(overlay.records().at(0).stationName, QStringLiteral("Replacement station"));
+        QCOMPARE(overlay.records().at(1), secondRecord);
+        QCOMPARE(source->commands, 0);
+        QVERIFY(model.spotModel().spots().isEmpty());
+    }
+
     void acceptedIdentityAndPanOwnershipClearOldPresentation()
     {
         RadioModel model;

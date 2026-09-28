@@ -10354,9 +10354,9 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThro
     // transmit with it. The backend clears the previously active slice, which on
     // a Flex arrives as a status echo and here has no other way of happening.
     connect(s, &SliceModel::activeSliceCommandIssued, this,
-            [this, s]() {
-        if (m_backend) m_backend->setActiveSlice(s->sliceId());
-    });
+            [this, s, canDispatch]() {
+        if (canDispatch()) { m_backend->setActiveSlice(s->sliceId()); }
+    }, Qt::DirectConnection);
 }
 
 void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,

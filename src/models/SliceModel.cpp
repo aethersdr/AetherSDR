@@ -839,6 +839,13 @@ void SliceModel::setTxSlice(bool on)
 
 void SliceModel::setActive(bool on)
 {
+    if (confirmsControls()) {
+        // Selection must follow the same live-object admission as tuning.
+        // An optimistic activeChanged edge can make the UI select a reused
+        // numeric slot before the owner refuses this retired object's intent.
+        if (on && QThread::currentThread() == thread()) { emit activeSliceCommandIssued(); }
+        return;
+    }
     if (on) {
         // Optimistic (#3854 review): activeSlice() prefers the radio's active
         // flag, so waiting for the echo leaves a one-round-trip window where

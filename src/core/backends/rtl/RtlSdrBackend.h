@@ -61,6 +61,7 @@ public:
 
     bool createSlice(const QString& panId, double frequencyHz) override;
     bool removeSlice(int sliceId) override;
+    void setActiveSlice(int sliceId) override;
     void setSliceFrequency(int sliceId, double hz) override;
     bool requestReceiveTune(int sliceId, double hz, ReceiveTuneView view) override;
     bool recenterReceiveCapture(const QString& panId) override;
@@ -199,6 +200,9 @@ private:
     int m_receiverCapacity = kQualifiedReceiverCapacity;
     RtlCaptureTransaction m_capture{{8, kQualifiedReceiverCapacity}};
     std::optional<RtlCaptureTransaction::State> m_lastPublished;
+    // Focus belongs to a configured stable identity, including parked receivers.
+    // It does not change the capture or demodulator bank.
+    int m_activeSliceId = -1;
     struct Monitor { int gain = 100; int pan = 50; bool mute = false; };
     std::array<Monitor, 8> m_monitors;
     struct NativeAudio {
@@ -256,6 +260,14 @@ private:
     };
     std::array<std::optional<WfmObservationIdentity>, 8> m_wfmLastObservation;
     RtlReceivePipeline::Diagnostics m_diagnostics; // owner-thread health cache
+    struct PcmDiagnostics {
+        quint64 packets = 0, frames = 0, nonzeroSamples = 0, nonfiniteSamples = 0;
+        quint64 discontinuities = 0, queueAgeTotalNs = 0, queueAgeMaxNs = 0;
+        quint64 lastDeliveryMs = 0, maxDeliveryGapMs = 0;
+        double peak = 0, sumSquaresLeft = 0, sumSquaresRight = 0;
+    };
+    // Slots 0..7 are independent pre-monitor taps; slot 8 is the speaker mix.
+    std::array<PcmDiagnostics, 9> m_pcmDiagnostics{};
     RtlSdrDdc* ddc();
 };
 

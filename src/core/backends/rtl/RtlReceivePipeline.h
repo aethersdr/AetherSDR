@@ -24,6 +24,20 @@ public:
         std::uint64_t mixerRejectedBlocks = 0;
         std::uint64_t mixerConfigurationFailures = 0;
         std::uint64_t droppedTraceEvents = 0;
+        std::uint64_t queuedPackets = 0;
+        std::uint64_t packetQueueHighWater = 0;
+        std::array<std::uint64_t, 8> receiverWithdrawals{};
+        // The worker fills these acquisition-lifetime observations in its
+        // snapshot. A pipeline-only fixture truthfully leaves them at zero.
+        std::uint64_t callbackCount = 0;
+        std::uint64_t callbackIqSamples = 0;
+        std::uint64_t malformedCallbacks = 0;
+        std::uint64_t callbackTotalNs = 0;
+        std::uint64_t callbackMaxNs = 0;
+        std::uint64_t callbackDeadlineMisses = 0;
+        std::uint64_t usbReadStarts = 0;
+        std::uint64_t usbCancelRequests = 0;
+        std::array<std::uint64_t, 16> callbackDurationBuckets{};
     };
     // Independently sampled lifetime counters, not one atomic point-in-time
     // transaction. The control owner caches these for healthSnapshot().
@@ -35,6 +49,9 @@ public:
         std::uint64_t receiverEpoch = 0;
         std::uint64_t audioEpoch = 0; // nonzero for HD, separately retired on sync/audio loss
         std::uint64_t producedMonotonicMs = 0; // oldest decoded contribution; zero for intentional HD silence
+        // Mailbox residence instrumentation. Separate from the HD producer's
+        // causal timestamp and never used to assert decoded-audio freshness.
+        std::uint64_t enqueuedMonotonicNs = 0;
         std::uint64_t firstSample = 0;
         int slot = -1;
         std::size_t frames = 0;
@@ -178,6 +195,8 @@ private:
     alignas(64) std::atomic<unsigned> m_write{0};
     alignas(64) std::atomic<unsigned> m_read{0};
     std::atomic<std::uint64_t> m_drops{0};
+    std::atomic<std::uint64_t> m_packetQueueHighWater{0};
+    std::array<std::atomic<std::uint64_t>, 8> m_receiverWithdrawals{};
     std::atomic<std::uint64_t> m_mixerLate{0};
     std::atomic<std::uint64_t> m_mixerRejected{0};
     std::atomic<std::uint64_t> m_mixerConfigurationFailures{0};

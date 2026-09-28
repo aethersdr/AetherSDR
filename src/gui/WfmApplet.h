@@ -35,6 +35,7 @@ signals:
     void availabilityChanged(bool available);
 private:
     bool ownsWfmSlice() const;
+    bool acceptsControl(const QWidget* control, quint64 binding) const;
     void refresh();
     void refreshDiagnostics();
     void refreshHd();
@@ -48,12 +49,16 @@ private:
 
     QPointer<RadioModel> m_model;
     QPointer<SliceModel> m_slice;
+    quint64 m_modelBinding{0};
+    quint64 m_sliceBinding{0};
+    quint64 m_audioModeBinding{0};
     QVector<QMetaObject::Connection> m_modelConnections;
     QVector<QMetaObject::Connection> m_sliceConnections;
     std::unique_ptr<ControlAvailabilityRegistry> m_availability;
     RadioCapabilities m_caps;
     bool m_connected{false};
     bool m_available{false};
+    QLabel* m_identity{nullptr};
     WfmLockScope* m_scope{nullptr};
     QPushButton* m_audioMode{nullptr};
     QLabel* m_status{nullptr};

@@ -7,8 +7,10 @@
 
 #include <QThread>
 #include <QVector>
+#include <array>
 #include <atomic>
 #include <complex>
+#include <limits>
 #include <memory>
 #include <optional>
 
@@ -46,7 +48,14 @@ public:
     void serviceCancellation();
     bool takeAudio(RtlReceivePipeline::Packet& packet) { return m_pipeline->takePacket(packet); }
     bool takeHdObservation(RtlReceivePipeline::HdFmObservation& value) { return m_pipeline->takeHdObservation(value); }
-    RtlReceivePipeline::Diagnostics diagnostics() const { return m_pipeline->diagnostics(); }
+    // Independently sampled counters since construction. Timing covers each
+    // valid callback's adoption and processing, not USB transport latency.
+    // The final bucket is unbounded; finite percentile bounds are conservative.
+    static constexpr std::array<std::uint64_t, 16> kCallbackDurationUpperBoundsNs{
+        50'000, 100'000, 200'000, 400'000, 800'000, 1'200'000, 1'600'000, 2'000'000,
+        2'400'000, 2'800'000, 3'400'000, 5'000'000, 10'000'000, 20'000'000,
+        50'000'000, std::numeric_limits<std::uint64_t>::max()};
+    RtlReceivePipeline::Diagnostics diagnostics() const;
     bool takeTraceEvent(RtlReceivePipeline::TraceEvent& event) { return m_pipeline->takeTraceEvent(event); }
     bool needsRepair() const { return m_pipeline->needsRepair(); }
     void setMonitor(int slot, int gain, int pan, bool mute) { m_pipeline->setMonitor(slot, gain, pan, mute); }
@@ -68,6 +77,8 @@ private:
     void applyDdc(const Transaction::State& state);
     void applyHardware();
     bool prepareHardwareResult();
+    void cancelReading();
+    void recordCallback(std::uint64_t durationNs, std::uint32_t iqSamples) noexcept;
 
     std::unique_ptr<Device> m_device;
     std::atomic<bool> m_readerRunning{false};
@@ -85,6 +96,16 @@ private:
     int m_legacyFilterHighHz = 0;
     std::unique_ptr<RtlReceivePipeline> m_pipeline;
     std::uint64_t m_firstSample = 0;
+    std::uint32_t m_captureRateHz = 0; // acquisition-context only
+    std::atomic<std::uint64_t> m_callbackCount{0};
+    std::atomic<std::uint64_t> m_callbackIqSamples{0};
+    std::atomic<std::uint64_t> m_malformedCallbacks{0};
+    std::atomic<std::uint64_t> m_callbackTotalNs{0};
+    std::atomic<std::uint64_t> m_callbackMaxNs{0};
+    std::atomic<std::uint64_t> m_callbackDeadlineMisses{0};
+    std::array<std::atomic<std::uint64_t>, kCallbackDurationUpperBoundsNs.size()> m_callbackDurationBuckets{};
+    std::atomic<std::uint64_t> m_usbReadStarts{0};
+    std::atomic<std::uint64_t> m_usbCancelRequests{0};
     RtlSdrDdc m_ddc;
     RtlDcBlocker m_dcBlocker;
     bool m_dcSuppression = false;

@@ -83,7 +83,8 @@ struct RtlReceivePipelineTestAccess {
         RtlReceivePipeline::Packet packet;
         if (!pipeline.takePacket(packet) || packet.slot != -1 || packet.firstSample != 100 || packet.frames != 128
             || packet.samples[0] != 0 || packet.samples[2] != 0.25f || packet.samples[254] != 0
-            || pipeline.takePacket(packet) || pipeline.diagnostics().mixerLateFrames != 2) { return false; }
+            || pipeline.takePacket(packet) || pipeline.diagnostics().mixerLateFrames != 2
+            || pipeline.diagnostics().receiverWithdrawals[3] != 1) { return false; }
 
         // Fill the independent trace ring, then partially drain and wrap it.
         // Every accepted event must survive in FIFO order; only new ones drop.
@@ -216,6 +217,26 @@ struct RtlReceivePipelineTestAccess {
     { return pipeline.m_registry.service().requested; }
     static std::uint64_t receiverEpoch(RtlReceivePipeline& pipeline, int slot)
     { return pipeline.m_specs[slot].epoch; }
+    static bool packetQueueAccounting(RtlReceivePipeline& pipeline)
+    {
+        RtlReceivePipeline::Packet packet;
+        packet.producedMonotonicMs = 1234; // a decoded timestamp must not become mailbox time
+        constexpr unsigned capacity = RtlReceivePipeline::kPackets - 1;
+        for (unsigned i = 0; i < capacity; ++i) {
+            packet.firstSample = i;
+            if (!pipeline.enqueue(packet)) { return false; }
+        }
+        const auto full = pipeline.diagnostics();
+        if (full.queuedPackets != capacity || full.packetQueueHighWater != capacity
+            || full.droppedPackets != 0 || pipeline.enqueue(packet)) { return false; }
+        for (unsigned i = 0; i < capacity; ++i) {
+            if (!pipeline.takePacket(packet) || packet.firstSample != i
+                || packet.enqueuedMonotonicNs == 0 || packet.producedMonotonicMs != 1234) { return false; }
+        }
+        const auto empty = pipeline.diagnostics();
+        return empty.queuedPackets == 0 && empty.packetQueueHighWater == capacity
+            && empty.droppedPackets == 1 && !pipeline.takePacket(packet);
+    }
     static bool rejectMalformedMixer(RtlReceivePipeline& pipeline)
     {
         pipeline.m_legacy = false; pipeline.m_token = {1, 1}; pipeline.m_captureEpoch = 1;
@@ -439,6 +460,14 @@ static void measureParkAndResume()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    {
+        auto queued = std::make_unique<Pipeline>();
+        inCallback = true;
+        const bool observed = AetherSDR::rtl::RtlReceivePipelineTestAccess::packetQueueAccounting(*queued);
+        inCallback = false;
+        check(observed, "bounded packet queue reports occupancy, lifetime high-water and overflow without losing accepted FIFO data");
+        check(callbackAllocations == 0, "packet queue observations allocate no callback memory");
+    }
     {
         auto traced = std::make_unique<Pipeline>();
         inCallback = true;

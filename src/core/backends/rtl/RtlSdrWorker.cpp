@@ -6,6 +6,7 @@
 #include "core/LogManager.h"
 #include "core/backends/rtl/RtlSdrUsbDevice.h"
 #include <aether_wdsp.h>
+#include <chrono>
 
 namespace AetherSDR::rtl {
 namespace {
@@ -55,7 +56,7 @@ bool RtlSdrWorker::stopReading()
 {
     m_stopRequested = true;
     for (int attempt = 0; isRunning() && attempt < 50; ++attempt) {
-        if (m_device) { m_device->cancelAsync(); }
+        cancelReading();
         if (wait(100)) { break; }
     }
     if (isRunning()) {
@@ -64,6 +65,54 @@ bool RtlSdrWorker::stopReading()
     }
     m_pipeline->stop();
     return true;
+}
+
+void RtlSdrWorker::cancelReading()
+{
+    if (m_device) {
+        // Count API requests, including retries; this is not a USB restart or
+        // a claim that the driver acknowledged cancellation.
+        m_usbCancelRequests.fetch_add(1, std::memory_order_relaxed);
+        m_device->cancelAsync();
+    }
+}
+
+RtlReceivePipeline::Diagnostics RtlSdrWorker::diagnostics() const
+{
+    RtlReceivePipeline::Diagnostics result = m_pipeline->diagnostics();
+    result.callbackCount = m_callbackCount.load(std::memory_order_relaxed);
+    result.callbackIqSamples = m_callbackIqSamples.load(std::memory_order_relaxed);
+    result.malformedCallbacks = m_malformedCallbacks.load(std::memory_order_relaxed);
+    result.callbackTotalNs = m_callbackTotalNs.load(std::memory_order_relaxed);
+    result.callbackMaxNs = m_callbackMaxNs.load(std::memory_order_relaxed);
+    result.callbackDeadlineMisses = m_callbackDeadlineMisses.load(std::memory_order_relaxed);
+    result.usbReadStarts = m_usbReadStarts.load(std::memory_order_relaxed);
+    result.usbCancelRequests = m_usbCancelRequests.load(std::memory_order_relaxed);
+    for (std::size_t i = 0; i < m_callbackDurationBuckets.size(); ++i) {
+        result.callbackDurationBuckets[i] = m_callbackDurationBuckets[i].load(std::memory_order_relaxed);
+    }
+    return result;
+}
+
+void RtlSdrWorker::recordCallback(std::uint64_t durationNs, std::uint32_t iqSamples) noexcept
+{
+    m_callbackCount.fetch_add(1, std::memory_order_relaxed);
+    m_callbackIqSamples.fetch_add(iqSamples, std::memory_order_relaxed);
+    m_callbackTotalNs.fetch_add(durationNs, std::memory_order_relaxed);
+    // Only the acquisition context writes this maximum; readers use the mirror.
+    if (durationNs > m_callbackMaxNs.load(std::memory_order_relaxed)) {
+        m_callbackMaxNs.store(durationNs, std::memory_order_relaxed);
+    }
+    if (m_captureRateHz != 0
+        && durationNs > std::uint64_t(iqSamples) * 1'000'000'000 / m_captureRateHz) {
+        m_callbackDeadlineMisses.fetch_add(1, std::memory_order_relaxed);
+    }
+    for (std::size_t i = 0; i < kCallbackDurationUpperBoundsNs.size(); ++i) {
+        if (durationNs <= kCallbackDurationUpperBoundsNs[i]) {
+            m_callbackDurationBuckets[i].fetch_add(1, std::memory_order_relaxed);
+            break;
+        }
+    }
 }
 
 bool RtlSdrWorker::submit(const Transaction::Work& work)
@@ -125,7 +174,7 @@ void RtlSdrWorker::serviceCancellation()
     // race, including a device that never delivers its first callback.
     if (m_command.load(std::memory_order_acquire) == Command::Hardware
         && m_readerRunning.load(std::memory_order_acquire) && m_device) {
-        m_device->cancelAsync();
+        cancelReading();
     }
 }
 
@@ -168,6 +217,7 @@ void RtlSdrWorker::applyDdc(const Transaction::State& state)
     m_legacyFilterHighHz = highHz;
     m_ddc.applyMonitor(receiver.audioGain, receiver.audioPan, receiver.audioMute);
     m_applied = state.token;
+    m_captureRateHz = state.hardware.sampleRateHz;
     qCDebug(lcPerf).nospace() << "RtlCapture phase=adopt ms=" << QDateTime::currentMSecsSinceEpoch()
         << " session=" << state.token.session << " revision=" << state.token.revision
         << " centerHz=" << state.hardware.centerHz << " generation=" << state.capture.generation;
@@ -251,6 +301,7 @@ void RtlSdrWorker::run()
         }
         m_readerRunning.store(true, std::memory_order_release);
         if (m_stopRequested.load(std::memory_order_acquire)) { break; }
+        m_usbReadStarts.fetch_add(1, std::memory_order_relaxed);
         const int rc = m_device->readAsync(&RtlSdrWorker::rtlsdrCallback, this);
         m_readerRunning.store(false, std::memory_order_release);
         if (m_stopRequested.load(std::memory_order_acquire)) { break; }
@@ -267,20 +318,25 @@ void RtlSdrWorker::rtlsdrCallback(unsigned char* buf, std::uint32_t len, void* c
     if (!worker) { return; }
     const Command command = worker->m_command.load(std::memory_order_acquire);
     if (worker->m_stopRequested.load(std::memory_order_acquire) || command == Command::Hardware) {
-        worker->m_device->cancelAsync();
+        worker->cancelReading();
         return;
     }
     if (!buf || len == 0 || len % 2 != 0 || len > kRtlBufLength) {
+        worker->m_malformedCallbacks.fetch_add(1, std::memory_order_relaxed);
         worker->m_ddc.resetSpectrum();
         worker->m_dcBlocker.reset();
         return;
     }
+    const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
     const bool adopting = command == Command::Receiver && worker->m_pipeline->adopt();
     if (adopting) { worker->applyDdc(worker->m_work->target); }
     worker->handleCallback(buf, len);
     // Complete is the release of ALL references into m_work, including DSP
     // output during this block. The control side may destroy it immediately.
     if (adopting) { worker->m_command.store(Command::Complete, std::memory_order_release); }
+    const std::uint64_t durationNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
+    worker->recordCallback(durationNs, len / 2);
 }
 
 void RtlSdrWorker::handleCallback(unsigned char* buf, std::uint32_t len)
