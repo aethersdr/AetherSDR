@@ -25,6 +25,9 @@
 #include <QResizeEvent>
 #include <cmath>
 #include <algorithm>
+#include <array>
+#include <optional>
+#include <tuple>
 #include <QStringList>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -83,6 +86,53 @@ private:
     int m_offset{0};
 };
 namespace {
+
+// Keep the popup's origin after hidePopup(): Qt closes the popup before
+// delivering activated. A receiver/reception change must reject that old intent.
+class WfmHdProgramComboBox final : public GuardedComboBox {
+public:
+    using GuardedComboBox::GuardedComboBox;
+    void invalidateInteraction()
+    {
+        ++m_generation;
+        hidePopup();
+    }
+    void setReception(const HdFmReception& value)
+    {
+        const Context context{value.sessionId, value.receiverEpoch, value.revision,
+                              value.frequencyHz, value.selectedProgram};
+        if (context == m_context) { return; }
+        m_context = context;
+        invalidateInteraction();
+    }
+    bool takeCurrentActivation()
+    {
+        const bool current = m_origin.value_or(m_generation) == m_generation;
+        m_origin.reset();
+        return current;
+    }
+    void showPopup() override
+    {
+        m_origin = m_generation;
+        GuardedComboBox::showPopup();
+    }
+protected:
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        if (!view()->isVisible()) { m_origin = m_generation; }
+        GuardedComboBox::keyPressEvent(event);
+    }
+    void wheelEvent(QWheelEvent* event) override
+    {
+        if (!view()->isVisible()) { m_origin = m_generation; }
+        GuardedComboBox::wheelEvent(event);
+    }
+private:
+    using Context = std::tuple<quint64, quint64, quint64, qint64, int>;
+    Context m_context{0, 0, 0, 0, -1};
+    quint64 m_generation{0};
+    std::optional<quint64> m_origin;
+};
 
 void setReadout(QLabel* label, const QString& text, const QString& name)
 {
@@ -168,7 +218,7 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
     settings->addWidget(bandwidthLabel, 1, 0);
     settings->addWidget(m_bandwidth, 1, 1);
     settings->setColumnStretch(1, 1);
-    m_hdProgram = new GuardedComboBox(this);
+    m_hdProgram = new WfmHdProgramComboBox(this);
     m_hdProgram->setObjectName(QStringLiteral("wfmHdProgram"));
     m_hdProgram->setAccessibleName(tr("Digital program"));
     m_hdProgram->setFocusPolicy(Qt::StrongFocus);
@@ -234,10 +284,19 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
         refresh();
     });
     connect(m_hdProgram, &QComboBox::activated, this, [this](int index) {
-        if (m_available && m_slice && m_hdProgram->isEnabled()) {
-            m_slice->setHdProgram(m_hdProgram->itemData(index).toInt());
+        const bool current = static_cast<WfmHdProgramComboBox*>(m_hdProgram)->takeCurrentActivation();
+        bool validProgram = false;
+        const int program = m_hdProgram->itemData(index).toInt(&validProgram);
+        if (current && index >= 0 && index < m_hdProgram->count() && validProgram
+            && ownsWfmSlice() && hasCurrentHdReception() && m_hdProgram->isEnabled()
+            && program != m_slice->hdProgram()) {
+            const QVector<HdFmService>& services = m_slice->hdFmReception().services;
+            const bool available = std::ranges::any_of(services, [program](const HdFmService& service) {
+                return service.program == program && service.audioAvailable;
+            });
+            if (available) { m_slice->setHdProgram(program); }
         }
-        refresh();
+        refresh(); // The displayed selection remains backend-confirmed.
     });
     connect(m_deemphasis, &QComboBox::activated, this, [this](int index) {
         if (m_available && m_slice && m_deemphasis->isEnabled()) {
@@ -281,6 +340,7 @@ bool WfmApplet::ownsWfmSlice() const
 
 void WfmApplet::setRadioModel(RadioModel* model)
 {
+    static_cast<WfmHdProgramComboBox*>(m_hdProgram)->invalidateInteraction();
     for (const auto& connection : m_modelConnections) { disconnect(connection); }
     m_modelConnections.clear();
     m_availability.reset();
@@ -319,6 +379,7 @@ void WfmApplet::setRadioModel(RadioModel* model)
 
 void WfmApplet::setSlice(SliceModel* slice)
 {
+    static_cast<WfmHdProgramComboBox*>(m_hdProgram)->invalidateInteraction();
     for (const auto& connection : m_sliceConnections) { disconnect(connection); }
     m_sliceConnections.clear();
     m_scope->clear();
@@ -589,17 +650,39 @@ void WfmApplet::refreshHd()
 {
     const QString previous = m_hdProgram->currentText();
     const QSignalBlocker blocker(m_hdProgram);
-    m_hdProgram->clear();
     const bool current = hasCurrentHdReception();
+    auto* programCombo = static_cast<WfmHdProgramComboBox*>(m_hdProgram);
+    programCombo->setReception(current ? m_slice->hdFmReception() : HdFmReception{});
+    std::array<QString, 8> labels;
+    QVector<int> programs;
     if (current) {
         for (const HdFmService& service : m_slice->hdFmReception().services) {
             if (!service.audioAvailable) { continue; }
-            const QString label = service.name.isEmpty() ? tr("P%1").arg(service.program + 1)
+            labels[service.program] = service.name.isEmpty() ? tr("P%1").arg(service.program + 1)
                 : tr("P%1 · %2").arg(service.program + 1).arg(service.name);
-            m_hdProgram->addItem(label, service.program);
         }
     }
-    m_hdProgram->setCurrentIndex(m_available ? m_hdProgram->findData(m_slice->hdProgram()) : -1);
+    for (int program = 0; program < static_cast<int>(labels.size()); ++program) {
+        if (!labels[program].isEmpty()) { programs.append(program); }
+    }
+    // Decoder telemetry may reorder services or rename them without changing
+    // their identity. Keep rows and the popup highlight stable in that case.
+    bool membershipChanged = m_hdProgram->count() != programs.size();
+    for (int row = 0; !membershipChanged && row < programs.size(); ++row) {
+        membershipChanged = m_hdProgram->itemData(row).toInt() != programs[row];
+    }
+    if (membershipChanged) {
+        programCombo->invalidateInteraction();
+        m_hdProgram->clear();
+        for (int program : programs) { m_hdProgram->addItem(labels[program], program); }
+    } else {
+        for (int row = 0; row < programs.size(); ++row) {
+            if (m_hdProgram->itemText(row) != labels[programs[row]]) {
+                m_hdProgram->setItemText(row, labels[programs[row]]);
+            }
+        }
+    }
+    m_hdProgram->setCurrentIndex(current ? m_hdProgram->findData(m_slice->hdProgram()) : -1);
     announceCombo(m_hdProgram, previous);
     if (m_availability) { m_availability->refreshEngaged(); }
     QString metadata = tr("Digital metadata unavailable");

@@ -15,6 +15,7 @@
 #include "models/SliceModel.h"
 
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QAccessible>
 #include <QComboBox>
 #include <QCheckBox>
@@ -839,6 +840,240 @@ private slots:
         QCOMPARE(source->audioModeRequests.last().second, WfmAudioMode::Stereo);
         QCOMPARE(cycle->text(), QStringLiteral("Mono"));
         WfmPresentationSettings::instance().setBroadcastOverlayEnabled(true);
+    }
+
+    void hdPopupTelemetryPreservesPendingChoice_data()
+    {
+        QTest::addColumn<bool>("mouse");
+        QTest::addColumn<int>("serviceChange");
+        QTest::newRow("mouse-press-telemetry-release") << true << 0;
+        QTest::newRow("keyboard-highlight-telemetry-return") << false << 0;
+        QTest::newRow("mouse-service-rename") << true << 1;
+        QTest::newRow("keyboard-service-rename") << false << 1;
+        QTest::newRow("mouse-service-reorder") << true << 2;
+        QTest::newRow("keyboard-service-reorder") << false << 2;
+    }
+
+    void hdPopupTelemetryPreservesPendingChoice()
+    {
+        QFETCH(bool, mouse);
+        QFETCH(int, serviceChange);
+        RadioModel model;
+        WfmBackend* source = attachBackend(model);
+        source->caps.broadcastFmReceive->hdStereo = true;
+        emit model.capabilitiesChanged(true, source->caps);
+        WfmHarness host;
+        WfmApplet& applet = *host.applet;
+        applet.setRadioModel(&model);
+        applet.setSlice(model.slice(3));
+        SliceDelta observation;
+        observation.wfmAudioMode = WfmAudioMode::HdStereo;
+        observation.hdFmReception = measuredHd();
+        emit source->sliceChanged(3, observation);
+        auto* program = applet.findChild<QComboBox*>(QStringLiteral("wfmHdProgram"));
+        auto* settings = applet.findChild<QPushButton*>(QStringLiteral("wfmSettingsToggle"));
+        QVERIFY(program && settings && program->isEnabled());
+        host.resize(400, 600);
+        host.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&host));
+        if (!settings->isChecked()) { QTest::mouseClick(settings, Qt::LeftButton); }
+        QTRY_VERIFY(program->isVisible());
+        QCOMPARE(program->currentData().toInt(), 0);
+        QTest::mouseClick(program, Qt::LeftButton);
+        QAbstractItemView* view = program->view();
+        QTRY_VERIFY(view->isVisible());
+        QVERIFY(QTest::qWaitForWindowExposed(view->window()));
+        // Qt ignores the opening click's release for a short interval. Wait
+        // before the distinct selection click; telemetry still interleaves
+        // strictly between its press and release below.
+        if (mouse) { QTest::qWait(QApplication::doubleClickInterval() + 20); }
+        const QModelIndex second = program->model()->index(program->findData(1), 0);
+        const QPoint position = view->visualRect(second).center();
+        QVERIFY(view->viewport()->rect().contains(position));
+        if (mouse) {
+            QTest::mouseMove(view->viewport(), position);
+            QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, position);
+        } else {
+            QTest::keyClick(view, Qt::Key_Down);
+        }
+        QCOMPARE(view->currentIndex().data(Qt::UserRole).toInt(), 1);
+        QVERIFY(source->programRequests.isEmpty());
+        for (int sequence = 2; sequence < 18; ++sequence) {
+            observation.hdFmReception->observationSequence = sequence;
+            observation.hdFmReception->syncDurationMs += 250;
+            observation.hdFmReception->title = QStringLiteral("Telemetry %1").arg(sequence);
+            if (serviceChange == 1) {
+                observation.hdFmReception->services[1].name = QStringLiteral("Renamed %1").arg(sequence);
+            } else if (serviceChange == 2) {
+                observation.hdFmReception->services.swapItemsAt(0, 1);
+            }
+            emit source->sliceChanged(3, observation);
+            QApplication::processEvents();
+        }
+        const bool popupStayedOpen = view->isVisible();
+        const int highlightedProgram = view->currentIndex().data(Qt::UserRole).toInt();
+        QVERIFY(source->programRequests.isEmpty()); // telemetry cannot activate a choice
+        if (mouse) {
+            QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, position);
+        } else {
+            QTest::keyClick(view, Qt::Key_Return);
+        }
+        QApplication::processEvents();
+        qInfo("HD popup input=%s openAfterTelemetry=%d highlightedProgram=%d requests=%lld displayedProgram=%d",
+              mouse ? "mouse" : "keyboard", popupStayedOpen, highlightedProgram,
+              static_cast<long long>(source->programRequests.size()), program->currentData().toInt());
+        QCOMPARE(source->programRequests.size(), 1);
+        QCOMPARE(source->programRequests.first(), (QPair<int, int>{3, 1}));
+        QVERIFY(popupStayedOpen);
+        QCOMPARE(highlightedProgram, 1);
+        QCOMPARE(model.slice(3)->hdProgram(), 0);
+        QCOMPARE(program->currentData().toInt(), 0); // intent is not confirmed state
+        if (serviceChange == 1) {
+            QVERIFY(program->itemText(program->findData(1)).contains(QStringLiteral("Renamed 17")));
+        }
+        emit source->sliceChanged(3, observation); // unchanged backend state is not an acknowledgement
+        QCOMPARE(program->currentData().toInt(), 0);
+        QCOMPARE(source->programRequests.size(), 1);
+        observation.hdProgram = 1;
+        observation.hdFmReception = measuredHd(1);
+        emit source->sliceChanged(3, observation);
+        QCOMPARE(program->currentData().toInt(), 1);
+        QCOMPARE(source->programRequests.size(), 1);
+        QTest::mouseClick(program, Qt::LeftButton);
+        QTRY_VERIFY(view->isVisible());
+        QTest::keyClick(view, Qt::Key_Return); // the accepted service is a no-op
+        QCOMPARE(source->programRequests.size(), 1);
+    }
+
+    void hdPopupCancelsWhenReceiverOrServiceIdentityChanges_data()
+    {
+        QTest::addColumn<QString>("change");
+        QTest::addColumn<bool>("mouse");
+        const QStringList changes = {QStringLiteral("service-removed"), QStringLiteral("service-added"),
+            QStringLiteral("audio-unavailable"), QStringLiteral("session"), QStringLiteral("epoch"),
+            QStringLiteral("revision"), QStringLiteral("frequency"), QStringLiteral("slice"),
+            QStringLiteral("reused-slice-id"), QStringLiteral("radio-model"), QStringLiteral("confirmed-program"),
+            QStringLiteral("reception-unavailable")};
+        for (const QString& change : changes) {
+            for (bool mouse : {false, true}) {
+                const QByteArray name = (change + (mouse ? QStringLiteral("-mouse") : QStringLiteral("-keyboard"))).toUtf8();
+                QTest::newRow(name.constData()) << change << mouse;
+            }
+        }
+    }
+
+    void hdPopupCancelsWhenReceiverOrServiceIdentityChanges()
+    {
+        QFETCH(QString, change);
+        QFETCH(bool, mouse);
+        RadioModel model;
+        WfmBackend* source = attachBackend(model);
+        source->caps.broadcastFmReceive->hdStereo = true;
+        emit model.capabilitiesChanged(true, source->caps);
+        RadioModel replacementModel;
+        WfmBackend* replacementSource = attachBackend(replacementModel);
+        replacementSource->caps.broadcastFmReceive->hdStereo = true;
+        emit replacementModel.capabilitiesChanged(true, replacementSource->caps);
+        WfmHarness host;
+        WfmApplet& applet = *host.applet;
+        applet.setRadioModel(&model);
+        applet.setSlice(model.slice(3));
+        SliceDelta observation = initialWfm();
+        observation.wfmAudioMode = WfmAudioMode::HdStereo;
+        observation.hdFmReception = measuredHd();
+        emit source->sliceChanged(3, observation);
+        auto* program = applet.findChild<QComboBox*>(QStringLiteral("wfmHdProgram"));
+        auto* settings = applet.findChild<QPushButton*>(QStringLiteral("wfmSettingsToggle"));
+        QVERIFY(program && settings && program->isEnabled());
+        host.resize(400, 600);
+        host.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&host));
+        if (!settings->isChecked()) { QTest::mouseClick(settings, Qt::LeftButton); }
+        QTRY_VERIFY(program->isVisible());
+        QTest::mouseClick(program, Qt::LeftButton);
+        QAbstractItemView* view = program->view();
+        QTRY_VERIFY(view->isVisible());
+        QVERIFY(QTest::qWaitForWindowExposed(view->window()));
+        if (mouse) { QTest::qWait(QApplication::doubleClickInterval() + 20); }
+        const QModelIndex second = program->model()->index(program->findData(1), 0);
+        const QPoint position = view->visualRect(second).center();
+        QVERIFY(view->viewport()->rect().contains(position));
+        if (mouse) {
+            QTest::mouseMove(view->viewport(), position);
+            QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, position);
+        } else {
+            QTest::keyClick(view, Qt::Key_Down);
+        }
+        QCOMPARE(view->currentIndex().data(Qt::UserRole).toInt(), 1);
+        QVERIFY(source->programRequests.isEmpty());
+        if (change == QStringLiteral("slice")) {
+            emit source->sliceChanged(4, observation);
+            applet.setSlice(model.slice(4));
+        } else if (change == QStringLiteral("reused-slice-id")) {
+            SliceModel* original = model.slice(3);
+            emit source->sliceRemoved(3);
+            emit source->sliceChanged(3, observation);
+            QVERIFY(model.slice(3) != original);
+            applet.setSlice(model.slice(3));
+        } else if (change == QStringLiteral("radio-model")) {
+            emit replacementSource->sliceChanged(3, observation);
+            applet.setRadioModel(&replacementModel);
+            applet.setSlice(replacementModel.slice(3));
+        } else {
+            if (change == QStringLiteral("service-removed")) {
+                observation.hdFmReception->services.removeAt(1);
+            } else if (change == QStringLiteral("service-added")) {
+                observation.hdFmReception->services.append({4, QStringLiteral("New service"), true});
+            } else if (change == QStringLiteral("audio-unavailable")) {
+                observation.hdFmReception->services[1].audioAvailable = false;
+            } else if (change == QStringLiteral("session")) {
+                ++observation.hdFmReception->sessionId;
+            } else if (change == QStringLiteral("epoch")) {
+                ++observation.hdFmReception->receiverEpoch;
+            } else if (change == QStringLiteral("revision")) {
+                ++observation.hdFmReception->revision;
+            } else if (change == QStringLiteral("frequency")) {
+                observation.frequency = 101.1;
+                observation.hdFmReception->frequencyHz = 101100000;
+            } else if (change == QStringLiteral("confirmed-program")) {
+                observation.hdProgram = 1;
+                observation.hdFmReception->selectedProgram = 1;
+            } else if (change == QStringLiteral("reception-unavailable")) {
+                observation.hdFmReception->valid = false;
+            }
+            emit source->sliceChanged(3, observation);
+        }
+        QApplication::processEvents();
+        QTRY_VERIFY(!view->isVisible());
+        QVERIFY(source->programRequests.isEmpty());
+        QVERIFY(replacementSource->programRequests.isEmpty());
+        // A completion already aimed at the old popup must never select a
+        // same-numbered row in its replacement receiver or service list.
+        if (mouse) {
+            QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, position);
+        } else {
+            QTest::keyClick(view, Qt::Key_Return);
+        }
+        QApplication::processEvents();
+        QVERIFY(source->programRequests.isEmpty());
+        QVERIFY(replacementSource->programRequests.isEmpty());
+        if (program->isEnabled() && program->count() > 1) {
+            const int acceptedProgram = program->currentData().toInt();
+            const int targetRow = program->currentIndex() == 0 ? program->count() - 1 : 0;
+            const int targetProgram = program->itemData(targetRow).toInt();
+            QTest::mouseClick(program, Qt::LeftButton);
+            QTRY_VERIFY(view->isVisible());
+            QTest::keyClick(view, targetRow == 0 ? Qt::Key_Home : Qt::Key_End);
+            QCOMPARE(view->currentIndex().data(Qt::UserRole).toInt(), targetProgram);
+            QTest::keyClick(view, Qt::Key_Return);
+            const bool replacement = change == QStringLiteral("radio-model");
+            WfmBackend* activeSource = replacement ? replacementSource : source;
+            WfmBackend* inactiveSource = replacement ? source : replacementSource;
+            const int sliceId = change == QStringLiteral("slice") ? 4 : 3;
+            QCOMPARE(activeSource->programRequests, (QVector<QPair<int, int>>{{sliceId, targetProgram}}));
+            QVERIFY(inactiveSource->programRequests.isEmpty());
+            QCOMPARE(program->currentData().toInt(), acceptedProgram);
+        }
     }
 
     void hdTelemetryScopeIsMeasuredBoundedAndRetiresOnIdentityChanges()
