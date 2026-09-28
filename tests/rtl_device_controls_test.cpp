@@ -111,20 +111,25 @@ int main(int argc, char** argv)
     const int correctedStart = displayFrames;
     check(waitFor(device, [&] { return displayFrames >= correctedStart + 12; }) && displayPeak < -110,
         "production worker sends genuinely DC-corrected IQ to the display after settling");
-    // Keep capture, slice RF, and the narrowed view at three distinct centers.
-    backend.setPanBandwidth({}, 300000);
-    backend.setPanCenter({}, 100100000, IRadioBackend::PanCenterIntent::Range);
+    // Initial FM-N placement deliberately avoids converter DC. Anchor the
+    // narrowed view on that accepted capture, retaining its DC bin for the
+    // existing suppression check while keeping all three centers distinct.
     const T::State original = Access::state(backend);
+    backend.setPanBandwidth({}, 300000);
+    backend.setPanCenter({}, original.capture.centerHz - 100000, IRadioBackend::PanCenterIntent::Range);
     const rtl::RtlViewport originalView = Access::view(backend);
     check(original.receivers.size() == 1 && original.receivers.front().mode == T::Mode::Fmn
         && original.receivers.front().passband.carrierHz == 100200000
         && original.receivers.front().passband.filterLowHz == -6500
         && original.receivers.front().passband.filterHighHz == 7500
         && original.receivers.front().audioGain == 37 && original.receivers.front().audioPan == 68
-        && original.receivers.front().audioMute && original.hardware.centerHz == 100000000
+        && original.receivers.front().audioMute && original.hardware.centerHz == original.capture.centerHz
+        && original.capture.centerHz != original.receivers.front().passband.carrierHz
         && originalView.centerHz != original.capture.centerHz
         && originalView.centerHz != original.receivers.front().passband.carrierHz
-        && originalView.spanHz < original.capture.achievedSampleRateHz,
+        && originalView.spanHz < original.capture.achievedSampleRateHz
+        && original.capture.centerHz >= originalView.centerHz - originalView.spanHz / 2
+        && original.capture.centerHz < originalView.centerHz + originalView.spanHz / 2,
         "PPM preservation fixture has nondefault receiver and independent narrowed view");
     bool viewMoved = false;
     const auto viewConnection = QObject::connect(&backend, &IRadioBackend::panCenterBandwidthChanged,
