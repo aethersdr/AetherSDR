@@ -173,7 +173,7 @@ public:
     // produced the first one's output does not just underrun that block, it
     // puts the channel's two-slot output ring out of step for good. Same
     // thread and same fence as processIq(); false while a control operation is
-    // in progress. Local WDSP patch 14.
+    // in progress. Local WDSP patch 15.
     [[nodiscard]] bool outputReady() noexcept;
 
     // ── Start and stop, which are NOT teardown ────────────────────────────

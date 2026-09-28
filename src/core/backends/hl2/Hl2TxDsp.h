@@ -370,7 +370,7 @@ private:
     //
     // So levelled audio waits here, and a block is exchanged only when the
     // channel reports the previous block's output ready
-    // (WdspChannel::outputReady(), local WDSP patch 14); a 1 ms single-shot
+    // (WdspChannel::outputReady(), local WDSP patch 15); a 1 ms single-shot
     // timer on this object's thread retries the rest. Nothing blocks the I/O
     // thread, and a steadily paced caller never waits. A worker that has not
     // answered within exchangeStallNs() is exchanged anyway, counted and

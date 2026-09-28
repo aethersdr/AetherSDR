@@ -596,7 +596,7 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
   it; plus the one-line `wdspPortHandoffPauseForTest()` call after the release.
   Look at the ORDER, not for an added line: upstream's fix, if it comes, is a
   move, and the pause call is ours alone.
-- **patch 14** -- in `dexchange()`, the `memcpy` into `r2` (and its
+- **patch 15** -- in `dexchange()`, the `memcpy` into `r2` (and its
   `r2_inidx` advance) sits **before** the `r2_havesamps` increment; plus the
   added read-only `GetChannelOutputReady()` in `iobuffs.c` (declared in
   `iobuffs.h` and `include/aether_wdsp.h`).
@@ -745,7 +745,10 @@ When updating WDSP, keep this unless upstream's `dexchange()` reads `r1` before
 it releases `Sem_OutReady`. Keep the pause call (and its declaration at the top
 of `iobuffs.c`) regardless: it is AetherSDR's own test surface.
 
-## Patch 14 — a non-blocking host can ask whether an output block is ready
+## Patch 15 — a non-blocking host can ask whether an output block is ready
+
+> Numbered 15 because #5965 (open) claims 14 for the minimum-phase workspace
+> free. If #5965 is withdrawn, this one keeps its number; numbers are never reused.
 
 `upstream/iobuffs.c` gains `GetChannelOutputReady(channel)`: 1 when
 `r2_havesamps >= out_size`, i.e. when the next `fexchange*` would find a whole
