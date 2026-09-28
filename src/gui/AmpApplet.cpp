@@ -201,7 +201,7 @@ QString formatTemp(float degC, bool fahrenheit)
 }
 
 // Every value in the bottom row is right-aligned in a field this wide and
-// drawn in a fixed-width face. The row is four readouts abreast, so any
+// drawn in a fixed-width face. The row is three readouts abreast, so any
 // reading that changes width shuffles everything to its right — and these
 // arrive five times a second, which makes the whole row twitch. The face
 // handles a 1 becoming an 8; the field handles 9.9 becoming 10.0.
@@ -420,14 +420,16 @@ void AmpApplet::buildUI()
 
     m_vddLabel = new QLabel(voltsReadout(QStringLiteral("Vdd"), QStringLiteral("—")), this);
     m_vacLabel = new QLabel(voltsReadout(QStringLiteral("Vac"), QStringLiteral("—")), this);
-    m_sourceLabel = new QLabel("● RADIO", this);
+    m_sourceLabel = new QLabel("● OFFLINE", this);
+    m_sourceLabel->setObjectName(QStringLiteral("ampConnectionSource"));
+    m_sourceLabel->setAccessibleName(tr("PGXL OFFLINE"));
+    m_sourceLabel->setAccessibleDescription(tr("No PGXL connection is available."));
     for (QLabel* readout : {m_vddLabel, m_vacLabel, m_sourceLabel}) {
         readout->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     }
 
-    // One row along the bottom when the panel has the width for it, stacked
-    // when it does not. A grid rather than two layouts, so neither reading is
-    // ever reparented between presentations — see applyTelemetryLayout.
+    // Readouts are one row in the expanded panel and stacked in the rail.
+    // The connection indicator has its own bottom-right row, like TGXL.
     m_telemetryBox = new QWidget;
     m_telemetryGrid = new QGridLayout(m_telemetryBox);
     m_telemetryGrid->setContentsMargins(0, 0, 0, 0);
@@ -438,10 +440,6 @@ void AmpApplet::buildUI()
     auto* btnRow = new QHBoxLayout;
     btnRow->setContentsMargins(0, 0, 0, 0);
     btnRow->setSpacing(6);
-    // The readouts take the row's width rather than a stretch beside them,
-    // so the grid has slack of its own to put between the last reading and
-    // the source indicator at the far end. A stretch here instead would take
-    // it all first and leave the grid at its contents' width.
     btnRow->addWidget(m_telemetryBox, 1);
 
     // Fan speed pull-down — surfaces all three modes instead of making the
@@ -488,14 +486,16 @@ void AmpApplet::buildUI()
         if (!m_meffaSettable) return;
         emit meffaToggled(m_meffaState == QLatin1String("OFF"));
     });
-    btnRow->addWidget(m_meffaBtn);
-    btnRow->addWidget(m_fanCombo);
+    // Keep the controls on the telemetry row's baseline so the gap from
+    // OPERATE to the source indicator matches TGXL's antenna-button gap.
+    btnRow->addWidget(m_meffaBtn, 0, Qt::AlignBottom);
+    btnRow->addWidget(m_fanCombo, 0, Qt::AlignBottom);
 
     m_operateBtn = new QPushButton("OPERATE");
     m_operateBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, kBtnStyle);
     m_operateBtn->hide();
-    btnRow->addWidget(m_operateBtn);
+    btnRow->addWidget(m_operateBtn, 0, Qt::AlignBottom);
 
     vbox->addLayout(btnRow);
 
@@ -505,6 +505,7 @@ void AmpApplet::buildUI()
     m_bottomStretch = new QSpacerItem(0, kBottomGap,
                                       QSizePolicy::Minimum, QSizePolicy::Fixed);
     vbox->addSpacerItem(m_bottomStretch);
+    vbox->addWidget(m_sourceLabel, 0, Qt::AlignRight);
 
     outer->addWidget(body);
 
@@ -552,7 +553,7 @@ void AmpApplet::applyTelemetryLayout()
     }
     m_telemetryInRow = inRow;
 
-    QWidget* const cells[] = {m_tempBtn, m_vddLabel, m_vacLabel, m_sourceLabel};
+    QWidget* const cells[] = {m_tempBtn, m_vddLabel, m_vacLabel};
     for (QWidget* cell : cells) {
         m_telemetryGrid->removeWidget(cell);
     }
@@ -562,16 +563,6 @@ void AmpApplet::applyTelemetryLayout()
     for (int i = 0; i < 3; ++i) {
         if (inRow) m_telemetryGrid->addWidget(cells[i], 0, i);
         else       m_telemetryGrid->addWidget(cells[i], i, 0);
-    }
-    // The source indicator is not a reading — it says which path the readings
-    // came down. It goes to the far end of the row rather than trailing the
-    // measurements, with the slack between, so it reads as a separate thing.
-    if (inRow) {
-        m_telemetryGrid->addWidget(cells[3], 0, 4, Qt::AlignRight | Qt::AlignVCenter);
-        m_telemetryGrid->setColumnStretch(3, 1);
-    } else {
-        m_telemetryGrid->addWidget(cells[3], 3, 0);
-        m_telemetryGrid->setColumnStretch(3, 0);
     }
 }
 
@@ -636,6 +627,9 @@ void AmpApplet::setAmpModel(AmpModel* model)
     connect(m_model, &AmpModel::antennaMapChanged, this, &AmpApplet::updateActivePort);
     connect(m_model, &AmpModel::ampStateChanged, this, &AmpApplet::setState);
     connect(m_model, &AmpModel::alertChanged, this, &AmpApplet::setAlertText);
+    connect(m_model, &AmpModel::presenceChanged, this, [this](bool) {
+        updateSourceIndicator();
+    });
     // MEffA rides the model rather than the wiring layer, like every other
     // amplifier-owned state on this panel. The model is also what a write has
     // to go through — a `setup` write carries the whole configuration group
@@ -654,6 +648,7 @@ void AmpApplet::setAmpModel(AmpModel* model)
     setAlertText(m_model->alert());
     setMeffa(m_model->meffa(), m_model->canWriteSetup());
     updatePortRows();
+    updateSourceIndicator();
 }
 
 void AmpApplet::setTxAntenna(const QString& antenna)
@@ -718,9 +713,10 @@ void AmpApplet::applyDensityAtScale(qreal scale)
     const qreal s = scale;
     auto px = [s](int base) { return qMax(1, qRound(base * s)); };
 
-    // No bottom margin: m_bottomStretch owns the space under the controls.
+    // The stretch owns the gap below controls; leave a small frame inset
+    // below the indicator in the expanded panel.
     m_vbox->setContentsMargins(f ? px(12) : 4, f ? px(10) : 2,
-                               f ? px(12) : 4, f ? 0 : 2);
+                               f ? px(12) : 4, f ? px(8) : 2);
     m_vbox->setSpacing(f ? px(8) : 2);
 
     // Expanded fills the window it was given; docked stays the fixed-height
@@ -909,8 +905,9 @@ void AmpApplet::applyTelemetryStyles(qreal scale)
 
     theme.applyStyleSheet(m_sourceLabel, QStringLiteral(
         "QLabel { color: %1; font-size: %2px; }")
-        .arg(m_directConnected ? QStringLiteral("{{color.accent.bright}}")
-                               : QStringLiteral("{{color.text.label}}"))
+        .arg(m_directConnected ? QStringLiteral("{{color.accent.success}}")
+             : hasRadioRelay() ? QStringLiteral("{{color.accent.warning}}")
+                                : QStringLiteral("{{color.text.disabled}}"))
         .arg(f ? px(11) : 9));
 
     theme.applyStyleSheet(m_fanCombo, QStringLiteral(
@@ -1442,8 +1439,10 @@ void AmpApplet::applyStateToControls()
 void AmpApplet::setDirectConnected(bool direct)
 {
     m_directConnected = direct;
-    m_sourceLabel->setText(direct ? QStringLiteral("● DIRECT")
-                                  : QStringLiteral("● RADIO"));
+    if (direct) {
+        m_directFailureReason.clear();
+    }
+    updateSourceIndicator();
     if (!direct) {
         // Vdd and Vac are not proxied by the radio — clear the stale values.
         m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"), QStringLiteral("—")));
@@ -1454,13 +1453,49 @@ void AmpApplet::setDirectConnected(bool direct)
         m_haveFanMode = false;
         applyFanControls();
     }
-    // contentScale(), not m_appliedScale: that member is only resizeEvent's
-    // cache key for "has the scale moved", and nothing else writes it — so
-    // between popping the applet out and the first resize that actually moves
-    // the scale it still reads 1.0, and a connect or disconnect in that window
-    // would style the readouts at a size nothing else on the panel is at.
-    applyTelemetryStyles(contentScale());
     updatePortRows();
+}
+
+void AmpApplet::setRadioConnected(bool connected)
+{
+    if (m_radioConnected == connected) return;
+    m_radioConnected = connected;
+    updateSourceIndicator();
+}
+
+void AmpApplet::updateSourceIndicator()
+{
+    m_sourceLabel->setText(m_directConnected ? QStringLiteral("● DIRECT")
+        : hasRadioRelay() ? QStringLiteral("● RADIO") : QStringLiteral("● OFFLINE"));
+    m_sourceLabel->setAccessibleName(m_directConnected ? tr("PGXL DIRECT connection")
+        : hasRadioRelay() ? tr("PGXL RADIO connection") : tr("PGXL OFFLINE"));
+    QString description = m_directConnected
+        ? tr("Connected directly to the PGXL.")
+        : hasRadioRelay()
+            ? tr("Using the radio relay; the direct PGXL connection is unavailable.")
+            : tr("No PGXL connection is available.");
+    if (!m_directFailureReason.isEmpty()) {
+        description += QStringLiteral(" ") + m_directFailureReason;
+    }
+    m_sourceLabel->setAccessibleDescription(description);
+    m_sourceLabel->setToolTip(m_directFailureReason);
+    // contentScale(), not m_appliedScale: a connection state change can arrive
+    // before the next resize event updates the cached scale.
+    applyTelemetryStyles(contentScale());
+}
+
+void AmpApplet::setDirectFailureReason(const QString& reason)
+{
+    if (m_directFailureReason == reason) {
+        return;
+    }
+    m_directFailureReason = reason;
+    updateSourceIndicator();
+}
+
+bool AmpApplet::hasRadioRelay() const
+{
+    return m_radioConnected && m_model && !m_model->handle().isEmpty();
 }
 
 void AmpApplet::setMeff(const QString& meff)

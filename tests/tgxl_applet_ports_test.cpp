@@ -20,6 +20,7 @@
 #include "gui/TunerApplet.h"
 #include "models/TunerModel.h"
 #include "core/backends/TunerDelta.h"
+#include <QLabel>
 
 #include <QApplication>
 #include <QDeadlineTimer>
@@ -87,6 +88,15 @@ int main(int argc, char** argv)
     applet.resize(420, 360);
     applet.show();
     settle();
+
+    QLabel* sourceIndicator = applet.findChild<QLabel*>(QStringLiteral("tunerConnectionSource"));
+    CHECK(sourceIndicator != nullptr);
+    if (sourceIndicator) {
+        const QPoint at = sourceIndicator->mapTo(&applet, QPoint(0, 0));
+        const int bottomInset = applet.height() - at.y() - sourceIndicator->height();
+        CHECK(bottomInset >= 6);
+        CHECK(bottomInset < 20);
+    }
 
     const auto rows = applet.findChildren<AccessoryPortRow*>();
     CHECK(rows.size() == 2);

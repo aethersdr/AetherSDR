@@ -28,6 +28,8 @@ public:
     explicit TgxlConnection(QObject* parent = nullptr);
 
     bool isConnected() const { return m_connected; }
+    bool isConnecting() const { return !m_connected && m_socket.state() != QAbstractSocket::UnconnectedState; }
+    bool isAuthBlocked() const { return m_authBlocked; }
     QString version() const { return m_version; }
     QString peerAddress() const { return m_socket.peerAddress().toString(); }
     quint16 peerPort() const { return m_socket.peerPort(); }
@@ -36,6 +38,9 @@ public:
     void disconnect();
 
     void setAutoReconnect(bool on) { m_autoReconnect = on; }
+    void setAuthCode(const QString& code);
+    void setAuthCodeForAttempt(quint64 attempt, const QString& code,
+                               bool credentialStoreUnavailable = false);
 
     // Manual relay adjustment: relay 0=C1, 1=L, 2=C2; direction +1 or -1
     void adjustRelay(int relay, int direction);
@@ -73,6 +78,10 @@ signals:
     void connected();
     void disconnected();
     void connectionFailed(const QString& errorString);
+    void authCodeRequired(quint64 attempt);
+    void authCodeAccepted(const QString& code);
+    void enteredAuthCodeDiscarded();
+    void authBlockCleared();
     void stateUpdated(const QMap<QString, QString>& kvs);
     void statusUpdated(const QMap<QString, QString>& kvs);
     // Operator-facing alert from the tuner ("LOW RF POWER" when a tune is
@@ -90,7 +99,14 @@ private slots:
 
 private:
     void applyPollRateFor(const QMap<QString, QString>& kvs);
-    void processLine(const QString& line);
+    Q_INVOKABLE void processLine(const QString& line); // injected-frame test seam
+    Q_INVOKABLE void processBytes(const QByteArray& bytes); // injected transport test seam
+    Q_INVOKABLE void beginAttempt(); // same reset used before a real TCP connect
+    Q_INVOKABLE void beginAttemptAt(const QString& host, quint16 port);
+    Q_INVOKABLE void onAuthTimeout();
+    void finishHandshake();
+    void sendAuthentication();
+    void failAuthentication(const QString& reason, bool blockReconnect = true);
 
     QTcpSocket m_socket;
     QTimer     m_pollTimer;       // interval follows m_transmitting
@@ -109,6 +125,16 @@ private:
     quint32    m_seq{0};
     bool       m_connected{false};
     bool       m_gotVersion{false};
+    bool       m_authPending{false};
+    bool       m_waitingForAuthCode{false};
+    bool       m_authBlocked{false};
+    int        m_authTimeouts{0};
+    quint64    m_authAttempt{0};
+    QTimer     m_authTimer;
+    QString    m_authCode;
+    bool       m_userAuthCode{false};
+    QString    m_userAuthEndpoint;
+    bool       m_authCloseReported{false};
     bool       m_autoReconnect{false};
     bool       m_deliberateDisconnect{false};
     QString    m_version;

@@ -19,6 +19,7 @@
 
 #include "MainWindow.h"
 #include "models/CwDecodeSettings.h"
+#include "PeripheralAuthStore.h"
 #include "core/backends/AutoRfGainControl.h"
 #include "core/ClientDisplaySettings.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
@@ -6436,11 +6437,19 @@ void MainWindow::wireMeters()
         updateStatusBarMinimumWidth();
         // Auto-connect/disconnect direct TGXL connection for manual relay control (#469)
         if (present) {
-            QString ip = m_radioModel.tunerModel().tgxlIp();
-            if (!ip.isEmpty() && !m_tgxlConn.isConnected()) {
-                m_tgxlConn.connectToTgxl(ip);
+            const AppSettings& settings = AppSettings::instance();
+            QString ip = settings.value("TGXL_ManualIp", "").toString().trimmed();
+            const quint16 port = ip.isEmpty() ? 9010
+                : static_cast<quint16>(settings.value("TGXL_ManualPort", "9010").toInt());
+            if (ip.isEmpty()) {
+                ip = m_radioModel.tunerModel().tgxlIp();
             }
-        } else {
+            if (!ip.isEmpty() && !m_tgxlConn.isConnected()) {
+                if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
+                    m_tgxlConn.connectToTgxl(ip, port);
+                }
+            }
+        } else if (AppSettings::instance().value("TGXL_ManualIp", "").toString().trimmed().isEmpty()) {
             m_tgxlConn.disconnect();
         }
     });
@@ -6458,12 +6467,108 @@ void MainWindow::wireMeters()
 
     // Wire TgxlConnection to TunerModel
     m_radioModel.tunerModel().setDirectConnection(&m_tgxlConn);
+    // Ordinary peripherals connect immediately. An AUTH greeting alone asks
+    // the OS vault; the attempt token discards replies to an abandoned socket.
+    connect(&m_tgxlConn, &TgxlConnection::authCodeRequired, this,
+            [this](quint64 attempt) {
+        PeripheralAuthStore::load(PeripheralAuthStore::Device::Tgxl,
+            PeripheralAuthStore::endpoint(m_tgxlConn.peerAddress(), m_tgxlConn.peerPort()), this,
+            [this, attempt](const PeripheralAuthStore::LoadResult& result) {
+                m_tgxlConn.setAuthCodeForAttempt(attempt, result.code,
+                    result.status == PeripheralAuthStore::LoadStatus::Unavailable);
+            });
+    });
+    connect(&m_pgxlConn, &PgxlConnection::authCodeRequired, this,
+            [this](quint64 attempt) {
+        PeripheralAuthStore::load(PeripheralAuthStore::Device::Pgxl,
+            PeripheralAuthStore::endpoint(m_pgxlConn.peerAddress(), m_pgxlConn.peerPort()), this,
+            [this, attempt](const PeripheralAuthStore::LoadResult& result) {
+                m_pgxlConn.setAuthCodeForAttempt(attempt, result.code,
+                    result.status == PeripheralAuthStore::LoadStatus::Unavailable);
+            });
+    });
+    connect(&m_antennaGenius, &AntennaGeniusModel::authCodeRequired, this,
+            [this](quint64 attempt) {
+        PeripheralAuthStore::load(PeripheralAuthStore::Device::AntennaGenius,
+            PeripheralAuthStore::endpoint(m_antennaGenius.peerAddress(), m_antennaGenius.peerPort()), this,
+            [this, attempt](const PeripheralAuthStore::LoadResult& result) {
+                m_antennaGenius.setAuthCodeForAttempt(attempt, result.code,
+                    result.status == PeripheralAuthStore::LoadStatus::Unavailable);
+            });
+    });
+    // Persist a newly entered code only after an AUTH reply accepts it.
+    // A rejected typo must not replace a previously working keychain entry.
+    const auto saveAcceptedCode = [this](PeripheralAuthStore::Device device,
+                                         const QString& endpoint, const QString& code) {
+        PeripheralAuthStore::save(device, endpoint, code, this, [this](bool ok) {
+            if (!ok && PeripheralAuthStore::persistentStoreAvailable()) {
+                statusBar()->showMessage(
+                    tr("Authorization code could not be saved; it works for this session only."),
+                    15000);
+            }
+        });
+    };
+    connect(&m_tgxlConn, &TgxlConnection::authCodeAccepted, this,
+            [this, saveAcceptedCode](const QString& code) {
+        saveAcceptedCode(PeripheralAuthStore::Device::Tgxl,
+            PeripheralAuthStore::endpoint(m_tgxlConn.peerAddress(), m_tgxlConn.peerPort()), code);
+    });
+    connect(&m_pgxlConn, &PgxlConnection::authCodeAccepted, this,
+            [this, saveAcceptedCode](const QString& code) {
+        saveAcceptedCode(PeripheralAuthStore::Device::Pgxl,
+            PeripheralAuthStore::endpoint(m_pgxlConn.peerAddress(), m_pgxlConn.peerPort()), code);
+    });
+    connect(&m_antennaGenius, &AntennaGeniusModel::authCodeAccepted, this,
+            [this, saveAcceptedCode](const QString& code) {
+        saveAcceptedCode(PeripheralAuthStore::Device::AntennaGenius,
+            PeripheralAuthStore::endpoint(m_antennaGenius.peerAddress(), m_antennaGenius.peerPort()), code);
+    });
+    const auto showBlockedConnection = [this](const QString& device,
+                                               const QString& reason, bool blocked) {
+        if (blocked) {
+            statusBar()->showMessage(device + ": " + reason, 15000);
+        }
+    };
+    connect(&m_tgxlConn, &TgxlConnection::connectionFailed, this,
+            [this, showBlockedConnection](const QString& reason) {
+        const bool blocked = m_tgxlConn.isAuthBlocked();
+        if (blocked) {
+            m_appletPanel->tunerApplet()->setDirectFailureReason(reason);
+        }
+        showBlockedConnection("TGXL", reason, blocked);
+    });
+    connect(&m_pgxlConn, &PgxlConnection::connectionFailed, this,
+            [this, showBlockedConnection](const QString& reason) {
+        const bool blocked = m_pgxlConn.isAuthBlocked();
+        if (blocked) {
+            m_appletPanel->ampApplet()->setDirectFailureReason(reason);
+        }
+        showBlockedConnection("PGXL", reason, blocked);
+    });
+    connect(&m_antennaGenius, &AntennaGeniusModel::connectionError, this,
+            [this, showBlockedConnection](const QString& reason) {
+        const QString device = AntennaGeniusModel::isShackSwitch(m_antennaGenius.connectedDevice())
+            ? QStringLiteral("ShackSwitch") : QStringLiteral("Antenna Genius");
+        showBlockedConnection(device, reason, m_antennaGenius.isAuthBlocked());
+    });
+    connect(&m_tgxlConn, &TgxlConnection::authBlockCleared, this, [this]() {
+        m_appletPanel->tunerApplet()->setDirectFailureReason(QString());
+    });
+    connect(&m_pgxlConn, &PgxlConnection::authBlockCleared, this, [this]() {
+        m_appletPanel->ampApplet()->setDirectFailureReason(QString());
+    });
+    connect(&m_tgxlConn, &TgxlConnection::connected, this, [this]() {
+        m_appletPanel->tunerApplet()->setDirectFailureReason(QString());
+    });
     // Same for the PGXL: the per-port block, the state word and the alert
     // channel live in the model rather than being decoded into the applet
     // here, so the applet has one source for them whichever path they arrive
     // on.
     m_radioModel.amplifier().setDirectConnection(&m_pgxlConn);
     m_appletPanel->ampApplet()->setAmpModel(&m_radioModel.amplifier());
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            m_appletPanel->ampApplet(), &AmpApplet::setRadioConnected);
+    m_appletPanel->ampApplet()->setRadioConnected(m_radioModel.isConnected());
     // ACOM deliberately does NOT route through AmpModel — it has its own
     // dedicated AcomApplet talking straight to AcomConnection (commands and
     // telemetry alike), so AmpModel stays 100% PGXL/Flex-relay-only. Wiring
@@ -6474,16 +6579,35 @@ void MainWindow::wireMeters()
     // Also attempt connection when TGXL IP arrives (may come after presence)
     connect(&m_radioModel.tunerModel(), &TunerModel::stateChanged, this, [this]() {
         auto* tuner = &m_radioModel.tunerModel();
-        if (tuner->isPresent() && !tuner->tgxlIp().isEmpty() && !m_tgxlConn.isConnected()) {
-            m_tgxlConn.connectToTgxl(tuner->tgxlIp());
+        if (tuner->isPresent() && !m_tgxlConn.isConnected()) {
+            const AppSettings& settings = AppSettings::instance();
+            QString ip = settings.value("TGXL_ManualIp", "").toString().trimmed();
+            const quint16 port = ip.isEmpty() ? 9010
+                : static_cast<quint16>(settings.value("TGXL_ManualPort", "9010").toInt());
+            if (ip.isEmpty()) {
+                ip = tuner->tgxlIp();
+            }
+            if (!ip.isEmpty() && !m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
+                m_tgxlConn.connectToTgxl(ip, port);
+            }
         }
     });
 
     // Auto-connect to PGXL when detected
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, [this](bool present) {
-        if (present && !m_radioModel.amplifier().ip().isEmpty() && !m_pgxlConn.isConnected()) {
-            m_pgxlConn.connectToPgxl(m_radioModel.amplifier().ip());
-        } else if (!present) {
+        if (present && !m_pgxlConn.isConnected()) {
+            const AppSettings& settings = AppSettings::instance();
+            QString ip = settings.value("PGXL_ManualIp", "").toString().trimmed();
+            const quint16 port = ip.isEmpty() ? 9008
+                : static_cast<quint16>(settings.value("PGXL_ManualPort", "9008").toInt());
+            if (ip.isEmpty()) {
+                ip = m_radioModel.amplifier().ip();
+            }
+            if (!ip.isEmpty() && !m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()) {
+                m_pgxlConn.connectToPgxl(ip, port);
+            }
+        } else if (!present && AppSettings::instance().value("PGXL_ManualIp", "")
+                                      .toString().trimmed().isEmpty()) {
             m_pgxlConn.disconnect();
         }
     });

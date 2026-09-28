@@ -41,6 +41,8 @@
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
 #include "models/AntennaGeniusModel.h"
+#include "PeripheralAuthStore.h"
+#include "PeripheralAuthConnectFlow.h"
 
 #include <QCloseEvent>
 #include <QTabWidget>
@@ -8736,7 +8738,10 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     addHeader(1, "IP Address");
     addHeader(2, "Port");
     addHeader(3, "");
-    addHeader(4, "Status");
+    addHeader(4, "Authorization code");
+    addHeader(5, "");
+    addHeader(6, "");
+    addHeader(7, "Status");
 
     auto& settings = AppSettings::instance();
 
@@ -8786,10 +8791,10 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
         // Status label
         auto* statusLbl = new QLabel(isConnectedFn() ? "Connected" : "Not connected");
-        statusLbl->setStyleSheet(isConnectedFn()
-            ? "QLabel { color: #00e060; font-size: 11px; }"
-            : "QLabel { color: #8aa8c0; font-size: 11px; }");
-        grid->addWidget(statusLbl, row, 4);
+        ThemeManager::instance().applyStyleSheet(statusLbl, isConnectedFn()
+            ? "QLabel { color: {{color.accent.success}}; font-size: 11px; }"
+            : "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        grid->addWidget(statusLbl, row, 7);
 
         // Connect/Disconnect button
         auto* btn = new QPushButton(isConnectedFn() ? "Disconnect" : "Connect");
@@ -8798,6 +8803,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
         connect(btn, &QPushButton::clicked, this,
                 [=, &settings]() {
+            statusLbl->setProperty("credentialError", false);
+            statusLbl->setProperty("discardedAuthCode", false);
             QString ip = ipEdit->text().trimmed();
             if (isConnectedFn()) {
                 // If the user cleared the IP field before clicking, wipe
@@ -8830,6 +8837,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 settings.setValue(ipKey, ip);
                 settings.setValue(portKey, QString::number(port));
                 settings.save();
+                statusLbl->setText("Connecting...");
                 connectFn(ip, static_cast<quint16>(port));
             }
         });
@@ -8838,10 +8846,48 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         auto updateState = [btn, statusLbl, isConnectedFn]() {
             bool conn = isConnectedFn();
             btn->setText(conn ? "Disconnect" : "Connect");
-            statusLbl->setText(conn ? "Connected" : "Not connected");
-            statusLbl->setStyleSheet(conn
-                ? "QLabel { color: #00e060; font-size: 11px; }"
-                : "QLabel { color: #8aa8c0; font-size: 11px; }");
+            if (conn) {
+                // A recovered connection retires any error from its prior
+                // attempt; otherwise a later disconnect can leave "Connected"
+                // frozen beside a Connect button.
+                statusLbl->setProperty("credentialError", false);
+            } else {
+                statusLbl->setProperty("credentialNote", QString());
+            }
+            if (!conn && (statusLbl->property("credentialError").toBool()
+                          || statusLbl->text().startsWith("Error:"))) {
+                return;
+            }
+            QString state = conn ? QStringLiteral("Connected")
+                                 : QStringLiteral("Not connected");
+            const QString note = statusLbl->property("credentialNote").toString();
+            if (conn && statusLbl->property("pendingAuthCode").toBool()) {
+                statusLbl->setProperty("pendingAuthCode", false);
+                statusLbl->setProperty("discardedAuthCode", false);
+                state += RadioSetupDialog::tr(
+                    " — device did not request authentication; code not saved");
+                statusLbl->setText(state);
+                ThemeManager::instance().applyStyleSheet(statusLbl,
+                    "QLabel { color: {{color.accent.warning}}; font-size: 11px; }");
+                return;
+            }
+            const bool discardedCode = statusLbl->property("discardedAuthCode").toBool();
+            if (discardedCode) {
+                state += RadioSetupDialog::tr(
+                    " — entered code was discarded before verification; enter it again");
+            }
+            if (!note.isEmpty()) {
+                state += QStringLiteral(" — ") + note;
+            }
+            statusLbl->setText(state);
+            if (!note.isEmpty() || discardedCode) {
+                ThemeManager::instance().applyStyleSheet(statusLbl,
+                    "QLabel { color: {{color.accent.warning}}; font-size: 11px; }");
+            } else {
+                ThemeManager::instance().applyStyleSheet(statusLbl, conn
+                    ? "QLabel { color: {{color.accent.success}}; font-size: 11px; }"
+                    : "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+            }
         };
 
         // Save-on-close: if the user has cleared the IP field and closes
@@ -8867,16 +8913,127 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         return updateState;
     };
 
+    // A blank code field means "reuse the saved code". Never display a
+    // keychain value in the widget: a stored secret stays in the keychain.
+    auto addAuthField = [this, grid](int row, const QString& label,
+                                                PeripheralAuthStore::Device device,
+                                                std::function<void()> clearAuthFn,
+                                                std::function<void()> updateState) {
+        auto* edit = new QLineEdit;
+        edit->setEchoMode(QLineEdit::Password);
+        edit->setProperty("aetherSensitiveValue", true);
+        edit->setPlaceholderText(PeripheralAuthStore::persistentStoreAvailable()
+            ? tr("Blank reuses code for this address") : tr("Code for this session only"));
+        edit->setAccessibleName(label + tr(" authorization code"));
+        edit->setAccessibleDescription(PeripheralAuthStore::persistentStoreAvailable()
+            ? tr("Leave blank to use the code saved for this device address when authentication is requested. Enter the code again if its address changed. A new code replaces the saved one only after the device accepts it.")
+            : tr("Enter a code for this session when the device requests authentication."));
+        applyEditStyle(edit);
+        grid->addWidget(edit, row, 4);
+
+        auto* show = new QPushButton(tr("Show"));
+        ThemeManager::instance().applyStyleSheet(show,
+            "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; "
+            "font-weight: bold; padding: 3px 10px; }");
+        show->setAccessibleName(label + tr(" show authorization code"));
+        connect(show, &QPushButton::clicked, this, [edit, show, label]() {
+            const bool visible = edit->echoMode() == QLineEdit::Normal;
+            edit->setEchoMode(visible ? QLineEdit::Password : QLineEdit::Normal);
+            show->setText(visible ? RadioSetupDialog::tr("Show")
+                                  : RadioSetupDialog::tr("Hide"));
+            show->setAccessibleName(label + (visible
+                ? RadioSetupDialog::tr(" show authorization code")
+                : RadioSetupDialog::tr(" hide authorization code")));
+        });
+        grid->addWidget(show, row, 5);
+
+        auto* clear = new QPushButton(tr("Clear code"));
+        ThemeManager::instance().applyStyleSheet(clear,
+            "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; "
+            "font-weight: bold; padding: 3px 10px; }");
+        clear->setAccessibleName(label + tr(" clear saved authorization code"));
+        connect(clear, &QPushButton::clicked, this, [this, edit, device,
+                                                      clearAuthFn, updateState, grid, row]() {
+            edit->clear();
+            auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(row, 7)->widget());
+            status->setProperty("pendingAuthCode", false);
+            status->setProperty("discardedAuthCode", false);
+            PeripheralAuthStore::save(device, QString(), QString(), this, [status, updateState](bool ok) {
+                if (!ok) {
+                    status->setProperty("credentialError", true);
+                    status->setText(RadioSetupDialog::tr(
+                        "Error: saved code remains in keychain; retry Clear code"));
+                    ThemeManager::instance().applyStyleSheet(status,
+                        "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
+                } else {
+                    status->setProperty("credentialError", false);
+                    status->setProperty("pendingAuthCode", false);
+                    status->setProperty("discardedAuthCode", false);
+                    status->setProperty("credentialNote", QString());
+                    status->clear();
+                    updateState();
+                }
+            });
+            clearAuthFn();
+        });
+        grid->addWidget(clear, row, 6);
+    };
+
+    auto connectWithCode = [grid](int row,
+                                  const QString& host, quint16 port,
+                                  std::function<void(const QString&, quint16)> connectFn,
+                                  std::function<void(const QString&)> setCodeFn) {
+        auto* edit = qobject_cast<QLineEdit*>(grid->itemAtPosition(row, 4)->widget());
+        auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(row, 7)->widget());
+        connectPeripheralWithCode(edit, status, host, port, connectFn, setCodeFn);
+    };
+
+    // A typed code can be dropped by a deliberate disconnect or a target
+    // switch before the peer verifies it. Keep that separate from a LAN
+    // greeting that never challenged the code.
+    auto markDiscardedCode = [grid](int row) {
+        auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(row, 7)->widget());
+        if (!status->property("pendingAuthCode").toBool()) {
+            return false;
+        }
+        status->setProperty("pendingAuthCode", false);
+        status->setProperty("discardedAuthCode", true);
+        return true;
+    };
+
     // Row 1: Tuner Genius XL (TGXL)
     if (m_tgxl) {
         auto updateTgxl = buildRow(1, "Tuner Genius XL (TGXL)", "TGXL_ManualIp", "TGXL_ManualPort", 9010,
-            [this](const QString& ip, quint16 port) { m_tgxl->connectToTgxl(ip, port); },
+            [this, connectWithCode](const QString& ip, quint16 port) {
+                connectWithCode(1, ip, port,
+                    [this](const QString& host, quint16 p) {
+                        m_tgxl->connectToTgxl(host, p);
+                    }, [this](const QString& code) { m_tgxl->setAuthCode(code); });
+            },
             [this]() { m_tgxl->disconnect(); },
             [this]() { return m_tgxl->isConnected(); },
             [this]() { return m_tgxl->peerAddress(); },
             [this]() { return m_tgxl->peerPort(); });
         connect(m_tgxl, &TgxlConnection::connected, this, updateTgxl);
         connect(m_tgxl, &TgxlConnection::disconnected, this, updateTgxl);
+        connect(m_tgxl, &TgxlConnection::enteredAuthCodeDiscarded, this,
+                [markDiscardedCode, updateTgxl]() {
+            if (markDiscardedCode(1)) {
+                updateTgxl();
+            }
+        });
+        connect(m_tgxl, &TgxlConnection::authCodeAccepted, this,
+                [grid](const QString&) {
+            auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(1, 7)->widget());
+            status->setProperty("pendingAuthCode", false);
+            status->setProperty("discardedAuthCode", false);
+            status->setProperty("credentialNote", PeripheralAuthStore::persistentStoreAvailable()
+                ? QString() : RadioSetupDialog::tr("code for this session only"));
+        });
+        addAuthField(1, "TGXL", PeripheralAuthStore::Device::Tgxl,
+                     [this]() { m_tgxl->setAuthCode(QString()); }, updateTgxl);
         // Pre-fill radio-discovered TGXL IP when no saved IP and not connected (#1039)
         auto* tgxlIpEdit = qobject_cast<QLineEdit*>(grid->itemAtPosition(1, 1)->widget());
         if (tgxlIpEdit && tgxlIpEdit->text().isEmpty()) {
@@ -8886,12 +9043,17 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         }
         // Show TCP error reason in status column (#1039)
-        auto* tgxlStatus = qobject_cast<QLabel*>(grid->itemAtPosition(1, 4)->widget());
+        auto* tgxlStatus = qobject_cast<QLabel*>(grid->itemAtPosition(1, 7)->widget());
         if (tgxlStatus) {
             connect(m_tgxl, &TgxlConnection::connectionFailed, this,
-                    [tgxlStatus](const QString& err) {
-                tgxlStatus->setText("Error: " + err);
-                tgxlStatus->setStyleSheet("QLabel { color: #e06060; font-size: 11px; }");
+                    [this, tgxlStatus](const QString& err) {
+                tgxlStatus->setProperty("credentialError", true);
+                if (m_tgxl->isAuthBlocked()) {
+                    tgxlStatus->setProperty("pendingAuthCode", false);
+                }
+                tgxlStatus->setText(RadioSetupDialog::tr("Error: ") + err);
+                ThemeManager::instance().applyStyleSheet(tgxlStatus,
+                    "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
             });
         }
     }
@@ -8899,13 +9061,45 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     // Row 2: Power Genius XL (PGXL)
     if (m_pgxl) {
         auto updatePgxl = buildRow(2, "Power Genius XL (PGXL)", "PGXL_ManualIp", "PGXL_ManualPort", 9008,
-            [this](const QString& ip, quint16 port) { m_pgxl->connectToPgxl(ip, port); },
+            [this, connectWithCode](const QString& ip, quint16 port) {
+                connectWithCode(2, ip, port,
+                    [this](const QString& host, quint16 p) {
+                        m_pgxl->connectToPgxl(host, p);
+                    }, [this](const QString& code) { m_pgxl->setAuthCode(code); });
+            },
             [this]() { m_pgxl->disconnect(); },
             [this]() { return m_pgxl->isConnected(); },
             [this]() { return m_pgxl->peerAddress(); },
             [this]() { return m_pgxl->peerPort(); });
         connect(m_pgxl, &PgxlConnection::connected, this, updatePgxl);
         connect(m_pgxl, &PgxlConnection::disconnected, this, updatePgxl);
+        connect(m_pgxl, &PgxlConnection::enteredAuthCodeDiscarded, this,
+                [markDiscardedCode, updatePgxl]() {
+            if (markDiscardedCode(2)) {
+                updatePgxl();
+            }
+        });
+        connect(m_pgxl, &PgxlConnection::authCodeAccepted, this,
+                [grid](const QString&) {
+            auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(2, 7)->widget());
+            status->setProperty("pendingAuthCode", false);
+            status->setProperty("discardedAuthCode", false);
+            status->setProperty("credentialNote", PeripheralAuthStore::persistentStoreAvailable()
+                ? QString() : RadioSetupDialog::tr("code for this session only"));
+        });
+        addAuthField(2, "PGXL", PeripheralAuthStore::Device::Pgxl,
+                     [this]() { m_pgxl->setAuthCode(QString()); }, updatePgxl);
+        auto* pgxlStatus = qobject_cast<QLabel*>(grid->itemAtPosition(2, 7)->widget());
+        connect(m_pgxl, &PgxlConnection::connectionFailed, this,
+                [this, pgxlStatus](const QString& error) {
+                    pgxlStatus->setProperty("credentialError", true);
+                    if (m_pgxl->isAuthBlocked()) {
+                        pgxlStatus->setProperty("pendingAuthCode", false);
+                    }
+                    pgxlStatus->setText(RadioSetupDialog::tr("Error: ") + error);
+                    ThemeManager::instance().applyStyleSheet(pgxlStatus,
+                        "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
+                });
     }
 
     // Row 3: Antenna Genius (AG) — hide "Connected" when ShackSwitch is using the model
@@ -8915,8 +9109,11 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             return !AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice());
         };
         auto updateAg = buildRow(3, "Antenna Genius (AG)", "AG_ManualIp", "AG_ManualPort", 9007,
-            [this](const QString& ip, quint16 port) {
-                m_ag->connectToAddress(QHostAddress(ip), port);
+            [this, connectWithCode](const QString& ip, quint16 port) {
+                connectWithCode(3, ip, port,
+                    [this](const QString& host, quint16 p) {
+                        m_ag->connectToAddress(host, p);
+                    }, [this](const QString& code) { m_ag->setAuthCode(code); });
             },
             [this]() { m_ag->disconnectFromDevice(); },
             isRealAg,
@@ -8924,6 +9121,44 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             [this]() { return m_ag->peerPort(); });
         connect(m_ag, &AntennaGeniusModel::connected,    this, updateAg);
         connect(m_ag, &AntennaGeniusModel::disconnected, this, updateAg);
+        connect(m_ag, &AntennaGeniusModel::enteredAuthCodeDiscarded, this,
+                [this, markDiscardedCode, updateAg]() {
+            if (!AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice())
+                && markDiscardedCode(3)) {
+                updateAg();
+            }
+        });
+        connect(m_ag, &AntennaGeniusModel::authCodeAccepted, this,
+                [grid](const QString&) {
+            auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(3, 7)->widget());
+            status->setProperty("pendingAuthCode", false);
+            status->setProperty("discardedAuthCode", false);
+            status->setProperty("credentialNote", PeripheralAuthStore::persistentStoreAvailable()
+                ? QString() : RadioSetupDialog::tr("code for this session only"));
+        });
+        addAuthField(3, "Antenna Genius", PeripheralAuthStore::Device::AntennaGenius,
+                     [this]() {
+            // The shared model may currently be serving ShackSwitch. Clearing
+            // AG's saved code must not reset that other target's auth block.
+            if (!AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice())) {
+                m_ag->setAuthCode(QString());
+            }
+        }, updateAg);
+        connect(m_ag, &AntennaGeniusModel::connectionError, this,
+                [this, grid](const QString& error) {
+                    // AG and ShackSwitch share this model. m_device retains
+                    // the attempted device even when TCP never connected.
+                    const int row = AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice())
+                        ? 4 : 3;
+                    auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(row, 7)->widget());
+                    status->setProperty("credentialError", true);
+                    if (m_ag->isAuthBlocked()) {
+                        status->setProperty("pendingAuthCode", false);
+                    }
+                    status->setText(RadioSetupDialog::tr("Error: ") + error);
+                    ThemeManager::instance().applyStyleSheet(status,
+                        "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
+                });
     }
 
     // Row 4: ShackSwitch — Connect/Disconnect + status (same pattern as AG)
@@ -8941,6 +9176,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 info.port   = 9007;
                 info.serial = QStringLiteral("ShackSwitch-manual");
                 info.name   = QStringLiteral("ShackSwitch");
+                m_ag->resetAuthBudgetFor(info);
                 m_ag->connectToDevice(info);
             },
             [this]() { m_ag->disconnectFromDevice(); },
@@ -8954,7 +9190,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         auto* webBtn = new QPushButton("⚙ Web UI");
         webBtn->setStyleSheet(kBtnStyle);
         webBtn->setToolTip("Open ShackSwitch web interface");
-        grid->addWidget(webBtn, 4, 5);
+        grid->addWidget(webBtn, 4, 8);
         connect(webBtn, &QPushButton::clicked, this, [this]() {
             auto& s = AppSettings::instance();
             QString ip = s.value("SS_ManualIp", "").toString();
@@ -9108,7 +9344,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         statusLbl->setStyleSheet(m_acom->isConnected()
             ? "QLabel { color: #00e060; font-size: 11px; }"
             : "QLabel { color: #8aa8c0; font-size: 11px; }");
-        grid->addWidget(statusLbl, row, 4);
+        grid->addWidget(statusLbl, row, 7);
 
         auto* acomBtn = new QPushButton(m_acom->isConnected() ? "Disconnect" : "Connect");
         acomBtn->setStyleSheet(kBtnStyle);
@@ -9338,7 +9574,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         auto* statusLbl = new QLabel(m_spe->isConnected() ? "Connected" : "Not connected");
         speTheme.applyStyleSheet(statusLbl,
             m_spe->isConnected() ? kStatusOkStyle : kStatusIdleStyle);
-        grid->addWidget(statusLbl, row, 4);
+        grid->addWidget(statusLbl, row, 7);
 
         auto* speBtn = new QPushButton(m_spe->isConnected() ? "Disconnect" : "Connect");
         speTheme.applyStyleSheet(speBtn, kBtnStyle);
@@ -9444,7 +9680,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
             m_vkamp->isConnected() ? kVkampConnectedStyle : kVkampDisconnectedStyle);
         statusLbl->setAccessibleName(tr("VK3AMP connection status"));
-        grid->addWidget(statusLbl, row, 4);
+        grid->addWidget(statusLbl, row, 7);
 
         auto* vkampBtn = new QPushButton(m_vkamp->isConnected() ? "Disconnect" : "Connect");
         AetherSDR::ThemeManager::instance().applyStyleSheet(vkampBtn, kBtnStyle);
@@ -9775,7 +10011,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         const QString kErrStyle =
             "QLabel { color: {{color.accent.danger}}; font-size: 11px; }";
         tm.applyStyleSheet(statusLbl, m_lpMeter->isConnected() ? kOkStyle : kIdleStyle);
-        grid->addWidget(statusLbl, row, 4);
+        grid->addWidget(statusLbl, row, 7);
 
         auto* lpBtn = new QPushButton(m_lpMeter->isConnected() ? "Disconnect" : "Connect");
         lpBtn->setAccessibleName(tr("Connect or disconnect the LP-100A meter"));

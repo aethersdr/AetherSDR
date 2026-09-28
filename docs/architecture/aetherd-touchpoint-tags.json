@@ -479,6 +479,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/PeripheralAuthCodeValidation.h": {
+  "tag": "peripheral(4o3a)",
+  "note": "Stateless validation of authorization codes before constructing line-oriented TGXL, PGXL and Antenna Genius peripheral commands; no radio-family wire or UI state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/PgxlConnection.h": {
   "tag": "peripheral(4o3a)",
   "note": "Direct TCP client (port 9008) for the external 4O3A Power Genius XL (PGXL) amplifier — TELEMETRY-ONLY (statusUpdated: state/power/SWR/current/temp/…); it has no operate/standby command. PGXL operate/standby is relayed through the radio (RadioModel::setAmpOperate → 'amplifier set <handle> operate=…'), which is also the only path for remote/SmartLink. So this header is a genuine local direct-transport peripheral(4o3a); the amp's radio-relay control lives in RadioModel (radio-side) and should split into a generic AmpModel + Flex relay behind FlexBackend — see #4094.",
