@@ -211,6 +211,106 @@ struct RtlReceivePipelineTestAccess {
             && diagnostic.mixerRejectedBlocks == 0 && diagnostic.droppedPackets == 0
             && diagnostic.mixerConfigurationFailures == 0 && !pipeline.needsRepair();
     }
+    struct MixerEpochPrefixResult {
+        bool configured = false;
+        bool retainedTap = false;
+        bool retiredPrefix = false;
+        bool crossingTap = false;
+        bool crossingSpeaker = false;
+        bool currentTap = false;
+        bool currentSpeaker = false;
+        bool lateRejected = false;
+        bool emptyRejected = false;
+        bool nonFiniteRejected = false;
+        bool bounded = false;
+    };
+    // Reproduce the retained WFM block [383745, 384001) at the speaker
+    // epoch boundary observed when adding two narrow receivers. Inject only
+    // decoded PCM; publication, mixer validation and both queues remain real.
+    // The generated-RF integration separately exercises actual bank adoption.
+    static MixerEpochPrefixResult mixerEpochPrefix(RtlReceivePipeline& pipeline)
+    {
+        MixerEpochPrefixResult result;
+        pipeline.m_legacy = false; pipeline.m_token = {47, 4}; pipeline.m_captureEpoch = 18;
+        pipeline.m_capture = {47, 1, 100000000, 2400000, 1080000, 1080000};
+        pipeline.m_mixerOrigin = 384001;
+        RtlReceiverRegistry::ReceiverSpec spec;
+        spec.handle = {47, 93, 3}; spec.epoch = 11; spec.passband.stableId = 3;
+        spec.dsp.wbfmReceive.emplace(); // already-decoded stereo bypasses narrow-FM squelch
+        const std::array<RtlAudioMixer::Input, 1> inputs{{{3, 93, 11}}};
+        result.configured = pipeline.m_mixer.configure(47, 18, inputs, 384001);
+        if (!result.configured) { return result; }
+        const auto takeAudio = [&](int slot, std::uint64_t first,
+                                   std::span<const float> left, std::span<const float> right,
+                                   bool discontinuity) {
+            RtlReceivePipeline::Packet packet;
+            if (!pipeline.takePacket(packet) || packet.slot != slot || packet.firstSample != first
+                || packet.frames != left.size() || packet.token != RtlCaptureTransaction::Token{47, 4}
+                || packet.captureEpoch != 18 || packet.discontinuity != discontinuity
+                || (slot >= 0 && (packet.instance != 93 || packet.receiverEpoch != 11))) { return false; }
+            for (std::size_t i = 0; i < left.size(); ++i) {
+                if (packet.samples[2 * i] != left[i] || packet.samples[2 * i + 1] != right[i]) { return false; }
+            }
+            return true;
+        };
+        RtlReceivePipeline::Packet extra;
+        std::array<float, 256> left{}, right{};
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            left[i] = 0.125f + static_cast<float>(i) / 2048;
+            right[i] = -0.375f - static_cast<float>(i) / 2048;
+        }
+        pipeline.audioBlock(spec, 383745, left, right, false);
+        pipeline.m_mixer.drain(384129, pipeline);
+        result.retainedTap = takeAudio(3, 383745, left, right, false);
+        result.retiredPrefix = pipeline.m_mixer.rejectedBlocks() == 0
+            && pipeline.m_mixer.nextSample() == 384001 && !pipeline.takePacket(extra);
+
+        // The first half predates the new epoch; only the second half belongs
+        // in its first speaker quantum. The independent tap keeps both halves.
+        pipeline.audioBlock(spec, 383873, left, right, false);
+        pipeline.m_mixer.drain(384129, pipeline);
+        result.crossingTap = takeAudio(3, 383873, left, right, false);
+        result.crossingSpeaker = takeAudio(-1, 384001, std::span(left).subspan(128),
+            std::span(right).subspan(128), true) && !pipeline.takePacket(extra);
+
+        std::array<float, 128> currentLeft{}, currentRight{};
+        currentLeft.fill(0.5f); currentRight.fill(-0.25f);
+        pipeline.audioBlock(spec, 384129, currentLeft, currentRight, false);
+        pipeline.m_mixer.drain(384257, pipeline);
+        result.currentTap = takeAudio(3, 384129, currentLeft, currentRight, false);
+        result.currentSpeaker = takeAudio(-1, 384129, currentLeft, currentRight, false)
+            && pipeline.m_mixer.nextSample() == 384257 && !pipeline.takePacket(extra);
+
+        // This block belongs to the current epoch but its quantum has already
+        // played. Comparing against the moving mixer cursor would conceal it.
+        const std::uint64_t beforeLate = pipeline.m_mixer.rejectedBlocks();
+        pipeline.audioBlock(spec, 384129, currentLeft, currentRight, false);
+        pipeline.m_mixer.drain(384257, pipeline);
+        result.lateRejected = pipeline.m_mixer.rejectedBlocks() == beforeLate + 1
+            && takeAudio(3, 384129, currentLeft, currentRight, false) && !pipeline.takePacket(extra);
+
+        const std::uint64_t beforeEmpty = pipeline.m_mixer.rejectedBlocks();
+        pipeline.audioBlock(spec, 383745, {}, {}, false);
+        result.emptyRejected = pipeline.m_mixer.rejectedBlocks() == beforeEmpty + 1;
+        while (pipeline.takePacket(extra)) {} // malformed taps are outside this mixer regression
+
+        // Invalid samples must still fail validation even when all their
+        // coordinates predate the epoch. Check each stereo side separately.
+        result.nonFiniteRejected = true;
+        for (int side = 0; side < 2; ++side) {
+            const std::uint64_t beforeInvalid = pipeline.m_mixer.rejectedBlocks();
+            if (side == 0) { left[17] = std::numeric_limits<float>::quiet_NaN(); }
+            else { right[29] = std::numeric_limits<float>::infinity(); }
+            pipeline.audioBlock(spec, 383745, left, right, false);
+            result.nonFiniteRejected &= pipeline.m_mixer.rejectedBlocks() == beforeInvalid + 1;
+            left[17] = 0.125f + 17.0f / 2048;
+            while (pipeline.takePacket(extra)) {}
+        }
+        pipeline.m_mixer.drain(384257, pipeline);
+        result.bounded = pipeline.m_mixer.lateFrames() == 0 && pipeline.droppedPackets() == 0
+            && !pipeline.takePacket(extra) && !pipeline.needsRepair();
+        return result;
+    }
     static void exhaustEpoch(RtlReceivePipeline& pipeline)
     { pipeline.m_nextEpoch = std::numeric_limits<std::uint64_t>::max(); }
     static std::uint64_t requested(RtlReceivePipeline& pipeline)
@@ -460,6 +560,24 @@ static void measureParkAndResume()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    {
+        auto epoch = std::make_unique<Pipeline>();
+        const std::size_t allocationsBefore = callbackAllocations;
+        inCallback = true;
+        const auto result = AetherSDR::rtl::RtlReceivePipelineTestAccess::mixerEpochPrefix(*epoch);
+        inCallback = false;
+        check(result.configured, "retained-receiver fixture configures a new speaker epoch");
+        check(result.retainedTap, "retained pre-epoch PCM keeps its exact independent stereo tap and receiver identity");
+        check(result.retiredPrefix, "retained PCM ending at the speaker epoch origin causes no rejection or speaker output");
+        check(result.crossingTap, "epoch-crossing PCM keeps the complete independent stereo tap");
+        check(result.crossingSpeaker, "epoch-crossing PCM contributes only its exact stereo suffix to the discontinuous speaker quantum");
+        check(result.currentTap && result.currentSpeaker, "current-epoch stereo PCM continues both tap and speaker without an extra discontinuity");
+        check(result.lateRejected, "genuinely late current-epoch PCM remains a counted mixer rejection");
+        check(result.emptyRejected, "empty pre-epoch PCM remains a counted mixer rejection");
+        check(result.nonFiniteRejected, "nonfinite pre-epoch PCM on either stereo side remains a counted mixer rejection");
+        check(result.bounded, "epoch-prefix handling creates no missing frames, queue loss or receiver repair");
+        check(callbackAllocations == allocationsBefore, "epoch-prefix publication and mixer validation allocate no callback memory");
+    }
     {
         auto queued = std::make_unique<Pipeline>();
         inCallback = true;

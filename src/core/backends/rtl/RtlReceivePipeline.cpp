@@ -364,6 +364,18 @@ void RtlReceivePipeline::audioBlockWithStatus(const RtlReceiverRegistry::Receive
         packet.samples[2 * i] = gatedLeft[i]; packet.samples[2 * i + 1] = gatedRight[i];
     }
     enqueue(packet); // independent tap, before gain/mute/pan
+    // A retained receiver can finish buffered PCM from before a new speaker
+    // epoch. Keep its tap continuous, but do not offer that retired prefix to
+    // the new mix. Use the fixed origin, never the advancing playback cursor:
+    // genuinely late current-epoch blocks must still fail mixer validation.
+    if (m_mixerOrigin && first < *m_mixerOrigin && !left.empty()
+        && left.size() <= *m_mixerOrigin - first
+        && std::ranges::all_of(std::span(gatedLeft).first(left.size()),
+            [](float value) { return std::isfinite(value); })
+        && std::ranges::all_of(std::span(gatedRight).first(right.size()),
+            [](float value) { return std::isfinite(value); })) {
+        return;
+    }
     m_mixer.push(packet.slot, packet.instance, packet.receiverEpoch, first,
         std::span(gatedLeft).first(left.size()), std::span(gatedRight).first(right.size()));
 }
