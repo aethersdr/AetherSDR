@@ -1943,11 +1943,13 @@ MainWindow::MainWindow(QWidget* parent)
             m_radioModel.maxSlices(), m_radioModel.slices()));
         m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
     });
-    // ...and on every later edge that can move the count (#5775). A
+    // ...and on every later edge that can move the count (#5775, #5776). A
     // backend that declares its own capacity may only know it once the link is
     // up, and may revise it mid-session; that arrives on capabilitiesChanged,
-    // which the edge above never sees. Disconnect (count 0) is left to
-    // onConnectionStateChanged, which clears the tabs itself.
+    // which the edge above never sees. The CAT applet's VFO letters take the
+    // same number (catPortTargetCount), so both are refreshed together.
+    // Disconnect (count 0) is left to onConnectionStateChanged, which clears
+    // the tabs and trims the CAT letters itself.
     auto* receiverSlots = new ReceiverSlotCount(&m_radioModel, this);
     connect(receiverSlots, &ReceiverSlotCount::countChanged, this, [this](int count) {
         if (count <= 0) {
@@ -1955,6 +1957,7 @@ MainWindow::MainWindow(QWidget* parent)
         }
         m_appletPanel->setMaxSlices(count);
         m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+        applyCatPortCount();
     });
 
     // Radio info can arrive after onConnectionStateChanged, so refresh the labels.
@@ -6346,7 +6349,11 @@ void MainWindow::buildUI()
 int MainWindow::catPortTargetCount() const
 {
     if (!m_radioModel.isConnected()) return 1;
-    return RadioModel::maxSlicesForModel(m_radioModel.model());
+    // The backend-aware capacity, the same number the RX applet's slice tabs
+    // take — not RadioModel::maxSlicesForModel(), a Flex model table with no
+    // row for any other family, whose 2-slice default offered only A and B on
+    // a four-receiver Hermes-Lite 2 (#5776).
+    return ReceiverSlotCount::forCeiling(m_radioModel.maxSlices(), m_radioModel.slices());
 }
 
 void MainWindow::applyCatPortCount()
