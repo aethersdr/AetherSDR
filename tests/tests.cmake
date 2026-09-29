@@ -379,7 +379,8 @@ add_test(NAME atu_seam_gate_test COMMAND atu_seam_gate_test)
 
 # #5637 §1: a TransmitModel verb the backend already applied through the seam
 # (rfpower, miclevel, TX passband, cw pitch) raises no commandDropped on a
-# backend with no command plane, while an unrouted verb still does. Injected
+# backend with no command plane, while an unrouted verb, and a cw pitch this
+# backend was never handed, still does. Injected
 # backend records the seam calls; no sockets, no radio.
 add_executable(transmit_seam_drop_notice_test tests/transmit_seam_drop_notice_test.cpp)
 target_include_directories(transmit_seam_drop_notice_test PRIVATE src tests)

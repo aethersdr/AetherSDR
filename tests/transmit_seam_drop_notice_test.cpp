@@ -155,6 +155,55 @@ static void cwPitchReachesSeamWithoutDropNotice()
           "cw pitch: no commandDropped for a pitch the backend applied");
 }
 
+// #6015 review: TransmitModel::setCwPitch emits `cw pitch N` on every call but
+// cwPitchChanged only on a change, and the host-modulating seam connection is
+// the change-gated one. A set that repeats the model's value therefore hands
+// the backend nothing. Withholding the notice is right only if THIS backend
+// was already handed that value; if it never was, the text is a real drop.
+static void cwPitchNeverHandedToBackendKeepsDropNotice()
+{
+    Fixture f(hostModulatingTransmitter());
+    const int pitch = f.radio.transmitModel().cwPitch();  // the model default
+    f.radio.transmitModel().setCwPitch(pitch);
+    check(f.backend->cwPitches.isEmpty(),
+          "premise: a repeat of the model's pitch reaches no seam setter");
+    check(f.droppedStartingWith(QStringLiteral("cw pitch ")),
+          "cw pitch never handed to this backend: the drop notice stands");
+}
+
+// ...and the same after a backend swap: the old backend held the value, the
+// new one has never been handed anything.
+static void cwPitchHandedToPreviousBackendKeepsDropNotice()
+{
+    Fixture f(hostModulatingTransmitter());
+    f.radio.transmitModel().setCwPitch(700);
+    auto fresh = std::make_unique<RecordingBackend>();
+    RecordingBackend* second = fresh.get();
+    second->caps = hostModulatingTransmitter();
+    f.radio.setBackendForTest(std::move(fresh), second->caps.family);
+    f.backend = second;
+    f.dropped.clear();
+    f.radio.transmitModel().setCwPitch(700);
+    check(second->cwPitches.isEmpty(),
+          "premise: the repeat reaches no setter on the new backend");
+    check(f.droppedStartingWith(QStringLiteral("cw pitch ")),
+          "pitch handed only to the previous backend: the drop notice stands");
+}
+
+// The control for the two above: a repeat of a value this backend WAS handed
+// (an operator tabbing out of an unchanged pitch field) stays quiet — the
+// backend holds exactly what the text carries.
+static void cwPitchRepeatOfHandedValueStaysQuiet()
+{
+    Fixture f(hostModulatingTransmitter());
+    f.radio.transmitModel().setCwPitch(700);
+    f.radio.transmitModel().setCwPitch(700);
+    check(f.backend->cwPitches == QList<int>{700},
+          "cw pitch: the backend was handed 700 once");
+    check(!f.droppedStartingWith(QStringLiteral("cw pitch ")),
+          "cw pitch: a repeat of the value the backend holds raises no notice");
+}
+
 // The negative control that keeps the first four honest: the same backend,
 // the same model, a verb nothing behind the seam implements. If the fix had
 // gated the whole commandReady forward, this is what would go quiet.
@@ -201,6 +250,9 @@ int main(int argc, char** argv)
     micLevelReachesSeamWithoutDropNotice();
     txFilterReachesSeamWithoutDropNotice();
     cwPitchReachesSeamWithoutDropNotice();
+    cwPitchNeverHandedToBackendKeepsDropNotice();
+    cwPitchHandedToPreviousBackendKeepsDropNotice();
+    cwPitchRepeatOfHandedValueStaysQuiet();
     unroutedVerbStillRaisesDropNotice();
     undeclaredCapabilityKeepsDropNotice();
     std::printf("%d failure(s)\n", failures);

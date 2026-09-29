@@ -2032,6 +2032,7 @@ void RadioModel::teardownBackend()
     // switch — the values behind them publish nothing once nothing vouches.
     m_transmitModel.resetPowerProvenance();
     m_backend.reset();
+    m_cwPitchHandedToBackend = -1;  // the next backend has been handed nothing
     acknowledgeTxTransportTeardown(m_txOperation);
     m_connection = nullptr;
     m_panStream = nullptr;
@@ -2202,9 +2203,11 @@ void RadioModel::evaluateTxFilterAudioLoss(float scFilt1, float scFilt2)
 
 namespace {
 // Whether TransmitModel's Flex text `command` duplicates a typed intent that
-// the constructor's seam connections below have ALREADY handed to a backend
-// declaring `caps` — i.e. whether, on a backend with no command plane, dropping
-// the text loses nothing (#5637).
+// the constructor's seam connections below hand to a backend declaring `caps`
+// — i.e. whether, on a backend with no command plane, dropping the text loses
+// nothing (#5637). TransmitModel emits the text and the typed intent from the
+// same setter, synchronously, so "handed" includes the intent that follows the
+// text in that one call (rfpower's comes after it).
 //
 // Each verb names the sibling connection that carries it, and is honoured only
 // under the capability that says the backend's setter does something. The
@@ -2220,8 +2223,14 @@ namespace {
 //                               txFilterCommandIssued -> setTxFilter()
 //                               hasTxFilterControls
 //   cw pitch N                  cwPitchChanged / cwPitchCommandIssued -> setCwPitch()
-//                               hostModulates || hasRadioSideCwKeyer (the two
-//                               gates those connections apply)
+//                               N == cwPitchHandedToBackend: the value THIS
+//                               backend was last handed. Not a capability,
+//                               because the host-modulating connection is
+//                               change-gated: a set that repeats the model's
+//                               value hands nothing (#6015 review). Quiet when
+//                               the backend already holds N; loud when it was
+//                               never handed it (before any push, or after a
+//                               backend swap).
 //
 // NOT listed, deliberately: vox_*, mon/mon_gain_sb, speech_processor_*,
 // `cw wpm`, `cw break_in`. They have seam connections too, but the Hermes-Lite
@@ -2231,11 +2240,14 @@ namespace {
 // A `transmit set` line qualifies only if EVERY key in it is routed, so text
 // that also carries an unrouted key still reaches the loud drop.
 bool transmitCommandDeliveredThroughSeam(const QString& command,
-                                         const RadioCapabilities& caps)
+                                         const RadioCapabilities& caps,
+                                         int cwPitchHandedToBackend)
 {
     static const QString kCwPitch = QStringLiteral("cw pitch ");
     if (command.startsWith(kCwPitch)) {
-        return caps.hostModulates || caps.hasRadioSideCwKeyer;
+        bool ok = false;
+        const int hz = command.mid(kCwPitch.size()).trimmed().toInt(&ok);
+        return ok && cwPitchHandedToBackend >= 0 && hz == cwPitchHandedToBackend;
     }
 
     static const QString kTransmitSet = QStringLiteral("transmit set ");
@@ -2472,13 +2484,17 @@ RadioModel::RadioModel(QObject* parent)
     // BFO on-radio.
     connect(&m_transmitModel, &TransmitModel::cwPitchChanged, this,
             [this](int hz) {
-        if (m_backend && backendCapabilities().hostModulates)
+        if (m_backend && backendCapabilities().hostModulates) {
             m_backend->setCwPitch(hz);
+            m_cwPitchHandedToBackend = hz;
+        }
     });
     connect(&m_transmitModel, &TransmitModel::cwPitchCommandIssued, this,
             [this](int hz) {
-        if (m_backend && backendCapabilities().hasRadioSideCwKeyer)
+        if (m_backend && backendCapabilities().hasRadioSideCwKeyer) {
             m_backend->setCwPitch(hz);
+            m_cwPitchHandedToBackend = hz;
+        }
     });
     connect(&m_transmitModel, &TransmitModel::cwSpeedCommandIssued, this,
             [this](int wpm) {
@@ -2513,8 +2529,10 @@ RadioModel::RadioModel(QObject* parent)
     // disagreement would be invisible the first time either one moves.
     connect(this, &RadioModel::connectionStateChanged, this,
             [this](bool connected) {
-        if (connected && m_backend && backendCapabilities().hostModulates)
+        if (connected && m_backend && backendCapabilities().hostModulates) {
             m_backend->setCwPitch(m_transmitModel.cwPitch());
+            m_cwPitchHandedToBackend = m_transmitModel.cwPitch();
+        }
     });
 
     // The speech processor to a backend that owns its own compressor.
@@ -2707,7 +2725,8 @@ RadioModel::RadioModel(QObject* parent)
         // through to sendCmd()'s loud drop, which is how the controls that
         // really do nothing on this radio are found (#5263).
         if (!hasCommandPlane() && m_backend
-            && transmitCommandDeliveredThroughSeam(trimmed, m_backend->capabilities())) {
+            && transmitCommandDeliveredThroughSeam(trimmed, m_backend->capabilities(),
+                                                   m_cwPitchHandedToBackend)) {
             qCDebug(lcProtocol).noquote()
                 << "RadioModel: no command plane; value already delivered through the seam:"
                 << cmd;
