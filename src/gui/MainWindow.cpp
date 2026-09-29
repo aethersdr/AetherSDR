@@ -1198,7 +1198,8 @@ MainWindow::MainWindow(QWidget* parent)
         // filter was dead on every edge here until now.  Stays installed
         // across frameless toggles — when the system frame is back on, the
         // platform owns resize and our filter no-ops.
-        FramelessResizer::install(this, 6, TitleBar::kHeight);
+        FramelessResizer::install(this, FramelessResizer::kDefaultMargin,
+                                  TitleBar::kHeight);
 
         // One-shot migration: collapse the legacy "CwDecodeOverlay" flat
         // key into the nested AppSettings["CwDecoder"] blob (#2417).  The
@@ -5734,7 +5735,22 @@ void MainWindow::buildUI()
     // [left items] → stretch → [STATION centered] → stretch → [right items]
     m_statusBarContainer = new QWidget(this);
     auto* hbox = new QHBoxLayout(m_statusBarContainer);
-    hbox->setContentsMargins(6, 0, 6, 0);
+    // Bottom inset keeps every click target in here clear of FramelessResizer's
+    // bottom edge-resize band (#4886).  The status bar is docked flush to the
+    // window's bottom edge and this layout previously had no bottom margin, so
+    // any child with a vertically-Preferred/Minimum policy — the gpsStack
+    // button and every plain QLabel click target — was stretched to within 2px
+    // of the window edge, i.e. 4px deep into the band.  The resizer's filter is
+    // on the window, and Qt runs application-installed filters before the
+    // receiver's own event(), so a press there was consumed as a resize and the
+    // control never saw it.  Insetting once at the container covers all ~20
+    // children and any added later; per-control maximumHeight() caps would
+    // drift.  Headroom: 46px status bar − 1px border-top − the style's own
+    // ~5px status-bar margins − 6px inset leaves 34px of content, and the
+    // tallest content is the two-row telemetry stacks at ~30px.  Measured
+    // offscreen (Qt 6.11): worst-case clearance from the window edge goes 2px →
+    // 8px, and the fixed 36x36 m_txIndicator is positioned, not clipped.
+    hbox->setContentsMargins(6, 0, 6, FramelessResizer::kDefaultMargin);
     hbox->setSpacing(6);
 
     auto addSep = [&]() -> QLabel* {

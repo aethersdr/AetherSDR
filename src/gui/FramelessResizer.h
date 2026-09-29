@@ -101,21 +101,19 @@ namespace AetherSDR {
 //     itself lists those controls among the things that worked correctly
 //     before this PR, so a live band there was a regression, not a
 //     pre-existing gap, and worth fixing here rather than deferring.
-//   - Bottom (QStatusBar, 46px, docked flush): *not* fixed here, tracked as
-//     #4886. First measured (an earlier round of this PR) as two examples —
-//     `gpsStatusButton` by ~4px, the "Cancel transmit" label by ~1px — which
-//     understated it: the status bar's inner container and ~20 direct
-//     children are laid out flush with each other, so essentially every
-//     clickable status control extends ~4px into the band the same way
-//     `gpsStatusButton` does; `Cancel transmit` is the outlier that mostly
-//     stops short, not a second representative example. #4886's own
-//     enumeration should be corrected to match before it's acted on.
-//     Deferred rather than fixed alongside the top edge because the fix is
-//     the same shape either way — cap each control's clickable rect short of
-//     the margin — but the bottom edge has an order of magnitude more
-//     controls to individually re-check, and none of them are the window's
-//     own min/max/close/menu controls a regression report would be filed
-//     against immediately.
+//   - Bottom (QStatusBar, 46px, docked flush): fixed in #4886 by insetting
+//     the status bar's inner container by kDefaultMargin at the bottom (see
+//     MainWindow.cpp), not by capping controls one at a time. First measured
+//     (an earlier round of PR #4829) as two examples — `gpsStatusButton` by
+//     ~4px, the "Cancel transmit" label by ~1px — which understated it: the
+//     container and its ~20 direct children are laid out flush with each
+//     other, so essentially every clickable status control extended ~4px
+//     into the band the same way `gpsStatusButton` did; `Cancel transmit`
+//     was the outlier that mostly stopped short, not a second representative
+//     example. That is exactly why the inset lives on the container: one
+//     inset covers every current child and every one added later, whereas a
+//     per-control maximumHeight() would have to be re-checked for each of
+//     the ~20 and would drift as controls are added.
 //
 // Known artifact of that manual path: dragging an edge that moves the window
 // origin (left or top) can make the opposite edge appear to shimmer under a
@@ -131,16 +129,24 @@ namespace AetherSDR {
 //
 // Usage:
 //   FramelessResizer::install(this);       // from a QWidget constructor
-//   FramelessResizer::install(win, 6);     // explicit margin
+//   FramelessResizer::install(win, 8);     // explicit margin
 class FramelessResizer : public QObject {
     Q_OBJECT
 public:
+    // Width (px) of the edge-resize band every adopter gets unless it passes
+    // its own `margin`. Named rather than a bare literal because adopters that
+    // dock a control flush to an edge must inset it by at least this much to
+    // stay out of the band (see MainWindow's status bar, #4886) — a hard-coded
+    // 6 on both sides could silently diverge from this default.
+    static constexpr int kDefaultMargin = 6;
+
     // `topMoveReserve`: height (px) of an edge-to-edge move handle (e.g. a title
     // bar) at the top of the window. The top strip is reserved for the window's
     // own move handling instead of the top-edge resize zone, so a title-bar grab
     // isn't stolen by the resizer (#4266). 0 (default) keeps the full top edge
     // resizable — the behavior for adopters that inset their title bar.
-    static void install(QWidget* window, int margin = 6, int topMoveReserve = 0);
+    static void install(QWidget* window, int margin = kDefaultMargin,
+                        int topMoveReserve = 0);
     ~FramelessResizer() override;
 
     // Pure logic pulled out of the private instance methods below so it's
