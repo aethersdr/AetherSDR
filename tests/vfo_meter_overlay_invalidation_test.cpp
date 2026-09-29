@@ -13,6 +13,18 @@
 
 using namespace AetherSDR;
 
+class PaintCountingVfo : public VfoWidget
+{
+public:
+    int paints = 0;
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        ++paints;
+        VfoWidget::paintEvent(event);
+    }
+};
+
 class VfoMeterOverlayInvalidationTest : public QObject
 {
     Q_OBJECT
@@ -97,6 +109,40 @@ private slots:
         meter->grab();
         QVERIFY(!invalidations.isEmpty());
         QVERIFY(meter->extremeLabels().front().secondary.contains(QStringLiteral("dBm")));
+    }
+
+    void inactiveStandardMeterDoesNotAnimateParent()
+    {
+        PaintCountingVfo vfo;
+        vfo.show();
+        SmartMtrWidget* meter = vfo.findChild<SmartMtrWidget*>();
+        QVERIFY(meter);
+        // Isolate parent repaints from the visible child's legitimate animation.
+        meter->hide();
+        vfo.setRelativeSignalLevel(-10);
+        QTest::qWait(300);
+        vfo.setRelativeSignalLevel(-110);
+        QTest::qWait(60);
+        vfo.paints = 0;
+        QTest::qWait(200);
+        QCOMPARE(vfo.paints, 0);
+
+        MeterViewController::instance().setSmartMtr(false);
+        QTest::qWait(60);
+        vfo.setRelativeSignalLevel(-10);
+        QTest::qWait(60);
+        vfo.paints = 0;
+        vfo.setRelativeSignalLevel(-110);
+        QTest::qWait(200);
+        QVERIFY(vfo.paints > 1); // the selected standard meter still animates
+
+        // Switching away must stop an already-running standard animation too.
+        MeterViewController::instance().setSmartMtr(true);
+        meter->hide();
+        QTest::qWait(60);
+        vfo.paints = 0;
+        QTest::qWait(200);
+        QCOMPARE(vfo.paints, 0);
     }
 };
 

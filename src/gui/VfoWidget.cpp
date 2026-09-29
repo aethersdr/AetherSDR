@@ -3982,6 +3982,7 @@ QRect VfoWidget::meterBarRect() const
 void VfoWidget::applyMeterView(bool smartMtr)
 {
     m_smartMtr = smartMtr;
+    updateSignalMeterTarget();
     if (m_meterStack) {
         m_meterStack->setCurrentIndex(smartMtr ? 1 : 0);
     }
@@ -4155,7 +4156,6 @@ void VfoWidget::setRelativeSignalLevel(std::optional<float> dbfs)
     m_dbmLabel->setAccessibleDescription(tr("Peak FFT bin in the receive passband, uncalibrated; not dBm or audio level"));
     updateSignalMeterTarget();
     pushSmartMtrInput();
-    update();
 }
 
 // SmartMTR feed: choose signal vs mic by TX state and push the input. The
@@ -4524,6 +4524,14 @@ void VfoWidget::updateSignalMeterTarget()
         m_targetSignalMeterFraction = 0.0f;
     } else {
         m_targetSignalMeterFraction = signalDbmToMeterFraction(m_signalDbm);
+    }
+
+    // Only the selected meter needs animation. Keep the standard bar seeded
+    // for switching back, without repainting the whole flag behind SmartMTR.
+    if (m_smartMtr) {
+        m_signalMeterAnimation.stop();
+        m_signalMeterFraction = m_targetSignalMeterFraction;
+        return;
     }
 
     if (qAbs(m_targetSignalMeterFraction - m_signalMeterFraction) <= kSignalMeterSnapEpsilon) {
