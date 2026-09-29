@@ -2622,8 +2622,16 @@ void ConnectionPanel::onManualIpChanged(const QString& ip)
 {
     const QString trimmed = ip.trimmed();
     m_manualConnectPending = false;
-    if (trimmed != m_manualProfileIp)
+    if (trimmed != m_manualProfileIp) {
+        // Typing an address must not discard a source path the operator has
+        // already selected. The saved profile is useful for startup and for
+        // choosing a recent address, but it must not silently turn an
+        // explicit interface back into Auto during an interactive edit.
+        const RadioBindSettings selected = currentManualBindSettings();
         applySavedSourceSelection(trimmed, /*restoreFamily=*/false);
+        if (selected.mode == RadioBindMode::Explicit)
+            refreshManualSourceOptions(&selected);
+    }
     setManualMessage(QString());
     updateActionState();
 }
@@ -2685,10 +2693,11 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
     // belongs to the saved address.
     if (m_manualIpEdit->text().trimmed() != trimmedIp) {
         m_manualIpEdit->setText(trimmedIp);
-        applySavedSourceSelection(trimmedIp, restoreSavedFamily);
-    } else if (m_manualProfileIp != trimmedIp) {
-        applySavedSourceSelection(trimmedIp, restoreSavedFamily);
+        if (restoreSavedFamily)
+            applySavedSourceSelection(trimmedIp, /*restoreFamily=*/true);
     } else if (restoreSavedFamily) {
+        // Interactive connects keep the currently selected source path. Only
+        // startup and an explicit recent-address selection restore profiles.
         applySavedSourceSelection(trimmedIp, /*restoreFamily=*/true);
     }
 
