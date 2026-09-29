@@ -796,19 +796,19 @@ private slots:
         SliceDelta accepted;
         accepted.wfmAudioMode = WfmAudioMode::HdStereo;
         emit source->sliceChanged(3, accepted);
-        QCOMPARE(cycle->text(), QStringLiteral("HD Stereo"));
-        QCOMPARE(status->text(), QStringLiteral("HD acquiring"));
+        QCOMPARE(cycle->text(), QStringLiteral("Digital"));
+        QCOMPARE(status->text(), QStringLiteral("Digital acquiring"));
         QVERIFY(!program->isEnabled());
         accepted = {};
         accepted.hdFmReception = measuredHd();
         emit source->sliceChanged(3, accepted);
-        QCOMPARE(status->text(), QStringLiteral("HD audio valid"));
+        QCOMPARE(status->text(), QStringLiteral("Digital audio valid"));
         const QString healthyStyle = status->styleSheet();
         QCOMPARE(program->count(), 2); // data-only services never masquerade as audio
         QCOMPARE(program->currentData().toInt(), 0);
         QVERIFY(program->isEnabled());
         QCOMPARE(metadata->textFormat(), Qt::PlainText);
-        QVERIFY(metadata->text().contains(QStringLiteral("HD Radio · HD1")));
+        QVERIFY(metadata->text().contains(QStringLiteral("Digital · P1")));
         QVERIFY(metadata->text().contains(QStringLiteral("<plain text>")));
         const QString text = metadata->text();
         WfmPresentationSettings::instance().setBroadcastOverlayEnabled(false);
@@ -827,10 +827,10 @@ private slots:
         emit source->sliceChanged(3, accepted);
         QCOMPARE(program->currentData().toInt(), 1);
         QCOMPARE(status->styleSheet(), healthyStyle);
-        QVERIFY(metadata->text().contains(QStringLiteral("HD2")));
+        QVERIFY(metadata->text().contains(QStringLiteral("P2")));
         cycle->click();
         QCOMPARE(source->audioModeRequests.last().second, WfmAudioMode::Mono);
-        QCOMPARE(cycle->text(), QStringLiteral("HD Stereo"));
+        QCOMPARE(cycle->text(), QStringLiteral("Digital"));
         accepted = {}; accepted.wfmAudioMode = WfmAudioMode::Mono; accepted.wfmForceMono = true;
         emit source->sliceChanged(3, accepted);
         QCOMPARE(cycle->text(), QStringLiteral("Mono"));
@@ -865,12 +865,12 @@ private slots:
         auto* accessible = QAccessible::queryAccessibleInterface(scope);
         QVERIFY(accessible);
         QVERIFY(accessible->text(QAccessible::Value).contains(QStringLiteral("16.5 dB")));
-        QVERIFY(accessible->text(QAccessible::Value).contains(QStringLiteral("HD audio valid")));
+        QVERIFY(accessible->text(QAccessible::Value).contains(QStringLiteral("Digital audio valid")));
         const QString healthyStyle = status->styleSheet();
         const QString fixtureDirectory = qEnvironmentVariable("AETHER_WFM_APPLET_SCREENSHOT_DIR");
         if (!fixtureDirectory.isEmpty()) {
             QVERIFY(QDir().mkpath(fixtureDirectory));
-            auto* fixtureLabel = new QLabel(QStringLiteral("TEST FIXTURE · synthetic HD telemetry"), &applet);
+            auto* fixtureLabel = new QLabel(QStringLiteral("TEST FIXTURE · synthetic Digital telemetry"), &applet);
             fixtureLabel->setWordWrap(true);
             qobject_cast<QVBoxLayout*>(applet.layout())->insertWidget(0, fixtureLabel);
             auto* diagnostics = applet.findChild<QCheckBox*>(QStringLiteral("wfmShowDiagnostics"));
@@ -893,7 +893,7 @@ private slots:
         accepted.hdFmReception = next;
         emit source->sliceChanged(3, accepted);
         QCOMPARE(scope->sampleCount(), 2);
-        QCOMPARE(status->text(), QStringLiteral("HD synced · awaiting audio"));
+        QCOMPARE(status->text(), QStringLiteral("Digital synced · awaiting audio"));
         QVERIFY(status->styleSheet() != healthyStyle);
         next.audioValid = true;
         next.syncLossCount = 1;

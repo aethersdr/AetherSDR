@@ -362,11 +362,11 @@ std::unique_ptr<Registry::Receiver> prepareHdFmReceiver(const Registry::Receiver
     std::unique_ptr<Nrsc5FmDecoder::Pipe> pipe, std::optional<WdspChannel::Reservation> reservation)
 {
     if (!spec.hdFm || spec.hdFm->program < 0 || spec.hdFm->program >= 8) {
-        error = "Invalid HD FM program"; return nullptr;
+        error = "Invalid digital program"; return nullptr;
     }
     auto receiver = std::make_unique<HdFmReceiver>(spec, std::move(pipe), std::move(reservation));
     if (!receiver->valid()) {
-        error = "HD FM decoder unavailable, RF footprint invalid, or two resident workers already reserved";
+        error = "Digital decoder unavailable, RF footprint invalid, or two resident workers already reserved";
         return nullptr;
     }
     return receiver;

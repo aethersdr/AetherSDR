@@ -22,7 +22,7 @@ struct WfmBroadcastOverlayRecord {
     QString artist;
     QString displayText() const
     {
-        QString text = QStringLiteral("HD Radio · HD%1").arg(program + 1);
+        QString text = QStringLiteral("Digital · P%1").arg(program + 1);
         for (const QString& part : {stationName, title, artist}) {
             if (!part.isEmpty()) { text += QStringLiteral(" · ") + part; }
         }

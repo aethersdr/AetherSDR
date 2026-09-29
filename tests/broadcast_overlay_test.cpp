@@ -160,7 +160,7 @@ private slots:
         WfmBroadcastTicker ticker;
         ticker.setContent(record);
         const int width = std::max(QFontMetrics(font).horizontalAdvance(cluster),
-                                   QFontMetrics(font).horizontalAdvance(QStringLiteral("HD Radio")));
+                                   QFontMetrics(font).horizontalAdvance(QStringLiteral("Digital")));
         ticker.layout(font, width);
         QVERIFY(ticker.pages().size() > 2);
         QString reconstructed;
@@ -212,7 +212,7 @@ private slots:
         overlay.bind(&model, model.slice(3)->panId());
         QCOMPARE(overlay.records().size(), 1);
         QCOMPARE(overlay.records().first().sliceId, 3);
-        QVERIFY(overlay.records().first().displayText().startsWith(QStringLiteral("HD Radio · HD1")));
+        QVERIFY(overlay.records().first().displayText().startsWith(QStringLiteral("Digital · P1")));
         QSignalSpy changed(&overlay, &WfmBroadcastOverlay::overlaysChanged);
         for (int i = 0; i < 30; ++i) {
             HdFmReception value = reception();

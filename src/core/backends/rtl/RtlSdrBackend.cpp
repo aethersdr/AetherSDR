@@ -586,10 +586,10 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
         const QStringList keys{QStringLiteral("rtlHdIqDrops"), QStringLiteral("rtlHdPcmDrops"),
             QStringLiteral("rtlHdPlayoutUnderruns")};
         snapshot.order.append(keys);
-        snapshot.sections.insert(keys.front(), tr("HD FM processing (since connect)"));
-        snapshot.labels.insert(keys[0], tr("HD IQ blocks dropped"));
-        snapshot.labels.insert(keys[1], tr("HD PCM blocks dropped"));
-        snapshot.labels.insert(keys[2], tr("HD speaker playout underruns"));
+        snapshot.sections.insert(keys.front(), tr("Digital processing (since connect)"));
+        snapshot.labels.insert(keys[0], tr("Digital IQ blocks dropped"));
+        snapshot.labels.insert(keys[1], tr("Digital PCM blocks dropped"));
+        snapshot.labels.insert(keys[2], tr("Digital speaker playout underruns"));
         for (qsizetype i = 0; i < keys.size(); ++i) {
             snapshot.values.insert(keys[i], QVariant::fromValue<qulonglong>(m_hdDiagnosticTotals[i]));
         }

@@ -126,9 +126,9 @@ void WfmLockScope::setHdMode(bool enabled)
 {
     if (m_hdMode == enabled) { return; }
     m_hdMode = enabled;
-    setAccessibleName(enabled ? tr("HD Radio lock scope") : tr("WFM pilot lock scope"));
+    setAccessibleName(enabled ? tr("Digital lock scope") : tr("WFM pilot lock scope"));
     setToolTip(enabled
-        ? tr("Measured HD Radio MER in dB, using the decoder's lower/upper convention. "
+        ? tr("Measured Digital MER in dB, using the decoder's lower/upper convention. "
              "State shows actual digital sync and valid selected-program audio. "
              "No lock threshold is inferred from MER.")
         : tr("Measured 19 kHz pilot magnitude and acquire/release thresholds in relative units. "
@@ -154,10 +154,10 @@ void WfmLockScope::appendHdSample(std::optional<double> lowerMerDb,
     const auto metric = [](const std::optional<double>& value) {
         return value ? QString::number(*value, 'f', 1) + QStringLiteral(" dB") : QStringLiteral("unavailable");
     };
-    QString state = synced ? (audioValid ? tr("HD audio valid") : tr("HD synced; awaiting audio"))
-                                 : tr("HD acquiring");
+    QString state = synced ? (audioValid ? tr("Digital audio valid") : tr("Digital synced; awaiting audio"))
+                                 : tr("Digital acquiring");
     if (recentlyRecovered) { state += tr(" · Unstable (sync recovered within 5 s)"); }
-    publishAccessibleValue(this, tr("HD Radio MER: decoder lower %1; upper %2. %3. %4 current observations.")
+    publishAccessibleValue(this, tr("Digital MER: decoder lower %1; upper %2. %3. %4 current observations.")
         .arg(metric(lowerMerDb), metric(upperMerDb), state).arg(m_hdSamples.size()));
     update();
 }
@@ -167,7 +167,7 @@ void WfmLockScope::clear()
     m_samples.clear();
     m_hdSamples.clear();
     m_clock.invalidate();
-    publishAccessibleValue(this, m_hdMode ? tr("Awaiting current receiver HD Radio telemetry.")
+    publishAccessibleValue(this, m_hdMode ? tr("Awaiting current receiver Digital telemetry.")
                                          : tr("Awaiting current receiver pilot telemetry."));
     if (isVisible()) {
         update();
@@ -274,10 +274,10 @@ void WfmLockScope::paintHd(QPainter& painter)
     painter.setPen(theme.color(this, "color.text.secondary"));
     const int lineHeight = fontMetrics().height();
     painter.drawText(QRect(5, 3, width() - 10, lineHeight), Qt::AlignLeft,
-                     tr("HD Radio MER · dB (decoder lower / upper)"));
+                     tr("Digital MER · dB (decoder lower / upper)"));
     if (m_hdSamples.isEmpty()) {
         painter.drawText(rect().adjusted(5, lineHeight + 5, -5, -5), Qt::AlignCenter,
-                         tr("Awaiting HD telemetry"));
+                         tr("Awaiting Digital telemetry"));
         return;
     }
     const QRectF plot(6, lineHeight + 7, width() - 12,
@@ -327,8 +327,8 @@ void WfmLockScope::paintHd(QPainter& painter)
             theme.color(this, sample.synced && sample.audioValid && !sample.recentlyRecovered ? "color.accent.success" : "color.accent.warning"));
     }
     painter.setPen(theme.color(this, "color.text.secondary"));
-    QString state = latest.synced ? (latest.audioValid ? tr("HD audio valid") : tr("Synced · awaiting audio"))
-                                       : tr("HD acquiring");
+    QString state = latest.synced ? (latest.audioValid ? tr("Digital audio valid") : tr("Synced · awaiting audio"))
+                                       : tr("Digital acquiring");
     if (latest.recentlyRecovered) { state += tr(" · Unstable"); }
     painter.drawText(QRect(6, int(stripY) + 8, width() - 12, lineHeight), Qt::AlignLeft, state);
     painter.drawText(QRect(6, height() - lineHeight - 2, width() - 12, lineHeight),

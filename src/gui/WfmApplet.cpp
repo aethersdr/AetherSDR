@@ -170,11 +170,11 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
     settings->setColumnStretch(1, 1);
     m_hdProgram = new GuardedComboBox(this);
     m_hdProgram->setObjectName(QStringLiteral("wfmHdProgram"));
-    m_hdProgram->setAccessibleName(tr("HD Radio program"));
+    m_hdProgram->setAccessibleName(tr("Digital program"));
     m_hdProgram->setFocusPolicy(Qt::StrongFocus);
     m_hdProgram->setPlaceholderText(tr("Unavailable"));
     applyComboStyle(m_hdProgram);
-    auto* programLabel = new QLabel(tr("HD program"), this);
+    auto* programLabel = new QLabel(tr("Digital program"), this);
     programLabel->setBuddy(m_hdProgram);
     ThemeManager::instance().applyStyleSheet(programLabel,
         "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
@@ -184,7 +184,7 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
 
     m_metadata = new WfmMetadataTicker(this);
     m_metadata->setObjectName(QStringLiteral("wfmBroadcastMetadata"));
-    m_metadata->setAccessibleDescription(tr("Current HD Radio station and now-playing text. "
+    m_metadata->setAccessibleDescription(tr("Current Digital station and now-playing text. "
         "Independent of the SpotHub WFM RDS overlay toggle. No analog RDS decoder is implied."));
     root->addWidget(m_metadata);
 
@@ -376,7 +376,7 @@ void WfmApplet::registerControls()
             return supported(connected, caps) && (caps.broadcastFmReceive->forceMonoControl || caps.broadcastFmReceive->hdStereo);
         }, [] { return true; }, false);
     m_availability->registerWidget(m_hdProgram,
-        tr("Select HD Stereo on a supported receiver to choose a discovered audio program"),
+        tr("Select Digital on a supported receiver to choose a discovered audio program"),
         [this, supported](bool connected, const RadioCapabilities& caps) {
             if (!supported(connected, caps) || !caps.broadcastFmReceive->hdStereo
                 || m_slice->wfmAudioMode() != WfmAudioMode::HdStereo || !hasCurrentHdReception()) { return false; }
@@ -427,7 +427,7 @@ void WfmApplet::refresh()
     const bool forceMono = m_available && m_slice->wfmAudioMode() == WfmAudioMode::Mono;
     const bool hdSelected = m_available && m_slice->wfmAudioMode() == WfmAudioMode::HdStereo;
     m_scope->setHdMode(hdSelected);
-    const QString modeText = hdSelected ? tr("HD Stereo") : forceMono ? tr("Mono") : tr("Auto Stereo");
+    const QString modeText = hdSelected ? tr("Digital") : forceMono ? tr("Mono") : tr("Auto Stereo");
     if (m_audioMode->text() != modeText) {
         m_audioMode->setText(modeText);
         m_audioMode->setAccessibleName(tr("Broadcast FM audio mode: %1").arg(modeText));
@@ -436,7 +436,7 @@ void WfmApplet::refresh()
     }
     if (m_audioMode->isEnabled()) {
         m_audioMode->setAccessibleDescription(m_caps.broadcastFmReceive->hdStereo
-            ? tr("Cycle Mono, Auto Stereo and HD Stereo. HD program selection uses discovered audio services.")
+            ? tr("Cycle Mono, Auto Stereo and Digital. Digital program selection uses discovered audio services.")
             : tr("Cycle between forced Mono and Auto Stereo. Auto Stereo falls back to mono when no stereo pilot is detected."));
         m_audioMode->setToolTip(m_audioMode->accessibleDescription());
     }
@@ -487,10 +487,10 @@ void WfmApplet::refreshDiagnostics()
         const HdFmReception value = current ? m_slice->hdFmReception() : HdFmReception{};
         const bool unstable = value.synced && value.syncLossCount > 0 && value.syncDurationMs < 5000;
         QString status = !receiving ? tr("Unavailable")
-            : !value.valid || !value.synced ? tr("HD acquiring")
-            : value.audioValid ? tr("HD audio valid") : tr("HD synced · awaiting audio");
+            : !value.valid || !value.synced ? tr("Digital acquiring")
+            : value.audioValid ? tr("Digital audio valid") : tr("Digital synced · awaiting audio");
         if (unstable) { status += tr(" · Unstable"); }
-        setReadout(m_status, status, tr("HD Radio observed reception: %1").arg(status));
+        setReadout(m_status, status, tr("Digital observed reception: %1").arg(status));
         m_status->setAccessibleDescription(tr("Actual digital sync and valid selected-program audio, independent of the requested mode."));
         ThemeManager::instance().setWidgetForegroundToken(m_status,
             !receiving ? QStringLiteral("color.text.secondary")
@@ -499,7 +499,7 @@ void WfmApplet::refreshDiagnostics()
         const auto metric = [this](const std::optional<double>& number, const QString& unit) {
             return number ? QString::number(*number, 'g', 5) + unit : tr("Unavailable");
         };
-        QString details = tr("Source: HD Radio\nSync: %1 · Audio: %2\nProgram: HD%3\nMER lower / upper: %4 / %5\nCBER: %6\nFrequency offset: %7\nSync duration: %8 s\nSync losses: %9 · Reacquisitions: %10")
+        QString details = tr("Source: Digital\nSync: %1 · Audio: %2\nProgram: %3\nMER lower / upper: %4 / %5\nCBER: %6\nFrequency offset: %7\nSync duration: %8 s\nSync losses: %9 · Reacquisitions: %10")
             .arg(value.synced ? tr("Yes") : tr("No"), value.audioValid ? tr("Valid") : tr("Unavailable"))
             .arg(m_slice->hdProgram() + 1)
             .arg(metric(value.merLowerDb, QStringLiteral(" dB")), metric(value.merUpperDb, QStringLiteral(" dB")),
@@ -508,7 +508,7 @@ void WfmApplet::refreshDiagnostics()
         if (m_slice->frequencyReportedKnown()) {
             details += tr("\nFrequency: %1 MHz").arg(m_slice->reportedFrequency(), 0, 'f', 6);
         }
-        setReadout(m_diagnostics, details, tr("HD Radio diagnostics: %1").arg(details));
+        setReadout(m_diagnostics, details, tr("Digital diagnostics: %1").arg(details));
         m_diagnostics->setAccessibleDescription(tr("Measured NRSC-5 decoder telemetry. Lower and upper MER use the decoder's spectral convention, inverted relative to RF sidebands. Unavailable metrics are not estimated."));
         m_diagnostics->setToolTip(m_diagnostics->accessibleDescription());
         if (!current) { m_scope->clear(); }
@@ -594,18 +594,18 @@ void WfmApplet::refreshHd()
     if (current) {
         for (const HdFmService& service : m_slice->hdFmReception().services) {
             if (!service.audioAvailable) { continue; }
-            const QString label = service.name.isEmpty() ? tr("HD%1").arg(service.program + 1)
-                : tr("HD%1 · %2").arg(service.program + 1).arg(service.name);
+            const QString label = service.name.isEmpty() ? tr("P%1").arg(service.program + 1)
+                : tr("P%1 · %2").arg(service.program + 1).arg(service.name);
             m_hdProgram->addItem(label, service.program);
         }
     }
     m_hdProgram->setCurrentIndex(m_available ? m_hdProgram->findData(m_slice->hdProgram()) : -1);
     announceCombo(m_hdProgram, previous);
     if (m_availability) { m_availability->refreshEngaged(); }
-    QString metadata = tr("HD Radio metadata unavailable");
+    QString metadata = tr("Digital metadata unavailable");
     if (current && m_slice->hdFmReception().synced) {
         const HdFmReception& value = m_slice->hdFmReception();
-        QStringList parts{tr("HD Radio · HD%1").arg(value.selectedProgram + 1)};
+        QStringList parts{tr("Digital · P%1").arg(value.selectedProgram + 1)};
         if (!value.stationName.isEmpty()) { parts.append(value.stationName); }
         if (!value.title.isEmpty()) { parts.append(value.title); }
         if (!value.artist.isEmpty()) { parts.append(value.artist); }
