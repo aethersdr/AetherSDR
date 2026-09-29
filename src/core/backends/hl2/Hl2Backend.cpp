@@ -9053,7 +9053,14 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // why a 10 Hz instantaneous sample of a speech envelope reads ~10 dB low
     // and what the hold does and does not recover.
     if (t.forwardPowerRaw) {
-        const double instantW = directionalWatts(*t.forwardPowerRaw);
+        // KEYED, the loudest RADDR-1 sample of the publish window rather than
+        // the last one: the radio re-samples the detector ~190 times a second
+        // and the last-value coalesce kept one in 19. UNKEYED, the
+        // last value exactly as before -- the maximum of 19 noise samples
+        // would sit above the no-carrier floor MeterModel snaps to zero on.
+        const int fwdRaw = (m_keyed && t.forwardPowerPeakRaw)
+            ? *t.forwardPowerPeakRaw : *t.forwardPowerRaw;
+        const double instantW = directionalWatts(fwdRaw);
         // The hold applies only while keyed. Unkeyed, the reading must fall to
         // zero on the same schedule REFPWR does — MeterModel snaps its own
         // forward-power filter to zero the moment a no-carrier sample arrives,

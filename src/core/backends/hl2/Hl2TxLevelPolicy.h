@@ -174,11 +174,18 @@ inline constexpr int kMicLevelCurve = 2;
 //
 // The HL2's forward power is a single 12-bit conversion from an I2C
 // instrumentation ADC with no peak detector and no averaging in the gateware
-// (rtl/slow_adc.v), reaching us at 10 Hz. Speech peaks last tens of
-// milliseconds, so sampling that envelope at 10 Hz lands on a peak essentially
-// never: an SSB reading sat 8-12 dB below PEP while constant-envelope FT8 —
-// where every instant IS the peak — read full scale. Both were making the same
-// power.
+// (rtl/slow_adc.v). The radio re-samples it on every other EP6 response
+// (control.v:261, `resp_rqst & resp_cnt`) and reports it in RADDR 1 up to ~190
+// times a second. This comment used to say it reached us at 10 Hz; that was
+// the host's own last-value coalesce in MetisClient, which kept one sample in
+// 19. Speech peaks last tens of milliseconds, so at 10 Hz a reading landed on
+// one essentially never: an SSB reading sat 8-12 dB below PEP while
+// constant-envelope FT8 -- where every instant IS the peak -- read full scale.
+//
+// The input here is now the MAXIMUM of each publish window
+// (Hl2Telemetry::forwardPowerPeakRaw), which sees the peaks the radio reports.
+// The hold still matters: it carries the peak across windows so the reading
+// does not dip between syllables.
 //
 // Instant attack, exponential release. What this recovers is NOT an
 // instantaneous PEP reading; no filter can recover a peak that was never

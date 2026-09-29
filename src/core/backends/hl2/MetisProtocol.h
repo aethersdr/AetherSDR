@@ -689,6 +689,22 @@ struct Hl2Telemetry {
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
 
+    // ---- FORWARD POWER, THE LOUDEST SAMPLE OF THE WINDOW -----------------
+    //
+    // `forwardPowerRaw` above is the LAST value seen, and it has the same
+    // decimation as `adcOverload`: RADDR 1 arrives up to ~190 times a second
+    // and the coalesced emit keeps one. For a carrier that costs nothing. For
+    // speech it is most of the answer -- the slow ADC re-samples the detector
+    // on every other response (control.v:261, `resp_rqst & resp_cnt`), so the
+    // radio does report the peaks and the host was discarding ~18 of every 19.
+    //
+    // This is the maximum over the RADDR-1 responses of the publish window,
+    // accumulated by the same loop and for the same reason as the ADC pair
+    // above. nullopt when the window saw no RADDR 1, never a stale carry.
+    // `forwardPowerSamples` is its denominator.
+    std::optional<int> forwardPowerPeakRaw;
+    int forwardPowerSamples = 0;
+
     // Merge a decoded response in, leaving untouched fields alone.
     //
     // IGNORES ACK responses apart from their PTT bit, and that is load-bearing
@@ -699,6 +715,30 @@ struct Hl2Telemetry {
     // own outgoing bytes. Harmless until something set the RQST bit; this
     // guard is what makes it stay harmless now that Hl2ControlRequest does.
     void apply(const Ep6Response& r) noexcept;
+};
+
+// Window accumulator for Hl2Telemetry::forwardPowerPeakRaw. Here rather than
+// inline in MetisClient's receive loop so the rule -- non-ACK RADDR 1 only,
+// maximum of DATA[15:0] -- is testable without a socket. An ACK's RADDR 1 is a
+// command address and its data our own echo; see Hl2Telemetry::apply().
+struct ForwardPowerWindow {
+    std::optional<int> peak;
+    int samples = 0;
+
+    void observe(const Ep6Response& r) noexcept
+    {
+        if (r.ack || r.raddr != 0x01)
+            return;
+        const int v = static_cast<int>(r.data & 0xFFFF);
+        if (!peak || v > *peak)
+            peak = v;
+        ++samples;
+    }
+    void clear() noexcept
+    {
+        peak.reset();
+        samples = 0;
+    }
 };
 
 // Directional-coupler counts -> watts, through the reference calibration curve.
