@@ -70,6 +70,8 @@ public:
     // 2-state on/off mode against the slice's squelchLevel only.
     void setRxApplet(RxApplet* rx);
     void setSignalLevel(float dbm);
+    void setRelativeSignalLevel(std::optional<float> dbfs);
+    bool relativeSignalLevel() const { return m_relativeSignal; }
     void setReceiveMeterReading(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
     // SmartMTR feeds: live mic level + separately-measured mic peak (both dBFS)
@@ -451,6 +453,8 @@ private:
     QStringList    m_antList;
     bool           m_updatingFromModel{false};
     bool           m_lastOnLeft{true};
+    bool m_relativeSignal = false;
+    bool m_relativeSignalValid = false;
     float          m_signalDbm{-130.0f};
     // Whether m_signalDbm is a real calibrated reading. FLEX always is; a
     // KiwiSDR slice without a calibrated meter is not, in which case the

@@ -47,6 +47,7 @@ public:
     bool submit(const Transaction::Work& work);
     std::optional<Transaction::Result> takeResult();
     void serviceCancellation();
+    bool takeRfObservation(RtlReceivePipeline::RfObservation& value) { return m_pipeline->takeRfObservation(value); }
     bool takeAudio(RtlReceivePipeline::Packet& packet) { return m_pipeline->takePacket(packet); }
     bool takeHdObservation(RtlReceivePipeline::HdFmObservation& value) { return m_pipeline->takeHdObservation(value); }
     // Independently sampled counters since construction. Timing covers each

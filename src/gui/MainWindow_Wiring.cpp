@@ -1534,6 +1534,16 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
         return;
     }
 
+    auto* relativeTimer = new QTimer(vfo);
+    relativeTimer->setInterval(100);
+    connect(relativeTimer, &QTimer::timeout, vfo, [this, vfo, id = s->sliceId()] {
+        const auto& meters = m_radioModel.meterModel();
+        const MeterDef* def = meters.meterDef(meters.findMeter("SLC", "LEVEL", id));
+        if ((def && def->unit == "dBFS") || vfo->relativeSignalLevel()) {
+            vfo->setRelativeSignalLevel(meters.relativeLevelForSlice(id));
+        }
+    });
+    relativeTimer->start();
     // Feed S-meter per-slice — only this VFO's slice level
     const int sid = s->sliceId();
     const QPointer<VfoWidget> vfoPtr(vfo);
@@ -6399,6 +6409,18 @@ void MainWindow::applyAmpTxMeters(float watts, float swr, bool fromRelay)
 
 void MainWindow::wireMeters()
 {
+    auto* relativeTimer = new QTimer(this);
+    relativeTimer->setInterval(100);
+    connect(relativeTimer, &QTimer::timeout, this, [this] {
+        if (!m_appletPanel) { return; }
+        auto* meter = m_appletPanel->sMeterWidget();
+        const auto& meters = m_radioModel.meterModel();
+        const MeterDef* def = meters.meterDef(meters.findMeter("SLC", "LEVEL", m_activeSliceId));
+        if ((def && def->unit == "dBFS") || meter->relativeLevel()) {
+            meter->setRelativeLevel(meters.relativeLevelForSlice(m_activeSliceId), m_activeSliceId);
+        }
+    });
+    relativeTimer->start();
     // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
     connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
             this, [this](int sliceIndex, float dbm) {

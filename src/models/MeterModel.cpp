@@ -130,6 +130,11 @@ void MeterModel::defineMeter(const MeterDef& def)
         removeMeter(def.index);
         m_manifestSliceContext = sliceContext;
     }
+    if (redefinition && def.source == QStringLiteral("SLC")
+        && def.name == QStringLiteral("LEVEL") && previous->unit != def.unit) {
+        m_values.remove(def.index);
+        m_valueUpdatedMs.remove(def.index);
+    }
     const bool nativeUnitChanged = redefinition && def.index == m_nativeAlcIndex
         && previous->unit != def.unit;
     m_defs[def.index] = def;
@@ -862,6 +867,16 @@ std::optional<float> MeterModel::swrIfLive() const
                                                : std::nullopt;
 }
 
+std::optional<float> MeterModel::relativeLevelForSlice(int sliceIndex) const
+{
+    if (sliceIndex < 0) { return std::nullopt; }
+    const int index = findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"), sliceIndex);
+    const MeterDef* def = meterDef(index);
+    if (!def || def->unit != QStringLiteral("dBFS")
+        || !vitalIsFresh(true, valueAgeMs(index))) { return std::nullopt; }
+    return m_values.value(index);
+}
+
 std::optional<float> MeterModel::sLevelForSlice(int sliceIndex) const
 {
     const auto it = m_sLevelIdxBySlice.constFind(sliceIndex);
@@ -869,6 +884,7 @@ std::optional<float> MeterModel::sLevelForSlice(int sliceIndex) const
         return std::nullopt;      // this receiver declares no LEVEL meter
     }
     const int index = it.value();
+    if (m_defs.value(index).unit != QStringLiteral("dBm")) { return std::nullopt; }
     // DECLARED IS NOT FED AND FED IS NOT CURRENT. m_sLevelIdxBySlice is
     // populated by the meter DEFINITION, so gating on the index alone would
     // publish the m_values default for a meter no packet has ever carried —
@@ -981,7 +997,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
         bool isSliceLevel = false;
         for (auto sit = m_sLevelIdxBySlice.constBegin(); sit != m_sLevelIdxBySlice.constEnd(); ++sit) {
             if (sit.value() == idx) {
-                emit sLevelChanged(sit.key(), v);
+                if (it->unit == QStringLiteral("dBm")) { emit sLevelChanged(sit.key(), v); }
                 isSliceLevel = true;
                 break;
             }

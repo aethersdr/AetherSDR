@@ -1705,6 +1705,19 @@ void RtlSdrBackend::publishLegacyPcm(const QByteArray& pcm, const QByteArray& pr
 void RtlSdrBackend::drainAudio()
 {
     const QPointer<RtlSdrWorker> worker(m_worker.get());
+    RtlReceivePipeline::RfObservation rf;
+    while (worker && worker.data() == m_worker.get() && worker->takeRfObservation(rf)) {
+        const auto now = hdMonotonicMs();
+        if (!acceptsFrame(rf.token.session, rf.token.revision) || !rf.producedMs
+            || rf.producedMs > now || now - rf.producedMs > 500) { continue; }
+        for (int id = 0; id < 8; ++id) {
+            if (rf.mask & (1u << id)) {
+                emit meterUpdate(QStringLiteral("SLC%1:LEVEL").arg(id), rf.dbfs[id]);
+                if (!worker || worker.data() != m_worker.get()
+                    || !acceptsFrame(rf.token.session, rf.token.revision)) { return; }
+            }
+        }
+    }
     drainHdObservations();
     expireHdObservations();
     if (!worker || worker.data() != m_worker.get()) { return; }
@@ -2110,7 +2123,25 @@ void RtlSdrBackend::publishCapture()
         m_wfmPublicationAge[id].invalidate();
         m_wfmObservationAge[id].invalidate();
     }
+    // Retire samples across every accepted capture revision, including parking,
+    // removal, retune and ID reuse. A definition alone is never a live sample.
+    if (prior) {
+        for (const auto& receiver : prior->receivers) {
+            emit meterRemoved(700 + receiver.passband.stableId);
+            if (!m_capture.confirmed() || m_capture.confirmed()->token != state.token) { return; }
+        }
+    }
     m_lastPublished = state;
+    for (const auto& receiver : state.receivers) {
+        MeterDef def;
+        def.index = 700 + receiver.passband.stableId;
+        def.source = QStringLiteral("SLC"); def.sourceIndex = receiver.passband.stableId;
+        def.name = QStringLiteral("LEVEL"); def.unit = QStringLiteral("dBFS");
+        def.low = -120; def.high = 0;
+        def.description = tr("Peak windowed FFT bin in the receive passband, relative to ADC full scale; uncalibrated, not dBm or channel power");
+        emit meterDefined(def);
+        if (!m_capture.confirmed() || m_capture.confirmed()->token != state.token) { return; }
+    }
     for (const auto& receiver : state.receivers) {
         m_monitors[receiver.passband.stableId] = {receiver.audioGain, receiver.audioPan, receiver.audioMute};
         updateMonitor(receiver.passband.stableId);

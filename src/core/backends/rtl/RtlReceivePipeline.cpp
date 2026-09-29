@@ -207,6 +207,7 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
     m_specs = specs;
     m_prepared = m_registry.service().requested;
     for (const auto& receiver : state.receivers) {
+        m_nextMeterPassbands[receiver.passband.stableId] = receiver.passband;
         m_nextSquelch[receiver.passband.stableId] = {receiver.squelchEnabled, receiver.squelchLevel,
             receiver.automaticSquelch, receiver.automaticSquelchMarginDb};
         m_nextMonitor[receiver.passband.stableId] = static_cast<unsigned>(receiver.audioGain
@@ -241,6 +242,7 @@ bool RtlReceivePipeline::adopt() noexcept
     m_token = m_nextToken; m_capture = m_nextCapture;
     m_captureEpoch = m_nextEpoch; m_legacy = m_nextLegacy;
     m_receivingMask = m_nextReceivingMask;
+    m_meterPassbands = m_nextMeterPassbands;
     m_faults.store(0, std::memory_order_release); // old bank faults cannot request a second reset
     return true;
 }
@@ -257,6 +259,40 @@ void RtlReceivePipeline::observeSpectrum(std::span<const float> bins, std::uint6
     if (bins.size() != m_spectrum.size()) { return; }
     std::copy(bins.begin(), bins.end(), m_spectrum.begin());
     m_spectrumFirstSample = firstSample; m_spectrumFresh = true;
+    if (!m_token.session || m_capture.achievedSampleRateHz <= 0) { return; }
+    RfObservation observation;
+    observation.token = m_token;
+    observation.producedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const double binHz = m_capture.achievedSampleRateHz / bins.size();
+    for (int id = 0; id < 8; ++id) {
+        if (!(m_receivingMask & (1u << id))) { continue; }
+        const auto& band = m_meterPassbands[id];
+        const double offset = band.carrierHz - m_capture.centerHz;
+        const int low = std::clamp(int(std::floor((offset + band.filterLowHz) / binHz + 1024)), 0, 2047);
+        const int high = std::clamp(int(std::ceil((offset + band.filterHighHz) / binHz + 1024)), low, 2047);
+        float peak = -120.0f;
+        bool valid = true;
+        for (int bin = low; bin <= high; ++bin) {
+            if (!std::isfinite(bins[bin])) { valid = false; break; }
+            peak = std::max(peak, bins[bin]);
+        }
+        if (valid) { observation.mask |= 1u << id; observation.dbfs[id] = peak; }
+    }
+    const unsigned write = m_rfWrite.load(std::memory_order_relaxed);
+    const unsigned next = (write + 1) % m_rfObservations.size();
+    if (next != m_rfRead.load(std::memory_order_acquire)) {
+        m_rfObservations[write] = observation;
+        m_rfWrite.store(next, std::memory_order_release);
+    }
+}
+bool RtlReceivePipeline::takeRfObservation(RfObservation& output) noexcept
+{
+    const unsigned read = m_rfRead.load(std::memory_order_relaxed);
+    if (read == m_rfWrite.load(std::memory_order_acquire)) { return false; }
+    output = m_rfObservations[read];
+    m_rfRead.store((read + 1) % m_rfObservations.size(), std::memory_order_release);
+    return true;
 }
 void RtlReceivePipeline::setMonitor(int slot, int gain, int pan, bool mute) noexcept
 {

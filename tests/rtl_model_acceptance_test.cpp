@@ -506,6 +506,17 @@ static void analogBankSelection(int capacity = 4)
         check(selected(id), "selection clears every previous active model");
     }
     check(!backend.createSlice({}, 100'650'000), "receiver above configured capacity refused at evaluation capacity");
+    check(waitFor([&] {
+        clock.advance();
+        for (int id = 0; id < capacity; ++id) {
+            if (!model.meterModel().relativeLevelForSlice(id)) { return false; }
+        }
+        return true;
+    }), "real injected IQ reaches relative RF meters for every stable receiver ID");
+    for (int id = 0; id < capacity; ++id) {
+        check(!model.meterModel().sLevelForSlice(id), "RTL never claims a calibrated S reading");
+    }
+
     for (int id = 0; id < capacity; ++id) {
         model.slice(id)->setAutomaticSquelch(true, 5 + id);
         model.slice(id)->setAudioMute(id % 2);
@@ -570,6 +581,10 @@ static void analogBankSelection(int capacity = 4)
         model.requestPanCenter(pan->panId(), 105.0, -1.0, IRadioBackend::PanCenterIntent::Drag);
         check(waitFor([&] { return settled() && Access::state(backend).receivingIds.empty(); }),
             "all configured analog receivers can park together");
+        for (int id = 0; id < capacity; ++id) {
+            check(!model.meterModel().relativeLevelForSlice(id), "parking withdraws live RF meter samples");
+        }
+
         check(selected(2) && model.slice(1)->wfmDeemphasisUs() == 50
             && !model.slice(1)->wfmReceptionDiagnostics().valid,
             "parked selection and recipe survive while reception clears");
@@ -584,6 +599,9 @@ static void analogBankSelection(int capacity = 4)
     check(backend.removeSlice(2), "selected middle slot removal admitted");
     check(waitFor([&] { return settled() && !model.slice(2); }), "selected middle slot removal adopted");
     check(selected(0), "removed selection resolves deterministically to a surviving identity");
+    check(model.meterModel().findMeter("SLC", "LEVEL", 2) == -1,
+        "removed receiver withdraws its meter definition");
+
     check(backend.createSlice({}, 100'200'000), "middle stable slot reuse admitted");
     check(waitFor([&] { return settled() && model.slice(2); }), "middle stable slot replacement adopted");
     check(retired && model.slice(2) != retired && selected(0), "replacement never inherits retired selection");
@@ -601,6 +619,7 @@ static void analogBankSelection(int capacity = 4)
     model.slice(1)->setActive(true);
     check(!backend.isConnected() && !model.slice(1)->isActive(),
         "reentrant disconnect cancels the unaccepted selection tail");
+    check(!model.meterModel().relativeLevelForSlice(0), "disconnect clears relative meter samples");
     QObject::disconnect(disconnectDuringSelect);
     backend.disconnectRadio();
 }

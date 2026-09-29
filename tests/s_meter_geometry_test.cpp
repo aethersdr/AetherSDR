@@ -1188,6 +1188,19 @@ int main(int argc, char** argv)
     expect(changedPixelCount(minimumRender) > 250, "minimum-size face renders");
     expect(changedPixelCount(enlargedRender) > 1000, "enlarged face renders");
 
+    meter.setTransmitting(false);
+    meter.setRelativeLevel(-40.0f, 7);
+    expect(meter.accessibleValueText().contains("dBFS")
+        && !meter.accessibleValueText().contains("dBm")
+        && !meter.sUnitsText().contains("S9"), "relative RF is never labeled dBm or S-units");
+    const QImage relativeFace = render(meter, QSize(280, 140));
+    meter.setRelativeLevel(std::nullopt, 2);
+    expect(meter.accessibleValueText().contains("unavailable"), "parked selection withdraws its old reading");
+    expect(imageDigest(relativeFace) != imageDigest(render(meter, QSize(280, 140))),
+        "relative no-data face differs from a live RF reading");
+    meter.setLevel(-73);
+    expect(meter.accessibleValueText().contains("dBm"), "calibrated input restores the calibrated meter");
+
     if (g_failures == 0) {
         // SAY WHICH HALF RAN. Without this the binary exits 0 whether or not the
         // announcement section executed, and ctest reports a bare "Passed" for

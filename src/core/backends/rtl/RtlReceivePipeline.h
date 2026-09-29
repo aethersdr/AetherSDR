@@ -67,6 +67,15 @@ public:
         std::optional<AetherSDR::WfmReceptionDiagnostics> wfmReception;
         std::array<float, 2048> samples{};
     };
+    // Windowed peak FFT bin in each accepted passband, relative to ADC full
+    // scale. This is neither calibrated dBm nor integrated channel power.
+    struct RfObservation {
+        Transaction::Token token;
+        std::uint64_t producedMs = 0;
+        std::uint8_t mask = 0;
+        std::array<float, 8> dbfs{};
+    };
+    bool takeRfObservation(RfObservation& output) noexcept;
     struct HdFmObservation {
         Transaction::Token token;
         std::uint64_t captureEpoch = 0;
@@ -195,6 +204,10 @@ private:
     std::array<SquelchConfig, 8> m_squelchConfig{};
     std::array<RtlSquelchGate, 8> m_squelch;
     std::array<std::uint64_t, 8> m_squelchEpoch{};
+    std::array<SharedCapturePolicy::SliceDescriptor, 8> m_nextMeterPassbands{}, m_meterPassbands{};
+    std::array<RfObservation, 4> m_rfObservations{};
+    alignas(64) std::atomic<unsigned> m_rfWrite{0};
+    alignas(64) std::atomic<unsigned> m_rfRead{0};
     std::array<float, 2048> m_spectrum{};
     std::uint64_t m_spectrumFirstSample = 0;
     bool m_spectrumFresh = false;

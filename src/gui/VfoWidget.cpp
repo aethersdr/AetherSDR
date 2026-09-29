@@ -3895,6 +3895,17 @@ void VfoWidget::paintEvent(QPaintEvent* event)
     const int scaleY = barY + barH + 2;
     const int tickH  = 3;
 
+    if (m_relativeSignal) {
+        p.setPen(ThemeManager::instance().color(this, "color.text.secondary"));
+        p.drawLine(barX, scaleY, barX + barW, scaleY);
+        QFont font = p.font(); font.setPixelSize(7); p.setFont(font);
+        for (int db = -120; db <= 0; db += 30) {
+            const int x = barX + (db + 120) * barW / 120;
+            p.drawLine(x, scaleY, x, scaleY + tickH);
+            p.drawText(x - (db == 0 ? 4 : 8), scaleY + tickH + 7, QString::number(db));
+        }
+        return;
+    }
     // Horizontal line: blue from start to S9, red from S9 to end.
     p.setPen(QColor(0x30, 0x80, 0xff));
     p.drawLine(barX, scaleY, s9X, scaleY);
@@ -4120,6 +4131,7 @@ void VfoWidget::syncSmartMtrSettingsControls()
 
 void VfoWidget::setSignalLevel(float dbm)
 {
+    m_relativeSignal = false;
     m_receiveMeterReadingActive = false;
     m_signalDbm = dbm;
     m_signalHasDbm = true; // FLEX always delivers a calibrated dBm reading
@@ -4127,6 +4139,22 @@ void VfoWidget::setSignalLevel(float dbm)
     m_dbmLabel->setAccessibleName("Signal level dBm");
     updateSignalMeterTarget();
     pushSmartMtrInput();
+}
+
+void VfoWidget::setRelativeSignalLevel(std::optional<float> dbfs)
+{
+    m_relativeSignal = true;
+    m_relativeSignalValid = dbfs && std::isfinite(*dbfs);
+    m_receiveMeterReadingActive = false;
+    m_signalHasDbm = false;
+    m_signalDbm = m_relativeSignalValid ? *dbfs : -120.0f;
+    m_dbmLabel->setText(m_relativeSignalValid
+        ? tr("%1 dBFS").arg(m_signalDbm, 0, 'f', 0) : tr("— dBFS"));
+    m_dbmLabel->setAccessibleName(tr("Relative RF level dBFS"));
+    m_dbmLabel->setAccessibleDescription(tr("Peak FFT bin in the receive passband, uncalibrated; not dBm or audio level"));
+    updateSignalMeterTarget();
+    pushSmartMtrInput();
+    update();
 }
 
 // SmartMTR feed: choose signal vs mic by TX state and push the input. The
@@ -4196,7 +4224,7 @@ void VfoWidget::pushSmartMtrInput()
         }
         in.hasValue = true;
     } else {
-        in.kind = MeterKind::Signal;
+        in.kind = m_relativeSignal ? MeterKind::RelativeSignal : MeterKind::Signal;
         in.value = m_signalDbm;
         in.min = -127.0; // dBm: S0
         in.max = -13.0;  // dBm: S9+60
@@ -4205,6 +4233,9 @@ void VfoWidget::pushSmartMtrInput()
         // The widget parks/fades the indicator and suppresses the value labels
         // when hasValue is false, matching the "Meter ---" dBm label.
         in.hasValue = m_signalHasDbm;
+        if (m_relativeSignal) {
+            in.min = -120; in.max = 0; in.hasValue = m_relativeSignalValid;
+        }
     }
     m_smartMtrWidget->setMeterInput(in);
 }
@@ -4424,6 +4455,7 @@ void VfoWidget::setTransmitting(bool tx)
 void VfoWidget::setReceiveMeterReading(
     const KiwiSdrProtocol::MeterReading& reading)
 {
+    m_relativeSignal = false;
     m_receiveMeterReading = reading;
     m_receiveMeterReadingActive = true;
     const bool hasDisplayDbm =
@@ -4469,7 +4501,10 @@ float VfoWidget::signalDbmToMeterFraction(float dbm)
 
 void VfoWidget::updateSignalMeterTarget()
 {
-    if (usesUnavailableSignalMeter()) {
+    if (m_relativeSignal) {
+        m_targetSignalMeterFraction = m_relativeSignalValid
+            ? std::clamp((m_signalDbm + 120.0f) / 120.0f, 0.0f, 1.0f) : 0.0f;
+    } else if (usesUnavailableSignalMeter()) {
         m_targetSignalMeterFraction = 0.0f;
     } else {
         m_targetSignalMeterFraction = signalDbmToMeterFraction(m_signalDbm);

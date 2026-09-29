@@ -511,6 +511,7 @@ void SmartMtrWidget::drawTypeLabel(QPainter& p, const SmartMtrGeometry& g) const
     case MeterKind::SWR:         text = QStringLiteral("SWR");  break;
     case MeterKind::Power:       text = QStringLiteral("PWR");  break;
     case MeterKind::Compression: text = QStringLiteral("COMP"); break;
+    case MeterKind::RelativeSignal: text = QStringLiteral("dBFS"); break;
     case MeterKind::Signal:      return;
     }
 
@@ -641,6 +642,7 @@ QString SmartMtrWidget::extremeSUnit(double raw) const
 QString SmartMtrWidget::extremeDbm(double raw) const
 {
     const int v = qRound(raw);
+    if (m_kind == MeterKind::RelativeSignal) { return QStringLiteral("%1dBFS").arg(v); }
     return m_kind == MeterKind::MicLevel ? QStringLiteral("%1dB").arg(v)
                                          : QStringLiteral("%1dBm").arg(v);
 }
@@ -693,7 +695,7 @@ QVector<SmartMtrWidget::ExtremeMarker> SmartMtrWidget::extremeLabels() const
 
     // Numeric value labels are a signal-meter feature only; other kinds (mic/TX)
     // show no value text (the peak marker itself still draws).
-    if (m_kind != MeterKind::Signal)
+    if (m_kind != MeterKind::Signal && m_kind != MeterKind::RelativeSignal)
         return out;
 
     // Two lines for signal (S-unit over dBm); a single top line for mic (no

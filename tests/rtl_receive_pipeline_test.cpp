@@ -24,6 +24,40 @@ namespace AetherSDR::rtl {
 struct RtlReceivePipelineTestAccess {
     // Observation seam only: the receiver supplies a fixed failure; this does
     // not claim to reproduce the underlying WDSP underrun.
+    static bool rfObservation(RtlReceivePipeline& pipeline)
+    {
+        pipeline.m_token = {19, 23};
+        pipeline.m_capture.achievedSampleRateHz = 2048000;
+        pipeline.m_capture.centerHz = 100000000;
+        pipeline.m_receivingMask = 0xff;
+        std::array<float, 2048> bins; bins.fill(-120);
+        for (int id = 0; id < 8; ++id) {
+            auto& band = pipeline.m_meterPassbands[id];
+            band.stableId = id; band.carrierHz = 100000000 + (id - 4) * 100000;
+            band.filterLowHz = -1000; band.filterHighHz = 1000;
+            bins[1024 + (id - 4) * 100] = -20 - 7 * id;
+        }
+        pipeline.observeSpectrum(bins, 0);
+        RtlReceivePipeline::RfObservation observation;
+        if (!pipeline.takeRfObservation(observation) || observation.mask != 0xff
+            || observation.token != pipeline.m_token || !observation.producedMs) { return false; }
+        for (int id = 0; id < 8; ++id) {
+            if (observation.dbfs[id] != -20 - 7 * id) { return false; }
+        }
+        // Sparse membership never renumbers receivers. Removed/parked IDs have
+        // no observation; invalid input invalidates only its own passband.
+        pipeline.m_receivingMask = 0x89;
+        bins[1024 + 300] = std::numeric_limits<float>::quiet_NaN();
+        pipeline.m_token.revision++;
+        pipeline.observeSpectrum(bins, 4096);
+        if (!pipeline.takeRfObservation(observation) || observation.mask != 0x09
+            || observation.token != pipeline.m_token || observation.dbfs[3] != -41) { return false; }
+        pipeline.m_receivingMask = 0xff;
+        bins[1324] = -33;
+        pipeline.observeSpectrum(bins, 8192);
+        return pipeline.takeRfObservation(observation) && observation.mask == 0xff
+            && observation.dbfs[7] == -33 && !pipeline.takeRfObservation(observation);
+    }
     static bool traceObservation(RtlReceivePipeline& pipeline)
     {
         struct FailingReceiver final : RtlReceiverRegistry::Receiver {
@@ -630,6 +664,11 @@ static void measureParkAndResume()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    {
+        auto rf = std::make_unique<Pipeline>();
+        check(AetherSDR::rtl::RtlReceivePipelineTestAccess::rfObservation(*rf),
+            "relative RF measurements preserve all eight IDs, sparse membership and revisions");
+    }
     {
         auto epoch = std::make_unique<Pipeline>();
         const std::size_t allocationsBefore = callbackAllocations;
