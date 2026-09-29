@@ -567,6 +567,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::sliceAdded, this, bindSlice);
         connect(m_model, &RadioModel::sliceRemoved, this,
                 [this] { refreshRxBindings(); });
+        // A session can create TCI after the backend restored its slices.
+        // Seed the sticky map before publishing any audio bindings; positional
+        // fallback would silently renumber survivors on the first removal.
+        for (SliceModel* slice : m_model->slices()) {
+            m_trxMap.acquire(slice->sliceId());
+        }
         for (SliceModel* slice : m_model->slices()) { bindSlice(slice); }
     }
     for (int ch = 1; ch <= 8; ++ch) { m_io->setRxGain(ch, m_rxChannelGain[ch - 1]); }

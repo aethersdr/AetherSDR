@@ -974,6 +974,31 @@ public:
               "revocation from a consumer callback prevents every remaining block of the same DAX input");
     }
 
+    static void serverConstructedAfterReceiverRestore()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<InjectedBackend>();
+        InjectedBackend* source = backend.get();
+        model.setBackendForTest(std::move(backend), QStringLiteral("rtl"));
+        for (int id = 0; id < 8; ++id) { source->add(id); }
+        // MainWindow can construct the session's TCI server after the radio
+        // restored its slices. Their sliceAdded signals have already fired.
+        TciServer server(&model);
+        source->remove(3);
+        QEventLoop settle;
+        QTimer::singleShot(550, &settle, &QEventLoop::quit);
+        settle.exec();
+        for (int id : {0, 1, 2, 4, 5, 6, 7}) {
+            const auto binding = server.sliceRxBinding(id);
+            check(binding.current() && binding.trx == id,
+                  "late-constructed TCI server preserves surviving receiver assignments");
+        }
+        source->add(99);
+        const auto replacement = server.sliceRxBinding(99);
+        check(replacement.current() && replacement.trx == 3,
+              "late-constructed TCI server reuses the actual removed receiver slot");
+    }
+
     static void simultaneousEightReceiverHandshakes()
     {
         Fixture f;
@@ -1010,6 +1035,7 @@ public:
 
     static int run()
     {
+        serverConstructedAfterReceiverRestore();
         simultaneousEightReceiverHandshakes();
         eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding();
