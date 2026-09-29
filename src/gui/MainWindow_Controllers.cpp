@@ -2111,8 +2111,18 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.transmitModel().setSpeechProcessorEnable(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().speechProcessorEnable() ? 1 : 0; });
 
+    // Same refusal as the dax_toggle shortcut (MainWindow_Shortcuts.cpp): on a
+    // radio with no DAX plane the optimistic daxOn() flip would mark the client
+    // TX chain not-ready while the wire text is dropped.
     reg("phone.daxEnable", "DAX", "Phone/CW", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.transmitModel().setDax(v > 0.5f); },
+        [this](float v) {
+            if (!m_radioModel.hasDaxStreams()) {
+                qCWarning(lcDevices) << "phone.daxEnable refused: this radio has no DAX plane";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setDax(v > 0.5f);
+        },
         [this]() -> float { return m_radioModel.transmitModel().daxOn() ? 1 : 0; });
 
     reg("phone.monEnable", "Monitor", "Phone/CW", P::Toggle, 0, 1,
@@ -2155,8 +2165,21 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.transmitModel().setCwSwapPaddles(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().cwSwapPaddles() ? 1 : 0; });
 
+    // `cw cwl_enabled` is Flex wire text; a radio without a command plane
+    // expresses CWL as the slice MODE instead (HL2, Icom, sim). There the
+    // optimistic cwlEnabled() flip is not merely dead: zero-beat reads it and
+    // mirrors its correction (MainWindow_Wiring.cpp, #5213), so a MIDI press
+    // would tune CWU the wrong way. Refuse before the flip, and say so.
     reg("cw.cwlEnable", "CWL Frequency Offset", "Phone/CW", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.transmitModel().setCwlEnabled(v > 0.5f); },
+        [this](float v) {
+            if (m_radioModel.isConnected() && !m_radioModel.hasCommandPlane()) {
+                qCWarning(lcDevices) << "cw.cwlEnable refused: this radio takes CWL"
+                                     << "as a slice mode, not an offset flag";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setCwlEnabled(v > 0.5f);
+        },
         [this]() -> float { return m_radioModel.transmitModel().cwlEnabled() ? 1 : 0; });
 
     reg("cw.breakInEnable", "CW Break-In (QSK)", "Phone/CW", P::Toggle, 0, 1,

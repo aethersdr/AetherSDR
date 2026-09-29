@@ -5427,6 +5427,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
     connect(menu, &SpectrumOverlayMenu::flexRxAntennaSelected,
             this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(menu, &SpectrumOverlayMenu::antennaChoiceRefused,
+            this, &MainWindow::announceAntennaChoiceRefused);
 
     // ── Slice marker clicks ──────────────────────────────────────────────
     connect(sw, &SpectrumWidget::sliceClicked,
@@ -5893,6 +5895,8 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
             this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
     connect(w, &VfoWidget::flexRxAntennaSelected,
             this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(w, &VfoWidget::antennaChoiceRefused,
+            this, &MainWindow::announceAntennaChoiceRefused);
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double) {
         updateKiwiSdrVirtualTrackingForSlice(s);
     });
@@ -6458,6 +6462,17 @@ void MainWindow::wireMeters()
 
     // Wire TgxlConnection to TunerModel
     m_radioModel.tunerModel().setDirectConnection(&m_tgxlConn);
+    // OPERATE / STANDBY / BYPASS on a TGXL reached by manual IP only: no radio
+    // relays them, nothing was sent. Every surface (applet keys, the status-bar
+    // cycle, the SWR sweep's bypass) funnels through TunerModel, so one
+    // connection announces them all.
+    connect(&m_radioModel.tunerModel(), &TunerModel::relayedCommandRefused,
+            this, [this](const QString& command) {
+        qCWarning(lcDevices) << "TGXL" << command
+                             << "refused: operate/standby/bypass need a Flex radio"
+                             << "to relay them; this tuner is reached by IP only";
+        showUnsupportedControlNotice();
+    });
     // Same for the PGXL: the per-port block, the state word and the alert
     // channel live in the model rather than being decoded into the applet
     // here, so the applet has one source for them whichever path they arrive
@@ -7249,6 +7264,8 @@ void MainWindow::wireMeters()
             this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
     connect(m_appletPanel->rxApplet(), &RxApplet::flexRxAntennaSelected,
             this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(m_appletPanel->rxApplet(), &RxApplet::antennaChoiceRefused,
+            this, &MainWindow::announceAntennaChoiceRefused);
 
     // Hide APD row on radios that don't support it
     connect(&m_radioModel.transmitModel(), &TransmitModel::apdStateChanged, this, [this]() {
@@ -7608,6 +7625,16 @@ void MainWindow::recordSplitAudioMirror(bool deferRestore)
     }
 
     disarmSplitAudioMirror();
+}
+
+// The widget refused before any send, so commandDropped() never fires; this is
+// the operator's only feedback (MainWindow::showUnsupportedControlNotice()).
+void MainWindow::announceAntennaChoiceRefused(bool tx)
+{
+    qCWarning(lcDevices) << (tx ? "TX" : "RX")
+                         << "antenna choice refused: this radio publishes no"
+                         << "antenna port to choose";
+    showUnsupportedControlNotice();
 }
 
 } // namespace AetherSDR

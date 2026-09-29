@@ -5874,6 +5874,12 @@ add_test(NAME spectrum_overlay_band_highlight_test
 set_tests_properties(spectrum_overlay_band_highlight_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# AntennaChoiceGate.h: when the RX/TX antenna menus refuse instead of offering
+# invented ANT1/ANT2. Header-only predicate, no Qt.
+add_executable(antenna_choice_gate_test tests/antenna_choice_gate_test.cpp)
+target_include_directories(antenna_choice_gate_test PRIVATE src)
+add_test(NAME antenna_choice_gate_test COMMAND antenna_choice_gate_test)
+
 # What a REFUSED "Auto" tick leaves on the checkbox's accessible description and
 # tooltip, and what a later successful arm has to take back off it (#5817). Same
 # shape as spectrum_overlay_band_highlight_test above -- widget only, a plain

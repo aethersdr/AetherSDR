@@ -148,6 +148,14 @@ signals:
     void operateRequested(bool on);
     void bypassRequested(bool on);
     void autotuneRequested();
+    // OPERATE / STANDBY / BYPASS were asked of a tuner this client reaches
+    // ONLY over its direct port-9010 link. Those three are relayed by a Flex
+    // radio (the handle above), and the direct link carries no equivalent that
+    // this client speaks, so nothing was sent. Emitted instead of the silent
+    // debug-line return so the UI can say so; `command` is "operate" or
+    // "bypass". Not emitted with no tuner at all -- that is not a refusal of
+    // anything the operator can see.
+    void relayedCommandRefused(const QString& command);
 
 private:
     QString m_handle;

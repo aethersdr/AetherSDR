@@ -1,6 +1,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "FrontEndOverloadIndicator.h"
 #include "core/TxKeyingMarker.h"
+#include "AntennaChoiceGate.h"
 #include "DeclaredBandMenuPolicy.h"
 #include "DisplaySettings.h"
 #include "DspParamPopup.h"
@@ -656,6 +657,26 @@ void SpectrumOverlayMenu::buildAntPanel()
             }
             updateLoopButtonVisibility();
             return;
+        }
+        // A radio port the radio never published (the invented ANT1/ANT2
+        // placeholder, refreshAntennaCombo()) with no Kiwi receiver on offer:
+        // refuse visibly and put the combo back, rather than moving the label
+        // while nothing moves (AntennaChoiceGate.h).
+        {
+            const bool connected = m_radioModel && m_radioModel->isConnected();
+            const bool published =
+                (targetSlice && !targetSlice->rxAntennaList().isEmpty())
+                || (m_radioModel && !m_radioModel->antennaList().isEmpty());
+            const bool virtualAntennas = m_kiwiSdrManager
+                && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
+            if (rxAntennaChoiceRefused(connected, published, virtualAntennas)) {
+                emit antennaChoiceRefused(false);
+                // Queued: this runs inside the combo's own index signal, and
+                // the refresh clears and refills that combo.
+                QMetaObject::invokeMethod(this, [this] { refreshAntennaCombo(); },
+                                          Qt::QueuedConnection);
+                return;
+            }
         }
         if (targetSlice) {
             emit flexRxAntennaSelected(targetSlice->sliceId());

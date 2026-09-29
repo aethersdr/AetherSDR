@@ -1178,6 +1178,16 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("dax_toggle", "DAX TX Toggle", "TX",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
+            // A radio with no DAX plane has no DAX TX to switch: the DAX
+            // button is already hidden there (applyCapabilitiesToUi), and the
+            // optimistic daxOn() flip would mark the client TX chain not-ready
+            // (the `!tx.daxOn()` readiness tests) while the transmit set
+            // dax= wire text is dropped. Refuse before the flip, and say so.
+            if (!m_radioModel.hasDaxStreams()) {
+                qCWarning(lcDevices) << "dax_toggle refused: this radio has no DAX plane";
+                showUnsupportedControlNotice();
+                return;
+            }
             auto& tx = m_radioModel.transmitModel();
             tx.setDax(!tx.daxOn());
         });

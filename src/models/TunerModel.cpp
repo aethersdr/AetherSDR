@@ -123,6 +123,11 @@ void TunerModel::setOperate(bool on)
 {
     if (m_handle.isEmpty()) {
         qCDebug(lcTuner) << "TunerModel::setOperate: no handle yet, ignoring";
+        // A TGXL reached by manual IP alone (a non-Flex radio) is present and
+        // on screen, but only a Flex relays operate/standby. Say so.
+        if (m_directPresence) {
+            emit relayedCommandRefused(QStringLiteral("operate"));
+        }
         return;
     }
     // Neutral intent → Flex "tgxl set handle=<h> mode=" wire (via RadioModel).
@@ -136,6 +141,9 @@ void TunerModel::setBypass(bool on)
 {
     if (m_handle.isEmpty()) {
         qCDebug(lcTuner) << "TunerModel::setBypass: no handle yet, ignoring";
+        if (m_directPresence) {
+            emit relayedCommandRefused(QStringLiteral("bypass"));
+        }
         return;
     }
     // Neutral intent → Flex "tgxl set handle=<h> bypass=" wire (via RadioModel).

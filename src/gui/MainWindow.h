@@ -599,6 +599,9 @@ private:
     // cannot honor. Shared by the commandDropped path and by the
     // capability gates that refuse BEFORE the send (M0, #5263).
     void showUnsupportedControlNotice();
+    // An antenna button or combo refused a pick because the radio published no
+    // port to choose (AntennaChoiceGate.h). Log it and say so, once a session.
+    void announceAntennaChoiceRefused(bool tx);
     // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
     // from the constructor, in original order, defined in its subject TU.
     void wireModemAudioCompletion(); // MainWindow_Wiring.cpp

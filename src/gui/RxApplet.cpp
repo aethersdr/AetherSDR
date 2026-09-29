@@ -1,4 +1,5 @@
 #include "RxApplet.h"
+#include "AntennaChoiceGate.h"
 #include "SplitAudioProfile.h"
 #include "AgcModeAvailability.h"
 #include "ScopedChildWidget.h"
@@ -395,6 +396,20 @@ void RxApplet::buildUI()
                 return;
             }
             QPointer<SliceModel> slice = m_slice;
+            // Nothing real to choose -- the radio published no port and no
+            // Kiwi receiver is on offer: refuse visibly instead of opening a
+            // menu of invented ANT1/ANT2 (AntennaChoiceGate.h).
+            {
+                const bool connected = m_radioModel && m_radioModel->isConnected();
+                const bool published = !slice->rxAntennaList().isEmpty()
+                    || (m_radioModel && !m_radioModel->antennaList().isEmpty());
+                const bool virtualAntennas = m_kiwiSdrManager
+                    && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
+                if (rxAntennaChoiceRefused(connected, published, virtualAntennas)) {
+                    emit antennaChoiceRefused(false);
+                    return;
+                }
+            }
             const QString cur = slice->rxAntenna();
             QStringList menuOptions = rxAntennaOptions();
             if (m_kiwiSdrManager) {
@@ -458,6 +473,16 @@ void RxApplet::buildUI()
             "font-size: 10px; font-weight: bold; padding: 0 2px; }"
             "QPushButton:hover { color: #ff6666; }");
         connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
+            // TX has no Kiwi escape: a virtual receiver never transmits.
+            if (m_slice) {
+                const bool connected = m_radioModel && m_radioModel->isConnected();
+                const bool published = !m_slice->txAntennaList().isEmpty()
+                    || (m_radioModel && !m_radioModel->antennaList().isEmpty());
+                if (txAntennaChoiceRefused(connected, published)) {
+                    emit antennaChoiceRefused(true);
+                    return;
+                }
+            }
             const QPointer<RxApplet> self(this);
             const QPointer<SliceModel> slice(m_slice);
             const QPointer<QPushButton> button(m_txAntBtn);
