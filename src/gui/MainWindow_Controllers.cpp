@@ -2257,6 +2257,37 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.setTransmit(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().isTransmitting() ? 1 : 0; });
 
+#ifdef HAVE_RADE
+    // RADE is a modem switched on a DIGU/DIGL slice, not a radio mode, so it
+    // has no place in the mode triggers below (#6024). This calls the same
+    // activateRADE()/deactivateRADE() the dropdown's RADE entry reaches, scoped
+    // to the active slice: a press there while RADE runs on another slice moves
+    // it (activateRADE() tears the old one down first) instead of stopping RADE
+    // on a slice the operator is not looking at.
+    reg("global.rade", "RADE Modem", "Global", P::Toggle, 0, 1,
+        [this](float v) {
+            auto* s = activeSlice();
+            if (!s) return;
+            if (v > 0.5f) {
+                // Same pre-check as the FreeDV Reporter path: without DAX audio
+                // activateRADE() declines with a modal, which a controller
+                // press must not raise.
+                if (!m_radioModel.panStream()) {
+                    qCWarning(lcRade) << "global.rade ignored: RADE needs DAX audio,"
+                                      << "which this radio does not provide";
+                    return;
+                }
+                activateRADE(s->sliceId());
+            } else if (s->sliceId() == m_radeSliceId) {
+                deactivateRADE();
+            }
+        },
+        [this]() -> float {
+            const auto* s = activeSlice();
+            return (s && s->sliceId() == m_radeSliceId) ? 1 : 0;
+        });
+#endif
+
     // Through the model, not sendCommand: the raw string only ever reached a
     // Flex, so this MIDI binding silently did nothing on any other radio.
     reg("global.tnfEnable", "TNF Global", "Global", P::Toggle, 0, 1,
