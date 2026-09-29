@@ -1,7 +1,9 @@
 // #5637 §1: a TransmitModel control whose value already crossed the
 // IRadioBackend seam must not ALSO be reported as dropped.
 //
-// TransmitModel emits two things for RF power, mic level and the TX passband:
+// TransmitModel emits two things for RF power, mic level and the TX passband
+// (tune power is the exception: its value reaches the backend as setTune()'s
+// argument at key time, not through a setter of its own):
 // a typed intent (rfPowerCommandIssued / micLevelCommandIssued /
 // txFilterCommandIssued) that RadioModel hands to the backend, and the legacy
 // Flex wire text through commandReady. On a backend with no command plane the
@@ -22,6 +24,7 @@
 
 #include "TestSettingsProfile.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
 #include <QCoreApplication>
@@ -47,8 +50,10 @@ public:
     QList<int> micGains;
     QList<QPair<int, int>> txFilters;
     QList<int> cwPitches;
+    QList<QPair<bool, int>> tunes;  // (on, tunePowerPercent) per setTune()
+    bool connected{true};
     RadioCapabilities capabilities() const override { return caps; }
-    bool isConnected() const override { return true; }
+    bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override {}
     void setSliceFrequency(int, double) override {}
@@ -62,6 +67,13 @@ public:
     void setMicGain(int level) override { micGains << level; }
     void setTxFilter(int lowHz, int highHz) override { txFilters << qMakePair(lowHz, highHz); }
     void setCwPitch(int hz) override { cwPitches << hz; }
+    // Honours tunePowerPercent the way Hl2Backend::setTune does (drive set
+    // from TUNE power at key time, PR #4551): records it rather than applying.
+    void setTune(bool on, int tunePowerPercent, const TxCoordinator::Operation&,
+                 const TxCoordinator::Completion&) override
+    {
+        tunes << qMakePair(on, tunePowerPercent);
+    }
     // setVox() is deliberately NOT overridden: this backend has no VOX, so the
     // Flex text for it really does reach nothing.
 };
@@ -93,6 +105,28 @@ struct Fixture {
         radio.setBackendForTest(std::move(owned), caps.family);
         QObject::connect(&radio, &RadioModel::commandDropped, &radio,
                          [this](const QString& cmd) { dropped << cmd; });
+    }
+
+    // TUNE resolves through txSlice(); install one the way radio status would.
+    // The socket-free slice fixture is refused while connected, so the link is
+    // down only for the install.
+    bool installTxSlice()
+    {
+        backend->connected = false;
+        const bool installed = radio.automationApplySliceFixture(0, QStringLiteral("A"));
+        backend->connected = true;
+        if (!installed) {
+            return false;
+        }
+        SliceModel* slice = radio.slice(0);
+        if (!slice) {
+            return false;
+        }
+        SliceDelta delta;
+        delta.txSlice = true;
+        delta.panId = QStringLiteral("0x40000000");
+        slice->applyChanges(delta);
+        return radio.txSlice() == slice;
     }
 
     bool droppedStartingWith(const QString& prefix) const
@@ -153,6 +187,26 @@ static void cwPitchReachesSeamWithoutDropNotice()
           "cw pitch: setCwPitch(700) reached the host-modulating backend once");
     check(!f.droppedStartingWith(QStringLiteral("cw pitch ")),
           "cw pitch: no commandDropped for a pitch the backend applied");
+}
+
+// Reported from the radio (ON8ST, 2026-09-29): the TUNE power slider works on
+// the HL2 — TUNE keys at the slider's power — yet every move logged "dropping
+// transmit set tunepower=N". The value has no setter of its own: RadioModel
+// hands m_transmitModel.tunePower() to setTune() at key time (PR #4551), and a
+// backend that owns its drive and can key applies it there. So the text is not
+// a drop. The key-time half is asserted, not assumed: TUNE is keyed and the
+// backend is seen receiving the slider's value.
+static void tunePowerDeliveredAtKeyTimeWithoutDropNotice()
+{
+    Fixture f(hostModulatingTransmitter());
+    check(f.installTxSlice(), "premise: a TX slice is installed");
+    f.radio.transmitModel().setTunePower(25);
+    check(!f.droppedStartingWith(QStringLiteral("transmit set tunepower=")),
+          "tunepower: no commandDropped on a backend that applies it at key time");
+    f.radio.transmitModel().startTune();
+    check(!f.backend->tunes.isEmpty() && f.backend->tunes.first() == qMakePair(true, 25),
+          "tunepower: TUNE keyed with setTune(true, 25), the slider's value");
+    f.radio.transmitModel().stopTune();
 }
 
 // #6015 review: TransmitModel::setCwPitch emits `cw pitch N` on every call but
@@ -238,6 +292,22 @@ static void undeclaredCapabilityKeepsDropNotice()
     f.radio.transmitModel().setCwPitch(650);
     check(f.droppedStartingWith(QStringLiteral("cw pitch ")),
           "no host CW demod or radio keyer: cw pitch still raises commandDropped");
+    f.radio.transmitModel().setTunePower(20);
+    check(f.droppedStartingWith(QStringLiteral("transmit set tunepower=")),
+          "receive-only backend: tunepower still raises commandDropped");
+}
+
+// A backend that can key but does not own its drive has nothing to apply a
+// tune power WITH: setTune()'s argument is ignored there, so the text is a
+// real drop and must stay loud.
+static void tunePowerWithoutDriveOwnershipKeepsDropNotice()
+{
+    RadioCapabilities caps = hostModulatingTransmitter();
+    caps.transmitDriveControl.reset();
+    Fixture f(caps);
+    f.radio.transmitModel().setTunePower(30);
+    check(f.droppedStartingWith(QStringLiteral("transmit set tunepower=")),
+          "no drive ownership declared: tunepower still raises commandDropped");
 }
 
 int main(int argc, char** argv)
@@ -250,11 +320,13 @@ int main(int argc, char** argv)
     micLevelReachesSeamWithoutDropNotice();
     txFilterReachesSeamWithoutDropNotice();
     cwPitchReachesSeamWithoutDropNotice();
+    tunePowerDeliveredAtKeyTimeWithoutDropNotice();
     cwPitchNeverHandedToBackendKeepsDropNotice();
     cwPitchHandedToPreviousBackendKeepsDropNotice();
     cwPitchRepeatOfHandedValueStaysQuiet();
     unroutedVerbStillRaisesDropNotice();
     undeclaredCapabilityKeepsDropNotice();
+    tunePowerWithoutDriveOwnershipKeepsDropNotice();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

@@ -2222,6 +2222,15 @@ namespace {
 //   transmit set filter_low= filter_high=
 //                               txFilterCommandIssued -> setTxFilter()
 //                               hasTxFilterControls
+//   transmit set tunepower=     no setter of its own: the value is handed as
+//                               setTune()'s tunePowerPercent at key time
+//                               (dispatchTuneIntent passes tunePower()), and
+//                               a backend that owns its drive applies it there
+//                               (HL2 applyDrive, Icom setTxPower; PR #4551).
+//                               canTransmit + transmitDriveControl declared:
+//                               without canTransmit TUNE never keys, and
+//                               without drive ownership there is nothing to
+//                               apply a tune power with.
 //   cw pitch N                  cwPitchChanged / cwPitchCommandIssued -> setCwPitch()
 //                               N == cwPitchHandedToBackend: the value THIS
 //                               backend was last handed. Not a capability,
@@ -2262,7 +2271,7 @@ bool transmitCommandDeliveredThroughSeam(const QString& command,
     for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
         const QString& key = it.key();
         bool routed = false;
-        if (key == QLatin1String("rfpower")) {
+        if (key == QLatin1String("rfpower") || key == QLatin1String("tunepower")) {
             routed = caps.canTransmit && caps.transmitDriveControl.has_value();
         } else if (key == QLatin1String("miclevel")) {
             routed = caps.canTransmit;
