@@ -6139,6 +6139,15 @@ add_executable(hl2_mode_vocabulary_test tests/hl2_mode_vocabulary_test.cpp)
 target_include_directories(hl2_mode_vocabulary_test PRIVATE src tests)
 target_link_libraries(hl2_mode_vocabulary_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_mode_vocabulary_test COMMAND hl2_mode_vocabulary_test)
+# HL2 spots stay in this client: alwaysUseClientSideSpots must be true, or
+# every DX-cluster/RBN/WSJT-X/POTA/manual spot is sent as `spot add` wire text
+# that RadioModel::sendCmd drops for want of a command plane, and none is ever
+# drawn. Separate target for the same reason as the lines above: the fixture
+# that would have carried an HL2 seam assertion is retired.
+add_executable(hl2_client_side_spots_declaration_test tests/hl2_client_side_spots_declaration_test.cpp)
+target_include_directories(hl2_client_side_spots_declaration_test PRIVATE src tests)
+target_link_libraries(hl2_client_side_spots_declaration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_client_side_spots_declaration_test COMMAND hl2_client_side_spots_declaration_test)
 add_executable(hl2_band_memory_test
     tests/hl2_band_memory_test.cpp
 )
@@ -6685,6 +6694,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_pan_limits_declaration_test
     hl2_fm_controls_declaration_test
     hl2_mode_vocabulary_test
+    hl2_client_side_spots_declaration_test
     hl2_gain_split_test
     icom_identity_test
     icom_control_profile_test
