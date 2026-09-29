@@ -2762,6 +2762,10 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     MetisClient::Params mp;
     mp.host = host;
     mp.port = request.port ? request.port : kMetisPort;
+    const QHostAddress sessionLocalAddress(
+        request.params.value(QStringLiteral("hl2.localAddress")).toString());
+    if (sessionLocalAddress.protocol() == QAbstractSocket::IPv4Protocol)
+        mp.localAddress = sessionLocalAddress;
     mp.sampleRate = sampleRateEnum(m_sampleRateHz);
     // The connect handshake IS the first commit: this rate goes into
     // MetisClient's initial command bank, so from here the radio is running at
@@ -2796,7 +2800,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
             for (const auto& d : m_metis->discover(400, host, kMetisPort)) {
                 // Keep the interface even when an older/short discovery reply
                 // omits byte 20; it is still the route that reached the radio.
-                mp.localAddress = d.localAddress;
+                if (mp.localAddress.isNull())
+                    mp.localAddress = d.localAddress;
                 if (d.reply.numRx > 0) {
                     m_boardMaxRx = d.reply.numRx;
                     break;

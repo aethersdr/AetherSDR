@@ -687,8 +687,19 @@ void RadioModel::handRestoredStateToBackend()
 // auto-reconnect timer, and a keychain read is async. IcomCredentials keeps a
 // process-lifetime session cache primed by the connect dialog precisely so this
 // call cannot block on the keyring — see its header.
-static void populateFamilyParams(RadioConnectRequest& req, const QString& family)
+static void populateFamilyParams(RadioConnectRequest& req, const QString& family,
+                                 const QHostAddress& sessionBindAddress = {})
 {
+    if (family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0
+        && sessionBindAddress.protocol() == QAbstractSocket::IPv4Protocol) {
+        // The manual HL2 probe may have found the radio through a specific
+        // interface while the operator left the source selector on Auto. Keep
+        // that observed route for the backend and for automatic reconnects;
+        // this is session state, not an Explicit preference.
+        req.params.insert(QStringLiteral("hl2.localAddress"),
+                          sessionBindAddress.toString());
+    }
+
     // The DDC0 rate and ADC options are connect-time preferences selected in
     // ConnectionPanel's ANAN-only manual-connect rows. Operating state such as
     // frequency is deliberately absent until this backend participates in the
@@ -2842,7 +2853,7 @@ RadioModel::RadioModel(QObject* parent)
                 // The RECONNECT path needs these too. Populating only the
                 // initial connect gives a session that authenticates once and
                 // then fails every automatic retry.
-                populateFamilyParams(req, m_family);
+                populateFamilyParams(req, m_family, m_lastInfo.sessionBindAddress);
                 handRestoredStateToBackend();
                 m_backend->connectRadio(req);
             }
@@ -3984,7 +3995,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         req.port   = info.port;
         req.serial = info.serial;
         req.serialIdentity = info.serialIdentity;
-        populateFamilyParams(req, info.family);
+        populateFamilyParams(req, info.family, info.sessionBindAddress);
         handRestoredStateToBackend();
         m_backend->connectRadio(req);
     }
@@ -4278,7 +4289,7 @@ bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
         request.host = selectedRadio.address.toString();
         request.port = selectedRadio.port;
         request.serial = selectedRadio.serial;
-        populateFamilyParams(request, m_family);
+        populateFamilyParams(request, m_family, selectedRadio.sessionBindAddress);
         request.params.insert(QStringLiteral("icom.wakeOnConnect"), false);
         request.params.insert(QStringLiteral("icom.waitingForWake"), true);
         request.params.insert(QStringLiteral("icom.civAddress"), address);
