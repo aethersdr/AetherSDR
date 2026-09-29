@@ -514,6 +514,7 @@ private:
     // meter's repaint asks the spectrum overlay to refresh.
     QElapsedTimer m_labelDirtyClock;
     qint64 m_lastLabelDirtyMs{-1};
+    bool m_smartMtrLabelsVisible{false};
     float m_micDbfs{-40.0f}; // latest mic level (dBFS); SmartMTR TX scale
     float m_micPeakDbfs{-40.0f}; // latest mic peak (dBFS, radio MICPEAK stat)
     // Latest TX-meter values, cached for the SmartMTR TX scales (see the setters).

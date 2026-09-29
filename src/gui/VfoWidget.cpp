@@ -4279,6 +4279,19 @@ void VfoWidget::pushSmartMtrOptions()
 
 void VfoWidget::onSmartMtrRepainted()
 {
+    // The animated bar is painted inside the flag, independently of the
+    // spectrum's optional value-label overlay. An empty overlay needs no
+    // rebuild on each bar frame. Do erase its last labels immediately when a
+    // reading disappears, even inside the normal animation throttle window.
+    if (m_smartMtrWidget->extremeLabels().isEmpty()) {
+        if (m_smartMtrLabelsVisible) {
+            m_smartMtrLabelsVisible = false;
+            m_lastLabelDirtyMs = -1;
+            emit smartMtrLabelsChanged();
+        }
+        return;
+    }
+
     // The meter repaints up to ~120 Hz while markers move; the spectrum's
     // static-overlay redraw (which draws the value labels) is comparatively
     // costly, so throttle the refresh requests to ~20 Hz.
@@ -4286,6 +4299,7 @@ void VfoWidget::onSmartMtrRepainted()
     if (m_lastLabelDirtyMs >= 0 && now - m_lastLabelDirtyMs < 50)
         return;
     m_lastLabelDirtyMs = now;
+    m_smartMtrLabelsVisible = true;
     emit smartMtrLabelsChanged();
 }
 

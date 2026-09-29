@@ -6592,6 +6592,35 @@ add_test(NAME rx_applet_squelch_reconciliation_test
 set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Socket-free real VFO/SmartMTR paint and label invalidation regression.
+add_executable(vfo_meter_overlay_invalidation_test
+    tests/vfo_meter_overlay_invalidation_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(vfo_meter_overlay_invalidation_test PRIVATE src)
+target_link_libraries(vfo_meter_overlay_invalidation_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME vfo_meter_overlay_invalidation_test
+         COMMAND vfo_meter_overlay_invalidation_test)
+set_tests_properties(vfo_meter_overlay_invalidation_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # FM filter capability and edge routing through the real RX and VFO widgets.
 # Injects capability data; no socket, USB access or synthetic firmware peer.
 add_executable(fm_filter_controls_test
@@ -6946,6 +6975,7 @@ set(AETHER_SETTINGS_CONSUMERS
     client_display_settings_test
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
+    vfo_meter_overlay_invalidation_test
     fm_filter_controls_test
     wfm_controls_test
     broadcast_overlay_test
