@@ -89,12 +89,35 @@ enum class RecordStartDecision {
 // in front of an operator whose problem is entirely different. A wrong
 // explanation is worse than none.
 //
-// `clientSideMode`      AppSettings "RecordingMode" == "Client" (the default).
+// `clientSideMode`      Whether THIS CLIENT is the recorder: the operator's
+//                       "RecordingMode" == "Client" (the default), or
+//                       Radio-Side selected on a radio with no radio-side
+//                       recorder to reach — see recordsOnClient() below.
 // `pcAudioEnabled`      AppSettings "PcAudioEnabled" == "True" (the default).
 // `backendOwnsRxAudio`  IRadioBackend::ownsRxAudio() — the connected backend
 //                       demodulates in-process and feeds the recorder over the
 //                       seam, so `remote_audio_rx` (and PC Audio) is not in the
 //                       path at all. False for Flex, true for HL2 and the sim.
+// Which recorder does the operator's REC/PLAY reach? The one routing decision
+// every surface shares (VFO flag, AetherRX, MIDI, and this recorder's own start
+// policy), so they cannot disagree about it.
+//
+// Radio-Side recording is `slice set <n> record=/play=` on the radio's command
+// plane. A radio with no command plane (HL2, ANAN, Icom, RTL) has no radio-side
+// recorder to reach: the wire text was dropped, the REC flag waited on a
+// recordOn echo that never came, and nothing was recorded anywhere. There the
+// setting falls back to the client recorder — the only recorder that exists —
+// rather than leaving a button that does nothing. A radio that can record keeps
+// the operator's choice exactly as before.
+//
+// `clientSideSetting`            AppSettings "RecordingMode" == "Client".
+// `radioSideRecordingReachable`  RadioModel::radioSideRecordingReachable().
+constexpr bool recordsOnClient(bool clientSideSetting,
+                               bool radioSideRecordingReachable)
+{
+    return clientSideSetting || !radioSideRecordingReachable;
+}
+
 constexpr RecordStartDecision evaluateRecordStart(bool clientSideMode,
                                                   bool pcAudioEnabled,
                                                   bool backendOwnsRxAudio)

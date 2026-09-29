@@ -107,14 +107,22 @@ int QsoRecorder::recordingDurationSecs() const
 
 // ── Manual control ──────────────────────────────────────────────────────────
 
+bool QsoRecorder::recordsOnClientNow() const
+{
+    const bool radioSideReachable =
+        !m_radioSideRecordingReachable || m_radioSideRecordingReachable();
+    return recordsOnClient(
+        AppSettings::instance().value("RecordingMode", "Client").toString() == "Client",
+        radioSideReachable);
+}
+
 // Live read of every policy input — the two settings plus the backend's own
 // answer about whether it feeds us over the seam. Nothing is cached, so a
 // backend swap or a settings change between two starts is picked up for free.
 RecordStartDecision QsoRecorder::evaluateStart() const
 {
     auto& s = AppSettings::instance();
-    const bool clientSide =
-        s.value("RecordingMode", "Client").toString() == "Client";
+    const bool clientSide = recordsOnClientNow();
     const bool pcAudio =
         s.value("PcAudioEnabled", "True").toString() == "True";
     // No provider installed (unit tests, no radio) reads as false: the Flex
@@ -412,8 +420,9 @@ void QsoRecorder::onMoxChanged(bool mox)
 // ends. A CW over needs exactly this and must NOT touch m_transmitting (#4281).
 void QsoRecorder::applyOverBookkeeping(bool overActive)
 {
-    // Only auto-record when in client-side recording mode
-    bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+    // Only auto-record when this client is the recorder -- including Radio-Side
+    // selected on a radio with no radio-side recorder (recordsOnClient()).
+    const bool clientSide = recordsOnClientNow();
     if (overActive) {
         // TX started — begin recording if auto-record is on and not already
         // recording. Auto trigger: a standing refusal is reported once, not on

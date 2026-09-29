@@ -123,6 +123,21 @@ public:
         m_backendOwnsRxAudio = std::move(provider);
     }
 
+    // Answers "can the radio record on its own side?"
+    // (RadioModel::radioSideRecordingReachable). Read live on every start, for
+    // the reason given above. With Radio-Side selected on a radio that cannot
+    // record, this recorder is the one that records — see recordsOnClient() in
+    // QsoRecordStartPolicy.h. Unset (the default) reads as true, which keeps
+    // the operator's Radio-Side choice binding: the pre-existing behaviour.
+    void setRadioSideRecordingReachableProvider(std::function<bool()> provider)
+    {
+        m_radioSideRecordingReachable = std::move(provider);
+    }
+    // recordsOnClient() over the live "RecordingMode" setting and the provider
+    // above: is THIS recorder the one the operator's REC/PLAY reaches? Every
+    // routing surface asks this, so none can disagree with the start policy.
+    bool recordsOnClientNow() const;
+
     // Would startRecording() be allowed right now? Reads the same live settings
     // and the same provider startRecording() does, so callers that want to ask
     // BEFORE committing to a UI state change (the automation bridge, wanting a
@@ -320,6 +335,8 @@ private:
     // See setBackendOwnsRxAudioProvider(). Null until MainWindow installs it,
     // and null reads as false — the Flex answer, and the safe one.
     std::function<bool()> m_backendOwnsRxAudio;
+    // See setRadioSideRecordingReachableProvider(). Null reads as true.
+    std::function<bool()> m_radioSideRecordingReachable;
 
     static constexpr int WAV_HEADER_SIZE = 44;
 };

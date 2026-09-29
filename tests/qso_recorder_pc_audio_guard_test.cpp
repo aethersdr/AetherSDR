@@ -243,6 +243,43 @@ int main(int argc, char** argv)
         EXPECT_EQ_INT(fileCount(tmp.path()), 0);
     }
 
+    // ── RADIO-SIDE ON A RADIO WITH NO RADIO-SIDE RECORDER ───────────────────
+    // The two cases above hold only where the radio CAN record. On a radio
+    // without a command plane (HL2, ANAN, Icom, RTL) `slice set <n> record=1`
+    // has nowhere to go: the REC flag latched and nothing was recorded
+    // anywhere. There this recorder is the only one that exists, so Radio-Side
+    // falls back to it — and the file on disk is the assertion, not the
+    // recorder's account of itself. The provider is live: the same recorder
+    // refuses again the moment a radio that can record is attached.
+    {
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        setMode("Radio", "False");
+
+        bool radioCanRecord = false;
+        QsoRecorder rec;
+        rec.setRecordingDir(tmp.path());
+        rec.setBackendOwnsRxAudioProvider([]() { return true; });   // HL2 shape
+        rec.setRadioSideRecordingReachableProvider([&]() { return radioCanRecord; });
+
+        EXPECT_TRUE(recordsOnClient(false, false));
+        EXPECT_TRUE(!recordsOnClient(false, true));
+        EXPECT_TRUE(recordsOnClient(true, true));
+        EXPECT_TRUE(recordsOnClient(true, false));
+
+        EXPECT_TRUE(rec.recordsOnClientNow());
+        EXPECT_TRUE(rec.evaluateStart() == RecordStartDecision::Allow);
+        rec.startRecording();
+        EXPECT_TRUE(rec.isRecording());
+        EXPECT_EQ_INT(fileCount(tmp.path()), 1);
+        rec.stopRecording();
+
+        radioCanRecord = true;   // a radio that records is attached
+        EXPECT_TRUE(!rec.recordsOnClientNow());
+        EXPECT_TRUE(rec.evaluateStart()
+                    == RecordStartDecision::BlockedRecordingModeIsRadio);
+    }
+
     // ── Auto-record must not report the same refusal on every key-down ──────
     // onMoxChanged() retries the start on EVERY MOX rising edge. Wired to a
     // dialog, an unchanged refusal would raise one per transmission and stack

@@ -1326,6 +1326,26 @@ MainWindow::MainWindow(QWidget* parent)
         auto* backend = m_radioModel.backend();
         return backend && backend->ownsRxAudio();
     });
+    // Radio-Side recording needs a radio-side recorder to reach; where there is
+    // none, this recorder records instead (recordsOnClient(),
+    // QsoRecordStartPolicy.h). Read live, like the provider above.
+    m_qsoRecorder->setRadioSideRecordingReachableProvider([this]() {
+        return m_radioModel.radioSideRecordingReachable();
+    });
+    // And say so when it happens: the operator chose Radio Side, and a file
+    // appearing on this computer instead must not be a surprise.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStarted, this,
+            [this](const QString&) {
+        const bool radioSideSelected =
+            AppSettings::instance().value("RecordingMode", "Client").toString()
+            != QLatin1String("Client");
+        if (radioSideSelected && !m_radioModel.radioSideRecordingReachable()) {
+            statusBar()->showMessage(
+                tr("This radio can't record on its own side — recording on this "
+                   "computer instead."),
+                6000);
+        }
+    });
 
     // A refused start (#4629). The recorder lives below the UI seam and can only
     // report the REASON — the wording is ours. Informational only, deliberately:
@@ -1334,9 +1354,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_qsoRecorder, &QsoRecorder::recordingBlocked, this,
             [this](AetherSDR::RecordStartDecision reason) {
         if (reason == AetherSDR::RecordStartDecision::BlockedRecordingModeIsRadio) {
-            // Unreachable from the GUI — every operator-facing path tests
-            // RecordingMode and sends radio-side to SliceModel without ever
-            // touching this recorder. Handled rather than swallowed because a
+            // Unreachable from the GUI — every operator-facing path asks
+            // QsoRecorder::recordsOnClientNow() and sends radio-side to
+            // SliceModel without ever touching this recorder. Handled rather than swallowed because a
             // silently discarded refusal is the failure mode this whole change
             // exists to remove; if a future caller forgets to route, this says
             // so instead of leaving a stray header-only WAV.
@@ -3366,9 +3386,8 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
         // not pinned to one slice, so radio-side goes to whichever slice is
         // active. The recorder can refuse to start (#4629), so the button is
         // set from what it actually did, never from the click.
-        const auto clientSide = [] {
-            return AppSettings::instance().value("RecordingMode", "Client")
-                       .toString() == "Client";
+        const auto clientSide = [this] {
+            return m_qsoRecorder->recordsOnClientNow();
         };
         connect(m_rxDialog, &AetherRxDialog::recordToggled,
                 this, [this, clientSide](bool on) {
@@ -3500,8 +3519,7 @@ void MainWindow::toggleRxPlaybackTransmit(const TxCoordinator::Request& input)
 void MainWindow::syncAetherRxRecordButtons()
 {
     if (!m_rxDialog) return;
-    const bool clientSide =
-        AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+    const bool clientSide = m_qsoRecorder && m_qsoRecorder->recordsOnClientNow();
     if (clientSide) {
         m_rxDialog->setRecordOn(m_qsoRecorder && m_qsoRecorder->isRecording());
         m_rxDialog->setPlayOn(m_qsoRecorder && m_qsoRecorder->isPlaying());

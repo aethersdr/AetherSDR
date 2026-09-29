@@ -6004,7 +6004,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     // Record/playback — route to radio or client-side QsoRecorder (#1297)
     connect(w, &VfoWidget::recordToggled, this, [this, w, sliceId](bool on) {
-        bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+        const bool clientSide = m_qsoRecorder->recordsOnClientNow();
         if (clientSide) {
             if (on)
                 m_qsoRecorder->startRecording();
@@ -6040,7 +6040,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     // Client-side playback
     connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
-        bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+        const bool clientSide = m_qsoRecorder->recordsOnClientNow();
         if (clientSide) {
             if (on)
                 m_qsoRecorder->startPlayback();
