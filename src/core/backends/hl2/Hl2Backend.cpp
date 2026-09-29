@@ -9050,8 +9050,10 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // MeterModel applies its own forward-power ballistics on top.
     //
     // Published through the peak hold, not raw. See kFwdPeakReleaseAlpha for
-    // why a 10 Hz instantaneous sample of a speech envelope reads ~10 dB low
-    // and what the hold does and does not recover.
+    // why the last-value sample MetisClient's 10 Hz coalesce used to keep read
+    // a speech envelope ~10 dB low (the radio reports ~190 a second; the 10 Hz
+    // was ours), why the input while keyed is now the window maximum, and what
+    // the hold does and does not recover.
     if (t.forwardPowerRaw) {
         // KEYED, the loudest RADDR-1 sample of the publish window rather than
         // the last one: the radio re-samples the detector ~190 times a second

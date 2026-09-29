@@ -1501,22 +1501,28 @@ private:
     // power, temperature and bias current, with no peak detector and no
     // averaging anywhere in the gateware (rtl/slow_adc.v, rtl/control.v ~L262 —
     // tier 1 on the source-precedence ladder). Each reading is the RF envelope
-    // at whatever instant the I2C transaction happened to land, and we see one
-    // every kTelemetryMinIntervalMs.
+    // at whatever instant the I2C transaction happened to land. The radio
+    // re-samples it on every other EP6 response and reports it in RADDR 1 up
+    // to ~190 times a second (control.v:261; measured on the DUT, receive
+    // only).
     //
-    // Speech peaks last tens of milliseconds. Sampling that envelope at 10 Hz
-    // lands on a peak essentially never, so an SSB reading sat 8-12 dB below
-    // PEP while a constant-envelope FT8 or WSPR transmission — where every
-    // instant IS the peak — read full scale. That is the whole of the reported
-    // "6 W on FT8, 1 W on voice": both were making the same PEP.
+    // THIS COMMENT USED TO SAY the samples arrived at 10 Hz. That was the
+    // host's own last-value coalesce in MetisClient (kTelemetryMinIntervalMs),
+    // which kept one sample in ~19, not the radio. Speech peaks last tens of
+    // milliseconds, so a 10 Hz sample of the envelope landed on one
+    // essentially never: an SSB reading sat 8-12 dB below PEP while a
+    // constant-envelope FT8 or WSPR transmission — where every instant IS the
+    // peak — read full scale.
     //
-    // No host-side filter can recover a peak that was never sampled. What a
-    // hold CAN do is accumulate the maximum across a transmission: ~30
-    // independent samples in a 3 s over lands within a few dB of true PEP, and
-    // converges further the longer the operator talks. So this is honest as an
-    // estimate that settles, and dishonest as an instantaneous reading — which
-    // is why the meter description says so and why the raw counts keep being
-    // logged and published for the bridge alongside it.
+    // Keyed, the input is now the MAXIMUM of each publish window
+    // (Hl2Telemetry::forwardPowerPeakRaw), so the peaks the radio reports
+    // reach the hold. The ~190 samples a second are still instants of an
+    // envelope, not a peak detector's output, so this remains an estimate:
+    // what the hold adds is carrying the maximum across windows so the reading
+    // does not fall back between syllables. Honest as an estimate that
+    // settles, dishonest as an instantaneous reading — which is why the meter
+    // description says so and why the raw counts keep being logged and
+    // published for the bridge alongside it.
     //
     // Instant attack, slow release, in WATTS rather than counts because the
     // calibration curve is markedly non-linear and a peak held in counts would
