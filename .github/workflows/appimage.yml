@@ -255,6 +255,7 @@ jobs:
           set -o pipefail
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_HD_FM=OFF \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
             -DREQUIRE_KEYCHAIN=ON \

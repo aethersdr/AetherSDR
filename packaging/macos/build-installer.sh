@@ -12,7 +12,7 @@ VERSION=$(grep 'project(AetherSDR' CMakeLists.txt | grep -oE '[0-9]+\.[0-9]+\.[0
 echo "=== Building AetherSDR macOS installer v${VERSION} ==="
 
 # 1. Build app
-cmake -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_HD_FM=OFF
 cmake --build "${BUILD_DIR}" -j$(sysctl -n hw.ncpu)
 
 # 1b. Build HAL plugin (separate build because libASPL FetchContent conflicts with main Ninja build)

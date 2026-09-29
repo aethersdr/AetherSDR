@@ -356,6 +356,7 @@ jobs:
           KEYCHAIN_FLAG="-DREQUIRE_KEYCHAIN=ON"
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_HD_FM=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ matrix.deploy_target }}" \
