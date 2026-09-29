@@ -1867,6 +1867,18 @@ void RadioModel::wireBackendReceiverState()
                     [this, s](bool on, int level) {
                 if (m_backend) m_backend->setSliceSquelch(s->sliceId(), on, level);
             });
+            // APF and the AGC-off level: the same hole, found later. Both were
+            // Flex wire text only, so on a host-DSP radio the APF button, its
+            // level slider, ToggleApf/WheelApf and the AGC-T slider with AGC
+            // Off moved the model and reached nothing.
+            connect(s, &SliceModel::apfCommandIssued, this,
+                    [this, s](bool on, int level) {
+                if (m_backend) m_backend->setSliceApf(s->sliceId(), on, level);
+            });
+            connect(s, &SliceModel::agcOffLevelCommandIssued, this,
+                    [this, s](int level) {
+                if (m_backend) m_backend->setSliceAgcOffLevel(s->sliceId(), level);
+            });
             // FM repeater controls are distinct neutral intents. Flex
             // continues to use SliceModel's wire text; every other backend gets
             // the same operator action through the seam instead of silently
