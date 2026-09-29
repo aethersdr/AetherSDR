@@ -214,8 +214,11 @@ public:
     // the two fight on reconnect. On a backend with no command plane there is no
     // radio opinion to defer to, the host bank owns the channel, and a recalled
     // step would otherwise never take because the wire command that normally
-    // round-trips it is dropped. Named for its one caller so the exception stays
-    // visible; see RadioModel::recallCachedMemory().
+    // round-trips it is dropped. Named for its first caller so the exception
+    // stays visible; see RadioModel::recallCachedMemory(). Its only other caller
+    // is RadioModel::applyClientOwnedSliceStep(), under the same condition --
+    // no command plane, so no radio opinion -- for CAT set_ts, the RX applet's
+    // STEP control and a net's Tune Now.
     void    applyRecalledStepHz(int hz);
     QVector<int> stepList() const { return m_stepList; }
     int     daxChannel()  const { return m_daxChannel; }

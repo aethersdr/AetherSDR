@@ -1410,6 +1410,12 @@ void MainWindow::registerShortcutActions()
                 // NR → NR2
                 s->setNr(false);
                 enableNr2WithWisdom();
+            } else if (!m_radioModel.radioSideNoiseReductionAvailable()) {
+                // off → NR2. A radio with no radio-side DSP has no NR step: it
+                // set the model's NR flag and nothing else, so the first press
+                // of the cycle did nothing audible. The rest of the cycle is
+                // host DSP and runs unchanged.
+                enableNr2WithWisdom();
             } else {
                 // off → NR
                 s->setNr(true);
@@ -1418,7 +1424,9 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("anf_toggle", "ANF Toggle", "DSP",
         QKeySequence(), [this]() {
             auto* s = activeSlice();
-            if (s) s->setAnf(!s->anfOn());
+            if (s && !m_radioModel.requestRadioAutoNotch(s, !s->anfOn())) {
+                showUnsupportedControlNotice();
+            }
         });
 
     // ── AGC ─────────────────────────────────────────────────────────────

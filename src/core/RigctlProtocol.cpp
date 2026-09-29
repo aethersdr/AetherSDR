@@ -2072,7 +2072,13 @@ QString RigctlProtocol::cmdSetTs(const QString& arg)
     if (a.isEmpty() || !ok || hz < 0) return rprt(-1);
     const int id = slice->sliceId();
     const QString cmd = QStringLiteral("slice set %1 step=%2").arg(id).arg(hz);
-    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+    QMetaObject::invokeMethod(m_model, [model = m_model, cmd, id, hz]() {
+        // A radio without a command plane owns no step to command: it is the
+        // client-side quantity the tuning wheel reads, and the wire text below
+        // would be dropped while the client was told RPRT 0.
+        if (model->applyClientOwnedSliceStep(id, hz)) {
+            return;
+        }
         model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
     return rprt(0);

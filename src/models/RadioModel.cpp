@@ -22,6 +22,7 @@
 #include "core/backends/rtl/RtlSdrBackend.h"    // RTL-SDR backend (family "rtl")
 #endif
 #include "core/AppSettings.h"
+#include "core/BandStackSettings.h"
 #include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/ShutdownTrace.h"
 #include "core/CwTrace.h"
@@ -4414,6 +4415,107 @@ void RadioModel::rebootRadio()
 RadioCapabilities RadioModel::backendCapabilities() const
 {
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
+}
+
+// ── Controls whose Flex wire text has a working path elsewhere ──────────────
+// See the header block. None of these writes wire text: the Flex caller keeps
+// its own send, and these only answer for the radios where that send is dropped.
+
+bool RadioModel::applyClientOwnedSliceStep(int sliceId, int hz)
+{
+    if (hasCommandPlane()) {
+        return false;   // the radio owns the step; the caller's wire text sets it
+    }
+    // No command plane: the wire text would be dropped at sendCmd() and the
+    // operator told the control is unsupported, while the step it asked for is
+    // a client-side quantity on this radio (the tuning wheel and the RX applet
+    // read SliceModel::stepHz). Handled here, including when there is nothing
+    // to apply it to, so the caller never falls through to a dead send.
+    if (SliceModel* s = slice(sliceId); s && hz > 0) {
+        s->applyRecalledStepHz(hz);
+    }
+    return true;
+}
+
+bool RadioModel::radioSideNoiseReductionAvailable() const
+{
+    // Fails open without a backend: the pre-connect behaviour is unchanged.
+    return !m_backend || backendCapabilities().hasRadioSideDsp;
+}
+
+bool RadioModel::requestRadioNoiseReduction(SliceModel* slice, bool on)
+{
+    if (!slice) {
+        return false;
+    }
+    if (!radioSideNoiseReductionAvailable()) {
+        qCWarning(lcProtocol) << "RadioModel: radio noise reduction refused:"
+                              << "this radio declares no radio-side DSP";
+        return false;
+    }
+    slice->setNr(on);
+    return true;
+}
+
+bool RadioModel::requestRadioAutoNotch(SliceModel* slice, bool on)
+{
+    if (!slice) {
+        return false;
+    }
+    // A command plane carries `slice set <n> anf=` somewhere that answers it:
+    // a Flex, or the Demo radio's synthetic connection, which turns it into the
+    // generator's audible notch (SimBackend::setDemoAnf) although the Demo
+    // declares no radio-side DSP. Only a radio with neither is refused.
+    if (!hasCommandPlane() && !radioSideNoiseReductionAvailable()) {
+        qCWarning(lcProtocol) << "RadioModel: radio auto notch refused:"
+                              << "this radio declares no radio-side DSP";
+        return false;
+    }
+    slice->setAnf(on);
+    return true;
+}
+
+bool RadioModel::requestAmCarrierLevel(int level)
+{
+    if (m_backend && !backendCapabilities().hasAmCarrierLevel) {
+        qCWarning(lcProtocol) << "RadioModel: AM carrier level refused:"
+                              << "this radio declares no AM carrier control";
+        return false;
+    }
+    m_transmitModel.setAmCarrierLevel(level);
+    return true;
+}
+
+void RadioModel::recallBandStackReceiveDsp(SliceModel* slice,
+                                           const BandStackEntry& entry)
+{
+    if (!slice) {
+        return;
+    }
+    // Same fields, same comparisons and the same relative order as the
+    // hand-written wire text this replaced, so a Flex receives the same
+    // commands.
+    if (!entry.agcMode.isEmpty() && entry.agcMode != slice->agcMode()) {
+        slice->setAgcMode(entry.agcMode);
+    }
+    if (entry.agcThreshold != slice->agcThreshold()) {
+        slice->setAgcThreshold(entry.agcThreshold);
+    }
+    if (entry.nbOn != slice->nbOn()) {
+        slice->setNb(entry.nbOn);
+    }
+    if (entry.nbLevel != slice->nbLevel()) {
+        slice->setNbLevel(entry.nbLevel);
+    }
+    if (!radioSideNoiseReductionAvailable()) {
+        return;
+    }
+    if (entry.nrOn != slice->nrOn()) {
+        slice->setNr(entry.nrOn);
+    }
+    if (entry.nrLevel != slice->nrLevel()) {
+        slice->setNrLevel(entry.nrLevel);
+    }
 }
 
 void RadioModel::setTransmitFrequencyCheck(bool on)

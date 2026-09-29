@@ -1970,12 +1970,29 @@ void MainWindow::registerMidiParams()
         },
         [this]() -> float { auto* s = activeSlice(); return s && s->adaptiveFilterEnabled() ? 1 : 0; });
 
+    // The RADIO's own NR and ANF. On a radio with no radio-side DSP (HL2,
+    // ANAN, RTL) the VFO hides these buttons, and a mapped knob reaching
+    // setNr()/setAnf() there moved the model and nothing else. Refused the
+    // way the buttons are gated, and said so; the host modules (NR2, RN2,
+    // NR4, DFNR) have their own parameters below.
     reg("rx.nrEnable", "Noise Reduction", "RX", P::Toggle, 0, 1,
-        [this](float v) { if (auto* s = activeSlice()) s->setNr(v > 0.5f); },
+        [this](float v) {
+            if (auto* s = activeSlice()) {
+                if (!m_radioModel.requestRadioNoiseReduction(s, v > 0.5f)) {
+                    showUnsupportedControlNotice();
+                }
+            }
+        },
         [this]() -> float { auto* s = activeSlice(); return s && s->nrOn() ? 1 : 0; });
 
     reg("rx.anfEnable", "Auto Notch", "RX", P::Toggle, 0, 1,
-        [this](float v) { if (auto* s = activeSlice()) s->setAnf(v > 0.5f); },
+        [this](float v) {
+            if (auto* s = activeSlice()) {
+                if (!m_radioModel.requestRadioAutoNotch(s, v > 0.5f)) {
+                    showUnsupportedControlNotice();
+                }
+            }
+        },
         [this]() -> float { auto* s = activeSlice(); return s && s->anfOn() ? 1 : 0; });
 
     reg("rx.squelchEnable", "Squelch Enable", "RX", P::Toggle, 0, 1,
@@ -2118,8 +2135,14 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.transmitModel().setVoxLevel(static_cast<int>(v)); },
         [this]() -> float { return m_radioModel.transmitModel().voxLevel(); });
 
+    // Gated on the same capability that dims the Phone applet's AM carrier
+    // slider: `transmit set am_carrier=` reaches only a radio that declares it.
     reg("phone.amCarrier", "AM Carrier", "Phone/CW", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.transmitModel().setAmCarrierLevel(static_cast<int>(v)); },
+        [this](float v) {
+            if (!m_radioModel.requestAmCarrierLevel(static_cast<int>(v))) {
+                showUnsupportedControlNotice();
+            }
+        },
         [this]() -> float { return m_radioModel.transmitModel().amCarrierLevel(); });
 
     reg("cw.speed", "CW Speed", "Phone/CW", P::Slider, 5, 100,
