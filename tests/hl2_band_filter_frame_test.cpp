@@ -165,7 +165,8 @@ int main(int argc, char** argv)
     //
     // m_oneShot is cleared nowhere -- not in start() alongside m_txSeq,
     // m_roundRobin, m_haveRxSeq, m_drops and m_linkUp -- and stop() deliberately
-    // preserves everything that is not an unfinished IO-board write. So a bank
+    // preserves everything that is not an unfinished IO-board write or a drive
+    // bank (section 6c). So a bank
     // queued by a band change while disconnected would ride the next session's
     // first frames. Queuing nothing is what closes that here.
     {
@@ -394,6 +395,69 @@ int main(int argc, char** argv)
         const Ep2 rx = c.buildNextControlPacket();
         check(addrOf(bank(rx, 1)) == kC0Rx1Freq && payloadOf(bank(rx, 1)) == kRxHz,
               "running: and it is on the next frame");
+    }
+
+    // ---- 6c. an undrained drive bank does not survive stop() ----
+    //
+    // Section 6 is a setter called on a stopped client; this is the other way
+    // a bank crosses the boundary. One queued WHILE RUNNING and not yet drained
+    // when the session ends was kept by stop(), whose erase took only the IO
+    // board's I2C banks, and the next start()'s two priming bursts -- six
+    // frames, before Hl2Backend's drive-0 -- would carry it. For the 0x09 bank that is the PA enable and
+    // the ATU tune request from a session that has ended.
+    //
+    // stop() now drops the 0x09 bank beside the I2C banks. It still keeps the
+    // RX and TX NCO banks, which assert nothing on the transmit side; the
+    // second half pins that, so an erase widened into a blanket clear fails.
+    {
+        constexpr std::uint32_t kRxHz = 10'136'000;
+        constexpr std::uint32_t kTxHz = 10'138'000;
+        constexpr int kDrive = 180;
+
+        MetisClient c;
+        c.enableTransmit(true);
+        MetisClientTestAccess::setStreaming(c);
+        c.setTxFrequencyHz(kTxHz);
+        c.setRxFrequencyHz(kRxHz);
+        c.setTxDriveLevel(kDrive);              // 0x09, PA enabled
+        c.setAtuTuneRequest(true);              // 0x09 again, tune requested
+        c.setIoBoardTxFrequencyHz(kTxHz);       // five I2C banks
+        check(MetisClientTestAccess::oneShotQueued(c) == 9,
+              "running: TX NCO, RX NCO, two drive banks and five I2C banks queued");
+
+        c.stop();                               // before a single frame drained
+        check(MetisClientTestAccess::oneShotQueued(c) == 2,
+              "stopped mid-queue: only the TX and RX NCO banks survive stop()");
+        MetisClientTestAccess::setStreaming(c); // the next session, as section 6
+
+        bool sawDrive = false, sawPa = false, sawTune = false, sawI2c = false;
+        bool txFreqFirst = false, rxFreqSecond = false;
+        for (int i = 0; i < 8; ++i) {           // both priming bursts and more
+            const Ep2 pkt = c.buildNextControlPacket();
+            for (int w = 0; w < 2; ++w) {
+                const std::uint8_t* cc = bank(pkt, w);
+                if (addrOf(cc) == kC0TxDrive) {
+                    sawDrive = true;
+                    sawPa = sawPa || paEnabledIn(cc);
+                    sawTune = sawTune || tuneRequestedIn(cc);
+                }
+                sawI2c = sawI2c || addrOf(cc) == kC0I2c2;
+            }
+            // The kept banks drain in the order they were queued, ahead of
+            // the rotation (which would open on RX1, then gain).
+            if (i == 0)
+                txFreqFirst = addrOf(bank(pkt, 1)) == kC0TxFreq
+                           && payloadOf(bank(pkt, 1)) == kTxHz;
+            if (i == 1)
+                rxFreqSecond = addrOf(bank(pkt, 1)) == kC0Rx1Freq
+                            && payloadOf(bank(pkt, 1)) == kRxHz;
+        }
+        check(!sawDrive, "stopped mid-queue: no drive bank of the ended session reaches the next");
+        check(!sawPa, "stopped mid-queue: the ended session's PA enable is not on the wire");
+        check(!sawTune, "stopped mid-queue: the ended session's ATU tune request is not on the wire");
+        check(!sawI2c, "stopped mid-queue: the unfinished IO-board write is still discarded");
+        check(txFreqFirst, "stopped mid-queue: the kept TX NCO bank is the next session's first");
+        check(rxFreqSecond, "stopped mid-queue: and the kept RX NCO bank its second");
     }
 
     if (g_failures == 0)

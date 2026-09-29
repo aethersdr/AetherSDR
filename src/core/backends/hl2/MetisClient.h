@@ -765,7 +765,9 @@ private slots:
 private:
     void sendControlPacket();           // one round-robin EP2 C&C packet
     // Append `bank` to m_oneShot only while a session is running -- the gate
-    // for the live-control setters that queue a single bank (#4579).
+    // for the live-control setters that queue a single bank (#4579). It keeps
+    // a bank out of the queue while stopped; what an ended session left
+    // undrained is stop()'s to discard or keep.
     // setIoBoardTxFrequencyHz() refuses at its top instead, for its own dedupe.
     void queueOneShotIfRunning(const Cc& bank);
     // One datagram off this socket, whatever endpoint it came from: the EP6/EP4
