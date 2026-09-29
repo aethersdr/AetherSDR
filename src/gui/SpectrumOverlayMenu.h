@@ -382,6 +382,9 @@ private:
     // True until a connected backend says otherwise, so a disconnected session
     // keeps the button rather than having it appear on connect.
     bool m_notchesSupported{true};
+    // Mirrors setDaxStreamsAvailable(). updateLayout() owns every menu
+    // button's visibility, so the capability has to live where it can see it.
+    bool m_daxStreamsAvailable{true};
     void applyTuningRangeToBandButtons();
     void updateActiveBandHighlight();
 

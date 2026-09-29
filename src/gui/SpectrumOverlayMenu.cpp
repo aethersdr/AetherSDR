@@ -1628,7 +1628,18 @@ void SpectrumOverlayMenu::updateLayout()
         // A button the radio cannot back stays hidden even when expanded, and
         // the ones below it close the gap — a blank slot would read as a
         // rendering fault rather than an absent feature.
-        const bool available = (idx != kBtnAddTnf) || m_notchesSupported;
+        //
+        // EVERY capability-hidden button has to be named here. This loop runs
+        // on every expand/collapse and sets each button's visibility outright,
+        // so a hide applied anywhere else is undone by the next toggle — which
+        // is how the DAX button (hidden by setDaxStreamsAvailable() on a radio
+        // with no DAX plane) came back on a Hermes-Lite 2 the first time the
+        // operator collapsed and reopened the menu, offering WFM on a stream
+        // nothing feeds.
+        const bool available =
+            (idx == kBtnAddTnf) ? m_notchesSupported
+            : (idx == kBtnDax)  ? m_daxStreamsAvailable
+                                : true;
         btn->setVisible(m_expanded && available);
         if (m_expanded && available) {
             btn->move(pad, y);
@@ -3111,8 +3122,15 @@ void SpectrumOverlayMenu::setDaxStreamsAvailable(bool available)
     // The button lives in the menu row and the panel is a popup off it, so both
     // have to go — hiding only the button would leave the panel reachable if it
     // were already open when the capability changed.
-    if (m_menuBtns.size() > kBtnDax && m_menuBtns[kBtnDax]) {
-        m_menuBtns[kBtnDax]->setVisible(available);
+    // Through the layout rather than a bare setVisible, for the reason
+    // setNotchesSupported() gives: updateLayout() re-applies every button's
+    // visibility on each expand/collapse, so a direct hide here was undone by
+    // the next toggle — and a direct SHOW put the DAX button on a collapsed
+    // menu with every other button hidden.
+    const bool changed = m_daxStreamsAvailable != available;
+    m_daxStreamsAvailable = available;
+    if (changed) {
+        updateLayout();
     }
     if (!available && m_daxPanel) {
         m_daxPanel->hide();

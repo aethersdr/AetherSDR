@@ -5874,6 +5874,43 @@ add_test(NAME spectrum_overlay_band_highlight_test
 set_tests_properties(spectrum_overlay_band_highlight_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The overlay DAX button stays hidden across expand/collapse on a radio with no
+# DAX plane (updateLayout() used to re-show it). Same link set and shape as
+# spectrum_overlay_band_highlight_test above.
+add_executable(spectrum_overlay_dax_availability_test
+    tests/spectrum_overlay_dax_availability_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_dax_availability_test PRIVATE src)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_dax_availability_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_dax_availability_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_dax_availability_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_dax_availability_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_dax_availability_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_dax_availability_test
+         COMMAND spectrum_overlay_dax_availability_test)
+set_tests_properties(spectrum_overlay_dax_availability_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # AntennaChoiceGate.h: when the RX/TX antenna menus refuse instead of offering
 # invented ANT1/ANT2. Header-only predicate, no Qt.
 add_executable(antenna_choice_gate_test tests/antenna_choice_gate_test.cpp)
@@ -6816,6 +6853,7 @@ set(AETHER_SETTINGS_CONSUMERS
     vkamp_connection_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test
+    spectrum_overlay_dax_availability_test
     spectrum_overlay_auto_rf_gain_refusal_test
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
