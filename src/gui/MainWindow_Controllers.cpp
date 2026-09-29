@@ -557,6 +557,10 @@ void MainWindow::handleFlexControlButton(int button, int action,
             if (!m_radioModel.hasCommandPlane()) {
                 qCDebug(lcDevices) << "SplitActiveSlice ignored:"
                                    << "this backend takes no Flex slice-create command";
+                // A log line alone is a hardware button that silently does
+                // nothing. Say so the way the keyboard split_toggle refusal
+                // does (MainWindow_Shortcuts.cpp); one notice per session.
+                showUnsupportedControlNotice();
                 return;
             }
             if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
@@ -584,6 +588,7 @@ void MainWindow::handleFlexControlButton(int button, int action,
             || !m_radioModel.hasCwTextStoredMacros()) {
             qCDebug(lcCw) << "CWX macro action" << actionName
                           << "ignored: radio has no stored text-keyer macros";
+            showUnsupportedControlNotice();
         } else {
             bool ok = false;
             const int idx = actionName.mid(4).toInt(&ok);
@@ -1094,6 +1099,7 @@ void MainWindow::dispatchHidAction(const QString& actionName,
             if (!m_radioModel.hasCommandPlane()) {
                 qCDebug(lcDevices) << "SplitActiveSlice (HID) ignored:"
                                    << "this backend takes no Flex slice-create command";
+                showUnsupportedControlNotice();
                 return;
             }
             auto* s = activeSlice();
