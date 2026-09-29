@@ -21,7 +21,7 @@ namespace AetherSDR {
 // ============================================================================
 
 // The measurement the control currently shows. Extend here for new kinds.
-// Signal is the RX scale; the rest are TX scales (see DisplaySettings::TxMeter).
+// Signal (dBm) and RelativeSignal (dBFS) are RX scales; the rest are TX scales.
 enum class MeterKind { RelativeSignal, Signal, MicLevel, SWR, Power, Compression };
 
 // Forward-power scale headroom: the scale top sits this far above the radio's

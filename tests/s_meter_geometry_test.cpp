@@ -1190,6 +1190,9 @@ int main(int argc, char** argv)
 
     meter.setTransmitting(false);
     meter.setRelativeLevel(-40.0f, 7);
+    expect(std::isnan(meter.levelDbm()), "relative RF has no calibrated widget accessor value");
+    expect(meter.accessibleDescription().contains("dBFS")
+        && meter.accessibleDescription().contains("uncalibrated"), "relative RF description names its actual reference");
     expect(meter.accessibleValueText().contains("dBFS")
         && !meter.accessibleValueText().contains("dBm")
         && !meter.sUnitsText().contains("S9"), "relative RF is never labeled dBm or S-units");

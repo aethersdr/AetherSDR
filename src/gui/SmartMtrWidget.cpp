@@ -502,7 +502,7 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
 void SmartMtrWidget::drawTypeLabel(QPainter& p, const SmartMtrGeometry& g) const
 {
     // TX meters only — the RX signal meter shows no type label.
-    if (!m_showTypeLabel || m_kind == MeterKind::Signal)
+    if ((!m_showTypeLabel && m_kind != MeterKind::RelativeSignal) || m_kind == MeterKind::Signal)
         return;
 
     QString text;

@@ -4131,6 +4131,7 @@ void VfoWidget::syncSmartMtrSettingsControls()
 
 void VfoWidget::setSignalLevel(float dbm)
 {
+    if (m_relativeSignal) { m_dbmLabel->setAccessibleDescription({}); }
     m_relativeSignal = false;
     m_receiveMeterReadingActive = false;
     m_signalDbm = dbm;
@@ -4455,6 +4456,7 @@ void VfoWidget::setTransmitting(bool tx)
 void VfoWidget::setReceiveMeterReading(
     const KiwiSdrProtocol::MeterReading& reading)
 {
+    if (m_relativeSignal) { m_dbmLabel->setAccessibleDescription({}); }
     m_relativeSignal = false;
     m_receiveMeterReading = reading;
     m_receiveMeterReadingActive = true;

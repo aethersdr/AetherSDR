@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <limits>
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QPixmap>
@@ -31,8 +32,8 @@ public:
     QSize sizeHint() const override { return m_geometry.sizing.preferred; }
     QSize minimumSizeHint() const override { return m_geometry.sizing.minimum; }
 
-    // Current reading in dBm.
-    float levelDbm() const { return m_levelDbm; }
+    // Calibrated reading only; a relative RF reading has no dBm equivalent.
+    float levelDbm() const { return m_relativeLevel ? std::numeric_limits<float>::quiet_NaN() : m_levelDbm; }
 
     // Reading as S-units string (e.g. "S7", "S9+20").
     QString sUnitsText() const;
@@ -89,6 +90,7 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    void updateReceiveLevel(float value);
     void updateNeedleTarget();
     void animateNeedle();
     void updatePeakHoldValue();

@@ -180,8 +180,16 @@ void SMeterWidget::setFaceTheme(AnalogMeterFaceTheme theme)
 
 void SMeterWidget::setLevel(float dbm) // a11y-check: skip -- settled update is timer-throttled
 {
+    if (m_relativeLevel) {
+        setAccessibleDescription(tr("Signal strength meter, shows S-units or TX power"));
+    }
     m_relativeLevel = false;
     m_receiveMeterReadingActive = false;
+    updateReceiveLevel(dbm);
+}
+
+void SMeterWidget::updateReceiveLevel(float dbm)
+{
     m_levelDbm = dbm;
 
     // Peak hold (existing needle/triangle behavior)
@@ -215,14 +223,20 @@ void SMeterWidget::setRelativeLevel(std::optional<float> dbfs, int receiverId)
     const bool reset = !m_relativeLevel || receiverId != m_relativeReceiver || !valid;
     const float value = valid ? *dbfs : -120.0f;
     if (reset) { m_peakDbm = value; m_peakHoldDbm = value; m_peakHoldTimerRunning = false; }
-    setLevel(value);
+    if (!m_relativeLevel) {
+        setAccessibleDescription(tr("Relative RF peak FFT bin in dBFS; uncalibrated, not dBm or audio level"));
+    }
     m_relativeLevel = true; m_relativeValid = valid; m_relativeReceiver = receiverId;
-    updateNeedleTarget(); update(); scheduleAccessibleValue();
+    m_receiveMeterReadingActive = false;
+    updateReceiveLevel(value);
 }
 
 void SMeterWidget::setReceiveMeterReading(
     const KiwiSdrProtocol::MeterReading& reading)
 {
+    if (m_relativeLevel) {
+        setAccessibleDescription(tr("Signal strength meter, shows S-units or TX power"));
+    }
     m_relativeLevel = false;
     m_receiveMeterReading = reading;
     m_receiveMeterReadingActive = true;
