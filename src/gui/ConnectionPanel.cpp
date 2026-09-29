@@ -3011,24 +3011,60 @@ void ConnectionPanel::resetManualConnectButton()
 ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
     const QString& ip, const RadioBindSettings& bindSettings)
 {
-    QUdpSocket hpsdr;
     // Honour the Advanced source-path choice the same way the Flex probe does.
     // On a VPN that exposes more than one adapter, letting the OS pick can send
     // the request out the wrong interface and the reply never comes back.
     const bool explicitBind = bindSettings.mode == RadioBindMode::Explicit
                            && !bindSettings.bindAddress.isNull();
-    const bool bound = explicitBind
-        ? hpsdr.bind(bindSettings.bindAddress, 0)
-        : hpsdr.bind(QHostAddress(QHostAddress::AnyIPv4), 0);
-    if (!bound) {
-        // Report the bind failure as itself, not as radio silence: the likely
-        // cause is an Advanced source path naming an adapter that has gone
-        // away, where "check the radio" is the wrong advice. Matches
-        // probeFlexRadio().
+    std::vector<std::unique_ptr<QUdpSocket>> sockets;
+    QString bindError;
+    if (explicitBind) {
+        auto socket = std::make_unique<QUdpSocket>();
+        if (socket->bind(bindSettings.bindAddress, 0)) {
+            sockets.push_back(std::move(socket));
+        } else {
+            bindError = socket->errorString();
+        }
+    } else {
+        // Auto must not ask the route table to choose one adapter on a
+        // multi-homed host. Send the directed probe from every active IPv4
+        // address and keep the source address of the socket that gets the
+        // valid reply. This is the manual-IP equivalent of Hl2Discovery's
+        // per-interface sweep.
+        for (const auto& candidate : NetworkPathResolver::enumerateIpv4Candidates()) {
+            auto socket = std::make_unique<QUdpSocket>();
+            if (socket->bind(candidate.address, 0))
+                sockets.push_back(std::move(socket));
+        }
+
+        // Preserve the old wildcard behaviour on hosts where Qt exposes no
+        // usable IPv4 candidate at all.
+        if (sockets.empty()) {
+            auto socket = std::make_unique<QUdpSocket>();
+            if (socket->bind(QHostAddress::AnyIPv4, 0))
+                sockets.push_back(std::move(socket));
+        }
+    }
+
+    if (sockets.empty()) {
+        // REPORT THE BIND FAILURE AS ITSELF, not as silence from the radio.
+        //
+        // Returning a bare false here made this indistinguishable from "nothing
+        // answered", and the caller renders that as "check the radio is powered,
+        // idle, and reachable" — sending the operator to power-cycle a radio
+        // that was never contacted. The Explicit path exists because a VPN can
+        // expose several adapters, so the likeliest cause of a bind failure is
+        // an Advanced source path naming an adapter that has since gone away:
+        // precisely the case where pointing at the radio is wrong.
+        //
+        // probeFlexRadio() already reports this properly; the two paths had
+        // drifted apart. (PR #4528 review.)
         if (explicitBind) {
+            const QString address = bindSettings.bindAddress.toString();
+            const QString error = QStringLiteral("Failed to bind %1: %2")
+                                      .arg(address, bindError);
             m_manualSourceWarningLabel->setText(
-                QStringLiteral("Failed to bind %1: %2")
-                    .arg(bindSettings.bindAddress.toString(), hpsdr.errorString()));
+                error);
             m_manualSourceWarningLabel->setVisible(true);
             updateManualAdvancedVisibility();
             setManualMessage(
@@ -3040,7 +3076,7 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
         } else {
             setManualMessage(
                 QStringLiteral("Could not open a UDP socket to probe for a "
-                               "Hermes-Lite 2: %1").arg(hpsdr.errorString()),
+                               "Hermes-Lite 2."),
                 true);
             reportStartupProbeFailure(
                 QStringLiteral("Could not open a UDP socket to reach the Hermes-Lite 2."));
@@ -3077,15 +3113,25 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
     }
 
     const auto request = hl2::discoveryRequest();
-    // A send that never left is not a radio that stayed silent. Without this the
-    // two are indistinguishable and both surface as "check the radio is powered".
-    if (hpsdr.writeDatagram(reinterpret_cast<const char*>(request.data()),
-                            qint64(request.size()),
-                            dest,
-                            hl2::kMetisPort) < 0) {
+    bool sent = false;
+    QString lastSendError;
+    for (const auto& socket : sockets) {
+        // A send that never left is not a radio that stayed silent. Without
+        // this the two are indistinguishable and both surface as "check the
+        // radio is powered".
+        if (socket->writeDatagram(reinterpret_cast<const char*>(request.data()),
+                                  qint64(request.size()),
+                                  dest,
+                                  hl2::kMetisPort) >= 0) {
+            sent = true;
+        } else {
+            lastSendError = socket->errorString();
+        }
+    }
+    if (!sent) {
         setManualMessage(
             QStringLiteral("Could not send a discovery request to %1: %2")
-                .arg(dest.toString(), hpsdr.errorString()),
+                .arg(dest.toString(), lastSendError),
             true);
         reportStartupProbeFailure(
             QStringLiteral("Could not send a discovery request to %1.").arg(dest.toString()));
@@ -3094,79 +3140,83 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
 
     QDeadlineTimer deadline(600);
     while (!deadline.hasExpired()) {
-        if (!hpsdr.waitForReadyRead(static_cast<int>(deadline.remainingTime())))
-            break;
-        while (hpsdr.hasPendingDatagrams()) {
-            const QByteArray d = hpsdr.receiveDatagram().data();
-            const auto reply = hl2::parseDiscoveryReply(
-                std::span<const std::uint8_t>(
-                    reinterpret_cast<const std::uint8_t*>(d.constData()), std::size_t(d.size())));
-            // A bare 0xEFFE reply is any openHPSDR board (Hermes, Mercury,
-            // Red Pitaya, …). Only board id 0x06 is a Hermes-Lite; gate on it
-            // so we never drive a foreign board through Hl2Backend. Same
-            // predicate Hl2Discovery applies to broadcast replies.
-            if (!reply || !reply->isHermesLite2())
-                continue;
+        for (const auto& socket : sockets) {
+            if (!socket->hasPendingDatagrams()) {
+                const qint64 remaining = deadline.remainingTime();
+                if (remaining <= 0)
+                    break;
+                socket->waitForReadyRead(static_cast<int>(std::min<qint64>(10, remaining)));
+            }
+            while (socket->hasPendingDatagrams()) {
+                const QByteArray d = socket->receiveDatagram().data();
+                const auto reply = hl2::parseDiscoveryReply(
+                    std::span<const std::uint8_t>(
+                        reinterpret_cast<const std::uint8_t*>(d.constData()), std::size_t(d.size())));
+                // A bare 0xEFFE reply is any openHPSDR board (Hermes, Mercury,
+                // Red Pitaya, …). Only board id 0x06 is a Hermes-Lite; gate on it
+                // so we never drive a foreign board through Hl2Backend. Same
+                // predicate Hl2Discovery applies to broadcast replies.
+                if (!reply || !reply->isHermesLite2())
+                    continue;
 
-            RadioInfo info;
-            info.family   = QString::fromLatin1(kFamilyHl2);
-            info.address  = dest;
-            info.port     = hl2::kMetisPort;            // Metis, not Flex 4992
-            info.model    = QStringLiteral("Hermes-Lite 2");
-            info.name     = info.model;
-            info.serial   = hl2::Hl2Discovery::macToSerial(reply->mac);
-            // Same nickname the broadcast sweep shows for this MAC. An HL2 has no
-            // on-radio name store, so the operator's custom name lives client-side
-            // keyed by serial — and hard-coding the model here meant a radio named
-            // in Radio Setup showed that name when found locally and
-            // "Hermes-Lite 2" when reached over the VPN. Needs the serial first.
-            info.nickname = hl2::Hl2Discovery::effectiveNickname(info.family, info.serial, info.model);
-            info.version  = QString::number(reply->gatewareVersion);
-            // Same label Hl2Discovery sets on the broadcast path — this
-            // is the SECOND place an HL2 RadioInfo is built, and a field
-            // set in only one of them is not set at all.
-            info.versionLabel = QStringLiteral("Gateware");
-            // Streaming (status byte 0x03) means another client already owns
-            // the radio. Reflect it rather than hard-coding Available.
-            info.inUse    = reply->streaming;
-            info.status   = reply->streaming ? QStringLiteral("In_Use")
-                                             : QStringLiteral("Available");
-            // Reached over a routed path, not a discovery broadcast — the same
-            // flag the Flex manual probe sets, so MainWindow remembers the
-            // address and the UI treats the link as remote.
-            info.isRouted           = true;
-            info.bindSettings       = bindSettings;
-            info.sessionBindAddress = bindSettings.mode == RadioBindMode::Explicit
-                ? bindSettings.bindAddress
-                : QHostAddress();
+                RadioInfo info;
+                info.family   = QString::fromLatin1(kFamilyHl2);
+                info.address  = dest;
+                info.port     = hl2::kMetisPort;            // Metis, not Flex 4992
+                info.model    = QStringLiteral("Hermes-Lite 2");
+                info.name     = info.model;
+                info.serial   = hl2::Hl2Discovery::macToSerial(reply->mac);
+                // Same nickname the broadcast sweep shows for this MAC. An HL2 has no
+                // on-radio name store, so the operator's custom name lives client-side
+                // keyed by serial — and hard-coding the model here meant a radio named
+                // in Radio Setup showed that name when found locally and
+                // "Hermes-Lite 2" when reached over the VPN. Needs the serial first.
+                info.nickname = hl2::Hl2Discovery::effectiveNickname(info.family, info.serial, info.model);
+                info.version  = QString::number(reply->gatewareVersion);
+                // Same label Hl2Discovery sets on the broadcast path — this
+                // is the SECOND place an HL2 RadioInfo is built, and a field
+                // set in only one of them is not set at all.
+                info.versionLabel = QStringLiteral("Gateware");
+                // Streaming (status byte 0x03) means another client already owns
+                // the radio. Reflect it rather than hard-coding Available.
+                info.inUse    = reply->streaming;
+                info.status   = reply->streaming ? QStringLiteral("In_Use")
+                                                 : QStringLiteral("Available");
+                // Reached over a routed path, not a discovery broadcast — the same
+                // flag the Flex manual probe sets, so MainWindow remembers the
+                // address and the UI treats the link as remote.
+                info.isRouted           = true;
+                info.bindSettings       = bindSettings;
+                info.sessionBindAddress = socket->localAddress();
 
-            resetManualConnectButton();
+                resetManualConnectButton();
 
-            if (reply->streaming) {
-                // #4448: HPSDR Protocol 1 is single-client. Fail closed rather
-                // than wedging both clients; there is no takeover path.
+                if (reply->streaming) {
+                    // #4448: HPSDR Protocol 1 is single-client. Fail closed rather
+                    // than wedging both clients; there is no takeover path.
+                    setManualMessage(
+                        QStringLiteral("The Hermes-Lite 2 at %1 is already in use by another client "
+                                       "and can't be shared.").arg(ip),
+                        true);
+                    reportStartupProbeFailure(
+                        QStringLiteral("The Hermes-Lite 2 at %1 is in use by another client.")
+                            .arg(ip));
+                    return Hl2ProbeResult::Answered;
+                }
+
+                saveManualProfile(ip, bindSettings, info.sessionBindAddress);
+                rememberManualIp(ip);
+                // #4470: the low-bandwidth checkbox is what caps the HL2 panadapter
+                // span, and this page is the one place it is on screen. Save it
+                // before we hand off, or ticking it does nothing.
+                saveLowBandwidthPreference(m_lowBwCheck->isChecked());
                 setManualMessage(
-                    QStringLiteral("The Hermes-Lite 2 at %1 is already in use by another client "
-                                   "and can't be shared.").arg(ip),
-                    true);
-                reportStartupProbeFailure(
-                    QStringLiteral("The Hermes-Lite 2 at %1 is in use by another client.")
-                        .arg(ip));
+                    QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.").arg(ip), false);
+                // A staged Icom credential belongs to the attempt it was staged for.
+                clearPendingIcomCredentials();
+                finishManualProbe(info);
                 return Hl2ProbeResult::Answered;
             }
-
-            saveManualProfile(ip, bindSettings, info.sessionBindAddress);
-            rememberManualIp(ip);
-            // #4470: the low-bandwidth checkbox is what caps the HL2 panadapter
-            // span, and this page is the one place it is on screen. Save it
-            // before we hand off, or ticking it does nothing.
-            saveLowBandwidthPreference(m_lowBwCheck->isChecked());
-            setManualMessage(
-                QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.").arg(ip), false);
-            // A staged Icom credential belongs to the attempt it was staged for.
-            clearPendingIcomCredentials();
-            finishManualProbe(info);
-            return Hl2ProbeResult::Answered;
         }
     }
 

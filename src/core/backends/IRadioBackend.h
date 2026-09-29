@@ -12,6 +12,7 @@
 #include <QByteArray>
 #include <QLoggingCategory>
 #include <QMap>
+#include <QHostAddress>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -49,6 +50,8 @@ struct RadioConnectRequest {
     QString serial;         // when a family identifies radios by serial
     QVariantMap params;     // family-specific extras (namespaced by the backend)
     RadioSerialIdentity serialIdentity;
+    // Local IPv4 address that reached the radio; null lets the OS choose.
+    QHostAddress localBindAddress;
 };
 
 // Complete radio-owned memory state applied after the common frequency/mode
