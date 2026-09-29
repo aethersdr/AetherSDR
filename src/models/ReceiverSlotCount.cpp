@@ -2,6 +2,7 @@
 
 #include "core/backends/RadioCapabilities.h"
 #include "models/RadioModel.h"
+#include "models/RadioSession.h"
 #include "models/SliceModel.h"
 
 #include <algorithm>
@@ -40,7 +41,15 @@ int ReceiverSlotCount::forCeiling(int declaredCeiling, const QList<SliceModel*>&
             letters = std::max(letters, slice->sliceId() + 1);
         }
     }
-    return letters;
+    return std::min(letters, RadioSession::kCatPorts);
+}
+
+int ReceiverSlotCount::catLetters(const RadioModel* radio)
+{
+    if (!radio || !radio->isConnected()) {
+        return RadioSession::kCatPorts;
+    }
+    return forCeiling(radio->maxSlices(), radio->slices());
 }
 
 void ReceiverSlotCount::refresh()

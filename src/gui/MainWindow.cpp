@@ -1947,9 +1947,9 @@ MainWindow::MainWindow(QWidget* parent)
     // backend that declares its own capacity may only know it once the link is
     // up, and may revise it mid-session; that arrives on capabilitiesChanged,
     // which the edge above never sees. The CAT applet's VFO letters take the
-    // same number (catPortTargetCount), so both are refreshed together.
-    // Disconnect (count 0) is left to onConnectionStateChanged, which clears
-    // the tabs and trims the CAT letters itself.
+    // same number (ReceiverSlotCount::catLetters), so both are refreshed
+    // together. On disconnect (count 0) the CAT letters are reset by
+    // onConnectionStateChanged, through applyCatPortCount().
     auto* receiverSlots = new ReceiverSlotCount(&m_radioModel, this);
     connect(receiverSlots, &ReceiverSlotCount::countChanged, this, [this](int count) {
         if (count <= 0) {
@@ -6360,7 +6360,6 @@ void MainWindow::applyCatPortCount()
 {
     auto& s = AppSettings::instance();
     const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
-    const int  target   = catPortTargetCount();  // bounds applet VFO letters, not port count
 
     for (int i = 0; i < kCatPorts; ++i) {
         if (!catPort(i)) continue;
@@ -6371,7 +6370,8 @@ void MainWindow::applyCatPortCount()
         // A CAT port is a control channel, not a 1:1 mapping to a slice — don't
         // cap how many configured ports start by the radio's receiver count
         // (#3693). Receiver capacity bounds the VFO-letter choices per port
-        // (catPortTargetCount() feeds the applet), not whether a port runs.
+        // (ReceiverSlotCount::catLetters() feeds the applet), not whether a
+        // port runs.
         const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024);
 
         if (shouldRun && !catPort(i)->isRunning()) {
@@ -6392,9 +6392,11 @@ void MainWindow::applyCatPortCount()
     auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
     if (applet) {
         applet->setCatEnabled(masterOn);
-        // Show hardware max when connected; fall back to kMaxPorts (all letters) when not.
-        const int hwSlices = (target > 1) ? target : kCatPorts;
-        applet->setMaxSlices(hwSlices);
+        // The radio's own count while connected — one letter on a one-receiver
+        // radio — and every letter when no radio is connected. Keyed on the
+        // connection, not on the count: `count <= 1 means disconnected` stopped
+        // holding once the count came from the backend (#5776).
+        applet->setMaxSlices(ReceiverSlotCount::catLetters(&m_radioModel));
     }
 }
 
@@ -6814,9 +6816,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // settle timer happened to fire.
         m_daxRestore.onDisconnected();
 
-        // Radio disconnected: trim CAT ports back to 1 so apps on channel A
-        // stay connected through brief reconnects, higher channels stop cleanly.
-        applyCatPortCount();  // catPortTargetCount() returns 1 when !connected
+        // Radio disconnected: re-apply the CAT port states, and offer every
+        // VFO letter again (ReceiverSlotCount::catLetters with no radio).
+        applyCatPortCount();
 
         if (m_layoutRestoreTimer) {
             m_layoutRestoreTimer->stop();

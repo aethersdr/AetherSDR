@@ -38,7 +38,19 @@ public:
     // (the HL2 at a wider span), and a shrink must not strand a live receiver
     // without a tab or a CAT letter. Slots, not a count: the tabs are indexed by
     // global slice id, so a receiver in slot C needs three letters even alone.
+    //
+    // Never more than there are letters (A-H, RadioSession::kCatPorts). A slice
+    // id is wire data, and the RX applet builds one tab per unit of this number,
+    // so the floor must not be able to grow it without bound.
     static int forCeiling(int declaredCeiling, const QList<SliceModel*>& slices);
+
+    // The VFO letters the CAT applet offers. Every letter while no radio is
+    // connected — nothing to describe, and a CAT client configured ahead of the
+    // connect keeps its choice. While connected, the radio's own count, even
+    // when that is one: a one-receiver radio (ANAN, RTL-SDR, the demo backend,
+    // an HL2 at its connect edge before its ceiling arrives) has one letter to
+    // offer, not all of them.
+    static int catLetters(const RadioModel* radio);
 
     // forCeiling(radio->maxSlices(), radio->slices()) while connected; 0 while
     // disconnected, when there is no radio for the number to describe.

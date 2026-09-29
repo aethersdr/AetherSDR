@@ -23,6 +23,9 @@
 // when a backend announces a revision (setupBackend(); a test-injected backend
 // is not wired through that relay). Socket-free: nothing is opened or keyed.
 //
+// The CAT applet's letter count, connected and not, is catLetters(), which
+// MainWindow::applyCatPortCount() hands to the applet as it is.
+//
 // NOT covered here: MainWindow's wiring of countChanged into
 // AppletPanel::setMaxSlices and the CAT applet. That wiring is two calls in a
 // lambda; MainWindow cannot be built in a unit test.
@@ -194,6 +197,43 @@ void testDisconnectWithdrawsTheCount()
     check("and says so", !spy.isEmpty() && spy.constLast().at(0).toInt() == 0);
 }
 
+void testTheFloorIsBoundedByTheLettersThereAre()
+{
+    // A slice id is wire data. The floor above raises the answer to id + 1,
+    // and the RX applet builds one tab per unit — so without a bound a slice
+    // id of 20 would build 21 tabs. There are eight letters, A-H.
+    SliceModel far(20);
+    check("a slice id of 20 yields eight letters, not twenty-one",
+          ReceiverSlotCount::forCeiling(1, QList<SliceModel*>{&far}) == 8);
+    check("and a declared ceiling above eight is held to eight",
+          ReceiverSlotCount::forCeiling(12, {}) == 8);
+}
+
+void testAOneReceiverRadioOffersOneCatLetter()
+{
+    // ANAN, RTL-SDR and the demo backend declare maxSlices = 1, and an HL2
+    // does at its connect edge. The CAT applet's "offer every letter" fallback
+    // is for a radio that is NOT connected; a connected one-receiver radio has
+    // exactly one letter to offer.
+    Fixture f;
+    check("with no radio connected every CAT letter is offered (A-H)",
+          ReceiverSlotCount::catLetters(&f.radio) == 8);
+
+    f.connect();
+    check("a connected radio declaring one receiver offers exactly one CAT letter",
+          ReceiverSlotCount::catLetters(&f.radio) == 1);
+
+    // The HL2's edge: its ceiling arrives after connect and raises the count.
+    f.revise(4);
+    check("the ceiling revised to 4 after connect then offers A-D",
+          ReceiverSlotCount::catLetters(&f.radio) == 4);
+
+    f.backend->connected = false;
+    f.publish();
+    check("and after disconnect every letter is offered again",
+          ReceiverSlotCount::catLetters(&f.radio) == 8);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -207,6 +247,8 @@ int main(int argc, char** argv)
     testAFallingCeilingDoesNotStrandARunningReceiver();
     testTheFloorIsBySlotNotByCount();
     testDisconnectWithdrawsTheCount();
+    testTheFloorIsBoundedByTheLettersThereAre();
+    testAOneReceiverRadioOffersOneCatLetter();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
     return g_failed == 0 ? 0 : 1;
 }
