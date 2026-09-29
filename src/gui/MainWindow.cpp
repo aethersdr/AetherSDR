@@ -1333,18 +1333,28 @@ MainWindow::MainWindow(QWidget* parent)
         return m_radioModel.radioSideRecordingReachable();
     });
     // And say so when it happens: the operator chose Radio Side, and a file
-    // appearing on this computer instead must not be a surprise.
+    // appearing on this computer instead must not be a surprise. Said once,
+    // not once per recording: with auto-record every over starts one, and a
+    // 6 s line per transmission is furniture, not a notice. Same shape as
+    // QsoRecorder::beginRecording's m_lastAutoBlocked -- an unchanged
+    // condition is reported once; a client recording started outside the
+    // fallback (the operator switched to Client) re-arms it.
     connect(m_qsoRecorder, &QsoRecorder::recordingStarted, this,
-            [this](const QString&) {
+            [this, noticeShown = false](const QString&) mutable {
         const bool radioSideSelected =
             AppSettings::instance().value("RecordingMode", "Client").toString()
             != QLatin1String("Client");
-        if (radioSideSelected && !m_radioModel.radioSideRecordingReachable()) {
-            statusBar()->showMessage(
-                tr("This radio can't record on its own side — recording on this "
-                   "computer instead."),
-                6000);
+        if (!radioSideSelected || m_radioModel.radioSideRecordingReachable()) {
+            noticeShown = false;
+            return;
         }
+        if (noticeShown)
+            return;
+        noticeShown = true;
+        statusBar()->showMessage(
+            tr("This radio can't record on its own side — recording on this "
+               "computer instead."),
+            6000);
     });
 
     // A refused start (#4629). The recorder lives below the UI seam and can only
