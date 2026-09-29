@@ -1056,6 +1056,7 @@ private:
     void drawTnfMarkers(QPainter& p, const QRect& specRect,
                         const QRect& wfRect = QRect());
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
+    int broadcastOverlayStartY(const QRect& specRect) const;
     void drawBroadcastOverlays(QPainter& p, const QRect& specRect);
     void updateBroadcastOverlayTicker(const QRect& specRect, bool presentPages = true);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
@@ -2108,6 +2109,7 @@ private:
     QVector<SpotMarker> m_spotMarkers;
     QVector<WfmBroadcastOverlayRecord> m_broadcastOverlays;
     QVector<WfmBroadcastTicker> m_broadcastTickers;
+    int m_broadcastStartY{-1};
     QElapsedTimer m_broadcastClock;
     QVector<SwrSweepPoint> m_swrSweepPoints;
     bool   m_swrSweepRunning{false};

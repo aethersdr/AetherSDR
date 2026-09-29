@@ -16528,6 +16528,19 @@ void SpectrumWidget::setBroadcastOverlays(const QVector<WfmBroadcastOverlayRecor
     update();
 }
 
+int SpectrumWidget::broadcastOverlayStartY(const QRect& specRect) const
+{
+    // Match ordinary spots' configured position, while clearing expanded flags.
+    // The full flag geometry includes whichever control panel is currently open.
+    int top = specRect.top() + specRect.height() * m_spotStartPct / 100;
+    for (const VfoWidget* flag : m_vfoWidgets) {
+        if (flag && flag->isVisible()) {
+            top = std::max(top, flag->geometry().bottom() + 8);
+        }
+    }
+    return top;
+}
+
 void SpectrumWidget::updateBroadcastOverlayTicker(const QRect& specRect, bool presentPages)
 {
     if (m_broadcastTickers.isEmpty()) { return; }
@@ -16536,21 +16549,23 @@ void SpectrumWidget::updateBroadcastOverlayTicker(const QRect& specRect, bool pr
     const int textWidth = std::min(420, specRect.width() - 12) - 12;
     const int rowHeight = QFontMetrics(labelFont).height() + 6;
     const qint64 nowMs = m_broadcastClock.elapsed();
-    bool changed = false;
+    const int startY = broadcastOverlayStartY(specRect);
+    bool changed = m_broadcastStartY != startY;
+    m_broadcastStartY = startY;
     int row = 0;
     for (qsizetype i = 0; i < m_broadcastTickers.size(); ++i) {
         WfmBroadcastTicker& ticker = m_broadcastTickers[i];
         changed = ticker.layout(labelFont, textWidth) || changed;
         const int x = mhzToX(m_broadcastOverlays.at(i).frequencyHz / 1.0e6);
         const bool inView = x >= specRect.left() && x <= specRect.right();
-        const int y = specRect.top() + 52 + row * (rowHeight + 2);
+        const int y = startY + row * (rowHeight + 2);
         const bool visible = presentPages && isVisible() && !m_frequencyPreviewActive
             && specRect.width() >= 40 && inView && y + rowHeight <= specRect.bottom();
         changed = ticker.advance(nowMs, visible) || changed;
         if (inView) { ++row; }
     }
-    // The existing receive/display cadence paints this frame. Only page changes
-    // invalidate the cached overlay; no timer, spot update, or radio write.
+    // The existing receive/display cadence paints this frame. Page/placement
+    // changes invalidate the cached overlay; no timer, spot update, or radio write.
     if (changed) { markOverlayDirty("broadcastPage", false); }
 }
 
@@ -16566,6 +16581,7 @@ void SpectrumWidget::drawBroadcastOverlays(QPainter& p, const QRect& specRect)
     const int rowHeight = metrics.height() + 6;
     const int maxWidth = std::min(420, specRect.width() - 12);
     ThemeManager& theme = ThemeManager::instance();
+    const int startY = broadcastOverlayStartY(specRect);
     int row = 0;
     for (qsizetype i = 0; i < m_broadcastOverlays.size(); ++i) {
         const WfmBroadcastOverlayRecord& record = m_broadcastOverlays.at(i);
@@ -16574,7 +16590,7 @@ void SpectrumWidget::drawBroadcastOverlays(QPainter& p, const QRect& specRect)
         if (x < specRect.left() || x > specRect.right()) { continue; }
         // Below slice flags, in a bounded independent row. Never enters spot
         // clustering, hit testing, trigger/remove commands or smart filters.
-        const int y = specRect.top() + 52 + row * (rowHeight + 2);
+        const int y = startY + row * (rowHeight + 2);
         if (y + rowHeight > specRect.bottom()) { break; }
         const QString label = ticker.pageText();
         // Size from the whole label so advancing a page never moves its RF anchor.
