@@ -189,6 +189,19 @@ int main(int argc, char** argv)
     check(publishedMhz && near(*publishedMhz * 1e6, edgeDial),
           "…and the published slice frequency stays the dial");
 
+    // ---- ...and comes back when RIT is cleared ----
+    // The NCO moved only because of RIT, so clearing RIT re-centres it on the
+    // dial; otherwise the pan centre stays offset by the old RIT amount for the
+    // rest of the session (|dial - NCO| = 500 Hz is well inside the window).
+    backend.setRitEnabled(false);
+    check(A::rx0RegisterHz(backend) == static_cast<std::uint32_t>(edgeDial)
+              && near(A::ncoHz(backend, 0), edgeDial),
+          "RIT cleared: the NCO register returns to the dial");
+    check(near(A::shiftHz(backend, 0), 0.0), "…and the receive shift is zero on the dial");
+    backend.setRitEnabled(true);
+    check(near(A::ncoHz(backend, 0), edgeDial) && near(A::shiftHz(backend, 0), 500.0),
+          "RIT back on inside the window: shift only, the NCO stays");
+
     // ---- RIT follows the transmit-owning receiver ----
     const double r0WithRit = A::shiftHz(backend, 0);
     const double r1Before = A::shiftHz(backend, 1);
@@ -199,6 +212,23 @@ int main(int argc, char** argv)
           "TX moved to receiver 1: receiver 0 no longer carries RIT");
     backend.setRitEnabled(false);
     check(near(A::shiftHz(backend, 1), r1Before), "RIT off: receiver 1 restored");
+
+    // ---- XIT must not walk the TX register through zero ----
+    // The dial guard in setTxFrequency() is on the dial; XIT is added after it.
+    // Receiver 1 owns transmit here. Park XIT at -9999 on a real dial first, so
+    // a skipped write would leave a STALE register behind, then tune to 5 kHz.
+    backend.setXitEnabled(true);
+    backend.setXitOffset(-9999);
+    check(A::txRegisterHz(backend) == 7'064'001u, "XIT -9999 on 7.074 MHz: TX register 7.064001 MHz");
+    backend.setSliceFrequency(1, 5'000.0);
+    const std::uint32_t lowTx = A::txRegisterHz(backend);
+    check(lowTx != 0u, "dial 5 kHz + XIT -9999: TX register is not commanded to DC");
+    check(lowTx != 7'064'001u, "dial 5 kHz + XIT -9999: TX register is not left on the old band");
+    check(lowTx == 5'000u, "dial 5 kHz + XIT -9999: TX register holds the dial, XIT dropped");
+    backend.setSliceFrequency(1, 20'000.0);
+    check(A::txRegisterHz(backend) == 10'001u, "dial 20 kHz: XIT -9999 applies again");
+    backend.setXitEnabled(false);
+    backend.setXitOffset(0);
 
     check(!A::mox(backend), "nothing keyed: MOX never set");
 

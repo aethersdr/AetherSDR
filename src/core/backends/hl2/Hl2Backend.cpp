@@ -3516,7 +3516,16 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     // The window is judged on where the receiver LISTENS (dial + RIT on the
     // transmit receiver), so a RIT offset past the edge moves the NCO too.
     const double tunedHz = rxTunedHz(*r);
-    if (std::abs(tunedHz - r->ncoHz) > usableHz) {
+    const bool ritApplies = (tunedHz != r->sliceFreqHz);
+    const bool outsideWindow = std::abs(tunedHz - r->ncoHz) > usableHz;
+    // A move RIT alone caused is undone when RIT stops applying to this
+    // receiver (cleared, zeroed, or transmit moved away) — the NCO comes back
+    // to the dial, or the pan centre stays offset by the old RIT for good.
+    const bool ritReturn = !outsideWindow && !ritApplies && r->ncoMovedForRit;
+    if (outsideWindow || ritReturn) {
+        // Judged against the NCO BEFORE it moves: did the dial alone fit?
+        r->ncoMovedForRit = outsideWindow && ritApplies
+            && std::abs(r->sliceFreqHz - r->ncoHz) <= usableHz;
         r->ncoHz = tunedHz;
         if (m_metis)
             // THIS receiver's NCO register, not RX1's. The two-argument overload
@@ -3905,7 +3914,12 @@ void Hl2Backend::setTxSlice(int sliceId)
     applyBandFilter("tx slice");
     publishWideState();
     // RIT belongs to the transmit receiver, so it leaves one and joins the other.
+    // On the new receiver this repeats the setTxFrequency() and band-memory
+    // writes above via setSliceFrequency(): the same values, and
+    // applyPerBandStateFor() returns early on an unchanged band key — a
+    // deliberate re-run of the whole tune, not a missing gate.
     if (m_ritOn && m_ritHz != 0) {
+        logRitScope();
         retuneReceiver(previous);
         retuneReceiver(ddc);
     }
@@ -4134,6 +4148,8 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     if (hz == r->ncoHz)
         return;
     r->ncoHz = hz;
+    // The operator placed the centre: it is theirs now, not RIT's to undo.
+    r->ncoMovedForRit = false;
     if (m_metis)
         QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
             Q_ARG(int, ddc),
@@ -5272,7 +5288,19 @@ void Hl2Backend::setTxFrequency(double hz)
     // XIT lands here and ONLY here: every caller passes the transmit receiver's
     // dial, so the offset reaches the TX register on every path that writes it
     // (tune, TX slice move, reconnect, calibration) and never the receive side.
-    const double txHz = hz + (m_xitOn ? m_xitHz : 0);
+    double txHz = hz + (m_xitOn ? m_xitHz : 0);
+    // The guard above is on the DIAL; XIT must not walk the commanded frequency
+    // through zero behind it. ncoCommandHz() answers 0 for anything non-
+    // positive, which would key at DC while the dial read a real frequency.
+    // Not a bare return either: the register would then keep its LAST value —
+    // after a jump down from 20 m, 20 m — so keying would radiate on a band the
+    // dial does not show. The dial itself is the one value that is neither.
+    if (txHz <= 0.0) {
+        qCWarning(lcHl2) << "HL2: XIT" << m_xitHz << "Hz would put TX at" << txHz
+                         << "Hz from a dial of" << hz
+                         << "Hz; TX register holds the dial, XIT not applied";
+        txHz = hz;
+    }
     QMetaObject::invokeMethod(m_metis, "setTxFrequencyHz", Qt::QueuedConnection,
         Q_ARG(std::uint32_t, ncoCommandHz(txHz)));
 }
@@ -5337,6 +5365,16 @@ void Hl2Backend::retuneReceiver(int ddc)
     }
 }
 
+void Hl2Backend::logRitScope() const
+{
+    // Radio-wide at the seam (RadioModel passes no slice id), so whichever VFO
+    // the operator turned, this is the receiver whose audio actually moved.
+    const Hl2ReceiverIds* ids = m_ids.byDdc(m_txDdc);
+    qCInfo(lcHl2) << "HL2: RIT" << (m_ritOn ? "on," : "off,") << "offset" << m_ritHz
+                  << "Hz — follows transmit: receiver DDC" << m_txDdc
+                  << "(slice" << (ids ? ids->uiNumber : -1) << ")";
+}
+
 void Hl2Backend::setRitEnabled(bool on)
 {
     if (on == m_ritOn) {
@@ -5344,18 +5382,25 @@ void Hl2Backend::setRitEnabled(bool on)
     }
     m_ritOn = on;
     if (m_ritHz != 0) {
+        logRitScope();
         retuneReceiver(m_txDdc);
     }
 }
 
 void Hl2Backend::setRitOffset(int hz)
 {
+    const int requested = hz;
     hz = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
+    if (hz != requested) {
+        qCWarning(lcHl2) << "HL2: RIT offset" << requested << "Hz clamped to" << hz
+                         << "Hz (limit +/-" << kRitXitMaxHz << "Hz)";
+    }
     if (hz == m_ritHz) {
         return;
     }
     m_ritHz = hz;
     if (m_ritOn) {
+        logRitScope();
         retuneReceiver(m_txDdc);
     }
 }
@@ -5374,7 +5419,12 @@ void Hl2Backend::setXitEnabled(bool on)
 
 void Hl2Backend::setXitOffset(int hz)
 {
+    const int requested = hz;
     hz = std::clamp(hz, -kRitXitMaxHz, kRitXitMaxHz);
+    if (hz != requested) {
+        qCWarning(lcHl2) << "HL2: XIT offset" << requested << "Hz clamped to" << hz
+                         << "Hz (limit +/-" << kRitXitMaxHz << "Hz)";
+    }
     if (hz == m_xitHz) {
         return;
     }
