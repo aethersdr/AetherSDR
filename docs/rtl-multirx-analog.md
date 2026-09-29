@@ -1,8 +1,8 @@
 # RTL analog multi-receiver evaluation
 
 This checkpoint implements the analog multi-receiver path from RFC #5468.
-It does not raise the qualified default capacity, enable multiple HD decoders,
-or establish release qualification. The free-pan and HD RFC amendments remain
+It does not raise the qualified default capacity, enable multiple digital decoders,
+or establish release qualification. The free-pan and digital RFC amendments remain
 subject to maintainer review. Native qualification results belong to the exact
 tested revision; component or injected-USB tests do not establish live RF proof.
 
@@ -19,9 +19,9 @@ preserve the normal launcher/profile before hardware testing.
 
 FM, FM-N and native analog WFM can coexist. Each receiver owns its exact RF
 filter, Mono/Stereo choice, deemphasis and monitor gain/pan/mute. AM/SAM/SSB/CW
-and HD remain singleton configurations, including when a configured sibling
+and digital remain singleton configurations, including when a configured sibling
 is parked. A refusal reports the unsupported combination without adopting a
-partial recipe. Changing back from a remembered HD recipe to analog remains
+partial recipe. Changing back from a remembered digital recipe to analog remains
 an explicit operator action.
 
 ## Selection and presentation
@@ -63,7 +63,7 @@ independent measurement of the demodulated signal or observed stereo lock.
 mix. Frames, nonzero samples, nonfinite input samples, delivered discontinuities,
 left/right energy, peak, queue residence and delivery gaps are cumulative
 owner-thread observations. Queue residence uses a separate enqueue clock and
-does not replace the HD decoder's original production-age fence. Counts and
+does not replace the digital decoder's original production-age fence. Counts and
 energies can be differenced across a frozen workload. Lifetime maxima and
 delivery gaps can include intentional parking/reconfiguration; they must not
 be called steady-state dropouts without checking that interval. Finite,
@@ -86,7 +86,7 @@ measure actual USB, FFT/waterfall and nonzero audio for at least 30 minutes
 each, including CPU/thermal headroom, callback latency, queue growth, saturated
 history RSS, planning and teardown. Report failures without changing their
 thresholds after observing the result. Linux x86_64 evidence does not qualify
-Linux aarch64, macOS, Windows, mixed legacy/native rates or multiple HD workers.
+Linux aarch64, macOS, Windows, mixed legacy/native rates or multiple digital workers.
 
 ## Startup delivery headroom
 

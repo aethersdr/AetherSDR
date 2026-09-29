@@ -1,10 +1,10 @@
-# Packaging an experimental HD FM checkpoint
+# Packaging an experimental digital FM checkpoint
 
 This recipe is for local, explicitly requested test artifacts. It does not
 change `ENABLE_HD_FM`'s default or publish, sign a release, or install drivers.
 Record the exact source revision and actual toolchain for each platform. Build
 `AetherSDR` and `aetherd` with `ENABLE_HD_FM=ON` and `ENABLE_RTL=ON`, run the
-relevant socket-free receiver tests, and preserve the separate HD-OFF result.
+relevant socket-free receiver tests, and preserve the separate decoder-OFF result.
 Recorded-IQ decoding and disconnected startup are not live RF or audible proof.
 
 ## Matching source and notices
@@ -67,7 +67,7 @@ An active external-model DFNR runtime must have its model beside the executable;
 the stager refuses that configuration when the known model payload is missing.
 
 The existing import audit indexes DLLs by filename throughout the payload.
-That is intentionally more permissive than Windows' loader. The HD stager
+That is intentionally more permissive than Windows' loader. The evaluation stager
 additionally checks that each shipped import is beside the executable or its
 importing plugin. Inspect loaded module paths in the clean-start test too.
 Test `qwindows.dll` as well as the offscreen plugin.

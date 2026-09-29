@@ -2,7 +2,7 @@
 # only: they include download fallbacks, CLI/shared targets and install hooks.
 include_guard(GLOBAL)
 
-option(ENABLE_HD_FM "Build experimental embedded HD FM" OFF)
+option(ENABLE_HD_FM "Build experimental embedded digital FM" OFF)
 if(NOT ENABLE_HD_FM)
     return()
 endif()

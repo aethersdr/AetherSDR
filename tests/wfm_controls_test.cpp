@@ -95,7 +95,7 @@ HdFmReception measuredHd(int program = 0)
     value.synced = value.audioValid = true;
     value.services = {{0, QStringLiteral("Main"), true}, {1, QStringLiteral("Second"), true},
                       {2, QStringLiteral("Data only"), false}};
-    value.stationName = QStringLiteral("Fixture HD station");
+    value.stationName = QStringLiteral("Fixture digital station");
     value.title = QStringLiteral("Title <plain text>");
     value.artist = QStringLiteral("Artist");
     value.merLowerDb = 16.5;
@@ -704,11 +704,11 @@ private slots:
         auto* metadata = applet.findChild<QLabel*>(QStringLiteral("wfmBroadcastMetadata"));
         auto* program = applet.findChild<QComboBox*>(QStringLiteral("wfmHdProgram"));
         QVERIFY(metadata && program);
-        QVERIFY(metadata->text().contains(QStringLiteral("Fixture HD station")));
+        QVERIFY(metadata->text().contains(QStringLiteral("Fixture digital station")));
         applet.setSlice(model.slice(4));
         const QString secondText = metadata->text();
         QVERIFY(secondText.contains(QStringLiteral("Other station")));
-        QVERIFY(secondText.contains(QStringLiteral("HD2")));
+        QVERIFY(secondText.contains(QStringLiteral("P2")));
         QCOMPARE(program->currentData().toInt(), 1);
         first.hdFmReception->title = QStringLiteral("Sibling song changed");
         emit source->sliceChanged(3, first);
@@ -1074,7 +1074,7 @@ private slots:
         QCOMPARE(program->currentData().toInt(), 0); // pending intent is not readback
         accepted = {}; accepted.hdProgram = 1;
         emit source->sliceChanged(3, accepted);
-        QVERIFY(!metadata->text().contains(QStringLiteral("Fixture HD station")));
+        QVERIFY(!metadata->text().contains(QStringLiteral("Fixture digital station")));
         QVERIFY(status->styleSheet() != healthyStyle);
         accepted = {}; accepted.hdFmReception = measuredHd(1);
         emit source->sliceChanged(3, accepted);
@@ -1171,7 +1171,7 @@ private slots:
             QTest::keyClick(view, Qt::Key_Return);
         }
         QApplication::processEvents();
-        qInfo("HD popup input=%s openAfterTelemetry=%d highlightedProgram=%d requests=%lld displayedProgram=%d",
+        qInfo("Digital popup input=%s openAfterTelemetry=%d highlightedProgram=%d requests=%lld displayedProgram=%d",
               mouse ? "mouse" : "keyboard", popupStayedOpen, highlightedProgram,
               static_cast<long long>(source->programRequests.size()), program->currentData().toInt());
         QCOMPARE(source->programRequests.size(), 1);
@@ -1425,14 +1425,14 @@ private slots:
         another.hdFmReception = measuredHd();
         emit source->sliceChanged(4, another);
         applet.setSlice(model.slice(4));
-        QVERIFY(metadata->text().contains(QStringLiteral("Fixture HD station")));
+        QVERIFY(metadata->text().contains(QStringLiteral("Fixture digital station")));
         const QString selectedText = metadata->text();
         next = measuredHd(); next.frequencyHz = 101100000; next.title = QStringLiteral("Stale old slice song");
         accepted = {}; accepted.hdFmReception = next;
         emit source->sliceChanged(3, accepted);
         QCOMPARE(metadata->text(), selectedText);
         applet.setSlice(nullptr);
-        QVERIFY(!metadata->text().contains(QStringLiteral("Fixture HD station")));
+        QVERIFY(!metadata->text().contains(QStringLiteral("Fixture digital station")));
     }
 
     void broadcastFilterPresetsPreserveSavedEdgesInBothWidgets()

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Stage a local, experimental HD FM portable payload without publishing it.
+    Stage a local, experimental digital FM portable payload without publishing it.
 .DESCRIPTION
     Run with PowerShell 7 in the existing MSVC/Qt build environment after the
     application, daemon, and focused tests pass at the stated revision. This
@@ -45,7 +45,7 @@ if (-not (Test-Path -LiteralPath $DependencyNoticesDir -PathType Container)) {
 $facts = Get-Content -LiteralPath $BuildInfo -Raw | ConvertFrom-Json
 if ($facts.revision -ne $Revision) { throw 'BuildInfo revision does not match Revision.' }
 if ($facts.platform -ne 'windows-x64' -or $facts.hdFm -ne $true -or $facts.rtl -ne $true) {
-    throw 'BuildInfo must describe this Windows x64 HD FM + RTL build.'
+    throw 'BuildInfo must describe this Windows x64 digital FM + RTL build.'
 }
 foreach ($name in @('AetherSDR.exe', 'aetherd.exe')) {
     $expected = $facts.binarySha256.PSObject.Properties[$name]
@@ -167,7 +167,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-start "AetherSDR HD FM test" /wait "%~dp0AetherSDR.exe"
+start "AetherSDR Digital test" /wait "%~dp0AetherSDR.exe"
 '@ | Set-Content -LiteralPath (Join-Path $output 'Start-AetherSDR-HD.cmd') -Encoding ascii
 
 # Store only package-relative paths, hashes and sizes. Test evidence, cache

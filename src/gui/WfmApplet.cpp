@@ -89,7 +89,7 @@ private:
 };
 namespace {
 
-// A popup may outlive its receiver binding or HD reception/service identity.
+// A popup may outlive its receiver binding or digital reception/service identity.
 // Preserve both witnesses after hidePopup(): Qt can deliver activated later.
 class WfmReceiverComboBox final : public GuardedComboBox {
 public:
@@ -117,7 +117,7 @@ public:
         const Origin origin = m_origin.value_or(Origin{m_binding, m_generation});
         m_origin.reset();
         // Bound controls use nonzero slice generations. Zero cannot authorize
-        // an activation whose HD reception or service membership was retired.
+        // an activation whose digital reception or service membership was retired.
         return origin.generation == m_generation ? origin.binding : 0;
     }
     void showPopup() override

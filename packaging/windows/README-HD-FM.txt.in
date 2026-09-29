@@ -1,4 +1,4 @@
-AetherSDR - experimental HD FM test build (Windows x64)
+AetherSDR - experimental digital FM test build (Windows x64)
 Source revision: @REVISION@
 
 Getting started
@@ -10,12 +10,12 @@ Getting started
    The USB device needs a working compatible WinUSB driver already installed.
    This package does not install or change drivers. Follow your dongle vendor's
    instructions if Windows does not show it as an available RTL receiver.
-4. Connect the RTL-SDR, select WFM, and tune a local FM station carrying HD.
-   In the WFM applet, click the audio mode until it says HD Stereo.
-   The cycle is Mono -> Auto Stereo -> HD Stereo. Choose a discovered HD
-   program from the HD program selector when available.
-5. Watch the status: HD acquiring, HD synced / awaiting audio, and HD audio
-   valid describe different stages. Selecting HD Stereo alone does not mean
+4. Connect the RTL-SDR, select WFM, and tune a local FM station carrying digital broadcasts.
+   In the WFM applet, click the audio mode until it says Digital.
+   The cycle is Mono -> Auto Stereo -> Digital. Choose a discovered digital
+   program from the Digital program selector when available.
+5. Watch the status: Digital acquiring, Digital synced / awaiting audio, and Digital audio
+   valid describe different stages. Selecting Digital alone does not mean
    the station has been decoded. Return to Auto Stereo for analog reception.
 
 Limits of this test build
@@ -24,7 +24,7 @@ See BUILD-INFO.json for the actual toolchain, enabled features and executable
 signing status. A valid source commit signature does not sign the Windows app.
 Windows may warn about an unsigned or unfamiliar application.
 
-Use one RTL receiver and one HD program at a time. HD needs the whole digital
+Use one RTL receiver and one digital program at a time. Digital reception needs the whole digital
 station footprint inside the captured band, and a usable digital signal.
 There is no automatic analog fallback. Keep the test receive-only.
 Startup and recorded-IQ tests do not establish reception or audible playback
@@ -32,7 +32,7 @@ on your radio, PC, antenna, or station. See the separately supplied test report.
 
 Useful feedback
 Send the revision above, Windows version, CPU, RTL model, station/frequency,
-selected HD program, and whether analog FM works. Note the exact status shown,
+selected digital program, and whether analog FM works. Note the exact status shown,
 time to lock, audio dropouts, channel balance, metadata, and what action caused
 any problem. A screenshot of the WFM diagnostics and short reproduction steps
 are useful. Review logs before sharing; do not send credentials or raw RF
@@ -42,7 +42,7 @@ Source and notices
 The matching source is included in source/@SOURCE_ARCHIVE@. Keep it with this
 build if you pass the ZIP onward. It contains source, dependency provenance,
 patches and build instructions for this checkpoint. licenses/ contains the
-AetherSDR and bundled-component notices. HD decoding is embedded; no external
+AetherSDR and bundled-component notices. Digital decoding is embedded; no external
 decoder command-line program or decoder download is needed.
 
 Code from FAAD2 is copyright (c) Nero AG, www.nero.com
