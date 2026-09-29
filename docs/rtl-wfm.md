@@ -97,11 +97,11 @@ second plus actual status changes. Unknown or stale measurements are unavailable
 no quality percentage is invented. Configuration and processing-health readouts
 are distinct from reception measurements.
 
-Native NRSC-5/HD FM is a separately requested next checkpoint and RFC amendment,
+Native NRSC-5 digital FM is a separately requested next checkpoint and RFC amendment,
 not covered by the existing analog architecture approval or the qualification
-below. The analog checkpoint exposes no ineffective HD state or empty metadata
-controls. Future HD program/ID3 metadata and analog RDS have different decoder
-sources; RDS remains separate from the requested native HD implementation.
+below. The analog checkpoint exposes no ineffective digital state or empty metadata
+controls. Future digital program/ID3 metadata and analog RDS have different decoder
+sources; RDS remains separate from the requested native digital implementation.
 
 The stereo indicator reports the last completed decoder block carried by a
 current-session/current-revision independent audio packet. It is unavailable
@@ -210,7 +210,7 @@ architecture-specific and operator acceptance work remains separate.
 
 ## Future digital reception
 
-HD Radio/nrsc5 implementation is deferred until the current RTL sprint finishes.
+Digital FM/nrsc5 implementation is deferred until the current RTL sprint finishes.
 Its future branch needs wide capture IQ before this analog filter, its own
 station-centered extraction and 744187.5 Hz conversion, and explicit paired
 44.1→48 kHz PCM conversion. RADE's demodulated 24 kHz speech input is unsuitable.

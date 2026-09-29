@@ -1,4 +1,4 @@
-# Experimental native HD FM receiver
+# Experimental native digital FM receiver
 
 This is a separate draft amendment to RFC #5468, stacked on the analog WFM
 applet work. Maintainer architecture approval and native qualification are
@@ -10,6 +10,10 @@ worker, or digital receiver. No merge or release readiness is implied.
 `ENABLE_HD_FM` defaults OFF. Its initial opt-in build supports Linux with GNU C
 and the existing enabled RTL/FFTW3f dependencies; other toolchains fail configure
 when explicitly opted in. Default Mac/Windows builds retain analog WFM.
+Application release workflows and the local macOS/Windows packaging scripts
+explicitly set
+`-DENABLE_HD_FM=OFF`; an evaluation build can still opt in with
+`-DENABLE_HD_FM=ON`.
 
 The embedded sources are pinned to nrsc5
 `0225922b6f68109df39d07391f4d855464598ab8` and FAAD2 2.11.2
@@ -25,11 +29,11 @@ share Aether's process-wide single-precision FFTW planner lock.
 
 ## Capture, worker, and audio contracts
 
-The initial receiver admits one active wide HD receiver. It does not expand
+The initial receiver admits one active wide digital receiver. It does not expand
 receiver capacity. A complete digital footprint of ±225 kHz plus at least
 3 kHz transition guards must fit the real usable capture, independently of
 stored analog filter edges. Invalid original filter geometry remains invalid.
-Selecting HD uses the existing prepare/adopt/rollback transaction; a rejected
+Selecting Digital uses the existing prepare/adopt/rollback transaction; a rejected
 recipe does not publish or persist a selection.
 
 `HdFmIqAdapter` consumes original capture IQ before the analog filter or
@@ -75,15 +79,15 @@ and playout underruns cumulatively since connection.
 
 ## Presentation and persistence
 
-The WFM applet cycles Mono → Stereo → HD Stereo only when the backend declares
-the implemented HD capability. Accepted selection, sync, and selected audio
+The WFM applet cycles Mono → Auto Stereo → Digital only when the backend declares
+the implemented digital capability. Accepted selection, sync, and selected audio
 validity are separate states. The selector lists actual discovered audio
-programs as HD1 through HD8. SIG channel/port numbers are not guessed to be
-program numbers, so program names remain a truthful fallback for now.
+programs as P1 through P8 (Program 1 through Program 8). SIG channel/port numbers
+are not guessed to be program numbers, so program names remain a truthful fallback for now.
 
-HD diagnostics show actual MER, CBER, frequency offset, and sync history.
+Digital diagnostics show actual MER, CBER, frequency offset, and sync history.
 The API's lower/upper MER labels use the NRSC-5 spectral convention, inverted
-relative to RF sidebands. HD does not reuse the analog pilot trace or invent
+relative to RF sidebands. Digital does not reuse the analog pilot trace or invent
 constellation, SNR, or quality metrics.
 
 One bounded owner-thread snapshot supplies station-name and selected-program
@@ -96,7 +100,7 @@ SpotHub → Display contains one ordinary **WFM RDS** on/off button made by the
 same factory as Memory. It defaults ON for a fresh profile, preserves saved
 OFF, and controls only this local overlay. The applet and decoding continue
 while it is off. `WfmPresentationSettings` owns its AppSettings document,
-preserving sibling settings. Actual displayed source is HD Radio;
+preserving sibling settings. Actual displayed source is Digital;
 analog RDS/RBDS remains a follow-up. No automatic analog/digital blending exists.
 
 ## Validation boundaries
