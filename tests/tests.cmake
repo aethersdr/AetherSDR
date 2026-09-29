@@ -4585,6 +4585,16 @@ target_link_libraries(rigctl_strength_slevel_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME rigctl_strength_slevel_test COMMAND rigctl_strength_slevel_test)
 
+# Controls that were silently dead without a Flex command plane although the
+# radio could serve them another way: each reroute or refusal pinned at the
+# model/seam level, with the Flex wire text compared byte-for-byte. Socket-free:
+# a stub backend and an unopened RadioConnection; nothing is opened or keyed.
+add_executable(reroute_dead_controls_test tests/reroute_dead_controls_test.cpp)
+target_include_directories(reroute_dead_controls_test PRIVATE src tests)
+target_link_libraries(reroute_dead_controls_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME reroute_dead_controls_test COMMAND reroute_dead_controls_test)
+
 # #5499 item 3: the noise-blanker hold invariant, read out of WdspChannel.cpp as
 # TEXT (same limitation, and same reason, as meter_surfaces_test above — the
 # facts never meet at compile time). Links nothing but Qt6::Core: it opens the
@@ -6661,6 +6671,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    reroute_dead_controls_test
     anan_backend_test
     anan_noise_blanker_readback_test
     tci_rx_audio_test

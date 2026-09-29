@@ -2639,6 +2639,14 @@ RadioModel::RadioModel(QObject* parent)
 
     // Forward equalizer model commands to the radio
     connect(&m_equalizerModel, &EqualizerModel::commandReady, this, [this](const QString& cmd){
+        // Without a command plane the graphic EQ is served by ClientEq
+        // (MainWindow::applyGraphicEqToClientEq, bound to the model's own
+        // state signals), so the slider and a mapped MIDI band DO act. Sending
+        // the `eq` text anyway only reached sendCmd's drop and told the
+        // operator a working control was unsupported.
+        if (!hasCommandPlane()) {
+            return;
+        }
         sendCmd(cmd);
     });
 

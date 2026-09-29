@@ -1998,6 +1998,7 @@ public:
 private:
     friend class RadioModelSliceLifecycleTestAccess;
     friend class TxOperationIntegrationTestAccess;
+    friend class RerouteDeadControlsTestAccess;
     void expirePendingCallbacks(const QString& reason);
 
     // True only while expirePendingCallbacks() is invoking the drained
