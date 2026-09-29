@@ -6896,7 +6896,20 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
+# Real applet with injected receive capabilities; no sockets/audio devices.
+if(NOT WIN32)
+    add_executable(dax_receive_applet_test tests/dax_receive_applet_test.cpp
+        src/gui/DaxApplet.cpp src/gui/MeterSlider.h src/gui/DragValuePopup.cpp
+        src/gui/SliceLabel.cpp src/gui/SliceColorManager.cpp
+        src/gui/ControlAvailabilityRegistry.cpp)
+    target_include_directories(dax_receive_applet_test PRIVATE src tests)
+    target_link_libraries(dax_receive_applet_test PRIVATE aetherdesktop_support Qt6::Widgets)
+    add_test(NAME dax_receive_applet_test COMMAND dax_receive_applet_test)
+    set_tests_properties(dax_receive_applet_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 set(AETHER_SETTINGS_CONSUMERS
+    dax_receive_applet_test
     anan_backend_test
     anan_noise_blanker_readback_test
     tci_rx_audio_test
@@ -7389,4 +7402,12 @@ if(WIN32 AND ENABLE_HD_FM AND TARGET aether_nrsc5)
     target_link_libraries(nrsc5_windows_compat_test PRIVATE "${AETHER_HD_COMPILER_RT}")
     add_test(NAME nrsc5_windows_compat_test COMMAND nrsc5_windows_compat_test)
     set_tests_properties(nrsc5_windows_compat_test PROPERTIES TIMEOUT 30)
+endif()
+
+# Anonymous-pipe output injection: no sockets, audio devices or helper processes.
+if(HAVE_PIPEWIRE)
+    add_executable(pipewire_rx_bridge_test tests/pipewire_rx_bridge_test.cpp)
+    target_include_directories(pipewire_rx_bridge_test PRIVATE src)
+    target_link_libraries(pipewire_rx_bridge_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME pipewire_rx_bridge_test COMMAND pipewire_rx_bridge_test)
 endif()

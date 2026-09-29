@@ -470,6 +470,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.receiveModeControl = std::nullopt; // mode/passband transition contract not yet qualified
     c.receiveFilterControl = std::nullopt;
     c.receiveAudioControl = std::nullopt;
+    c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.receivePanCenterControl = std::nullopt; // center also retunes the slice
     c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
                                                          48'000, 1'536'000};

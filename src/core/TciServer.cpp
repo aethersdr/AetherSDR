@@ -2802,6 +2802,15 @@ void TciServer::resetClientRx(ClientState& client)
     syncClient(client);
 }
 
+TciRxBinding TciServer::sliceRxBinding(int sliceId) const
+{
+    const quint64 key = TciIoWorker::rxRouteKey(false,sliceId);
+    const TciRxBinding binding = m_rxBindings.value(key);
+    const QPointer<SliceModel> owner = m_rxBindingOwners.value(key);
+    if (!m_model || !owner || m_model->slice(sliceId) != owner || !binding.current()) { return {}; }
+    return binding;
+}
+
 void TciServer::refreshRxBindings()
 {
     QHash<quint64, TciRxBinding> next;
@@ -2844,6 +2853,7 @@ void TciServer::refreshRxBindings()
     m_rxBindings = next;
     m_rxBindingOwners = owners;
     m_io->post([io = m_io.get(), next] { io->setRxBindings(next); });
+    emit rxBindingsChanged();
 }
 
 void TciServer::retireAllRxRoutes()

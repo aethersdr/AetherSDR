@@ -61,6 +61,13 @@ struct ReceiveAudioControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     // Both gain (0..100) and mute must act on the shared slice's RX audio.
 };
+// Typed pre-monitor sliceAudioFrameReady export; it grants no TX, IQ or
+// headless-control verb. Absence means this consumer path is not qualified.
+struct ReceiveAudioExport {
+    QVector<int> sampleRatesHz;
+    int maximumReceivers = 0;  // independent taps, never a speaker mix
+};
+
 // Native slice squelch semantics. Absence preserves the legacy desktop shape;
 // this record alone grants no headless-control verb. Explicit modes make an
 // unsupported demodulator distinguishable from a supported control set to Off.
@@ -458,6 +465,7 @@ struct RadioCapabilities {
     std::optional<ReceiveModeControl> receiveModeControl;
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
+    std::optional<ReceiveAudioExport> receiveAudioExport;
     std::optional<ReceiveSquelchModel> receiveSquelchModel;
     std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;

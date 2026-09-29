@@ -243,6 +243,10 @@ RadioCapabilities RtlSdrBackend::capabilities() const
 #endif
     }
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    c.receiveAudioExport = ReceiveAudioExport{{24000,48000},m_receiverCapacity};
+#ifdef AETHER_ENABLE_NRSC5
+    c.receiveAudioExport->sampleRatesHz.append(44100);
+#endif
     c.receiveSquelchModel = ReceiveSquelchModel{
         {QStringLiteral("FM"), QStringLiteral("FMN")},
         RtlSquelchGate::kReferenceDb, RtlSquelchGate::kStepDb, QStringLiteral("dBFS/2048-bin"), true, false};

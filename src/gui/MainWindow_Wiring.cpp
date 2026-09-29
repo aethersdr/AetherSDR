@@ -1857,6 +1857,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // toggle that flag on slice-mode transitions (e.g. band-stack restore)
     // because doing so parks DAX2's TX Stream in Busy. (#2315)
     auto updateDaxTxMode = [this]() {
+        if (!m_radioModel.backendCapabilities().canTransmit) { return; }
         bool isDigital = false;
         int txSliceId = -1;
         for (auto* sl : m_radioModel.slices()) {
@@ -3053,7 +3054,7 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
 #endif
 
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
-    if (m_daxBridge) {
+    if (m_daxBridge && m_radioModel.backendCapabilities().hasDaxStreams) {
         auto* panStream = m_radioModel.panStream();
         bool txSliceIsDigital = false;
 

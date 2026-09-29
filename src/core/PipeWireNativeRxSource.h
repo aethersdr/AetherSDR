@@ -23,7 +23,7 @@ namespace AetherSDR {
 //     real-time path.
 class PipeWireNativeRxSource {
 public:
-    explicit PipeWireNativeRxSource(int channel);
+    explicit PipeWireNativeRxSource(int channel, bool nativePcm = false);
     ~PipeWireNativeRxSource();
 
     PipeWireNativeRxSource(const PipeWireNativeRxSource&) = delete;
@@ -36,10 +36,12 @@ public:
 
     // Disconnects and destroys the stream, releases the shared context.
     void close();
+    // Owner-thread boundary: discard retained samples under the existing loop lock.
+    void reset();
 
     // Push 48 kHz mono float32 samples into the ring buffer.  Drops the
     // newest incoming samples that wouldn't fit if the consumer (PipeWire)
-    // is too slow — this caps backlog at the ring size (~42 ms) so latency
+    // is too slow — this caps backlog at the configured ring size (42 or 341 ms) so latency
     // cannot grow unboundedly even under stalls, and it keeps the SPSC
     // invariant intact (only the producer touches m_writeIdx, only the
     // consumer touches m_readIdx).
@@ -52,14 +54,11 @@ public:
 
 private:
 
-    // Ring buffer is a power of two so wraparound is a mask op.
-    // 2048 samples = ~42 ms @ 48 kHz mono float32.  In steady state the ring
-    // is near-empty; the cap matters only on transient stalls — at which
-    // point we *want* to drop oldest samples rather than let latency grow.
-    // Earlier 8192 sizing absorbed up to 170 ms of stalls, which directly
-    // showed up as DT growth under load.
-    static constexpr uint32_t RING_SIZE = 2048;
-    static constexpr uint32_t RING_MASK = RING_SIZE - 1;
+    // Legacy packet stream: 2048 samples (~42 ms). Native decoded bursts:
+    // 16384 samples (~341 ms), matching the bounded RX-only FIFO path.
+    static constexpr uint32_t kMaximumRingSize = 16384;
+    const uint32_t m_ringSize;
+    const uint32_t m_ringMask;
 
     int        m_channel;
     pw_stream* m_stream{nullptr};
@@ -73,7 +72,7 @@ private:
     // SPSC ring.  Producer (Qt thread) writes m_writeIdx; consumer
     // (PipeWire thread) writes m_readIdx.  Indices are free-running and
     // masked at access time.
-    float                  m_ring[RING_SIZE]{};
+    float                  m_ring[kMaximumRingSize]{};
     std::atomic<uint32_t>  m_writeIdx{0};
     std::atomic<uint32_t>  m_readIdx{0};
 };

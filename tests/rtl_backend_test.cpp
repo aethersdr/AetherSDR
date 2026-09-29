@@ -38,6 +38,12 @@ int main(int argc, char** argv)
     check(!caps.canCreateSlices, "RTL-SDR retains its fixed single receiver in P01");
     check(caps.family == "rtl", "capabilities.family is rtl");
     check(!caps.canTransmit, "RTL-SDR cannot transmit");
+    check(caps.receiveAudioExport && caps.receiveAudioExport->maximumReceivers == caps.maxSlices
+              && caps.receiveAudioExport->sampleRatesHz.contains(24000)
+              && caps.receiveAudioExport->sampleRatesHz.contains(48000),
+          "RTL declares its typed native receive audio export independently of TX/IQ");
+    check(!caps.hasDaxStreams,"native receive export does not advertise Flex DAX/IQ streams");
+
     check(caps.txPowerMaxWatts == 0.0, "RTL-SDR max TX power is 0");
     check(!caps.hostModulates, "RTL-SDR does not modulate on host");
     check(caps.maxSlices == 1, "RTL-SDR maxSlices is 1");

@@ -976,6 +976,7 @@ set(CORE_SOURCES
     src/core/TciIoWorker.cpp
     src/core/TciClient.h
     src/core/TciServer.cpp
+    src/models/DaxReceiveModel.cpp
     src/core/TciRxConverter.cpp
     src/core/TciPeerProcess.cpp
     src/core/TciProtocol.cpp

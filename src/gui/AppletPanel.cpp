@@ -1799,13 +1799,12 @@ void AppletPanel::setProfilesVisible(bool visible)
                               QStringLiteral("Applet_PROF"), visible);
 }
 
-void AppletPanel::setDaxStreamsVisible(bool visible)
+void AppletPanel::setDaxStreamsVisible(bool visible, bool nativeReceive)
 {
-    // Both tiles are the same capability: "DAX" is per-slice receive audio,
-    // "IQ" is per-panadapter IQ, and a radio produces both stream kinds or
-    // neither.
+    // A native slice PCM export provides audio only; IQ and radio-side DAX
+    // selectors retain their separate radio stream capability.
     applyCapabilityVisibility(QStringLiteral("DAX"),
-                              QStringLiteral("Applet_DAX"), visible);
+                              QStringLiteral("Applet_DAX"), visible || nativeReceive);
     applyCapabilityVisibility(QStringLiteral("IQ"),
                               QStringLiteral("Applet_IQ"), visible);
     // The AetherClock applet is NOT a DAX tile — it stays visible on every

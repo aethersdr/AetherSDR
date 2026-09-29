@@ -52,6 +52,7 @@
 #include "core/WfmSettings.h"
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
+#include "models/DaxReceiveModel.h"
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
@@ -1248,14 +1249,12 @@ bool MainWindow::startDax()
 {
     if (m_daxBridge) return true;
 
-    // DAX rides PanadapterStream's VITA-49 audio, which only a Flex backend
-    // owns — RadioModel leaves panStream() null for every other family (see
-    // its makeBackend/Flex-adapter step). Bail before creating the bridge so a
-    // non-Flex session can't reach the acquireDaxChannel() calls below on a
-    // null stream. Without this, connecting to an HL2 with AutoStartDAX=True
-    // segfaults ~3 s later from the auto-start timer in onConnectionStateChanged.
-    if (!m_radioModel.panStream()) {
-        qCDebug(lcDax) << "MainWindow: DAX unavailable — backend has no PanadapterStream";
+    bool nativeReceive = false;
+#ifdef HAVE_WEBSOCKETS
+    nativeReceive = m_radioModel.backendCapabilities().receiveAudioExport.has_value() && tciServer();
+#endif
+    if (!nativeReceive && !m_radioModel.panStream()) {
+        qCDebug(lcDax) << "MainWindow: DAX unavailable for this backend/build";
         return false;
     }
 
@@ -1275,7 +1274,7 @@ bool MainWindow::startDax()
     // Open only as many DAX RX devices as the radio has slices — the audio
     // device list follows the radio (#4854). maxSlices() is known here: this
     // runs on the 3 s post-connect timer, well after the radio reported it.
-    if (!m_daxBridge->open(m_radioModel.maxSlices())) {
+    if (!m_daxBridge->open(m_radioModel.maxSlices(), nativeReceive)) {
         qWarning() << "MainWindow: failed to open DAX audio bridge";
         QMessageBox::warning(this, "DAX Audio Bridge Error",
             "AetherSDR could not open the DAX audio bridge.\n\n"
@@ -1289,68 +1288,70 @@ bool MainWindow::startDax()
     // RadioModel::handleDaxRxStreamRegistry (#3305) — instead of per-consumer
     // statusReceived hooks with divergent filtering.
 
-    // Acquire DAX channels only for slices with a channel assigned.
-    // FlexLib creates streams on demand, not all 8 unconditionally.
-    // Creating unused streams causes the radio to round-robin audio
-    // across all of them, starving the active channels.
-    m_daxSliceLastCh.clear();
-    for (auto* s : m_radioModel.slices()) {
-        int ch = s->daxChannel();
-        m_daxSliceLastCh[s->sliceId()] = ch;
-        if (ch >= 1 && ch <= 8) {
-            m_radioModel.acquireDaxChannel(
-                ch, PanadapterStream::DaxConsumer::Bridge);
-        }
-    }
-
-    // #2895: the one-shot loop above only covers slices that ALREADY have a
-    // DAX channel at bridge startup (typically just slice 0 / DAX 1). When the
-    // user later assigns DAX 2-4 to another slice via the UI, SliceModel only
-    // sends `slice set <id> dax=<ch>` — it never sends `stream create
-    // type=dax_rx`, so the radio never registers a DAX client (dax_clients
-    // stays 0) and sends silence. React to per-slice channel changes here and
-    // create/remove the DAX RX stream on demand, mirroring the TCI path
-    // (TciServer::ensureDaxForTci, #1331/#1439) and FlexLib
-    // RequestDAXRXAudioStream(channel).
-    for (auto* s : m_radioModel.slices()) {
-        wireDaxSlice(s);
-    }
-    m_daxSliceConns.append(connect(&m_radioModel, &RadioModel::sliceAdded,
-                                   this, [this](SliceModel* s) {
-        if (!m_daxBridge || !s) return;
-        // Let onDaxChannelChanged() see a 0 -> channel transition for slices
-        // restored with DAX already assigned.
-        m_daxSliceLastCh[s->sliceId()] = 0;
-        wireDaxSlice(s);
-        // A slice can arrive already carrying a DAX channel (radio profile
-        // restore); make sure its stream exists too.
-        if (s->daxChannel() >= 1 && s->daxChannel() <= 8) {
-            onDaxChannelChanged(s, s->daxChannel());
-        }
-    }));
-    // A slice removed out from under us (pan close, foreign client, profile
-    // load) never fires daxChannelChanged — release its channel here or the
-    // bridge holds it until stopDax (a silent radio-side orphan, #3305).
-    m_daxSliceConns.append(connect(&m_radioModel, &RadioModel::sliceRemoved,
-                                   this, [this](int sliceId) {
-        if (!m_daxBridge) return;
-        const int ch = m_daxSliceLastCh.take(sliceId);
-        if (ch < 1 || ch > 4) return;
+    if (!nativeReceive) {
+        // Acquire DAX channels only for slices with a channel assigned.
+        // FlexLib creates streams on demand, not all 8 unconditionally.
+        // Creating unused streams causes the radio to round-robin audio
+        // across all of them, starving the active channels.
+        m_daxSliceLastCh.clear();
         for (auto* s : m_radioModel.slices()) {
-            if (s && s->daxChannel() == ch) return;  // channel hopped slices
+            int ch = s->daxChannel();
+            m_daxSliceLastCh[s->sliceId()] = ch;
+            if (ch >= 1 && ch <= 8) {
+                m_radioModel.acquireDaxChannel(
+                    ch, PanadapterStream::DaxConsumer::Bridge);
+            }
         }
-        m_radioModel.releaseDaxChannel(
-            ch, PanadapterStream::DaxConsumer::Bridge);
-    }));
 
-    // Wire DAX RX: PanadapterStream routes registered DAX streams here
-    connect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
-            m_daxBridge, [bridge = m_daxBridge](int channel, const PcmFrame& frame) {
-        const QByteArray pcm = frame.legacyStereo24();
-        if (!pcm.isEmpty()) {
-            bridge->feedDaxAudio(channel, pcm);
+        // #2895: the one-shot loop above only covers slices that ALREADY have a
+        // DAX channel at bridge startup (typically just slice 0 / DAX 1). When the
+        // user later assigns DAX 2-4 to another slice via the UI, SliceModel only
+        // sends `slice set <id> dax=<ch>` — it never sends `stream create
+        // type=dax_rx`, so the radio never registers a DAX client (dax_clients
+        // stays 0) and sends silence. React to per-slice channel changes here and
+        // create/remove the DAX RX stream on demand, mirroring the TCI path
+        // (TciServer::ensureDaxForTci, #1331/#1439) and FlexLib
+        // RequestDAXRXAudioStream(channel).
+        for (auto* s : m_radioModel.slices()) {
+            wireDaxSlice(s);
         }
-    });
+        m_daxSliceConns.append(connect(&m_radioModel, &RadioModel::sliceAdded,
+                                       this, [this](SliceModel* s) {
+            if (!m_daxBridge || !s) return;
+            // Let onDaxChannelChanged() see a 0 -> channel transition for slices
+            // restored with DAX already assigned.
+            m_daxSliceLastCh[s->sliceId()] = 0;
+            wireDaxSlice(s);
+            // A slice can arrive already carrying a DAX channel (radio profile
+            // restore); make sure its stream exists too.
+            if (s->daxChannel() >= 1 && s->daxChannel() <= 8) {
+                onDaxChannelChanged(s, s->daxChannel());
+            }
+        }));
+        // A slice removed out from under us (pan close, foreign client, profile
+        // load) never fires daxChannelChanged — release its channel here or the
+        // bridge holds it until stopDax (a silent radio-side orphan, #3305).
+        m_daxSliceConns.append(connect(&m_radioModel, &RadioModel::sliceRemoved,
+                                       this, [this](int sliceId) {
+            if (!m_daxBridge) return;
+            const int ch = m_daxSliceLastCh.take(sliceId);
+            if (ch < 1 || ch > DaxBridge::NUM_CHANNELS) { return; }
+            for (auto* s : m_radioModel.slices()) {
+                if (s && s->daxChannel() == ch) return;  // channel hopped slices
+            }
+            m_radioModel.releaseDaxChannel(
+                ch, PanadapterStream::DaxConsumer::Bridge);
+        }));
+
+        // Wire DAX RX: PanadapterStream routes registered DAX streams here
+        connect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
+                m_daxBridge, [bridge = m_daxBridge](int channel, const PcmFrame& frame) {
+            const QByteArray pcm = frame.legacyStereo24();
+            if (!pcm.isEmpty()) {
+                bridge->feedDaxAudio(channel, pcm);
+            }
+        });
+    }
 
     // DAX-IQ stream-status routing, the VITA-49 IQ feed, level meter, and the
     // enable/disable/rate connections are wired ONCE at construction (see the
@@ -1377,6 +1378,21 @@ bool MainWindow::startDax()
     for (int i = 1; i <= 8; ++i)
         m_daxBridge->setChannelGain(i, ss.value(QStringLiteral("DaxRxGain%1").arg(i), "0.5").toString().toFloat());
     m_daxBridge->setTxGain(ss.value("DaxTxGain", "0.5").toString().toFloat());
+
+#ifdef HAVE_WEBSOCKETS
+    if (nativeReceive) {
+        auto* receive = new DaxReceiveModel(m_radioModel, *tciServer(), m_daxBridge);
+        connect(receive, &DaxReceiveModel::audioReady, m_daxBridge, &DaxBridge::feedDaxAudio);
+        connect(receive, &DaxReceiveModel::channelReset, m_daxBridge, &DaxBridge::resetRxChannel);
+        connect(receive, &DaxReceiveModel::channelSliceChanged, m_appletPanel->daxApplet(),
+                [this](int channel, int sliceId) {
+            m_appletPanel->daxApplet()->setReceiveChannelSlice(channel,m_radioModel.slice(sliceId));
+        });
+        receive->setEnabled(true);
+        qCInfo(lcDax) << "MainWindow: starting receive-only DAX audio bridge";
+        return true;
+    }
+#endif
 
     // Wire DAX TX: apps → bridge → AudioEngine → VITA-49.
     // AudioEngine chooses packet format/routing based on DaxTxLowLatency.
@@ -1415,8 +1431,11 @@ void MainWindow::stopDax()
 {
     if (!m_daxBridge) return;
 
-    m_audio->setDaxTxMode(false);
-    m_audio->clearTxAccumulators();  // self-marshals
+    const bool receiveOnly = m_daxBridge->isReceiveOnly();
+    if (!receiveOnly) {
+        m_audio->setDaxTxMode(false);
+        m_audio->clearTxAccumulators();  // self-marshals
+    }
 
     // #2895: drop the per-slice daxChannelChanged / sliceAdded reactions wired
     // in startDax() so they don't fire against a torn-down bridge.
@@ -1426,8 +1445,9 @@ void MainWindow::stopDax()
     m_daxSliceConns.clear();
     m_daxSliceLastCh.clear();
 
-    disconnect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
-               m_daxBridge, nullptr);
+    if (m_radioModel.panStream()) {
+        disconnect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady, m_daxBridge, nullptr);
+    }
     disconnect(m_daxBridge, &DaxBridge::txAudioReady,
                this, nullptr);
 
@@ -1436,13 +1456,20 @@ void MainWindow::stopDax()
     // or RADE still uses survives a bridge teardown — the #3363/#2886 failure
     // class, now enforced structurally instead of by cross-consumer peeking
     // (#3305).
-    m_radioModel.releaseAllDaxChannels(
-        PanadapterStream::DaxConsumer::Bridge);
+    if (!receiveOnly) {
+        m_radioModel.releaseAllDaxChannels(PanadapterStream::DaxConsumer::Bridge);
+    }
 
     // Restore original mic selection
-    if (!m_savedMicSelection.isEmpty() && m_savedMicSelection != "PC")
+    if (!receiveOnly && !m_savedMicSelection.isEmpty() && m_savedMicSelection != "PC") {
         m_radioModel.sendCommand(QString("transmit set mic_selection=%1").arg(m_savedMicSelection));
+    }
 
+    if (receiveOnly) {
+        for (int channel = 1; channel <= DaxBridge::NUM_CHANNELS; ++channel) {
+            m_appletPanel->daxApplet()->setReceiveChannelSlice(channel,nullptr);
+        }
+    }
     m_daxBridge->close();
     delete m_daxBridge;
     m_daxBridge = nullptr;

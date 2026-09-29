@@ -269,6 +269,7 @@ RadioCapabilities SimBackend::capabilities() const
                                                 {QStringLiteral("USB"), QStringLiteral("LSB")}};
     caps.receiveFilterControl = std::nullopt; // demo passband setters only echo state
     caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
+    caps.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
     caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
     caps.canReboot = false;

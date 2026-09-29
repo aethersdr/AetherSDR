@@ -18,6 +18,7 @@
 #include "AetherialAudioStrip.h"
 #include "AppletPanel.h"
 #include "DaxApplet.h"
+#include "ControlAvailabilityRegistry.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
@@ -933,8 +934,16 @@ void MainWindow::buildMenuBar()
     }
 #else
     auto* autoDaxAction = settingsMenu->addAction("Autostart DAX with AetherSDR");
-    m_autoDaxAction = autoDaxAction;   // hidden by applyCapabilitiesToUi() on a
-                                       // radio that reports no DAX streams
+    m_autoDaxAction = autoDaxAction;
+    auto* daxAvailability = new ControlAvailabilityRegistry(m_radioModel, this);
+    daxAvailability->registerAction(autoDaxAction, tr("DAX audio export is unavailable for this receiver in this build."),
+        [](bool connected, const RadioCapabilities& caps) {
+            bool nativeReceive = false;
+#ifdef HAVE_WEBSOCKETS
+            nativeReceive = caps.receiveAudioExport.has_value();
+#endif
+            return !connected || caps.hasDaxStreams || nativeReceive;
+        });
     autoDaxAction->setCheckable(true);
     autoDaxAction->setChecked(
         AppSettings::instance().value("AutoStartDAX", "False").toString() == "True");
