@@ -3290,18 +3290,31 @@ void TciServer::sendInitBurst(TciClient* client)
         << "TCI: receiver map"
         << (receiverMap.isEmpty() ? QStringLiteral("(none)") : receiverMap.join(QLatin1Char(' ')));
 
-    // TCI protocol requires one command per WebSocket message.
-    // Split the concatenated burst into individual messages.
-    QString burst = protocol->generateInitBurst();
-    const auto commands = burst.split(';', Qt::SkipEmptyParts);
-    for (const auto& cmd : commands) {
+    // Preserve one command per WebSocket message, but admit the bounded init
+    // snapshot as one worker job. Eight receivers times eight simultaneous
+    // clients otherwise exceed the 256-job mailbox during their handshakes.
+    const QString burst = protocol->generateInitBurst();
+    const QStringList commands = burst.split(';', Qt::SkipEmptyParts);
+    QStringList messages;
+    qsizetype bytes = 0;
+    for (const QString& cmd : commands) {
         // DIAG: log each init-burst command — the startup vfo:/dds: here is what
         // WSJT-X reconciles against on connect; a wrong/late one explains the
         // "TCI failed set rxfreq" some users hit right at WSJT-X startup.
         qCDebug(lcCat).noquote() << "TCI tx→init:" << (cmd + QLatin1Char(';'));
         const QString message = cmd + QLatin1Char(';');
-        sendClientText(client, message);
+        noteClientTextTx(client, message);
+        messages.append(message);
+        bytes += message.size() * sizeof(QChar);
     }
+    TciIoWorker* io = m_io.get();
+    const quint64 id = client->id();
+    io->post([io, id, messages = std::move(messages)] {
+        for (const QString& message : messages) {
+            // sendText rechecks client lifetime and socket backlog each time.
+            io->sendText(id, message);
+        }
+    }, bytes);
     qCDebug(lcCat) << "TCI: sent init burst," << commands.size() << "commands";
 }
 

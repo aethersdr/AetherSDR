@@ -11,6 +11,7 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QTimer>
+#include <QSemaphore>
 #include <QStringList>
 #include "core/TciClient.h"
 #include <array>
@@ -973,8 +974,43 @@ public:
               "revocation from a consumer callback prevents every remaining block of the same DAX input");
     }
 
+    static void simultaneousEightReceiverHandshakes()
+    {
+        Fixture f;
+        for (int id = 0; id < 8; ++id) { f.backend->add(id); }
+        // Exercise the production mailbox with its existing worker paused.
+        // No server/socket is opened and no firmware peer is simulated.
+        QSemaphore paused;
+        QSemaphore resume;
+        f.server.m_io->m_accepting = true;
+        f.server.m_ioThread = std::make_unique<QThread>();
+        f.server.m_io->moveToThread(f.server.m_ioThread.get());
+        f.server.m_ioThread->start();
+        QMetaObject::invokeMethod(f.server.m_io.get(), [&] {
+            paused.release();
+            resume.acquire();
+        }, Qt::QueuedConnection);
+        paused.acquire();
+        f.server.m_running.store(true);
+        for (int id = 0; id < 8; ++id) {
+            f.server.onClientOpened(std::make_shared<TciClientLifetime>(),
+                                    QHostAddress(QStringLiteral("192.0.2.1")), 50000 + id);
+        }
+        {
+            QMutexLocker lock(&f.server.m_io->m_mailboxMutex);
+            check(!f.server.m_io->m_overloaded,
+                  "eight full receiver handshakes fit the unchanged bounded worker mailbox");
+            check(f.server.m_io->m_mailboxBytes > 0,
+                  "handshake payload bytes remain charged to the mailbox bound");
+        }
+        check(f.server.m_clients.size() == 8, "eight simultaneous clients remain registered");
+        resume.release();
+        f.server.stop();
+    }
+
     static int run()
     {
+        simultaneousEightReceiverHandshakes();
         eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding();
         replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
