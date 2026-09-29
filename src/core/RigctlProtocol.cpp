@@ -252,6 +252,16 @@ int rfLevelToPanGain(double level, int low, int high, int step)
     return std::clamp(low + static_cast<int>(steps) * stepSize, low, high);
 }
 
+// Only a range the backend has published is a scale to map onto. Before it
+// lands the pan holds PanadapterModel's Flex-shaped defaults (-8..32 step 8),
+// and a level scaled against those would be sent to the radio as a real gain.
+// A degenerate range is refused for the same reason, and because the level
+// divides by its span.
+bool rfGainRangeKnown(const PanadapterModel& pan)
+{
+    return pan.hasRfGainRange() && pan.rfGainHigh() > pan.rfGainLow();
+}
+
 double panGainToRfLevel(int gain, int low, int high)
 {
     return qBound(0.0, static_cast<double>(gain - low) / (high - low), 1.0);
@@ -1468,7 +1478,7 @@ QString RigctlProtocol::cmdGetLevel(const QString& arg)
         // Read from the slice's own copy, `l RF` echoed the client's last
         // write and never a gain set anywhere else.
         if (const auto* pan = rfGainPanFor(m_model, slice)) {
-            if (pan->rfGainHigh() <= pan->rfGainLow()) return rprt(-11);
+            if (!rfGainRangeKnown(*pan)) return rprt(-11);  // RIG_ENAVAIL
             return makeResponse(formatRigLevelValue(panGainToRfLevel(
                 pan->rfGain(), pan->rfGainLow(), pan->rfGainHigh())));
         }
@@ -1695,7 +1705,7 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
         // IRadioBackend::setPanRfGain where it does not — the HL2's AD9866 LNA
         // is reachable only that way.
         if (const auto* pan = rfGainPanFor(m_model, slice)) {
-            if (pan->rfGainHigh() <= pan->rfGainLow()) return rprt(-11);
+            if (!rfGainRangeKnown(*pan)) return rprt(-11);  // RIG_ENAVAIL
             const int gain = rfLevelToPanGain(val, pan->rfGainLow(),
                                               pan->rfGainHigh(), pan->rfGainStep());
             const QString panId = slice->panId();

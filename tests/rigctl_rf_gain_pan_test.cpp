@@ -90,7 +90,10 @@ struct Fixture {
 
     // withPan=false leaves the slice attached to nothing, which on a backend
     // with no command plane means there is no RF gain control to address.
-    explicit Fixture(bool withPan = true)
+    // publishRange=false leaves the pan as it is before the backend's
+    // panRfGainInfoChanged lands: PanadapterModel's own defaults, which are a
+    // Flex's shape (-8..32 step 8) and not any backend's statement.
+    explicit Fixture(bool withPan = true, bool publishRange = true)
     {
         auto owned = std::make_unique<StubBackend>();
         backend = owned.get();
@@ -118,7 +121,9 @@ struct Fixture {
             }
             // The Hermes-Lite 2 LNA range, as Hl2Backend publishes it through
             // panRfGainInfoChanged (kLnaGainMinDb / kLnaGainMaxDb, 1 dB step).
-            pan->setRfGainInfo(-12, 48, 1);
+            if (publishRange) {
+                pan->setRfGainInfo(-12, 48, 1);
+            }
         }
         backend->connected = true;
     }
@@ -224,6 +229,33 @@ void testNothingToAddressIsNotAcknowledged()
     check("and nothing was sent to the backend", f.backend->rfGainWrites == 0);
 }
 
+void testNoPublishedRangeIsNotAGuess()
+{
+    Fixture f(/*withPan=*/true, /*publishRange=*/false);
+    RigctlProtocol port(&f.radio);
+    port.setSliceIndex(0);
+
+    // The pan exists from its geometry signal on; its range arrives later, on
+    // panRfGainInfoChanged. In between, the model holds Flex-shaped defaults,
+    // and `L RF 0.5` scaled against them would send +16 dB to an HL2 whose
+    // half-travel is +18. Refuse until the backend has said what its range is.
+    check("L RF before the backend publishes its range answers RIG_ENAVAIL",
+          setRf(port, QStringLiteral("0.5")) == QLatin1String("RPRT -11"));
+    check("l RF before the backend publishes its range does not invent a reading",
+          !getRf(port).has_value());
+    check("and nothing was sent to the backend", f.backend->rfGainWrites == 0);
+
+    // The range lands, as RadioModel relays panRfGainInfoChanged.
+    f.pan->setRfGainInfo(-12, 48, 1);
+    check("once the range is published L RF is taken",
+          setRf(port, QStringLiteral("0.5")) == QLatin1String("RPRT 0"));
+    check("and lands at half travel of the published range (+18 dB)",
+          f.backend->lastRfGain == 18);
+    f.pan->setRfGain(18);
+    const auto after = getRf(port);
+    check("and l RF reads it back", after.has_value() && nearly(*after, 0.5));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -237,6 +269,7 @@ int main(int argc, char** argv)
     testBottomOfTravelIsTheBottomOfTheRange();
     testReadBackIsThePansValue();
     testNothingToAddressIsNotAcknowledged();
+    testNoPublishedRangeIsNotAGuess();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
     return g_failed == 0 ? 0 : 1;
 }
