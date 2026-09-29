@@ -166,6 +166,7 @@ void WsjtxClient::parseStatus(QDataStream& ds)
     status.id = id;
     status.mode = mode;
     status.transmitting = body.transmitting;
+    status.dialFreqHz = dialFreqHz;
     status.rxFreqHz = resolved.rxFreqHz;
     status.txFreqHz = resolved.txFreqHz;
 

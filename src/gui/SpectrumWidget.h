@@ -959,12 +959,13 @@ public:
     // program's live Rx/Tx position, not a DX spot, and the issue calls out
     // that the two must stay visually distinct.
     struct WsjtxMarker {
-        QString id;             // WSJT-X instance id, for tooltip/debugging only
-        double  rxFreqHz{0.0};
-        double  txFreqHz{0.0};
+        QString id;               // WSJT-X instance id, for tooltip/debugging only
+        double  dialFreqHz{0.0};  // raw radio dial frequency, no audio offset
+        double  rxFreqHz{0.0};    // dial + Rx audio offset (full RF)
+        double  txFreqHz{0.0};    // dial + Tx audio offset (full RF)
         bool    transmitting{false};
-        QString mode;           // WSJT-X mode name ("FT8"/"FT4"/"FT2"/...), drives
-                                 // the double-line occupied-bandwidth width below.
+        QString mode;             // WSJT-X mode name ("FT8"/"FT4"/"FT2"/...), drives
+                                  // the double-line occupied-bandwidth width below.
     };
     void setWsjtxMarkers(const QVector<WsjtxMarker>& markers);
     // Per-pan, unlike setShowTuneGuides/setExtendedFrequencyLine (which
