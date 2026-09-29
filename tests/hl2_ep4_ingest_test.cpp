@@ -400,8 +400,9 @@ int main(int argc, char** argv)
 
         // THE POSITIVE HALF.
         check(has(fresh, "adcPeakDbfs") && has(fresh, "adcRmsDbfs")
-                  && has(fresh, "adcCrestDb") && has(fresh, "adcClippedPerBlock"),
-              "a block just delivered publishes all four converter rows");
+                  && has(fresh, "adcCrestDb") && has(fresh, "adcClippedPerBlock")
+                  && has(fresh, "adcDcDbfs") && has(fresh, "adcDcCodes"),
+              "a block just delivered publishes all six converter rows");
         // Against the block's OWN arithmetic, so the check cannot agree with a
         // wrong reading merely because both were typed from the same guess.
         check(value(fresh, "adcPeakDbfs").toString()
@@ -451,8 +452,8 @@ int main(int argc, char** argv)
                   && listed(stale, "adcDcDbfs") && listed(stale, "adcDcCodes"),
               "...while the rows keep their place and their labels");
 
-        // AND THE AGE ROW SURVIVES THE EXPIRY IT CAUSED. Four dashes and no age
-        // says only that something is missing; four dashes and an age says the
+        // AND THE AGE ROW SURVIVES THE EXPIRY IT CAUSED. Six dashes and no age
+        // says only that something is missing; six dashes and an age says the
         // gate stopped, which is the whole diagnostic.
         check(has(stale, "adcObservedAgoMs"),
               "the age row outlives the values it expired");
@@ -475,14 +476,14 @@ int main(int argc, char** argv)
         //
         // That is correct for the rows the rule was written for -- the in-band
         // path going quiet is exactly when the stream-free source should own
-        // temperatureC -- and it would silently undo this expiry. The four rows
+        // temperatureC -- and it would silently undo this expiry. The six rows
         // here have no stream-free twin: there is no second sensor that can
         // answer "what did the converter see" while the gate that answers it is
         // stopped, so a value arriving from the base could only be a staler
         // copy of the one just withheld.
         //
         // It is safe today because Hl2TelemetryService::healthRows() declares
-        // none of the four. Nothing enforced that, and nothing about the merge
+        // none of the six. Nothing enforced that, and nothing about the merge
         // would complain: add `adcPeakDbfs` to the offline source and every
         // other assertion in this file stays green while the expiry stops
         // reaching either consumer. This is the assertion that goes red

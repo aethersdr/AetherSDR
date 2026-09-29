@@ -7329,8 +7329,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // looked at", and 0.00 dBFS in particular would read as a hard clip.
     //
     // Guarding the put() calls themselves, as this first did, drops the keys
-    // out of `order` entirely: four rows then appeared the moment the first
-    // block landed and vanished again on every link edge through
+    // out of `order` entirely: the four rows of that day (six now) then
+    // appeared the moment the first block landed and vanished again on every
+    // link edge through
     // resetBandscopeMirrors(), so the dialog's row list changed shape under a
     // reader mid-refresh. (PR #5650 review round 3.)
     //
@@ -7579,9 +7580,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // snapshot with no age on it invites being read as current.
     //
     // GATED ON haveObservation, NOT ON haveBlock, and that is the whole reason
-    // the two names exist. This row is what EXPLAINS the four above going
-    // absent: an operator who sees four dashes and an age of 46 810 ms knows
-    // the gate stopped, where four dashes and a fifth dash says only that
+    // the two names exist. This row is what EXPLAINS the six above going
+    // absent: an operator who sees six dashes and an age of 46 810 ms knows
+    // the gate stopped, where six dashes and a seventh dash says only that
     // something is missing. Expiring the age along with the values would
     // delete the evidence for the expiry.
     put("adcObservedAgoMs", QStringLiteral("ADC level observed (ms ago)"),

@@ -1351,8 +1351,17 @@ struct Ep4Stats {
     // zero — and a non-zero mean smaller than half a code computes BELOW the
     // floor rather than being clamped to it. That is rmsDbfs()'s choice for a
     // sub-half-code deviation, taken for the same reason: the sentinel means
-    // "no level", and a tiny level is still a level. crestDb() already treats
-    // anything <= the floor as unusable, so nothing downstream is misled.
+    // "no level", and a tiny level is still a level.
+    //
+    // Nothing downstream filters it. healthSnapshot()'s dbfs lambda and
+    // AutomationServer::doBandscope()'s report() both publish the number
+    // verbatim (crestDb() never reads it). What keeps a reader from being
+    // misled is that a sub-floor value is LOWER than the sentinel, never equal
+    // to it, and that meanCodes() is published beside it as adcDcCodes. The
+    // second part matters: the floor is the rounded -72.25 and the rows print
+    // at two decimals, so a real mean of about half a code (0.4996..0.5001)
+    // also prints "-72.25", and only adcDcCodes — "0.50" against "0.00" —
+    // tells "measured, half a code" from "measured, zero".
     [[nodiscard]] double dcDbfs() const noexcept;
     // The same mean, SIGNED, in raw converter codes (-2048..+2047 scale). A
     // dBFS magnitude cannot tell a pedestal sitting toward the positive rail
