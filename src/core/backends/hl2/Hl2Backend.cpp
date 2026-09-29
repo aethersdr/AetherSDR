@@ -9077,10 +9077,19 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          wattsToDbm(directionalWatts(*t.reversePowerRaw)));
     if (t.forwardPowerRaw && (*t.forwardPowerRaw != m_lastFwdRaw)) {
         m_lastFwdRaw = *t.forwardPowerRaw;
+        // The window peak and its sample count ride the same line: the count
+        // is what tells a "sluggish meter" report whether the RADDR-1 stream
+        // itself is thin (~19 per 100 ms is healthy at 48 kHz) or the meter
+        // is. The window length is adcWindowMs -- MetisClient stamps both
+        // accumulators at the same emit, so it is this window's length too,
+        // including the short or late ones a fixed 100 ms would misstate.
         qCDebug(lcHl2Tx) << "HL2 directional: fwd" << *t.forwardPowerRaw
                          << "rev" << t.reversePowerRaw.value_or(-1)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
-                         << "(uncalibrated reference curve)";
+                         << "(uncalibrated reference curve);"
+                         << "window peak" << t.forwardPowerPeakRaw.value_or(-1)
+                         << "of" << t.forwardPowerSamples << "RADDR-1 samples in"
+                         << t.adcWindowMs << "ms";
     }
     // TX IQ FIFO — THE RADIO'S, not ours. `fill` is the top 7 bits of the
     // gateware's DSIQ level, 0-127, not a sample count; `pacingFault` is the

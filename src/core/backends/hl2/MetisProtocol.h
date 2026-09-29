@@ -693,15 +693,26 @@ struct Hl2Telemetry {
     //
     // `forwardPowerRaw` above is the LAST value seen, and it has the same
     // decimation as `adcOverload`: RADDR 1 arrives up to ~190 times a second
-    // and the coalesced emit keeps one. For a carrier that costs nothing. For
-    // speech it is most of the answer -- the slow ADC re-samples the detector
-    // on every other response (control.v:261, `resp_rqst & resp_cnt`), so the
-    // radio does report the peaks and the host was discarding ~18 of every 19.
+    // and the coalesced emit keeps one. For speech that is most of the answer
+    // -- the slow ADC re-samples the detector on every other response
+    // (control.v:261, `resp_rqst & resp_cnt`), so the radio does report the
+    // peaks and the host was discarding ~18 of every 19.
+    //
+    // ON A STEADY CARRIER the maximum is not free: the detector reading has
+    // noise, so a maximum sits above the last value by roughly its noise peak.
+    // Measured on the DUT (one HL2, 40 m, d162): across five keyed overs from
+    // 0.5 W to 5.7 W, TUNE included, the largest of 8-19 last-value samples
+    // polled over each over sat 0.03-0.05 dB above their median (e.g. TUNE
+    // raw 3608 median, 3621 max: 5.68 W vs 5.72 W through directionalWatts).
+    // That bounds the shift at about 0.05 dB -- ~1 % in watts -- on that
+    // radio. It is not a figure for every unit.
     //
     // This is the maximum over the RADDR-1 responses of the publish window,
     // accumulated by the same loop and for the same reason as the ADC pair
     // above. nullopt when the window saw no RADDR 1, never a stale carry.
-    // `forwardPowerSamples` is its denominator.
+    // `forwardPowerSamples` counts the responses it was taken over; its window
+    // length is `adcWindowMs`, stamped at the same emit. Hl2Backend logs all
+    // three on the directional debug line.
     std::optional<int> forwardPowerPeakRaw;
     int forwardPowerSamples = 0;
 
