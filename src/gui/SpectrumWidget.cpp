@@ -18255,6 +18255,17 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
     const int labelY = wfRect.top() + fm.height();
 
     for (const auto& marker : std::as_const(m_wsjtxMarkers)) {
+        // Filter by dial frequency (raw radio tuning point, no audio offset).
+        // This correctly disambiguates two WSJT-X instances on different mode
+        // frequencies (e.g. FT8 on 14.074 vs FT4 on 14.080) even when both
+        // pans share an overlapping display range — the audio-offset rxFreqHz
+        // of one instance can easily fall inside the other pan's span, but
+        // the dial frequencies are distinct. If a single WSJT-X instance's
+        // dial frequency is outside this pan's span, skip it entirely.
+        const double dialMhz = marker.dialFreqHz / 1.0e6;
+        if (dialMhz < startMhz || dialMhz > endMhz)
+            continue;
+
         const double rxMhz = marker.rxFreqHz / 1.0e6;
         if (rxMhz >= startMhz && rxMhz <= endMhz) {
             drawModeWidthLines(rxMhz, rxColor, marker.mode);

@@ -20,8 +20,9 @@ namespace AetherSDR {
 // LSB/USB special case here.
 struct WsjtxStatus {
     QString id;
-    double  rxFreqHz{0.0};
-    double  txFreqHz{0.0};
+    double  dialFreqHz{0.0};  // raw radio dial frequency, no audio offset
+    double  rxFreqHz{0.0};    // dial + Rx audio offset (full RF)
+    double  txFreqHz{0.0};    // dial + Tx audio offset (full RF)
     bool    transmitting{false};
     QString mode;
 };

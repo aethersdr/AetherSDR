@@ -851,7 +851,7 @@ void MainWindow::rebuildWsjtxMarkers()
     markers.reserve(m_wsjtxInstances.size());
     for (auto it = m_wsjtxInstances.cbegin(); it != m_wsjtxInstances.cend(); ++it) {
         const WsjtxStatus& st = it.value();
-        markers.append({st.id, st.rxFreqHz, st.txFreqHz, st.transmitting, st.mode});
+        markers.append({st.id, st.dialFreqHz, st.rxFreqHz, st.txFreqHz, st.transmitting, st.mode});
     }
 
     for (PanadapterApplet* applet : m_panStack->allApplets()) {
