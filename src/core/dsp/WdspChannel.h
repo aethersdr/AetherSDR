@@ -117,6 +117,16 @@ public:
         // 0..100, the seam's units. Mapped to WDSP's threshold by
         // noiseBlankerThresholdForLevel().
         int noiseBlankerLevel = 50;
+        // CW audio peaking filter (WDSP SPCW, apfshadow.c) — see setApf().
+        // In Config for the reason fmDeviationHz is: the four peaking stages
+        // belong to the RXA that reconfigure() frees, so a filter held only in
+        // a runtime setter would silently switch off on the next rebuild.
+        // Defaults are RXA.c's own (off, 600 Hz, 100 Hz, linear gain 2.0), so
+        // a caller that never touches them opens exactly what WDSP builds.
+        bool apfEnabled = false;
+        double apfCenterHz = 600.0;
+        double apfBandwidthHz = 100.0;
+        double apfGain = 2.0;   // LINEAR, not dB
     };
 
     enum class ProcessResult
@@ -309,6 +319,21 @@ public:
     // already in flight. Control-path work, guarded exactly like setMode(); it
     // must not be called from the processIq() callback.
     bool setAgc(int agcMode, double maximumGainDb) noexcept;
+    // The gain the AGC stage applies while its mode is 0 (off), in dB. WDSP's
+    // xwcpagc() multiplies by it ONLY in mode 0 and ignores it otherwise, so
+    // this may be set at any time and takes effect exactly when AGC is off.
+    // setAgc() already re-pushes Config::agcFixedGainDb on every mode change;
+    // this is the missing half that lets the value itself move at runtime.
+    // Receive only; refuses a non-finite value or a racing control operation.
+    bool setAgcFixedGain(double fixedGainDb) noexcept;
+    // CW audio peaking filter (WDSP's SPCW front door, apfshadow.c). centerHz
+    // is AUDIO (the CW pitch), gain is LINEAR. Receive only; refuses a
+    // non-positive or non-finite centre, bandwidth or gain rather than handing
+    // WDSP a filter design it would divide by. Stored in Config so open()
+    // re-applies it after a reconfigure().
+    bool setApf(bool enabled, double centerHz, double bandwidthHz, double gain) noexcept;
+    [[nodiscard]] static bool apfParametersValid(double centerHz, double bandwidthHz,
+                                                 double gain) noexcept;
 
     // ── Filter length and phase mode, at runtime ──────────────────────────
     //

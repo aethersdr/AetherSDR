@@ -745,6 +745,58 @@ bool WdspChannel::setAgc(int agcMode, double maximumGainDb) noexcept
     return true;
 }
 
+bool WdspChannel::setAgcFixedGain(double fixedGainDb) noexcept
+{
+    if (m_config.direction != Direction::Receive || !std::isfinite(fixedGainDb) ||
+        !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        SetRXAAGCFixed(m_channelId, fixedGainDb);
+    }
+    // Stored so setAgc() and open() push the operator's value, not the
+    // construction default: applyRxAgc() re-sends it on every mode change.
+    m_config.agcFixedGainDb = fixedGainDb;
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::apfParametersValid(double centerHz, double bandwidthHz,
+                                     double gain) noexcept
+{
+    // The double-pole design divides by the centre (H(f) = (bw/fc) / ...), and
+    // calc_dpole_nc sizes its FIR from the bandwidth; a zero or non-finite
+    // value in either is a filter WDSP cannot build. A zero gain is not a
+    // filter at all — it is a mute that looks like an APF.
+    return std::isfinite(centerHz) && std::isfinite(bandwidthHz) && std::isfinite(gain)
+           && centerHz > 0.0 && bandwidthHz > 0.0 && gain > 0.0;
+}
+
+bool WdspChannel::setApf(bool enabled, double centerHz, double bandwidthHz,
+                         double gain) noexcept
+{
+    if (m_config.direction != Direction::Receive ||
+        !apfParametersValid(centerHz, bandwidthHz, gain) || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        // Shape before run: switching on first would run one block through
+        // whatever design the stage last held.
+        SetRXASPCWFreq(m_channelId, centerHz);
+        SetRXASPCWBandwidth(m_channelId, bandwidthHz);
+        SetRXASPCWGain(m_channelId, gain);
+        SetRXASPCWRun(m_channelId, enabled ? 1 : 0);
+    }
+    m_config.apfEnabled = enabled;
+    m_config.apfCenterHz = centerHz;
+    m_config.apfBandwidthHz = bandwidthHz;
+    m_config.apfGain = gain;
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setFilterTaps(int taps) noexcept
 {
     // The SAME predicate validateConfig() applies, so the setter and open()
@@ -1122,6 +1174,17 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
             "WDSP FM deviation is outside Config::kMinFmDeviationHz..kMaxFmDeviationHz");
         return false;
     }
+    // Same door as setApf(), for the same reason as the deviation above: open()
+    // pushes these straight into the peaking-filter design.
+    if (config.direction == Direction::Receive &&
+        !apfParametersValid(config.apfCenterHz, config.apfBandwidthHz, config.apfGain)) {
+        setError(error, "WDSP APF centre, bandwidth and gain must be positive and finite");
+        return false;
+    }
+    if (config.direction == Direction::Receive && !std::isfinite(config.agcFixedGainDb)) {
+        setError(error, "WDSP AGC fixed gain must be finite");
+        return false;
+    }
     return true;
 }
 
@@ -1255,6 +1318,14 @@ void WdspChannel::open() noexcept
         // again by close(), so this has to be re-pushed on every open or a
         // reconfigure() silently returns the operator to a 5 kHz assumption.
         SetRXAFMDeviation(m_channelId, m_config.fmDeviationHz);
+        // The peaking stages are built by create_rxa at RXA.c's defaults and
+        // freed by close(), so the operator's APF is re-pushed on every open,
+        // for the same reason as the deviation above. validateConfig() has
+        // already refused a design WDSP could not build.
+        SetRXASPCWFreq(m_channelId, m_config.apfCenterHz);
+        SetRXASPCWBandwidth(m_channelId, m_config.apfBandwidthHz);
+        SetRXASPCWGain(m_channelId, m_config.apfGain);
+        SetRXASPCWRun(m_channelId, m_config.apfEnabled ? 1 : 0);
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);

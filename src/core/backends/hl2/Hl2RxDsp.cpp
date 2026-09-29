@@ -294,6 +294,11 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     applyMinimumPhaseForMode();
     m_channel->setFilter(m_config.filterLowHz, m_config.filterHighHz);
     m_channel->setAgc(m_config.agcMode, m_config.maximumAgcGainDb);
+    // The AGC-off level and the APF are held outside Config (see the header),
+    // so a fresh channel opens on WDSP's defaults for both. Re-applied here
+    // AFTER the mode, because whether the APF runs depends on it.
+    applyAgcOffLevel();
+    applyApf();
     // A rebuild (rate change) creates a fresh channel; restore the operator's
     // current slice offset rather than silently snapping the slice to centre.
     if (m_shiftHz != 0.0)
@@ -417,6 +422,50 @@ void Hl2RxDsp::setMode(WdspChannel::Mode mode)
     if (canPushToChannel()) {
         m_channel->setMode(mode);
         applyMinimumPhaseForMode();
+        // Entering or leaving CW switches the APF in or out of circuit; the
+        // operator's request itself is untouched.
+        applyApf();
+    }
+}
+
+void Hl2RxDsp::setAgcOffLevel(int level)
+{
+    m_agcOffLevel = std::clamp(level, 0, 100);
+    if (canPushToChannel())
+        applyAgcOffLevel();
+}
+
+void Hl2RxDsp::applyAgcOffLevel()
+{
+    const double db = agcFixedGainDbForOffLevel(m_agcOffLevel);
+    if (!m_channel->setAgcFixedGain(db)) {
+        qCWarning(lcHl2RxDsp) << "AGC-off level" << m_agcOffLevel << "(" << db
+                              << "dB ) refused by the channel; held and re-applied"
+                                 " on the next configure()";
+    }
+}
+
+void Hl2RxDsp::setApf(bool on, int level, double centerHz)
+{
+    m_apfOn = on;
+    m_apfLevel = std::clamp(level, 0, 100);
+    // A pitch the channel would refuse keeps the last good centre rather than
+    // poisoning the held request; Hl2Backend clamps the pitch to 100..6000 Hz.
+    if (std::isfinite(centerHz) && centerHz > 0.0)
+        m_apfCenterHz = centerHz;
+    if (canPushToChannel())
+        applyApf();
+}
+
+void Hl2RxDsp::applyApf()
+{
+    const bool run = apfInCircuit();
+    if (!m_channel->setApf(run, m_apfCenterHz, apfBandwidthHzForLevel(m_apfLevel),
+                           kApfGain)) {
+        qCWarning(lcHl2RxDsp) << "APF" << (run ? "on" : "off") << "at" << m_apfCenterHz
+                              << "Hz level" << m_apfLevel
+                              << "refused by the channel; held and re-applied on"
+                                 " the next configure()";
     }
 }
 

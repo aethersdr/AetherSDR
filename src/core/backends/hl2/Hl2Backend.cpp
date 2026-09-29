@@ -1293,6 +1293,8 @@ bool Hl2Backend::createPanadapter()
     // inheriting RX1's — which for a receiver that has never been configured is
     // the default of off.
     pushNoiseBlanker(r);
+    pushApf(r);
+    pushAgcOffLevel(r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -2401,7 +2403,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     // this radio has — but stated rather than defaulted, per the struct's
     // "a backend that omits one silently declares it absent" rule.
     c.hasLmsNoiseFilters = false;
-    c.hasAudioPeakingFilter = false;
+    // THE EXCEPTION, like the blanker below: WDSP's CW peaking filter runs on
+    // this host (setSliceApf), so the APF row is a working control here even
+    // though the radio has no firmware DSP at all.
+    c.hasAudioPeakingFilter = true;
     c.hasManualNotch = false;
     c.hasTransmitFrequencyCheck = false;
     c.hasDdcPanEdgeRolloff = false;
@@ -3800,6 +3805,36 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
             Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
 }
 
+void Hl2Backend::setSliceApf(int sliceId, bool on, int level)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r)
+        return;
+    // Per receiver, like the blanker: two receivers on two CW signals can
+    // want different peaking, and the slice model holds it per slice.
+    r->apfOn = on;
+    r->apfLevel = qBound(0, level, 100);
+    pushApf(*r);
+    emitSliceState(ddc);
+}
+
+void Hl2Backend::setSliceAgcOffLevel(int sliceId, int level)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r)
+        return;
+    // Stored and pushed in EVERY AGC mode, not only while AGC is Off. WDSP
+    // applies the fixed gain only in its mode 0 (wcpAGC.c xwcpagc) and
+    // setSliceAgc() maps "off" to exactly that mode, so the value lands the
+    // moment the operator switches AGC off — and a calibrator or controller
+    // that sets it first and switches second gets the level it set.
+    r->agcOffLevel = qBound(0, level, 100);
+    pushAgcOffLevel(*r);
+    emitSliceState(ddc);
+}
+
 void Hl2Backend::setSliceAudioMute(int sliceId, bool mute)
 {
     Receiver* r = rx(ddcForSlice(sliceId));
@@ -3971,6 +4006,27 @@ void Hl2Backend::pushNoiseBlanker(const Receiver& r)
     // unconditional push is the only version with no such case to reason about.
     QMetaObject::invokeMethod(r.dsp, "setNoiseBlanker", Qt::QueuedConnection,
         Q_ARG(bool, r.nbOn), Q_ARG(int, r.nbLevel));
+}
+
+void Hl2Backend::pushApf(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // The centre is the pitch, not the BFO: the peaking filter runs on the
+    // demodulated audio, where both CWU and CWL come out at +pitch. Hl2RxDsp
+    // decides from its own mode whether the stage runs, so this is safe to
+    // send in any mode and is sent unconditionally, like the blanker.
+    QMetaObject::invokeMethod(r.dsp, "setApf", Qt::QueuedConnection,
+        Q_ARG(bool, r.apfOn), Q_ARG(int, r.apfLevel),
+        Q_ARG(double, static_cast<double>(m_cwPitchHz)));
+}
+
+void Hl2Backend::pushAgcOffLevel(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    QMetaObject::invokeMethod(r.dsp, "setAgcOffLevel", Qt::QueuedConnection,
+        Q_ARG(int, r.agcOffLevel));
 }
 
 void Hl2Backend::seedNotches(const Receiver& r)
@@ -5336,6 +5392,10 @@ void Hl2Backend::setCwPitch(int hz)
             Q_ARG(double, rxShiftHz(r)));
         QMetaObject::invokeMethod(r.dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, lo), Q_ARG(double, hi));
+        // The APF is centred on the pitch, so it moves with it. Otherwise the
+        // peak stays on the old tone while the signal slides off it — the
+        // filter would be attenuating the very signal it exists to lift.
+        pushApf(r);
     }
 }
 
@@ -6167,6 +6227,13 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
         e[QStringLiteral("agcMaxGainDb")] = c->maximumAgcGainDb;
         e[QStringLiteral("agcSlopeDb")] = c->agcSlopeDb;
         e[QStringLiteral("agcFixedGainDb")] = c->agcFixedGainDb;
+        // What the channel's SPCW stage last ACCEPTED (WdspChannel stores
+        // these only after WDSP took them), so a refused or never-delivered
+        // APF request reads differently from an applied one.
+        e[QStringLiteral("apfRun")] = c->apfEnabled;
+        e[QStringLiteral("apfCenterHz")] = c->apfCenterHz;
+        e[QStringLiteral("apfBandwidthHz")] = c->apfBandwidthHz;
+        e[QStringLiteral("apfGain")] = c->apfGain;
         // Level 4 where it exists: these two ask WDSP itself rather than
         // reading the config, and are marked so a reader can tell.
         e[QStringLiteral("wdspNotchCount")] = dsp->wdspNotchCount();
@@ -8803,6 +8870,10 @@ void Hl2Backend::pushInitialState()
         // so a reconnect into a session that had it on would leave the slice's
         // NB button lit over a chain that is not blanking anything.
         pushNoiseBlanker(r);
+        // And the APF and AGC-off level, which a fresh chain also opens
+        // without.
+        pushApf(r);
+        pushAgcOffLevel(r);
     }
     if (m_txDsp) {
         const Receiver* txRx = rx(m_txDdc);
@@ -9530,6 +9601,14 @@ void Hl2Backend::emitSliceState(int ddc)
     // as a command (Principle II).
     d.agcMode = r->agcMode;
     d.agcThreshold = r->agcThresholdDb;
+    // The AGC-off level and the APF, on the same terms: what the receiver
+    // holds, so a reconnect that opened fresh chains shows the operator the
+    // values the DSP is really running rather than the model's last ones.
+    // SliceModel::applyChanges() guards all three, so an echo at an unchanged
+    // value emits nothing.
+    d.agcOffLevel = r->agcOffLevel;
+    d.apf = r->apfOn;
+    d.apfLevel = r->apfLevel;
     // The HL2 has one transmitter however many receivers it runs, so EXACTLY ONE
     // slice is the transmit slice — the one on m_txDdc.
     //

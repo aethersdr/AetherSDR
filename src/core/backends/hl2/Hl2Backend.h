@@ -126,6 +126,12 @@ public:
     // the radio-side DSP family (NR, ANF) are deliberately NOT implemented and
     // stay hidden, because implementing one of them is not implementing all.
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    // Two more host-side receive stages the HL2 can only have here: WDSP's CW
+    // audio peaking filter (centred on the CW pitch, in circuit in CW modes
+    // only) and the fixed gain its AGC applies while AGC is Off. Per receiver,
+    // like the blanker. See Hl2RxDsp for the level mappings.
+    void setSliceApf(int sliceId, bool on, int level) override;
+    void setSliceAgcOffLevel(int sliceId, int level) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
@@ -691,6 +697,17 @@ private:
         bool nbOn = false;
         int  nbLevel = 50;
 
+        // Authoritative APF request and AGC-off level, for the blanker's
+        // reason: nothing echoes them, and a fresh chain must be told again.
+        // Defaults mirror SliceModel's (APF off at level 50; off-level 10) and
+        // Hl2RxDsp's, so the first published slice state is what WDSP runs.
+        bool apfOn = false;
+        // Literal because this header only forward-declares Hl2RxDsp; keep in
+        // step with Hl2RxDsp::kDefaultApfLevel / kDefaultAgcOffLevel
+        // (hl2_apf_agc_off_test pins the agreement).
+        int  apfLevel = 50;
+        int  agcOffLevel = 10;
+
         // Host-side per-slice audio. The radio mixes nothing for us — a Flex
         // sums its slices on-radio and sends one stream, and an HL2 demodulates
         // every receiver here — so mute, level and balance are ours to apply.
@@ -796,6 +813,10 @@ private:
     // blanker off, so without this a reconnect or an added panadapter silently
     // turns off a blanker the operator's slice still shows as on.
     void pushNoiseBlanker(const Receiver& r);
+    // The same, for the APF (with the current CW pitch as its centre) and the
+    // AGC-off level. Called beside every pushNoiseBlanker().
+    void pushApf(const Receiver& r);
+    void pushAgcOffLevel(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC.
     //

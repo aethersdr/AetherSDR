@@ -193,6 +193,27 @@ void SetRXAAGCDecay(int channel, int decayMs);
 void SetRXAAGCHang(int channel, int hangMs);
 void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 
+// ── CW audio peaking filter (APF, apfshadow.c) ────────────────────────────
+//
+// NOT A NEW STAGE. RXA.c builds four peaking filters into every receive
+// channel — double-pole, matched, gaussian and bi-quad — all off, all at
+// 600 Hz / 100 Hz / gain 2.0, and apfshadow is the one front door that routes
+// run/freq/bandwidth/gain to whichever of them `selection` names (0 is the
+// double-pole, and it is what create_apfshadow starts on). They run AFTER the
+// AGC, on the demodulated audio, so the centre is an AUDIO frequency: the CW
+// pitch, not an RF offset. The double-pole is built in its CWL+CWU mode (I is
+// copied into Q before filtering), so one positive centre serves both
+// sidebands. `gain` is LINEAR, not dB (the matched and gaussian variants
+// multiply it by sqrt(2) internally; the double-pole and bi-quad do not).
+//
+// Every call takes ch[channel].csDSP through the stage it lands on and
+// rebuilds that stage's impulse response, so these are control-path work.
+void SetRXASPCWSelection(int channel, int selection);
+void SetRXASPCWRun(int channel, int run);
+void SetRXASPCWFreq(int channel, double centerHz);
+void SetRXASPCWBandwidth(int channel, double bandwidthHz);
+void SetRXASPCWGain(int channel, double gain);
+
 // ── FM demodulator deviation ──────────────────────────────────────────────
 //
 // NO VENDORED PATCH IS INVOLVED, and that is worth saying plainly because the

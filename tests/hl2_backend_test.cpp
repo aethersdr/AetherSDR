@@ -31,6 +31,7 @@
 #include "TestDspBuildWait.h"
 
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2RxDsp.h"
 
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
@@ -47,8 +48,10 @@
 #include <QTimer>
 #include <QUdpSocket>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 
 using namespace AetherSDR;
 using AetherSDR::hl2::Hl2Backend;
@@ -293,6 +296,75 @@ int main(int argc, char** argv)
     check(cwLow == cwuLow && cwHigh == cwuHigh,
           "a pitch change leaves the operator's CW cuts alone");
     QObject::disconnect(captureFilter);
+
+    // ---- APF and the AGC-off level reach the receive chain ----
+    //
+    // Both were Flex wire text only. Read back from dspChains(), which reports
+    // what the WDSP channel ACCEPTED rather than what was asked, so a verb that
+    // stored its value and never reached the chain fails here. dspChains()
+    // blocks on the I/O thread, behind the queued pushes these verbs made.
+    {
+        const auto rx0 = [&backend]() {
+            for (const QVariant& v : backend.dspChains()) {
+                const QVariantMap m = v.toMap();
+                if (m.value(QStringLiteral("chain")).toString() == QLatin1String("rx-wdsp")
+                    && m.value(QStringLiteral("receiver")).toInt() == 0)
+                    return m;
+            }
+            return QVariantMap{};
+        };
+        const auto near = [](const QVariant& v, double want) {
+            return v.isValid() && std::abs(v.toDouble() - want) < 1e-6;
+        };
+        std::optional<bool> pubApf;
+        std::optional<int> pubApfLevel, pubOffLevel;
+        auto capture = QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                                        [&](int, const SliceDelta& d) {
+            if (d.apf) pubApf = *d.apf;
+            if (d.apfLevel) pubApfLevel = *d.apfLevel;
+            if (d.agcOffLevel) pubOffLevel = *d.agcOffLevel;
+        });
+        backend.setSliceMode(0, QStringLiteral("CW"));
+        check(pubApf == false && pubApfLevel == hl2::Hl2RxDsp::kDefaultApfLevel
+                  && pubOffLevel == hl2::Hl2RxDsp::kDefaultAgcOffLevel,
+              "a fresh receiver publishes the APF and off-level defaults its chain runs");
+        QVariantMap c = rx0();
+        check(c.value(QStringLiteral("apfRun")).toBool() == false
+                  && near(c.value(QStringLiteral("agcFixedGainDb")),
+                          hl2::Hl2RxDsp::agcFixedGainDbForOffLevel(
+                              hl2::Hl2RxDsp::kDefaultAgcOffLevel)),
+              "the chain opened with the APF off and the default AGC-off gain");
+
+        backend.setSliceApf(0, true, 80);
+        backend.setSliceAgcOffLevel(0, 40);
+        check(pubApf == true && pubApfLevel == 80 && pubOffLevel == 40,
+              "setSliceApf / setSliceAgcOffLevel publish what the receiver now holds");
+        c = rx0();
+        check(c.value(QStringLiteral("apfRun")).toBool()
+                  && near(c.value(QStringLiteral("apfCenterHz")), 700.0)
+                  && near(c.value(QStringLiteral("apfBandwidthHz")),
+                          hl2::Hl2RxDsp::apfBandwidthHzForLevel(80)),
+              "in CW the APF runs, centred on the CW pitch, at the level's bandwidth");
+        check(near(c.value(QStringLiteral("agcFixedGainDb")), 24.0),
+              "the AGC-off level reached WDSP's fixed gain (40 units = 24 dB)");
+
+        backend.setCwPitch(650);
+        c = rx0();
+        check(near(c.value(QStringLiteral("apfCenterHz")), 650.0),
+              "a CW pitch change moves the APF centre with it");
+
+        backend.setSliceMode(0, QStringLiteral("LSB"));
+        c = rx0();
+        check(!c.value(QStringLiteral("apfRun")).toBool() && pubApf == true,
+              "outside CW the stage stops while the slice keeps its APF request");
+        backend.setSliceMode(0, QStringLiteral("CW"));
+        c = rx0();
+        check(c.value(QStringLiteral("apfRun")).toBool(),
+              "and back in CW it runs again");
+        backend.setSliceApf(0, false, 80);
+        backend.setCwPitch(700);
+        QObject::disconnect(capture);
+    }
     backend.setSliceMode(0, QStringLiteral("LSB"));
 
     // ---- keying does not disturb the link ----
