@@ -111,7 +111,8 @@ void testDualSensorToggle()
 
     // The PGXL front panel shows both temperatures without labels, for
     // example "24.4/24.2 C". The applet labels them PA (PA heatsink) and
-    // HL (Harmonic Load heatsink).
+    // HL (Harmonic Load heatsink). HL comes only over a direct connection.
+    applet.setDirectConnected(true);
     applet.setPaHeatsinkTemp(34.7f);
     applet.setHarmonicLoadHeatsinkTemp(28.4f);
     report("dual sensor displays Celsius pair",
@@ -144,6 +145,12 @@ void testRadioFallbackDropsHarmonicLoadTemp()
     // must not stay on screen after the direct connection drops.
     applet.setDirectConnected(false);
     report("radio fallback drops the Harmonic Load heatsink",
+           button->text() == QStringLiteral("PA  34.7 C"),
+           button->text());
+
+    // A late HL write after the drop must not bring the stale value back.
+    applet.setHarmonicLoadHeatsinkTemp(28.5f);
+    report("a late Harmonic Load write after the drop stays hidden",
            button->text() == QStringLiteral("PA  34.7 C"),
            button->text());
 

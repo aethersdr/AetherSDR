@@ -6492,10 +6492,12 @@ void MainWindow::wireMeters()
         qCDebug(lcTuner) << "PGXL status:" << kvs;
         auto* amp = m_appletPanel->ampApplet();
         // Heatsink temperatures, in degrees Celsius:
-        //   `temp` is the PA heatsink. Some firmware sends both temperatures
-        //   in this key as "PA/HL", for example "30.5/26.5".
-        //   `hltemp` is the Harmonic Load heatsink (firmware 3.8.9). Other
-        //   firmware names it `tempb`. Whichever key arrives is used.
+        //   `temp` is the PA heatsink.
+        //   `hltemp` is the Harmonic Load heatsink (seen on firmware 3.8.9
+        //   and 3.9.8).
+        // Two other forms are accepted but have never been seen in a capture:
+        // both temperatures packed into `temp` as "PA/HL" (e.g. "30.5/26.5"),
+        // and the HL temperature named `tempb`.
         if (kvs.contains("temp")) {
             const QString tv = kvs["temp"];
             const int slash = tv.indexOf('/');

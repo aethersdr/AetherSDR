@@ -1151,6 +1151,9 @@ void AmpApplet::setPaHeatsinkTemp(float degC)
 
 void AmpApplet::setHarmonicLoadHeatsinkTemp(float degC)
 {
+    // Direct connection only, like Vdd and Vac: a late write after the
+    // connection drops must not put a stale value back on screen.
+    if (!m_directConnected) return;
     m_harmonicLoadHeatsinkTemp = degC;
     m_hasHarmonicLoadHeatsinkTemp = true;
     updateTempLabel();
