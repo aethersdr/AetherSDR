@@ -35,7 +35,7 @@ public:
 
     // Push what to display. The parent owns the data (kind + value + range);
     // the widget just renders it. Triggers a repaint.
-    void setMeterInput(const MeterInput& input);
+    void setMeterInput(const MeterInput& input, const QString& unavailableReason = {});
 
     // Extremes (min/max peak-hold markers) options. Widget-local mirrors of the
     // DisplaySettings enums so this widget stays free of the settings/AppSettings
@@ -85,6 +85,7 @@ protected:
     void changeEvent(QEvent*) override;
 
 private:
+    QString m_unavailableReason;
     // One element per method; all draw in UNITS via SmartMtrGeometry. Called
     // from paintEvent in back-to-front order.
     void drawControl(QPainter& p, const SmartMtrGeometry& g) const;

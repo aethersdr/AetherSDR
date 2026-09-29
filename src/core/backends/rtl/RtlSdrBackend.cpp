@@ -285,7 +285,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
             | RadioCapabilities::ClientSettingsDomain::RfGain | RadioCapabilities::ClientSettingsDomain::Memories;
     }
     // Vendor extensions
-    c.extensions["rtl"] = QVariantMap{{"serial", m_serial}, {"settingsVersion", 1}};
+    c.extensions["rtl"] = QVariantMap{{"serial", m_serial}, {"settingsVersion", 1}, {"receiveMetersControl", true}};
     c.extensionNamespaces = {"rtl"};
 
     return c;
@@ -441,6 +441,7 @@ RtlCaptureTransaction::Receiver RtlSdrBackend::initialReceiver() const
 void RtlSdrBackend::startCapture(std::unique_ptr<RtlSdrWorker> worker)
 {
     m_worker = std::move(worker);
+    m_worker->setReceiveMetersEnabled(m_receiveMetersEnabled);
     m_startupTrace = qgetenv("AETHER_AUTOMATION") == "1" && qgetenv("AETHER_RTL_STARTUP_TRACE") == "1"
         ? std::make_shared<RtlStartupTrace>() : nullptr;
     m_worker->setStartupTrace(m_startupTrace);
@@ -1236,6 +1237,22 @@ void RtlSdrBackend::invokeExtension(const QString& ns, const QString& verb,
     if (verb == QLatin1String("settings.get")) {
         emit extensionResult(requestId, deviceSettingsStatus()); return;
     }
+    if (verb == QLatin1String("receive_meters.set")) {
+        if (arg.metaType().id() != QMetaType::Bool || !m_lastPublished) {
+            emit extensionError(requestId, tr("Receive meters require a boolean and an accepted receiver state"));
+            return;
+        }
+        const QPointer<RtlSdrWorker> producer(m_worker.get());
+        m_receiveMetersEnabled = arg.toBool();
+        m_worker->setReceiveMetersEnabled(m_receiveMetersEnabled);
+        saveAcceptedDeviceSettings();
+        publishRfMeterDefinitions(true);
+        if (!producer || producer.data() != m_worker.get() || !m_connected) { return; }
+        emit extensionStatus(QStringLiteral("rtl"), QStringLiteral("settings"), deviceSettingsStatus());
+        if (!producer || producer.data() != m_worker.get() || !m_connected) { return; }
+        emit extensionResult(requestId, m_receiveMetersEnabled);
+        return;
+    }
     bool ok = false;
     const qint64 value = arg.toLongLong(&ok);
     const int type = arg.metaType().id();
@@ -1413,6 +1430,7 @@ void RtlSdrBackend::applyRestoredState(const RestoredRadioState& state)
     m_panRfGainDb = kDefaultRfGainDb;
     m_ppmCorrection = m_savedDeviceSettings.values.ppm;
     m_dcSuppression = m_savedDeviceSettings.values.dcSuppression;
+    m_receiveMetersEnabled = m_savedDeviceSettings.values.receiveMetersEnabled;
     m_directSampling = 0;
 
     if (state.rfFrequencyHz > 0) {
@@ -1708,13 +1726,14 @@ void RtlSdrBackend::drainAudio()
     RtlReceivePipeline::RfObservation rf;
     while (worker && worker.data() == m_worker.get() && worker->takeRfObservation(rf)) {
         const auto now = hdMonotonicMs();
-        if (!acceptsFrame(rf.token.session, rf.token.revision) || !rf.producedMs
+        if (!m_receiveMetersEnabled || !acceptsFrame(rf.token.session, rf.token.revision) || !rf.producedMs
             || rf.producedMs > now || now - rf.producedMs > 500) { continue; }
         for (int id = 0; id < 8; ++id) {
             if (rf.mask & (1u << id)) {
                 emit meterUpdate(QStringLiteral("SLC%1:LEVEL").arg(id), rf.dbfs[id]);
                 if (!worker || worker.data() != m_worker.get()
-                    || !acceptsFrame(rf.token.session, rf.token.revision)) { return; }
+                    || !acceptsFrame(rf.token.session, rf.token.revision)
+                    || !worker->rfObservationIsCurrent(rf)) { return; }
             }
         }
     }
@@ -2132,16 +2151,8 @@ void RtlSdrBackend::publishCapture()
         }
     }
     m_lastPublished = state;
-    for (const auto& receiver : state.receivers) {
-        MeterDef def;
-        def.index = 700 + receiver.passband.stableId;
-        def.source = QStringLiteral("SLC"); def.sourceIndex = receiver.passband.stableId;
-        def.name = QStringLiteral("LEVEL"); def.unit = QStringLiteral("dBFS");
-        def.low = -120; def.high = 0;
-        def.description = tr("Peak windowed FFT bin in the receive passband, relative to ADC full scale; uncalibrated, not dBm or channel power");
-        emit meterDefined(def);
-        if (!m_capture.confirmed() || m_capture.confirmed()->token != state.token) { return; }
-    }
+    publishRfMeterDefinitions();
+    if (!m_capture.confirmed() || m_capture.confirmed()->token != state.token) { return; }
     for (const auto& receiver : state.receivers) {
         m_monitors[receiver.passband.stableId] = {receiver.audioGain, receiver.audioPan, receiver.audioMute};
         updateMonitor(receiver.passband.stableId);
@@ -2279,6 +2290,7 @@ void RtlSdrBackend::verifyDeviceSettingsIdentity(const QString& serial)
         m_deviceSettingsReason = tr("Session only: opened device serial does not match the settings identity.");
         m_ppmCorrection = 0;
         m_dcSuppression = false;
+        m_receiveMetersEnabled = true;
     }
 }
 
@@ -2287,7 +2299,36 @@ void RtlSdrBackend::saveAcceptedDeviceSettings()
     m_deviceSettingsSaved = false;
     if (m_deviceSettingsAllowed) {
         m_deviceSettingsSaved = RtlDeviceSettings(m_settingsScope).saveAccepted(
-            {m_ppmCorrection, m_dcSuppression}, m_deviceSettingsReason);
+            {m_ppmCorrection, m_dcSuppression, m_receiveMetersEnabled}, m_deviceSettingsReason);
+    }
+}
+
+void RtlSdrBackend::publishRfMeterDefinitions(bool retireValues)
+{
+    if (!m_lastPublished) { return; }
+    const auto state = *m_lastPublished;
+    const bool enabled = m_receiveMetersEnabled;
+    const auto current = [this, &state, enabled] {
+        return m_lastPublished && m_lastPublished->token == state.token
+            && m_capture.confirmed() && m_capture.confirmed()->token == state.token
+            && m_receiveMetersEnabled == enabled;
+    };
+    for (const auto& receiver : state.receivers) {
+        MeterDef def;
+        def.index = 700 + receiver.passband.stableId;
+        def.source = QStringLiteral("SLC"); def.sourceIndex = receiver.passband.stableId;
+        def.name = QStringLiteral("LEVEL"); def.unit = QStringLiteral("dBFS");
+        def.low = -120; def.high = 0;
+        def.description = tr("Peak windowed FFT bin in the receive passband, relative to ADC full scale; uncalibrated, not dBm or channel power");
+        if (!enabled) { def.unavailableReason = tr("Receive meters disabled"); }
+        // Retire cached values before either enabling or disabling. A definition
+        // never stands in for a fresh observation after re-enabling.
+        if (retireValues) {
+            emit meterRemoved(def.index);
+            if (!current()) { return; }
+        }
+        emit meterDefined(def);
+        if (!current()) { return; }
     }
 }
 
@@ -2297,6 +2338,7 @@ QVariantMap RtlSdrBackend::deviceSettingsStatus() const
         {QStringLiteral("applied"), m_connected && m_lastPublished.has_value()},
         {QStringLiteral("ppm"), m_ppmCorrection},
         {QStringLiteral("dcSuppression"), m_dcSuppression},
+        {QStringLiteral("receiveMetersEnabled"), m_receiveMetersEnabled},
         {QStringLiteral("pending"), m_capture.busy()},
         {QStringLiteral("requestedPpm"), m_requested.hardware.ppm},
         {QStringLiteral("requestedDcSuppression"), m_requested.dcSuppression},

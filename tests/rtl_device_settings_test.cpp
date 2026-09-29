@@ -40,6 +40,13 @@ int main(int argc, char** argv)
     check(Settings(first).saveAccepted({-12, true}, reason), "update accepted controls");
     check(first.featureExact(Settings::featureName()).value("futureField").toObject().value("keep").toInt() == 123, "unknown members survive read-modify-write");
     check(Settings(first).load().values == Settings::Values{-12, true}, "DC and PPM roundtrip independently");
+    check(Settings(first).load().values.receiveMetersEnabled, "legacy settings default meters to enabled");
+    check(Settings(first).saveAccepted({-12, true, false}, reason), "meter disable saves through device settings owner");
+    check(!Settings(first).load().values.receiveMetersEnabled && Settings(second).load().values.receiveMetersEnabled,
+        "meter setting roundtrips per serial without leaking into another radio");
+    Settings::Values valuesForInvalidMeter;
+    check(!Settings::decode({{"ppm", 0}, {"dcSuppression", false}, {"receiveMetersEnabled", "false"}}, valuesForInvalidMeter),
+        "meter setting refuses non-boolean values");
     const QJsonObject future{{"privateFutureState", 42}};
     check(first.setFeature(Settings::featureName(), 99, future), "seed future schema");
     check(Settings(first).load().status == Settings::ReadStatus::Refused, "future document is not reinterpreted as current controls");

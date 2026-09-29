@@ -1,6 +1,7 @@
 #include "SmartMtrWidget.h"
 
 #include "SmartMtrStyle.h"
+#include "core/ThemeManager.h"
 
 #include <QEvent>
 #include <QFont>
@@ -111,8 +112,10 @@ void SmartMtrWidget::applyBallistics(MeterKind kind)
     m_smooth.setBallistics(b);
 }
 
-void SmartMtrWidget::setMeterInput(const MeterInput& input)
+void SmartMtrWidget::setMeterInput(const MeterInput& input, const QString& unavailableReason)
 {
+    m_unavailableReason = unavailableReason;
+    setAccessibleDescription(unavailableReason);
     // A non-finite value (NaN/Inf) would survive std::clamp (both comparisons
     // false), stick in the bar smoother so needsAnimation() never clears, and
     // poison the extremes running sum permanently. Drop it; the last good frame
@@ -168,6 +171,13 @@ void SmartMtrWidget::setMeterInput(const MeterInput& input)
         span > 0.0 ? float((posUnits - kScaleMin) / span) : 0.0f;
 
     m_smooth.setTarget(targetFrac);
+    if (!input.hasValue && input.kind == MeterKind::RelativeSignal) {
+        m_animTimer.stop();
+        m_extremes.reset();
+        m_smooth.snapToTarget();
+        update();
+        return;
+    }
     if (kindChanged)
         m_smooth.snapToTarget(); // snap across the discontinuity, don't glide
 
@@ -254,6 +264,13 @@ void SmartMtrWidget::paintEvent(QPaintEvent*)
     drawIndicator(p, g);
     p.drawPixmap(0, 0, m_aboveBar);
     drawExtremes(p, g);
+    if (!m_unavailableReason.isEmpty()) {
+        p.setPen(ThemeManager::instance().color(this, "color.text.secondary"));
+        QFont labelFont = font();
+        labelFont.setPixelSize(10);
+        p.setFont(labelFont);
+        p.drawText(rect(), Qt::AlignCenter, tr("Meters off"));
+    }
 
     // Let the parent's value-label overlay repaint in lockstep with the markers.
     emit repainted();

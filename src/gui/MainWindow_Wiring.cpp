@@ -1540,7 +1540,7 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
         const auto& meters = m_radioModel.meterModel();
         const MeterDef* def = meters.meterDef(meters.findMeter("SLC", "LEVEL", id));
         if ((def && def->unit == "dBFS") || vfo->relativeSignalLevel()) {
-            vfo->setRelativeSignalLevel(meters.relativeLevelForSlice(id));
+            vfo->setRelativeSignalLevel(meters.relativeLevelForSlice(id), def ? def->unavailableReason : QString());
         }
     });
     relativeTimer->start();
@@ -6417,7 +6417,8 @@ void MainWindow::wireMeters()
         const auto& meters = m_radioModel.meterModel();
         const MeterDef* def = meters.meterDef(meters.findMeter("SLC", "LEVEL", m_activeSliceId));
         if ((def && def->unit == "dBFS") || meter->relativeLevel()) {
-            meter->setRelativeLevel(meters.relativeLevelForSlice(m_activeSliceId), m_activeSliceId);
+            meter->setRelativeLevel(meters.relativeLevelForSlice(m_activeSliceId), m_activeSliceId,
+                def ? def->unavailableReason : QString());
         }
     });
     relativeTimer->start();

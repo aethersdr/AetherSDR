@@ -1201,6 +1201,15 @@ int main(int argc, char** argv)
     expect(meter.accessibleValueText().contains("unavailable"), "parked selection withdraws its old reading");
     expect(imageDigest(relativeFace) != imageDigest(render(meter, QSize(280, 140))),
         "relative no-data face differs from a live RF reading");
+    meter.setRelativeLevel(std::nullopt, 2, QStringLiteral("Receive meters disabled"));
+    expect(meter.accessibleValueText() == QStringLiteral("Receive meters disabled")
+        && meter.accessibleDescription() == QStringLiteral("Receive meters disabled"),
+        "disabled RF meter exposes its actual reason to assistive technology");
+    const QImage offFace = render(meter, QSize(280, 140));
+    meter.setRelativeLevel(-40.0f, 2);
+    expect(meter.accessibleValueText().contains("dBFS")
+        && imageDigest(offFace) != imageDigest(render(meter, QSize(280, 140))),
+        "re-enabled RF meter recovers the selected live face");
     meter.setLevel(-73);
     expect(meter.accessibleValueText().contains("dBm"), "calibrated input restores the calibrated meter");
 

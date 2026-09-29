@@ -48,6 +48,8 @@ public:
     std::optional<Transaction::Result> takeResult();
     void serviceCancellation();
     bool takeRfObservation(RtlReceivePipeline::RfObservation& value) { return m_pipeline->takeRfObservation(value); }
+    bool rfObservationIsCurrent(const RtlReceivePipeline::RfObservation& value) const { return m_pipeline->rfObservationIsCurrent(value); }
+    void setReceiveMetersEnabled(bool enabled) { m_pipeline->setReceiveMetersEnabled(enabled); }
     bool takeAudio(RtlReceivePipeline::Packet& packet) { return m_pipeline->takePacket(packet); }
     bool takeHdObservation(RtlReceivePipeline::HdFmObservation& value) { return m_pipeline->takeHdObservation(value); }
     // Independently sampled counters since construction. Timing covers each

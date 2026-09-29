@@ -55,7 +55,7 @@ public:
 public slots:
     // Update the displayed RX level (S-meter dBm).
     void setLevel(float dbm);
-    void setRelativeLevel(std::optional<float> dbfs, int receiverId);
+    void setRelativeLevel(std::optional<float> dbfs, int receiverId, const QString& unavailableReason = {});
     bool relativeLevel() const { return m_relativeLevel; }
     void setReceiveMeterReading(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
@@ -131,6 +131,7 @@ private:
     QString m_lastAccessibleValue;
     bool m_relativeLevel = false;
     bool m_relativeValid = false;
+    QString m_relativeUnavailableReason;
     int m_relativeReceiver = -1;
     float   m_levelDbm{0.0f};    // current RX reading; initialized from geometry
     float   m_peakDbm{0.0f};     // RX peak hold; initialized from geometry

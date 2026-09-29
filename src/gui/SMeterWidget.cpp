@@ -184,6 +184,7 @@ void SMeterWidget::setLevel(float dbm) // a11y-check: skip -- settled update is 
         setAccessibleDescription(tr("Signal strength meter, shows S-units or TX power"));
     }
     m_relativeLevel = false;
+    if (!m_peakReset.isActive()) { m_peakReset.start(); }
     m_receiveMeterReadingActive = false;
     updateReceiveLevel(dbm);
 }
@@ -217,17 +218,27 @@ void SMeterWidget::updateReceiveLevel(float dbm)
     }
 }
 
-void SMeterWidget::setRelativeLevel(std::optional<float> dbfs, int receiverId)
+void SMeterWidget::setRelativeLevel(std::optional<float> dbfs, int receiverId, const QString& unavailableReason)
 {
-    const bool valid = dbfs && std::isfinite(*dbfs);
+    const bool valid = unavailableReason.isEmpty() && dbfs && std::isfinite(*dbfs);
+    if (m_relativeLevel && !m_relativeValid && !valid && receiverId == m_relativeReceiver
+        && unavailableReason == m_relativeUnavailableReason) { return; }
+    m_relativeUnavailableReason = unavailableReason;
     const bool reset = !m_relativeLevel || receiverId != m_relativeReceiver || !valid;
     const float value = valid ? *dbfs : -120.0f;
     if (reset) { m_peakDbm = value; m_peakHoldDbm = value; m_peakHoldTimerRunning = false; }
-    if (!m_relativeLevel) {
-        setAccessibleDescription(tr("Relative RF peak FFT bin in dBFS; uncalibrated, not dBm or audio level"));
-    }
+    setAccessibleDescription(unavailableReason.isEmpty()
+        ? tr("Relative RF peak FFT bin in dBFS; uncalibrated, not dBm or audio level") : unavailableReason);
     m_relativeLevel = true; m_relativeValid = valid; m_relativeReceiver = receiverId;
     m_receiveMeterReadingActive = false;
+    if (!valid) {
+        m_levelDbm = value;
+        m_needleFraction = m_targetNeedleFraction = 0;
+        m_needleAnimation.stop(); m_peakDecay.stop(); m_peakReset.stop();
+        update(); scheduleAccessibleValue();
+        return;
+    }
+    if (!m_peakReset.isActive()) { m_peakReset.start(); }
     updateReceiveLevel(value);
 }
 
@@ -238,6 +249,7 @@ void SMeterWidget::setReceiveMeterReading(
         setAccessibleDescription(tr("Signal strength meter, shows S-units or TX power"));
     }
     m_relativeLevel = false;
+    if (!m_peakReset.isActive()) { m_peakReset.start(); }
     m_receiveMeterReading = reading;
     m_receiveMeterReadingActive = true;
 
@@ -476,7 +488,8 @@ bool SMeterWidget::usesUnavailableRxMeter() const
 
 QString SMeterWidget::unavailableRxMeterLabel() const
 {
-    if (m_relativeLevel) { return tr("Relative RF — unavailable"); }
+    if (m_relativeLevel) { return m_relativeUnavailableReason.isEmpty()
+        ? tr("Relative RF — unavailable") : m_relativeUnavailableReason; }
     if (!m_receiveMeterReadingActive) {
         return QStringLiteral("Meter unavailable");
     }

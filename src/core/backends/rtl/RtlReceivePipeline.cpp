@@ -259,9 +259,12 @@ void RtlReceivePipeline::observeSpectrum(std::span<const float> bins, std::uint6
     if (bins.size() != m_spectrum.size()) { return; }
     std::copy(bins.begin(), bins.end(), m_spectrum.begin());
     m_spectrumFirstSample = firstSample; m_spectrumFresh = true;
+    const std::uint64_t generation = m_rfGeneration.load(std::memory_order_acquire);
+    if (!(generation & 1)) { return; } // Keep the independent SQL spectrum above.
     if (!m_token.session || m_capture.achievedSampleRateHz <= 0) { return; }
     RfObservation observation;
     observation.token = m_token;
+    observation.generation = generation;
     observation.producedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     const double binHz = m_capture.achievedSampleRateHz / bins.size();
@@ -288,11 +291,22 @@ void RtlReceivePipeline::observeSpectrum(std::span<const float> bins, std::uint6
 }
 bool RtlReceivePipeline::takeRfObservation(RfObservation& output) noexcept
 {
-    const unsigned read = m_rfRead.load(std::memory_order_relaxed);
-    if (read == m_rfWrite.load(std::memory_order_acquire)) { return false; }
-    output = m_rfObservations[read];
-    m_rfRead.store((read + 1) % m_rfObservations.size(), std::memory_order_release);
-    return true;
+    for (unsigned count = 0; count < m_rfObservations.size(); ++count) {
+        const unsigned read = m_rfRead.load(std::memory_order_relaxed);
+        if (read == m_rfWrite.load(std::memory_order_acquire)) { return false; }
+        output = m_rfObservations[read];
+        m_rfRead.store((read + 1) % m_rfObservations.size(), std::memory_order_release);
+        const std::uint64_t generation = m_rfGeneration.load(std::memory_order_acquire);
+        if ((generation & 1) && output.generation == generation) { return true; }
+    }
+    return false;
+}
+void RtlReceivePipeline::setReceiveMetersEnabled(bool enabled) noexcept
+{
+    const std::uint64_t generation = m_rfGeneration.load(std::memory_order_relaxed);
+    if (bool(generation & 1) != enabled) {
+        m_rfGeneration.store(generation + 1, std::memory_order_release);
+    }
 }
 void RtlReceivePipeline::setMonitor(int slot, int gain, int pan, bool mute) noexcept
 {

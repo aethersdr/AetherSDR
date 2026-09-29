@@ -144,6 +144,7 @@ private:
     QVector<RtlSliceSettings::Slice> acceptedSettings() const;
     void finishExtensions(bool success, RtlCaptureTransaction::Token token = {});
     QVariantMap deviceSettingsStatus() const;
+    void publishRfMeterDefinitions(bool retireValues = false);
     void saveAcceptedDeviceSettings();
     void verifyDeviceSettingsIdentity(const QString& serial);
     bool acceptsFrame(quint64 session, quint64 revision) const;
@@ -185,6 +186,7 @@ private:
     int m_panRfGainDb{kDefaultRfGainDb};
     int m_ppmCorrection{0};
     bool m_dcSuppression = false;
+    bool m_receiveMetersEnabled = true;
     RtlDeviceSettings::ReadResult m_savedDeviceSettings;
     bool m_deviceSettingsAllowed = false;
     bool m_deviceSettingsSaved = false;

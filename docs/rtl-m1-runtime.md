@@ -651,3 +651,27 @@ freshness window at 100 ms intervals and displays unavailable when unfed or
 stale. Relative readings never enter the calibrated `sLevelChanged` signal or
 `sLevelForSlice` accessor. Slice bars, SmartMTR and the selected analog meter
 use a labeled -120..0 dBFS scale; other radios retain their calibrated scale.
+
+
+### Private evaluation: optional receive meters
+
+RTL Receiver settings exposes **Enable receive meters**, default enabled.
+Its accepted boolean is stored as `receiveMetersEnabled` in the same per-serial
+`RtlDevice` schema-1 document; missing fields in older documents mean enabled.
+The `rtl/receive_meters.set` extension requires a boolean and a connected,
+accepted receiver state. `receiveMetersControl` advertises that verb.
+
+Disabling stops the independent RF-passband measurement/publication, clears
+cached readings, and stops relative-meter animation. The existing typed meter
+catalogue carries an unavailable reason so both the VFO and selected analog
+meter identify the disabled state instead of freezing a reading. A generation
+stamp rejects queued/in-flight readings across disable/re-enable. The shared
+spectrum needed for squelch and the receiver/audio paths remain active. This
+control does not retune or rebuild the capture graph. Enabling requires a fresh
+observation before any meter becomes live. Settings are unchanged on other
+radio families, and anonymous or mismatched serials remain session-only.
+
+This is an interim operator choice for the private eight-receiver evaluation.
+The enabled display still has measurable CPU overhead; bounded redraw fixes
+alone did not recover the earlier pre-meter baseline. Exact performance and
+hardware-validation evidence belongs to the sealed evaluation package.

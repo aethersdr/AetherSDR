@@ -4143,17 +4143,22 @@ void VfoWidget::setSignalLevel(float dbm)
     pushSmartMtrInput();
 }
 
-void VfoWidget::setRelativeSignalLevel(std::optional<float> dbfs)
+void VfoWidget::setRelativeSignalLevel(std::optional<float> dbfs, const QString& unavailableReason)
 {
+    const bool valid = unavailableReason.isEmpty() && dbfs && std::isfinite(*dbfs);
+    if (m_relativeSignal && !m_relativeSignalValid && !valid
+        && m_relativeUnavailableReason == unavailableReason) { return; }
+    m_relativeUnavailableReason = unavailableReason;
     m_relativeSignal = true;
-    m_relativeSignalValid = dbfs && std::isfinite(*dbfs);
+    m_relativeSignalValid = valid;
     m_receiveMeterReadingActive = false;
     m_signalHasDbm = false;
     m_signalDbm = m_relativeSignalValid ? *dbfs : -120.0f;
     m_dbmLabel->setText(m_relativeSignalValid
-        ? tr("%1 dBFS").arg(m_signalDbm, 0, 'f', 0) : tr("— dBFS"));
+        ? tr("%1 dBFS").arg(m_signalDbm, 0, 'f', 0) : (unavailableReason.isEmpty() ? tr("— dBFS") : tr("Meters off")));
     m_dbmLabel->setAccessibleName(tr("Relative RF level dBFS"));
-    m_dbmLabel->setAccessibleDescription(tr("Peak FFT bin in the receive passband, uncalibrated; not dBm or audio level"));
+    m_dbmLabel->setAccessibleDescription(unavailableReason.isEmpty()
+        ? tr("Peak FFT bin in the receive passband, uncalibrated; not dBm or audio level") : unavailableReason);
     updateSignalMeterTarget();
     pushSmartMtrInput();
 }
@@ -4238,7 +4243,7 @@ void VfoWidget::pushSmartMtrInput()
             in.min = -120; in.max = 0; in.hasValue = m_relativeSignalValid;
         }
     }
-    m_smartMtrWidget->setMeterInput(in);
+    m_smartMtrWidget->setMeterInput(in, m_relativeSignal ? m_relativeUnavailableReason : QString());
 }
 
 void VfoWidget::pushSmartMtrOptions()
@@ -4528,9 +4533,10 @@ void VfoWidget::updateSignalMeterTarget()
 
     // Only the selected meter needs animation. Keep the standard bar seeded
     // for switching back, without repainting the whole flag behind SmartMTR.
-    if (m_smartMtr) {
+    if (m_smartMtr || (m_relativeSignal && !m_relativeSignalValid)) {
         m_signalMeterAnimation.stop();
         m_signalMeterFraction = m_targetSignalMeterFraction;
+        if (!m_smartMtr) { update(); }
         return;
     }
 

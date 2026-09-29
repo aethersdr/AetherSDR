@@ -111,6 +111,34 @@ private slots:
         QVERIFY(meter->extremeLabels().front().secondary.contains(QStringLiteral("dBm")));
     }
 
+    void unavailableRelativeMetersStayQuietAndRecover()
+    {
+        PaintCountingVfo vfo;
+        vfo.show();
+        SmartMtrWidget* meter = vfo.findChild<SmartMtrWidget*>();
+        QVERIFY(meter);
+        vfo.setRelativeSignalLevel(-20);
+        QTest::qWait(100);
+        const QImage live = meter->grab().toImage();
+        vfo.setRelativeSignalLevel(std::nullopt, QStringLiteral("Receive meters disabled"));
+        QTest::qWait(60);
+        const QImage off = meter->grab().toImage();
+        QVERIFY(live != off);
+        QCOMPARE(meter->accessibleDescription(), QStringLiteral("Receive meters disabled"));
+        QVERIFY(meter->extremeLabels().isEmpty());
+        QTest::qWait(60);
+        vfo.paints = 0;
+        for (int i = 0; i < 4; ++i) {
+            vfo.setRelativeSignalLevel(std::nullopt, QStringLiteral("Receive meters disabled"));
+            QTest::qWait(50);
+        }
+        QCOMPARE(vfo.paints, 0);
+        vfo.setRelativeSignalLevel(-40);
+        QTest::qWait(100);
+        QVERIFY(meter->grab().toImage() != off);
+        QVERIFY(meter->accessibleDescription().isEmpty());
+    }
+
     void inactiveStandardMeterDoesNotAnimateParent()
     {
         PaintCountingVfo vfo;

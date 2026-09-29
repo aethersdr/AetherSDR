@@ -72,10 +72,17 @@ public:
     struct RfObservation {
         Transaction::Token token;
         std::uint64_t producedMs = 0;
+        std::uint64_t generation = 0;
         std::uint8_t mask = 0;
         std::array<float, 8> dbfs{};
     };
     bool takeRfObservation(RfObservation& output) noexcept;
+    void setReceiveMetersEnabled(bool enabled) noexcept;
+    bool rfObservationIsCurrent(const RfObservation& observation) const noexcept
+    {
+        const auto generation = m_rfGeneration.load(std::memory_order_acquire);
+        return (generation & 1) && observation.generation == generation;
+    }
     struct HdFmObservation {
         Transaction::Token token;
         std::uint64_t captureEpoch = 0;
@@ -206,6 +213,9 @@ private:
     std::array<std::uint64_t, 8> m_squelchEpoch{};
     std::array<SharedCapturePolicy::SliceDescriptor, 8> m_nextMeterPassbands{}, m_meterPassbands{};
     std::array<RfObservation, 4> m_rfObservations{};
+    // Main-thread writer; callback snapshots the epoch. Odd means enabled.
+    // Epoch tagging rejects queued/in-flight samples across disable/re-enable.
+    std::atomic<std::uint64_t> m_rfGeneration{1};
     alignas(64) std::atomic<unsigned> m_rfWrite{0};
     alignas(64) std::atomic<unsigned> m_rfRead{0};
     std::array<float, 2048> m_spectrum{};

@@ -55,8 +55,22 @@ struct RtlReceivePipelineTestAccess {
         pipeline.m_receivingMask = 0xff;
         bins[1324] = -33;
         pipeline.observeSpectrum(bins, 8192);
-        return pipeline.takeRfObservation(observation) && observation.mask == 0xff
-            && observation.dbfs[7] == -33 && !pipeline.takeRfObservation(observation);
+        if (!pipeline.takeRfObservation(observation) || observation.mask != 0xff
+            || observation.dbfs[7] != -33 || pipeline.takeRfObservation(observation)) { return false; }
+        pipeline.observeSpectrum(bins, 9000); // leave an old sample queued
+        pipeline.setReceiveMetersEnabled(false);
+        const auto write = pipeline.m_rfWrite.load();
+        pipeline.observeSpectrum(bins, 10000);
+        if (pipeline.m_rfWrite.load() != write || pipeline.takeRfObservation(observation)
+            || !pipeline.m_spectrumFresh || pipeline.m_spectrumFirstSample != 10000) { return false; }
+        pipeline.setReceiveMetersEnabled(true);
+        if (pipeline.takeRfObservation(observation)) { return false; }
+        pipeline.observeSpectrum(bins, 11000);
+        pipeline.setReceiveMetersEnabled(false);
+        pipeline.setReceiveMetersEnabled(true);
+        if (pipeline.takeRfObservation(observation)) { return false; } // rapid off/on rejects queued sample
+        pipeline.observeSpectrum(bins, 12000);
+        return pipeline.takeRfObservation(observation) && observation.mask == 0xff;
     }
     static bool traceObservation(RtlReceivePipeline& pipeline)
     {

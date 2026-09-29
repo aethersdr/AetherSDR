@@ -70,7 +70,7 @@ public:
     // 2-state on/off mode against the slice's squelchLevel only.
     void setRxApplet(RxApplet* rx);
     void setSignalLevel(float dbm);
-    void setRelativeSignalLevel(std::optional<float> dbfs);
+    void setRelativeSignalLevel(std::optional<float> dbfs, const QString& unavailableReason = {});
     bool relativeSignalLevel() const { return m_relativeSignal; }
     void setReceiveMeterReading(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
@@ -455,6 +455,7 @@ private:
     bool           m_lastOnLeft{true};
     bool m_relativeSignal = false;
     bool m_relativeSignalValid = false;
+    QString m_relativeUnavailableReason;
     float          m_signalDbm{-130.0f};
     // Whether m_signalDbm is a real calibrated reading. FLEX always is; a
     // KiwiSDR slice without a calibrated meter is not, in which case the

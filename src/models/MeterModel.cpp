@@ -55,6 +55,7 @@ QJsonObject meterToJson(const MeterDef& def, bool hasValue, float value, qint64 
     obj["low"] = def.low;
     obj["high"] = def.high;
     obj["description"] = def.description;
+    obj["unavailable_reason"] = def.unavailableReason;
     obj["has_value"] = hasValue;
     obj["value"] = hasValue ? QJsonValue(value) : QJsonValue();
     // Milliseconds since this meter's value last updated (-1 = never). Lets a
@@ -872,7 +873,7 @@ std::optional<float> MeterModel::relativeLevelForSlice(int sliceIndex) const
     if (sliceIndex < 0) { return std::nullopt; }
     const int index = findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"), sliceIndex);
     const MeterDef* def = meterDef(index);
-    if (!def || def->unit != QStringLiteral("dBFS")
+    if (!def || !def->unavailableReason.isEmpty() || def->unit != QStringLiteral("dBFS")
         || !vitalIsFresh(true, valueAgeMs(index))) { return std::nullopt; }
     return m_values.value(index);
 }
