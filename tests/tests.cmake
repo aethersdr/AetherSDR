@@ -2778,8 +2778,9 @@ set_tests_properties(radio_setup_label_theme_token_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 # #5637 §3: Radio Setup's Max Power field. A watt ceiling from the backend's
-# txPowerBands (HL2) reads W and is read-only with an accessible reason where
-# there is no command plane to write it; the Flex percent stays editable. Same
+# txPowerBands (HL2) reads W once reported (nothing before), read-only with an
+# accessible reason where there is no command plane to write it; the Flex path
+# is unchanged from main (editable, same write; unit not asserted). Same
 # target shape as radio_setup_region_field_test; the HL2 backend is built
 # through rebuildBackendForTest() and never connected -- no socket.
 add_executable(radio_setup_max_power_field_test

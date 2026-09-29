@@ -1,15 +1,12 @@
 // #5637 §3 — Radio Setup → Transmit's `Max Power:` field.
 //
 // The field shows TransmitModel::maxPowerLevel() and was labelled `%` on every
-// radio. That number has two producers: a Flex reports `max_power_level` in
-// its transmit status (a percent, and a level the operator may write back with
-// `transmit set max_power_level=`), while a backend that declares
-// RadioCapabilities::txPowerBands has it set by RadioModel::refreshTxPowerLimit
-// from the band's rated WATTS — the Hermes-Lite 2's 5 W power class, which the
-// forward-power gauges already read as watts. On an HL2 the dialog therefore
-// said "5 %", accepted an edit, dropped the write (no command plane), and read
-// 5 back on the next open: the "Max Power reverts from 100% to 5%" in the
-// report.
+// radio. On a backend that declares RadioCapabilities::txPowerBands that value
+// is set by RadioModel::refreshTxPowerLimit from the band's rated WATTS — the
+// Hermes-Lite 2's 5 W power class, which the forward-power gauges already read
+// as watts. On an HL2 the dialog therefore said "5 %", accepted an edit,
+// dropped the write (no command plane), and read 5 back on the next open: the
+// "Max Power reverts from 100% to 5%" in the report.
 //
 // Pinned here, each with its control:
 //   1. a watt ceiling from the band table is labelled W, not %;
@@ -17,7 +14,12 @@
 //      accessible channel (a tooltip alone never reaches a screen reader);
 //   3. finishing an edit there raises no commandDropped — nothing is offered
 //      that cannot be sent;
-//   4. the Flex field is unchanged: `%`, editable.
+//   4. before the backend has reported a rating, no number and no W are shown
+//      — TransmitModel's compiled-in 100 is not a rating;
+//   5. the Flex path is unchanged from main: editable, and an edit still
+//      reaches RadioModel::sendCommand. Its unit label is deliberately NOT
+//      asserted — which unit Flex's max_power_level carries is an open
+//      question this change does not answer.
 //
 // No hardware and no transport: the HL2 backend is the real one, built through
 // rebuildBackendForTest() and never connected.
@@ -32,12 +34,58 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLoggingCategory>
 #include <QSignalSpy>
+#include <QStringList>
 #include <QtTest>
 
 using namespace AetherSDR;
 
 namespace {
+
+QStringList* g_logSink = nullptr;
+
+void captureLogHandler(QtMsgType, const QMessageLogContext&, const QString& msg)
+{
+    if (g_logSink) {
+        *g_logSink << msg;
+    }
+}
+
+// RadioModel has no outbound-command signal; sendCommand() logs each command
+// at debug on aether.protocol (the same capture tci_server_review_test uses).
+class ScopedCommandLog
+{
+public:
+    ScopedCommandLog()
+    {
+        g_logSink = &m_lines;
+        m_previous = qInstallMessageHandler(captureLogHandler);
+        QLoggingCategory::setFilterRules(QStringLiteral("aether.protocol.debug=true"));
+    }
+    ~ScopedCommandLog()
+    {
+        QLoggingCategory::setFilterRules(QString());
+        qInstallMessageHandler(m_previous);
+        g_logSink = nullptr;
+    }
+    ScopedCommandLog(const ScopedCommandLog&) = delete;
+    ScopedCommandLog& operator=(const ScopedCommandLog&) = delete;
+
+    bool contains(const QString& fragment) const
+    {
+        for (const QString& line : m_lines) {
+            if (line.contains(fragment)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+private:
+    QStringList      m_lines;
+    QtMessageHandler m_previous{nullptr};
+};
 
 struct MaxPowerField {
     QLineEdit* edit{nullptr};
@@ -111,10 +159,47 @@ private slots:
         QCOMPARE(dropped.count(), 0);
     }
 
-    // POSITIVE CONTROL: the Flex field keeps its percent and stays editable, so
-    // the assertions above cannot be passed by a field made read-only and
-    // relabelled on every radio.
-    void flexLevelStaysAnEditablePercent()
+    // The state the review found (#6015): an HL2 backend built but not yet
+    // connected, so refreshTxPowerLimit() has never run and maxPowerLevel() is
+    // still TransmitModel's compiled-in 100. That is not the radio's rating,
+    // and "100 W" described as "the radio's rated output" is wrong for a 5 W
+    // radio.
+    void hl2UnreportedRatingShowsNoPhantomWatts()
+    {
+        RadioModel model;
+        QVERIFY(model.rebuildBackendForTest(QStringLiteral("hl2")));
+        QVERIFY2(!model.backendCapabilities().txPowerBands.isEmpty(),
+                 "HL2 declares its power class as a band table");
+        QVERIFY2(!model.transmitModel().haveMaxPowerLevel(),
+                 "premise: no rating has been reported");
+
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        dialog.selectTab(QStringLiteral("Transmit"));
+        const MaxPowerField field = findMaxPowerField(dialog);
+        QVERIFY2(field.edit, "Max Power edit found");
+        QVERIFY2(field.unit, "Max Power unit label found");
+
+        QVERIFY2(field.edit->text().isEmpty(),
+                 qPrintable(QStringLiteral("no phantom rating, got \"%1\"")
+                                .arg(field.edit->text())));
+        QVERIFY2(field.unit->text() != QStringLiteral("W"),
+                 "no W before any watts have been reported");
+        QVERIFY2(field.edit->isReadOnly(), "still no command plane");
+        QVERIFY2(!field.edit->accessibleDescription().startsWith(
+                     QStringLiteral("The radio's rated output")),
+                 "does not describe an unreported value as the rated output");
+        QVERIFY2(!field.edit->accessibleDescription().isEmpty(),
+                 "the reason still reaches a screen reader");
+    }
+
+    // POSITIVE CONTROL: the Flex path is unchanged from main — the field is
+    // editable and an edit reaches sendCommand as `transmit set
+    // max_power_level=` — so the assertions above cannot be passed by a field
+    // made read-only on every radio. The unit label is NOT asserted, and the
+    // value typed is inside every reading's range: which unit Flex reports is
+    // not settled here, and this test must not freeze either answer.
+    void flexPathUnchangedFromMain()
     {
         RadioModel model;  // a bare model is on the Flex backend
         QVERIFY2(model.hasCommandPlane(), "Flex has a command plane");
@@ -125,10 +210,16 @@ private slots:
         dialog.selectTab(QStringLiteral("Transmit"));
         const MaxPowerField field = findMaxPowerField(dialog);
         QVERIFY2(field.edit, "Max Power edit found");
-        QVERIFY2(field.unit, "Max Power unit label found");
 
-        QCOMPARE(field.unit->text(), QStringLiteral("%"));
-        QVERIFY2(!field.edit->isReadOnly(), "Flex max_power_level is writable");
+        QCOMPARE(field.edit->text(),
+                 QString::number(model.transmitModel().maxPowerLevel()));
+        QVERIFY2(!field.edit->isReadOnly(), "Flex max_power_level stays writable");
+
+        ScopedCommandLog log;
+        field.edit->setText(QStringLiteral("80"));
+        emit field.edit->editingFinished();
+        QVERIFY2(log.contains(QStringLiteral("transmit set max_power_level=80")),
+                 "the edit still reaches RadioModel::sendCommand");
     }
 };
 
