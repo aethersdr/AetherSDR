@@ -81,8 +81,7 @@ class AntennaGeniusModel : public QObject {
     Q_OBJECT
 
 public:
-    explicit AntennaGeniusModel(QObject* parent = nullptr,
-        std::function<void(const QByteArray&)> authCommandWriter = {});
+    explicit AntennaGeniusModel(QObject* parent = nullptr);
     ~AntennaGeniusModel() override;
 
     // Start/stop UDP discovery listener.
@@ -173,6 +172,7 @@ private slots:
     void onKeepAlive();
 
 private:
+    friend struct AntennaGeniusModelTestAccess;
     Q_INVOKABLE void processTcpBytes(const QByteArray& bytes); // injected transport test seam
     Q_INVOKABLE void beginAttempt(); // same reset used before a real TCP connect
     Q_INVOKABLE void beginAttemptAt(const QString& host, quint16 port);

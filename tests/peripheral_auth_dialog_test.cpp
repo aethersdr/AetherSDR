@@ -2,6 +2,10 @@
 #include "AutomationSensitiveLineEdit.h"
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
+#include "core/LpMeterConnection.h"
+#include "core/VkampConnection.h"
+#include "core/SpeConnection.h"
+#include "core/AcomConnection.h"
 #include "gui/RadioSetupDialog.h"
 #include "gui/PeripheralAuthStore.h"
 #include "gui/PeripheralAuthConnectFlow.h"
@@ -11,7 +15,8 @@
 
 #include <QApplication>
 #include <QByteArray>
-#include <QGridLayout>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMetaObject>
@@ -32,33 +37,40 @@ int main(int argc, char** argv)
     TgxlConnection tgxl;
     PgxlConnection pgxl;
     AntennaGeniusModel ag;
-    RadioSetupDialog dialog(&model, nullptr, &tgxl, &pgxl, &ag);
+    AcomConnection acom;
+    SpeConnection spe;
+    VkampConnection vkamp;
+    LpMeterConnection meter;
+    RadioSetupDialog dialog(&model, nullptr, &tgxl, &pgxl, &ag, nullptr,
+                            &acom, &spe, &vkamp, &meter);
+    dialog.resize(960, 680);
     dialog.show();
     dialog.selectTab(QStringLiteral("Peripherals"));
     QCoreApplication::processEvents();
 
-    QGridLayout* grid = nullptr;
-    for (QGridLayout* candidate : dialog.findChildren<QGridLayout*>()) {
-        QLayoutItem* item = candidate->itemAtPosition(1, 0);
-        QLabel* label = item ? qobject_cast<QLabel*>(item->widget()) : nullptr;
-        if (label && label->text().contains(QStringLiteral("Tuner Genius XL"))) {
-            grid = candidate;
-            break;
-        }
-    }
-    if (!grid) {
-        std::fprintf(stderr, "TGXL peripheral row missing\n");
-        return 1;
-    }
-    QLineEdit* code = qobject_cast<QLineEdit*>(grid->itemAtPosition(1, 4)->widget());
-    QLabel* status = qobject_cast<QLabel*>(grid->itemAtPosition(1, 7)->widget());
-    QPushButton* show = qobject_cast<QPushButton*>(grid->itemAtPosition(1, 5)->widget());
-    QPushButton* connectButton = qobject_cast<QPushButton*>(grid->itemAtPosition(1, 3)->widget());
-    QPushButton* clearButton = qobject_cast<QPushButton*>(grid->itemAtPosition(1, 6)->widget());
-    QLineEdit* ip = qobject_cast<QLineEdit*>(grid->itemAtPosition(1, 1)->widget());
+    QLineEdit* code = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralField_1_4"));
+    QLabel* status = dialog.findChild<QLabel*>(QStringLiteral("peripheralField_1_7"));
+    QPushButton* show = dialog.findChild<QPushButton*>(QStringLiteral("peripheralField_1_5"));
+    QPushButton* connectButton = dialog.findChild<QPushButton*>(QStringLiteral("peripheralField_1_3"));
+    QPushButton* clearButton = dialog.findChild<QPushButton*>(QStringLiteral("peripheralField_1_6"));
+    QLineEdit* ip = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralField_1_1"));
     if (!code || !status || !show || !connectButton || !clearButton || !ip
         || !code->property("aetherSensitiveValue").toBool()) {
         std::fprintf(stderr, "TGXL credential controls missing or not sensitive\n");
+        return 1;
+    }
+    auto fitsViewport = [](QWidget* widget) {
+        for (QWidget* ancestor = widget->parentWidget(); ancestor; ancestor = ancestor->parentWidget()) {
+            if (QScrollArea* scroll = qobject_cast<QScrollArea*>(ancestor)) {
+                const QRect bounds(widget->mapTo(scroll->viewport(), QPoint()), widget->size());
+                return scroll->horizontalScrollBar()->maximum() == 0
+                    && bounds.left() >= 0 && bounds.right() < scroll->viewport()->width();
+            }
+        }
+        return false;
+    };
+    if (dialog.size() != QSize(960, 680) || !fitsViewport(clearButton) || !fitsViewport(status)) {
+        std::fprintf(stderr, "Clear code or Status is clipped at the default dialog size\n");
         return 1;
     }
     code->setText(QStringLiteral("sample"));
@@ -104,6 +116,11 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    QCoreApplication::processEvents();
+    if (!fitsViewport(clearButton) || !fitsViewport(status) || !status->wordWrap()) {
+        std::fprintf(stderr, "Authorization error requires horizontal scrolling\n");
+        return 1;
+    }
     // Simulate the state reached after a newly entered code meets a LAN
     // greeting without AUTH. The status must say why the code was not saved.
     status->setProperty("pendingAuthCode", true);
@@ -167,7 +184,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "later connection inherited stale code note\n");
         return 1;
     }
-    QLabel* pgxlStatus = qobject_cast<QLabel*>(grid->itemAtPosition(2, 7)->widget());
+    QLabel* pgxlStatus = dialog.findChild<QLabel*>(QStringLiteral("peripheralField_2_7"));
     if (!pgxlStatus) {
         return 1;
     }
@@ -211,8 +228,8 @@ int main(int argc, char** argv)
     // Set only the model's current-attempt metadata, without opening a socket.
     // The same model backs both rows and retains this metadata on TCP failure.
     AgDeviceInfo& attempt = const_cast<AgDeviceInfo&>(ag.connectedDevice());
-    QLabel* agStatus = qobject_cast<QLabel*>(grid->itemAtPosition(3, 7)->widget());
-    QLabel* shackSwitchStatus = qobject_cast<QLabel*>(grid->itemAtPosition(4, 7)->widget());
+    QLabel* agStatus = dialog.findChild<QLabel*>(QStringLiteral("peripheralField_3_7"));
+    QLabel* shackSwitchStatus = dialog.findChild<QLabel*>(QStringLiteral("peripheralField_4_7"));
     if (!agStatus || !shackSwitchStatus) {
         std::fprintf(stderr, "Antenna Genius or ShackSwitch status row missing\n");
         return 1;
@@ -272,7 +289,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "ShackSwitch block setup failed\n");
         return 1;
     }
-    QPushButton* clearAg = qobject_cast<QPushButton*>(grid->itemAtPosition(3, 6)->widget());
+    QPushButton* clearAg = dialog.findChild<QPushButton*>(QStringLiteral("peripheralField_3_6"));
     if (!clearAg) {
         return 1;
     }

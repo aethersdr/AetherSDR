@@ -106,6 +106,7 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <array>
 #include <utility>
 #include "core/ThemeManager.h"
 
@@ -8727,6 +8728,17 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     group->setStyleSheet(kGroupStyle);
     auto* grid = new QGridLayout(group);
     grid->setSpacing(6);
+    using PeripheralRow = std::array<QWidget*, 9>;
+    auto rowWidgets = std::make_shared<std::array<PeripheralRow, 10>>();
+    // Callbacks keep stable widget references when the wide table is reflowed.
+    auto widgetAt = [grid, rowWidgets](int row, int column) -> QWidget* {
+        QWidget* saved = (*rowWidgets)[static_cast<size_t>(row)][static_cast<size_t>(column)];
+        if (saved) {
+            return saved;
+        }
+        QLayoutItem* item = grid->itemAtPosition(row, column);
+        return item ? item->widget() : nullptr;
+    };
 
     // Column headers
     auto addHeader = [&](int col, const QString& text) {
@@ -8915,7 +8927,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
     // A blank code field means "reuse the saved code". Never display a
     // keychain value in the widget: a stored secret stays in the keychain.
-    auto addAuthField = [this, grid](int row, const QString& label,
+    auto addAuthField = [this, grid, widgetAt](int row, const QString& label,
                                                 PeripheralAuthStore::Device device,
                                                 std::function<void()> clearAuthFn,
                                                 std::function<void()> updateState) {
@@ -8955,9 +8967,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             "font-weight: bold; padding: 3px 10px; }");
         clear->setAccessibleName(label + tr(" clear saved authorization code"));
         connect(clear, &QPushButton::clicked, this, [this, edit, device,
-                                                      clearAuthFn, updateState, grid, row]() {
+                                                      clearAuthFn, updateState, widgetAt, row]() {
             edit->clear();
-            auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(row, 7)->widget());
+            auto* status = qobject_cast<QLabel*>(widgetAt(row, 7));
             status->setProperty("pendingAuthCode", false);
             status->setProperty("discardedAuthCode", false);
             PeripheralAuthStore::save(device, QString(), QString(), this, [status, updateState](bool ok) {
@@ -8981,20 +8993,20 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         grid->addWidget(clear, row, 6);
     };
 
-    auto connectWithCode = [grid](int row,
+    auto connectWithCode = [widgetAt](int row,
                                   const QString& host, quint16 port,
                                   std::function<void(const QString&, quint16)> connectFn,
                                   std::function<void(const QString&)> setCodeFn) {
-        auto* edit = qobject_cast<QLineEdit*>(grid->itemAtPosition(row, 4)->widget());
-        auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(row, 7)->widget());
+        auto* edit = qobject_cast<QLineEdit*>(widgetAt(row, 4));
+        auto* status = qobject_cast<QLabel*>(widgetAt(row, 7));
         connectPeripheralWithCode(edit, status, host, port, connectFn, setCodeFn);
     };
 
     // A typed code can be dropped by a deliberate disconnect or a target
     // switch before the peer verifies it. Keep that separate from a LAN
     // greeting that never challenged the code.
-    auto markDiscardedCode = [grid](int row) {
-        auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(row, 7)->widget());
+    auto markDiscardedCode = [widgetAt](int row) {
+        auto* status = qobject_cast<QLabel*>(widgetAt(row, 7));
         if (!status->property("pendingAuthCode").toBool()) {
             return false;
         }
@@ -9025,8 +9037,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         });
         connect(m_tgxl, &TgxlConnection::authCodeAccepted, this,
-                [grid](const QString&) {
-            auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(1, 7)->widget());
+                [widgetAt](const QString&) {
+            auto* status = qobject_cast<QLabel*>(widgetAt(1, 7));
             status->setProperty("pendingAuthCode", false);
             status->setProperty("discardedAuthCode", false);
             status->setProperty("credentialNote", PeripheralAuthStore::persistentStoreAvailable()
@@ -9035,7 +9047,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         addAuthField(1, "TGXL", PeripheralAuthStore::Device::Tgxl,
                      [this]() { m_tgxl->setAuthCode(QString()); }, updateTgxl);
         // Pre-fill radio-discovered TGXL IP when no saved IP and not connected (#1039)
-        auto* tgxlIpEdit = qobject_cast<QLineEdit*>(grid->itemAtPosition(1, 1)->widget());
+        auto* tgxlIpEdit = qobject_cast<QLineEdit*>(widgetAt(1, 1));
         if (tgxlIpEdit && tgxlIpEdit->text().isEmpty()) {
             QString discovered = m_model->tunerModel().tgxlIp();
             if (!discovered.isEmpty()) {
@@ -9043,7 +9055,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         }
         // Show TCP error reason in status column (#1039)
-        auto* tgxlStatus = qobject_cast<QLabel*>(grid->itemAtPosition(1, 7)->widget());
+        auto* tgxlStatus = qobject_cast<QLabel*>(widgetAt(1, 7));
         if (tgxlStatus) {
             connect(m_tgxl, &TgxlConnection::connectionFailed, this,
                     [this, tgxlStatus](const QString& err) {
@@ -9080,8 +9092,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         });
         connect(m_pgxl, &PgxlConnection::authCodeAccepted, this,
-                [grid](const QString&) {
-            auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(2, 7)->widget());
+                [widgetAt](const QString&) {
+            auto* status = qobject_cast<QLabel*>(widgetAt(2, 7));
             status->setProperty("pendingAuthCode", false);
             status->setProperty("discardedAuthCode", false);
             status->setProperty("credentialNote", PeripheralAuthStore::persistentStoreAvailable()
@@ -9089,7 +9101,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         });
         addAuthField(2, "PGXL", PeripheralAuthStore::Device::Pgxl,
                      [this]() { m_pgxl->setAuthCode(QString()); }, updatePgxl);
-        auto* pgxlStatus = qobject_cast<QLabel*>(grid->itemAtPosition(2, 7)->widget());
+        auto* pgxlStatus = qobject_cast<QLabel*>(widgetAt(2, 7));
         connect(m_pgxl, &PgxlConnection::connectionFailed, this,
                 [this, pgxlStatus](const QString& error) {
                     pgxlStatus->setProperty("credentialError", true);
@@ -9129,8 +9141,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         });
         connect(m_ag, &AntennaGeniusModel::authCodeAccepted, this,
-                [grid](const QString&) {
-            auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(3, 7)->widget());
+                [widgetAt](const QString&) {
+            auto* status = qobject_cast<QLabel*>(widgetAt(3, 7));
             status->setProperty("pendingAuthCode", false);
             status->setProperty("discardedAuthCode", false);
             status->setProperty("credentialNote", PeripheralAuthStore::persistentStoreAvailable()
@@ -9145,12 +9157,12 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         }, updateAg);
         connect(m_ag, &AntennaGeniusModel::connectionError, this,
-                [this, grid](const QString& error) {
+                [this, widgetAt](const QString& error) {
                     // AG and ShackSwitch share this model. m_device retains
                     // the attempted device even when TCP never connected.
                     const int row = AntennaGeniusModel::isShackSwitch(m_ag->connectedDevice())
                         ? 4 : 3;
-                    auto* status = qobject_cast<QLabel*>(grid->itemAtPosition(row, 7)->widget());
+                    auto* status = qobject_cast<QLabel*>(widgetAt(row, 7));
                     status->setProperty("credentialError", true);
                     if (m_ag->isAuthBlocked()) {
                         status->setProperty("pendingAuthCode", false);
@@ -10115,6 +10127,74 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         vbox->addLayout(refreshRow);
     }
 #endif
+
+    // Keep address/port/connect on the first line, authorization on the next,
+    // and give errors the full width. The former eight-column table clipped
+    // Clear and Status at the default 960x680 dialog size (PR #6008).
+    for (int row = 0; row < 10; ++row) {
+        for (int column = 0; column < 9; ++column) {
+            QLayoutItem* item = grid->itemAtPosition(row, column);
+            (*rowWidgets)[static_cast<size_t>(row)][static_cast<size_t>(column)] =
+                item ? item->widget() : nullptr;
+        }
+    }
+    for (const PeripheralRow& row : *rowWidgets) {
+        for (QWidget* widget : row) {
+            if (widget) {
+                grid->removeWidget(widget);
+            }
+        }
+    }
+    for (int column = 0; column < 9; ++column) {
+        if (QWidget* header = (*rowWidgets)[0][static_cast<size_t>(column)]) {
+            if (column < 4) {
+                grid->addWidget(header, 0, column);
+            } else {
+                header->hide();
+            }
+        }
+    }
+    int displayRow = 1;
+    for (int row = 1; row < 10; ++row) {
+        const PeripheralRow& fields = (*rowWidgets)[static_cast<size_t>(row)];
+        if (!fields[0]) {
+            continue;
+        }
+        for (int column = 0; column < 9; ++column) {
+            if (QWidget* widget = fields[static_cast<size_t>(column)]) {
+                widget->setObjectName(QStringLiteral("peripheralField_%1_%2").arg(row).arg(column));
+            }
+        }
+        if (QLabel* label = qobject_cast<QLabel*>(fields[0])) {
+            label->setWordWrap(true);
+        }
+        for (int column = 0; column < 4; ++column) {
+            if (QWidget* field = fields[static_cast<size_t>(column)]) {
+                grid->addWidget(field, displayRow, column);
+            }
+        }
+        ++displayRow;
+        if (fields[4]) {
+            auto* authLabel = new QLabel(tr("Authorization code"), group);
+            applyLabelStyle(authLabel);
+            authLabel->setWordWrap(true);
+            authLabel->setBuddy(fields[4]);
+            grid->addWidget(authLabel, displayRow, 0);
+            grid->addWidget(fields[4], displayRow, 1);
+            grid->addWidget(fields[5], displayRow, 2);
+            grid->addWidget(fields[6], displayRow, 3);
+            ++displayRow;
+        }
+        if (fields[8]) {
+            grid->addWidget(fields[8], displayRow++, 0, 1, 4);
+        }
+        if (QLabel* status = qobject_cast<QLabel*>(fields[7])) {
+            status->setWordWrap(true);
+            grid->addWidget(status, displayRow++, 0, 1, 4);
+        }
+        grid->setRowMinimumHeight(displayRow++, 8);
+    }
+    grid->setColumnStretch(1, 1);
 
     note->setWordWrap(true);
     AetherSDR::ThemeManager::instance().applyStyleSheet(note, "QLabel { color: {{color.text.label}}; font-size: 11px; padding: 8px; }");

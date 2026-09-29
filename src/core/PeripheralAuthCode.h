@@ -25,8 +25,10 @@ inline QByteArray peripheralAuthCommand(PeripheralAuthProtocol protocol, const Q
     if (protocol == PeripheralAuthProtocol::Tgxl) {
         return "C1|auth " + code.toUtf8() + '\n';
     }
+    // AG's API specifies CR; the issue #2313 capture confirms LF framing and
+    // that CRLF reaches the auth parser. Use both, as ordinary AG commands do.
     return "C1|auth code=" + code.toUtf8()
-         + (protocol == PeripheralAuthProtocol::AntennaGenius ? '\r' : '\n');
+         + (protocol == PeripheralAuthProtocol::AntennaGenius ? QByteArray("\r\n") : QByteArray("\n"));
 }
 
 } // namespace AetherSDR

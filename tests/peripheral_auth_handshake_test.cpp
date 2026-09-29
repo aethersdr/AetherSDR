@@ -14,6 +14,19 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <cstdio>
+#include <utility>
+
+namespace AetherSDR {
+// Inject only the auth write, never a live peer, without widening the model's
+// production constructor API.
+struct AntennaGeniusModelTestAccess {
+    static void setAuthWriter(AntennaGeniusModel& model,
+                             std::function<void(const QByteArray&)> writer = [](const QByteArray&) {})
+    {
+        model.m_authCommandWriter = std::move(writer);
+    }
+};
+}
 
 using namespace AetherSDR;
 
@@ -28,6 +41,50 @@ void feed(Connection& connection, const char* frame)
 {
     CHECK(QMetaObject::invokeMethod(&connection, "processLine", Qt::DirectConnection,
                                     Q_ARG(QString, QString::fromLatin1(frame))));
+}
+
+template<typename Connection>
+void checkReconnectSuppression(const QString& timerName, const char* greeting,
+                               const char* rejection, quint16 port)
+{
+    for (const char* failure : {"rejection", "onAuthTimeout", "onDisconnected"}) {
+        Connection connection;
+        connection.setAutoReconnect(true);
+        QTimer* retry = connection.template findChild<QTimer*>(timerName);
+        CHECK(retry != nullptr);
+        if (!retry) {
+            continue;
+        }
+        QSignalSpy required(&connection, &Connection::authCodeRequired);
+        const bool rejecting = QByteArray(failure) == "rejection";
+        for (int strike = 1; strike <= (rejecting ? 1 : 3); ++strike) {
+            CHECK(QMetaObject::invokeMethod(&connection, "beginAttemptAt", Qt::DirectConnection,
+                Q_ARG(QString, QStringLiteral("192.0.2.10")), Q_ARG(quint16, port)));
+            CHECK(!retry->isActive());
+            feed(connection, greeting);
+            CHECK(required.size() == strike);
+            if (required.isEmpty()) {
+                break;
+            }
+            connection.setAuthCodeForAttempt(required.last().at(0).toULongLong(),
+                                             QStringLiteral("saved-code"));
+            if (rejecting) {
+                feed(connection, rejection);
+            } else {
+                CHECK(QMetaObject::invokeMethod(&connection, failure, Qt::DirectConnection));
+            }
+            const bool blocked = rejecting || strike == 3;
+            CHECK(connection.isAuthBlocked() == blocked);
+            CHECK(retry->isActive() == !blocked);
+        }
+        // A close or error delivered after rejection must not re-arm retries.
+        CHECK(QMetaObject::invokeMethod(&connection, "onDisconnected", Qt::DirectConnection));
+        CHECK(!retry->isActive());
+        CHECK(QMetaObject::invokeMethod(&connection, "onError", Qt::DirectConnection,
+            Q_ARG(QAbstractSocket::SocketError, QAbstractSocket::RemoteHostClosedError)));
+        CHECK(!retry->isActive());
+        retry->stop(); // Never allow a timer to connect to a synthetic peer.
+    }
 }
 
 void prepareAg(AntennaGeniusModel& connection,
@@ -51,7 +108,11 @@ int main(int argc, char** argv)
     CHECK(peripheralAuthCommand(PeripheralAuthProtocol::Pgxl, QStringLiteral("sample"))
           == QByteArray("C1|auth code=sample\n")); // captured PGXL form
     CHECK(peripheralAuthCommand(PeripheralAuthProtocol::AntennaGenius, QStringLiteral("sample"))
-          == QByteArray("C1|auth code=sample\r")); // vendor-documented form
+          == QByteArray("C1|auth code=sample\r\n")); // documented syntax, capture-compatible framing
+    checkReconnectSuppression<TgxlConnection>(QStringLiteral("tgxlReconnectTimer"),
+        "V1.2.17 AUTH", "R1|0|Unauthorized", 9010);
+    checkReconnectSuppression<PgxlConnection>(QStringLiteral("pgxlReconnectTimer"),
+        "V3.9.1 AUTH", "R1|FF|Denied", 9008);
     int strikes = 0;
     CHECK(recordPeripheralAuthFailure(strikes) < 3);
     CHECK(recordPeripheralAuthFailure(strikes) < 3);
@@ -421,7 +482,8 @@ int main(int argc, char** argv)
     }
     {
         QByteArray command;
-        AntennaGeniusModel connection(nullptr,
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection,
             [&command](const QByteArray& bytes) { command = bytes; });
         prepareAg(connection);
         connection.setAuthCode(QStringLiteral("sample"));
@@ -432,7 +494,7 @@ int main(int argc, char** argv)
                          [&signalOrder]() { signalOrder.append(QStringLiteral("connected")); });
         CHECK(QMetaObject::invokeMethod(&connection, "processTcpBytes", Qt::DirectConnection,
                                         Q_ARG(QByteArray, QByteArray("V4.0.22 AG AUTH\r\n"))));
-        CHECK(command == QByteArray("C1|auth code=sample\r"));
+        CHECK(command == QByteArray("C1|auth code=sample\r\n"));
         CHECK(signalOrder.isEmpty());
         CHECK(QMetaObject::invokeMethod(&connection, "processTcpBytes", Qt::DirectConnection,
                                         Q_ARG(QByteArray, QByteArray("R1|0|\r\n"))));
@@ -440,7 +502,8 @@ int main(int argc, char** argv)
         connection.disconnectFromDevice();
     }
     {
-        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection);
         prepareAg(connection);
         connection.setAuthCode(QStringLiteral("sample"));
         QSignalSpy connected(&connection, &AntennaGeniusModel::connected);
@@ -452,7 +515,8 @@ int main(int argc, char** argv)
         connection.disconnectFromDevice();
     }
     {
-        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection);
         prepareAg(connection);
         connection.setAuthCode(QStringLiteral("sample"));
         QSignalSpy connected(&connection, &AntennaGeniusModel::connected);
@@ -464,7 +528,8 @@ int main(int argc, char** argv)
         connection.disconnectFromDevice();
     }
     {
-        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection);
         prepareAg(connection);
         connection.setAuthCode(QStringLiteral("sample"));
         QSignalSpy accepted(&connection, &AntennaGeniusModel::authCodeAccepted);
@@ -484,7 +549,8 @@ int main(int argc, char** argv)
                                    QByteArray("R1|0|unknown\r\n"),
                                    QByteArray("R1|0|OK|Unauthorized\r\n"),
                                    QByteArray("R2|0|OK\r\n")}) {
-        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection);
         prepareAg(connection);
         connection.setAuthCode(QStringLiteral("rejected-code"));
         QSignalSpy accepted(&connection, &AntennaGeniusModel::authCodeAccepted);
@@ -512,7 +578,8 @@ int main(int argc, char** argv)
     }
     {
         // Discovery churn cannot evict an old block or grow retry history forever.
-        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection);
         for (int target = 0; target < 256; ++target) {
             prepareAg(connection, QStringLiteral("target-%1.example").arg(target));
             CHECK(QMetaObject::invokeMethod(&connection, "onAuthTimeout", Qt::DirectConnection));
@@ -533,7 +600,8 @@ int main(int argc, char** argv)
     {
         // AG and ShackSwitch share a model, but their failure budgets and
         // automatic-connect blocks belong to their individual targets.
-        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection);
         const QString agHost = QStringLiteral("192.0.2.10");
         const QString switchHost = QStringLiteral("192.0.2.11");
         prepareAg(connection, agHost);
@@ -586,7 +654,8 @@ int main(int argc, char** argv)
     }
     {
         QByteArray command;
-        AntennaGeniusModel connection(nullptr,
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection,
             [&command](const QByteArray& bytes) { command = bytes; });
         prepareAg(connection);
         QSignalSpy discarded(&connection, &AntennaGeniusModel::enteredAuthCodeDiscarded);
@@ -601,14 +670,15 @@ int main(int argc, char** argv)
     }
     {
         QByteArray command;
-        AntennaGeniusModel connection(nullptr,
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection,
             [&command](const QByteArray& bytes) { command = bytes; });
         prepareAg(connection);
         connection.setAuthCode(QStringLiteral("typed-for-first-host"));
         prepareAg(connection); // reconnect to the same target preserves the code
         CHECK(QMetaObject::invokeMethod(&connection, "processTcpBytes", Qt::DirectConnection,
                                         Q_ARG(QByteArray, QByteArray("V4.0.22 AG AUTH\r\n"))));
-        CHECK(command == QByteArray("C1|auth code=typed-for-first-host\r"));
+        CHECK(command == QByteArray("C1|auth code=typed-for-first-host\r\n"));
     }
     {
         AntennaGeniusModel connection;
@@ -622,7 +692,8 @@ int main(int argc, char** argv)
         }
     }
     for (const char* failureMethod : {"onTcpDisconnected", "onAuthTimeout"}) {
-        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection);
         prepareAg(connection);
         connection.setAuthCode(QStringLiteral("sample"));
         QSignalSpy failed(&connection, &AntennaGeniusModel::connectionError);
@@ -638,7 +709,8 @@ int main(int argc, char** argv)
         CHECK(failed.size() == 3);
     }
     {
-        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection);
         prepareAg(connection);
         QSignalSpy required(&connection, &AntennaGeniusModel::authCodeRequired);
         QSignalSpy failed(&connection, &AntennaGeniusModel::connectionError);
@@ -664,7 +736,8 @@ int main(int argc, char** argv)
         CHECK(connection.isAuthBlocked());
     }
     for (const char* failureMethod : {"onTcpDisconnected", "onAuthTimeout"}) {
-        AntennaGeniusModel connection(nullptr, [](const QByteArray&) {});
+        AntennaGeniusModel connection;
+        AntennaGeniusModelTestAccess::setAuthWriter(connection);
         prepareAg(connection);
         QSignalSpy required(&connection, &AntennaGeniusModel::authCodeRequired);
         for (int strike = 1; strike <= 3; ++strike) {

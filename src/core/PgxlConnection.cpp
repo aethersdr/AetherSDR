@@ -19,6 +19,8 @@ PgxlConnection::PgxlConnection(QObject* parent)
 
     // Retries every 5s indefinitely until the device returns or the user disconnects.
     // This is intentional for a LAN peripheral that may be power-cycling.
+    m_reconnectTimer.setParent(this);
+    m_reconnectTimer.setObjectName(QStringLiteral("pgxlReconnectTimer"));
     m_reconnectTimer.setSingleShot(true);
     m_reconnectTimer.setInterval(5000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {

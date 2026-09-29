@@ -9,7 +9,6 @@
 #include "core/LogManager.h"
 #include <QDebug>
 #include <QRegularExpression>
-#include <utility>
 
 namespace AetherSDR {
 
@@ -36,10 +35,8 @@ static QString authTarget(const QString& host, quint16 port)
 
 // ── AntennaGeniusModel ─────────────────────────────────────────────────────
 
-AntennaGeniusModel::AntennaGeniusModel(QObject* parent,
-                                     std::function<void(const QByteArray&)> authCommandWriter)
+AntennaGeniusModel::AntennaGeniusModel(QObject* parent)
     : QObject(parent)
-    , m_authCommandWriter(std::move(authCommandWriter))
 {
     m_portA.portId = 1;
     m_portB.portId = 2;
@@ -670,7 +667,8 @@ void AntennaGeniusModel::sendAuthentication()
         return;
     }
     // 4O3A Antenna Genius TCPIP API documents this exact AUTH command and a
-    // carriage-return terminator. A live AG capture is still outstanding.
+    // carriage-return terminator. Issue #2313's contributor capture reports
+    // LF from the utility and CRLF accepted by AG; use the normal command framing.
     // https://github.com/4o3a/genius-api-docs/wiki/Antenna-Genius-TCPIP-auth
     const QByteArray command = peripheralAuthCommand(PeripheralAuthProtocol::AntennaGenius, m_authCode);
     if (!m_authCommandWriter && !m_tcpSocket) {

@@ -46,9 +46,32 @@ The [4O3A Antenna Genius TCP/IP API](https://github.com/4o3a/genius-api-docs/wik
 documents the optional WAN `AUTH` greeting, and its
 [auth command](https://github.com/4o3a/genius-api-docs/wiki/Antenna-Genius-TCPIP-auth)
 documents `auth code=<code>`. The command format specifies a carriage-return
-terminator. The published response format echoes the sequence number and uses
+terminator; the client sends CRLF, consistent with its other AG commands and
+the contributor capture summarized below. The published response format echoes the sequence number and uses
 a zero hexadecimal result for success; an optional message may follow it.
 This is protocol documentation, not a live AG validation.
+
+### Contributor-reported Antenna Genius capture
+
+[TnxQSO-Admin's 2026-05-30 report on #2313](https://github.com/aethersdr/AetherSDR/issues/2313#issuecomment-4583904317)
+describes a capture from the working 4O3A AG Utility on Windows:
+
+- The challenged greeting was `V<version> AG AUTH\n`, confirming that `AG`
+  remains in the WAN greeting.
+- The utility sent `C<seq>|auth code=<code>\n`. AG emitted LF-terminated
+  replies with a trailing pipe: `R<seq>|0|` or `R<seq>|FF|`.
+- AetherSDR's ordinary CRLF-terminated auth attempts reached the auth parser
+  and received `R<seq>|FF|`. This demonstrates accepted framing, not a
+  successful authorization with those attempts. Bare CR has no equivalent
+  captured evidence, so the AUTH builder also uses CRLF.
+- The utility silently truncated the configured password to eight characters
+  on that device. Operators troubleshooting a code set through that utility
+  should verify the stored value; AetherSDR does not silently truncate codes.
+
+These are the contributor's reported observations, not a new hardware run by
+this branch. The report does not identify an AG firmware version. Successful
+in-app authorization and Keychain restore still need live validation.
+
 
 ## AetherSDR application run
 
@@ -190,9 +213,9 @@ empty, or exactly `OK` message. Unknown bodies, extra fields, and zero-result
 credential acceptance is signaled. The `OK` allowlist is a defensive client
 policy tested with injected frames, not a claim that AG hardware emitted it.
 The vendor API explicitly documents `V<a.b.c> AG[ AUTH]`, so the AG identifier
-requirement is retained. A live AG check must capture both the WAN greeting
-(in particular whether it retains `AG`) and accepted/rejected reply bodies;
-TGXL's tokenless greeting alone is not evidence of AG behavior.
+requirement is retained. The contributor-reported capture above confirms the WAN `AG AUTH` greeting.
+A fresh AG check should record the firmware version and accepted/rejected
+replies for this client; it need not treat retention of `AG` as an unknown.
 
 Auth failure counters include both timeouts and mid-auth socket closes. AG
 tracks at most 128 failed targets, ignores empty targets, and does not evict
@@ -218,3 +241,43 @@ the AG body guard, empty-target guard, retry-history cap, and failed-delete
 cache handling each failed with the respective fix removed, then passed after
 restoration. Static registration, manifest, engine-boundary, capability-record,
 command-plane, and whitespace checks found no new blocker.
+
+
+## Maintainer review follow-up (2026-09-29)
+
+TGXL and PGXL reconnect timers are named for socket-free inspection. The
+handshake regression enables automatic reconnect, injects a saved-code
+rejection or three consecutive timeouts/handshake disconnects at a nonempty
+target, and checks that retry scheduling stops when authentication blocks.
+It also injects a late disconnect and socket error after the block and checks
+that neither re-arms the timer. No timer is allowed to perform a TCP connect.
+The AG test writer is installed through a private test-access friend rather
+than a public constructor parameter.
+
+Setup retains the same manual connection controls, but each device's
+credentials and wrapped status now have their own lines. This avoids the
+wide table hiding Clear code and authentication errors at the default dialog
+size; the independent list/detail redesign is not part of this PR.
+
+The existing branch also changes automatic TGXL/PGXL connection selection:
+a saved manual host/port takes precedence over the radio-reported endpoint,
+and loss of radio-reported accessory presence does not disconnect a manually
+configured direct connection. This supports WAN connections and also affects
+LAN users who retain a manual override. Clearing the override restores use of
+the discovered address.
+
+The stored credential remains bound to the resolved peer IP and port. A DDNS
+address change therefore requires entering the code again. This preserves
+the reviewed security boundary pending a maintainer choice between peer-IP,
+configured-host, or combined binding; it is not a claim that DDNS reuse is
+implemented. The follow-up requests that ruling explicitly, along with the
+existing indicator and central-tab placement decisions.
+
+Local validation passed all eight focused auth, automation-redaction, TGXL,
+and amp applet tests. Removing TGXL/PGXL auth-block reconnect guards failed
+on retry-timer assertions; reverting AG AUTH to bare CR failed on emitted
+command assertions; restoring the wide Setup table failed on viewport
+clipping. After restoring the fixes and rebuilding, all eight tests passed
+again. Registration, manifest, engine-boundary, capability-record,
+command-plane, colour-ratchet, and whitespace checks found no new blocker.
+No additional live-hardware, OS-vault, or TX verification was performed.
