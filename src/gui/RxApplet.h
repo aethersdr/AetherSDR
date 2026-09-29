@@ -45,6 +45,7 @@ class KiwiSdrManager;
 //  • RIT on/off + Hz offset with < > step buttons
 //  • XIT on/off + Hz offset with < > step buttons
 class RxApplet : public QWidget {
+    friend struct RxAppletSquelchTestAccess;
     Q_OBJECT
 
 public:
@@ -343,6 +344,7 @@ private:
     void cycleSqlMode();
     void setSqlMode(SqlMode m, bool propagateToRadio);
     bool usingExternalReceiveSquelch() const;
+    bool usingEngineAutoSquelch() const;
     int clampManualSqlLevelForCurrentSurface(int level) const;
     void setManualSqlLevelForCurrentSurface(int level);
     int agcThresholdMinimum() const;

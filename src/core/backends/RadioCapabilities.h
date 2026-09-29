@@ -69,6 +69,10 @@ struct ReceiveSquelchModel {
     double referenceDb = -160.0;
     double stepDb = 1.0;
     QString unit = QStringLiteral("dBm");
+    // setSliceAutoSquelch + observed per-slice Auto state are implemented.
+    bool automaticInEngine = false;
+    // False when detector and display use different measurement bandwidths.
+    bool spectrumComparable = true;
 };
 // Broadcast FM receiver controls, distinct from narrow-FM/repeater features.
 // Engaged only when setSliceWfmDeemphasis and observed stereo status work.

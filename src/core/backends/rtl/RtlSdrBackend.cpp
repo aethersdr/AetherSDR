@@ -134,7 +134,7 @@ RtlSdrBackend::RtlSdrBackend(QObject* parent)
     // shipped capacity or persist an unqualified limit in a radio profile.
 #if defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
     const QByteArray evaluation = qgetenv("AETHER_RTL_EVALUATION_RECEIVERS");
-    if (qgetenv("AETHER_AUTOMATION") == "1" && (evaluation == "2" || evaluation == "4")) {
+    if (qgetenv("AETHER_AUTOMATION") == "1" && (evaluation == "2" || evaluation == "4" || evaluation == "8")) {
         m_receiverCapacity = evaluation.toInt();
         m_capture = RtlCaptureTransaction({8, static_cast<std::size_t>(m_receiverCapacity)});
         qCWarning(lcRtlReceive) << "Unqualified RTL analog evaluation capacity:" << m_receiverCapacity;
@@ -245,7 +245,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receiveSquelchModel = ReceiveSquelchModel{
         {QStringLiteral("FM"), QStringLiteral("FMN")},
-        RtlSquelchGate::kReferenceDb, RtlSquelchGate::kStepDb, QStringLiteral("dBFS/bin")};
+        RtlSquelchGate::kReferenceDb, RtlSquelchGate::kStepDb, QStringLiteral("dBFS/2048-bin"), true, false};
     c.panSpanModel = PanSpanModel{false, false};
     if (m_lastPublished && hasReceivingNarrowFm(*m_lastPublished)) {
         c.receiveCapturePlacement = ReceiveCapturePlacement{
@@ -675,6 +675,10 @@ IRadioBackend::HealthSnapshot RtlSdrBackend::healthSnapshot() const
             recipe.insert(QStringLiteral("audioGain"), receiver.audioGain);
             recipe.insert(QStringLiteral("audioPan"), receiver.audioPan);
             recipe.insert(QStringLiteral("audioMute"), receiver.audioMute);
+            recipe.insert(QStringLiteral("squelchEnabled"), receiver.squelchEnabled);
+            recipe.insert(QStringLiteral("squelchLevel"), receiver.squelchLevel);
+            recipe.insert(QStringLiteral("automaticSquelch"), receiver.automaticSquelch);
+            recipe.insert(QStringLiteral("automaticSquelchMarginDb"), receiver.automaticSquelchMarginDb);
             recipes.append(recipe);
         }
         snapshot.values.insert(QStringLiteral("rtlReceiverRecipes"), recipes);
@@ -906,7 +910,7 @@ void RtlSdrBackend::setSliceMode(int sliceId, const QString& mode)
     receiver->mode = modeValue;
     desired.followReceiverId = sliceId;
     desired.avoidDc = narrowFm;
-    if (!narrowFm) { receiver->squelchEnabled = false; }
+    if (!narrowFm) { receiver->squelchEnabled = false; receiver->automaticSquelch = false; }
     receiver->passband.guardLowHz = (narrowFm || nativeWfm) ? 3000 : 0;
     receiver->passband.guardHighHz = (narrowFm || nativeWfm) ? 3000 : 0;
     requestCapture(desired);
@@ -1016,8 +1020,26 @@ void RtlSdrBackend::setSliceSquelch(int sliceId, bool enabled, int level)
     if (receiver == desired.receivers.end()
         || (receiver->mode != RtlCaptureTransaction::Mode::Fm
             && receiver->mode != RtlCaptureTransaction::Mode::Fmn)) { return; }
-    if (receiver->squelchEnabled == enabled && receiver->squelchLevel == level) { return; }
+    if (receiver->squelchEnabled == enabled && receiver->squelchLevel == level
+        && !receiver->automaticSquelch) { return; }
+    receiver->automaticSquelch = false;
     receiver->squelchEnabled = enabled; receiver->squelchLevel = level;
+    requestCapture(desired);
+}
+
+void RtlSdrBackend::setSliceAutoSquelch(int sliceId, bool enabled, int marginDb)
+{
+    if (!hasAcceptedSlice(sliceId) || marginDb < 5 || marginDb > 20) { return; }
+    auto desired = m_requested;
+    const auto receiver = std::ranges::find_if(desired.receivers,
+        [sliceId](const auto& value) { return value.passband.stableId == sliceId; });
+    if (receiver == desired.receivers.end()
+        || (receiver->mode != RtlCaptureTransaction::Mode::Fm
+            && receiver->mode != RtlCaptureTransaction::Mode::Fmn)) { return; }
+    if (receiver->automaticSquelch == enabled && receiver->automaticSquelchMarginDb == marginDb) { return; }
+    receiver->automaticSquelch = enabled;
+    receiver->automaticSquelchMarginDb = marginDb;
+    if (enabled) { receiver->squelchEnabled = true; }
     requestCapture(desired);
 }
 
@@ -1273,6 +1295,8 @@ QVector<RtlSliceSettings::Slice> RtlSdrBackend::acceptedSettings() const
         }
         slice.audioGain = m_monitors[id].gain; slice.audioMute = m_monitors[id].mute; slice.audioPan = m_monitors[id].pan;
         slice.squelchEnabled = receiver.squelchEnabled; slice.squelchLevel = receiver.squelchLevel;
+        slice.automaticSquelch = receiver.automaticSquelch;
+        slice.automaticSquelchMarginDb = receiver.automaticSquelchMarginDb;
         slice.wfmDeemphasisUs = receiver.wfmDeemphasisUs;
         slice.wfmForceMono = receiver.wfmForceMono;
         slice.wfmHdStereo = receiver.wfmHdStereo;
@@ -1350,7 +1374,8 @@ void RtlSdrBackend::restoreAcceptedSlices()
                 || !std::ranges::all_of(desired.receivers, supportsAnalogBank)))) { continue; }
         desired.receivers.push_back({descriptor, captureMode(slice.mode), slice.audioGain, slice.audioPan,
             slice.audioMute, !wide && slice.squelchEnabled, slice.squelchLevel, slice.wfmDeemphasisUs, slice.wfmForceMono,
-            slice.wfmHdStereo, slice.hdProgram});
+            slice.wfmHdStereo, slice.hdProgram,
+            !wide && slice.automaticSquelch, slice.automaticSquelchMarginDb});
     }
     // Preserve a valid configured receiver even when it is parked. The
     // transaction derives DSP membership from the confirmed capture; a
@@ -1967,6 +1992,8 @@ void RtlSdrBackend::emitSliceState(const RtlCaptureTransaction::Receiver& receiv
     delta.filterHigh = static_cast<int>(receiver.passband.filterHighHz);
     delta.audioGain = m_monitors[id].gain; delta.audioMute = m_monitors[id].mute; delta.audioPan = m_monitors[id].pan;
     delta.squelchOn = receiver.squelchEnabled; delta.squelchLevel = receiver.squelchLevel;
+    delta.automaticSquelch = receiver.automaticSquelch;
+    delta.automaticSquelchMarginDb = receiver.automaticSquelchMarginDb;
     delta.panId = QStringLiteral("0xe1000000"); delta.active = id == m_activeSliceId;
     delta.inCapture = m_lastPublished && std::ranges::find(m_lastPublished->receivingIds, id)
         != m_lastPublished->receivingIds.end();

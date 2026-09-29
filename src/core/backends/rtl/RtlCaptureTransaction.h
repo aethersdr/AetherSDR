@@ -35,6 +35,8 @@ public:
         bool wfmForceMono = false; // selected decoder matrix policy, not observed pilot
         bool wfmHdStereo = false;
         int hdProgram = 0; // decoder program 0..7, persisted only after adoption
+        bool automaticSquelch = false;
+        int automaticSquelchMarginDb = 10;
         bool operator==(const Receiver&) const = default;
     };
     struct Desired {

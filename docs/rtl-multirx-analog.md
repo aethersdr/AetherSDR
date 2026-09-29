@@ -9,7 +9,7 @@ tested revision; component or injected-USB tests do not establish live RF proof.
 ## Evaluation admission
 
 On Linux x86_64 only, start an explicitly isolated evaluation process with
-`AETHER_AUTOMATION=1` and `AETHER_RTL_EVALUATION_RECEIVERS=2` or `4`.
+`AETHER_AUTOMATION=1` and `AETHER_RTL_EVALUATION_RECEIVERS=2`, `4` or `8`.
 This chooses the same capacity for the transaction and private worker at
 construction. It cannot resize a running session, is never persisted, and
 does not change `kQualifiedReceiverCapacity` (one). Every other value or
@@ -92,7 +92,7 @@ Linux aarch64, macOS, Windows, mixed legacy/native rates or multiple HD workers.
 
 The packet ring is allocated once from the immutable process receiver capacity.
 Its usable slots are 127, 170, 254 and 424 for one, two, four and eight receivers;
-only two and four are exposed by the current evaluation launcher. Native WFM
+two, four and eight are exposed by the process evaluation setting. Native WFM
 produces one 256-frame tap per receiver plus a shared 128-frame speaker stream
 at 48 kHz. Scaling by that packet rate preserves at least the original one-RX
 nominal 225.8 ms buffering time. The qualified one-RX queue stays at 128 allocated
@@ -109,3 +109,52 @@ reports actual usable slots. Occupancy is sampled current backlog; drops and
 high-water remain lifetime observations.
 Old 127-packet high-water screening results remain historical comparisons and
 must not be described as the current ring's full condition.
+
+## Eight-receiver requirement and SQL correction
+
+The operator requested eight on Nobara after observing approximately 3% laptop
+CPU with four. That observation is not an eight-receiver capacity result.
+This is an isolated evaluation amendment for maintainer review under RFC #5468,
+not approval to raise the qualified one-receiver default or other radio limits.
+The existing eight slots, PCM routes, mixer membership, queue sizing and stable
+IDs are reused; no thread or dependency is added. Evaluate the representative
+operator workload and report actual continuity faults and timing/thermal data
+separately; a historical zero-deadline-miss screen is not an evaluation admission
+rule. Public release qualification remains separate.
+
+RTL FM/FM-N manual SQL retains its absolute -120 + 1.2 * level scale, in dBFS
+per 2048-point Blackman-Harris detector bin. For example, levels 51 and 54 mean
+-58.8 and -55.2 dBFS/detector-bin. It is neither calibrated antenna dBm nor a
+noise-relative percentage. Tuner gain, bandwidth, in-band interference and
+peak/hang behavior influence the threshold required to close audio. There is
+no guessed RF offset or changed default/manual threshold in this correction.
+The temporary SQL overlay is suppressed when detector/display bandwidths differ;
+the visible SQL controls describe the detector units instead of plotting a
+misleading absolute threshold on a different scale.
+
+The display changed to 65536 bins while SQL detection stayed at 2048. Both
+normalize by FFT length; white-noise bin power therefore differs by about
+15.05 dB, so display Auto thresholds are not detector thresholds. Additionally,
+a trimmed logarithmic floor is biased low relative to noise peaks. RTL Auto now
+runs inside each acquisition-owned gate on the same detector spectrum as its
+peak measurement. It excludes the selected receiver passband plus window leakage,
+uses the median of neighboring bin powers (with the exponential-noise median to
+mean correction), and smooths locally. It retains the existing ramp, hang and
+stale-data closure. It remains a coarse signal-level gate, not a discriminator
+noise squelch or calibrated channel-power measurement.
+
+The backend accepts a typed Auto intent and publishes its adopted per-slice
+state. The engine owns Auto/margin alongside the manual threshold in RtlSlices;
+manual/Off intent exits Auto. Selection, display zoom, FFT averaging and a hidden
+applet do not control adaptation. WFM retains its separate decoder behavior;
+the FM/FM-N manual/Auto gate is unavailable there. Schema-1 SQL objects now have
+optional `automatic` (default false) and `marginDb` (default 10, range 5–20).
+Legacy display-Auto intent rows are preserved but do not silently enable the
+new engine policy; explicitly choose Auto after upgrading. The prior manual
+threshold is never replaced with a computed Auto threshold by the new engine.
+
+TCI already consumes the typed per-slice 48 kHz PCM route for RTL. This is a
+source-level route audit, not eight-client throughput or RadioReference service
+qualification. RTL does not advertise Flex DAX streams; its virtual DAX and
+DAX-IQ paths are not supplied by this change. RadioReference/Broadcastify
+publishing still requires a separately validated external streaming workflow.

@@ -1413,7 +1413,8 @@ bool MainWindow::autoSquelchShouldRunOnSpectrum(
     }
 
     const auto sql = m_radioModel.backendCapabilities().receiveSquelchModel;
-    if (sql && (!sql->modes.contains(s->mode()) || panId != s->panId())) { return false; }
+    if (sql && (sql->automaticInEngine || !sql->modes.contains(s->mode())
+                || panId != s->panId())) { return false; }
 
     return kiwiSdrProfileForPan(panId).isEmpty()
         && (!spectrum || !spectrum->kiwiSdrWaterfallActive());
@@ -4129,7 +4130,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         const auto sql = m_radioModel.isConnected()
             ? m_radioModel.backendCapabilities().receiveSquelchModel : std::nullopt;
         sw->setSquelchScale(sql ? sql->referenceDb : -160.0,
-            sql ? sql->stepDb : 1.0, sql ? sql->unit : QString());
+            sql ? sql->stepDb : 1.0, sql ? sql->unit : QString(),
+                !sql || sql->spectrumComparable);
 
         wirePanDisplayStatus(applet, pan);
     }

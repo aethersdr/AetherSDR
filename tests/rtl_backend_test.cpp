@@ -44,6 +44,16 @@ int main(int argc, char** argv)
     check(caps.maxPanadapters == 1, "RTL-SDR maxPanadapters is 1");
     check(!caps.persistsMemories, "RTL-SDR does not persist memories on device");
 
+#if defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
+    qputenv("AETHER_RTL_EVALUATION_RECEIVERS", "8");
+    qunsetenv("AETHER_AUTOMATION");
+    { rtl::RtlSdrBackend normal; check(normal.capabilities().maxSlices == 1, "eight requires explicit evaluation environment"); }
+    qputenv("AETHER_AUTOMATION", "1");
+    { rtl::RtlSdrBackend eight; check(eight.capabilities().maxSlices == 8, "eight-receiver evaluation is advertised"); }
+    qunsetenv("AETHER_RTL_EVALUATION_RECEIVERS");
+    qunsetenv("AETHER_AUTOMATION");
+#endif
+
     // Check ClientSettingsDomains
     check(caps.clientSettingsDomains.testFlag(RadioCapabilities::ClientSettingsDomain::Tuning),
           "ClientSettingsDomain::Tuning declared");

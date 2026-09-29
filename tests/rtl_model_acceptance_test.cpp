@@ -412,37 +412,42 @@ static void analogBankRestoreAndSharedCapture()
     using Access = rtl::RtlCaptureBackendTestAccess;
     const RadioSettingsScope scope("rtl", "analog-bank-restore");
     QVector<RtlSliceSettings::Slice> saved;
-    for (int id = 0; id < 4; ++id) {
+    for (int id = 0; id < 8; ++id) {
         RtlSliceSettings::Slice receiver;
         receiver.id = id;
-        receiver.frequencyHz = 99'400'000 + id * 300'000;
+        receiver.frequencyHz = 99'400'000 + id * 200'000;
         receiver.mode = id < 2 ? QStringLiteral("WFM") : QStringLiteral("FMN");
         receiver.filterLowHz = id < 2 ? -90000 : -8000;
         receiver.filterHighHz = -receiver.filterLowHz;
         receiver.wfmDeemphasisUs = id == 0 ? 50 : 75;
         receiver.wfmForceMono = id == 0;
-        receiver.audioGain = 40 + id * 10;
-        receiver.audioPan = id * 25;
+        receiver.audioGain = 40 + id * 5;
+        receiver.audioPan = id * 12;
         receiver.audioMute = id == 3;
+        receiver.squelchEnabled = id >= 2;
+        receiver.automaticSquelch = id >= 2;
+        receiver.automaticSquelchMarginDb = 5 + id;
         saved.append(receiver);
     }
-    check(RtlSliceSettings(scope).patch(100'000'000, 2'400'000, saved), "four analog saved recipes seeded");
+    check(RtlSliceSettings(scope).patch(100'000'000, 2'400'000, saved), "eight analog saved recipes seeded");
     RadioModel model;
     check(model.rebuildBackendForTest("rtl"), "restore bank model initialized");
     RadioModelSliceLifecycleTestAccess::restore(model, "analog-bank-restore");
     auto& backend = *static_cast<rtl::RtlSdrBackend*>(model.backend());
     auto device = std::make_shared<test::DeviceState>();
     CaptureClock clock(device);
-    Access::start(backend, std::make_unique<test::InjectedDevice>(device), 4);
+    Access::start(backend, std::make_unique<test::InjectedDevice>(device), 8);
     device->releaseReadback();
     const auto settled = [&] { clock.advance(); return Access::idle(backend); };
-    check(waitFor([&] { return settled() && model.slice(3); }), "four analog saved receivers adopted");
-    if (!model.slice(3)) { backend.disconnectRadio(); return; }
-    for (int id = 0; id < 4; ++id) {
+    check(waitFor([&] { return settled() && model.slice(7); }), "eight analog saved receivers adopted");
+    if (!model.slice(7)) { backend.disconnectRadio(); return; }
+    for (int id = 0; id < 8; ++id) {
         const auto* slice = model.slice(id);
         check(slice && slice->mode() == saved[id].mode && slice->frequency() * 1e6 == saved[id].frequencyHz
             && slice->audioGain() == saved[id].audioGain && slice->audioPan() == saved[id].audioPan
-            && slice->audioMute() == saved[id].audioMute && slice->filterLow() == saved[id].filterLowHz,
+            && slice->audioMute() == saved[id].audioMute && slice->filterLow() == saved[id].filterLowHz
+            && slice->automaticSquelch() == saved[id].automaticSquelch
+            && slice->automaticSquelchMarginDb() == saved[id].automaticSquelchMarginDb,
             "restore retains each stable receiver recipe and monitor settings");
     }
     check(model.slice(0)->wfmForceMono() && model.slice(0)->wfmDeemphasisUs() == 50
@@ -453,23 +458,23 @@ static void analogBankRestoreAndSharedCapture()
     backend.invokeExtension("rtl", "ppm.set", 800, -16);
     backend.invokeExtension("rtl", "ppm.set", 801, -17);
     check(waitFor([&] { return settled() && Access::state(backend).hardware.ppm == -17; }),
-        "coalesced PPM edit reaches the entire four-receiver capture");
+        "coalesced PPM edit reaches the entire eight-receiver capture");
     check(Access::state(backend).receivers == before.receivers && model.slice(2)->isActive(),
         "shared PPM changes preserve every recipe and selection");
     const auto valid = Access::state(backend);
     backend.invokeExtension("rtl", "sample_rate.set", 802, 0);
     check(Access::idle(backend) && Access::state(backend).token == valid.token,
-        "invalid capture rate refuses without altering four receivers");
+        "invalid capture rate refuses without altering eight receivers");
     device->failWriteAt = device->writes + 1;
     backend.invokeExtension("rtl", "ppm.set", 803, -18);
     check(waitFor([&] { return settled(); }) && backend.isConnected()
         && Access::state(backend).hardware.ppm == -17
         && Access::state(backend).receivers == before.receivers && model.slice(2)->isActive(),
-        "failed PPM application compensates all four recipes without moving focus");
+        "failed PPM application compensates all eight recipes without moving focus");
     backend.disconnectRadio();
 }
 
-static void analogBankSelection()
+static void analogBankSelection(int capacity = 4)
 {
     using Access = rtl::RtlCaptureBackendTestAccess;
     RadioModel model;
@@ -477,7 +482,7 @@ static void analogBankSelection()
     auto& backend = *static_cast<rtl::RtlSdrBackend*>(model.backend());
     auto device = std::make_shared<test::DeviceState>();
     CaptureClock clock(device);
-    Access::start(backend, std::make_unique<test::InjectedDevice>(device), 4);
+    Access::start(backend, std::make_unique<test::InjectedDevice>(device), capacity);
     device->releaseReadback();
     const auto settled = [&] { clock.advance(); return Access::idle(backend); };
     check(waitFor([&] { return settled() && model.slice(0); }), "analog bank initial receiver adopted");
@@ -493,24 +498,35 @@ static void analogBankSelection()
         return count == 1;
     };
     check(selected(0), "bootstrap selects exactly one stable receiver");
-    for (int id = 1; id < 4; ++id) {
-        check(backend.createSlice({}, 99'400'000 + id * 300'000), "analog sibling creation admitted");
+    for (int id = 1; id < capacity; ++id) {
+        check(backend.createSlice({}, 99'500'000 + id * 200'000), "analog sibling creation admitted");
         check(waitFor([&] { return settled() && model.slice(id); }), "analog sibling creation adopted");
         if (!model.slice(id)) { backend.disconnectRadio(); return; }
         model.slice(id)->setActive(true);
         check(selected(id), "selection clears every previous active model");
     }
-    check(!backend.createSlice({}, 100'650'000), "fifth configured receiver refused at evaluation capacity");
+    check(!backend.createSlice({}, 100'650'000), "receiver above configured capacity refused at evaluation capacity");
+    for (int id = 0; id < capacity; ++id) {
+        model.slice(id)->setAutomaticSquelch(true, 5 + id);
+        model.slice(id)->setAudioMute(id % 2);
+    }
+    check(waitFor([&] { return settled() && model.slice(capacity - 1)->automaticSquelch(); }),
+        "all receiver Auto requests adopt");
+    for (int id = 0; id < capacity; ++id) {
+        check(model.slice(id)->automaticSquelchMarginDb() == 5 + id
+            && model.slice(id)->audioMute() == bool(id % 2), "SQL and mute stay per receiver");
+    }
     const auto beforeFocus = Access::state(backend);
     const int beforeFocusWrites = device->writes;
     for (int iteration = 0; iteration < 32; ++iteration) {
-        const int id = iteration % 4;
+        const int id = iteration % capacity;
         model.slice(id)->setActive(true);
         check(selected(id), "rapid focus retains one exact model identity");
     }
     check(Access::state(backend).token == beforeFocus.token && device->writes == beforeFocusWrites
         && Access::state(backend).receivers == beforeFocus.receivers,
         "focus changes no capture revision, hardware, monitor or receiver recipe");
+    model.slice(3)->setActive(true); // start the reentrant scenario on its observed source
     bool redirected = false;
     const auto redirect = QObject::connect(model.slice(3), &SliceModel::activeChanged, &model,
         [&](bool active) {
@@ -558,8 +574,8 @@ static void analogBankSelection()
             && !model.slice(1)->wfmReceptionDiagnostics().valid,
             "parked selection and recipe survive while reception clears");
         model.requestPanCenter(pan->panId(), 100.0, -1.0, IRadioBackend::PanCenterIntent::Drag);
-        check(waitFor([&] { return settled() && Access::state(backend).receivingIds.size() == 4; }),
-            "all four analog receivers resume at their configured RF");
+        check(waitFor([&] { return settled() && Access::state(backend).receivingIds.size() == static_cast<std::size_t>(capacity); }),
+            "all configured analog receivers resume at their configured RF");
     }
     QPointer<SliceModel> retired = model.slice(2);
     QObject::connect(&backend, &IRadioBackend::sliceRemoved, &model, [&](int id) {
@@ -596,6 +612,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv); AppSettings::instance().load();
     hdModelBoundary();
     analogBankSelection();
+    analogBankSelection(8);
     analogBankRestoreAndSharedCapture();
     const RadioSettingsScope scope("rtl", "model-accepted");
     RtlSliceSettings::Slice saved;
@@ -671,6 +688,23 @@ int main(int argc, char** argv)
     check(RtlSliceSettings(scope).load().document.slices[3].squelchEnabled
         && RtlSliceSettings(scope).load().document.slices[3].squelchLevel == 61,
           "only accepted squelch threshold reaches persistence");
+    slice->setAutomaticSquelch(true, 12);
+    check(!slice->automaticSquelch(), "pending Auto intent is not published optimistically");
+    check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend)
+        && slice->automaticSquelch(); }), "Auto command adopts on sparse stable receiver");
+    check(slice->automaticSquelchMarginDb() == 12 && slice->squelchLevel() == 61,
+        "Auto margin is distinct from preserved manual threshold");
+    RadioModelSliceLifecycleTestAccess::flush(model);
+    const auto sqlSaved = RtlSliceSettings(scope).load().document.slices[3];
+    check(sqlSaved.automaticSquelch && sqlSaved.automaticSquelchMarginDb == 12,
+        "accepted per-receiver Auto persists");
+    slice->setAutomaticSquelch(true, 100);
+    check(rtl::RtlCaptureBackendTestAccess::idle(backend) && slice->automaticSquelchMarginDb() == 12,
+        "invalid Auto margin is refused");
+    slice->setSquelch(true, 61);
+    check(waitFor([&] { captureClock.advance(); return rtl::RtlCaptureBackendTestAccess::idle(backend)
+        && !slice->automaticSquelch(); }), "same manual threshold still exits Auto");
+    RadioModelSliceLifecycleTestAccess::flush(model);
     const auto accepted = scope.featureExact("RtlSlices");
     const int refusedBefore = observed;
     slice->setFilterWidth(9000, -9000); slice->setMode("not-a-mode");

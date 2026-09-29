@@ -115,7 +115,7 @@ public:
     bool adopt() noexcept;
     bool process(std::uint64_t firstSample, std::span<const std::complex<float>> samples) noexcept;
     // Acquisition only, before process() for this capture block. Shares the
-    // display's existing FFT; the caller supplies capture-sample identity.
+    // fixed 2048-bin detector FFT; caller supplies capture-sample identity.
     void observeSpectrum(std::span<const float> bins, std::uint64_t firstSample) noexcept;
     void stop(); // after acquisition joined
     bool takePacket(Packet& output) noexcept;
@@ -187,7 +187,10 @@ private:
     std::atomic<unsigned> m_faults{0};
     std::array<std::atomic<unsigned>, 8> m_monitor;
     std::array<unsigned, 8> m_nextMonitor{};
-    struct SquelchConfig { bool enabled = false; int level = 20; };
+    struct SquelchConfig {
+        bool enabled = false; int level = 20;
+        bool automatic = false; int marginDb = 10;
+    };
     std::array<SquelchConfig, 8> m_nextSquelch{};
     std::array<SquelchConfig, 8> m_squelchConfig{};
     std::array<RtlSquelchGate, 8> m_squelch;

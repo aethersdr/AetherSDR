@@ -10279,6 +10279,14 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThro
             m_backend->setSliceSquelch(s->sliceId(), on, level);
         }
     }, Qt::DirectConnection);
+    connect(s, &SliceModel::automaticSquelchRequested, this,
+            [this, s, canDispatch](bool enabled, int marginDb) {
+        if (!canDispatch() || !m_backend->isConnected() || slice(s->sliceId()) != s
+            || s->externalReceiveReplacementActive() || marginDb < 5 || marginDb > 20) { return; }
+        const auto sql = m_backend->capabilities().receiveSquelchModel;
+        if (!sql || !sql->automaticInEngine || !sql->modes.contains(s->mode())) { return; }
+        m_backend->setSliceAutoSquelch(s->sliceId(), enabled, marginDb);
+    }, Qt::DirectConnection);
     connect(s, &SliceModel::wfmAudioModeRequested, this,
             [this, s, canDispatch](WfmAudioMode mode) {
         if (!validWfmAudioMode(mode) || !canDispatch() || !m_backend->isConnected()

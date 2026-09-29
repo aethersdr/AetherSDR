@@ -499,17 +499,18 @@ static void measureSquelchPipeline()
     ddc.setSpectrumRateFps(1); // display throttling must not chatter the gate
     std::uint64_t first = 0;
     QVector<std::complex<float>> iq(8192);
-    std::array<double, 4> tapPeak{}, speakerPeak{};
-    std::array<std::size_t, 4> counts{};
+    std::array<double, 6> tapPeak{}, speakerPeak{};
+    std::array<std::size_t, 6> counts{};
     const auto start = std::chrono::steady_clock::now();
     int phase = 0;
     constexpr std::uint64_t kPhaseSamples = 1920000; // 0.8 seconds per state
-    while (first < 4 * kPhaseSamples) {
+    while (first < 6 * kPhaseSamples) {
         const int wanted = first / kPhaseSamples;
         if (wanted != phase) {
             phase = wanted;
             state.token.revision++;
             state.receivers[0].squelchEnabled = phase != 3;
+            state.receivers[0].automaticSquelch = phase >= 4;
             state.receivers[0].squelchLevel = phase == 1 ? 25 : 100;
             check(pipeline->prepare(state) && ready(*pipeline) && pipeline->adopt(),
                 "squelch edit adopts without rebuilding the demodulator");
@@ -518,7 +519,8 @@ static void measureSquelchPipeline()
         }
         for (int i = 0; i < iq.size(); ++i) {
             const double angle = 2.5 * std::sin(2 * std::numbers::pi * 1000 * (first + i) / 2400000.0);
-            iq[i] = {float(0.3 * std::cos(angle)), float(0.3 * std::sin(angle))};
+            const double amplitude = phase == 4 ? 0.0 : 0.3;
+            iq[i] = {float(amplitude * std::cos(angle)), float(amplitude * std::sin(angle))};
         }
         ddc.processIqData(iq, false); // real FFT, no legacy audio or USB
         const auto spectrum = ddc.takeSquelchSpectrum();
@@ -533,7 +535,7 @@ static void measureSquelchPipeline()
             for (std::size_t i = 0; i < packet.frames; ++i) {
                 const std::uint64_t frame = packet.firstSample + i;
                 const int window = frame / 38400;
-                if (window >= 4 || frame % 38400 < 24000 || frame % 38400 > 33600) { continue; }
+                if (window >= 6 || frame % 38400 < 24000 || frame % 38400 > 33600) { continue; }
                 const double value = std::abs(packet.samples[2 * i]);
                 if (packet.slot == 3) { tapPeak[window] = std::max(tapPeak[window], value); ++counts[window]; }
                 else if (packet.slot == -1) { speakerPeak[window] = std::max(speakerPeak[window], value); }
@@ -541,13 +543,13 @@ static void measureSquelchPipeline()
         }
         std::this_thread::sleep_until(start + std::chrono::microseconds(first * 1000000 / 2400000));
     }
-    for (int window = 0; window < 4; ++window) {
+    for (int window = 0; window < 6; ++window) {
         check(counts[window] > 8000, "squelch phase contains settled tap samples");
-        const bool open = window == 1 || window == 3;
+        const bool open = window == 1 || window == 3 || window == 5;
         std::printf("SQL window=%d tap_peak=%.6f speaker_peak=%.6f\n", window, tapPeak[window], speakerPeak[window]);
         check(open ? tapPeak[window] > 0.4 && speakerPeak[window] > 0.4
                    : tapPeak[window] == 0 && speakerPeak[window] == 0,
-            "real FFT threshold gates both sparse receiver tap and speaker; Off passes audio");
+            "real FFT manual/Auto gates sparse receiver tap and speaker; Off passes audio");
     }
     pipeline->stop();
 }

@@ -78,6 +78,7 @@ public:
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
     void setSliceSquelch(int sliceId, bool enabled, int level) override;
+    void setSliceAutoSquelch(int sliceId, bool enabled, int marginDb) override;
     void setSliceWfmDeemphasis(int sliceId, int microseconds) override;
     void setSliceWfmForceMono(int sliceId, bool forceMono) override;
     void setSliceWfmAudioMode(int sliceId, WfmAudioMode mode) override;

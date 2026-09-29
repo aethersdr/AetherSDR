@@ -743,6 +743,12 @@ void SliceModel::setSquelch(bool on, int level)
     emit squelchChanged(on, level);
 }
 
+void SliceModel::setAutomaticSquelch(bool enabled, int marginDb)
+{
+    if (marginDb < 5 || marginDb > 20 || externalReceiveReplacementActive()) { return; }
+    emit automaticSquelchRequested(enabled, marginDb);
+}
+
 void SliceModel::setManualSquelch(bool on, int level)
 {
     setSquelch(on, level);
@@ -1739,7 +1745,13 @@ void SliceModel::applyChanges(const SliceDelta& d)
             emit wfmReceptionDiagnosticsChanged(value);
         }
     }
-    if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
+    if (d.automaticSquelch) { m_automaticSquelch = *d.automaticSquelch; }
+    if (d.automaticSquelchMarginDb && *d.automaticSquelchMarginDb >= 5
+        && *d.automaticSquelchMarginDb <= 20) {
+        m_automaticSquelchMarginDb = *d.automaticSquelchMarginDb;
+    }
+    if (d.squelchOn.has_value() || d.squelchLevel.has_value()
+        || d.automaticSquelch || d.automaticSquelchMarginDb) {
         m_squelchOnKnown |= d.squelchOn.has_value();
         m_squelchLevelKnown |= d.squelchLevel.has_value();
         if (d.squelchOn.has_value())

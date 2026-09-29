@@ -36,6 +36,8 @@ public:
         bool wfmForceMono = false;
         bool wfmHdStereo = false;
         int hdProgram = 0;
+        bool automaticSquelch = false;
+        int automaticSquelchMarginDb = 10;
     };
     struct Document {
         double captureCenterHz = 0;

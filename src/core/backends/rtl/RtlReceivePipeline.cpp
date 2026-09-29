@@ -74,6 +74,8 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
             || receiver.audioGain < 0
             || receiver.audioGain > 100 || receiver.audioPan < 0 || receiver.audioPan > 100
             || receiver.squelchLevel < 0 || receiver.squelchLevel > 100
+            || receiver.automaticSquelchMarginDb < 5 || receiver.automaticSquelchMarginDb > 20
+            || (receiver.automaticSquelch && !receiver.squelchEnabled)
             || (receiver.wfmDeemphasisUs != 50 && receiver.wfmDeemphasisUs != 75)
             || (receiver.mode == Transaction::Mode::Wfm && receiver.squelchEnabled)) { return Submission::Failed; }
         // Parking changes reception membership, not the configured graph's
@@ -205,7 +207,8 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
     m_specs = specs;
     m_prepared = m_registry.service().requested;
     for (const auto& receiver : state.receivers) {
-        m_nextSquelch[receiver.passband.stableId] = {receiver.squelchEnabled, receiver.squelchLevel};
+        m_nextSquelch[receiver.passband.stableId] = {receiver.squelchEnabled, receiver.squelchLevel,
+            receiver.automaticSquelch, receiver.automaticSquelchMarginDb};
         m_nextMonitor[receiver.passband.stableId] = static_cast<unsigned>(receiver.audioGain
             | (receiver.audioPan << 8) | (receiver.audioMute ? 1 << 16 : 0));
     }
@@ -231,7 +234,8 @@ bool RtlReceivePipeline::adopt() noexcept
     for (std::size_t slot = 0; slot < m_monitor.size(); ++slot) {
         m_monitor[slot].store(m_nextMonitor[slot], std::memory_order_relaxed);
         m_squelchConfig[slot] = m_nextSquelch[slot];
-        m_squelch[slot].configure(m_nextSquelch[slot].enabled, m_nextSquelch[slot].level, resetSquelch);
+        m_squelch[slot].configure(m_nextSquelch[slot].enabled, m_nextSquelch[slot].level, resetSquelch,
+            m_nextSquelch[slot].automatic, m_nextSquelch[slot].marginDb);
     }
     if (resetSquelch) { m_spectrumFresh = false; m_squelchEpoch.fill(0); }
     m_token = m_nextToken; m_capture = m_nextCapture;
@@ -299,7 +303,8 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
         const int slot = view.spec->handle.slot;
         auto& gate = m_squelch[slot];
         if (m_squelchEpoch[slot] != view.spec->epoch) {
-            gate.configure(m_squelchConfig[slot].enabled, m_squelchConfig[slot].level, true);
+            gate.configure(m_squelchConfig[slot].enabled, m_squelchConfig[slot].level, true,
+                m_squelchConfig[slot].automatic, m_squelchConfig[slot].marginDb);
             m_squelchEpoch[slot] = view.spec->epoch;
         }
         if (m_spectrumFresh && !view.spec->dsp.wbfmReceive) {
@@ -312,12 +317,7 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
                 (offset + passband.filterLowHz) / binHz + 1024)), 0, 2047);
             const int high = std::clamp(static_cast<int>(std::ceil(
                 (offset + passband.filterHighHz) / binHz + 1024)), low, 2047);
-            float peak = -120.0f;
-            for (int bin = low; bin <= high; ++bin) {
-                if (!std::isfinite(m_spectrum[bin])) { peak = std::numeric_limits<float>::quiet_NaN(); break; }
-                peak = std::max(peak, m_spectrum[bin]);
-            }
-            gate.observe(peak, clock(m_spectrumFirstSample));
+            gate.observeSpectrum(m_spectrum, low, high, clock(m_spectrumFirstSample));
         }
         if (!view.receiver->processCapture(block, *this)) {
             const unsigned bit = 1u << slot;
