@@ -1144,6 +1144,26 @@ void AmpApplet::setSwr(float swr)
 
 void AmpApplet::setPaHeatsinkTemp(float degC)
 {
+    // The PGXL's own reading. Dropped while the radio's is fresh, so the two
+    // sources never take turns writing the readout. See the header.
+    if (m_radioPaHeatsinkTemp.isValid()
+            && m_radioPaHeatsinkTemp.elapsed() < kRelayMeterFreshnessMs) {
+        return;
+    }
+    m_paHeatsinkTemp = degC;
+    m_hasPaHeatsinkTemp = true;
+    updateTempLabel();
+}
+
+void AmpApplet::setRadioPaHeatsinkTemp(float degC, bool valid)
+{
+    if (!valid) {
+        // The meter is gone. Hand the reading back to the PGXL at once rather
+        // than holding it off for the rest of the freshness window.
+        m_radioPaHeatsinkTemp.invalidate();
+        return;
+    }
+    m_radioPaHeatsinkTemp.restart();
     m_paHeatsinkTemp = degC;
     m_hasPaHeatsinkTemp = true;
     updateTempLabel();
@@ -1207,6 +1227,27 @@ void AmpApplet::updateTempLabel()
 }
 
 void AmpApplet::setDrainCurrent(float amps)
+{
+    // The PGXL's own reading. Dropped while the radio's is fresh; see
+    // setPaHeatsinkTemp().
+    if (m_radioDrainCurrent.isValid()
+            && m_radioDrainCurrent.elapsed() < kRelayMeterFreshnessMs) {
+        return;
+    }
+    applyDrainCurrent(amps);
+}
+
+void AmpApplet::setRadioDrainCurrent(float amps, bool valid)
+{
+    if (!valid) {
+        m_radioDrainCurrent.invalidate();
+        return;
+    }
+    m_radioDrainCurrent.restart();
+    applyDrainCurrent(amps);
+}
+
+void AmpApplet::applyDrainCurrent(float amps)
 {
     m_drainAmps = amps;
     m_idGauge->setValue(amps);
@@ -1471,22 +1512,6 @@ void AmpApplet::setDirectConnected(bool direct)
     // would style the readouts at a size nothing else on the panel is at.
     applyTelemetryStyles(contentScale());
     updatePortRows();
-}
-
-void AmpApplet::setMeff(const QString& meff)
-{
-    // The RELAYED MEffA state, off the radio's amplifier telemetry rather than
-    // the port-9008 socket. On a station with no direct socket this is the
-    // only place the state appears at all, so it reads out here — but it can
-    // never be WRITTEN from here: a `setup` write carries the whole
-    // configuration group and only the direct connection can read the rest of
-    // it. Hence settable=false; the control shows the state and stays inert.
-    //
-    // The socket path (AmpModel::meffaChanged) calls setMeffa directly with
-    // the real writability, and arrives on a connected station before this
-    // does, so it wins where both exist.
-    if (m_meffaSettable) return;   // the socket owns it; do not downgrade
-    setMeffa(meff, false);
 }
 
 } // namespace AetherSDR

@@ -1725,6 +1725,49 @@ void testRemovingTheDriveMeterClearsTheReading()
     report("removing the drive meter clears the drive reading", !valid);
 }
 
+// The PGXL's drain current and PA heatsink temperature reach the amplifier's
+// consumers in amps and degrees Celsius. The values are ones the radio and the
+// PGXL both reported during a tune on a FLEX-8600 with PGXL firmware 3.9.8.
+void testAmplifierVitalsAreRouted()
+{
+    MeterModel model;
+    model.setTgxlHandle(kTgxlHandle);
+    defineAmpManifest(model);
+    model.defineMeter(ampMeter(15, kPgxlHandle, "ID", "Amps", 0.0, 70.0));
+
+    float amps = -1.0f, degC = -1.0f;
+    bool ampsValid = false, degCValid = false;
+    QObject::connect(&model, &MeterModel::ampVitalsChanged,
+                     [&](float a, bool av, float t, bool tv) {
+                         amps = a; ampsValid = av; degC = t; degCValid = tv;
+                     });
+
+    model.updateValues({15, 16}, {qint16(19.2f * 256.0f), qint16(44.1f * 64.0f)});
+    report("amplifier drain current is routed and converted to amps",
+           ampsValid && nearlyEqual(amps, 19.2f));
+    report("amplifier PA heatsink temperature is routed and converted to degrees Celsius",
+           degCValid && nearlyEqual(degC, 44.1f));
+
+    model.removeMeter(15);
+    report("removing the drain current meter withdraws the reading",
+           !ampsValid && degCValid);
+}
+
+// A tuner's ID meter, should one ever appear, must not land on the amplifier.
+void testTunerDrainCurrentIsNotRoutedToTheAmplifier()
+{
+    MeterModel model;
+    model.setTgxlHandle(kTgxlHandle);
+    model.defineMeter(ampMeter(19, kTgxlHandle, "ID", "Amps", 0.0, 70.0));
+
+    bool sawValid = false;
+    QObject::connect(&model, &MeterModel::ampVitalsChanged,
+                     [&](float, bool av, float, bool) { sawValid = sawValid || av; });
+
+    model.updateValues({19}, {qint16(3.0f * 256.0f)});
+    report("a tuner's drain current meter is not routed to the amplifier", !sawValid);
+}
+
 // The two FWD meters are told apart by handle, and the manifest arrives BEFORE
 // the TGXL handle is known on a cold start. The rescan in setTgxlHandle is what
 // stops the tuner's FWD landing on the amplifier's gauge — without it the two
@@ -1943,6 +1986,8 @@ int main(int argc, char** argv)
     testAmplifierDriveMeterIsRouted();
     testAmplifierDriveIsAbsentWithoutTheMeter();
     testRemovingTheDriveMeterClearsTheReading();
+    testAmplifierVitalsAreRouted();
+    testTunerDrainCurrentIsNotRoutedToTheAmplifier();
     testAmpAndTunerMetersSplitByHandleAfterALateHandle();
     testTunerHandleDriveDoesNotReachTheAmplifier();
     testAmpPowerFlagTracksOnlyPowerMeters();
