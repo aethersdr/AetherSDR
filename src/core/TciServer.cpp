@@ -1166,14 +1166,12 @@ QJsonObject TciServer::routingSnapshot() const
 
     QJsonArray endpoints;
     if (m_model) {
-        const auto slices = m_model->slices();
-        for (int trx = 0; trx < slices.size(); ++trx) {
-            const SliceModel* slice = slices.at(trx);
+        for (const SliceModel* slice : m_model->slices()) {
             if (!slice) {
                 continue;
             }
             endpoints.append(QJsonObject{
-                {QStringLiteral("trx"), trx},
+                {QStringLiteral("trx"), m_trxMap.trxForSlice(m_model, slice)},
                 {QStringLiteral("sliceId"), slice->sliceId()},
                 {QStringLiteral("panId"), slice->panId()},
                 {QStringLiteral("frequencyHz"),

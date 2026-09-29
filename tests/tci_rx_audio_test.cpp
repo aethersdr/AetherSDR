@@ -12,6 +12,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QSemaphore>
+#include <QJsonArray>
 #include <QStringList>
 #include "core/TciClient.h"
 #include <array>
@@ -992,6 +993,12 @@ public:
             const auto binding = server.sliceRxBinding(id);
             check(binding.current() && binding.trx == id,
                   "late-constructed TCI server preserves surviving receiver assignments");
+        }
+        for (const QJsonValue& value : server.routingSnapshot().value(QStringLiteral("endpoints")).toArray()) {
+            const QJsonObject endpoint = value.toObject();
+            const int id = endpoint.value(QStringLiteral("sliceId")).toInt();
+            check(endpoint.value(QStringLiteral("trx")).toInt() == server.sliceRxBinding(id).trx,
+                  "routing diagnostics report the same stable receiver assignment as audio");
         }
         source->add(99);
         const auto replacement = server.sliceRxBinding(99);
