@@ -136,6 +136,8 @@ public:
     // recordsOnClient() over the live "RecordingMode" setting and the provider
     // above: is THIS recorder the one the operator's REC/PLAY reaches? Every
     // routing surface asks this, so none can disagree with the start policy.
+    // While a recording or playback is live it answers true regardless, so a
+    // flip of either input mid-recording cannot send the stop elsewhere.
     bool recordsOnClientNow() const;
 
     // Would startRecording() be allowed right now? Reads the same live settings

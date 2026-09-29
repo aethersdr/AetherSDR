@@ -280,6 +280,63 @@ int main(int argc, char** argv)
                     == RecordStartDecision::BlockedRecordingModeIsRadio);
     }
 
+    // ── A REACHABILITY FLIP MID-RECORDING MUST NOT STRAND THE RECORDING ──────
+    // Review of #6021: every surface re-asks recordsOnClientNow() per click, and
+    // reachability now moves on connect/disconnect. Start on the client with
+    // no radio-side recorder, attach one, press REC off: were the answer
+    // re-derived, the stop would go to the slice, stopRecording() would never
+    // run, and the button would go dark over a WAV that keeps writing. The
+    // routing is latched for the life of the recording instead.
+    //
+    // routeRecordOff() is the surfaces' shape (MainWindow_Wiring.cpp
+    // recordToggled, AetherRX, MIDI global.qsoRecord), with the slice branch
+    // recorded rather than taken -- there is no radio here.
+    {
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        setMode("Radio", "False");
+
+        bool radioCanRecord = false;
+        QsoRecorder rec;
+        rec.setRecordingDir(tmp.path());
+        rec.setBackendOwnsRxAudioProvider([]() { return true; });   // HL2 shape
+        rec.setRadioSideRecordingReachableProvider([&]() { return radioCanRecord; });
+
+        bool wentToSlice = false;
+        const auto routeRecordOff = [&]() {
+            if (rec.recordsOnClientNow())
+                rec.stopRecording();
+            else
+                wentToSlice = true;
+        };
+
+        rec.startRecording();
+        EXPECT_TRUE(rec.isRecording());
+
+        radioCanRecord = true;   // a Flex connects mid-recording
+        EXPECT_TRUE(rec.recordsOnClientNow());   // latched: still this recorder
+        routeRecordOff();
+        EXPECT_TRUE(!rec.isRecording());
+        EXPECT_TRUE(!wentToSlice);
+        EXPECT_EQ_INT(fileCount(tmp.path()), 1);
+
+        // Latched for ONE recording only: idle again, the live answer returns.
+        EXPECT_TRUE(!rec.recordsOnClientNow());
+
+        // The same hazard from the setting side (pre-existing, closed by the
+        // same latch): Client-mode recording, operator picks Radio Side in
+        // Radio Setup with a radio that records, then presses REC off.
+        setMode("Client", "True");
+        rec.startRecording();
+        EXPECT_TRUE(rec.isRecording());
+        setMode("Radio", "True");
+        EXPECT_TRUE(rec.recordsOnClientNow());
+        routeRecordOff();
+        EXPECT_TRUE(!rec.isRecording());
+        EXPECT_TRUE(!wentToSlice);
+        EXPECT_TRUE(!rec.recordsOnClientNow());
+    }
+
     // ── Auto-record must not report the same refusal on every key-down ──────
     // onMoxChanged() retries the start on EVERY MOX rising edge. Wired to a
     // dialog, an unchanged refusal would raise one per transmission and stack

@@ -109,6 +109,19 @@ int QsoRecorder::recordingDurationSecs() const
 
 bool QsoRecorder::recordsOnClientNow() const
 {
+    // Latched for the life of one recording (or playback). The inputs below
+    // move on their own -- reachability on every radio connect and disconnect,
+    // the setting in Radio Setup -- and every surface re-asks this per click.
+    // Were it re-derived mid-recording, REC-off after a Flex connected would go
+    // to the slice, stopRecording() would never run, and the button would go
+    // dark over a WAV that keeps writing to app exit. While this recorder holds
+    // something live it IS the recorder the operator's REC/PLAY reach, so the
+    // stop always lands on the recorder that started.
+    if (m_recording.load(std::memory_order_acquire)
+        || m_writeFailurePending.load(std::memory_order_acquire)
+        || m_playing) {
+        return true;
+    }
     const bool radioSideReachable =
         !m_radioSideRecordingReachable || m_radioSideRecordingReachable();
     return recordsOnClient(
