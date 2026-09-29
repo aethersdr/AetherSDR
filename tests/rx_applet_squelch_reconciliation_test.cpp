@@ -61,6 +61,31 @@ class RxAppletSquelchReconciliationTest : public QObject
     Q_OBJECT
 
 private slots:
+    void engineAutoRestoreKeepsManualThresholdOnAttachedSlice()
+    {
+        SliceModel first(0);
+        RxApplet rx;
+        RxAppletSquelchTestAccess::engineSql(rx);
+        rx.setSlice(&first);
+        QSignalSpy commands(&first, &SliceModel::commandReady);
+        SliceDelta restored;
+        restored.mode = QStringLiteral("FMN");
+        restored.squelchOn = true;
+        restored.squelchLevel = 54;
+        restored.automaticSquelch = true;
+        restored.automaticSquelchMarginDb = 13;
+        first.applyChanges(restored);
+        QCOMPARE(rx.sqlMode(), RxApplet::SqlMode::Auto);
+        QCOMPARE(rx.autoSqlMarginDb(), 13);
+        QCOMPARE(first.manualSquelchLevel(), 54);
+        QCOMPARE(rx.sqlManualLevel(), 54);
+        QVERIFY(commands.isEmpty());
+        rx.cycleSqlModeExternal(); // Auto -> Off
+        rx.cycleSqlModeExternal(); // Off -> Manual restores the saved threshold
+        QCOMPARE(rx.sqlManualLevel(), 54);
+        QCOMPARE(first.squelchLevel(), 54);
+    }
+
     void engineAutoFollowsSelectedSliceWithoutCrossWrites()
     {
         SliceModel first(0), eighth(7);

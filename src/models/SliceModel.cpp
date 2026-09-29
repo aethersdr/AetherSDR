@@ -1766,8 +1766,13 @@ void SliceModel::applyChanges(const SliceDelta& d)
             // External-receive (Kiwi) slices keep their level in
             // m_externalReceiveSquelchLevel and never read the Flex manual
             // memory, so exclude them here exactly as setManualSquelch does.
-            if (m_squelchEchoIsManual && !m_externalReceiveAudioReplacement)
+            // Engine-owned Auto publishes its retained manual threshold,
+            // not a computed Auto level. Restore that memory even if the
+            // attached applet already marked its echo surface Off/Auto.
+            if ((m_squelchEchoIsManual || d.automaticSquelch.has_value())
+                && !m_externalReceiveAudioReplacement) {
                 setManualSquelchLevel(*d.squelchLevel);
+            }
         }
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }
