@@ -53,6 +53,14 @@ public:
     void setHeadphoneMuted(bool muted);
     void setMasterVolume(int pct);
     void setHeadphoneVolume(int pct);
+    // Say what the headphone mute and slider act on. True on a radio with no
+    // headphone mixer of its own whose audio plays on this computer (see
+    // HeadphoneOutputPolicy.h): both then drive this computer's output, the
+    // same one the master slider and speaker mute drive, and a screen reader
+    // must hear that rather than "headphone audio" for a jack that is not
+    // there. False restores the radio-headphone wording.
+    void setHeadphoneFollowsLocalOutput(bool follows);
+    bool headphoneFollowsLocalOutput() const { return m_headphoneFollowsLocal; }
     void setOtherClientTx(bool transmitting, const QString& station);
     // Empty hides the marker. A non-empty family name keeps the experimental
     // status visible for the whole connected session, independent of whether
@@ -135,6 +143,7 @@ private:
     QSlider*     m_hpSlider{nullptr};
     QLabel*      m_masterLabel{nullptr};
     QLabel*      m_hpLabel{nullptr};
+    bool         m_headphoneFollowsLocal{false};
 
     // Window-control trio (frameless mode): minimize, maximize/restore, close.
     // QLabels (not buttons) for a flat look; click is wired via eventFilter.

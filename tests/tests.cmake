@@ -6346,6 +6346,32 @@ add_test(NAME titlebar_headphone_mute_test COMMAND titlebar_headphone_mute_test)
 set_tests_properties(titlebar_headphone_mute_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Where the headphone pair goes on a radio with no headphone mixer of its own:
+# HeadphoneOutputPolicy.h's truth table plus what the title bar announces.
+# Same TitleBar link set as titlebar_headphone_mute_test above.
+add_executable(headphone_output_policy_test
+    tests/headphone_output_policy_test.cpp
+    src/gui/TitleBar.cpp
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(headphone_output_policy_test PRIVATE src tests)
+target_link_libraries(headphone_output_policy_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(headphone_output_policy_test PROPERTIES AUTOMOC ON)
+add_test(NAME headphone_output_policy_test COMMAND headphone_output_policy_test)
+set_tests_properties(headphone_output_policy_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Pure index arithmetic lifted out of RxApplet — no GUI, no radio.
 add_executable(icom_replay_test tests/icom_replay_test.cpp)
 target_include_directories(icom_replay_test PRIVATE src)
@@ -6771,6 +6797,7 @@ set(AETHER_SETTINGS_CONSUMERS
     container_widget_test
     hl2_pc_audio_lock_test
     titlebar_headphone_mute_test
+    headphone_output_policy_test
     amp_applet_test
     container_manager_test
     container_nesting_test

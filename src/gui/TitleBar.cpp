@@ -927,6 +927,31 @@ void TitleBar::setHeadphoneVolume(int pct)
     m_hpLabel->setText(QString::number(pct));
 }
 
+void TitleBar::setHeadphoneFollowsLocalOutput(bool follows)
+{
+    m_headphoneFollowsLocal = follows;
+    if (follows) {
+        const QString muteText = tr(
+            "This radio has no headphone output of its own; its audio plays on "
+            "this computer. Mutes or unmutes this computer's audio output, the "
+            "same as the speaker button.");
+        const QString volumeText = tr(
+            "This radio has no headphone output of its own; its audio plays on "
+            "this computer. Sets this computer's output level, 0 to 100 "
+            "percent, the same as the master volume.");
+        m_headphoneBtn->setToolTip(muteText);
+        m_headphoneBtn->setAccessibleDescription(muteText);
+        m_hpSlider->setToolTip(volumeText);
+        m_hpSlider->setAccessibleDescription(volumeText);
+        return;
+    }
+    m_headphoneBtn->setToolTip(tr("Click to mute/unmute headphones"));
+    m_headphoneBtn->setAccessibleDescription(tr("Mute or unmute headphone audio"));
+    m_hpSlider->setToolTip(QString());
+    m_hpSlider->setAccessibleDescription(
+        tr("Headphone volume level, 0 to 100 percent"));
+}
+
 void TitleBar::setMultiFlexStatus(int count, const QStringList& names)
 {
     if (count > 0) {
