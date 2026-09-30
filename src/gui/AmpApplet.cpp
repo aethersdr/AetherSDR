@@ -228,7 +228,9 @@ QString pad(const QString& value)
 // "PA 106.8 F", "Vac 121 V": label, value, unit. One length whatever the
 // value, so the grid column it sits in never changes width and the column
 // beside it never shifts. The spare spaces go at the end, not in front of the
-// number, where they would open a visible gap ("HL  89.8").
+// number, where they would open a visible gap ("HL  89.8"). The cost is that
+// the unit letter, not the number, shifts by a column as the value gains a
+// digit; the cell is pinned to its widest reading, so nothing beside it moves.
 QString readout(const QString& label, const QString& value, const QString& unit)
 {
     const int fixedLength = label.length() + 1 + kValueFieldChars + 1 + unit.length();
@@ -976,10 +978,10 @@ void AmpApplet::applyTelemetryStyles(qreal scale)
     // so Vac and Vdd beside it never move. Fixed-length text alone does that
     // only in a truly fixed-width face; where none is installed the fallback
     // is proportional and "9.9" and "106.8" differ in width. Measured in the
-    // face the sheet asks for, plus the button's 1px border either side and
-    // its 2px right padding.
-    QFont face(QStringLiteral("monospace"));
-    face.setStyleHint(QFont::Monospace);
+    // face the button is drawn in (ensurePolished applies the sheet's font),
+    // plus its 1px border either side and its 2px right padding.
+    m_tempBtn->ensurePolished();
+    QFont face = m_tempBtn->font();
     face.setPixelSize(bodyPx);
     const QFontMetrics metrics(face);
     int widest = 0;
@@ -1568,11 +1570,11 @@ void AmpApplet::applyStateToControls()
     // operating colour. POWERUP and SELFCHECK are the amplifier on its way up;
     // FAULT is it having tripped. Each says so.
     //
-    // Before the amplifier reports a state at all, the rail button reads
-    // OPERATE, grey and disabled: it keeps its place in the row without
-    // claiming a state.
+    // Before the amplifier reports a state at all, the rail button reads a
+    // dash, grey and disabled, as the fan combo does: it keeps its place in
+    // the row without borrowing a state's word.
     const bool faulted = (m_stateWord == QLatin1String("FAULT"));
-    m_operateBtn->setText(!known ? tr("OPERATE")
+    m_operateBtn->setText(!known ? QStringLiteral("—")
                           : faulted ? tr("FAULT")
                           : m_stateWord == QLatin1String("POWERUP") ? tr("PWRUP")
                           : m_stateWord == QLatin1String("SELFCHECK") ? tr("CHECK")
@@ -1585,6 +1587,8 @@ void AmpApplet::applyStateToControls()
     m_operateBtn->setEnabled(known);
     m_operateBtn->setToolTip(known ? QString()
                                    : tr("The amplifier has not reported its state yet."));
+    m_operateBtn->setAccessibleName(known ? m_operateBtn->text()
+                                          : tr("Amplifier state not reported"));
     theme.applyStyleSheet(m_stbyKey, m_standby ? kPanelKeyStandbyStyle
                                                : kPanelKeyIdleStyle);
     m_stbyKey->setAccessibleDescription(

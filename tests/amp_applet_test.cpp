@@ -555,10 +555,11 @@ void testMeffaShowsThreeStates()
     // until the amplifier reports a state.
     QPushButton* operate = nullptr;
     for (QPushButton* b : applet.findChildren<QPushButton*>()) {
-        if (!b->isHidden() && b->text() == QStringLiteral("OPERATE")) operate = b;
+        if (!b->isHidden() && b->accessibleName() == QStringLiteral("Amplifier state not reported")) operate = b;
     }
     report("OPERATE is shown but disabled until the amplifier reports",
-           operate != nullptr && !operate->isEnabled());
+           operate != nullptr && !operate->isEnabled()
+               && operate->text() == QStringLiteral("—"));
     if (operate) {
         applet.setState(QStringLiteral("STANDBY"));
         report("a reported state enables the operate control",
@@ -860,7 +861,7 @@ void testDockedCaptionsFitTheRail()
         auto* fan = fanCombo(applet);
         QPushButton* operate = nullptr;
         for (QPushButton* b : applet.findChildren<QPushButton*>()) {
-            if (b->isVisible() && b != meffa && b->objectName().isEmpty()
+            if (meffa && b->isVisible() && b != meffa && b->objectName().isEmpty()
                 && b->parentWidget() == meffa->parentWidget()) {
                 operate = b;
             }
@@ -874,6 +875,13 @@ void testDockedCaptionsFitTheRail()
                 detail += QStringLiteral(" | %1 %2<%3").arg(w->metaObject()->className())
                               .arg(w->width()).arg(w->sizeHint().width());
             }
+        }
+        // A combo's sizeHint uses minimumContentsLength, not the item text, so
+        // the caption itself is measured too (#4885).
+        if (fan && !fan->currentText().isEmpty()
+            && fan->fontMetrics().horizontalAdvance(fan->currentText()) > fan->width()) {
+            fits = false;
+            detail += QStringLiteral(" | fan caption wider than combo");
         }
         if (operate) detail += QStringLiteral(" | operate=") + operate->text();
         if (fan) detail += QStringLiteral(" | fan=") + fan->currentText();
