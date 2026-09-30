@@ -33,8 +33,8 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     QKeychain::TestControl::reset();
-    const QString first = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.10"), 9010);
-    const QString second = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.11"), 9010);
+    const QString first = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.10"), QStringLiteral("192.0.2.10"), 9010);
+    const QString second = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.11"), QStringLiteral("192.0.2.11"), 9010);
 
     PeripheralAuthStore::LoadResult loaded;
     PeripheralAuthStore::load(PeripheralAuthStore::Device::Tgxl, first, &app,

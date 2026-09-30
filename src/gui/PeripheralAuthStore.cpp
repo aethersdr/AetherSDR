@@ -147,13 +147,19 @@ void startNextWrite(PeripheralAuthStore::Device device)
 
 } // namespace
 
-QString PeripheralAuthStore::endpoint(const QString& peerAddress, quint16 port)
+QString PeripheralAuthStore::endpoint(const QString& configuredHost,
+                                      const QString& peerAddress, quint16 port)
 {
-    QHostAddress address;
-    if (port == 0 || !address.setAddress(peerAddress)) {
+    QHostAddress peer;
+    if (port == 0 || !peer.setAddress(peerAddress)) {
         return {};
     }
-    return address.toString() + QLatin1Char(':') + QString::number(port);
+    const QString host = configuredHost.trimmed();
+    QHostAddress literal;
+    if (host.isEmpty() || literal.setAddress(host)) {
+        return peer.toString() + QLatin1Char(':') + QString::number(port);
+    }
+    return QStringLiteral("host:") + host.toLower() + QLatin1Char(':') + QString::number(port);
 }
 
 void PeripheralAuthStore::load(Device device, const QString& endpoint, QObject* context,

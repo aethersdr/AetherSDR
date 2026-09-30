@@ -6472,7 +6472,7 @@ void MainWindow::wireMeters()
     connect(&m_tgxlConn, &TgxlConnection::authCodeRequired, this,
             [this](quint64 attempt) {
         PeripheralAuthStore::load(PeripheralAuthStore::Device::Tgxl,
-            PeripheralAuthStore::endpoint(m_tgxlConn.peerAddress(), m_tgxlConn.peerPort()), this,
+            PeripheralAuthStore::endpoint(m_tgxlConn.attemptHost(), m_tgxlConn.peerAddress(), m_tgxlConn.peerPort()), this,
             [this, attempt](const PeripheralAuthStore::LoadResult& result) {
                 m_tgxlConn.setAuthCodeForAttempt(attempt, result.code,
                     result.status == PeripheralAuthStore::LoadStatus::Unavailable);
@@ -6481,7 +6481,7 @@ void MainWindow::wireMeters()
     connect(&m_pgxlConn, &PgxlConnection::authCodeRequired, this,
             [this](quint64 attempt) {
         PeripheralAuthStore::load(PeripheralAuthStore::Device::Pgxl,
-            PeripheralAuthStore::endpoint(m_pgxlConn.peerAddress(), m_pgxlConn.peerPort()), this,
+            PeripheralAuthStore::endpoint(m_pgxlConn.attemptHost(), m_pgxlConn.peerAddress(), m_pgxlConn.peerPort()), this,
             [this, attempt](const PeripheralAuthStore::LoadResult& result) {
                 m_pgxlConn.setAuthCodeForAttempt(attempt, result.code,
                     result.status == PeripheralAuthStore::LoadStatus::Unavailable);
@@ -6490,7 +6490,7 @@ void MainWindow::wireMeters()
     connect(&m_antennaGenius, &AntennaGeniusModel::authCodeRequired, this,
             [this](quint64 attempt) {
         PeripheralAuthStore::load(PeripheralAuthStore::Device::AntennaGenius,
-            PeripheralAuthStore::endpoint(m_antennaGenius.peerAddress(), m_antennaGenius.peerPort()), this,
+            PeripheralAuthStore::endpoint(m_antennaGenius.attemptHost(), m_antennaGenius.peerAddress(), m_antennaGenius.peerPort()), this,
             [this, attempt](const PeripheralAuthStore::LoadResult& result) {
                 m_antennaGenius.setAuthCodeForAttempt(attempt, result.code,
                     result.status == PeripheralAuthStore::LoadStatus::Unavailable);
@@ -6511,17 +6511,17 @@ void MainWindow::wireMeters()
     connect(&m_tgxlConn, &TgxlConnection::authCodeAccepted, this,
             [this, saveAcceptedCode](const QString& code) {
         saveAcceptedCode(PeripheralAuthStore::Device::Tgxl,
-            PeripheralAuthStore::endpoint(m_tgxlConn.peerAddress(), m_tgxlConn.peerPort()), code);
+            PeripheralAuthStore::endpoint(m_tgxlConn.attemptHost(), m_tgxlConn.peerAddress(), m_tgxlConn.peerPort()), code);
     });
     connect(&m_pgxlConn, &PgxlConnection::authCodeAccepted, this,
             [this, saveAcceptedCode](const QString& code) {
         saveAcceptedCode(PeripheralAuthStore::Device::Pgxl,
-            PeripheralAuthStore::endpoint(m_pgxlConn.peerAddress(), m_pgxlConn.peerPort()), code);
+            PeripheralAuthStore::endpoint(m_pgxlConn.attemptHost(), m_pgxlConn.peerAddress(), m_pgxlConn.peerPort()), code);
     });
     connect(&m_antennaGenius, &AntennaGeniusModel::authCodeAccepted, this,
             [this, saveAcceptedCode](const QString& code) {
         saveAcceptedCode(PeripheralAuthStore::Device::AntennaGenius,
-            PeripheralAuthStore::endpoint(m_antennaGenius.peerAddress(), m_antennaGenius.peerPort()), code);
+            PeripheralAuthStore::endpoint(m_antennaGenius.attemptHost(), m_antennaGenius.peerAddress(), m_antennaGenius.peerPort()), code);
     });
     const auto showBlockedConnection = [this](const QString& device,
                                                const QString& reason, bool blocked) {
