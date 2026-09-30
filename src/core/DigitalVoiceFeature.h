@@ -68,16 +68,23 @@ inline bool digitalVoiceModeSelectable(const QString& radioMode)
 // The Mode Up / Down step: the next entry of modes after currentMode in
 // direction (+1 / -1), skipping any the slice cannot be put in right now.
 // Stepping onto a refused mode left the slice where it was, so every later
-// press asked for the same mode again (#6034). An unknown currentMode is
-// treated as index 0 before stepping, preserving the previous cycle behavior.
-// Empty when no entry is selectable.
+// press asked for the same mode again (#6034). radioModes is the slice's
+// mode_list as the radio reports it; when it is not empty, entries the radio
+// does not report are skipped too (a FLEX-8400 has no CWL and turns a request
+// for it into DIGU). Empty radioModes (no list reported yet, or a backend that
+// reports none) keeps the whole list. An unknown currentMode is treated as
+// index 0 before stepping, preserving the previous cycle behavior. Empty when
+// no entry is selectable.
 inline QString nextCycledMode(const QStringList& modes, const QString& currentMode,
-                              int direction)
+                              int direction, const QStringList& radioModes = {})
 {
     const int count = static_cast<int>(modes.size());
     int idx = std::max(0, static_cast<int>(modes.indexOf(currentMode.toUpper())));
     for (int tries = 0; tries < count; ++tries) {
         idx = (idx + direction + count) % count;
+        if (!radioModes.isEmpty() && !radioModes.contains(modes[idx])) {
+            continue;
+        }
         if (digitalVoiceModeSelectable(modes[idx])) {
             return modes[idx];
         }

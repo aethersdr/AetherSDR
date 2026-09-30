@@ -2342,7 +2342,8 @@ void MainWindow::registerMidiParams()
     // ── Mode Up / Down (cycle through the mode list above) ───────────
     auto cycleMode = [this, fireShortcut, modes](int direction) {
         auto* s = activeSlice();
-        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction);
+        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction,
+                                            s ? s->modeList() : QStringList());
         if (next.isEmpty()) {
             return;
         }
