@@ -6572,7 +6572,7 @@ void MainWindow::wireMeters()
         m_appletPanel->ampApplet()->setDirectConnected(false);
     });
     // Radio amplifier status → AmpApplet telemetry (fallback path).
-    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, temp, state) in its
+    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, state) in its
     // amplifier status messages, so the applet keeps updating even when the direct
     // PGXL TCP connection isn't established.  When direct TCP IS connected, that
     // path is faster and higher-precision (the radio rebroadcast may round/lag),
@@ -6582,11 +6582,10 @@ void MainWindow::wireMeters()
             this, [this](const QMap<QString, QString>& kvs) {
         if (m_pgxlConn.isConnected()) return;
         auto* amp = m_appletPanel->ampApplet();
-        // A FlexRadio relays only the PA heatsink temperature. The Harmonic
-        // Load heatsink temperature is available only over a direct
-        // connection to the PGXL.
-        if (kvs.contains("temp"))
-            amp->setPaHeatsinkTemp(kvs["temp"].toFloat());
+        // A FlexRadio relays no temperature in the amplifier status at all:
+        // the PA heatsink temperature arrives as the AMP `TEMP` meter
+        // (MeterModel::ampMetersChanged, below). The Harmonic Load heatsink
+        // temperature is available only over a direct connection to the PGXL.
         if (kvs.contains("id"))
             amp->setDrainCurrent(kvs["id"].toFloat());
         if (kvs.contains("vdd"))
