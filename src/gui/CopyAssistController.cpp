@@ -1,5 +1,7 @@
 #include "CopyAssistController.h"
 
+#include "AetherBuildIdentity.h"   // generated at build time (#5804)
+
 #include "CopyAssistPanel.h"
 #include "CopyAssistSettings.h"
 #include "CopyAssistSettingsDialog.h"
@@ -43,16 +45,13 @@
 namespace {
 // What a fault record is stamped with, so an upgrade — a new whisper/ggml build
 // — gets the attempt made again instead of inheriting the old verdict. The SHA
-// is part of it so a development build of another commit counts as new too (it
-// is captured at configure time, so an incremental rebuild keeps the old one).
+// is part of it so a development build of another commit counts as new too. It
+// comes from the header regenerated on every build (#5804), so an incremental
+// rebuild onto a new commit moves the stamp as well.
 QString asrAppVersionStamp()
 {
-#ifdef AETHER_GIT_SHA
     return QCoreApplication::applicationVersion() + QLatin1Char('+')
-        + QStringLiteral(AETHER_GIT_SHA);
-#else
-    return QCoreApplication::applicationVersion();
-#endif
+        + QStringLiteral(AETHER_BUILD_SHA);
 }
 } // namespace
 

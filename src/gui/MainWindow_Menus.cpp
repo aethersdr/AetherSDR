@@ -1763,10 +1763,9 @@ void MainWindow::buildMenuBar()
         vbox->addWidget(iconLbl);
 
         // Header
-        // The git SHA captured at CMake configure time identifies the build —
-        // useful when bug-reporting against a dev/test build that doesn't
-        // correspond to a tagged release.  See CMakeLists.txt for the capture
-        // and the file-top #define for the non-CMake-build fallback.
+        // The git SHA identifies the build — useful when bug-reporting against
+        // a dev/test build that doesn't correspond to a tagged release. It is
+        // captured at build time; see cmake/AetherBuildIdentity.cmake.
         const QString rendererDescription = [this]() {
             if (SpectrumWidget* sw = spectrum()) {
                 return sw->rendererDescription();

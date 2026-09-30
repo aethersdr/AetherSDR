@@ -3,7 +3,7 @@
 # repository, and checks the generated header in each state a checkout can be in.
 #
 # The case that matters most is "new commit, no re-configure": the header must
-# follow HEAD, because that is exactly where the configure-time AETHER_GIT_SHA
+# follow HEAD, because that is exactly where a configure-time SHA
 # goes stale. The case that keeps it cheap is "nothing changed": the header must
 # not be rewritten, or every build would recompile what includes it.
 #
@@ -12,6 +12,34 @@
 if(NOT AETHER_SOURCE_DIR OR NOT WORK_DIR)
     message(FATAL_ERROR "usage: -DAETHER_SOURCE_DIR=<repo> -DWORK_DIR=<scratch>")
 endif()
+
+# ---- 0. There is ONE build identity in the binary --------------------------
+# A second, configure-time SHA compiled in beside the header can disagree with
+# it after an incremental rebuild onto a new commit -- the defect this header
+# fixes. Nothing under src/ may read one, and CMakeLists.txt may not define one.
+# Needs no git, so it runs before the skip below.
+file(GLOB_RECURSE _aether_sources
+     "${AETHER_SOURCE_DIR}/src/*.cpp" "${AETHER_SOURCE_DIR}/src/*.h"
+     "${AETHER_SOURCE_DIR}/src/*.mm" "${AETHER_SOURCE_DIR}/src/*.in")
+set(_stale_readers "")
+foreach(_f IN LISTS _aether_sources)
+    file(READ "${_f}" _text)
+    string(FIND "${_text}" "AETHER_GIT_SHA" _at)
+    if(NOT _at EQUAL -1)
+        file(RELATIVE_PATH _rel "${AETHER_SOURCE_DIR}" "${_f}")
+        list(APPEND _stale_readers "${_rel}")
+    endif()
+endforeach()
+file(READ "${AETHER_SOURCE_DIR}/CMakeLists.txt" _cmakelists)
+if(_cmakelists MATCHES "AETHER_GIT_SHA=")
+    list(APPEND _stale_readers "CMakeLists.txt (compile definition)")
+endif()
+if(_stale_readers)
+    message(FATAL_ERROR "FAIL one build identity: a configure-time SHA survives in: "
+                        "${_stale_readers} -- read AETHER_BUILD_SHA from "
+                        "AetherBuildIdentity.h instead")
+endif()
+message(STATUS "PASS one build identity: nothing reads a configure-time SHA")
 
 find_package(Git QUIET)
 if(NOT Git_FOUND)

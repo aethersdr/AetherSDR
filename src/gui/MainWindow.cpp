@@ -284,15 +284,6 @@
 #include <QStandardPaths>
 #include "core/ThemeManager.h"
 
-// CMake captures the short git SHA at configure time and passes it as a
-// preprocessor definition (see CMakeLists.txt).  Defaulted to "unknown" so
-// non-CMake builds (e.g. raw clang invocations during local experiments)
-// still compile.  See issue #2991 for the rationale on hoisting this to
-// file scope rather than the inline definition inside buildMenuBar().
-#ifndef AETHER_GIT_SHA
-#define AETHER_GIT_SHA "unknown"
-#endif
-
 namespace AetherSDR {
 
 namespace {
