@@ -76,6 +76,37 @@ inline Menu menuFor(bool labelHit, const QString& source)
     return source == QLatin1String("Memory") ? Menu::ApplyMemory : Menu::Spot;
 }
 
+// Everything the right-click path needs about the label under the cursor.
+// `menu` is the only gate: the spot ID is carried, never tested.
+struct LabelHit {
+    Menu menu{Menu::General};
+    int spotId{-1};
+    QString callsign;
+    double freqMhz{0.0};
+    QString source;
+};
+
+// Resolve the label under `pos` against the widget's own hit rects and marker
+// list. SpectrumWidget::mousePressEvent calls this for the right-click menu,
+// so a test that feeds it markers with negative IDs exercises the decision
+// that used to be `hitSpotIdx >= 0` inline in the widget.
+template <typename HitRect, typename Marker>
+LabelHit resolveLabelHit(const QVector<HitRect>& rects,
+                         const QVector<Marker>& markers, const QPoint& pos)
+{
+    LabelHit hit;
+    const int i = labelMarkerAt(rects, markers.size(), pos);
+    if (i < 0)
+        return hit;
+    const Marker& m = markers[i];
+    hit.spotId = m.index;
+    hit.callsign = m.callsign;
+    hit.freqMhz = m.freqMhz;
+    hit.source = m.source;
+    hit.menu = menuFor(true, m.source);
+    return hit;
+}
+
 // What each spot-label action does. SpectrumWidget binds these to its signals
 // and to the clipboard / browser; a test binds recorders.
 struct SpotLabelActions {

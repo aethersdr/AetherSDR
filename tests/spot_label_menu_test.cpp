@@ -16,10 +16,17 @@
 //
 // SOCKET-FREE. Builds a QMenu offscreen; binds nothing, reaches no radio.
 //
+// The widget's right-click path is now one call, resolveLabelHit(), gated on
+// the menu kind it returns; testResolveLabelHit feeds that call the widget's
+// own shapes (hit rects + markers) with negative, zero and positive IDs, so
+// the decision that used to be `hitSpotIdx >= 0` inline in the widget is
+// driven here as behaviour.
+//
 // WHAT THIS FILE CANNOT OBSERVE: a constructed SpectrumWidget or MainWindow.
-// Neither is buildable in a test here. The source pins at the end check that
-// both call these helpers and that the sign guard is gone; that is a text
-// check, not a behaviour check. Nothing here was run against a radio.
+// Neither is buildable in a test here. That the widget calls resolveLabelHit,
+// gates on its menu and re-tests no ID sign, and that MainWindow routes on
+// removeRoute, are source pins at the end: text checks, not behaviour.
+// Nothing here was run against a radio.
 
 #include "gui/SpotLabelPolicy.h"
 
@@ -28,6 +35,7 @@
 #include <QFile>
 #include <QMenu>
 #include <QRect>
+#include <QRegularExpression>
 #include <QVector>
 
 #include <cstdio>
@@ -49,6 +57,14 @@ void report(const char* name, bool ok)
 struct HitRect {
     QRect rect;
     int markerIndex;
+};
+
+// The fields of SpectrumWidget::SpotMarker that resolveLabelHit reads.
+struct Marker {
+    int index;
+    QString callsign;
+    double freqMhz;
+    QString source;
 };
 
 struct Recorder {
@@ -93,6 +109,51 @@ void testHitTestIgnoresIdSpace()
            labelMarkerAt(kRects, kMarkerCount, kEmpty) == -1);
     report("an SHistory/QRM rect is no spot-label hit",
            labelMarkerAt(kRects, kMarkerCount, kOnQrm) == -1);
+}
+
+void testResolveLabelHit()
+{
+    // Three labels side by side plus an SHistory/QRM rect past the marker
+    // list: the widget's own layout, with every ID class under the cursor.
+    const QVector<HitRect> rects{
+        {QRect(0, 10, 60, 14), 0},
+        {QRect(100, 10, 60, 14), 1},
+        {QRect(200, 10, 60, 14), 2},
+        {QRect(300, 10, 60, 14), 3},
+        {QRect(400, 10, 60, 14), 9},
+    };
+    const QVector<Marker> markers{
+        {-kPassiveSpotIdBase, QStringLiteral("ON4ABC"), 7.074, QStringLiteral("DXCluster")},
+        {-kMemorySpotIdBase, QStringLiteral("Net"), 3.705, QStringLiteral("Memory")},
+        {0, QStringLiteral("K1ABC"), 14.025, QStringLiteral("RBN")},
+        {10000, QStringLiteral("DL1XYZ"), 14.074, QStringLiteral("TCI")},
+    };
+
+    const LabelHit local = resolveLabelHit(rects, markers, QPoint(20, 15));
+    report("resolve: a passive-local label (-2000000) opens the spot menu",
+           local.menu == Menu::Spot && local.spotId == -kPassiveSpotIdBase
+           && local.callsign == QLatin1String("ON4ABC") && local.freqMhz == 7.074);
+
+    const LabelHit memory = resolveLabelHit(rects, markers, QPoint(120, 15));
+    report("resolve: a memory label (-1000000) opens Apply Memory",
+           memory.menu == Menu::ApplyMemory && memory.spotId == -kMemorySpotIdBase);
+
+    const LabelHit radio = resolveLabelHit(rects, markers, QPoint(220, 15));
+    report("resolve: a radio label (0) opens the spot menu",
+           radio.menu == Menu::Spot && radio.spotId == 0);
+
+    const LabelHit tci = resolveLabelHit(rects, markers, QPoint(320, 15));
+    report("resolve: a TCI label (10000) opens the spot menu",
+           tci.menu == Menu::Spot && tci.spotId == 10000
+           && tci.source == QLatin1String("TCI"));
+
+    const LabelHit qrm = resolveLabelHit(rects, markers, QPoint(420, 15));
+    report("resolve: an SHistory/QRM rect opens the general-area menu",
+           qrm.menu == Menu::General && qrm.spotId == -1);
+
+    const LabelHit empty = resolveLabelHit(rects, markers, QPoint(80, 15));
+    report("resolve: empty space opens the general-area menu",
+           empty.menu == Menu::General && empty.spotId == -1);
 }
 
 void testMenuKinds()
@@ -211,10 +272,16 @@ void testShippingCallSites()
 {
     const QByteArray widget = readSource("src/gui/SpectrumWidget.cpp");
     report("the test can read SpectrumWidget.cpp", !widget.isEmpty());
+    // Any sign test on the hit spot's ID, however spelt: `>= 0`, `> -1`,
+    // `!= -1`, `< 0`, with or without spaces.
+    const QRegularExpression signGate(QStringLiteral(
+        R"((hitSpotIdx|hit\.spotId)\s*(>=\s*0|>\s*-1|!=\s*-1|<\s*0|==\s*-1)\b)"));
     report("the right-click path no longer gates on the ID sign",
-           !widget.contains("if (hitSpotIdx >= 0)"));
-    report("the right-click path uses the shared label hit-test",
-           widget.contains("SpotLabelPolicy::labelMarkerAt("));
+           !signGate.match(QString::fromUtf8(widget)).hasMatch());
+    report("the right-click path resolves the label through the shared helper",
+           widget.contains("SpotLabelPolicy::resolveLabelHit("));
+    report("the right-click path gates the spot menu on the resolved menu kind",
+           widget.contains("if (hit.menu != SpotLabelPolicy::Menu::General)"));
     report("the right-click path populates the menu through the helper",
            widget.contains("SpotLabelPolicy::addSpotLabelActions("));
 
@@ -231,6 +298,7 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
 
     testHitTestIgnoresIdSpace();
+    testResolveLabelHit();
     testMenuKinds();
     testLocalSpotRemovesLocally();
     testRadioSpotUnchanged();

@@ -10117,29 +10117,17 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         // Check if right-click is on an existing spot label. Presence comes
         // from the rect hit, never from the spot ID: client-side IDs (memory,
         // passive-local — DX/RBN/WSJT-X/POTA/manual on HL2, Icom, Passive
-        // mode) are negative by construction (#6037).
-        const int hitMarker = SpotLabelPolicy::labelMarkerAt(
-            m_spotClickRects, m_spotMarkers.size(),
+        // mode) are negative by construction, TCI-injected ones positive, so
+        // the sign says nothing about presence (#6037).
+        const SpotLabelPolicy::LabelHit hit = SpotLabelPolicy::resolveLabelHit(
+            m_spotClickRects, m_spotMarkers,
             QPoint(mx, static_cast<int>(ev->position().y())));
-        int hitSpotIdx = -1;
-        QString hitSpotCall;
-        double hitSpotFreq = 0;
-        QString hitSpotSource;
-        if (hitMarker >= 0) {
-            const auto& sm = m_spotMarkers[hitMarker];
-            hitSpotIdx = sm.index;
-            hitSpotCall = sm.callsign;
-            hitSpotFreq = sm.freqMhz;
-            hitSpotSource = sm.source;
-        }
-        const SpotLabelPolicy::Menu spotMenu =
-            SpotLabelPolicy::menuFor(hitMarker >= 0, hitSpotSource);
 
         ScopedChildWidget<QMenu> menuOwner(this);
         QMenu& menu = *menuOwner.get();
 
         // Spot-on-label context menu
-        if (spotMenu != SpotLabelPolicy::Menu::General) {
+        if (hit.menu != SpotLabelPolicy::Menu::General) {
             SpotLabelPolicy::SpotLabelActions actions;
             actions.applyMemory = [this](int id) { emit spotTriggered(id); };
             actions.tune = [this](double mhz) { emit frequencyClicked(mhz); };
@@ -10150,8 +10138,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 QDesktopServices::openUrl(QUrl("https://www.qrz.com/db/" + call));
             };
             actions.remove = [this](int id) { emit spotRemoveRequested(id); };
-            SpotLabelPolicy::addSpotLabelActions(menu, this, spotMenu, hitSpotIdx,
-                                                 hitSpotCall, hitSpotFreq, actions);
+            SpotLabelPolicy::addSpotLabelActions(menu, this, hit.menu, hit.spotId,
+                                                 hit.callsign, hit.freqMhz, actions);
         }
         // TNF context menu (when clicking on a TNF marker)
         else if (hitTnf >= 0) {

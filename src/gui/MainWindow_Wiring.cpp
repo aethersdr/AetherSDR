@@ -5403,6 +5403,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             m_radioModel.sendCommand(QString("spot remove %1").arg(spotIndex));
             return;
         case SpotLabelPolicy::RemoveRoute::Ignore:
+            // Unreachable today: menuFor() gives memory labels no Remove
+            // Spot. Logged so a fourth ID class does not fail silently.
+            qCWarning(lcGui) << "Remove Spot: no removal route for spot"
+                             << spotIndex << "source" << source << "- ignored";
             return;
         }
     });
