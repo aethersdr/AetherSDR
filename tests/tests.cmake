@@ -811,6 +811,16 @@ target_link_libraries(nnr_filter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME nnr_filter_test COMMAND nnr_filter_test)
 set_tests_properties(nnr_filter_test PROPERTIES TIMEOUT 300)
 
+# Every client RX NR method denoises L and R independently, as RN2 does: one
+# side's output never depends on the other side's input, and a hard pan step
+# settles within the filter's latency. Real NR2/NR4/NNR, plus DFNR and BNR
+# when their model or GPU pack is present (nr_rate_domain_test covers those
+# two everywhere through stand-in C APIs).
+add_executable(nr_stereo_independence_test tests/nr_stereo_independence_test.cpp)
+target_link_libraries(nr_stereo_independence_test PRIVATE aethercore Qt6::Core)
+add_test(NAME nr_stereo_independence_test COMMAND nr_stereo_independence_test)
+set_tests_properties(nr_stereo_independence_test PROPERTIES TIMEOUT 300)
+
 add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
 target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_receiver_registry_test COMMAND rtl_receiver_registry_test)
@@ -822,6 +832,28 @@ add_executable(hl2_metis_protocol_test
     src/core/backends/hl2/MetisProtocol.cpp)
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
+
+# HL2 hardware-variant options — which board is on the other end (bare HL2,
+# HL2+ with the AK4951 codec, SquareSDR 2), the dither bit's three
+# incompatible meanings, the companion filter board's receive/transmit split
+# and the EP2 audio slot. Same shape as the target above: pure policy plus
+# pure wire, no Qt, no aethercore, no socket.
+add_executable(hl2_hardware_options_test
+    tests/hl2_hardware_options_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_hardware_options_test PRIVATE src)
+add_test(NAME hl2_hardware_options_test COMMAND hl2_hardware_options_test)
+
+# The same document where it meets the settings store: the save/load round
+# trip, the read-modify-write that keeps a newer build's field alive, and the
+# empty-serial case that would otherwise write the family-wide default row.
+# Needs AppSettings and therefore Qt, which is why it is a second target rather
+# than more of the pure-policy one above. Still socket-free and radio-free.
+add_executable(hl2_hardware_document_test
+    tests/hl2_hardware_document_test.cpp)
+target_include_directories(hl2_hardware_document_test PRIVATE src tests)
+target_link_libraries(hl2_hardware_document_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_hardware_document_test COMMAND hl2_hardware_document_test)
 
 # HL2 wideband bandscope (EP4) parser — the 12-bit ADC codes, the 20-bit
 # sequence counter and its forward-gap guard. Same shape as the target above:
@@ -1361,6 +1393,20 @@ add_executable(hl2_connect_reentrancy_test tests/hl2_connect_reentrancy_test.cpp
 target_include_directories(hl2_connect_reentrancy_test PRIVATE src tests)
 target_link_libraries(hl2_connect_reentrancy_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_connect_reentrancy_test COMMAND hl2_connect_reentrancy_test)
+
+# HL2 per-receiver S-meter lifetime — the meter a receiver declares as its chain
+# opens must go when the chain does. Drives a real MeterModel over the backend's
+# own meterDefined/meterRemoved, so the assertions are consumer lookups rather
+# than call spies. Needs no radio, and adds no fake peer — but it drives the real
+# connect flow, and the socket start at the end of finishDspSetup() BINDS A UDP
+# SOCKET LOCALLY whether or not anything answers, same as the
+# hl2_connect_reentrancy_test sibling says in its own header. Packets go to
+# TEST-NET-1 (192.0.2.0/24), which is reserved for documentation and routes
+# nowhere. See the file header.
+add_executable(hl2_slice_meter_lifecycle_test tests/hl2_slice_meter_lifecycle_test.cpp)
+target_include_directories(hl2_slice_meter_lifecycle_test PRIVATE src tests)
+target_link_libraries(hl2_slice_meter_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_slice_meter_lifecycle_test COMMAND hl2_slice_meter_lifecycle_test)
 
 add_executable(client_eq_test
     tests/client_eq_test.cpp
@@ -2294,7 +2340,6 @@ if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCES
     add_executable(nvidia_afx_filter_test
         tests/nvidia_afx_filter_test.cpp
         src/core/NvidiaAfxFilter.cpp
-        src/core/MonoDspStereoAdapter.cpp
         src/core/Resampler.cpp
     )
     target_compile_definitions(nvidia_afx_filter_test PRIVATE HAVE_NVIDIA_AFX)
@@ -2781,14 +2826,6 @@ target_include_directories(biquad_test PRIVATE src)
 add_test(NAME biquad_test COMMAND biquad_test)
 
 
-add_executable(mono_dsp_stereo_adapter_test
-    tests/mono_dsp_stereo_adapter_test.cpp
-    src/core/MonoDspStereoAdapter.cpp
-)
-target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
-target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
-add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
-
 # Socket/device-free tests of the real optional wrappers. The local C API
 # substitutes only apply half-gain and expose sample counts; these tests do
 # not load a downloaded model, SDK pack or GPU and do not claim inference.
@@ -2799,7 +2836,6 @@ add_executable(nr_rate_domain_test
     tests/nr_test_df_api.cpp
     src/core/DeepFilterFilter.cpp
     src/core/NvidiaAfxFilter.cpp
-    src/core/MonoDspStereoAdapter.cpp
     src/core/Resampler.cpp
 )
 target_compile_definitions(nr_rate_domain_test PRIVATE HAVE_DFNR HAVE_NVIDIA_AFX)
@@ -2817,7 +2853,6 @@ if(ENABLE_SPECBLEACH)
         tests/specbleach_rate_domain_test.cpp
         src/core/SpecbleachFilter.cpp
         src/core/dsp/FftwPlannerLock.cpp
-        src/core/MonoDspStereoAdapter.cpp
         ${SPECBLEACH_SOURCES}
     )
     target_compile_definitions(specbleach_rate_domain_test PRIVATE HAVE_SPECBLEACH)
@@ -3840,6 +3875,33 @@ target_link_libraries(tgxl_docked_parity_test PRIVATE
 set_target_properties(tgxl_docked_parity_test PROPERTIES AUTOMOC ON)
 add_test(NAME tgxl_docked_parity_test COMMAND tgxl_docked_parity_test)
 set_tests_properties(tgxl_docked_parity_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# TGXL applet port strips and STANDBY ordering: the relay path claims no
+# trigger mode it cannot know ("RF SENSE"), and BYPASS -> STANDBY commands
+# operate first so the radio's in-between status already reads STANDBY.
+add_executable(tgxl_applet_ports_test
+    tests/tgxl_applet_ports_test.cpp
+    src/gui/TunerApplet.cpp
+    src/gui/AccessoryPanelWidgets.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/TunerModel.cpp
+    src/models/MeterModel.cpp
+    src/models/BandSettings.cpp
+    src/core/TgxlConnection.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(tgxl_applet_ports_test PRIVATE src)
+target_link_libraries(tgxl_applet_ports_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
+)
+set_target_properties(tgxl_applet_ports_test PROPERTIES AUTOMOC ON)
+add_test(NAME tgxl_applet_ports_test COMMAND tgxl_applet_ports_test)
+set_tests_properties(tgxl_applet_ports_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(fm_tone_presentation_test
@@ -6706,6 +6768,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
     tgxl_docked_parity_test
+    tgxl_applet_ports_test
     pgxl_direct_protocol_test
     pgxl_panel_test
 )

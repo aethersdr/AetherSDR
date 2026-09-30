@@ -74,8 +74,9 @@ public:
         int dspBlockSize = 1024;         // WdspChannel input/processing block
         // Panadapter output points per frame. The FFT behind them is larger
         // (AnanPanAnalyzer: at least 16384) and averaged down to this count.
-        // Stays at the droop tables' kDroopCorrectionFftSize so each point
-        // lines up with one table entry.
+        // Follows the panel's width (setPanPoints()); the droop tables stay
+        // at kDroopCorrectionFftSize and are read onto this count
+        // (applyDroopCorrectionDbResampled()).
         int panPoints = 1024;
         // Display frame rate the analyzer is sized for; kept current by
         // setSpectrumRateFps() so a rebuild comes up at the operator's rate.
@@ -216,6 +217,10 @@ public:
     // Log-recursive (true) or linear-recursive (false) time averaging. See
     // AnanPanAnalyzer::setLogAverage().
     Q_INVOKABLE void setSpectrumLogAverage(bool on);
+    // Panadapter output points per frame, from the panel's width. Clamped to
+    // AnanPanAnalyzer::kMaxPoints; below 2 is ignored. See
+    // AnanPanAnalyzer::setNumPoints().
+    Q_INVOKABLE void setPanPoints(int points);
 
     // Installs the measured per-bin dB correction for ONE DDC0 rate (see
     // AnanDroopCorrection.h). Ignored -- no change, no crash -- if `table`

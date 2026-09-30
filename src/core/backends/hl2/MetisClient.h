@@ -78,6 +78,23 @@ public:
         // would say so. See setSampleRate()'s standing comment: a field that
         // shares a rebuild with another has to be carried, not re-defaulted.
         bool bandscope = false;
+
+        // ---- hardware-variant options (Hl2HardwareOptions decides these) ----
+        //
+        // THE CONFIG-REGISTER PAIR RIDES HERE FOR THE SAME MEASURED REASON
+        // ocFilterByte and bandscope do: setSampleRate() and setReceiverCount()
+        // REBUILD the config bank from Params, so a field that shares that
+        // register and is not carried here gets silently dropped the next time
+        // an unrelated control changes. For the dither bit that would mean a
+        // SquareSDR 2's loudspeaker switching itself off when the operator
+        // changed the panadapter span.
+        bool ditherBit = false;
+        bool randomBit = false;
+
+        // Whether this radio has a local audio codec (HL2+ or SquareSDR 2), and
+        // so whether the EP2 audio slot may carry samples at all. FALSE is not
+        // "no audio", it is "that slot is EADDR" — see ep2WriteTxAudio().
+        bool hasCodec = false;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -249,6 +266,35 @@ public:
     // recorded from this declaration, and `std::uint8_t` does not normalize to
     // the same string as `unsigned char`.
     Q_INVOKABLE void setBandFilter(int ocFilterByte);
+
+    // The config register's dither and random bits. ONE setter for the pair
+    // because they share C3 and a setter per bit would have to read the other
+    // one back out of m_ccConfig to avoid clearing it.
+    //
+    // What the dither bit MEANS is not decided here — see kConfigDither and
+    // Hl2HardwareOptions::ditherBitOnWire(). This level only puts it on the
+    // wire and keeps it across a register rebuild.
+    Q_INVOKABLE void setDitherRandomBits(bool dither, bool random);
+
+    // Declare whether this radio has a local audio codec. Gates the EP2 audio
+    // slot: false leaves it at zero, which is what a bare HL2's EADDR requires.
+    // Turning it off also drops whatever speaker audio was queued, because that
+    // audio has nowhere to go and must not leak into EADDR on the next frame.
+    Q_INVOKABLE void setLocalCodec(bool present);
+
+    // Stereo speaker audio for a codec radio: interleaved int16 L,R at 48 kHz,
+    // the EP2 rate. Ignored outright when no codec is declared. Bounded — see
+    // kSpeakerAudioCapSamples — because this is fed from the audio thread and a
+    // stalled EP2 pacer must not grow a queue without limit.
+    Q_INVOKABLE void submitSpeakerAudio(const QByteArray& interleavedInt16);
+
+    // Discard samples captured before the operator silenced the radio speaker.
+    Q_INVOKABLE void clearSpeakerAudio();
+
+    // Raise or clear the gateware's ATU tune request (0x09[20]). Rides the
+    // drive-level bank, so this restates the current drive rather than being a
+    // register of its own.
+    Q_INVOKABLE void setAtuTuneRequest(bool request);
     // Push the TRANSMIT frequency to the HL2 IO Board (I2C2 chip 0x1D) so an
     // attached amplifier, antenna relay or transverter follows the band.
     //
@@ -918,6 +964,16 @@ private:
     std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
     Cc m_ccTxDrive{};
+    // The ATU tune request's standing state, held because it shares 0x09 with
+    // the drive level: setTxDriveLevel() has to re-assert it or a drive change
+    // mid-tune would drop the request.
+    bool m_atuTune = false;
+    // Speaker audio awaiting the EP2 pacer, interleaved L,R at 48 kHz.
+    std::deque<std::int16_t> m_speakerAudio;
+    // ~250 ms of stereo at 48 kHz. Deep enough to ride out the audio thread's
+    // block jitter, shallow enough that a stall is heard as a gap rather than
+    // as a quarter-second of delay that never recovers.
+    static constexpr std::size_t kSpeakerAudioCapSamples = 48000 / 4 * 2;
 
     bool m_txAllowed = false;   // gate; see enableTransmit()
     std::deque<std::complex<float>> m_txIq;   // pending transmit samples

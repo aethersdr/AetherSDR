@@ -3281,6 +3281,28 @@ The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 base64 `pcmBase64`. Use `audioCapture status` for metadata only and
 `audioCapture stop` to stop early.
 
+#### DSP stereo probe: NR2, NR4, MNR, DFNR, BNR, NNR
+
+`audioCapture probeDspStereo <mode>` (or `all`, optionally with `strict`) runs
+the same deterministic three-second stereo signal through three fresh filters
+of that method: once as generated, once with the right channel replaced by
+unrelated tones, and once with the left replaced. Every client NR method
+denoises L and R independently, as RN2 does, so `ok` means each side's output
+is bit-identical whatever the other side carries (`leftIndependent`,
+`rightIndependent`, `channelsIndependent`) and both sides stay `audible`.
+
+The RMS `input`/`output`, `ratioError`, and level-ratio fields are reported
+but not judged: independent, level-dependent suppression treats the louder
+and quieter copies of one off-centre signal differently, so the L/R balance
+is not held (see the RX DSP ordering in `docs/architecture/audio-pipeline.md`). These modes no longer
+return `preserved`, the old L/R-ratio verdict; read `channelsIndependent` and
+`ok` instead (RN2 keeps `preserved`). `leftIndependenceMaxError` and
+`rightIndependenceMaxError` give the largest per-sample difference behind each
+verdict, or `-1` when the runs differ in length or produced no output. The NR2 run disables post2, whose per-instance random comfort noise
+would otherwise make the three runs differ, and says so with
+`post2Disabled: true`. A method that removes the probe's
+steady tones entirely (BNR does) reports `audible: false`.
+
 #### RN2 deterministic stereo probe
 
 `audioCapture probeDspStereo RN2` is an automation-only, synthetic RX proof
