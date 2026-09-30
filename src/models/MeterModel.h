@@ -448,6 +448,12 @@ signals:
     void ampMetersChanged(float fwdPower, float swr, float temp,
                           float drivePower, bool driveValid);
     void tgxlMetersChanged(float fwdPower, float swr);
+    // The PGXL's drain current (amps, "ID") and PA heatsink temperature
+    // (degrees Celsius, "TEMP"), relayed by the radio. Each valid flag is false
+    // when its meter does not exist or has been withdrawn; the float alongside
+    // is 0.0f and MUST NOT be rendered. Emitted on every sample of either.
+    void ampVitalsChanged(float drainCurrent, bool drainCurrentValid,
+                          float paHeatsinkTemp, bool paHeatsinkTempValid);
 
     // Emitted when any meter value changes (for debug/generic display).
     void meterUpdated(int index, float value);
@@ -549,7 +555,8 @@ private:
     int m_ampFwdPwrIdx{-1};  // "AMP" / "FWD" (PGXL)
     int m_ampSwrIdx{-1};     // "AMP" / "RL" (PGXL)
     int m_ampDrvIdx{-1};     // "AMP" / "DRV" (PGXL — exciter power at the amp input)
-    int m_ampTempIdx{-1};    // "AMP" / "TEMP"
+    int m_ampTempIdx{-1};    // "AMP" / "TEMP" (PGXL PA heatsink)
+    int m_ampIdIdx{-1};      // "AMP" / "ID" (PGXL drain current)
     int m_tgxlFwdIdx{-1};   // "AMP" / "FWD" (TGXL — matched by handle)
     int m_tgxlSwrIdx{-1};   // "AMP" / "RL" (TGXL — matched by handle)
     quint32 m_tgxlHandle{0}; // TGXL amplifier handle for meter disambiguation
@@ -604,6 +611,7 @@ private:
     float m_ampFwdPwr{0.0f};
     float m_ampSwr{1.0f};
     float m_ampTemp{0.0f};
+    float m_ampDrainCurrent{0.0f};
     float m_ampDrv{0.0f};
     // Set when a FWD or RL value packet lands for the amplifier. ampMetersChanged
     // also fires for TEMP and DRV, and a consumer that arbitrates between the
@@ -614,6 +622,10 @@ private:
     // Set when a DRV value packet lands, cleared wherever m_ampDrvIdx is, so a
     // drive reading can never outlive the meter it describes.
     bool m_hasAmpDrvValue{false};
+    // Set when an ID or TEMP value packet lands, cleared wherever the meter's
+    // index is, so neither reading can outlive the meter it describes.
+    bool m_hasAmpDrainCurrentValue{false};
+    bool m_hasAmpTempValue{false};
 };
 
 } // namespace AetherSDR

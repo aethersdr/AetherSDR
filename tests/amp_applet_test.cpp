@@ -488,6 +488,47 @@ void testRelayedMetersWinOverTheDeviceWhileFresh()
 // With no relay at all — a radio that publishes no amplifier meters, or before
 // the meter manifest lands — the amplifier's own socket is the only source and
 // must drive the gauges.
+// Drain current and PA heatsink temperature come from both the radio's meters
+// and the PGXL's own status, and both change at the same moments. The tie goes
+// to the radio: its value wins while fresh, and the PGXL's is used otherwise.
+void testRadioVitalsWinOverTheDeviceWhileFresh()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* button = tempButton(applet);
+    if (!button) { report("radio vitals", false); return; }
+
+    // No radio meters at all: the PGXL's own readings apply.
+    applet.setDrainCurrent(4.3f);
+    applet.setPaHeatsinkTemp(43.6f);
+    report("the PGXL's drain current applies with no radio meter",
+           qFuzzyCompare(gaugeValue(applet, QStringLiteral("Drain current")), 4.3f));
+    report("the PGXL's PA heatsink temperature applies with no radio meter",
+           button->text() == QStringLiteral("PA 43.6 C "), button->text());
+
+    // The radio's meters arrive and win while fresh.
+    applet.setRadioDrainCurrent(19.2f, true);
+    applet.setRadioPaHeatsinkTemp(47.9f, true);
+    applet.setDrainCurrent(19.1f);
+    applet.setPaHeatsinkTemp(47.8f);
+    report("the radio's drain current wins while fresh",
+           qFuzzyCompare(gaugeValue(applet, QStringLiteral("Drain current")), 19.2f));
+    report("the radio's PA heatsink temperature wins while fresh",
+           button->text() == QStringLiteral("PA 47.9 C "), button->text());
+
+    // The radio's meters are withdrawn: the PGXL takes over at once.
+    applet.setRadioDrainCurrent(0.0f, false);
+    applet.setRadioPaHeatsinkTemp(0.0f, false);
+    report("a withdrawn radio meter does not zero the drain current",
+           qFuzzyCompare(gaugeValue(applet, QStringLiteral("Drain current")), 19.2f));
+    applet.setDrainCurrent(5.0f);
+    applet.setPaHeatsinkTemp(48.9f);
+    report("the PGXL's drain current applies once the radio meter is gone",
+           qFuzzyCompare(gaugeValue(applet, QStringLiteral("Drain current")), 5.0f));
+    report("the PGXL's PA heatsink temperature applies once the radio meter is gone",
+           button->text() == QStringLiteral("PA 48.9 C "), button->text());
+}
+
 void testDeviceMetersDriveTheGaugesWithoutARelay()
 {
     resetSettings();
@@ -670,27 +711,6 @@ void testWithdrawnDriveHidesTheRow()
     applet.setDrivePower(0.0f, false);
     report("unmeasured drive hides the gauge rather than parking it at zero",
            gauge->isHidden());
-}
-
-// The relayed MEffA state reads out on a station with no direct socket, but
-// can never be written from there — a `setup` write carries the whole group
-// and only the socket can read the rest of it.
-void testRelayedMeffaReadsOutButStaysInert()
-{
-    resetSettings();
-    AmpApplet applet;
-    auto* btn = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
-    if (!btn) { report("relayed MEffA", false); return; }
-    QSignalSpy toggled(&applet, &AmpApplet::meffaToggled);
-
-    applet.setMeff(QStringLiteral("ACTIVE"));
-    report("relayed MEffA state reaches the control",
-           btn->accessibleName() == QStringLiteral("MEffA on — optimising"),
-           btn->accessibleName());
-    report("relayed MEffA is not writable", !btn->isEnabled());
-    btn->click();
-    report("a press on a relay-only MEffA commands nothing",
-           toggled.count() == 0);
 }
 
 // Fan mode must stay operable whether or not the `setup` group is known: the
@@ -948,6 +968,7 @@ int main(int argc, char** argv)
     testReadoutWidthIsStable();
     testDriveRowShowsMeasuredDrive();
     testRelayedMetersWinOverTheDeviceWhileFresh();
+    testRadioVitalsWinOverTheDeviceWhileFresh();
     testDeviceMetersDriveTheGaugesWithoutARelay();
     testSwrBarFollowsThePowerCrossing();
     testMeffaShowsThreeStates();
@@ -956,7 +977,6 @@ int main(int argc, char** argv)
     testDeviceMetersSurviveARelayWithNoPower();
     testWithdrawnDriveHidesTheRow();
     testFanControlStaysOperableWithoutTheSetupGroup();
-    testRelayedMeffaReadsOutButStaysInert();
     testPeakMarkerUsesTheSlidingWindow();
 
     std::printf("\n%s\n",

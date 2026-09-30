@@ -75,9 +75,22 @@ public:
     //       some firmware.
     // A FlexRadio relays only the PA heatsink temperature. The HL
     // temperature is available only over a direct connection to the PGXL.
+    //
+    // Drain current and the PA heatsink temperature come from two sources:
+    // the PGXL's own status (setDrainCurrent, setPaHeatsinkTemp) and the
+    // radio's ID and TEMP meters (setRadioDrainCurrent,
+    // setRadioPaHeatsinkTemp). Measured on a FLEX-8600 with a PGXL on
+    // firmware 3.9.8, both sources change these two values at the same
+    // moments, so neither is faster. The tie goes to the radio, the same as
+    // forward power and SWR, where the radio is faster: the radio's value is
+    // used while it is fresh, and the PGXL's value is used otherwise
+    // (docs/pgxl-telemetry-source-evidence.md). valid=false means the radio's
+    // meter does not exist or was withdrawn.
     void setPaHeatsinkTemp(float degC);
+    void setRadioPaHeatsinkTemp(float degC, bool valid);
     void setHarmonicLoadHeatsinkTemp(float degC);
     void setDrainCurrent(float amps);
+    void setRadioDrainCurrent(float amps, bool valid);
     void setDrainVoltage(float volts);
     void setMainsVoltage(int volts);
     void setState(const QString& state);
@@ -87,7 +100,6 @@ public:
     // false until the whole `setup` write group is known, which is what a
     // write needs; the control is shown but inert until then.
     void setMeffa(const QString& state, bool settable);
-    void setMeff(const QString& meff);
     void setDirectConnected(bool direct);
     void setRadioConnected(bool connected);
     void setDirectFailureReason(const QString& reason);
@@ -166,8 +178,10 @@ private:
     // One rule, one place: the radio-relayed AMP meters and the amplifier's own
     // port-9008 status carry the SAME measurement — on a steady carrier the
     // relayed FWD meter and the device's `fwd` field agree to within 0.05 dB —
-    // so the choice between them is about rate, not truth. The relay arrives
-    // with the radio's meter packets (~20 fps); the device is polled at 5 Hz.
+    // so the choice between them is about rate, not truth. During a transmit
+    // the relayed FWD and RL values change 13 to 19 times a second, and the
+    // device's own 2 to 11 times, measured polling the PGXL every 50 ms, twice
+    // the rate this client polls it (docs/pgxl-telemetry-source-evidence.md).
     // The relay therefore wins while its sample is fresh, and the device feed
     // takes over when the radio is not publishing amplifier meters at all
     // (no relay, or before the meter manifest lands). Last-writer-wins between
@@ -178,6 +192,7 @@ private:
     // unmediated writer is the defect this whole path exists to remove.
     void setFwdPower(float watts);
     void setSwr(float swr);
+    void applyDrainCurrent(float amps);
     void updateDriveLabel();
 
     void setAlertText(const QString& text);
@@ -302,6 +317,10 @@ private:
     // elapsed-time gate measured off the wall clock wedges shut for the length
     // of any backwards clock step.
     QElapsedTimer m_radioMeters;
+    // When the radio last delivered a drain current or PA heatsink
+    // temperature sample. See setDrainCurrent() and setPaHeatsinkTemp().
+    QElapsedTimer m_radioDrainCurrent;
+    QElapsedTimer m_radioPaHeatsinkTemp;
 
     // Cached telemetry values — gauges update every call, labels update at 10 Hz
     float    m_fwdWatts{0.0f};
