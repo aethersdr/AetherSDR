@@ -406,7 +406,8 @@ configured, so it cannot name an older commit after an incremental rebuild.
 `dirty` is `git describe`'s own notion: tracked files differed from `HEAD` at
 build time. Outside a git checkout (a source tarball) the strings are
 `"unknown"` and `commitsSinceTag` is `-1`; when no tag is reachable (a shallow
-clone), `describe` and `sha` carry the bare hash and `baseline` is `"unknown"`.
+clone), `describe` and `sha` carry the bare hash, `baseline` is `"unknown"` and
+`commitsSinceTag` is likewise `-1`.
 
 ### `verbs`
 Machine-readable catalog of every verb the running build understands —
