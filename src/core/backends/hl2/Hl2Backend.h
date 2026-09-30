@@ -372,6 +372,9 @@ private:
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
+    // Hands receiver 0 a configured Hl2RxDsp on the I/O thread, so the APF and
+    // AGC-off verbs can be followed from the seam into WDSP without a socket.
+    friend struct Hl2ApfAgcOffTestAccess;
     // Delivers one bandscope block through MetisClient's own signal and lets
     // the mirror age, so the converter rows' expiry can be exercised without a
     // radio, a socket or an EP4 stream. Reaches nothing else.

@@ -21,8 +21,15 @@
 //      the stage does not run.
 //   5. Both survive a configure() (the rebuild a sample-rate change does),
 //      and the channel read-back reports what WDSP accepted.
+//   6. THE BACKEND HALF. Hl2Backend::setSliceApf / setSliceAgcOffLevel reach
+//      the receiver's chain on the I/O thread, publish what the receiver
+//      holds through sliceChanged, and dspChains() reports what WDSP took; a
+//      CW pitch change moves the APF centre; leaving CW stops the stage and
+//      keeps the slice's request. No socket: receiver 0 is handed a configured
+//      chain directly, as hl2_unkey_hold_test does with an unconfigured one.
 
 #include "TestSettingsProfile.h"
+#include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/MetisProtocol.h"   // kEp6BlockSamples
 #include "core/dsp/WdspChannel.h"
@@ -35,8 +42,35 @@
 #include <complex>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
+
+namespace AetherSDR::hl2 {
+
+// Give receiver 0 a CONFIGURED chain on the backend's real I/O thread, so every
+// verb below travels the queued path it takes in production. Configured on this
+// thread before the move, then published to the EP6 fan-out's list, which is
+// what dspChains() gathers from.
+struct Hl2ApfAgcOffTestAccess {
+    static bool attachChain(Hl2Backend& backend, const Hl2RxDsp::Config& cfg)
+    {
+        auto* dsp = new Hl2RxDsp();
+        std::string err;
+        if (!dsp->configure(cfg, &err)) {
+            std::printf("  configure failed: %s\n", err.c_str());
+            delete dsp;
+            return false;
+        }
+        dsp->moveToThread(backend.m_ioThread);
+        backend.m_rx[0].dsp = dsp;
+        backend.publishIoDsps();
+        return true;
+    }
+    static void tearDown(Hl2Backend& backend) { backend.tearDownReceivers(); }
+};
+
+}  // namespace AetherSDR::hl2
 
 using namespace AetherSDR::hl2;
 
@@ -315,6 +349,82 @@ int main(int argc, char** argv)
         c = dsp.channelConfig();
         check(c && std::abs(c->apfCenterHz - 700.0) < 1e-9,
               "a non-positive centre is not handed to WDSP");
+    }
+
+    // ── 6. Through Hl2Backend: seam verb -> receiver -> WDSP, and back ────
+    //
+    // Read back from dspChains(), which reports what the WDSP channel ACCEPTED
+    // rather than what was asked, so a verb that stored its value and never
+    // reached the chain fails here. dspChains() blocks on the I/O thread,
+    // behind the queued pushes these verbs made.
+    {
+        using AetherSDR::IRadioBackend;
+        using AetherSDR::SliceDelta;
+        Hl2Backend backend;
+        check(Hl2ApfAgcOffTestAccess::attachChain(
+                  backend, baseConfig(WdspChannel::Mode::Usb, 0)),
+              "receiver 0 has a configured chain on the I/O thread");
+        const auto rx0 = [&backend]() {
+            for (const QVariant& v : backend.dspChains()) {
+                const QVariantMap m = v.toMap();
+                if (m.value(QStringLiteral("chain")).toString() == QLatin1String("rx-wdsp")
+                    && m.value(QStringLiteral("receiver")).toInt() == 0)
+                    return m;
+            }
+            return QVariantMap{};
+        };
+        const auto near = [](const QVariant& v, double want) {
+            return v.isValid() && std::abs(v.toDouble() - want) < 1e-6;
+        };
+        std::optional<bool> pubApf;
+        std::optional<int> pubApfLevel, pubOffLevel;
+        auto capture = QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                                        [&](int, const SliceDelta& d) {
+            if (d.apf) pubApf = *d.apf;
+            if (d.apfLevel) pubApfLevel = *d.apfLevel;
+            if (d.agcOffLevel) pubOffLevel = *d.agcOffLevel;
+        });
+        // Stated rather than inherited: Hl2Backend starts at 600 Hz, and the
+        // assertions this section replaced assumed 700 -- they never ran, so
+        // nothing caught it. The centre checks below read against this value.
+        backend.setCwPitch(700);
+        backend.setSliceMode(0, QStringLiteral("CW"));
+        check(pubApf == false && pubApfLevel == Hl2RxDsp::kDefaultApfLevel
+                  && pubOffLevel == Hl2RxDsp::kDefaultAgcOffLevel,
+              "a fresh receiver publishes the APF and off-level defaults its chain runs");
+        QVariantMap c = rx0();
+        check(!c.isEmpty() && c.value(QStringLiteral("apfRun")).toBool() == false
+                  && c.value(QStringLiteral("agcFixedGainDb")).toDouble() == 10.0,
+              "the chain reports the APF off and AGC Off at exactly the 10 dB "
+              "origin/main always ran");
+
+        backend.setSliceApf(0, true, 80);
+        backend.setSliceAgcOffLevel(0, 40);
+        check(pubApf == true && pubApfLevel == 80 && pubOffLevel == 40,
+              "setSliceApf / setSliceAgcOffLevel publish what the receiver now holds");
+        c = rx0();
+        check(c.value(QStringLiteral("apfRun")).toBool()
+                  && near(c.value(QStringLiteral("apfCenterHz")), 700.0)
+                  && near(c.value(QStringLiteral("apfBandwidthHz")),
+                          Hl2RxDsp::apfBandwidthHzForLevel(80)),
+              "in CW the APF runs, centred on the CW pitch, at the level's bandwidth");
+        check(near(c.value(QStringLiteral("agcFixedGainDb")), 28.0),
+              "the AGC-off level reached WDSP's fixed gain (40 units = 28 dB)");
+
+        backend.setCwPitch(650);
+        c = rx0();
+        check(near(c.value(QStringLiteral("apfCenterHz")), 650.0),
+              "a CW pitch change moves the APF centre with it");
+
+        backend.setSliceMode(0, QStringLiteral("LSB"));
+        c = rx0();
+        check(!c.value(QStringLiteral("apfRun")).toBool() && pubApf == true,
+              "outside CW the stage stops while the slice keeps its APF request");
+        backend.setSliceMode(0, QStringLiteral("CW"));
+        c = rx0();
+        check(c.value(QStringLiteral("apfRun")).toBool(), "and back in CW it runs again");
+        QObject::disconnect(capture);
+        Hl2ApfAgcOffTestAccess::tearDown(backend);
     }
 
     std::printf("\n  %s — %d failure(s)\n", g_failures ? "FAILED" : "PASSED", g_failures);

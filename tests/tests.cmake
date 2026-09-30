@@ -1212,7 +1212,7 @@ add_test(NAME hl2_noise_blanker_test COMMAND hl2_noise_blanker_test)
 # HL2 control map). A real Hl2RxDsp/WDSP channel, measured audio, no socket.
 add_executable(hl2_apf_agc_off_test tests/hl2_apf_agc_off_test.cpp)
 target_include_directories(hl2_apf_agc_off_test PRIVATE src tests)
-target_link_libraries(hl2_apf_agc_off_test PRIVATE aethercore Qt6::Core)
+target_link_libraries(hl2_apf_agc_off_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_apf_agc_off_test COMMAND hl2_apf_agc_off_test)
 
 # The seam half: SliceModel's APF / AGC-off intents reach IRadioBackend through
