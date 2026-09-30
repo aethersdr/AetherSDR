@@ -410,7 +410,7 @@ void AmpApplet::buildUI()
     m_tempBtn->setCursor(Qt::PointingHandCursor);
     m_tempBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_tempBtn->setMinimumWidth(76);
-    m_tempBtn->setAccessibleDescription("Toggles the PA heatsink and Harmonic Load heatsink temperatures between Celsius and Fahrenheit");
+    m_tempBtn->setAccessibleDescription(tr("Toggles the PA heatsink and Harmonic Load heatsink temperatures between Celsius and Fahrenheit"));
     connect(m_tempBtn, &QPushButton::clicked, this, [this]() {
         m_tempFahrenheit = !m_tempFahrenheit;
         writeTempFahrenheit(m_tempFahrenheit);
@@ -1209,17 +1209,26 @@ void AmpApplet::updateTempLabel()
     const QString nextUnit = m_tempFahrenheit
         ? tr("Celsius")
         : tr("Fahrenheit");
-    m_tempBtn->setToolTip(
-        tr("PA: PA heatsink temperature\n"
-           "HL: Harmonic Load heatsink temperature\n"
-           "Click to show degrees %1").arg(nextUnit));
+    // The tooltip explains only the labels on the button: HL is named only
+    // while an HL value is showing.
+    m_tempBtn->setToolTip(m_hasHarmonicLoadHeatsinkTemp
+        ? tr("PA: PA heatsink temperature\n"
+             "HL: Harmonic Load heatsink temperature\n"
+             "Click to show degrees %1").arg(nextUnit)
+        : tr("PA: PA heatsink temperature\n"
+             "Click to show degrees %1").arg(nextUnit));
+    // Spoken in words: before the first reading the visible dash becomes
+    // "not reported", which a screen reader says plainly.
+    const QString unitName = m_tempFahrenheit ? tr("Fahrenheit") : tr("Celsius");
+    const QString paSpoken = m_hasPaHeatsinkTemp
+        ? tr("PA heatsink %1 degrees %2").arg(paText, unitName)
+        : tr("PA heatsink not reported");
     m_tempBtn->setAccessibleName(m_hasHarmonicLoadHeatsinkTemp
-        ? tr("PA heatsink %1, Harmonic Load heatsink %2 degrees %3")
-              .arg(paText,
+        ? tr("%1, Harmonic Load heatsink %2 degrees %3")
+              .arg(paSpoken,
                    formatTemp(m_harmonicLoadHeatsinkTemp, m_tempFahrenheit),
-                   m_tempFahrenheit ? tr("Fahrenheit") : tr("Celsius"))
-        : tr("PA heatsink %1 degrees %2")
-              .arg(paText, m_tempFahrenheit ? tr("Fahrenheit") : tr("Celsius")));
+                   unitName)
+        : paSpoken);
     if (QAccessible::isActive()) {
         QAccessibleEvent event(m_tempBtn, QAccessible::NameChanged);
         QAccessible::updateAccessibility(&event);

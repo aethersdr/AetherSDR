@@ -73,6 +73,10 @@ void testDefaultPlaceholder()
     report("default placeholder uses Celsius",
            button->text() == QStringLiteral("PA     \u2014 C"),
            button->text());
+    // Spoken in words, not as the visible dash.
+    report("placeholder is spoken as not reported",
+           button->accessibleName() == QStringLiteral("PA heatsink not reported"),
+           button->accessibleName());
 }
 
 void testSingleSensorToggle()
@@ -140,6 +144,9 @@ void testRadioFallbackDropsHarmonicLoadTemp()
     report("direct connection shows both heatsinks",
            button->text() == QStringLiteral("PA  34.7 / HL  28.4 C"),
            button->text());
+    report("direct connection explains HL in the tooltip",
+           button->toolTip().contains(QStringLiteral("HL: Harmonic Load heatsink")),
+           button->toolTip());
 
     // A FlexRadio relays only the PA heatsink temperature, so the HL value
     // must not stay on screen after the direct connection drops.
@@ -147,6 +154,9 @@ void testRadioFallbackDropsHarmonicLoadTemp()
     report("radio fallback drops the Harmonic Load heatsink",
            button->text() == QStringLiteral("PA  34.7 C"),
            button->text());
+    // The tooltip explains only what is on the button.
+    report("radio fallback drops HL from the tooltip",
+           !button->toolTip().contains(QStringLiteral("HL:")), button->toolTip());
 
     // A late HL write after the drop must not bring the stale value back.
     applet.setHarmonicLoadHeatsinkTemp(28.5f);
