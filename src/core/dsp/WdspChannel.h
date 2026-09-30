@@ -169,6 +169,7 @@ public:
         // own default (max(2048, dsp_size)), so this changes nothing on its own
         // — it makes the value explicit and tunable instead of implicit.
         // pihpsdr runs 8192 by comparison.
+        // Both apply to a transmit channel too (TXASetNC/TXASetMP in open()).
         int filterTaps = 2048;
         bool minimumPhase = false;
         // FM detector deviation in Hz: the assumed incoming deviation, not a filter.
@@ -381,7 +382,9 @@ public:
     // callers are on the control thread.
     // setMinimumPhase(): same magnitude response, collapsed group delay; RXASetMP
     // rebuilds all six masks without stopping.
-    // Both RX-only, control-path (not from processIq()), idempotent in WDSP.
+    // setFilterTaps() is RX-only. setMinimumPhase() also works on TX (TXASetMP,
+    // which likewise does not stop the channel). Both control-path (not from
+    // processIq()), idempotent in WDSP.
     bool setFilterTaps(int taps) noexcept;
     bool setMinimumPhase(bool on) noexcept;
 

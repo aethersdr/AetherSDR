@@ -122,6 +122,19 @@ public:
     // the first non-zero input, i.e. the start of every over (#6052). Thetis
     // and pihpsdr both open TX with 0; the 25 ms up-slew (de-click) is kept.
     static constexpr double kTxMuteDelayUpSec = 0.0;
+
+    // TX bandpass length: create_txa's own 2048, made explicit. 1024 would save
+    // 10.7 ms but drops the DIGU 150 Hz opposite-sideband image from 174.6 to
+    // 135.6 dB, below hl2_txdsp_test's 140 dB floor (#6052).
+    static constexpr int kTxFilterTaps = 2048;
+
+    // Minimum phase in USB and LSB only: same |H|, impulse peak 19.2 ms earlier
+    // on {300, 2700}, but group delay varies 4.78 ms across the passband. Data
+    // modes, CW (#5498 ruling), AM, DSB and FM keep linear phase.
+    [[nodiscard]] static constexpr bool txMinimumPhaseFor(WdspChannel::Mode mode) noexcept
+    {
+        return mode == WdspChannel::Mode::Usb || mode == WdspChannel::Mode::Lsb;
+    }
 #endif
 
     // Blocks the modulator could not place on the wire since configure(): each

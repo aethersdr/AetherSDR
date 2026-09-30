@@ -66,6 +66,10 @@ WdspChannel::Config Hl2TxDsp::modulatorChannelConfig(const Config& config)
     // No delay before the up-ramp on transmit (see kTxMuteDelayUpSec); the
     // 25 ms up-slew, the de-click, keeps WdspChannel::Config's default.
     c.muteDelayUpSec = kTxMuteDelayUpSec;
+    // The bandpass: create_txa's length, explicit, and minimum phase in the
+    // voice modes. See kTxFilterTaps and txMinimumPhaseFor().
+    c.filterTaps = kTxFilterTaps;
+    c.minimumPhase = txMinimumPhaseFor(config.mode);
     // blockForOutput = false (the default, and what the figures above were
     // measured at). Setting it true would block the audio I/O thread and make
     // fexchange2's underrun report unreachable; fix underruns by pacing.
@@ -135,6 +139,11 @@ void Hl2TxDsp::applyModeAndFilter()
 
     if (!m_channel->setMode(m_config.mode)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: mode change refused";
+    }
+    // The phase mode follows the operating mode (txMinimumPhaseFor); a no-op
+    // when it already matches.
+    if (!m_channel->setMinimumPhase(txMinimumPhaseFor(m_config.mode))) {
+        qCWarning(lcTxMod) << "HL2 TXA modulator: phase-mode change refused";
     }
     if (!m_channel->setFilter(lowHz, highHz)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: passband change refused,"
