@@ -12,6 +12,7 @@
 // accessibleDescription, not a tooltip alone. Pinned here:
 //   * selectable=false: disabled, unchecked, reason in accessibleDescription
 //     and tooltip, and no `mic acc` command on the way;
+//   * a model refresh reporting mic_acc=1 does not re-light it while dimmed;
 //   * selectable=true: live again with its original description.
 //
 // Not yet mutation-checked. The mutation to run before a PR: removing
@@ -21,6 +22,7 @@
 #include "TestSettingsProfile.h"
 #include "gui/PhoneCwApplet.h"
 #include "models/TransmitModel.h"
+#include "core/backends/TransmitDelta.h"
 
 #include <QApplication>
 #include <QPushButton>
@@ -75,6 +77,17 @@ int main(int argc, char** argv)
           "tooltip and accessibleDescription carry the same reason");
     check(commands.count() == 0,
           "dimming sends nothing -- no `mic acc 0` on a radio that drops it");
+
+    // The invariant is HELD, not only asserted at the gate: a model refresh
+    // carrying mic_acc=1 must not re-light the dimmed button.
+    {
+        TransmitDelta d;
+        d.micAcc = true;
+        model.applyChanges(d);
+    }
+    check(model.micAcc(), "precondition: the model now reports +ACC on");
+    check(!acc->isChecked(), "a model refresh does not re-light the dimmed +ACC");
+    check(commands.count() == 0, "and the refresh sends nothing either");
 
     applet.setSelectableMicInputs(true);
     check(acc->isEnabled(), "selectable inputs -> +ACC is live again");

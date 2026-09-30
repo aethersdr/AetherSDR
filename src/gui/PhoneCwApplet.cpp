@@ -1275,7 +1275,10 @@ void PhoneCwApplet::syncPhoneFromModel()
         m_micLevelSlider->setValue(m_model->micLevel());
         m_micLevelLabel->setText(QString::number(m_model->micLevel()));
     }
-    m_accBtn->setChecked(m_model->micAcc());
+    // Held, not merely set once: setSelectableMicInputs(false) unlights +ACC,
+    // and a refresh must not light a dimmed control back up from a model value
+    // that belongs to a radio whose inputs this client cannot select.
+    m_accBtn->setChecked(m_selectableMicInputs && m_model->micAcc());
     m_procBtn->setChecked(m_model->speechProcessorEnable());
 
     {
