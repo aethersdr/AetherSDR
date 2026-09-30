@@ -17,6 +17,21 @@
 
 using AetherSDR::hl2::Hl2DbReference;
 
+// THE AGC REFERENCE IS A CONSTANT, NOT A SETTING (#5625 follow-up). A
+// setReferenceLnaGainDb() stood here with no caller anywhere, so the
+// "reference" was the shipped default behind a setter nothing reached. It was
+// removed rather than wired -- see Hl2DbReference::kReferenceLnaGainDb for why
+// there is nothing it would be right to wire it to. These two lines are what
+// keep it that way: the reference is the SAME constant the band memory falls
+// back to (production's, not a retyped 20), and no instance can move it.
+template <typename T>
+concept CanMoveAgcReference = requires(T& r) { r.setReferenceLnaGainDb(0.0); };
+static_assert(!CanMoveAgcReference<Hl2DbReference>,
+              "the AGC reference gain has no per-instance setter");
+static_assert(Hl2DbReference::kReferenceLnaGainDb
+                  == static_cast<double>(AetherSDR::hl2::kLnaDefaultGainDb),
+              "the AGC reference is the shipped LNA default");
+
 static int g_failures = 0;
 static void check(bool ok, const char* what)
 {
@@ -255,6 +270,20 @@ int main()
         check(near(after.offsetDb() - (20.0 - stored),
                    Hl2DbReference::kFullScaleDbmAtZeroGain - 20.0),
               "and moves it by the same -17 dB at every stored gain");
+    }
+
+    // The reference is the same for every object and every gain: the LNA
+    // term the AGC undoes is (shipped default - commanded), full stop, across
+    // the whole native range. A reference seeded from anything else -- the
+    // connect-time gain, a band's memory, the auto-gain baseline -- fails here
+    // on every gain but the one it happened to be seeded at.
+    for (int g = AetherSDR::hl2::kLnaGainMinDb;
+         g <= AetherSDR::hl2::kLnaGainMaxDb; ++g) {
+        Hl2DbReference fresh;
+        fresh.setLnaGainDb(g);
+        check(near(fresh.lnaOffsetDb(),
+                   static_cast<double>(AetherSDR::hl2::kLnaDefaultGainDb) - g),
+              "the AGC's LNA term is (shipped default - commanded) at every gain");
     }
 
     if (g_failures == 0)
