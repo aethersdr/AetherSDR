@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.4 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.9.5 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -144,6 +144,7 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none")
     unset(_aether_san_list)
 endif()
 option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
+option(REQUIRE_RTL "Fail configuration unless the RTL backend and float FFTW are available" OFF)
 # Which SSB modulator the Hermes-Lite 2 transmit path is BUILT with. There is
 # no runtime switch and there must not be one: two silent transmit paths are
 # worse than one, and Hl2TxDsp.cpp records that the prior TXA attempt failed
@@ -2635,8 +2636,8 @@ endif()
 # plain header+library probe so the switch below is reachable on every
 # platform, not only the pkg-config ones.
 if(ENABLE_RTL AND NOT RTLSDR_FOUND)
-    find_path(RTLSDR_INCLUDE_DIR rtl-sdr.h)
-    find_library(RTLSDR_LIBRARY NAMES rtlsdr librtlsdr)
+    find_path(RTLSDR_INCLUDE_DIR rtl-sdr.h HINTS "${CMAKE_SOURCE_DIR}/third_party/rtl-deps/include")
+    find_library(RTLSDR_LIBRARY NAMES rtlsdr librtlsdr HINTS "${CMAKE_SOURCE_DIR}/third_party/rtl-deps/lib")
     if(RTLSDR_INCLUDE_DIR AND RTLSDR_LIBRARY)
         add_library(RtlSdr::RtlSdr UNKNOWN IMPORTED)
         set_target_properties(RtlSdr::RtlSdr PROPERTIES
@@ -2650,8 +2651,8 @@ else()
 endif()
 
 if(ENABLE_RTL AND NOT RTL_FFTW3F_FOUND)
-    find_path(RTL_FFTW3F_INCLUDE_DIR fftw3.h)
-    find_library(RTL_FFTW3F_LIBRARY NAMES fftw3f libfftw3f libfftw3f-3)
+    find_path(RTL_FFTW3F_INCLUDE_DIR fftw3.h HINTS "${CMAKE_SOURCE_DIR}/third_party/fftw3/include")
+    find_library(RTL_FFTW3F_LIBRARY NAMES fftw3f libfftw3f libfftw3f-3 HINTS "${CMAKE_SOURCE_DIR}/third_party/fftw3/lib")
     if(RTL_FFTW3F_INCLUDE_DIR AND RTL_FFTW3F_LIBRARY)
         add_library(RtlFftw3f::RtlFftw3f UNKNOWN IMPORTED)
         set_target_properties(RtlFftw3f::RtlFftw3f PROPERTIES
@@ -2682,6 +2683,27 @@ elseif(RTLSDR_FOUND AND NOT RTL_FFTW3F_FOUND)
     message(STATUS "RTL-SDR ... disabled — librtlsdr found but fftw3f missing. Install fftw3f (e.g. libfftw3-dev), or configure with -DENABLE_RTL=OFF.")
 else()
     message(STATUS "RTL-SDR ... disabled — librtlsdr not found")
+endif()
+
+include(cmake/AetherRequireRtl.cmake)
+aether_require_rtl()
+
+# Stage RTL independently of the optional NR4 and Digital FM features.
+if(WIN32 AND AETHER_BACKEND_RTL)
+    foreach(_rtl_dll
+            "${CMAKE_SOURCE_DIR}/third_party/rtl-deps/bin/rtlsdr.dll"
+            "${CMAKE_SOURCE_DIR}/third_party/rtl-deps/bin/libusb-1.0.dll"
+            "${CMAKE_SOURCE_DIR}/third_party/fftw3/bin/libfftw3f-3.dll")
+        if(EXISTS "${_rtl_dll}")
+            foreach(_rtl_app AetherSDR aetherd)
+                add_custom_command(TARGET ${_rtl_app} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_rtl_dll}" "$<TARGET_FILE_DIR:${_rtl_app}>")
+            endforeach()
+        elseif(REQUIRE_RTL)
+            message(FATAL_ERROR "Required RTL runtime missing: ${_rtl_dll}; run scripts/setup/setup-rtl-deps.ps1 and setup-fftw.ps1")
+        endif()
+    endforeach()
 endif()
 
 include(cmake/AetherHdFm.cmake)

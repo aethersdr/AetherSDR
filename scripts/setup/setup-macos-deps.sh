@@ -81,7 +81,7 @@ OUT_DIR="third_party/macos-deps"
 PREFIX="$(pwd)/$OUT_DIR"
 WORK_DIR="$(pwd)/.macos-deps-build"
 STAMP="$OUT_DIR/.build-stamp"
-STAMP_CONTENT="target=$TARGET fftw=$FFTW_VERSION portaudio=$PORTAUDIO_VERSION hidapi=$HIDAPI_VERSION arch=$(uname -m)"
+STAMP_CONTENT="target=$TARGET fftw=$FFTW_VERSION portaudio=$PORTAUDIO_VERSION hidapi=$HIDAPI_VERSION arch=$(uname -m) rtl=$(shasum -a 256 "$SCRIPT_DIR/rtl-dependencies.json" "$SCRIPT_DIR/setup-rtl-deps.sh" | shasum -a 256 | cut -d' ' -f1)"
 
 # ── Already set up? (lets CI cache third_party/macos-deps) ───────────────
 # The stamp carries the deployment target, so a local rebuild at a different
@@ -154,7 +154,9 @@ done
 # target we just exported. Homebrew disables it for the same reason.
 tar xzf "$WORK_DIR/portaudio.tgz" -C "$WORK_DIR"
 echo "Building PortAudio $PORTAUDIO_VERSION for macOS $TARGET..."
-( cd "$WORK_DIR/portaudio" && ./configure \
+# AppleClang 17 diagnoses the pinned upstream float scaling constants. Keep
+# the warning visible without treating that dependency-only warning as fatal.
+( cd "$WORK_DIR/portaudio" && CFLAGS="${CFLAGS:-} -Wno-error=implicit-const-int-float-conversion" ./configure \
     --prefix="$PREFIX" \
     --enable-shared --disable-static \
     --disable-mac-universal >/dev/null )
@@ -178,6 +180,12 @@ cmake -B "$WORK_DIR/hidapi-build" -S "$WORK_DIR/hidapi-hidapi-$HIDAPI_VERSION" -
     -DHIDAPI_BUILD_HIDTEST=OFF >/dev/null
 cmake --build "$WORK_DIR/hidapi-build" -j"$JOBS" >/dev/null
 cmake --install "$WORK_DIR/hidapi-build" >/dev/null
+
+RTL_DEPS_PREFIX="$PREFIX" bash "$SCRIPT_DIR/setup-rtl-deps.sh"
+SOURCES="$PREFIX/share/aethersdr-rtl-sources"
+cp "$WORK_DIR/fftw.tar.gz" "$SOURCES/fftw-$FFTW_VERSION.tar.gz"
+cp "$WORK_DIR/fftw-$FFTW_VERSION/COPYING" "$SOURCES/FFTW-COPYING"
+cp "$SCRIPT_DIR/setup-macos-deps.sh" "$SOURCES/"
 
 # ── Verify the whole point of the exercise ──────────────────────────────
 # A build that silently ignored MACOSX_DEPLOYMENT_TARGET would look exactly like
