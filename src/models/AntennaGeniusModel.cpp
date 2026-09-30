@@ -328,6 +328,7 @@ void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
 void AntennaGeniusModel::beginAttemptAt(const QString& host, quint16 port)
 {
     m_attemptEndpoint = authTarget(host, port);
+    m_attemptHost = host.trimmed();
     if (m_userAuthCode && m_userAuthEndpoint != m_attemptEndpoint) {
         // A code typed for one target must not follow an auto-connect or
         // discovery switch to a different host during reconnect backoff.

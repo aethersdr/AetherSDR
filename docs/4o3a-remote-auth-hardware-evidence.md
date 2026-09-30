@@ -151,12 +151,22 @@ not yet been observed on hardware.
 
 ## Credential scope and remaining live checks
 
-Each accessory type has one saved Keychain record, bound to the IP address and
-port of the peer that accepted the code. Connecting the same type at another
-address replaces that record after the new peer accepts a code. If a device's
-address changes, the operator must enter its code again; the old record is not
-sent to the new address. This is the current credential scope, including for a
-hostname whose resolved address changes.
+Each accessory type has one saved Keychain record. What it is bound to depends
+on how the operator named the device:
+
+- **A literal IP address:** bound to the IP address and port of the peer that
+  accepted the code. If the device's address changes, the operator enters its
+  code again; the old record is not sent to the new address.
+- **A hostname (typically DDNS):** bound to the lowercased name and port. A
+  residential IP change behind the name does not orphan the saved code, which
+  is the main remote use case of #2313. The trade is deliberate: whatever the
+  name resolves to receives the saved code, so an operator should only save a
+  code for a name they control.
+
+Nothing is bound until a socket has connected to a real peer address. Either
+way, connecting the same type at a different identity replaces the record after
+the new peer accepts a code. Records saved before this change for a hostname
+carry the IP form and are not reused; they are entered once more.
 
 A failed Keychain deletion leaves the saved code in the operating system's
 vault. The setup dialog reports that Clear code must be retried; it cannot
@@ -266,12 +276,11 @@ configured direct connection. This supports WAN connections and also affects
 LAN users who retain a manual override. Clearing the override restores use of
 the discovered address.
 
-The stored credential remains bound to the resolved peer IP and port. A DDNS
-address change therefore requires entering the code again. This preserves
-the reviewed security boundary pending a maintainer choice between peer-IP,
-configured-host, or combined binding; it is not a claim that DDNS reuse is
-implemented. The follow-up requests that ruling explicitly, along with the
-existing indicator and central-tab placement decisions.
+The stored credential is bound to the configured hostname and port when the
+operator entered a name, and to the connected peer IP and port when they
+entered a literal address (see "Credential scope"). A DDNS address change
+therefore no longer requires entering the code again. The indicator and
+central-tab placement decisions remain with the maintainer.
 
 Local validation passed all eight focused auth, automation-redaction, TGXL,
 and amp applet tests. Removing TGXL/PGXL auth-block reconnect guards failed

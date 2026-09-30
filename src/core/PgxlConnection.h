@@ -24,6 +24,9 @@ public:
     bool isAuthBlocked() const { return m_authBlocked; }
     QString version() const { return m_version; }
     QString peerAddress() const { return m_socket.peerAddress().toString(); }
+    // The host the operator (or discovery) asked for on the current attempt:
+    // a name or a literal address. Saved codes key on it; see PeripheralAuthStore.
+    QString attemptHost() const { return m_attemptHost; }
     quint16 peerPort() const { return m_socket.peerPort(); }
 
     void connectToPgxl(const QString& host, quint16 port = 9008);
@@ -145,6 +148,7 @@ private:
     QString    m_authCode;
     bool       m_userAuthCode{false};
     QString    m_userAuthEndpoint;
+    QString    m_attemptHost;
     bool       m_authCloseReported{false};
     bool       m_autoReconnect{false};
     bool       m_deliberateDisconnect{false};

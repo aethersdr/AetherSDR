@@ -91,7 +91,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "Connect button did not reject invalid code\n");
         return 1;
     }
-    const QString endpoint = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.10"), 9010);
+    const QString endpoint = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.10"), QStringLiteral("192.0.2.10"), 9010);
     PeripheralAuthStore::save(PeripheralAuthStore::Device::Tgxl, endpoint,
                               QStringLiteral("session-code"), &app);
     clearButton->click();
