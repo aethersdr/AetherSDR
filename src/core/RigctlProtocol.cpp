@@ -2070,7 +2070,9 @@ QString RigctlProtocol::cmdSetTs(const QString& arg)
     if (!slice) return rprt(-8);
     const QString a = parts.isEmpty() ? QString{} : parts[0];
     if (a == "?") {
-        // Common tuning steps in Hz; 0 = any step accepted.
+        // Common tuning steps in Hz. The trailing 0 is Hamlib's RIG_TS_ANY
+        // marker (any positive step is accepted), not a step: set_ts 0 is
+        // refused below.
         static const QString kSteps = QStringLiteral("1 10 100 500 1000 5000 9000 10000 12500 100000 500000 0");
         if (m_extended)
             return QStringLiteral("set_ts:\nTuning Steps: %1\n").arg(kSteps) + rprt(0);
@@ -2078,7 +2080,10 @@ QString RigctlProtocol::cmdSetTs(const QString& arg)
     }
     bool ok;
     const int hz = a.toInt(&ok);
-    if (a.isEmpty() || !ok || hz < 0) return rprt(-1);
+    // A step of 0 Hz tunes nowhere. Refused as RIG_EINVAL rather than answered
+    // RPRT 0: without a command plane nothing would change, and with one the
+    // radio was sent step=0.
+    if (a.isEmpty() || !ok || hz <= 0) return rprt(-1);
     const int id = slice->sliceId();
     const QString cmd = QStringLiteral("slice set %1 step=%2").arg(id).arg(hz);
     QMetaObject::invokeMethod(m_model, [model = m_model, cmd, id, hz]() {

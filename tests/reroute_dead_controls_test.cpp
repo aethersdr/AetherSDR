@@ -218,6 +218,21 @@ void testRigctlSetTsReachesTheSlice()
     check(readBack == QLatin1String("1000"), "CAT get_ts reads back the step set_ts set");
 }
 
+void testRigctlSetTsRefusesZero()
+{
+    // Hamlib's step is a positive number of Hz; the 0 in `set_ts ?` is its
+    // RIG_TS_ANY marker ("any step"), not a step. set_ts 0 used to answer
+    // RPRT 0 and, without a command plane, change nothing.
+    Fixture f;
+    RigctlProtocol port(&f.radio);
+    port.setSliceIndex(0);
+    f.radio.applyClientOwnedSliceStep(0, 250);
+    const QString reply = port.handleLine(QStringLiteral("\\set_ts 0")).trimmed();
+    QCoreApplication::processEvents();
+    check(reply == QLatin1String("RPRT -1"), "CAT set_ts 0: refused as RIG_EINVAL (was: RPRT 0)");
+    check(f.slice->stepHz() == 250, "CAT set_ts 0: the step is unchanged");
+}
+
 // ── Rows 3, 4, 8: the radio's own NR / ANF ─────────────────────────────────
 
 void testRadioNrAndAnfRefuseWithoutRadioDsp()
@@ -607,6 +622,7 @@ int main(int argc, char** argv)
     testStepIsClientOwnedWithoutCommandPlane();
     testStepStaysRadioOwnedWithCommandPlane();
     testRigctlSetTsReachesTheSlice();
+    testRigctlSetTsRefusesZero();
     testRadioNrAndAnfRefuseWithoutRadioDsp();
     testRadioNrAndAnfRouteWhereTheRadioHasThem();
     testAnfStillReachesTheDemoCommandPlane();
