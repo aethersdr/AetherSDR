@@ -5385,6 +5385,19 @@ void Hl2Backend::setCwPitch(int hz)
     // 500 Hz filter stays a 500 Hz filter centred on the marker whatever the
     // pitch is. That is the point of keeping the two domains apart.
     for (Receiver& r : m_rx) {
+        // The APF is centred on the pitch, so it moves with it. Otherwise the
+        // peak stays on the old tone while the signal slides off it — the
+        // filter would be attenuating the very signal it exists to lift.
+        //
+        // EVERY receiver, BEFORE the CW test below, not only the ones in CW
+        // now. Hl2RxDsp holds the centre across a trip out of CW and runs it
+        // again on the way back in (setMode -> applyApf), and setSliceMode
+        // does not re-send the APF. A pitch moved while the slice sat in USB
+        // was therefore never delivered, and re-entering CW ran the peak on
+        // the OLD pitch: at the default 100 Hz a 200 Hz error puts the tone on
+        // the skirt, so APF-on made the wanted signal quieter. pushApf() is
+        // safe in any mode by its own contract; this is where it has to be.
+        pushApf(r);
         if (!r.dsp || cwBfoHz(r.mode) == 0.0)
             continue;
         const auto [lo, hi] = dspFilterHz(r);
@@ -5392,10 +5405,6 @@ void Hl2Backend::setCwPitch(int hz)
             Q_ARG(double, rxShiftHz(r)));
         QMetaObject::invokeMethod(r.dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, lo), Q_ARG(double, hi));
-        // The APF is centred on the pitch, so it moves with it. Otherwise the
-        // peak stays on the old tone while the signal slides off it — the
-        // filter would be attenuating the very signal it exists to lift.
-        pushApf(r);
     }
 }
 

@@ -397,6 +397,11 @@ int main(int argc, char** argv)
                   && c.value(QStringLiteral("agcFixedGainDb")).toDouble() == 10.0,
               "the chain reports the APF off and AGC Off at exactly the 10 dB "
               "origin/main always ran");
+        // Read HERE, before any setSliceApf: the pitch above was set while the
+        // receiver was still in USB, and the next setSliceApf would push the
+        // pitch itself and hide a stale centre (PR #6050 review).
+        check(near(c.value(QStringLiteral("apfCenterHz")), 700.0),
+              "a pitch set outside CW is the APF centre on entering CW");
 
         backend.setSliceApf(0, true, 80);
         backend.setSliceAgcOffLevel(0, 40);
@@ -420,9 +425,15 @@ int main(int argc, char** argv)
         c = rx0();
         check(!c.value(QStringLiteral("apfRun")).toBool() && pubApf == true,
               "outside CW the stage stops while the slice keeps its APF request");
+        // The review's sequence with the APF ON: the pitch moves while the
+        // slice is out of CW, and nothing but the mode change follows.
+        backend.setCwPitch(750);
         backend.setSliceMode(0, QStringLiteral("CW"));
         c = rx0();
         check(c.value(QStringLiteral("apfRun")).toBool(), "and back in CW it runs again");
+        check(near(c.value(QStringLiteral("apfCenterHz")), 750.0),
+              "centred on the pitch moved while the slice was out of CW, not the "
+              "one it left CW with");
         QObject::disconnect(capture);
         Hl2ApfAgcOffTestAccess::tearDown(backend);
     }
