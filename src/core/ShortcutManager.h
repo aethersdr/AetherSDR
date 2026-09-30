@@ -97,8 +97,13 @@ public:
 
     // Enable or disable operating QShortcut objects. Used to yield key
     // events to focused child widgets (e.g. sliders) that would otherwise
-    // have their arrow keys stolen by window-level shortcuts.
+    // have their arrow keys stolen by window-level shortcuts, and to let
+    // every bound key through when keyboard shortcuts are switched off
+    // (#5483). The state is remembered: rebuildShortcuts() applies it to
+    // the shortcuts it creates, so a rebuild cannot silently re-arm keys
+    // that were yielded.
     void setShortcutsEnabled(bool enabled);
+    bool shortcutsEnabled() const { return m_shortcutsEnabled; }
 
     // Query
     const QVector<Action>& actions() const { return m_actions; }
@@ -119,6 +124,7 @@ private:
     QVector<Action> m_actions;
     QVector<QShortcut*> m_shortcuts;
     QVector<QShortcut*> m_windowShortcuts;
+    bool m_shortcutsEnabled{true};
 };
 
 } // namespace AetherSDR

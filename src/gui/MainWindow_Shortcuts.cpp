@@ -335,7 +335,10 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
             m_pttHoldInput.stop();
         }
     }
-    return true;  // consume the bound key so it can't also activate a button
+    // Consume the bound key so it can't also activate a button -- but only
+    // when it keyed. With keyboard shortcuts off it did nothing, and eating it
+    // would take Space away from the focused button as well (#5483).
+    return m_keyboardShortcutsEnabled;
 }
 
 
@@ -572,6 +575,12 @@ void MainWindow::renewSliderShortcutLease()
     m_sliderShortcutLeaseTimer.start(kSliderShortcutLeaseMs);
 }
 
+void MainWindow::syncOperatingShortcutsEnabled()
+{
+    m_shortcutManager.setShortcutsEnabled(m_keyboardShortcutsEnabled
+                                          && !s_sliderShortcutLeaseActive);
+}
+
 void MainWindow::releaseSliderShortcutLease(bool clearFocus)
 {
     auto* slider = m_sliderShortcutLease.data();
@@ -584,7 +593,9 @@ void MainWindow::releaseSliderShortcutLease(bool clearFocus)
     m_sliderShortcutLeaseTimer.stop();
     m_sliderShortcutLease.clear();
     s_sliderShortcutLeaseActive = false;
-    m_shortcutManager.setShortcutsEnabled(true);
+    // Back to the master switch, not unconditionally on: with keyboard
+    // shortcuts off, the lease ending must not re-arm every bound key (#5483).
+    syncOperatingShortcutsEnabled();
 
     if (clearFocus && slider && QApplication::focusWidget() == slider)
         slider->clearFocus();
@@ -1588,6 +1599,7 @@ void MainWindow::registerShortcutActions()
     // ── Load user bindings and create QShortcuts ────────────────────────
     m_shortcutManager.loadBindings();
     s_keyboardShortcutsEnabled = m_keyboardShortcutsEnabled;
+    syncOperatingShortcutsEnabled();
     m_shortcutManager.rebuildShortcuts(this, shortcutGuard);
 
     m_sliderShortcutLeaseTimer.setSingleShot(true);

@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QDialog>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QSlider>
 #include <QTest>
 #include <QWidget>
@@ -138,5 +139,46 @@ int main(int argc, char** argv)
     rebuild();
     press(Qt::Key_F12);
     expect(windowCalls == beforeRebind + 1, "clearing a window binding removes its shortcut");
+
+    // #5483: "keyboard shortcuts off" must mean the bound key falls through to
+    // the focused widget, not that it disappears. A QShortcut that is enabled
+    // but refused by its guard still consumes the key; only a disabled one
+    // lets it through. MainWindow disables the operating shortcuts when the
+    // master switch is off, and the state has to survive a rebuild, because
+    // Configure Shortcuts rebuilds after the switch was read.
+    {
+        QWidget host;
+        QPushButton button(QStringLiteral("focused"), &host);
+        button.setFocusPolicy(Qt::StrongFocus);
+        button.show();
+        ShortcutManager spaceManager;
+        int spaceCalls = 0;
+        int clicks = 0;
+        bool spaceAllowed = false;
+        QObject::connect(&button, &QPushButton::clicked, [&] { ++clicks; });
+        spaceManager.registerAction("space_marker", "Space marker", "TX",
+            QKeySequence(Qt::Key_Space), [&] { ++spaceCalls; });
+        const auto rebuildSpace = [&] {
+            spaceManager.rebuildShortcuts(&host, [&] { return spaceAllowed; });
+        };
+
+        spaceManager.setShortcutsEnabled(false);
+        rebuildSpace();
+        focus(host, &button);
+        press(Qt::Key_Space);
+        expect(clicks == 1 && spaceCalls == 0,
+               "disabled shortcut lets its key reach the focused button, across a rebuild");
+        expect(!spaceManager.shortcutsEnabled(), "rebuild keeps the disabled state");
+
+        spaceManager.setShortcutsEnabled(true);
+        press(Qt::Key_Space);
+        expect(clicks == 1 && spaceCalls == 0,
+               "an enabled shortcut refused by its guard still swallows the key");
+
+        spaceAllowed = true;
+        press(Qt::Key_Space);
+        expect(clicks == 1 && spaceCalls == 1,
+               "an enabled, allowed shortcut acts and keeps the key from the button");
+    }
     return failures == 0 ? 0 : 1;
 }
