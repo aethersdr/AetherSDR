@@ -307,20 +307,32 @@ public:
     // Pushed only when canPushToChannel(), like every other verb here.
 
     // AGC-off level, 0..100 in the slice model's units -> WDSP fixed gain in
-    // dB, on the SAME 0.6 dB/unit scale the AGC-T threshold uses
-    // (Hl2DbReference::kAgcCeilingDbPerUnit), so one slider has one scale in
-    // both AGC states: 0..60 dB. NOT referred to the LNA gain the way the
-    // ceiling is: with AGC off the operator rides RF gain against overload,
-    // and a fixed gain that silently moved to undo their RF-gain change would
-    // defeat the reason they turned AGC off.
+    // dB:
     //
-    // The slice model's default of 10 therefore opens at 6 dB, where WDSP's
-    // channel default (WdspChannel::Config::agcFixedGainDb) was 10 dB.
+    //     gain_dB = 10 + 0.6 * (level - 10)        level 0..100 -> 4..64 dB
+    //
+    // ANCHORED ON THE DEFAULT. Before this route existed every HL2 ran AGC Off
+    // at WDSP's channel default, WdspChannel::Config::agcFixedGainDb = 10 dB,
+    // whatever the slider said. The slice model opens at level 10, so the map
+    // gives exactly 10.0 dB there (the (level - 10) term is an exact 0.0, no
+    // rounding) and AGC Off sounds as it always did until the operator moves
+    // the slider. A plain level * 0.6 would have opened 4 dB quieter for
+    // every HL2 user.
+    //
+    // The slope is the SAME 0.6 dB/unit the AGC-T threshold uses
+    // (Hl2DbReference::kAgcCeilingDbPerUnit), so one slider has one step size
+    // in both AGC states; only the origin differs. NOT referred to the LNA
+    // gain the way the ceiling is: with AGC off the operator rides RF gain
+    // against overload, and a fixed gain that silently moved to undo their
+    // RF-gain change would defeat the reason they turned AGC off.
     static constexpr double kAgcFixedGainDbPerUnit = 0.6;
-    static constexpr int kDefaultAgcOffLevel = 10;   // SliceModel::m_agcOffLevel
+    static constexpr int kDefaultAgcOffLevel = 10;           // SliceModel::m_agcOffLevel
+    static constexpr double kDefaultAgcFixedGainDb = 10.0;   // WdspChannel::Config
     [[nodiscard]] static double agcFixedGainDbForOffLevel(int level) noexcept
     {
-        return static_cast<double>(std::clamp(level, 0, 100)) * kAgcFixedGainDbPerUnit;
+        return kDefaultAgcFixedGainDb
+               + static_cast<double>(std::clamp(level, 0, 100) - kDefaultAgcOffLevel)
+                     * kAgcFixedGainDbPerUnit;
     }
     // WDSP multiplies by the fixed gain ONLY while its AGC mode is 0
     // (wcpAGC.c xwcpagc), so this is safe to apply in any mode and is audible

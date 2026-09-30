@@ -141,11 +141,19 @@ int main(int argc, char** argv)
 
     // ── 1. The maps ──────────────────────────────────────────────────────
     {
-        check(std::abs(Hl2RxDsp::agcFixedGainDbForOffLevel(0) - 0.0) < 1e-9
-                  && std::abs(Hl2RxDsp::agcFixedGainDbForOffLevel(100) - 60.0) < 1e-9,
-              "AGC-off level spans 0..60 dB, the AGC-T threshold's own scale");
-        check(std::abs(Hl2RxDsp::agcFixedGainDbForOffLevel(-5) - 0.0) < 1e-9
-                  && std::abs(Hl2RxDsp::agcFixedGainDbForOffLevel(400) - 60.0) < 1e-9,
+        // The default is pinned EXACTLY (==, not a tolerance): before this
+        // route AGC Off ran at WdspChannel::Config's 10 dB whatever the
+        // slider said, and the default slider must not change what it sounds
+        // like.
+        check(Hl2RxDsp::agcFixedGainDbForOffLevel(Hl2RxDsp::kDefaultAgcOffLevel)
+                      == WdspChannel::Config{}.agcFixedGainDb
+                  && WdspChannel::Config{}.agcFixedGainDb == 10.0,
+              "the default AGC-off level gives exactly the 10 dB AGC Off always had");
+        check(std::abs(Hl2RxDsp::agcFixedGainDbForOffLevel(0) - 4.0) < 1e-9
+                  && std::abs(Hl2RxDsp::agcFixedGainDbForOffLevel(100) - 64.0) < 1e-9,
+              "AGC-off level spans 4..64 dB at the AGC-T threshold's 0.6 dB/unit");
+        check(std::abs(Hl2RxDsp::agcFixedGainDbForOffLevel(-5) - 4.0) < 1e-9
+                  && std::abs(Hl2RxDsp::agcFixedGainDbForOffLevel(400) - 64.0) < 1e-9,
               "an out-of-range off level clamps rather than extrapolating");
         check(std::abs(Hl2RxDsp::apfBandwidthHzForLevel(0) - 200.0) < 1e-9
                   && std::abs(Hl2RxDsp::apfBandwidthHzForLevel(50) - 100.0) < 1e-9
@@ -198,7 +206,7 @@ int main(int argc, char** argv)
 
     // ── 3. AGC-off level, measured ───────────────────────────────────────
     //
-    // Small amplitude so 60 dB of fixed gain does not clip: 1e-4 * 10^3 = 0.1.
+    // Small amplitude so 64 dB of fixed gain does not clip: 1e-4 * 10^3.2 = 0.16.
     constexpr double kAmp = 1e-4;
     {
         const auto atLevel = [&](int agcMode, int level) {
@@ -229,7 +237,7 @@ int main(int argc, char** argv)
     {
         const auto ratioDb = [&](WdspChannel::Mode mode, bool apfOn) {
             const auto prep = [apfOn](Hl2RxDsp& d) {
-                d.setAgcOffLevel(50);   // 30 dB
+                d.setAgcOffLevel(50);   // 34 dB
                 d.setApf(apfOn, 50, kPitchHz);
             };
             const double onPitch = measureRms(mode, 0, kPitchHz, 1e-3, prep);
@@ -277,7 +285,7 @@ int main(int argc, char** argv)
                   && std::abs(c->apfBandwidthHz - Hl2RxDsp::apfBandwidthHzForLevel(80)) < 1e-9
                   && std::abs(c->apfGain - Hl2RxDsp::kApfGain) < 1e-9,
               "the channel read-back reports the APF design WDSP accepted");
-        check(c && std::abs(c->agcFixedGainDb - 24.0) < 1e-9,
+        check(c && std::abs(c->agcFixedGainDb - 28.0) < 1e-9,
               "the channel read-back reports the fixed gain WDSP accepted");
 
         // What a sample-rate change does: configure() with a caller's fresh
@@ -290,7 +298,7 @@ int main(int argc, char** argv)
         check(c && c->apfEnabled && std::abs(c->apfCenterHz - 700.0) < 1e-9
                   && std::abs(c->apfBandwidthHz - Hl2RxDsp::apfBandwidthHzForLevel(80)) < 1e-9,
               "the APF survives the rebuild");
-        check(c && std::abs(c->agcFixedGainDb - 24.0) < 1e-9,
+        check(c && std::abs(c->agcFixedGainDb - 28.0) < 1e-9,
               "the AGC-off level survives the rebuild");
 
         // Leaving CW takes the stage out of circuit without forgetting it.

@@ -330,10 +330,9 @@ int main(int argc, char** argv)
               "a fresh receiver publishes the APF and off-level defaults its chain runs");
         QVariantMap c = rx0();
         check(c.value(QStringLiteral("apfRun")).toBool() == false
-                  && near(c.value(QStringLiteral("agcFixedGainDb")),
-                          hl2::Hl2RxDsp::agcFixedGainDbForOffLevel(
-                              hl2::Hl2RxDsp::kDefaultAgcOffLevel)),
-              "the chain opened with the APF off and the default AGC-off gain");
+                  && c.value(QStringLiteral("agcFixedGainDb")).toDouble() == 10.0,
+              "the chain opened with the APF off and AGC Off at exactly the 10 dB "
+              "origin/main always ran");
 
         backend.setSliceApf(0, true, 80);
         backend.setSliceAgcOffLevel(0, 40);
@@ -345,8 +344,8 @@ int main(int argc, char** argv)
                   && near(c.value(QStringLiteral("apfBandwidthHz")),
                           hl2::Hl2RxDsp::apfBandwidthHzForLevel(80)),
               "in CW the APF runs, centred on the CW pitch, at the level's bandwidth");
-        check(near(c.value(QStringLiteral("agcFixedGainDb")), 24.0),
-              "the AGC-off level reached WDSP's fixed gain (40 units = 24 dB)");
+        check(near(c.value(QStringLiteral("agcFixedGainDb")), 28.0),
+              "the AGC-off level reached WDSP's fixed gain (40 units = 28 dB)");
 
         backend.setCwPitch(650);
         c = rx0();
