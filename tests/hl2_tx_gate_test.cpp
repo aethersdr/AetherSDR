@@ -15,6 +15,7 @@
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "TxTestAuthority.h"
 #include "core/backends/hl2/MetisProtocol.h"
+#include "core/TxChainLatency.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -198,6 +199,16 @@ public:
         QStringList out;
         for (const QString& line : m_lines) {
             if (line.contains(QStringLiteral("HOST queue starved")))
+                out << line;
+        }
+        return out;
+    }
+    // The once-per-over key-down report (#6052).
+    [[nodiscard]] QStringList keyDownLines() const
+    {
+        QStringList out;
+        for (const QString& line : m_lines) {
+            if (line.contains(QStringLiteral("HL2 tx key-down")))
                 out << line;
         }
         return out;
@@ -1377,6 +1388,59 @@ int main(int argc, char** argv)
                   && lines.first().contains(QStringLiteral("SINCE PROCESS START")),
               "the totals are labelled for what they are -- nothing resets them, "
               "not start(), not a link edge, not flushTxIq()");
+
+        // ---- THE KEY-DOWN REPORT (#6052): the queue's share, per over ----
+        //
+        // The same over, read the way #6052's triage asked for: the empty-queue
+        // silence at the head of the over, as ONE figure, at the moment the
+        // first queued IQ goes out -- next to the voice chain's latency, which
+        // is the other half of what the wire shows as leading zeros. Published
+        // here by hand because AudioEngine is not in this test; 970 is not a
+        // real chain figure, only a value the line must carry through.
+        const QStringList keyDown = log.keyDownLines();
+        check(keyDown.size() == 1, "ONE key-down line per over");
+        check(keydown.lastKeyDownUnderflowSamples()
+                  == preRollPackets * static_cast<std::uint64_t>(kTxSamplesPerPacket),
+              "the key-down figure is the pre-roll: every empty-queue sample "
+              "between MOX-on and the first queued IQ");
+        check(!keyDown.isEmpty()
+                  && keyDown.first().contains(QString::number(
+                         preRollPackets * static_cast<std::uint64_t>(kTxSamplesPerPacket))
+                         + QStringLiteral(" samples")),
+              "and the line carries it");
+    }
+    {
+        // The voice chain's figure rides in the same line, and an unpublished
+        // one says so instead of printing -1 as if it were a delay.
+        TxTestAuthority tx;
+        ScopedTxFifoLog log;
+        MetisClient over;
+        over.enableTransmit(true);
+        AetherSDR::TxChainLatency::publishVoiceProcessorFrames(970);
+        over.setMox(true, tx.operation);
+        (void)over.buildNextControlPacket();                // one empty packet
+        const std::vector<std::complex<float>> block(
+            static_cast<std::size_t>(kTxSamplesPerPacket), std::complex<float>(0.25f, -0.25f));
+        over.queueTxIq(block, tx.context);
+        (void)over.buildNextControlPacket();                // first queued IQ
+        (void)over.buildNextControlPacket();                // nothing queued: no second line
+        QStringList lines = log.keyDownLines();
+        check(lines.size() == 1 && lines.first().contains(QStringLiteral("970 frames")),
+              "the key-down line carries TxVoiceProcessor::latencyFrames() as published");
+        check(over.lastKeyDownUnderflowSamples()
+                  == static_cast<std::uint64_t>(kTxSamplesPerPacket),
+              "one empty packet before the first IQ is one packet of key-down silence");
+
+        over.setMox(false, tx.operation);
+        AetherSDR::TxChainLatency::publishVoiceProcessorFrames(-1);
+        over.setMox(true, tx.operation);                     // a NEW over re-arms it
+        over.queueTxIq(block, tx.context);
+        (void)over.buildNextControlPacket();
+        lines = log.keyDownLines();
+        check(lines.size() == 2 && lines.last().contains(QStringLiteral("n/a")),
+              "each over reports once, and an unpublished chain figure reads n/a");
+        check(over.lastKeyDownUnderflowSamples() == 0,
+              "an over whose queue was primed at MOX-on reports no key-down silence");
     }
 
     {

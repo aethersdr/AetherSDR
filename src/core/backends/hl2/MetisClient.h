@@ -399,6 +399,14 @@ public:
     [[nodiscard]] std::uint64_t txUnderflowPackets() const noexcept { return m_txUnderflowPackets; }
     [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
     [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
+    // Empty-queue keyed silence at the head of the most recent over that
+    // carried queued IQ, in EP2 samples: txUnderflowSamples from MOX-on to the
+    // first queued sample. Logged at that moment under lcHl2Tx. Same THREAD
+    // CONTRACT as the three above.
+    [[nodiscard]] std::uint64_t lastKeyDownUnderflowSamples() const noexcept
+    {
+        return m_lastKeyDownUnderflowSamples;
+    }
 
     // Baseband test tone, offsetHz from the TX carrier, amplitude 0..1 (<= 0
     // disables); takes precedence over queued IQ. Synthesised per EP2 packet with
@@ -805,6 +813,14 @@ private:
             / static_cast<std::uint64_t>(kTxSamplesPerPacket);
     std::uint64_t m_txUnderflowRunQuietPackets = 0;
     void reportTxUnderflowRun();
+    // Key-down report (#6052): armed on MOX's rising edge with the underflow
+    // total, reported once on the first keyed packet carrying queued IQ. The
+    // difference is the empty-queue silence this queue put at the head of the
+    // over. CW and the test tone never reach the queued arm and log nothing.
+    bool m_keyDownReportPending = false;
+    std::uint64_t m_keyDownUnderflowBase = 0;
+    std::uint64_t m_lastKeyDownUnderflowSamples = 0;
+    void reportKeyDown();
     double m_toneHz = 0.0;
     double m_toneAmp = 0.0;
     double m_tonePhase = 0.0;   // radians, carried across packets

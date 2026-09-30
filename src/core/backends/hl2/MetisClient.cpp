@@ -1,6 +1,7 @@
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2EmergencyStop.h"
 #include "core/LogManager.h"   // lcHl2 — commanded-NCO breadcrumbs
+#include "core/TxChainLatency.h"
 
 #include <QElapsedTimer>
 #include <QThread>
@@ -1293,6 +1294,12 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
     if (m_mox == was)
         return;
 
+    // The key-down report (#6052): armed on the rising edge, disarmed on the
+    // falling one so an over that never carried queued IQ says nothing.
+    m_keyDownReportPending = m_mox;
+    if (m_mox)
+        m_keyDownUnderflowBase = m_txUnderflowSamples;
+
     // THE BANDSCOPE'S TRANSMIT INTERLOCK, on the edges of the one member that
     // is the final authority for keying on the wire (buildNextControlPacket
     // reads exactly this, ANDed with the gate). The HL2 receives while it
@@ -1457,6 +1464,30 @@ void MetisClient::reportTxUnderflowRun()
                      << "by it and cannot be used to rule it out.";
     m_txUnderflowRunPackets = 0;
     m_txUnderflowRunSamples = 0;
+}
+
+void MetisClient::reportKeyDown()
+{
+    m_keyDownReportPending = false;
+    m_lastKeyDownUnderflowSamples = m_txUnderflowSamples - m_keyDownUnderflowBase;
+    // Both figures are 48 kHz samples: EP2 is clocked at kEp2AudioRateHz and
+    // latencyFrames() is defined at 48 kHz, so they add without conversion.
+    const auto ms = [](double samples) {
+        return QString::number(1000.0 * samples / kEp2AudioRateHz, 'f', 2);
+    };
+    const int chain = TxChainLatency::voiceProcessorFrames();
+    const QString chainText = chain >= 0
+        ? QStringLiteral("%1 frames (%2 ms)").arg(chain).arg(ms(chain))
+        : QStringLiteral("n/a (the transmit audio is not on the microphone path)");
+    qCDebug(lcHl2Tx).nospace().noquote()
+        << "HL2 tx key-down: first queued IQ after "
+        << m_lastKeyDownUnderflowSamples << " samples ("
+        << ms(static_cast<double>(m_lastKeyDownUnderflowSamples))
+        << " ms) of EMPTY-QUEUE keyed silence (txUnderflowSamples since MOX-on);"
+        << " upstream of the queue, TxVoiceProcessor::latencyFrames() = "
+        << chainText
+        << ". Neither figure includes the WDSP TXA channel's own delay, which is"
+        << " fixed by its configuration and measured offline (hl2_tx_latency_test).";
 }
 
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
@@ -1636,6 +1667,8 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket(qin
             if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets)
                 reportTxUnderflowRun();
         }
+        if (n > 0 && m_keyDownReportPending)
+            reportKeyDown();
         if (n > 0)
             ep2WriteTxIq(pkt, block);   // a short block leaves the rest as silence
         // n == 0 needs no write at all: ep2Packet already zero-filled the
