@@ -331,6 +331,13 @@ public:
     // non-positive or non-finite centre, bandwidth or gain rather than handing
     // WDSP a filter design it would divide by. Stored in Config so open()
     // re-applies it after a reconfigure().
+    //
+    // WHILE IT RUNS, BOTH OUTPUT CHANNELS COME FROM I ALONE. RXA.c builds the
+    // double-pole in mode 2 (CWL + CWU), and xdoublepole overwrites Q with I
+    // before filtering (doublepole.c), so whatever difference the chain
+    // carried between left and right into this stage is gone after it. WDSP's
+    // design, harmless for ordinary CW; stated so a future stereo CW path is
+    // not surprised by it.
     bool setApf(bool enabled, double centerHz, double bandwidthHz, double gain) noexcept;
     [[nodiscard]] static bool apfParametersValid(double centerHz, double bandwidthHz,
                                                  double gain) noexcept;
