@@ -57,6 +57,8 @@ std::mutex g_channelMutex;
 // genuinely re-plan. Widening it was never a decision anyone made -- it is
 // simply what one mutex serving two jobs became.
 std::mutex& g_setupMutex = AetherSDR::fftwPlannerMutex();
+// apfshadow.c's `selection`: 0 double-pole, 1 matched, 2 gaussian, 3 bi-quad.
+constexpr int kApfSelectionDoublePole = 0;
 std::array<bool, kWdspChannelCount> g_channelsInUse {};
 
 // WDSP builds its FFTs with FFTW_PATIENT — ~220 planner calls per RX channel
@@ -1344,6 +1346,18 @@ void WdspChannel::open() noexcept
         // freed by close(), so the operator's APF is re-pushed on every open,
         // for the same reason as the deviation above. validateConfig() has
         // already refused a design WDSP could not build.
+        //
+        // The selection FIRST, and stated rather than inherited. Everything
+        // this class and Hl2RxDsp reason about is the DOUBLE-POLE:
+        // apfParametersValid() guards its divide by the centre, the level map
+        // is sized against calc_dpole_nc, and "one positive centre serves CWL
+        // and CWU" is its mode-2 I-into-Q copy. create_apfshadow (RXA.c)
+        // happens to start on 0 today; a WDSP update that started elsewhere
+        // would silently route every call below to the matched or gaussian
+        // filter, which scale the gain by sqrt(2) and size themselves
+        // differently. On today's WDSP this is a no-op (SetRXASPCWSelection
+        // returns early when the selection is unchanged), so it costs nothing.
+        SetRXASPCWSelection(m_channelId, kApfSelectionDoublePole);
         SetRXASPCWFreq(m_channelId, m_config.apfCenterHz);
         SetRXASPCWBandwidth(m_channelId, m_config.apfBandwidthHz);
         SetRXASPCWGain(m_channelId, m_config.apfGain);

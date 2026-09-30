@@ -206,8 +206,12 @@ void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 // sidebands. `gain` is LINEAR, not dB (the matched and gaussian variants
 // multiply it by sqrt(2) internally; the double-pole and bi-quad do not).
 //
-// Every call takes ch[channel].csDSP through the stage it lands on and
-// rebuilds that stage's impulse response, so these are control-path work.
+// Every call takes ch[channel].csDSP through the stage it lands on, so these
+// are control-path work. The double-pole rebuilds its impulse response only
+// when centre, bandwidth or gain actually changed (CalcDoublepoleFilter's own
+// guard, doublepole.c), and plans an FFT only when its length changes.
+// WdspChannel::open() sets the selection to 0 explicitly rather than relying
+// on create_apfshadow's default.
 void SetRXASPCWSelection(int channel, int selection);
 void SetRXASPCWRun(int channel, int run);
 void SetRXASPCWFreq(int channel, double centerHz);
