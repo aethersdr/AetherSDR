@@ -178,7 +178,8 @@ private:
     // relayed FWD meter and the device's `fwd` field agree to within 0.05 dB —
     // so the choice between them is about rate, not truth. During a transmit
     // the relayed FWD and RL values change 13 to 19 times a second, and the
-    // device's own 2 to 11 times (docs/pgxl-telemetry-source-evidence.md).
+    // device's own 2 to 11 times, measured polling the PGXL every 50 ms, twice
+    // the rate this client polls it (docs/pgxl-telemetry-source-evidence.md).
     // The relay therefore wins while its sample is fresh, and the device feed
     // takes over when the radio is not publishing amplifier meters at all
     // (no relay, or before the meter manifest lands). Last-writer-wins between

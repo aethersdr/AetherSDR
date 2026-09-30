@@ -1768,6 +1768,22 @@ void testTunerDrainCurrentIsNotRoutedToTheAmplifier()
     report("a tuner's drain current meter is not routed to the amplifier", !sawValid);
 }
 
+// Nor a tuner's TEMP: on the amplifier it would also hold off the PGXL's own
+// PA heatsink reading while it looked fresh.
+void testTunerTemperatureIsNotRoutedToTheAmplifier()
+{
+    MeterModel model;
+    model.setTgxlHandle(kTgxlHandle);
+    model.defineMeter(ampMeter(20, kTgxlHandle, "TEMP", "degC", 0.0, 100.0));
+
+    bool sawValid = false;
+    QObject::connect(&model, &MeterModel::ampVitalsChanged,
+                     [&](float, bool, float, bool tv) { sawValid = sawValid || tv; });
+
+    model.updateValues({20}, {qint16(40.0f * 64.0f)});
+    report("a tuner's temperature meter is not routed to the amplifier", !sawValid);
+}
+
 // The two FWD meters are told apart by handle, and the manifest arrives BEFORE
 // the TGXL handle is known on a cold start. The rescan in setTgxlHandle is what
 // stops the tuner's FWD landing on the amplifier's gauge — without it the two
@@ -1988,6 +2004,7 @@ int main(int argc, char** argv)
     testRemovingTheDriveMeterClearsTheReading();
     testAmplifierVitalsAreRouted();
     testTunerDrainCurrentIsNotRoutedToTheAmplifier();
+    testTunerTemperatureIsNotRoutedToTheAmplifier();
     testAmpAndTunerMetersSplitByHandleAfterALateHandle();
     testTunerHandleDriveDoesNotReachTheAmplifier();
     testAmpPowerFlagTracksOnlyPowerMeters();

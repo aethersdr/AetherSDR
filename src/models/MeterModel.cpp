@@ -94,6 +94,9 @@ void MeterModel::setTgxlHandle(quint32 handle)
     m_ampIdIdx = -1;
     m_ampDrainCurrent = 0.0f;
     m_hasAmpDrainCurrentValue = false;
+    // TEMP is handle-matched below, so it may not be found again either.
+    m_ampTemp = 0.0f;
+    m_hasAmpTempValue = false;
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const auto& def = *it;
         if (def.source == "AMP" && def.name == "FWD" && def.unit == "dBm") {
@@ -114,7 +117,9 @@ void MeterModel::setTgxlHandle(quint32 handle)
             if (handle == 0 || def.sourceIndex != static_cast<int>(handle))
                 m_ampDrvIdx = def.index;
         } else if (def.source == "AMP" && def.name == "TEMP") {
-            m_ampTempIdx = def.index;
+            // Handle-matched for the same reason as DRV and ID.
+            if (handle == 0 || def.sourceIndex != static_cast<int>(handle))
+                m_ampTempIdx = def.index;
         } else if (def.source == "AMP" && def.name == "ID" && def.unit == "Amps") {
             // Handle-matched for the same reason as DRV.
             if (handle == 0 || def.sourceIndex != static_cast<int>(handle))
@@ -235,8 +240,13 @@ void MeterModel::defineMeter(const MeterDef& def)
         if (m_tgxlHandle == 0 || def.sourceIndex != static_cast<int>(m_tgxlHandle))
             m_ampDrvIdx = def.index;
     }
-    else if (def.source == "AMP" && def.name == "TEMP")
-        m_ampTempIdx = def.index;
+    else if (def.source == "AMP" && def.name == "TEMP") {
+        // The PGXL's PA heatsink. Handle-matched for the same reason as DRV:
+        // a tuner's TEMP, should one appear, must not land on the amplifier,
+        // where it would also hold off the PGXL's own reading.
+        if (m_tgxlHandle == 0 || def.sourceIndex != static_cast<int>(m_tgxlHandle))
+            m_ampTempIdx = def.index;
+    }
     else if (def.source == "AMP" && def.name == "ID" && def.unit == "Amps") {
         // The PGXL's drain current. Handle-matched for the same reason as DRV.
         if (m_tgxlHandle == 0 || def.sourceIndex != static_cast<int>(m_tgxlHandle))

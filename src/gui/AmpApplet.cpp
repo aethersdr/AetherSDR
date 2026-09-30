@@ -1249,6 +1249,11 @@ void AmpApplet::setDrainCurrent(float amps)
 void AmpApplet::setRadioDrainCurrent(float amps, bool valid)
 {
     if (!valid) {
+        // The last value stays on the gauge, unlike drive, whose row hides when
+        // its meter goes (setDrivePower). Drive has no other source, so a bar
+        // left standing would be a reading nobody is updating. Drain current
+        // does: the PGXL's own value takes over at once, and the radio's ID
+        // meter only goes away with the amplifier, which takes the panel too.
         m_radioDrainCurrent.invalidate();
         return;
     }
