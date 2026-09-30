@@ -969,8 +969,8 @@ void AmpApplet::applyTelemetryStyles(qreal scale)
             .arg(hasReading ? QStringLiteral("{{color.text.primary}}")
                             : QStringLiteral("{{color.text.disabled}}")));
     };
-    styleTemp(m_tempBtn, m_hasTempA);
-    styleTemp(m_hlTempBtn, m_hasTempB);
+    styleTemp(m_tempBtn, m_hasPaHeatsinkTemp);
+    styleTemp(m_hlTempBtn, m_hasHarmonicLoadHeatsinkTemp);
 
     // Hold the temperature column at the width of its widest possible reading,
     // so Vac and Vdd beside it never move. Fixed-length text alone does that
@@ -1249,22 +1249,25 @@ void AmpApplet::setSwr(float swr)
     // Label text is updated by the 100 ms timer (updateValueLabels).
 }
 
-void AmpApplet::setTemp(float degC)
+void AmpApplet::setPaHeatsinkTemp(float degC)
 {
-    m_tempA = degC;
-    const bool firstReading = !m_hasTempA;
-    m_hasTempA = true;
+    m_paHeatsinkTemp = degC;
+    const bool firstReading = !m_hasPaHeatsinkTemp;
+    m_hasPaHeatsinkTemp = true;
     if (firstReading) {
         applyTelemetryStyles(contentScale());   // from grey to a live reading
     }
     updateTempLabel();
 }
 
-void AmpApplet::setTempB(float degC)
+void AmpApplet::setHarmonicLoadHeatsinkTemp(float degC)
 {
-    m_tempB = degC;
-    const bool firstReading = !m_hasTempB;
-    m_hasTempB = true;
+    // Direct connection only, like Vdd and Vac: a late write after the
+    // connection drops must not put a stale value back on screen.
+    if (!m_directConnected) return;
+    m_harmonicLoadHeatsinkTemp = degC;
+    const bool firstReading = !m_hasHarmonicLoadHeatsinkTemp;
+    m_hasHarmonicLoadHeatsinkTemp = true;
     if (firstReading) {
         applyTelemetryStyles(contentScale());   // from grey to a live reading
     }
@@ -1277,48 +1280,44 @@ void AmpApplet::updateTempLabel()
         return;
     }
 
-    const QString tempA = m_hasTempA
-        ? formatTemp(m_tempA, m_tempFahrenheit)
+    const QString paText = m_hasPaHeatsinkTemp
+        ? formatTemp(m_paHeatsinkTemp, m_tempFahrenheit)
         : QStringLiteral("—");
     const QString unit = m_tempFahrenheit
         ? QStringLiteral("F")
         : QStringLiteral("C");
 
-    // Both sensors are named. The amplifier's own panel runs them unlabelled
-    // as "24.4/24.2 C", which is fine on hardware where the operator knows
-    // which is which and nothing else on screen is a temperature; here two
-    // bare numbers say nothing about what either one is measuring.
+    // The PGXL front panel shows both temperatures without labels, for
+    // example "24.4/24.2 C". The first is the PA heatsink and the second is
+    // the Harmonic Load heatsink (PowerGeniusXL User Guide v3.9.8, p. 55).
+    // We label them PA and HL so the operator knows which is which.
     //
-    // HL is the wire's own name for the second (`hltemp`). PA is not — the
-    // first arrives as a bare `temp`, and PA is what an unqualified
-    // temperature on a power amplifier is. A one-line change if 4O3A ever
-    // says otherwise.
-    //
-    // The text keeps one length whatever the values, so the readings beside
-    // it never shift. The spare spaces go at the END rather than in front of
-    // each number, where they would open a visible gap ("HL  89.8").
-    const QString tempB = m_hasTempB
-        ? formatTemp(m_tempB, m_tempFahrenheit)
+    // Each readout keeps one length whatever its value, so nothing beside it
+    // shifts. The spare spaces go at the END rather than in front of the
+    // number, where they would open a visible gap ("HL  89.8").
+    const QString hlText = m_hasHarmonicLoadHeatsinkTemp
+        ? formatTemp(m_harmonicLoadHeatsinkTemp, m_tempFahrenheit)
         : QStringLiteral("—");
-    m_tempBtn->setText(readout(QStringLiteral("PA"), tempA, unit));
+    m_tempBtn->setText(readout(QStringLiteral("PA"), paText, unit));
     // HL keeps its place with a dash when there is no reading, so the rows
     // do not move when it arrives or goes.
-    m_hlTempBtn->setText(readout(QStringLiteral("HL"), tempB, unit));
+    m_hlTempBtn->setText(readout(QStringLiteral("HL"), hlText, unit));
 
     const QString nextUnit = m_tempFahrenheit
         ? tr("Celsius")
         : tr("Fahrenheit");
     const QString unitName = m_tempFahrenheit ? tr("Fahrenheit") : tr("Celsius");
+    // Each readout's tooltip explains only its own label.
     m_tempBtn->setToolTip(
         tr("PA heatsink temperature\nClick to show degrees %1").arg(nextUnit));
     m_hlTempBtn->setToolTip(
         tr("Harmonic Load heatsink temperature\nClick to show degrees %1").arg(nextUnit));
     // Spoken in words: the visible dash becomes "not reported".
-    m_tempBtn->setAccessibleName(m_hasTempA
-        ? tr("PA heatsink %1 degrees %2").arg(tempA, unitName)
+    m_tempBtn->setAccessibleName(m_hasPaHeatsinkTemp
+        ? tr("PA heatsink %1 degrees %2").arg(paText, unitName)
         : tr("PA heatsink not reported"));
-    m_hlTempBtn->setAccessibleName(m_hasTempB
-        ? tr("Harmonic Load heatsink %1 degrees %2").arg(tempB, unitName)
+    m_hlTempBtn->setAccessibleName(m_hasHarmonicLoadHeatsinkTemp
+        ? tr("Harmonic Load heatsink %1 degrees %2").arg(hlText, unitName)
         : tr("Harmonic Load heatsink not reported"));
     if (QAccessible::isActive()) {
         for (QPushButton* btn : {m_tempBtn, m_hlTempBtn}) {
@@ -1608,6 +1607,12 @@ void AmpApplet::setDirectConnected(bool direct)
         m_drainVoltsText = QStringLiteral("—");
         m_mainsVoltsText = QStringLiteral("—");
         updateVoltsLabel();
+        // The radio relays only the PA heatsink temperature. Drop the Harmonic
+        // Load heatsink temperature so its last value does not stay on screen
+        // as if it were still live. It returns with the next direct reading.
+        m_hasHarmonicLoadHeatsinkTemp = false;
+        updateTempLabel();
+        applyTelemetryStyles(contentScale());   // HL back to the grey dash
         // Fan mode is only available via the direct PGXL protocol — drop it
         // until the amplifier is back rather than leaving a control up that
         // can no longer command anything.
