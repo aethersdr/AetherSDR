@@ -112,6 +112,18 @@ public:
     [[nodiscard]] int wdspChannelId() const noexcept;
     [[nodiscard]] const WdspChannel::Config* channelConfig() const noexcept;
 
+#if AETHER_HL2_TX_TXA
+    // The TXA channel config buildModulator() opens, as a pure function of
+    // Config, so tests/hl2_tx_latency_test.cpp opens the same channel offline.
+    [[nodiscard]] static WdspChannel::Config modulatorChannelConfig(const Config& config);
+
+    // No delay before the TX mute up-ramp (WdspChannel::Config's default is
+    // 10 ms). WDSP's upslew0 zeroes delay x rate samples of real audio after
+    // the first non-zero input, i.e. the start of every over (#6052). Thetis
+    // and pihpsdr both open TX with 0; the 25 ms up-slew (de-click) is kept.
+    static constexpr double kTxMuteDelayUpSec = 0.0;
+#endif
+
     // Blocks the modulator could not place on the wire since configure(): each
     // non-Ok WdspChannel::processIq in the TXA build, always 0 in the phasing
     // build. Surfaced in the log and health snapshot. Read on the I/O thread,

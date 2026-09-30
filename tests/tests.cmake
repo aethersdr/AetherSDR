@@ -7226,6 +7226,16 @@ target_link_libraries(hl2_tx_passband_onset_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_tx_passband_onset_test COMMAND hl2_tx_passband_onset_test)
 set_tests_properties(hl2_tx_passband_onset_test PROPERTIES SKIP_RETURN_CODE 77)
 
+# Transmit latency of the HL2's WDSP TXA channel, offline (#6052): tone onset
+# and impulse delay read off emitted IQ, plus the sideband suppression the
+# latency choices must not cost. TXA-only -- the phasing build has no channel.
+if(AETHER_HL2_TX_TXA)
+    add_executable(hl2_tx_latency_test tests/hl2_tx_latency_test.cpp)
+    target_include_directories(hl2_tx_latency_test PRIVATE src)
+    target_link_libraries(hl2_tx_latency_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME hl2_tx_latency_test COMMAND hl2_tx_latency_test)
+endif()
+
 # radiocert's measurement primitives. Header-only by design so this needs no
 # Qt and no link against aethercore — see the test's header comment for why it
 # exists at all (both shipped bugs in the diagnostic were in this arithmetic).
