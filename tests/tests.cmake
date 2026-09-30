@@ -4591,6 +4591,9 @@ add_test(NAME rigctl_strength_slevel_test COMMAND rigctl_strength_slevel_test)
 # a stub backend and an unopened RadioConnection; nothing is opened or keyed.
 add_executable(reroute_dead_controls_test tests/reroute_dead_controls_test.cpp)
 target_include_directories(reroute_dead_controls_test PRIVATE src tests)
+# The source root lets it read the MainWindow wiring it cannot construct.
+target_compile_definitions(reroute_dead_controls_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(reroute_dead_controls_test PRIVATE
     aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME reroute_dead_controls_test COMMAND reroute_dead_controls_test)

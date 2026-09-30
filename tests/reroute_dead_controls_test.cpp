@@ -30,6 +30,9 @@
 #include "models/TransmitModel.h"
 
 #include <QCoreApplication>
+#include <QDirIterator>
+#include <QFile>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QStringList>
 
@@ -320,6 +323,53 @@ void testLevelFaceReadsMicPeakWhereThereIsNoMicMeter()
           "S-meter: a radio with neither meter is unchanged");
 }
 
+// Every consumer of micMetersChanged shows a "transmit level": the S-meter's
+// Level face, the VFO SmartMTR, the Phone/CW Level gauge and TCI tx_sensors.
+// They must agree, so each has to pass the level through the one helper. Read
+// as source text because the three GUI consumers are lambdas in MainWindow,
+// which this test cannot construct; a new consumer that forgets the helper
+// fails here too.
+QString readSource(const QString& relative)
+{
+    QFile file(QStringLiteral(AETHER_SOURCE_DIR "/") + relative);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+    return QString::fromUtf8(file.readAll());
+}
+
+void testEveryTransmitLevelConsumerUsesTheHelper()
+{
+    const QString marker = QStringLiteral("&MeterModel::micMetersChanged");
+    int consumers = 0;
+    int usingHelper = 0;
+    QDirIterator it(QStringLiteral(AETHER_SOURCE_DIR "/src"), {QStringLiteral("*.cpp")},
+                    QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString path = it.next();
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            continue;
+        }
+        const QString text = QString::fromUtf8(file.readAll());
+        for (qsizetype at = text.indexOf(marker); at >= 0;
+             at = text.indexOf(marker, at + marker.size())) {
+            const qsizetype end = text.indexOf(QStringLiteral("});"), at);
+            const QString body = text.mid(at, end < 0 ? -1 : end - at);
+            ++consumers;
+            if (body.contains(QStringLiteral("transmitLevelFaceValue("))) {
+                ++usingHelper;
+            } else {
+                std::printf("       no transmitLevelFaceValue in the consumer at %s\n",
+                            qPrintable(path));
+            }
+        }
+    }
+    check(consumers >= 4, "level face: the four micMetersChanged consumers are found");
+    check(consumers == usingHelper,
+          "level face: every consumer shows MICPEAK where there is no MIC (VFO, Phone/CW, TCI too)");
+}
+
 // ── Rows 12/13: band-stack bookmark recall ──────────────────────────────────
 
 BandStackEntry bookmark()
@@ -433,6 +483,7 @@ int main(int argc, char** argv)
     testAmCarrierFollowsTheCapability();
     testGraphicEqIsNotReportedAsUnsupported();
     testLevelFaceReadsMicPeakWhereThereIsNoMicMeter();
+    testEveryTransmitLevelConsumerUsesTheHelper();
     testBandStackRecallReachesTheSeam();
     testBandStackRecallWritesTheSameFlexWireText();
     testNetFilterReachesTheSeam();

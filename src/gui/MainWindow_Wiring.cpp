@@ -1566,9 +1566,13 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
     // shows the operator-selected meter only on its own TX slice while
     // transmitting. No amp-operate gate (unlike the analog S-Meter below): the
     // meter reports the truth of whatever the operator selected.
+    // The mic value is the same "transmit level" the S-meter's Level face
+    // shows (MeterModel::transmitLevelFaceValue): MICPEAK on a radio that
+    // publishes no MIC meter (HL2), where MIC would sit on its floor.
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            vfo, [vfo](float micLevel, float, float micPeak, float compPeak) {
-        vfo->setMicLevel(micLevel, micPeak);
+            vfo, [this, vfo](float micLevel, float, float micPeak, float compPeak) {
+        vfo->setMicLevel(
+            m_radioModel.meterModel().transmitLevelFaceValue(micLevel, micPeak), micPeak);
         vfo->setTxCompression(compPeak);
     });
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
