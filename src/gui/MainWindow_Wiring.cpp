@@ -5387,12 +5387,19 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     });
     connect(sw, &SpectrumWidget::spotRemoveRequested, this, [this](int spotIndex) {
-        if (isPassiveLocalSpotId(spotIndex)) {
+        // Client-side spots never reach the wire: HL2 has no command plane,
+        // and no radio knows a passive-local ID (#6037).
+        switch (SpotLabelPolicy::removeRoute(spotIndex)) {
+        case SpotLabelPolicy::RemoveRoute::LocalModel:
             m_passiveSpotExpiryMs.remove(spotIndex);
             m_radioModel.spotModel().removeSpot(spotIndex);
             return;
+        case SpotLabelPolicy::RemoveRoute::RadioCommand:
+            m_radioModel.sendCommand(QString("spot remove %1").arg(spotIndex));
+            return;
+        case SpotLabelPolicy::RemoveRoute::Ignore:
+            return;
         }
-        m_radioModel.sendCommand(QString("spot remove %1").arg(spotIndex));
     });
 
     // ── +RX / +TNF buttons ───────────────────────────────────────────────

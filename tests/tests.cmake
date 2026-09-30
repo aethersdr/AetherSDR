@@ -3233,6 +3233,18 @@ target_compile_definitions(passive_spots_policy_test PRIVATE
 target_link_libraries(passive_spots_policy_test PRIVATE Qt6::Core)
 add_test(NAME passive_spots_policy_test COMMAND passive_spots_policy_test)
 
+# Right-click on a client-side spot label offers Remove Spot and removes it
+# locally, never as `spot remove` wire text (#6037). Header-only helpers;
+# offscreen QMenu, socket-free.
+add_executable(spot_label_menu_test tests/spot_label_menu_test.cpp)
+target_include_directories(spot_label_menu_test PRIVATE src)
+target_compile_definitions(spot_label_menu_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(spot_label_menu_test PRIVATE Qt6::Core Qt6::Widgets)
+add_test(NAME spot_label_menu_test COMMAND spot_label_menu_test)
+set_tests_properties(spot_label_menu_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(spot_mode_resolver_test
     tests/spot_mode_resolver_test.cpp
     src/core/SpotModeResolver.cpp
