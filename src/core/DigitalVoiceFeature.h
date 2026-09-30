@@ -58,8 +58,9 @@ inline bool digitalVoiceModeSelectable(const QString& radioMode)
 // The Mode Up / Down step: the next entry of modes after currentMode in
 // direction (+1 / -1), skipping any the slice cannot be put in right now.
 // Stepping onto a refused mode left the slice where it was, so every later
-// press asked for the same mode again (#6034). An unknown currentMode starts
-// from the first entry. Empty when no entry is selectable.
+// press asked for the same mode again (#6034). An unknown currentMode is
+// treated as index 0 before stepping, preserving the previous cycle behavior.
+// Empty when no entry is selectable.
 inline QString nextCycledMode(const QStringList& modes, const QString& currentMode,
                               int direction)
 {

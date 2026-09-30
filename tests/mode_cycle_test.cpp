@@ -90,6 +90,8 @@ int main(int argc, char** argv)
 
     ok &= expect(nextCycledMode({}, QStringLiteral("USB"), +1).isEmpty(),
                  "an empty list yields no mode");
+    ok &= expect(nextCycledMode({QStringLiteral("DSTR")}, QStringLiteral("DSTR"), +1).isEmpty(),
+                 "a list of only refused modes yields no mode instead of spinning");
 
     if (!ok) {
         return 1;
