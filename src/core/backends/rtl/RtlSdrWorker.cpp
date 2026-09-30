@@ -13,6 +13,24 @@ namespace {
 constexpr std::uint32_t kRtlBufLength = 16384;
 using T = RtlCaptureTransaction;
 
+bool onlyMonitorDiffers(const T::State& before, const T::State& after)
+{
+    if (before.token.session != after.token.session || before.hardware != after.hardware
+        || before.capture != after.capture || before.dcSuppression != after.dcSuppression
+        || before.automaticDirectSampling != after.automaticDirectSampling
+        || before.receivingIds != after.receivingIds
+        || before.receivers.size() != after.receivers.size()) { return false; }
+    for (std::size_t i = 0; i < before.receivers.size(); ++i) {
+        T::Receiver previous = before.receivers[i];
+        const T::Receiver& next = after.receivers[i];
+        previous.audioGain = next.audioGain;
+        previous.audioPan = next.audioPan;
+        previous.audioMute = next.audioMute;
+        if (previous != next) { return false; }
+    }
+    return true;
+}
+
 } // namespace
 
 RtlSdrWorker::RtlSdrWorker(struct rtlsdr_dev* dev, QObject* parent, std::size_t capacity)
@@ -180,6 +198,22 @@ void RtlSdrWorker::serviceCancellation()
 
 void RtlSdrWorker::applyDdc(const Transaction::State& state)
 {
+    if (m_work->before && m_applied == m_work->before->token && m_applied.revision != 0
+        && !m_work->hardwareChanged && m_result
+        && m_result->code == Transaction::ResultCode::Applied
+        && onlyMonitorDiffers(*m_work->before, state)) {
+        // Includes compensation for a superseded audio-only request. The RF
+        // observation never changed, so retain the partial FFT, cadence and
+        // estimator. Still stamp every new frame with the adopted token; the
+        // backend's publication fences continue rejecting obsolete revisions.
+        const Transaction::Receiver& receiver = state.receivers.front();
+        m_ddc.applyMonitor(receiver.audioGain, receiver.audioPan, receiver.audioMute);
+        m_applied = state.token;
+        qCDebug(lcPerf).nospace() << "RtlCapture phase=monitor_adopt ms=" << QDateTime::currentMSecsSinceEpoch()
+            << " session=" << state.token.session << " revision=" << state.token.revision
+            << " generation=" << state.capture.generation << " compensation=" << m_work->compensation;
+        return;
+    }
     bool compatible = m_work->before && m_applied.session == state.token.session
         && m_applied.revision != 0 && !m_work->compensation
         && m_result && m_result->code == Transaction::ResultCode::Applied

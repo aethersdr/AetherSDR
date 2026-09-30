@@ -46,6 +46,7 @@ struct RtlCaptureBackendTestAccess {
     { emit backend.m_worker->waterfallRowReady(token.session, token.revision, 0, frame); }
     static void service(RtlSdrBackend& backend) { backend.serviceCapture(); }
     static bool stopWorker(RtlSdrBackend& backend) { return backend.m_worker->stopReading(); }
+    static RtlSdrWorker* worker(RtlSdrBackend& backend) { return backend.m_worker.get(); }
     static RtlReceivePipeline::Diagnostics diagnostics(const RtlSdrBackend& backend)
     { return backend.m_worker->diagnostics(); }
 };
@@ -411,6 +412,86 @@ static void receiverTuneKeepsDisplayAverage()
     receiver.disconnectRadio();
 }
 
+static void rapidMonitorEditsKeepSpectrum(bool metersEnabled)
+{
+    auto device = std::make_shared<DeviceState>();
+    rtl::RtlSdrBackend backend;
+    rtl::RtlCaptureBackendTestAccess::start(backend, std::make_unique<InjectedDevice>(device), 2);
+    device->releaseReadback();
+    if (!waitFor([&] { return backend.isConnected(); })) {
+        check(false, "monitor averaging fixture connects");
+        backend.disconnectRadio(); return;
+    }
+    backend.setPanAverage({}, 100);
+    backend.invokeExtension("rtl", "receive_meters.set", 1, metersEnabled);
+    const auto clockBlock = [&] {
+        const int completed = device->callbacks + 1;
+        device->block();
+        check(waitFor([&] { return device->callbacks == completed; }), "monitor callback completes");
+        QThread::usleep(3500);
+        rtl::RtlCaptureBackendTestAccess::service(backend);
+        QCoreApplication::processEvents();
+    };
+    check(backend.createSlice({}, 100'200'000), "monitor fixture admits independent second slice");
+    for (int i = 0; i < 200 && rtl::RtlCaptureBackendTestAccess::busy(backend); ++i) { clockBlock(); }
+    const T::State before = rtl::RtlCaptureBackendTestAccess::state(backend);
+    check(before.receivers.size() == 2, "monitor fixture publishes both receivers");
+    int frames = 0;
+    float lastDc = -999;
+    // Observe production worker frames before publication fencing: superseded
+    // tokens must still be rejected by the backend, but RF cadence must survive.
+    QObject::connect(rtl::RtlCaptureBackendTestAccess::worker(backend),
+        &rtl::RtlSdrWorker::spectrumFrameReady, &backend,
+        [&](quint64, quint64, int, const QByteArray& frame) {
+            ++frames;
+            std::memcpy(&lastDc, frame.constData() + frame.size() / 2, sizeof(lastDc));
+        });
+    for (int i = 0; i < 24; ++i) { clockBlock(); }
+    const int seededFrames = frames;
+    const int writes = device->writes;
+    const int starts = device->starts;
+    device->iqLevel = 190;
+    for (int i = 0; i < 96; ++i) {
+        if (i % 4 == 0) {
+            const int id = (i / 4) % 2;
+            // The second request supersedes the first before its callback;
+            // this exercises real compensation, not a sequential setter test.
+            backend.setSliceAudioGain(id, 20);
+            backend.setSliceAudioGain(id, 60 + id);
+            backend.setSliceAudioPan(id, 30 + id);
+            backend.setSliceAudioMute(id, true);
+        }
+        clockBlock();
+    }
+    check(frames - seededFrames >= 8,
+          "rapid independent monitor edits preserve continuous FFT cadence through compensation");
+    const double raw = 20 * std::log10(std::sqrt(2.) * (190 - 127.5) / 127.5
+                                      * .35875 * (65535. / 65536));
+    for (int i = 0; i < 200 && rtl::RtlCaptureBackendTestAccess::busy(backend); ++i) { clockBlock(); }
+    const int framesBeforeFinal = frames;
+    for (int i = 0; i < 12; ++i) { clockBlock(); }
+    check(frames > framesBeforeFinal && lastDc < raw - 3,
+          "rapid monitor edits retain accumulated averaging instead of reseeding raw power");
+    const T::State after = rtl::RtlCaptureBackendTestAccess::state(backend);
+    check(!rtl::RtlCaptureBackendTestAccess::busy(backend)
+        && after.receivers.size() == 2 && after.receivers[0].audioGain == 60
+        && after.receivers[1].audioGain == 61 && after.receivers[0].audioPan == 30
+        && after.receivers[1].audioPan == 31 && after.receivers[0].audioMute
+        && after.receivers[1].audioMute && after.capture == before.capture
+        && after.hardware == before.hardware && device->writes == writes && device->starts == starts,
+          "latest per-slice monitor intent is confirmed without hardware writes or USB restart");
+    const double retainedDb = raw - lastDc;
+    int staleFrames = 0;
+    QObject::connect(&backend, &IRadioBackend::spectrumFrameReady,
+        [&](int, const QByteArray&) { ++staleFrames; });
+    rtl::RtlCaptureBackendTestAccess::spectrum(backend,
+        QByteArray(65536 * int(sizeof(float)), '\0'), before.token);
+    check(staleFrames == 0, "retaining RF history never admits obsolete revision output");
+    std::printf("monitor_average meters=%d frames=%d retained_db=%.3f\n",
+        metersEnabled, frames - seededFrames, retainedDb);
+    backend.disconnectRadio();
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -418,6 +499,8 @@ int main(int argc, char** argv)
     sustainedPanProgress(false);
     sustainedPanProgress(true);
     receiverTuneKeepsDisplayAverage();
+    rapidMonitorEditsKeepSpectrum(true);
+    rapidMonitorEditsKeepSpectrum(false);
     deferredPanCannotOutliveNewerIntent();
     auto state = std::make_shared<DeviceState>();
     rtl::RtlSdrBackend backend;
