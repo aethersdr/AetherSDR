@@ -3107,13 +3107,10 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 // branch carrying unmerged changes both answer the same
                 // release string. `build` is captured at build time (#5804),
                 // so a harness can check which binary it is talking to.
-                const QJsonObject build{
-                    {QStringLiteral("describe"), QStringLiteral(AETHER_BUILD_DESCRIBE)},
-                    {QStringLiteral("sha"), QStringLiteral(AETHER_BUILD_SHA)},
-                    {QStringLiteral("baseline"), QStringLiteral(AETHER_BUILD_BASELINE)},
-                    {QStringLiteral("commitsSinceTag"), AETHER_BUILD_COMMITS_SINCE_TAG},
-                    {QStringLiteral("dirty"), AETHER_BUILD_DIRTY},
-                };
+                const QJsonObject build = AutomationServer::buildIdentityJson(
+                    QStringLiteral(AETHER_BUILD_DESCRIBE), QStringLiteral(AETHER_BUILD_SHA),
+                    QStringLiteral(AETHER_BUILD_BASELINE), AETHER_BUILD_COMMITS_SINCE_TAG,
+                    AETHER_BUILD_DIRTY);
                 return QJsonObject{
                     {QStringLiteral("ok"), true},
                     {QStringLiteral("app"), QStringLiteral("AetherSDR")},
@@ -13309,6 +13306,19 @@ const char* msgTypeName(int t)
 
 // Serialize one event for the wire. PII is redacted here, on egress, so the
 // in-memory ring stays raw (cheap tap) but nothing sensitive ever leaves.
+QJsonObject AutomationServer::buildIdentityJson(const QString& describe, const QString& sha,
+                                                const QString& baseline, int commitsSinceTag,
+                                                bool dirty)
+{
+    return QJsonObject{
+        {QStringLiteral("describe"), describe},
+        {QStringLiteral("sha"), sha},
+        {QStringLiteral("baseline"), baseline},
+        {QStringLiteral("commitsSinceTag"), commitsSinceTag},
+        {QStringLiteral("dirty"), dirty},
+    };
+}
+
 QJsonObject AutomationServer::logEventToJson(const LogEvent& e)
 {
     return QJsonObject{
