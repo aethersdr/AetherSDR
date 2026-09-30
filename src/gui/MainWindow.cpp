@@ -5467,12 +5467,25 @@ void MainWindow::buildUI()
         if (!e.txAntenna.isEmpty() && e.txAntenna != slice->txAntenna()) {
             m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
         }
+        // AGC while KiwiSDR external receive audio replaces the slice: the
+        // bookmark holds the RADIO's AGC, and the SliceModel setters would
+        // write it into the KiwiSDR AGC instead, so it is sent as before and
+        // recallBandStackReceiveDsp() below leaves the AGC alone.
+        if (slice->externalReceiveReplacementActive()) {
+            if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
+                m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
+            }
+            if (e.agcThreshold != slice->agcThreshold()) {
+                m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
+            }
+        }
         // Volume
         if (static_cast<int>(slice->audioGain()) != e.audioGain) {
             slice->setAudioGain(static_cast<float>(e.audioGain));
         }
-        // AGC, NB and NR through the SliceModel setters, not hand-written wire
-        // text: on a Flex the setters write the same `slice set` commands, and
+        // AGC (outside KiwiSDR replacement, above), NB and NR through the
+        // SliceModel setters, not hand-written wire text: on a Flex the
+        // setters write the same `slice set` commands, and
         // on a seam backend they reach setSliceAgc / setSliceNoiseBlanker,
         // which the raw text bypassed -- the bookmark restored frequency and
         // mode and silently dropped the rest.

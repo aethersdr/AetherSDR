@@ -4505,14 +4505,23 @@ void RadioModel::recallBandStackReceiveDsp(SliceModel* slice,
     if (!slice) {
         return;
     }
-    // Same fields, same comparisons and the same relative order as the
-    // hand-written wire text this replaced, so a Flex receives the same
+    // Same fields, same comparisons and, among themselves, the same order as
+    // the hand-written wire text this replaced, so a Flex receives the same
     // commands.
-    if (!entry.agcMode.isEmpty() && entry.agcMode != slice->agcMode()) {
-        slice->setAgcMode(entry.agcMode);
-    }
-    if (entry.agcThreshold != slice->agcThreshold()) {
-        slice->setAgcThreshold(entry.agcThreshold);
+    //
+    // While KiwiSDR external receive audio replaces this slice, the AGC setters
+    // address the KiwiSDR AGC (a dB threshold on its own range), but the
+    // bookmark holds the RADIO's AGC -- it was saved from agcMode() and
+    // agcThreshold(). The AGC is then not recalled here: the caller writes it
+    // as the same wire text the hand-written recall sent, and the KiwiSDR AGC
+    // is left alone.
+    if (!slice->externalReceiveReplacementActive()) {
+        if (!entry.agcMode.isEmpty() && entry.agcMode != slice->agcMode()) {
+            slice->setAgcMode(entry.agcMode);
+        }
+        if (entry.agcThreshold != slice->agcThreshold()) {
+            slice->setAgcThreshold(entry.agcThreshold);
+        }
     }
     if (entry.nbOn != slice->nbOn()) {
         slice->setNb(entry.nbOn);

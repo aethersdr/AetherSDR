@@ -515,6 +515,44 @@ void testBandStackRecallWritesTheSameFlexWireText()
     check(wire.isEmpty(), "band stack/flex: an already-matching recall sends nothing");
 }
 
+void testBandStackRecallLeavesTheKiwiAgcAlone()
+{
+    // While KiwiSDR external receive audio replaces a slice, SliceModel's AGC
+    // setters write the KiwiSDR AGC. The bookmark holds the RADIO's AGC, so the
+    // recall must not route it there; MainWindow sends it as the hand-written
+    // `slice set` text it always sent.
+    Fixture f([](RadioCapabilities& c) { c.hasRadioSideDsp = true; });
+    f.slice->setExternalReceiveAudioReplacementMute(true);
+    const QString kiwiMode = f.slice->receiveAgcMode();
+    const int kiwiThreshold = f.slice->receiveAgcThreshold();
+    f.backend->agc.clear();
+    QSignalSpy wire(f.slice, &SliceModel::commandReady);
+    f.radio.recallBandStackReceiveDsp(f.slice, bookmark());
+    check(f.slice->receiveAgcMode() == kiwiMode
+              && f.slice->receiveAgcThreshold() == kiwiThreshold,
+          "band stack/kiwi: the KiwiSDR AGC is not overwritten with the radio's");
+    check(f.backend->agc.empty(), "band stack/kiwi: no AGC intent from the recall");
+    const QStringList expected{
+        QStringLiteral("slice set 0 nb=1"),
+        QStringLiteral("slice set 0 nb_level=30"),
+        QStringLiteral("slice set 0 nr=1"),
+        QStringLiteral("slice set 0 nr_level=40"),
+    };
+    check(wireOf(wire) == expected, "band stack/kiwi: NB and NR text as before, no AGC text");
+
+    // ...and the caller still writes the radio's AGC as it did before.
+    const QString mw = readSource(QStringLiteral("src/gui/MainWindow.cpp"));
+    const qsizetype recall = mw.indexOf(QStringLiteral("recallBandStackReceiveDsp(slice, e)"));
+    const qsizetype start = mw.lastIndexOf(QStringLiteral("BandStackPanel::recallRequested"), recall);
+    const QString lambda = (recall > 0 && start > 0) ? mw.mid(start, recall - start) : QString();
+    check(lambda.contains(QStringLiteral("if (slice->externalReceiveReplacementActive())"))
+              && lambda.contains(QStringLiteral(
+                  "QString(\"slice set %1 agc_mode=%2\").arg(id).arg(e.agcMode)"))
+              && lambda.contains(QStringLiteral(
+                  "QString(\"slice set %1 agc_threshold=%2\").arg(id).arg(e.agcThreshold)")),
+          "band stack/kiwi: MainWindow sends the radio AGC text the recall always sent");
+}
+
 // ── Row 14 (filter half): a net's filter on Tune Now ────────────────────────
 
 void testNetFilterReachesTheSeam()
@@ -580,6 +618,7 @@ int main(int argc, char** argv)
     testEveryTransmitLevelConsumerUsesTheHelper();
     testBandStackRecallReachesTheSeam();
     testBandStackRecallWritesTheSameFlexWireText();
+    testBandStackRecallLeavesTheKiwiAgcAlone();
     testNetFilterReachesTheSeam();
     testNetFilterIsNormalisedForLowerSideband();
 

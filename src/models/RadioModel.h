@@ -761,7 +761,10 @@ public:
     // recall used to write by hand; on a seam backend they reach the verbs
     // (setSliceAgc, setSliceNoiseBlanker) the recall used to bypass. NR is
     // recalled only where radio-side NR exists, so a bookmark cannot plant an
-    // "NR on" the radio has no way to honour.
+    // "NR on" the radio has no way to honour. The AGC is skipped while KiwiSDR
+    // external receive audio replaces the slice: the setters would write the
+    // bookmark's radio AGC into the KiwiSDR AGC, so the caller keeps sending
+    // it as the `slice set` text the hand-written recall sent.
     void recallBandStackReceiveDsp(SliceModel* slice, const BandStackEntry& entry);
 
     // ── Memory command routing ──────────────────────────────────────────────
