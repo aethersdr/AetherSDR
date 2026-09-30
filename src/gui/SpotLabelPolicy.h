@@ -2,15 +2,22 @@
 
 // Spot ID space and the spot-label right-click decisions (#6037).
 //
-// Spot IDs are not all radio-owned. The radio's own spots use its
-// non-negative indices; everything this client places in SpotModel itself
-// uses negative IDs offset by a base so the two can never collide:
+// Spot IDs are not all radio-owned, and the sign of an ID does not say which
+// it is. SpotModel is keyed by a plain int shared by three kinds of producer:
 //
+//   radio spots          the radio's own non-negative indices
+//   TCI-injected spots   client-side, but POSITIVE: TciProtocol::cmdSpot
+//                        allocates them from 10000 upward (source "TCI"), so
+//                        nothing keeps them apart from a radio index >= 10000
 //   memory markers       -(kMemorySpotIdBase + memoryIndex)
 //   passive-local spots  m_nextPassiveSpotId-- from -kPassiveSpotIdBase down
 //                        (DX cluster / RBN / WSJT-X / POTA / manual spots in
 //                        Passive mode or on a client-side-spots backend such
 //                        as HL2 and Icom, plus N1MM and EiBi)
+//
+// Only the two negative ranges are disjoint from the radio's by construction.
+// Where a decision needs "does the radio own this spot?", it reads the spot's
+// source as well as its ID (removeRoute below; spotTriggered does the same).
 //
 // The right-click menu once decided "was a label hit?" from the SIGN of the
 // hit marker's ID (`hitSpotIdx >= 0`), so every client-side label fell
@@ -114,12 +121,28 @@ enum class RemoveRoute {
     Ignore,        // not removable through Remove Spot (memory, unknown)
 };
 
-// Only a radio-owned (non-negative) ID is ever written to the radio. A
-// passive-local ID has no radio-side counterpart — and on HL2 there is no
-// command plane to receive one — so it is removed from the model directly.
-inline RemoveRoute removeRoute(int spotIndex)
+// A spot an external TCI client placed. Matched the way the spotTriggered
+// handler matches it, case-insensitively.
+inline bool isTciSpotSource(const QString& source)
 {
-    if (isPassiveLocalSpotId(spotIndex))
+    return source.compare(QLatin1String("TCI"), Qt::CaseInsensitive) == 0;
+}
+
+// `source` is the spot's SpotModel source, empty when the spot is no longer
+// in the model. Only a radio-owned spot is ever written to the radio:
+//  - a passive-local ID has no radio-side counterpart, and on HL2 there is no
+//    command plane to receive one;
+//  - a TCI-injected spot has a positive ID the radio never assigned, so
+//    `spot remove <id>` would name a spot the radio does not know, or one it
+//    does under the same number. TciProtocol::cmdSpotDelete already removes
+//    these from the model directly; Remove Spot does the same.
+// Both are removed from the model here. A memory marker is not removable
+// through Remove Spot (menuFor never offers it one).
+inline RemoveRoute removeRoute(int spotIndex, const QString& source)
+{
+    if (source == QLatin1String("Memory"))
+        return RemoveRoute::Ignore;
+    if (isPassiveLocalSpotId(spotIndex) || isTciSpotSource(source))
         return RemoveRoute::LocalModel;
     if (spotIndex >= 0)
         return RemoveRoute::RadioCommand;

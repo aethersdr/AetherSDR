@@ -1,12 +1,13 @@
 // Right-clicking a client-side spot label must offer Remove Spot (#6037).
 //
 // The spectrum's right-click menu decided "was a label hit?" from the sign of
-// the hit spot's ID (`hitSpotIdx >= 0`). Every spot this client places in
-// SpotModel itself carries a negative ID — passive-local from -2000000 down
+// the hit spot's ID (`hitSpotIdx >= 0`). Most spots this client places in
+// SpotModel itself carry a negative ID — passive-local from -2000000 down
 // (DX cluster, RBN, WSJT-X, POTA and manual spots on HL2, Icom or in Passive
 // mode; N1MM; EiBi), memory markers from -1000000 down — so all of them fell
 // through to the general-area menu: no Remove Spot, and Apply Memory was never
-// reachable by right-click at all.
+// reachable by right-click at all. TCI-injected spots are the exception: they
+// are client-side with POSITIVE IDs, so removal routes on source, not sign.
 //
 // This drives the same helpers the production right-click path in
 // SpectrumWidget::mousePressEvent calls: the label hit-test, the menu choice,
@@ -119,9 +120,9 @@ void testLocalSpotRemovesLocally()
     report("local ID -2000000: Remove Spot requests that exact ID",
            rec.removed == 1 && rec.removedId == localId);
     report("local ID -2000000: removal routes to SpotModel, no wire text",
-           removeRoute(localId) == RemoveRoute::LocalModel);
+           removeRoute(localId, QStringLiteral("DXCluster")) == RemoveRoute::LocalModel);
     report("a later-allocated passive-local ID is still local",
-           removeRoute(-kPassiveSpotIdBase - 12345) == RemoveRoute::LocalModel);
+           removeRoute(-kPassiveSpotIdBase - 12345, QStringLiteral("N1MM")) == RemoveRoute::LocalModel);
 }
 
 void testRadioSpotUnchanged()
@@ -141,8 +142,8 @@ void testRadioSpotUnchanged()
     report("radio ID 0: Remove Spot requests ID 0",
            rec.removed == 1 && rec.removedId == 0);
     report("radio ID 0: removal still goes to the radio as `spot remove`",
-           removeRoute(0) == RemoveRoute::RadioCommand
-           && removeRoute(42) == RemoveRoute::RadioCommand);
+           removeRoute(0, QStringLiteral("RBN")) == RemoveRoute::RadioCommand
+           && removeRoute(42, QStringLiteral("DXCluster")) == RemoveRoute::RadioCommand);
 }
 
 void testMemoryOffersApplyOnly()
@@ -161,7 +162,33 @@ void testMemoryOffersApplyOnly()
     report("memory ID -1000000: Apply triggers that exact ID",
            rec.applied == 1 && rec.appliedId == memoryId);
     report("a memory ID never becomes `spot remove` wire text",
-           removeRoute(memoryId) == RemoveRoute::Ignore);
+           removeRoute(memoryId, QStringLiteral("Memory")) == RemoveRoute::Ignore);
+}
+
+// TCI-injected spots are client-side but carry POSITIVE IDs
+// (TciProtocol::cmdSpot allocates them from 10000 up). The sign of the ID
+// cannot tell them from a radio spot; the source must (review of #6041).
+void testTciSpotRemovesLocally()
+{
+    const int tciId = 10000;  // the first ID TciProtocol::cmdSpot hands out
+    QMenu menu;
+    Recorder rec;
+    addSpotLabelActions(menu, &menu, menuFor(true, QStringLiteral("TCI")),
+                        tciId, QStringLiteral("DL1XYZ"), 14.074, rec.actions());
+    QAction* remove = findAction(menu, QStringLiteral("Remove Spot"));
+    report("TCI ID 10000: Remove Spot is offered", remove != nullptr);
+    if (remove)
+        remove->trigger();
+    report("TCI ID 10000: Remove Spot requests that exact ID",
+           rec.removed == 1 && rec.removedId == tciId);
+    report("TCI ID 10000: removal routes to SpotModel, no `spot remove` wire text",
+           removeRoute(tciId, QStringLiteral("TCI")) == RemoveRoute::LocalModel);
+    report("the TCI source matches case-insensitively, as spotTriggered does",
+           removeRoute(tciId + 7, QStringLiteral("tci")) == RemoveRoute::LocalModel);
+    report("a radio spot at the same positive ID still goes to the radio",
+           removeRoute(tciId, QStringLiteral("RBN")) == RemoveRoute::RadioCommand);
+    report("a radio ID no longer in the model (empty source) still goes to the radio",
+           removeRoute(tciId, QString()) == RemoveRoute::RadioCommand);
 }
 
 void testGeneralAreaAddsNoSpotActions()
@@ -194,7 +221,7 @@ void testShippingCallSites()
     const QByteArray wiring = readSource("src/gui/MainWindow_Wiring.cpp");
     report("the test can read MainWindow_Wiring.cpp", !wiring.isEmpty());
     report("spotRemoveRequested switches on the removal route",
-           wiring.contains("SpotLabelPolicy::removeRoute(spotIndex)"));
+           wiring.contains("SpotLabelPolicy::removeRoute(spotIndex, source)"));
 }
 
 } // namespace
@@ -208,6 +235,7 @@ int main(int argc, char** argv)
     testLocalSpotRemovesLocally();
     testRadioSpotUnchanged();
     testMemoryOffersApplyOnly();
+    testTciSpotRemovesLocally();
     testGeneralAreaAddsNoSpotActions();
     testShippingCallSites();
 

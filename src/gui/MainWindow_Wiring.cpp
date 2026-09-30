@@ -5387,9 +5387,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     });
     connect(sw, &SpectrumWidget::spotRemoveRequested, this, [this](int spotIndex) {
-        // Client-side spots never reach the wire: HL2 has no command plane,
-        // and no radio knows a passive-local ID (#6037).
-        switch (SpotLabelPolicy::removeRoute(spotIndex)) {
+        // Only a radio-owned spot reaches the wire. Passive-local and
+        // TCI-injected spots are client-side and are dropped from the model
+        // here; TCI IDs are positive (TciProtocol::cmdSpot, from 10000 up),
+        // so the route reads the spot's source, not the sign of its ID (#6037).
+        const auto& spots = m_radioModel.spotModel().spots();
+        const auto it = spots.constFind(spotIndex);
+        const QString source = it != spots.cend() ? it->source : QString();
+        switch (SpotLabelPolicy::removeRoute(spotIndex, source)) {
         case SpotLabelPolicy::RemoveRoute::LocalModel:
             m_passiveSpotExpiryMs.remove(spotIndex);
             m_radioModel.spotModel().removeSpot(spotIndex);
