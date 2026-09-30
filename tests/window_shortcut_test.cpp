@@ -1,6 +1,8 @@
 #include "TestSettingsProfile.h"
 #include "core/ShortcutManager.h"
+#include "gui/TxKeyActivationGuard.h"
 
+#include <QAccessible>
 #include <QApplication>
 #include <QDialog>
 #include <QLineEdit>
@@ -179,6 +181,121 @@ int main(int argc, char** argv)
         press(Qt::Key_Space);
         expect(clicks == 1 && spaceCalls == 1,
                "an enabled, allowed shortcut acts and keeps the key from the button");
+    }
+
+    // #5483 follow-up: the key that now reaches the focused widget must not
+    // KEY THE TRANSMITTER. Fusion gives a clicked QPushButton focus, so after a
+    // mouse click on MOX the next Space landed on MOX and latched TX. The
+    // route below is MainWindow::eventFilter()'s order -- PTT (Hold) first,
+    // consuming its key only while shortcuts are on, then the shared guard
+    // refuseTxKeyActivation() that MainWindow calls. No radio is constructed.
+    {
+        struct KeyRoute : QObject {
+            ShortcutManager* shortcuts{nullptr};
+            bool shortcutsOn{false};
+            int pttPresses{0};
+            int pttReleases{0};
+            int refused{0};
+            bool eventFilter(QObject* obj, QEvent* e) override
+            {
+                if (e->type() != QEvent::KeyPress && e->type() != QEvent::KeyRelease)
+                    return false;
+                auto* ke = static_cast<QKeyEvent*>(e);
+                const auto* a = shortcuts->actionForKey(QKeySequence(ke->key()));
+                if (shortcutsOn && !ke->isAutoRepeat() && a
+                    && a->id == QLatin1String("ptt_hold")) {
+                    ++(e->type() == QEvent::KeyPress ? pttPresses : pttReleases);
+                    return true;
+                }
+                if (AetherSDR::refuseTxKeyActivation(obj, ke, shortcutsOn, *shortcuts)) {
+                    ++refused;
+                    return true;
+                }
+                return false;
+            }
+        };
+
+        QDialog host;
+        QPushButton mox(QStringLiteral("MOX"), &host);
+        mox.setCheckable(true);
+        AetherSDR::markTxKeying(&mox);
+        QPushButton ordinary(QStringLiteral("ordinary"), &host);
+        QPushButton receiveOnly(QStringLiteral("receive"), &host);
+        AetherSDR::registerReceiveControlAction(&receiveOnly,
+            [](const std::shared_ptr<AetherSDR::TxController>&, const QString&,
+               const QString&) -> AetherSDR::TxKeyingAction::Prepared { return {}; });
+        for (QPushButton* b : {&mox, &ordinary, &receiveOnly}) {
+            b->setFocusPolicy(Qt::StrongFocus);
+            b->setAutoDefault(false);
+            b->show();
+        }
+        int moxClicks = 0;
+        int ordinaryClicks = 0;
+        int receiveClicks = 0;
+        QObject::connect(&mox, &QPushButton::clicked, [&] { ++moxClicks; });
+        QObject::connect(&ordinary, &QPushButton::clicked, [&] { ++ordinaryClicks; });
+        QObject::connect(&receiveOnly, &QPushButton::clicked, [&] { ++receiveClicks; });
+
+        ShortcutManager keys;
+        // As MainWindow registers it: null handler (no QShortcut), keysTx.
+        keys.registerAction("ptt_hold", "PTT (Hold)", "TX",
+            QKeySequence(Qt::Key_Space), nullptr, false, true);
+        KeyRoute route;
+        route.shortcuts = &keys;
+        app.installEventFilter(&route);
+
+        route.shortcutsOn = false;
+        focus(host, &mox);
+        press(Qt::Key_Space);
+        expect(moxClicks == 0 && !mox.isChecked() && route.refused == 2,
+               "shortcuts off: bound Space on a focused TX-keying button does not key it");
+
+        focus(host, &ordinary);
+        press(Qt::Key_Space);
+        expect(ordinaryClicks == 1,
+               "shortcuts off: bound Space still activates an ordinary focused button");
+
+        focus(host, &receiveOnly);
+        press(Qt::Key_Space);
+        expect(receiveClicks == 1,
+               "shortcuts off: a receive-only control marked for the bridge still activates");
+
+        // Not widened: an activation key bound to nothing is untouched, as at
+        // origin/main -- Return on an auto-default TX button in a dialog.
+        mox.setAutoDefault(true);
+        focus(host, &mox);
+        press(Qt::Key_Return);
+        expect(moxClicks == 1 && mox.isChecked(),
+               "shortcuts off: an UNBOUND activation key on a TX button is unchanged");
+        mox.setAutoDefault(false);
+        mox.setChecked(false);
+
+        // The screen-reader press is not a key event and stays available.
+        QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(&mox);
+        QAccessibleActionInterface* actions = iface ? iface->actionInterface() : nullptr;
+        expect(actions != nullptr, "TX button exposes an accessible action interface");
+        if (actions) {
+            actions->doAction(QAccessibleActionInterface::pressAction());
+            QTest::qWait(400);  // allow for an animateClick()-style press
+        }
+        expect(moxClicks == 2,
+               "shortcuts off: the accessible press action still activates the TX button");
+        mox.setChecked(false);
+
+        // Shortcuts on: PTT (Hold) owns Space, press and release, before the
+        // guard; the guard itself never fires.
+        route.shortcutsOn = true;
+        const int refusedBefore = route.refused;
+        focus(host, &mox);
+        press(Qt::Key_Space);
+        expect(route.pttPresses == 1 && route.pttReleases == 1 && moxClicks == 2
+                   && route.refused == refusedBefore,
+               "shortcuts on: Space goes to PTT (Hold), not to the focused button");
+        QKeyEvent space(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+        expect(!AetherSDR::refuseTxKeyActivation(&mox, &space, true, keys),
+               "shortcuts on: the guard never refuses");
+
+        app.removeEventFilter(&route);
     }
     return failures == 0 ? 0 : 1;
 }

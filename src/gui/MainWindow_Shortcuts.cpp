@@ -16,6 +16,7 @@
 #include "MainWindow.h"
 #include "core/TxKeyingMarker.h"
 #include "TxInputKeyEvent.h"
+#include "TxKeyActivationGuard.h"
 #include "core/IambicKeyer.h"
 
 #include <QApplication>
@@ -697,6 +698,13 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         // rather than a hardcoded Space, so reassigning it actually moves the
         // transmit key (#3879).
         if (handlePttHoldShortcut(ke, event->type()))
+            return true;
+
+        // With shortcuts off the bound key now reaches the focused widget
+        // (#5483) -- but never a transmit-keying button: a mouse click on MOX
+        // gives it focus, and the next Space must not latch TX. See
+        // TxKeyActivationGuard.h for the keyboard / screen-reader paths.
+        if (refuseTxKeyActivation(obj, ke, m_keyboardShortcutsEnabled, m_shortcutManager))
             return true;
 
         // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
