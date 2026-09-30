@@ -12,9 +12,11 @@
 // QWidget parent, offscreen, no MainWindow and no backend. Visibility is read
 // with isHidden() (the explicit flag), since the parent is never shown.
 //
-// Not yet mutation-checked. The mutation to run before a PR: removing the
-// kBtnDax arm from updateLayout()'s availability test fails "stays hidden
-// after collapse and re-expand".
+// Mutation-checked: with updateLayout()'s kBtnDax arm replaced by `true`,
+// "no DAX plane -> DAX button hidden", "DAX stays hidden after collapse and
+// re-expand" and "and after a second round trip" fail, and nothing else in the
+// suite does. The "precondition" check pins the default (available until told
+// otherwise), so the hide is asserted as a change of state, not assumed.
 
 #include "gui/SpectrumOverlayMenu.h"
 
