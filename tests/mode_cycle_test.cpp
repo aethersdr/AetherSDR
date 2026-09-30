@@ -58,13 +58,15 @@ int main(int argc, char** argv)
     ok &= expect(nextCycledMode(modes, QStringLiteral("DFM"), +1) == QStringLiteral("DIGU"),
                  "Mode Up from DFM skips DSTR to DIGU");
 
-    const QStringList down = walk(modes, QStringLiteral("USB"), -1, 12);
-    ok &= expect(down == QStringList({"RTTY", "DIGL", "DIGU", "DFM", "NFM", "FM",
-                                      "SAM", "AM", "CWL", "CW", "LSB", "USB"}),
+    const QStringList down = walk(modes, QStringLiteral("USB"), -1, 14);
+    ok &= expect(down == QStringList({"FDVL", "FDVU", "RTTY", "DIGL", "DIGU", "DFM",
+                                      "NFM", "FM", "SAM", "AM", "CWL", "CW", "LSB",
+                                      "USB"}),
                  "Mode Down from USB visits every other mode and returns to USB");
-    const QStringList up = walk(modes, QStringLiteral("USB"), +1, 12);
+    const QStringList up = walk(modes, QStringLiteral("USB"), +1, 14);
     ok &= expect(up == QStringList({"LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM",
-                                    "DFM", "DIGU", "DIGL", "RTTY", "USB"}),
+                                    "DFM", "DIGU", "DIGL", "RTTY", "FDVU", "FDVL",
+                                    "USB"}),
                  "Mode Up from USB visits every other mode and returns to USB");
 
     // Helper running: DSTR is a normal stop in both directions.
@@ -91,10 +93,32 @@ int main(int argc, char** argv)
     ok &= expect(nextCycledMode(modes, QStringLiteral("AM"), -1, flex8400)
                      == QStringLiteral("CW"),
                  "Mode Down from AM skips CWL");
-    const QStringList reported = walk(modes, QStringLiteral("USB"), +1, 11, flex8400);
+    const QStringList reported = walk(modes, QStringLiteral("USB"), +1, 13, flex8400);
     ok &= expect(reported == QStringList({"LSB", "CW", "AM", "SAM", "FM", "NFM",
-                                          "DFM", "DIGU", "DIGL", "RTTY", "USB"}),
+                                          "DFM", "DIGU", "DIGL", "RTTY", "FDVU",
+                                          "FDVL", "USB"}),
                  "Mode Up from USB visits only reported modes and returns to USB");
+
+    // FreeDV waveform modes (#6028): a stop when the radio reports them.
+    ok &= expect(modes.contains(QStringLiteral("FDVU"))
+                     && modes.contains(QStringLiteral("FDVL")),
+                 "FDVU and FDVL have mode triggers and shortcuts");
+    ok &= expect(nextCycledMode(modes, QStringLiteral("RTTY"), +1, flex8400)
+                     == QStringLiteral("FDVU"),
+                 "Mode Up from RTTY reaches FDVU on a radio that reports it");
+    ok &= expect(nextCycledMode(modes, QStringLiteral("FDVU"), +1, flex8400)
+                     == QStringLiteral("FDVL"),
+                 "Mode Up from FDVU reaches FDVL");
+    // CONSTRUCTED: the measured list without the FreeDV waveform's modes.
+    QStringList noFreeDv = flex8400;
+    noFreeDv.removeAll(QStringLiteral("FDVU"));
+    noFreeDv.removeAll(QStringLiteral("FDVL"));
+    ok &= expect(nextCycledMode(modes, QStringLiteral("RTTY"), +1, noFreeDv)
+                     == QStringLiteral("USB"),
+                 "Mode Up from RTTY skips FDVU/FDVL when the radio does not report them");
+    ok &= expect(nextCycledMode(modes, QStringLiteral("USB"), -1, noFreeDv)
+                     == QStringLiteral("RTTY"),
+                 "Mode Down from USB skips FDVL/FDVU when the radio does not report them");
     ok &= expect(registry.activateMode(DigitalVoiceModeId::DStar),
                  "D-STAR service activates");
     ok &= expect(nextCycledMode(modes, QStringLiteral("DIGU"), -1, flex8400)

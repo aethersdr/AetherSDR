@@ -42,7 +42,7 @@ inline QStringList modeActionModes()
 {
     return filterUnavailableDigitalVoiceModes(
         {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM",
-         "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
+         "DFM", "DSTR", "DIGU", "DIGL", "RTTY", "FDVU", "FDVL"});
 }
 
 // Whether a slice can be put in radioMode right now. A digital-voice mode is
