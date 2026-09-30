@@ -371,8 +371,8 @@ jobs:
             cat configure-floor.log
             exit 1
           }
-          grep -q "GPU spectrum rendering enabled" configure-floor.log || {
-            echo "ERROR: floor Qt disabled GPU spectrum. Relevant output:"
+          grep -Fq "GPU spectrum rendering enabled (QRhi, Qt ${QT_FLOOR_VERSION})" configure-floor.log || {
+            echo "ERROR: floor build did not enable GPU spectrum with Qt ${QT_FLOOR_VERSION}. Relevant output:"
             grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure-floor.log || true
             exit 1
           }
