@@ -450,6 +450,37 @@ public:
         }
     }
 
+    // Show or hide this pane's -/+ span pair, and say when it is shared
+    // (#5750). On a radio whose span is one register for the whole board
+    // (RadioCapabilities::panSpanModel->radioWide), MainWindow shows the pair
+    // on ONE pane only -- see PanSpanControlGate.h -- and that pane's pair
+    // says, in its tooltip and accessible description, that it moves every
+    // panadapter. `shown = true, radioWide = false` is the per-pan default
+    // and restores exactly what the constructor built: visible, no tooltip,
+    // no description.
+    void setSpanControlPlacement(bool shown, bool radioWide)
+    {
+        const QString outTip = radioWide
+            ? tr("Zoom out. The span is shared: this changes every panadapter on this radio.")
+            : QString();
+        const QString inTip = radioWide
+            ? tr("Zoom in. The span is shared: this changes every panadapter on this radio.")
+            : QString();
+        const QString desc = radioWide
+            ? tr("This radio has one span for all panadapters, so this control changes every panadapter.")
+            : QString();
+        if (m_zoomOutBtn) {
+            m_zoomOutBtn->setVisible(shown);
+            m_zoomOutBtn->setToolTip(outTip);
+            m_zoomOutBtn->setAccessibleDescription(desc);
+        }
+        if (m_zoomInBtn) {
+            m_zoomInBtn->setVisible(shown);
+            m_zoomInBtn->setToolTip(inTip);
+            m_zoomInBtn->setAccessibleDescription(desc);
+        }
+    }
+
     // Set the per-mode filter limits (Hz). Called when mode changes.
     void setFilterLimits(int minHz, int maxHz) { m_filterMinHz = minHz; m_filterMaxHz = maxHz; }
 

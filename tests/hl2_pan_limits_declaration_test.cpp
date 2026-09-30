@@ -33,6 +33,7 @@
 #include "TestSettingsProfile.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "gui/PanSpanControlGate.h"
 #include "gui/PanZoomModeGate.h"
 
 #include <QCoreApplication>
@@ -306,6 +307,76 @@ int main(int argc, char** argv)
     //
     // Closing the remaining half needs a MainWindow seam that does not exist
     // today. Stated rather than left for the next reader to assume otherwise.
+
+    // ---- one span control when there is one span (#5750) ----
+    //
+    // radioWide was declared above and, until this section, read by nothing in
+    // src/gui/: every pane got its own -/+ pair and pressing one re-spanned
+    // them all. PanSpanControlGate.h decides which pane keeps the pair. The
+    // `radioWide` input is READ OFF THIS RADIO'S DECLARATION, the same way the
+    // band/segment section above reads panZoomModes, so reverting the
+    // declaration fails here rather than agreeing with a retyped literal.
+    {
+        const bool hl2RadioWide = caps.panSpanModel && caps.panSpanModel->radioWide;
+        const QStringList panes{QStringLiteral("0x40000000"),
+                                QStringLiteral("0x40000001"),
+                                QStringLiteral("0x40000002")};
+
+        int shown = 0;
+        for (const QString& p : panes) {
+            shown += spanControlShownOnPan(hl2RadioWide, panes,
+                                           QStringLiteral("0x40000001"), p) ? 1 : 0;
+        }
+        check(shown == 1,
+              "HL2 with three panes: exactly ONE pane carries the span control, "
+              "because there is one span");
+        check(spanControlShownOnPan(hl2RadioWide, panes,
+                                    QStringLiteral("0x40000001"),
+                                    QStringLiteral("0x40000001")),
+              "and it is the pane holding the TX slice");
+        check(radioWideSpanControlPan(hl2RadioWide, panes, QString())
+                  == QStringLiteral("0x40000000"),
+              "with no TX slice it falls back to the FIRST pane in stack order, "
+              "a fixed pane rather than whichever was clicked last");
+        check(radioWideSpanControlPan(hl2RadioWide, panes,
+                                      QStringLiteral("0x40000009"))
+                  == QStringLiteral("0x40000000"),
+              "a TX slice on a pane the stack does not hold also falls back, "
+              "so a stale pan id can never leave ZERO panes with the control");
+        check(spanControlShownOnPan(hl2RadioWide, {QStringLiteral("0x40000000")},
+                                    QString(), QStringLiteral("0x40000000")),
+              "a single pane on a radio-wide radio keeps its control");
+
+        // The other families must keep today's per-pane controls. A Flex has
+        // genuinely independent spans; a radio with per-pan span declares
+        // radioWide false; a backend nobody has read declares no record at
+        // all, and absence must never hide a control.
+        const RadioCapabilities unread{};
+        const bool unreadRadioWide =
+            unread.panSpanModel && unread.panSpanModel->radioWide;
+        PanSpanModel perPan;
+        perPan.followsSampleRate = true;
+        perPan.radioWide = false;
+        for (const QString& p : panes) {
+            check(spanControlShownOnPan(unreadRadioWide, panes,
+                                        QStringLiteral("0x40000001"), p),
+                  "no span record (Flex, Icom, Sim): every pane keeps its control");
+            check(spanControlShownOnPan(perPan.radioWide, panes,
+                                        QStringLiteral("0x40000001"), p),
+                  "a per-pan span (radioWide false, as ANAN declares): every "
+                  "pane keeps its control");
+        }
+        check(radioWideSpanControlPan(false, panes, QStringLiteral("0x40000001"))
+                  .isEmpty(),
+              "per-pan answers 'every pane', not the TX pane");
+    }
+
+    // WHAT THIS SECTION CANNOT SEE: that MainWindow::syncPanSpanControlPlacement
+    // is called on each event that moves the answer (connect, pane added /
+    // removed / re-keyed, TX slice moved, slice removed), and that
+    // SpectrumWidget::setSpanControlPlacement hides the pair. No registered
+    // test target links MainWindow*.cpp or SpectrumWidget.cpp -- the same gap
+    // the band/segment section states above. The predicate is what is pinned.
 
     std::printf("%s: %d failure(s)\n", argv[0], failures);
     return failures == 0 ? 0 : 1;

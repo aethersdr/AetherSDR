@@ -5406,7 +5406,16 @@ void MainWindow::buildUI()
             connected && caps.hasDdcPanEdgeRolloff);
         applet->spectrumWidget()->setClientFftSmoothingEnabled(
             !(connected && caps.backendPanAveraging.has_value()));
+        // A new pane changes WHICH pane carries a radio-wide span control,
+        // not only this one's (#5750), so the whole stack is re-derived.
+        syncPanSpanControlPlacement();
     });
+    // Removing or re-keying a pane can take the span control's owner with
+    // it; re-derive so exactly one pane still carries it (#5750).
+    connect(m_panStack, &PanadapterStack::panRemoved, this,
+            [this](const QString&) { syncPanSpanControlPlacement(); });
+    connect(m_panStack, &PanadapterStack::panRekeyed, this,
+            [this](const QString&, const QString&) { syncPanSpanControlPlacement(); });
 
     // Band stack panel signal wiring
     auto* bsPanel = m_panStack->bandStackPanel();
@@ -6478,6 +6487,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
                     !backendAverages);
             }
         }
+        // The span declaration belongs to the radio just (dis)connected, so
+        // the one-control-per-span placement is re-derived here too (#5750).
+        syncPanSpanControlPlacement();
     }
 
     // Demo scene push on connect: the applet owns the startup scene, so its
