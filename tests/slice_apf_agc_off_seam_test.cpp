@@ -27,6 +27,8 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QMetaMethod>
+#include <QMetaObject>
 #include <QSignalSpy>
 
 #include <cstdio>
@@ -218,10 +220,27 @@ void testBaseVerbsAreNoOps()
     std::printf("\n  5. Other families\n");
     // A backend that does not override the verbs must accept them silently —
     // the base defaults are what every family except HL2 now inherits.
+    //
+    // A base verb has no state to read back, so what "no-op" can mean here is
+    // what an outside observer could see: it emits nothing. Every signal the
+    // backend declares is spied, so a default that published a slice change,
+    // a status line or anything else would be counted.
     MinimalBackend b;
+    std::vector<std::unique_ptr<QSignalSpy>> spies;
+    const QMetaObject* mo = b.metaObject();
+    for (int i = 0; i < mo->methodCount(); ++i) {
+        const QMetaMethod m = mo->method(i);
+        if (m.methodType() == QMetaMethod::Signal)
+            spies.push_back(std::make_unique<QSignalSpy>(&b, m));
+    }
     b.setSliceApf(0, true, 50);
     b.setSliceAgcOffLevel(0, 40);
-    check(true, "IRadioBackend's default setSliceApf / setSliceAgcOffLevel are no-ops");
+    int emitted = 0;
+    for (const auto& spy : spies)
+        emitted += static_cast<int>(spy->count());
+    check(spies.size() > 1, "the backend's signals are all being watched");
+    check(emitted == 0,
+          "IRadioBackend's default setSliceApf / setSliceAgcOffLevel emit nothing");
 }
 
 }  // namespace
