@@ -22,15 +22,6 @@ bool expect(bool condition, const char* message)
     return condition;
 }
 
-// The Mode Up / Down list as registerMidiParams() builds it
-// (src/gui/MainWindow_Controllers.cpp, "Mode triggers").
-QStringList cycledModes()
-{
-    return AetherSDR::filterUnavailableDigitalVoiceModes(
-        {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM",
-         "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
-}
-
 QStringList walk(const QStringList& modes, QString from, int direction, int steps)
 {
     QStringList visited;
@@ -50,7 +41,7 @@ int main(int argc, char** argv)
 
     using namespace AetherSDR;
     DigitalVoiceModeRegistry& registry = DigitalVoiceModeRegistry::instance();
-    const QStringList modes = cycledModes();
+    const QStringList modes = modeActionModes();
     ok &= expect(modes.contains(QStringLiteral("DSTR")),
                  "a helper build keeps DSTR in the cycled list");
 

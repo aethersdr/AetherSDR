@@ -35,6 +35,16 @@ inline QStringList filterUnavailableDigitalVoiceModes(QStringList modes)
     return modes;
 }
 
+// The modes with a keyboard shortcut (mode_<x>) and a MIDI trigger
+// (global.mode<X>), in Mode Up / Down order. One list for both, so a mode is
+// added in one place.
+inline QStringList modeActionModes()
+{
+    return filterUnavailableDigitalVoiceModes(
+        {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM",
+         "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
+}
+
 // Whether a slice can be put in radioMode right now. A digital-voice mode is
 // accepted only while its local helper runs: SliceModel::setMode() is refused
 // by DigitalVoiceModeRegistry::transferSlice() otherwise and the slice keeps
