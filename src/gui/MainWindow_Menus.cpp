@@ -8,6 +8,7 @@
 // only the About-dialog button and its connection.
 
 #include "MainWindow.h"
+#include "AetherBuildIdentity.h"   // generated at build time (#5804)
 
 #include "workspace/WorkspaceController.h"
 
@@ -1786,21 +1787,18 @@ void MainWindow::buildMenuBar()
             "</div>")
             .arg(QCoreApplication::applicationVersion(), qVersion(),
                  QStringLiteral(__DATE__),
-                 QStringLiteral(AETHER_GIT_SHA),
+                 QStringLiteral(AETHER_BUILD_SHA),
                  rendererDescription.toHtmlEscaped()));
         header->setAlignment(Qt::AlignCenter);
         header->setWordWrap(true);
-        // Tooltip explains the staleness possibility — the SHA is baked at
-        // CMake configure time, so a dev who runs `cmake --build` after a
-        // new commit without re-configuring sees the previous SHA here.
-        // Re-running `cmake --fresh` (or deleting CMakeCache.txt) captures
-        // the current HEAD. The renderer line comes from the active pan at
-        // dialog-open time, after Qt has picked a real QRhi backend when the
-        // GPU path is active.
+        // The SHA comes from the header cmake/AetherBuildIdentity.cmake
+        // regenerates on every build (#5804), so an incremental `cmake --build`
+        // after a new commit shows the new SHA without re-configuring. The
+        // renderer line comes from the active pan at dialog-open time, after Qt
+        // has picked a real QRhi backend when the GPU path is active.
         header->setToolTip(
-            QStringLiteral("Build identity and active pan renderer. SHA is captured at CMake "
-                           "configure time — re-run `cmake -B build` after "
-                           "a new commit if you need the current value."));
+            QStringLiteral("Build identity and active pan renderer. The SHA is captured "
+                           "when the binary is built."));
         vbox->addWidget(header);
 
         // Separator

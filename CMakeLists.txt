@@ -2053,11 +2053,39 @@ if(Git_FOUND)
     endif()
 endif()
 target_compile_definitions(AetherSDR PRIVATE AETHER_GIT_SHA="${AETHER_GIT_SHA}")
+
 if(Git_FOUND AND _aether_git_sha_rv EQUAL 0 AND NOT "${_aether_git_sha_out}" STREQUAL "")
     message(STATUS "Build SHA: ${AETHER_GIT_SHA}")
 else()
     message(STATUS "Build SHA: ${AETHER_GIT_SHA} (git unavailable or not a git checkout)")
 endif()
+
+# ---- Build identity, captured at BUILD time (#5804) -----------------------
+# AETHER_GIT_SHA above is a CONFIGURE-time capture, so `cmake --build` after a
+# new commit keeps the previous value. This target re-evaluates on every build
+# and writes a generated header; configure_file() only rewrites it when the
+# content changes, so an unchanged HEAD recompiles nothing.
+#
+# `git describe --tags --always --dirty` carries the release baseline AND the
+# hash in one token ("v26.9.3-68-g7e841682"). The automation bridge's `ping`
+# reports it, so a harness can tell which build it is talking to.
+set(AETHER_BUILD_ID_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/build-identity")
+set(AETHER_BUILD_ID_HEADER "${AETHER_BUILD_ID_DIR}/AetherBuildIdentity.h")
+add_custom_target(aether_build_identity ALL
+    BYPRODUCTS "${AETHER_BUILD_ID_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        -DAETHER_SRC_DIR=${CMAKE_SOURCE_DIR}
+        -DAETHER_IN_FILE=${CMAKE_SOURCE_DIR}/src/core/AetherBuildIdentity.h.in
+        -DAETHER_OUT_FILE=${AETHER_BUILD_ID_HEADER}
+        -P ${CMAKE_SOURCE_DIR}/cmake/AetherBuildIdentity.cmake
+    COMMENT "Capturing build identity (git describe)"
+    VERBATIM)
+# AutomationServer.cpp (ping) lives in aetherdesktop_support; the About dialog
+# is in the executable.
+foreach(_aether_build_id_consumer aetherdesktop_support AetherSDR)
+    add_dependencies(${_aether_build_id_consumer} aether_build_identity)
+    target_include_directories(${_aether_build_id_consumer} PRIVATE "${AETHER_BUILD_ID_DIR}")
+endforeach()
 
 # Reproducible-builds.org SOURCE_DATE_EPOCH support.  When a distro
 # packager (Debian, Arch, NixOS, openSUSE, Fedora, etc.) sets

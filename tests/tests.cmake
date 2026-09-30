@@ -4027,6 +4027,25 @@ target_link_libraries(automation_cell_test PRIVATE aethercore Qt6::Widgets)
 add_test(NAME automation_cell_test COMMAND automation_cell_test)
 set_tests_properties(automation_cell_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# #5804: `ping` reports the build identity the aether_build_identity target
+# generates. Socket-free handleLine injection; no listener, no radio.
+add_executable(automation_ping_build_identity_test
+    tests/automation_ping_build_identity_test.cpp)
+target_include_directories(automation_ping_build_identity_test PRIVATE
+    src tests "${AETHER_BUILD_ID_DIR}")
+add_dependencies(automation_ping_build_identity_test aether_build_identity)
+target_link_libraries(automation_ping_build_identity_test PRIVATE aethercore Qt6::Core)
+add_test(NAME automation_ping_build_identity_test
+         COMMAND automation_ping_build_identity_test)
+# #5804: the capture script itself, driven against a scratch git repository --
+# no tag, on a tag, past a tag without re-configuring, dirty, and unchanged
+# HEAD leaving the header untouched.
+add_test(NAME build_identity_capture_test
+         COMMAND ${CMAKE_COMMAND}
+                 -DAETHER_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                 -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/build_identity_capture_test
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/build_identity_capture_test.cmake)
+
 add_executable(automation_menu_lookup_test tests/automation_menu_lookup_test.cpp)
 target_include_directories(automation_menu_lookup_test PRIVATE src tests)
 target_link_libraries(automation_menu_lookup_test PRIVATE aethercore Qt6::Widgets)
@@ -6805,6 +6824,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     anan_noise_blanker_readback_test
     automation_cell_test
     automation_menu_lookup_test
+    automation_ping_build_identity_test
     automation_gauge_verb_test
     automation_persist_diagnostics_test
     automation_server_gesture_test
