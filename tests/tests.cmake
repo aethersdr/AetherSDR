@@ -3339,6 +3339,15 @@ target_include_directories(digital_voice_slice_lifecycle_test PRIVATE src)
 target_link_libraries(digital_voice_slice_lifecycle_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME digital_voice_slice_lifecycle_test COMMAND digital_voice_slice_lifecycle_test)
 
+add_executable(mode_cycle_test
+    tests/mode_cycle_test.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(mode_cycle_test PRIVATE src)
+target_compile_definitions(mode_cycle_test PRIVATE AETHER_ENABLE_DIGITAL_VOICE_HELPER)
+target_link_libraries(mode_cycle_test PRIVATE Qt6::Core)
+add_test(NAME mode_cycle_test COMMAND mode_cycle_test)
+
 add_executable(dstar_model_test
     tests/dstar_model_test.cpp
     src/models/DStarModel.cpp
