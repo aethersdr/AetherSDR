@@ -26,6 +26,10 @@ cmake_args=()
 if [ "$(uname -s)" = Darwin ]; then
     : "${MACOS_DEPLOYMENT_TARGET:?Set the deployment target explicitly}"
     export MACOSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET"
+    # New Apple SDKs can link pipe2 as a weak import even when the target
+    # macOS lacks it. Autoconf's link-only probe then selects a null call.
+    # libusb's pipe + fcntl fallback works across our supported macOS floor.
+    export ac_cv_func_pipe2=no
     cmake_args=(-DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" -DCMAKE_INSTALL_NAME_DIR="$PREFIX/lib")
 fi
 (cd "$USB" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --enable-shared --disable-static --disable-examples-build --disable-tests-build)
