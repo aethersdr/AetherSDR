@@ -786,9 +786,12 @@ through `WdspChannel::outputReady()` before every exchange; nothing else calls
 it. The reorder applies to every channel, blocking and non-blocking; in
 blocking mode the host is released by `Sem_OutReady`, which is signalled after
 both the copy and the count either way. `hl2_txdsp_capture_burst_test` pins
-the behaviour: a 24 kHz capture delivered as Qt delivers it gives zero faults
-and a phase-continuous tone with the patch, and 1 fault and ~120 splices in two
-seconds without it.
+the QUERY and the gate built on it: a 24 kHz capture delivered as Qt delivers
+it gives zero faults and a phase-continuous tone with the patch, and 1 fault and
+~120 splices in two seconds without it. It does NOT pin the `dexchange()`
+reorder: that closes a narrow window between the count and the copy on another
+thread, which no deterministic test here reaches. The reorder rests on the
+argument above, not on a test.
 
 When updating WDSP, keep this unless upstream grows an equivalent query; keep
 the reorder unless upstream's `dexchange()` already copies before it counts.
