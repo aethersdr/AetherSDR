@@ -1580,6 +1580,7 @@ target_link_libraries(aethercore PRIVATE aether::wdsp)
 # desktop executable and the automation test harnesses on the same linkage path
 # without pulling QtWidgets into the headless engine.
 add_library(aetherdesktop_support STATIC
+    src/gui/PeripheralAuthStore.cpp
     src/gui/TxPointerAction.cpp
     src/core/AutomationServer.cpp
     src/core/SettingsHelpers.cpp

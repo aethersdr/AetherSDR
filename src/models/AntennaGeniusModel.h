@@ -5,7 +5,10 @@
 #include <QString>
 #include <QStringList>
 #include <QHostAddress>
+#include <QHash>
+#include <QByteArray>
 #include <QList>
+#include <functional>
 
 class QUdpSocket;
 class QTcpSocket;
@@ -19,6 +22,7 @@ struct AgDeviceInfo {
     QString   serial;
     QString   version;
     QHostAddress ip;
+    QString   host;       // Manual DNS name; empty for discovered devices.
     quint16   port{9007};
     int       radioPorts{2};
     int       antennaPorts{8};
@@ -88,13 +92,21 @@ public:
     void connectToDevice(const AgDeviceInfo& info);
     // Connect directly by IP address (for remote/manual connections).
     void connectToAddress(const QHostAddress& ip, quint16 port);
+    void connectToAddress(const QString& host, quint16 port);
     void disconnectFromDevice();
 
     void setAutoReconnect(bool on) { m_autoReconnect = on; }
+    void setAuthCode(const QString& code);
+    void setAuthCodeForAttempt(quint64 attempt, const QString& code,
+                               bool credentialStoreUnavailable = false);
+    void resetAuthBudgetFor(const AgDeviceInfo& info);
 
     // Getters
     bool isConnected()   const { return m_connected; }
-    bool isConnecting()  const { return m_tcpSocket != nullptr && !m_connected; }
+    bool isConnecting() const;
+    bool isAuthBlocked() const { return authBlockedForTarget(m_attemptEndpoint); }
+    bool isAuthBlockedFor(const QString& host, quint16 port) const;
+    bool isAuthBlockedFor(const AgDeviceInfo& info) const;
     bool isPresent()     const { return !m_discoveredDevices.isEmpty(); }
     static bool isShackSwitch(const AgDeviceInfo& info);
     QString peerAddress() const;
@@ -139,6 +151,9 @@ signals:
     void deviceLost(const QString& serial);
     void connected();
     void disconnected();
+    void authCodeRequired(quint64 attempt);
+    void authCodeAccepted(const QString& code);
+    void enteredAuthCodeDiscarded();
     void connectionError(const QString& msg);
 
     void antennasChanged();        // antenna list refreshed
@@ -157,6 +172,11 @@ private slots:
     void onKeepAlive();
 
 private:
+    friend struct AntennaGeniusModelTestAccess;
+    Q_INVOKABLE void processTcpBytes(const QByteArray& bytes); // injected transport test seam
+    Q_INVOKABLE void beginAttempt(); // same reset used before a real TCP connect
+    Q_INVOKABLE void beginAttemptAt(const QString& host, quint16 port);
+    Q_INVOKABLE void onAuthTimeout();
     // Send a command, returns sequence number.
     int sendCommand(const QString& cmd);
 
@@ -168,6 +188,11 @@ private:
     void processLine(const QString& line);
     void processResponse(int seq, int code, const QString& body);
     void processStatus(const QString& body);
+    bool authBlockedForTarget(const QString& target) const;
+    int recordAuthFailure();
+    void completePrologue();
+    void sendAuthentication();
+    void failAuthentication(const QString& reason, bool blockReconnect = true);
 
     // Parse helpers
     static QMap<QString, QString> parseKeyValues(const QString& text);
@@ -189,9 +214,20 @@ private:
 
     // TCP connection
     QTcpSocket* m_tcpSocket{nullptr};
+    std::function<void(const QByteArray&)> m_authCommandWriter;
     AgDeviceInfo m_device;
     bool m_connected{false};
     bool m_gotPrologue{false};
+    bool m_authPending{false};
+    bool m_waitingForAuthCode{false};
+    QHash<QString, int> m_authFailuresByTarget;
+    quint64 m_authAttempt{0};
+    QString m_authCode;
+    bool m_userAuthCode{false};
+    QString m_attemptEndpoint;
+    QString m_userAuthEndpoint;
+    bool m_authCloseReported{false};
+    QTimer* m_authTimer{nullptr};
     QString m_lineBuffer;
 
     // Command sequencing

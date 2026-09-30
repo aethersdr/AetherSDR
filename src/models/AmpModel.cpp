@@ -205,6 +205,7 @@ void AmpModel::applySetupGroup(const QMap<QString, QString>& kvs)
     m_setupLedIntens = kvs.value(QStringLiteral("ledintens"));
     // Present but empty on an amplifier with no auth configured, and empty is
     // the value to send back — value() returning a default here is correct.
+    // A non-empty code is never sent back; see writeSetupGroup().
     m_setupAuthCode  = kvs.value(QStringLiteral("authcode"));
     const bool becameWritable = !m_haveSetupGroup;
     m_haveSetupGroup = true;
@@ -236,9 +237,20 @@ void AmpModel::writeSetupGroup(const QString& meffa, const QString& fanMode)
     // permanent, use the Save button on the Configuration screen." A panel
     // toggle is a run-time choice, not an edit to the amplifier's stored
     // configuration.
-    m_directConn->sendCommand(
-        QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4 authcode=%5")
-            .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode, m_setupAuthCode));
+    //
+    // Except the auth code, once one is set. Firmware 3.9.8 with authorization
+    // enabled refuses any `setup` that carries `authcode=<code>` with 50000013
+    // (bad parameter), so every fan-mode change and MEffA toggle failed. The
+    // same group without `authcode` is accepted and leaves the stored code
+    // unchanged, and so does `setup fanmode=` on its own (probed 2026-09-29).
+    // With no code set the key stays, empty, exactly as the vendor sends it.
+    QString command =
+        QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4")
+            .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode);
+    if (m_setupAuthCode.isEmpty()) {
+        command += QStringLiteral(" authcode=");
+    }
+    m_directConn->sendCommand(command);
 }
 
 void AmpModel::setMeffaEnabled(bool on)

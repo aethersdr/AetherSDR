@@ -1,4 +1,5 @@
 #include "PgxlConnection.h"
+#include "PeripheralAuthCode.h"
 #include "LogManager.h"
 
 namespace AetherSDR {
@@ -18,46 +19,138 @@ PgxlConnection::PgxlConnection(QObject* parent)
 
     // Retries every 5s indefinitely until the device returns or the user disconnects.
     // This is intentional for a LAN peripheral that may be power-cycling.
+    m_reconnectTimer.setParent(this);
+    m_reconnectTimer.setObjectName(QStringLiteral("pgxlReconnectTimer"));
     m_reconnectTimer.setSingleShot(true);
     m_reconnectTimer.setInterval(5000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (!m_connected && !m_lastHost.isEmpty()) {
+        if (!m_connected && !m_authBlocked && !m_lastHost.isEmpty()) {
             connectToPgxl(m_lastHost, m_lastPort);
         }
     });
+    m_authTimer.setSingleShot(true);
+    m_authTimer.setInterval(5000);
+    connect(&m_authTimer, &QTimer::timeout, this, &PgxlConnection::onAuthTimeout);
+}
+
+void PgxlConnection::onAuthTimeout()
+{
+    failAuthentication("Authentication timed out", recordPeripheralAuthFailure(m_authFailures) >= 3);
+}
+
+void PgxlConnection::setAuthCode(const QString& code)
+{
+    const bool wasBlocked = m_authBlocked;
+    m_authCode = code;
+    m_userAuthCode = !code.isEmpty();
+    m_userAuthEndpoint = m_userAuthCode
+        ? m_lastHost.trimmed().toLower() + QLatin1Char('|') + QString::number(m_lastPort)
+        : QString();
+    m_authBlocked = false;
+    m_authFailures = 0;
+    if (wasBlocked) {
+        emit authBlockCleared();
+    }
+    if (code.isEmpty() && m_waitingForAuthCode) {
+        failAuthentication("Authorization code required");
+    }
+}
+
+void PgxlConnection::setAuthCodeForAttempt(quint64 attempt, const QString& code,
+                                            bool credentialStoreUnavailable)
+{
+    if (m_waitingForAuthCode && attempt == m_authAttempt) {
+        if (code.isEmpty()) {
+            failAuthentication(credentialStoreUnavailable
+                ? "Stored authorization code unavailable" : "Authorization code required");
+            return;
+        }
+        // Restoring the same saved code on a reconnect must not replenish the
+        // failure budget. Only an operator-entered code or success resets it.
+        m_authCode = code;
+        m_userAuthCode = false;
+        m_userAuthEndpoint.clear();
+        m_waitingForAuthCode = false;
+        sendAuthentication();
+    }
 }
 
 void PgxlConnection::connectToPgxl(const QString& host, quint16 port)
 {
-    m_lastHost = host;
-    m_lastPort = port;
-    m_deliberateDisconnect = false;
-    m_reconnectTimer.stop();
-    if (m_connected) {
+    const bool wasConnected = m_connected;
+    beginAttemptAt(host, port);
+    if (m_socket.state() != QAbstractSocket::UnconnectedState) {
         m_deliberateDisconnect = true;
-        m_pollTimer.stop();
-    m_pollInFlight = false;
-        m_connected = false;
-        m_socket.abort();  // synchronous — onDisconnected will not fire
+        m_socket.abort();  // disconnected may be emitted synchronously
         m_deliberateDisconnect = false;
     }
+    if (wasConnected) {
+        emit disconnected();
+    }
+    qCDebug(lcTuner) << "PgxlConnection: connecting to" << host << ":" << port;
+    m_socket.connectToHost(host, port);
+}
+
+void PgxlConnection::beginAttemptAt(const QString& host, quint16 port)
+{
+    const QString target = host.trimmed().toLower() + QLatin1Char('|') + QString::number(port);
+    if (m_userAuthCode && m_userAuthEndpoint != target) {
+        m_authCode.clear();
+        m_userAuthCode = false;
+        m_userAuthEndpoint.clear();
+        emit enteredAuthCodeDiscarded();
+    }
+    m_lastHost = host;
+    m_lastPort = port;
+    beginAttempt();
+}
+
+void PgxlConnection::beginAttempt()
+{
+    if (!m_userAuthCode) {
+        m_authCode.clear();
+    }
+    ++m_authAttempt;
+    m_deliberateDisconnect = false;
+    m_reconnectTimer.stop();
+    m_authTimer.stop();
+    m_authPending = false;
+    m_waitingForAuthCode = false;
+    m_authCloseReported = false;
+    m_pollTimer.stop();
+    m_pollInFlight = false;
+    m_connected = false;
     m_seq = 0;
     m_setupReadSeq = 0;
     m_gotVersion = false;
     m_version.clear();
     m_readBuf.clear();
-    qCDebug(lcTuner) << "PgxlConnection: connecting to" << host << ":" << port;
-    m_socket.connectToHost(host, port);
 }
 
 void PgxlConnection::disconnect()
 {
+    const bool wasConnected = m_connected;
     m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
+    m_authTimer.stop();
+    m_authPending = false;
+    m_waitingForAuthCode = false;
+    const bool discardedCode = m_userAuthCode;
+    if (discardedCode) {
+        m_authCode.clear();
+    }
+    m_userAuthCode = false;
+    m_userAuthEndpoint.clear();
+    if (discardedCode) {
+        emit enteredAuthCodeDiscarded();
+    }
     m_pollTimer.stop();
     m_pollInFlight = false;
     m_connected = false;
     m_socket.disconnectFromHost();
+    if (wasConnected) {
+        emit disconnected();
+    }
 }
 
 void PgxlConnection::onConnected()
@@ -69,10 +162,27 @@ void PgxlConnection::onDisconnected()
 {
     qCDebug(lcTuner) << "PgxlConnection: disconnected";
     m_pollTimer.stop();
+    const bool rejectedDuringAuth = m_authPending;
+    m_authTimer.stop();
+    m_authPending = false;
+    m_waitingForAuthCode = false;
+    if (rejectedDuringAuth && !m_deliberateDisconnect) {
+        m_authBlocked = recordPeripheralAuthFailure(m_authFailures) >= 3;
+        if (m_authBlocked) {
+            m_authCode.clear();
+            m_userAuthCode = false;
+            m_userAuthEndpoint.clear();
+        }
+        m_authCloseReported = true;
+        emit connectionFailed("Connection closed during authentication");
+    }
     m_pollInFlight = false;
+    const bool wasConnected = m_connected;
     m_connected = false;
-    emit disconnected();
-    if (!m_deliberateDisconnect && m_autoReconnect && !m_lastHost.isEmpty()) {
+    if (wasConnected) {
+        emit disconnected();
+    }
+    if (!m_deliberateDisconnect && !m_authBlocked && m_autoReconnect && !m_lastHost.isEmpty()) {
         m_reconnectTimer.start();
     }
     m_deliberateDisconnect = false;
@@ -82,11 +192,14 @@ void PgxlConnection::onError(QAbstractSocket::SocketError error)
 {
     qCWarning(lcTuner) << "PgxlConnection: socket error" << error
                         << m_socket.errorString();
+    if (!m_authPending && !m_authCloseReported) {
+        emit connectionFailed(m_socket.errorString());
+    }
     // A failed reconnect attempt arrives here (not via onDisconnected) because
     // the socket never reached ConnectedState. Re-arm so we keep retrying until
     // the device returns or the user disconnects. isActive() prevents double-arm
     // when a live drop emits both errorOccurred and disconnected.
-    if (!m_deliberateDisconnect && m_autoReconnect && !m_connected
+    if (!m_deliberateDisconnect && !m_authBlocked && !m_authPending && m_autoReconnect && !m_connected
             && !m_lastHost.isEmpty() && !m_reconnectTimer.isActive()) {
         m_reconnectTimer.start();
     }
@@ -94,11 +207,21 @@ void PgxlConnection::onError(QAbstractSocket::SocketError error)
 
 void PgxlConnection::onReadyRead()
 {
-    m_readBuf.append(m_socket.readAll());
+    processBytes(m_socket.readAll());
+}
+
+void PgxlConnection::processBytes(const QByteArray& bytes)
+{
+    m_readBuf.append(bytes);
 
     while (true) {
         int idx = m_readBuf.indexOf('\n');
         if (idx < 0) break;
+        if (idx > kMaxPeripheralLineLength) {
+            m_readBuf.clear();
+            failAuthentication("PGXL protocol line exceeded limit", !m_connected);
+            return;
+        }
 
         QString line = QString::fromUtf8(m_readBuf.left(idx)).trimmed();
         m_readBuf.remove(0, idx + 1);
@@ -106,26 +229,62 @@ void PgxlConnection::onReadyRead()
         if (!line.isEmpty())
             processLine(line);
     }
+    if (m_readBuf.size() > kMaxPeripheralLineLength) {
+        m_readBuf.clear();
+        failAuthentication("PGXL protocol line exceeded limit", !m_connected);
+    }
 }
 
 void PgxlConnection::processLine(const QString& line)
 {
     // Version line: V3.8.9
     if (!m_gotVersion && line.startsWith('V')) {
-        m_version = line.mid(1);
+        const bool requiresAuth = line.endsWith(" AUTH");
+        m_version = requiresAuth ? line.mid(1, line.size() - 6) : line.mid(1);
         m_gotVersion = true;
         qCInfo(lcTuner) << "PgxlConnection: PGXL version" << m_version;
+        if (requiresAuth) {
+            qCInfo(lcTuner) << "PgxlConnection: authorization challenge received";
+            if (m_authCode.isEmpty()) {
+                m_waitingForAuthCode = true;
+                emit authCodeRequired(m_authAttempt);
+            } else {
+                sendAuthentication();
+            }
+        } else {
+            // A LAN greeting did not verify a newly entered code. Discard it
+            // rather than carrying it to a later, possibly different host.
+            if (m_userAuthCode) {
+                m_authCode.clear();
+                m_userAuthCode = false;
+                m_userAuthEndpoint.clear();
+            }
+            finishHandshake();
+        }
+        return;
+    }
 
-        sendCommand("info");
-        // Read the stored configuration up front. A `setup` write has to carry
-        // the whole group, so the values we are not changing have to be known
-        // before the operator can change the one they are.
-        m_setupReadSeq = sendCommand("setup read");
-        sendCommand("status");
+    if (m_waitingForAuthCode) {
+        return;
+    }
 
-        m_connected = true;
-        m_pollTimer.start();
-        emit connected();
+    if (m_authPending) {
+        if (line.startsWith('R')) {
+            if (line == QStringLiteral("R1|0|Authorized")) {
+                m_authTimer.stop();
+                m_authPending = false;
+                const QString acceptedCode = m_userAuthCode ? m_authCode : QString();
+                m_authCode.clear();
+                if (m_userAuthCode) {
+                    m_userAuthCode = false;
+                    m_userAuthEndpoint.clear();
+                    emit authCodeAccepted(acceptedCode);
+                }
+                finishHandshake();
+            } else {
+                failAuthentication("Authorization code rejected");
+            }
+        }
         return;
     }
 
@@ -229,6 +388,58 @@ void PgxlConnection::processLine(const QString& line)
     }
 }
 
+void PgxlConnection::finishHandshake()
+{
+    m_authBlocked = false;
+    m_authFailures = 0;
+    sendCommand("info");
+    // Setup writes carry the whole group; read it before controls are enabled.
+    m_setupReadSeq = sendCommand("setup read");
+    sendCommand("status");
+    m_connected = true;
+    m_pollTimer.start();
+    emit connected();
+}
+
+void PgxlConnection::sendAuthentication()
+{
+    if (m_authCode.isEmpty()) {
+        failAuthentication("Authorization code required");
+        return;
+    }
+    if (!validPeripheralAuthCode(m_authCode)) {
+        failAuthentication("Invalid authorization code");
+        return;
+    }
+    // Firmware 3.9.1 expects code= and answers R1|0|Authorized. Avoid the
+    // command logger, which records its entire argument.
+    m_authPending = true;
+    m_socket.write(peripheralAuthCommand(PeripheralAuthProtocol::Pgxl, m_authCode));
+    m_seq = 1;
+    m_authTimer.start();
+}
+
+void PgxlConnection::failAuthentication(const QString& reason, bool blockReconnect)
+{
+    m_authTimer.stop();
+    m_authPending = false;
+    m_waitingForAuthCode = false;
+    m_authBlocked = blockReconnect;
+    if (blockReconnect) {
+        m_authCode.clear();
+        m_userAuthCode = false;
+        m_userAuthEndpoint.clear();
+    }
+    m_reconnectTimer.stop();
+    m_readBuf.clear();
+    emit connectionFailed(reason);
+    m_socket.abort();
+    if (!m_authBlocked && m_autoReconnect && !m_lastHost.isEmpty()
+        && !m_reconnectTimer.isActive()) {
+        m_reconnectTimer.start();
+    }
+}
+
 // TRANSMIT_A / TRANSMIT_B are the amplifier's keyed states; IDLE, STANDBY and
 // POWERUP are not. Anything unrecognised is treated as not transmitting, so a
 // new state string cannot pin the poll rate high forever.
@@ -258,7 +469,12 @@ quint32 PgxlConnection::sendCommand(const QString& cmd)
     quint32 seq = ++m_seq;
     QString line = QString("C%1|%2\n").arg(seq).arg(cmd);
     m_socket.write(line.toUtf8());
-    qCDebug(lcTuner) << "PgxlConnection: sent" << line.trimmed();
+    // Setup writes carry the device's authcode even when the operator only
+    // changed fan mode or MEffA. Never copy that credential into support logs.
+    qCDebug(lcTuner) << "PgxlConnection: sent"
+                     << (cmd.contains(QStringLiteral("authcode="), Qt::CaseInsensitive)
+                             ? QStringLiteral("<setup command redacted>")
+                             : line.trimmed());
     return seq;
 }
 

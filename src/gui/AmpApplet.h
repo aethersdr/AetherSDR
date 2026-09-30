@@ -101,6 +101,8 @@ public:
     // write needs; the control is shown but inert until then.
     void setMeffa(const QString& state, bool settable);
     void setDirectConnected(bool direct);
+    void setRadioConnected(bool connected);
+    void setDirectFailureReason(const QString& reason);
 
     // Docked (applet rail) vs floating/canvas presentation. Driven by the
     // container's dockModeChanged — see the AMP entry in AppletPanel.
@@ -134,7 +136,7 @@ protected:
 private:
     void buildUI();
     void buildExpandedUI();
-    // The four readouts run as a row along the bottom of the panel and stack
+    // The three telemetry readouts run as a row in the panel and stack
     // in the rail's single-tile width. Same widgets either way — the grid is
     // re-flowed rather than the controls rebuilt.
     void applyTelemetryLayout();
@@ -155,6 +157,8 @@ private:
     // The readouts carry their own colours (live vs. not proxied by the
     // radio) and their own scale, so one place resolves both.
     void applyTelemetryStyles(qreal scale);
+    void updateSourceIndicator();
+    bool hasRadioRelay() const;
     // Both operate controls wear the amplifier's current state, so a single
     // place decides what each of them says and how it is lit.
     void applyStateToControls();
@@ -215,8 +219,10 @@ private:
     QPushButton* m_tempBtn{nullptr}; // "PA 34.7 / HL 28.4 C"; click to toggle C/F
     QLabel*  m_vddLabel{nullptr};   // "Vdd  50.0 V"  (beside SWR row)
     QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
-    QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
+    QLabel*  m_sourceLabel{nullptr}; // bottom-right connection source
     bool     m_directConnected{false};
+    QString  m_directFailureReason;
+    bool     m_radioConnected{false};
 
     QWidget*     m_telemetryBox{nullptr};
     QGridLayout* m_telemetryGrid{nullptr};

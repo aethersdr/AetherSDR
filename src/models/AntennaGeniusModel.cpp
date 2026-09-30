@@ -1,4 +1,5 @@
 #include "AntennaGeniusModel.h"
+#include "core/PeripheralAuthCode.h"
 
 #include <QUdpSocket>
 #include <QTcpSocket>
@@ -17,6 +18,20 @@ static constexpr quint16 kAgPort = 9007;
 static constexpr int kKeepAliveMs = 30000;
 // Discovery timeout: remove device if no broadcast in 5 seconds.
 static constexpr int kDiscoveryTimeoutMs = 5000;
+// Never evict a blocked target: churn must not replenish its retry budget.
+// At capacity, unknown targets stay blocked until a tracked budget is reset.
+static constexpr qsizetype kMaxAuthTargets = 128;
+
+static QString authTarget(const QString& host, quint16 port)
+{
+    if (host.trimmed().isEmpty() || port == 0) {
+        return {};
+    }
+    QHostAddress address;
+    const QString normalized = address.setAddress(host.trimmed())
+        ? address.toString() : host.trimmed().toLower();
+    return normalized + QLatin1Char('|') + QString::number(port);
+}
 
 // ── AntennaGeniusModel ─────────────────────────────────────────────────────
 
@@ -29,13 +44,20 @@ AntennaGeniusModel::AntennaGeniusModel(QObject* parent)
     // Retries every 5s indefinitely until the device returns or the user disconnects.
     // This is intentional for a LAN peripheral that may be power-cycling.
     m_reconnectTimer = new QTimer(this);
+    m_reconnectTimer->setObjectName(QStringLiteral("agReconnectTimer"));
     m_reconnectTimer->setSingleShot(true);
     m_reconnectTimer->setInterval(5000);
     connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (!m_connected && m_device.port > 0 && !m_device.ip.isNull()) {
+        if (!m_connected && !isAuthBlocked() && m_device.port > 0
+            && (!m_device.ip.isNull() || !m_device.host.isEmpty())) {
             connectToDevice(m_device);
         }
     });
+
+    m_authTimer = new QTimer(this);
+    m_authTimer->setSingleShot(true);
+    m_authTimer->setInterval(5000);
+    connect(m_authTimer, &QTimer::timeout, this, &AntennaGeniusModel::onAuthTimeout);
 
     // Watchdog for `info get`: falls back to runInitSequence() if the device
     // accepts the TCP connection and sends a prologue but never responds to
@@ -57,6 +79,84 @@ AntennaGeniusModel::~AntennaGeniusModel()
 {
     disconnectFromDevice();
     stopDiscovery();
+}
+
+void AntennaGeniusModel::setAuthCode(const QString& code)
+{
+    m_authCode = code;
+    m_userAuthCode = !code.isEmpty();
+    m_userAuthEndpoint = m_userAuthCode ? m_attemptEndpoint : QString();
+    m_authFailuresByTarget.remove(m_attemptEndpoint);
+    if (code.isEmpty() && m_waitingForAuthCode) {
+        failAuthentication("Authorization code required");
+    }
+}
+
+void AntennaGeniusModel::resetAuthBudgetFor(const AgDeviceInfo& info)
+{
+    const QString host = info.host.isEmpty() ? info.ip.toString() : info.host;
+    const QString target = authTarget(host, info.port);
+    if (target.isEmpty()) {
+        return;
+    }
+    m_authFailuresByTarget.remove(target);
+}
+
+void AntennaGeniusModel::setAuthCodeForAttempt(quint64 attempt, const QString& code,
+                                                bool credentialStoreUnavailable)
+{
+    if (m_waitingForAuthCode && attempt == m_authAttempt) {
+        if (code.isEmpty()) {
+            failAuthentication(credentialStoreUnavailable
+                ? "Stored authorization code unavailable" : "Authorization code required");
+            return;
+        }
+        // Restoring the same saved code on a reconnect must not replenish the
+        // failure budget. Only an operator-entered code or success resets it.
+        m_authCode = code;
+        m_userAuthCode = false;
+        m_userAuthEndpoint.clear();
+        m_waitingForAuthCode = false;
+        sendAuthentication();
+    }
+}
+
+bool AntennaGeniusModel::isConnecting() const
+{
+    return m_tcpSocket && !m_connected
+        && m_tcpSocket->state() != QAbstractSocket::UnconnectedState;
+}
+
+bool AntennaGeniusModel::isAuthBlockedFor(const QString& host, quint16 port) const
+{
+    return authBlockedForTarget(authTarget(host, port));
+}
+
+bool AntennaGeniusModel::authBlockedForTarget(const QString& target) const
+{
+    if (target.isEmpty()) {
+        return false;
+    }
+    const auto entry = m_authFailuresByTarget.constFind(target);
+    return entry == m_authFailuresByTarget.cend()
+        ? m_authFailuresByTarget.size() >= kMaxAuthTargets : entry.value() >= 3;
+}
+
+int AntennaGeniusModel::recordAuthFailure()
+{
+    if (m_attemptEndpoint.isEmpty()) {
+        return 0;
+    }
+    if (!m_authFailuresByTarget.contains(m_attemptEndpoint)
+        && m_authFailuresByTarget.size() >= kMaxAuthTargets) {
+        return 3;
+    }
+    return recordPeripheralAuthFailure(m_authFailuresByTarget[m_attemptEndpoint]);
+}
+
+bool AntennaGeniusModel::isAuthBlockedFor(const AgDeviceInfo& info) const
+{
+    return isAuthBlockedFor(info.host.isEmpty() ? info.ip.toString() : info.host, info.port);
 }
 
 // ── UDP Discovery ──────────────────────────────────────────────────────────
@@ -193,11 +293,14 @@ void AntennaGeniusModel::onDiscoveryDatagram()
 
 void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
 {
+    const QString host = info.host.isEmpty() ? info.ip.toString() : info.host;
+    beginAttemptAt(host, info.port);
     // Always clean up any existing socket — connected or still pending.
     // Multiple auto-connect triggers (radio connect + UDP beacon) can fire
     // in quick succession; without this the R4 accepts the first socket and
     // sends its greeting there while AetherSDR's active socket is a later one.
     if (m_tcpSocket) {
+        QObject::disconnect(m_tcpSocket, nullptr, this, nullptr);
         m_tcpSocket->abort();
         m_tcpSocket->deleteLater();
         m_tcpSocket = nullptr;
@@ -208,11 +311,6 @@ void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
     }
 
     m_device = info;
-    m_gotPrologue = false;
-    m_lineBuffer.clear();
-    m_nextSeq = 1;
-    m_pending.clear();
-
     m_tcpSocket = new QTcpSocket(this);
     connect(m_tcpSocket, &QTcpSocket::connected,
             this, &AntennaGeniusModel::onTcpConnected);
@@ -223,8 +321,44 @@ void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
     connect(m_tcpSocket, &QTcpSocket::errorOccurred,
             this, [this]() { onTcpError(); });
 
-    qCDebug(lcTuner) << "AntennaGenius: connecting to" << info.ip.toString() << ":" << info.port;
-    m_tcpSocket->connectToHost(info.ip, info.port);
+    qCDebug(lcTuner) << "AntennaGenius: connecting to" << host << ":" << info.port;
+    m_tcpSocket->connectToHost(host, info.port);
+}
+
+void AntennaGeniusModel::beginAttemptAt(const QString& host, quint16 port)
+{
+    m_attemptEndpoint = authTarget(host, port);
+    if (m_userAuthCode && m_userAuthEndpoint != m_attemptEndpoint) {
+        // A code typed for one target must not follow an auto-connect or
+        // discovery switch to a different host during reconnect backoff.
+        m_authCode.clear();
+        m_userAuthCode = false;
+        m_userAuthEndpoint.clear();
+        emit enteredAuthCodeDiscarded();
+    }
+    beginAttempt();
+}
+
+void AntennaGeniusModel::beginAttempt()
+{
+    m_reconnectTimer->stop();
+    if (!m_userAuthCode) {
+        m_authCode.clear();
+    }
+    ++m_authAttempt;
+    m_authTimer->stop();
+    m_authPending = false;
+    m_waitingForAuthCode = false;
+    m_authCloseReported = false;
+    m_gotPrologue = false;
+    m_lineBuffer.clear();
+    m_nextSeq = 1;
+    m_pending.clear();
+}
+
+void AntennaGeniusModel::onAuthTimeout()
+{
+    failAuthentication("Authentication timed out", recordAuthFailure() >= 3);
 }
 
 void AntennaGeniusModel::connectToAddress(const QHostAddress& ip, quint16 port)
@@ -234,6 +368,17 @@ void AntennaGeniusModel::connectToAddress(const QHostAddress& ip, quint16 port)
     info.port = port;
     info.name = ip.toString();
     info.serial = QString("manual-%1").arg(ip.toString());
+    connectToDevice(info);
+}
+
+void AntennaGeniusModel::connectToAddress(const QString& host, quint16 port)
+{
+    AgDeviceInfo info;
+    info.host = host;
+    info.ip = QHostAddress(host);
+    info.port = port;
+    info.name = host;
+    info.serial = QString("manual-%1").arg(host);
     connectToDevice(info);
 }
 
@@ -250,6 +395,18 @@ quint16 AntennaGeniusModel::peerPort() const
 void AntennaGeniusModel::disconnectFromDevice()
 {
     m_deliberateDisconnect = true;
+    m_authTimer->stop();
+    m_authPending = false;
+    m_waitingForAuthCode = false;
+    const bool discardedCode = m_userAuthCode;
+    if (discardedCode) {
+        m_authCode.clear();
+    }
+    m_userAuthCode = false;
+    m_userAuthEndpoint.clear();
+    if (discardedCode) {
+        emit enteredAuthCodeDiscarded();
+    }
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();
     }
@@ -259,7 +416,8 @@ void AntennaGeniusModel::disconnectFromDevice()
         m_keepAlive = nullptr;
     }
     if (m_tcpSocket) {
-        m_tcpSocket->disconnectFromHost();
+        QObject::disconnect(m_tcpSocket, nullptr, this, nullptr);
+        m_tcpSocket->abort();
         m_tcpSocket->deleteLater();
         m_tcpSocket = nullptr;
     }
@@ -279,6 +437,7 @@ void AntennaGeniusModel::disconnectFromDevice()
 
 void AntennaGeniusModel::onTcpConnected()
 {
+    m_device.ip = m_tcpSocket->peerAddress();
     qCDebug(lcTuner) << "AntennaGenius: TCP connected to" << m_device.ip.toString();
 
     // Arduino WiFiServer::available() only returns a client once it has sent data.
@@ -297,6 +456,20 @@ void AntennaGeniusModel::onTcpConnected()
 void AntennaGeniusModel::onTcpDisconnected()
 {
     qCDebug(lcTuner) << "AntennaGenius: TCP disconnected";
+    const bool rejectedDuringAuth = m_authPending;
+    m_authTimer->stop();
+    m_authPending = false;
+    m_waitingForAuthCode = false;
+    if (rejectedDuringAuth && !m_deliberateDisconnect) {
+        const bool blocked = recordAuthFailure() >= 3;
+        if (blocked) {
+            m_authCode.clear();
+            m_userAuthCode = false;
+            m_userAuthEndpoint.clear();
+        }
+        m_authCloseReported = true;
+        emit connectionError("Connection closed during authentication");
+    }
     bool wasConnected = m_connected;
     if (m_connected) {
         m_connected = false;
@@ -305,8 +478,9 @@ void AntennaGeniusModel::onTcpDisconnected()
     if (m_keepAlive) {
         m_keepAlive->stop();
     }
-    if (!m_deliberateDisconnect && m_autoReconnect && wasConnected
-        && m_device.port > 0 && !m_device.ip.isNull()) {
+    if (!m_deliberateDisconnect && !isAuthBlocked() && m_autoReconnect
+        && (wasConnected || rejectedDuringAuth)
+        && m_device.port > 0 && (!m_device.ip.isNull() || !m_device.host.isEmpty())) {
         m_reconnectTimer->start();
     }
     m_deliberateDisconnect = false;
@@ -317,13 +491,15 @@ void AntennaGeniusModel::onTcpError()
     if (!m_tcpSocket) return;
     QString err = m_tcpSocket->errorString();
     qCWarning(lcTuner) << "AntennaGenius: TCP error:" << err;
-    emit connectionError(err);
+    if (!m_authPending && !m_authCloseReported) {
+        emit connectionError(err);
+    }
     // A failed reconnect attempt arrives here (not via onTcpDisconnected) because
     // the socket never reached ConnectedState. Re-arm so we keep retrying until
     // the device returns or the user disconnects. isActive() prevents double-arm
     // when a live drop emits both errorOccurred and disconnected.
-    if (!m_deliberateDisconnect && m_autoReconnect && !m_connected
-            && m_device.port > 0 && !m_device.ip.isNull()
+    if (!m_deliberateDisconnect && !isAuthBlocked() && !m_authPending && m_autoReconnect && !m_connected
+            && m_device.port > 0 && (!m_device.ip.isNull() || !m_device.host.isEmpty())
             && m_reconnectTimer && !m_reconnectTimer->isActive()) {
         m_reconnectTimer->start();
     }
@@ -332,12 +508,21 @@ void AntennaGeniusModel::onTcpError()
 void AntennaGeniusModel::onTcpReadyRead()
 {
     if (!m_tcpSocket) return;
+    processTcpBytes(m_tcpSocket->readAll());
+}
 
-    m_lineBuffer += QString::fromUtf8(m_tcpSocket->readAll());
+void AntennaGeniusModel::processTcpBytes(const QByteArray& bytes)
+{
+    m_lineBuffer += QString::fromUtf8(bytes);
 
     // Process complete lines (terminated by \r\n or \n).
     int pos;
     while ((pos = m_lineBuffer.indexOf('\n')) >= 0) {
+        if (pos > kMaxPeripheralLineLength) {
+            m_lineBuffer.clear();
+            failAuthentication("Antenna Genius protocol line exceeded limit", !m_connected);
+            return;
+        }
         QString line = m_lineBuffer.left(pos).trimmed();
         m_lineBuffer.remove(0, pos + 1);
 
@@ -353,56 +538,178 @@ void AntennaGeniusModel::onTcpReadyRead()
                     m_device.version = parts[0].mid(1);  // skip 'V'
                 qCDebug(lcTuner) << "AntennaGenius: prologue received, version"
                          << m_device.version;
-                // If connected via manual IP, enrich from UDP-discovered list.
-                // Matches "ShackSwitch-manual" and legacy "manual-<ip>" serials.
-                if (m_device.serial.endsWith("-manual") || m_device.serial.startsWith("manual-")) {
-                    for (const auto& d : m_discoveredDevices) {
-                        if (!d.ip.isNull() && d.ip == m_device.ip) {
-                            m_device.serial       = d.serial;
-                            m_device.name         = d.name;
-                            m_device.webPort      = d.webPort;
-                            m_device.radioPorts   = d.radioPorts;
-                            m_device.antennaPorts = d.antennaPorts;
-                            break;
-                        }
+                if (line.endsWith(" AUTH")) {
+                    qCInfo(lcTuner) << "AntennaGenius: authorization challenge received";
+                    if (m_userAuthCode && (m_userAuthEndpoint.isEmpty()
+                        || m_userAuthEndpoint != m_attemptEndpoint)) {
+                        m_authCode.clear();
+                        m_userAuthCode = false;
+                        m_userAuthEndpoint.clear();
                     }
-                    // UDP beacon not yet received — infer port count from firmware version.
-                    // Uno Q sends V2.0, R4 sends V1.0. This runs before emit connected()
-                    // so the applet sees the correct radioPorts immediately.
-                    if (m_device.serial.endsWith("-manual") || m_device.serial.startsWith("manual-"))
-                        m_device.radioPorts = (m_device.version == "2.0") ? 2 : 1;
+                    if (m_authCode.isEmpty()) {
+                        m_waitingForAuthCode = true;
+                        emit authCodeRequired(m_authAttempt);
+                    } else {
+                        sendAuthentication();
+                    }
+                } else {
+                    // An unchallenged connection cannot verify a new code.
+                    if (m_userAuthCode) {
+                        m_authCode.clear();
+                        m_userAuthCode = false;
+                        m_userAuthEndpoint.clear();
+                    }
+                    completePrologue();
                 }
+            }
+            continue;
+        }
 
-                m_connected = true;
-                emit connected();
+        if (m_waitingForAuthCode) {
+            continue;
+        }
 
-                // Ensure manually-connected devices appear in the
-                // discovered list so the UI button becomes visible.
-                bool wasEmpty = m_discoveredDevices.isEmpty();
-                bool found = false;
-                for (const auto& d : m_discoveredDevices) {
-                    if (d.serial == m_device.serial) { found = true; break; }
+        if (m_authPending) {
+            if (line.startsWith('R')) {
+                const QStringList fields = line.split(QLatin1Char('|'));
+                bool validResult = false;
+                const quint32 result = fields.size() >= 2
+                    ? fields.at(1).toUInt(&validResult, 16) : 0;
+                // The 4O3A AG API says the echoed sequence is 1 for this
+                // command and a zero hex result means success. Also constrain
+                // the body: sibling TGXL documents a zero-result Unauthorized
+                // rejection. AG firmware responses still need live validation.
+                const bool acceptedBody = fields.size() == 2
+                    || (fields.size() == 3 && (fields.at(2).isEmpty()
+                        || fields.at(2) == QLatin1String("OK")));
+                if (fields.size() >= 2 && fields.at(0) == QLatin1String("R1")
+                    && validResult && result == 0 && acceptedBody) {
+                    m_authTimer->stop();
+                    m_authPending = false;
+                    const QString acceptedCode = m_userAuthCode ? m_authCode : QString();
+                    m_authCode.clear();
+                    if (m_userAuthCode) {
+                        m_userAuthCode = false;
+                        m_userAuthEndpoint.clear();
+                        emit authCodeAccepted(acceptedCode);
+                    }
+                    completePrologue();
+                } else {
+                    failAuthentication("Authorization code rejected");
                 }
-                if (!found) {
-                    m_discoveredDevices.append(m_device);
-                    emit deviceDiscovered(m_device);
-                    if (wasEmpty)
-                        emit presenceChanged(true);
-                }
-                // Probe device identity before running the init sequence.
-                // The response provides authoritative ports/antennas/serial
-                // and is required for manual-IP connections that never see
-                // a UDP discovery beacon. runInitSequence() is deferred to
-                // the info get response handler so radioPorts is correct
-                // before any antenna/band list arrives. The init watchdog
-                // catches devices that never answer (silent non-response).
-                m_seqInfo = sendCommand("info get");
-                m_initWatchdog->start();
             }
             continue;
         }
 
         processLine(line);
+    }
+    if (m_lineBuffer.size() > kMaxPeripheralLineLength) {
+        m_lineBuffer.clear();
+        failAuthentication("Antenna Genius protocol line exceeded limit", !m_connected);
+    }
+}
+
+void AntennaGeniusModel::completePrologue()
+{
+    m_authFailuresByTarget.remove(m_attemptEndpoint);
+    // If connected via manual IP, enrich from UDP-discovered list.
+    if (m_device.serial.endsWith("-manual") || m_device.serial.startsWith("manual-")) {
+        for (const AgDeviceInfo& discovered : m_discoveredDevices) {
+            if (!discovered.ip.isNull() && discovered.ip == m_device.ip) {
+                m_device.serial = discovered.serial;
+                m_device.name = discovered.name;
+                m_device.webPort = discovered.webPort;
+                m_device.radioPorts = discovered.radioPorts;
+                m_device.antennaPorts = discovered.antennaPorts;
+                break;
+            }
+        }
+        if (m_device.serial.endsWith("-manual") || m_device.serial.startsWith("manual-")) {
+            m_device.radioPorts = (m_device.version == "2.0") ? 2 : 1;
+        }
+    }
+
+    m_connected = true;
+    emit connected();
+
+    bool wasEmpty = m_discoveredDevices.isEmpty();
+    bool found = false;
+    for (const AgDeviceInfo& discovered : m_discoveredDevices) {
+        if (discovered.serial == m_device.serial) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        m_discoveredDevices.append(m_device);
+        emit deviceDiscovered(m_device);
+        if (wasEmpty) {
+            emit presenceChanged(true);
+        }
+    }
+    m_seqInfo = sendCommand("info get");
+    m_initWatchdog->start();
+}
+
+void AntennaGeniusModel::sendAuthentication()
+{
+    if (m_authCode.isEmpty()) {
+        failAuthentication("Authorization code required");
+        return;
+    }
+    if (!validPeripheralAuthCode(m_authCode)) {
+        failAuthentication("Invalid authorization code");
+        return;
+    }
+    if (m_userAuthCode && (m_userAuthEndpoint.isEmpty()
+        || m_userAuthEndpoint != m_attemptEndpoint)) {
+        failAuthentication("Authorization code target changed");
+        return;
+    }
+    // 4O3A Antenna Genius TCPIP API documents this exact AUTH command and a
+    // carriage-return terminator. Issue #2313's contributor capture reports
+    // LF from the utility and CRLF accepted by AG; use the normal command framing.
+    // https://github.com/4o3a/genius-api-docs/wiki/Antenna-Genius-TCPIP-auth
+    const QByteArray command = peripheralAuthCommand(PeripheralAuthProtocol::AntennaGenius, m_authCode);
+    if (!m_authCommandWriter && !m_tcpSocket) {
+        failAuthentication("Connection closed before authorization command");
+        return;
+    }
+    m_authPending = true;
+    if (m_authCommandWriter) {
+        m_authCommandWriter(command);
+    } else {
+        m_tcpSocket->write(command);
+    }
+    m_nextSeq = 2;
+    m_authTimer->start();
+}
+
+void AntennaGeniusModel::failAuthentication(const QString& reason, bool blockReconnect)
+{
+    m_authTimer->stop();
+    m_authPending = false;
+    m_waitingForAuthCode = false;
+    if (blockReconnect && !m_attemptEndpoint.isEmpty()
+        && (m_authFailuresByTarget.contains(m_attemptEndpoint)
+            || m_authFailuresByTarget.size() < kMaxAuthTargets)) {
+        m_authFailuresByTarget.insert(m_attemptEndpoint, 3);
+    }
+    if (blockReconnect) {
+        m_authCode.clear();
+        m_userAuthCode = false;
+        m_userAuthEndpoint.clear();
+    }
+    m_reconnectTimer->stop();
+    m_lineBuffer.clear();
+    emit connectionError(reason);
+    if (m_tcpSocket) {
+        m_tcpSocket->abort();
+    }
+    if (!isAuthBlocked() && m_autoReconnect && m_device.port > 0
+        && (!m_device.ip.isNull() || !m_device.host.isEmpty())
+        && !m_reconnectTimer->isActive()) {
+        m_reconnectTimer->start();
     }
 }
 

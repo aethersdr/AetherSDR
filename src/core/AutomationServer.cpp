@@ -84,6 +84,7 @@
 #include <QItemSelectionModel>
 #include <QComboBox>
 #include <QLineEdit>
+#include "AutomationSensitiveLineEdit.h"
 #include <QLabel>
 #include <QSpinBox>
 #include <QProgressBar>
@@ -292,9 +293,7 @@ QString widgetValue(const QWidget* w, bool* truncated = nullptr)
         // dumpTree is written to a temp tree.json, so returning the cleartext
         // would exfiltrate credentials. Reporting a placeholder keeps the field
         // assertable (present / non-empty) without leaking the value. (#3646)
-        if (le->echoMode() != QLineEdit::Normal)
-            return le->text().isEmpty() ? QString() : QStringLiteral("<hidden>");
-        return le->text();
+        return automationLineEditValue(le);
     }
     // Text views (transcripts, decode logs, terminals) are documents, not
     // scalars, so the tree carries a bounded prefix: enough for an assertion
@@ -1257,6 +1256,7 @@ ResolvedAction resolveMenuBarAction(const QString& target)
 // so route QRhiWidget through its own grab().
 QImage grabWidget(QWidget* w)
 {
+    AutomationSensitiveGrabMask mask(w);
 #ifdef AETHER_GPU_SPECTRUM
     // QRhiWidget inherits QWidget::grab() (which returns an empty pixmap for a
     // GPU surface); grabFramebuffer() is the real readback and returns a QImage.

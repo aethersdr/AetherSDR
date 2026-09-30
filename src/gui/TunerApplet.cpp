@@ -412,6 +412,13 @@ void TunerApplet::buildUI()
                                       QSizePolicy::Minimum, QSizePolicy::Fixed);
     vbox->addSpacerItem(m_bottomStretch);
 
+    m_sourceLabel = new QLabel(QStringLiteral("● OFFLINE"), this);
+    m_sourceLabel->setObjectName(QStringLiteral("tunerConnectionSource"));
+    m_sourceLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    m_sourceLabel->setAccessibleName(tr("TGXL OFFLINE"));
+    m_sourceLabel->setAccessibleDescription(tr("No TGXL connection is available."));
+    vbox->addWidget(m_sourceLabel, 0, Qt::AlignRight);
+
     updatePortRows();
 
     outer->addWidget(body);
@@ -613,10 +620,12 @@ void TunerApplet::applyDensityAtScale(qreal scale)
     const qreal s = scale;
     // A design-pixel metric at the current scale.
     auto px = [s](int base) { return qMax(1, qRound(base * s)); };
+    applySourceIndicatorStyle(scale);
 
-    // No bottom margin: m_bottomStretch owns the space under the controls.
+    // The stretch owns the gap below controls; leave a small frame inset
+    // below the indicator in the expanded panel.
     m_vbox->setContentsMargins(f ? px(12) : 4, f ? px(10) : 2,
-                               f ? px(12) : 4, f ? 0 : 2);
+                               f ? px(12) : 4, f ? px(8) : 2);
     m_vbox->setSpacing(f ? px(8) : 2);
 
     // Expanded fills the window it was given; docked stays the fixed-height
@@ -706,6 +715,59 @@ void TunerApplet::applyDensityAtScale(qreal scale)
     syncFromModel();
 }
 
+void TunerApplet::applySourceIndicatorStyle(qreal scale)
+{
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_sourceLabel,
+        QStringLiteral("QLabel { color: %1; font-size: %2px; }")
+            .arg(m_directConnected ? QStringLiteral("{{color.accent.success}}")
+                 : hasRadioRelay() ? QStringLiteral("{{color.accent.warning}}")
+                                    : QStringLiteral("{{color.text.disabled}}"))
+            .arg(m_floating ? qMax(1, qRound(11 * scale)) : 9));
+}
+
+bool TunerApplet::hasRadioRelay() const
+{
+    return m_radioConnected && m_model && !m_model->handle().isEmpty();
+}
+
+void TunerApplet::updateSourceIndicator(bool direct)
+{
+    if (direct) {
+        m_directFailureReason.clear();
+    }
+    const QString source = direct ? QStringLiteral("● DIRECT")
+        : hasRadioRelay() ? QStringLiteral("● RADIO") : QStringLiteral("● OFFLINE");
+    if (m_directConnected == direct && m_sourceLabel->text() == source
+        && m_sourceLabel->toolTip() == m_directFailureReason
+        && !m_sourceLabel->styleSheet().isEmpty()) {
+        return;
+    }
+    m_directConnected = direct;
+    m_sourceLabel->setText(source);
+    m_sourceLabel->setAccessibleName(direct ? tr("TGXL DIRECT connection")
+        : hasRadioRelay() ? tr("TGXL RADIO connection") : tr("TGXL OFFLINE"));
+    QString description = direct
+        ? tr("Connected directly to the TGXL.")
+        : hasRadioRelay()
+            ? tr("Using the radio relay; the direct TGXL connection is unavailable.")
+            : tr("No TGXL connection is available.");
+    if (!m_directFailureReason.isEmpty()) {
+        description += QStringLiteral(" ") + m_directFailureReason;
+    }
+    m_sourceLabel->setAccessibleDescription(description);
+    m_sourceLabel->setToolTip(m_directFailureReason);
+    applySourceIndicatorStyle(contentScale());
+}
+
+void TunerApplet::setDirectFailureReason(const QString& reason)
+{
+    if (m_directFailureReason == reason) {
+        return;
+    }
+    m_directFailureReason = reason;
+    updateSourceIndicator(m_directConnected);
+}
+
 void TunerApplet::setRadioModelName(const QString& model)
 {
     if (m_radioModelName == model) return;
@@ -724,6 +786,7 @@ void TunerApplet::setRadioConnected(bool connected)
 {
     if (m_radioConnected == connected) return;
     m_radioConnected = connected;
+    updateSourceIndicator(m_directConnected);
     if (!connected) {
         auto* gauge = static_cast<HGauge*>(m_fwdGauge);
         gauge->setWindowPeakEnabled(true);
@@ -1015,6 +1078,9 @@ void TunerApplet::setTunerModel(TunerModel* model)
 
     // State changes → refresh UI
     connect(m_model, &TunerModel::stateChanged, this, &TunerApplet::syncFromModel);
+    connect(m_model, &TunerModel::stateChanged, this, [this]() {
+        updateSourceIndicator(m_directConnected);
+    });
 
     // Forward power and SWR from direct TGXL connection (#625). Routed through
     // the stamped entry point so it yields to the radio-relayed AMP meters
@@ -1034,6 +1100,10 @@ void TunerApplet::setTunerModel(TunerModel* model)
     };
     connect(m_model, &TunerModel::directConnectionChanged, this, updateScrollEnabled);
     updateScrollEnabled();
+
+    connect(m_model, &TunerModel::directConnectionChanged,
+            this, &TunerApplet::updateSourceIndicator);
+    updateSourceIndicator(m_model->hasDirectConnection());
 
     // Antenna switch: show buttons only when direct connection is active AND
     // the TGXL reports antA (models without a switch never send antA).
