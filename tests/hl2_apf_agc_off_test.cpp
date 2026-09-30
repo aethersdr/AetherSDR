@@ -32,16 +32,20 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/MetisProtocol.h"   // kEp6BlockSamples
+#include "core/dsp/FftwPlannerLock.h"
 #include "core/dsp/WdspChannel.h"
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <future>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -236,6 +240,42 @@ int main(int argc, char** argv)
         bad.apfBandwidthHz = 0.0;
         check(WdspChannel::create(bad, &err) == nullptr,
               "create() refuses an APF design open() could not push");
+    }
+
+    // ── 2b. A no-op setApf takes no lock ─────────────────────────────────
+    //
+    // The planner lock is process-global and setApf runs on the I/O thread
+    // that paces EP2. A call that changes nothing must not wait behind someone
+    // else's planning, so it is made HERE while this thread holds that lock:
+    // with the early-out it returns at once; without it, it blocks until the
+    // lock is released below, and the bounded wait reports that as a failure
+    // instead of hanging.
+    {
+        WdspChannel::Config rxc;   // Receive, 48 kHz, valid as it stands
+        rxc.mode = WdspChannel::Mode::Cwu;
+        std::string err;
+        auto channel = WdspChannel::create(rxc, &err);
+        check(channel != nullptr, "receive channel opens");
+        if (channel) {
+            const double bw = Hl2RxDsp::apfBandwidthHzForLevel(Hl2RxDsp::kDefaultApfLevel);
+            check(channel->setApf(true, kPitchHz, bw, 2.0), "APF design accepted");
+            std::future<bool> same;
+            bool returnedUnderLock = false;
+            {
+                std::unique_lock<std::mutex> held(AetherSDR::fftwPlannerMutex());
+                same = std::async(std::launch::async, [&channel, bw] {
+                    return channel->setApf(true, kPitchHz, bw, 2.0);
+                });
+                returnedUnderLock = same.wait_for(std::chrono::seconds(2))
+                                    == std::future_status::ready;
+            }
+            const bool sameOk = same.get();
+            check(returnedUnderLock && sameOk,
+                  "an unchanged setApf returns true without taking the planner lock");
+            check(channel->setApf(true, kPitchHz + 50.0, bw, 2.0)
+                      && channel->config().apfCenterHz == kPitchHz + 50.0,
+                  "a changed setApf still reaches WDSP");
+        }
     }
 
     // ── 3. AGC-off level, measured ───────────────────────────────────────

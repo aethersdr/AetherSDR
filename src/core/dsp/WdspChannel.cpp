@@ -777,7 +777,29 @@ bool WdspChannel::setApf(bool enabled, double centerHz, double bandwidthHz,
                          double gain) noexcept
 {
     if (m_config.direction != Direction::Receive ||
-        !apfParametersValid(centerHz, bandwidthHz, gain) || !beginControlOperation()) {
+        !apfParametersValid(centerHz, bandwidthHz, gain)) {
+        return false;
+    }
+    // ALREADY THERE: return before the control handshake and the lock, the
+    // same shape as setMinimumPhase(). Hl2RxDsp::applyApf() runs on every mode
+    // change, rebuild and pitch change, mostly to keep an off stage off.
+    //
+    // WDSP itself would not redesign for these: CalcDoublepoleFilter
+    // (doublepole.c) returns early when centre, bandwidth and gain are all
+    // unchanged, and its FIR is built analytically (build_doublepole_1eff) with
+    // no FFTW plan unless the length changes. What a no-op call still costs is
+    // g_setupMutex, which IS the process-global FFTW planner lock, taken on the
+    // I/O thread that paces EP2: behind another channel's rebuild it would
+    // wait out that rebuild's planning to change nothing. And a no-op must not
+    // be refused because a callback is in flight.
+    //
+    // Exact equality is correct here: m_config holds precisely what the last
+    // accepted setApf() or open() gave WDSP, and nothing else writes SPCW.
+    if (enabled == m_config.apfEnabled && centerHz == m_config.apfCenterHz
+        && bandwidthHz == m_config.apfBandwidthHz && gain == m_config.apfGain) {
+        return true;
+    }
+    if (!beginControlOperation()) {
         return false;
     }
     {
