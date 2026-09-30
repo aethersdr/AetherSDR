@@ -295,11 +295,11 @@ public:
     //     reference that moved -- to the connect-time gain, a band's stored
     //     gain, or the auto-gain baseline -- would move every operator's
     //     heard AGC-T on events they did not associate with it.
-    //   * Nothing an operator does can move the shipped default (#5829 took
+    //   * Nothing an operator does can move the shipped default (the #5829 fix took
     //     the persisted "defaultDb" key out for exactly that reason), so a
     //     setter here would be a second source of truth for a value no action
     //     reaches -- the same dead public surface Principle IX removed
-    //     setTrimDb for, below.
+    //     setTrimDb for, above.
     //
     // If a per-radio reference is ever needed, it lands with the thing that
     // sets it and the test that says why, not as a setter nobody calls.
