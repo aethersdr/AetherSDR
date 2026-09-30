@@ -24,6 +24,10 @@ using AetherSDR::hl2::Hl2DbReference;
 // there is nothing it would be right to wire it to. These two lines are what
 // keep it that way: the reference is the SAME constant the band memory falls
 // back to (production's, not a retyped 20), and no instance can move it.
+// Both fail to compile against the header before the removal; the runtime
+// loop at the end of main() does not, and says so. The concept names the old
+// setter, so a setter under a new name would pass it -- review catches that
+// one, not this file.
 template <typename T>
 concept CanMoveAgcReference = requires(T& r) { r.setReferenceLnaGainDb(0.0); };
 static_assert(!CanMoveAgcReference<Hl2DbReference>,
@@ -272,11 +276,22 @@ int main()
               "and moves it by the same -17 dB at every stored gain");
     }
 
-    // The reference is the same for every object and every gain: the LNA
-    // term the AGC undoes is (shipped default - commanded), full stop, across
-    // the whole native range. A reference seeded from anything else -- the
-    // connect-time gain, a band's memory, the auto-gain baseline -- fails here
-    // on every gain but the one it happened to be seeded at.
+    // A CHARACTERIZATION PIN, NOT THE GUARD. The LNA term the AGC undoes is
+    // (shipped default - commanded) across the whole native range, read
+    // straight from lnaOffsetDb() rather than through agcCeilingDb()'s clamp.
+    //
+    // What it does NOT prove: this loop passes unchanged against the code
+    // before the setter was removed -- the old member defaulted to the same
+    // value and nothing reassigned it. It never seeds an object, so a setter
+    // put back and called from a connect path, a band's memory or the
+    // auto-gain baseline would pass here too. And it compares against the
+    // same kLnaDefaultGainDb the reference is built from, so a change to the
+    // shipped default moves both sides and passes as well.
+    //
+    // What it does catch: lnaOffsetDb() drifting from that formula -- a sign
+    // flip, or a reference decoupled from the default. The guard against a
+    // movable reference is the pair of static_asserts at the top of this
+    // file, which fail to compile against the pre-removal header.
     for (int g = AetherSDR::hl2::kLnaGainMinDb;
          g <= AetherSDR::hl2::kLnaGainMaxDb; ++g) {
         Hl2DbReference fresh;
