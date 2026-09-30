@@ -1945,11 +1945,20 @@ QString RigctlProtocol::cmdSetFunc(const QString& args)
         QMetaObject::invokeMethod(slice, [slice, on]() { slice->setNb(on); }, Qt::QueuedConnection);
         return rprt(0);
     }
+    // The radio's own NR / ANF. A radio that has neither (HL2, ANAN: the host
+    // runs NR2/NR4 and the VFO hides both buttons) cannot turn them ON; the
+    // model flag alone would read back as a phantom "on" through get_func.
+    // RIG_ENAVAIL, as for the other functions this rig does not have. OFF is
+    // already the truth there and is answered as before.
     if (func == "NR") {
+        if (on && m_model && !m_model->radioSideNoiseReductionAvailable())
+            return rprt(-11);   // RIG_ENAVAIL
         QMetaObject::invokeMethod(slice, [slice, on]() { slice->setNr(on); }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (func == "ANF") {
+        if (on && m_model && !m_model->radioSideAutoNotchAvailable())
+            return rprt(-11);   // RIG_ENAVAIL
         QMetaObject::invokeMethod(slice, [slice, on]() { slice->setAnf(on); }, Qt::QueuedConnection);
         return rprt(0);
     }

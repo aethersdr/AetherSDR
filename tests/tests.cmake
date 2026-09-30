@@ -6835,6 +6835,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_dsp_backend_readback_test
     backend_slice_lifecycle_test
     tci_automation_test
+    reroute_dead_controls_test
 )
 foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)
     if(TARGET ${_automation_test})

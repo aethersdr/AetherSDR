@@ -742,6 +742,12 @@ public:
     // radio-side NR/ANF; the caller says so through its notice channel. ANF is
     // also accepted wherever a command plane exists, because the Demo radio's
     // synthetic connection answers `anf=` with an audible notch; it has no NR.
+    // The auto notch is there where radio-side DSP is, and also wherever a
+    // command plane exists (see requestRadioAutoNotch). The remote-control
+    // surfaces -- CAT set_func/ZZNR/NR/NT, TCI rx_nr_enable/rx_anf_enable and
+    // the automation bridge's `slice dsp` -- ask these two before turning
+    // either ON, and refuse in their own protocol's terms.
+    bool radioSideAutoNotchAvailable() const;
     bool requestRadioNoiseReduction(SliceModel* slice, bool on);
     bool requestRadioAutoNotch(SliceModel* slice, bool on);
     // AM carrier level, refused the same way when the radio declares no AM

@@ -18,8 +18,11 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/AutomationServer.h"
 #include "core/BandStackSettings.h"
 #include "core/RigctlProtocol.h"
+#include "core/SmartCatProtocol.h"
+#include "core/TciProtocol.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/MeterDef.h"
 #include "core/backends/flex/RadioConnection.h"
@@ -36,6 +39,7 @@
 #include <QSignalSpy>
 #include <QStringList>
 
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <vector>
@@ -49,6 +53,16 @@ public:
     static void useCommandPlane(RadioModel& radio, RadioConnection* connection)
     {
         radio.m_connection = connection;
+    }
+};
+
+// handleLine() is private; AutomationServer befriends this name for its tests.
+class AutomationServerTestAccess
+{
+public:
+    static QJsonObject handleLine(AutomationServer& server, const QByteArray& line)
+    {
+        return server.handleLine(line, nullptr);
     }
 };
 } // namespace AetherSDR
@@ -248,6 +262,83 @@ void testAnfStillReachesTheDemoCommandPlane()
     check(!f.radio.requestRadioNoiseReduction(f.slice, true) && !f.slice->nrOn(),
           "NR/demo: still refused, no phantom");
     RerouteDeadControlsTestAccess::useCommandPlane(f.radio, nullptr);
+}
+
+// The remote-control surfaces reach SliceModel::setNr/setAnf too: CAT
+// (rigctld set_func, SmartSDR-CAT ZZNR/NR/NT), TCI and the automation bridge.
+// Each refuses ON in its own protocol's terms where the radio has no
+// radio-side NR/ANF, leaving no phantom "on"; OFF, already the truth there, is
+// answered as before; and a radio that has them is unchanged.
+void testRemoteSurfacesRefuseRadioNrAndAnfWithoutRadioDsp()
+{
+    Fixture f;
+    auto noPhantom = [&f]() {
+        QCoreApplication::processEvents();   // rigctl/TCI apply on a queued hop
+        auto anyOn = [](const std::vector<LoggingBackend::Toggle>& log) {
+            return std::any_of(log.begin(), log.end(),
+                               [](const LoggingBackend::Toggle& t) { return t.on; });
+        };
+        return !f.slice->nrOn() && !f.slice->anfOn()
+            && !anyOn(f.backend->nr) && !anyOn(f.backend->anf);
+    };
+
+    RigctlProtocol rig(&f.radio);
+    rig.setSliceIndex(0);
+    check(rig.handleLine(QStringLiteral("\\set_func NR 1")).trimmed() == QLatin1String("RPRT -11"),
+          "remote/rigctl: set_func NR 1 answers RIG_ENAVAIL (was: RPRT 0)");
+    check(rig.handleLine(QStringLiteral("\\set_func ANF 1")).trimmed() == QLatin1String("RPRT -11"),
+          "remote/rigctl: set_func ANF 1 answers RIG_ENAVAIL");
+    check(noPhantom(), "remote/rigctl: no phantom NR/ANF, no ON reached the seam");
+    check(rig.handleLine(QStringLiteral("\\set_func NR 0")).trimmed() == QLatin1String("RPRT 0"),
+          "remote/rigctl: set_func NR 0 is still answered RPRT 0");
+
+    TciProtocol tci(&f.radio);
+    (void)tci.handleCommand(QStringLiteral("rx_nr_enable:0,true"));
+    check(tci.pendingNotification() == QLatin1String("rx_nr_enable:0,false;"),
+          "remote/TCI: rx_nr_enable true is answered with the truth, false");
+    (void)tci.handleCommand(QStringLiteral("rx_anf_enable:0,true"));
+    check(tci.pendingNotification() == QLatin1String("rx_anf_enable:0,false;"),
+          "remote/TCI: rx_anf_enable true is answered with the truth, false");
+    check(noPhantom(), "remote/TCI: no phantom NR/ANF, no ON reached the seam");
+
+    SmartCatProtocol cat(&f.radio, 0);
+    check(cat.processCommand(QStringLiteral("ZZNR1")) == QLatin1String("?;"),
+          "remote/SmartCAT: ZZNR1 refused with ?;");
+    check(cat.processCommand(QStringLiteral("NR1")) == QLatin1String("?;"),
+          "remote/SmartCAT: NR1 refused with ?;");
+    check(cat.processCommand(QStringLiteral("NT1")) == QLatin1String("?;"),
+          "remote/SmartCAT: NT1 refused with ?;");
+    check(noPhantom(), "remote/SmartCAT: no phantom NR/ANF, no ON reached the seam");
+    check(cat.processCommand(QStringLiteral("NR0")).isEmpty(),
+          "remote/SmartCAT: NR0 is accepted as before");
+
+    AutomationServer bridge;
+    bridge.setRadioModel(&f.radio);
+    const QJsonObject nr =
+        AutomationServerTestAccess::handleLine(bridge, QByteArrayLiteral("slice dsp nr on"));
+    const QJsonObject anf =
+        AutomationServerTestAccess::handleLine(bridge, QByteArrayLiteral("slice dsp anf on"));
+    check(!nr.value(QStringLiteral("ok")).toBool() && !anf.value(QStringLiteral("ok")).toBool(),
+          "remote/bridge: slice dsp nr|anf on is refused");
+    check(noPhantom(), "remote/bridge: no phantom NR/ANF, no ON reached the seam");
+}
+
+void testRemoteSurfacesStillReachRadioNrWhereItExists()
+{
+    Fixture f([](RadioCapabilities& c) { c.hasRadioSideDsp = true; });
+    RigctlProtocol rig(&f.radio);
+    rig.setSliceIndex(0);
+    check(rig.handleLine(QStringLiteral("\\set_func NR 1")).trimmed() == QLatin1String("RPRT 0"),
+          "remote/icom: set_func NR 1 accepted");
+    TciProtocol tci(&f.radio);
+    (void)tci.handleCommand(QStringLiteral("rx_anf_enable:0,true"));
+    check(tci.pendingNotification() == QLatin1String("rx_anf_enable:0,true;"),
+          "remote/icom: TCI rx_anf_enable accepted as before");
+    QCoreApplication::processEvents();
+    check(f.slice->nrOn() && !f.backend->nr.empty() && f.backend->nr.back().on,
+          "remote/icom: NR reaches setSliceNoiseReduction");
+    check(f.slice->anfOn() && !f.backend->anf.empty() && f.backend->anf.back().on,
+          "remote/icom: ANF reaches setSliceAutoNotch");
 }
 
 // ── Row 5: AM carrier ───────────────────────────────────────────────────────
@@ -470,6 +561,7 @@ void testNetFilterIsNormalisedForLowerSideband()
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("aether-reroute-dead-controls-test"));
+    qputenv("AETHER_AUTOMATION", "1");
     QCoreApplication app(argc, argv);
     check(profile.isValid(), "isolated settings profile is available");
     AppSettings::instance().load();
@@ -480,6 +572,8 @@ int main(int argc, char** argv)
     testRadioNrAndAnfRefuseWithoutRadioDsp();
     testRadioNrAndAnfRouteWhereTheRadioHasThem();
     testAnfStillReachesTheDemoCommandPlane();
+    testRemoteSurfacesRefuseRadioNrAndAnfWithoutRadioDsp();
+    testRemoteSurfacesStillReachRadioNrWhereItExists();
     testAmCarrierFollowsTheCapability();
     testGraphicEqIsNotReportedAsUnsupported();
     testLevelFaceReadsMicPeakWhereThereIsNoMicMeter();

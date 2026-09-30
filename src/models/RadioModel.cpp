@@ -4451,6 +4451,15 @@ bool RadioModel::radioSideNoiseReductionAvailable() const
     return !m_backend || backendCapabilities().hasRadioSideDsp;
 }
 
+bool RadioModel::radioSideAutoNotchAvailable() const
+{
+    // A command plane carries `slice set <n> anf=` somewhere that answers it:
+    // a Flex, or the Demo radio's synthetic connection, which turns it into the
+    // generator's audible notch (SimBackend::setDemoAnf) although the Demo
+    // declares no radio-side DSP. Only a radio with neither has no ANF.
+    return hasCommandPlane() || radioSideNoiseReductionAvailable();
+}
+
 bool RadioModel::requestRadioNoiseReduction(SliceModel* slice, bool on)
 {
     if (!slice) {
@@ -4470,11 +4479,7 @@ bool RadioModel::requestRadioAutoNotch(SliceModel* slice, bool on)
     if (!slice) {
         return false;
     }
-    // A command plane carries `slice set <n> anf=` somewhere that answers it:
-    // a Flex, or the Demo radio's synthetic connection, which turns it into the
-    // generator's audible notch (SimBackend::setDemoAnf) although the Demo
-    // declares no radio-side DSP. Only a radio with neither is refused.
-    if (!hasCommandPlane() && !radioSideNoiseReductionAvailable()) {
+    if (!radioSideAutoNotchAvailable()) {
         qCWarning(lcProtocol) << "RadioModel: radio auto notch refused:"
                               << "this radio declares no radio-side DSP";
         return false;
