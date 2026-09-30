@@ -111,6 +111,9 @@ public:
     static bool isShackSwitch(const AgDeviceInfo& info);
     QString peerAddress() const;
     quint16 peerPort() const;
+    // The host asked for on the current attempt: a name or a literal address.
+    // Saved codes key on it; see PeripheralAuthStore.
+    QString attemptHost() const { return m_attemptHost; }
     const AgDeviceInfo& connectedDevice() const { return m_device; }
 
     QList<AgDeviceInfo>   discoveredDevices() const { return m_discoveredDevices; }
@@ -225,6 +228,7 @@ private:
     QString m_authCode;
     bool m_userAuthCode{false};
     QString m_attemptEndpoint;
+    QString m_attemptHost;
     QString m_userAuthEndpoint;
     bool m_authCloseReported{false};
     QTimer* m_authTimer{nullptr};

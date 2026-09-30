@@ -782,10 +782,35 @@ int main(int argc, char** argv)
         CHECK(!PeripheralAuthStore::validCode(QStringLiteral("two words")));
         CHECK(PeripheralAuthStore::validCode(QStringLiteral("code=value")));
         bool savedPersistently = true;
-        const QString boundEndpoint = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.10"), 9010);
-        const QString wrongEndpoint = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.11"), 9010);
+        const QString boundEndpoint = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.10"), QStringLiteral("192.0.2.10"), 9010);
+        const QString wrongEndpoint = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.11"), QStringLiteral("192.0.2.11"), 9010);
         CHECK(boundEndpoint != wrongEndpoint);
-        CHECK(PeripheralAuthStore::endpoint(QStringLiteral("unresolved.example"), 9010).isEmpty());
+        // Nothing binds before a socket has a real peer, name or not.
+        CHECK(PeripheralAuthStore::endpoint(QStringLiteral("unresolved.example"),
+                                            QStringLiteral("unresolved.example"), 9010).isEmpty());
+        CHECK(PeripheralAuthStore::endpoint(QStringLiteral("home.example.net"), QString(), 9010).isEmpty());
+        CHECK(PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.10"),
+                                            QStringLiteral("192.0.2.10"), 0).isEmpty());
+        // A name binds to the name: the residential IP behind it changing does
+        // not orphan the saved code (#2313's DDNS operators), and the case of
+        // the name does not matter.
+        const QString byName = PeripheralAuthStore::endpoint(
+            QStringLiteral("Home.Example.Net"), QStringLiteral("198.51.100.7"), 9010);
+        CHECK(!byName.isEmpty());
+        CHECK(byName == PeripheralAuthStore::endpoint(
+            QStringLiteral(" home.example.net "), QStringLiteral("203.0.113.9"), 9010));
+        // A different name, a different port, or a literal IP is a different
+        // identity, so a code saved for one is never offered to another.
+        CHECK(byName != PeripheralAuthStore::endpoint(
+            QStringLiteral("other.example.net"), QStringLiteral("198.51.100.7"), 9010));
+        CHECK(byName != PeripheralAuthStore::endpoint(
+            QStringLiteral("home.example.net"), QStringLiteral("198.51.100.7"), 9008));
+        CHECK(byName != PeripheralAuthStore::endpoint(
+            QStringLiteral("198.51.100.7"), QStringLiteral("198.51.100.7"), 9010));
+        // A literal IP still binds to the connected address, exactly as before.
+        CHECK(PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.10"),
+                                            QStringLiteral("192.0.2.10"), 9010)
+              == QStringLiteral("192.0.2.10:9010"));
         QEventLoop loop;
         QTimer::singleShot(1000, &loop, &QEventLoop::quit);
         PeripheralAuthStore::save(PeripheralAuthStore::Device::Tgxl,
@@ -819,7 +844,7 @@ int main(int argc, char** argv)
     {
         // Cold session-vault loads preserve their endpoint binding. An old
         // unbound plaintext value cannot be sent to a discovered peer.
-        const QString endpoint = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.20"), 9008);
+        const QString endpoint = PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.20"), QStringLiteral("192.0.2.20"), 9008);
         AppSettings::instance().setSessionCredential(QStringLiteral("pgxl_auth_code"),
             QStringLiteral("{\"version\":1,\"endpoint\":\"%1\",\"code\":\"restored\"}")
                 .arg(endpoint));
@@ -833,7 +858,7 @@ int main(int argc, char** argv)
         AppSettings::instance().setSessionCredential(QStringLiteral("antenna_genius_auth_code"),
                                                      QStringLiteral("old-unbound-code"));
         PeripheralAuthStore::load(PeripheralAuthStore::Device::AntennaGenius,
-            PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.21"), 9007), &app,
+            PeripheralAuthStore::endpoint(QStringLiteral("192.0.2.21"), QStringLiteral("192.0.2.21"), 9007), &app,
             [&](const PeripheralAuthStore::LoadResult& result) { loaded = result; loop.quit(); });
         QTimer::singleShot(1000, &loop, &QEventLoop::quit);
         loop.exec();
