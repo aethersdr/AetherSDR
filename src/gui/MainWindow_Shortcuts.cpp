@@ -17,6 +17,7 @@
 #include "core/TxKeyingMarker.h"
 #include "TxInputKeyEvent.h"
 #include "TxKeyActivationGuard.h"
+#include "PttHoldKeyStep.h"
 #include "core/IambicKeyer.h"
 
 #include <QApplication>
@@ -311,35 +312,34 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
         return true;
     }
 
-    // Mirror the prior Space behavior: only key while connected and not typing
-    // into a text field. When those gates fail, do not consume the key — let it
-    // fall through (matching the old `&& m_radioModel.isConnected()` guard).
-    // Use textEntryCaptured() (not textInputCaptured()) so a focused
-    // non-editable combo — which keeps focus after its popup closes (#3908) —
-    // doesn't swallow the first Space/PTT press.
-    if (textEntryCaptured() || !m_radioModel.isConnected())
+    // The gates (connected, not typing, shortcuts on) apply to a new press
+    // only; the release of a live hold always un-keys (Principle VI). Use
+    // textEntryCaptured() (not textInputCaptured()) so a focused non-editable
+    // combo -- which keeps focus after its popup closes (#3908) -- doesn't
+    // swallow the first Space/PTT press. See PttHoldKeyStep.h.
+    switch (pttHoldKeyStep(eventType, m_pttHoldActive, m_keyboardShortcutsEnabled,
+                           textEntryCaptured(), m_radioModel.isConnected())) {
+    case PttHoldKeyStep::PassThrough:
         return false;
-
-    if (m_keyboardShortcutsEnabled) {
+    case PttHoldKeyStep::Consume:
+        return true;
+    case PttHoldKeyStep::KeyTx:
         // Route through the PTT coordinator (not the raw setTransmit() path) so
         // the Quindar intro/outro runs for keyboard PTT just like the GUI MOX
         // button. requestPttOn/Off still terminate in an `xmit` command, so the
         // interlock/gating in RadioModel's xmit handler is preserved; the
         // coordinator's preflight applies the same local interlock check.
         // (#3610)
-        if (eventType == QEvent::KeyPress && !m_pttHoldActive) {
-            m_pttHoldActive = true;
-            m_pttHoldInput = m_radioModel.localTxController()->capture(TxController::Activity::Mox);
-            (void)m_pttHoldInput.start();
-        } else if (eventType == QEvent::KeyRelease && m_pttHoldActive) {
-            m_pttHoldActive = false;
-            m_pttHoldInput.stop();
-        }
+        m_pttHoldActive = true;
+        m_pttHoldInput = m_radioModel.localTxController()->capture(TxController::Activity::Mox);
+        (void)m_pttHoldInput.start();
+        return true;
+    case PttHoldKeyStep::UnkeyTx:
+        m_pttHoldActive = false;
+        m_pttHoldInput.stop();
+        return true;
     }
-    // Consume the bound key so it can't also activate a button -- but only
-    // when it keyed. With keyboard shortcuts off it did nothing, and eating it
-    // would take Space away from the focused button as well (#5483).
-    return m_keyboardShortcutsEnabled;
+    return true;
 }
 
 

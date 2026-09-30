@@ -1,5 +1,6 @@
 #include "TestSettingsProfile.h"
 #include "core/ShortcutManager.h"
+#include "gui/PttHoldKeyStep.h"
 #include "gui/TxKeyActivationGuard.h"
 
 #include <QAccessible>
@@ -183,16 +184,61 @@ int main(int argc, char** argv)
                "an enabled, allowed shortcut acts and keeps the key from the button");
     }
 
+    // PTT (Hold) decision, MainWindow::handlePttHoldShortcut()'s switch.
+    // Principle VI: the release of a hold that STARTED keyed always un-keys,
+    // whatever changed mid-hold -- shortcuts switched off, focus moved into a
+    // text field, the connection dropped. Only a new press is gated.
+    {
+        using AetherSDR::PttHoldKeyStep;
+        using AetherSDR::pttHoldKeyStep;
+        const auto rel = QEvent::KeyRelease;
+        const auto prs = QEvent::KeyPress;
+        //                   type, holdActive, shortcutsOn, typing, connected
+        expect(pttHoldKeyStep(rel, true, false, false, true) == PttHoldKeyStep::UnkeyTx,
+               "PTT hold: shortcuts turned OFF mid-hold, the release still un-keys");
+        expect(pttHoldKeyStep(rel, true, true, true, true) == PttHoldKeyStep::UnkeyTx,
+               "PTT hold: focus moved into a text field mid-hold, the release still un-keys");
+        expect(pttHoldKeyStep(rel, true, true, false, false) == PttHoldKeyStep::UnkeyTx,
+               "PTT hold: disconnected mid-hold, the release still un-keys");
+        expect(pttHoldKeyStep(rel, true, false, true, false) == PttHoldKeyStep::UnkeyTx,
+               "PTT hold: every gate closed mid-hold, the release still un-keys");
+        expect(pttHoldKeyStep(rel, true, true, false, true) == PttHoldKeyStep::UnkeyTx,
+               "PTT hold: normal release un-keys");
+        expect(pttHoldKeyStep(prs, false, true, false, true) == PttHoldKeyStep::KeyTx,
+               "PTT hold: press keys with shortcuts on, connected, not typing");
+        expect(pttHoldKeyStep(prs, false, false, false, true) == PttHoldKeyStep::PassThrough,
+               "PTT hold: press with shortcuts off does not key and falls through (#5483)");
+        expect(pttHoldKeyStep(prs, false, true, true, true) == PttHoldKeyStep::PassThrough,
+               "PTT hold: press while typing does not key and falls through");
+        expect(pttHoldKeyStep(prs, false, true, false, false) == PttHoldKeyStep::PassThrough,
+               "PTT hold: press while disconnected does not key and falls through");
+        expect(pttHoldKeyStep(prs, true, true, false, true) == PttHoldKeyStep::Consume,
+               "PTT hold: a second press during a hold is consumed, not re-keyed");
+        expect(pttHoldKeyStep(rel, false, true, false, true) == PttHoldKeyStep::Consume,
+               "PTT hold: a stray release with no hold is consumed, nothing to un-key");
+        expect(pttHoldKeyStep(rel, false, false, false, true) == PttHoldKeyStep::PassThrough,
+               "PTT hold: a stray release with shortcuts off falls through");
+    }
+
     // #5483 follow-up: the key that now reaches the focused widget must not
     // KEY THE TRANSMITTER. Fusion gives a clicked QPushButton focus, so after a
     // mouse click on MOX the next Space landed on MOX and latched TX. The
     // route below is MainWindow::eventFilter()'s order -- PTT (Hold) first,
-    // consuming its key only while shortcuts are on, then the shared guard
+    // through the same pttHoldKeyStep() MainWindow uses, then the shared guard
     // refuseTxKeyActivation() that MainWindow calls. No radio is constructed.
+    //
+    // Coverage boundary, stated: no registered test target links
+    // MainWindow*.cpp, so this route RE-IMPLEMENTS eventFilter()'s ordering.
+    // Nothing here pins that the production filter calls
+    // refuseTxKeyActivation() at all, or that it sits after
+    // handlePttHoldShortcut(). It passes "connected, not typing" as constants
+    // where production reads textEntryCaptured() and RadioModel::isConnected();
+    // the decision table above covers those gates.
     {
         struct KeyRoute : QObject {
             ShortcutManager* shortcuts{nullptr};
             bool shortcutsOn{false};
+            bool holdActive{false};
             int pttPresses{0};
             int pttReleases{0};
             int refused{0};
@@ -202,10 +248,22 @@ int main(int argc, char** argv)
                     return false;
                 auto* ke = static_cast<QKeyEvent*>(e);
                 const auto* a = shortcuts->actionForKey(QKeySequence(ke->key()));
-                if (shortcutsOn && !ke->isAutoRepeat() && a
-                    && a->id == QLatin1String("ptt_hold")) {
-                    ++(e->type() == QEvent::KeyPress ? pttPresses : pttReleases);
-                    return true;
+                if (!ke->isAutoRepeat() && a && a->id == QLatin1String("ptt_hold")) {
+                    switch (AetherSDR::pttHoldKeyStep(e->type(), holdActive, shortcutsOn,
+                                                      false, true)) {
+                    case AetherSDR::PttHoldKeyStep::PassThrough:
+                        break;
+                    case AetherSDR::PttHoldKeyStep::Consume:
+                        return true;
+                    case AetherSDR::PttHoldKeyStep::KeyTx:
+                        holdActive = true;
+                        ++pttPresses;
+                        return true;
+                    case AetherSDR::PttHoldKeyStep::UnkeyTx:
+                        holdActive = false;
+                        ++pttReleases;
+                        return true;
+                    }
                 }
                 if (AetherSDR::refuseTxKeyActivation(obj, ke, shortcutsOn, *shortcuts)) {
                     ++refused;
@@ -294,6 +352,18 @@ int main(int argc, char** argv)
         QKeyEvent space(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
         expect(!AetherSDR::refuseTxKeyActivation(&mox, &space, true, keys),
                "shortcuts on: the guard never refuses");
+
+        // Principle VI through real key delivery: key with Space, switch
+        // shortcuts OFF while it is held, release. The release must un-key and
+        // be consumed -- it must not stay keyed, and must not reach MOX.
+        focus(host, &ordinary);
+        QTest::keyPress(&ordinary, Qt::Key_Space);
+        expect(route.holdActive && route.pttPresses == 2,
+               "mid-hold toggle: Space press keyed with shortcuts on");
+        route.shortcutsOn = false;
+        QTest::keyRelease(&ordinary, Qt::Key_Space);
+        expect(!route.holdActive && route.pttReleases == 2 && ordinaryClicks == 1,
+               "mid-hold toggle: shortcuts turned off mid-hold, the release still un-keys");
 
         app.removeEventFilter(&route);
     }
