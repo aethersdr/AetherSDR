@@ -16,6 +16,9 @@
 //      the tooltip and the accessibleDescription must say so -- a screen
 //      reader otherwise announces "headphone audio" for a jack that does not
 //      exist -- and switching back must restore the radio wording.
+//   1b. what the pair SHOWS: the local output, the radio mixer, or -- with no
+//      radio connected -- nothing new. The disconnect edge must not write
+//      RadioModel's default headphone gain onto the slider.
 //
 // MainWindow's routing (applyHeadphoneVolume/applyHeadphoneMute) consumes (1)
 // directly; this is its truth table, not a copy of it.
@@ -81,6 +84,23 @@ int main(int argc, char** argv)
           "disconnected -> not re-pointed");
     check(!headphoneFollowsLocalOutput(false, true, true),
           "disconnected with a stale command plane -> not re-pointed");
+
+    // ── 1b. What the pair SHOWS, including the disconnect edge ─────────────
+    // capabilitiesChanged fires on disconnect, so the sync runs with no radio.
+    // It must leave the pair alone there: reading the radio mixer would snap
+    // the slider to RadioModel's default gain, a number no radio reported.
+    check(headphoneLevelSource(true, false, true) == HeadphoneLevelSource::LocalOutput,
+          "HL2 with PC Audio on -> shows this computer's output");
+    check(headphoneLevelSource(true, true, true) == HeadphoneLevelSource::RadioMixer,
+          "Flex -> shows the radio's headphone mixer");
+    check(headphoneLevelSource(true, false, false) == HeadphoneLevelSource::RadioMixer,
+          "no command plane, PC Audio off -> the old radio-mixer path, unchanged");
+    check(headphoneLevelSource(false, false, true) == HeadphoneLevelSource::Unchanged,
+          "disconnected (after an HL2) -> left as the operator last saw it");
+    check(headphoneLevelSource(false, true, true) == HeadphoneLevelSource::Unchanged,
+          "disconnected (after a Flex) -> left alone too");
+    check(headphoneLevelSource(false, false, false) == HeadphoneLevelSource::Unchanged,
+          "disconnected with PC Audio off -> left alone");
 
     // ── 2. What the title bar says ─────────────────────────────────────────
     TitleBar bar;

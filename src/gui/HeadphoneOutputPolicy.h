@@ -41,4 +41,21 @@ namespace AetherSDR {
     return connected && !hasCommandPlane && pcAudioEnabled;
 }
 
+// WHAT THE HEADPHONE SLIDER AND GLYPH SHOULD SHOW. Three answers, not two:
+// with no radio connected there is no output and no mixer for them to report,
+// so they are left as they are. capabilitiesChanged fires on the disconnect
+// edge too, and reading the radio mixer there would snap the slider to
+// RadioModel's default gain -- a number no radio ever reported -- while the
+// output it had been following stayed where it was.
+enum class HeadphoneLevelSource { LocalOutput, RadioMixer, Unchanged };
+
+[[nodiscard]] constexpr HeadphoneLevelSource headphoneLevelSource(
+    bool connected, bool hasCommandPlane, bool pcAudioEnabled) noexcept
+{
+    if (headphoneFollowsLocalOutput(connected, hasCommandPlane, pcAudioEnabled))
+        return HeadphoneLevelSource::LocalOutput;
+    return connected ? HeadphoneLevelSource::RadioMixer
+                     : HeadphoneLevelSource::Unchanged;
+}
+
 }  // namespace AetherSDR

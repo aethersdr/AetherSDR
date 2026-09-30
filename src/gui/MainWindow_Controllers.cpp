@@ -3261,12 +3261,16 @@ void MainWindow::wireExternalControllers()
 // entry points (MIDI slider, controller wheel, and the MIDI master knob that
 // shares the mapping) are controller paths; the title bar is the fourth.
 
+static bool pcAudioEnabledSetting()
+{
+    return AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+}
+
 bool MainWindow::headphoneFollowsLocalOutput() const
 {
-    const bool pcAudio =
-        AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
     return AetherSDR::headphoneFollowsLocalOutput(
-        m_radioModel.isConnected(), m_radioModel.hasCommandPlane(), pcAudio);
+        m_radioModel.isConnected(), m_radioModel.hasCommandPlane(),
+        pcAudioEnabledSetting());
 }
 
 int MainWindow::headphoneVolumeLevel() const
@@ -3309,14 +3313,23 @@ void MainWindow::syncHeadphoneControls()
     if (!m_titleBar) {
         return;
     }
-    const bool follows = headphoneFollowsLocalOutput();
-    m_titleBar->setHeadphoneFollowsLocalOutput(follows);
-    if (follows) {
+    const HeadphoneLevelSource source = headphoneLevelSource(
+        m_radioModel.isConnected(), m_radioModel.hasCommandPlane(),
+        pcAudioEnabledSetting());
+    m_titleBar->setHeadphoneFollowsLocalOutput(
+        source == HeadphoneLevelSource::LocalOutput);
+    switch (source) {
+    case HeadphoneLevelSource::LocalOutput:
         m_titleBar->setHeadphoneVolume(headphoneVolumeLevel());
         m_titleBar->setHeadphoneMuted(m_audio && m_audio->isMuted());
-    } else {
+        break;
+    case HeadphoneLevelSource::RadioMixer:
         m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
         m_titleBar->setHeadphoneMuted(m_radioModel.headphoneMute());
+        break;
+    case HeadphoneLevelSource::Unchanged:
+        // Disconnected: no output to report. Keep what the operator last saw.
+        break;
     }
 }
 
