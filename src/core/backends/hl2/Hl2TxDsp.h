@@ -278,7 +278,14 @@ public slots:
     // Bluetooth headset microphone) every delivery carries two blocks, and
     // exchanging them back-to-back underran the second one and left the
     // channel's output ring out of step for the rest of the over: the
-    // "chopped" transmit audio of hl2-lab d160/d161. So the TXA build waits
+    // "chopped" transmit audio of hl2-lab d160/d161. The device rate is only
+    // how macOS produces the grouping; the condition is any delivery of two
+    // or more blocks, and this stage always sees the 24 kHz transport rate.
+    // The pull path (Linux, Windows) reaches it too: TxCaptureBuffer returns
+    // everything available on each readyRead, so a read of 2048 or more
+    // frames at 48 kHz is two blocks. So do the queued hops between the audio,
+    // GUI and I/O threads: a busy thread lets consecutive deliveries run
+    // back-to-back here, which is the same burst. So the TXA build waits
     // for the channel to report each block's output ready before exchanging
     // the next, with a timer on this object's thread taking the rest (see
     // exchangeDueBlocks()); a burst is absorbed, and a steadily paced caller
