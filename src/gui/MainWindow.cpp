@@ -5416,6 +5416,14 @@ void MainWindow::buildUI()
             [this](const QString&) { syncPanSpanControlPlacement(); });
     connect(m_panStack, &PanadapterStack::panRekeyed, this,
             [this](const QString&, const QString&) { syncPanSpanControlPlacement(); });
+    // Floating, docking, a layout rearrange and a canvas loan change which
+    // docked pane comes first, and so the fallback owner (#5750).
+    connect(m_panStack, &PanadapterStack::panFloated, this,
+            [this](const QString&) { syncPanSpanControlPlacement(); });
+    connect(m_panStack, &PanadapterStack::panDocked, this,
+            [this](const QString&) { syncPanSpanControlPlacement(); });
+    connect(m_panStack, &PanadapterStack::dockedArrangementChanged, this,
+            [this]() { syncPanSpanControlPlacement(); });
 
     // Band stack panel signal wiring
     auto* bsPanel = m_panStack->bandStackPanel();

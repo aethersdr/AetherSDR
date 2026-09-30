@@ -635,10 +635,11 @@ through `nearestIqSampleRateHz` and by `panBandwidthLimitsChanged` clamping the
 zoom control. What was missing was the **claim**, so a client had no way to ask.
 
 `radioWide` has one consumer (#5750): `MainWindow::syncPanSpanControlPlacement`
-shows the −/+ span pair on **one** pane when it is true — the pane holding the
-TX slice, else the first pane — with a tooltip and accessible description saying
-the span is shared, and leaves every pane its own pair when it is false or the
-record is absent. The decision is `gui/PanSpanControlGate.h`, pinned in
+keeps the −/+ span pair **live** on one pane when it is true — the pane holding
+the TX slice, else the first docked pane in layout order — saying the span is
+shared, and **dims** it on every other pane with the reason in the tooltip and
+the accessible description (dimmed, never hidden). It leaves every pane its own
+live pair when it is false or the record is absent. The decision is `gui/PanSpanControlGate.h`, pinned in
 `tests/hl2_pan_limits_declaration_test.cpp` against the HL2's own declaration.
 
 On the HL2 the pan span *is* the DDC sample rate, so `sampleRatesHz` is not a

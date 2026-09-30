@@ -8,6 +8,7 @@
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 
+#include <QHash>
 #include <QHBoxLayout>
 #include <QLayout>
 #include <QStringList>
@@ -16,6 +17,8 @@
 #include <QPointer>
 #include <QTimer>
 #include <QWindow>
+
+#include <functional>
 
 // After moving a QRhiWidget between top-level windows, force a fresh initialize()
 // cycle so Metal binds to the new NSView. The backing-store notification is sent
@@ -644,6 +647,7 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
         }
         equalizeSizes();
     });
+    emit dockedArrangementChanged();
 }
 
 void PanadapterStack::removeAll()
@@ -968,6 +972,7 @@ PanadapterApplet* PanadapterStack::detachForCanvas(const QString& panId)
     if (applet) {
         applet->setOnCanvas(true);
         m_lentToCanvas.insert(panId);
+        emit dockedArrangementChanged();
     }
     return applet;
 }
@@ -1009,6 +1014,7 @@ void PanadapterStack::returnFromCanvas(const QString& panId,
     const bool multi = m_pans.size() > 1;
     for (auto* a : m_pans)
         a->setMultiPanMode(multi);
+    emit dockedArrangementChanged();
 }
 
 void PanadapterStack::floatPanadapter(const QString& panId)
@@ -1149,6 +1155,35 @@ void PanadapterStack::dockPanadapter(const QString& panId)
 bool PanadapterStack::isFloating(const QString& panId) const
 {
     return m_floatingWindows.contains(panId);
+}
+
+QStringList PanadapterStack::dockedPanIdsInLayoutOrder() const
+{
+    // Walk the splitter tree depth-first in index order. Every layout this
+    // class builds is one vertical splitter of applets or of horizontal row
+    // splitters, so depth-first index order is row by row, left to right.
+    QHash<const PanadapterApplet*, QString> idOf;
+    for (auto it = m_pans.cbegin(); it != m_pans.cend(); ++it) {
+        idOf.insert(it.value(), it.key());
+    }
+    QStringList ordered;
+    std::function<void(const QSplitter*)> walk = [&](const QSplitter* split) {
+        if (!split) return;
+        for (int i = 0; i < split->count(); ++i) {
+            QWidget* w = split->widget(i);
+            if (auto* applet = qobject_cast<PanadapterApplet*>(w)) {
+                const QString id = idOf.value(applet);
+                if (!id.isEmpty() && !m_floatingWindows.contains(id)
+                    && !m_lentToCanvas.contains(id)) {
+                    ordered.append(id);
+                }
+            } else if (auto* inner = qobject_cast<QSplitter*>(w)) {
+                walk(inner);
+            }
+        }
+    };
+    walk(m_splitter);
+    return ordered;
 }
 
 void PanadapterStack::setFramelessMode(bool on)

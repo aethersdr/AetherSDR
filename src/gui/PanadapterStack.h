@@ -41,7 +41,15 @@ public:
     SpectrumWidget* spectrum(const QString& panId) const;
     int count() const { return m_pans.size(); }
     QList<PanadapterApplet*> allApplets() const { return m_pans.values(); }
+    // Every pane the stack holds, docked or not, in pan-id order (QMap keys).
+    // NOT the order the panes appear on screen -- for that, see below.
     QStringList panIds() const { return m_pans.keys(); }
+    // The panes in this window's splitter, in the order the layout shows
+    // them: row by row, left to right, top to bottom. Floating panes and
+    // panes lent to the workspace canvas are not in the splitter and are not
+    // listed. (#5750: the span-control fallback wants a pane in the main
+    // window, and the first one the operator sees.)
+    QStringList dockedPanIdsInLayoutOrder() const;
 
     // Active pan (determines which pan the applet column shows controls for)
     QString activePanId() const { return m_activePanId; }
@@ -130,6 +138,10 @@ signals:
     void activePanChanged(const QString& panId);
     void panFloated(const QString& panId);
     void panDocked(const QString& panId);
+    // The set or order of docked panes changed without a pane being added,
+    // removed, floated or docked: a layout rearrange, or a pane lent to or
+    // returned from the workspace canvas. (#5750)
+    void dockedArrangementChanged();
     // Pan lifecycle, for the workspace controller (RFC #4887 phase 4).
     // panAdded fires once per applet however it was created (addPanadapter
     // or an applyLayout branch); panRemoved fires after the applet is

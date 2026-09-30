@@ -2352,6 +2352,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     refreshSliceLinkUi();
     updateAetherDspModePolicy();
+
+    // A slice can arrive ALREADY flagged TX: RadioModel applies its fields
+    // before emitting sliceAdded, so the txSliceChanged lambda above never
+    // sees the false->true edge. Re-derive once now, or on connect the live
+    // span control stays on the fallback pane instead of the TX pane (#5750).
+    syncPanSpanControlPlacement();
 }
 
 void MainWindow::requestSliceClose(int sliceId)

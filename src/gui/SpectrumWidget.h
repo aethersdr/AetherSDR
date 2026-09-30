@@ -450,32 +450,39 @@ public:
         }
     }
 
-    // Show or hide this pane's -/+ span pair, and say when it is shared
-    // (#5750). On a radio whose span is one register for the whole board
-    // (RadioCapabilities::panSpanModel->radioWide), MainWindow shows the pair
-    // on ONE pane only -- see PanSpanControlGate.h -- and that pane's pair
-    // says, in its tooltip and accessible description, that it moves every
-    // panadapter. `shown = true, radioWide = false` is the per-pan default
-    // and restores exactly what the constructor built: visible, no tooltip,
-    // no description.
-    void setSpanControlPlacement(bool shown, bool radioWide)
+    // Say whether this pane's -/+ span pair is live, and why not (#5750).
+    // On a radio whose span is one register for the whole board
+    // (RadioCapabilities::panSpanModel->radioWide), MainWindow keeps the pair
+    // LIVE on one pane only -- see PanSpanControlGate.h -- and DIMS it on the
+    // others, never hides it (AGENTS.md: "Dim it, never hide it"). A dimmed
+    // pair states its reason in the tooltip (shown on a disabled button by
+    // eventFilter()) and in the accessible description, which is what a
+    // screen reader announces; the live pair says the span is shared.
+    // `live = true, radioWide = false` is the per-pan default and restores
+    // exactly what the constructor built: enabled, no tooltip, no description.
+    void setSpanControlPlacement(bool live, bool radioWide)
     {
-        const QString outTip = radioWide
-            ? tr("Zoom out. The span is shared: this changes every panadapter on this radio.")
-            : QString();
-        const QString inTip = radioWide
-            ? tr("Zoom in. The span is shared: this changes every panadapter on this radio.")
-            : QString();
-        const QString desc = radioWide
-            ? tr("This radio has one span for all panadapters, so this control changes every panadapter.")
-            : QString();
+        QString outTip;
+        QString inTip;
+        QString desc;
+        if (radioWide && live) {
+            outTip = tr("Zoom out. The span is shared: this changes every panadapter on this radio.");
+            inTip = tr("Zoom in. The span is shared: this changes every panadapter on this radio.");
+            desc = tr("This radio has one span for all panadapters, so this control changes every panadapter.");
+        } else if (radioWide) {
+            desc = tr("Unavailable on this panadapter: this radio has one span for all "
+                      "panadapters, so it is set from one pane only: the one holding "
+                      "the transmit slice, or the first panadapter when none transmits.");
+            outTip = desc;
+            inTip = desc;
+        }
         if (m_zoomOutBtn) {
-            m_zoomOutBtn->setVisible(shown);
+            m_zoomOutBtn->setEnabled(live);
             m_zoomOutBtn->setToolTip(outTip);
             m_zoomOutBtn->setAccessibleDescription(desc);
         }
         if (m_zoomInBtn) {
-            m_zoomInBtn->setVisible(shown);
+            m_zoomInBtn->setEnabled(live);
             m_zoomInBtn->setToolTip(inTip);
             m_zoomInBtn->setAccessibleDescription(desc);
         }
