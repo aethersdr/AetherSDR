@@ -380,6 +380,32 @@ int main(int argc, char** argv)
         peer->flush();
         CHECK(spin([&] { return refused.count() >= 1; }));
         CHECK(refused.last().at(1).toString() == QLatin1String("50000013"));
+
+        // ── With an auth code set, the write leaves it out ──
+        //
+        // Firmware 3.9.8 with authorization enabled answers `setup read` with
+        // the code (`authcode=<digits>`) and refuses any `setup` that carries
+        // it back, with 50000013, so fan mode and MEffA could not be changed.
+        // The group without `authcode` is accepted and the stored code stays
+        // as it was (probed on the hardware, 2026-09-29).
+        emit conn.setupRead({{QStringLiteral("ledintens"), QStringLiteral("74")},
+                             {QStringLiteral("nickname"), QStringLiteral("PGXL-HOME")},
+                             {QStringLiteral("authcode"), QStringLiteral("1234")}});
+        g_clientTraffic.clear();
+        model.setFanMode(QStringLiteral("broadcast"));
+        CHECK(spin([&] {
+            return peerSaw(peer, "setup nickname=PGXL-HOME meffa=AUTO"
+                                 " ledintens=74 fanmode=BROADCAST\n");
+        }));
+        // MEffA carries the fan mode the amplifier last reported (CONTEST).
+        g_clientTraffic.clear();
+        model.setMeffaEnabled(false);
+        CHECK(spin([&] {
+            return peerSaw(peer, "setup nickname=PGXL-HOME meffa=OFF"
+                                 " ledintens=74 fanmode=CONTEST\n");
+        }));
+        CHECK(!g_clientTraffic.contains("authcode"));
+        CHECK(!g_clientTraffic.contains("1234"));
     }
 
     // A state push with a prefix word before the first key parses the same
