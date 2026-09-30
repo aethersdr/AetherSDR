@@ -19,6 +19,7 @@ constexpr const char* kFieldDither            = "dither";
 constexpr const char* kFieldRandom            = "random";
 constexpr const char* kFieldDdc0AdcIndex      = "ddc0AdcIndex";
 constexpr const char* kFieldBypassAdc0Filters = "bypassAdc0Filters";
+constexpr const char* kFieldSpeakerAudioEnabled = "speakerAudioEnabled";
 constexpr const char* kFieldBypassAdc1Filters = "bypassAdc1Filters";
 
 }  // namespace
@@ -101,6 +102,22 @@ void AnanSettings::setBypassAdc0Filters(bool on)
 {
     QJsonObject obj = readObj();
     obj[QLatin1String(kFieldBypassAdc0Filters)] = on;
+    writeObj(obj);
+}
+
+bool AnanSettings::speakerAudioEnabled()
+{
+    // false, not true: an absent key must mean "off" here. Every other option in
+    // this file defaults true because absence means "the shipped hardware
+    // default"; this one's absence means the operator has never asked for an
+    // outbound stream, and starting one anyway is the wrong way to be wrong.
+    return readObj().value(QLatin1String(kFieldSpeakerAudioEnabled)).toBool(false);
+}
+
+void AnanSettings::setSpeakerAudioEnabled(bool on)
+{
+    QJsonObject obj = readObj();
+    obj[QLatin1String(kFieldSpeakerAudioEnabled)] = on;
     writeObj(obj);
 }
 

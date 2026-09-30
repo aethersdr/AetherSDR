@@ -32,6 +32,13 @@
 // addition, gated behind the engine's TX arbiter above the seam
 // (Constitution Principle VI: AetherSDR never transmits without operator
 // intent).
+//
+// buildSpeakerAudio() is NOT a transmit encoder, and the distinction is the
+// whole reason this paragraph now has to say so. It carries already-demodulated
+// RECEIVER audio to the radio's own speaker codec on kSpeakerAudioPort. Nothing
+// in it reaches the DUC, the PA or the T/R relay, it is accepted by p2app while
+// the radio is receiving, and it cannot key anything. The claim above still
+// holds exactly as written: no DUC-Specific, no drive, no PTT.
 
 namespace AetherSDR::anan {
 
@@ -50,6 +57,16 @@ inline constexpr std::uint16_t kRadioPort = 1024;
 // configuration that ever produced a DDC0 IQ stream.
 inline constexpr std::uint16_t kDdcSpecificPort = 1025;
 inline constexpr std::uint16_t kHighPriorityPort = 1027;
+
+// The radio's listening port for DDC Audio -- demodulated receiver audio sent
+// BACK to the radio so its own codec and speaker reproduce it (spec p.36; the
+// default port table, p.19-20, indexes it 4). p2app receives it in
+// IncomingSpkrAudio() and DMAs it to the speaker codec FIFO.
+//
+// Load-bearing for the same reason kDdcSpecificPort and kHighPriorityPort are:
+// a speaker packet carries no type discriminator, only a 4-byte sequence, so
+// the port IS the packet's identity. Sent anywhere else it is silently dropped.
+inline constexpr std::uint16_t kSpeakerAudioPort = 1028;
 
 // The port DDC0 IQ nominally originates FROM per the General Packet's byte
 // 17-18 default (spec p.19-20). NOT load-bearing for where the PC receives
@@ -327,6 +344,102 @@ std::array<std::uint8_t, 1444> buildHighPriority(bool run,
 // The step attenuators' range (spec pp.34,36), shared by the encoder's clamp and
 // by the backend that offers the control.
 inline constexpr int kMaxStepAttenuationDb = 31;
+
+// ---- DDC Audio, PC -> radio (spec p.36) ----
+//
+// The radio's speaker stream, and the ONE outbound data path in this file. Fixed
+// geometry, not negotiated: 64 stereo frames per packet, 16-bit signed
+// big-endian, left then right, at 48 ksps -- so 256 bytes of samples behind a
+// 4-byte big-endian sequence number, 260 bytes total, one packet every 1333 us.
+//
+// The rate is NOT the DDC rate and does not follow it. A DDC0 running at 1536
+// ksps still feeds a 48 ksps speaker stream, because this is audio out of the
+// demodulator, not IQ.
+//
+// 48 ksps is also not a choice. The codec runs at it, every published figure for
+// this stream states it, and p2app's receiver DMAs fixed 256-byte blocks into
+// the speaker FIFO with no rate field anywhere in the packet to say otherwise.
+inline constexpr int kSpeakerSampleRateHz = 48000;
+inline constexpr int kSpeakerFramesPerPacket = 64;
+inline constexpr int kSpeakerChannels = 2;
+inline constexpr std::size_t kSpeakerSampleBytes = 256;  // 64 frames * 2ch * int16
+inline constexpr std::size_t kSpeakerPacketBytes = 260;  // + seq(4)
+inline constexpr int kSpeakerPacketIntervalUs = 1333;    // 64 / 48000
+
+// Encode one speaker packet. `interleavedLr` is L,R,L,R... in host order; it is
+// clamped to int16 range by its own type, so only the byte order is this
+// function's business.
+//
+// SHORT INPUT ZERO-FILLS THE REMAINDER rather than refusing, and that is a
+// deliberate difference from parseDdcFrame()'s exact-length rule. A parser that
+// accepts a short frame invents data that was never on the wire; an encoder
+// asked for a partial block has a correct answer available -- silence -- and the
+// alternative is worse. Dropping the packet stalls the radio's FIFO and stutters
+// audio that was merely ending, while sending the accumulator's untouched tail
+// would transmit whatever the PREVIOUS packet left there, i.e. a stale 1.3 ms
+// of audio repeated. Excess samples are ignored, as buildDdcSpecific() ignores
+// excess DDCs.
+std::array<std::uint8_t, kSpeakerPacketBytes> buildSpeakerAudio(
+    std::uint32_t sequence, std::span<const std::int16_t> interleavedLr) noexcept;
+
+// ---- High Priority Status, radio -> PC (spec p.47) ----
+//
+// 60 bytes: a 4-byte big-endian sequence, then hardware state. Only the two
+// fields the speaker stream needs to be judged by are decoded here; the rest of
+// the packet (forward/reverse power, supply voltage, ADC peaks, user I/O) is
+// deliberately left alone until something needs it. Decoding a field nobody
+// reads is how a struct acquires members whose units nobody has checked.
+//
+// ARRIVES ON THE SAME SOCKET as DDC0 IQ -- every radio->PC stream goes to the
+// port Discovery was sent from (see kDdc0DefaultPort). It is NOT DDC-shaped, so
+// parseDdcFrame() rejects it and it lands in the same branch as Mic Data and the
+// Discovery reply.
+inline constexpr std::size_t kHighPriorityStatusBytes = 60;
+
+struct HighPriorityStatus {
+    std::uint32_t seq = 0;
+    // Byte 30 bit 3. The radio ran OUT of speaker audio: it had samples to play
+    // and we had not sent them. This is the one honest verdict on the send
+    // pacing, and the only reason it is decoded.
+    //
+    // LATCHED AT THE RADIO, not instantaneous: p2app ORs in anything that
+    // happened since the last status packet and clears it on send, so one set bit
+    // means "at least once in the last ~200 ms", never "right now".
+    bool speakerUnderflow = false;
+    // Bytes 37-38. The speaker FIFO's fill level.
+    //
+    // IN FIFO LOCATIONS, NOT SAMPLES, whatever the field is called elsewhere.
+    // p2app computes `Word = Word*2` with the comment "2 samples per FIFO
+    // location" and then writes the UNSCALED count -- the multiply lands in a
+    // variable the send never reads (OutHighPriority.c, and the mic and DUC
+    // depths have the same dead scaling). So this number is not in the same unit
+    // as kSpeakerFramesPerPacket and must not be compared against it. Useful as a
+    // TREND -- falling towards zero means the sender is losing -- not as an
+    // absolute sample count. Named `level` rather than `samples` for that reason.
+    std::uint16_t speakerFifoLevel = 0;
+};
+
+// Decode, or nullopt if this is not a status packet.
+//
+// Bounds-checked before indexing (Principle VII): this parses unauthenticated
+// UDP. An EXACT length is required -- p2app sends a fixed 60 bytes, so a
+// different length is a different packet type rather than a truncated one, the
+// same reasoning parseDdcFrame() applies to its own length rule.
+//
+// Ambiguity with the Discovery reply, stated because both are 60 bytes: a reply
+// has bytes 0-3 all zero and byte 4 of 0x02/0x03, while this packet's bytes 0-3
+// are a sequence and its byte 4 is the PTT/key bitfield. They can only collide on
+// sequence 0 with PTT bits that happen to read 0x02 or 0x03, and the caller tries
+// the Discovery parse first, so the reply wins that tie.
+//
+// WHICH REQUIRES THE CALLER TO TRY IT ON EVERY DATAGRAM, not only until the first
+// reply has been acted on. A reply parse gated on "have I announced discovery yet"
+// leaves every later reply -- a duplicate, a retransmit, a reply to another
+// client's broadcast on this socket -- landing here, where its byte 30 bit 3
+// decodes as a speaker-FIFO underflow that never happened. Announce once; parse
+// always. P2Client::handleDatagram() is written that way on purpose.
+[[nodiscard]] std::optional<HighPriorityStatus> parseHighPriorityStatus(
+    std::span<const std::uint8_t> data) noexcept;
 
 // ---- DDC I&Q Data (spec p.53-54) ----
 

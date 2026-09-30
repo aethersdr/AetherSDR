@@ -479,6 +479,26 @@ public:
         Q_UNUSED(panPercent);
     }
 
+    // ---- the RADIO's own audio output ----
+    //
+    // How loud the radio plays, and whether it plays at all. Distinct from the
+    // per-slice setters above and from the client's master volume, and all three
+    // are needed because they answer different questions: per-slice is "how loud
+    // is this receiver", the client master is "how loud is this COMPUTER's
+    // output", and this is "how loud is the RADIO's output".
+    //
+    // A Flex takes these as wire commands (`mixer lineout gain`), so these
+    // defaults are never reached there. A backend that demodulates on this host
+    // and feeds the radio's codec itself has to apply them to the samples,
+    // because there may be nothing on the radio that can: an ANAN-G2 exposes a
+    // speaker MUTE and no speaker volume register at all, so unscaled samples
+    // reach the operator at full scale with no way to turn them down.
+    //
+    // Percent, 0..100, matching the per-slice scale rather than introducing a
+    // second one at the same seam.
+    virtual void setLineoutGain(int percent) { Q_UNUSED(percent); }
+    virtual void setLineoutMute(bool mute) { Q_UNUSED(mute); }
+
     // Move transmit to this slice. A radio with one transmitter and several
     // receivers has to MOVE it — retarget the TX oscillator, mode and passband —
     // rather than set a per-slice flag, so this is a verb and not a setter with

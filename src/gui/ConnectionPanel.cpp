@@ -1022,6 +1022,23 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     connect(m_manualAnanBypassAdc1Check, &QCheckBox::toggled,
             this, [](bool on) { anan::AnanSettings::setBypassAdc1Filters(on); });
 
+    m_manualAnanSpeakerAudioCheck = new QCheckBox(tr("Send RX audio to the radio's speaker"), this);
+    m_manualAnanSpeakerAudioCheck->setObjectName(QStringLiteral("connectionManualAnanSpeakerAudio"));
+    m_manualAnanSpeakerAudioCheck->setAccessibleDescription(
+        tr("Send the demodulated receive audio back to the radio so its own "
+           "speaker and headphone jack reproduce it, as well as this computer's "
+           "sound card. Off by default. Takes effect on the next connect."));
+    m_manualAnanSpeakerAudioCheck->setToolTip(
+        tr("Send the demodulated receive audio back to the radio, so its own\n"
+           "speaker and headphone jack play it as well as this computer's.\n"
+           "The receiver's mute and volume still apply to both.\n"
+           "Off by default. Takes effect on the next connect."));
+    m_manualAnanSpeakerAudioCheck->setChecked(anan::AnanSettings::speakerAudioEnabled());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_manualAnanSpeakerAudioCheck, lowBandwidthCheckStyle);
+    m_manualAnanSpeakerAudioRow = addManualRow(QStringLiteral(""), m_manualAnanSpeakerAudioCheck);
+    connect(m_manualAnanSpeakerAudioCheck, &QCheckBox::toggled,
+            this, [](bool on) { anan::AnanSettings::setSpeakerAudioEnabled(on); });
+
     // One column, set from the widest label. Rows that are hidden for a family
     // still count: the Icom rows appear and disappear as the operator changes
     // radio type, and a column that resized with them would move the Radio type
@@ -2526,6 +2543,8 @@ void ConnectionPanel::updateManualFamilyHints()
         m_manualAnanBypassAdc0Row->setVisible(anan);
     if (m_manualAnanBypassAdc1Row)
         m_manualAnanBypassAdc1Row->setVisible(anan);
+    if (m_manualAnanSpeakerAudioRow)
+        m_manualAnanSpeakerAudioRow->setVisible(anan);
 
     if (icom) {
         // Fill from settings, and read the password out of the keychain — which
