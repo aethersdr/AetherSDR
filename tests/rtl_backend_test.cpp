@@ -50,12 +50,24 @@ int main(int argc, char** argv)
     check(caps.maxPanadapters == 1, "RTL-SDR maxPanadapters is 1");
     check(!caps.persistsMemories, "RTL-SDR does not persist memories on device");
 
-#if defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
+#if (defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)) \
+    || (defined(Q_OS_MAC) && defined(Q_PROCESSOR_ARM_64)) \
+    || (defined(Q_OS_WIN) && defined(Q_PROCESSOR_X86_64))
     qputenv("AETHER_RTL_EVALUATION_RECEIVERS", "8");
     qunsetenv("AETHER_AUTOMATION");
     { rtl::RtlSdrBackend normal; check(normal.capabilities().maxSlices == 1, "eight requires explicit evaluation environment"); }
     qputenv("AETHER_AUTOMATION", "1");
-    { rtl::RtlSdrBackend eight; check(eight.capabilities().maxSlices == 8, "eight-receiver evaluation is advertised"); }
+    {
+        rtl::RtlSdrBackend eight;
+        const auto evaluationCaps = eight.capabilities();
+        check(evaluationCaps.maxSlices == 8 && evaluationCaps.canCreateSlices,
+              "eight-receiver evaluation is advertised");
+        check(evaluationCaps.receiveAudioExport && evaluationCaps.receiveAudioExport->maximumReceivers == 8,
+              "eight-receiver native DAX export is advertised");
+        check(!evaluationCaps.canTransmit, "eight-receiver evaluation remains receive-only");
+    }
+    qputenv("AETHER_RTL_EVALUATION_RECEIVERS", "9");
+    { rtl::RtlSdrBackend invalid; check(invalid.capabilities().maxSlices == 1, "unsupported evaluation capacity is refused"); }
     qunsetenv("AETHER_RTL_EVALUATION_RECEIVERS");
     qunsetenv("AETHER_AUTOMATION");
 #endif

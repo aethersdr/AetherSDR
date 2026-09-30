@@ -132,7 +132,9 @@ RtlSdrBackend::RtlSdrBackend(QObject* parent)
 {
     // Process-only, opt-in qualification profile. This does not raise the
     // shipped capacity or persist an unqualified limit in a radio profile.
-#if defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)
+#if (defined(Q_OS_LINUX) && defined(Q_PROCESSOR_X86_64)) \
+    || (defined(Q_OS_MAC) && defined(Q_PROCESSOR_ARM_64)) \
+    || (defined(Q_OS_WIN) && defined(Q_PROCESSOR_X86_64))
     const QByteArray evaluation = qgetenv("AETHER_RTL_EVALUATION_RECEIVERS");
     if (qgetenv("AETHER_AUTOMATION") == "1" && (evaluation == "2" || evaluation == "4" || evaluation == "8")) {
         m_receiverCapacity = evaluation.toInt();
