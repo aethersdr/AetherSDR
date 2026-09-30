@@ -553,14 +553,12 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
             // Already in standby — return to operate. Same order as
             // cycleOperateState's standby leg so both paths command the
             // tuner identically.
-            m_model->setBypass(false);
-            m_model->setOperate(true);
+            m_model->setOperateAndBypass(true, false, /*operateFirst=*/false);
         } else {
             // Operate first: a status arriving between the two commands then
             // already reads STANDBY (operate=0), where bypass first would
             // report operate=1 bypass=0 and flash OPERATE on the way down.
-            m_model->setOperate(false);
-            m_model->setBypass(false);
+            m_model->setOperateAndBypass(false, false, /*operateFirst=*/true);
         }
     });
     connect(m_bypBtn, &QPushButton::clicked, this, [this]() {
@@ -568,8 +566,7 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
         if (m_model->isOperate() && m_model->isBypass()) {
             m_model->setBypass(false);   // back to operate, still out of standby
         } else {
-            m_model->setOperate(true);
-            m_model->setBypass(true);
+            m_model->setOperateAndBypass(true, true, /*operateFirst=*/true);
         }
     });
 }
@@ -1198,12 +1195,10 @@ void TunerApplet::cycleOperateState()
     } else if (m_model->isOperate() && m_model->isBypass()) {
         // Currently BYPASS → go to STANDBY. Operate first, for the same
         // reason as the STBY key's.
-        m_model->setOperate(false);
-        m_model->setBypass(false);
+        m_model->setOperateAndBypass(false, false, /*operateFirst=*/true);
     } else {
         // Currently STANDBY → go to OPERATE
-        m_model->setBypass(false);
-        m_model->setOperate(true);
+        m_model->setOperateAndBypass(true, false, /*operateFirst=*/false);
     }
 }
 

@@ -153,6 +153,26 @@ void TunerModel::setBypass(bool on)
     if (m_bypass != on) { m_bypass = on; emit stateChanged(); }
 }
 
+void TunerModel::setOperateAndBypass(bool operate, bool bypass, bool operateFirst)
+{
+    if (m_handle.isEmpty()) {
+        qCDebug(lcTuner) << "TunerModel::setOperateAndBypass: no handle yet, ignoring";
+        // One press, one refusal: the two setters below would each refuse.
+        if (m_directPresence) {
+            emit relayedCommandRefused(operateFirst ? QStringLiteral("operate")
+                                                    : QStringLiteral("bypass"));
+        }
+        return;
+    }
+    if (operateFirst) {
+        setOperate(operate);
+        setBypass(bypass);
+    } else {
+        setBypass(bypass);
+        setOperate(operate);
+    }
+}
+
 void TunerModel::autoTune()
 {
     // Prefer the direct port-9010 channel when available: bypasses the radio's

@@ -112,6 +112,11 @@ public:
     // antenna/relay methods below) stays local and does not go through the seam.
     void setOperate(bool on);
     void setBypass(bool on);
+    // One operator action that needs BOTH verbs (STBY, BYP, the rail cycle),
+    // commanded in the order given. On a tuner no radio relays for, it is ONE
+    // refusal, not two: relayedCommandRefused fires once, naming the first
+    // verb, and nothing is sent.
+    void setOperateAndBypass(bool operate, bool bypass, bool operateFirst);
     void autoTune();
     // Break a tune already in progress — the same `autotune` the start uses,
     // which the firmware treats as a toggle. No-op when not tuning.
