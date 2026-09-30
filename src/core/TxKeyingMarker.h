@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QRegularExpression>
+#include <QStringList>
 #include <QWidget>
 #include <QPointer>
 #include <QVariant>
@@ -17,9 +19,10 @@ namespace AetherSDR {
 // This is a *positive* signal set at the keying control's creation site, which
 // is far more robust than matching control names: a TX-capable control is
 // guarded because it was explicitly declared keying, not because its label
-// happened to contain a magic word. Name matching remains in the bridge only as
-// a logged belt-and-suspenders fallback for controls that predate or forget the
-// marker.
+// happened to contain a magic word. Name matching remains only as a
+// belt-and-suspenders fallback for controls that predate or forget the marker;
+// see transmitControlMatch() at the end of this file, which the bridge and the
+// keyboard TX activation guard share.
 //
 // Usage at the call site, right after creating the button:
 //     m_moxBtn = new QPushButton("MOX");
@@ -129,5 +132,100 @@ private:
     TxKeyingAction::Prepared m_action;
     bool m_started{false};
 };
+
+
+// ── Is this widget a transmit control? One answer for every guard ──────────
+// Shared by the automation bridge (AutomationServer.cpp isTransmitControl /
+// hasTransmitControlInChain) and the keyboard activation guard
+// (gui/TxKeyActivationGuard.h), so the two cannot drift apart.
+
+// Tokenize an identifier or label into lowercased words, splitting on
+// non-alphanumeric separators AND camelCase humps (tuneButton -> [tune, button],
+// aprsSvcWXBOT -> [aprs, svc, wxbot], "Auto-Tune" -> [auto, tune]). The TX-guard
+// fallback matches a deny-word against a WHOLE token, so a cross-token trigram
+// like "cwx" formed by the c in "svc" + "wx" in "wxbot" no longer false-positives
+// as the CWX keyer, while genuine keyers (moxButton, pttSend, "Auto-Tune") still
+// match. This is the anchored replacement for the old bare contains() blocklist
+// that flagged the RX-only APRS weather entry (#3646).
+inline QStringList identifierTokens(const QString& s)
+{
+    QString spaced;
+    spaced.reserve(s.size() * 2);
+    for (int i = 0; i < s.size(); ++i) {
+        const QChar c = s.at(i);
+        // Break at a lower/digit -> Upper hump (tuneButton -> "tune Button") and
+        // at an acronym -> word hump (WXBot -> "WX Bot"); runs of caps stay whole
+        // (WXBOT -> "wxbot").
+        if (i > 0 && c.isUpper()
+            && (s.at(i - 1).isLower() || s.at(i - 1).isDigit()
+                || (i + 1 < s.size() && s.at(i + 1).isLower())))
+            spaced.append(QLatin1Char(' '));
+        spaced.append(c);
+    }
+    static const QRegularExpression kSeparators(QStringLiteral("[^a-z0-9]+"));
+    return spaced.toLower().split(kSeparators, Qt::SkipEmptyParts);
+}
+
+// True if any haystack contributes a whole token equal to a deny-word — the
+// anchored TX-guard fallback match.
+inline bool matchesTxDenyToken(const QStringList& haystacks, const QStringList& deny)
+{
+    for (const QString& h : haystacks) {
+        const QStringList tokens = identifierTokens(h);
+        for (const QString& d : deny)
+            if (tokens.contains(d))
+                return true;
+    }
+    return false;
+}
+
+// The fallback deny-list, kept narrow: only words that unambiguously mean
+// "keys TX". "tune"/"atu"/"vox" were dropped because they false-positive on
+// RX-only controls — the "Tune Now" button (net/spot retune) and "Tune to
+// <spot>" only move the VFO, and a VOX toggle arms TX rather than keying it.
+// The genuine keying TUNE/ATU buttons (TxApplet, AtuPreTuneDialog) all carry
+// the authoritative markTxKeying() marker, so removing them here loses no real
+// protection. (#3918 — "Tune Now" false-positive)
+inline const QStringList& txDenyTokens()
+{
+    static const QStringList kDeny = {
+        QStringLiteral("mox"), QStringLiteral("ptt"),
+        QStringLiteral("transmit"), QStringLiteral("cwx"),
+    };
+    return kDeny;
+}
+
+enum class TransmitControlMatch {
+    None,          // not a transmit control
+    Marker,        // carries the authoritative markTxKeying() marker
+    NameFallback,  // unmarked button whose name/label reads as a TX keyer
+};
+
+// Authoritative: the positive marker. Fallback: a BUTTON-scoped name
+// heuristic, retained only to catch a keying control that predates or forgot
+// the marker. Button scoped because only a discrete button action can key
+// (setpoint sliders like "Tune power"/"RF power" never transmit by being
+// moved). A NameFallback result means that control should get an explicit
+// markTxKeying(); callers that can log, should.
+inline TransmitControlMatch transmitControlMatch(const QWidget* w)
+{
+    if (!w)
+        return TransmitControlMatch::None;
+    if (w->property(kTxKeyingProperty).toBool())
+        return TransmitControlMatch::Marker;
+
+    // By meta-object name and Q_PROPERTY, not qobject_cast: this header sits in
+    // src/core and must not include a QtWidgets class header (engine boundary).
+    if (!w->inherits("QAbstractButton"))
+        return TransmitControlMatch::None;  // sliders / combos / spinboxes can't trigger TX
+
+    if (w->objectName().startsWith(QStringLiteral("panOverlayMessageClose_")))
+        return TransmitControlMatch::None;  // closes an overlay notification, never keys TX.
+
+    const QStringList hay{w->objectName(), w->accessibleName(),
+                          w->property("text").toString()};
+    return matchesTxDenyToken(hay, txDenyTokens()) ? TransmitControlMatch::NameFallback
+                                                   : TransmitControlMatch::None;
+}
 
 } // namespace AetherSDR

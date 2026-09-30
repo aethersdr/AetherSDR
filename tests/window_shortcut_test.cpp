@@ -231,9 +231,10 @@ int main(int argc, char** argv)
     // MainWindow*.cpp, so this route RE-IMPLEMENTS eventFilter()'s ordering.
     // Nothing here pins that the production filter calls
     // refuseTxKeyActivation() at all, or that it sits after
-    // handlePttHoldShortcut(). It passes "connected, not typing" as constants
-    // where production reads textEntryCaptured() and RadioModel::isConnected();
-    // the decision table above covers those gates.
+    // handlePttHoldShortcut(). It resolves bindings with the same
+    // shortcutSequenceFromKeyEvent() production uses, and passes "connected,
+    // not typing" as constants where production reads textEntryCaptured() and
+    // RadioModel::isConnected(); the decision table above covers those gates.
     {
         struct KeyRoute : QObject {
             ShortcutManager* shortcuts{nullptr};
@@ -247,7 +248,8 @@ int main(int argc, char** argv)
                 if (e->type() != QEvent::KeyPress && e->type() != QEvent::KeyRelease)
                     return false;
                 auto* ke = static_cast<QKeyEvent*>(e);
-                const auto* a = shortcuts->actionForKey(QKeySequence(ke->key()));
+                const auto* a = shortcuts->actionForKey(
+                    AetherSDR::shortcutSequenceFromKeyEvent(ke));
                 if (!ke->isAutoRepeat() && a && a->id == QLatin1String("ptt_hold")) {
                     switch (AetherSDR::pttHoldKeyStep(e->type(), holdActive, shortcutsOn,
                                                       false, true)) {
@@ -364,6 +366,34 @@ int main(int argc, char** argv)
         QTest::keyRelease(&ordinary, Qt::Key_Space);
         expect(!route.holdActive && route.pttReleases == 2 && ordinaryClicks == 1,
                "mid-hold toggle: shortcuts turned off mid-hold, the release still un-keys");
+
+        // The guard shares the bridge's predicate: an UNMARKED button whose
+        // name reads as a TX keyer (the bridge's name fallback) is refused too.
+        QPushButton unmarked(QStringLiteral("PTT"), &host);
+        unmarked.setFocusPolicy(Qt::StrongFocus);
+        unmarked.setAutoDefault(false);
+        unmarked.show();
+        int unmarkedClicks = 0;
+        QObject::connect(&unmarked, &QPushButton::clicked, [&] { ++unmarkedClicks; });
+        focus(host, &unmarked);
+        press(Qt::Key_Space);
+        expect(unmarkedClicks == 0,
+               "shortcuts off: an unmarked button named like a TX keyer is refused (bridge fallback)");
+
+        // ... and a button inside a marked TX control is judged by its chain.
+        QWidget keyingPanel(&host);
+        AetherSDR::markTxKeying(&keyingPanel);
+        QPushButton inner(QStringLiteral("inner"), &keyingPanel);
+        inner.setFocusPolicy(Qt::StrongFocus);
+        inner.setAutoDefault(false);
+        keyingPanel.show();
+        inner.show();
+        int innerClicks = 0;
+        QObject::connect(&inner, &QPushButton::clicked, [&] { ++innerClicks; });
+        focus(host, &inner);
+        press(Qt::Key_Space);
+        expect(innerClicks == 0,
+               "shortcuts off: a button inside a marked TX control is refused (parent chain)");
 
         app.removeEventFilter(&route);
     }

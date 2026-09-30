@@ -15,19 +15,28 @@ namespace AetherSDR {
 //
 // With shortcuts off, the operating QShortcuts are disabled so a bound key
 // reaches the focused widget instead of vanishing. For an ordinary button that
-// is the point: Space activates it. For a button that KEYS THE TRANSMITTER --
-// anything carrying markTxKeying() / registerTxKeyingAction(), the same marker
-// the automation bridge's TX guard reads (AutomationServer.cpp
-// isTransmitControl) -- it is not: the app runs the Fusion style, where a
-// clicked QPushButton takes focus, so the Space that used to be swallowed by
-// the PTT-hold filter would now toggle MOX and latch transmit after the
-// operator had merely clicked it with the mouse.
+// is the point: Space activates it. For a button that KEYS THE TRANSMITTER it
+// is not: the app runs the Fusion style, where a clicked QPushButton takes
+// focus, so the Space that used to be swallowed by the PTT-hold filter would
+// now toggle MOX and latch transmit after the operator had merely clicked it
+// with the mouse.
+//
+// "Keys the transmitter" is decided by the SAME predicate the automation
+// bridge's TX guard uses -- transmitControlMatch() in core/TxKeyingMarker.h:
+// the markTxKeying() / registerTxKeyingAction() marker, or the button-scoped
+// name fallback for a keying control that forgot the marker -- walked up the
+// parent chain as the bridge's hasTransmitControlInChain() does. One function,
+// so the two guards cannot drift apart.
 //
 // So MainWindow::eventFilter() refuses exactly the keys that change was about:
 // an activation key (Space, Select, Enter, Return) that is bound to a shortcut
-// action, delivered to a TX-keying button, while shortcuts are off. That is the
-// behaviour of origin/main before #5483 for those keys (the bound key never
-// reached the button), and nothing wider:
+// action, delivered to a TX-keying button, while shortcuts are off. While the
+// radio is connected and the operator is not typing, that is the behaviour of
+// origin/main before #5483 for those keys (the PTT (Hold) filter swallowed the
+// bound key, so it never reached the button). It is slightly wider in one
+// case, in the safe direction: on main, with the radio DISCONNECTED, the filter
+// let the key through and Space clicked a focused MOX; this guard refuses that
+// too. Nothing else is widened:
 //   - Mouse clicks are not key events and are untouched.
 //   - An activation key that is NOT bound to any shortcut is untouched, so a
 //     keyboard path that exists today -- e.g. Return on an auto-default
@@ -44,9 +53,17 @@ namespace AetherSDR {
 // never fires; the PTT-hold filter consumes its key first, as before.
 inline bool isTxKeyingButton(const QObject* receiver)
 {
+    // Only a button is activated by these keys; what it belongs to is judged
+    // up its parent chain, as the bridge does.
     const auto* button = qobject_cast<const QAbstractButton*>(receiver);
-    return button && button->property(kTxKeyingProperty).toBool()
-        && txActionRequiresPermission(button);
+    if (!button)
+        return false;
+    for (const QWidget* w = button; w; w = w->parentWidget()) {
+        if (transmitControlMatch(w) != TransmitControlMatch::None
+            && txActionRequiresPermission(w))
+            return true;
+    }
+    return false;
 }
 
 inline bool refuseTxKeyActivation(const QObject* receiver, const QKeyEvent* ev,
@@ -68,12 +85,9 @@ inline bool refuseTxKeyActivation(const QObject* receiver, const QKeyEvent* ev,
     }
     if (!isTxKeyingButton(receiver))
         return false;
-    // Resolve the binding the way MainWindow resolves PTT (Hold):
-    // shortcutSequenceFromKeyEvent() masks to these four modifiers.
-    const Qt::KeyboardModifiers modifiers = ev->modifiers()
-        & (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
-    return shortcuts.actionForKey(QKeySequence(static_cast<int>(modifiers) | ev->key()))
-        != nullptr;
+    // Resolve the binding exactly as MainWindow resolves PTT (Hold): the same
+    // function, not a copy of it.
+    return shortcuts.actionForKey(shortcutSequenceFromKeyEvent(ev)) != nullptr;
 }
 
 } // namespace AetherSDR

@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QByteArray>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QShortcut>
 #include <QString>
@@ -30,6 +31,23 @@ struct ShortcutExportResult {
 
     bool ok() const { return error.isEmpty(); }
 };
+
+// The key sequence a key event resolves to for binding lookup: the key plus
+// Shift/Ctrl/Alt/Meta, nothing else (keypad and other flags masked off). Inline
+// here so every resolver -- the PTT (Hold) filter and the TX activation guard
+// -- matches a binding the same way and cannot drift.
+inline QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev)
+{
+    if (!ev || ev->key() == Qt::Key_unknown)
+        return {};
+
+    const Qt::KeyboardModifiers modifiers =
+        ev->modifiers() & (Qt::ShiftModifier
+                           | Qt::ControlModifier
+                           | Qt::AltModifier
+                           | Qt::MetaModifier);
+    return QKeySequence(static_cast<int>(modifiers) | ev->key());
+}
 
 class ShortcutManager : public QObject {
     Q_OBJECT

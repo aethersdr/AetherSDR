@@ -183,7 +183,6 @@ bool panPixelDimensionsReady(const SpectrumWidget* spectrum);
 // ─── Misc UI ─────────────────────────────────────────────────────────────────
 
 QPixmap buildBandStackIndicatorPixmap(bool active);
-QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev);
 
 // ─── Client connection parsing (discovery / multiFLEX) ──────────────────────
 
