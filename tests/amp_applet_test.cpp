@@ -73,8 +73,15 @@ void testDefaultPlaceholder()
     if (!button) return;
 
     report("default placeholder uses Celsius",
-           button->text() == QStringLiteral("PA     \u2014 C"),
+           button->text() == QStringLiteral("PA \u2014 C    "),
            button->text());
+
+    // The placeholder is drawn like Vdd and Vac without a connection: in the
+    // disabled tone. The first reading switches it to the normal one.
+    const QString placeholderStyle = button->styleSheet();
+    applet.setTemp(34.7f);
+    report("the first PA reading leaves the placeholder tone",
+           !placeholderStyle.isEmpty() && button->styleSheet() != placeholderStyle);
 }
 
 void testConnectionSourceIndicator()
@@ -130,17 +137,17 @@ void testSingleSensorToggle()
 
     applet.setTemp(34.7f);
     report("single sensor displays Celsius",
-           button->text() == QStringLiteral("PA  34.7 C"),
+           button->text() == QStringLiteral("PA 34.7 C "),
            button->text());
 
     button->click();
     report("single sensor toggles to Fahrenheit",
-           button->text() == QStringLiteral("PA  94.5 F"),
+           button->text() == QStringLiteral("PA 94.5 F "),
            button->text());
 
     button->click();
     report("single sensor toggles back to Celsius",
-           button->text() == QStringLiteral("PA  34.7 C"),
+           button->text() == QStringLiteral("PA 34.7 C "),
            button->text());
 }
 
@@ -149,23 +156,71 @@ void testDualSensorToggle()
     resetSettings();
 
     AmpApplet applet;
-    auto* button = tempButton(applet);
-    report("dual sensor button exists", button != nullptr);
-    if (!button) return;
+    auto* pa = tempButton(applet);
+    auto* hl = applet.findChild<QPushButton*>(QStringLiteral("ampHlTempButton"));
+    report("dual sensor readouts exist", pa != nullptr && hl != nullptr);
+    if (!pa || !hl) return;
 
-    // Both sensors are named. The amplifier's own panel runs them unlabelled
-    // ("24.4/24.2 C"); on hardware the operator knows which is which, and
-    // here two bare numbers say nothing about what either is measuring.
+    // Both sensors are named, one readout each. The amplifier's own panel runs
+    // them unlabelled ("24.4/24.2 C"); here two bare numbers would say nothing
+    // about what either is measuring.
+    report("HL keeps its place with a dash before a reading",
+           hl->text() == QStringLiteral("HL \u2014 C    "), hl->text());
     applet.setTemp(34.7f);
     applet.setTempB(28.4f);
     report("dual sensor displays Celsius pair",
-           button->text() == QStringLiteral("PA  34.7 / HL  28.4 C"),
-           button->text());
+           pa->text() == QStringLiteral("PA 34.7 C ") && hl->text() == QStringLiteral("HL 28.4 C "),
+           pa->text() + QStringLiteral("|") + hl->text());
 
-    button->click();
-    report("dual sensor toggles to Fahrenheit pair",
-           button->text() == QStringLiteral("PA  94.5 / HL  83.1 F"),
-           button->text());
+    // Either readout toggles both.
+    pa->click();
+    report("a click on PA shows both in Fahrenheit",
+           pa->text() == QStringLiteral("PA 94.5 F ") && hl->text() == QStringLiteral("HL 83.1 F "),
+           pa->text() + QStringLiteral("|") + hl->text());
+    hl->click();
+    report("a click on HL shows both in Celsius again",
+           pa->text() == QStringLiteral("PA 34.7 C ") && hl->text() == QStringLiteral("HL 28.4 C "),
+           pa->text() + QStringLiteral("|") + hl->text());
+    // The unit chosen from HL is saved like one chosen from PA: a new applet
+    // opens in it.
+    hl->click();
+    AmpApplet reopened;
+    auto* reopenedHl = reopened.findChild<QPushButton*>(QStringLiteral("ampHlTempButton"));
+    report("the unit chosen from HL is saved",
+           reopenedHl && reopenedHl->text().endsWith(QStringLiteral("F    ")),
+           reopenedHl ? reopenedHl->text() : QString());
+}
+
+// Vac and Vdd start at the same x whatever the temperatures read: the grid
+// column is as wide as its widest cell, and every readout keeps one length.
+void testVoltagesStayAlignedWithTheTemperatures()
+{
+    resetSettings();
+    AmpApplet applet;
+    applet.setDirectConnected(true);
+    applet.resize(260, 360);
+    applet.show();
+    auto* vac = applet.findChild<QLabel*>(QStringLiteral("ampMainsVoltage"));
+    auto* vdd = applet.findChild<QLabel*>(QStringLiteral("ampDrainVoltage"));
+    report("voltage readouts exist", vac && vdd);
+    if (!vac || !vdd) return;
+
+    auto x = [&applet](QWidget* w) {
+        QCoreApplication::processEvents();
+        return w->mapTo(&applet, QPoint(0, 0)).x();
+    };
+    const int start = x(vac);
+    bool aligned = x(vac) == x(vdd);
+    bool steady = true;
+    const float temps[][2] = {{9.9f, 9.9f}, {106.8f, 89.8f}, {35.7f, 100.4f}, {-5.0f, 120.0f}};
+    for (const auto& t : temps) {
+        applet.setTemp(t[0]);
+        applet.setTempB(t[1]);
+        aligned = aligned && x(vac) == x(vdd);
+        steady = steady && x(vac) == start;
+    }
+    report("Vac and Vdd start at the same x", aligned);
+    report("the voltages do not move as the temperatures change", steady);
 }
 
 void testPreferenceReload()
@@ -190,12 +245,12 @@ void testPreferenceReload()
     if (!button) return;
 
     report("reloaded placeholder uses Fahrenheit",
-           button->text() == QStringLiteral("PA     \u2014 F"),
+           button->text() == QStringLiteral("PA \u2014 F    "),
            button->text());
 
     restored.setTemp(0.0f);
     report("reloaded value displays Fahrenheit",
-           button->text() == QStringLiteral("PA  32.0 F"),
+           button->text() == QStringLiteral("PA 32.0 F "),
            button->text());
 }
 
@@ -212,7 +267,8 @@ void testFanModePulldown()
     // isVisibleTo(&applet), not isVisible(): the applet is never shown as a
     // top-level window in this offscreen harness, so isVisible() would be
     // false regardless of the combo's own shown/hidden state.
-    report("fan combo starts hidden", !combo->isVisibleTo(&applet));
+    report("fan combo starts shown, disabled and showing no mode",
+           combo->isVisibleTo(&applet) && !combo->isEnabled() && combo->currentIndex() == -1);
 
     QSignalSpy spy(&applet, &AmpApplet::fanModeChanged);
 
@@ -249,19 +305,32 @@ void testFanModePulldown()
     {
         AmpApplet fresh;
         QComboBox* freshCombo = fanCombo(fresh);
-        report("fresh fan combo starts hidden", freshCombo && freshCombo->isHidden());
+        report("fresh fan combo starts disabled with no mode",
+               freshCombo && !freshCombo->isEnabled() && freshCombo->currentIndex() == -1);
         if (freshCombo) {
             fresh.setFanMode("bogus");
-            report("unknown fanmode does not reveal the control",
-                   freshCombo->isHidden());
+            report("unknown fanmode does not enable the control or show a mode",
+                   !freshCombo->isEnabled() && freshCombo->currentIndex() == -1);
             fresh.setFanMode("CONTEST");
-            report("a recognized mode does reveal it", !freshCombo->isHidden());
+            report("a recognized mode enables it and shows the mode",
+                   freshCombo->isEnabled()
+                       && freshCombo->currentText() == QStringLiteral("Fan: Contest"),
+                   freshCombo->currentText());
+            // Losing the direct connection clears the mode again, and clearing
+            // it is not a fan-mode command.
+            QSignalSpy freshSpy(&fresh, &AmpApplet::fanModeChanged);
+            fresh.setDirectConnected(true);
+            fresh.setDirectConnected(false);
+            report("losing the connection clears the mode without commanding one",
+                   freshCombo->currentIndex() == -1 && !freshCombo->isEnabled()
+                       && freshSpy.count() == 0,
+                   QString::number(freshSpy.count()));
         }
     }
 
     // #4731: on a large-enough default UI font, the popup's fixed pixel
     // width (sized off the combo's own hardcoded 10px stylesheet font)
-    // couldn't fit "Fan: Contest" — the longest item — so Qt's default
+    // couldn't fit the longest item — then "Fan: Contest" — so Qt's default
     // ElideMiddle silently mangled it. Widths/fonts aren't trustworthy to
     // assert on directly in this offscreen, unlaid-out harness (the combo
     // is never shown, so its geometry never reflects a real style pass),
@@ -270,8 +339,12 @@ void testFanModePulldown()
     // any future overflow visibly (clipped) instead of mid-eliding it.
     report("fan combo sizes to its widest item, not a pinned width",
            combo->sizeAdjustPolicy() == QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    report("fan combo reserves room for \"Fan: Contest\"",
-           combo->minimumContentsLength() >= static_cast<int>(QStringLiteral("Fan: Contest").length()),
+    int longestItem = 0;
+    for (int i = 0; i < combo->count(); ++i) {
+        longestItem = std::max(longestItem, static_cast<int>(combo->itemText(i).length()));
+    }
+    report("fan combo reserves room for its longest item",
+           combo->minimumContentsLength() >= longestItem,
            QString::number(combo->minimumContentsLength()));
     report("fan combo popup does not silently mid-elide overflow",
            combo->view()->textElideMode() == Qt::ElideNone);
@@ -421,8 +494,23 @@ void testMeffaShowsThreeStates()
     // isVisible() is false for every child whatever setVisible() was called
     // with — the assertion passed with the whole visibility gate deleted.
     // isHidden() reads the widget's own flag.
-    report("MEffA control is hidden until the amplifier reports",
-           btn->isHidden());
+    report("MEffA control is shown but disabled until the amplifier reports",
+           !btn->isHidden() && !btn->isEnabled());
+
+    // OPERATE follows the same rule: in its place, but disabled and grey,
+    // until the amplifier reports a state.
+    QPushButton* operate = nullptr;
+    for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+        if (!b->isHidden() && b->text() == QStringLiteral("OPERATE")) operate = b;
+    }
+    report("OPERATE is shown but disabled until the amplifier reports",
+           operate != nullptr && !operate->isEnabled());
+    if (operate) {
+        applet.setState(QStringLiteral("STANDBY"));
+        report("a reported state enables the operate control",
+               operate->isEnabled() && operate->text() == QStringLiteral("STANDBY"),
+               operate->text());
+    }
 
     applet.setMeffa(QStringLiteral("OFF"), true);
     report("OFF reads as disabled",
@@ -623,7 +711,7 @@ void testReadoutWidthIsStable()
     report("zero drain voltage is reported literally",
            vdd->text().contains(QStringLiteral("0.0")), vdd->text());
     report("zero drain voltage is not a placeholder",
-           !vdd->text().contains(QStringLiteral("\u2014")), vdd->text());
+           vdd->text().startsWith(QStringLiteral("Vdd 0.0 ")), vdd->text());
     report("zero drain voltage keeps the row's width",
            vdd->text().length() == vddReading, vdd->text());
 
@@ -700,6 +788,77 @@ void testPeakMarkerUsesTheSlidingWindow()
            g->peakValue() < 900.0f, QString::number(g->peakValue()));
 }
 
+// Every caption the rail's controls can show fits the button it gets, at the
+// rail's width (AppletPanel is 260 px) and wider. #5903: MEffA, "Fan: St…" and
+// "PERAT" clipped in the 260 px rail.
+//
+// Checked against each control's own sizeHint rather than font metrics taken
+// here: the hint is computed from the fonts and style sheet this machine
+// actually draws with, so a CI host that falls back to other fonts moves both
+// sides together instead of failing on a caption that fits.
+void testDockedCaptionsFitTheRail()
+{
+    resetSettings();
+
+    auto controlsFit = [](AmpApplet& applet, const QString& when) {
+        QCoreApplication::processEvents();
+        auto* meffa = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+        auto* fan = fanCombo(applet);
+        QPushButton* operate = nullptr;
+        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+            if (b->isVisible() && b != meffa && b->objectName().isEmpty()
+                && b->parentWidget() == meffa->parentWidget()) {
+                operate = b;
+            }
+        }
+        bool fits = meffa && fan && operate;
+        QString detail = when;
+        for (QWidget* w : std::initializer_list<QWidget*>{meffa, fan, operate}) {
+            if (!w) continue;
+            if (!w->isVisible() || w->width() < w->sizeHint().width()) {
+                fits = false;
+                detail += QStringLiteral(" | %1 %2<%3").arg(w->metaObject()->className())
+                              .arg(w->width()).arg(w->sizeHint().width());
+            }
+        }
+        if (operate) detail += QStringLiteral(" | operate=") + operate->text();
+        if (fan) detail += QStringLiteral(" | fan=") + fan->currentText();
+        return std::make_pair(fits, detail);
+    };
+
+    for (int railWidth : {260, 300}) {
+        {
+            // A fresh applet: nothing reported yet, every control disabled.
+            AmpApplet fresh;
+            fresh.resize(railWidth, 360);
+            fresh.show();
+            const auto offline = controlsFit(fresh, QStringLiteral("before any report"));
+            report(qPrintable(QStringLiteral("rail controls fit before any report at %1 px").arg(railWidth)),
+                   offline.first, offline.second);
+        }
+
+        AmpApplet applet;
+        applet.resize(railWidth, 360);
+        applet.show();
+        applet.setDirectConnected(true);
+        bool all = true;
+        QString failures;
+        for (const char* state : {"STANDBY", "IDLE", "FAULT", "POWERUP", "SELFCHECK"}) {
+            applet.setState(QString::fromLatin1(state));
+            for (const char* fanMode : {"STANDARD", "CONTEST", "BROADCAST"}) {
+                applet.setFanMode(QString::fromLatin1(fanMode));
+                for (const char* meffa : {"OFF", "STANDBY", "ACTIVE"}) {
+                    applet.setMeffa(QString::fromLatin1(meffa), true);
+                    const auto r = controlsFit(applet, QStringLiteral("%1/%2/%3").arg(state, fanMode, meffa));
+                    if (!r.first) { all = false; failures += r.second + QStringLiteral("; "); }
+                }
+            }
+        }
+        report(qPrintable(QStringLiteral("every rail caption fits at %1 px").arg(railWidth)),
+               all, failures);
+    }
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(QStringLiteral("aether-amp-applet-test"));
@@ -719,6 +878,8 @@ int main(int argc, char** argv)
     testConnectionSourceIndicator();
     testSingleSensorToggle();
     testDualSensorToggle();
+    testVoltagesStayAlignedWithTheTemperatures();
+    testDockedCaptionsFitTheRail();
     testPreferenceReload();
     testFanModePulldown();
     testReadoutWidthIsStable();

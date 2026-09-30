@@ -117,10 +117,8 @@ protected:
 private:
     void buildUI();
     void buildExpandedUI();
-    // The three telemetry readouts run as a row in the panel and stack
-    // in the rail's single-tile width. Same widgets either way — the grid is
-    // re-flowed rather than the controls rebuilt.
-    void applyTelemetryLayout();
+    void placeReadings();
+    void updateVoltsLabel();
     void updateTempLabel();
     void updateValueLabels();
 
@@ -194,9 +192,12 @@ private:
     QLabel*  m_idLabel{nullptr};    // "Id   39"
 
     // Right-side info column (one per gauge row)
-    QPushButton* m_tempBtn{nullptr}; // "34.7/28.4 C"  (click to toggle C/F)
-    QLabel*  m_vddLabel{nullptr};   // "Vdd  50.0 V"  (beside SWR row)
-    QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
+    QPushButton* m_tempBtn{nullptr};   // "PA 34.7 C"  (click to toggle C/F)
+    QPushButton* m_hlTempBtn{nullptr}; // "HL 28.4 C"  (click to toggle C/F)
+    QLabel*  m_vacLabel{nullptr};      // "Vac 240 V"
+    QLabel*  m_vddLabel{nullptr};      // "Vdd 50.0 V"
+    QString  m_drainVoltsText{QStringLiteral("—")};
+    QString  m_mainsVoltsText{QStringLiteral("—")};
     QLabel*  m_sourceLabel{nullptr}; // bottom-right connection source
     bool     m_directConnected{false};
     QString  m_directFailureReason;
@@ -204,9 +205,6 @@ private:
 
     QWidget*     m_telemetryBox{nullptr};
     QGridLayout* m_telemetryGrid{nullptr};
-    // Which way the grid is currently flowed, so a density pass that changes
-    // nothing does not re-add four widgets to it.
-    bool         m_telemetryInRow{false};
 
     QComboBox*   m_fanCombo{nullptr};
     QPushButton* m_operateBtn{nullptr};
@@ -241,6 +239,8 @@ private:
     // the slack themselves. Its minimum is the gap that keeps them off the
     // frame.
     QSpacerItem* m_bottomStretch{nullptr};
+    QSpacerItem* m_controlsGap{nullptr};   // docked: above the controls
+    QSpacerItem* m_readingsGap{nullptr};   // docked: above the readings
     // The amplifier's alert channel — the same `M|<text>` frame the tuner
     // sends, on the same vendor's protocol. Not in any layout: it is a child
     // of the applet, sized to cover it and raised, because a fault is the
