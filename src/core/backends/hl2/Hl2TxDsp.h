@@ -8,6 +8,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -175,6 +176,21 @@ public:
     // on (Hl2Backend moves this object there), so it needs no atomic.
     [[nodiscard]] unsigned long long modulatorFaultBlocks() const noexcept;
     [[nodiscard]] unsigned long long modulatorBlocks() const noexcept;
+    // The part of modulatorFaultBlocks() that was DROPPED unexchanged because
+    // the channel's worker had not produced the previous block's output within
+    // a block period of this one reaching the head of the queue (TXA build;
+    // always 0 in the phasing build). A drop costs the block's audio and keeps
+    // the channel's output ring in step; exchanging it would cost the same
+    // audio and put the ring out of step for the rest of the over. So a drop
+    // says "the worker was starved", and any other fault says the gate failed.
+    [[nodiscard]] unsigned long long modulatorStallDrops() const noexcept;
+
+    // TEST SEAM. Replaces the readiness answer the exchange gate acts on; it is
+    // handed the channel's own answer so a test can only ever narrow it (make
+    // the worker look stalled), never exchange into a channel that is not
+    // ready. Empty (the default) means the channel's answer is used as is.
+    // TXA build only; a no-op in the phasing build.
+    void setOutputReadyProbeForTest(std::function<bool(bool channelReady)> probe);
 
 public slots:
     // Mono TX audio at inputSampleRateHz.
@@ -372,15 +388,35 @@ private:
     // channel reports the previous block's output ready
     // (WdspChannel::outputReady(), local WDSP patch 15); a 1 ms single-shot
     // timer on this object's thread retries the rest. Nothing blocks the I/O
-    // thread, and a steadily paced caller never waits. A worker that has not
-    // answered within exchangeStallNs() is exchanged anyway, counted and
-    // logged, so a stall cannot become unbounded latency.
+    // thread, and a steadily paced caller never waits.
+    //
+    // A block that has sat at the HEAD of the queue for exchangeStallNs() --
+    // timed from when it got there, never from the previous exchange, because
+    // an idle caller makes "no exchange for a while" trivially true -- with
+    // the worker still not ready is DROPPED, not exchanged: an exchange would
+    // underrun and desync the ring, a drop loses the same audio and keeps it
+    // in step. Counted in modulatorFaultBlocks() and modulatorStallDrops(),
+    // and logged. The worker already holds the previous exchange's input, so a
+    // drop cannot starve it into never producing.
     void exchangeDueBlocks();
     void onExchangeTimer();
+    void noteFault(const char* why);
+    bool channelOutputReady();
     qint64 exchangeStallNs() const noexcept;
     std::vector<float> m_exchangePending;
     QTimer* m_exchangeTimer = nullptr;
-    QElapsedTimer m_lastExchange;
+    // When the block now at the head of m_exchangePending got there. Invalid
+    // while no whole block is waiting, and invalidated on every over boundary
+    // (resetModulatorState(), buildModulator()), so an over never inherits a
+    // deadline from the previous one.
+    QElapsedTimer m_headWait;
+    unsigned long long m_txStallDrops = 0;
+    // Queue depth, in blocks, above which the stage says it is being fed
+    // faster than the channel drains -- the signal the old underrun count used
+    // to give for free. Warned once per excursion.
+    static constexpr std::size_t kPendingWarnBlocks = 4;
+    bool m_pendingWarned = false;
+    std::function<bool(bool)> m_outputReadyProbe;
 #else
     // ── Phasing modulator ────────────────────────────────────
     //
