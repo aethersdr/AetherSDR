@@ -81,7 +81,7 @@ retain the newest value, including the paired DSP state and squelch field mask.
 | HL2 | Existing RX-worker NB and receiver mixer gain/mute/balance | Radio-side NR/ANF/manual notch or squelch |
 | RTL (optional) | Existing DDC gain/mute/balance | DSP or radio antenna controls; tests only cover cold refusal without USB |
 | Demo | NB and ANF affect the existing production signal generator | Independent AF mixer or new advertised DSP capabilities |
-| ANAN | Existing client-only tune lock | NB from separate #5824, new mixer or other receive controls |
+| ANAN | Existing WDSP NB from landed #5824 and client-only tune lock | New mixer or other receive controls |
 
 `ReceiveDispatch` distinguishes a dispatched operation, a client-only lock, and
 an unsupported operation. It is not hardware acknowledgement. Unsupported
@@ -105,6 +105,18 @@ this is not a fake firmware peer. New model tests cover both construction paths,
 unique wiring, stale IDs, reconnect, off-thread refusal, nested edits, deletion,
 explicit unsupported results and NRS restore. These remain in the existing
 unconditional CTest targets; the frozen PR gate is unchanged.
+
+The landed `anan_noise_blanker_readback_test` additionally pins model dispatch
+across same/different-radio reconnect and typed NB requests through the actual
+ANAN worker, keeping requested and applied state separate during a DSP rebuild.
+The adapter delegates to #5824's existing NB implementation; it adds no DSP,
+transport, thread or capability.
+
+The landed split-audio preference recorder consumes typed operator audio intents,
+not radio readback or external-receive suppression. Its production translation
+helpers are shared by the socket-free `split_audio_profile_test`, which covers
+repeated apply/arm/restore cycles, non-operator writes, suppression/reassertion,
+and keeping everyday RX gain/mute outside split learning.
 
 TX controls, RIT/XIT, FM repeater and digital offsets, diversity, panadapter
 commands and DAX/PCM transport are outside this batch. The separate audio-path

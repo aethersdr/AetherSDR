@@ -70,6 +70,7 @@ public:
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
     void setPanCenter(const QString& panId, double hz, PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanFrameRate(const QString& panId, int fps) override;

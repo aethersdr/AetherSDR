@@ -7473,7 +7473,7 @@ void MainWindow::applySplitOffsetKHz(double offsetKHz, int rxSliceId)
 // station. When the split ends, what they did is what comes back next time.
 // Nothing is configured.
 //
-// Every value is learned from the *CommandIssued signals, never from the
+// Every value is learned from typed operator audio intents, never from the
 // *Changed ones. SliceModel.h spells out why: the Changed signals also fire
 // when radio status is applied, so learning from them would record the radio's
 // own state as the operator's preference and replay it — a client re-asserting
@@ -7542,26 +7542,22 @@ void MainWindow::armSplitAudioMirror(SliceModel* rx, SliceModel* tx,
                   << "rxPanMovedByApply=" << applied.rxPanMoved
                   << "restored=" << applied.restored;
 
-    m_splitAudioConns.append(connect(tx, &SliceModel::audioMuteCommandIssued, this,
-        [this](bool mute) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxMute(mute);
-        }));
-    m_splitAudioConns.append(connect(tx, &SliceModel::audioGainCommandIssued, this,
-        [this](int gain) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxGain(gain);
-        }));
-    m_splitAudioConns.append(connect(tx, &SliceModel::audioPanCommandIssued, this,
-        [this](int pan) {
-            if (!m_splitAudioApplying) m_splitAudioRecorder.noteTxPan(pan);
+    m_splitAudioConns.append(connect(tx, &SliceModel::receiveAudioRequested, this,
+        [this](const SliceAudioRequest& request) {
+            if (!m_splitAudioApplying) {
+                m_splitAudioRecorder.noteTxAudioIntent(request);
+            }
         }));
     if (rx) {
         // RX pan only. Its volume and mute are the operator's everyday
         // listening level and stay out of this entirely (#2242) — a split must
         // not come back later and change how the radio sounds the rest of the
         // time.
-        m_splitAudioConns.append(connect(rx, &SliceModel::audioPanCommandIssued, this,
-            [this](int pan) {
-                if (!m_splitAudioApplying) m_splitAudioRecorder.noteRxPan(pan);
+        m_splitAudioConns.append(connect(rx, &SliceModel::receiveAudioRequested, this,
+            [this](const SliceAudioRequest& request) {
+                if (!m_splitAudioApplying) {
+                    m_splitAudioRecorder.noteRxAudioIntent(request);
+                }
             }));
     }
 }

@@ -72,8 +72,8 @@ struct SplitAudioProfile {
 
 // Marks an audio write as the OPERATOR's own, for as long as it is in scope.
 //
-// SliceModel emits audio*CommandIssued for every caller of its setters — the
-// operator's controls, but also TCI (rx_mute, rx_balance), SmartCAT (ZZMA/ZZMB,
+// SliceModel emits operator-origin receiveAudioRequested for its setters —
+// the operator's controls, but also TCI (rx_mute, rx_balance), SmartCAT (ZZMA/ZZMB,
 // ZZLB/ZZLF), rigctld MUTE, Mute All, RADE and memory recall. Only the first
 // kind is a preference: a logger muting VFO B over TCI must not wipe the
 // arrangement, and a CAT pan must not be replayed on every split. So the
@@ -99,7 +99,7 @@ private:
 // The decision of what counts as a preference — and what the RX pan has to be
 // put back to — does not need a window, a radio, or a slice, so it is here
 // where it can be tested directly. MainWindow owns one of these, forwards the
-// *CommandIssued signals into the note* methods, and asks merge() for the
+// typed operator audio intents into the note* methods, and asks merge() for the
 // profile to store.
 //
 // It also has to outlive the TX slice: when the radio removes it out of band,
@@ -130,7 +130,7 @@ public:
                            || m_txPanTouched || m_rxPanTouched);
     }
 
-    // Operator-issued changes only. Every caller is a *CommandIssued signal,
+    // Operator-issued changes only. Every caller is an operator-origin intent,
     // which does not fire for radio status echoes — so a pan moved by another
     // client on the radio, or the front panel, never arrives here. And a note
     // counts only inside a SplitAudioOperatorEdit, which drops the writes this
@@ -145,6 +145,31 @@ public:
         m_rxPanTouched = true;
         m_rxPanMovedByOperator = true;   // survives forgetTouched(): restore duty
         m_rxPan = pan;
+    }
+
+    // Keep this GUI-owned recorder independent of the engine request header,
+    // as with the slice-generic apply/monitor helpers below. Production and
+    // tests use the same typed-intent translation, not copied signal wiring.
+    template<class AudioRequest>
+    void noteTxAudioIntent(const AudioRequest& request)
+    {
+        if (!request.valid() || request.origin != AudioRequest::Origin::Operator) {
+            return;
+        }
+        switch (request.field) {
+        case AudioRequest::Field::Gain: noteTxGain(request.value); break;
+        case AudioRequest::Field::Mute: noteTxMute(request.value != 0); break;
+        case AudioRequest::Field::Pan: noteTxPan(request.value); break;
+        }
+    }
+
+    template<class AudioRequest>
+    void noteRxAudioIntent(const AudioRequest& request)
+    {
+        if (request.valid() && request.origin == AudioRequest::Origin::Operator
+            && request.field == AudioRequest::Field::Pan) {
+            noteRxPan(request.value);
+        }
     }
 
     // The profile to store. Learned fields CARRY FORWARD: `existing` was

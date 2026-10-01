@@ -568,6 +568,27 @@ void demoAndColdRefusal()
 #endif
 }
 
+void ananNoiseBlankerDispatch()
+{
+    anan::AnanBackend backend;
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
+              SliceDspRequest::Field::Enabled, true, 71}) == ReceiveDispatch::Dispatched
+              && backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 71,
+          "typed ANAN blanker intent reaches the existing backend implementation");
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
+              SliceDspRequest::Field::Level, false, 35}) == ReceiveDispatch::Dispatched
+              && !backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 35,
+          "typed ANAN blanker preserves the enable/level pair for either edited field");
+    check(backend.requestSliceDsp(1, {SliceDspRequest::Feature::Nb,
+              SliceDspRequest::Field::Enabled, true, 90}) == ReceiveDispatch::Unsupported
+              && backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+                  SliceDspRequest::Field::Enabled, true, 90}) == ReceiveDispatch::Unsupported
+              && backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
+                  SliceDspRequest::Field::Level, true, 101}) == ReceiveDispatch::Unsupported
+              && !backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 35,
+          "invalid identities, unsupported DSP and invalid levels cannot alter ANAN NB state");
+}
+
 void hl2WorkerDispatch()
 {
     hl2::Hl2Backend backend;
@@ -627,6 +648,7 @@ int main(int argc, char** argv)
     receiveControlContracts();
     icomCommandsAndObservations();
     hostConfiguration();
+    ananNoiseBlankerDispatch();
     hl2WorkerDispatch();
     demoAndColdRefusal();
     return failures == 0 ? 0 : 1;
