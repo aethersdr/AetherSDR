@@ -1,9 +1,9 @@
 # tests/
 
-Automated unit tests — `*_test.cpp` files compiled by CMake and run
-in CI, except the retired fixtures listed under "Network-fixture
-boundary" below, which stay in source for history but are not
-configured or compiled. To run the suite locally:
+Automated unit tests — `*_test.cpp` files declared in `tests.cmake`,
+compiled by CMake and run in CI. A few targets are opt-in (an `option()`
+defaulting OFF) or manual (`EXCLUDE_FROM_ALL`); "Network-fixture boundary"
+below lists them and how to enable each. To run the suite locally:
 
 ```sh
 cmake -B build -S .
@@ -73,6 +73,16 @@ Three HL2 tests are explicit rather than part of the default graph:
   The test fingerprints the simulator before it can key. The weekly sanitizer
   lanes build it for compile coverage; without a simulator it skips honestly
   (exit 77, reported by ctest as Skipped).
+
+Other targets outside the default graph:
+
+- `weather_radar_texture_gl_test` needs a real OpenGL 3.2 context, which no CI
+  lane has: enable it with `-DAETHER_ENABLE_RADAR_GL_TEST=ON` on a machine
+  with a GPU.
+- `rigctld_test`, `CAT_TS-2000_test` and `CAT_Flex_test` are manual clients
+  for a running AetherSDR (CAT ports enabled for the CAT ones). They are
+  `EXCLUDE_FROM_ALL` and never registered; build one by name, e.g.
+  `cmake --build build --target rigctld_test`.
 
 **Not to be confused with [`/docs/qa/`](../docs/qa/)**, which holds
 *manual* QA checklists and test plans — human procedures for features

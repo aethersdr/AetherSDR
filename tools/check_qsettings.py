@@ -40,14 +40,45 @@ _STRIP = re.compile(
 )
 
 
+# A numeric literal's digit separators (1'000, 0xFF'FF) are not quotes. Drop
+# them before stripping, or the span between two of them reads as a char
+# literal and hides the code on that line. A digit right after a quote or a
+# word character ('1', u8'x') does not start a numeric literal.
+_NUMBER = re.compile(r"(?<!['\w])\d[\w.']*")
+
+
 def uses_qsettings(text: str) -> bool:
+    text = _NUMBER.sub(lambda m: m.group(0).replace("'", ""), text)
     return bool(_TOKEN.search(_STRIP.sub(" ", text)))
+
+
+_SELF_TEST = [
+    ("QSettings s;", True),
+    ("int a = 1'000; QSettings settings; int b = 2'000;", True),
+    ("auto m = 0xFF'FF; QSettings s; auto n = 0b1010'1010;", True),
+    ("char c = '1'; QSettings s; char d = '2';", True),
+    ("auto c = u8'x'; QSettings s; auto d = u8'y';", True),
+    ("// QSettings is banned\nconst char* x = \"QSettings\";", False),
+    ("void migrateFromQSettings();", False),
+    ("int a = 1'000; /* QSettings */ int b = 2'000;", False),
+]
+
+
+def self_test() -> list[str]:
+    return [f"self-test: uses_qsettings({src!r}) should be {want}"
+            for src, want in _SELF_TEST if uses_qsettings(src) != want]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     parser.add_argument("--strict", action="store_true", help="exit 1 on any finding")
     args = parser.parse_args()
+
+    broken = self_test()
+    if broken:
+        for line in broken:
+            print(f"QSETTINGS: {line}")
+        return 1
 
     users = set()
     for path in sorted(SRC.rglob("*")):
