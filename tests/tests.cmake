@@ -7324,6 +7324,13 @@ target_include_directories(slice_rit_xit_seam_test PRIVATE src tests)
 target_link_libraries(slice_rit_xit_seam_test PRIVATE aethercore Qt6::Core)
 add_test(NAME slice_rit_xit_seam_test COMMAND slice_rit_xit_seam_test)
 
+# #6052: a late transmit block must not become keyed zeros in mid-over. Drives
+# MetisClient's TX IQ queue in virtual time (EP2 samples) — no socket, no clock.
+add_executable(hl2_tx_queue_jitter_test tests/hl2_tx_queue_jitter_test.cpp)
+target_include_directories(hl2_tx_queue_jitter_test PRIVATE src tests)
+target_link_libraries(hl2_tx_queue_jitter_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_queue_jitter_test COMMAND hl2_tx_queue_jitter_test)
+
 # #5497: the unkey unmute waits for the radio's T/R, and the MOX-off is queued
 # ahead of it. An ordering test with a clock in it — no WDSP, no socket.
 add_executable(hl2_unkey_hold_test tests/hl2_unkey_hold_test.cpp)
