@@ -90,7 +90,7 @@ Complete this preflight before building or running any test. It overrides the
 parallel-work instruction below, and it gates *executing* a socket-owning
 target — it does not suspend the requirement to finish and post the review.
 
-Read `AGENTS.md`'s "Test-layer boundary". Fetch the PR's own sources before
+Read "Test-layer boundary" in `docs/agents/tests-ci.md`. Fetch the PR's own sources before
 inspecting anything — `gh pr diff <PR>`, or `git fetch origin pull/<PR>/head`
 then `git show FETCH_HEAD:<path>`; never read the working tree, which is the
 base branch and will pass this preflight vacuously on a PR that does add a
@@ -323,7 +323,7 @@ Read the diff against each of these; cite the specific rule when flagging:
 - **CMake contract** — any target compiling `AppSettings.cpp` uses
   `${AETHER_SETTINGS_SOURCES}` and joins `AETHER_SETTINGS_CONSUMERS`; tests
   isolate via `TestSettingsProfile.h` (`AETHER_SETTINGS_DIR`).
-- **AGENTS.md § "In-flight: aetherd engine/UI decoupling"** — the migration
+- **`docs/agents/backends.md`** (the aetherd / engine-boundary sub-doc of AGENTS.md) — the migration
   ratchets, which the settings and capability rules above do not reach:
   EB1/EB2/EB3 (`tools/check_engine_boundary.py`), the capability-record and
   command-plane freezes, the build-target link rules (`aethercore` never

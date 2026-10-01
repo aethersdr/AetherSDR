@@ -4,7 +4,7 @@
 before suggesting non-trivial code. This file holds only the highest-
 priority must-knows that fit in Copilot's chat context window.
 
-## Five must-knows before suggesting code
+## Must-knows before suggesting code
 
 1. **Signed commits required on `main`.** Branch protection enforces
    it. See `docs/COMMIT-SIGNING.md` for setup; the doc has explicit AI
@@ -17,20 +17,21 @@ priority must-knows that fit in Copilot's chat context window.
    spec. Commit-message format: `Short description (#NNNN). Principle <N>.`
    when the change is principle-relevant.
 
-3. **`bin/validate-diff.sh` is the merge gate, enforced by
-   infrastructure** (Principle XII: Sandbox By Infrastructure, Not By
-   Prompt). Don't suggest patterns that try to bypass it; the gate
-   rejects PRs that touch protected paths regardless of prompt-level
-   intent.
+3. **Enforcement is by infrastructure, not prompt** (Principle XII):
+   branch protection (required CI checks, CODEOWNERS review, signed
+   commits) for every contributor, plus `bin/validate-diff.sh` — a
+   path allow-list in the AetherClaude orchestrator's own repo that
+   gates that bot's PRs. Don't suggest patches that try to work
+   around either.
 
 4. **Use `AppSettings`, NOT `QSettings`.** Persist as **nested JSON
    under one root key** per feature (Principle V). Example: a feature
    stores `{"enabled": true, "mode": "auto"}` under `AppSettings["MyFeature"]`,
-   backed by the SQLite store (RFC #4603). Credentials go to QtKeychain,
-   never the settings store.
-   not `MyFeatureEnabled` + `MyFeatureMode` as flat keys.
+   not `MyFeatureEnabled` + `MyFeatureMode` as flat keys. Backed by the
+   SQLite store (RFC #4603). Credentials go to QtKeychain, never the
+   settings store.
 
-5. **All meter UI uses `MeterSmoother`** (AGENTS.md convention). Do not
+5. **All meter UI uses `MeterSmoother`** (`docs/agents/gui.md`). Do not
    suggest envelope followers, `std::pow`/`exp` smoothing, or
    asymmetric `kAlpha` blenders for new meter widgets.
 
