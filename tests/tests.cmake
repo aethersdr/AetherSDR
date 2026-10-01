@@ -779,6 +779,13 @@ add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
 
+# Releasing the noise-blanker hold must not flush the stage: the blanker still
+# blanks impulses in the first 200 ms after the edge, unlike a re-enabled one.
+add_executable(wdsp_nb_hold_test tests/wdsp_nb_hold_test.cpp)
+target_link_libraries(wdsp_nb_hold_test PRIVATE aethercore)
+add_test(NAME wdsp_nb_hold_test COMMAND wdsp_nb_hold_test)
+set_tests_properties(wdsp_nb_hold_test PROPERTIES TIMEOUT 30)
+
 # Socket-free lifetime checks for the two process-global FFTW planners.
 # Uses real NR2/NR4/RTL constructors and destructors, without radio sockets.
 add_executable(fftw_planner_lock_test tests/fftw_planner_lock_test.cpp)
