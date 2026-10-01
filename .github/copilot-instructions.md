@@ -12,7 +12,7 @@ priority must-knows that fit in Copilot's chat context window.
 
 2. **The AetherSDR Constitution governs every contribution.** See
    `CONSTITUTION.md` (canonical: `.specify/memory/constitution.md`).
-   14 principles, structured per Cisco's
+   Structured per Cisco's
    [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
    spec. Commit-message format: `Short description (#NNNN). Principle <N>.`
    when the change is principle-relevant.

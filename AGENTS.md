@@ -82,11 +82,10 @@ When helping with AetherSDR:
   workflows. Verify with `git log --show-signature -1` after the first commit.
 - **Read the AetherSDR Constitution before writing or reviewing code.**
   Canonical source: `.specify/memory/constitution.md`; byte-identical mirror at
-  `CONSTITUTION.md`. 14 principles (constitution v2.0.0): 7 AetherSDR-domain
-  principles (FlexLib authority, radio-authoritative live state,
-  radio-persistable settings, clean-room contributions, per-feature config
-  ownership, transmit-on-intent, boundary input validation) + 7 defensive
-  engineering principles adopted from Cisco's
+  `CONSTITUTION.md`. AetherSDR-domain principles (FlexLib authority,
+  radio-authoritative live state, radio-persistable settings, clean-room
+  contributions, per-feature config ownership, transmit-on-intent, boundary
+  input validation) plus defensive engineering principles adopted from Cisco's
   [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
   (Evidence Over Assertion, Surface Only What Survives, Claims Are Atomic And
   Mortal, Fixes Are Demonstrated, Sandbox By Infrastructure, Operator Outranks

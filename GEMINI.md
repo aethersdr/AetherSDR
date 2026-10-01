@@ -13,7 +13,7 @@ the must-knows that fit in Gemini's chat context efficiently.
    yourself or the contributor at that doc for setup.
 
 2. **The AetherSDR Constitution governs every contribution.** See
-   [`CONSTITUTION.md`](CONSTITUTION.md). 14 principles, structured
+   [`CONSTITUTION.md`](CONSTITUTION.md), structured
    per Cisco's
    [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
    spec. Commit-message format: `Short description (#NNNN). Principle <N>.`
