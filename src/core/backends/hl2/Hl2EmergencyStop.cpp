@@ -22,14 +22,53 @@ namespace {
 // lifetime it cannot reason about, and these have static storage duration for
 // the whole process.
 //
-// The armed flag is the ONLY synchronisation. arm() fills the payload first and
-// publishes the descriptor last with a release store; fire() acquires the
-// descriptor before reading anything else. That ordering is what makes a
-// handler firing halfway through arm() see either the complete previous state
-// or nothing at all — never a descriptor paired with someone else's address.
-std::atomic<int>  g_fd{-1};
-sockaddr_in       g_addr{};
-std::uint8_t      g_packet[64]{};
+// THE PAYLOAD IS IMMUTABLE ONCE PUBLISHED, and that is the synchronisation.
+// arm() fills a slot NO HANDLER CAN BE LOOKING AT, then publishes it with a
+// single release store; fire() acquire-loads the pointer once and reads only
+// through it. That is what makes a handler firing halfway through arm() see
+// either the complete previous target or the complete new one — never a
+// descriptor paired with someone else's address.
+//
+// THAT GUARANTEE USED TO BE CLAIMED HERE AND NOT DELIVERED, which is the defect
+// aethersdr/AetherSDR#4581 is about. The previous shape kept ONE mutable
+// payload: arm() stored -1 into the descriptor "to stop any concurrent fire()",
+// then memset the address in place, then republished. It does not stop a
+// handler whose acquire-load had ALREADY returned the previous descriptor — an
+// atomic store cannot reach back and change a load that has happened — and that
+// handler went on to read the address while the memset was running. Signals are
+// delivered to an arbitrary thread, so the handler need not be the arming one.
+//
+// No memory order on the disarming store closes that. An ordering constrains
+// which other writes a load is guaranteed to see ALONGSIDE a value; it does not
+// constrain WHICH VALUE a racing load may return. Not mutating what a handler
+// may still be reading is what closes it.
+//
+// TWO SLOTS ARE ENOUGH. Reaching the slot a handler is reading would take two
+// further arms — two reconnects — inside the few microseconds of three sendto()
+// calls, in a process that is already on its way out because a terminating
+// signal has been delivered.
+struct StopTarget {
+    sockaddr_in  addr{};
+    std::uint8_t packet[64]{};
+    // qintptr, not int. The value arrives from QUdpSocket::socketDescriptor() as
+    // qintptr and is used as SOCKET (UINT_PTR) on Windows, so an int here
+    // narrowed a 64-bit handle on Win64. Windows hands out small socket handles
+    // in practice, so this was never observed to bite; it is fixed because it
+    // costs nothing. The cast to the platform's own type happens at the sendto()
+    // call and nowhere else. (#4581)
+    qintptr      fd{-1};
+};
+
+// Every member is constant-initialised, so these are alive before main() and a
+// handler installed at any point has something well-formed to read.
+StopTarget g_slots[2];
+unsigned   g_nextSlot = 0;                    // arm() only; never read by a handler
+std::atomic<StopTarget*> g_armed{nullptr};
+
+// A handler may only touch lock-free atomics, and this pointer load is the
+// entire synchronisation budget fire() has.
+static_assert(std::atomic<StopTarget*>::is_always_lock_free,
+              "the armed pointer is loaded from a signal handler");
 
 // Repeats of the stop datagram. UDP, 64 bytes, and the cost of losing the only
 // copy is a physical power cycle — so send it more than once.
@@ -66,38 +105,55 @@ void armEmergencyStop(qintptr fd, const QHostAddress& host, quint16 port,
         return;
     }
 
-    g_fd.store(-1, std::memory_order_relaxed);   // stop any concurrent fire()
+    // Fill the slot that is NOT the published one. g_nextSlot advances only
+    // here, and only after a publish, so the slot written below is never the
+    // slot g_armed points at — nothing a handler can be reading is touched.
+    StopTarget& slot = g_slots[g_nextSlot & 1u];
+    std::memset(&slot.addr, 0, sizeof(slot.addr));
+    slot.addr.sin_family = AF_INET;
+    slot.addr.sin_port = htons(port);
+    slot.addr.sin_addr.s_addr = htonl(v4);
+    std::memcpy(slot.packet, stopPacket.data(), sizeof(slot.packet));
+    slot.fd = fd;
 
-    std::memset(&g_addr, 0, sizeof(g_addr));
-    g_addr.sin_family = AF_INET;
-    g_addr.sin_port = htons(port);
-    g_addr.sin_addr.s_addr = htonl(v4);
-    std::memcpy(g_packet, stopPacket.data(), sizeof(g_packet));
-
-    // Publish LAST. Everything above must be visible to a handler that sees
-    // this store.
-    g_fd.store(static_cast<int>(fd), std::memory_order_release);
+    // Publish LAST, and as a SINGLE store. Everything above must be visible to a
+    // handler that sees this pointer, and the descriptor must not become visible
+    // ahead of the address it belongs to.
+    g_armed.store(&slot, std::memory_order_release);
+    ++g_nextSlot;
 }
 
 void disarmEmergencyStop() noexcept
 {
-    g_fd.store(-1, std::memory_order_release);
+    // A handler that has already loaded the pointer still completes its sends;
+    // that is harmless, because the target it holds is complete and the socket
+    // is still open until MetisClient::stop() closes it — which is why stop()
+    // disarms before the close and not after.
+    g_armed.store(nullptr, std::memory_order_release);
 }
 
 void fireEmergencyStop() noexcept
 {
-    const int fd = g_fd.load(std::memory_order_acquire);
-    if (fd < 0)
+    // ONE load, and everything else read through the pointer it returned. Loading
+    // the target twice would reintroduce exactly what #4581 was about.
+    const StopTarget* target = g_armed.load(std::memory_order_acquire);
+    if (!target) {
         return;
+    }
 
     for (int i = 0; i < kStopRepeats; ++i) {
         // sendto() is on POSIX's async-signal-safe list. Nothing else in this
         // function allocates, locks, or calls into Qt — that is the whole
         // reason the payload was built in advance.
-        (void)::sendto(static_cast<socket_t>(fd),
-                       reinterpret_cast<const char*>(g_packet), sizeof(g_packet),
-                       0, reinterpret_cast<const sockaddr*>(&g_addr),
-                       sizeof(g_addr));
+        //
+        // The descriptor is narrowed HERE and nowhere else: socket_t is int on
+        // POSIX and SOCKET (UINT_PTR) on Windows, and this call is the one place
+        // the platform's own type is the correct one.
+        (void)::sendto(static_cast<socket_t>(target->fd),
+                       reinterpret_cast<const char*>(target->packet),
+                       sizeof(target->packet), 0,
+                       reinterpret_cast<const sockaddr*>(&target->addr),
+                       sizeof(target->addr));
     }
 }
 
