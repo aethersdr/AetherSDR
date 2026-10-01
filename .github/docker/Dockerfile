@@ -80,7 +80,7 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon-x11-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Qt 6.12.0 LTS (binary pin, and the source floor — #5487) ────────────
+# ── Qt 6.12.0 LTS (binary pin, and the source floor — #5487, #6055) ─────
 # Version and module list deliberately match appimage.yml and the Windows leg
 # in ci.yml, so every artifact and every CI check compiles against one Qt.
 # Bumping it means bumping all three together. Linux/mac still use nested
