@@ -214,7 +214,7 @@ int main(int argc, char** argv)
     }
 
     // ---- nearestDdc0RateKsps: nearest by RATIO, not linear distance ----
-    // Mirrors hl2_backend_test's own span-snap table -- HERMES.md §15.1:
+    // Mirrors hl2_backend_seam_test's span-snap table -- HERMES.md §15.1:
     // these rates are octave-spaced and zoom is multiplicative, so a plain
     // linear "closest wins" search is provably wrong for a request between
     // the geometric and arithmetic mean of two adjacent rates. ANAN's first
@@ -233,7 +233,7 @@ int main(int argc, char** argv)
             {384, 384, "an exact rate is taken exactly"},
             {100, 96, "100 ksps snaps DOWN to 96 ksps, not up to 192 ksps"},
             // THE case that pins ratio-nearest rather than linear-nearest --
-            // see hl2_backend_test's own identical row for the exact math
+            // see hl2_backend_seam_test's identical row for the exact math
             // (geometric mean 135.8, arithmetic mean 144, so 140 falls on
             // opposite sides of the two rules). Without this row the log()
             // could be deleted and the suite would stay green.

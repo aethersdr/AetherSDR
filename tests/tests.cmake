@@ -1093,35 +1093,6 @@ target_include_directories(icom_power_clamp_model_test PRIVATE src tests)
 target_link_libraries(icom_power_clamp_model_test PRIVATE aethercore Qt6::Core)
 add_test(NAME icom_power_clamp_model_test COMMAND icom_power_clamp_model_test)
 
-# Retired fake-radio fixtures. Positive session and backend convergence is
-# certified against real firmware through the automation bridge and radiocert;
-# deterministic protocol/model policy stays in socket-free tests. Keep these
-# declarations as source history, but do not configure, compile, or register
-# them: they add network-fixture compile and wait cost to every default build.
-#[==[
-# IcomCIV phases 0-3 end to end — the session against a fake IC-705 on
-# localhost. This is what proves the ORDER of the RS-BA1 handshake, which is the
-# part of the protocol Icom documents nowhere.
-add_executable(icom_session_test
-    tests/icom_session_test.cpp
-    src/core/backends/icom/IcomSession.cpp
-    src/core/backends/icom/IcomStream.cpp
-    src/core/backends/icom/IcomProtocol.cpp
-    src/core/backends/icom/CivCodec.cpp
-    src/core/backends/icom/IcomScope.cpp
-    src/core/backends/icom/IcomAudio.cpp)
-target_include_directories(icom_session_test PRIVATE src tests)
-target_link_libraries(icom_session_test PRIVATE Qt6::Core Qt6::Network)
-add_test(NAME icom_session_test COMMAND icom_session_test)
-
-# IcomCIV backend seam test — the IRadioBackend implementor against the fake
-# IC-705, with the TCI/WSJT-X audio contract as the load-bearing assertion.
-add_executable(icom_backend_test tests/icom_backend_test.cpp)
-target_include_directories(icom_backend_test PRIVATE src tests)
-target_link_libraries(icom_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME icom_backend_test COMMAND icom_backend_test)
-]==]
-
 # IcomCIV live probe — REQUIRES A REAL RADIO, so deliberately NOT registered
 # with add_test(). Receive-only: it never sends a PTT command.
 #   cmake --build build --target icom_live_probe
@@ -1159,31 +1130,6 @@ add_executable(hl2_live_band_filter_probe EXCLUDE_FROM_ALL
     tests/hl2_live_band_filter_probe.cpp)
 target_include_directories(hl2_live_band_filter_probe PRIVATE src)
 target_link_libraries(hl2_live_band_filter_probe PRIVATE aethercore Qt6::Core Qt6::Network)
-
-# Retired fake-radio fixtures. Positive HL2 lifecycle and transport convergence
-# moves to the automation bridge; socket-free protocol and policy tests remain.
-# Keep the declarations for history without making them build or test targets.
-#[==[
-# A killed AetherSDR must still release the radio. A child process runs a real
-# MetisClient against a fake radio; the Python driver kills it and requires a
-# metis-stop datagram to arrive. End-to-end on purpose — see the .py header.
-add_executable(hl2_signal_stop_child tests/hl2_signal_stop_child.cpp)
-target_include_directories(hl2_signal_stop_child PRIVATE src)
-target_link_libraries(hl2_signal_stop_child PRIVATE aethercore Qt6::Core Qt6::Network)
-find_package(Python3 COMPONENTS Interpreter)
-if(NOT WIN32 AND Python3_Interpreter_FOUND)
-    add_test(NAME hl2_signal_stop_test
-             COMMAND ${Python3_EXECUTABLE}
-                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/hl2_signal_stop_test.py
-                     $<TARGET_FILE:hl2_signal_stop_child>)
-endif()
-
-# HL2 MetisClient loopback test — drives the UDP wire against a fake HL2.
-add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
-target_include_directories(hl2_metis_client_test PRIVATE src)
-target_link_libraries(hl2_metis_client_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME hl2_metis_client_test COMMAND hl2_metis_client_test)
-]==]
 
 # HL2 receiver-count restart — a fake radio that "loses" a metis-start, proving
 # the restart retries it and that the recovery is not mistaken for a reconnect.
@@ -1381,36 +1327,6 @@ target_link_libraries(hl2_trim_autorepeat_test PRIVATE Qt6::Core Qt6::Widgets Qt
 add_test(NAME hl2_trim_autorepeat_test COMMAND hl2_trim_autorepeat_test)
 set_tests_properties(hl2_trim_autorepeat_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-
-# Retired fake-radio fixtures. Positive backend and telemetry convergence is
-# certified against real hardware; deterministic assertions that survive are
-# extracted into socket-free tests rather than keeping a localhost peer in the
-# default compile and CTest graph.
-#[==[
-# HL2 backend — IRadioBackend seam contract against a capped fake HL2.
-add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
-target_include_directories(hl2_backend_test PRIVATE src)
-target_link_libraries(hl2_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME hl2_backend_test COMMAND hl2_backend_test)
-
-# HL2 transport telemetry — the IRadioBackend::linkStats seam that feeds the
-# heartbeat indicator, the status-bar Network field and the diagnostics pane on
-# a family that owns no RadioConnection and no PanadapterStream.
-add_executable(hl2_link_stats_test tests/hl2_link_stats_test.cpp)
-target_include_directories(hl2_link_stats_test PRIVATE src tests)
-target_link_libraries(hl2_link_stats_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME hl2_link_stats_test COMMAND hl2_link_stats_test)
-
-# The CONSUMER half of the same seam. The backend can publish a perfect snapshot
-# while every readout downstream still lies, so this drives a real RadioModel
-# against a fake HL2: the readouts leaving their structural zero, the
-# absent-vs-zero predicates on BOTH sides of the disconnect edge, and the
-# per-session reset the two scoring-session entry points share.
-add_executable(hl2_link_stats_model_test tests/hl2_link_stats_model_test.cpp)
-target_include_directories(hl2_link_stats_model_test PRIVATE src tests)
-target_link_libraries(hl2_link_stats_model_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
-]==]
 
 if(AETHER_BACKEND_RTL)
     # Socket-free RTL-SDR backend seam, DSP, and discovery contract.
@@ -4156,21 +4072,6 @@ if(PYTHON3_EXECUTABLE)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_seam_probe_table.py)
 endif()
 
-# Retired local-listener fixture. Positive behavior is covered through the live
-# bridge; deterministic boundary behavior belongs in socket-free tests.
-#[==[
-# JSON boundary regression for shared bridge `id` normalization. Exercises the
-# real QLocalSocket request path and tune dispatcher without touching a radio.
-add_executable(automation_json_id_test
-    tests/automation_json_id_test.cpp
-)
-target_include_directories(automation_json_id_test PRIVATE src tests)
-target_link_libraries(automation_json_id_test PRIVATE
-    aethercore Qt6::Core Qt6::Network
-)
-add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
-]==]
-
 # Read-only external-device diagnostic registry and provider dispatch. The
 # platform-specific Ulanzi HID snapshot is supplied by MainWindow on macOS;
 # this test pins the bridge contract without requiring physical hardware.
@@ -4253,21 +4154,6 @@ add_executable(automation_boundary_core_test tests/automation_boundary_core_test
 target_include_directories(automation_boundary_core_test PRIVATE src tests)
 target_link_libraries(automation_boundary_core_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME automation_boundary_core_test COMMAND automation_boundary_core_test)
-
-# Retired local-listener fixture. Positive behavior is covered through the live
-# bridge; deterministic boundary behavior belongs in socket-free tests.
-#[==[
-# `connect wait` phase reporting + deferred connect-failure delivery (#4912).
-add_executable(automation_connect_wait_phase_test
-    tests/automation_connect_wait_phase_test.cpp
-)
-target_include_directories(automation_connect_wait_phase_test PRIVATE src tests)
-target_link_libraries(automation_connect_wait_phase_test PRIVATE
-    aethercore Qt6::Core Qt6::Network
-)
-add_test(NAME automation_connect_wait_phase_test
-         COMMAND automation_connect_wait_phase_test)
-]==]
 
 add_executable(gui_client_identity_policy_test
     tests/gui_client_identity_policy_test.cpp
@@ -4926,45 +4812,6 @@ target_include_directories(owned_single_shot_timer_test PRIVATE src)
 target_link_libraries(owned_single_shot_timer_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME owned_single_shot_timer_test COMMAND owned_single_shot_timer_test)
 
-# Retired local-listener fixtures. Their positive verb behavior is covered by
-# the live bridge; deterministic boundary behavior belongs in socket-free tests.
-#[==[
-# The bridge preserves dragAt, target-tune, memory-recall, and authenticated
-# positional requests across its bare and JSON protocol forms.
-# doubleClick / doubleClickAt verbs (#5068) — asserts the real Qt sequence
-# (Press, Release, DblClick, Release) and that mouseDoubleClickEvent fires,
-# which no number of clickAt calls can produce.
-add_executable(automation_double_click_test tests/automation_double_click_test.cpp)
-target_include_directories(automation_double_click_test PRIVATE src)
-target_link_libraries(automation_double_click_test PRIVATE
-    aethercore Qt6::Core Qt6::Network Qt6::Widgets
-)
-set_target_properties(automation_double_click_test PROPERTIES AUTOMOC ON)
-add_test(NAME automation_double_click_test COMMAND automation_double_click_test)
-set_tests_properties(automation_double_click_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-
-add_executable(automation_fm_repeater_verbs_test tests/automation_fm_repeater_verbs_test.cpp)
-target_include_directories(automation_fm_repeater_verbs_test PRIVATE src)
-target_link_libraries(automation_fm_repeater_verbs_test PRIVATE
-    aethercore Qt6::Core Qt6::Network Qt6::Widgets
-)
-set_target_properties(automation_fm_repeater_verbs_test PROPERTIES AUTOMOC ON)
-add_test(NAME automation_fm_repeater_verbs_test COMMAND automation_fm_repeater_verbs_test)
-set_tests_properties(automation_fm_repeater_verbs_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-
-add_executable(automation_drag_at_test tests/automation_drag_at_test.cpp)
-target_include_directories(automation_drag_at_test PRIVATE src)
-target_link_libraries(automation_drag_at_test PRIVATE
-    aethercore Qt6::Core Qt6::Network Qt6::Widgets
-)
-set_target_properties(automation_drag_at_test PROPERTIES AUTOMOC ON)
-add_test(NAME automation_drag_at_test COMMAND automation_drag_at_test)
-set_tests_properties(automation_drag_at_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-]==]
-
 # aetherd RFC 2.3 template — pan decode/normalize chain (incl. wnb_level guard).
 add_executable(aetherd_pan_decode_test tests/aetherd_pan_decode_test.cpp)
 target_include_directories(aetherd_pan_decode_test PRIVATE src)
@@ -5135,8 +4982,6 @@ add_test(NAME hl2_band_filter_frame_test COMMAND hl2_band_filter_frame_test)
 # health rows and the bandscope.enable verb on a default-constructed
 # Hl2Backend, which needs no socket because m_connected is the only thing a
 # peer buys. The positive path is certified against hardware, not faked here.
-# That section lives in this target and not in tests/hl2_backend_test.cpp,
-# which the retired-fixtures block below leaves with no target at all.
 add_executable(hl2_ep4_ingest_test tests/hl2_ep4_ingest_test.cpp)
 target_include_directories(hl2_ep4_ingest_test PRIVATE src tests)
 target_link_libraries(hl2_ep4_ingest_test PRIVATE aethercore Qt6::Core Qt6::Network)
@@ -7026,11 +6871,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_persist_diagnostics_test
     automation_server_gesture_test
     automation_device_diagnostics_test
-    automation_json_id_test
     automation_connect_family_test
-    automation_connect_wait_phase_test
-    automation_double_click_test
-    automation_drag_at_test
     automation_tx_watchdog_test
     automation_rn2_probe_test
     automation_nnr_probe_test

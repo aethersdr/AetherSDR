@@ -44,26 +44,17 @@ injected transport/state-machine tests rather than socket fixtures; and
 positive convergence against real firmware is proven through the automation
 bridge and `radiocert`, which certify by effect and cannot prove a non-event.
 
-The following 12 positive-convergence fixtures remain in source and as bracket
-comments in `tests.cmake` for history, but are not configured, compiled, or
-registered with CTest:
-
-- Icom: `icom_session_test` and `icom_backend_test`.
-- HL2: `hl2_signal_stop_test` and its helper, `hl2_metis_client_test`,
-  `hl2_backend_test`, `hl2_link_stats_test`, and
-  `hl2_link_stats_model_test`.
-- Automation server: `automation_json_id_test`,
-  `automation_connect_wait_phase_test`, `automation_double_click_test`,
-  `automation_fm_repeater_verbs_test`, and `automation_drag_at_test`.
+Their deterministic checks run socket-free: `icom_session_lease_test`,
+`icom_backend_seam_test`, `icom_civ_stall_test`, `icom_power_clamp_model_test`,
+the `hl2_backend_*_seam`/`hl2_link_stats_*_seam`/`hl2_metis_link_counters`
+tests, and `automation_boundary_core_test`/`automation_boundary_widgets_test`.
 
 Three socket fixtures remain registered until their negative assertions have
 socket-free replacements: `vkamp_connection_test` (bypass/antenna interlocks),
 `automation_server_gesture_test` (TX-keying refusals and cleanup), and
-`hl2_receiver_count_restart_test` (dropped Metis-start retry). The IC-9700
-capability-table assertion that used to carry this lived in
-`radio_capability_gating_test`, which was removed for intermittency — so
-RadioModel's application of that band ceiling to the transmit model now has no
-registered test at all, alongside its socket-free replacement in #5254.
+`hl2_receiver_count_restart_test` (dropped Metis-start retry). RadioModel's
+application of the IC-9700 band power ceiling is pinned by
+`icom_power_clamp_model_test`.
 
 Two HL2 tests are explicit rather than part of the default graph:
 

@@ -6,12 +6,6 @@
 // the mode is RTTY. The operator sees a mode they chose and hears a mode they
 // did not, and nothing in the path disagrees with them.
 //
-// WHY THIS TARGET IS SEPARATE. The natural home for a seam assertion is the
-// fake-radio fixture in hl2_backend_test.cpp — which is RETIRED inside a
-// commented block in tests/tests.cmake, so an assertion written there would be
-// compiled by nothing and green forever. tests.cmake already states the rule
-// beside hl2_pan_limits_declaration_test: "a declaration must not be pinned
-// only inside something that does not build." Same reasoning, same shape.
 //
 // WHAT IS AND IS NOT PINNED HERE. The lists and the relations between them are,
 // against the SAME accessors production reads rather than a retyped copy — a
