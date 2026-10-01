@@ -900,10 +900,10 @@ granularity, then **stop**: if tempted to subdivide one subsystem into several
 thin TUs, extract a real class instead (the #3557 direction) — that's the only
 move that actually decouples.
 
-Sibling TUs must **carry their includes explicitly** — the Linux CI image is on
-Qt 6.8.3 while macOS runs 6.11.x, so a header that resolves transitively on the
-newer Qt need not on 6.8.3; don't rely on transitive includes (this broke
-#3532). When you move the last user of a header out of `MainWindow.cpp`, drop
+Sibling TUs must **carry their includes explicitly** — Qt reshuffles its
+transitive includes between releases, and a distro Qt newer than the 6.12 pin
+is a supported build, so a header that resolves transitively on one Qt need
+not on another; don't rely on transitive includes (this broke #3532). When you move the last user of a header out of `MainWindow.cpp`, drop
 that `#include` too.
 
 Full map + decision guide:

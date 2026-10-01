@@ -237,7 +237,9 @@ void testRadioFallbackDropsHarmonicLoadTemp()
     auto* pa = tempButton(applet);
     auto* hl = applet.findChild<QPushButton*>(QStringLiteral("ampHlTempButton"));
     report("fallback readouts exist", pa != nullptr && hl != nullptr);
-    if (!pa || !hl) return;
+    if (!pa || !hl) {
+        return;
+    }
 
     applet.setDirectConnected(true);
     applet.setPaHeatsinkTemp(34.7f);

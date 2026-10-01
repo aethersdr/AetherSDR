@@ -71,8 +71,8 @@ public:
     // The PGXL reports two heatsink temperatures in degrees Celsius
     // (PowerGeniusXL User Guide v3.9.8, p. 55):
     //   PA: the power amplifier heatsink. Status key `temp`.
-    //   HL: the Harmonic Load heatsink. Status key `hltemp`, or `tempb` on
-    //       some firmware.
+    //   HL: the Harmonic Load heatsink. Captured status key `hltemp`.
+    //       `tempb` is also accepted, but has not been seen in a capture.
     // A FlexRadio relays only the PA heatsink temperature. The HL
     // temperature is available only over a direct connection to the PGXL.
     //
