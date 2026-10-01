@@ -78,6 +78,10 @@ if (-not $QtDir) {
 if (-not $QtDir -or -not (Test-Path "$QtDir\bin\windeployqt.exe")) {
     throw "Qt not found. Run scripts\setup\setup-qt.ps1, or pass -QtDir C:\Qt\6.x.y\msvc2022_64 (must contain bin\windeployqt.exe)."
 }
+# Export whichever kit won - an explicit -QtDir, QT_ROOT_DIR, or the cached
+# release Qt - so the setup-*.ps1 scripts below (setup-qtkeychain.ps1 resolves
+# Qt from QT_ROOT_DIR) build against the same Qt this script configures with.
+$env:QT_ROOT_DIR = $QtDir
 Write-Host "  MSVC + CMake + Ninja OK; Qt = $QtDir; jobs = $Jobs" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------

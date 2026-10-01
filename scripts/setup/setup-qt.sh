@@ -11,10 +11,17 @@
 # every CI leg and release workflow is checked against — with the same pinned
 # aqtinstall, into a per-user cache shared by every checkout:
 #
-#   Linux:  ${XDG_CACHE_HOME:-~/.cache}/aethersdr/qt/<version>-<revision>/
-#   macOS:  ~/Library/Caches/aethersdr/qt/<version>-<revision>/
+#   Linux:  ${XDG_CACHE_HOME:-~/.cache}/aethersdr/qt/
+#   macOS:  ~/Library/Caches/aethersdr/qt/
 #
-# (override with AETHER_QT_CACHE). CMake looks there on its own
+# (override with AETHER_QT_CACHE). Each install is an immutable generation,
+# gen/<version>-<revision>-<id>/, and <version>-<revision>.current names the
+# live one. A reinstall builds a new generation beside the old and publishes it
+# by atomically replacing that pointer file, so every checkout sees either the
+# old kit or the new one and never neither (Constitution XIV); the superseded
+# generation is deleted only after the pointer moves. No tree is ever renamed,
+# so the paths aqt patches into the kit (qmake, CMake, .pc files) stay true.
+# CMake reads the pointer on its own
 # (cmake/AetherQtPin.cmake), so after this script a plain `cmake -B build`
 # picks the pinned Qt up with no flags.
 #
@@ -85,16 +92,29 @@ if [ "$OS" = "Darwin" ]; then
 else
     CACHE_ROOT="${AETHER_QT_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/aethersdr/qt}"
 fi
-# The revision is part of the path: RC and final share a version string, and a
-# rebuilt Qt behind an unchanged pin must never be mistaken for the old one.
-INSTALL_ROOT="$CACHE_ROOT/$QT_VERSION-$QT_PACKAGE_REVISION"
-QT_PREFIX="$INSTALL_ROOT/$QT_VERSION/$KIT_DIR"
-STAMP="$INSTALL_ROOT/.aether-qt-stamp"
+# The revision is part of every name: RC and final share a version string, and
+# a rebuilt Qt behind an unchanged pin must never be mistaken for the old one.
+PIN_TAG="$QT_VERSION-$QT_PACKAGE_REVISION"
+POINTER="$CACHE_ROOT/$PIN_TAG.current"
+GEN_ROOT="$CACHE_ROOT/gen"
 STAMP_CONTENT="version=$QT_VERSION revision=$QT_PACKAGE_REVISION arch=$AQT_ARCH modules=$QT_MODULES aqt=$AQTINSTALL_VERSION"
 
+# The live generation's directory name, or nothing.
+CURRENT_GEN=""
+if [ -f "$POINTER" ]; then
+    CURRENT_GEN="$(head -n 1 "$POINTER")"
+fi
+prefix_of() { echo "$GEN_ROOT/$1/$QT_VERSION/$KIT_DIR"; }
+QT_PREFIX=""
+[ -n "$CURRENT_GEN" ] && QT_PREFIX="$(prefix_of "$CURRENT_GEN")"
+
 if [ "$PRINT_PREFIX" = 1 ]; then
-    echo "$QT_PREFIX"
-    exit 0
+    if [ -n "$QT_PREFIX" ] && [ -x "$QT_PREFIX/bin/qmake" ]; then
+        echo "$QT_PREFIX"
+        exit 0
+    fi
+    echo "Qt $QT_VERSION is not installed; run scripts/setup/setup-qt.sh" >&2
+    exit 1
 fi
 
 # True when version $1 is older than $2.
@@ -110,7 +130,8 @@ build_keychain() {
 }
 
 # ── Already installed? ───────────────────────────────────────────────────
-if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$STAMP_CONTENT" ] &&
+if [ -n "$CURRENT_GEN" ] && [ -f "$GEN_ROOT/$CURRENT_GEN/.aether-qt-stamp" ] &&
+   [ "$(cat "$GEN_ROOT/$CURRENT_GEN/.aether-qt-stamp")" = "$STAMP_CONTENT" ] &&
    [ -x "$QT_PREFIX/bin/qmake" ] &&
    [ "$("$QT_PREFIX/bin/qmake" -query QT_VERSION)" = "$QT_VERSION" ]; then
     echo "Qt $QT_VERSION ($QT_PACKAGE_REVISION) already installed at $QT_PREFIX"
@@ -134,7 +155,9 @@ if [ -n "$MIN_GLIBC" ]; then
 fi
 
 if [ "$OS" = "Darwin" ]; then
-    XCODE="$(xcodebuild -version 2>/dev/null | awk '/^Xcode/ {print $2}')"
+    # `|| true`: with only the Command Line Tools, xcodebuild exits non-zero,
+    # and under set -e that would end the script before the guidance below.
+    XCODE="$(xcodebuild -version 2>/dev/null | awk '/^Xcode/ {print $2}' || true)"
     if [ -z "$XCODE" ]; then
         die "Xcode not found. Qt $QT_VERSION needs Xcode $QT_MIN_XCODE+ (the Command Line
        Tools alone are not enough for Qt's SDK check)."
@@ -201,15 +224,34 @@ if [ ! -f "$VENV/.complete" ]; then
     touch "$VENV/.complete"
 fi
 
-STAGING="$CACHE_ROOT/.staging-$QT_VERSION-$QT_PACKAGE_REVISION-$$"
-trap 'rm -rf "$STAGING"' EXIT
-rm -rf "$STAGING"
+# Generations left by a run that was killed outright (no EXIT trap) are
+# unpublished and unfinished; their owning PID is in the name. Remove only
+# those whose owner is gone: a live one may be another checkout's install in
+# progress.
+mkdir -p "$GEN_ROOT"
+for d in "$GEN_ROOT/$PIN_TAG"-*; do
+    [ -d "$d" ] || continue
+    name="${d##*/}"
+    [ "$name" = "$CURRENT_GEN" ] && continue
+    [ -f "$d/.aether-qt-stamp" ] && continue
+    pid="${name##*-}"
+    if ! kill -0 "$pid" 2>/dev/null; then
+        echo "Removing an abandoned partial install: $name"
+        rm -rf "$d"
+    fi
+done
+
+# The new generation is built in its final location. Nothing points at it
+# until the pointer is replaced below, so a failure here removes only itself.
+NEW_GEN="$PIN_TAG-$(date +%s)-$$"
+NEW_DIR="$GEN_ROOT/$NEW_GEN"
+trap 'rm -rf "$NEW_DIR" "$POINTER.tmp.$$"' EXIT
 echo "Installing Qt $QT_VERSION $AQT_ARCH ($QT_MODULES) — about 2 GB..."
 # shellcheck disable=SC2086  # QT_MODULES is a deliberate word list
 "$VENV/bin/aqt" install-qt "$AQT_HOST" desktop "$QT_VERSION" "$AQT_ARCH" \
-    -m $QT_MODULES --outputdir "$STAGING"
+    -m $QT_MODULES --outputdir "$NEW_DIR"
 
-STAGED_PREFIX="$STAGING/$QT_VERSION/$KIT_DIR"
+STAGED_PREFIX="$(prefix_of "$NEW_GEN")"
 [ -x "$STAGED_PREFIX/bin/qmake" ] || die "aqt finished but left no qmake at $STAGED_PREFIX."
 GOT="$("$STAGED_PREFIX/bin/qmake" -query QT_VERSION)"
 [ "$GOT" = "$QT_VERSION" ] || die "aqt installed Qt $GOT, expected $QT_VERSION."
@@ -225,11 +267,21 @@ for m in $QT_MODULES; do
         die "aqt did not install Qt6$pkg ($m)."
 done
 
-rm -rf "$INSTALL_ROOT"
-mv "$STAGING" "$INSTALL_ROOT"
+echo "$STAMP_CONTENT" > "$NEW_DIR/.aether-qt-stamp"
+# Publish: rename(2) of a regular file over another on the same filesystem is
+# atomic, on GNU and BSD mv alike. Until this line the old generation is live;
+# from it on, the new one is.
+echo "$NEW_GEN" > "$POINTER.tmp.$$"
+mv -f "$POINTER.tmp.$$" "$POINTER"
 trap - EXIT
-echo "$STAMP_CONTENT" > "$STAMP"
+QT_PREFIX="$STAGED_PREFIX"
 echo "Qt $QT_VERSION installed at $QT_PREFIX"
+# Only now is the superseded generation unreferenced. A build configured
+# against it re-runs CMake on its next build (its cached Qt6_DIR is gone, so
+# find_package searches again and reads the new pointer).
+if [ -n "$CURRENT_GEN" ] && [ "$CURRENT_GEN" != "$NEW_GEN" ]; then
+    rm -rf "${GEN_ROOT:?}/$CURRENT_GEN"
+fi
 
 build_keychain
 

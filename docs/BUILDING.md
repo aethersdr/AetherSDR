@@ -158,8 +158,13 @@ minute on a fast connection.
 
 - **Where it goes:** `~/.cache/aethersdr/qt/` on Linux,
   `~/Library/Caches/aethersdr/qt/` on macOS, shared by every checkout. Set
-  `AETHER_QT_CACHE` to put it elsewhere. Builds link it by absolute path, so
-  delete it and they stop launching until you re-run the script.
+  `AETHER_QT_CACHE` to put it elsewhere. Each install is a generation under
+  `gen/`, and `<version>-<revision>.current` names the live one. A reinstall
+  builds the new generation alongside and switches the pointer in one atomic
+  step, so an interrupted or failed reinstall leaves the working Qt in place;
+  existing build directories re-run CMake on their next build and follow the
+  pointer. Builds link Qt by absolute path, so delete the cache and they stop
+  launching until you re-run the script.
 - **What it checks first**, so an unsupported machine is told before the
   download rather than after: glibc 2.34+ (x86_64) or 2.38+ (aarch64), Xcode
   16+ on macOS, a working `python3 -m venv` (on Debian, Ubuntu and Raspberry Pi

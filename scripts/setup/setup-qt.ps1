@@ -8,9 +8,14 @@
     cmake/qt-pin.env (the file every CI leg and release workflow is checked
     against) into a per-user cache shared by every checkout:
 
-        %LOCALAPPDATA%\aethersdr\qt\<version>-<revision>\
+        %LOCALAPPDATA%\aethersdr\qt\
 
-    (override with AETHER_QT_CACHE), then builds qtkeychain against it with
+    (override with AETHER_QT_CACHE), as an immutable generation directory
+    gen\<version>-<revision>-<id>\ that <version>-<revision>.current names.
+    A reinstall builds a new generation beside the old one and publishes it by
+    atomically replacing that pointer file, so every checkout sees the old kit
+    or the new one and never neither (Constitution XIV); the superseded
+    generation is deleted only afterwards. Then it builds qtkeychain against it with
     setup-qtkeychain.ps1. CMake looks there on its own (cmake/AetherQtPin.cmake),
     so afterwards a plain configure finds the pinned Qt with no -D flags.
 
@@ -82,14 +87,25 @@ $KitDir  = "msvc2022_64"
 
 $CacheRoot = $env:AETHER_QT_CACHE
 if (-not $CacheRoot) { $CacheRoot = Join-Path $env:LOCALAPPDATA "aethersdr\qt" }
-# Revision in the path for the reason setup-qt.sh gives: RC and final share a
-# version string.
-$InstallRoot  = Join-Path $CacheRoot "$QtVersion-$Revision"
-$QtPrefix     = Join-Path $InstallRoot "$QtVersion\$KitDir"
-$Stamp        = Join-Path $InstallRoot ".aether-qt-stamp"
+# Revision in every name for the reason setup-qt.sh gives: RC and final share
+# a version string. Layout and publish protocol match setup-qt.sh exactly.
+$PinTag       = "$QtVersion-$Revision"
+$Pointer      = Join-Path $CacheRoot "$PinTag.current"
+$GenRoot      = Join-Path $CacheRoot "gen"
 $StampContent = "version=$QtVersion revision=$Revision arch=$AqtArch modules=$($Pin['QT_MODULES']) aqt=$($Pin['AQTINSTALL_GIT_REF'])"
 
-if ($PrintPrefix) { Write-Output $QtPrefix; exit 0 }
+function Get-GenPrefix([string]$Gen) { Join-Path $GenRoot "$Gen\$QtVersion\$KitDir" }
+
+$CurrentGen = $null
+if (Test-Path $Pointer) { $CurrentGen = (Get-Content $Pointer -TotalCount 1).Trim() }
+$QtPrefix = $null
+if ($CurrentGen) { $QtPrefix = Get-GenPrefix $CurrentGen }
+
+if ($PrintPrefix) {
+    if ($QtPrefix -and (Test-Path (Join-Path $QtPrefix "bin\qmake.exe"))) { Write-Output $QtPrefix; exit 0 }
+    Write-Host "Qt $QtVersion is not installed; run scripts\setup\setup-qt.ps1"
+    exit 1
+}
 
 function Build-Keychain {
     if ($NoKeychain) { return }
@@ -109,9 +125,11 @@ function Build-Keychain {
 }
 
 # -- Already installed? ----------------------------------------------------
-$qmake = Join-Path $QtPrefix "bin\qmake.exe"
-if ((Test-Path $Stamp) -and ((Get-Content $Stamp -Raw).Trim() -eq $StampContent) -and
-    (Test-Path $qmake) -and ((& $qmake -query QT_VERSION) -eq $QtVersion)) {
+$stamp = $null
+if ($CurrentGen) { $stamp = Join-Path $GenRoot "$CurrentGen\.aether-qt-stamp" }
+if ($QtPrefix -and (Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $StampContent) -and
+    (Test-Path (Join-Path $QtPrefix "bin\qmake.exe")) -and
+    ((& (Join-Path $QtPrefix "bin\qmake.exe") -query QT_VERSION) -eq $QtVersion)) {
     Write-Host "Qt $QtVersion ($Revision) already installed at $QtPrefix" -ForegroundColor Green
     Build-Keychain
     exit 0
@@ -217,19 +235,34 @@ if ($sevenZip) {
     Write-Host "         (winget install 7zip.7zip) and re-run." -ForegroundColor Yellow
 }
 
-# Staged, then renamed into place, so an interrupted install never leaves a
-# half-populated kit for a later configure to trust.
-$Staging = Join-Path $CacheRoot ".staging-$QtVersion-$Revision-$PID"
-if (Test-Path $Staging) { Remove-Item -Recurse -Force $Staging }
+# Generations left by a run that was killed outright are unpublished and
+# unfinished; their owning PID ends the name. Remove only those whose owner is
+# gone - a live one may be another checkout's install in progress.
+New-Item -ItemType Directory -Force -Path $GenRoot | Out-Null
+foreach ($d in Get-ChildItem -Directory -Path $GenRoot -Filter "$PinTag-*" -ErrorAction SilentlyContinue) {
+    if ($d.Name -eq $CurrentGen) { continue }
+    if (Test-Path (Join-Path $d.FullName ".aether-qt-stamp")) { continue }
+    $owner = ($d.Name -split '-')[-1]
+    if (-not (Get-Process -Id $owner -ErrorAction SilentlyContinue)) {
+        Write-Host "Removing an abandoned partial install: $($d.Name)"
+        Remove-Item -Recurse -Force $d.FullName -ErrorAction SilentlyContinue
+    }
+}
+
+# The new generation is built in its final location; nothing points at it
+# until the pointer is replaced, so a failure removes only itself.
+$NewGen = "$PinTag-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())-$PID"
+$NewDir = Join-Path $GenRoot $NewGen
 # Parallel 7-Zip workers race to create the shared output root on a fresh
 # install (seen on CI); create it up front, as ci.yml does.
-$StagedPrefix = Join-Path $Staging "$QtVersion\$KitDir"
+$StagedPrefix = Get-GenPrefix $NewGen
 New-Item -ItemType Directory -Force -Path $StagedPrefix | Out-Null
+$published = $false
 
 try {
     Write-Host "Installing Qt $QtVersion $AqtArch ($($Pin['QT_MODULES'])) - about 2 GB..." -ForegroundColor Cyan
     $aqtArgs = @("install-qt", "windows", "desktop", $QtVersion, $AqtArch, "-m") + $Modules +
-               $extract + @("--outputdir", $Staging)
+               $extract + @("--outputdir", $NewDir)
     & $Aqt @aqtArgs
     if ($LASTEXITCODE -ne 0) { Fail "aqt install-qt failed (exit $LASTEXITCODE)." }
 
@@ -248,13 +281,34 @@ try {
         }
     }
 
-    if (Test-Path $InstallRoot) { Remove-Item -Recurse -Force $InstallRoot }
-    Move-Item -Path $Staging -Destination $InstallRoot
+    Set-Content -Path (Join-Path $NewDir ".aether-qt-stamp") -Value $StampContent -NoNewline
+
+    # Publish. File.Replace (ReplaceFileW) swaps the pointer's contents in one
+    # step on NTFS; the very first install has nothing to replace, so a plain
+    # rename publishes it. Until this point the old generation is live.
+    # [NullString]::Value, not $null: PowerShell turns $null into "" for a
+    # .NET string parameter, and Replace rejects an empty backup path.
+    $tmp = "$Pointer.tmp.$PID"
+    Set-Content -Path $tmp -Value $NewGen -NoNewline
+    if (Test-Path $Pointer) {
+        [System.IO.File]::Replace($tmp, $Pointer, [NullString]::Value)
+    } else {
+        [System.IO.File]::Move($tmp, $Pointer)
+    }
+    $published = $true
 } finally {
-    if (Test-Path $Staging) { Remove-Item -Recurse -Force $Staging -ErrorAction SilentlyContinue }
+    if (-not $published) {
+        Remove-Item -Recurse -Force $NewDir -ErrorAction SilentlyContinue
+        Remove-Item -Force "$Pointer.tmp.$PID" -ErrorAction SilentlyContinue
+    }
 }
-Set-Content -Path $Stamp -Value $StampContent -NoNewline
+$QtPrefix = $StagedPrefix
 Write-Host "Qt $QtVersion installed at $QtPrefix" -ForegroundColor Green
+# Only now is the superseded generation unreferenced. A build configured
+# against it re-runs CMake on its next build and picks up the new pointer.
+if ($CurrentGen -and $CurrentGen -ne $NewGen) {
+    Remove-Item -Recurse -Force (Join-Path $GenRoot $CurrentGen) -ErrorAction SilentlyContinue
+}
 
 Build-Keychain
 
