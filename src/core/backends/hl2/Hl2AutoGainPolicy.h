@@ -218,9 +218,8 @@ struct AutoGainConfig {
 // slots. A failed probe costs about one window of clipping.
 //   step 6 dB            clears the measured 3-5 dB clean->clipping knee
 //                        (d92-clip-observability); one probe undoes one attack.
-//   maxOffsetDb 24       four whole steps. May exceed the hardware (the LNA
-//                        folds `& 0x1F` above code 31; one board measured
-//                        ~17.8 dB usable, #5535); Hl2GainSplit.h clamps.
+//   maxOffsetDb 24       four whole steps. May exceed the hardware;
+//                        Hl2GainSplit.h clamps.
 //   base interval 30 s   one failed probe per interval = 0.33 % clip duty.
 //   max interval 480 s   four doublings; ~0.02 % clipping at the cap.
 //   probeConfirmMs 3 s   d92's fixed-gain control swung 0 % -> 90 % between

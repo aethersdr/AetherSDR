@@ -101,8 +101,9 @@ struct MemoryRecallDetails {
 //     string SIGNAL/SLOT, QSignalSpy capture) need it.
 //  5. TEARDOWN IS BOUNDED AND ORDERED. disconnectRadio() returns with no worker
 //     able to reach a seam signal: sources stopped, threads joined (or handed to
-//     a self-deleting reaper, as RtlSdrBackend does for a stuck open), and
-//     disconnected() emitted exactly once from the backend's thread. The
+//     a self-deleting reaper, as RtlSdrBackend does for a stuck open).
+//     disconnected() is emitted exactly once, from the backend's thread,
+//     before returning or asynchronously — never twice, never from a worker. The
 //     destructor completes the same drain and never waits on a
 //     BlockingQueuedConnection whose target may be waiting on this thread.
 //     Disconnecting signals does not drop calls already queued, so
