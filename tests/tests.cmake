@@ -73,6 +73,28 @@ unset(_aether_stray_registrations)
 # matters.
 get_property(_aether_targets_before_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 
+# ── Bound: the executables this file declares, by name ───────────────────────
+# The other half of the baseline. "Declared in the root directory since the
+# baseline" is this file's executables only while nothing else declares one
+# there afterwards: the root file below its include(), or a file it includes
+# there. The deferred retrofits would link the isolation object into such a
+# target, and aetherdesktop_support too if it links aethercore and
+# Qt6::Widgets. So the names are read from this file's own text, and
+# aether_collect_test_executables() fails the configure step on an executable
+# that is in the difference and not among them.
+#
+# That needs every add_executable() in this file to name its target literally,
+# which all of them do. Bracket comments are not stripped here, so a retired
+# declaration kept inside one still counts; that loosens the bound only by
+# names that no longer exist.
+file(READ "${CMAKE_CURRENT_LIST_FILE}" _aether_tests_listfile)
+string(REGEX REPLACE "#[^\n]*" "" _aether_tests_listfile "${_aether_tests_listfile}")
+string(REGEX MATCHALL "add_executable[ \t\r\n]*\\([ \t\r\n]*[A-Za-z0-9_.+-]+"
+       _aether_executables_declared_here "${_aether_tests_listfile}")
+string(REGEX REPLACE "add_executable[ \t\r\n]*\\([ \t\r\n]*" ""
+       _aether_executables_declared_here "${_aether_executables_declared_here}")
+unset(_aether_tests_listfile)
+
 
 # Typed producer PCM, queued lifetime and compatibility: QtCore only, no sockets.
 add_executable(pcm_frame_test tests/pcm_frame_test.cpp)
@@ -7021,13 +7043,34 @@ add_test(NAME system_inventory_test COMMAND system_inventory_test)
 # isolation does nothing unless they open a WDSP channel, and then it keeps a
 # probe from replacing the developer's real wisdom cache. The baseline keeps
 # every production target (AetherSDR, aetherd, aethercore) out of the set.
-# "Since the baseline" is exactly this file today, because the root file
-# declares no target after its include(). An executable declared there later
-# would be treated as one of these.
+# "Since the baseline" has to mean this file and nothing else, so the set is
+# bounded from the other side as well: an executable in it that this file's
+# text does not declare fails the configure step by name (see "Bound" at the
+# top of this file).
+#
+# Opting an executable out of the isolation object is explicit and carries its
+# reason. Anywhere in this file:
+#
+#   set_property(TARGET <executable> PROPERTY
+#       AETHER_TEST_NO_WISDOM_ISOLATION "<why this binary must plan uncapped>")
+#
+# The value IS the reason: empty, or a bare ON/1/TRUE, fails the configure step,
+# and so does setting it on a target that links the object anyway. Every opt-out
+# is printed in the configure log. It is meant for a measurement tool whose
+# subject is the uncapped planner; such a tool has to point
+# AETHER_WDSP_WISDOM_DIR somewhere itself, or it writes the developer's real
+# cache. There is no opt-out from the ctest ENVIRONMENT cap or from the TIMEOUT:
+# both belong to registered tests, and no test has needed one.
 #
 # aether_assert_tests_retrofitted() then reads the result back and fails the
 # configure step, naming each miss. It is scheduled from inside the retrofit, so
-# it also runs after any call that was deferred in between.
+# it runs after any call that was deferred in between, and a test such a call
+# registers is named as a miss rather than skipped.
+#
+# That the assertion ran is itself checked, because a check that never runs and
+# a check that finds nothing print the same: it leaves a marker on
+# aether_test_wisdom_isolation, and the file(GENERATE) below the functions
+# fails the generate step when the marker is absent.
 
 # The isolation TU, compiled once and linked into every executable declared in
 # this file by aether_retrofit_tests() below. Declared here, not deferred. An
@@ -7065,7 +7108,8 @@ target_compile_definitions(aether_test_wisdom_isolation PRIVATE
 # aether_retrofit_tests() below.
 
 # Every executable declared in this file: the directory's targets now, minus the
-# baseline from the top of the file.
+# baseline from the top of the file, each one checked against the names this
+# file's text declares.
 function(aether_collect_test_executables out_var)
     if(NOT _aether_targets_before_tests)
         message(FATAL_ERROR
@@ -7073,15 +7117,38 @@ function(aether_collect_test_executables out_var)
             "is empty or unset, so the test executables cannot be told apart from "
             "production targets.")
     endif()
+    if(NOT _aether_executables_declared_here)
+        message(FATAL_ERROR
+            "tests/tests.cmake: the list of executables this file declares "
+            "(_aether_executables_declared_here) is empty or unset, so the set "
+            "of test executables cannot be bounded.")
+    endif()
     get_property(_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     list(REMOVE_ITEM _targets ${_aether_targets_before_tests})
     set(_executables "")
+    set(_strays "")
     foreach(_target IN LISTS _targets)
         get_target_property(_type ${_target} TYPE)
-        if(_type STREQUAL "EXECUTABLE")
+        if(NOT _type STREQUAL "EXECUTABLE")
+            continue()
+        endif()
+        if(_target IN_LIST _aether_executables_declared_here)
             list(APPEND _executables ${_target})
+        else()
+            list(APPEND _strays ${_target})
         endif()
     endforeach()
+    if(_strays)
+        list(JOIN _strays ", " _stray_text)
+        message(FATAL_ERROR
+            "tests/tests.cmake: executable(s) declared in the root directory after "
+            "the test baseline, but not by tests/tests.cmake: ${_stray_text}\n"
+            "The deferred test retrofits cannot tell such a target from a test "
+            "executable and would link aether_test_wisdom_isolation into it. "
+            "Declare a production target above include(tests/tests.cmake) in the "
+            "root CMakeLists.txt, and a test or tool in tests/tests.cmake, with "
+            "its name written out.")
+    endif()
     set(${out_var} "${_executables}" PARENT_SCOPE)
 endfunction()
 
@@ -7104,8 +7171,12 @@ function(aether_retrofit_tests)
 
         # The linked-in initializer covers running the binary DIRECTLY, which
         # ctest properties cannot reach and which is how a test is usually
-        # debugged. Once per executable, however many tests it backs.
-        if(NOT ";${_links};" MATCHES ";aether_test_wisdom_isolation;")
+        # debugged. Once per executable, however many tests it backs. Not for
+        # an executable that opted out; the assertion checks the reason it gave.
+        get_property(_opted_out TARGET ${_target}
+            PROPERTY AETHER_TEST_NO_WISDOM_ISOLATION SET)
+        if(NOT _opted_out
+                AND NOT ";${_links};" MATCHES ";aether_test_wisdom_isolation;")
             target_link_libraries(${_target} PRIVATE aether_test_wisdom_isolation)
         endif()
     endforeach()
@@ -7120,7 +7191,9 @@ function(aether_retrofit_tests)
             "AETHER_WDSP_WISDOM_DIR=${AETHER_TEST_WISDOM_DIR}")
 
         # The default ceiling (see "Default test timeout" above). Only fills the
-        # gap: a test that declares its own TIMEOUT keeps it.
+        # gap: a test that declares its own TIMEOUT keeps it. An explicit
+        # TIMEOUT 0 is ctest's "no timeout", so it counts as a gap and is
+        # replaced too: the rule is a ceiling on every test.
         get_test_property(${_test} TIMEOUT _existing_timeout)
         if(NOT _existing_timeout)
             set_tests_properties(${_test} PROPERTIES TIMEOUT 300)
@@ -7130,10 +7203,12 @@ function(aether_retrofit_tests)
     cmake_language(DEFER CALL aether_assert_tests_retrofitted)
 endfunction()
 
-# The check that makes the three guarantees above true rather than stated: a
-# miss here would otherwise pass silently (the suite still goes green without a
-# cap or a timeout). Reads the properties back from the tests and targets; it
-# does not trust the loops above to have run.
+# The check that makes the guarantees above true rather than stated. A miss in
+# the cap, the TIMEOUT or the isolation object would otherwise pass silently:
+# the suite still goes green without them. A missing aetherdesktop_support
+# would not, it fails at link time, but it is read back here as well so that it
+# is reported at configure time and by name. Reads the properties back from the
+# tests and targets; it does not trust the loops above to have run.
 function(aether_assert_tests_retrofitted)
     set(_misses "")
     get_property(_tests DIRECTORY PROPERTY TESTS)
@@ -7149,11 +7224,42 @@ function(aether_assert_tests_retrofitted)
         endif()
     endforeach()
     aether_collect_test_executables(_test_executables)
+    set(_opt_outs "")
     foreach(_target IN LISTS _test_executables)
         get_target_property(_links ${_target} LINK_LIBRARIES)
-        if(NOT ";${_links};" MATCHES ";aether_test_wisdom_isolation;")
+        if(";${_links};" MATCHES ";aethercore;"
+                AND ";${_links};" MATCHES ";Qt6::Widgets;"
+                AND NOT ";${_links};" MATCHES ";aetherdesktop_support;")
             list(APPEND _misses
-                "executable ${_target}: aether_test_wisdom_isolation not linked")
+                "executable ${_target}: GUI harness without aetherdesktop_support")
+        endif()
+        set(_has_object FALSE)
+        if(";${_links};" MATCHES ";aether_test_wisdom_isolation;")
+            set(_has_object TRUE)
+        endif()
+        get_property(_opted_out TARGET ${_target}
+            PROPERTY AETHER_TEST_NO_WISDOM_ISOLATION SET)
+        if(NOT _opted_out)
+            if(NOT _has_object)
+                list(APPEND _misses
+                    "executable ${_target}: aether_test_wisdom_isolation not linked")
+            endif()
+            continue()
+        endif()
+        get_property(_reason TARGET ${_target}
+            PROPERTY AETHER_TEST_NO_WISDOM_ISOLATION)
+        string(STRIP "${_reason}" _reason)
+        string(REPLACE ";" "," _reason "${_reason}")
+        string(TOUPPER "${_reason}" _reason_upper)
+        if(_reason STREQUAL ""
+                OR _reason_upper MATCHES "^(1|ON|YES|TRUE|Y|0|OFF|NO|FALSE|N)$")
+            list(APPEND _misses
+                "executable ${_target}: AETHER_TEST_NO_WISDOM_ISOLATION without a reason")
+        elseif(_has_object)
+            list(APPEND _misses
+                "executable ${_target}: opts out, yet links aether_test_wisdom_isolation")
+        else()
+            list(APPEND _opt_outs "${_target}: ${_reason}")
         endif()
     endforeach()
     if(_misses)
@@ -7162,14 +7268,48 @@ function(aether_assert_tests_retrofitted)
         message(FATAL_ERROR
             "tests/tests.cmake: ${_miss_count} test retrofit(s) missing:\n"
             "  ${_miss_text}\n"
-            "Every registered test needs the FFTW planner cap and a TIMEOUT, and "
-            "every executable declared in tests/tests.cmake links "
-            "aether_test_wisdom_isolation. aether_retrofit_tests() applies all "
-            "three; see the comment above it.")
+            "Every registered test needs the FFTW planner cap and a TIMEOUT. Every "
+            "executable declared in tests/tests.cmake links "
+            "aether_test_wisdom_isolation unless it sets "
+            "AETHER_TEST_NO_WISDOM_ISOLATION to its reason, and links "
+            "aetherdesktop_support if it is a GUI harness (aethercore and "
+            "Qt6::Widgets). "
+            "aether_retrofit_tests() applies all of it; see the comment above it.")
     endif()
+
+    # Said once per configure, so that an opt-out is never silent and a log
+    # shows what was checked.
+    foreach(_opt_out IN LISTS _opt_outs)
+        message(STATUS "tests/tests.cmake: no wisdom isolation in ${_opt_out}")
+    endforeach()
+    list(LENGTH _tests _test_count)
+    list(LENGTH _test_executables _executable_count)
+    list(LENGTH _opt_outs _opt_out_count)
+    if(AETHER_TEST_FFTW_TIMELIMIT STREQUAL "")
+        set(_cap "FFTW planner UNBOUNDED (AETHER_TEST_FFTW_TIMELIMIT is empty)")
+    else()
+        set(_cap "FFTW planner cap ${AETHER_TEST_FFTW_TIMELIMIT} s")
+    endif()
+    string(CONCAT _summary
+        "${_test_count} tests and ${_executable_count} executables checked / "
+        "${_opt_out_count} opted out of the wisdom isolation / ${_cap}")
+    message(STATUS "tests/tests.cmake: ${_summary}")
+
+    # The marker the file(GENERATE) below looks for. Last statement on purpose:
+    # it is set only when everything above ran to the end.
+    set_property(TARGET aether_test_wisdom_isolation
+        PROPERTY AETHER_TESTS_RETROFIT_ASSERTED "${_summary}")
 endfunction()
 
 cmake_language(DEFER CALL aether_retrofit_tests)
+
+# The check on the check. Generator expressions are evaluated after every
+# deferred call has run, so this is where "the assertion never ran" becomes an
+# error: without the marker the expression asks for a target that does not
+# exist, and the generate step fails naming it. With the marker it writes the
+# assertion's summary line to the build directory.
+file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/tests-retrofit-gate.txt" CONTENT
+    "$<TARGET_PROPERTY:$<IF:$<BOOL:$<TARGET_PROPERTY:aether_test_wisdom_isolation,AETHER_TESTS_RETROFIT_ASSERTED>>,aether_test_wisdom_isolation,AETHER_TESTS_RETROFIT_ASSERTION_DID_NOT_RUN>,AETHER_TESTS_RETROFIT_ASSERTED>\n")
 
 # Socket-free capability/extension tests: injected transport, no QLocalServer
 # and no radio connect. Exercises the same dispatcher used by the bridge.
