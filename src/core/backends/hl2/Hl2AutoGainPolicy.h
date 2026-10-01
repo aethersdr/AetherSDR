@@ -349,6 +349,11 @@ struct AutoGainConfig {
     std::int64_t tripBackoffWindowMs = 60000;
     // Each repeat doubles the release dwell, capped.
     std::int64_t dwellBackoffMaxMs = 30000;
+
+    // Every field, so "these two backends run the same law" is one comparison
+    // and a field added later is compared without anyone remembering to.
+    friend constexpr bool operator==(const AutoGainConfig&,
+                                     const AutoGainConfig&) noexcept = default;
 };
 
 // The binary per-band high-gain / low-gain controller, as a configuration of

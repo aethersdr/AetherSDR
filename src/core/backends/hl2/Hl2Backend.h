@@ -370,6 +370,10 @@ private:
     // the mirror age, so the converter rows' expiry can be exercised without a
     // radio, a socket or an EP4 stream. Reaches nothing else.
     friend struct Hl2HealthBlockTestAccess;
+    // Fires the link edges through MetisClient's own signals and seeds the
+    // connect baseline, so the law a connect installs and the gate it asks for
+    // can be read without a radio or a socket. See hl2_auto_gain_law_test.cpp.
+    friend struct Hl2AutoGainLawTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
