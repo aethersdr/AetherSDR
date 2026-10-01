@@ -2736,7 +2736,9 @@ MainWindow::MainWindow(QWidget* parent)
     }
 
     // Restore the Aetherial Audio Channel Strip if it was open on last
-    // exit (#2301).  toggleAetherialStrip() lazy-creates and shows.
+    // exit (#2301). toggleAetherialStrip() lazy-creates and shows. Before a
+    // session connects the route is unknown, so restore is allowed; a later
+    // capability/mic update hides the editor silently if its route is blocked.
     if (s.value("AetherialStripVisible", "False").toString() == "True") {
         if (txAudioPathBlock() == TxAudioPathBlock::None) {
             toggleAetherialStrip();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DeferredSettingsWrites.h"
+#include "TxAudioPathPolicy.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  MainWindow is DECOMPOSED (#3351). Add member fields/declarations here ONLY
@@ -626,7 +627,7 @@ private:
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
-    enum class TxAudioPathBlock { None, PcAudio, MicInput };
+    using TxAudioPathBlock = AetherSDR::TxAudioPathBlock;
     TxAudioPathBlock txAudioPathBlock() const; // MainWindow_DspApplets.cpp
     QString txAudioPathBlockMessage(TxAudioPathBlock block) const;
     bool showTxAudioPathErrorIfBlocked(); // MainWindow_DspApplets.cpp

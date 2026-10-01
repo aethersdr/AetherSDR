@@ -60,20 +60,11 @@ namespace AetherSDR {
 
 MainWindow::TxAudioPathBlock MainWindow::txAudioPathBlock() const
 {
-    if (!m_radioModel.isConnected()) return TxAudioPathBlock::None;
-    const RadioCapabilities caps = m_radioModel.backendCapabilities();
-    if (!caps.canTransmit || caps.hostModulates) return TxAudioPathBlock::None;
-
     const bool pcAudioOn = AppSettings::instance()
         .value("PcAudioEnabled", "True").toString() == "True";
-    if (caps.takesTxAudioOverSeam && !pcAudioOn) {
-        return TxAudioPathBlock::PcAudio;
-    }
-    if (caps.hasSelectableMicInputs
-        && m_radioModel.transmitModel().micSelection() != QStringLiteral("PC")) {
-        return TxAudioPathBlock::MicInput;
-    }
-    return TxAudioPathBlock::None;
+    return classifyTxAudioPath(m_radioModel.isConnected(),
+                              m_radioModel.backendCapabilities(), pcAudioOn,
+                              m_radioModel.transmitModel().micSelection());
 }
 
 QString MainWindow::txAudioPathBlockMessage(TxAudioPathBlock block) const
