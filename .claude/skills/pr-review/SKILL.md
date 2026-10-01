@@ -244,13 +244,14 @@ What to look for:
   call — name it as one (step 5's GOVERNANCE.md framing) rather than either
   waving it through or calling it a violation.
 - **Deleted behavior, not just added code.** Read the `-` lines as carefully
-  as the `+` lines. A removed guard, early return, confirmation, or comment
-  citing a fixed issue means a previously-fixed bug may be back. Grep the
-  removed side for it:
-  `gh pr diff <PR> | grep '^-' | grep -iE 'guard|#[0-9]{3,}|return|if \(' `
-  When a removal deletes a comment that *names a symptom*, quote that comment
-  back and ask what now prevents it. If the replacement code still concedes
-  the same precondition, the guard's removal is a regression, not a cleanup.
+  as the `+` lines. A removed guard, early return, or confirmation means a
+  previously-fixed bug may be back. Grep the removed side for it:
+  `gh pr diff <PR> | grep '^-' | grep -iE 'guard|return|if \(' `
+  The finding is the removed **code**, not the removed prose. Deleting or
+  shortening a comment while its guard and test stay is cleanup the project
+  wants (AGENTS.md §"Comments") — do not flag it. When the guard itself is
+  gone, check the PR's `-` side and `git log -S` for what it protected, and
+  ask what now prevents it.
 - **Sibling implementations left behind.** If the fix touches one of several
   parallel copies (one of N plugins, one of N backends, one of N call sites),
   grep for the others and say which remain broken. That is a completeness
@@ -273,7 +274,8 @@ Verdicts — apply these consistently:
 | Unrelated to the issue and to the stated fix | **Blocker.** Ask to unbundle: drop the commit, open its own PR |
 | Explained by the issue *thread* but absent from the PR body | Not a blocker on its own — but name it, and ask for the body to be updated so it is reviewable and searchable later |
 | New public/protocol surface | **Needs maintainer decision**, flagged to the maintainer by name |
-| A removed guard whose symptom can recur | **Blocker** (a regression), with the deleted comment quoted as evidence |
+| A removed guard whose symptom can recur | **Blocker** (a regression), naming the symptom and what used to prevent it |
+| A comment that narrates history (bug retelling, "used to", review attribution) or runs past ~5 lines | Nit — ask to move the history to the commit/PR body (AGENTS.md §"Comments") |
 | User-visible default changed, correct but undisclosed | Nit — plus a request to state it in the body |
 
 Distinguish this from step 6. Scope is about *whether the change belongs in
@@ -430,7 +432,8 @@ thread; AppSettings is thread-safe but `save()` does I/O — never on the
 render callback), Qt object lifetime (`QPointer`/`WA_DeleteOnClose`,
 parenting), error handling per house style (no exceptions; check returns;
 `qWarning` with category), silent failure modes (unchecked writes, swallowed
-errors), and whether comments explain *why* (constraints), not *what*.
+errors), and whether comments explain *why* (constraints), not *what*, and
+state the current invariant rather than its history (AGENTS.md §"Comments").
 
 Read hostilely: for each non-trivial hunk, spend a moment constructing the
 input, ordering, or lifecycle event that makes it misbehave before you accept
