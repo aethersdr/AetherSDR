@@ -14,7 +14,7 @@ namespace AetherSDR {
 struct SplitQsySettings {
     static constexpr int kMinimumThresholdHz = 1;
     static constexpr int kMaximumThresholdHz = 200000;
-    static constexpr int kDefaultThresholdHz = 20;
+    static constexpr int kDefaultThresholdHz = 2000;
     static constexpr int kVersion = 1;
     static constexpr const char* kSettingsKey = "SplitBehavior";
 
@@ -89,14 +89,12 @@ struct SplitQsySettings {
 
 inline bool shouldCloseSplitOnQsy(const SplitQsySettings& settings,
                                   bool splitActive, bool rxSlice,
-                                  bool qsyCloseSuppressed,
                                   double frequencyMhz,
                                   double referenceFrequencyMhz)
 {
     const double thresholdMhz =
         static_cast<double>(settings.thresholdHz) / 1000000.0;
     return settings.closeSplitOnQsy && splitActive && rxSlice
-        && !qsyCloseSuppressed
         && std::abs(frequencyMhz - referenceFrequencyMhz) > thresholdMhz;
 }
 

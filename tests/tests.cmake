@@ -1511,8 +1511,13 @@ target_link_libraries(split_audio_profile_test PRIVATE Qt6::Core)
 add_test(NAME split_audio_profile_test COMMAND split_audio_profile_test)
 set_tests_properties(split_audio_profile_test PROPERTIES TIMEOUT 30)
 
-# Split QSY preference document: defaults, bounds, versioning and round-trips.
-add_executable(split_qsy_settings_test tests/split_qsy_settings_test.cpp)
+# Split QSY settings and observation policy. SliceModel exercises the
+# radio-status-only path and local tune echo matching without a socket.
+add_executable(split_qsy_settings_test
+    tests/split_qsy_settings_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
 target_include_directories(split_qsy_settings_test PRIVATE src)
 target_link_libraries(split_qsy_settings_test PRIVATE Qt6::Core)
 add_test(NAME split_qsy_settings_test COMMAND split_qsy_settings_test)

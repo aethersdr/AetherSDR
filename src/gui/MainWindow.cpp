@@ -9065,6 +9065,7 @@ void MainWindow::disableSplit()
 {
     if (!m_splitActive) return;
 
+    m_pendingSliceFrequencyEchoes.clear();
     m_splitActive = false;
 
     // Learn this split's audio arrangement and put the RX pan back, BEFORE the
