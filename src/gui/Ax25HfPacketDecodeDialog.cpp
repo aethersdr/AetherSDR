@@ -4458,6 +4458,10 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
     };
 
     auto* serviceMenu = new QMenu(msgFrame);
+    // Each service entry's hint is the addressing syntax the operator needs
+    // (WXBOT's "City,ST" comma, the ARISS path); it is also what seedAprsService()
+    // echoes into the log.  Qt shows it on hover only with this opt-in (#5546).
+    serviceMenu->setToolTipsVisible(true);
     QString lastSection;
     for (const AprsServiceEntry& e : kAprsServices) {
         const QString section = QString::fromLatin1(e.section);

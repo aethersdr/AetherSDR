@@ -2343,19 +2343,12 @@ void MainWindow::registerMidiParams()
 
     // ── Mode Up / Down (cycle through the mode list above) ───────────
     auto cycleMode = [this, fireShortcut, modes](int direction) {
-        // Find current mode index from the active slice; if no match, start at 0.
-        int currentIdx = 0;
-        if (auto* s = activeSlice()) {
-            const QString curMode = s->mode().toUpper();
-            for (int i = 0; i < modes.size(); ++i) {
-                if (curMode == modes[i]) {
-                    currentIdx = i;
-                    break;
-                }
-            }
+        auto* s = activeSlice();
+        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction);
+        if (next.isEmpty()) {
+            return;
         }
-        const int next = (currentIdx + direction + modes.size()) % modes.size();
-        const QString idShort = QString("mode_%1").arg(modes[next].toLower());
+        const QString idShort = QString("mode_%1").arg(next.toLower());
         fireShortcut(idShort.toUtf8().constData());
     };
     reg("global.modeUp", "Mode Up", "Global", P::Trigger, 0, 1,

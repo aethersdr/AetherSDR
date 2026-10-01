@@ -72,13 +72,16 @@ namespace AetherSDR::anan {
 // points in anan_droop_defaults_test (bins 41-56) agree so closely and why no
 // bench point is needed further out.
 //
-// THAT IS SAFE TODAY ONLY BECAUSE applyEdgeFade() OVERWRITES BINS 0-29.
-// Its tailFraction is 0.03 and kDroopCorrectionFftSize is 1024, so the fade
-// covers every bin this curve gets wrong, with 16 bins to spare. Those two
-// constants live in different files and neither references the other. If the
-// fade's tail ever shrinks below ~0.014, the untrustworthy bins reach the
-// display and this table needs re-deriving against quantized taps -- or
-// clamping nearer the real 125 dB floor -- rather than merely re-cropping.
+// THAT IS SAFE TODAY ONLY BECAUSE applyEdgeFade() OVERWRITES THE OUTER 3% OF
+// THE SPAN. The comparison is in fractions of the span, not in bins: the
+// curve is wrong over table points 0-13 of 1024, about 1.4% of the span, and
+// the fade's tailFraction is 0.03 of whatever point count the panadapter
+// frame has -- which follows the panel width, so it is no longer this
+// table's grid (applyDroopCorrectionDbResampled()). Those two constants live
+// in different files and neither references the other. If the fade's tail
+// ever shrinks below ~0.014, the untrustworthy points reach the display and
+// this table needs re-deriving against quantized taps -- or clamping nearer
+// the real 125 dB floor -- rather than merely re-cropping.
 //
 // The gateware caveat is real: a future FPGA release could re-tune those
 // filters. Defaults are applied regardless of the connected radio's reported

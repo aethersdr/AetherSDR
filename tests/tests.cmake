@@ -370,6 +370,19 @@ target_include_directories(backend_capability_revision_test PRIVATE src tests)
 target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
 
+# #5347: injected Icom model profiles, no session/transport/device.
+add_executable(icom_panadapter_capacity_test tests/icom_panadapter_capacity_test.cpp)
+target_include_directories(icom_panadapter_capacity_test PRIVATE src tests)
+target_link_libraries(icom_panadapter_capacity_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_panadapter_capacity_test COMMAND icom_panadapter_capacity_test)
+
+# #5890: bounded concrete-backend receive contracts. No bound socket, fake
+# firmware peer or hardware connection; Demo uses its own synthetic source.
+add_executable(backend_receive_contract_test tests/backend_receive_contract_test.cpp)
+target_include_directories(backend_receive_contract_test PRIVATE src tests)
+target_link_libraries(backend_receive_contract_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME backend_receive_contract_test COMMAND backend_receive_contract_test)
+
 # ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
 # backend records setAtu(); no sockets, no radio.
 add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
@@ -811,6 +824,16 @@ target_link_libraries(nnr_filter_test PRIVATE aethercore Qt6::Core)
 add_test(NAME nnr_filter_test COMMAND nnr_filter_test)
 set_tests_properties(nnr_filter_test PROPERTIES TIMEOUT 300)
 
+# Every client RX NR method denoises L and R independently, as RN2 does: one
+# side's output never depends on the other side's input, and a hard pan step
+# settles within the filter's latency. Real NR2/NR4/NNR, plus DFNR and BNR
+# when their model or GPU pack is present (nr_rate_domain_test covers those
+# two everywhere through stand-in C APIs).
+add_executable(nr_stereo_independence_test tests/nr_stereo_independence_test.cpp)
+target_link_libraries(nr_stereo_independence_test PRIVATE aethercore Qt6::Core)
+add_test(NAME nr_stereo_independence_test COMMAND nr_stereo_independence_test)
+set_tests_properties(nr_stereo_independence_test PROPERTIES TIMEOUT 300)
+
 add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
 target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_receiver_registry_test COMMAND rtl_receiver_registry_test)
@@ -822,6 +845,28 @@ add_executable(hl2_metis_protocol_test
     src/core/backends/hl2/MetisProtocol.cpp)
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
+
+# HL2 hardware-variant options — which board is on the other end (bare HL2,
+# HL2+ with the AK4951 codec, SquareSDR 2), the dither bit's three
+# incompatible meanings, the companion filter board's receive/transmit split
+# and the EP2 audio slot. Same shape as the target above: pure policy plus
+# pure wire, no Qt, no aethercore, no socket.
+add_executable(hl2_hardware_options_test
+    tests/hl2_hardware_options_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_hardware_options_test PRIVATE src)
+add_test(NAME hl2_hardware_options_test COMMAND hl2_hardware_options_test)
+
+# The same document where it meets the settings store: the save/load round
+# trip, the read-modify-write that keeps a newer build's field alive, and the
+# empty-serial case that would otherwise write the family-wide default row.
+# Needs AppSettings and therefore Qt, which is why it is a second target rather
+# than more of the pure-policy one above. Still socket-free and radio-free.
+add_executable(hl2_hardware_document_test
+    tests/hl2_hardware_document_test.cpp)
+target_include_directories(hl2_hardware_document_test PRIVATE src tests)
+target_link_libraries(hl2_hardware_document_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_hardware_document_test COMMAND hl2_hardware_document_test)
 
 # HL2 wideband bandscope (EP4) parser — the 12-bit ADC codes, the 20-bit
 # sequence counter and its forward-gap guard. Same shape as the target above:
@@ -884,6 +929,19 @@ target_include_directories(anan_noise_blanker_readback_test PRIVATE src tests)
 target_link_libraries(anan_noise_blanker_readback_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_noise_blanker_readback_test COMMAND anan_noise_blanker_readback_test)
 set_tests_properties(anan_noise_blanker_readback_test PROPERTIES TIMEOUT 120)
+
+# ANAN speaker stream (DDC Audio, PC -> radio) -- the SEND PLUMBING: queue,
+# whole-packet boundary, sequence counter, overflow policy and enable gate, read
+# from the datagrams P2Client really sends. Loopback only, no radio.
+# Binds 127.0.0.1:1028 (kSpeakerAudioPort).
+add_executable(anan_speaker_audio_test tests/anan_speaker_audio_test.cpp)
+target_include_directories(anan_speaker_audio_test PRIVATE src tests)
+target_link_libraries(anan_speaker_audio_test
+    PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME anan_speaker_audio_test COMMAND anan_speaker_audio_test)
+# Exit 77 == the speaker port was already held, so nothing could be observed.
+# Without this property that is a green pass with zero checks.
+set_tests_properties(anan_speaker_audio_test PROPERTIES SKIP_RETURN_CODE 77)
 
 # IcomCIV wire layers — pure encode/decode, standalone (no Qt / aethercore).
 # An Icom networked radio is two protocols stacked: CI-V is the command plane
@@ -1361,6 +1419,20 @@ add_executable(hl2_connect_reentrancy_test tests/hl2_connect_reentrancy_test.cpp
 target_include_directories(hl2_connect_reentrancy_test PRIVATE src tests)
 target_link_libraries(hl2_connect_reentrancy_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_connect_reentrancy_test COMMAND hl2_connect_reentrancy_test)
+
+# HL2 per-receiver S-meter lifetime — the meter a receiver declares as its chain
+# opens must go when the chain does. Drives a real MeterModel over the backend's
+# own meterDefined/meterRemoved, so the assertions are consumer lookups rather
+# than call spies. Needs no radio, and adds no fake peer — but it drives the real
+# connect flow, and the socket start at the end of finishDspSetup() BINDS A UDP
+# SOCKET LOCALLY whether or not anything answers, same as the
+# hl2_connect_reentrancy_test sibling says in its own header. Packets go to
+# TEST-NET-1 (192.0.2.0/24), which is reserved for documentation and routes
+# nowhere. See the file header.
+add_executable(hl2_slice_meter_lifecycle_test tests/hl2_slice_meter_lifecycle_test.cpp)
+target_include_directories(hl2_slice_meter_lifecycle_test PRIVATE src tests)
+target_link_libraries(hl2_slice_meter_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_slice_meter_lifecycle_test COMMAND hl2_slice_meter_lifecycle_test)
 
 add_executable(client_eq_test
     tests/client_eq_test.cpp
@@ -2294,7 +2366,6 @@ if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCES
     add_executable(nvidia_afx_filter_test
         tests/nvidia_afx_filter_test.cpp
         src/core/NvidiaAfxFilter.cpp
-        src/core/MonoDspStereoAdapter.cpp
         src/core/Resampler.cpp
     )
     target_compile_definitions(nvidia_afx_filter_test PRIVATE HAVE_NVIDIA_AFX)
@@ -2342,6 +2413,35 @@ add_executable(audio_output_router_test
 target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
+
+# QtAudioBackendGuard: Qt 6.12's QtMultimedia segfaults enumerating audio
+# devices when its PipeWire backend cannot create a client context. One
+# executable, two scenarios, each in its own process. PipeWire is pointed at an
+# empty config dir, which is exactly the failing condition; no daemon is
+# contacted (socket-free). Linux only. Exits 77 when libpipewire is absent.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(qt_audio_backend_guard_test
+        tests/qt_audio_backend_guard_test.cpp
+        src/core/QtAudioBackendGuard.cpp
+    )
+    target_include_directories(qt_audio_backend_guard_test PRIVATE src)
+    target_link_libraries(qt_audio_backend_guard_test PRIVATE Qt6::Core Qt6::Multimedia ${CMAKE_DL_LIBS})
+    set(_aether_empty_pw_conf "${CMAKE_CURRENT_BINARY_DIR}/empty-pipewire-config")
+    file(MAKE_DIRECTORY "${_aether_empty_pw_conf}")
+    add_test(NAME qt_audio_backend_guard_no_config
+             COMMAND qt_audio_backend_guard_test no-config)
+    add_test(NAME qt_audio_backend_guard_user_choice
+             COMMAND qt_audio_backend_guard_test user-choice)
+    set_tests_properties(qt_audio_backend_guard_no_config qt_audio_backend_guard_user_choice
+        PROPERTIES SKIP_RETURN_CODE 77
+                   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PIPEWIRE_CONFIG_DIR=${_aether_empty_pw_conf};PIPEWIRE_CONFIG_PREFIX=/nonexistent")
+    # Exercise the default-selection path even when the developer has chosen a
+    # backend in their shell. The user-choice scenario keeps its explicit value.
+    set_property(TEST qt_audio_backend_guard_no_config PROPERTY
+        ENVIRONMENT_MODIFICATION "QT_AUDIO_BACKEND=unset:")
+    set_property(TEST qt_audio_backend_guard_user_choice APPEND PROPERTY
+        ENVIRONMENT "QT_AUDIO_BACKEND=pulseaudio")
+endif()
 
 # Pure mode-policy regression for global AetherDSP selection (#4415).
 add_executable(aether_dsp_mode_policy_test
@@ -2781,14 +2881,6 @@ target_include_directories(biquad_test PRIVATE src)
 add_test(NAME biquad_test COMMAND biquad_test)
 
 
-add_executable(mono_dsp_stereo_adapter_test
-    tests/mono_dsp_stereo_adapter_test.cpp
-    src/core/MonoDspStereoAdapter.cpp
-)
-target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
-target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
-add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
-
 # Socket/device-free tests of the real optional wrappers. The local C API
 # substitutes only apply half-gain and expose sample counts; these tests do
 # not load a downloaded model, SDK pack or GPU and do not claim inference.
@@ -2799,7 +2891,6 @@ add_executable(nr_rate_domain_test
     tests/nr_test_df_api.cpp
     src/core/DeepFilterFilter.cpp
     src/core/NvidiaAfxFilter.cpp
-    src/core/MonoDspStereoAdapter.cpp
     src/core/Resampler.cpp
 )
 target_compile_definitions(nr_rate_domain_test PRIVATE HAVE_DFNR HAVE_NVIDIA_AFX)
@@ -2817,7 +2908,6 @@ if(ENABLE_SPECBLEACH)
         tests/specbleach_rate_domain_test.cpp
         src/core/SpecbleachFilter.cpp
         src/core/dsp/FftwPlannerLock.cpp
-        src/core/MonoDspStereoAdapter.cpp
         ${SPECBLEACH_SOURCES}
     )
     target_compile_definitions(specbleach_rate_domain_test PRIVATE HAVE_SPECBLEACH)
@@ -3198,6 +3288,18 @@ target_compile_definitions(passive_spots_policy_test PRIVATE
 target_link_libraries(passive_spots_policy_test PRIVATE Qt6::Core)
 add_test(NAME passive_spots_policy_test COMMAND passive_spots_policy_test)
 
+# Right-click on a client-side spot label offers Remove Spot and removes it
+# locally, never as `spot remove` wire text (#6037). Header-only helpers;
+# offscreen QMenu, socket-free.
+add_executable(spot_label_menu_test tests/spot_label_menu_test.cpp)
+target_include_directories(spot_label_menu_test PRIVATE src)
+target_compile_definitions(spot_label_menu_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(spot_label_menu_test PRIVATE Qt6::Core Qt6::Widgets)
+add_test(NAME spot_label_menu_test COMMAND spot_label_menu_test)
+set_tests_properties(spot_label_menu_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(spot_mode_resolver_test
     tests/spot_mode_resolver_test.cpp
     src/core/SpotModeResolver.cpp
@@ -3303,6 +3405,15 @@ add_executable(digital_voice_slice_lifecycle_test
 target_include_directories(digital_voice_slice_lifecycle_test PRIVATE src)
 target_link_libraries(digital_voice_slice_lifecycle_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME digital_voice_slice_lifecycle_test COMMAND digital_voice_slice_lifecycle_test)
+
+add_executable(mode_cycle_test
+    tests/mode_cycle_test.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(mode_cycle_test PRIVATE src)
+target_compile_definitions(mode_cycle_test PRIVATE AETHER_ENABLE_DIGITAL_VOICE_HELPER)
+target_link_libraries(mode_cycle_test PRIVATE Qt6::Core)
+add_test(NAME mode_cycle_test COMMAND mode_cycle_test)
 
 add_executable(dstar_model_test
     tests/dstar_model_test.cpp
@@ -3842,6 +3953,33 @@ add_test(NAME tgxl_docked_parity_test COMMAND tgxl_docked_parity_test)
 set_tests_properties(tgxl_docked_parity_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# TGXL applet port strips and STANDBY ordering: the relay path claims no
+# trigger mode it cannot know ("RF SENSE"), and BYPASS -> STANDBY commands
+# operate first so the radio's in-between status already reads STANDBY.
+add_executable(tgxl_applet_ports_test
+    tests/tgxl_applet_ports_test.cpp
+    src/gui/TunerApplet.cpp
+    src/gui/AccessoryPanelWidgets.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/TunerModel.cpp
+    src/models/MeterModel.cpp
+    src/models/BandSettings.cpp
+    src/core/TgxlConnection.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(tgxl_applet_ports_test PRIVATE src)
+target_link_libraries(tgxl_applet_ports_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
+)
+set_target_properties(tgxl_applet_ports_test PROPERTIES AUTOMOC ON)
+add_test(NAME tgxl_applet_ports_test COMMAND tgxl_applet_ports_test)
+set_tests_properties(tgxl_applet_ports_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(fm_tone_presentation_test
     tests/fm_tone_presentation_test.cpp
 )
@@ -4294,6 +4432,17 @@ add_executable(hdlc_codec_test
 target_include_directories(hdlc_codec_test PRIVATE src)
 target_link_libraries(hdlc_codec_test PRIVATE aether_libmodem_core)
 add_test(NAME hdlc_codec_test COMMAND hdlc_codec_test)
+
+# Contour ShuttleXpress / ShuttlePro v2 report decoding (#5927). The parsers
+# are pure byte decoders with no hidapi dependency, so the test is built
+# unconditionally; HAVE_HIDAPI only unlocks the #ifdef around them.
+add_executable(hid_device_parser_test
+    tests/hid_device_parser_test.cpp
+    src/core/HidDeviceParser.cpp
+)
+target_include_directories(hid_device_parser_test PRIVATE src)
+target_compile_definitions(hid_device_parser_test PRIVATE HAVE_HIDAPI)
+add_test(NAME hid_device_parser_test COMMAND hid_device_parser_test)
 
 # Offline AX.25 decode diagnostic: replays a captured WAV through the decoder.
 # Not a ctest (needs an input file); built on demand for troubleshooting.
@@ -5044,6 +5193,13 @@ target_include_directories(backend_seam_affinity_test PRIVATE src tests)
 target_link_libraries(backend_seam_affinity_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME backend_seam_affinity_test COMMAND backend_seam_affinity_test)
 
+# #5678 row 2.5: every IRadioBackend signal has a consumer once RadioModel
+# has wired each family — no seam outlet emits into nothing. Socket-free.
+add_executable(backend_seam_consumer_test tests/backend_seam_consumer_test.cpp)
+target_include_directories(backend_seam_consumer_test PRIVATE src tests)
+target_link_libraries(backend_seam_consumer_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME backend_seam_consumer_test COMMAND backend_seam_consumer_test)
+
 add_executable(backend_family_switch_test tests/backend_family_switch_test.cpp)
 target_include_directories(backend_family_switch_test PRIVATE src tests)
 target_link_libraries(backend_family_switch_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -5098,6 +5254,22 @@ add_executable(icom_family_test tests/icom_family_test.cpp)
 target_include_directories(icom_family_test PRIVATE src)
 target_link_libraries(icom_family_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME icom_family_test COMMAND icom_family_test)
+
+# #5920 follow-up (@jensenpat, non-blocking review): the channels out of
+# MainWindow::sendPanDimensionsToRadio() -- Flex wire delivery, ANAN typed
+# dispatch, Icom's no-command path. Two halves, for the reason the test's own
+# header gives: no test target constructs a MainWindow, and the block cannot
+# move down into RadioModel without failing check_command_plane.py, whose
+# src/models/RadioModel.cpp row is shrink-only. Part A builds every family
+# through the production family switch and reads the two predicates that call
+# site consults (no socket, no device, no radio); Part B reads the call site
+# itself as TEXT, which is what AETHER_SOURCE_DIR is for here.
+add_executable(pan_dimension_routing_test tests/pan_dimension_routing_test.cpp)
+target_include_directories(pan_dimension_routing_test PRIVATE src tests)
+target_compile_definitions(pan_dimension_routing_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(pan_dimension_routing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pan_dimension_routing_test COMMAND pan_dimension_routing_test)
 
 add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)
@@ -6066,6 +6238,15 @@ add_executable(hl2_mode_vocabulary_test tests/hl2_mode_vocabulary_test.cpp)
 target_include_directories(hl2_mode_vocabulary_test PRIVATE src tests)
 target_link_libraries(hl2_mode_vocabulary_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_mode_vocabulary_test COMMAND hl2_mode_vocabulary_test)
+# HL2 spots stay in this client: alwaysUseClientSideSpots must be true, or
+# every DX-cluster/RBN/WSJT-X/POTA/manual spot is sent as `spot add` wire text
+# that RadioModel::sendCmd drops for want of a command plane, and none is ever
+# drawn. Separate target for the same reason as the lines above: the fixture
+# that would have carried an HL2 seam assertion is retired.
+add_executable(hl2_client_side_spots_declaration_test tests/hl2_client_side_spots_declaration_test.cpp)
+target_include_directories(hl2_client_side_spots_declaration_test PRIVATE src tests)
+target_link_libraries(hl2_client_side_spots_declaration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_client_side_spots_declaration_test COMMAND hl2_client_side_spots_declaration_test)
 add_executable(hl2_band_memory_test
     tests/hl2_band_memory_test.cpp
 )
@@ -6592,6 +6773,8 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_label_theme_token_test
     atu_seam_gate_test
     backend_capability_revision_test
+    icom_panadapter_capacity_test
+    backend_receive_contract_test
     radio_capacity_declaration_test
     extension_namespace_gate_test
     control_availability_registry_test
@@ -6612,6 +6795,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_pan_limits_declaration_test
     hl2_fm_controls_declaration_test
     hl2_mode_vocabulary_test
+    hl2_client_side_spots_declaration_test
     hl2_gain_split_test
     icom_identity_test
     icom_control_profile_test
@@ -6695,6 +6879,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
     tgxl_docked_parity_test
+    tgxl_applet_ports_test
     pgxl_direct_protocol_test
     pgxl_panel_test
 )

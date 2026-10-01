@@ -291,6 +291,17 @@ void MainWindow::buildMenuBar()
 
     // ── Settings menu ──────────────────────────────────────────────────────
     auto* settingsMenu = menuBar()->addMenu("&Settings");
+    // Qt has suppressed per-action tooltips since 5.1 unless the menu opts in,
+    // and the opt-in has to be on the menu the item is drawn in — including for
+    // a submenu's menuAction(), which renders on the PARENT.  Without this, the
+    // tr("Not supported by this radio") reason applyCapabilitiesToUi() sets on
+    // the greyed TX Band and Inhibit-during-TUNE entries is written and thrown
+    // away, and a disabled QAction does not highlight on hover either, so the
+    // entry reads as broken rather than unavailable (#5546, same shape as
+    // #5510).  Entries with no explicit tooltip stay silent: QMenu shows the
+    // action's set tooltip, not QAction::toolTip()'s fall-back to its own
+    // label, so opting a large menu in costs nothing.
+    settingsMenu->setToolTipsVisible(true);
 
     auto* radioSetup = settingsMenu->addAction("Radio Setup...");
     radioSetup->setMenuRole(QAction::PreferencesRole);  // macOS: appears in app menu as Preferences (#883, #1013)
@@ -1006,6 +1017,7 @@ void MainWindow::buildMenuBar()
     toolsMenu->setToolTipsVisible(true);
 
     auto* viewMenu = menuBar()->addMenu("&View");
+    viewMenu->setToolTipsVisible(true);  // see settingsMenu above (#5546)
 
     // Workspace canvas (RFC #4887 phase 3) — opt-in, reversible.  The check
     // state persists inside the workspace document itself (Principle V), not

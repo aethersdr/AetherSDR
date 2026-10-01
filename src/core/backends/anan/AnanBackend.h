@@ -2,6 +2,8 @@
 
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/anan/AnanRxDsp.h"
+#include "core/backends/anan/AnanSliceAudio.h"
+#include "core/Resampler.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/P2Client.h"
 #include "core/dsp/WdspSMeter.h"
@@ -11,7 +13,9 @@
 #include <QThread>
 #include <QTimer>
 
+#include <memory>
 #include <utility>
+#include <vector>
 
 namespace AetherSDR::anan {
 
@@ -70,6 +74,24 @@ public:
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+
+    // The receiver's own audio stage. Without these three the operator's mute,
+    // AF fader and balance moved and nothing happened: IRadioBackend's defaults
+    // are no-ops, and a backend that demodulates on this host is the only thing
+    // in the chain that can apply them (see AnanSliceAudio.h).
+    void setSliceAudioMute(int sliceId, bool mute) override;
+    void setSliceAudioGain(int sliceId, int gainPercent) override;
+    void setSliceAudioPan(int sliceId, int panPercent) override;
+
+    // The RADIO's own output level and mute, applied to the speaker stream only.
+    //
+    // Separate from the per-slice stage above, and both apply: the slice stage is
+    // how loud this receiver is wherever it is heard, this is how loud the RADIO
+    // plays. Without it the radio gets the samples at whatever the slice stage
+    // left them -- full scale by default -- and the G2 has no speaker volume
+    // register to turn that down with.
+    void setLineoutGain(int percent) override;
+    void setLineoutMute(bool mute) override;
     void setPanCenter(const QString& panId, double hz, PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanFrameRate(const QString& panId, int fps) override;
@@ -78,6 +100,7 @@ public:
     void setPanRfGain(const QString& panId, int gainDb) override;
     void setPanAverage(const QString& panId, int average) override;
     void setPanWeightedAverage(const QString& panId, bool on) override;
+    void setPanPixelWidth(const QString& panId, int pixels) override;
     void setCwPitch(int hz) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
@@ -124,6 +147,10 @@ public:
     [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
     [[nodiscard]] bool noiseBlankerOnForTest() const noexcept { return m_nbOn; }
     [[nodiscard]] int noiseBlankerLevelForTest() const noexcept { return m_nbLevel; }
+    // The radio's own output level/mute as the lineout seam last set them. Same
+    // *ForTest convention as the four above: read-only, not part of the seam.
+    [[nodiscard]] int lineoutGainPercentForTest() const noexcept { return m_lineoutGainPercent; }
+    [[nodiscard]] bool lineoutMutedForTest() const noexcept { return m_lineoutMuted; }
     // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
     // smoothing and publish tick can be tested without a live radio.
     void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
@@ -149,8 +176,23 @@ private:
     // actually exists.
     P2Client::Params m_pendingParams;
     AnanRxDsp::Config m_pendingDspConfig;
+    // Panadapter points from the panel width (setPanPixelWidth()). Kept here
+    // as well as in AnanRxDsp so a connect that happens after the width
+    // arrives still builds the analyzer at that count.
+    int m_panPoints = static_cast<int>(kDroopCorrectionFftSize);
     void emitSliceState();
     void emitPanState();
+
+    // Convert one demodulated block to the radio's speaker stream and hand it to
+    // P2Client. Takes the SAME buffer the speakers get, after the receiver's
+    // audio stage, so mute and the fader reach the radio as well.
+    //
+    // Does nothing unless the session was started with speaker audio enabled.
+    void sendSpeakerAudioToRadio(const QByteArray& stereoFloat);
+    // Build or discard the two resamplers for the current audio rate. Called
+    // whenever the DSP is configured or rebuilt, because the rate is theirs to
+    // follow and a rate change invalidates their filter state.
+    void resetSpeakerResamplers();
     // Declares SLC:LEVEL to the meter seam; on every connect, before the
     // first reading can arrive. See its definition.
     void defineMeters();
@@ -343,6 +385,52 @@ private:
     // retained setting. Defaults match AnanRxDsp::Config's.
     bool m_nbOn = false;
     int m_nbLevel = 50;
+
+    // The receiver's audio stage as the three setters last left it, and the
+    // values emitSliceState() publishes so the controls can show what is
+    // actually applied rather than what they last sent.
+    //
+    // Retained across a rate change and a reconnect, like the blanker and unlike
+    // AGC: a rate change is not an instruction to unmute or to move the fader,
+    // and having audio come back at a different level than the operator set it
+    // to is the kind of surprise that reads as a fault in the radio.
+    //
+    // 100 and 50 are unity and centred, so a backend nobody has touched sounds
+    // exactly as it did before these existed.
+    bool m_sliceAudioMuted = false;
+    int m_sliceAudioGainPercent = 100;
+    int m_sliceAudioPanPercent = 50;
+
+    // ---- speaker stream (DDC Audio, PC -> radio) ----
+    //
+    // Live copy of the connect-time parameter, so the audio path tests one bool
+    // rather than reaching into m_pendingParams on every block.
+    bool m_speakerAudioEnabled = false;
+    // The radio's own output level/mute, as setLineoutGain()/setLineoutMute()
+    // last left them.
+    //
+    // 50 MATCHES RadioModel's OWN DEFAULT for the same value, deliberately: the
+    // model resets to 50 on every radio change, and a backend that started at 100
+    // instead would put the radio at full scale for as long as it took the
+    // operator to touch the slider. They are two halves of one setting and a
+    // disagreement between them is audible.
+    int m_lineoutGainPercent = 50;
+    bool m_lineoutMuted = false;
+    // TWO resamplers, one per channel, and NEVER Resampler's stereo helper:
+    // processStereoToStereo() averages L and R to mono and duplicates the result
+    // back, which would silently undo the balance applied a few lines earlier and
+    // collapse a diversity pair to one ear's worth of information. The engine's
+    // own output resampler is built the same way for the same reason
+    // (docs/architecture/audio-pipeline.md, "24 kHz to 48 kHz upsampling").
+    std::unique_ptr<Resampler> m_speakerResampleL;
+    std::unique_ptr<Resampler> m_speakerResampleR;
+    // Deinterleave/convert scratch, retained so a steady stream does not
+    // allocate once per block in the audio path.
+    std::vector<float> m_speakerSrcL;
+    std::vector<float> m_speakerSrcR;
+    QByteArray m_speakerOutL;
+    QByteArray m_speakerOutR;
+    std::vector<qint16> m_speakerInterleaved;
 
     // Fixed identifiers -- Phase 1b is exactly one slice, one pan.
     static constexpr int kSliceId = 0;

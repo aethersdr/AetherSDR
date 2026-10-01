@@ -312,7 +312,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canCreateSlices = false;
     c.maxSlices = m.receivers;
-    c.maxPanadapters = m.hasScope ? m.receivers : 0;
+    // The implemented scope path publishes one panId ("0"), even on models
+    // with two receivers. Advertise streams we can supply, not hardware VFOs
+    // (#5347); independent receiver/scope selection remains separate work.
+    c.maxPanadapters = m.hasScope ? 1 : 0;
     c.tuningMinHz = static_cast<double>(m.tuningMinHz);
     c.tuningMaxHz = static_cast<double>(m.tuningMaxHz);
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio,

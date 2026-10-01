@@ -253,6 +253,7 @@ void AnanRxDsp::installChannel(RebuildResult result)
     // The analyzer was built for m_config.spectrumFps as it stood when the
     // build began; bring it up to the operator's current rate.
     result.analyzer->setFramesPerSecond(m_config.spectrumFps);
+    result.analyzer->setNumPoints(m_config.panPoints);
     result.analyzer->setAverageTimeMs(m_config.spectrumAverageMs);
     result.analyzer->setLogAverage(m_config.spectrumLogAverage);
     // Analyzer before channel: the outgoing analyzer uses the outgoing
@@ -362,6 +363,17 @@ void AnanRxDsp::setSpectrumAverageMs(int ms)
     // up at install.
     if (m_analyzer && !m_rebuildInFlight)
         m_analyzer->setAverageTimeMs(ms);
+}
+
+void AnanRxDsp::setPanPoints(int points)
+{
+    if (points < 2)
+        return;
+    m_config.panPoints = std::min(points, AnanPanAnalyzer::kMaxPoints);
+    // Same deferral as setSpectrumRateFps(): the incoming analyzer picks it
+    // up at install.
+    if (m_analyzer && !m_rebuildInFlight)
+        m_analyzer->setNumPoints(m_config.panPoints);
 }
 
 void AnanRxDsp::setSpectrumLogAverage(bool on)
@@ -494,7 +506,7 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         // the six valid DDC0 rates.
         const DroopCorrectionTable& droopTable =
             droopTableForRate(m_config.inputSampleRateHz / 1000);
-        applyDroopCorrectionDb(m_bins, droopTable);
+        applyDroopCorrectionDbResampled(m_bins, droopTable);
         // Cosmetic fade for the true edge. See applyEdgeFade()'s own
         // comment for why this exists instead of a larger capDb.
         //

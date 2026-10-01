@@ -1,7 +1,10 @@
 #pragma once
 
 #include "core/backends/anan/P2Protocol.h"
+#include "core/backends/anan/AnanSpeakerPacing.h"
 
+#include <QByteArray>
+#include <QElapsedTimer>
 #include <QHostAddress>
 #include <QObject>
 #include <QSet>
@@ -84,6 +87,17 @@ public:
         int adc0AttenuationDb = 0;
         int adc1AttenuationDb = 0;
 
+        // Send demodulated RX audio back to the radio so its own codec and
+        // speaker reproduce it (DDC Audio, kSpeakerAudioPort).
+        //
+        // DEFAULT OFF, unlike every other option here, and deliberately so: this
+        // is the one field that makes the client originate a continuous outbound
+        // stream -- 750 packets a second for as long as the session lasts. A
+        // radio that was silent before an upgrade should not start making noise
+        // because of one, and a host that was sending nothing should not start
+        // sending 260 kB/s, so this waits to be asked for.
+        bool speakerAudioEnabled = false;
+
         // Multi-DDC session. EMPTY (the default) means "single DDC0
         // session", built from ddc0RateKsps/ddc0AdcIndex above -- so every
         // existing caller keeps the exact bench-validated single-DDC
@@ -128,6 +142,34 @@ public:
     // 100 ms, so a value held anywhere else would be overwritten by the next
     // tick. An out-of-range adcIndex is ignored.
     Q_INVOKABLE void setStepAttenuationDb(int adcIndex, int db);
+
+    // Hand over demodulated receiver audio for the radio's own speaker (DDC
+    // Audio, kSpeakerAudioPort). `interleavedInt16` is L,R,L,R... signed 16-bit
+    // in HOST order at kSpeakerSampleRateHz; the big-endian conversion is
+    // buildSpeakerAudio()'s job, not the caller's.
+    //
+    // ONE CALL PER DSP BLOCK, not per packet. The queue, the pacing and the
+    // sends all live on this object's thread, so a block of audio crosses the
+    // thread boundary about once every 20 ms instead of 750 times a second.
+    //
+    // Does nothing unless the session was started with speakerAudioEnabled.
+    Q_INVOKABLE void enqueueSpeakerAudio(const QByteArray& interleavedInt16);
+
+    // How many status packets reported the radio's speaker FIFO running dry, and
+    // the level the last one carried. The underflow count is THE verdict on the
+    // send pacing: a healthy stream reports zero for the life of the session.
+    //
+    // Readable rather than logged-only so a bench run has a number to quote and a
+    // test has something to assert. The level is in FIFO locations, not samples --
+    // see HighPriorityStatus::speakerFifoLevel.
+    [[nodiscard]] int speakerUnderflowReports() const noexcept
+    {
+        return m_speakerUnderflowReports;
+    }
+    [[nodiscard]] std::uint16_t lastSpeakerFifoLevel() const noexcept
+    {
+        return m_lastSpeakerFifoLevel;
+    }
 
     // Change one DDC's sample rate on a LIVE session -- no stop, no restart,
     // no reconnect. Returns false (sending nothing) if the session is not
@@ -197,10 +239,12 @@ private slots:
     void onReadyRead();
     void onKeepaliveTick();
     void onConnectTimeout();
+    void onSpeakerDrainTick();
 
 private:
     friend struct P2ClientTestAccess;
     void handleDatagram(std::span<const std::uint8_t> bytes, quint16 senderPort);
+    void noteSpeakerFifoStatus(const HighPriorityStatus& status);
 
     // p.8: "a Command & Control packet must be sent at least every second
     // (every 100 mS is recommended). Should a C&C packet not be received,
@@ -219,6 +263,28 @@ private:
 
     QUdpSocket* m_socket = nullptr;
     QTimer* m_keepaliveTimer = nullptr;
+    // Releases queued speaker packets. The rate is set by how many packets the
+    // pacer releases, not by how often this fires -- but the two are coupled
+    // through the pacer's target, which has to be big enough to cover several of
+    // these ticks. See SpeakerAudioPacer::kTargetFifoFrames: a 5 ms tick drains
+    // 240 frames from the radio, and a target that could not hold more than that
+    // made the radio's audio unintelligible.
+    QTimer* m_speakerDrainTimer = nullptr;
+    static constexpr int kSpeakerDrainMs = 5;
+    // Queued whole packets' worth of samples, oldest first. Bounded: audio the
+    // radio cannot take is dropped rather than accumulated, because unbounded
+    // queueing of a realtime stream converts a transient stall into permanent
+    // latency that never recovers.
+    static constexpr int kMaxQueuedSpeakerPackets = 64;  // ~85 ms
+    std::vector<std::int16_t> m_speakerPending;
+    SpeakerAudioPacer m_speakerPacer;
+    std::uint32_t m_speakerSequence = 0;
+    QElapsedTimer m_speakerClock;
+    bool m_speakerAudioEnabled = false;
+    // Logged once per session, not per drop: this fires in the audio path.
+    bool m_speakerOverflowLogged = false;
+    int m_speakerUnderflowReports = 0;
+    std::uint16_t m_lastSpeakerFifoLevel = 0;
     QTimer* m_connectTimeoutTimer = nullptr;
     // Whatever start() was actually called with -- onConnectTimeout()'s
     // message reports this, not kConnectTimeoutMs, so the number an operator

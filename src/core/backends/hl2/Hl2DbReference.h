@@ -274,12 +274,36 @@ public:
     // measurement named beside kFullScaleDbmAtZeroGain is made.
     bool isCalibrated() const noexcept { return m_fullScaleMeasured; }
 
-    // The gain the uncalibrated scale is referred to. At this gain the offset
-    // is zero, so the reported number is raw dBFS. Defaults to the backend's
-    // default LNA setting, which is what keeps the displayed floor where the
-    // operator has always seen it.
-    void setReferenceLnaGainDb(double db) noexcept { m_referenceLnaGainDb = db; }
-    double referenceLnaGainDb() const noexcept { return m_referenceLnaGainDb; }
+    // THE GAIN THE AGC CEILING IS REFERRED TO: the shipped LNA default, and a
+    // CONSTANT, not a setting.
+    //
+    // There used to be a setReferenceLnaGainDb() here and a member behind it.
+    // Nothing in src/ or tests/ ever called it (#5625 review), so the
+    // "reference" was this constant with a setter around it. It is removed
+    // rather than wired, because there is nothing it would be right to wire
+    // it to:
+    //
+    //   * Only lnaOffsetDb() -- and so only the AGC ceiling -- reads it. The
+    //     display moved to the absolute offsetDb() and no longer has a
+    //     reference gain at all; the comment that stood here ("at this gain
+    //     the offset is zero, so the reported number is raw dBFS") described
+    //     the retired relative display form.
+    //   * The ceiling's compatibility guarantee IS a fixed reference: at the
+    //     shipped default the operator's AGC-T maps through the plain
+    //     0.6-per-unit table, and every stored gain gets 0.6*T + (default -
+    //     stored), which hl2_dbref_test pins across the whole range. A
+    //     reference that moved -- to the connect-time gain, a band's stored
+    //     gain, or the auto-gain baseline -- would move every operator's
+    //     heard AGC-T on events they did not associate with it.
+    //   * Nothing an operator does can move the shipped default (the #5829 fix took
+    //     the persisted "defaultDb" key out for exactly that reason), so a
+    //     setter here would be a second source of truth for a value no action
+    //     reaches -- the same dead public surface Principle IX removed
+    //     setTrimDb for, above.
+    //
+    // If a per-radio reference is ever needed, it lands with the thing that
+    // sets it and the test that says why, not as a setter nobody calls.
+    static constexpr double kReferenceLnaGainDb = kDefaultLnaGainDb;
 
     // The whole point: subtracting the gain we applied is what keeps a signal
     // of constant strength reading the same dBm across a gain change.
@@ -325,7 +349,7 @@ public:
     // every operator's AGC-T the moment they connected.
     double lnaOffsetDb() const noexcept
     {
-        return m_referenceLnaGainDb - m_lnaGainDb;
+        return kReferenceLnaGainDb - m_lnaGainDb;
     }
 
     // The operator's AGC-T, referred to this reference. Same invariant as the
@@ -342,7 +366,6 @@ public:
 
 private:
     double m_lnaGainDb = kDefaultLnaGainDb;
-    double m_referenceLnaGainDb = kDefaultLnaGainDb;
     double m_fullScaleDbm = kFullScaleDbmAtZeroGain;
 
     // DERIVED UNTIL SOMEBODY MEASURES IT. Only setFullScaleDbm sets this, and

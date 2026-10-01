@@ -606,9 +606,17 @@ void productionCapabilityContracts()
     // a DSP build and therefore is not socket-free.
     anan::AnanBackend anan;
     const auto ananCaps = anan.capabilities();
-    check(!ananCaps.receiveModeControl && !ananCaps.receiveFilterControl && !ananCaps.receiveAudioControl
+    check(!ananCaps.receiveModeControl && !ananCaps.receiveFilterControl
         && !ananCaps.receivePanCenterControl && ananCaps.receivePanBandwidthControl,
         "ANAN exposes qualified bandwidth only, not center that implicitly retunes");
+    // Audio IS declared now: the backend applies gain and mute to the block it
+    // publishes, which is what the record promises. Before that it was absent and
+    // correctly so -- the three setters were IRadioBackend's no-ops, so declaring
+    // it would have offered a control that moved and did nothing.
+    check(ananCaps.receiveAudioControl
+        && ananCaps.receiveAudioControl->authority
+               == SliceFrequencyControl::Authority::Engine,
+        "ANAN declares Engine-authority receive audio, because it applies it");
     icom::IcomCivBackend icom;
     const auto icomCaps = icom.capabilities();
     check(!icomCaps.receiveModeControl && !icomCaps.receiveFilterControl && !icomCaps.receiveAudioControl

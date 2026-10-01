@@ -706,6 +706,8 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
                           anan::AnanSettings::bypassAdc0Filters());
         req.params.insert(QStringLiteral("anan.bypassAdc1Filters"),
                           anan::AnanSettings::bypassAdc1Filters());
+        req.params.insert(QStringLiteral("anan.speakerAudioEnabled"),
+                          anan::AnanSettings::speakerAudioEnabled());
         return;
     }
 
@@ -1313,13 +1315,31 @@ void RadioModel::setupBackend(const QString& family)
 
     // meterId is "SOURCE:NAME" (e.g. "TX:FWDPWR"), matching MeterDef's own
     // source/name pair rather than inventing a second naming scheme.
+    //
+    // A backend with SEVERAL of the same meter — an HL2 running more than one
+    // receiver publishes an S-meter per receiver — needs a third field, the
+    // sourceIndex, and this signal has no room for one. Until it does, the
+    // index rides on the source token as trailing digits and
+    // MeterModel::splitMeterId takes it back off. That is the honest shape of
+    // it: a source index smuggled through a name, because the alternative is a
+    // signature change to IRadioBackend.
+    //
+    // WITHOUT the index this is worse than a dropped reading. findMeter()
+    // treats sourceIndex -1 as match-any and returns the FIRST definition with
+    // that source and name, so every receiver's level would land on the lowest
+    // one — a plausible wrong number in place of an honest absence. An id with
+    // no digits still resolves match-any, which is what every single-instance
+    // meter ("TX:FWDPWR", "RAD:PATEMP") has always relied on.
     connect(m_backend.get(), &IRadioBackend::meterUpdate, this,
             [this](const QString& meterId, double value) {
-        const int colon = meterId.indexOf(QLatin1Char(':'));
-        if (colon <= 0)
+        QString source;
+        QString name;
+        int sourceIndex = -1;
+        if (!MeterModel::splitMeterId(meterId, &source, &name, &sourceIndex)) {
             return;
-        m_meterModel.updateValueByName(meterId.left(colon), meterId.mid(colon + 1),
-                                       static_cast<float>(value));
+        }
+        m_meterModel.updateValueByName(source, name,
+                                       static_cast<float>(value), sourceIndex);
     });
 
     // aetherd RFC 2.3: TransmitModel touchpoint. The backend decodes the five
@@ -6399,6 +6419,20 @@ bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
         pan->setLocalWeightedAverage(on);
     }
     m_backend->setPanWeightedAverage(backendPanIdFor(panId), on);
+    return true;
+}
+
+bool RadioModel::requestLocalPanPixelWidth(const QString& panId, int points)
+{
+    // Local-shaping backends only, as requestLocalPanWeightedAverage(): on
+    // Flex the caller still sends the xpixels= wire text itself. Unlike that
+    // one, nothing is mirrored into PanadapterModel: the width is not an
+    // operator setting but a fact of the window, re-sent on every resize,
+    // and fftXPixels() was never echoed for a local backend either.
+    if (panId.isEmpty() || !shapesDisplayRatesLocally()) {
+        return false;
+    }
+    m_backend->setPanPixelWidth(backendPanIdFor(panId), points);
     return true;
 }
 
@@ -12068,6 +12102,15 @@ void RadioModel::setLineoutGain(int v)
     m_lineoutGain = v;
     qCDebug(lcAudio) << "setLineoutGain:" << v;
     sendCmd(QString("mixer lineout gain %1").arg(v));
+    // The same request, typed, for a backend with no command plane to receive the
+    // string on. Without it this control reached a Flex and nothing else, so on
+    // every other radio the master volume had no effect at all once PC Audio was
+    // off -- MainWindow::applyMasterVolume() routes here in exactly that case.
+    // Same shape as the rx-antenna and pan-dimension calls above: guarded on
+    // usesFlexCommandPlane() so a Flex is not told twice.
+    if (m_backend && !usesFlexCommandPlane()) {
+        m_backend->setLineoutGain(v);
+    }
     emit audioOutputChanged();
 }
 
@@ -12093,6 +12136,12 @@ void RadioModel::setLineoutMute(bool m)
 {
     qCDebug(lcAudio) << "setLineoutMute:" << m;
     sendCmd(QString("mixer lineout mute %1").arg(m ? 1 : 0));
+    // Sent unconditionally, like the command above and for the reason this
+    // function's own comment gives: a mute is a request, and a model that has
+    // drifted from the radio must stay recoverable from the UI.
+    if (m_backend && !usesFlexCommandPlane()) {
+        m_backend->setLineoutMute(m);
+    }
     if (m_lineoutMute != m) {
         m_lineoutMute = m;
         emit audioOutputChanged();

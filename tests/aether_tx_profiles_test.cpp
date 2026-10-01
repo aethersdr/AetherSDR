@@ -48,6 +48,9 @@ private slots:
     void theStoredCopyCarriesNoNameOfItsOwn();
     void aRefusedWriteKeepsTheLibraryAndReportsFailure();
     void roundTripsTheLiveTransmitChain();
+    void exportsAndRestoresCompressorDriveAndPhase();
+    void legacyCompressorProfilesKeepCurrentDriveAndPhase();
+    void importedCompressorValuesAreClamped();
     void aReceiveExportIsRefusedByKind();
     void legacyPresetsMigrateOnFirstOpen();
     void migrationDoesNotUndoADeliberateDelete();
@@ -280,6 +283,86 @@ void AetherTxProfilesTest::roundTripsTheLiveTransmitChain()
     QVERIFY(chain.size() >= 2);
     QCOMPARE(chain.at(0), AudioEngine::TxChainStage::Comp);
     QCOMPARE(chain.at(1), AudioEngine::TxChainStage::Gate);
+}
+
+void AetherTxProfilesTest::exportsAndRestoresCompressorDriveAndPhase()
+{
+    AudioEngine engine;
+    AetherTxProfiles lib(&engine, nullptr);
+    ChannelStripPresets presets(&engine);
+    auto* comp = engine.clientCompTx();
+    QVERIFY(comp);
+
+    comp->setDriveDb(7.5f);
+    comp->setPhaseRotatorStages(4);
+    QVERIFY(lib.saveFromCurrent("Broadcast"));
+
+    const QString path = m_home.filePath("compressor.json");
+    QVERIFY(presets.exportCurrentToFile("Broadcast", path));
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QJsonObject exported = QJsonDocument::fromJson(f.readAll())
+                                     .object()
+                                     .value("comp").toObject();
+    QVERIFY(exported.contains("driveDb"));
+    QVERIFY(exported.contains("phaseRotatorStages"));
+    QCOMPARE(exported.value("driveDb").toDouble(), 7.5);
+    QCOMPARE(exported.value("phaseRotatorStages").toInt(), 4);
+
+    comp->setDriveDb(1.0f);
+    comp->setPhaseRotatorStages(1);
+    QVERIFY(lib.loadProfile("Broadcast"));
+    QVERIFY(qAbs(comp->driveDb() - 7.5f) < 0.01f);
+    QCOMPARE(comp->phaseRotatorStages(), 4);
+}
+
+void AetherTxProfilesTest::legacyCompressorProfilesKeepCurrentDriveAndPhase()
+{
+    AudioEngine engine;
+    auto* comp = engine.clientCompTx();
+    QVERIFY(comp);
+    comp->setDriveDb(9.0f);
+    comp->setPhaseRotatorStages(5);
+
+    const QJsonObject legacy{
+        { "comp", QJsonObject{
+            { "enabled", true },
+            { "thresholdDb", -24.0 },
+            { "ratio", 4.0 },
+        } },
+    };
+    ChannelStripPresets::applyTxJson(&engine, legacy);
+
+    QVERIFY(qAbs(comp->driveDb() - 9.0f) < 0.01f);
+    QCOMPARE(comp->phaseRotatorStages(), 5);
+    QVERIFY(qAbs(comp->thresholdDb() - (-24.0f)) < 0.01f);
+}
+
+void AetherTxProfilesTest::importedCompressorValuesAreClamped()
+{
+    AudioEngine engine;
+    auto* comp = engine.clientCompTx();
+    QVERIFY(comp);
+
+    ChannelStripPresets::applyTxJson(
+        &engine, QJsonObject{
+            { "comp", QJsonObject{
+                { "driveDb", 1000.0 },
+                { "phaseRotatorStages", 1000.0 },
+            } },
+        });
+    QCOMPARE(comp->driveDb(), 18.0f);
+    QCOMPARE(comp->phaseRotatorStages(), 6);
+
+    ChannelStripPresets::applyTxJson(
+        &engine, QJsonObject{
+            { "comp", QJsonObject{
+                { "driveDb", -1000.0 },
+                { "phaseRotatorStages", -1000.0 },
+            } },
+        });
+    QCOMPARE(comp->driveDb(), 0.0f);
+    QCOMPARE(comp->phaseRotatorStages(), 0);
 }
 
 // The channel-strip library this store migrates from: both directions in one

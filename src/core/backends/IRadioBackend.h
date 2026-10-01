@@ -101,7 +101,7 @@ struct MemoryRecallDetails {
 //
 //  2. EVERY SEAM SIGNAL IS EMITTED FROM THAT THREAD. This includes the
 //     high-rate data plane (audioFrameReady, sliceAudioFrameReady,
-//     spectrumFrameReady, waterfallRowReady, meterUpdate) and the cadence
+//     spectrumFrameReady, meterUpdate) and the cadence
 //     signals (linkStatsUpdated). A backend whose socket, DSP or timer lives
 //     on a worker thread brings the result back to its own thread FIRST — a
 //     queued connection with `this` as the receiver context, or
@@ -439,6 +439,21 @@ public:
         Q_UNUSED(on);
     }
 
+    // How many screen pixels the pan's full reported bandwidth would cover
+    // -- the panel's device-pixel width, widened by any display-side crop --
+    // so a backend that computes its own spectrum can return one point per
+    // pixel instead of a fixed count stretched across the panel. A Flex is
+    // told the same thing as `xpixels` on its own wire.
+    //
+    // Default no-op: a Flex radio takes xpixels on the wire, and a
+    // host-computed backend that does not override this keeps its own
+    // fixed point count.
+    virtual void setPanPixelWidth(const QString& panId, int pixels)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(pixels);
+    }
+
     // ---- per-slice audio ----
     //
     // A Flex mixes its slices ON THE RADIO, so these are wire commands to it and
@@ -463,6 +478,26 @@ public:
         Q_UNUSED(sliceId);
         Q_UNUSED(panPercent);
     }
+
+    // ---- the RADIO's own audio output ----
+    //
+    // How loud the radio plays, and whether it plays at all. Distinct from the
+    // per-slice setters above and from the client's master volume, and all three
+    // are needed because they answer different questions: per-slice is "how loud
+    // is this receiver", the client master is "how loud is this COMPUTER's
+    // output", and this is "how loud is the RADIO's output".
+    //
+    // A Flex takes these as wire commands (`mixer lineout gain`), so these
+    // defaults are never reached there. A backend that demodulates on this host
+    // and feeds the radio's codec itself has to apply them to the samples,
+    // because there may be nothing on the radio that can: an ANAN-G2 exposes a
+    // speaker MUTE and no speaker volume register at all, so unscaled samples
+    // reach the operator at full scale with no way to turn them down.
+    //
+    // Percent, 0..100, matching the per-slice scale rather than introducing a
+    // second one at the same seam.
+    virtual void setLineoutGain(int percent) { Q_UNUSED(percent); }
+    virtual void setLineoutMute(bool mute) { Q_UNUSED(mute); }
 
     // Move transmit to this slice. A radio with one transmitter and several
     // receivers has to MOVE it — retarget the TX oscillator, mode and passband —
@@ -1378,8 +1413,17 @@ signals:
     // Declared here so backends have a normalized outlet for spectrum/waterfall/
     // audio; the concrete zero-copy/binary frame formats are step-4 work. Until
     // then a backend may relay the existing in-tree frame types.
+    //
+    // There is deliberately NO separate waterfall outlet. RadioModel derives
+    // the waterfall row from spectrumFrameReady (onBackendSpectrumFrame, paced
+    // by the pan's waterfall rate), so a backend's spectrum frame IS its row.
+    // A waterfallRowReady(int, QByteArray) used to be declared here; RTL-SDR
+    // emitted it with the byte-identical frame and nothing ever connected it
+    // (#5678 row 2.5). Wiring it would have fed RTL every row twice and
+    // bypassed the pacing gate. A backend with a genuinely separate waterfall
+    // plane (as Flex has, via PanadapterStream) adds an outlet together with
+    // its consumer, in the same change.
     void spectrumFrameReady(int panId, const QByteArray& frame);
-    void waterfallRowReady(int panId, const QByteArray& row);
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 
 protected:

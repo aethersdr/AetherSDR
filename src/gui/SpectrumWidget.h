@@ -412,6 +412,9 @@ public:
         m_edgeTaperEnabled = enabled;
         markOverlayDirty();
     }
+    // True when the crop above is applied to what this widget is showing now
+    // (off for a Kiwi overlay, which brings its own uncropped span).
+    bool panEdgeCropActive() const;
 
     // Skip the fixed client-side EMA (SMOOTH_ALPHA) on the spectrum trace
     // when the backend already averages per the operator's FFT AVG
@@ -1451,7 +1454,6 @@ private:
     // so it must never feed a setPanBandwidth() call or similar (that
     // coupling caused a documented zoom-out regression). Center is
     // unaffected: the crop is symmetric.
-    bool panEdgeCropActive() const;
     double effectiveBandwidthMhz() const;
     // Central (1 - 2*kEdgeTaperFraction) fraction of bins, or bins unchanged
     // when m_edgeTaperEnabled is false. Pairs with effectiveBandwidthMhz():

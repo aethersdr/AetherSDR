@@ -179,8 +179,8 @@ private:
     static constexpr int kPostLandSettleMs = 500;
     static constexpr int kPollIntervalMs = 200;
     // Sampling needs its own bound. Only the rate wait used to have one, so a
-    // feed that simply stopped -- a hidden or paused panadapter, a frame size
-    // that is not kDroopCorrectionFftSize, a quiet network drop -- left this
+    // feed that simply stopped -- a hidden or paused panadapter, frames too
+    // short to resample (onSpectrumFrame()), a quiet network drop -- left this
     // phase spinning forever: isRunning() stayed latched (making start() and
     // applyResult() permanent no-ops), the correction stayed bypassed, and
     // the radio sat parked at the sweep's rate. Generous against a low
