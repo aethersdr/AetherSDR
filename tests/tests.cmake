@@ -7008,11 +7008,8 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     anan_noise_blanker_readback_test
     automation_cell_test
     automation_menu_lookup_test
-<<<<<<< HEAD
     automation_sensitive_grab_command_test
-=======
     automation_ping_build_identity_test
->>>>>>> origin/main
     automation_gauge_verb_test
     automation_persist_diagnostics_test
     automation_server_gesture_test
