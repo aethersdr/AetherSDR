@@ -261,6 +261,7 @@ public:
     // hide entirely on RX.
     enum class PooDooSide { Tx, Rx };
     void setPooDooActiveSide(PooDooSide side);
+    void setTxAudioPathBlocked(bool blocked);
 
     // Reorder the TX DSP sub-containers inside the "tx_dsp" parent to
     // mirror the CHAIN's current stage order.  Call whenever the user
@@ -438,6 +439,7 @@ private:
     ClientReverbApplet* m_clientReverbApplet{nullptr};
     ClientRxDspApplet*  m_clientRxDspApplet{nullptr};
     ClientChainApplet* m_clientChainApplet{nullptr};
+    bool m_txAudioPathBlocked{false};
     CatControlApplet* m_catControlApplet{nullptr};
     DaxApplet*     m_daxApplet{nullptr};
     TciApplet*     m_tciApplet{nullptr};

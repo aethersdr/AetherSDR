@@ -2726,6 +2726,26 @@ target_include_directories(firmware_uploader_test PRIVATE src)
 target_link_libraries(firmware_uploader_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME firmware_uploader_test COMMAND firmware_uploader_test)
 
+# #5958: socket-free capability policy; no discovery, transport, or radio peer.
+add_executable(tx_audio_path_policy_test tests/tx_audio_path_policy_test.cpp)
+target_include_directories(tx_audio_path_policy_test PRIVATE src)
+target_link_libraries(tx_audio_path_policy_test PRIVATE Qt6::Core)
+add_test(NAME tx_audio_path_policy_test COMMAND tx_audio_path_policy_test)
+
+# #5958: production CHAIN visibility under injected route notices; no sockets.
+add_executable(client_chain_audio_path_test
+    tests/client_chain_audio_path_test.cpp
+    src/gui/ClientChainApplet.cpp
+    src/gui/ClientChainWidget.cpp
+    src/gui/ClientRxChainWidget.cpp
+)
+target_include_directories(client_chain_audio_path_test PRIVATE src tests)
+target_link_libraries(client_chain_audio_path_test PRIVATE
+    aetherdesktop_support Qt6::Widgets)
+add_test(NAME client_chain_audio_path_test COMMAND client_chain_audio_path_test)
+set_tests_properties(client_chain_audio_path_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
 # Local Qt dialog + injected uploader callbacks; no radio connection or peer.
 add_executable(firmware_close_dialog_test
     tests/firmware_close_dialog_test.cpp
