@@ -370,9 +370,6 @@ QString audioErrorName(QAudio::Error error)
     case QAudio::NoError: return QStringLiteral("NoError");
     case QAudio::OpenError: return QStringLiteral("OpenError");
     case QAudio::IOError: return QStringLiteral("IOError");
-#if QT_VERSION < QT_VERSION_CHECK(6, 11, 0)
-    case QAudio::UnderrunError: return QStringLiteral("UnderrunError");
-#endif
     case QAudio::FatalError: return QStringLiteral("FatalError");
     default: return QStringLiteral("UnknownError");
     }

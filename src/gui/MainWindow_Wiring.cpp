@@ -4938,6 +4938,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfBlankerThreshold(1.15f);
         sw->setWfBlankerMode(0);
         sw->setShowCursorFreq(false);
+        // The panel below is synced with showGrid=true, so the widget must be
+        // told too: setShowGrid() updates the live grid and persists the key.
+        sw->setShowGrid(true);
         sw->setBackgroundImage(":/bg-default.jpg");
         sw->setBackgroundOpacity(80);
         sw->setBackgroundFillColor(QColor(0x0a, 0x0a, 0x14));
@@ -5012,9 +5015,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->resetDisplay3DSettings();
 
         // Sync all Display panel UI controls (incl. the 2D/3D combo + 3D Floor).
+        // The line width argument is in pixels and must equal the 1.0f applied
+        // to the widget above, or the slider and label read a width the trace
+        // is not drawn at.
         menu->syncDisplaySettings(0, 25, 70, false, QColor(0x00, 0xe5, 0xff),
                                   50, 15, true, 50, 100, 75, false, true, 0,
-                                  true, 2.0f, false, 0, 6, 70,
+                                  true, 1.0f, false, 0, 6, 70,
                                   QColor(0x00, 0xe5, 0xff), 100);
         menu->syncExtraDisplaySettings(false, 1.15f, 80, 0,
                                        QColor(0x0a, 0x0a, 0x14));

@@ -370,6 +370,19 @@ target_include_directories(backend_capability_revision_test PRIVATE src tests)
 target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
 
+# #5347: injected Icom model profiles, no session/transport/device.
+add_executable(icom_panadapter_capacity_test tests/icom_panadapter_capacity_test.cpp)
+target_include_directories(icom_panadapter_capacity_test PRIVATE src tests)
+target_link_libraries(icom_panadapter_capacity_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_panadapter_capacity_test COMMAND icom_panadapter_capacity_test)
+
+# #5890: bounded concrete-backend receive contracts. No bound socket, fake
+# firmware peer or hardware connection; Demo uses its own synthetic source.
+add_executable(backend_receive_contract_test tests/backend_receive_contract_test.cpp)
+target_include_directories(backend_receive_contract_test PRIVATE src tests)
+target_link_libraries(backend_receive_contract_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME backend_receive_contract_test COMMAND backend_receive_contract_test)
+
 # ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
 # backend records setAtu(); no sockets, no radio.
 add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
@@ -2387,6 +2400,35 @@ add_executable(audio_output_router_test
 target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
+
+# QtAudioBackendGuard: Qt 6.12's QtMultimedia segfaults enumerating audio
+# devices when its PipeWire backend cannot create a client context. One
+# executable, two scenarios, each in its own process. PipeWire is pointed at an
+# empty config dir, which is exactly the failing condition; no daemon is
+# contacted (socket-free). Linux only. Exits 77 when libpipewire is absent.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(qt_audio_backend_guard_test
+        tests/qt_audio_backend_guard_test.cpp
+        src/core/QtAudioBackendGuard.cpp
+    )
+    target_include_directories(qt_audio_backend_guard_test PRIVATE src)
+    target_link_libraries(qt_audio_backend_guard_test PRIVATE Qt6::Core Qt6::Multimedia ${CMAKE_DL_LIBS})
+    set(_aether_empty_pw_conf "${CMAKE_CURRENT_BINARY_DIR}/empty-pipewire-config")
+    file(MAKE_DIRECTORY "${_aether_empty_pw_conf}")
+    add_test(NAME qt_audio_backend_guard_no_config
+             COMMAND qt_audio_backend_guard_test no-config)
+    add_test(NAME qt_audio_backend_guard_user_choice
+             COMMAND qt_audio_backend_guard_test user-choice)
+    set_tests_properties(qt_audio_backend_guard_no_config qt_audio_backend_guard_user_choice
+        PROPERTIES SKIP_RETURN_CODE 77
+                   ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PIPEWIRE_CONFIG_DIR=${_aether_empty_pw_conf};PIPEWIRE_CONFIG_PREFIX=/nonexistent")
+    # Exercise the default-selection path even when the developer has chosen a
+    # backend in their shell. The user-choice scenario keeps its explicit value.
+    set_property(TEST qt_audio_backend_guard_no_config PROPERTY
+        ENVIRONMENT_MODIFICATION "QT_AUDIO_BACKEND=unset:")
+    set_property(TEST qt_audio_backend_guard_user_choice APPEND PROPERTY
+        ENVIRONMENT "QT_AUDIO_BACKEND=pulseaudio")
+endif()
 
 # Pure mode-policy regression for global AetherDSP selection (#4415).
 add_executable(aether_dsp_mode_policy_test
@@ -5145,6 +5187,13 @@ target_include_directories(backend_seam_affinity_test PRIVATE src tests)
 target_link_libraries(backend_seam_affinity_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME backend_seam_affinity_test COMMAND backend_seam_affinity_test)
 
+# #5678 row 2.5: every IRadioBackend signal has a consumer once RadioModel
+# has wired each family — no seam outlet emits into nothing. Socket-free.
+add_executable(backend_seam_consumer_test tests/backend_seam_consumer_test.cpp)
+target_include_directories(backend_seam_consumer_test PRIVATE src tests)
+target_link_libraries(backend_seam_consumer_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME backend_seam_consumer_test COMMAND backend_seam_consumer_test)
+
 add_executable(backend_family_switch_test tests/backend_family_switch_test.cpp)
 target_include_directories(backend_family_switch_test PRIVATE src tests)
 target_link_libraries(backend_family_switch_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -6702,6 +6751,8 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_label_theme_token_test
     atu_seam_gate_test
     backend_capability_revision_test
+    icom_panadapter_capacity_test
+    backend_receive_contract_test
     radio_capacity_declaration_test
     extension_namespace_gate_test
     control_availability_registry_test
