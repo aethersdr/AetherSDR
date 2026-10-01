@@ -13,7 +13,9 @@
 #include <QLoggingCategory>
 
 #include <algorithm>
+#include <array>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
