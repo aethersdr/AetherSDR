@@ -1428,6 +1428,40 @@ target_include_directories(hl2_slice_meter_lifecycle_test PRIVATE src tests)
 target_link_libraries(hl2_slice_meter_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_slice_meter_lifecycle_test COMMAND hl2_slice_meter_lifecycle_test)
 
+# HL2 backend seam on a default-constructed backend: capabilities, link edges,
+# span policy, CW hang ownership, tune drive and its health rows, notch ids.
+# Binds nothing: link edges are MetisClient's own signals emitted in-process.
+add_executable(hl2_backend_seam_test tests/hl2_backend_seam_test.cpp)
+target_include_directories(hl2_backend_seam_test PRIVATE src tests)
+target_link_libraries(hl2_backend_seam_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_backend_seam_test COMMAND hl2_backend_seam_test)
+
+# What a connect seeds (remembered span) and forgets (notches). Binds nothing:
+# boardMaxRx skips discovery and an immediate disconnect supersedes the start.
+add_executable(hl2_backend_session_scope_test tests/hl2_backend_session_scope_test.cpp)
+target_include_directories(hl2_backend_session_scope_test PRIVATE src tests)
+target_link_libraries(hl2_backend_session_scope_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_backend_session_scope_test COMMAND hl2_backend_session_scope_test)
+
+# MetisClient transport counters, gap rounding and link edges through the
+# packet-sink seam. No start(), no bind.
+add_executable(hl2_metis_link_counters_test tests/hl2_metis_link_counters_test.cpp)
+target_include_directories(hl2_metis_link_counters_test PRIVATE src)
+target_link_libraries(hl2_metis_link_counters_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_metis_link_counters_test COMMAND hl2_metis_link_counters_test)
+
+# HL2 linkStats seam, both halves: the backend's publish cadence and liveness,
+# and RadioModel's readouts and absent-vs-zero predicates. No socket.
+add_executable(hl2_link_stats_seam_test tests/hl2_link_stats_seam_test.cpp)
+target_include_directories(hl2_link_stats_seam_test PRIVATE src tests)
+target_link_libraries(hl2_link_stats_seam_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_link_stats_seam_test COMMAND hl2_link_stats_seam_test)
+
+add_executable(hl2_link_stats_model_seam_test tests/hl2_link_stats_model_seam_test.cpp)
+target_include_directories(hl2_link_stats_model_seam_test PRIVATE src tests)
+target_link_libraries(hl2_link_stats_model_seam_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_link_stats_model_seam_test COMMAND hl2_link_stats_model_seam_test)
+
 add_executable(client_eq_test
     tests/client_eq_test.cpp
     src/core/ClientEq.cpp
@@ -5002,6 +5036,27 @@ if(AETHER_ENABLE_HL2_TX_LOOPBACK_TEST)
         PRIVATE aethercore Qt6::Core Qt6::Network)
     add_test(NAME hl2_dsp_readback_sim_test COMMAND hl2_dsp_readback_sim_test)
     set_tests_properties(hl2_dsp_readback_sim_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# A killed AetherSDR must still send metis-stop, or the radio streams at a dead
+# host until power-cycled. Opt-in: the Python driver binds an EPHEMERAL UDP port
+# on 127.0.0.1, runs a real MetisClient against it in a child process, kills
+# the child and listens for the stop. Nothing else is contacted. Exit 77 = the
+# driver could not bind.
+option(AETHER_ENABLE_HL2_SIGNAL_STOP_TEST
+       "Build and register the opt-in HL2 signal-stop process test" OFF)
+if(AETHER_ENABLE_HL2_SIGNAL_STOP_TEST)
+    add_executable(hl2_signal_stop_child tests/hl2_signal_stop_child.cpp)
+    target_include_directories(hl2_signal_stop_child PRIVATE src)
+    target_link_libraries(hl2_signal_stop_child PRIVATE aethercore Qt6::Core Qt6::Network)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(NOT WIN32 AND Python3_Interpreter_FOUND)
+        add_test(NAME hl2_signal_stop_test
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/hl2_signal_stop_test.py
+                         $<TARGET_FILE:hl2_signal_stop_child>)
+        set_tests_properties(hl2_signal_stop_test PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
 endif()
 
 add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
