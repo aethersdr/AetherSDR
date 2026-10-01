@@ -811,6 +811,14 @@ private:
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
     AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
     void scheduleClientWaterfallRateSave(int panIndex, int rate);
+    // Two more values a Flex stores for a pan and a radio with no display
+    // engine does not: FFT FPS and the dBm scale. Same store, same deferral,
+    // same "only where the radio holds no copy" rule.
+    void scheduleClientFftFpsSave(int panIndex, int fps);
+    bool clientOwnsPanDbmRange() const;
+    void adoptClientOwnedDbmRange(const QString& panId, int panIndex,
+                                  float minDbm, float maxDbm);
+    void restoreClientOwnedDbmRange(PanadapterModel* pan, int panIndex);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();

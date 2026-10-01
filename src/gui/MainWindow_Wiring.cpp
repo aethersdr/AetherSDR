@@ -21,6 +21,7 @@
 #include "models/CwDecodeSettings.h"
 #include "core/backends/AutoRfGainControl.h"
 #include "core/ClientDisplaySettings.h"
+#include "core/DbmRangePlausibility.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include <QHBoxLayout>
 #include <QLabel>
@@ -172,24 +173,6 @@ bool memoryRevealTargetMatches(double actualMhz, double targetMhz)
 {
     return targetMhz <= 0.0
         || std::abs(actualMhz - targetMhz) <= kMemoryRevealTargetToleranceMhz;
-}
-
-bool dbmRangeLooksPlausible(float minDbm, float maxDbm)
-{
-    constexpr float kMinAllowedDbm = -180.0f;
-    constexpr float kMaxAllowedDbm = 80.0f;
-    constexpr float kMinRangeDb = 10.0f;
-    constexpr float kMaxRangeDb = 180.0f;
-
-    if (!std::isfinite(minDbm) || !std::isfinite(maxDbm)) {
-        return false;
-    }
-
-    const float rangeDb = maxDbm - minDbm;
-    return minDbm >= kMinAllowedDbm
-        && maxDbm <= kMaxAllowedDbm
-        && rangeDb >= kMinRangeDb
-        && rangeDb <= kMaxRangeDb;
 }
 
 SliceModel* kiwiAssignedSliceForPan(const RadioModel& radioModel,
@@ -3113,12 +3096,80 @@ void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
         return;
     }
     // Include scope in the key so a radio switch cannot overwrite a pending edit.
-    const QString key = QString::number(scope.family().size()) + QLatin1Char(':') + scope.family()
-        + QString::number(scope.radioId().size()) + QLatin1Char(':') + scope.radioId()
-        + QLatin1Char(':') + QString::number(panIndex);
+    const QString key = ClientDisplaySettings::pendingWriteKey(scope, panIndex, "waterfallRate");
     m_pendingDisplayWrites.schedule(key, [scope, panIndex, shapedLocally, rate] {
         ClientDisplaySettings::saveWaterfallRate(scope, panIndex, shapedLocally, rate);
     });
+}
+
+// FFT FPS on a radio whose display the engine shapes: the radio holds no
+// copy, so the client is the only memory there is. A Flex stores it and
+// reports it back; `shapedLocally` is false there and nothing is scheduled.
+void MainWindow::scheduleClientFftFpsSave(int panIndex, int fps)
+{
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    const bool shapedLocally = m_radioModel.shapesDisplayRatesLocally();
+    if (!shapedLocally || !scope.hasRadioIdentity() || panIndex < 0) {
+        return;
+    }
+    m_pendingDisplayWrites.schedule(
+        ClientDisplaySettings::pendingWriteKey(scope, panIndex, "fftFps"),
+        [scope, panIndex, shapedLocally, fps] {
+            ClientDisplaySettings::saveFftFps(scope, panIndex, shapedLocally, fps);
+        });
+}
+
+// True where the pan's dBm scale is the client's alone: see
+// ClientDisplaySettings::clientOwnsDbmRange.
+bool MainWindow::clientOwnsPanDbmRange() const
+{
+    return ClientDisplaySettings::clientOwnsDbmRange(
+        m_radioModel.shapesDisplayRatesLocally(),
+        m_radioModel.isConnected()
+            && m_radioModel.backendCapabilities().panBinsAbsolute());
+}
+
+// The operator moved the dBm scale on a radio that stores no range and
+// publishes none. Two things follow, and both are what a Flex's echo does for
+// a Flex: the pan model takes the range, so every site that re-seeds a widget
+// from the model (reconnect, a layout change) hands back this range and not
+// the model's built-in -130..-40; and the range is remembered for the next
+// start.
+void MainWindow::adoptClientOwnedDbmRange(const QString& panId, int panIndex,
+                                          float minDbm, float maxDbm)
+{
+    if (!clientOwnsPanDbmRange() || !dbmRangeLooksPlausible(minDbm, maxDbm)) {
+        return;
+    }
+    if (auto* pan = m_radioModel.panadapter(panId)) {
+        pan->setRange(minDbm, maxDbm);
+    }
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    if (!scope.hasRadioIdentity() || panIndex < 0) {
+        return;
+    }
+    m_pendingDisplayWrites.schedule(
+        ClientDisplaySettings::pendingWriteKey(scope, panIndex, "dbmRange"),
+        [scope, panIndex, minDbm, maxDbm] {
+            ClientDisplaySettings::saveDbmRange(scope, panIndex, true,
+                                                minDbm, maxDbm);
+        });
+}
+
+// The other half: put the remembered range into the pan MODEL before a widget
+// is primed from it, so that prime and every other site that re-seeds from the
+// model agree. No-op on a radio that owns or publishes its range.
+void MainWindow::restoreClientOwnedDbmRange(PanadapterModel* pan, int panIndex)
+{
+    if (!pan || !clientOwnsPanDbmRange()) {
+        return;
+    }
+    // A pending edit is newer than the stored row.
+    m_pendingDisplayWrites.flush();
+    if (const auto savedRange = ClientDisplaySettings::dbmRange(
+            m_radioModel.settingsScope(), panIndex, true)) {
+        pan->setRange(savedRange->minDbm, savedRange->maxDbm);
+    }
 }
 
 void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
@@ -3198,6 +3249,14 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         if (const auto savedRate = ClientDisplaySettings::waterfallRate(
                 m_radioModel.settingsScope(), sw->panIndex(), true)) {
             sw->setWfLineDuration(*savedRate);
+        }
+        // FFT FPS, the same way and for the same reason: no radio reports it
+        // here, so without this it came back at the widget default (25) after
+        // every restart. Restored into the widget BEFORE the request below,
+        // which then seeds the shaper and the pan model from it.
+        if (const auto savedFps = ClientDisplaySettings::fftFps(
+                m_radioModel.settingsScope(), sw->panIndex(), true)) {
+            sw->setFftFps(*savedFps);
         }
         m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
                                             sw->wfLineDuration());
@@ -3348,6 +3407,7 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         // congestion-aware throttle isn't holding the rates down (same rule as
         // the FPS slider — otherwise the clone fights the cap).
         dst->setFftFps(src->fftFps());
+        scheduleClientFftFpsSave(dst->panIndex(), src->fftFps());
         if (!m_adaptiveThrottleActive) {
             m_radioModel.requestPanDisplayRates(targetPanId, src->fftFps(),
                                                 /*wfMs=*/0);
@@ -4049,6 +4109,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // On reconnect the auto-adjust would animate from the wrong baseline and
         // fire dbmRangeChangeRequested with bogus values — which then locks out the
         // correct radio-reported range via the pendingDbm guard. (#3034)
+        //
+        // On a radio that stores no range and publishes none, the pan model
+        // only ever holds its built-in -130..-40, so that is what this line
+        // primed after every restart, whatever the operator had set.
+        restoreClientOwnedDbmRange(pan, sw->panIndex());
         sw->setDbmRange(pan->minDbm(), pan->maxDbm());
 
         // Also set here, not only from applyCapabilitiesToUi: a pane added
@@ -4268,6 +4333,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         armDbmRangeHandshake(minDbm, maxDbm);
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
+        // After the handshake is armed: the model's levelChanged then reads as
+        // the echo of this very request and completes it.
+        adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);
     });
     connect(sw, &SpectrumWidget::radioDbmHeadroomRecoveryRequested,
             this, [this, applet, sw, encoderDbmRange,
@@ -4331,12 +4399,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {
             sw->setDbmRange(minDbm, maxDbm);
             setStreamDbmRange(minDbm, maxDbm, true);
+            adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(),
+                                     minDbm, maxDbm);
             return;
         }
 
         armDbmRangeHandshake(minDbm, maxDbm);
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
+        adoptClientOwnedDbmRange(applet->panId(), sw->panIndex(), minDbm, maxDbm);
     });
 
     // ── TNF signals ──────────────────────────────────────────────────────
@@ -4659,6 +4730,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
             this, [this, applet, sw](int v) {
         sw->setFftFps(v);  // always update restore target for when throttle lifts
+        // The operator's value, saved before the throttle test: the adaptive
+        // cap is transient and must not decide what is remembered.
+        scheduleClientFftFpsSave(sw->panIndex(), v);
         if (m_adaptiveThrottleActive)
             return;
         // Through the model, not a raw sendCommand: on a backend that streams
@@ -4934,6 +5008,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfAutoBlackRadioSide(false);
         sw->setWfLineDuration(100);
         scheduleClientWaterfallRateSave(sw->panIndex(), 100);
+        scheduleClientFftFpsSave(sw->panIndex(), 25);
         sw->setWfBlankerEnabled(false);
         sw->setWfBlankerThreshold(1.15f);
         sw->setWfBlankerMode(0);

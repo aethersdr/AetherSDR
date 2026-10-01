@@ -16,22 +16,20 @@
 // that a future change which reintroduces an unechoed request has something
 // that fails rather than a warning nobody is watching.
 //
-// ⚠ dbmRangeLooksPlausible() is DUPLICATED here rather than exported: it is a
-// file-static in MainWindow_Wiring.cpp and linking that pulls in the whole GUI.
+// dbmRangeLooksPlausible() is the REAL predicate, from
+// core/DbmRangePlausibility.h. It used to be a file-static in
+// MainWindow_Wiring.cpp and this file carried a hand copy, because linking that
+// file pulls in the whole GUI; the copy could not catch a change to the real
+// constants. A third caller arrived (ClientDisplaySettings refuses to store or
+// restore a range that fails it), the predicate got its own header, and the
+// copy is gone: widen kMinAllowedDbm to -400 now and the checks below fail.
 //
-// Be honest about what that costs: this file cannot catch a change to the real
-// constants. If someone widens kMinAllowedDbm to -400, the copy below still
-// says -180 and every check here still passes while the ratchet this exists to
-// document sails past the guard unnoticed.
-//
-// What it DOES pin is the arithmetic and the shape of the runaway, which is the
-// part that was hard to characterise and easy to misread as "just a bad number".
-// The behavioural half — that a fixed-scale backend never arms the loop at all —
-// is pinned in icom_family_test via the capability, where it can be asserted
-// against the real code. Exporting the predicate (its own small header, or a
-// namespace in a linkable TU) would let this file close the gap; worth doing if
-// a third caller ever needs it.
+// What this file pins is the arithmetic and the shape of the runaway, which is
+// the part that was hard to characterise and easy to misread as "just a bad
+// number". The behavioural half — that a fixed-scale backend never arms the
+// loop at all — is pinned in icom_family_test via the capability.
 
+#include "core/DbmRangePlausibility.h"
 #include "core/backends/RadioCapabilities.h"
 
 #include <QtGlobal>
@@ -47,23 +45,7 @@ static void check(bool ok, const char* what)
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_failures; }
 }
 
-// Mirror of MainWindow_Wiring.cpp's dbmRangeLooksPlausible().
-static bool dbmRangeLooksPlausible(float minDbm, float maxDbm)
-{
-    constexpr float kMinAllowedDbm = -180.0f;
-    constexpr float kMaxAllowedDbm = 80.0f;
-    constexpr float kMinRangeDb = 10.0f;
-    constexpr float kMaxRangeDb = 180.0f;
-
-    if (!std::isfinite(minDbm) || !std::isfinite(maxDbm)) {
-        return false;
-    }
-    const float rangeDb = maxDbm - minDbm;
-    return minDbm >= kMinAllowedDbm
-        && maxDbm <= kMaxAllowedDbm
-        && rangeDb >= kMinRangeDb
-        && rangeDb <= kMaxRangeDb;
-}
+using AetherSDR::dbmRangeLooksPlausible;
 
 int main()
 {

@@ -2164,6 +2164,36 @@ Measured on the real HL2 at 96 kHz span, 25 fps pan:
 that the slider midpoint is the speed midpoint — the property whose absence was
 the second bug.
 
+#### What survives a restart, and where it is kept
+
+A Flex stores a pan's FFT FPS, FFT AVG, Wt Avg, waterfall rate and dBm range and
+reports them back on connect, which is why the client deliberately keeps no copy
+of them (`SpectrumWidget::loadSettings` deletes the old flat keys; #2465, #4126).
+The HL2 stores none of them and nothing reports them, so for a while only the
+waterfall rate came back: it alone was written to the per-radio `ClientDisplay`
+document. On the bench, FFT FPS 12 / AVG 40 / Wt Avg on returned as 25 / 0 / off
+(the widget defaults), and a dBm scale of -2.19 top / 120 dB returned as
+-40 / 90 — the `PanadapterModel` defaults, -130..-40, which pan wiring primes
+the widget from.
+
+FFT FPS and the dBm range now live in that one document too, keyed by pan slot
+(`core/ClientDisplaySettings.h`). The Display panel's FPS slider, Clone to all
+Pans and Reset to Defaults save; `MainWindow::wirePanDisplayStatus` restores
+into the widget before it seeds the shaper. **FFT AVG and Wt Avg are still not
+remembered.** On this radio they average nothing until the backend does
+(#5782), and their persistence is being built with a capability of its own in
+the RTL work; a second writer here would put two shapes under one key.
+
+The dBm range is the odd one: the pan model, not the widget, is what every
+re-seed reads, so a scale the operator moves is put into the model
+(`MainWindow::adoptClientOwnedDbmRange`) and the remembered one goes into the
+model before the first prime. FFT Floor Auto's own moves are not stored; with it
+on, the top is re-derived at every start and what survives is the dynamic range.
+
+Never as flat `AppSettings` keys, and only where
+`RadioModel::shapesDisplayRatesLocally()` is true. The range needs absolute bins
+as well, which keeps an Icom (whose backend publishes its own range) out.
+
 ### 15.2.3 There is no hardware black level to select
 
 The Display panel's **Black Level** button cycles the waterfall floor source:

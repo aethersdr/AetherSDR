@@ -1894,6 +1894,9 @@ void MainWindow::wirePanLifecycle()
                 // Prime the spectrum widget with the pan's current dBm range on
                 // reconnect so the noise-floor auto-adjust starts from the correct
                 // position. (#3034)
+                // A radio that stores no range hands back a model at its
+                // built-in -130..-40 here; the remembered one goes in first.
+                restoreClientOwnedDbmRange(pan, sw->panIndex());
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());
             }
             for (SliceModel* slice : m_radioModel.slices()) {

@@ -6421,6 +6421,21 @@ target_include_directories(client_display_settings_test PRIVATE src tests)
 target_link_libraries(client_display_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME client_display_settings_test COMMAND client_display_settings_test)
 
+# FFT FPS and the dBm range in the same ClientDisplay document.
+# Socket-free: the real settings store in a TestSettingsProfile, and three
+# backends constructed only to read capabilities() (Qt6::Network for their
+# headers, as noise_floor_auto_adjust_gate_test). AETHER_SOURCE_DIR because the
+# last block reads the MainWindow wiring as text: MainWindow links into no test.
+add_executable(client_display_pan_settings_test
+    tests/client_display_pan_settings_test.cpp)
+target_include_directories(client_display_pan_settings_test PRIVATE src tests)
+target_link_libraries(client_display_pan_settings_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+target_compile_definitions(client_display_pan_settings_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME client_display_pan_settings_test
+         COMMAND client_display_pan_settings_test)
+
 # Socket-free injection into real SliceModel/RxApplet/VfoWidget objects.
 # RadioModel supplies identity only; no connectRadio call or firmware peer.
 add_executable(rx_applet_squelch_reconciliation_test
@@ -6715,6 +6730,7 @@ set(AETHER_SETTINGS_CONSUMERS
     waterfall_time_marker_settings_test
     extended_tnf_settings_test
     client_display_settings_test
+    client_display_pan_settings_test
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
