@@ -1060,6 +1060,39 @@ target_link_libraries(icom_ptt_authority_test PRIVATE
     aethercore Qt6::Core)
 add_test(NAME icom_ptt_authority_test COMMAND icom_ptt_authority_test)
 
+# Socket-free RS-BA1 lease correlation and echo filtering. IcomSession is never
+# started; control packets go through IcomStream's test writer and back in via
+# the session's private payload slots.
+add_executable(icom_session_lease_test tests/icom_session_lease_test.cpp)
+target_include_directories(icom_session_lease_test PRIVATE src)
+target_link_libraries(icom_session_lease_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_session_lease_test COMMAND icom_session_lease_test)
+
+# Socket-free IcomCivBackend seam policy: stale generations, TX guards and
+# drive restore, compound mode and passband writes, pan intents, RX audio rate,
+# trace tags, lease diagnostics and scrub. Unstarted IcomSession; frames are
+# read from the backend's trace and replies enter onCivFrame directly.
+add_executable(icom_backend_seam_test tests/icom_backend_seam_test.cpp)
+target_include_directories(icom_backend_seam_test PRIVATE src tests)
+target_link_libraries(icom_backend_seam_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_backend_seam_test COMMAND icom_backend_seam_test)
+
+# Socket-free CI-V stall policy: IC-9700 0x04 restart ladder vs warn-only for
+# other models. Waits ~5 s once for the backend's monotonic clock to pass the
+# stall threshold; the serial stream is a never-bound IcomStream test writer.
+add_executable(icom_civ_stall_test tests/icom_civ_stall_test.cpp)
+target_include_directories(icom_civ_stall_test PRIVATE src)
+target_link_libraries(icom_civ_stall_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME icom_civ_stall_test COMMAND icom_civ_stall_test)
+set_tests_properties(icom_civ_stall_test PROPERTIES TIMEOUT 30)
+
+# Socket-free: RadioModel applies the IC-9700 per-deck PA ceiling from the
+# production IcomCivBackend's capabilities as the reported frequency moves.
+add_executable(icom_power_clamp_model_test tests/icom_power_clamp_model_test.cpp)
+target_include_directories(icom_power_clamp_model_test PRIVATE src tests)
+target_link_libraries(icom_power_clamp_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_power_clamp_model_test COMMAND icom_power_clamp_model_test)
+
 # Retired fake-radio fixtures. Positive session and backend convergence is
 # certified against real firmware through the automation bridge and radiocert;
 # deterministic protocol/model policy stays in socket-free tests. Keep these
