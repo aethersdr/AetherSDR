@@ -11,58 +11,32 @@ class QThread;
 
 namespace AetherSDR {
 
-// RadioSession — the aggregate that constitutes "a connected radio".
+// RadioSession — the aggregate that constitutes "a connected radio" (#3351,
+// #3445).
 //
-// Born from the #3351 monolith decomposition and the #3445 multi-radio
-// brief (Camp B): MainWindow historically embedded one RadioModel by
-// value plus the per-radio servers and lifecycle as loose members,
-// which hard-coded the single-radio assumption into the application
-// layer. RadioSession gives that bundle a name and an owner.
+// It owns:
+//   • the RadioModel (by value);
+//   • session identity (id, label) for a future session switcher;
+//   • the TciServer and CatPort[] LIFETIMES. Construction and wiring stay in
+//     MainWindow's wireRadioModel()/wireCatPorts() (UI-coupled). Both servers
+//     hold a raw RadioModel*, so they are deleted in ~RadioSession's body,
+//     which runs before m_radioModel destructs (the #2385 crash-on-quit
+//     class). MainWindow's shutdown still stops TCI early, via
+//     shutdownTciServer(), while the model and AudioEngine are alive; that
+//     destroys the controller and joins its TciIo worker.
 //
-// v1 scope (this class today):
-//   • owns the RadioModel (by value — identical construction semantics
-//     to the old MainWindow member)
-//   • carries session identity (id, label) for the future session
-//     switcher UI
+// Deliberately not here (#3445):
+//   • the wireDiscovery/wireRadioModel/wirePanLifecycle bodies — model->UI glue
+//     referencing MainWindow's widgets; moving them into models/ would invert
+//     the dependency. They stay in MainWindow_Session.cpp or a future GUI-layer
+//     per-session controller.
+//   • a per-session settings facade — per-radio state today is global,
+//     radio-side, or already namespaced (BandStackSettings keys
+//     "Radio_<serial>", the template to follow). Build it when a second
+//     session has a real consumer.
 //
-// v2 scope (this PR): TciServer + CatPort[] OWNERSHIP. Construction and
-// signal wiring stay in MainWindow's wireRadioModel()/wireCatPorts()
-// (they are UI-coupled); the session owns lifetime. Why this matters:
-// both server types hold a raw RadioModel* — if they outlive the model,
-// that's the #2385 crash-on-quit class. With the session owning both,
-// teardown order is structural: servers are deleted in ~RadioSession's
-// BODY, which the language guarantees runs before the m_radioModel
-// member destructs. The old manual delete-before-members dance in
-// MainWindow's shutdown path remains only for its *early* teardown
-// requirement (TCI must stop while model and AudioEngine are still alive)
-// and now routes through shutdownTciServer().
-//
-// TciServer remains on the model thread and owns its private TciIo worker.
-// shutdownTciServer() destroys the controller, which stops and joins that
-// worker before the model is destroyed.
-//
-// Planned v3+ scope (see #3445) — corrected after the v2 landing:
-//   • The wireDiscovery/wireRadioModel/wirePanLifecycle bodies do NOT
-//     belong here. They are ~100 connect() calls with ~76 references to
-//     MainWindow's widgets (applet panel, title bar, pan stack, spectrum
-//     widgets, status bar) — model→UI glue that is application-layer by
-//     nature. Moving it onto a models/ class would invert the dependency
-//     (RadioSession would have to #include the GUI). It stays in
-//     MainWindow_Session.cpp (or a future GUI-layer per-session
-//     controller), not on this aggregate.
-//   • A per-session *settings* facade is premature: there is no per-radio
-//     AppSettings namespace to wrap today. Per-radio state is either
-//     global (StationName, LastConnectedRadioSerial), radio-side (slice/
-//     pan/mode → SSDR profiles, see #3384), or already correctly
-//     namespaced — BandStackSettings::sanitizeSerial() keys on
-//     "Radio_<serial>" and is the working template multi-radio should
-//     follow when it needs per-radio persistence. Build that facade when
-//     a second session creates a real consumer, not before.
-//
-// MainWindow currently binds `RadioModel& m_radioModel` to
-// session->radioModel() so the ~900 existing call sites across the
-// MainWindow TUs compile unchanged. New code SHOULD prefer going
-// through the session.
+// MainWindow binds `RadioModel& m_radioModel` to session->radioModel() so
+// existing call sites compile unchanged. New code should go through the session.
 class TciServer;
 class CatPort;
 

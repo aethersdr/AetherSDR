@@ -9,117 +9,34 @@ namespace AetherSDR::hl2 {
 // The single owner of everything that relates a raw dBFS number to a dBm one,
 // and of the one audio-chain setpoint that has to move with it.
 //
-// WHY THIS IS ONE OBJECT
+// ONE OBJECT so the LNA gain and its display offset can never drift apart:
+// every gain change (manual or automatic) shifts the absolute reference by
+// exactly the gain step, and without an equal and opposite offset the trace
+// jumps and the waterfall paints a false band.
 //
-// Every LNA gain change shifts the absolute signal reference by exactly the
-// same amount. If the panadapter displays dBm and the gain moves, the whole
-// trace jumps and the waterfall paints a horizontal band that reads as a real
-// on-air event. The fix is to apply an equal and opposite offset in the display
-// chain -- and the only way to guarantee the two can never drift apart is to
-// keep the gain value and its offset in the same object, which is what this is.
+// Three terms:
 //
-// This matters before there is any automatic RF AGC, because a manual gain
-// change has the identical problem.
+//   * LNA gain — exact as far as the commanded code is the applied gain, so
+//     within that range a gain change provably cannot move a reported dBm. A
+//     fold above code 31 was reported on one board (softerhardware/Hermes-Lite2
+//     #177) but ad9866.v at 883a338 passes all six bits in native format, as
+//     AetherSDR sets it; keep the documented range until that is reconciled. A
+//     board-specific correction would need a qualified mapping shared with the
+//     reported gain.
+//   * fullScaleDbm — DERIVED from the AD9866 datasheet and input network (see
+//     kFullScaleDbmAtZeroGain), not a per-unit calibration. The absolute form
+//     moves the displayed noise floor onto a checkable figure;
+//     hl2_dbref_test asserts the step.
+//   * AGC ceiling — AGC-T (0..100) becomes WDSP's maximum gain, a setpoint
+//     about the antenna signal that WDSP applies after the LNA. Referring it by
+//     the LNA term means a gain change moves no reported number AND no heard
+//     level (needed by the RF-gain regulator, HERMES.md 13 item 14).
+//     fullScaleDbm does not enter it: the AGC never sees dBm.
 //
-// WHAT IS AND IS NOT CALIBRATED
-//
-// The LNA term is exact AS FAR AS THE COMMANDED CODE IS THE APPLIED GAIN: it is
-// the gain we ourselves commanded, so removing it is arithmetic, not
-// estimation. Within that range a gain change provably cannot move a reported
-// dBm value.
-//
-// A fold above code 31 was reported on one board in upstream issue #177.
-// Its scope is unresolved: ad9866.v at 883a338 passes all six gain bits when
-// the native-format flag is set, as AetherSDR sets it. Keep the documented
-// range and existing reference until the measured behavior is reconciled with
-// that command path; do not reinterpret stored gains from this observation.
-// https://github.com/softerhardware/Hermes-Lite2/issues/177
-//
-// This object knows the commanded gain, not the analog response of a board.
-// Any future hardware-specific correction needs a qualified mapping shared
-// with the reported gain and separate validation of the display and AGC paths.
-//
-// THE ABSOLUTE TERM IS NOW DERIVED, AND THIS PARAGRAPH USED TO ARGUE THE
-// OPPOSITE. It said fullScaleDbm "is NOT calibrated here ... so it defaults to
-// 0.0 and the gain term is measured RELATIVE to a reference gain, not
-// absolutely", and then explained why the relative form mattered. Every word of
-// that was true of the tree that carried it and none of it is true now. Left
-// standing it would have been the strongest argument against the change it sits
-// inside -- flagged in review, and a header arguing against its own class is
-// worse than one that says nothing.
-//
-// WHAT CHANGED IS THE OBJECTION, NOT THE STANDARD. The old reasoning turned on
-// "neither number is calibrated, so an absolute form buys nothing and only
-// moves the floor" -- and it was right, because the alternative on offer was a
-// per-unit calibration nobody had. It is not the alternative here.
-// fullScaleDbm is DERIVED from the AD9866 datasheet and the HL2's own input
-// network (see kFullScaleDbmAtZeroGain below), and a derived figure is not a
-// per-unit one. Quisk and SparkSDR build per-unit tables for the analogous TX
-// power question; this is a different kind of number and the comparison does
-// not carry.
-//
-// The concrete objection the old form raised is also answered rather than
-// waved through: yes, the absolute form moves the displayed noise floor, and
-// that is the point -- it moves it ONTO a figure that can be checked, from one
-// that could not. What it must never do is move without saying so, which is
-// why the step is asserted in hl2_dbref_test rather than left to arrive.
-//
-// THE THIRD TERM: THE AGC CEILING, WHICH THE OPERATOR HEARS
-//
-// The display half of this is the half you can see, and it was built first.
-// The AGC-T half is the half you hear, and it has the same cause.
-//
-// The operator's AGC-T is a 0..100 slider that becomes a WDSP MAXIMUM GAIN in
-// dB -- the most gain the AGC is allowed to apply, which is what decides how
-// far down into the noise it will chase a weak signal. It is a setpoint about
-// the signal AT THE ANTENNA, but WDSP applies it to a signal that has already
-// been through the LNA. Raise the LNA 6 dB and the same antenna signal arrives
-// at the AGC 6 dB hotter, so the same ceiling now lets the AGC amplify 6 dB
-// further into the noise than the operator asked for -- the band floor comes
-// up in the headphones and the operator turns the AGC-T down to compensate.
-// Lower the LNA and weak signals fall out from under the ceiling instead.
-//
-// So the ceiling is referred to the reference the same way the display is:
-// subtract the LNA term, and a gain change moves no reported number AND no
-// heard level. This is the dependency item 14's RF-gain regulator needs --
-// that regulator steps the RxPGA 3-6 dB several times a day, and the display
-// half was already safe. This is the half that was not.
-//
-// fullScaleDbm deliberately does NOT enter the ceiling. It is the dBFS->dBm
-// calibration of a DISPLAY axis; the AGC lives entirely inside the digital
-// chain and never sees dBm. The two consumers share the LNA term and differ in
-// the calibration term, which is an argument for keeping the terms in one
-// object and deriving each consumer's combination here, rather than handing
-// out a single "offset" and hoping both callers apply it correctly.
-//
-// WHY THIS IS NOT ONE OBJECT PER SLICE
-//
-// The backlog row that asked for this (docs/HERMES.md 13, item 12) says "one
-// dB-reference object per slice". Built literally that would be wrong on this
-// radio, and the reason is worth stating because the row will outlive it.
-//
-// Of the three terms, TWO ARE PROPERTIES OF THE RADIO, not of a slice:
-//
-//   * The LNA gain is one AD9866 field (0x0a[5:0]) in front of ALL four DDCs.
-//     There is no per-receiver RF gain to hold. N copies of one number is
-//     precisely the drift this class was created to make impossible.
-//   * fullScaleDbm is a property of the board, the ADC reference and the front
-//     end -- again one per radio, shared by every DDC.
-//
-// ONE IS GENUINELY PER SLICE: the AGC-T, an operator judgement about one
-// receiver's audio, which two receivers on different bands may legitimately
-// disagree about. It lives with the rest of that receiver's state, in
-// Hl2Backend::Receiver::agcThresholdDb, and is passed to agcCeilingDb() at the
-// point of use.
-//
-// So the reference is ONE object per radio, and the per-slice quantity is an
-// ARGUMENT to it rather than a copy inside it. That gives the row what it was
-// actually after -- a slice's AGC ceiling that moves with the reference -- with
-// no second copy of a gain that physically cannot differ between slices.
-//
-// If the hardware ever changes (per-DDC front-end gain, or per-slice
-// calibration), split it then, and the split will be forced by a real
-// difference rather than by a sentence.
+// ONE PER RADIO, NOT PER SLICE. The LNA (AD9866 0x0a[5:0]) sits in front of all
+// four DDCs and fullScaleDbm is a board property. AGC-T is per receiver
+// (Hl2Backend::Receiver::agcThresholdDb) and is passed to agcCeilingDb() as an
+// argument. Split this only if the hardware gains a per-DDC front end.
 class Hl2DbReference {
 public:
     // Matches Hl2Backend/MetisClient's default LNA setting.
@@ -133,11 +50,8 @@ public:
     // belongs here because the ceiling it produces is referred to this object.
     static constexpr double kAgcCeilingDbPerUnit = 0.6;
 
-    // WHAT 0 dBFS IS AT THE ANTENNA, with 0 dB of LNA gain: +3 dBm.
-    //
-    // DERIVED, NOT AVERAGED, and that distinction is the whole reason this is a
-    // constant rather than a per-unit calibration. Every step is from the
-    // AD9866 datasheet and the HL2's own input network:
+    // WHAT 0 dBFS IS AT THE ANTENNA, with 0 dB of LNA gain: +3 dBm. Derived from the
+    // AD9866 datasheet and the HL2 input network, not averaged:
     //
     //   full scale at RxPGA = 48 dB (datasheet)          8.0 mVpp
     //   referred to 0 dB -- 48 dB is x251.2              2.01 Vpp differential
@@ -151,49 +65,18 @@ public:
     //   -------------------------------------------------------------
     //   full scale at the antenna, 0 dB LNA gain         about +3 dBm
     //
-    // THE SIGN OF THE LAST TERM WAS WRONG IN THE FIRST DRAFT, which subtracted
-    // the insertion loss and arrived at -1 dBm. Loss ahead of the converter
-    // makes the antenna-referred full-scale point HIGHER, not lower: P_adc =
-    // P_ant - 2 dB, so P_ant = P_adc + 2 dB. The old figure read every signal
-    // 4 dB weak. Caught by aethersdr-agent on #5753.
+    // Loss ahead of the converter raises the antenna-referred full scale:
+    // P_ant = P_adc + 2 dB.
     //
-    // NO INDEPENDENT CONFIRMATION, and the one this file used to cite is
-    // WITHDRAWN. DL1YCF's "-34 dBm clipping at +33 dB of gain" arithmetically
-    // gives -1 dBm and was quoted here as agreeing "to the digit" -- with a
-    // figure now known to be 4 dB out, which is the tell. It also assumes +33
-    // dB was DELIVERED, and on one measured unit it was not: a commanded +33
-    // is code 45, and if that code folds `& 0x1F` it lands on 13, i.e. +1 dB
-    // applied, which makes the same measurement give -33 dBm instead.
+    // Not independently confirmed. DL1YCF's "-34 dBm clipping at +33 dB" cannot
+    // confirm or refute it: it depends on whether a commanded +33 (code 45) was
+    // applied or folded `& 0x1F`, which is open (#5752, Hermes-Lite2 #177). This
+    // figure is at 0 dB gain and does not depend on that. A bench measurement (known
+    // level at a known applied gain, against the clip counter) would settle it.
     //
-    // WHETHER IT FOLDS IS OPEN. #5752 looked at exactly this and declined to
-    // treat the fold as general: it clamped connect parameters without changing
-    // the native range, left -12..+48 and the +20 dB default standing, and
-    // recorded that the single-unit observation in softerhardware/Hermes-Lite2
-    // #177 "remains unresolved against the native bit-6-selected RTL path".
-    // So this cross-check is indeterminate for two independent reasons --
-    // commanded-versus-applied cannot be established from the published figure,
-    // and the fold that would decide it is itself unsettled. It confirms
-    // nothing in either direction and is recorded here only so nobody
-    // re-derives it.
-    //
-    // NONE OF WHICH TOUCHES THE DERIVATION BELOW. kFullScaleDbmAtZeroGain is a
-    // figure AT 0 dB LNA gain, taken from the AD9866 datasheet and the input
-    // network; it does not depend on what the gain register does above code 31.
-    //
-    // WHAT WOULD SETTLE IT is a bench measurement on this radio: a known level
-    // into the antenna port at a known APPLIED gain, read against the ADC clip
-    // counter. That is receive-only and wants a calibrated source.
-    //
-    // NOT THE openHPSDR FIGURE. piHPSDR and deskHPSDR carry +14 dB, and their
-    // own notes describe it as "average, varies per unit". This is not that,
-    // and a reader comparing the two should know they are different KINDS of
-    // number rather than two estimates of one.
-    //
-    // WHAT IT DOES NOT COVER. The input transformer runs away above ~20 MHz --
-    // IN3OTD measured return loss falling to -12.5 dB at 30 MHz -- so on 10 m a
-    // band-dependent residual sits on top of the ~1 dB this buys. A per-band
-    // table could take that later; it is not a reason to leave the reference at
-    // zero, which is what "uncalibrated" actually meant here.
+    // Not the openHPSDR +14 dB, which is a per-unit average — a different kind of
+    // number. The input transformer degrades above ~20 MHz (IN3OTD: -12.5 dB return
+    // loss at 30 MHz), so a band-dependent residual remains on 10 m.
     static constexpr double kFullScaleDbmAtZeroGain = 3.0;
 
     // WDSP's own default maximum gain, used here only as the bound on what

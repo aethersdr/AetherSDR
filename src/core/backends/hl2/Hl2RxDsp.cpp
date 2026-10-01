@@ -781,68 +781,23 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
             m_stereo[2 * k + 1] = m_dcBlockR.process(m_right[k]);
         }
         emit audioReady(m_stereo);
-        // S-meter from WDSP's own signal-strength meter, NOT from the RMS of
-        // the demodulated audio. Holding that audio level constant is precisely
-        // what the AGC does, so an audio-RMS meter barely moves with signal
-        // strength — it deflects, which is why it looked like it worked, but it
-        // tracks the AGC's output target rather than the signal.
-        // AVERAGE, NOT PEAK. WDSP's xmeter keeps both from the same
-        // smag = I*I + Q*Q: `avg` is an EMA of power, `peak` is a peak-hold
-        // that DECAYS across blocks rather than resetting per block. Both take
-        // the log after averaging, so the domain is right either way -- the tap
-        // is the whole difference.
+        // S-meter from WDSP's own signal-strength meter, not the RMS of demodulated
+        // audio (which the AGC holds constant). The AVERAGE tap, not peak: xmeter's
+        // `avg` is an EMA of I*I + Q*Q, the RMS quantity S9 (-73 dBm of sine) is
+        // defined in; the decaying peak-hold reads band noise ~11-14 dB high while
+        // agreeing on a steady carrier. The backend applies its own ballistics.
         //
-        // On a steady carrier the two agree exactly, because I*I + Q*Q is
-        // constant for a complex exponential. They diverge only on noise and on
-        // modulation, so every check against a test tone passes and the error
-        // appears precisely where an operator judges a receiver: the band noise
-        // floor, which a peak-hold reads roughly 11-14 dB high.
+        // Not read while muted: the muted branch above clocks the channel with zeros,
+        // and the mute is the transmit mute, so the needle would dive on every key-down.
+        // Not read for a settle count after the mute releases either, because `avg`
+        // (0.100 s EMA) has integrated those zeros (measured -224.5 dBFS vs -10.5
+        // before the mute). The settle is counted in completed WDSP blocks, the clock
+        // xmeter integrates on, so a stalled stream cannot expire it early. The
+        // pre-transmit reading is held ~300 ms past the mute.
         //
-        // That also makes the peak tap wrong for a dBm-labelled axis. S9 is
-        // defined as -73 dBm of sine, i.e. an RMS quantity, and `avg` is the
-        // mean-square -- so the average tap is what the calibration means.
-        // Meter ballistics are not lost: the backend already applies its own
-        // attack/decay EMA to the dBm value before publishing.
-        // NOT WHILE MUTED, for the same reason the ADC peak below is not
-        // sampled while muted -- and this site was the one of the two that
-        // forgot. The muted branch at the top of this loop clocks the channel
-        // with literal zeros on purpose, so `avg` is then measuring the silence
-        // this code fed it, not the band. The mute is the TRANSMIT mute
-        // (Hl2Backend queues setAudioMuted around an over), so an unguarded
-        // read drops the S-meter needle to the floor on every key-down and
-        // walks it back up on unkey: an artefact of our own muting, presented
-        // as a signal level.
-        //
-        // Found by cross-checking tropo1234's #5818, which fixes exactly this
-        // on the ANAN side of the same #5785 change. Their reasoning is the
-        // rate-change settle window; ours is T/R. Same tap, same mute, same
-        // needle.
-        //
-        // AND NOT FOR THE FIRST FEW BLOCKS AFTER THE MUTE RELEASES, which is
-        // the other half of the same fault and the half a guard alone does not
-        // close. `avg` is an EMA with a 0.100 s time constant and it kept
-        // integrating this loop's zeros for the whole over; suppressing the
-        // read while muted does not un-integrate them. Without the settle
-        // count below, the block that arrives one instant after unkey reads
-        // the silence at its full depth — ten9876 measured -224.5 dBFS against
-        // a pre-mute -10.5 — and the needle dives on UNKEY rather than on
-        // key-down. Same zeros, same tap, other edge.
-        //
-        // COUNTED HERE, not on a clock, and counted only on this path. One
-        // decrement per block that WDSP actually completed is the same clock
-        // xmeter() integrates on, so the window means the same thing whatever
-        // the block rate is doing; a wall clock would expire early on a stalled
-        // stream and publish exactly the reading it exists to withhold.
-        //
-        // The cost is that the held pre-transmit reading is held ~300 ms longer
-        // than the mute itself. That is the honest trade: a held reading is at
-        // least a reading of the band, and the alternative on offer is a
-        // measurement of our own silence.
-        //
-        // The same gate sets the READ CADENCE (WdspSMeter::emitEveryBlocks):
-        // one reading per DSP-rate block's worth of input, so the backend's
-        // per-reading EMA keeps the same time constant at every sample rate
-        // instead of shrinking eightfold between 48 and 384 ksps.
+        // The same gate sets the read cadence (WdspSMeter::emitEveryBlocks): one reading
+        // per DSP-rate block of input, so the backend's EMA has the same time constant
+        // at every sample rate.
         if (!m_audioMuted && m_meterTap.tick()) {
             emit meterUpdate(static_cast<float>(
                 m_channel->meter(WdspChannel::Meter::SignalAverage)));

@@ -59,62 +59,22 @@ namespace AetherSDR::hl2 {
 
 // The same slider as the linear multiplier the modulator takes.
 //
-// Level 0 mutes outright rather than resolving to the -20 dB the line above
-// would give it. A slider at the bottom of its travel means off, and 0.0x is
-// the only reading of that which is not "very quiet".
+// Level 0 mutes outright rather than giving -20 dB: the bottom of a level
+// control's travel means off.
 //
-// THE ARGUMENT FOR THE SPECIAL CASE HAS CHANGED, though the behaviour has not.
-// It used to be that -20 dB would be hauled straight back up by the ALC's 40 dB
-// of makeup, so "0" would have sounded barely different from "50" — a control
-// that teaches an operator to distrust every other one on the panel. That
-// makeup gain is gone: -20 dB is now a real -20 dB on the air, and "0" would be
-// audibly quieter than "50" without the mute. The case survives on the plainer
-// ground that the bottom of a travel labelled as a level means off.
-//
-// SCOPE, and it is narrower than it used to be. This multiplier is applied to
-// audio entering Hl2TxDsp::processAudioBlock tagged TxAudioSource::Microphone
-// or ClientLeveled — the operator's voice, the AX.25 modem (whose AFSK
-// amplitude is a fixed constant this slider is the only way to move), and
-// TCI/DAX client audio, where it is the proportional attenuator #4796 left it.
-// On those paths it is a straight proportional control on the air, the same on
-// each, all the way up to the ALC's target — the ALC behind it only reduces and
-// has no makeup half left to hand the gain back with, so TX gain 5 (-18 dB) is a
-// real -18 dB. It stops
-// being straight only where it has to: drive a full-scale source through the
-// top of this slider's +40 dB and the ALC limits, rather than letting the
-// modulator's hard clamp flat-top it, so the last stretch of travel buys
-// reduced headroom rather than more power.
-//
-// THAT LAST SENTENCE IS TRUE ONLY BECAUSE REDUCTION IS INSTANTANEOUS, and it is
-// worth saying which mechanism holds it up. A smoothed attack does not: at 100x
-// the modulator's hard clamp would be reached before the loop got there, and a
-// one-shot key-on seed covers only the FIRST reduction of an over, so the next
-// loud syllable arrives unprotected — measured on this class at |IQ| 1.5045 with
-// 727 clipped samples. Hl2TxDsp's reduction branch simply takes the target
-// (`m_alcGain = target`), which is what keeps the widened slider inside the
-// modulator's headroom; only the release stays smoothed. hl2_txdsp_test's
-// slider-top case asserts it over the WHOLE run rather than the settled tail,
-// because the settled tail is precisely the half that cannot see this.
-//
-// This paragraph described the key-on seed until `5607b565` (#5646) replaced
-// it. The seed is gone, `Config::alcAttackSec` with it, and Hl2TxDsp.cpp's own
-// comment records why it was rejected.
+// Scope: applied to audio tagged TxAudioSource::Microphone or ClientLeveled
+// (voice, the AX.25 modem, TCI/DAX). The ALC behind it only reduces, so it is
+// a straight proportional control on the air up to the ALC target (TX gain 5 is
+// a real -18 dB). Driving a full-scale source through the top of the +40 dB
+// travel makes the ALC limit rather than the modulator's hard clamp flat-top.
+// That holds only because reduction is instantaneous (`m_alcGain = target` in
+// Hl2TxDsp); a smoothed attack would reach the clamp first. hl2_txdsp_test's
+// slider-top case asserts it over the whole run.
 //
 // IT DOES NOT REACH ENGINE-GENERATED AUDIO, SO 0 DOES NOT SILENCE A BEACON.
-// Hl2TxDsp::processAudioBlock substitutes 1.0 for this multiplier when the
-// source is TxAudioSource::EngineGenerated — the WSPR pump, and nothing else —
-// so a beacon goes out at the level its generator chose and this slider does not
-// move it, at 0 or anywhere else.
-//
-// That is deliberate: a microphone control has no business moving, or muting,
-// an unattended transmission, and yoking a beacon to the level an operator
-// picked for their voice was the defect. But it retires a claim this comment
-// used to make — "at 0 nothing transmits, as a plain 0.0x multiply on every
-// path" — and that claim was a safety property an operator could have leaned
-// on. IT IS NO LONGER TRUE. Parking this control at 0 between voice sessions
-// silences the microphone and the TCI/DAX path; it does not silence the
-// transmitter. Whatever is generating an unattended transmission is what stops
-// it — the beacon's own control, not this one.
+// Hl2TxDsp substitutes 1.0 for the WSPR pump. Level 0 silences the microphone
+// and the TCI/DAX path, not the transmitter; an unattended transmission is
+// stopped by its own control.
 [[nodiscard]] inline double micSliderToLinear(int level) noexcept
 {
     if (level <= 0)

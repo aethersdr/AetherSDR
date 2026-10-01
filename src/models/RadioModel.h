@@ -1043,53 +1043,30 @@ public:
     // #4142 — the ONLY supported way for a USER-INTENT path to write a pan's
     // center/bandwidth/band to the radio.
     //
-    // `display pan set <id> center=…` (and bandwidth=/band=) is classified as
-    // a profile-owned radio state write, so sendCmd() DROPS it while the
-    // profile-load hold is armed: it returns before a sequence number is
-    // allocated and the command never reaches the wire. A user action that
-    // lands in that window (typed frequency, zoom, drag, band change, ATU
-    // sweep, automation) was silently lost, and the client kept its optimistic
-    // state — leaving the pan permanently claiming state the radio never took.
+    // sendCmd() drops `display pan set <id> center=…` (and bandwidth=/band=) while
+    // the profile-load hold is armed. requestPan*() defers instead: it coalesces
+    // per pan (last write wins per field), returns false WITHOUT advancing local
+    // model state, and replays after re-checking the hold. Dedup is against
+    // effective state (pending value, else the model); a request equal to the model
+    // that supersedes a different pending value cancels it (a user correction).
     //
-    // requestPan*() defers instead of dropping: while the hold is armed it
-    // coalesces the request per pan (field-wise, last write wins per field)
-    // and returns false WITHOUT advancing local model state, so the client
-    // never claims state the radio does not have. The replay is scheduled by
-    // the act of deferring and re-checks the hold before sending.
+    // Only user-intent writers route here. Model-echo/reconcile writers
+    // (active-slice reasserts, dBm auto-floor, fps/average reconciles) keep their
+    // guards and the sendCmd() backstop — #3563 suppresses them during a profile
+    // load by design.
     //
-    // Deduping is centralized here against EFFECTIVE state — the pending value
-    // if one is queued, else the model (which keeps tracking radio status
-    // during the hold). A request equal to the model that supersedes a
-    // different pending value is a user CORRECTION: the pending entry is
-    // cancelled instead of replayed.
-    //
-    // Routing discipline is the user-intent boundary: model-echo/reconcile
-    // writers (active-slice reasserts, dBm auto-floor, fps/average reconciles)
-    // must keep their explicit guards and the sendCmd() backstop — #3563
-    // suppresses them during a profile load BY DESIGN. Do not route those.
-    //
-    // Pass bandwidthMhz > 0 to set center and bandwidth coherently in one
-    // command (zoom paths must never split the pair); pass <= 0 to leave the
-    // radio's bandwidth untouched.
+    // bandwidthMhz > 0 sets center and bandwidth in one command (zoom must never
+    // split the pair); <= 0 leaves bandwidth alone.
     //
     // Returns true if the radio's state matches the request (dispatched, or a
-    // corrective cancel — the radio is already there); false if the request is
-    // deferred or could not be dispatched. Callers that also advance view
-    // state optimistically must gate that on the return value, or they will
-    // re-create the black-waterfall divergence.
+    // corrective cancel); false if deferred or not dispatched. Callers that update
+    // view state optimistically must gate on it.
     //
-    // THE INTENT IS THE CALLER'S TO STATE, not something to infer here. On a
-    // backend whose scope window is slaved to the VFO (every networked Icom)
-    // Drag means RETUNE, so "which caller is this" decides whether the radio
-    // moves. Inferring it from whether a bandwidth came along classifies every
-    // centre-only writer — pan-follow, reveal, band change, the WFM recentre —
-    // as a drag, and reveal in particular asks for a DELIBERATELY OFFSET centre
-    // (settle distance from the edge), which would tune the radio most of a
-    // half-span off the signal the operator just clicked.
-    //
-    // Range is the default because it is the one that cannot move a radio: a
-    // slaved-scope backend refuses it and re-asserts its own geometry. Only the
-    // two genuine "the operator moved the window" sites pass Drag.
+    // `intent` is the caller's to state. On a backend whose scope is slaved to the
+    // VFO (networked Icom) Drag means RETUNE. Range is the default because it
+    // cannot move a radio (a slaved-scope backend refuses it); only the two
+    // "operator moved the window" sites pass Drag. Centre-only writers such as
+    // reveal deliberately ask for an offset centre and must not retune.
     bool requestPanCenter(const QString& panId,
                           double centerMhz,
                           double bandwidthMhz = -1.0,
@@ -1980,102 +1957,36 @@ private:
 
     // ---- waterfall pacing for raw-spectrum backends ------------------------
     //
-    // The PAN rate is capped at the source (IRadioBackend::setPanFrameRate), so
-    // frames arrive here already at the operator's FFT FPS. The waterfall runs
-    // SLOWER than that — line_duration is its own control and typically 100 ms
-    // against 25-40 fps — so it needs one more gate, and only in that
-    // direction.
+    // Pan frames arrive already capped at the operator's FFT FPS
+    // (IRadioBackend::setPanFrameRate). The waterfall runs slower (line_duration,
+    // typically 100 ms), so this gate drops frames to one row per
+    // WaterfallRate::localRowIntervalMs(rate); at rate 100 it returns 0 and the gate
+    // is lifted. A plain drop, not a coalesce. It fixes CADENCE only: the widget's
+    // initial time axis is seeded from line_duration (resetWfTimeScale), so rows
+    // must arrive at that rate.
     //
-    // A plain drop, not a coalesce. Frames are already scarce by the time they
-    // reach here, and combining them would mean a magnitude/log round trip per
-    // bin per frame for no gain the operator can see.
+    // It does not make a row represent its interval: each row is the one producer
+    // frame that landed on the gate, so a short burst can be absent from the
+    // history. What a frame means differs by family (this hangs off the generic
+    // spectrumFrameReady; Flex does not use it):
     //
-    // It is also correctness, not just load: the widget scales its time axis
-    // from line_duration, so a row must actually ARRIVE every line_duration.
-    // Unpaced, rows arrived at the full frame rate and the visible history was
-    // several times shorter than the axis claimed.
+    // - HL2 and RTL-SDR: one unaveraged FFT window (1024 points; at 384 kHz,
+    //   2.67 ms of a 407 ms row at rate 10). Frames between rows are dropped.
+    //   Hl2Spectrum::setAverageFrames is unwired in production (#5833).
+    // - ANAN: every IQ block feeds the WDSP analyzer and only taking a frame is
+    //   paced, so the row is already time-averaged (FFT AVG via
+    //   AnanBackend::setPanAverage) — still not an integration over the row.
+    // - Icom: reassembled CI-V scope sweeps converted to dBm (IcomCivBackend
+    //   toDbm()), not FFT windows.
     //
-    // What the gate fixes is the CADENCE, and only the cadence. It does not
-    // make a row represent its interval, and an earlier wording here claimed it
-    // did -- which is why the remaining gap has been easy to miss. Each emitted
-    // row is still the single producer frame that happened to land on the gate:
-    // one frame out of the whole localRowIntervalMs. The loss is by frame
-    // SELECTION, not only by burst length -- a burst shorter than the gap
-    // between ROWS can miss the history entirely rather than merely being
-    // attenuated, AND a burst a pan frame DID catch is still absent from the
-    // history unless that frame is the one landing on the gate.
+    // The settled axis does not depend on this number: updateWaterfallRow() stamps
+    // rows with their arrival at the widget (after deferReceivePresentation), and
+    // updateWaterfallMsPerRowFromHistory() locks m_wfMsPerRow onto that measured
+    // cadence.
     //
-    // Scope what follows to HL2, because this gate is not HL2's. It hangs off
-    // the generic IRadioBackend::spectrumFrameReady, which every family except
-    // Flex emits -- HL2, ANAN, Icom, RTL-SDR and the demo SimBackend -- and
-    // what a "frame" MEANS differs across them:
-    //
-    // - On HL2 the claim is exact. The frame is one unaveraged FFT window; at
-    //   384 kHz that window is 1024/384000 = 2.67 ms (docs/HERMES.md 15.2.1
-    //   states the same thing as 375 fps; fftSize is Hl2RxDsp.h's 1024) --
-    //   nominal, since Hl2Spectrum's Hanning window weights the ends down and
-    //   the effective span is shorter still -- and at rate 10
-    //   localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 -- 0.66 %,
-    //   an upper bound. Production depth is one window: Hl2Spectrum::setAverageFrames
-    //   defaults to 1 and only hl2_spectrum_test calls it (#5833), so m_avgPower
-    //   is present and unwired and the emitted frame is still unaveraged. m_acc
-    //   holds only the partial IQ window the NEXT frame completes from, which is
-    //   why HERMES 15.2.1 says the accumulator keeps filling on a skipped
-    //   interval. The frames between rows never reach the waterfall at all:
-    //   dropped, never accumulated. RTL-SDR's frames are unaveraged FFTs too,
-    //   so the shape carries there; only the numbers are HL2's.
-    // - On ANAN the frames between rows are not dropped. Every IQ block is
-    //   fed to the WDSP analyzer and only TAKING a frame is paced (AnanRxDsp:
-    //   "none are thrown away"), so the row that lands here is already
-    //   time-averaged. The FFT AVG slider sets that time through
-    //   AnanBackend::setPanAverage (steps of kMsPerAverageStep); the
-    //   weighted-average toggle selects log-recursive or linear-recursive.
-    //   That blend is still not an integration over localRowIntervalMs, and
-    //   #5782 owns the domain question. The fixed-alpha dB EMA this bullet
-    //   used to name (AnanRxDsp::smoothSpectrumBins) was removed in #5814.
-    // - Icom rows are reassembled CI-V scope sweeps, not FFT windows at all,
-    //   so neither the 2.67 ms nor the duty figure means anything there.
-    //   IcomScope.h's "Raw display units, 0..160. NOT dBm" describes the RAW
-    //   sweep, not what reaches this gate: IcomCivBackend emits
-    //   toDbm(sweep, geom, cal) before spectrumFrameReady, so the row here is
-    //   the converted vector.
-    //
-    // The interval a row SHOULD integrate is the gap between rows: this gate's
-    // own WaterfallRate::localRowIntervalMs(rate) while the gate is paced, and
-    // the pan frame interval at rate 100, where localRowIntervalMs() returns 0
-    // and the gate is lifted. Which layer that number has to reach is part of
-    // the open question below, not settled here.
-    // Note what does NOT rest on that number, because it reads the other way
-    // round. updateWaterfallRow() stamps each row with its ARRIVAL time and
-    // Q_UNUSED()s the timecode; updateWaterfallMsPerRowFromHistory() measures
-    // m_wfMsPerRow from those stamps (localMsPerRow only SEEDS the preview, in
-    // resetWfTimeScale); and waterfallTimeMarkers() takes rows, head, seconds,
-    // offset and height — it never sees the rate at all, and labels wall-clock
-    // boundaries off the same stamps. localRowIntervalMs() could not carry the
-    // axis anyway: it returns 0 at rate 100, where the gate is lifted.
-    //
-    // ARRIVAL there means arrival AT THE WIDGET, which is not this gate's
-    // stamp. The nowNs the gate passes out reaches PerfTelemetry only; the row
-    // is then routed through MainWindow::deferReceivePresentation, and
-    // updateWaterfallRow() takes its own QDateTime::currentMSecsSinceEpoch().
-    // So the axis calibrates from PRESENTATION cadence, which tracks this
-    // gate's cadence but is not it, and diverges under a presentation delay or
-    // a busy GUI thread.
-    //
-    // Nor does that contradict the retained rationale above, and the link is
-    // worth stating because the two paragraphs read as opposites. Both are true
-    // because resetWfTimeScale() seeds m_wfMsPerRow from localMsPerRow with
-    // m_wfTimeScaleLocked false, so the deterministic mapping IS the axis until
-    // updateWaterfallMsPerRowFromHistory() has enough rows at this rate to lock
-    // onto the measured value. The seeded half is the half unpaced rows
-    // falsified.
-    //
-    // The open question is which LAYER owns the accumulation and in
-    // which domain, because averaging dBFS is averaging logarithms -- see
-    // RFC #5782 (this repository's own; not one of the real upstreams), whose
-    // plan row 2.2 is the integrated waterfall row and whose Option C rules
-    // the above-the-seam variant out. Do not add an accumulator here until
-    // that lands.
+    // Which layer integrates a row, and in which domain (averaging dBFS averages
+    // logarithms), is open in RFC #5782 (plan row 2.2; Option C rules out doing it
+    // above the seam). Do not add an accumulator here until that lands.
     QHash<int, qint64> m_backendWfLastRowNs;
     // Covers only the window before MainWindow seeds the pan model from the
     // operator's sliders. 100 is the top of the 1..100 rate control and matches

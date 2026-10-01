@@ -394,66 +394,32 @@ Cc ccTxDrive(int level, bool paEnable = false, bool atuTune = false) noexcept;
 
 // ---- Direct I2C writes (companion devices on the external bus) ----
 //
-// EASY TO CONFUSE WITH THE FILTER BOARD ABOVE, and the difference matters. The
-// J16 open-collector byte is INDIRECT: we set config bits and the gateware
-// turns them into an I2C write for us. This is the DIRECT path — a C&C bank
-// that names the bus, the chip and the register itself.
+// Not the filter board's J16 byte above (indirect: config bits the gateware
+// turns into I2C). This is the direct path, naming bus, chip and register.
 //
-// The HL2 exposes its two I2C buses as C&C addresses 0x3c (I2C1, internal:
-// Versa clock, AD9866) and 0x3d (I2C2, the external companion-board bus).
-// Verified against the gateware RTL, whose own init sequences build the
-// identical payload shape (gateware/rtl/i2c.v):
+// C&C addresses 0x3c (I2C1, internal: Versa clock, AD9866) and 0x3d (I2C2,
+// external companion bus). Payload shape as gateware/rtl/i2c.v builds it:
 //
 //     icmd_addr       = 6'h3c;
 //     icmd_data_upper = {8'h06, 1'b1, 7'h6a};   // cookie, stop, chip address
-//
-// DATA layout, from that same RTL (cmd_data[31:16] is the upper half, and
-// icmd_reg_val = cmd_data[15:0] is the register/value pair):
 //
 //     C1 = DATA[31:24]   cookie: 0x06 to write, 0x07 to read
 //     C2 = DATA[23]      stop at end;  DATA[22:16] the 7-bit chip address
 //     C3 = DATA[15:8]    register or control number inside the chip
 //     C4 = DATA[7:0]     the data byte (write only)
 //
-// The gateware emits {C3, C4} as a two-byte I2C write, which is what an
-// ordinary register-then-value slave expects. ONE-BYTE WRITES ONLY — there is
-// no burst mode, so an N-byte value costs N C&C banks.
+// The gateware emits {C3, C4} as a two-byte I2C write. One byte per C&C bank;
+// no burst mode.
 //
-// RQST (C0[7]) IS LEFT CLEAR ON THESE BANKS, AND THE REASON HAS CHANGED.
+// RQST (C0[7]) stays clear on these banks: neither 0x3c nor 0x3d is on
+// MetisClient::requestRegister's allow-list (0x3d reaches the board switching
+// amplifiers, relays and transverters; 0x3c the Versa clock; nothing
+// re-asserts either). Change that allow-list, not this, if an ACK is needed.
 //
-// It used to be a decoder hazard: `Hl2Telemetry::apply()` dispatched on RADDR
-// *without* consulting the ACK flag, so an I2C reply (RADDR 0x3c/0x3d) landed
-// harmlessly in its `default:` only by accident of that switch's shape, and any
-// future edit to it could have made an echo of our own outgoing bytes read as
-// telemetry. THAT BUG IS FIXED — `apply()` now returns early on `r.ack`
-// (MetisProtocol.cpp) — so the hazard is closed and is no longer the reason.
-//
-// What decides whether an address may carry RQST now is the ALLOW-LIST in
-// `MetisClient::requestRegister`, and NEITHER 0x3c NOR 0x3d IS ON IT. That is a
-// deliberate omission, not an oversight: an arbitrary-data RQST at 0x3d is a
-// direct I2C write to the companion board described immediately below — the one
-// that switches amplifiers, antenna relays and transverters — and 0x3c reaches
-// the Versa clock that the board's own clocking depends on. Neither is
-// re-asserted by anything, so a wrong value there persists.
-//
-// The encoders in this section therefore stay write-only because nothing needs
-// an acknowledgement for them, and because nothing may ask for one. If a future
-// item does need one, the change is to that allow-list, with a note there
-// saying what the acknowledgement is worth — not a flag added here.
-// addr 0x3b: a raw SPI transaction against the AD9866 itself (gateware
-// `ad9866ctrl.v`, which decodes `6'h3b`). A WRITE, and only a write — an
-// earlier note here called it the read path, which the RTL contradicts:
-// `ad9866ctrl` has no data output, `assign sdo = 1'b0;`, and control.v's
-// RESP_READ carries `cmd_resp_data_i2c` for the AD9866 branch behind the
-// gateware's own `// FIXME: suppor read cmd_resp_data_ad9866`. The reply is our
-// echo or the 0x3F refusal.
-//
-// What it writes: gated on `cmd_data[31:24] == 8'h06`, it puts
-// `{3'b000, cmd_data[20:16], cmd_data[7:0]}` on the converter's SPI bus — any
-// AD9866 register, any byte, INCLUDING the TX-gain register 0x0a that the
-// gateware's own 0x09 handler drives. It is therefore a transmit-path write
-// that nothing re-asserts, and MetisClient::requestRegister does NOT allow-list
-// it. No encoder here either: nothing writes it.
+// addr 0x3b: a raw AD9866 SPI write (ad9866ctrl.v, gated on cookie 8'h06; puts
+// {3'b000, cmd_data[20:16], cmd_data[7:0]} on the bus). Not a read path: the
+// reply is our echo or the 0x3F refusal. It can write any converter register,
+// including TX gain 0x0a, so it is not allow-listed and has no encoder.
 inline constexpr std::uint8_t kC0Ad9866Spi = 0x76;  // addr 0x3b << 1
 inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
 inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1
@@ -721,134 +687,33 @@ double directionalWatts(int raw) noexcept;
 double detectorVolts(int raw) noexcept;
 
 // Minimum forward-power reading, in raw converter counts, below which an SWR
-// ratio is quantisation noise rather than a measurement.
+// ratio is noise rather than a measurement. Shared here, beside the curve, so
+// the meter and the Radio Health snapshot use one threshold.
 //
-// With no carrier, forward and reverse are both near zero and dominated by
-// noise; reverse frequently exceeds forward and the ratio saturates. An
-// operator glancing at that sees a catastrophic mismatch on an antenna that is
-// fine. Raw counts because that is what we have — this is a noise floor, not a
-// calibrated power level.
+// CRITERION: noise on either channel must not move the reported SWR by more than
+// 0.25 (half the finest distinction downstream: 1.5 / 2.0 / 2.5, and the 3.0
+// sweep abort) at the 95th percentile, for true SWR 1.0 to 3.0.
 //
-// It lives in this header, beside the curve it is derived from, so EVERY
-// consumer shares one threshold. It was previously local to the meter path,
-// so the Radio Health snapshot computed an unguarded ratio and bounced at its
-// 500 ms refresh while the meter beside it stayed silent — two surfaces
-// disagreeing about the same radio because only one of them had the guard.
-//
-// ---- why not 16 (#4578, nigelfenton's half), and how 96 was first reached ----
-//
-// 16 was a guess about where noise stops, and it is too low by six times. A TX
-// Cal sweep aborted on its first step at a reported SWR of 256.00 on an antenna
-// a RigExpert AA-170 and a real carrier both measured at 1.50 — a LIVE reading,
-// admitted by this gate, computed from counts barely above it. Every layer's
-// absent-handling worked; the number itself was admitted and wrong.
-//
-// CRITERION, because there is no single correct answer and the choice has to be
-// arguable: one count of quantisation on EITHER channel must not move the
-// reported SWR by more than 0.25 — half the finest distinction anything
-// downstream makes (1.5 against 2.0 against 2.5, and the 3.0 at which a sweep
-// aborts) — for every true SWR from 1.0 to 3.0. Above 3.0 the exact value stops
-// mattering because every consumer has already stopped.
-//
-// Swept against directionalWatts()'s own curve, worst case over that band:
-//
-//     forward counts    16     32     64     96    128    256    512
-//     worst SWR error  0.85   0.50   0.30   0.20   0.16   0.10   0.05
-//
-// 96 is the smallest count at and above which the criterion holds UNDER THE
-// ONE-COUNT MODEL. That model was subsequently measured and found wrong; the
-// paragraph beginning "and then it WAS measured" below carries the correction
-// and the value this constant actually holds. The sweep is kept because it is
-// still the right arithmetic for the question it asks, and because the two
-// derivations agreeing where they overlap is what makes the correction
-// credible rather than a second opinion.
-//
-// NOT ~1200, which #4578 suggested. Gating on FORWARD counts does nothing to
-// lift the REVERSE channel out of the knee: at a true 1.5 the reverse sits a
-// factor of five below forward in voltage, so getting it above 1200 counts
-// needs about 16 W forward — past the top of this table and past what an HL2
-// produces. At 1200 forward counts a true 2.0 still displayed 1.76 under the
-// old raw ratio. It buys nothing and costs SWR below ~0.67 W.
-//
-// ---- and then it WAS measured, and 96 was too low (bench run D89) ----
-//
-// The paragraph that used to end this comment said 96 was derived analytically,
-// that it assumed a ONE-COUNT channel-to-channel disagreement nobody had put an
-// instrument on, and that if the real disagreement were larger then 96 was
-// still too low. That measurement has now been made, on a Hermes-Lite 2 into a
-// dummy load, reading fwd_pwr and rev_pwr straight out of the response
-// registers with no client application in the path. The prediction was right
-// and the direction was the unfavourable one.
-//
-// TWO THINGS WERE MEASURED THAT THE ONE-COUNT MODEL CANNOT EXPRESS.
-//
-// (1) NOISE, and it is not one count. With RF in the load the reverse channel
-//     has a standard deviation of 2.73 counts and a full range of 0..12 counts
-//     (2311 settled samples over 15 drive levels). It does not shrink at low
-//     drive, because it does not come from the signal: with the PA keyed and
-//     the drive register at zero the same channel reads 0.67, and unkeyed it
-//     reads 0.63..0.70 (6418 samples over 300 s). The forward channel's
-//     residual standard deviation is 3.77 counts.
-//
-// (2) OFFSET, which is not noise at all and which the criterion above has no
-//     term for. Fitting the reverse channel against the forward one across 16
-//     legs spanning 1.3 to 822 forward counts gives
-//
-//         rev = 3.41 + 0.00097 * fwd        (residual sd 0.21 counts)
-//
-//     so with NO reflected power the reverse channel still reads ~3.4 counts.
-//     That is a bias. Averaging does not remove it and a gate does not remove
-//     it either — a gate only shrinks its weight against a growing forward
-//     reading. The intercept was stable to 0.05 counts across seven captures
-//     over forty minutes and is identical keyed and unkeyed, so it is the
-//     converter and not the PA.
-//
-// WHAT THAT DOES TO THE READING. On a dummy load the true answer is known and
-// near 1.0, so every departure IS the instrument. At 96 forward counts this
-// radio's reverse channel is ~97% offset, and the linearized form reports
-//
-//     gate 96 -> 1.40      gate 160 -> 1.25      gate 320 -> 1.14
-//
-// against a load measured at 1.03..1.06 by the same instrument where it is
-// trustworthy. 0.40 of error at 96 counts is 1.6x the 0.25 the criterion above
-// was chosen to hold, and the empirical settling curve agrees: pooling every
-// keyed sample and binning by forward count, the linearized median first comes
-// within 0.25 of the truth in the 200..260 bin and its 95th percentile in the
-// 260..340 bin.
-//
-// SO THE CRITERION IS UNCHANGED AND ITS ANSWER MOVED. Re-derived by resampling
-// the MEASURED distributions rather than perturbing by an assumed count:
+// Measured on one HL2 into a dummy load (bench run D89, response registers read
+// directly): reverse-channel sd 2.73 counts (range 0..12, unchanged at zero
+// drive), forward residual sd 3.77, and a stable OFFSET of
+// rev = 3.41 + 0.00097 * fwd counts (residual sd 0.21; identical keyed and
+// unkeyed, so it is the converter). Resampling those distributions:
 //
 //     forward counts        16     32     64     96    160    256    320
 //     p95 error (measured) 6.35   1.95   0.91   0.65   0.38   0.26   0.20
-//     p95 error (1-count)  1.57   0.50   0.30   0.20    ...    ...   ...
 //
-// The second row is the old model and is reproduced exactly by the new tool
-// where the two overlap, which is why the first row is a correction and not a
-// disagreement. 320 is the smallest gridded count whose 95th-percentile error
-// stays within 0.25 everywhere above it. 256 misses by 0.008 and is a
-// defensible round alternative; 160 is the answer if the criterion is read at
-// the MEDIAN rather than as the worst case its wording states.
+// 320 is the smallest gridded count meeting the criterion (256 misses by
+// 0.008; 160 meets it at the median). Lower gates admitted live readings like a
+// 256.00 SWR on an antenna measured at 1.50 (#4578). Gating near ~1200 would not
+// lift the reverse channel out of the detector knee at any HL2 power.
 //
-// THE COST, which is the real argument against going further: SWR reads absent
-// below ~74 mW forward on the reference curve, 1.5% of the HL2's rated 5 W and
-// 18 dB down, against ~12 mW at 96 and ~1.6 mW at 16.
+// Cost: SWR reads absent below ~74 mW forward (1.5 % of 5 W).
 //
-// STILL NOT MEASURED, and it bounds what the above is worth: this is ONE radio,
-// one coupler and one dummy load. The offset is a per-unit property of a diode
-// detector and there is no reason to expect 3.4 counts on another board — only
-// to expect that it is not zero, which is the part the one-count model got
-// wrong. A per-unit calibration would replace this constant along with the
-// curve. See also kMeasuredReverseFloorCounts below, which the test uses to run
-// the offset criterion rather than restate it.
-//
-// A BETTER FIX THAN A GATE EXISTS AND IS NOT DONE HERE. Both channels are
-// readable while unkeyed and their floors are stable, so sampling them just
-// before a transmission and subtracting would remove the bias outright. On the
-// measured distributions that drops the gate this criterion needs from 320 to
-// 200 at the 95th percentile and from 160 to 16 at the median. It is a larger
-// change than raising a constant, it needs a place to hold the floor and a
-// policy for when to re-measure it, and it is recorded rather than attempted.
+// One radio, one coupler: the offset is per-unit, only expected to be non-zero
+// elsewhere. kMeasuredReverseFloorCounts below lets the test run the offset
+// criterion. A better fix (not done here) samples both channels unkeyed just
+// before TX and subtracts the floors, which would drop the p95 gate to ~200.
 inline constexpr int kMinForwardCountsForSwr = 320;
 
 // The reverse channel's reading with NO reflected power, in counts — the

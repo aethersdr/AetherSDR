@@ -174,93 +174,40 @@ public:
     [[nodiscard]] unsigned long long modulatorBlocks() const noexcept;
 
 public slots:
-    // Mono TX audio at inputSampleRateHz.
+    // Mono TX audio at inputSampleRateHz. `source` decides whether m_micGain
+    // applies:
     //
-    // `source` SAYS WHOSE LEVEL THIS IS, and what it decides is whether
-    // m_micGain applies at all:
+    //   Microphone / ClientLeveled   m_micGain applies: the operator's level on the
+    //                                mic path, and a proportional attenuator on
+    //                                TCI/DAX audio (WSJT-X, fldigi, PipeWire bridge)
+    //                                whose sender sets its own level (#4796).
+    //   EngineGenerated              m_micGain does NOT apply. The WSPR pump, the
+    //                                only such source, keys unattended; a mic slider
+    //                                must not move or mute it.
     //
-    //   Microphone / ClientLeveled   m_micGain applies. On the mic path it is
-    //                                the operator's own level control; on the
-    //                                client path — TCI or DAX TX audio from
-    //                                WSJT-X, fldigi or the PipeWire bridge,
-    //                                whose sender already applied its own
-    //                                power control — it is the proportional
-    //                                attenuator #4796 left it.
-    //   EngineGenerated              m_micGain DOES NOT APPLY. A mic slider is
-    //                                a microphone control, and the WSPR pump —
-    //                                the only source tagged this way — keys for
-    //                                111.6 s with nobody at the microphone.
-    //                                Yoking a beacon to the setting an operator
-    //                                picked for their voice is a defect that
-    //                                predates the ALC change; it was merely
-    //                                invisible while 40 dB of makeup normalised
-    //                                every source onto the target.
+    // The AX.25 modem is Microphone: its AFSK amplitude is fixed
+    // (kTxAfskAmplitude = 0.35, -9.12 dBFS) and the packet dialog has no level
+    // control, so this slider is the only way to move it. RADE never reaches here.
     //
-    // THE AX.25 MODEM IS Microphone, NOT EngineGenerated, and the reason is a
-    // level rather than a label: its AFSK amplitude is a compile-time constant
-    // (kTxAfskAmplitude = 0.35, -9.12 dBFS) and the packet dialog carries no
-    // level control, so this slider is the only thing in the product that can
-    // move a packet frame. Bypassing it would pin HF packet 7.71 dB under
-    // alcTargetPeak with nothing able to raise it. (RADE never reaches here at
-    // all: it needs DAX audio, activateRADE() refuses any radio that cannot
-    // provide it, and a Flex modulates on its own side.)
+    // The ALC is the same for all three: reduction-only, unity ceiling. Every
+    // source is protected from splatter; engine audio is simply not re-levelled.
+    // hl2_txdsp_test's #4796 cases pin the TCI/DAX path.
     //
-    // WHY IT IS A SOURCE AND NOT THE BOOL IT REPLACED. `clientLeveled` selected
-    // the ALC's ceiling: unity for client-leveled audio, alcMaxGainDb (40 dB)
-    // for everything else. That asymmetry was #4796 — an ALC applied to a
-    // client that sets its own level normalized that level control away above
-    // the hold threshold and froze into a path-dependent gain below it. The
-    // remedy was to ceiling the client path at unity, and then the ceiling
-    // became unity on EVERY path, which left the bool nothing to select. What
-    // it could never say is the distinction that matters once the makeup is
-    // gone: it answered "did an external client set this level?", so the
-    // operator's microphone and the engine's own generators shared one bucket.
-    //
-    // What survives from that era is the half that was never the bug and never
-    // depended on the flag: the MODULATOR owns its own ceiling. Reduction still
-    // applies to everything, because m_micGain reaches 100x (+40 dB,
-    // Hl2TxLevelPolicy.h) and a full-scale source with the TX gain slider up
-    // arrives far inside the hard clamp below — and flat-topping an SSB
-    // modulator input splatters across the band. That clamp is a backstop, not
-    // a level control, and must not become the only thing standing between a
-    // hot source and the air.
-    //
-    // The ALC itself is unchanged for all three: reduction-only, unity ceiling.
-    // Engine audio is protected from splatter exactly like everything else; it
-    // simply is not RE-LEVELLED on its way in.
-    //
-    // RESIDUE: m_inBuffer carries up to dspBlockSize-1 samples between calls and
-    // would be levelled with the NEW block's multiplier, so a source change
-    // inside one transmission drops the carry rather than mislevelling it. See
-    // the guard at the top of processAudioBlock().
-    //
-    // hl2_txdsp_test's #4796 cases still pass unchanged, which is the evidence
-    // that none of this moved the TCI/DAX path.
+    // RESIDUE: m_inBuffer carries up to dspBlockSize-1 samples between calls, so a
+    // source change inside one transmission drops the carry rather than levelling
+    // it with the new multiplier (guard at the top of processAudioBlock()).
     //
     // ── THE TXA BUILD IS NOT RATE-FREE, and the phasing build is ──────────
     //
-    // The phasing modulator is a convolution: N audio samples in gives exactly
-    // 2N IQ samples out, whenever they are handed over and however fast.
-    //
-    // A TXA channel is not. It is opened with blockForOutput = false -- the
-    // setting Hl2RxDsp uses and the setting every figure on #5678 was measured
-    // at -- so WdspChannel::processIq RETURNS Underrun rather than waiting when
-    // the channel's output side is not ready yet. A caller that feeds faster
-    // than real time starves it: measured at this geometry, 240-255 of 256
-    // blocks underrun unpaced, against 0 of 64 at the live 21.33 ms block
-    // period and 0 at 5 ms. An underrun is not a dropped block either --
-    // fexchange2 advances r2_outidx on the miss without consuming, so the
-    // stream thereafter runs one whole DSP buffer AHEAD, permanently.
-    //
-    // The live caller is paced: AudioEngine's TX poll hands this stage audio as
-    // the sound card produces it. Every OTHER caller -- a test, a bench
-    // harness, an offline render -- has to pace itself or it is measuring
-    // starvation. It will not be told quietly: a starved block is counted in
-    // modulatorFaultBlocks() and logged.
-    //
-    // THIS IS ORTHOGONAL TO THE SOURCE ARGUMENT ABOVE. The rate coupling is a
-    // property of which MODULATOR was compiled in; the source argument is about
-    // which LEVEL policy applies. Neither reads the other.
+    // The phasing modulator is a convolution: N samples in, 2N IQ out, at any rate.
+    // The TXA channel is opened with blockForOutput = false, so processIq returns
+    // Underrun when the output side is not ready; a caller faster than real time
+    // starves it (unpaced: 240-255 of 256 blocks underrun; 0 of 64 at the live
+    // 21.33 ms period or at 5 ms). An underrun leaves the stream one DSP buffer
+    // ahead permanently (fexchange2 advances r2_outidx). The live caller
+    // (AudioEngine's TX poll) is paced; tests and offline renders must pace
+    // themselves. Starved blocks are counted in modulatorFaultBlocks() and logged.
+    // This is independent of the source argument above.
     void processAudioBlock(const std::vector<float>& mono,
                            TxAudioSource source,
                            const TxCoordinator::Context& context);

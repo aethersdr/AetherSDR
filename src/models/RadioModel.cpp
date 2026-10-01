@@ -1565,57 +1565,22 @@ void RadioModel::setupBackend(const QString& family)
         m_meterModel.updateValues(std::forward<decltype(values)>(values)...);
     });
 
-    // HAND THE FRESH BACKEND THE MIC GAIN THE MODEL ALREADY HOLDS.
+    // HAND THE FRESH BACKEND THE MIC GAIN THE MODEL ALREADY HOLDS. The constructor's
+    // seam carries operator intent (slider moves), and a backend rebuild is not one:
+    // a new host modulator starts at its own 1.0 default while
+    // TransmitModel::m_micLevel keeps the operator's position (micLevel is not
+    // persisted for applyRestoredState()). Push at construction, not connect,
+    // because the disagreement exists from construction. A no-op on the
+    // constructor's own call (50 maps to 1.0).
     //
-    // The seam wired in the constructor carries operator INTENT — it fires when
-    // the slider moves, and a backend rebuild is not the slider moving. So
-    // without this, a family swap silently parts the two: the new modulator is
-    // constructed at its own 1.0 default (Hl2TxDsp::m_micGain) while
-    // TransmitModel::m_micLevel still holds the operator's position, because
-    // nothing resets that model and micLevel is not persisted for
-    // applyRestoredState() to restore. Connect an HL2, set MIC to 80, visit the
-    // demo or a Flex, come back: the slider reads 80, the snapshot's micLevel
-    // reads 80, and the radio is transmitting at unity.
-    //
-    // That is the readback-agreeing-with-the-failure shape this whole change
-    // exists to eliminate, so it cannot be left standing one seam over. Pushing
-    // here rather than in the connect path because the disagreement is created
-    // by CONSTRUCTION, not by connecting — the modulator is wrong the moment it
-    // exists, and a backend that is never connected should still answer
-    // healthSnapshot() honestly.
-    //
-    // Free on the constructor's own call, where TransmitModel is at its 50 and
-    // 50 maps to the 1.0 the modulator already holds.
-    //
-    // GATED ON hostModulates, NOT on the family predicate the operator-intent
-    // seam uses — the two sites ask different questions and the gate was copied
-    // between them.
-    //
-    // The seam's gate is DE-DUPLICATION: setMicLevel() emits
-    // `transmit set miclevel=` beside micLevelCommandIssued, so on a Flex the
-    // seam would issue a second copy of a command the wire text already carried.
-    // Nothing is in flight here. setupBackend() emits no wire text, so "did the
-    // Flex text path already carry this" is not a question this site has.
-    //
-    // The question this site has is whether the fresh backend HAS a host
-    // modulator standing at its own default, waiting to be told where the
-    // operator left the slider. That is precisely what hostModulates answers.
-    // A backend that does not host-modulate has no such object: it either has
-    // nothing to seed (Flex, RTL, the sim) or it owns the value INSIDE the radio
-    // and will report it on connect — Icom, where IRadioBackend::setMicGain is
-    // implemented as a live CI-V 14 0B write (or, on an IC-9700 with LAN as the
-    // modulation input, a SET 0114 LAN MOD write). Handing either one a
-    // client-held number at construction is a silent write of state the radio
-    // never asked for, and it marks the backend's own mirror as reported —
-    // healthSnapshot() then prints our number where the radio's belongs, before
-    // a single 14 0B reply has arrived. The operator's own slider move still
-    // reaches an Icom through micLevelCommandIssued; only this construction-time
-    // push stops.
-    //
-    // See the hostModulates declaration in RadioCapabilities.h, which carries
-    // the warning that conflating it with takesTxAudioOverSeam cost a working
-    // transmitter. This is that same flag, read for the question it was written
-    // to answer: does the HOST run the modulator.
+    // Gated on hostModulates, not the Flex-dedup gate the intent seam uses: the
+    // question here is whether the host runs a modulator waiting to be told the
+    // slider position. Flex, RTL and Sim have nothing to seed; Icom owns the value
+    // in the radio (CI-V 14 0B, or SET 0114 LAN MOD on an IC-9700) and reports it on
+    // connect, so pushing a client number would be an unrequested radio write and
+    // would mark its mirror reported. Operator slider moves still reach Icom via
+    // micLevelCommandIssued. See RadioCapabilities.h on hostModulates vs
+    // takesTxAudioOverSeam.
     if (m_backend && backendCapabilities().hostModulates)
         m_backend->setMicGain(m_transmitModel.micLevel());
 }

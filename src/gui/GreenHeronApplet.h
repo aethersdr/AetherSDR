@@ -1,79 +1,35 @@
 #pragma once
 
-// GreenHeronApplet — the GHE tile: the ONE Green Heron "Everyware" switch this
+// GreenHeronApplet — the GHE tile: the one Green Heron "Everyware" switch this
 // station's radio is fed from, as a list of its antenna ports.
 //
-// The Everyware server presents several switches (four on the reference
-// installation) and the reference Python client draws all of them as a
-// matrix. This applet deliberately does not: a radio is wired to exactly one
-// switch, so the operator picks theirs once and then sees a single column of
-// real antenna names — which is also what fits a 260 px sidebar tile without
-// abbreviating everything into initials.
+// The server presents several switches; a radio is wired to one, so the
+// operator picks theirs once and sees one column of antenna names. Other
+// switches' selections (SWITCHLOCKS) only mark an antenna "in use by <switch>".
 //
-// The other switches are not ignored, they are just not drawn. Their
-// selections arrive in SWITCHLOCKS and are what marks an antenna "in use by
-// AS-84F-2" here, because an antenna feeds one switch at a time and the
-// device would refuse the click anyway.
+// The applet owns its GreenHeronModel (the AntennaGenius pattern): there is no
+// discovery path and the switch is radio-agnostic, so MainWindow has nothing to
+// detect or forward. The list renders what the device reported, never what we
+// asked for (GreenHeronModel::selectPort).
 //
-// The applet OWNS its GreenHeronModel rather than being handed one by
-// MainWindow (the AntennaGenius pattern). Two reasons: the Everyware server
-// has no discovery path, so there is nothing for MainWindow to detect and
-// nothing to condition the tray button on — the operator types an address and
-// the applet is the only thing that needs it; and the switch is
-// radio-agnostic, so no MainWindow signal has to reach it. That keeps the
-// whole feature to three files plus its registration.
+// The rotator sits in this tile because it shares the switches' socket. It is
+// shown only while a heading is being reported: a powered-off controller is not
+// a socket event, and a stale heading would sit beside a live Turn button.
 //
-// The list renders exactly what the device has reported — never what we asked
-// for. A relay that fails to move shows up as a button that does not light,
-// rather than as a UI that lies (see GreenHeronModel::selectPort).
+// Safety invariants, easy to "tidy" away:
 //
-// THE ROTATOR SITS IN THIS SAME TILE, under the antenna list, because the
-// Everyware server carries it down the same socket the switches use. A
-// separate applet would have to open a second connection to the same server
-// to show one number.
+//   1. CHOOSING A HEADING AND SENDING IT ARE SEPARATE GESTURES. Typing proposes;
+//      Turn (or Enter) transmits. The protocol has no stop or park verb, so a
+//      rotation cannot be recalled. Nothing transmits on a single click or drag.
+//   2. THE READOUT IS THE REPORTED HEADING, NEVER THE COMMANDED ONE, with no
+//      "on target" verdict: on real hardware the rotator stops ~2° short,
+//      overshoots, and wanders ±3.8° while stationary. Hence
+//      "62.9° · asked 64.3° · Δ1.4°".
 //
-// It appears only while the device is actually reporting a heading and
-// vanishes when it stops — that is not a cosmetic choice. A rotator is
-// announced only while its controller is powered on, and the controller going
-// off is not a socket event: the heading would otherwise sit there
-// indefinitely beside a Turn button that would aim a controller that is off.
-//
-// Two things about it are safety invariants rather than preferences, and both
-// are easy to "tidy" away:
-//
-//   1. CHOOSING A HEADING AND SENDING IT ARE SEPARATE GESTURES. Typing a
-//      heading proposes it; Turn (or Enter in the field) transmits. There is
-//      no stop or park verb anywhere in this protocol, so a rotation that
-//      starts cannot be recalled in software. Nothing here may transmit on a
-//      single click or a drag.
-//   2. THE READOUT IS THE REPORTED HEADING, NEVER THE COMMANDED ONE, and it
-//      never says "on target". Measured on real hardware: the rotator stops
-//      about two degrees short along whichever way it was turning, overshoots
-//      on the way there, and wanders over a ±3.8° band while mechanically
-//      stationary. Any arrival threshold at that noise level would flicker,
-//      and the error it tested would be smaller than the measurement. Hence
-//      "62.9° · asked 64.3° · Δ1.4°" and no verdict.
-//
-// The reference GTK client draws a full Cairo compass rose for this. In the
-// DOCKED tile it is still refused: a recognisable rose would cost most of a
-// 248px-wide rail's height to restate one number the readout already gives.
-//
-// It is drawn only when the tile is FLOATING, where the operator has sized
-// the window themselves and the height is theirs to spend — see RotorCompass
-// below, and the dockModeChanged wiring on the GHE entry in AppletPanel. The
-// floating window resizes itself around the dial as the rotator comes and
-// goes, so no default float size is declared for it. The other half of the
-// original objection, that a rose's
-// colours arrive as hardcoded hex in a repo that ratchets against exactly
-// that, is answered by painting from ThemeManager::color() tokens rather
-// than by not painting.
-//
-// The rose is READ-ONLY, and that is invariant 1 above rather than an
-// oversight. A compass rose's natural affordance is click-to-point, which is
-// precisely the single gesture that may not transmit; RotorCompass therefore
-// has no mouse handlers at all, and must not acquire one — not even to fill
-// the heading field, which is one Enter away from a rotation that cannot be
-// recalled.
+// The compass rose (RotorCompass) is drawn only when the tile is floating, where
+// the operator controls the height (dockModeChanged wiring in AppletPanel), and
+// is painted from ThemeManager tokens. It is read-only by invariant 1:
+// RotorCompass has no mouse handlers and must not gain any.
 
 #include <QHash>
 #include <QStringList>

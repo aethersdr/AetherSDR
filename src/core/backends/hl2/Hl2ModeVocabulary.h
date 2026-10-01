@@ -1,105 +1,36 @@
 #pragma once
 
-// THE TWO MODE LISTS THIS BACKEND KEEPS, AND WHY THERE ARE TWO.
+// THE TWO MODE LISTS THIS BACKEND KEEPS:
 //
-// An earlier draft of #5755 published one list on the reasoning that "does this
-// backend really do this mode" is a single question. It is two, and
-// aethersdr-agent was right to say so:
+//   * ACCEPT — "may a stored document say this". Every spelling
+//     modeFromString() maps, aliases included; a string that would not map is
+//     dropped at restore rather than reaching Receiver::mode and re-persisting.
+//   * OFFER — "should an operator be able to pick this". Each mode once, and
+//     only where picking it does something.
 //
-//   * ACCEPT asks "may a stored document say this". It must take every spelling
-//     modeFromString() maps, aliases included, or a restore silently loses the
-//     operator's mode instead of protecting them from it. This is the guard
-//     from PR #4619's review (Ozy311): a mode string that would NOT map is
-//     dropped rather than reaching Receiver::mode, the UI, and — via capture —
-//     re-persisting itself.
+// OFFER is a subset of ACCEPT (hl2_mode_vocabulary_test asserts it), so the menu
+// never offers what restore would reject. Accepted but not offered:
 //
-//   * OFFER asks "should an operator be able to pick this". It must list each
-//     mode ONCE, and only where picking it does something.
+//   ALIASES   CWU (= CW), WFM (= WBFM), NFM (= FM); one WdspChannel mode each.
+//   WBFM/WFM  RxApplet's mode handler assumes "WFM" is never in m_modeCombo
+//             (the WFM overlay is toggled from the VFO flag).
+//   DRM       no decoder on this backend.
 //
-// The offered list is a SUBSET of the accepted one, which is the invariant that
-// matters: a menu can never offer a mode the restore boundary would reject, and
-// the boundary stays free to accept spellings the menu has no business showing.
-// hl2_mode_vocabulary_test asserts the containment rather than trusting it.
+// canonicalOfferedMode() collapses an alias onto the offered spelling at the
+// restore boundary and in setSliceMode(), before it reaches Receiver::mode.
+// Otherwise the combos (which only move on a findText() hit) would show index 0
+// ("LSB") while the receiver is in FM. This is a no-op on the DSP: it renames
+// what is shown, never what is heard.
 //
-// THREE GROUPS ARE ACCEPTED AND NOT OFFERED.
+// It cannot weaken a TX refusal: modeIsReceiveOnly() is a case-insensitive
+// membership test on what the slice holds, so every pair is listed both ways in
+// receiveOnlyModes (FM/NFM, WBFM/WFM) or on neither (CW/CWU, which transmit via
+// the gateware keyer). The duplicates stay; a missing entry costs far more.
 //
-//   ALIASES. CWU is CW under a second name (VoiceModeGate.h says so outright),
-//   WFM is WBFM's, NFM is FM's — modeFromString() maps each pair onto one
-//   WdspChannel mode. A menu carrying both members of a pair asks the operator
-//   to choose between a mode and itself.
+// WBFM and DRM have no offered twin and remain undisplayable if reached via
+// CAT, TCI or a hand-edited document (residual set in hl2_mode_vocabulary_test).
 //
-//   WBFM/WFM. RxApplet.cpp's mode handler is written on the stated assumption
-//   that "WFM" is never an entry in m_modeCombo, because the WFM software-demod
-//   overlay is toggled from the VFO flag instead. Publishing it would put two
-//   different WFM concepts in one widget, one of them reached through a handler
-//   that tears the other one down.
-//
-//   DRM. There is no DRM decoder on this backend. modeFromString() mapping it
-//   onto a WDSP mode is not the radio demodulating it, and offering it is the
-//   same class of claim #5580 exists to remove — its own third bullet.
-//
-// THE DELTA AGAINST THE COMPILED-IN FLEXRADIO FALLBACK this replaces, in full:
-// RTTY, DFM and DSTR leave (nothing here demodulates them, and modeFromString()
-// turns all three into USB while every readback still says RTTY); NFM leaves
-// (it is FM); DSB and CWL arrive, both real, both distinct, both unreachable
-// from the combo before.
-//
-// AN ACCEPTED ALIAS MUST BE RECONCILED, NOT MERELY ACCEPTED (#5755 review,
-// jensenpat). Splitting the lists is only half a change: NFM was an ordinary
-// entry in the FlexRadio fallback combo this replaces, it is still accepted on
-// restore, and it is no longer offered -- so a session saved in NFM came back
-// with the slice holding "NFM" and the menu unable to show it. Both consumers
-// rebuild with clear()/addItems()/findText(currentText) and only move the
-// selection when findText() succeeds (RxApplet::connectSlice and
-// VfoWidget::setSlice, both on SliceModel::modeListChanged), so the combo fell
-// to index 0 -- "LSB" -- with signals blocked, while the receiver really was in
-// FM. Nothing downstream heals it: RxApplet's SliceModel::modeChanged handler
-// is written the same findText()-must-hit way, and VfoWidget's does not touch
-// the combo at all -- it only relabels the mode TAB, so that widget ends up
-// showing "NFM" on the tab and "LSB" in the combo at the same time. An operator
-// reading LSB while hearing FM is the exact fault #5580 exists to remove, so
-// introducing a fresh one here would be the change arguing against itself.
-//
-// canonicalOfferedMode() closes it at the restore boundary: the alias collapses
-// onto the spelling the menu carries BEFORE the mode reaches Receiver::mode, so
-// the menu and the model cannot disagree about a restored document.
-//
-// IT CANNOT WEAKEN A TX REFUSAL, and that is checked rather than asserted.
-// RadioCapabilities::modeIsReceiveOnly() is a case-insensitive MEMBERSHIP test,
-// not alias normalisation, and RadioModel::refuseKeyInReceiveOnlyMode() runs it
-// on what the slice holds. Every pair below is therefore listed BOTH WAYS in
-// Hl2Backend::capabilities()'s receiveOnlyModes (FM and NFM, WBFM and WFM) or
-// on NEITHER (CW and CWU both transmit correctly through the gateware keyer).
-// Collapsing one spelling onto the other moves nothing across that boundary --
-// hl2_mode_vocabulary_test pins the equivalence for every accepted spelling.
-// The duplicate entries stay, and the reason has NARROWED rather than gone:
-// this file used to say "CAT, TCI and Hl2Backend::setSliceMode still put
-// either spelling on the slice at run time", and setSliceMode() no longer
-// does -- it runs canonicalOfferedMode() on what it is handed, the same way
-// applyRestoredState() always has, so the last backend-side route that could
-// leave a slice holding an unpublished spelling is closed. That was a
-// description of the behaviour and never a requirement of it; the equivalence
-// above is what made closing it safe. The duplicate receiveOnlyModes entries
-// are kept regardless, because a membership test is not alias normalisation
-// and the cost of an extra entry is nothing against the cost of a missing one.
-//
-// modeFromString() maps both members of each pair onto ONE WdspChannel mode, so
-// the reconciliation is a no-op on the DSP: it renames what the operator is
-// shown, never what they hear. defaultPassbandForMode() and cwBfoOffsetHz()
-// carry both spellings in one branch for the same reason.
-//
-// TWO ACCEPTED MODES REMAIN UNDISPLAYABLE -- WBFM and DRM, which have no
-// offered twin to collapse onto. Neither is a regression of this PR: neither
-// was in the FlexRadio fallback either, so a slice holding one already showed
-// index 0 before this change. Reaching them at all needs CAT, TCI or a
-// hand-edited document. Said here rather than left for the next reader to
-// rediscover; see the residual set in hl2_mode_vocabulary_test.
-//
-// HEADER, NOT A .cpp-LOCAL LIST, for the reason tests/tests.cmake states beside
-// hl2_pan_limits_declaration_test: "a declaration must not be pinned only
-// inside something that does not build." The fake-radio fixture that would have
-// carried a seam assertion — hl2_backend_test — is retired inside a commented
-// block, so an assertion written there would be green forever.
+// A header, not a .cpp-local list, so it is pinned by a test that builds.
 
 #include <QString>
 #include <QStringList>

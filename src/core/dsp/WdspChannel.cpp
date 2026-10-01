@@ -1282,81 +1282,29 @@ void WdspChannel::close() noexcept
     if (!m_open) {
         return;
     }
-    // TEARDOWN, and the only CloseChannel in this process. Stop first:
-    // CloseChannel on a running channel frees buffers out from under the mute
-    // ramp and skips the flush entirely, which is both a click on the way out
-    // and a race.
+    // TEARDOWN, and the only CloseChannel in this process. Stop first: CloseChannel
+    // on a running channel frees buffers under the mute ramp and skips the flush.
     //
-    // dmode 1 here, unlike setRunning()'s stop, and it does NOT mean the same
-    // thing. The flag it waits on is ch[channel].flushflag, and NOTHING ON THIS
-    // THREAD can clear it. The chain is one hop longer than it looks:
-    // fexchange0/fexchange2 run the down-slew and, when the slew completes,
-    // release a->Sem_Flush (the ReleaseSemaphore calls at the tail of
-    // fexchange0/fexchange2); WDSP's per-channel flushChannel thread wakes on
-    // that semaphore, flushes, and only then clears flushflag (the tail of
-    // flushChannel, channel.c). So the wait is satisfiable ONLY while
-    // the host keeps calling fexchange*, and close() runs behind the control
-    // fence — the destructor has drained the callbacks, reconfigure() holds
-    // beginControlOperation() — so by construction nothing will call it and the
-    // wait runs to WDSP's 100 ms timeout.
+    // dmode 1 here, unlike setRunning(). The wait is on ch[].flushflag, which only
+    // the flushChannel thread clears after fexchange* releases Sem_Flush — and close()
+    // runs behind the control fence, so nothing clocks the channel and the wait runs
+    // to WDSP's 100 ms timeout. That timeout branch force-clears exchange, flushflag
+    // and slew.downflag, which is the state CloseChannel wants; dmode 0 would skip
+    // the force-clear as well. Reaching CloseChannel with those flags set (an owner
+    // that already stopped, making this a no-op) is also benign: pre_main_destroy,
+    // pre_main_build and destroy_iobuffs reset all three. Don't re-add a wait.
     //
-    // The blocking form is still the right call here, because the timeout
-    // branch is not waste: it force-clears exchange, flushflag and
-    // slew.downflag, which is exactly the state CloseChannel wants to find.
-    // Passing dmode 0 would skip the wait AND the force-clear, which is not the
-    // same shortcut.
+    // AetherSDR patch 9 moved the flushChannel handshake into pre_main_destroy, so
+    // a channel stopped and then clocked can no longer be freed under an in-flight
+    // flush_rxa() (runCloseAfterStoppedClockingTest holds it). Hl2RxDsp and
+    // AnanRxDsp stop before releasing a channel and skip the 100 ms;
+    // WdspReceiver (rtl/RtlReceiverRegistry.cpp) retires on another thread and
+    // still pays it per channel.
     //
-    // AND THAT IS NOT AN ARGUMENT AGAINST THE OWNER-SIDE STOP DESCRIBED IN THE
-    // NEXT PARAGRAPH, which deliberately makes this line a no-op so the
-    // force-clear never runs. Reaching CloseChannel with all three flags still
-    // set is benign, checked rather than assumed: pre_main_destroy clears
-    // exchange, pre_main_build clears flushflag, and post_main_destroy ->
-    // destroy_iobuffs frees the whole iob so create_iobuffs hands back a fresh
-    // slew with downflag zeroed. A future reader following the paragraph above
-    // should not re-add the wait. (Raised in review of #5628.)
-    //
-    // THE ONE THING THE 100 ms WAS ALSO DOING, and the reason this is safe to
-    // skip only since AetherSDR patch 9. The wait was never only a wait: while
-    // it ran, an in-flight flushChannel thread had time to leave flush_rxa()
-    // before destroy_main() freed the RXA chain underneath it. Nothing in
-    // CloseChannel waited for that thread — patch 4's handshake waits for the
-    // wdspmain worker, and upstream's flushChannel handshake sat in
-    // destroy_iobuffs(), i.e. AFTER destroy_main(). So a channel stopped through
-    // setRunning() and then CLOCKED — which is what the header documents as
-    // correct usage, and what the T/R mute of docs/HERMES.md §13 row 9a will do
-    // — reached this line with the flush thread runnable and no barrier left.
-    // MEASURED as a use-after-free, reproduced before it was fixed; ten9876
-    // found it in review of #5628. Patch 9 moves that handshake into
-    // pre_main_destroy, so the barrier is explicit and covers every caller of
-    // CloseChannel rather than only the ones that happen to pay a timeout.
-    // runCloseAfterStoppedClockingTest is what holds it.
-    //
-    // The rest of the fix is at the OWNER, not here: a channel already stopped
-    // through setRunning() takes none of this, because SetChannelState no-ops
-    // when the state already matches. Two of the three WdspChannel owners in
-    // this tree — Hl2RxDsp and AnanRxDsp — now stop before they let a channel
-    // go, so on those paths this line is normally a no-op and the 100 ms is not
-    // paid at all. The third, WdspReceiver in
-    // src/core/backends/rtl/RtlReceiverRegistry.cpp, deliberately does not:
-    // it retires a bank on the registry's executor thread rather than on the
-    // thread that drives processIq(), so the "a callback cannot be in flight"
-    // argument the other two rest on does not carry across without work this PR
-    // has not done. Since patch 9 that is a latency question and not a safety
-    // one, and the RTL path still pays the 100 ms per channel. (Raised in
-    // review of #5628.)
-    //
-    // OUTSIDE g_setupMutex, and it is the only WDSP call in this class that is.
-    // That lock exists to serialise the FFTW PLANNER (see the comments at the
-    // top of this file); SetChannelState enters none of it. Everything it
-    // touches is indexed by channel — ch[channel].state/flushflag/exchange,
-    // ch[channel].iob.pc->slew — and so is everything the flushChannel thread
-    // it hands off to reaches: flush_iobuffs/flush_main are memsets and index
-    // resets over rxa[channel]/txa[channel], with no fftw_plan or
-    // fftw_destroy_plan reachable from either (checked by walking the call
-    // graph out of flush_main across the vendored tree). Under the lock, N
-    // channels closing while running queued N timeouts end to end. NOT
-    // MEASURED, an inference from the 100 ms constant: four receivers would
-    // have been ~0.4 s of serialised teardown.
+    // OUTSIDE g_setupMutex, the only WDSP call here that is: that lock serialises
+    // the FFTW planner, and SetChannelState and the flush it triggers touch only
+    // per-channel state with no fftw_plan reachable. Under the lock N closing
+    // channels would serialise N timeouts (~0.4 s for four receivers, inferred).
     SetChannelState(m_channelId, 0, 1);
     m_running.store(false, std::memory_order_relaxed);
     {

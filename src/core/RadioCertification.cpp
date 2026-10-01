@@ -449,58 +449,24 @@ void RadioCertification::stageControlEffect(const Options& o)
             "about what the gain is")
             .arg(micDelta, 0, 'f', 1);
 
-    // RF GAIN, CERTIFIED BY EFFECT — AND THE FAMILY GATE GOES WITH IT.
+    // RF GAIN, CERTIFIED BY EFFECT, with no family gate. On seam backends the
+    // operator's slider routes rfGainChanged -> RadioModel::setPanRfGainFor ->
+    // backend (HL2: Hl2Backend::setPanRfGain -> MetisClient::setLnaGainDb, AD9866
+    // 0x0a[5:0]); SliceModel::setRfGain is Flex wire text only. This stage drives
+    // the control and reports what it observed.
     //
-    // This used to hardcode, behind `if (family == "hl2")`, the finding
-    // "SliceModel::setRfGain has no runtime path on this backend". The first
-    // clause is still true: SliceModel::setRfGain's whole body is
-    // `slice set N rfgain=X`, Flex wire text no seam backend can receive. The
-    // CONCLUSION was false, and printed on every Hermes-Lite 2 run. The
-    // operator's slider does not call it — SpectrumOverlayMenu emits
-    // rfGainChanged unconditionally and only falls back to the slice setter
-    // when there is no radio model or no pan id — so on the HL2 the slider
-    // routes rfGainChanged → RadioModel::setPanRfGainFor →
-    // Hl2Backend::setPanRfGain → applyLnaGainDb → MetisClient::setLnaGainDb,
-    // which writes AD9866 0x0a[5:0] at runtime and remembers it per band.
+    // The expected S-meter delta is ZERO, not the step: Hl2DbReference moves with
+    // the gain so a gain change cannot move a reported dBm (docs/HERMES.md 17.4).
     //
-    // Replacing the assertion with a measurement removes the reason for the
-    // family gate (§1.14). A stage that DRIVES the control and reports what
-    // happened cannot tell a Flex operator their working preamp is broken,
-    // because it is no longer telling anybody anything it did not observe.
-    //
-    // THE EXPECTED DELTA IS ZERO, NOT THE STEP SIZE. Hl2DbReference is moved in
-    // the same call as the gain and both the spectrum and the S-meter render
-    // through it, specifically so a gain change does NOT slide the display
-    // (docs/HERMES.md 17.4; the class header states it as an invariant — "a gain
-    // change provably cannot move a reported dBm value"). On healthy hardware
-    // an 8 dB LNA step moves SLC:LEVEL by 0 dB. Asserting 8 dB would have
-    // replaced one permanent false positive with another.
-    //
-    // AND THE DELTA STILL DOES NOT RENDER A VERDICT, because it cannot. Two
-    // different states produce the identical −step reading:
-    //
-    //   * the reference moved and the LNA register did not — the real defect;
-    //   * the register moved and the RECEIVED NOISE FLOOR did not, because the
-    //     reading is dominated by the converter's own noise rather than by
-    //     anything coming down the feedline. Raising the LNA lifts antenna
-    //     noise and leaves ADC noise where it is, so on a quiet band the raw
-    //     dBFS barely moves and the display subtracts the full step anyway.
-    //
-    // That is not a hypothetical. Measured on the live Hermes-Lite 2 on a quiet
-    // 20 m: an 8 dB step moved SLC:LEVEL by −6.3 dB, which is within 2 dB of
-    // the defect signature — while the raw dBFS behind it ROSE 1.74 dB, proving
-    // the register HAD been written. A threshold tight enough to catch the
-    // defect fires on healthy hardware every time the band is quiet, and this
-    // stage exists to stop printing findings like that.
-    //
-    // So the delta is reported as evidence with its two readings named, and the
-    // VERDICT rests on the echo. applyLnaGainDb echoes the value the hardware
-    // actually took to every pan, so an echo landing on
-    // PanadapterModel::rfGain() is evidence the seam was crossed — and it is
-    // not §1.6's readback of our own setpoint, because an out-of-range request
-    // comes back clamped rather than repeated. What is still missing to close
-    // the effect half is the raw pre-reference dBFS, which the seam does not
-    // expose (docs/CERTIFICATION.md 2.4 — the meters join).
+    // The delta still cannot render a verdict. The same -step reading comes from
+    // (a) the reference moved but the LNA register did not (the defect), or (b) the
+    // register moved but the reading is dominated by converter noise on a quiet
+    // band. Measured on a live HL2 on a quiet 20 m: an 8 dB step moved SLC:LEVEL by
+    // -6.3 dB while raw dBFS rose 1.74 dB. So the delta is reported as evidence,
+    // and the verdict rests on the echo: applyLnaGainDb echoes the value the
+    // hardware took to every pan, and an out-of-range request comes back clamped,
+    // not repeated. Closing the effect half needs the raw pre-reference dBFS, which
+    // the seam does not expose (docs/CERTIFICATION.md 2.4).
     auto settledSLevel = [&]() -> double {
         // LET THE EMA CATCH UP. docs/HERMES.md 17.6: every WDSP sample is smoothed
         // (decay alpha 0.15 at ~47 samples/s, so ~0.7 s to settle) and one is

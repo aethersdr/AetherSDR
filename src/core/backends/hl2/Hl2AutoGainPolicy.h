@@ -1,120 +1,43 @@
 #pragma once
 
-// The automatic receive-gain control law, as a pure function.
+// The automatic receive-gain control law, as a pure function:
 //
 //     (state, observation, config) -> action
 //
-// No Qt, no socket, no clock, no radio. Elapsed time is an INPUT and the
-// function returns an INSTRUCTION about state, exactly as `adcOverloadWarn`
-// returns `restartClock` rather than touching a `QElapsedTimer`. `Hl2Backend`
-// owns the timers and the register write; this header owns every decision.
+// No Qt, socket, clock or radio. Elapsed time is an input and the result is an
+// instruction about state; Hl2Backend owns the timers and the register write.
+// It is a header the backend evaluates (not a copy of it) so tests exercise the
+// real decision.
 //
-// It lives in a header, evaluated by the backend rather than copied into it,
-// for the reason `Hl2TxLevelPolicy.h` states: a test against a re-typed copy of
-// a decision proves only that two copies agree.
+// PARAMETERISED, NOT A FIXED SERVO. On ON8ST's station (#5354) 6 dB of LNA spans
+// the whole 0 % -> 86 % clipping transition at 14.2 MHz, so a 3 dB step is half
+// the plant's linear region and a per-band binary high/low switch may be the
+// better feature. Step, thresholds, dwell, cooldown and trip memory are all
+// configuration; binaryHighLowConfig() is the binary controller as one config.
 //
-// ---------------------------------------------------------------------------
-// WHY THIS IS PARAMETERISED RATHER THAN A FIXED SERVO
-// ---------------------------------------------------------------------------
+// WHAT THE OBSERVATION IS. Response address 0 DATA[24] is `(&clip_cnt)`, the AND
+// of a two-bit saturating counter cleared on every resp_rqst: it means AT LEAST
+// THREE CLIP EVENTS IN ONE REPORTING INTERVAL, not "a sample railed" (#5354).
+// So:
 //
-// The obvious shape for this feature is a servo: small steps, a dwell, a slow
-// release. There is a measurement that says the obvious shape may be wrong.
+//   * `Clean` means "fewer than three clip events per interval", which at
+//     76.8 MSPS can still be a lot of clipping. The wideband bandscope
+//     (Hl2BandscopeHeadroom.h) supplies the magnitude and an early-warning knee
+//     below the clip point; the bit supplies coverage of every sample. Veto and
+//     magnitude; neither substitutes for the other.
+//   * The observation exists only while streaming. At idle nothing clears the
+//     counter and the bit is a latch of unknown age. When evidence stops, the
+//     loop HOLDS its offset: no decay, no release, no dwell advance. A window
+//     with too few observations is `Void`, and `Void` is not `Clean`.
+//   * The rate (overloadSamples / samples, ~190 samples/s) is ordinal and a
+//     lower bound, because the crossing can miss assertions. Hence three coarse
+//     states, not a proportional law.
+//   * Command responses displace the slot carrying this bit (up to half of
+//     them), so a count is usable only with its denominator: `minSamples`.
 //
-// A sweep on ON8ST's station (issue #5354's own table) gives, at 14.2 MHz:
-//
-//     LNA -12 dB -> 0 % clipping        LNA  +0 dB -> 86 % clipping
-//     LNA  -6 dB -> 0 % clipping        LNA  +6 dB -> 100 % clipping
-//
-// SIX DECIBELS SPANS THE ENTIRE 0 % -> 86 % TRANSITION. The smallest attack
-// step worth taking is 3 dB — half of that. A controller whose step is half its
-// plant's whole linear region is not a servo; it is a two-state switch wearing
-// a servo's machinery, and on that evidence a per-band binary high-gain /
-// low-gain decision with a long hold may simply be the better feature.
-//
-// The measurement that would settle it has not been made — nobody has yet
-// watched this observable on a live antenna, because it turns out to be a
-// single bit that only updates while the radio is streaming. So this header
-// declines to choose. Step size, thresholds, dwell, cooldown and the trip
-// memory are all configuration, and `binaryHighLowConfig()` below is the binary
-// controller expressed as one particular `AutoGainConfig` — the same function,
-// the same state machine, the same tests, different numbers. The bench decides
-// by measurement, and neither outcome needs a rewrite.
-//
-// ---------------------------------------------------------------------------
-// WHAT THE OBSERVATION ACTUALLY IS, AND WHAT THAT FORCES
-// ---------------------------------------------------------------------------
-//
-// RETRACTED PREMISE, CORRECTED HERE RATHER THAN QUIETLY DROPPED. An earlier
-// version of this comment said the overload bit meant "the converter railed",
-// and the control law below was sized against that reading. It is not what the
-// bit means, the correction was posted on aethersdr/AetherSDR#5354, and it
-// matters to every threshold in this file.
-//
-// Response address 0's DATA[24] is `(&clip_cnt)` -- the reduction AND of a
-// TWO-BIT SATURATING counter that is cleared on every `resp_rqst`. A reduction
-// AND is true only when both bits are set, i.e. only when the counter has
-// SATURATED at 3. So the bit does not say "a sample railed". It says:
-//
-//     AT LEAST THREE CLIP EVENTS OCCURRED IN ONE REPORTING INTERVAL.
-//
-// And at idle there is no `resp_rqst`, so nothing clears it: the bit is then an
-// uncleared latch of unknown age rather than a level.
-//
-// TWO CONSEQUENCES, AND THE SECOND IS WHY THIS FILE NOW HAS A SECOND SENSOR:
-//
-//   * `Clean` DOES NOT MEAN "NOT CLIPPING". It means "fewer than three clip
-//     events per reporting interval", which on a converter running at
-//     76.8 MSPS is a great deal of clipping. The loop can therefore sit in
-//     Clean while the front end is being hit, and no amount of tuning the
-//     thresholds below can recover what the bit never carried.
-//   * THE RATE IS COARSER THAN IT LOOKS. `overloadSamples / samples` is a rate
-//     of threshold crossings of a three-event counter, not a rate of clipping.
-//     It remains ORDINAL -- more is worse -- which is why the three-state
-//     quantisation survives the correction and a proportional law still would
-//     not. It is not a magnitude and never was.
-//
-// The wideband bandscope (Hl2BandscopeHeadroom.h) is the answer to both. It
-// reads the same `rx_data` register the counter is derived from, so it is
-// commensurable with it by construction, and it carries an actual magnitude
-// with an early-warning knee BELOW the clip point. What survives from the bit
-// is its coverage: it inspects every sample and the bandscope inspects 0.0027 %
-// of them. Veto and magnitude, and neither substitutes for the other.
-//
-// Two consequences are load-bearing here and are behaviour, not commentary:
-//
-//   1. THE OBSERVATION ONLY EXISTS WHILE STREAMING. The counter's only clear is
-//      the EP6 response cycle, which runs only inside the streaming datagram
-//      path; its increment is ungated. At idle it is a LATCH, not a level. So
-//      when the evidence stops arriving the loop HOLDS its offset — it does not
-//      decay, does not release, and does not advance the release dwell. A
-//      window with too few observations is `Void`, and `Void` IS NOT `Clean`:
-//      releasing gain into a stalled stream is the one failure a loop built on
-//      a bare overload bit is most likely to have.
-//
-//   2. THE RATE IS THE ONLY GRADED THING AVAILABLE. A single bit sampled ~190
-//      times a second, accumulated as a numerator over a denominator across a
-//      window, is what lets the first attack step be sized. It is not a
-//      magnitude and must not be treated as one, which is why the classifier
-//      below quantises to three states rather than using the proportion
-//      directly: the crossing that produces the bit can MISS assertions, so an
-//      observed rate is a LOWER BOUND on the true one. Three coarse states are
-//      robust to that; a proportional law would not be.
-//
-// The denominator is not ours to assume, either: command responses displace the
-// slot that carries this bit, at up to half of them, and the application issues
-// commands in response to operator activity. So a count of adverse events
-// arrives with its denominator or it is not usable — `minSamples` is that rule
-// as a gate rather than as a reporting convention.
-//
-// ---------------------------------------------------------------------------
-// THE AXIS
-// ---------------------------------------------------------------------------
-//
-// `offsetDb` is a NON-NEGATIVE attenuation below the operator's baseline (see
-// Hl2GainSplit.h). This law has no way to express a gain above the number the
-// operator set, so it cannot make the radio louder than they asked and cannot
-// reach the AD9866 register region above +19 dB unless they are already in it.
-// The only automatic action in the loud direction is undoing one of its own.
+// THE AXIS. `offsetDb` is a non-negative attenuation below the operator's
+// baseline (Hl2GainSplit.h). The law cannot make the radio louder than the
+// operator set; the only automatic move in the loud direction undoes its own.
 
 #include <cstdint>
 
@@ -388,115 +311,46 @@ struct AutoGainConfig {
 // PROBING RELEASE, as one particular AutoGainConfig
 // ---------------------------------------------------------------------------
 //
-// Every constant below is a choice, and every choice is answerable to a
-// measurement or to a stated piece of arithmetic. None of them is Zeus's --
-// that client's plant is a different converter behind a different front end,
-// and its numbers were never measured here.
+// ONE DETECTION WINDOW = MetisClient::kTelemetryMinIntervalMs = 100 ms. This is
+// read out of the code, not chosen: Hl2Backend::publishTelemetry evaluates this
+// function on each coalesced telemetryUpdated. Address 0 arrives ~190/s at
+// 48 kHz with one receiver (~19 per window, ~9 worst case with command ACKs
+// displacing slots), comfortably above minSamples. A failed probe therefore
+// costs about one window (~100 ms) of a clipping converter.
 //
-// THE DETECTION WINDOW IS NOT A CHOICE AT ALL; IT IS READ OUT OF THE CODE, and
-// the whole scheme rests on it. The overload bit rides the EP6 C&C bytes, which
-// `MetisClient`'s receive loop parses on every datagram and accumulates into
-// `Hl2Telemetry::adcSamples` / `adcOverloadSamples`; it publishes them on
-// `telemetryUpdated`, coalesced by `MetisClient::kTelemetryMinIntervalMs`, and
-// `Hl2Backend::publishTelemetry` evaluates THIS FUNCTION on that publish and no
-// other clock. So:
-//
-//     ONE DETECTION WINDOW = kTelemetryMinIntervalMs = 100 ms.
-//
-// Response address 0 arrives once every two EP6 datagrams, which at 48 kHz with
-// one receiver is ~190 a second -- ~19 per window, and ~9 in the worst case
-// where the radio displaces every other classic slot with a command ACK. Both
-// are comfortably above `minSamples`, so the window is a real denominator and
-// not a thin one. Higher sample rates and more receivers only raise it.
-//
-// THE COST OF A FAILED PROBE IS THEREFORE ONE WINDOW: the step goes on at the
-// end of window N, the clip is observed across window N+1, and the step comes
-// back off at its end. Roughly 100 ms of a railed converter, plus the few
-// milliseconds it takes the gain bank to come round in `MetisClient`'s C&C
-// rotation. That is the number the rest of this scheme is sized against.
-//
-//   probeStepDb = 6
-//       The clean->clipping transition measured 3-5 dB wide, median 4, on
-//       ON8ST's station (`d92-clip-observability`). One 6 dB move clears the
-//       knee outright and cannot stall inside it, where a 3 dB move can
-//       oscillate on the same edge. It is also the step the attack already
-//       uses, and a probe that does not undo exactly one attack step is not a
-//       probe of anything.
-//
-//   maxOffsetDb = 24
-//       Four whole probe steps. Chosen so that EVERY move the loop makes is a
-//       full 6 dB and never a remainder truncated against the ceiling -- a 2 dB
-//       remainder is narrower than the measured knee and could stall inside it.
-//       The operator owns this number.
-//
-//       AND IT IS PROBABLY LARGER THAN THE HARDWARE HAS. This 24 was sized
-//       when the LNA axis was believed to span 31 dB. ON8ST retracted that on
-//       #5535 (2026-09-12): the gain folds `& 0x1F` above code 31
-//       (Hermes-Lite2 #177, design intent per softerhardware) and codes 28-31
-//       sit within 0.07 dB on his board, leaving about 17.8 dB USABLE -- one
-//       board, measured once, confirmed by nobody else.
-//
-//       IT IS NOT CHANGED HERE, deliberately. How deep an automatic control
-//       may dig is one of exactly two numbers the operator owns, the
-//       replacement figure rests on a single unreplicated board, and #5535 is
-//       unanswered. Picking a new ceiling from one measurement would be
-//       deciding in code the thing the RFC exists to decide. What the loop
-//       does meanwhile is safe rather than silent: Hl2GainSplit.h clamps to
-//       the register floor and reports the offset ACTUALLY applied, and the
-//       AtFloor branch below lights the "the front end needs attenuation ahead
-//       of the radio" warning rather than attacking into a fold forever.
-//
-//   baseProbeIntervalMs = 30000
-//       The floor on it is the cost: one failed probe per interval is 100 ms of
-//       clipping per interval, so 30 s is a duty cycle of 0.33 % -- one clipped
-//       window in three hundred -- BEFORE the backoff, which only lowers it.
-//       The ceiling on it is the thing being tracked: the knee moves 10-20 dB
-//       across a dawn or dusk transition lasting tens of minutes, so 30 s is
-//       two orders of magnitude faster than the drift and cannot lag it. The
-//       shipped default of 3000 is wrong here by exactly that argument: a
-//       deliberate clip every three seconds all night is not a feature.
-//
-//   maxProbeIntervalMs = 480000
-//       Four doublings from base (30 -> 60 -> 120 -> 240 -> 480 s). It is the
-//       worst-case latency with which the loop can notice that the band has
-//       gone quiet, so it has to be comfortably shorter than the transition it
-//       must not sleep through; eight minutes against a dawn that takes tens of
-//       minutes has the margin. It bounds the steady-state cost too: an eight
-//       hour night spent entirely at the cap is ~60 probes, ~6 s of clipping in
-//       28800 s, 0.02 %.
-//
-//   probeConfirmMs = 3000
-//       How long a probe has to survive to be believed. It cannot be short:
-//       `d92`'s same-gain negative control alternated 3 s blocks AT A FIXED
-//       GAIN and saw the observed clip rate swing 0 % -> 90 % between them, so
-//       a confirmation shorter than one of those blocks can sit entirely inside
-//       a lull and call it headroom. 3 s is one such block -- the shortest
-//       period the bench has any evidence about at all. It is 30 detection
-//       windows.
-//
-//   releaseIntervalMs = 3000
-//       Deliberately the same number, so that once a probe is confirmed the
-//       next one follows immediately: the reclaim rate is one 6 dB step per
-//       confirmation period, and the full 24 dB comes back in about twelve
-//       seconds if the band allows it. This is the fast half of the asymmetry.
-//
+//   probeStepDb = 6           The measured clean->clipping knee is 3-5 dB wide
+//                             (ON8ST, d92-clip-observability); 6 dB clears it
+//                             without stalling inside, and equals one attack
+//                             step, so a probe undoes exactly one attack.
+//   maxOffsetDb = 24          Four whole steps, so no move is a truncated
+//                             remainder. Operator-owned. Likely deeper than the
+//                             hardware: the LNA folds `& 0x1F` above code 31 and
+//                             one board measured ~17.8 dB usable (#5535, open).
+//                             Hl2GainSplit.h clamps to the register floor and
+//                             reports the applied offset, and AtFloor lights the
+//                             "attenuate ahead of the radio" warning.
+//   baseProbeIntervalMs       30 s: one failed probe per interval is a 0.33 %
+//     = 30000                 clip duty cycle before backoff, and still two
+//                             orders of magnitude faster than the 10-20 dB knee
+//                             drift across dawn/dusk. The struct default of 3 s
+//                             would clip deliberately every 3 s all night.
+//   maxProbeIntervalMs        Four doublings (30 -> 480 s): worst-case latency to
+//     = 480000                notice the band went quiet, well under a dawn
+//                             transition; ~0.02 % clipping overnight at the cap.
+//   probeConfirmMs = 3000     d92's fixed-gain control swung 0 % -> 90 % between
+//                             3 s blocks, so a shorter confirmation can sit
+//                             inside a lull. 30 detection windows.
+//   releaseIntervalMs = 3000  Same as confirm, so the next probe follows at once:
+//                             the full 24 dB returns in ~12 s if the band allows.
 //   attackCooldownMs, minSamples, unkeyHoldoffMs, warmupWindows, stalenessMs
-//       Left at the defaults, which were argued elsewhere in this header and
-//       are not probing's to re-open. The 200 ms cooldown is two detection
-//       windows, so the loop must see a clip persist into a fresh window before
-//       taking a second step, and still digs the full 24 dB out in ~0.8 s.
-//
-//   tripBackoffWindowMs = 2 * maxProbeIntervalMs
-//       A bookkeeping consequence, not a control choice: a failed probe taken
-//       at the cap arrives `maxProbeIntervalMs` after the trip it is probing
-//       from, and it has to still count as a repeat or the backoff would stop
-//       compounding exactly where it matters most.
-//
-//   tripForgetMs = 3600000
-//       Also bookkeeping. Forgetting a trip resets the interval to base, and
-//       nothing may do that except a CONFIRMED PROBE, a band change, or the
-//       operator. An hour is beyond any interval the backoff can reach, so in
-//       this configuration probing supersedes forgetting rather than racing it.
+//                             Defaults. The 200 ms cooldown is two windows, so a
+//                             clip must persist into a fresh window before a
+//                             second step; 24 dB still digs out in ~0.8 s.
+//   tripBackoffWindowMs       A probe at the cap arrives maxProbeIntervalMs after
+//     = 2 * maxProbeIntervalMs  its trip and must still count as a repeat.
+//   tripForgetMs = 3600000    Longer than any reachable interval, so only a
+//                             confirmed probe, band change or operator resets
+//                             the interval to base.
 [[nodiscard]] constexpr AutoGainConfig probingReleaseConfig(
     std::int64_t baseProbeIntervalMs = 30000,
     std::int64_t maxProbeIntervalMs = 480000,

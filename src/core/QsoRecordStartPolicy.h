@@ -2,59 +2,24 @@
 
 // QsoRecordStartPolicy — may a QSO recording start? (#4629)
 //
-// Client-Side recording captures RadioModel::rxDemodAudioReady, which on a Flex
-// is fed by PanadapterStream::pcmFrameReady — the `remote_audio_rx` VITA-49
-// stream. That stream is created ONLY when PC Audio is enabled
-// (RadioModel::scheduleRxAudioStreamEnsure, which returns early on
-// PcAudioEnabled=False and removes an already-owned stream). With PC Audio off
-// there is no stream, so feedRxAudio() is never called, and the recorder
-// happily opened a file and wrote a 44-byte WAV header to it, then waited
-// forever for samples that could not arrive. The operator got a correctly named
-// file containing nothing, and no error — because from the recorder's point of
-// view nothing had gone wrong. It received silence-of-absence rather than
-// silence-of-signal, and could not tell the two apart.
+// Client-side recording captures RadioModel::rxDemodAudioReady, which on a Flex
+// is fed by the `remote_audio_rx` stream. That stream exists only when PC Audio
+// is enabled (scheduleRxAudioStreamEnsure), deliberately (#1071), so with PC
+// Audio off a client-side recording would write an empty WAV with no error.
+// Refuse it and say why instead.
 //
-// Gating stream creation on PC Audio is deliberate, not an oversight: #1071
-// removed TCI's auto-create for exactly this reason ("auto-creating the stream
-// overrode the user's explicit PC Audio toggle"). So the fix is not to
-// circumvent the gate but to refuse the recording and say why.
+// Radio-side recording (`slice set <n> record=1`) does not involve the client
+// audio path and must never be blocked here; `Allow` for it is load-bearing.
 //
-// RADIO-SIDE RECORDING DOES NOT DEPEND ON PC AUDIO and must never be blocked
-// here. It is `slice set <n> record=1` (SliceModel::setRecordOn) — the radio
-// records to its own storage and the client's audio path is not involved at
-// all. It stays available as the answer for an operator who monitors on the
-// radio's own speaker, so `Allow` for radio-side is a load-bearing case, not a
-// fallthrough.
+// `backendOwnsRxAudio` is a required input. A backend that demodulates
+// in-process feeds the recorder over the seam and never uses `remote_audio_rx`,
+// so PC Audio is irrelevant to it. MainWindow's PC Audio lock does not cover
+// this: it is gated on hostModulates && canTransmit, which Sim fails
+// (ownsRxAudio=true, PC Audio can be turned off). The caller supplies the value
+// live through a provider callback, so it cannot go stale across a backend swap.
 //
-// Pure and header-only so every case is unit-testable without a radio, an
-// event loop, or a settings store — mirroring DaxRestorePolicy /
-// KiwiSdrTxMutePolicy / SliceRecreatePolicy.
-//
-// ── Why `backendOwnsRxAudio` is a REQUIRED input, not a refinement ───────────
-//
-// A backend that demodulates in-process feeds the recorder over the seam
-// (RadioModel::wireRxDemodAudioBus binds backendAudioFrameReady when
-// IRadioBackend::ownsRxAudio() is true) and never touches `remote_audio_rx` at
-// all. PC Audio is irrelevant to it, and blocking it would break a recording
-// that works.
-//
-// It is tempting to argue this input is unnecessary because MainWindow
-// force-enables AND LOCKS PC Audio on such a backend. That argument is WRONG,
-// and the counter-example ships today: the lock is gated on
-// `caps.hostModulates && caps.canTransmit` (MainWindow_Session.cpp), and
-//
-//   HL2   ownsRxAudio=true,  hostModulates=true,  canTransmit=true  → locked
-//   Sim   ownsRxAudio=true,  hostModulates=FALSE, canTransmit=FALSE → NOT locked
-//
-// SimBackend is the only backend that owns its RX audio without locking PC
-// Audio on — the operator can freely turn PC Audio off in demo mode, and the
-// sim's audio still reaches the recorder. Two inputs would refuse that
-// recording for a reason that does not apply to it.
-//
-// The caller supplies this live (QsoRecorder holds a provider callback rather
-// than a cached bool) so there is no flag to go stale across a backend swap —
-// a stale flag failing open is the shape of the bug this whole file exists to
-// fix.
+// Pure and header-only so every case is unit-testable without a radio, event
+// loop or settings store.
 
 namespace AetherSDR {
 

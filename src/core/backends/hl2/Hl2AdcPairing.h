@@ -1,68 +1,32 @@
 #pragma once
 
-// The HL2's two ADC level readings, paired — as a pure decision.
+// The HL2's two ADC level readings, paired, as a pure decision (HERMES.md §13
+// item 16). They are measured at different points and disagree by design:
 //
-// HERMES.md §13 item 16, A3 §7: "the single most useful diagnostic pairing on
-// the HL2". There are two answers to "how hard is the converter being driven",
-// they are measured at different points, and THEY DISAGREE BY DESIGN:
+//   * PRE-DDC — the gateware clip indicator (EP6 RADDR 0x00, DATA bit 24,
+//     decoded in Hl2Telemetry::apply). It sees the whole 0-38.4 MHz input, so
+//     a station far outside the slice can set it. It is an AND-reduction over
+//     a 2-bit clip counter (control.v at 883a338), so it asserts only once the
+//     counter saturates (~1.2 us of continuous clipping) and clears on the next
+//     EP6 response (~1.3 ms at 48 kHz, one receiver). A clear bit is NOT "the
+//     converter is comfortable", and the bit is not the count (HERMES.md
+//     §11.4, §12.5; the count is §13 row 14).
+//   * POST-DDC — WDSP's RXA_ADC_PK (adcmeter first in xrxa, ahead of nbp0). It
+//     sees one slice, after the DDC and WDSP's half-band decimation.
 //
-//   * PRE-DDC — the HL2 gateware's clip indicator (EP6 RADDR 0x00, DATA bit
-//     24, decoded in MetisProtocol's Hl2Telemetry::apply). It watches the
-//     converter's input, so it sees the WHOLE 0-38.4 MHz the converter sees:
-//     a broadcast station 20 MHz away can set it without ever appearing in
-//     the slice the operator is listening to.
+// Read together they say where the energy is; apart, neither can. That is why
+// the clip flag alone is the wrong driver for a gain decision.
 //
-//     IT IS NOT A LEVEL COMPARATOR, and an earlier version of this comment
-//     said it was. The gateware builds the bit as `(&clip_cnt)` — an
-//     AND-reduction over its clip counter; the slot layout is transcribed
-//     from control.v at 883a338 beside the decode in MetisProtocol.cpp — so
-//     it asserts only once that counter is SATURATED, every bit set, not when
-//     a level is crossed. `clip_cnt` is two bits wide and increments once per
-//     control-clock tick while the synchronised sticky `rxclip` level is high,
-//     so continuous clipping saturates it in roughly 1.2 us. The counter is
-//     cleared by the next EP6 response (about 1.3 ms at 48 kHz with one
-//     receiver); without a running stream it is an uncleared latch. Those
-//     timings and the reset path are derived in HERMES.md section 11.4 from
-//     gateware 883a338. Two things follow that the labels must respect: an
-//     isolated clipping window can leave the bit clear, so a clear bit is NOT
-//     "the converter is comfortable"; and the bit is not the counter.
-//     HERMES.md §12.5 keeps "the HL2's clip counter and overload bit" as two
-//     things, and §13 row 14 — still open — is where the count as a count
-//     belongs.
-//   * POST-DDC — WDSP's RXA_ADC_PK for the receive chain (third_party/wdsp
-//     RXA.c: the adcmeter runs first in xrxa, on midbuff, ahead of nbp0). It
-//     sees ONE slice, after the gateware's DDC and after WDSP's input
-//     half-band decimation to the 48 kHz DSP rate.
+// Nothing here is calibrated and the two sides are not on a common scale (dB
+// re wire full scale vs. an unquantified DDC processing gain;
+// Hl2DbReference::isCalibrated() is false). Labels claim only the pairing:
+// "the converter is overloading while this slice sits 40 dB below full scale".
 //
-// The disagreement is the whole point. This lab has measured exactly the case
-// the oracle describes — a quiet slice while the converter saturates on
-// something far outside it — and it is why the clip flag alone was the wrong
-// driver for a gain decision. Read together the two numbers say WHERE the
-// energy is; read apart, neither can.
-//
-// NOTHING HERE IS CALIBRATED, and the two sides are not even on a common
-// scale. The slice peak is dB relative to WIRE full scale; the DDC between the
-// two measurement points carries a processing gain nobody here has quantified;
-// and Hl2DbReference::isCalibrated() is false -- its fullScaleDbm is a DERIVED
-// +3 dBm rather than 0.0 now, but derived is not measured and it refers the
-// DISPLAY path, not these readings -- so no reading in this file is
-// antenna-referred. What survives the missing
-// calibration is the PAIRING: "the converter is overloading while this slice
-// sits 40 dB below full scale" is true, useful, and contains no absolute
-// reference at all. Labels must claim exactly that much and no more.
-//
-// DISPLAY ONLY. IRadioBackend.h's health contract binds: "Purely for display —
-// nothing in the app makes a decision from it." Nothing reads this verdict
-// back; no gain, no AGC, no drive, no filter follows from it.
-//
-// A seam rather than an inline condition, for Hl2OverloadPolicy.h's reason:
-// most branches below are otherwise reachable only by driving a real converter
-// into a real overload, which is not a thing a test suite can arrange. The
-// exceptions are the two liveness gates — kSliceStaleMs and sliceSideSampling
-// — which need no overload at all, and both of them were WRONG before they
-// existed: the first inverted the verdict for the whole of a transmission, the
-// second for its leading 129-150 ms. The seam has now paid for itself twice, and
-// each time the case that caught it was a case this file could express.
+// DISPLAY ONLY, per IRadioBackend.h's health contract: nothing reads this
+// verdict back to drive gain, AGC, drive or filters. It is a seam so the
+// branches, which otherwise need a real converter in real overload, are
+// testable; the liveness gates (kSliceStaleMs, sliceSideSampling) are the
+// cases that most need it.
 
 #include <chrono>
 #include <cmath>
@@ -93,57 +57,24 @@ inline constexpr double kSliceHotHeadroomDb = 3.0;
 // How old the post-DDC slice reading may be and still be paired with a live
 // overload flag.
 //
-// THE TWO SIDES OF THE PAIRING DO NOT STOP AT THE SAME TIME. Hl2RxDsp holds
-// the slice peak at its last receive value for the whole of a transmission —
-// it has to, because the chain is clocked with silence there and the meter
-// would otherwise decay to WDSP's floor — while Hl2Telemetry::adcOverload
-// keeps updating, because EP6 responses ride the same datagrams as the IQ and
-// RX streaming continues through TX on the HL2. Paired with no freshness test,
-// a converter overload during transmit — and on an HL2 the transmitter is on
-// the same port as the receiver, so that is a routine reading — comes out as
-// "the signal doing it is elsewhere in 0-38.4 MHz" against a frozen quiet
-// slice. That is the exact opposite of what is happening, and it sends the
-// operator to the attenuator to fix their own PTT. A held NUMBER with an age
-// beside it is honest; a held SENTENCE asserting causation is not.
+// The two sides do not stop together. During TX Hl2RxDsp holds the slice peak
+// at its last receive value (the chain is clocked with silence), while
+// Hl2Telemetry::adcOverload keeps updating (EP6 rides the IQ datagrams). Without
+// a freshness test, an overload during transmit would read as "the signal is
+// elsewhere" against a frozen quiet slice — the opposite of the truth. Past
+// this age the verdict goes quiet instead.
 //
-// CHOSEN, NOT MEASURED. What the value is worth is the gap it sits in, and
-// both edges of that gap are judgements about operating, not measurements:
+// 150 ms is chosen, not measured: above one output block (21.3 ms at 48 kHz,
+// so scheduling jitter isn't "stale") and below the shortest deliberate
+// transmission (a PTT tap; CW break-in holds MOX across a whole character).
+// Anything from ~100 to 200 ms behaves the same.
 //
-//   * UNDER it, one output block. Hl2RxDsp refreshes the reading once per
-//     processed block — 1024 input samples, 21.3 ms at the HL2's slowest
-//     48 kHz rate and less above it — so a threshold near that would call a
-//     healthy receive path stale on ordinary scheduling jitter.
-//   * OVER it, the shortest transmission. The briefest thing an operator can
-//     deliberately do to a PTT is a tap, and a tap is a couple of hundred
-//     milliseconds; CW break-in raises MOX on the first element and holds it
-//     through the inter-element hang (Hl2Backend::setCwKeying), so even a
-//     single character is ONE keyed span rather than one element.
-//
-// 150 ms sits in that gap: about seven blocks of margin under it, and under a
-// tap over it. Nobody has measured either edge on hardware and anything from
-// roughly 100 to 200 ms would behave the same. The number is not the point;
-// going quiet instead of asserting the opposite is.
-//
-// THIS GATE COVERS THE TAIL OF A TRANSMISSION AND NOT THE HEAD, and an earlier
-// version of this comment claimed it covered the whole of one. At key-down
-// `ago` is the age of the last RECEIVE block — under one block period, 21.3 ms
-// at 48 kHz — and it must still CLIMB to this threshold before the gate shuts.
-// For that climb the held pre-transmit peak is fresh by age while the flag is
-// live, which is the inverted sentence this gate exists to prevent, arriving
-// for 129-150 ms of every key-down depending on where key-down falls inside a
-// block (and longer still, because setKeying delivers the mute to the DSP
-// thread over a QUEUED connection, so a block or two more may be sampled and
-// re-stamped after the key goes down). K5PTB measured it against a real
-// Hl2RxDsp in wall-clock: ConverterOnly to t=137 ms, Unknown from t=139 ms.
-// RadioHealthDialog polls every 500 ms (kRefreshIntervalMs), so roughly three
-// key-downs in ten land a refresh inside that window.
-//
-// The head is therefore closed by a SECOND, synchronous input rather than by
-// this threshold — `sliceSideSampling` below, which the backend knows the
-// instant it queues the mute. This gate stays because it catches every OTHER
-// way the DSP thread can stop producing while EP6 keeps arriving: a stalled IQ
-// stream, a chain between rebuilds, a starved DSP thread. Transmit was only
-// the common way in, and it is now the one way in that is known in advance.
+// This covers the tail of a transmission, not the head: at key-down the reading
+// is still young and must age past the threshold (129-150 ms, plus a block or
+// two because the mute reaches the DSP thread over a queued connection). The
+// head is closed by the synchronous `sliceSideSampling` input below. This gate
+// still catches every other way the DSP stops while EP6 continues: a stalled IQ
+// stream, a chain between rebuilds, a starved DSP thread.
 inline constexpr std::int64_t kSliceStaleMs = 150;
 
 // The monotonic clock every timestamp in this family is taken from. One
