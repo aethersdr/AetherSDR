@@ -1456,11 +1456,6 @@ private:
     // what was last asked for. See the definition for why setTxFilter() is the
     // one push that does not go through here.
     void pushTxPassband(const QString& mode);
-    // Tune-carrier amplitude, full scale into the modulator. Actual radiated
-    // power is governed by the TX drive register, which is where an operator
-    // sets it; scaling here as well would make the power control non-linear for
-    // no reason.
-    static constexpr double kTuneCarrierAmplitude = 1.0;
     int m_lastFwdRaw = -1;
 
     // ---- Meter pacing / ballistics ----

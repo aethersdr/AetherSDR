@@ -5792,7 +5792,7 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
         // would overwrite the saved RF power we have to restore on release.
         if (tunePowerPercent >= 0)
             applyDrive(tunePowerPercent);
-        setTxTestTone(0.0, kTuneCarrierAmplitude, operation);
+        setTxTestTone(0.0, kHl2CarrierAmplitude, operation);
         m_toneFromTune = true;   // set AFTER: setTxTestTone clears the flag
         setKeying(true, operation, completion);
     } else {
