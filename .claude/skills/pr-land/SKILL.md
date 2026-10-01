@@ -233,8 +233,9 @@ author labelled "nit, non-blocking" (they still block; see step 11).
 **Reviews** — `gh api repos/aethersdr/AetherSDR/pulls/<PR>/reviews --paginate
 --jq '.[] | {id, user: .user.login, state, submitted_at}'`. Only the latest
 review per reviewer counts toward `reviewDecision`; note every
-`CHANGES_REQUESTED` and the body text of each, which often carries findings
-that never became inline threads.
+`CHANGES_REQUESTED` and the body text of each. `/pr-review` puts every finding
+in the review body, located by `file:line`, so the body is the primary finding
+list; threads come from other reviewers or the rare inline exception.
 
 **Top-level comments** — `gh pr view <PR> --json comments`. These do not block
 the merge, so they are the ones that get skipped; bot findings and maintainer
@@ -246,8 +247,8 @@ trigger tests the merge result, a `push`-triggered check on the branch does
 not include current main.
 
 **The prior review** — if `/pr-review` ran in this session, its blockers and
-nits are items. If it did not, read the posted review bodies; do not assume
-the inline threads are the whole of it.
+nits are items. If it did not, read the posted review bodies; that is where
+its findings are.
 
 ## 2. Fresh adversarial pass
 
