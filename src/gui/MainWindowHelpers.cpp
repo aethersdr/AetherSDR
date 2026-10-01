@@ -357,11 +357,6 @@ int memoryIndexFromSpotId(int spotIndex)
     return -spotIndex - kMemorySpotIdBase;
 }
 
-bool isPassiveLocalSpotId(int spotIndex)
-{
-    return spotIndex <= -kPassiveSpotIdBase;
-}
-
 QString memorySpotLabel(const MemoryEntry& memory)
 {
     if (!memory.name.trimmed().isEmpty())
