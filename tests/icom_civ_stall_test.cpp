@@ -31,6 +31,7 @@ struct IcomStreamTestAccess {
 };
 
 struct IcomCivBackendTestAccess {
+    static qint64 stallThresholdMs() { return IcomCivBackend::kCivStallMs; }
     static void prepare(IcomCivBackend& b, const char* modelName,
                         std::vector<std::vector<std::uint8_t>>& serialSink)
     {
@@ -119,7 +120,7 @@ int main(int argc, char** argv)
     Access::prepare(ic705, "IC-705", ic705Serial);
     Access::prepare(exhaust, "IC-9700", exhaustSerial);
 
-    const qint64 stallMs = 5000;
+    const qint64 stallMs = Access::stallThresholdMs();
     while (Access::now(ic9700) <= stallMs + 100 || Access::now(ic705) <= stallMs + 100
            || Access::now(exhaust) <= stallMs + 100) {
         QThread::msleep(50);

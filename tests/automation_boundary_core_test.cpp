@@ -360,7 +360,9 @@ void fmRepeaterAndTransmit()
     boundary("transmit wattage 5", QStringLiteral("rfpower|tunepower"));
     boundary("transmit", QStringLiteral("requires an action"));
 
-    // Permission on a transport-less model: nothing downstream can key.
+    // Permission on a transport-less model: nothing downstream can key. The
+    // ceiling is injected on purpose: this pins the clamp and its reply field.
+    // That RadioModel applies the radio's ceiling is icom_power_clamp_model_test.
     Access::setTxMaxPower(server, 30);
     server.setTxAllowed(true);
     auto& tx = radio.transmitModel();

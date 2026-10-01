@@ -82,6 +82,10 @@ its timeout.
 Prefer behavioral seams over source-text assertions: a test that greps a
 source file breaks on behavior-preserving refactors. Applets already link into
 unit tests, so the seam is a `tests.cmake` entry, not a missing capability.
+A source-text pin is acceptable only for a claim no behavioural seam can reach
+(for example, ordering inside a `MainWindow` method no test can construct),
+and the test must say which claim that is. A pin that duplicates a
+behavioural check, or guards only a comment, is retired.
 
 ## CI image
 

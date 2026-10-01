@@ -4,7 +4,9 @@ QSettings ratchet: application settings go through AppSettings, never QSettings
 (docs/agents/settings.md).
 
 A file under src/ may use the QSettings type only if it is listed in ALLOWED,
-with the reason it needs Qt's own store rather than ours. The list only
+with the reason it needs Qt's own store rather than ours. Only src/ is
+scanned: test fixtures that drive the legacy-store migration use QSettings on
+purpose. The list only
 shrinks: a listed file that no longer uses QSettings is also an error, so the
 entry is removed in the same change that removes the use.
 

@@ -56,7 +56,13 @@ socket-free replacements: `vkamp_connection_test` (bypass/antenna interlocks),
 application of the IC-9700 band power ceiling is pinned by
 `icom_power_clamp_model_test`.
 
-Two HL2 tests are explicit rather than part of the default graph:
+Three HL2 tests are explicit rather than part of the default graph:
+
+- A killed client must still release the radio: enable `hl2_signal_stop_test`
+  with `-DAETHER_ENABLE_HL2_SIGNAL_STOP_TEST=ON`. Its Python driver binds an
+  ephemeral loopback UDP port and runs a real `MetisClient` in a child
+  process, so it is absent from the default graph and from every CI lane; it
+  exits 77 if it cannot bind.
 
 - Both weekly sanitizer lanes enable `hl2_receiver_churn_test` with
   `-DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=ON` — TSan for the receiver-vector
