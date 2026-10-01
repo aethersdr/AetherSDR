@@ -1,37 +1,12 @@
 #pragma once
 
-// ONE predicate for band/segment zoom: both whether the "B"/"S" buttons are
-// enabled and whether a command path may send.
-//
-// `band_zoom=`/`segment_zoom=` are FlexLib wire text (togglePanZoomModeForPan),
-// dropped by RadioModel::sendCmd on a backend with no command plane. Seven
-// operator surfaces reach them: the two waterfall-corner buttons, the
-// band_zoom/segment_zoom shortcuts, MIDI global.bandZoom/segmentZoom, the
-// FlexControl button table, the RC28/Stream Deck/T-Mate2 chain
-// (dispatchHidAction; T-Mate2 key 3 defaults to BandZoom), the FlexControl/
-// HID/Ulanzi wheel (applyFlexControlWheelAction), and the bridge `shortcut`
-// verb. All but the buttons fan into MainWindow::togglePanZoomMode and
-// setPanZoomMode, which call this, so gating those two covers them.
-//
-// The capability rung is RadioCapabilities::panZoomModes.has_value() (a
-// per-feature record, engaged by FlexBackend today), not a family string
-// (#5554); a second family engages the record with no edit here.
-//
-// A refusal must say so: a pre-send gate never reaches commandDropped(), so on
-// the NotDeclared rung callers pair qCWarning(lcDevices) with
-// showUnsupportedControlNotice(). NotConnected and NoPan stay silent, as
-// before. panZoomModeRefusal() distinguishes the rungs; panZoomModeWritable()
-// is the yes/no form, and bandSegmentZoomAvailable() is it with a pan present.
-//
-// Receive-only: the only emission is `display pan set <panId> band_zoom=<0|1>`
-// (or segment_zoom), display-domain text with no TX path (keysTx false at
-// both shortcut registrations), and the toggle reads the pan's
-// radio-authoritative flag (#4057). Separate from the pan-ownership drop in
-// RadioModel::sendCommand, which is a last line after the UI acted.
-//
-// In src/gui/ because it is UI policy with no Qt or engine types, alongside
-// DStarAvailabilityGate.h and DaxRestorePolicy.h, adding nothing to the aetherd
-// touchpoint manifest.
+// One predicate for band/segment zoom: whether the "B"/"S" buttons are enabled
+// and whether a command path may send `display pan set <panId> band_zoom=` /
+// `segment_zoom=` (Flex wire text). Every non-button surface goes through
+// MainWindow::togglePanZoomMode / setPanZoomMode. Capability:
+// RadioCapabilities::panZoomModes.has_value(), not a family (#5554). On
+// NotDeclared callers warn and call showUnsupportedControlNotice();
+// NotConnected/NoPan stay silent. Receive-only: no TX path (keysTx false).
 
 namespace AetherSDR {
 

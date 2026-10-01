@@ -11,44 +11,15 @@ class QWindow;
 
 namespace AetherSDR {
 
-// Adds all-edge resize to a Qt::FramelessWindowHint top-level QWidget (#4827).
-//
-// Two platform quirks shape it:
-//
-//  1. Native child windows. Once any child acquires a native window Qt
-//     promotes its siblings too, and pointer events go to the innermost native
-//     window, so a filter on the top-level QWindow never sees them (MainWindow
-//     on Linux/xcb: QStatusBar, the central widget and QSizeGrip are native).
-//     The filter therefore sits on the application object and maps each event
-//     window back to its top-level widget. Hover uses window-level events,
-//     since button-less MouseMove only reaches widgets with mouse tracking.
-//     On Windows MainWindow is not frameless (no-op); on macOS SpectrumWidget
-//     sets WA_DontCreateNativeAncestors (#4339), so promotion does not happen.
-//
-//  2. startSystemResize() is unreliable on xcb and Windows+translucent
-//     (QTBUG-69716 / QTBUG-90628, FramelessMoveHelper::
-//     systemMoveResizeUnreliable()) and always fails on macOS (QCocoaWindow has
-//     no override), so the press handler falls back to dragging the geometry
-//     manually, as QSizeGrip does.
-//
-// Application-level filters run before the receiver's own event(), so a press
-// inside the margin band never reaches a widget under it. MainWindow installs
-// with topMoveReserve = TitleBar::kHeight to keep the title bar's menu and
-// window buttons clickable; the bottom band still overlaps status-bar controls
-// by ~4px (#4886).
-//
-// The automation bridge's pointer verbs send QMouseEvents to QWidgets, not
-// QWindows, so they cannot exercise this filter; it was verified with real X11
-// input (XTest).
-//
-// Known artifact of the manual path: dragging the left or top edge can make the
-// opposite edge shimmer under a compositor. Geometry is exact; an app-driven
-// setGeometry() has no _NET_WM_SYNC_REQUEST handshake, so stale content can be
-// presented at the new origin.
-//
-// Usage:
-//   FramelessResizer::install(this);       // from a QWidget constructor
-//   FramelessResizer::install(win, 6);     // explicit margin
+// All-edge resize for a Qt::FramelessWindowHint top-level QWidget (#4827).
+//  1. Native children (MainWindow on xcb) get pointer events first, so the
+//     filter sits on the application, maps each event window to its top level,
+//     and hovers via window-level events (macOS avoids promotion, #4339).
+//  2. startSystemResize() is unreliable on xcb/Windows+translucent and fails on
+//     macOS (FramelessMoveHelper), so presses fall back to a manual drag.
+// The margin shadows widgets under it (MainWindow reserves TitleBar::kHeight,
+// #4886); bridge pointer verbs cannot reach this filter; manual left/top drags
+// may shimmer under a compositor (no _NET_WM_SYNC_REQUEST).
 class FramelessResizer : public QObject {
     Q_OBJECT
 public:

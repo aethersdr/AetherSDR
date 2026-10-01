@@ -1,35 +1,14 @@
 #pragma once
 
-// GreenHeronApplet — the GHE tile: the one Green Heron "Everyware" switch this
-// station's radio is fed from, as a list of its antenna ports.
-//
-// The server presents several switches; a radio is wired to one, so the
-// operator picks theirs once and sees one column of antenna names. Other
-// switches' selections (SWITCHLOCKS) only mark an antenna "in use by <switch>".
-//
-// The applet owns its GreenHeronModel (the AntennaGenius pattern): there is no
-// discovery path and the switch is radio-agnostic, so MainWindow has nothing to
-// detect or forward. The list renders what the device reported, never what we
-// asked for (GreenHeronModel::selectPort).
-//
-// The rotator sits in this tile because it shares the switches' socket. It is
-// shown only while a heading is being reported: a powered-off controller is not
-// a socket event, and a stale heading would sit beside a live Turn button.
-//
-// Safety invariants, easy to "tidy" away:
-//
-//   1. CHOOSING A HEADING AND SENDING IT ARE SEPARATE GESTURES. Typing proposes;
-//      Turn (or Enter) transmits. The protocol has no stop or park verb, so a
-//      rotation cannot be recalled. Nothing transmits on a single click or drag.
-//   2. THE READOUT IS THE REPORTED HEADING, NEVER THE COMMANDED ONE, with no
-//      "on target" verdict: on real hardware the rotator stops ~2° short,
-//      overshoots, and wanders ±3.8° while stationary. Hence
-//      "62.9° · asked 64.3° · Δ1.4°".
-//
-// The compass rose (RotorCompass) is drawn only when the tile is floating, where
-// the operator controls the height (dockModeChanged wiring in AppletPanel), and
-// is painted from ThemeManager tokens. It is read-only by invariant 1:
-// RotorCompass has no mouse handlers and must not gain any.
+// GHE tile: antenna ports of the Green Heron "Everyware" switch this radio is
+// wired to (other switches' SWITCHLOCKS mark "in use by <switch>"). Owns its
+// GreenHeronModel; shows what the device reported, never what we asked for. The
+// rotator shares the socket and shows only while a heading is reported. Safety:
+//   1. Choosing a heading and sending it are separate gestures (Turn or Enter);
+//      the protocol has no stop/park verb, so nothing sends on click or drag.
+//   2. The readout is the REPORTED heading with no "on target" verdict (rotor
+//      stops ~2° short, overshoots, wanders ±3.8°): "62.9° · asked 64.3° · Δ1.4°".
+// RotorCompass (floating tile only) is read-only by invariant 1: no mouse handlers.
 
 #include <QHash>
 #include <QStringList>
@@ -47,21 +26,11 @@ namespace AetherSDR {
 
 class GreenHeronModel;
 
-// The rotator dial. Shown only while the GHE tile is floating.
-//
-// It renders exactly what the readout renders and claims nothing more: a
-// needle at the REPORTED heading, and — when this session has commanded one —
-// a dimmer ghost tick at the heading that was asked for. The two marks simply
-// sit where they sit. There is deliberately no arrival state, no "on target"
-// colour and no tolerance ring: the hardware stops ~2° short along its
-// direction of travel and wanders ±3.8° while mechanically stationary, so any
-// such threshold would flicker and would be testing an error smaller than the
-// measurement.
-//
-// Neither mark is drawn in an accent colour for the same reason. Success and
-// warning tokens would editorialise about a difference the protocol offers no
-// way to judge, so the needle is simply the primary text colour and the ghost
-// the label colour.
+// Rotator dial, shown only while the GHE tile floats. Needle at the REPORTED
+// heading plus a dimmer ghost tick at the commanded one. No arrival state,
+// tolerance ring or accent colours: the rotor stops ~2° short and wanders ±3.8°
+// at rest, so any threshold would flicker. Needle uses the primary text colour,
+// ghost the label colour.
 class RotorCompass : public QWidget {
     Q_OBJECT
 

@@ -1,43 +1,14 @@
 #pragma once
 
-// The automatic receive-gain control law, as a pure function:
-//
-//     (state, observation, config) -> action
-//
-// No Qt, socket, clock or radio. Elapsed time is an input and the result is an
-// instruction about state; Hl2Backend owns the timers and the register write.
-// It is a header the backend evaluates (not a copy of it) so tests exercise the
-// real decision.
-//
-// PARAMETERISED, NOT A FIXED SERVO. On ON8ST's station (#5354) 6 dB of LNA spans
-// the whole 0 % -> 86 % clipping transition at 14.2 MHz, so a 3 dB step is half
-// the plant's linear region and a per-band binary high/low switch may be the
-// better feature. Step, thresholds, dwell, cooldown and trip memory are all
-// configuration; binaryHighLowConfig() is the binary controller as one config.
-//
-// WHAT THE OBSERVATION IS. Response address 0 DATA[24] is `(&clip_cnt)`, the AND
-// of a two-bit saturating counter cleared on every resp_rqst: it means AT LEAST
-// THREE CLIP EVENTS IN ONE REPORTING INTERVAL, not "a sample railed" (#5354).
-// So:
-//
-//   * `Clean` means "fewer than three clip events per interval", which at
-//     76.8 MSPS can still be a lot of clipping. The wideband bandscope
-//     (Hl2BandscopeHeadroom.h) supplies the magnitude and an early-warning knee
-//     below the clip point; the bit supplies coverage of every sample. Veto and
-//     magnitude; neither substitutes for the other.
-//   * The observation exists only while streaming. At idle nothing clears the
-//     counter and the bit is a latch of unknown age. When evidence stops, the
-//     loop HOLDS its offset: no decay, no release, no dwell advance. A window
-//     with too few observations is `Void`, and `Void` is not `Clean`.
-//   * The rate (overloadSamples / samples, ~190 samples/s) is ordinal and a
-//     lower bound, because the crossing can miss assertions. Hence three coarse
-//     states, not a proportional law.
-//   * Command responses displace the slot carrying this bit (up to half of
-//     them), so a count is usable only with its denominator: `minSamples`.
-//
-// THE AXIS. `offsetDb` is a non-negative attenuation below the operator's
-// baseline (Hl2GainSplit.h). The law cannot make the radio louder than the
-// operator set; the only automatic move in the loud direction undoes its own.
+// The automatic receive-gain law as a pure function (state, observation,
+// config) -> action: no Qt, socket or clock; Hl2Backend owns timers and the
+// register write. `offsetDb` is attenuation below the operator's baseline
+// (Hl2GainSplit.h), never a boost. The input, response address 0 DATA[24]
+// `(&clip_cnt)`, means ">= 3 clip events this reporting interval" (#5354): an
+// ordinal lower bound valid only while streaming, so windows are Void/Clean/
+// Marginal/Hot. Void is not Clean: the loop holds (no decay, no dwell advance).
+// Command responses displace up to half the slots, hence `minSamples`.
+// Hl2BandscopeHeadroom.h supplies the magnitude below the clip point.
 
 #include <cstdint>
 
@@ -111,95 +82,28 @@ struct AutoGainConfig {
     std::int64_t releaseIntervalMs = 500;
     std::int64_t releaseDwellMs = 3000;
 
-    // ---- PROBING RELEASE ---------------------------------------------------
-    //
-    // THE RELEASE CONDITION IS THE HARD PART, AND NOTHING ON THIS RADIO
-    // MEASURES HEADROOM. The clip flag is an honest "you are too high" sensor
-    // and nothing else: it says the converter railed, never how much room is
-    // left below the rails. `RXA_ADC_PK` cannot stand in for it, because it
-    // measures the post-DDC slice while the flag measures the pre-DDC full
-    // spectrum -- a quiet 48 kHz slice reads as headroom while a broadcast
-    // station saturates the converter (docs/HERMES.md 12.5).
-    //
-    // So the only way to find out whether the gain can come back is TO TRY IT
-    // AND SEE. A release is therefore not a decision, it is a PROBE, and it can
-    // fail. `probeConfirmMs` is how long the answer has to stay clean before
-    // the probe is believed:
-    //
-    //   - a clip INSIDE that period is a FAILED probe. The attack branch puts
-    //     the step straight back and, because the loop had released since its
-    //     last trip, treats the clip as a REPEAT: the dwell -- which is what
-    //     paces the next probe -- DOUBLES, up to `dwellBackoffMaxMs`.
-    //   - a probe that survives it is believed: the interval goes back to base
-    //     and `releasedSinceTrip` is cleared, so the NEXT clip is a fresh trip
-    //     paced from base rather than a continuation of a backoff that belonged
-    //     to a different hour of the day.
-    //
-    // THAT IS THE ASYMMETRY, AND IT IS THE POINT. While conditions are genuinely
-    // hot the probes fail, the interval doubles, and the loop goes quiet. The
-    // moment there is real headroom the first probe survives, the interval
-    // collapses to base -- and because `cleanMs` is by then far past the dwell,
-    // successive steps come one per `releaseIntervalMs`. Slow to give up on a
-    // hot band; fast to reclaim gain once the band has actually gone quiet.
-    //
-    // ZERO DISABLES IT, which is the default: with `probeConfirmMs == 0` a
-    // release is never confirmed, nothing resets the interval, and this law is
-    // exactly the one that shipped before probing existed.
+    // Probing release. The clip flag only says "too high"; RXA_ADC_PK measures
+    // the post-DDC slice, not the pre-DDC converter (docs/HERMES.md 12.5). So a
+    // release is a probe that can fail. A clip within `probeConfirmMs` takes the
+    // attack branch as a repeat trip and doubles the dwell (the probe interval)
+    // up to `dwellBackoffMaxMs`; a probe that stays clean that long resets the
+    // interval to base and clears `releasedSinceTrip`. Zero (default) disables
+    // confirmation.
     std::int64_t probeConfirmMs = 0;
 
-    // Whether the per-band trip memory binds the RELEASE FLOOR as well as the
-    // backoff. True is the original behaviour: the loop will not return below
-    // `tripOffsetDb + tripMarginDb`, which converges a hunt on a plant whose
-    // knee sits still.
-    //
-    // PROBING SETS IT FALSE, AND THE REASON HAS BEEN NARROWED SINCE IT WAS
-    // WRITTEN. This comment used to say the knee moves 10-20 dB between a quiet
-    // afternoon and a loud evening. ON8ST WITHDREW THE DIURNAL ATTRIBUTION on
-    // #5535 (2026-09-12): the return-to-baseline control fired, two of three
-    // bands did not return, and the +/-2 dB floor quoted was two sweeps 90 min
-    // apart on one night. Overnight repeatability was never measured.
-    //
-    // WHAT SURVIVES IS THE PART THIS FIELD ACTUALLY NEEDS, and he says so in the
-    // same breath: "the range and the variability stand, the hour as cause does
-    // not". The knee is not a constant. A remembered offset that permanently
-    // floors the release is a lookup table keyed on a number that moves for
-    // reasons nobody has established: dig 18 dB out once and the loop can never
-    // return below 12 dB again. With the floor off, what stops the loop hunting
-    // is the widening probe interval and the bounded cost of a failed probe --
-    // a memory in TIME rather than in decibels, which is the only kind that
-    // survives a knee whose movement is measured but unexplained.
+    // Whether the per-band trip memory also floors the release at
+    // `tripOffsetDb + tripMarginDb`. True converges a hunt on a plant whose knee
+    // stays put. Probing sets it false: the knee moves for reasons not yet
+    // established (#5535), so a remembered offset would strand the loop deep;
+    // the widening probe interval is the memory instead.
     bool tripFloorBindsRelease = true;
 
-    // ---- THE MEASURED-HEADROOM RELEASE (Hl2BandscopeHeadroom.h) ------------
-    //
-    // THIS IS WHAT THE BANDSCOPE CHANGES, AND IT CHANGES THE ONE THING THIS
-    // HEADER PREVIOUSLY HAD TO GUESS AT.
-    //
-    // Read the probing-release comment below and note what it rests on:
-    // "NOTHING ON THIS RADIO MEASURES HEADROOM ... so the only way to find out
-    // whether the gain can come back is TO TRY IT AND SEE." That was true of
-    // the clip flag and it is true of RXA_ADC_PK, and it is why a release had
-    // to be a deliberate probe that costs a clipped window when it fails.
-    //
-    // The wideband bandscope measures it. It samples the SAME `rx_data`
-    // register the clip flag is derived from, pre-DDC, across the whole
-    // 0-38.4 MHz the converter sees -- so it answers "how far below the rail
-    // is the loudest thing anywhere in the converter's span", including the
-    // out-of-slice signal that is the usual cause and the one neither the
-    // S-meter nor the post-DDC slice peak can see.
-    //
-    // With `requireHeadroomToRelease` a release stops being a gamble: the loop
-    // gives gain back only when it has SEEN room for the whole step. The probe
-    // machinery below is kept, unchanged, because a probe can still fail --
-    // the gate's duty cycle can miss a transient between blocks -- so a failed
-    // release still backs the interval off exactly as before.
-    //
-    // ABSENT IS NOT ZERO AND IT IS NOT INFINITY. When this is required and no
-    // current reading exists, the loop HOLDS and reports HeadroomAbsent. That
-    // is the same rule the Void branch already applies to the clip bit:
-    // hearing nothing is not hearing clean, and it is certainly not hearing
-    // room. It deliberately does NOT silently fall back to blind probing --
-    // an operator who armed a measured mode did not ask for a deliberate clip.
+    // Measured-headroom release (Hl2BandscopeHeadroom.h). The bandscope samples
+    // the same pre-DDC `rx_data` the clip flag derives from, across 0-38.4 MHz.
+    // When required, the loop releases only after seeing room for the whole
+    // step; the probe backoff stays because the gated reading can miss a
+    // transient. No current reading means hold with HeadroomAbsent, never a
+    // fallback to blind probing.
     bool requireHeadroomToRelease = false;
 
     // The caller's own margin, ON TOP of the step and the sampling bias below.
@@ -307,50 +211,25 @@ struct AutoGainConfig {
     return c;
 }
 
-// ---------------------------------------------------------------------------
-// PROBING RELEASE, as one particular AutoGainConfig
-// ---------------------------------------------------------------------------
-//
-// ONE DETECTION WINDOW = MetisClient::kTelemetryMinIntervalMs = 100 ms. This is
-// read out of the code, not chosen: Hl2Backend::publishTelemetry evaluates this
-// function on each coalesced telemetryUpdated. Address 0 arrives ~190/s at
-// 48 kHz with one receiver (~19 per window, ~9 worst case with command ACKs
-// displacing slots), comfortably above minSamples. A failed probe therefore
-// costs about one window (~100 ms) of a clipping converter.
-//
-//   probeStepDb = 6           The measured clean->clipping knee is 3-5 dB wide
-//                             (ON8ST, d92-clip-observability); 6 dB clears it
-//                             without stalling inside, and equals one attack
-//                             step, so a probe undoes exactly one attack.
-//   maxOffsetDb = 24          Four whole steps, so no move is a truncated
-//                             remainder. Operator-owned. Likely deeper than the
-//                             hardware: the LNA folds `& 0x1F` above code 31 and
-//                             one board measured ~17.8 dB usable (#5535, open).
-//                             Hl2GainSplit.h clamps to the register floor and
-//                             reports the applied offset, and AtFloor lights the
-//                             "attenuate ahead of the radio" warning.
-//   baseProbeIntervalMs       30 s: one failed probe per interval is a 0.33 %
-//     = 30000                 clip duty cycle before backoff, and still two
-//                             orders of magnitude faster than the 10-20 dB knee
-//                             drift across dawn/dusk. The struct default of 3 s
-//                             would clip deliberately every 3 s all night.
-//   maxProbeIntervalMs        Four doublings (30 -> 480 s): worst-case latency to
-//     = 480000                notice the band went quiet, well under a dawn
-//                             transition; ~0.02 % clipping overnight at the cap.
-//   probeConfirmMs = 3000     d92's fixed-gain control swung 0 % -> 90 % between
-//                             3 s blocks, so a shorter confirmation can sit
-//                             inside a lull. 30 detection windows.
-//   releaseIntervalMs = 3000  Same as confirm, so the next probe follows at once:
-//                             the full 24 dB returns in ~12 s if the band allows.
-//   attackCooldownMs, minSamples, unkeyHoldoffMs, warmupWindows, stalenessMs
-//                             Defaults. The 200 ms cooldown is two windows, so a
-//                             clip must persist into a fresh window before a
-//                             second step; 24 dB still digs out in ~0.8 s.
-//   tripBackoffWindowMs       A probe at the cap arrives maxProbeIntervalMs after
-//     = 2 * maxProbeIntervalMs  its trip and must still count as a repeat.
-//   tripForgetMs = 3600000    Longer than any reachable interval, so only a
-//                             confirmed probe, band change or operator resets
-//                             the interval to base.
+// Probing release as one AutoGainConfig. One detection window is
+// MetisClient::kTelemetryMinIntervalMs = 100 ms (Hl2Backend::publishTelemetry
+// evaluates once per coalesced telemetryUpdated). Address 0 arrives ~190/s at
+// 48 kHz with one receiver: ~19 per window, ~9 worst case with ACKs displacing
+// slots. A failed probe costs about one window of clipping.
+//   step 6 dB            clears the measured 3-5 dB clean->clipping knee
+//                        (d92-clip-observability); one probe undoes one attack.
+//   maxOffsetDb 24       four whole steps. May exceed the hardware (the LNA
+//                        folds `& 0x1F` above code 31; one board measured
+//                        ~17.8 dB usable, #5535); Hl2GainSplit.h clamps.
+//   base interval 30 s   one failed probe per interval = 0.33 % clip duty.
+//   max interval 480 s   four doublings; ~0.02 % clipping at the cap.
+//   probeConfirmMs 3 s   d92's fixed-gain control swung 0 % -> 90 % between
+//                        3 s blocks; 30 detection windows.
+//   releaseIntervalMs    = confirm, so 24 dB returns in ~12 s.
+//   cooldown 200 ms      default: two windows; 24 dB still digs out in ~0.8 s.
+//   tripBackoffWindowMs  2 * max interval, so a probe at the cap is a repeat.
+//   tripForgetMs 1 h     longer than any interval: only a confirmed probe, band
+//                        change or operator resets the interval to base.
 [[nodiscard]] constexpr AutoGainConfig probingReleaseConfig(
     std::int64_t baseProbeIntervalMs = 30000,
     std::int64_t maxProbeIntervalMs = 480000,
@@ -382,54 +261,13 @@ struct AutoGainConfig {
     return c;
 }
 
-// ---------------------------------------------------------------------------
-// THE BANDSCOPE-FED RELEASE, as one particular AutoGainConfig
-// ---------------------------------------------------------------------------
-//
-// probingReleaseConfig() with the release licensed by a MEASUREMENT instead of
-// taken on spec. Everything that was argued for probing is kept and is not
-// re-opened here; what changes is that the loop now has to have SEEN the room
-// before it takes a step into it.
-//
-//   requireHeadroomToRelease = true
-//       The whole point. See AutoGainConfig's comment.
-//
-//   headroomBiasDb -- NOT DEFAULTED, and it is the caller's to supply from the
-//       gate period it actually runs (gatedPeakBiasDbForPeriod). It is a
-//       parameter rather than a constant because a future change to
-//       MetisClient::kBandscopeSampleMs must move it, and a literal 3.77 here
-//       would silently stop matching the gate it describes. At the shipped
-//       1000 ms period it is 3.77 dB.
-//
-//   releaseHeadroomMarginDb = 2
-//       On top of the step and the bias. The bias bound is an expectation
-//       under a Gaussian model and the model is a first approximation to a
-//       real band, so a reading that exactly meets the requirement is not a
-//       comfortable place to step from. 2 dB is a third of one probe step and
-//       is the smallest margin that is not a rounding artefact. It is a
-//       CHOICE and it is answerable to no measurement -- which is stated here
-//       rather than dressed up, and is a thing #5535 may well want to set.
-//
-//   headroomRailAttacks = true
-//       A block at the rail is a clip and the loop should act on it. Costs
-//       nothing when the bandscope is off, because Absent never rails.
-//
-// WHAT IS DELIBERATELY LEFT ALONE, AND WHY THAT IS A QUESTION FOR #5535 AND
-// NOT FOR THIS FILE:
-//
-// probingReleaseConfig() justifies its 30 s base interval by the COST OF A
-// FAILED PROBE -- "one failed probe per interval is 100 ms of clipping per
-// interval, so 30 s is a duty cycle of 0.33 %". A measurement-licensed release
-// is not expected to fail, so that justification genuinely weakens, and a
-// shorter interval would reclaim gain faster after a band goes quiet.
-//
-// It is NOT shortened here. How fast an automatic control is allowed to give
-// gain back is a control decision with an operator-visible consequence, the
-// evidence that would size it is a live-antenna measurement nobody has taken
-// (the study's Procedure C), and #5535 is unanswered. Changing it would be
-// deciding in code a thing the RFC exists to decide. The interval stays at
-// probing's, the loop is strictly more cautious than probing was, and the
-// number is one line to change once there is a ruling to change it to.
+// probingReleaseConfig() with each release licensed by measured headroom
+// (requireHeadroomToRelease) and bandscope rail blocks counted as clips
+// (headroomRailAttacks; inert while the bandscope is off). headroomBiasDb has no
+// default: the caller derives it from the gate period it runs
+// (gatedPeakBiasDbForPeriod; 3.77 dB at the 1000 ms kBandscopeSampleMs). The
+// 2 dB margin is a choice, not a measurement. The 30 s probe interval is kept
+// pending a ruling on #5535.
 [[nodiscard]] inline AutoGainConfig bandscopeReleaseConfig(
     double headroomBiasDb,
     double releaseHeadroomMarginDb = 2.0) noexcept
@@ -650,16 +488,9 @@ constexpr int clampInt(int lo, int v, int hi) noexcept
     // ---- the window ----
     AutoGainWindow w = classifyWindow(obs.samples, obs.overloadSamples, cfg);
 
-    // A BANDSCOPE BLOCK THAT RAILED IS A CLIP, and the clip bit may simply not
-    // have been in the window that carried it -- the flag is latched and
-    // cleared by the EP6 response cycle, on its own cadence. This is the same
-    // register and the same thresholds, so acting on it is not a second
-    // opinion, it is the same opinion arriving by a different route.
-    //
-    // ESCALATION ONLY, AND ONLY FROM Clean. It never softens a Hot window and
-    // never rescues a Void one; see AutoGainConfig::headroomRailAttacks. The
-    // direction is the safe one -- the loop can only become MORE cautious on
-    // this evidence, never less.
+    // A bandscope block at the rail is a clip on the same register, possibly
+    // outside this flag window. It only escalates Clean to Marginal; it never
+    // softens Hot or rescues Void.
     if (cfg.headroomRailAttacks && obs.headroom.railed()
         && w == AutoGainWindow::Clean) {
         w = AutoGainWindow::Marginal;
@@ -783,31 +614,12 @@ constexpr int clampInt(int lo, int v, int hi) noexcept
         next.releasedSinceTrip = false;
     }
 
-    // ---- a probe in flight is believed, or it is not ----
-    //
-    // A release is the loop ASKING whether the headroom it has no way to
-    // measure has come back. `probeConfirmMs` is how long the answer has to
-    // stay clean before the question counts as answered:
-    //
-    //   - a clip before then never reaches here. It takes the attack branch
-    //     above, which sees `releasedSinceTrip` still set, calls the trip a
-    //     REPEAT, and doubles the interval that paces the next probe.
-    //   - reaching here with the period elapsed is the probe SURVIVING. The
-    //     interval goes back to base and the flag clears, so the next clip is a
-    //     fresh trip rather than the continuation of a backoff that was earned
-    //     under conditions that have since changed.
-    //
-    // BOTH CLOCKS ARE REQUIRED, and they are not the same clock.
-    // `sinceReleaseMs` says the probe has been in flight long enough;
-    // `cleanMs` says that whole time was spent OBSERVING a clean converter, and
-    // it is reset by keying, by the post-unkey hold-off and by warmup. Without
-    // the second, a transmission in the middle of a probe would let wall time
-    // confirm a probe that was never watched.
-    //
-    // THIS RUNS BEFORE THE ZERO-OFFSET RETURN BELOW ON PURPOSE. A probe that
-    // takes the offset all the way back to the operator's baseline is the one
-    // most worth confirming, and returning Idle first would leave the loop
-    // carrying a stale backoff forever.
+    // A clip before `probeConfirmMs` took the attack branch above as a repeat
+    // trip; reaching here with the period elapsed means the probe survived, so
+    // reset the interval to base. Both clocks are needed: `cleanMs` is reset by
+    // keying, unkey hold-off and warmup, so wall time alone could confirm an
+    // unwatched probe. Runs before the zero-offset return so a probe back to
+    // baseline still clears the backoff.
     if (cfg.probeConfirmMs > 0 && next.releasedSinceTrip
         && next.sinceReleaseMs >= cfg.probeConfirmMs
         && next.cleanMs >= cfg.probeConfirmMs) {
@@ -857,26 +669,10 @@ constexpr int clampInt(int lo, int v, int hi) noexcept
         return out;
     }
 
-    // ---- THE MEASURED-HEADROOM LICENCE ------------------------------------
-    //
-    // Everything above this point is the clip flag's business: the converter
-    // has not railed for long enough, and the pacing allows another step. That
-    // establishes only that the loop is ALLOWED to try. It does not establish
-    // that there is room, and before the bandscope nothing could.
-    //
-    // Here the loop asks the wideband reading whether `delta` dB of gain
-    // actually fits -- against the step, the gate's sampling bias and the
-    // configured margin (Hl2BandscopeHeadroom.h::headroomLicensesStepDb).
-    //
-    // THE LICENCE IS CHECKED AGAINST `delta`, NOT `cfg.releaseStepDb`, because
-    // delta is what will actually be given back once the release floor has
-    // truncated the step. Asking about a step the loop is not taking would
-    // refuse releases that fit.
-    //
-    // Both refusals below hold the offset and advance nothing: no release
-    // happened, so `sinceReleaseMs` keeps running and the next tick asks
-    // again. A refusal is not a failed probe and must not earn a backoff --
-    // the loop never moved, so there is nothing for the band to have punished.
+    // With requireHeadroomToRelease the bandscope must also license `delta`
+    // (the step after release-floor truncation, not cfg.releaseStepDb) against
+    // bias and margin (headroomLicensesStepDb). A refusal holds, advances
+    // nothing and earns no backoff: the loop never moved.
     if (cfg.requireHeadroomToRelease) {
         if (!obs.headroom.isMeasurement()) {
             out.next = next;

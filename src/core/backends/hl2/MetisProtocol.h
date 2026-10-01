@@ -9,28 +9,13 @@
 #include <vector>
 
 // HPSDR Protocol 1 ("Metis") wire primitives for the Hermes-Lite 2 backend.
+// Socket-free and Qt-free; MetisClient owns the UDP socket and RX thread.
+// HL2-specific facts are checked against the Hermes-Lite 2 gateware RTL, the
+// authority for what the hardware decodes (see THIRD_PARTY_LICENSES).
 //
-// Direct C++ port of the live-validated tools/hl2/hpsdr.py spike (aetherd
-// HL2 Phase 1a). Protocol facts (register map, EP2/EP6 framing, LNA gain
-// register) are grounded clean-room in openHPSDR Protocol 1, the Hermes-Lite 2
-// wiki/gateware, and the pihpsdr reference client (Principle I; see
-// THIRD_PARTY_LICENSES). Where a fact is HL2-specific it has been checked
-// against the Hermes-Lite 2 gateware RTL, which is the authority for what this
-// hardware actually decodes.
-//
-// This layer is intentionally socket-free and Qt-free so it unit-tests against
-// captured/synthetic frames without hardware; MetisClient owns the UDP socket
-// and RX thread and calls into these functions.
-//
-// TRANSMIT: this layer CAN now encode a keyed frame. The old invariant here —
-// "every C0 register-address byte is even, so MOX (C0 bit 0) is always 0, so
-// these primitives cannot key the radio" — no longer holds, and pretending
-// otherwise would be worse than losing it.
-//
-// What replaces it is a gate one level up: MetisClient will not set MOX unless
-// transmit has been explicitly enabled, and hl2_tx_gate_test asserts that with
-// the gate off NO emitted frame ever carries C0 bit 0. The encoders below are
-// pure functions; encoding a keyed frame is not the same as sending one.
+// TRANSMIT: these encoders CAN produce a keyed frame (withMox). The gate is in
+// MetisClient, which never sets MOX unless transmit is explicitly enabled;
+// hl2_tx_gate_test asserts no frame carries C0 bit 0 with the gate off.
 
 namespace AetherSDR::hl2 {
 
@@ -48,23 +33,11 @@ inline constexpr std::size_t kUsbPacketSize = 1032;
 inline constexpr std::size_t kFrameSize = 512;
 inline constexpr std::size_t kFramePayload = 504;
 
-// ---- EP6 (radio->host) payload geometry ----
-//
-// The payload is a sequence of ROUNDS. One round carries a sample from EVERY
-// active receiver followed by a single 2-byte mic/VNA word:
-//
-//     [ I(3) Q(3) ] x numRx | mic(2)
-//
-// so a round is 6*numRx + 2 bytes and the per-packet sample count is NOT a
-// constant — it falls as receivers are added. At one receiver a round is 8
-// bytes and 504/8 divides exactly, which is why a single-RX implementation can
-// get away with treating 8 and 126 as constants. It stops being true at two.
-//
-// A round NEVER straddles a 512-byte frame: the gateware emits whole rounds
-// while at least one more fits and ZERO-PADS the remainder of the frame
-// (usopenhpsdr1.v, MIC0 -> `(byte_no[8:0] > round_bytes) ? RXDATA2 : PAD`).
-// So rounds-per-frame is a floor division and the tail bytes are not samples.
-// At numRx=4 that is 19 rounds (494 bytes) with 10 bytes of padding.
+// EP6 payload is a sequence of ROUNDS: [ I(3) Q(3) ] x numRx | mic(2), so a
+// round is 6*numRx + 2 bytes. A round never straddles a 512-byte frame: the
+// gateware zero-pads the tail (usopenhpsdr1.v, MIC0 -> `(byte_no[8:0] >
+// round_bytes) ? RXDATA2 : PAD`), so rounds-per-frame is a floor division.
+// numRx=4: 19 rounds (494 bytes) + 10 pad bytes.
 inline constexpr std::size_t kRxIqBytes   = 6;   // 24-bit BE I + 24-bit BE Q
 inline constexpr std::size_t kRoundMicBytes = 2; // mic / VNA word closing a round
 
@@ -101,30 +74,18 @@ constexpr double ep6PacketsPerSecond(int sampleRateHz, int numRx) noexcept
 }
 
 // Sustained EP6 wire rate in bits/second, including UDP (8), IPv4 (20) and
-// Ethernet (14 + 4 FCS) headers plus the 20-byte preamble/inter-frame gap — the
-// bits that actually have to fit down the link, not just the payload.
-//
-// THE HL2's ETHERNET IS 100BASE-T. This is the number that decides whether a
-// (rate, receiver-count) pair is physically deliverable: four receivers at
-// 384 kHz is ~86 Mbit/s, which is not a safety margin below 100. The link does
-// not refuse — it drops, and dropped EP6 packets are gaps in every panadapter
-// at once. See Hl2Backend for the policy that acts on this.
+// Ethernet (14 + 4 FCS) headers plus the 20-byte preamble/inter-frame gap.
+// The HL2 link is 100BASE-T and drops rather than refuses, gapping every
+// receiver at once; Hl2Backend applies the policy.
 constexpr double ep6BitsPerSecond(int sampleRateHz, int numRx) noexcept
 {
     constexpr double kWireBytesPerPacket = kUsbPacketSize + 8 + 20 + 18 + 20;
     return ep6PacketsPerSecond(sampleRateHz, numRx) * kWireBytesPerPacket * 8.0;
 }
 
-// The share of the HL2's 100BASE-T link we are willing to fill with EP6.
-//
-// 70% is a working headroom figure, not a measurement: the remaining 30% covers
-// our own EP2 stream back to the radio, ARP/discovery, whatever else shares the
-// operator's switch, and the burstiness a fixed average hides. Exceeding it does
-// not fail cleanly — the link drops packets, and a dropped EP6 packet is a
-// simultaneous gap in EVERY receiver.
-//
-// The measured products (Mbit/s, wire rate) this admits and refuses:
-//
+// Share of the 100BASE-T link EP6 may fill. 70% is a headroom choice, not a
+// measurement: the rest covers EP2, ARP/discovery, other switch traffic and
+// burstiness. Wire rates (Mbit/s):
 //            1 RX    2 RX    3 RX    4 RX
 //    48 k     3.3     5.9     8.4    11.1
 //    96 k     6.7    11.7    16.9    22.2
@@ -157,20 +118,10 @@ inline constexpr int kEp6BlockSamples = ep6SamplesPerPacket(1);
 // adding receivers cannot silently reshape the transmit packet.
 inline constexpr std::size_t kTxSampleBytes = 8;
 
-// C0 register-address bytes (address << 1). Bit 0 is MOX, not part of the
-// address, so every constant here is even and keying is applied separately with
-// withMox() — see kC0MoxBit.
-//
-// The host->radio C0 byte splits THREE ways, not two. dsopenhpsdr1.v decodes it
-// in one state (CMDCTRL):
-//
-//     resprqst <= eth_data[7];      // ask the radio to answer this command
-//     addr     <= eth_data[6:1];    // SIX bits of register address, not seven
-//     ptt      <= eth_data[0];      // MOX
-//
-// so the address space is 0x00..0x3F and bit 7 is a flag, not address bit 6.
-// Nothing below 0x40 collides with it, which is why every constant here has
-// been safe while nothing set it. See kC0RespRqstBit and Hl2ControlRequest.
+// C0 register-address bytes (address << 1). dsopenhpsdr1.v (CMDCTRL) splits
+// host->radio C0 three ways: [7] resprqst, [6:1] six-bit address (0x00..0x3F),
+// [0] MOX. So every constant here is even; keying is applied with withMox()
+// and RQST with withRespRqst().
 inline constexpr std::uint8_t kC0Config = 0x00;   // addr 0x00: sample rate + #RX + ADC select
 inline constexpr std::uint8_t kC0Rx1Freq = 0x04;  // addr 0x02: RX1 NCO frequency (Hz, 32-bit BE)
 inline constexpr std::uint8_t kC0TxFreq  = 0x02;  // addr 0x01: TX1 NCO frequency (Hz, 32-bit BE)
@@ -181,18 +132,11 @@ inline constexpr std::uint8_t kC0TxDrive = 0x12;  // addr 0x09: TX drive level +
 // property of the frame, and every bank has to carry it while transmitting.
 inline constexpr std::uint8_t kC0MoxBit = 0x01;
 
-// C0 bit 7, host->radio: RESPONSE REQUEST. Set it on a C&C bank and the radio
-// answers that one command with an ACK frame on EP6 (C0[7] set there too).
-// Clear on every bank this client has ever sent until Hl2ControlRequest, which
-// is why no ACK has ever arrived and why nothing downstream has had to cope
-// with one.
-//
-// It is NOT a read bit. There is no read-only command in this direction: the
-// gateware latches cmd_data and applies the write whatever bit 7 says, and the
-// response is an ECHO of what was written (control.v, RESP_START:
-// resp_cmd_data_next = cmd_data). The only genuine reads are the AD9866 SPI and
-// I2C subsystem commands, which encode a read opcode inside the data and whose
-// reply carries the read value in place of the echo (RESP_READ).
+// C0 bit 7, host->radio: RESPONSE REQUEST. The radio answers that command with
+// an ACK frame on EP6 (C0[7] set). NOT a read bit: the write is applied
+// regardless and the reply echoes cmd_data (control.v RESP_START). Only the
+// AD9866 SPI and I2C commands return a read value (RESP_READ). Only
+// Hl2ControlRequest sets it.
 inline constexpr std::uint8_t kC0RespRqstBit = 0x80;
 
 // Highest register address the six-bit C0 field can carry.
@@ -211,46 +155,23 @@ inline constexpr int kRespAddrError = 0x3F;
 // hardware takes the coarse part of it.
 inline constexpr int kTxDriveMax = 255;
 inline constexpr std::uint8_t kC0AdcGain = 0x14;  // addr 0x0a: AD9866 LNA gain
-// addr 0x0e. THIS ADDRESS MEANS TWO DIFFERENT THINGS, which is exactly the
-// class of trap the HL2 oracle warns about:
-//
-//   generic openHPSDR : per-receiver ADC assignment. C1 holds RX1..RX4 (2 bits
-//                       each, LSB first), C2 holds RX5..RX7, C3[4:0] TX att.
-//   Hermes-Lite 2     : TX LNA gain. [15] enable hardware-managed TX gain,
-//                       [14] LNA mode select for it, [13:8] the gain itself.
-//
-// We send it because the GENERIC meaning is mandatory: a conforming multi-ADC
-// device leaves every receiver UNASSIGNED until this arrives and then emits
-// correctly framed, correctly paced, all-ZERO IQ — indistinguishable from a
-// dead antenna. Verified against hpsdrsim, whose rx_adc[] defaults to -1.
-//
-// On the HL2 the all-zero payload is inert: bit 15 clear leaves hardware-managed
-// TX gain disabled, which is already the default — and transmit has since been
-// brought up and verified on air with it left that way, so this is NOT a
-// blocker for basic SSB.
-//
-// It still matters for two things neither of which is implemented: the T/R gain
-// switch (the mechanism Quisk uses for fast turnaround) and PureSignal's
-// unclipped feedback path. Both need 0x0e to carry a real value, and this round
-// robin would zero it every third frame.
+// addr 0x0e means two things:
+//   generic openHPSDR: per-receiver ADC assignment. C1 = RX1..RX4 (2 bits each,
+//                      LSB first), C2 = RX5..RX7, C3[4:0] TX att.
+//   Hermes-Lite 2:     TX LNA gain. [15] enable HW-managed TX gain, [14] its
+//                      LNA mode, [13:8] the gain.
+// It must be sent: a conforming multi-ADC device (hpsdrsim rx_adc[] = -1)
+// streams all-zero IQ until assigned. All-zero is inert on the HL2. The T/R
+// gain switch and PureSignal would need a real value here, which the round
+// robin would zero every third frame.
 inline constexpr std::uint8_t kC0AdcAssignOrTxGain = 0x1C;
 
 // addr 0x39: sync / reset. DATA[7:4] = 0x8 resets every decimation filter
-// pipeline; 0x9 also phase-aligns the NCOs (needed for coherent multi-RX).
-//
-// *** NOTHING SENDS THIS TODAY. WRITING IT WEDGED A RADIO. ***
-//
-// Sending it after every NCO move meant a pan drag fired ~30 of these per
-// second, and the board halted its stream and then stopped answering discovery
-// until it was power-cycled. The encoder is kept because its byte layout is
-// verified and worth not re-deriving; see MetisClient::requestPipelineReset()
-// for the full account and the preconditions for bringing it back.
-//
-// In particular, do NOT trust the claim that used to stand here — that every
-// other field is a command nibble whose "act" encoding has bit 3 set, so
-// leaving them zero is "no action". That was inferred from the 0x8/0x9 pattern
-// and never checked against the gateware RTL, and this register carries the
-// watchdog enable at [27:24] and the master enable at [11:8].
+// pipeline; 0x9 also phase-aligns the NCOs. NOTHING SENDS THIS: ~30/s during a
+// pan drag halted the stream and discovery until power-cycle. Zeroing the
+// other fields is not known to be "no action"; the register also holds the
+// watchdog enable [27:24] and master enable [11:8]. See
+// MetisClient::requestPipelineReset() before using it.
 inline constexpr std::uint8_t kC0Sync = 0x72;
 
 // Config-register (C0=0x00) bit flags.
@@ -266,46 +187,24 @@ inline constexpr std::uint8_t kConfigMercury = 0x40;  // C1 bit6: ADC-as-DDC-sou
 inline constexpr std::uint8_t kConfigDuplex = 0x04;   // C4 bit2: pihpsdr sets this
                                                       // unconditionally. No-op on HL2.
 
-// C3 bits — DATA[11] and DATA[12]. On genuine openHPSDR hardware these drive
-// the LT2208's dither generator and its output randomiser. The HL2 has no
-// LT2208, and UNLIKE the two no-ops above, the dither bit is NOT inert here:
-// the HL2 gateware hijacked it, undocumented, to drive the BAND VOLTAGE output
-// on the CL2 jack (control.v: `band_volts_enabled <= cmd_data[11]`), while on
-// a board carrying a codec the same bit switches that codec's LOUDSPEAKER
-// (i2c_bus2.v under `ifdef AK4951`: `ak4951_spon_next = cmd_data[11]`).
-//
-// It is NOT a "a codec is present" interlock on any variant — see the evidence
-// collected above Hl2HardwareOptions::Codec, which is also where the decision
-// about what this bit should carry lives. This header only names the bit.
-//
-// The random bit has no such second life on any HL2 variant known to us and is
-// carried for completeness — and so that a caller who sets it is setting a
-// named thing rather than a magic number.
+// C3 bits DATA[11] and DATA[12]: LT2208 dither and random on openHPSDR. On
+// the HL2 the dither bit is NOT inert: it drives the CL2 band-voltage output
+// (control.v `band_volts_enabled <= cmd_data[11]`), or on an AK4951 board the
+// speaker (i2c_bus2.v `ak4951_spon_next = cmd_data[11]`). It is not a codec
+// interlock; Hl2HardwareOptions::Codec decides what it carries. The random bit
+// has no known HL2 use.
 inline constexpr std::uint8_t kConfigDither = 0x08;   // C3 bit3 = DATA[11]
 inline constexpr std::uint8_t kConfigRandom = 0x10;   // C3 bit4 = DATA[12]
 
 enum class SampleRate : std::uint8_t { R48k = 0, R96k = 1, R192k = 2, R384k = 3 };
 int sampleRateHz(SampleRate rate) noexcept;
 
-// ---- Companion filter board (J16 open-collector outputs) ----
-//
-// The HL2 has NO switchable filters of its own. What it has is seven
-// open-collector outputs in the config register at 0x00[23:17], which the
-// GATEWARE forwards as one byte to I2C address 0x20 — bits [6:0] from those
-// outputs, bit [7] from the RX-antenna bit at 0x00[13]. Nothing here writes
-// I2C: setting the config bits IS the whole mechanism (HL2 wiki, Protocol.md
-// "Filter Board"; oracle §8).
-//
-// The N2ADR companion board decodes bits 6:0 ONE-HOT into six low-pass filters
-// and one AM-broadcast-blocking high-pass. Values below are Quisk's
-// Hermes_BandDict verbatim (quisk_conf_defaults.py) — the reference client, and
-// tier 3 on the source-precedence ladder. They are reproduced rather than
-// re-derived because the grouping (60 and 40 share a filter; 17 and 15 share
-// one) is a property of that board, not something inferable from the band plan.
-//
-// A board that is absent simply has nothing listening on the I2C bus, so
-// writing these is inert on a bare HL2 — which is why this is safe to drive
-// unconditionally rather than behind a "do you have the filter board" setting.
+// Companion filter board (J16 open-collector outputs). The gateware forwards
+// config bits 0x00[23:17] (plus RX-antenna 0x00[13] as bit 7) as one byte to
+// I2C address 0x20 (HL2 wiki Protocol.md "Filter Board"). The N2ADR board
+// decodes bits 6:0 one-hot; values are Quisk's Hermes_BandDict verbatim
+// (quisk_conf_defaults.py). With no board fitted the write is inert, so it is
+// driven unconditionally.
 inline constexpr std::uint8_t kOcLpf160   = 0x01;   // 160 m low-pass
 inline constexpr std::uint8_t kOcLpf80    = 0x02;   // 80 m
 inline constexpr std::uint8_t kOcLpf60_40 = 0x04;   // 60 m + 40 m share one
@@ -315,25 +214,10 @@ inline constexpr std::uint8_t kOcLpf12_10 = 0x20;   // 12 m + 10 m
 inline constexpr std::uint8_t kOcHpfAmBc  = 0x40;   // AM broadcast blocking HPF
 inline constexpr std::uint8_t kOcNone     = 0x00;   // every relay released
 
-// The open-collector byte for a receive/transmit frequency in Hz.
-//
-// Chosen by FREQUENCY rather than by a band name, because this has to answer
-// for the whole tuning range, not only the ten HF amateur bands: the operator
-// can park on 9 MHz shortwave or 500 kHz, and "no band matched" must still give
-// a defined filter state rather than leaving whatever the last band selected.
-//
-// Every amateur band lands on the same value Quisk's table gives it — that is
-// the check that the range boundaries are right, not an accident of rounding.
-//
-// Two deliberate departures from "always engage the HPF":
-//   - Below 1.6 MHz the AM-blocking HPF would remove exactly what is being
-//     listened to, so nothing is engaged.
-//   - On 160 m the HPF stays OUT. The HL2's own switching supply couples spurs
-//     into the filter board's 160 m and HPF inductors (HL2 wiki, Options.md),
-//     and Quisk's default omits it there for that reason.
-//   - Above 30 MHz the board has no filter at all (6 m and up), so
-//     everything is released rather than engaging a low-pass that would
-//     attenuate the very signal being received.
+// The open-collector byte for a frequency in Hz, defined across the whole
+// tuning range (not just amateur bands); every amateur band matches Quisk's
+// table. No HPF below 1.6 MHz (it would remove MW) or on 160 m (supply spurs
+// couple into those inductors, HL2 wiki Options.md); nothing above 30 MHz.
 std::uint8_t ocFilterByteForHz(double hz) noexcept;
 
 // Human-readable name of an open-collector filter selection, for logging.
@@ -371,83 +255,35 @@ Cc ccPipelineReset() noexcept;
 
 // TX1 NCO frequency in Hz (32-bit big-endian across C1..C4).
 Cc ccTxFreq(std::uint32_t hz) noexcept;
-// TX drive level (0..kTxDriveMax, carried in C1) plus the onboard PA enable.
-//
-// PA ENABLE IS 0x09[19], i.e. C2 bit 3, and it is NOT optional for a useful
-// transmission: with the PA off the only output is the AD9866's own DAC level,
-// which is milliwatts. Measured on hardware — a correct, modulated, keyed
-// transmission with the PA disabled produced forward-power counts of zero.
-//
-// Defaulted OFF so that enabling the power amplifier is always something a
-// caller did on purpose.
-//
-// ATU TUNE IS 0x09[20], i.e. C2 bit 4, and it is a REQUEST rather than a state:
-// the HL2 gateware's AH-4 handler starts a tune cycle while the bit is held and
-// the radio is keyed. It belongs on this bank because the gateware reads the
-// whole of 0x09 at once, and holding it in a separate register write would let
-// a drive change in between clear it.
-//
-// Defaulted OFF for the same reason paEnable is: starting an antenna tuner is
-// never something a caller should get by omission. An ATU driven over I2C from
-// the N2ADR IO board must leave this clear — see Hl2HardwareOptions::atuGateware.
+// TX drive level (0..kTxDriveMax, in C1) plus 0x09 flag bits, both default OFF
+// so a caller always asks for them explicitly:
+//   paEnable = 0x09[19] (C2 bit 3). Without it output is the AD9866 DAC alone,
+//              milliwatts (forward-power counts read zero).
+//   atuTune  = 0x09[20] (C2 bit 4), a request: the AH-4 handler tunes while it
+//              is held and keyed. Leave clear for an I2C-driven ATU on the
+//              N2ADR IO board (Hl2HardwareOptions::atuGateware).
 Cc ccTxDrive(int level, bool paEnable = false, bool atuTune = false) noexcept;
 
-// ---- Direct I2C writes (companion devices on the external bus) ----
-//
-// Not the filter board's J16 byte above (indirect: config bits the gateware
-// turns into I2C). This is the direct path, naming bus, chip and register.
-//
-// C&C addresses 0x3c (I2C1, internal: Versa clock, AD9866) and 0x3d (I2C2,
-// external companion bus). Payload shape as gateware/rtl/i2c.v builds it:
-//
-//     icmd_addr       = 6'h3c;
-//     icmd_data_upper = {8'h06, 1'b1, 7'h6a};   // cookie, stop, chip address
-//
-//     C1 = DATA[31:24]   cookie: 0x06 to write, 0x07 to read
-//     C2 = DATA[23]      stop at end;  DATA[22:16] the 7-bit chip address
-//     C3 = DATA[15:8]    register or control number inside the chip
-//     C4 = DATA[7:0]     the data byte (write only)
-//
-// The gateware emits {C3, C4} as a two-byte I2C write. One byte per C&C bank;
-// no burst mode.
-//
-// RQST (C0[7]) stays clear on these banks: neither 0x3c nor 0x3d is on
-// MetisClient::requestRegister's allow-list (0x3d reaches the board switching
-// amplifiers, relays and transverters; 0x3c the Versa clock; nothing
-// re-asserts either). Change that allow-list, not this, if an ACK is needed.
-//
-// addr 0x3b: a raw AD9866 SPI write (ad9866ctrl.v, gated on cookie 8'h06; puts
-// {3'b000, cmd_data[20:16], cmd_data[7:0]} on the bus). Not a read path: the
-// reply is our echo or the 0x3F refusal. It can write any converter register,
-// including TX gain 0x0a, so it is not allow-listed and has no encoder.
+// Direct I2C writes: 0x3c (I2C1, internal: Versa clock, AD9866) and 0x3d
+// (I2C2, external companion bus). Payload per gateware/rtl/i2c.v:
+//   C1 = DATA[31:24] cookie 0x06 write / 0x07 read
+//   C2 = DATA[23] stop at end, DATA[22:16] 7-bit chip address
+//   C3 = DATA[15:8] register;  C4 = DATA[7:0] data byte
+// One two-byte I2C write per bank. Neither address is on
+// MetisClient::requestRegister's allow-list, so RQST stays clear.
+// addr 0x3b is a raw AD9866 SPI write (ad9866ctrl.v, cookie 8'h06) that can
+// hit any converter register, so it has no encoder and is not allow-listed.
 inline constexpr std::uint8_t kC0Ad9866Spi = 0x76;  // addr 0x3b << 1
 inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
 inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1
 inline constexpr std::uint8_t kI2cCookieWrite = 0x06;  // C1
 inline constexpr std::uint8_t kI2cStopAtEnd   = 0x80;  // C2 bit 7
 
-// ---- Hermes-Lite 2 IO Board (N2ADR), I2C2 chip 0x1D ----
-//
-// A Raspberry Pi Pico that switches amplifiers, antenna relays and transverters
-// from the TRANSMIT frequency. The gateware tells it nothing: it is a plain
-// I2C slave, and the host is the only party that knows where the operator is
-// tuned. Without these writes the board powers up and does nothing that
-// follows the band.
-//
-// Registers 0..4 hold the transmit frequency in Hz, MOST significant byte
-// first. Writing register 4 (the LSB) COMMITS the value — the firmware
-// assembles all five from its own register file at that instant:
-//
-//     case REG_TX_FREQ_BYTE0:
-//         new_tx_freq = (uint64_t)data
-//             | (uint64_t)Registers[REG_TX_FREQ_BYTE1] << 8
-//             | ... | (uint64_t)Registers[REG_TX_FREQ_BYTE4] << 32;
-//         new_tx_fcode = hertz2fcode(new_tx_freq);
-//
-// (HL2IOBoard/n2adr_lib/i2c_slave_handler.c). Two consequences: the LSB must be
-// sent LAST, and all five bytes must be sent even though the top one is always
-// zero on HF — the board keeps the others in its register file, so an omitted
-// byte silently contributes a stale value from the previous commit.
+// HL2 IO Board (N2ADR), I2C2 chip 0x1D: switches amplifiers, relays and
+// transverters from the TX frequency, which only the host supplies. Registers
+// 0..4 hold it in Hz, MSB first; writing register 4 (LSB) commits all five
+// from the board's register file (HL2IOBoard/n2adr_lib/i2c_slave_handler.c).
+// So send the LSB LAST and send all five, or a stale byte is committed.
 inline constexpr std::uint8_t kIoBoardI2cAddr      = 0x1D;
 inline constexpr std::uint8_t kIoBoardRegTxFreqMsb = 0;   // DATA bits 39:32
 inline constexpr std::uint8_t kIoBoardRegTxFreqLsb = 4;   // DATA bits  7:0, COMMITS
@@ -457,33 +293,19 @@ inline constexpr std::uint8_t kIoBoardRegTxFreqLsb = 4;   // DATA bits  7:0, COM
 // wiki advises for forward compatibility.
 Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept;
 
-// The five C&C banks that write `hz` into the IO board's transmit-frequency
-// registers, ALREADY IN THE ORDER THEY MUST BE SENT: most significant byte
-// first, LSB last because that write is what commits the value.
-//
-// Returned as a batch rather than written one call at a time so the ordering
-// constraint lives here, next to the firmware quotation that explains it,
-// instead of in a loop at each call site that could be reversed by someone who
-// reasonably assumed little-endian.
+// The five C&C banks that write `hz` into the IO board's TX-frequency
+// registers, already in send order (MSB first, committing LSB last).
 inline constexpr std::size_t kIoBoardTxFreqBanks = 5;
-// These three constants are NOT independent: one loop below indexes registers
-// with a shift of 8 * (kIoBoardRegTxFreqLsb - reg). Raise the bank count
-// without moving the LSB register and the last iteration subtracts past zero in
-// unsigned arithmetic — an 8 * 255 shift, undefined, putting a garbage byte on
-// a wire that moves an amplifier's band relay. Tie them together so that edit
-// fails to compile rather than reaching hardware.
+// ccIoBoardTxFrequency shifts by 8 * (kIoBoardRegTxFreqLsb - reg); a bank
+// count that overran Msb..Lsb would underflow that into an undefined shift.
 static_assert(kIoBoardTxFreqBanks
                   == static_cast<std::size_t>(kIoBoardRegTxFreqLsb
                                               - kIoBoardRegTxFreqMsb + 1),
               "IO board frequency bank count must span Msb..Lsb exactly");
 std::array<Cc, kIoBoardTxFreqBanks> ccIoBoardTxFrequency(std::uint64_t hz) noexcept;
-// A C&C bank addressing an arbitrary six-bit register with arbitrary data.
-//
-// Deliberately the last resort, not the first: every register with a known
-// meaning has a named encoder above, and one of those says what it is doing in
-// the call. This exists because Hl2ControlRequest has to be able to address a
-// register the caller names at runtime, and refuses an address outside
-// 0x00..0x3F rather than letting it alias into the RQST bit.
+// A C&C bank addressing an arbitrary six-bit register, for Hl2ControlRequest's
+// runtime-named registers. Prefer the named encoders. The address is masked to
+// 0x3F so it cannot alias into RQST or MOX.
 Cc ccRegister(int addr, std::uint32_t data) noexcept;
 
 // Set or clear the response-request bit (C0 bit 7) on a C&C bank.
@@ -507,69 +329,32 @@ inline Cc withMox(Cc cc, bool keyed) noexcept
 }
 
 // Write 16-bit I/Q transmit samples into an EP2 packet built by ep2Packet().
-//
-// Host->radio sample layout is 8 bytes: 32 bits where Hermes put headphone
-// audio, then 16-bit I, then 16-bit Q, all big-endian. 63 samples per 512-byte
-// frame, two frames per packet.
-//
-// THE AUDIO SLOT IS NOT AUDIO. The HL2 has no codec, and the FIRST 32-bit
-// "audio" word after each frame's C&C bytes is repurposed as EADDR, the
-// extended-address register (base 0x3f). memcpy-ing a Hermes TX frame layout
-// writes garbage into it. We leave every audio slot zero, which keeps EADDR
-// zero, which is what "not using the extended space" has to look like.
-//
-// Samples beyond what the packet holds are ignored; a short span leaves the
-// remainder as transmit silence.
+// Each 8-byte sample is [audio(4) | I(2) | Q(2)] big-endian, 63 per frame.
+// The audio slot stays zero: on a bare HL2 the first one per frame is EADDR
+// (extended address, base 0x3f), and zero means "unused". Excess samples are
+// ignored; a short span leaves silence.
 void ep2WriteTxIq(std::array<std::uint8_t, kUsbPacketSize>& pkt,
                   std::span<const std::complex<float>> iq) noexcept;
 
-// Write 16-bit stereo speaker audio into the SLOT ep2WriteTxIq() deliberately
-// leaves alone — FOR A RADIO THAT HAS A CODEC, AND ONLY FOR ONE.
-//
-// READ ep2WriteTxIq's note first. On a bare Hermes-Lite 2 that slot is not
-// audio: its first word per 512-byte frame is EADDR, the extended-address
-// register, and writing a sample there is not a wasted write but a command.
-// This function therefore has a precondition that no signature can express —
-// the radio must be an HL2+ (AK4951 companion board) or a SquareSDR 2, whose
-// gateware routes the slot to a real codec and does not use EADDR. The caller
-// that knows is MetisClient, gated on Hl2HardwareOptions::hasLocalCodec().
-//
-// Layout is the Hermes original: 32 bits of audio (16-bit left, 16-bit right,
-// big-endian) ahead of the 16-bit I and Q of the same sample, 63 samples per
-// frame, two frames per packet — the same 126 samples ep2WriteTxIq fills, at
-// the same fixed 48 kHz. `audio` is INTERLEAVED L,R, so it holds twice as many
-// int16s as there are samples.
-//
-// A short span leaves the remaining slots at whatever the packet already held,
-// which after ep2Packet's zero fill is silence. Underrun therefore sounds like
-// a gap rather than like the previous block repeating.
+// Write 16-bit stereo speaker audio into the slot ep2WriteTxIq() leaves zero.
+// PRECONDITION: the radio has a codec (HL2+ AK4951 board or SquareSDR 2); on a
+// bare HL2 the first slot per frame is EADDR and a sample there is a command.
+// MetisClient gates this on Hl2HardwareOptions::hasLocalCodec(). `audio` is
+// interleaved L,R big-endian, 126 samples at 48 kHz; a short span leaves the
+// zero fill (silence, and a zero EADDR).
 void ep2WriteTxAudio(std::array<std::uint8_t, kUsbPacketSize>& pkt,
                      std::span<const std::int16_t> audio) noexcept;
 
 // Transmit samples carried per EP2 packet (63 per frame, two frames).
 inline constexpr int kTxSamplesPerPacket = 126;
 
-// ---- EP6 Command & Control responses (radio -> host) ----
-//
-// C0[7] is ACK, and it CHANGES HOW THE REST OF C0 IS READ (oracle §5):
-//   ACK == 0 (classic, free-running): C0[6:3] = RADDR[3:0], C0[2] Dot,
-//            C0[1] Dash (always 0 — the HL2 has no internal keyer), C0[0] PTT.
-//   ACK == 1 (reply to our RQST):     C0[6:1] = RADDR[5:0], C0[0] PTT.
-//
-// The radio free-runs through the classic addresses, so telemetry arrives
-// without asking. Verified against hpsdrsim's responder, whose C0 sequence is
-// 0, 8, 16, 24, 32 — i.e. RADDR 0..4 at C0[6:3].
-//
-// On a real HL2 the free-running address is only TWO bits wide: control.v
-// declares `logic [1:0] resp_addr` and composes C0 as
-// {3'b000, resp_addr, ext_cwkey, 1'b0, ptt_resp}, so C0[6:5] are hardwired zero
-// and the cycle is 0,1,2,3. Reading four bits at C0[6:3] therefore gives the
-// same number on this hardware and stays right on a generic Hermes — but do not
-// expect RADDR 4 from an HL2. Slot 3 is `debug` and carries nothing we consume.
-//
-// ONE RESPONSE SLOT PER EP6 FRAME, not per packet: usopenhpsdr1.v toggles
-// resp_rqst once in SYNC_RESP, which runs once per 512-byte frame. That is the
-// only clock a reply can arrive on, and it stops dead when the stream stops.
+// EP6 C&C responses. C0[7] is ACK and changes how C0 is read:
+//   ACK == 0 (free-running): C0[6:3] = RADDR[3:0], C0[2] Dot, C0[1] Dash
+//            (always 0 on HL2), C0[0] PTT.
+//   ACK == 1 (reply to RQST): C0[6:1] = RADDR[5:0], C0[0] PTT.
+// The HL2's free-running resp_addr is 2 bits (control.v), so RADDR cycles
+// 0..3 (3 = debug); hpsdrsim cycles 0..4. One response slot per 512-byte frame
+// (usopenhpsdr1.v SYNC_RESP), and none once the stream stops.
 struct Ep6Response {
     bool ack = false;
     int raddr = 0;
@@ -592,21 +377,12 @@ struct Hl2Telemetry {
     std::optional<bool> adcOverload;
     std::optional<bool> txInhibited;      // register bit is ACTIVE LOW; decoded here
 
-    // TX IQ FIFO status: DATA[15:8] of RADDR 0, the gateware's `dsiq_status`.
-    // Settled against the gateware at 883a338; see apply() for the layout and
-    // for what the old txFifoCount/txFifoUnderflow/txFifoOverflow got wrong.
-    //
-    // Coarse occupancy: the TOP 7 bits of the read-side fill level, 0..127
-    // (fifos.v:101, `rd_count <= rd_tlength[(rdbits-1):(rdbits-7)]`). NOT a
-    // sample count, and deliberately not converted to one — the words-to-
-    // samples mapping is an inference this layer has not established. #17's
-    // pacing servo needs that conversion; nothing else does.
+    // TX IQ FIFO status, DATA[15:8] of RADDR 0 (`dsiq_status`, gateware
+    // 883a338; layout in apply()). Top 7 bits of the read-side fill level,
+    // 0..127 (fifos.v:101): coarse occupancy, NOT a sample count (#17).
     std::optional<int>  txFifoFillMsbs;
-    // ONE flag for TWO faults: the FIFO ran empty (`rd_tvalidn`) OR its writes
-    // were blocked because it filled (`~allow_push`) — fifos.v:105-106. The
-    // gateware does not distinguish them, so neither do we. A consumer that
-    // wants to say which one happened cannot get it from this word, and must
-    // say "TX pacing fault" rather than pick a side.
+    // One flag for two faults, FIFO empty OR writes blocked when full
+    // (fifos.v:105-106); report it as a "TX pacing fault", not either one.
     std::optional<bool> txFifoRecovery;
     std::optional<int>  temperatureRaw;
     std::optional<int>  forwardPowerRaw;
@@ -614,132 +390,51 @@ struct Hl2Telemetry {
     std::optional<int>  biasCurrentRaw;
     bool ptt = false;
 
-    // ---- ADC OVERLOAD AS A RATE, WITH ITS DENOMINATOR --------------------
-    //
-    // `adcOverload` above is the LAST value seen. That is a ~10 Hz sample of a
-    // bit the radio sets and clears up to ~190 times a second, because
-    // MetisClient coalesces telemetryUpdated at kTelemetryMinIntervalMs -- so
-    // as a measure of how hard the front end is being hit it is decimated
-    // roughly 19:1 and always was.
-    //
-    // These three are accumulated by MetisClient's receive loop across the
-    // publish interval, which is the only place the per-frame rate still
-    // exists. `adcSamples` counts response-address-0 responses actually seen;
-    // `adcOverloadSamples` counts how many of those carried the bit.
-    //
-    // THE DENOMINATOR IS NOT A CONSTANT AND MUST BE CARRIED. It varies with the
-    // sample rate and the receiver count, and the radio also DISPLACES the slot
-    // that carries this response whenever it has a command response to send --
-    // at up to half of them -- so it varies with what the application is doing
-    // too. A numerator without it is not a rate.
-    //
-    // A WINDOW WITH TOO FEW OBSERVATIONS IS NOT A CLEAN ONE. See
-    // adcClipRatePercent below: it returns nothing rather than zero, and the
-    // difference is the whole value of the reading.
-    //
-    // And note what these can and cannot see: the counter behind this bit is
-    // cleared only by the EP6 response cycle, which runs only while the radio
-    // is streaming. There is no idle poll for it. When the stream stops these
-    // simply stop arriving -- which is honest, and is why nothing downstream
-    // may read their absence as "clean".
-    //
-    // WHAT THE BIT ACTUALLY MEANS, corrected on aethersdr/AetherSDR#5354 after
-    // this row was first written: DATA[24] is `(&clip_cnt)`, the reduction AND
-    // of a TWO-BIT SATURATING counter cleared on each `resp_rqst`. It is true
-    // only when that counter saturated, so it means "at least THREE clip
-    // events in one reporting interval" -- not "a sample railed". A window
-    // with the bit clear is therefore NOT a window with no clipping, and this
-    // rate must not be labelled or read as one. Hl2AutoGainPolicy.h carries
-    // the full consequence.
+    // ADC overload as a rate. `adcOverload` is the last value, a ~10 Hz sample
+    // (kTelemetryMinIntervalMs) of a bit that changes up to ~190/s. MetisClient's
+    // receive loop accumulates these per publish interval: RADDR-0 responses
+    // seen, and how many carried the bit. The denominator varies with rate, RX
+    // count and command-response displacement, so it must be carried; nothing
+    // arrives while not streaming, and absence is not "clean". DATA[24] is
+    // &clip_cnt, a 2-bit saturating counter: set means >= 3 clip events per
+    // interval, clear does NOT mean no clipping (#5354; see Hl2AutoGainPolicy.h).
     int adcSamples = 0;
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;
 
-    // Merge a decoded response in, leaving untouched fields alone.
-    //
-    // IGNORES ACK responses apart from their PTT bit, and that is load-bearing
-    // rather than tidiness. In an ACK, `raddr` is the six-bit address of the
-    // command being answered and `data` is the echo of what we wrote — so an
-    // ACK for register 0x00 would otherwise be decoded here as a firmware
-    // version, an ADC-overload flag and a TX FIFO depth, all invented from our
-    // own outgoing bytes. Harmless until something set the RQST bit; this
-    // guard is what makes it stay harmless now that Hl2ControlRequest does.
+    // Merge a decoded response in, leaving untouched fields alone. ACK
+    // responses contribute only PTT: their raddr is the command address and
+    // data our own echo, which would otherwise decode as telemetry.
     void apply(const Ep6Response& r) noexcept;
 };
 
-// Directional-coupler counts -> watts, through the reference calibration curve.
-// See the table in the .cpp for what this curve is and, much more importantly,
-// what it is NOT — it is not a calibration of any particular radio.
-//
-// Lives here rather than in Hl2Backend because swrFromRaw() now needs the same
-// curve, and MetisProtocol is the layer Hl2Backend already depends on. Putting
-// one copy at the lower layer costs no new dependency edge; the alternatives
-// both cost one (see the note above swrFromRaw()).
+// Directional-coupler counts -> watts via Quisk's reference curve (see the
+// .cpp). Indicative only: not a calibration of any particular radio.
 double directionalWatts(int raw) noexcept;
 
 // Detector output in arbitrary VOLTAGE units: sqrt(directionalWatts(raw)).
-//
-// This is the inverse of the count->power curve, taken back to voltage because
-// SWR is a voltage ratio. The units are arbitrary and deliberately so — only
-// the ratio of two of these is ever used, so any consistent scale works, and
-// pretending the number is volts would be the same mistake as pretending the
-// counts are watts.
+// Only ratios of two of these (SWR) are meaningful.
 double detectorVolts(int raw) noexcept;
 
-// Minimum forward-power reading, in raw converter counts, below which an SWR
-// ratio is noise rather than a measurement. Shared here, beside the curve, so
-// the meter and the Radio Health snapshot use one threshold.
-//
-// CRITERION: noise on either channel must not move the reported SWR by more than
-// 0.25 (half the finest distinction downstream: 1.5 / 2.0 / 2.5, and the 3.0
-// sweep abort) at the 95th percentile, for true SWR 1.0 to 3.0.
-//
-// Measured on one HL2 into a dummy load (bench run D89, response registers read
-// directly): reverse-channel sd 2.73 counts (range 0..12, unchanged at zero
-// drive), forward residual sd 3.77, and a stable OFFSET of
-// rev = 3.41 + 0.00097 * fwd counts (residual sd 0.21; identical keyed and
-// unkeyed, so it is the converter). Resampling those distributions:
-//
+// Minimum forward counts below which SWR is noise; shared by the meter and the
+// Radio Health snapshot. Criterion: noise moves reported SWR by <= 0.25 at p95
+// for true SWR 1.0..3.0. Bench run D89 (one HL2, dummy load): reverse sd 2.73
+// counts, forward residual sd 3.77, offset rev = 3.41 + 0.00097 * fwd.
 //     forward counts        16     32     64     96    160    256    320
 //     p95 error (measured) 6.35   1.95   0.91   0.65   0.38   0.26   0.20
-//
-// 320 is the smallest gridded count meeting the criterion (256 misses by
-// 0.008; 160 meets it at the median). Lower gates admitted live readings like a
-// 256.00 SWR on an antenna measured at 1.50 (#4578). Gating near ~1200 would not
-// lift the reverse channel out of the detector knee at any HL2 power.
-//
-// Cost: SWR reads absent below ~74 mW forward (1.5 % of 5 W).
-//
-// One radio, one coupler: the offset is per-unit, only expected to be non-zero
-// elsewhere. kMeasuredReverseFloorCounts below lets the test run the offset
-// criterion. A better fix (not done here) samples both channels unkeyed just
-// before TX and subtracts the floors, which would drop the p95 gate to ~200.
+// 320 is the smallest gridded count meeting it (#4578). SWR is absent below
+// ~74 mW forward. Subtracting unkeyed floors before TX could lower it to ~200.
 inline constexpr int kMinForwardCountsForSwr = 320;
 
-// The reverse channel's reading with NO reflected power, in counts — the
-// intercept of rev = 3.41 + 0.00097*fwd fitted across bench run D89's 16 legs.
-//
-// Here so that hl2_metis_protocol_test can RUN the offset criterion instead of
-// restating it, exactly as it already runs the quantisation one: if a future
-// per-unit calibration replaces the curve, or if anyone lowers the gate, the
-// assertion re-derives rather than inheriting a stale comment.
-//
-// MEASURED ON ONE RADIO (Hermes-Lite 2, gateware v74, N2ADR filter board, into
-// a dummy load at 7.1 MHz). It is NOT a constant of the design and nothing may
-// use it to correct a reading — it is a lower bound on what the gate has to
-// tolerate, and it is used for exactly that.
+// Reverse-channel counts with no reflected power: the intercept of
+// rev = 3.41 + 0.00097*fwd from bench run D89 (one HL2, gateware v74, N2ADR,
+// dummy load, 7.1 MHz). For hl2_metis_protocol_test to check the SWR gate
+// against; never use it to correct a reading.
 inline constexpr double kMeasuredReverseFloorCounts = 3.41;
 
-// The clip rate for a window, as a whole percent, or NOTHING when the window
-// did not carry enough observations to have a rate at all.
-//
-// The nullopt is the point. "Three of three responses carried the overload bit"
-// is not 100 % clipping, it is three responses; reporting it as 100 would turn
-// a thin window into the most alarming reading the row can produce. Returning
-// nothing renders as "not reported", which is the same distinction the health
-// snapshot already makes between "the radio never told us" and "the value is
-// zero" -- and the same one that stops a control loop releasing gain into a
-// stalled stream.
+// The clip rate for a window as a whole percent, or nullopt when the window
+// has fewer than `minSamples` observations. nullopt renders "not reported" and
+// keeps a control loop from releasing gain into a stalled stream.
 [[nodiscard]] constexpr std::optional<int> adcClipRatePercent(
     int samples, int overloadSamples, int minSamples = 4) noexcept
 {
@@ -753,16 +448,9 @@ inline constexpr double kMeasuredReverseFloorCounts = 3.41;
     return (over * 200 + samples) / (samples * 2);
 }
 
-// Standing-wave ratio from raw forward/reverse counts.
-//
-// The counts are UNCALIBRATED ADC readings, and SWR is a RATIO — but a ratio of
-// raw counts is scale-invariant, NOT curve-invariant, and the detector's curve
-// is not linear. Both counts are therefore mapped through detectorVolts()
-// before the ratio is taken. See the comment on the definition for the whole
-// argument, including the part of the old reasoning that is still correct.
-//
-// Returns nullopt when there is no forward power to speak of: SWR is undefined
-// with no carrier, and 1.0 would read as a perfect match rather than "unknown".
+// Standing-wave ratio from raw forward/reverse counts, each mapped through
+// detectorVolts() first because the detector curve is not linear. Returns
+// nullopt with no forward power (1.0 would read as a perfect match).
 std::optional<double> swrFromRaw(int forwardRaw, int reverseRaw) noexcept;
 
 // 64-byte Metis command: EF FE 04 <cmd>. cmd 0x01 = start IQ, 0x00 = stop.
@@ -775,18 +463,10 @@ std::array<std::uint8_t, 64> metisCommand(std::uint8_t cmd) noexcept;
 // dead endpoint (after which it stops answering discovery until power-cycled).
 inline constexpr std::uint8_t kRunWatchdogDisable = 0x80;
 
-// Bit 1 of the same run/stop byte is `wide_spectrum` (Hermes-Lite 2 gateware,
-// rtl/dsopenhpsdr1.v RUNSTOP: `run <= eth_data[0]; wide_spectrum <=
-// eth_data[1]`), which turns the WIDEBAND BANDSCOPE stream (endpoint 0x04) on.
-//
-// It is a SEPARATE, LATER datagram, never folded into metisStart(): connect
-// stays byte-identical (`0x01`), which is what tests/hl2_metis_protocol_test.cpp
-// asserts and what three fake-radio fixtures sniff as `d[3] == 0x01`. Enabling
-// mid-stream re-sends the run byte with this bit set, and re-asserting `run`
-// while already running is a no-op in the gateware's own decode.
-//
-// The same RUNSTOP write clears BOTH bits, so metisStop() (0x00) stops the
-// bandscope as well as the IQ stream — including the pre-armed emergency stop.
+// Bit 1 of the run/stop byte is `wide_spectrum` (dsopenhpsdr1.v RUNSTOP:
+// `run <= eth_data[0]; wide_spectrum <= eth_data[1]`), enabling the EP4
+// wideband bandscope. Sent only via metisRunCommand(), never metisStart().
+// metisStop() (0x00) clears both bits, stopping the bandscope too.
 inline constexpr std::uint8_t kRunWideSpectrum = 0x02;
 
 inline std::array<std::uint8_t, 64> metisStart(bool watchdogEnabled = true) noexcept
@@ -800,16 +480,10 @@ inline std::array<std::uint8_t, 64> metisStop(bool watchdogEnabled = true) noexc
         0x00 | (watchdogEnabled ? 0x00 : kRunWatchdogDisable)));
 }
 
-// The run byte re-sent MID-STREAM to move `wide_spectrum` without disturbing
-// `run`. A pure function, and that is the point rather than a convenience:
-// this byte goes out twice a second for the whole session, while the operator
-// is listening, and bit 0 clearing by accident stops the IQ stream — so the
-// composition has to be reachable by a socket-free test. Composed inside
-// MetisClient it was not, and a test could only re-derive the same expression
-// and agree with itself (PR #5650 review, blocker 1).
-//
-// NOT metisStart(): connect's byte stays `0x01`, which hl2_metis_protocol_test
-// asserts and three fake-radio fixtures sniff. Asserted in that same file.
+// The run byte re-sent mid-stream (twice a second) to set `wide_spectrum`
+// with `run` held at 1; re-asserting run is a gateware no-op, and clearing it
+// would stop IQ. connect's metisStart() byte stays `0x01`, which
+// hl2_metis_protocol_test and three fake-radio fixtures rely on.
 inline std::array<std::uint8_t, 64> metisRunCommand(bool wideSpectrum,
                                                     bool watchdogEnabled = true) noexcept
 {
@@ -833,21 +507,10 @@ struct DiscoveryReply {
     std::uint8_t numRx = 0;
     [[nodiscard]] bool isHermesLite2() const noexcept { return boardId == 0x06; }
 
-    // ---- Telemetry, discovery-reply offsets 0x17-0x29 ----
-    //
-    // The SAME quantities the EP6 response cycle carries, in the SAME raw
-    // units, but all at once and WITHOUT a stream — which is the whole point:
-    // this is the only route that answers while another client holds the radio,
-    // and the only one that answers at all when the stream is broken.
-    //
-    // Every field is optional because a reply may be short, or may come from a
-    // gateware built without EXTENDED_RESP (control.v:826), where these bytes
-    // are hard zeros rather than readings. nullopt is "this reply did not carry
-    // it"; 0 is a measurement. A forward-power reading of zero is real.
-    //
-    // Offsets are the gateware's, derived from usopenhpsdr1.v's DOWN-counting
-    // emitter (offset = 0x3B - dbyte_no) at 883a338 and cross-checked against
-    // hermeslite.py's independent decoder. See the test for the full map.
+    // Telemetry, offsets 0x17-0x29 (gateware 883a338, offset = 0x3B - dbyte_no):
+    // the EP6 response quantities in the same raw units, readable without a
+    // stream. nullopt = this reply did not carry it (short reply); 0 is a
+    // reading, though gateware without EXTENDED_RESP sends hard zeros.
     std::optional<std::uint32_t> responseData;   // 0x17-0x1a, `resp_data`
     std::optional<bool> extCwKey;                // 0x1b[7]
     std::optional<bool> ptt;                     // 0x1b[6]  `ptt_resp` = cw_on|ext_ptt
@@ -896,55 +559,26 @@ int ep6Samples(std::span<const std::uint8_t> pkt,
 // receiver. `out.size()` IS the receiver count the packet is decoded against —
 // it must match what the radio was configured with at 0x00[6:3], because the
 // wire carries no receiver-count field and a mismatch silently reinterprets
-// every subsequent round. Samples are APPENDED to each vector.
-//
-// Returns the number of samples appended PER RECEIVER, or -1 if `pkt` is not a
-// valid EP6 packet or `out` is empty / larger than kMaxReceivers.
-//
-// The single-receiver ep6Samples() above is exactly this with out.size()==1 and
-// is kept because the transmit and bring-up paths read better without a span of
-// one vector; both share ep6DecodeRounds().
+// every subsequent round. Samples are APPENDED to each vector. Returns samples
+// appended PER RECEIVER, or -1 for a bad packet or `out` empty / larger than
+// kMaxReceivers.
 int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
                     std::span<std::vector<std::complex<float>>> out) noexcept;
 
-// The AD9866 on-die temperature, in degrees C, from the instrumentation ADC's
-// raw count -- the `temperatureRaw` field decoded above, whichever path carried
-// it.
-//
-// HERE, next to the decode, because BOTH paths need it and they have no other
-// header in common. Hl2Backend has it from EP6 and Hl2TelemetryService has it
-// from a port-1025 discovery reply; before this the conversion lived only in
-// Hl2Backend, so the stream-free path could publish a raw count and nothing
-// else, and "what is the PA temperature while somebody else holds the stream"
-// -- one of the three questions this feature exists for -- rendered as an em
-// dash beside a four-digit count (#5642 review). Hl2Backend::temperatureCelsius()
-// now forwards here, so the two paths cannot report different degrees for the
-// same count.
-//
-// The scaling is the Hermes-Lite 2 wiki's published formula. It is NOT verified
-// against a reference thermometer, so treat it as indicative.
+// Temperature in degrees C from `temperatureRaw`, shared by the EP6 path
+// (Hl2Backend::temperatureCelsius) and the discovery path (Hl2TelemetryService)
+// so they agree. HL2 wiki formula, not checked against a thermometer.
 [[nodiscard]] constexpr double hl2TemperatureCelsius(int raw) noexcept
 {
     return (3.26 * (static_cast<double>(raw) / 4096.0) - 0.5) / 0.01;
 }
 
-// ---- EP4 (radio->host): the wideband bandscope ----
-//
-// A SECOND radio->host stream on the SAME socket and port as EP6, enabled by
-// kRunWideSpectrum and framed `EF FE 01 04`. Grounded in the Hermes-Lite 2
-// gateware (rtl/usopenhpsdr1.v `WIDE1`..`WIDE4`, rtl/fifos.v `usbs_fifo`,
-// rtl/ad9866.v) and CONFIRMED ON THE WIRE against a v74.2 board: 15,003
-// datagrams, every one 1032 bytes, byte 4 always 0x00, and 131,072 payload
-// words with the low nibble clear without exception.
-//
-// What it carries is NOT a receiver: it is the raw AD9866 output, PRE-DDC,
-// pre-decimation and pre-NCO — 2048 consecutive 12-bit codes off a 76.8 MSPS
-// converter, drained four packets at a time from a 2048-word FIFO.
-//
-// It is the same `rx_data` register the gateware's own clip detector reads
-// (ad9866.v: `rxclipp = (rx_data == 12'b011111111111)`), so a level taken from
-// these codes and the ADC-overload bit in the EP6 telemetry are on ONE scale by
-// construction. That is the whole reason this stream is worth parsing.
+// EP4 wideband bandscope: a second radio->host stream on the EP6 socket,
+// enabled by kRunWideSpectrum, framed `EF FE 01 04`, 1032 bytes (usopenhpsdr1.v
+// WIDE1..WIDE4, fifos.v usbs_fifo; confirmed on a v74.2 board). It carries raw
+// pre-DDC AD9866 codes: 2048 consecutive 12-bit samples at 76.8 MSPS per
+// 4-packet block. Same `rx_data` the gateware clip detector reads (ad9866.v
+// `rxclipp = (rx_data == 12'b011111111111)`), so levels share the overload scale.
 inline constexpr std::size_t kEp4SamplesPerPacket = 512;   // 1024 bytes / 2
 // Four packets drain the 2048-word usbs_fifo, and they are NOT four packets
 // apart in wall time — measured at ~2.6 ms between the packets of a block and
@@ -961,42 +595,22 @@ inline constexpr int         kEp4BlockSamples     = 2048;
 // read every bandscope block as ~66 dB quieter than it is.
 inline constexpr int         kEp4FullScale        = 2048;
 // hermeslite_core.v `parameter CLK_FREQ = 76800000`; clk_ad9866 is derived from
-// rffe_ad9866_clk76p8. First Nyquist zone DC..38.4 MHz.
-//
-// RESTORED IN REBASE: this constant was authored on this branch and carried by
-// the EP4 commits that #5650 superseded; the squash that landed #5650 did not
-// keep it. Two things read it now: Hl2Backend's wideband converter view, and
-// Hl2BandscopeHeadroom.h's gatedPeakBiasDbForPeriod(), whose full-rate
-// reference IS this number.
+// rffe_ad9866_clk76p8. First Nyquist zone DC..38.4 MHz. Also the full-rate
+// reference for Hl2BandscopeHeadroom.h's gatedPeakBiasDbForPeriod().
 inline constexpr double      kAdcSampleRateHz     = 76.8e6;
 // `ep4_seq_no` is declared `logic [19:0]`: byte 4 of the header is a hardwired
 // 8'h00 and byte 5 masks to a nibble. It wraps at 1,048,576 — about 46 minutes
 // at the measured 381 packets/s — and a detector that assumes EP6's 32 bits
 // reports one enormous gap per wrap.
 inline constexpr std::uint32_t kEp4SeqModulus = 1u << 20;
-// The forward-gap guard, at 20-bit scale. MetisClient::onReadyRead already
-// applies the 32-bit form to EP6 (`if (gap < 0x80000000u)`) on the reasoning
-// that a BACKWARD jump is a reset, not a loss.
-//
-// EP4 needs the same rule and needs it harder, because the backward jump is not
-// rare — it happens once at every stream start. usopenhpsdr1.v:
-//
+// The forward-gap guard at 20-bit scale: a backward jump is a reset, not loss.
+// Every stream start rewinds: usopenhpsdr1.v
 //     ep4_seq_no <= (bs_tvalid) ? ep4_seq_no_next : {ep4_seq_no_next[19:2],2'b00};
-//
-// forces the low two bits to zero whenever the FIFO is not yet full, so a fresh
-// stream emits 0, 1, 2 and then RESTARTS AT 0 — measured three times in six
-// legs, always at the same place. Read with a 32-bit detector that `2 -> 0` is
-// a forward gap of 1,048,574, and the drop counter reports a million lost
-// packets in the first second of every session. A counter that is wrong in its
-// first reading is worse than no counter.
+// zeroes the low bits until the FIFO fills, so a fresh stream emits 0, 1, 2, 0.
 inline constexpr std::uint32_t kEp4SeqForwardGapMax = kEp4SeqModulus / 2;
 
-// One step of the EP4 sequence counter, classified.
-//
-// A pure function rather than four lines inlined into the receive path,
-// because the classification IS the phase's difficulty: it is what the d94
-// bench run changed, and a rule that lives here can be proved against recorded
-// sequences in a socket-free, Qt-free test instead of only through a client.
+// One step of the EP4 sequence counter, classified. Pure so it can be tested
+// against recorded sequences without a socket.
 struct Ep4SeqStep {
     std::uint32_t drops = 0;   // packets genuinely lost before this one
     bool rewind = false;       // the counter went backwards: a reset, not loss
@@ -1016,26 +630,14 @@ constexpr Ep4SeqStep ep4SeqStep(std::uint32_t expected, std::uint32_t got) noexc
         step.rewind = true;                            // backward jump = reset
     return step;
 }
-// ---- the duty-cycle gate's timing constants ----
-//
-// Every number here was MEASURED on a v74.2 board — bench runs d94
-// (`d94-ep4-bandscope-existence`) and d95 (`d95-procedure-b-ep6-cost`) — and
-// not derived from the RTL. They are grouped because the gate in MetisClient is
-// only correct to the extent that they are, and each one carries the receiver
-// count it was measured at, because one of them turned out to depend on it.
+// Duty-cycle gate timing constants, MEASURED on a v74.2 board (bench runs
+// d94 `d94-ep4-bandscope-existence`, d95 `d95-procedure-b-ep6-cost`), not
+// derived from RTL.
 
-// EP4 packet rate at ONE RECEIVER: 380.951, 380.955, 380.952 and 380.955
-// packets/s at 48, 96, 192 and 384 kHz — flat to 3 ppm across an eightfold
-// sample-rate change, because the capture is clocked by `bs_cnt` off the
-// 76.8 MHz converter clock and not by the DDC.
-//
-// FLAT IN SAMPLE RATE IS NOT FLAT IN RECEIVER COUNT, and d95 measured the
-// difference: 320.0 packets/s at THREE receivers, exact to the datagram in
-// three separate 120 s legs, against 380.69 at one. `usopenhpsdr1.v`'s START
-// arbitration tests EP6 readiness BEFORE the bandscope in the same if/else-if
-// chain, so more receivers means fewer slots left for it.
-//
-// Nothing between or beyond one and three receivers has been measured.
+// EP4 packet rate: ~380.95/s at 1 RX, flat to 3 ppm over 48..384 kHz (clocked
+// by `bs_cnt` off the 76.8 MHz converter clock); 320.0/s at 3 RX, because
+// usopenhpsdr1.v's START arbitration serves EP6 before the bandscope. Other
+// receiver counts are unmeasured.
 inline constexpr double kEp4PacketsPerSecond1Rx = 380.95238095238096;
 inline constexpr double kEp4PacketsPerSecond3Rx = 320.0;
 
@@ -1059,12 +661,8 @@ constexpr double ep6PacketIntervalMs(int sampleRateHz, int numRx) noexcept
 }
 
 // EP6 packets between a `run` transition (0x00 -> 0x03) and the first EP4
-// datagram. MEASURED AT 129, at BOTH 48 kHz and 384 kHz — 0.3297 s and
-// 0.0418 s, the same 129 packets. That is the signature of a counter clocked by
-// the stream and not of any timer, and it is why the guard below cannot be
-// expressed in milliseconds alone.
-//
-// 160 is 129 plus a 24 % margin.
+// datagram: measured 129 at both 48 kHz (0.3297 s) and 384 kHz (0.0418 s), so
+// it is stream-clocked, not a timer. 160 = 129 + 24 % margin.
 inline constexpr int kEp4ArmingEp6Packets = 160;
 
 // Constexpr ceiling, because std::ceil is not constexpr before C++23 and this
@@ -1075,35 +673,15 @@ constexpr int ep4CeilToInt(double v) noexcept
     return (v > static_cast<double>(t)) ? t + 1 : t;
 }
 
-// How long the gate may wait for a complete bandscope block before giving up.
-//
-// THE MAX IS NOT DEFENSIVE — both terms are reachable and each is wrong alone.
-//
-//   * 10 x the slowest block interval (125 ms) covers a MID-STREAM enable,
-//     where `run` never drops and the first EP4 arrives in 2.41-2.61 ms,
-//     measured four times out of four. What follows it is a flushed block and a
-//     captured one: two block intervals, so ten is a fivefold margin.
-//   * 160 EP6 packet intervals covers the OTHER path into arming — a run-byte
-//     transition through 0x00, which is what setReceiverCount()'s stop/start
-//     does. There the first EP4 is 129 EP6 packets away, which is 0.339 s at
-//     48 kHz and 0.042 s at 384 kHz.
-//
-// A guard fixed at ten block intervals therefore times out ALWAYS at 48 kHz and
-// NEVER at 384 kHz: a spurious failure whose presence depends on the operator's
-// sample rate. Taking the max costs nothing where the stream did not restart.
-//
-// TWO THINGS THIS RESTS ON THAT NOBODY HAS MEASURED, both at receiver counts
-// above one, and both costing at worst one bandscopeTimeouts increment and a
-// retry on the next sampling period — never a wedged gate:
-//
-//   * whether the 129-packet arming delay is clocked by EP6 PACKETS or by EP6
-//     SAMPLES. At one receiver the two are proportional and d94 could not tell
-//     them apart. If it is samples, then at 3 RX / 48 kHz the delay is 0.339 s
-//     against a 167 ms guard, and the FIRST cycle after a receiver-count change
-//     would be abandoned. Every other measured combination is covered either
-//     way.
-//   * the EP4 rate at two, and at four or more, receivers. The block term uses
-//     the slowest of the two counts that were measured.
+// How long the gate waits for a complete bandscope block. Both terms of the
+// max are needed:
+//   * 10 x slowest block interval (125 ms): mid-stream enable, first EP4 in
+//     ~2.5 ms, then a flushed and a captured block (5x margin).
+//   * 160 EP6 packet intervals: a run transition through 0x00 (e.g.
+//     setReceiverCount's stop/start), first EP4 after 129 EP6 packets.
+// Unmeasured above 1 RX: whether arming counts EP6 packets or samples (if
+// samples, 3 RX / 48 kHz misses once), and the EP4 rate at 2 or 4+ RX. A miss
+// costs one bandscopeTimeouts increment and a retry, never a wedged gate.
 constexpr int bandscopeGuardMs(int sampleRateHz, int numRx) noexcept
 {
     const double byBlock  = 10.0 * kEp4BlockIntervalSlowestMs;
@@ -1133,23 +711,10 @@ struct Ep4Stats {
     int    samples        = 0;
     int    peakAbs        = 0;    // 0..kEp4FullScale
     double sumSquares     = 0.0;  // of raw codes, so rms shares peak's scale
-    // Signed sum of the same raw codes, so the MEAN can be removed from the
-    // RMS. Without it there is no way to tell a converter DC offset from
-    // signal, and the offset is carried at full weight: for a record with mean
-    // m and standard deviation s, an about-zero RMS reports sqrt(m^2 + s^2)
-    // rather than s. That inflates rms, and since adcCrestDb is peak - rms it
-    // DEFLATES the crest — pushing a broadband noise floor (11-12 dB over 2048
-    // samples) toward the ~3 dB a discrete carrier gives, which is the one
-    // distinction this statistic exists to make. It cost a diagnosis: a
-    // terminated port read 3.71 dB and was called a near-sinusoidal carrier,
-    // when a DC pedestal fits that number exactly as well. (#5802.)
-    //
-    // Signed and not magnitude: a magnitude sum is not the mean and would
-    // remove nothing. Plain `double` for the same reason sumSquares is one —
-    // 2048 codes of at most 2048 accumulate to ~4.2e6 (their SQUARES to
-    // ~8.6e9), and both are exact integers far inside a double's exact-integer
-    // range, so the variance difference below cannot cancel catastrophically
-    // at any level a 12-bit converter can produce.
+    // Signed sum of the raw codes, so rmsDbfs() can remove the mean: a DC
+    // offset would otherwise inflate rms and deflate the crest (broadband noise
+    // ~11-12 dB vs ~3 dB for a carrier) (#5802). Exact in a double: 2048 codes
+    // sum to <= ~4.2e6, squares to <= ~8.6e9.
     double sum            = 0.0;
     // Codes at either converter rail, counted with the gateware's OWN
     // predicate rather than a symmetric one: ad9866.v fires rxclipp at
@@ -1157,53 +722,20 @@ struct Ep4Stats {
     // symmetric `abs(code) >= 2048` can never fire on a POSITIVE clip, because
     // +2048 is not a code a 12-bit two's-complement converter can produce.
     int    clippedSamples = 0;
-    // UNCALIBRATED, PRE-DDC dBFS on the converter's own scale. It is
-    // commensurable with the gateware's clip and good-level flags and with
-    // nothing else — not with an S-meter, not with the WDSP ADC peak, and not
-    // with any antenna-referred level. Nothing has compared it against a real
-    // band; do not present it as an absolute.
-    //
-    // peakDbfs() is ABSOLUTE and rmsDbfs() is AC-COUPLED: the peak is the
-    // largest |code| seen, the RMS is the deviation about this record's own
-    // mean. Their difference is therefore a crest measured from the DC
-    // pedestal to the excursion, which is what makes a rail-ward peak legible
-    // while still refusing to let a converter offset masquerade as signal.
-    // MIXED REFERENCE ON PURPOSE, and RULED: the maintainer settled #5802
-    // question 1 on 2026-09-20 -- peakAbs STAYS absolute. So this pairing is a
-    // decision, not an omission, and nothing here should be read as having
-    // pre-empted it. A signed pedestal row to sit beside these is tracked at
-    // #5856, which is where a reader should go next rather than to #5802 --
-    // including for the bench evidence that the removed mean tracks analog
-    // gain, so it is not a converter offset on at least one radio.
+    // Uncalibrated pre-DDC dBFS, comparable only with the gateware's clip and
+    // good-level flags (not an S-meter, the WDSP ADC peak, or antenna level).
+    // peakDbfs() is ABSOLUTE (largest |code|); rmsDbfs() is AC-coupled (about
+    // the record's mean). The mixed reference is deliberate (#5802); a signed
+    // pedestal row is tracked at #5856.
     [[nodiscard]] double peakDbfs() const noexcept;
     [[nodiscard]] double rmsDbfs()  const noexcept;
-    // Peak-to-RMS in dB, or nullopt when the record cannot support one.
-    //
-    // kEp4FloorDbfs is a SENTINEL and not a level: it exists to say "below the
-    // smallest code this converter has" WITHOUT inventing one. Subtracting it
-    // invents one anyway, and the subtraction is the whole of adcCrestDb.
-    //
-    // Before the RMS became AC-referred the case could not arise: an
-    // about-zero RMS is at the floor only when the peak is too, and the
-    // difference was a harmless zero. Now a record can have a large, real,
-    // absolute peak and NO representable AC deviation at all — a DC pedestal
-    // with a wobble under half a code — and peak - floor would publish sixty
-    // to ninety dB of "crest" for a record whose crest is undefined. That is
-    // the reading a script thresholding "crest > 10 dB means broadband noise"
-    // gets exactly backwards.
-    //
-    // So the predicate is that BOTH terms are real levels, which also covers
-    // an RMS computed below the floor: a deviation smaller than half a code is
-    // quantisation residue, not a measurement to take a ratio against. The
-    // peak and RMS rows still report what they each computed; only the derived
-    // ratio declines to exist. (#5802, and the floor nit on PR #5832.)
+    // Peak-to-RMS in dB, or nullopt unless BOTH are above kEp4FloorDbfs, a
+    // sentinel rather than a level. A DC pedestal with sub-code AC deviation
+    // would otherwise publish 60-90 dB of meaningless "crest" (#5802).
     [[nodiscard]] std::optional<double> crestDb() const noexcept;
     // Fold another packet's statistics in. Peak takes the max, everything else
-    // sums — which is what makes a block's stats the same shape as a packet's.
-    // `sum` sums for exactly the reason sumSquares does: both are linear in
-    // the record, so the mean and variance of a merged block are the mean and
-    // variance of the 2048-sample concatenation and not an average of four
-    // packet-sized answers.
+    // sums, so a merged block's mean and variance are those of the 2048-sample
+    // concatenation.
     void merge(const Ep4Stats& other) noexcept;
 };
 
@@ -1215,20 +747,10 @@ std::optional<std::uint32_t> ep4Seq(std::span<const std::uint8_t> pkt) noexcept;
 
 // Decode an EP4 packet's 512 ADC codes, normalised to [-1, 1) by
 // kEp4FullScale, and append them to `out`. Returns the count appended, or -1
-// if `pkt` is not a valid EP4 packet.
-//
-// NO PRODUCTION CALLER YET, and that is deliberate rather than an oversight:
-// the gate needs only ep4Stats(), and the consumer that wants samples is the
-// display phase this PR stops short of. It is kept, and tested directly in
-// hl2_ep4_bandscope_test, because the shift-and-sign-extend encoding is the
-// one thing a future display must not get wrong. Do not read it as live API.
-// (PR #5650 review round 3.)
-//
-// The wire word is little-endian 16-bit and holds the 12-bit code SHIFTED LEFT
-// BY FOUR (usopenhpsdr1.v `WIDE3` emits `{bs_tdata[3:0], 4'b0000}` and `WIDE4`
-// emits `bs_tdata[11:4]`, both halves of the same FIFO word, low nibble first).
-// Recovering the code is an ARITHMETIC right shift by four; a logical shift
-// turns every negative sample into a large positive one.
+// if `pkt` is not a valid EP4 packet. Each wire word is little-endian 16-bit
+// holding the 12-bit code shifted left by four (usopenhpsdr1.v `WIDE3` emits
+// `{bs_tdata[3:0], 4'b0000}`, `WIDE4` `bs_tdata[11:4]`); the decoder shifts
+// right four and sign-extends from bit 11.
 int ep4Samples(std::span<const std::uint8_t> pkt, std::vector<float>& out) noexcept;
 
 // Magnitude statistics over one EP4 packet, or nullopt if `pkt` is not one.

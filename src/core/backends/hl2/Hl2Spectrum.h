@@ -25,29 +25,12 @@ public:
 
     [[nodiscard]] int fftSize() const noexcept { return m_fftSize; }
 
-    // How many display frames the emitted spectrum integrates over (1 = one
-    // un-averaged periodogram per frame, the default).
-    //
-    // Integration is in POWER, before the log. Averaging dB is the geometric mean:
-    // it biases low on bursts (-100,-100,-100,-40 dBFS averages to -85 in dB vs -46
-    // in power) and by a fixed -2.51 dB on a noise floor (RFC #5782 §3, #5794).
-    // The estimator is an EMA with alpha = 1/frames: one vector of state, and every
-    // frame still emits.
-    //
-    // Frames are DISPLAY frames, not consecutive periodograms: Hl2RxDsp calls
-    // process() only when spectrumFrameDue(), so the time constant moves with the
-    // fps cap (N = 8 at 25 fps spans ~320 ms).
-    //
-    // Nothing calls this yet. Wiring it to IRadioBackend::setPanAverage() (RFC
-    // #5782) owes the 0..100 step-to-depth mapping, a meaning for
-    // setPanWeightedAverage(), and engaging RadioCapabilities::backendPanAveraging
-    // in the same change so SpectrumWidget's EMA does not stack on this one. The
-    // signature is in frames so it is not mistaken for the operator's number.
-    //
-    // Changing the depth drops the accumulated state. Call on the DSP thread (the
-    // hl2-io thread that calls process()): the members are unsynchronised, so use
-    // a queued Q_INVOKABLE on Hl2RxDsp like setSpectrumRateFps. The class comment's
-    // "construct off the real-time path" is about FFTW's planner, not this.
+    // Display frames the spectrum integrates over (1 = none, the default), as a
+    // power-domain EMA with alpha = 1/frames (averaging dB biases low, -2.51 dB
+    // on noise; RFC #5782 §3, #5794). Display frames, so N = 8 at 25 fps ~320 ms.
+    // Not yet wired to setPanAverage(); doing so must also set
+    // RadioCapabilities::backendPanAveraging so SpectrumWidget's EMA doesn't
+    // stack. Drops accumulated state. Call on the hl2-io thread (unsynchronised).
     void setAverageFrames(int frames) noexcept;
     [[nodiscard]] int averageFrames() const noexcept { return m_averageFrames; }
 
@@ -62,37 +45,16 @@ public:
     // when the next frame comes due it completes from recent contiguous samples
     // instead of refilling from empty.
     //
-    // Refilling was what made the achieved frame rate track the SPAN rather than
-    // the operator's slider. A frame is fftSize samples and an EP6 block is 126,
-    // so an empty accumulator costs ~9 block intervals before a frame can be
-    // emitted at all — 23.6 ms at 48 kHz but only 3.0 ms at 384 kHz. Feeding it
-    // instead bounds that to a single block.
-    //
-    // Caps at fftSize - 1 deliberately: older samples can never contribute to
-    // the next transform, and leaving the buffer exactly full would break
-    // process()'s frame-boundary detection (it fires on == fftSize after a
-    // push_back, so a pre-filled buffer would step straight past it and never
-    // emit another frame).
+    // (An empty accumulator would cost ~9 EP6 blocks per frame, making frame
+    // rate track the span.) Caps at fftSize - 1: process() fires on == fftSize
+    // after a push_back, so a full buffer would step past it and never emit.
     void accumulate(std::span<const std::complex<float>> iq);
 
-    // Drop the partial frame, returning how many samples went with it (0 = nothing
-    // in flight). The caller is a TRANSPORT SEQUENCE GAP: process() carries a
-    // partial frame across calls (~8 EP6 blocks of 126 samples per 1024-point
-    // frame), so lost packets mid-frame would put a time discontinuity inside one
-    // FFT. Discard rather than zero-fill, since a zero run renders as a broadband
-    // transient. The return value separates "a gap arrived" from "a gap cost a
-    // frame" (Hl2RxDsp::spectrumGapDiscards()).
-    //
-    // The averaging state is kept here: frames integrated before a gap still
-    // measure the same spectrum. A geometry change must drop it; FFT size and IQ
-    // rate do so for free because buildChannel() reconstructs this object.
-    //
-    // A pan RETUNE does not: setPanCenter()/setSliceFrequency() move the NCO
-    // without reaching this object, so once setAverageFrames(N) is wired, dragging
-    // the pan would blend bins integrated at the old NCO for ~N frames. Harmless
-    // today (only hl2_spectrum_test averages). That wiring owes the retune a
-    // distinct drop (a dropAverage() or a flag), not reset(): a gap and a retune
-    // want opposite answers about the integrated frames.
+    // Drop the partial frame on a transport sequence gap, returning samples
+    // discarded (0 = none): discard, not zero-fill, which renders as a transient.
+    // Averaging state is kept (same spectrum). A pan retune moves the NCO
+    // without reaching here, so wiring setAverageFrames() needs a separate drop
+    // for retune; buildChannel() rebuilds this object on FFT size/rate change.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = m_acc.size();

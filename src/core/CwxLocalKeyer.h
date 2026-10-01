@@ -13,37 +13,16 @@
 
 namespace AetherSDR {
 
-// Local Morse keyer — generates dit/dah timing events from CWX text so the
-// AetherSDR sidetone path can play a tone matching what the radio is
-// transmitting.  Independent of the radio's own keyer; both use the same
-// configured WPM, so they stay in sync within ±1 element on typical hardware.
-// If they drift, sidetone is informational only — the radio produces the
-// actual on-air CW.
-//
-// Threading
-// ─────────
-// The element schedule runs on a dedicated worker thread.  Each edge is timed
-// to an absolute std::chrono::steady_clock deadline (drift-corrected against
-// the run epoch) waited on an interruptible condition_variable — NOT a QTimer.
-// QTimer fires on whichever event loop owns it, and under panadapter paint +
-// VITA-49 burst handling that loop coalesces the firing, landing the edge a
-// block or two late and clipping individual CW elements (#3623).  IambicKeyer
-// abandoned QTimer for exactly this reason ("QTimer's jitter is too high for
-// CW"); this keyer now mirrors that pattern.
-//
-// Output
-// ──────
-// onKeyDownChange(bool down, when) flips the sidetone gate.  `when` is the
-// edge's SCHEDULED instant on the element grid (m_epoch + m_nextEdgeMs), not
-// the emission wall-clock: the callback runs when the worker wakes, but the
-// grid deadline is exact and known before the edge fires, so a consumer that
-// places the edge in time (the sidetone's sample mapping) renders the rhythm
-// the text was scheduled with rather than the worker's wake rhythm — the
-// same contract as IambicKeyer (#4890, #4977).  Edges that are not on the
-// grid (stop/abort/drain key-up, a run's first element before the epoch is
-// taken) carry wall clock.  Called directly from the worker thread, so the
-// receiver MUST be lock-free (e.g. CwSidetoneGenerator::setKeyDown, which is
-// std::atomic).
+// Local Morse keyer: dit/dah events from CWX text for the sidetone, at the same
+// WPM as the radio's keyer (informational; the radio makes the on-air CW).
+// The schedule runs on a worker thread waiting on absolute steady_clock deadlines
+// via an interruptible condition_variable, not a QTimer, whose event-loop
+// coalescing clips elements (#3623), as IambicKeyer does.
+// onKeyDownChange(down, when): `when` is the edge's SCHEDULED grid instant
+// (m_epoch + m_nextEdgeMs), so a consumer renders the intended rhythm (#4890,
+// #4977); off-grid edges (stop/abort/drain, first element) carry wall clock.
+// Called on the worker thread, so the receiver MUST be lock-free
+// (e.g. CwSidetoneGenerator::setKeyDown).
 class CwxLocalKeyer {
 public:
     using KeyDownCallback =

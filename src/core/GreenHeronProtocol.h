@@ -1,31 +1,16 @@
 #pragma once
 
-// Green Heron "Everyware" antenna-switch wire protocol (TCP port 10000).
-//
-// Clean-room (Principle IV): there is no vendor documentation; everything here
-// comes from observing traffic between the vendor's own client and server.
-// Nothing was decompiled or disassembled. The code is a from-scratch Qt port of
-// the author's own MIT-licensed implementation (github.com/motoham88/
-// everyware-linux), contributed under GPLv3 by the same copyright holder.
-//
-// The far end is the Everyware server (a PC with the switch hardware on serial),
-// not a switch. One socket carries both the antenna switches (SWITCHADD /
-// SWITCHUPDATE / SWITCHLOCKS / SET_SWITCH) and any rotator (ADD / POINT / TURN).
-// Switch names are unique only within one server, so key on host + switch name.
-//
-// Framing, ASCII and line-oriented:
-//
-//     record   := VERB US field (US field)* CRLF
-//     field    := text | subfield (GS subfield)*
-//
-//     US = 0x1f between fields, GS = 0x1d between subfields, CRLF ends a record.
-//     TURN is the exception and ends with a bare CR (see kTurnVerb).
-//
-// Record boundaries do not align with TCP segments (observed both ways), so feed
-// every read through splitRecords() and keep the remainder.
-//
-// Pure — no sockets, timers or GUI — so the parser is tested against captured
-// bytes (tests/green_heron_protocol_test.cpp). GreenHeronModel owns the socket.
+// Green Heron "Everyware" antenna-switch protocol (TCP port 10000). No vendor
+// documentation; derived from observed traffic, ported from the author's MIT
+// implementation (github.com/motoham88/everyware-linux). The peer is the
+// Everyware server; one socket carries switches (SWITCHADD / SWITCHUPDATE /
+// SWITCHLOCKS / SET_SWITCH) and rotators (ADD / POINT / TURN). Switch names are
+// unique per server: key on host + name. Framing, ASCII:
+//     record := VERB US field (US field)* CRLF
+//     field  := text | subfield (GS subfield)*
+//     US = 0x1f, GS = 0x1d; TURN ends with a bare CR (see kTurnVerb).
+// Records don't align with TCP segments: feed every read through splitRecords().
+// Pure; tested against captures (tests/green_heron_protocol_test.cpp).
 
 #include <QByteArray>
 #include <QString>
@@ -50,36 +35,20 @@ inline constexpr quint16 kDefaultPort = 10000;
 inline constexpr int  kKeepAliveIntervalMs = 5000;
 inline constexpr char kKeepAliveByte       = '\0';
 
-// The one command the device accepts from us, confirmed byte-identical to the
-// vendor client's own bytes for the same operation:
-//
+// The switch command, byte-identical to the vendor client's:
 //     SET_SWITCH<US>AS-84F-4<US>Beam-20<CRLF>       29 bytes
-//     SET_SWITCH<US>AS-84F-4<US>Dummy Load<CRLF>    32 bytes
 //     SET_SWITCH<US>AS-84F-4<US>OFF<CRLF>           25 bytes
-//
-// Fire-and-forget: no ack, no correlation id. The device confirms by pushing
-// a fresh SWITCHUPDATE ~123 ms later. Never model relay state locally from a
-// command sent — the device is the authority and it reports quickly.
+// Fire-and-forget; the device confirms with a SWITCHUPDATE ~123 ms later. Never
+// model relay state from a sent command.
 inline constexpr const char* kSelectVerb = "SET_SWITCH";
 
-// The rotator command, and the only other verb this client ever sends.
-// Confirmed byte-for-byte off the wire, then confirmed accepted by moving a
-// real RT-21:
-//
+// The rotator command, confirmed on the wire and on a real RT-21:
 //     54 55 52 4e 1f 52 6f 74 6f 72 1f 38 39 2e 30 0d
 //     T  U  R  N  US R  o  t  o  r  US 8  9  .  0  CR
-//
-// THE TERMINATOR IS A BARE CR (0x0d), NOT CRLF. That is a genuine asymmetry
-// with SET_SWITCH and it is why encodeTurn() does not share a terminator with
-// encodeSelect(). Do not "tidy" the two into one without a capture that says
-// the device accepts CRLF here.
-//
-// Fire-and-forget, like SET_SWITCH: no ack, no correlation id. Confirmation
-// arrives as a fresh POINT. There is NO stop, park, or disable verb anywhere
-// in this protocol — powering the controller off produced no record at all,
-// because it is a physical action. A turn that starts cannot be recalled in
-// software, which is why every front end must make choosing a heading and
-// sending it two separate gestures.
+// Terminated by a bare CR, NOT CRLF (unlike SET_SWITCH); don't unify without a
+// capture showing CRLF works. Fire-and-forget; confirmed by a fresh POINT. The
+// protocol has no stop/park verb, so a started turn can't be recalled: front
+// ends must make choosing and sending a heading separate gestures.
 inline constexpr const char* kTurnVerb = "TURN";
 
 // Headings, in both directions, carry one decimal place. Encoding must be
@@ -126,17 +95,9 @@ enum class RecordType {
     Point,         // a rotator's reported heading
 };
 
-// DeviceAdd is deliberately NOT called RotorAdd. Every capture of this verb
-// reads `ADD<US>Rotor`, and that field is the device's OPERATOR-CONFIGURED
-// name — the same way switch records key on the switch name. That the name
-// happened to be the word "Rotor" is not evidence the verb is rotor-specific:
-// one installation, one device, one generic three-character verb on a socket
-// shared with the switches. A rotator named "Beam" would announce
-// `ADD<US>Beam`, and a future non-rotor device would land in the same branch.
-//
-// POINT is what establishes that a named device is a rotator with a heading.
-// The model therefore keys its rotator table on POINT and treats ADD as
-// corroboration, never the other way round.
+// DeviceAdd, not RotorAdd: in `ADD<US>Rotor` the field is the operator-configured
+// device name, not a type. POINT establishes that a device is a rotator, so the
+// model keys its rotator table on POINT and treats ADD as corroboration.
 
 // One selectable antenna position, as advertised in SWITCHADD.
 //
@@ -206,17 +167,10 @@ struct Record {
 // well-behaved device never triggers it.
 QVector<QByteArray> splitRecords(QByteArray& buffer, bool* bytesDropped = nullptr);
 
-// Parse one complete record (no trailing CRLF). Never throws and never fails:
-// an unrecognised verb or outright garbage comes back as RecordType::Unknown
-// with its fields intact. A month of captures on one idle installation would
-// be a thin basis for claiming the whole vocabulary, so unknown verbs are
-// surfaced rather than treated as errors.
-//
-// Unknown also covers a record that is well formed but carries a value we
-// will not act on: a POINT whose heading is non-finite or outside
-// [kMinHeadingDegrees, kMaxHeadingDegrees] is not a position, and is refused
-// at the boundary rather than passed inward (Principle VII). The bounds are
-// the ones encodeTurn refuses to send.
+// Parse one complete record (no trailing CRLF). Never fails: unknown verbs or
+// garbage return RecordType::Unknown with fields intact, as does a POINT whose
+// heading is non-finite or outside [kMinHeadingDegrees, kMaxHeadingDegrees]
+// (the bounds encodeTurn enforces).
 Record parse(const QByteArray& record);
 
 // ── Commands (client → device) ──────────────────────────────────────────────

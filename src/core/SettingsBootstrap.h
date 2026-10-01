@@ -4,18 +4,10 @@
 
 namespace AetherSDR {
 
-// Pre-QApplication settings access (RFC #4603).
-//
-// Two startup consumers need a setting before QApplication exists and before
-// AppSettings::load() runs: the UiScale bootstrap in main.cpp (QT_SCALE_FACTOR
-// must be set before the QApplication constructor) and GpuSelector (the RHI
-// backend choice). They must NOT construct the AppSettings singleton — its
-// load() sequencing (path migration, XML import) belongs to the ordinary
-// startup flow.
-//
-// readValue() reads the SQLite store read-only when it exists, and falls back
-// to scanning the legacy XML file — which is exactly the state on the very
-// first launch after the upgrade, where the import has not run yet.
+// Pre-QApplication settings access (RFC #4603) for the UiScale bootstrap
+// (QT_SCALE_FACTOR) and GpuSelector. Must not construct AppSettings, whose
+// load() does path migration and XML import. readValue() reads SQLite
+// read-only if present, else scans the legacy XML (first launch after upgrade).
 namespace SettingsBootstrap {
 
 // Returns the stored value for a top-level settings key, or `defaultValue`

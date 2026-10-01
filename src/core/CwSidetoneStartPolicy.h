@@ -1,28 +1,16 @@
 #pragma once
 
-// CwSidetoneStartPolicy — which device the sidetone backend gets at start()
-// (#4978).
-//
-// startSidetoneStream() resolves a QAudioDevice the same way the RX sink does
-// (saved AudioOutputDeviceId if still enumerable, else Qt's default). The two
-// backends give a null device opposite meanings:
-//
-//   PortAudio   null = "resolve your own default output"
-//               (Pa_GetDefaultOutputDevice). The intended path for a default
-//               selection; a Qt-description-to-PortAudio-name match cannot
-//               succeed across PulseAudio/PipeWire vs ALSA naming on Linux.
-//   QAudioSink  null = "requested output unavailable -> system default",
-//               flagged fallbackOccurred=true, so it always gets the resolved
-//               device.
-//
-// So PortAudio gets a null device exactly when the selection is not explicit.
-// A selection is explicit when a device id is saved AND still enumerable, even
-// if that device is the system default; that case still takes the name-match
-// path (#4978 stays open for it).
-//
-// The decision is platform-independent; the platform enters only through
-// CwSidetoneBackendPolicy.h. Pure, header-only, no Qt types; every case is a
-// compile-time assert and a row in tests/cw_sidetone_start_policy_test.cpp.
+// Which device the sidetone backend gets at start() (#4978). startSidetoneStream()
+// resolves a QAudioDevice like the RX sink (saved AudioOutputDeviceId if still
+// enumerable, else Qt's default). A null device means:
+//   PortAudio   "resolve your own default" (Pa_GetDefaultOutputDevice); Qt and
+//               ALSA names can't be matched on Linux.
+//   QAudioSink  "requested output unavailable" (fallbackOccurred=true), so it
+//               always gets the resolved device.
+// PortAudio gets null exactly when the selection is not explicit (a saved id
+// that is still enumerable, even if it is the default). Platform-independent;
+// pure header, every case a static_assert and a row in
+// tests/cw_sidetone_start_policy_test.cpp.
 
 namespace AetherSDR {
 
@@ -36,16 +24,10 @@ enum class SidetoneStartDevice {
     BackendDefault,
 };
 
-// `savedDeviceSet`         AudioEngine::m_outputDevice is non-null — an
-//                          AudioOutputDeviceId is saved.
-// `savedDeviceEnumerable`  that id was found in QMediaDevices::audioOutputs()
-//                          at start time. False when the device is gone; in
-//                          practice startRxStream() has already nulled a
-//                          missing saved device before the sidetone starts, so
-//                          this arrives as savedDeviceSet=false on the normal
-//                          path — the row is kept for the Q_INVOKABLE entry
-//                          point and for a hotplug between the two
-//                          enumerations.
+// `savedDeviceSet`        an AudioOutputDeviceId is saved (m_outputDevice set).
+// `savedDeviceEnumerable` that id is in audioOutputs() at start. startRxStream()
+//                         normally nulls a missing device first; this row covers
+//                         the Q_INVOKABLE entry and a hotplug in between.
 constexpr bool isExplicitSidetoneSelection(bool savedDeviceSet,
                                            bool savedDeviceEnumerable)
 {

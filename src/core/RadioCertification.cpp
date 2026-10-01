@@ -35,22 +35,10 @@ using certmath::tonePower;
 
 namespace {
 
-// The meter table from docs/radio-certification.md, in executable form.
-//
-// Kept as DATA rather than a sequence of hand-written checks so that adding a
-// radio means adding rows, and so the documentation and the tool cannot drift
-// apart — anything here that a backend does not publish shows up as "defined
-// but never fed" or as absent, which are different findings and both useful.
-//
-// THERE IS NO UNIT COLUMN HERE, deliberately. It used to hold one expected unit
-// compared by equality, and MeterSurfaces.h's `acceptedUnits` — a SET — was
-// introduced precisely because that form reports a permanent false positive on
-// a healthy meter. Only one of the two tables was updated, so every HL2 run
-// went on reporting `UNIT MISMATCH … TX:ALC (declared dBFS, expected dB)` on a
-// correct meter, and ranked it above every real concern (CERTIFICATION.md
-// 1.38). The unit expectation now has exactly one home: kMeterSurfaces, joined
-// by key. A row here whose key has no surface entry gets no unit verdict, which
-// is the honest answer rather than a comparison against a value nobody wrote.
+// The meter table from docs/radio-certification.md, as data so docs and tool
+// can't drift; unpublished rows show as "defined but never fed" or absent.
+// No unit column: expected units live only in kMeterSurfaces (acceptedUnits),
+// joined by key. A row with no surface entry gets no unit verdict.
 struct MeterSpec {
     const char* source;
     const char* name;
@@ -98,26 +86,12 @@ constexpr MeterSpec kMeterTable[] = {
                                              "FWDPWR"},
     {"TX",  "ALC",      true,  true,  false, "host ALC; MeterModel::swAlc() consumes it "
                                              "and the Phone/CW ALC gauges render it"},
-    // The GAIN the host ALC is applying, which is a different measurement from
-    // the row above and not a duplicate of it: TX:ALC is the post-ALC peak and
-    // sits near the target whatever the operator does, while this moves with
-    // how hard the stage is working. Host-side like its neighbours, so a
-    // zero-drive key still feeds it — needsForwardPower is false for the same
-    // reason TX:ALC's is.
-    //
-    // ADDING THE SURFACE WITHOUT ADDING THIS ROW IS THE 1.38 DEFECT. The unit
-    // verdict is a join between kMeterSurfaces and this table on the key, so a
-    // meter present in one and absent from the other is either never checked or
-    // checked against nothing — and the last time the two disagreed the run
-    // reported UNIT MISMATCH on a correct meter and ranked it above every real
-    // finding. tests/meter_surfaces_test.cpp now covers it.
-    //
-    // COVERED IS NOT GATED, and the difference matters to whoever adds the
-    // next surface. ci.yml's only ctest steps are the frozen list in
-    // .github/ci-test-gate.txt, and this test is deliberately not on it, so
-    // it does not run on a PR. It runs unfiltered on every push to main
-    // (full-suite.yml) and weekly under the sanitizers — which catches the
-    // divergence, but after the merge rather than before it.
+    // Host ALC gain, distinct from TX:ALC (post-ALC peak, which sits near target):
+    // this moves with how hard the stage works. Host-side, so a zero-drive key
+    // feeds it (needsForwardPower false). Every kMeterSurfaces entry needs a row
+    // here or its unit verdict is lost (CERTIFICATION.md 1.38);
+    // tests/meter_surfaces_test.cpp checks the join but is not in the PR CI gate
+    // (.github/ci-test-gate.txt) — it runs on main pushes and weekly sanitizers.
     {"TX",  "ALCGAIN",  true,  true,  false, "gain the host ALC is applying, in dB; "
                                              "MeterModel::alcGainDb() consumes it and "
                                              "no GUI surface renders it yet (#5636)"},
@@ -407,30 +381,11 @@ void RadioCertification::stageControlEffect(const Options& o)
     // has characterised.
     const double micDelta = micFull - micHalf;
 
-    // NOTE: this stage does not exercise the RF power slider, and must not claim
-    // to. It previously reported `rfPowerRestoredTo`, which named a restore that
-    // never happened — in a report whose entire value is that it does not
-    // overstate what it verified. The power row in docs/radio-certification.md
-    // used to be certified by TX:FWDPWR dropping ~6 dB on a halving. FWDPWR IS
-    // published on this backend now (in dBm, through an uncalibrated reference
-    // curve), so that row is no longer blocked on a missing meter — but the
-    // HALVING STIMULUS ITSELF IS NOT USABLE ON THIS RADIO, and the ratio does
-    // not rescue it. Two independent reasons, both measured:
-    //
-    //   * The gateware decodes only the drive register's TOP NIBBLE, so a
-    //     slider halving is not a drive halving. Slider 44 % and 50 % both land
-    //     on nibble 7 (1.984 W vs 2.001 W — six points of travel doing
-    //     nothing), and 51 % jumps +1.25 dB. 100→50→25 % is nibble 15→7→3.
-    //   * HL2FilterE3 is nonlinear as well as uncalibrated, so the scale does
-    //     not cancel out of a ratio taken across a wide span.
-    //
-    // Measured live: −4.44 dB (100→50 %) and −2.33 dB (50→25 %) against the
-    // −6.02 dB a true halving would give. If the scale cancelled, both would
-    // read −6.02. So a failing delta cannot be attributed to the control rather
-    // than to the curve, and radiocert must not report one as a control defect.
-    // What this control CAN certify by effect is monotonicity — one nibble up,
-    // FWDPWR rises — which is the stimulus docs/radio-certification.md now
-    // carries. See docs/HERMES.md 17.5 and 17.7 for both measurements.
+    // This stage does not exercise the RF power slider. A halving stimulus is
+    // unusable on HL2: the gateware decodes only the drive register's top nibble
+    // (44 % and 50 % both map to nibble 7), and HL2FilterE3 is nonlinear, so the
+    // ratio doesn't cancel (measured −4.44 dB for 100→50 %, −2.33 dB for 50→25 %).
+    // The power row is certified by monotonicity instead (docs/HERMES.md 17.5, 17.7).
     QJsonObject m{
         {QStringLiteral("micGain100Dbfs"), micFull},
         {QStringLiteral("micGain50Dbfs"), micHalf},
@@ -449,24 +404,13 @@ void RadioCertification::stageControlEffect(const Options& o)
             "about what the gain is")
             .arg(micDelta, 0, 'f', 1);
 
-    // RF GAIN, CERTIFIED BY EFFECT, with no family gate. On seam backends the
-    // operator's slider routes rfGainChanged -> RadioModel::setPanRfGainFor ->
-    // backend (HL2: Hl2Backend::setPanRfGain -> MetisClient::setLnaGainDb, AD9866
-    // 0x0a[5:0]); SliceModel::setRfGain is Flex wire text only. This stage drives
-    // the control and reports what it observed.
-    //
-    // The expected S-meter delta is ZERO, not the step: Hl2DbReference moves with
-    // the gain so a gain change cannot move a reported dBm (docs/HERMES.md 17.4).
-    //
-    // The delta still cannot render a verdict. The same -step reading comes from
-    // (a) the reference moved but the LNA register did not (the defect), or (b) the
-    // register moved but the reading is dominated by converter noise on a quiet
-    // band. Measured on a live HL2 on a quiet 20 m: an 8 dB step moved SLC:LEVEL by
-    // -6.3 dB while raw dBFS rose 1.74 dB. So the delta is reported as evidence,
-    // and the verdict rests on the echo: applyLnaGainDb echoes the value the
-    // hardware took to every pan, and an out-of-range request comes back clamped,
-    // not repeated. Closing the effect half needs the raw pre-reference dBFS, which
-    // the seam does not expose (docs/CERTIFICATION.md 2.4).
+    // RF gain, certified by effect, no family gate. Seam path: rfGainChanged ->
+    // RadioModel::setPanRfGainFor -> backend (HL2: MetisClient::setLnaGainDb, AD9866
+    // 0x0a[5:0]). Expected S-meter delta is ZERO (Hl2DbReference tracks the gain,
+    // docs/HERMES.md 17.4), but a delta can't distinguish a stuck register from
+    // converter noise on a quiet band, so it's reported as evidence; the verdict
+    // rests on the echo (applyLnaGainDb echoes the applied, clamped value). The
+    // effect half needs raw pre-reference dBFS, not on the seam (CERTIFICATION.md 2.4).
     auto settledSLevel = [&]() -> double {
         // LET THE EMA CATCH UP. docs/HERMES.md 17.6: every WDSP sample is smoothed
         // (decay alpha 0.15 at ~47 samples/s, so ~0.7 s to settle) and one is
@@ -488,22 +432,10 @@ void RadioCertification::stageControlEffect(const Options& o)
             "no active panadapter, so the route the operator's RF Gain slider "
             "actually uses does not exist to be driven");
     } else {
-        // DISARM ANY AUTOMATIC GAIN CONTROL FOR THE DURATION.
-        //
-        // This exercise moves RF gain 8 dB, spins 1.2 s twice for the S-meter's
-        // EMA to settle, and puts the gain back. That is roughly 2.8 s of live
-        // event loop, and a backend loop moving the gain inside it would make
-        // `echoed != target` and fire the one hard finding this stage has --
-        // "the RF Gain control did not reach the backend" -- which is exactly
-        // the permanent false positive this stage was rewritten to eliminate.
-        // It would also invalidate startGain and therefore the restore.
-        //
-        // Restored afterwards on every path out of this block, because a
-        // certification run must not leave the operator's radio in a different
-        // state from the one it found.
-        // The ARMED state, not merely the presence of the control. A radio that
-        // has the feature but never had it switched on must not have it
-        // switched ON by a certification run.
+        // Disarm auto RF gain for this ~2.8 s probe: a loop moving the gain would make
+        // `echoed != target` (a false "control did not reach the backend") and
+        // invalidate startGain. Restored on every exit path. Only re-armed if it was
+        // ARMED before; a run must never switch the feature on.
         auto* autoGain = m_radio->autoRfGain();
         const bool autoGainWasOn = autoGain && autoGain->isArmed();
         if (autoGainWasOn) {
@@ -524,18 +456,10 @@ void RadioCertification::stageControlEffect(const Options& o)
         target = qBound(low, target, high);
         const int stepDb = target - startGain;
 
-        // THE SAME DISCIPLINE, APPLIED TO THE THING THE OPERATOR HEARS.
-        // The AGC-T is a setpoint about the signal at the ANTENNA; the backend
-        // refers it to the LNA gain (Hl2DbReference::agcCeilingDb) so a gain
-        // change moves the derived WDSP ceiling and leaves the operator's own
-        // number alone. The tempting wrong fix — compensating by rewriting the
-        // operator's 0..100 — would make their AGC slider walk on every gain
-        // change, and item 14's regulator steps the gain several times a day.
-        //
-        // The derived ceiling is not on the seam, so this cannot measure it.
-        // What it CAN certify is that the operator's number did not move, which
-        // is the half that would be visible to them and the half a bad fix
-        // breaks. EXPECTED DELTA ZERO, same as the S-level above.
+        // AGC-T is referred to the LNA gain by the backend (Hl2DbReference::
+        // agcCeilingDb), so a gain change must leave the operator's 0..100 AGC-T
+        // untouched. The derived ceiling isn't on the seam; this certifies only that
+        // the operator's number did not move. Expected delta zero.
         SliceModel* agcSlice = m_radio->slice(0);
         const int agcTBefore = agcSlice ? agcSlice->agcThreshold() : -1;
 
@@ -546,17 +470,9 @@ void RadioCertification::stageControlEffect(const Options& o)
         const int agcTAfter = agcSlice ? agcSlice->agcThreshold() : -1;
         m_radio->setPanRfGainFor(panId, startGain);   // leave it where we found it
         spin(400);
-        // Re-arm AFTER the gain is back where it was, so the loop's first
-        // window is about the operator's own setting rather than this stage's
-        // probe value.
-        //
-        // RE-FETCHED, NOT REUSED. The pointer taken above is borrowed and valid
-        // only for the call that obtained it (AutoRfGainControl.h), and between
-        // there and here spin() has run a real QEventLoop for 200 + 1200 + 1200
-        // + 400 ms. A link drop inside any of those reaches RadioModel's
-        // teardown and m_backend.reset(), which destroys the object behind it --
-        // leaving the old pointer non-null and dangling, so a null guard would
-        // not have caught it. Asking again returns nullptr in exactly that case.
+        // Re-arm after the gain is restored. Re-fetch the pointer: it is borrowed per
+        // call (AutoRfGainControl.h), and spin() has run event loops since, where a
+        // link drop can reset m_backend and leave the old pointer dangling.
         if (autoGainWasOn) {
             if (auto* ag = m_radio->autoRfGain()) {
                 ag->setArmed(true);
@@ -691,17 +607,10 @@ void RadioCertification::stageMeterInventory()
         const int idx = meters.findMeter(QString::fromLatin1(spec.source),
                                          QString::fromLatin1(spec.name));
         const qint64 age = idx >= 0 ? meters.valueAgeMs(idx) : -1;
-        // THE UNIT, TWICE. `acceptedUnits` is every unit the CONSUMER can
-        // correctly handle; `declaredUnit` is what the backend actually
-        // published. When the declaration is outside the set the meter is
-        // already being misread and no amount of freshness will show it — an
-        // IC-705 declaring FWDPWR in Watts against a consumer assuming dBm
-        // rendered 5 W as 0.003 W while this stage reported it fed and healthy.
-        //
-        // The set comes from kMeterSurfaces, the one table that owns it, and
-        // the membership test from the one predicate that answers it. This used
-        // to be a private single-value column compared by equality, which
-        // flagged a correct TX:ALC on every HL2 run (CERTIFICATION.md 1.38).
+        // `acceptedUnits` (from kMeterSurfaces) is every unit the consumer handles;
+        // `declaredUnit` is what the backend published. A declaration outside the
+        // set means the meter is already misread however fresh it is (e.g. FWDPWR in
+        // W against a dBm consumer).
         const MeterDef* def = idx >= 0 ? meters.meterDef(idx) : nullptr;
         const QString declared = def ? def->unit : QString();
         const MeterSurface* surface = meterSurfaceFor(key);
@@ -866,18 +775,11 @@ void RadioCertification::stageMeterInventory()
         concern = concern.isEmpty() ? lead : lead + QStringLiteral(". ") + concern;
     }
 
-    // WHAT THE GAUGE WILL ACTUALLY SHOW. Everything above measures the seam;
-    // these three are read back through the consumer that converts, because
-    // "a value arrived" and "the face moved" turned out to be different
-    // questions (CERTIFICATION.md 1.27).
-    //
-    // TAKEN WHILE KEYED, by stageMeterScale, and behind each consumer's own
-    // liveness gate. Sampled here instead — after stageControlEffect unkeyed
-    // and settled 700 ms — every transmit quantity is absent by construction,
-    // and read raw the SWR accessor returns its 1.0f initialiser, so the probe
-    // reported a confident perfect match beside its own "never fed" (1.34).
-    // The unkeyed reading is kept alongside because the pair is the evidence
-    // that the gauge falls back correctly when transmission stops.
+    // What the gauge will show, read through the converting consumers
+    // (CERTIFICATION.md 1.27). Sampled while keyed by stageMeterScale, behind each
+    // consumer's liveness gate; unkeyed every TX quantity is absent and raw SWR
+    // reads its 1.0f initialiser (1.34). The unkeyed reading is kept to show the
+    // gauge falls back correctly.
     QJsonObject rendered = m_renderedWhileKeyed;
     const bool haveKeyedSample = !rendered.isEmpty();
     if (!haveKeyedSample)
@@ -1068,16 +970,10 @@ void RadioCertification::stageModeMap()
             {QStringLiteral("passband"),
              QStringLiteral("%1..%2").arg(slice->filterLow()).arg(slice->filterHigh())},
         };
-        // A READBACK THAT DIFFERS HAS TWO CAUSES AND THIS TOOL CANNOT TELL
-        // THEM APART. It may be an unmapped mode falling through to the
-        // backend's default — the fault this stage was written for — or a
-        // DELIBERATE alias collapse, which is what the HL2 does now:
-        // Hl2Backend::setSliceMode runs hl2::canonicalOfferedMode(), so
-        // "CWU" is published back as "CW" and "NFM" as "FM" on purpose, so
-        // that the mode a slice holds is always one the mode menu can
-        // display. Both are worth REPORTING and neither may be asserted from
-        // out here, so the concern below names both rather than the one that
-        // used to be the only possibility.
+        // A differing readback is either an unmapped mode falling to the backend
+        // default or a deliberate alias (HL2's hl2::canonicalOfferedMode publishes
+        // "CWU" as "CW", "NFM" as "FM"); this tool can't tell them apart, so the
+        // concern names both.
         if (back.compare(mode, Qt::CaseInsensitive) != 0)
             notRetained << (mode + QStringLiteral("->") + back);
     }
@@ -1463,26 +1359,10 @@ void RadioCertification::stageRf(const Options& o)
     spin(1200);
     const QJsonObject after = meterSnapshot();
 
-    // ABSENCE OF A METER IS NOT ABSENCE OF RF.
-    //
-    // Both branches below used to read a missing meter as a transmit defect: an
-    // absent SWR became "the transmitter is not producing RF", and an absent
-    // PATEMP became a fabricated 0.0 rise and the accusation that dissipation
-    // did not happen — on a radio that simply has no temperature telemetry.
-    //
-    // That is precisely the misattribution the meters-last ordering exists to
-    // avoid, and this stage was committing it. The meters have NOT been
-    // validated at this point in the run, so anything concluded from them is
-    // labelled meterDependent and worded as a statement about the meter.
-    // A STALE reading is not a reading. meterSnapshot() already records
-    // swrStale, and without consulting it a value left over from a previous
-    // transmission satisfies this check — so the stage would report a healthy
-    // SWR path on a radio that sent nothing this key. That is the same
-    // meter-trust problem the wording below is careful about, one level up.
-    //
-    // The PA temperature needs it for the same reason and did not have it: a
-    // stale pair yields a fabricated 0.0 rise, and the stage then asserts that
-    // dissipation did not happen on a radio it never actually read.
+    // A missing or stale meter is not missing RF: meters are not yet validated
+    // here, so conclusions from them are labelled meterDependent and worded about
+    // the meter. swrStale and stale PA temperature are excluded, or a leftover
+    // value would fake a healthy SWR path or a 0.0 temperature rise.
     const bool haveSwr = keyed.contains(QStringLiteral("swr"))
                       && !keyed.contains(QStringLiteral("swrStale"));
     const bool haveTemp = idle.contains(QStringLiteral("paTempC"))
@@ -1540,37 +1420,16 @@ void RadioCertification::stageSideband(const Options& o)
     if (!m_audio || !m_radio || !o.includeAudioProbe)
         return;
 
-    // THE STAGE THIS WHOLE TOOL EXISTS FOR.
-    //
-    // Demodulate our own transmission and ask what FREQUENCY comes back. A 1 kHz
-    // tone transmitted in USB and received in USB must return 1 kHz of audio. If
-    // the transmit sideband is inverted it lands on the other side of the
-    // carrier, the USB demodulator hears nothing, and the LSB demodulator hears
-    // it instead.
-    //
-    // This works where the panadapter does not. The panadapter reads raw wire
-    // order and so agrees with the transmitter no matter which convention it
-    // uses; the demodulator applies the receive conjugation and WDSP's sideband
-    // selection, which are an independent implementation of the same question.
+    // Sideband check: demodulate our own transmission. A 1 kHz USB tone received
+    // in USB must return 1 kHz; an inverted TX lands in LSB instead. The
+    // panadapter can't answer this (raw wire order agrees with the transmitter by
+    // construction); the demodulator's RX conjugation and WDSP sideband selection
+    // are an independent path.
     m_radio->setTxAudioMonitor(true);   // hear ourselves, just for this stage
 
-    // TURN THE POWER DOWN FOR THIS STAGE.
-    //
-    // Listening to our own transmitter means the receiver sees full transmit
-    // power from a few inches of coax and overloads — measured at +7.3 dBFS,
-    // clipping hard, with both sidebands reading alike. A saturated front end
-    // cannot answer a sideband question at all, so the stage was reduced to
-    // reporting INCONCLUSIVE.
-    //
-    // This check needs enough signal to measure and no more. Drop the drive,
-    // measure, restore.
-    //
-    // RAII, because the comment here used to CLAIM the setting was restored even
-    // if something below threw while the code was plain sequential — an early
-    // return or a throw would have left the operator's radio at 5% drive with the
-    // TX audio monitor still on (RX unmuted during transmit), and nothing in the
-    // UI to explain either. run()'s epilogue clears the monitor and the key but
-    // has never restored the power.
+    // Drop drive for this stage: our own TX at full power overloads the receiver
+    // (measured +7.3 dBFS, both sidebands alike). RAII restores power and the TX
+    // monitor on every exit; run()'s epilogue does not restore power.
     auto& tx = m_radio->transmitModel();
     const int restorePower = tx.rfPower();
     const auto restore = qScopeGuard([this, restorePower] {
@@ -1638,24 +1497,11 @@ void RadioCertification::stageSideband(const Options& o)
     if (auto* slice = m_radio->slice(0))
         slice->setMode(o.mode);
 
-    // TAKE THE RATE FROM THE CAPTURE. This is docs/HERMES.md 1.9, and it was still
-    // here — in the one stage this whole tool exists for — after the same defect
-    // had already been found and fixed in stage-rx-sidebands.
-    //
-    // The old comment said the rate was safe because "every chunk here comes
-    // from the same sink". That was true and was exactly why it was wrong: the
-    // sink is the "output" tap, which runs at the audio DEVICE's rate, not
-    // AudioEngine::DEFAULT_SAMPLE_RATE. On a 48 kHz device, probing a 1 kHz tone
-    // at an assumed 24 kHz lands on 2 kHz — both sidebands read the noise floor
-    // and the verdict reduces to a coin toss that can print SIDEBAND LOOKS
-    // INVERTED. The saturation guard below masked it, because rms() does not
-    // care about the rate; the first person to add attenuation would have got a
-    // confident wrong answer.
-    //
-    // The rate is reported in `measured` so a future wrong one is visible in the
-    // output instead of silent, and a disagreement between the two captures is a
-    // concern in its own right — comparing two buffers measured at different
-    // rates is not a sideband comparison at all.
+    // Take the rate from the capture (docs/HERMES.md 1.9): the "output" tap runs at
+    // the audio device rate, not AudioEngine::DEFAULT_SAMPLE_RATE, and a wrong
+    // rate probes the wrong frequency (1 kHz at an assumed 24 kHz on a 48 kHz
+    // device reads 2 kHz). The rate is reported, and differing rates between the
+    // two captures are a concern in their own right.
     const double fs = sameFs > 0.0 ? sameFs
                     : (oppFs > 0.0 ? oppFs : AudioEngine::DEFAULT_SAMPLE_RATE);
     const bool rateAssumed  = sameFs <= 0.0 && oppFs <= 0.0;
@@ -1705,17 +1551,9 @@ void RadioCertification::stageSideband(const Options& o)
         {QStringLiteral("receiverSaturated"), saturated},
     };
 
-    // SATURATION CHECK FIRST, and this is not a detail.
-    //
-    // Monitoring our own transmission means the receiver sees a signal from a
-    // few inches of coax at full transmit power. It overloads, both sidebands
-    // read the same, and the sideband comparison becomes a coin toss on noise.
-    //
-    // Measured on hardware before this guard existed: overall RMS +7.3 dBFS —
-    // clipping hard — with the two sidebands 1 dB apart, and the stage
-    // confidently reported SIDEBAND LOOKS INVERTED. A false alarm of exactly the
-    // kind that costs days, produced by the tool meant to prevent them. An
-    // overloaded measurement must decline to answer, not answer wrongly.
+    // Saturation check first: our own TX over a few inches of coax overloads the
+    // receiver (measured +7.3 dBFS) and makes the sidebands read alike. An
+    // overloaded measurement must decline to answer, not report inversion.
     QString concern;
     if (sameSb.empty() || oppSb.empty()) {
         concern = QStringLiteral(
@@ -1792,20 +1630,10 @@ void RadioCertification::stageCarrierSuppression(const Options& o)
 {
     if (!m_audio)
         return;
-    // SSB has no carrier. Keying with NO audio should produce essentially no RF;
-    // anything substantial is DC offset in the modulator leaking a carrier at the
-    // dial frequency.
-    //
-    // "NO AUDIO" HAS TO MEAN IT. The microphone is live during every other
-    // stage, and the ALC's whole job is to lift a quiet room to full modulation
-    // — so simply not enabling the test tone leaves room noise being amplified
-    // into a real signal. Measured before this: mic peak -65 dBFS while
-    // "silent", and the stage reported a carrier that was actually amplified
-    // room ambience.
-    //
-    // Mic gain to zero is the honest way to ask the question.
-    // AudioEngine exposes no getter, so restore from the persisted setting the
-    // app itself uses — the same value MainWindow applies on connect.
+    // SSB has no carrier: keying with no audio should give ~no RF; anything
+    // substantial is modulator DC offset. Mic gain goes to zero because the ALC
+    // lifts room noise into real modulation otherwise. AudioEngine has no getter,
+    // so restore from the persisted "PcMicGain" setting MainWindow applies.
     const int restoreGain = AppSettings::instance().value("PcMicGain", 100).toInt();
     if (m_audio)
         m_audio->setPcMicGain(0);
@@ -2018,20 +1846,10 @@ QJsonObject RadioCertification::run(const Options& o)
     }
 
     if (doTx) {
-        // RE-ESTABLISH THE DIAL BEFORE ANYTHING KEYS, and this is a transmit
-        // safety property, not tidiness.
-        //
-        // stageControlPlane is the only thing that sets the frequency, and it
-        // used to live in the tune block alone. The receive stages that run
-        // between them park the dial on the reference carrier — WWV at
-        // 9.9985 MHz — and restore the MODE but not the frequency. So every
-        // keyed stage of an `all` run transmitted a few hundred Hz off a
-        // standards station, out of band, while the report's `radio` block
-        // faithfully said 14.2 MHz throughout: a value answering a different
-        // question than the one being asked (docs/HERMES.md 1.11).
-        //
-        // It also fixes `radiocert tx` standalone, which otherwise keys on
-        // whatever the operator last tuned, with no record of where that was.
+        // TX safety: re-establish the dial before anything keys. The RX stages park it
+        // on the WWV reference carrier and restore only the mode, so keyed stages
+        // would otherwise transmit out of band (docs/HERMES.md 1.11). Also gives
+        // standalone `radiocert tx` a known frequency.
         stageControlPlane(o);
         stagePreconditions();
         stageDspLiveness(o);

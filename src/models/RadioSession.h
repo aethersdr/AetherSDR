@@ -12,31 +12,13 @@ class QThread;
 namespace AetherSDR {
 
 // RadioSession — the aggregate that constitutes "a connected radio" (#3351,
-// #3445).
-//
-// It owns:
-//   • the RadioModel (by value);
-//   • session identity (id, label) for a future session switcher;
-//   • the TciServer and CatPort[] LIFETIMES. Construction and wiring stay in
-//     MainWindow's wireRadioModel()/wireCatPorts() (UI-coupled). Both servers
-//     hold a raw RadioModel*, so they are deleted in ~RadioSession's body,
-//     which runs before m_radioModel destructs (the #2385 crash-on-quit
-//     class). MainWindow's shutdown still stops TCI early, via
-//     shutdownTciServer(), while the model and AudioEngine are alive; that
-//     destroys the controller and joins its TciIo worker.
-//
-// Deliberately not here (#3445):
-//   • the wireDiscovery/wireRadioModel/wirePanLifecycle bodies — model->UI glue
-//     referencing MainWindow's widgets; moving them into models/ would invert
-//     the dependency. They stay in MainWindow_Session.cpp or a future GUI-layer
-//     per-session controller.
-//   • a per-session settings facade — per-radio state today is global,
-//     radio-side, or already namespaced (BandStackSettings keys
-//     "Radio_<serial>", the template to follow). Build it when a second
-//     session has a real consumer.
-//
-// MainWindow binds `RadioModel& m_radioModel` to session->radioModel() so
-// existing call sites compile unchanged. New code should go through the session.
+// #3445). Owns the RadioModel (by value), session identity, and the TciServer
+// and CatPort[] lifetimes (MainWindow still constructs and wires them). Both
+// hold a raw RadioModel*, so ~RadioSession's body deletes them before
+// m_radioModel destructs (#2385). shutdownTciServer() stops TCI earlier, while
+// the model and AudioEngine are alive, and joins its TciIo worker. Model->UI
+// wiring stays in the GUI layer so models/ never depends on widgets.
+// MainWindow::m_radioModel aliases radioModel(); new code should use the session.
 class TciServer;
 class CatPort;
 

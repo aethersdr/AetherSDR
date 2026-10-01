@@ -1,36 +1,13 @@
 #pragma once
 
-// THE TWO MODE LISTS THIS BACKEND KEEPS:
-//
-//   * ACCEPT — "may a stored document say this". Every spelling
-//     modeFromString() maps, aliases included; a string that would not map is
-//     dropped at restore rather than reaching Receiver::mode and re-persisting.
-//   * OFFER — "should an operator be able to pick this". Each mode once, and
-//     only where picking it does something.
-//
-// OFFER is a subset of ACCEPT (hl2_mode_vocabulary_test asserts it), so the menu
-// never offers what restore would reject. Accepted but not offered:
-//
-//   ALIASES   CWU (= CW), WFM (= WBFM), NFM (= FM); one WdspChannel mode each.
-//   WBFM/WFM  RxApplet's mode handler assumes "WFM" is never in m_modeCombo
-//             (the WFM overlay is toggled from the VFO flag).
-//   DRM       no decoder on this backend.
-//
-// canonicalOfferedMode() collapses an alias onto the offered spelling at the
-// restore boundary and in setSliceMode(), before it reaches Receiver::mode.
-// Otherwise the combos (which only move on a findText() hit) would show index 0
-// ("LSB") while the receiver is in FM. This is a no-op on the DSP: it renames
-// what is shown, never what is heard.
-//
-// It cannot weaken a TX refusal: modeIsReceiveOnly() is a case-insensitive
-// membership test on what the slice holds, so every pair is listed both ways in
-// receiveOnlyModes (FM/NFM, WBFM/WFM) or on neither (CW/CWU, which transmit via
-// the gateware keyer). The duplicates stay; a missing entry costs far more.
-//
-// WBFM and DRM have no offered twin and remain undisplayable if reached via
-// CAT, TCI or a hand-edited document (residual set in hl2_mode_vocabulary_test).
-//
-// A header, not a .cpp-local list, so it is pinned by a test that builds.
+// ACCEPT: every spelling modeFromString() maps (aliases included); anything else
+// is dropped at restore. OFFER: what an operator can pick, each mode once.
+// OFFER is a subset of ACCEPT (hl2_mode_vocabulary_test). Accepted, not offered:
+// aliases CWU/WFM/NFM; WBFM/WFM (RxApplet assumes "WFM" is never in m_modeCombo);
+// DRM (no decoder). canonicalOfferedMode() maps an alias to its offered spelling
+// at restore and in setSliceMode() so the combos match; display-only, no DSP
+// effect. receiveOnlyModes lists each alias pair both ways (modeIsReceiveOnly()
+// is a membership test), so canonicalising cannot weaken a TX refusal.
 
 #include <QString>
 #include <QStringList>

@@ -8,32 +8,15 @@
 #include <string>
 #include <vector>
 
-// Icom RS-BA1 network transport wire primitives.
-//
-// An Icom networked radio is TWO protocols stacked, and keeping them apart is
-// the single most important structural decision in this backend:
-//
-//   * CI-V is the COMMAND PLANE — a 1980s serial bus protocol, BCD-encoded,
-//     documented by Icom in a per-model "CI-V Reference Guide". It lives in
-//     CivCodec.h, not here.
-//   * RS-BA1 is the TRANSPORT — three UDP streams, a session handshake, a
-//     login, and a hand-rolled retransmission layer. Icom documents NOTHING
-//     about it. That is what this file encodes.
-//
-// Over USB there is no transport at all: the CI-V bytes go straight down a
-// serial port. So this file is the WiFi/Ethernet half and CivCodec.h is the
-// half that is common to both.
-//
-// Grounded clean-room against Icom's own IC-705 CI-V Reference Guide (for the
-// command plane) and, for this undocumented transport, against nonoo/kappanhang
-// (MIT, portable — see THIRD_PARTY_LICENSES) with wfview (GPL-3) used ONLY as a
-// read-only specification for field names and offsets, never as source.
-// See ~/oracles/icom/icom-oracle.md §2 for the reasoning and the traps.
-//
-// Qt-free and socket-free on purpose, exactly like MetisProtocol.h: these are
-// pure functions over byte buffers so icom_protocol_test can exercise every
-// packet shape without linking Qt or opening a socket. IcomStream owns the
-// UDP socket and calls into these.
+// Icom RS-BA1 network transport wire primitives. Two stacked protocols:
+//   * CI-V — the BCD command plane, documented per model by Icom; CivCodec.h.
+//   * RS-BA1 — the undocumented TRANSPORT: three UDP streams, session handshake,
+//     login, and a hand-rolled retransmission layer. This file.
+// Over USB there is no transport; CI-V goes straight to a serial port.
+// Transport grounded on nonoo/kappanhang (MIT, see THIRD_PARTY_LICENSES), with
+// wfview (GPL-3) used only as a read-only spec for field names and offsets.
+// Qt- and socket-free so icom_protocol_test covers every packet shape;
+// IcomStream owns the sockets.
 
 namespace AetherSDR::icom {
 
@@ -52,17 +35,10 @@ inline constexpr std::uint16_t kAudioPort   = 50003;
 // simply stops. wfview renews at 60 s; kappanhang re-auths on a 1-minute
 // ticker. 60 s is the observed contract, so renew comfortably inside it.
 inline constexpr int kTokenRenewalMs   = 60'000;
-// RENEW THREE TIMES INSIDE THE CONTRACT, not once.
-//
-// 45 s gave exactly one attempt before the 60 s expiry, and a renewal is a
-// single UDP datagram. On a clean wired link that is fine. On the link this was
-// found on — an IC-705 on 2.4 GHz WiFi 4 at -65 dBm with 14.7% TX retries and
-// 802.11 power-save latency spiking to 300 ms — one shot is not enough, and
-// losing it is silent: the radio's token expires, it stops honouring the
-// session, and the transport keeps running so nothing above notices.
-//
-// 20 s gives three independent chances, and the ack tracking in IcomSession
-// turns a lost one into an immediate resend rather than a dead session.
+// Renew the token 20 s before the 60 s expiry: a renewal is one UDP datagram
+// and a lost one is silent. NOTE: these kToken* constants are currently unused;
+// the live lease timing is IcomSession::Params (30 s first renewal, 60 s
+// cadence, 3 s ack grace, 80 s dead).
 inline constexpr int kTokenRenewEarlyMs = 20'000;
 // How long a renewal may go unacknowledged before we resend it. Sized off the
 // observed worst-case round trip on a power-saving link, with margin.
@@ -145,17 +121,10 @@ struct Header {
     std::uint32_t rcvdId = 0;
 };
 
-// ENDIANNESS, stated once so nobody has to re-derive it:
-//
-//   len, type, seq        LITTLE-endian
-//   sentId, rcvdId        we write BIG-endian
-//
-// The session IDs are OPAQUE TOKENS. The radio echoes back whatever we sent and
-// never interprets them, so the choice does not affect interoperability —
-// kappanhang treats them big-endian and wfview reads them native. What DOES
-// matter is that we are self-consistent, because we compare the rcvdId the
-// radio echoed against the sentId we generated. Hence one pair of accessors
-// used everywhere rather than ad-hoc shifts at each call site.
+// Endianness: len, type, seq are LITTLE-endian; we write sentId/rcvdId
+// BIG-endian. Session IDs are opaque tokens the radio echoes back, so only
+// self-consistency matters (we compare the echoed rcvdId against our sentId) —
+// hence one accessor pair used everywhere.
 [[nodiscard]] Header parseHeader(std::span<const std::uint8_t> pkt);
 void writeHeader(std::span<std::uint8_t> out, const Header& h);
 
@@ -173,20 +142,13 @@ void writeHeader(std::span<std::uint8_t> out, const Header& h);
 [[nodiscard]] std::uint32_t deriveLocalSessionId(std::uint32_t randomSeed,
                                                  std::uint16_t localPort) noexcept;
 
-// ---------------------------------------------------------------------------
-// Handshake
-// ---------------------------------------------------------------------------
-//
-// Per stream, in order:
+// Handshake, per stream:
 //     -> AreYouThere      (TWICE)
-//     <- IAmHere          carries the radio's session ID in bytes 8..11
+//     <- IAmHere          radio's session ID in bytes 8..11
 //     -> AreYouReady      (TWICE)
 //     <- IAmReady
-//
-// EVERY handshake packet is sent TWICE. This is not paranoia — the IC-705's
-// WiFi stack drops the first packet of a burst often enough that both reference
-// implementations do it unconditionally. sendTwice() in IcomStream is where
-// that happens; these builders return one copy.
+// Every handshake packet goes out twice (the IC-705 WiFi stack drops the first
+// of a burst); IcomStream::sendTwice() does that, these builders return one copy.
 
 [[nodiscard]] std::vector<std::uint8_t> buildAreYouThere(std::uint32_t localSid);
 [[nodiscard]] std::vector<std::uint8_t> buildAreYouReady(std::uint32_t localSid,
@@ -257,19 +219,11 @@ struct SeqRange {
 // Credentials — obfuscation, NOT encryption
 // ---------------------------------------------------------------------------
 
-// Icom passes usernames and passwords through a fixed 95-entry substitution
-// table. It is a position-dependent monoalphabetic substitution and it is
-// TRIVIALLY REVERSIBLE: anyone on the LAN with a packet capture has the
-// operator's radio password.
-//
-// This is stated here, in the code, because it is a fact the UI has to be
-// honest about rather than an implementation detail. There is no alternative —
-// the radio's firmware accepts only this scheme — so the mitigation is entirely
-// about where WE store the credential (keychain, never the settings XML) and
-// about telling the operator.
-//
-// Always returns exactly 16 bytes, zero-padded. Input beyond 16 characters is
-// truncated, which is the radio's own limit.
+// Icom's fixed 95-entry, position-dependent substitution table for usernames
+// and passwords. TRIVIALLY REVERSIBLE — anyone with a LAN capture has the
+// password — and the firmware accepts nothing else, so the credential is stored
+// only in the keychain (IcomCredentials). Returns exactly 16 bytes, zero-padded;
+// longer input is truncated (the radio's own limit).
 [[nodiscard]] std::array<std::uint8_t, 16> encodePasscode(std::string_view s);
 
 // ---------------------------------------------------------------------------
@@ -444,25 +398,12 @@ struct StreamGrant {
 // Audio stream
 // ---------------------------------------------------------------------------
 
-// A 20 ms frame at 48 kHz mono s16 is 1920 bytes and does not fit one
-// comfortable datagram alongside the header, so it is SPLIT across two packets
-// of unequal size. Both directions use this pair.
-//
-// Do NOT derive per-packet timing from packet size: these represent 14.2 ms and
-// 5.8 ms, and kappanhang's "10 ms per packet" is an average across the pair.
-// Reconstruct by concatenating payloads in sequence order and let the audio
-// device clock it.
-// THE FRAME IS A DURATION, and its byte count is derived from it.
-//
-// It used to be the constant 1920 with the split pair defining it, which is
-// only 20 ms at 48 kHz mono s16 — the rate and the sample width were baked into
-// a number that looked like a protocol constant. Changing the rate to 16 kHz
-// while leaving 1920 in place produced 60 ms frames; the radio's jitter buffer
-// read them as discontinuities and discarded every one, giving a keyed
-// transmitter with zero forward power and nothing on the air.
-//
-// kappanhang derives it the same way:
-//   audioFrameSize = (audioSampleRate * audioSampleBytes * audioFrameLength) / 1s
+// A 20 ms audio frame; its byte count is DERIVED from duration, rate and sample
+// width (as kappanhang does), never a free constant — a mismatched frame length
+// is discarded by the radio's jitter buffer, keying with zero forward power.
+// Each frame is split across two packets (below), representing 14.2 ms and
+// 5.8 ms: don't derive timing per packet; concatenate payloads in sequence order
+// and let the audio device clock it.
 inline constexpr int         kAudioFrameMs      = 20;
 inline constexpr int         kAudioSampleBytes  = 2;    // s16, mono
 inline constexpr std::uint32_t kAudioRateHz     = 48000;

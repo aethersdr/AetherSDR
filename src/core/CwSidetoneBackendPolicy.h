@@ -1,21 +1,11 @@
 #pragma once
 
-// CwSidetoneBackendPolicy — which sidetone backend AudioEngine constructs (#5713).
-//
-// Inputs: whether PortAudio was compiled in (HAVE_PORTAUDIO), the platform, and
-// AppSettings["CwSidetoneBackend"]. A saved value that names a backend always
-// wins; the platform supplies only the default for an unset install.
-//
-// Windows defaults to QAudioSink and Linux/macOS to PortAudio: the Windows
-// PortAudio path corrupts the heap shortly after connect (#5713, root cause
-// open). PortAudio stays reachable on Windows via an explicit setting so the
-// fault can still be reproduced. This is a mitigation, not a fix.
-//
-// The saved value is matched case-insensitively and an unrecognised value means
-// "unset", so a mistyped `--config set` lands on the safe platform default.
-//
-// Pure, header-only, no Qt types; the truth table is pinned by compile-time
-// asserts and tests/cw_sidetone_backend_policy_test.cpp.
+// Which sidetone backend AudioEngine constructs (#5713), from HAVE_PORTAUDIO, the
+// platform and AppSettings["CwSidetoneBackend"]. A saved value naming a backend
+// always wins (case-insensitive; unrecognised = unset). Default: QAudioSink on
+// Windows (its PortAudio path corrupts the heap shortly after connect, root cause
+// open; mitigation only), PortAudio on Linux/macOS. Pure, header-only; truth
+// table pinned by static_asserts and tests/cw_sidetone_backend_policy_test.cpp.
 
 #include <string_view>
 

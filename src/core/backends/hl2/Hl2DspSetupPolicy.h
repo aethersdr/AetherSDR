@@ -1,30 +1,11 @@
 #pragma once
 
-// How long the DSP-setup phase may run before warning, and before giving up, as
-// a pure decision (#5413).
-//
-// beginDspSetup() hands the WDSP opens to the I/O thread and finishDspSetup() is
-// posted back when they finish; MetisClient::start()'s connect watchdog is only
-// reached after that, so this phase needs its own bound.
-//
-// TWO STAGES because a slow first open is legitimate: an uncached WDSP/FFTW
-// open measures plans instead of loading them (#5052). Measured cold costs run
-// from ~19 s (HERMES §22.3, the outlier) to 98 s on an idle bench, 165 s
-// (wdsp_channel_test), ~179-190 s (#4877, including CI), and ~190-220 s for
-// whole connects under heavy load. Slower hardware will be slower still.
-//
-// Hence fail at 600 s: ~3x the largest documented cold cost and still finite.
-// Failing a connect that would have succeeded loses the session; a late error
-// on a real hang only delays a message the warn line already foreshadows. The
-// warn repeats on a fixed cadence until the phase finishes or fails.
-//
-// These figures cover one receiver. connectRadio() opens one chain unless a
-// caller passes an explicit `numRx` connect param (automation/embedders), later
-// receivers open outside this phase, and receiverCeiling() caps 384 kHz at 3.
-// Further chains at one rate share plans and should be nearly free (expected,
-// not measured).
-//
-// Pure so the timing is testable without a radio, socket or event loop (#5358).
+// Warn/fail bounds for the DSP-setup phase (beginDspSetup() -> finishDspSetup()
+// on the I/O thread), which precedes MetisClient::start()'s connect watchdog
+// (#5413). An uncached WDSP/FFTW open measures plans (#5052): one receiver's
+// cold open measured ~19-220 s, so fail at 600 s (~3x the worst, still finite);
+// failing a connect that would succeed costs more than a late error on a hang.
+// Figures are for one chain; later receivers open outside this phase.
 
 #include <cstdint>
 
@@ -36,9 +17,7 @@ enum class DspSetupAction {
     Fail,   // long enough that the caller deserves an error instead of silence
 };
 
-// Default stages. Deliberately far apart: the gap between them is where a
-// legitimately slow first open lives — measured at 98.3 s quiet and 188 s under
-// load, so the gap is the working case, not the pathological one.
+// Far apart on purpose: a legitimately slow first open lives in the gap.
 inline constexpr std::int64_t kDspSetupWarnMs = 10'000;
 inline constexpr std::int64_t kDspSetupFailMs = 600'000;
 

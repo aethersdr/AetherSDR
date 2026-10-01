@@ -1,25 +1,11 @@
 #pragma once
 
-// TWO LNA NUMBERS, NOT ONE: the operator's baseline, and what reaches the wire.
-//
-// The baseline (Hl2Backend::m_lnaGainDb) is also the per-band memory written by
-// rememberCurrentBandState, the `rfGain` extension persisted through
-// RadioStateMemory (this backend owns ClientSettingsDomain::RfGain), and what
-// setPanRfGain compares against. An automatic writer on that path would bake
-// its transients into the operator's per-band memory and persisted state on the
-// next band change, so automatic action is kept separate.
-//
-// THE AXIS IS AN ATTENUATION: a non-negative offset in dB below the baseline. An
-// automatic action can never make the radio louder than the operator asked
-// (only undo its own reduction), the operator's number is the ceiling, and the
-// AD9866 region above +19 dB is reachable only if the operator is already there.
-//
-// The applied offset is returned as well as the effective gain, because
-// `baseline - offset` can hit the register floor: a controller must see it has
-// run out of range (an operator-facing "attenuate ahead of the radio"
-// condition) rather than attack against a clamp.
-//
-// No Qt, clock or radio; Hl2Backend evaluates this rather than keeping a copy.
+// Two LNA numbers: the operator's baseline (Hl2Backend::m_lnaGainDb, also the
+// per-band memory and persisted `rfGain`) and what reaches the wire. Automatic
+// action is a separate non-negative attenuation below the baseline, so it never
+// leaks into persisted state and never makes the radio louder than asked. The
+// applied offset is returned too: `baseline - offset` can hit the register
+// floor, and a controller must see it ran out of range.
 
 namespace AetherSDR::hl2 {
 

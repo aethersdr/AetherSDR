@@ -42,18 +42,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 namespace AetherSDR {
 
-// Client-side spectral noise reduction using the WDSP Gaussian/Gamma speech
-// estimators with WDSP OSMS, MMSE, or non-stationary noise-floor tracking.
-// Derived from WDSP NR2 (emnr.c) by Warren Pratt, NR0V.
-//
-// Uses FFTW3 for FFT computation (with wisdom file for optimised plans)
-// when available; falls back to a built-in radix-2 FFT otherwise.
-//
-// Processes mono float32 audio at 24 kHz.  For stereo RX audio,
-// processStereo() runs each channel through its own noise estimate and mask,
-// the way RN2 runs one RNNoise state per channel: a diversity pair hard-panned
-// L/R has two antennas with two different noise floors, and a pan change
-// reaches the output as soon as the audio carrying it does.
+// Client-side spectral NR with WDSP Gaussian/Gamma speech estimators and OSMS,
+// MMSE or non-stationary noise tracking, derived from WDSP NR2 (emnr.c, Warren
+// Pratt NR0V). FFTW3 (with wisdom) when available, else built-in radix-2.
+// Mono float32 at 24 kHz; processStereo() keeps a separate noise estimate and
+// mask per channel (diversity L/R has two noise floors).
 
 class SpectralNR {
 public:
@@ -183,16 +176,10 @@ public:
                                        WisdomCancelCb shouldCancel = nullptr);
 
 private:
-    // FFTW plan creation/destruction is NOT thread-safe, and neither is the
-    // allocator pairing TSan named in #5424. THE LOCK IS NOT OURS AND IS NOT
-    // DECLARED HERE: every site in the .cpp that plans, allocates, frees or
-    // moves wisdom takes AetherSDR::fftwPlannerLock() from
-    // core/dsp/FftwPlannerLock.h, because the planner it guards is
-    // process-global and WDSP, Hl2Spectrum and AnanPanAnalyzer reach the same
-    // one in the same double-precision family. This class used to keep a
-    // private static mutex here (#467, written when SpectralNR.cpp held all
-    // the FFTW in the tree); two mutexes over one planner serialise nothing
-    // (#5895). fftw_execute() is thread-safe and does not need the lock.
+    // FFTW planning and the fftw_malloc/free pairing (#5424) are not thread-safe;
+    // every .cpp site that plans, allocates, frees or moves wisdom takes the
+    // process-wide AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h,
+    // #5895). fftw_execute() needs no lock.
 
     SpectralNR(int fftSize, int sampleRate, int overlap,
                bool useLegacyGainMethods, bool withRightChannel);

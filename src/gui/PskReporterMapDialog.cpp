@@ -663,41 +663,19 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_beaconTone->setAccessibleName(tr("WSPR audio tone frequency"));
     m_beaconTone->setAccessibleDescription(
         tr("Audio tone from 1400 to 1600 hertz"));
-    // This is the frequency of the LOWEST of the four tones, which is what
-    // WSJT-X's Tx-frequency box means too. Naming it "center" (as this did)
-    // was not just loose wording — the generator centred the constellation on
-    // it, putting every spot 2.2 Hz below where the same number in WSJT-X
-    // would have put it.
-    //
-    // The range stays 1400–1600 because that is WSJT-X's own WSPR range under
-    // the same convention: at the top of it symbol 3 lands at 1604.4 Hz, just
-    // outside the 200 Hz sub-band, exactly as it does there. Narrowing to
-    // 1595.6 would be a defensible change but it would be OURS rather than the
-    // oracle's, and the centred convention this replaces overran the top too
-    // (1600 → 1602.2) while ALSO overrunning the bottom (1400 → 1397.8), which
-    // this fixes.
+    // Frequency of the LOWEST of the four tones, as in WSJT-X's Tx box. Range
+    // 1400–1600 matches WSJT-X's WSPR range under that convention (symbol 3
+    // reaches 1604.4 Hz at the top, as it does there).
     m_beaconTone->setToolTip(
         tr("Audio offset above the selected USB dial frequency, at the lowest "
            "of the four tones — the same convention as WSJT-X"));
 
     m_beaconLevel = new QSpinBox(beaconBox);
-    // WSPR beacon audio level, -60..-3 dBFS (headroom ahead of the radio's TX
-    // chain). WSJT-X likewise generates at full scale and attenuates digitally.
-    // With the HL2's ALC reduction-only, the level set here is the level
-    // transmitted.
-    //
-    // The default and the stored value are backend-dependent
-    // (PskBeaconLevelPolicy.h, pinned by psk_beacon_level_policy_test), and the
-    // level is PER RADIO: it lives in the radio-scoped WsprBeacon feature document
-    // keyed by RadioModel::settingsScope(), so an HL2 and a Flex get separate
-    // answers.
-    //
-    // Re-evaluated on every capability change, because the dialog is cached for the
-    // session: applyBeaconLevel() rides RadioModel::connectionStateChanged (identity
-    // change; re-reads the new radio's level) and
-    // TransmitModel::hostModulationChanged (republish within a session; not enough
-    // alone, since a Flex connect leaves hostModulation() false). Not
-    // callsignChanged, which non-Flex backends never emit.
+    // WSPR beacon audio level, -60..-3 dBFS of headroom ahead of the TX chain
+    // (WSJT-X also attenuates digitally); with the HL2's reduction-only ALC it
+    // is the transmitted level. Default and stored value are per radio
+    // (WsprBeacon document keyed by RadioModel::settingsScope();
+    // PskBeaconLevelPolicy.h). See the applyBeaconLevel() connections below.
     m_beaconLevel->setRange(-60, -3);
     m_beaconLevel->setSingleStep(1);
     m_beaconLevel->setSuffix(tr(" dBFS"));
@@ -1438,26 +1416,11 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
             m_radioModel->setStationCallsign(call);
         }
     });
-    // Selecting a band tunes the receiver to that WSPR sub-band.
-    //
-    // This used to update the status text and nothing else, on the reasoning
-    // that selecting is a choice rather than a command. In the operator's seat
-    // that reads as a broken control: the label says "40m · 7.038600 MHz USB on
-    // transmit" while the dial sits on whatever it was, there is no way to look
-    // at the sub-band before committing to it, and the entire band change —
-    // NCO, band-filter relays, TX oscillator — then happens inside the last
-    // seconds before a 111.6-second transmission. Tuning here moves that jump
-    // to a moment when the operator is watching, and makes "is anything
-    // decoding on this band right now?" answerable before arming.
-    //
-    // Only the dial moves. Mode, slice passband and the station TX filter are
-    // still applied by applyBeaconBand() at arm time, because those are the
-    // parts that disturb a listening operator's setup, and they are restored
-    // afterwards.
-    //
-    // Operator intent only: updateBeaconDefaults() drives this combo from the
-    // slice frequency behind a QSignalBlocker, so a programmatic sync cannot
-    // reach here and tune the radio back at itself.
+    // Selecting a band tunes the dial to that WSPR sub-band, so the operator can
+    // check it before arming and the band change does not happen seconds before
+    // a 111.6 s transmission. Mode, passband and station TX filter are still
+    // applied at arm time by applyBeaconBand() and restored afterwards.
+    // Operator intent only: updateBeaconDefaults() syncs under a QSignalBlocker.
     connect(m_beaconBand, &QComboBox::currentIndexChanged, this, [this] {
         const double dialMhz = m_beaconBand->currentData().toDouble();
         setBeaconStatus(
@@ -1516,23 +1479,11 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                 stopBeacon(tr("Stopped: transmitter unkeyed"));
             }
         });
-        // BOTH signals, and neither is redundant.
-        //
-        // connectionStateChanged is the one that carries the radio IDENTITY
-        // change, so it is what re-reads the newly connected radio's stored
-        // level. RadioModel installs publishCapabilities() on this same signal
-        // in its constructor, before any dialog exists, so capabilities are
-        // already published by the time this runs.
-        //
-        // hostModulationChanged is a CHANGE signal and fires only when the
-        // answer flips, which is not every connect: TransmitModel returns early
-        // when the value is unchanged, so connecting a Flex (false -> false)
-        // emits nothing at all. It is here for the case connectionStateChanged
-        // cannot see -- a capability republish within a live session, which
-        // RadioModel also drives from a backend capability update.
-        //
-        // applyBeaconLevel() is a pure recomputation, so being called twice on
-        // one edge costs a settings read and changes nothing.
+        // Both signals: connectionStateChanged carries the radio identity change
+        // (capabilities are already published by then), and
+        // hostModulationChanged covers a mid-session capability republish but
+        // does not fire when the value is unchanged (Flex connect). Calling
+        // applyBeaconLevel() twice is harmless.
         connect(m_radioModel, &RadioModel::connectionStateChanged, this,
                 [this] { applyBeaconLevel(); });
         connect(&m_radioModel->transmitModel(),
@@ -1543,20 +1494,11 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     updateBeaconDefaults();
 }
 
-// The beacon level's stored value for the CONNECTED radio, if it has one.
-//
-// Returns nothing when this radio has never had one set -- which is the
-// condition for a default to apply, and is not the same as "the store is
-// empty". A present document with no levelDbFs field is a radio whose level
-// was never chosen; a present document WITH one is a deliberate choice.
-//
-// Claim-and-freeze, per scope, on first access (AGENTS.md, "Settings
-// Migration"): the first time a given radio is seen, the legacy app-global
-// PskReporter.beaconLevelDbFs is imported into that radio's document if the
-// policy says it described an on-air level there. The document's existence is
-// the migration marker, so an operator who cleared their level does not have it
-// resurrected, and the legacy key is never rewritten -- it stays frozen as the
-// downgrade snapshot.
+// The connected radio's stored beacon level, or nothing if never chosen (a
+// document without levelDbFs). Claim-and-freeze per scope (AGENTS.md "Settings
+// Migration"): on first sight of a radio the legacy app-global
+// PskReporter.beaconLevelDbFs is imported if the policy allows; the document's
+// existence is the marker, and the legacy key is never rewritten.
 std::optional<int> PskReporterMapDialog::storedBeaconLevelDbFs(bool hostModulates)
 {
     if (m_radioModel == nullptr) {
@@ -1705,18 +1647,10 @@ void PskReporterMapDialog::setBeaconControlsEnabled(bool enabled)
     m_beaconLevel->setEnabled(enabled);
 }
 
-// Retune/reshape the TX slice for the selected WSPR band, at ARM time.
-//
-// Called only from scheduleBeacon(). This comment used to say selecting a band
-// "must not retune the operator's slice" — that is no longer true and had
-// become the opposite of the code: the band combo now tunes the dial on
-// selection, so the operator can look at the sub-band (and its SWR) before
-// committing to 111.6 s of transmission.
-//
-// What is still deferred to here is everything that disturbs a listening
-// setup and gets restored afterwards: the slice MODE, the slice passband, and
-// the station-wide TX filter. The dial is not restored — the operator asked to
-// go there.
+// Reshape the TX slice for the selected WSPR band at arm time; called only from
+// scheduleBeacon(). The dial is tuned on band selection; this applies what
+// disturbs a listening setup and is restored afterwards: slice mode, slice
+// passband, station-wide TX filter. The dial is not restored.
 bool PskReporterMapDialog::applyBeaconBand()
 {
     if (m_radioModel == nullptr) {
@@ -1743,18 +1677,11 @@ bool PskReporterMapDialog::applyBeaconBand()
     // The speech chain is deliberately NOT borrowed here — it is taken at the
     // key, in reassertBeaconChannel(). See borrowBeaconSpeechChain().
 
-    // Standard WSPR dial frequencies use upper sideband on every band. Keep
-    // both the slice display passband and radio TX passband comfortably around
-    // the selectable 1400–1600 Hz WSPR offset.
-    //
-    // DIGU is what actually selects the transmit sideband, and it is the one
-    // line here that every family honours: a Flex takes it as slice mode, and
-    // Hl2Backend maps it to the WDSP TX channel's mode. `transmit filter_*`
-    // below is Flex station state — a host-modulating backend derives its TX
-    // passband from the mode instead (DIGU → 150…3000 Hz), which contains the
-    // WSPR offset, so the request is advisory there rather than dropped-and-
-    // wrong. The generated tone is a single 4-FSK carrier ~6 Hz wide; nothing
-    // about the frame depends on the narrower passband being applied.
+    // WSPR uses USB on every band; keep both passbands around the 1400–1600 Hz
+    // offset. DIGU selects the TX sideband on every family (Flex slice mode;
+    // Hl2Backend maps it to the WDSP TX mode). `transmit filter_*` is Flex
+    // station state; a host-modulating backend derives 150…3000 Hz from DIGU,
+    // which contains the offset, so it is advisory there.
     const QPointer<PskReporterMapDialog> self(this);
     const QPointer<SliceModel> sliceGuard(slice);
     const TxCoordinator::Request original = m_beaconRequest;
@@ -1770,37 +1697,14 @@ bool PskReporterMapDialog::applyBeaconBand()
     return current();
 }
 
-// Re-send mode and both passbands, and report whether this is still the
-// channel the operator armed.
-//
-// One push at arm time is not enough, for two reasons that compound.
-//
-// A cross-band `slice tune` makes the radio recall freq/mode/filters from its
-// BAND STACK, asynchronously, and it may recreate the slice while doing it
-// (flexlib-oracle §6.2; #2824). That recall can land after the mode= and filt
-// we sent immediately behind the tune, and when it does it wins — leaving the
-// beacon pointed at a USB slice with whatever passband the band stack held.
-// SliceModel::setMode() also deliberately declines to push a `filt` on the
-// Flex path, on the reasoning that the radio heals the passband from its own
-// per-mode memory, so the mode echo carries a filter of the radio's choosing.
-//
-// And arming happens up to a full 120 s before the key. Anything at all can
-// move the slice in that window — another client, a band button, a profile
-// load — and until now nothing looked again.
-//
-// So this runs immediately before requestPttOn(), and the generated lead-in is
-// silence, so the radio has that lead-in to apply what we just sent before the
-// first symbol goes out.
-//
-// How much lead-in that is depends on how late the tick was: a full second on
-// time, and NOTHING once we are a second or more past the boundary, where
-// updateBeaconState() drops the pre-roll to zero and skips into the frame
-// instead. That is the weakest case and it is deliberate — a late tick means
-// the GUI thread was stalled, which is when a stale channel is most likely,
-// but padding the lead-in to buy settling time would put the lateness straight
-// back into DT, which is the thing the slot-referenced lead-in exists to
-// remove. Losing a couple of hundred ms of the first sync symbol to a mode
-// that lands late costs less than a frame that reports a second of DT.
+// Re-send mode and both passbands and report whether this is still the armed
+// channel. Run just before requestPttOn(): a cross-band `slice tune` makes the
+// radio recall band-stack freq/mode/filters asynchronously, possibly recreating
+// the slice (#2824), which can override what we sent; SliceModel::setMode()
+// sends no `filt` on Flex; and arming precedes the key by up to 120 s. The
+// silent lead-in gives the radio time to apply this — a full second on time,
+// none when a late tick skips the pre-roll, which is accepted rather than
+// adding DT.
 bool PskReporterMapDialog::reassertBeaconChannel(QString* reason)
 {
     const auto fail = [reason](const QString& text) {
@@ -1858,32 +1762,12 @@ bool PskReporterMapDialog::reassertBeaconChannel(QString* reason)
     return current();
 }
 
-// Switch off the station audio processing that would misshape the frame, and
-// remember what to hand back in restoreBorrowedTxState().
-//
-// Everything here is station-wide and mode-independent: a Flex does not bypass
-// the speech processor, the compander or the TX equalizer because a slice says
-// DIGU. Left on, they operate on a constant-envelope 4-FSK tone — the compander
-// pumps its level over the frame, the processor adds intermodulation products
-// either side of the carrier, and the EQ tilts it — which is precisely why
-// WSJT-X's own operating guidance is to switch all of it off for digital modes.
-//
-// Taken at the KEY rather than at arm, for the same reason mode and the
-// passbands are re-asserted here: arming happens up to 120 s before the key,
-// and up to ~6 minutes once the two permitted deferrals are spent. A borrow
-// made at arm is stale by the time it matters — anything that turns the
-// processor back on inside that window transmits through it, which is the
-// "pushed once and never checked" failure this whole function exists to close.
-// Reading the values here also means the saved copy is the operator's real
-// state at key time, so the restore cannot hand back something two minutes old.
-//
-// The secondary benefit is that the operator's own station is untouched while
-// merely armed: a beacon waiting for its slot no longer silently strips the
-// speech processor — or VOX, which would leave a VOX operator's microphone dead
-// with nothing on screen saying why — from a station they are still using.
-//
-// The generated lead-in gives the radio the same settling time these commands'
-// neighbours get; see the note above on how much lead-in that is.
+// Switch off station audio processing that would misshape the 4-FSK frame
+// (speech processor, compander, TX EQ — station-wide on Flex, not bypassed by
+// DIGU; WSJT-X advises the same) and remember what restoreBorrowedTxState()
+// hands back. Done at KEY, not arm (arming can precede the key by 120 s, ~6 min
+// with deferrals), so the saved copy is the real state at key time and an armed
+// beacon leaves the station (including VOX) untouched.
 void PskReporterMapDialog::borrowBeaconSpeechChain(TransmitModel& tx)
 {
     if (m_beaconTxChainSaved || m_radioModel == nullptr
@@ -2276,21 +2160,11 @@ void PskReporterMapDialog::updateBeaconState()
         return;
     }
 
-    // Reference the lead-in to the SLOT, not to whenever this tick happened to
-    // run. WSPR audio starts 1.000 s into the even minute; WSJT-X computes its
-    // silent lead-in as `(delay_ms - mstr) * frameRate / 1000` against the wall
-    // clock (Modulator.cpp) rather than assuming it was called on time.
-    //
-    // This used to pass a flat kPreRollFrames — one second measured from
-    // whenever the pump started — so the 50 ms tick granularity and everything
-    // behind it landed in DT instead of being absorbed. Past the 1 s mark the
-    // lead-in is gone and the remainder truncates the head of the frame, again
-    // as WSJT-X does, which holds DT near zero rather than sliding a 111.6 s
-    // transmission later into a two-minute slot.
-    //
-    // What is still outside the measurement is the queued hop to the audio
-    // thread, where the pump clock actually starts. That is sub-millisecond
-    // against a lateness budget of two seconds.
+    // Reference the lead-in to the SLOT: WSPR audio starts 1.000 s into the even
+    // minute, and like WSJT-X (Modulator.cpp) the silence is computed from the
+    // wall clock, so tick lateness is absorbed instead of landing in DT. Past
+    // 1 s the head of the frame is truncated. The queued hop to the audio thread
+    // is sub-millisecond.
     const qint64 lateMs = std::max<qint64>(0, nowMs - m_beaconSlotMs);
     const qint64 leadInMs = kBeaconAudioStartMs - lateMs;
     const int preRollFrames = leadInMs > 0
@@ -2325,19 +2199,9 @@ void PskReporterMapDialog::updateBeaconState()
     setBeaconStatus(tr("Transmitting · pre-roll"), "color.highlight.tx");
 }
 
-// Where "home" is on the map. Without it the MapView has no origin, so it can
-// draw the received spots (each carries its own coordinates) but no PATHS —
-// which is exactly what an HL2 operator saw: a map full of spots and not one
-// line joining them to anything.
-//
-// Both original sources were FlexRadio GPSDO readings. A radio with no GPS
-// reports neither, MaidenheadLocator::toLatLon("") failed, and this returned
-// having set no home position at all.
-//
-// The operator's own grid is the missing third source. It is the same locator
-// the WSPR beacon encodes and transmits, it is now persisted, and a 4-character
-// square is about 70 x 100 km — coarse for a fix and entirely adequate for
-// drawing a path across a continent.
+// Where "home" is on the map; without it spots draw but no paths. Sources: the
+// FlexRadio GPSDO readings, then the operator's own grid (the one the beacon
+// transmits; a 4-char square is ~70 x 100 km, fine for paths).
 void PskReporterMapDialog::updateHomeFromRadio()
 {
     double lat = 0.0, lon = 0.0;

@@ -5,26 +5,13 @@
 
 namespace AetherSDR {
 
-// Client-side tube saturator — TX DSP chain Phase 4 (#1661).  Per-
-// sample soft-clipping waveshaper that adds tube-like harmonic
-// warmth.  Modelled on Ableton's Dynamic Tube with three selectable
-// curve flavours:
-//
-//   Model A — Soft tanh (broad, gentle)
-//   Model B — Hard clip + tanh hybrid (odd harmonics, aggressive)
-//   Model C — Asymmetric (bias-dominant, even harmonics, warm)
-//
-// The "Dynamic" part: an envelope follower on the input modulates
-// drive so quiet passages stay clean while loud sections saturate
-// more.  Envelope amount + Attack + Release shape that behaviour.
-// A pre-tilt "Tone" filter shifts which part of the spectrum gets
-// pushed into the nonlinearity, and a parallel Dry/Wet mix lets
-// users blend processed + dry.
-//
-// Thread model mirrors ClientComp / ClientGate / ClientDeEss:
-// UI thread writes atomics + bumps a version counter; the audio
-// thread reads the version once per block and recaches derived
-// values.  No locks, no allocations, no exceptions.
+// Client-side TX tube saturator (#1661), after Ableton's Dynamic Tube:
+//   Model A - soft tanh (gentle)
+//   Model B - hard clip + tanh hybrid (odd harmonics)
+//   Model C - asymmetric (bias-dominant, even harmonics)
+// An input envelope follower modulates drive (Envelope/Attack/Release); a pre-tilt
+// Tone filter and Dry/Wet mix. UI thread writes atomics + bumps a version; the
+// audio thread recaches per block. No locks, allocations or exceptions.
 class ClientTube {
 public:
     enum class Model : uint8_t {

@@ -132,18 +132,11 @@ private:
     // Mirrors buildCalibrationTab()'s own shape (gated on the capability, not
     // the family; a m_droopReseed lambda re-synced the same two ways).
     QWidget* buildDroopCalibrationTab();
-    // Which Hermes-Lite 2 variant is on the other end: local audio codec, the
-    // dither bit's three incompatible meanings, the companion filter board and
-    // the gateware ATU. Protocol 1 exposes none of it, so the operator is the
-    // only source — see Hl2HardwareOptions.
-    //
-    // Gated on the backend's DECLARED extension namespace, like the two pages
-    // above are gated on declared capabilities. What no backend can answer is
-    // the value — "does this radio have an AK4951 companion board" — which is
-    // why these are settings; that is a different question from which backend
-    // answers the verbs, and the backend states the latter itself. Every
-    // control writes through the hl2 extension namespace, which refuses
-    // anything else.
+    // Which Hermes-Lite 2 variant is attached: codec, the dither bit's three
+    // meanings, companion filter board, gateware ATU. Protocol 1 exposes none of
+    // it, so these are operator settings (Hl2HardwareOptions). Gated on the
+    // backend's declared extension namespace; every control writes through the
+    // hl2 extension, which refuses anything else.
     QWidget* buildHl2HardwareTab();
     // Whether the connected backend declares the "hl2" extension namespace —
     // i.e. whether anything will answer the hw.get / hw.set verbs this page is

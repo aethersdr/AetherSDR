@@ -92,16 +92,10 @@ QString normalizeManualIp(const QString& ip)
     if (!address.isNull())
         return address.toString();
 
-    // A HOST NAME is legitimate here and used to be dropped SILENTLY, because
-    // QHostAddress parses numeric addresses only. That cost the recent list
-    // every VPN radio reached by DNS name, and it bites hardest on an Icom:
-    // the IC-705's documented default address is ic-705.local, so the one
-    // address the manual explicitly tells the operator to use was the one the
-    // field refused to remember.
-    //
-    // Conservative charset — letters, digits, dot, hyphen, underscore, with
-    // alphanumeric ends — so this widens what we REMEMBER without widening
-    // what we will hand to a resolver.
+    // Host names are remembered too (QHostAddress parses numeric only); the
+    // IC-705's documented default is ic-705.local. The charset is conservative
+    // (alphanumeric ends; letters, digits, . - _) so this widens what is stored,
+    // not what reaches a resolver.
     static const QRegularExpression hostName(
         QStringLiteral("^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$"));
     if (trimmed.size() <= 253 && hostName.match(trimmed).hasMatch())
@@ -291,19 +285,9 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     const QString editStyle =
         "QLineEdit { border: 1px solid #304050; border-radius: 4px; padding: 4px 6px; "
         "background: #09111b; color: #d7e4f2; }";
-    // THE SHARED COMBO STYLE, not a hand-rolled one.
-    //
-    // This dialog used to carry its own: raw hex instead of theme tokens, and a
-    // down-arrow built from the CSS zero-size-plus-borders triangle trick, which
-    // Qt renders on macOS as a filled blob rather than an arrow. Meanwhile every
-    // other combo in the app already used ComboStyle.h, which paints a real
-    // arrow and follows the theme — so the one dialog a new operator sees first
-    // was the one that looked wrong.
-    //
-    // The override is the field HEIGHT's business: these rows are 30 px, where
-    // the compact applet combos the shared template was shaped for are 22 px, so
-    // the text needs a bigger inset to sit off the frame. `padding: 0` was what
-    // made it hug the border in the first place.
+    // Uses the shared ComboStyle (themed, real painted arrow). The override is
+    // for row height: these rows are 30 px vs the 22 px applet combos the
+    // template was shaped for, so the text needs a larger inset.
     const QString comboExtraRules =
         "QComboBox { padding: 4px 8px; }"
         // Pin the drop-down to the BORDER box. Without this it inherits the
@@ -311,18 +295,9 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         "QComboBox::drop-down { subcontrol-origin: border;"
         " subcontrol-position: top right; width: 22px; border: none; }";
 
-    // The Icom credential fields are bare QLineEdits, not combo boxes, so they
-    // inherit none of the combo styling above. Without this they render as white
-    // boxes on a dark panel — the same widget, two different looks, in one row.
-    //
-    // TOKENS, and applied through ThemeManager rather than setStyleSheet(). The
-    // neighbouring style strings in this file are pre-existing raw hex and are
-    // left alone, but nothing new should add to that pile: the same four values
-    // already have canonical tokens, so hardcoding them here would have meant
-    // two credential fields that stop following the theme the moment anyone
-    // changes it.
-    // 8 px to match the combos above, so the four fields in this column start
-    // their text at the same x. They did not before: the combos had none at all.
+    // The Icom credential fields are plain QLineEdits and inherit no combo
+    // styling. Uses theme tokens through ThemeManager so they follow theme
+    // changes. 8 px padding matches the combos so text in this column aligns.
     const QString lineEditStyle =
         "QLineEdit { border: 1px solid {{color.background.2}}; border-radius: 2px; "
         "padding: 4px 8px; background: {{color.background.1}}; "
@@ -815,32 +790,12 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     connect(m_manualIcomPortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) { syncIcomPortCustomRow(); });
 
-    // The CI-V address is another value the operator may have to read off the
-    // radio. The network credentials live in the Network menu, while this one
-    // lives in Connectors > CI-V. Without it the address can only ever be the
-    // IC-705 default, and every other model in kModels is unreachable: CI-V is
-    // addressed, so an IC-9700 on 0xA2 silently ignores everything sent to
-    // 0xA4. No ID reply, no model, and the conservative unknown fallback means
-    // no scope and no transmit — which reads as "this backend has no
-    // panadapter yet" rather than "wrong address".
-    //
-    // MOSTLY A DISPLAY, NOT AN INPUT — and that is the reframe that justifies a
-    // chooser at all. The connect path now asks the radio for its own address
-    // (a broadcast 0x19 0x00, which needs no model table and is right even when
-    // the address was changed ON the radio), so the operator does not have to
-    // know any of this. What the control buys is LEGIBILITY: it names the
-    // models, so "A2" stops being a number to look up, and picking one is a
-    // one-click shortcut for an operator who would rather be explicit.
-    //
-    // Non-editable, with a "Custom..." sentinel and a hidden hex row —
-    // populateSerialPortCombo()'s shape (RadioSetupDialog.cpp), MIRRORED rather
-    // than reused because that helper is serial-specific and behind
-    // HAVE_SERIALPORT. It is the closer of the two in-repo precedents:
-    // m_manualIpCombo above is an editable recent-values HISTORY, whereas this
-    // enumerates a known set and offers an escape hatch. That helper's own
-    // header records being factored out after two call sites reimplemented it
-    // "with a subtly different isCustom computation"; this is deliberately not
-    // the third.
+    // CI-V is addressed: a radio on 0xA2 ignores frames to 0xA4, which looks like
+    // "no scope, no TX" rather than "wrong address". Mostly a display: connect
+    // asks the radio for its address (broadcast 0x19 0x00), so this names the
+    // models and gives an explicit override. Non-editable with a "Custom..."
+    // sentinel and hidden hex row, mirroring populateSerialPortCombo()
+    // (RadioSetupDialog.cpp), which is serial-only and behind HAVE_SERIALPORT.
     m_manualIcomCivCombo = new QComboBox(manualGroup);
     m_manualIcomCivCombo->setObjectName(QStringLiteral("connectionManualIcomCivCombo"));
     m_manualIcomCivCombo->setAccessibleName(tr("Icom radio model"));
@@ -871,24 +826,12 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_manualIcomCivCustomRow =
         addManualRow(QStringLiteral("CI-V address:"), m_manualIcomCivEdit);
 
-    // ⚠ AUTOMATION: THIS FIELD IS NOW HIDDEN UNTIL "Custom..." IS SELECTED, and
-    // the bridge refuses to drive a hidden widget — `invoke
-    // connectionManualIcomCivAddress setText A2` returns
-    // "refused: 'connectionManualIcomCivAddress' is not visible". Verified
-    // against a running build, not assumed.
-    //
-    // A script that sets this field must now select Custom first:
+    // Automation: the hex field is hidden until "Custom..." is selected, and the
+    // bridge refuses hidden widgets. Select it first:
     //     invoke connectionManualIcomCivCombo setCurrentText "Custom..."
     //     invoke connectionManualIcomCivAddress setText A2
-    // …or, better, name the model and skip the hex entirely:
-    //     invoke connectionManualIcomCivCombo setCurrentText "IC-9700 — A2"
-    //
-    // The objectName is deliberately unchanged so that message names the field
-    // the script already knows, and the failure is LOUD rather than a silent
-    // no-op. An earlier revision of this tried to keep the old call working by
-    // selecting Custom from the field's own textChanged — which cannot fire,
-    // because the bridge's visibility check runs first. Removed rather than
-    // left in as a comment promising something it does not do.
+    // or pick the model directly ("IC-9700 — A2"). The objectName is kept so
+    // the refusal names the field a script already uses.
     connect(m_manualIcomCivCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) { syncIcomCivCustomRow(); });
 
@@ -1541,16 +1484,10 @@ void ConnectionPanel::clearPendingIcomCredentials()
 
 void ConnectionPanel::setConnected(bool connected)
 {
-    // THE ONE MOMENT THE CREDENTIALS ARE PROVEN. Everything staged by
-    // probeRadio() is written here and nowhere else, so a wrong password is
-    // forgotten rather than persisted over a working one.
-    // SCOPED TO THE FAMILY THAT WAS STAGED FOR. A bare "connected" is not
-    // proof that THIS password was proven: stage an Icom attempt, have it fail
-    // without driving a disconnected edge (the panel is already disconnected,
-    // so a state-change-only caller emits nothing), then connect to a Flex, and
-    // the unproven Icom password would be written over a working keychain entry
-    // — the exact failure the staging exists to prevent, one step removed. The
-    // clears at every other connect path are the belt to this brace.
+    // Credentials staged by probeRadio() are persisted only here, so a wrong
+    // password never overwrites a working one. Scoped to the staged family: a
+    // failed Icom attempt followed by a Flex connect must not write the unproven
+    // Icom password.
     if (connected && !m_pendingIcomPassword.isEmpty()
         && currentManualFamily() == QLatin1String(kFamilyIcom)) {
         IcomCredentials::save(m_pendingIcomPassword);
@@ -2416,18 +2353,10 @@ void ConnectionPanel::populateIcomCivCombo()
     m_manualIcomCivCombo->addItem(tr("Auto-detect (recommended)"),
                                   QStringLiteral("__auto__"));
     for (const auto& model : AetherSDR::icom::knownModels()) {
-        // ONLY RADIOS THIS PAGE CAN ACTUALLY DIAL.
-        //
-        // `hasNetwork` false means CI-V only — a serial port, or Icom's own
-        // RS-BA1 *server* software on a PC acting as a front end. The IC-7300 is
-        // the one such row today, and offering it here would invite an operator
-        // with a USB-only IC-7300 to pick it and get a connect timeout on a page
-        // whose whole premise is "you already know the radio's IP".
-        //
-        // The server-fronted case is not lost: that session's address is still
-        // the radio's 0x94, reachable through `Custom...`. It is the rarer path
-        // and the one where auto-detect by NAME cannot help anyway, because the
-        // handshake names the server rather than the radio behind it.
+        // Only radios this page can dial. hasNetwork == false means CI-V only
+        // (serial or an RS-BA1 server front end); those stay reachable via
+        // `Custom...`, where name auto-detect cannot help because the handshake
+        // names the server, not the radio.
         if (!model.hasNetwork)
             continue;
         const QString name = QString::fromUtf8(model.name.data(),
@@ -2553,19 +2482,11 @@ void ConnectionPanel::updateManualFamilyHints()
         // between the request and the answer.
         if (m_manualIcomUserEdit && m_manualIcomUserEdit->text().isEmpty())
             m_manualIcomUserEdit->setText(IcomSettings::username());
-        // The chooser answers this now. Rebuilt rather than left alone so a
-        // settings change made elsewhere in the session is reflected, and
-        // because the selection is what decides whether the hex row is showing.
-        //
-        // EXCEPT over an address the operator is still typing. This function is
-        // reached from setManualFamily(), which applySavedSourceSelection()
-        // calls when a recent host is picked from the dropdown — so selecting
-        // "Custom...", typing an address and then choosing an IP rebuilt the
-        // chooser from settings, reset it to Auto, hid the row and discarded the
-        // entry with nothing said. The sibling user / password / IP fills below
-        // have always guarded on isEmpty() for exactly this reason; the chooser
-        // is a combo rather than a line edit, so its "unsaved work in progress"
-        // is the Custom hex field standing open with something in it.
+        // Rebuilt from settings so changes made elsewhere show and so the
+        // selection decides the hex row's visibility — except while the Custom
+        // hex field is open with text in it (reached via setManualFamily() from
+        // applySavedSourceSelection()), which would discard the operator's entry.
+        // Same rule as the isEmpty() guards on the fields below.
         const bool customEntryInFlight =
             m_manualIcomCivCombo
             && m_manualIcomCivCombo->currentData().toString()
@@ -2876,16 +2797,10 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         }
 
         IcomSettings::setUsername(user);
-        // Hex, with or without an 0x prefix or a trailing h — the radio's own
-        // menu writes it as "A2h", so accept what the operator is looking at.
-        // An unparseable or out-of-range entry is IGNORED rather than clamped:
-        // a wrong CI-V address is silent (the radio simply never answers), so
-        // guessing on the operator's behalf would hide their typo behind the
-        // exact symptom this field exists to cure.
-        // WITH A NON-EDITABLE COMBO THE READ-BACK IS UNAMBIGUOUS: branch on
-        // currentData(), which is the raw value the item was built with. The old
-        // single-field form had to infer intent from an empty string, and could
-        // not tell "the operator chose A4" from "nobody chose anything" at all.
+        // Hex, with or without 0x or a trailing h (the radio menu shows "A2h").
+        // Unparseable or out-of-range input is ignored, not clamped: a wrong
+        // CI-V address fails silently, so guessing would hide the typo. Branch on
+        // currentData(), the raw value each item was built with.
         if (m_manualIcomCivCombo) {
             const QString sel = m_manualIcomCivCombo->currentData().toString();
             if (sel == QLatin1String("__auto__")) {
@@ -2944,22 +2859,12 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         const quint16 basePort = selectedIcomBasePort();
         IcomSettings::setBasePort(basePort);
 
-        // Do NOT setLastHost or save the credential until the radio has
-        // actually accepted us. The non-secret port choice is safe to retain
-        // immediately so a retry and the backend's reconnect timer use the
-        // same forwarding triplet.
-        //
-        // Both used to run here, before the connect was even attempted. One
-        // mistyped password therefore replaced a working keychain entry with a
-        // broken one — permanently, with no way to recover it — and the
-        // last-host setting was overwritten with an address that never
-        // answered. The operator's only symptom is that the NEXT connect fails
-        // for a reason they did not cause.
-        //
-        // The session cache is still primed immediately, because the connect
-        // below reads it synchronously and must not race a keyring write. What
-        // is deferred is the DURABLE copy: onIcomConnectSucceeded() commits it
-        // once the radio has answered. See setConnected().
+        // Do not setLastHost or save the credential until the radio accepts us,
+        // so a mistyped password never replaces a working keychain entry. The
+        // port choice is kept now so retries and reconnects use the same
+        // triplet. The session cache is primed now because connect reads it
+        // synchronously; onIcomConnectSucceeded() writes the durable copy (see
+        // setConnected()).
         IcomCredentials::setSessionPassword(pass);
         m_pendingIcomHost = trimmedIp;
         m_pendingIcomPassword = pass;
@@ -3116,18 +3021,10 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
         ? hpsdr.bind(bindSettings.bindAddress, 0)
         : hpsdr.bind(QHostAddress(QHostAddress::AnyIPv4), 0);
     if (!bound) {
-        // REPORT THE BIND FAILURE AS ITSELF, not as silence from the radio.
-        //
-        // Returning a bare false here made this indistinguishable from "nothing
-        // answered", and the caller renders that as "check the radio is powered,
-        // idle, and reachable" — sending the operator to power-cycle a radio
-        // that was never contacted. The Explicit path exists because a VPN can
-        // expose several adapters, so the likeliest cause of a bind failure is
-        // an Advanced source path naming an adapter that has since gone away:
-        // precisely the case where pointing at the radio is wrong.
-        //
-        // probeFlexRadio() already reports this properly; the two paths had
-        // drifted apart. (PR #4528 review.)
+        // Report the bind failure as itself, not as radio silence: the likely
+        // cause is an Advanced source path naming an adapter that has gone
+        // away, where "check the radio" is the wrong advice. Matches
+        // probeFlexRadio().
         if (explicitBind) {
             m_manualSourceWarningLabel->setText(
                 QStringLiteral("Failed to bind %1: %2")
@@ -3151,22 +3048,11 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
         return Hl2ProbeResult::NotAttempted;
     }
 
-    // RESOLVE A NAME BEFORE PROBING IT.
-    //
-    // QHostAddress(ip) is null for anything that is not a literal address, and a
-    // writeDatagram() to a null destination sends nothing — so a hostname used to
-    // fail as a 600 ms silence and then get reported as "No Hermes-Lite 2 answered
-    // … check the radio is powered", blaming the radio for an input this path
-    // never tried to send to.
-    //
-    // Names have to work here because the Flex path accepts them (connectToHost()
-    // resolves internally) and docs/automation-bridge.md documents the verb as
-    // `connect ip <host-or-ip> [flex|hl2]`. QHostInfo::fromName() is synchronous,
-    // which suits a path that already blocks ~600 ms on the reply.
-    //
-    // IPv4 only, and not an arbitrary pick from the list: Metis is IPv4-only, so a
-    // AAAA-only name has nothing this protocol can talk to and should say so
-    // rather than fail as silence. (PR #4528 review.)
+    // Resolve a name before probing: QHostAddress(ip) is null for non-literals
+    // and writeDatagram() to a null address sends nothing. Names must work as on
+    // the Flex path (`connect ip <host-or-ip> [flex|hl2]`, automation-bridge.md).
+    // fromName() is synchronous, fine on a path that already blocks ~600 ms.
+    // IPv4 only: Metis is IPv4-only, so an AAAA-only name is reported as such.
     QHostAddress dest(ip);
     if (dest.isNull()) {
         const QHostInfo resolved = QHostInfo::fromName(ip);

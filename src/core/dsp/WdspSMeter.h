@@ -7,22 +7,13 @@
 #include <cstdint>
 #include <optional>
 
-// The receive S-meter as read from WDSP's RXA and published by a host-DSP
-// backend: the tap's constants, the block countdown that keeps the backend's
-// own silence off the needle, the cadence that keeps the reading rate the
-// same at every input rate, and the publish-side ballistics.
-//
-// WHY ONE HEADER. Hl2RxDsp and AnanRxDsp are two copies of the same receive
-// stage, and Hl2Backend and AnanBackend two copies of the same publisher.
-// Both pairs carried this arithmetic separately, and the settle copies had
-// already diverged on the degenerate case (0 blocks against 1) before either
-// had shipped. WdspProcessTally.h exists for the same reason one stage lower.
-// The numbers here are properties of WDSP's meter and of the meter widget,
-// not of either radio, so they live once.
-//
-// THREADING. WdspSMeterTap is DSP-thread state, touched only from the block
-// loop and the setters that run there. SMeterSmoother is publisher-thread
-// state, per receiver where a backend has more than one. Neither is shared.
+// Receive S-meter read from WDSP's RXA for host-DSP backends: tap constants,
+// the block countdown that keeps the backend's own silence off the needle,
+// rate-independent cadence, and publish-side ballistics. Shared by
+// Hl2RxDsp/AnanRxDsp and Hl2Backend/AnanBackend because the numbers belong to
+// WDSP's meter and the widget, not either radio.
+// Threading: WdspSMeterTap is DSP-thread state; SMeterSmoother is
+// publisher-thread state, per receiver. Neither is shared.
 namespace AetherSDR {
 
 struct WdspSMeter final {
@@ -59,16 +50,10 @@ struct WdspSMeter final {
         return std::max(1, static_cast<int>(std::ceil(blocks)));
     }
 
-    // Blocks between readings. Both stages feed WDSP a fixed number of INPUT
-    // samples per block and hold dsp_rate constant, so a block is a shorter
-    // slice of wall time the wider the receiver runs: 1024 samples is 21 ms
-    // at 48 ksps and 0.67 ms at 1536 ksps. Read on every block, the publisher
-    // would see ~47 readings a second at the narrowest rate and ~1500 at the
-    // widest, and its per-reading EMA would lose its smoothing as the
-    // operator zooms out (decay time constant ~140 ms -> ~4.5 ms). Reading
-    // every inputRate/dspRate-th block instead keeps the reading rate at one
-    // DSP-rate block's worth (~47/s) whatever the input rate, so the
-    // ballistics are a property of the meter rather than of the zoom.
+    // Blocks between readings. A block is a fixed count of input samples, so its
+    // wall time shrinks with input rate (1024 samples: 21 ms at 48 ksps, 0.67 ms at
+    // 1536 ksps). Reading every inputRate/dspRate-th block keeps ~47 readings/s at
+    // any rate, so the publisher's EMA (τ ~140 ms) doesn't change with zoom.
     [[nodiscard]] static int emitEveryBlocks(int inputSampleRateHz,
                                              int dspSampleRateHz) noexcept
     {

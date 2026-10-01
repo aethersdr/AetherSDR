@@ -75,19 +75,9 @@ LogManager::LogManager()
         {"aether.dsp",        "DSP",          "NR2, RN2, CW decoder processing"},
         {"aether.rade",       "RADE",         "FreeDV Radio Autoencoder digital voice"},
         {"aether.smartlink",  "SmartLink",    "Auth0 login, TLS tunnel, WAN streaming"},
-        // Label leads with TCI because TciServer.cpp owns the large majority of
-        // this category's call sites — 53 of 76 as of #4750, with CatPort.cpp
-        // next at 15 and the rest scattered. The old "CAT/rigctld" label named
-        // only the minority user, so someone chasing a TCI problem scanned the
-        // checkbox list, saw nothing about TCI, and concluded AetherSDR had no
-        // TCI logging to turn on. It has more than any other rig-control
-        // surface; it was just filed under another name. Deliberately NOT split
-        // into a new aether.tci category: the id is what filter rules and saved
-        // settings key off, so renaming it would silently drop every user's
-        // existing preference for this category, and the two surfaces genuinely
-        // share the rig-control plumbing that the qCInfo lines report on.
-        // The description names the TX-summary fields (blocks/peak/rms/clips)
-        // because those are the tokens an operator greps a support log for.
+        // Label leads with TCI: TciServer.cpp owns most of this category's call sites.
+        // Not split into aether.tci because filter rules and saved settings key off the
+        // id. The description names the TX-summary fields operators grep for.
         {"aether.cat",        "TCI / CAT / rigctld",  "TCI server (slice and DAX arming, TX audio summary, TX_CHRONO stall summary at debug: maxGap/latePolls/catch-up), rigctld TCP servers, PTY virtual serial ports"},
         {"aether.dax",        "DAX",          "Virtual audio bridge (PipeWire/CoreAudio)"},
         {"aether.meters",     "Meters",       "Meter definitions and value conversion"},
@@ -123,24 +113,10 @@ LogManager::LogManager()
         {"aether.qrz",        "QRZ Lookup",   "QRZ.com callsign lookups: session, cache, CW callsign spotting, photos"},
         {"aether.clock",      "AetherClock",  "WWV/WWVB time-signal decoder: state transitions, per-second alignment, frame decodes, voter verdicts"},
         {"aether.hl2",        "Hermes-Lite 2", "HL2 backend: band changes, J16 companion-filter selection, LNA gain, and radio health telemetry"},
-        // Registered so the TRANSMIT telemetry is reachable at all. The category
-        // was declared locally in Hl2Backend.cpp and was never listed here, so
-        // applyFilterRules()'s blanket "aether.*.debug=false" switched it off and
-        // no UI toggle could switch it back on. What that hid is the TX IQ FIFO
-        // depth plus its underflow/overflow flags — which the backend's own
-        // comment calls "the most important number in the protocol" and "what
-        // distinguishes 'the audio is wrong' from 'the audio never arrived'".
-        // An underflow is exactly what a mid-transmission click sounds like,
-        // and it was undiagnosable from a log file.
-        // SEPARATE TOGGLE from "Hermes-Lite 2", deliberately: the FIFO depth is
-        // sampled per telemetry frame, so this is high-rate next to the rest of
-        // the HL2 category and is not something to leave on by default. Said
-        // explicitly in the description because the two labels otherwise read as
-        // one control, and someone chasing transmit telemetry will tick the
-        // wrong box and conclude the logging is still broken.
-        // It is declared in LogManager.h now, beside every other category,
-        // because "aether.hl2.tx" has a SECOND writer: MetisClient logs the
-        // host queue's own starvation there, and that is not this FIFO.
+        // aether.hl2.tx: TX telemetry (radio DSIQ FIFO depth + underflow/overflow, the
+        // signal that separates "audio wrong" from "audio never arrived") and, from
+        // MetisClient, the host queue's own starvation. A separate toggle from
+        // "Hermes-Lite 2" because it is high-rate; the description says so.
         {"aether.hl2.tx",     "Hermes-Lite 2 TX", "HL2 transmit telemetry — TWO different instruments on one toggle, and the difference is the point. The RADIO’s DSIQ FIFO depth with its underflow/overflow flags and the forward/reflected power counts; AND the HOST queue’s own starvation lines, which are NOT that FIFO and which that FIFO cannot see. Separate toggle — ticking \"Hermes-Lite 2\" does NOT enable this (high-rate)"},
         // ICOM — the same "declared locally, never registered" hole the HL2
         // categories above had. All five were unreachable: applyFilterRules()'s
@@ -190,20 +166,9 @@ void LogManager::setEnabled(const QString& id, bool on)
         }
     }
 
-    // NOT IN THE CURATED LIST — register it and honour the request anyway.
-    //
-    // The list above is the set worth OFFERING in the UI, and it was silently
-    // doubling as the set that could be TOGGLED AT ALL: a category it did not
-    // name accepted `setEnabled` and did nothing, while the verb that called it
-    // reported ok. `log set aether.icom.stream on` answered
-    // `{ok: true, enabled: false}`, so the only way to see wire traffic was to
-    // relaunch with QT_LOGGING_RULES — and on a single-client radio every
-    // relaunch costs a session timeout.
-    //
-    // Refusing loudly would be defensible; accepting is better. Qt categories
-    // are created by any translation unit that declares one, so no central list
-    // can be complete, and a diagnostic category nobody thought to curate is
-    // exactly the one you need at 2am.
+    // Not in the curated list: register it and honour the request anyway. The list
+    // is what the UI offers, not the set that can be toggled; any TU can declare a
+    // category, so `log set <category> on` must work for uncurated ones too.
     if (!on)
         return;   // nothing to turn off, and no reason to accrue an entry
 
@@ -245,29 +210,11 @@ void LogManager::applyFilterRules()
     for (const auto& c : m_categories) {
         if (c.enabled) {
             rules << QString("%1.debug=true").arg(c.id);
-            // …and info, which is NOT implied by enabling debug.
-            //
-            // Qt filter rules are per-LEVEL, not a threshold: "x.debug=true"
-            // turns on debug and leaves every other level at the category's
-            // declared default. Most categories here are declared
-            // Q_LOGGING_CATEGORY(…, QtWarningMsg), so their info tier was off
-            // and no UI toggle could reach it — ticking the category produced
-            // its DEBUG messages while silently withholding its INFO ones,
-            // which are the more important half.
-            //
-            // Found while trying to diagnose transmit clicking from a user log:
-            // TciServer::logTxAudioSummary() is a qCInfo(lcCat) carrying
-            // blocks / requested48k / effective48k / peak / rms / clips — the
-            // numbers that answer "is the TX feed underrunning?" — and it had
-            // never once appeared in a log file. Neither had the 16 qCInfo
-            // calls on lcDax. Two dozen categories are declared QtWarningMsg,
-            // so this was most of the codebase's INFO logging.
-            //
-            // Note the asymmetry: no blanket "aether.*.info=false" is emitted
-            // above — it would newly silence the QtDebugMsg/QtInfoMsg-declared
-            // categories (aether.kiwisdr, aether.connection, aether.hl2, …)
-            // whose Info is visible today. For those, this toggle governs
-            // Debug only; their Info stays on regardless.
+            // ...and info, which enabling debug does NOT imply: Qt filter rules are per
+            // level, and most categories are declared QtWarningMsg, so their INFO lines
+            // (e.g. TciServer::logTxAudioSummary) would otherwise never appear. No blanket
+            // "aether.*.info=false" is emitted above, so categories declared QtDebugMsg /
+            // QtInfoMsg keep Info visible and this toggle governs only their Debug.
             rules << QString("%1.info=true").arg(c.id);
         }
     }

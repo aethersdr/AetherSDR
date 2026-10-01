@@ -1,18 +1,9 @@
 #pragma once
 
-// Pure helper functions extracted from MainWindow.cpp (#3351 Phase 0).
-//
-// Everything here is a stateless formatter or value transform with no
-// MainWindow dependency: tooltip builders, spot-ID math, client-list
-// parsing, small pixmap painters. They were file-scope statics inside
-// MainWindow.cpp; they live here so the monolith decomposition can move
-// method bodies into per-subsystem translation units without dragging a
-// 400-line block of file-locals along to every new TU.
-//
-// Rule for additions: if a function needs MainWindow state (members,
-// mutable file-scope statics like the shortcut-lease flags), it does NOT
-// belong here — put it on the class, or leave it file-scope next to the
-// state it reads.
+// Pure helpers from MainWindow (#3351): stateless formatters and value
+// transforms with no MainWindow dependency (tooltips, spot-ID math, client-list
+// parsing, small pixmaps). Anything that needs MainWindow state or mutable
+// file-scope statics does not belong here.
 
 #include <QKeySequence>
 #include <QList>

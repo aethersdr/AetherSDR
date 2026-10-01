@@ -1,30 +1,12 @@
 #pragma once
 
-// The workspace document — every workspace profile, the active selection, and
-// the radio-profile bindings, as one versioned object (RFC #4887, phase 2).
-//
-// One document, one owner, one atomic write: Constitution Principle V (a
-// feature owns its configuration as a single object) and Principle XIV
-// (persist atomically).  That is the whole point of this type existing.  The
-// arrangement it replaces is spread across a dozen independent settings keys
-// with three different schemas and no single writer, so a shutdown path that
-// skips one of them restores a MIXTURE of two layouts — which is what "the
-// window rules never work" feels like from the operator's chair.
-//
-// Two things this schema deliberately separates:
-//
-//   * item rects are AUTHORITATIVE — fractions of their surface, restored
-//     exactly, on every platform, every launch;
-//   * `windowGeometry` on an extra canvas window is a HINT, and named like
-//     one — the desktop may decline it, and always does on Wayland for
-//     position.  A hint that is ignored costs one drag and loses no layout.
-//
-// Parsing is strict (Principle VII — untrusted input is validated at the
-// boundary): the settings store is a file on disk that a user can edit, a
-// backup can restore, and a future build can write a newer schema into.
-//
-// Widget-free, so the whole schema is unit-tested headless — see
-// tests/workspace_document_test.cpp.
+// The workspace document: all workspace profiles, the active selection and the
+// radio-profile bindings as one versioned object, written atomically by one
+// owner (RFC #4887), so a partial shutdown can't restore a mix of two layouts.
+// Item rects are authoritative (surface fractions, restored exactly);
+// `windowGeometry` on extra windows is only a hint (Wayland ignores position).
+// Parsing is strict because the store is user-editable on disk and may hold a
+// newer schema. Widget-free; see tests/workspace_document_test.cpp.
 
 #include "gui/workspace/CanvasItem.h"
 
@@ -155,20 +137,12 @@ public:
     // ── Serialisation ────────────────────────────────────────────────────
     QJsonObject toJson() const;
 
-    // Strict parse.  Returns false and leaves `out` untouched for anything
-    // this build must not act on:
-    //   * a missing or non-integer version,
-    //   * a version NEWER than kSchemaVersion — a later build wrote it, and
-    //     re-writing it from this one's understanding would destroy whatever
-    //     it knew that we do not (AppSettings takes the same stance),
-    //   * a root that is not an object, or carries no workspaces array.
-    //
-    // Recoverable damage inside a valid document is repaired rather than
-    // rejected, and reported through `warnings` so it is visible instead of
-    // silent: items with no id or an invalid rect are dropped, duplicate item
-    // ids within a surface are dropped, a workspace with no "main" surface
-    // gains an empty one, a binding pointing at a missing workspace is
-    // dropped, and an activeWorkspace naming nothing falls back to the first.
+    // Strict parse: returns false and leaves `out` untouched for a missing or
+    // non-integer version, a version newer than kSchemaVersion (rewriting would
+    // destroy what a later build knew), or a root without a workspaces array.
+    // Recoverable damage is repaired and reported via `warnings`: bad/duplicate
+    // items dropped, missing "main" surface added, dangling bindings dropped, an
+    // unknown activeWorkspace falls back to the first.
     static bool fromJson(const QJsonObject& root,
                          WorkspaceDocument* out,
                          QString* error = nullptr,

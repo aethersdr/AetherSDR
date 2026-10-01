@@ -4,17 +4,9 @@
 
 namespace AetherSDR {
 
-// Single source of truth for every path in the client settings store.
-//
-// Before RFC #4603 the config-dir logic was hand-duplicated in three places
-// (AppSettings constructor, the pre-QApplication UiScale scan in main.cpp,
-// and GpuSelector) and the copies had already drifted — the main.cpp copy
-// ignored $XDG_CONFIG_HOME. Everything now calls this helper.
-//
-// QStandardPaths::writableLocation(GenericConfigLocation) is deliberately the
-// backing call: it needs no QCoreApplication (it is env/known-folder based on
-// all three platforms), and it respects QStandardPaths::setTestModeEnabled(),
-// which the test fixture (tests/TestSettingsProfile.h) relies on.
+// Single source of truth for every settings-store path. Backed by
+// QStandardPaths::writableLocation(GenericConfigLocation), which needs no
+// QCoreApplication and honours setTestModeEnabled() (tests/TestSettingsProfile.h).
 namespace SettingsPaths {
 
 // ~/.config/AetherSDR (Linux), ~/Library/Preferences/AetherSDR (macOS),

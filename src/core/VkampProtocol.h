@@ -9,26 +9,16 @@
 
 namespace AetherSDR {
 
-// VK3AMP RF amplifier protocol.
-//
-// Protocol authority: NOT a manufacturer spec (unlike ACOM's, see
-// AcomProtocol.h) -- reverse-engineered from packet captures against real
-// hardware by a companion, unaffiliated project (vkamp_client.py), whose
-// own comments tag each field/command with its confirmation level. Treat
-// "confirmed" claims here as confirmed against the specific unit(s) that
-// project tested, not guaranteed identical across every VK3AMP/TCI_VKAMP-
-// family amp in the field. See docs/architecture/vkamp-amplifier-design.md
-// for the full design note, including why this codebase deliberately does
-// NOT carry over that project's decompile-derived fault-name table
-// (Constitution Principle IV) -- error codes surface as a bare number here.
-//
-// Three wire formats, not one (design doc Section 3):
-//   - TCP control/status (port 5005): ASCII CSV, request/response -- the amp
-//     does not broadcast spontaneously while idle.
+// VK3AMP RF amplifier protocol. Not a manufacturer spec: reverse-engineered
+// by the unaffiliated vkamp_client.py project from captures of specific units,
+// so "confirmed" means confirmed on those units. Its decompile-derived fault
+// names are deliberately not carried; error codes surface as numbers. See
+// docs/architecture/vkamp-amplifier-design.md. Wire formats (design doc §3):
+//   - TCP control/status (port 5005): ASCII CSV request/response; silent when
+//     idle.
 //   - UDP telemetry (port 5010): ASCII CSV, TX-gated, needs a periodic "11"
-//     retrigger to keep flowing.
-//   - Serial (COM port): a different, undocumented-here 15-byte binary frame
-//     -- out of scope for this v1 (TCP+UDP only); see design doc Section 3.3.
+//     retrigger.
+//   - Serial: a 15-byte binary frame, not implemented (TCP+UDP only, §3.3).
 namespace Vkamp {
 
 // VK3AMP ships in three rated-power classes. The wire protocol has no
@@ -115,18 +105,10 @@ struct Telemetry {
     int current{0};
     int input_raw{0};
 
-    // Calibrated values -- quadratic (output/reflected/input) or linear
-    // (current) fits against external reference measurements, ported from
-    // the companion project's own calibration (design doc Section 3.2).
-    //
-    // The three quadratics share one out-of-range rule: the fit is followed
-    // only where it is monotonically increasing, and below its own vertex it
-    // tapers linearly to 0W at 0 raw counts. calibratedPower() in the .cpp
-    // carries the reasoning -- in short, a decreasing power curve is the fit
-    // telling you it has left the data it was built from, and scaling a real
-    // reading by a fraction of itself never made that reading truer. The
-    // consequence that matters at call sites: 0 raw counts really does mean
-    // 0W on every curve, so "no carrier" needs no special case anywhere.
+    // Calibrated values: quadratic (output/reflected/input) or linear (current)
+    // fits from the companion project's reference measurements (design doc §3.2).
+    // Quadratics are followed only where increasing and taper linearly to 0 W at
+    // 0 raw below the vertex (see calibratedPower()), so 0 raw always means 0 W.
     float outputWatts() const;
     float reflectedWatts() const;
     float currentAmps() const;

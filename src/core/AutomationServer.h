@@ -423,17 +423,11 @@ private:
     // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
     // under a target-local point according to childAt() and QApplication::widgetAt().
     QJsonObject doHitTest(const QString& target, const QString& value) const;
-    // clickAt [<target>] <x> <y>: synthesize a real left-click at a point. With no
-    // target, x/y are GLOBAL screen coordinates (matching dumpTree geometry); with
-    // a target they are LOCAL to that widget. Generic fallback for when name/text
-    // matching is ambiguous (e.g. several tiles share accessibleName
-    // "containerClose" and only the first is reachable by invoke). TX-gated on the
-    // whole ancestor chain; disabled widgets and (with the power ceiling armed)
-    // the RF/Tune power sliders are refused.
-    // A coordinate click, optionally a double-click. Double sends the full Qt
-    // sequence (Press, Release, DblClick, Release) — Qt does NOT promote two
-    // synthetic press/release pairs into a double-click, so a caller cannot
-    // build one out of two clickAt calls. (#5068)
+    // clickAt [<target>] <x> <y>: a real left-click (or double) at a point; x/y are
+    // GLOBAL (dumpTree geometry) without a target, LOCAL with one. TX-gated on the
+    // whole ancestor chain; disabled widgets and (power ceiling armed) the RF/Tune
+    // power sliders are refused. Double sends Press, Release, DblClick, Release: Qt
+    // never promotes two synthetic clicks into a double-click. (#5068)
     enum class ClickKind { Single, Double };
     QJsonObject doClickAt(const QString& target, const QString& value,
                           ClickKind kind = ClickKind::Single);
@@ -470,19 +464,14 @@ private:
     QJsonObject doDss(const QString& action,
                       const QString& target,
                       const QString& value) const;
-    // Radio-side display-stream inventory / leak detector (#3856).
-    //   streams        — Layer A: registered pan/wf streams + UDP "orphan"
-    //                     streams the radio is still transmitting that we let go.
-    //   streams radio   — Layer B: the radio-authoritative display-object set
-    //                     (pans + waterfalls) classified ours/foreign/orphan,
-    //                     plus leaked waterfalls (parent pan gone) — catches the
-    //                     resource-level lingering Layer A can't see.
-    //   streams resync  — re-subscribe (sub pan all) to force the radio to
-    //                     re-dump every allocated display object, refreshing the
-    //                     Layer-B maps to the radio's present-tense set; re-poll
-    //                     `streams radio` after it settles to confirm a lingering
-    //                     waterfall the client view had already purged.
-    //   streams reset   — clear the Layer-A orphan tally to re-baseline.
+    // Radio-side display-stream leak detector (#3856).
+    //   streams        - registered pan/wf streams + UDP streams still arriving for
+    //                    ids we released.
+    //   streams radio  - the radio's display objects classified ours/foreign/orphan,
+    //                    plus waterfalls whose parent pan is gone.
+    //   streams resync - `sub pan all` to make the radio re-dump its display objects;
+    //                    re-poll `streams radio` after it settles.
+    //   streams reset  - clear the orphan tally to re-baseline.
     QJsonObject doStreams(const QString& action);
     // Cross-platform process + subsystem memory profiler (the `memprofile`
     // verb — distinct from the `memory` frequency-recall verb). `start` samples
@@ -851,16 +840,9 @@ private:
     };
     std::vector<std::shared_ptr<ConnectWait>> m_connectWaits;
 
-    // The last deferred connect/disconnect failure, and when it happened.
-    //
-    // Every connect verb schedules its real work onto the GUI event loop and
-    // replies {ok:true, deferred:true} before that work runs, so a failure
-    // afterwards existed only as a qCWarning — invisible to the client that
-    // asked (#4912). Keeping the last one here lets `connect wait` hand it
-    // back, which is where a caller is already looking when a connect does not
-    // land. The reply carries the error's AGE, not its timestamp, so a stale
-    // failure from a previous attempt is distinguishable from this one's
-    // without the caller needing a clock of its own.
+    // The last deferred connect/disconnect failure (verbs reply before the work runs),
+    // handed back by `connect wait` (#4912). The reply carries its AGE so a stale
+    // failure is distinguishable without a client clock.
     QString m_lastConnectError;
     qint64 m_lastConnectErrorMs{-1};
     // answerPendingWaits: whether this failure should complete outstanding
