@@ -4098,6 +4098,11 @@ The symptom an operator reports is "the app hangs when I connect a Hermes-Lite
 for the first time." It is not a hang and it is not the radio. It is FFTW
 measuring plans, on the GUI thread, with nothing on screen to say so.
 
+The 19 seconds of the title and every figure in §22.1 are from #4775
+(`57c2eb94`, 2026-08-05), with no machine recorded, and were not re-taken.
+§22.3 has one channel open re-measured on 2026-10-01, and how far that figure
+has moved with the tree since.
+
 ### 22.1 What was actually measured
 
 Driven through the automation bridge against `hpsdrsim -hermeslite2 -P1`. The
@@ -4167,39 +4172,58 @@ now 6.6–11.5× the largest later one, not the 107–189× of the first
 measurement.
 
 **The magnitude moved with the tree, three times.** First open in each
-ordering; the last three rows are the same benchmark on one machine (the M6
-above):
+ordering, then the lowest and highest single reading among the later opens of
+both orderings; the last three rows are the same benchmark on one machine (the
+M6 above):
 
-| Tree | What changed | 48 kHz first | 384 kHz first |
-|---|---|---|---|
-| `57c2eb94` (#4775, 2026-08-05) | the first measurement: `filterTaps` at WDSP's 2048 default, machine not recorded | 18865 ms | 18666 ms |
-| `9ef15a74` (parent of #5697) | 8192 taps since #4780, WDSP 2.10 since #5686 | 40917 ms (40609–40985) | 40874 ms (40556–41147) |
-| `5fb9b58d` (#5697) | the minimum-phase workspace is built only when used | 11543 ms (11480–11551) | 11365 ms (11279–11502) |
-| `25da98de` (2026-10-01) | `create_minphase()` plans with `FFTW_ESTIMATE` (WDSP patch 12, #5954), and minimum phase is on outside CW | 1335 ms | 1215 ms |
+| Tree | What changed | 48 kHz first | 384 kHz first | Later opens |
+|---|---|---|---|---|
+| `57c2eb94` (#4775, 2026-08-05) | the first measurement: `filterTaps` at WDSP's 2048 default, machine not recorded | 18865 ms | 18666 ms | 39–175 ms |
+| `9ef15a74` (parent of #5697) | 8192 taps since #4780, WDSP 2.10 since #5686 | 40917 ms (40609–40985) | 40874 ms (40556–41147) | 36–159 ms |
+| `5fb9b58d` (#5697) | the minimum-phase workspace is built only when used | 11543 ms (11480–11551) | 11365 ms (11279–11502) | 35–158 ms |
+| `25da98de` (2026-10-01) | `create_minphase()` plans with `FFTW_ESTIMATE` (WDSP patch 12, #5954), and minimum phase is on outside CW | 1335 ms | 1215 ms | 61–184 ms |
 
 The two middle rows are adjacent commits, three cold processes per ordering,
 built against Qt 6.8.3; the step to the last row was not isolated commit by
-commit. The first row's 100 / 71 / 39 ms and 64 / 99 / 175 ms later opens
-are within 1.6× of every later row. On an Apple M2 at 26.9.1, before #5697,
-the same first open measured 94.7 s (#5456); `AETHERSDR-PATCHES.md` records
-10.9 s for one RX channel create on x86_64 after patch 12. So quote a
-first-open time only with its machine and its commit.
+commit. The first row's later opens are the 100 / 71 / 39 ms and
+64 / 99 / 175 ms of the first measurement. The later opens stayed between 35
+and 184 ms in every row while the first open went from 40.9 s to 1.2–1.3 s on
+one machine: the tree moved the first open, not the rest. On an Apple M2
+(macOS 26.6.2, AetherSDR 26.9.1), before #5697, the same first open measured
+94.7 s (#5456); `third_party/wdsp/AETHERSDR-PATCHES.md` records 10.9 s for one
+RX channel create on x86_64 after patch 12. So quote a first-open time only
+with its machine and its commit.
 
-**To re-measure, two traps, both silent.** Do not time a registered test:
-every one links `tests/TestWdspWisdomIsolation.cpp`, which caps the planner, so
-cold and warm read the same and nothing is exported. And set
-`AETHER_WDSP_FFTW_TIMELIMIT` to the empty string rather than unsetting it: the
-initializer does not overwrite, and `plannerTimeLimitSeconds()` maps empty to
-unbounded. Then check the export, not just the clock — a cold run that wrote
-no wisdom file was capped.
+**To re-measure, two traps, both silent.** Do not time a registered test.
+`tests/tests.cmake` caps the planner for them twice: a ctest `ENVIRONMENT`
+property on each test registered above its retrofit loop, and
+`tests/TestWdspWisdomIsolation.cpp` linked into each test executable whose
+target carries its test's name. Under either one, cold and warm read the same
+and nothing is exported. Neither half reaches every test: one registered under
+a name that is not its target's (`settings_browser_dialog`, the
+`app_settings_safety_*` set) gets the property without the link, and one
+registered below the loop gets neither. So a test's registration does not say
+whether the binary was capped. And set `AETHER_WDSP_FFTW_TIMELIMIT` to the
+empty string rather than unsetting it: the initializer does not overwrite, and
+`plannerTimeLimitSeconds()` maps empty to unbounded. Then check the export, not
+just the clock — a cold run that wrote no wisdom file was capped.
 
 That "once per machine" is what the first-connect dialog tells the operator, and
 saying it is the point: a wait you are told happens once reads very differently
 from the same wait with a window on screen that says "Connecting…".
-The dialog is gated on elapsed time (1500 ms), not on a cold-cache predicate —
-`WdspChannel` exposes none, and one could not be exact anyway, since a cache
-that imports cleanly may still lack plans for these geometries and would report
-"warm" while the open measured regardless. See `MainWindow::armWdspSetupDialog`.
+How long that wait is depends on the host: the first open is 1.2–1.3 s on the
+machine above and 10.9 s for one RX channel create on x86_64 (patch 12's entry
+in `third_party/wdsp/AETHERSDR-PATCHES.md`), and a connect opens a channel per
+receiver. The slow host is the one the dialog is for.
+The dialog is gated on elapsed time (`kWdspSetupDialogDelayMs`, 1500 ms), not
+on a cold-cache predicate. The delay keeps the dialog off a warm connect
+(0.57 s in §22.1), where it would only flash; a cold connect that finishes
+inside it shows no dialog either. On the machine above the first open alone
+(1.2–1.3 s) no longer crosses the gate; a whole cold connect was not
+re-measured there. A predicate was not an option: `WdspChannel` exposes none,
+and one could not be exact anyway, since a cache that imports cleanly may
+still lack plans for these geometries and would report "warm" while the open
+measured regardless. See `MainWindow::armWdspSetupDialog`.
 
 ### 22.4 Two paths blocked the GUI thread; one still does
 
@@ -4219,10 +4243,11 @@ loop, and joining that loop first would race the post.
 
 Splitting the connect is what made this reachable, and that is not an argument
 against the split: before it, the connect itself held the UI, so nobody could
-get to the radio picker mid-connect. Now the UI is live for those twenty
-seconds, and reaching for a different radio is the obvious thing to do while
-waiting. `OpenChannel` cannot be cancelled, so the honest options are a busy
-state over the teardown or a backend that can be abandoned rather than joined —
+get to the radio picker mid-connect. Now the UI is live for as long as the
+planning takes (20.2 s in §22.1's 2026-08-05 run), and reaching for a different
+radio is the obvious thing to do while waiting. `OpenChannel` cannot be
+cancelled, so the honest options are a busy state over the teardown or a
+backend that can be abandoned rather than joined —
 and the second one also has to replace the `QPointer` guard in
 `beginDspSetup()`, which is sound today *because* teardown blocks.
 
