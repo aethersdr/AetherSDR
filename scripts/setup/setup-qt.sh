@@ -18,8 +18,10 @@
 # gen/<version>-<revision>-<id>/, and <version>-<revision>.current names the
 # live one. A reinstall builds a new generation beside the old and publishes it
 # by atomically replacing that pointer file, so every checkout sees either the
-# old kit or the new one and never neither (Constitution XIV); the superseded
-# generation is deleted only after the pointer moves. No tree is ever renamed,
+# old kit or the new one and never neither (Constitution XIV). Superseded
+# generations are kept: binaries already built in any checkout link their Qt by
+# absolute path and must keep launching until they are rebuilt, so nothing is
+# deleted until you ask with --prune. No tree is ever renamed,
 # so the paths aqt patches into the kit (qmake, CMake, .pc files) stay true.
 # CMake reads the pointer on its own
 # (cmake/AetherQtPin.cmake), so after this script a plain `cmake -B build`
@@ -42,6 +44,9 @@
 #   scripts/setup/setup-qt.sh                 install (no-op if already present)
 #   scripts/setup/setup-qt.sh --print-prefix  print the Qt prefix CMake will use
 #   scripts/setup/setup-qt.sh --no-keychain   skip the qtkeychain build
+#   scripts/setup/setup-qt.sh --prune         delete every generation but the
+#                                             live one (frees ~2 GB each; builds
+#                                             against a pruned one must rebuild)
 #
 # Requires: python3, curl, and for qtkeychain: git, cmake, ninja, a C++
 # compiler. Windows builders: see docs/BUILDING.md (Qt online installer or aqt).
@@ -59,10 +64,12 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 PRINT_PREFIX=0
 WITH_KEYCHAIN=1
+PRUNE=0
 for arg in "$@"; do
     case "$arg" in
         --print-prefix) PRINT_PREFIX=1 ;;
         --no-keychain)  WITH_KEYCHAIN=0 ;;
+        --prune)        PRUNE=1 ;;
         -h|--help)      sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
         *)              die "unknown argument: $arg (try --help)" ;;
     esac
@@ -107,6 +114,36 @@ fi
 prefix_of() { echo "$GEN_ROOT/$1/$QT_VERSION/$KIT_DIR"; }
 QT_PREFIX=""
 [ -n "$CURRENT_GEN" ] && QT_PREFIX="$(prefix_of "$CURRENT_GEN")"
+
+# ── --prune: reclaim superseded generations, on request only ────────────
+# Keeps the live generation of the current pin and any unfinished generation
+# whose owning install is still running (another checkout, mid-install).
+# Everything else under gen/ goes, including generations of earlier pins, along
+# with pointer files that would be left naming them.
+if [ "$PRUNE" = 1 ]; then
+    removed=0
+    for d in "$GEN_ROOT"/*; do
+        [ -d "$d" ] || continue
+        name="${d##*/}"
+        [ "$name" = "$CURRENT_GEN" ] && continue
+        if [ ! -f "$d/.aether-qt-stamp" ] && kill -0 "${name##*-}" 2>/dev/null; then
+            echo "Keeping $name: an install is still running in it"
+            continue
+        fi
+        echo "Removing $name"
+        rm -rf "${d:?}"
+        removed=$((removed + 1))
+    done
+    for ptr in "$CACHE_ROOT"/*.current; do
+        [ -f "$ptr" ] || continue
+        [ "$ptr" = "$POINTER" ] && continue
+        [ -d "$GEN_ROOT/$(head -n 1 "$ptr")" ] || rm -f "$ptr"
+    done
+    echo "Pruned $removed generation(s). Live: ${CURRENT_GEN:-none}"
+    echo "Builds configured against a pruned generation re-run CMake on their"
+    echo "next build and relink against the live one."
+    exit 0
+fi
 
 if [ "$PRINT_PREFIX" = 1 ]; then
     if [ -n "$QT_PREFIX" ] && [ -x "$QT_PREFIX/bin/qmake" ]; then
@@ -277,11 +314,12 @@ mv -f "$POINTER.tmp.$$" "$POINTER"
 trap - EXIT
 QT_PREFIX="$STAGED_PREFIX"
 echo "Qt $QT_VERSION installed at $QT_PREFIX"
-# Only now is the superseded generation unreferenced. A build configured
-# against it re-runs CMake on its next build (its cached Qt6_DIR is gone, so
-# find_package searches again and reads the new pointer).
+# The superseded generation stays: binaries built against it, in any checkout,
+# keep launching. Builds pick up the new generation on their next configure
+# (cmake/AetherQtPin.cmake drops cached entries for any generation that is not
+# the live one). --prune reclaims the space when nothing needs it.
 if [ -n "$CURRENT_GEN" ] && [ "$CURRENT_GEN" != "$NEW_GEN" ]; then
-    rm -rf "${GEN_ROOT:?}/$CURRENT_GEN"
+    echo "Previous generation $CURRENT_GEN kept; run with --prune to remove it."
 fi
 
 build_keychain

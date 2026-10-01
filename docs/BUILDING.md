@@ -26,8 +26,14 @@ builds qtkeychain against it, then configure as usual:
 
 ```bash
 scripts/setup/setup-qt.sh
-cmake -B build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix)"
+cmake -B build -G Ninja \
+  -DCMAKE_PREFIX_PATH="$(scripts/setup/setup-qt.sh --print-prefix);$(brew --prefix)"
 ```
+
+The pinned Qt goes first in that list on purpose. `$(brew --prefix)` is there
+for fftw, librtlsdr, portaudio and hidapi, but a Homebrew `qt` formula (often
+pulled in by something else) lives under the same prefix; naming the pinned Qt
+first keeps it the one CMake finds.
 
 Qt 6.12 needs **Xcode 16** (the macOS 15 SDK): Qt's own CMake stops at
 configure with "Qt requires at least version 16 of Xcode" on anything older,
@@ -161,9 +167,10 @@ minute on a fast connection.
   `gen/`, and `<version>-<revision>.current` names the live one. A reinstall
   builds the new generation alongside and switches the pointer in one atomic
   step, so an interrupted or failed reinstall leaves the working Qt in place;
-  existing build directories re-run CMake on their next build and follow the
-  pointer. Builds link Qt by absolute path, so delete the cache and they stop
-  launching until you re-run the script.
+  existing build directories follow the pointer on their next configure.
+  Superseded generations are kept, because built binaries link Qt by absolute
+  path and must keep launching until rebuilt; `--prune` (`-Prune` on Windows)
+  deletes every generation but the live one when you want the ~2 GB back.
 - **What it checks first**, so an unsupported machine is told before the
   download rather than after: glibc 2.34+ (x86_64) or 2.38+ (aarch64), Xcode
   16+ on macOS, a working `python3 -m venv` (on Debian, Ubuntu and Raspberry Pi

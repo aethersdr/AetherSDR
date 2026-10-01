@@ -14,8 +14,9 @@
     gen\<version>-<revision>-<id>\ that <version>-<revision>.current names.
     A reinstall builds a new generation beside the old one and publishes it by
     atomically replacing that pointer file, so every checkout sees the old kit
-    or the new one and never neither (Constitution XIV); the superseded
-    generation is deleted only afterwards. Then it builds qtkeychain against it with
+    or the new one and never neither (Constitution XIV). Superseded generations
+    are kept - binaries already built in any checkout link their Qt by absolute
+    path - until you run -Prune. Then it builds qtkeychain against it with
     setup-qtkeychain.ps1. CMake looks there on its own (cmake/AetherQtPin.cmake),
     so afterwards a plain configure finds the pinned Qt with no -D flags.
 
@@ -44,12 +45,18 @@
 .PARAMETER NoKeychain
     Skip the qtkeychain build (SmartLink credential persistence compiles out).
 
+.PARAMETER Prune
+    Delete every generation except the live one (about 2 GB each), keeping any
+    unfinished one whose install is still running. Builds against a pruned
+    generation re-run CMake on their next build and relink.
+
 .EXAMPLE
     powershell -File scripts\setup\setup-qt.ps1
 #>
 param(
     [switch]$PrintPrefix,
-    [switch]$NoKeychain
+    [switch]$NoKeychain,
+    [switch]$Prune
 )
 
 $ErrorActionPreference = "Stop"
@@ -100,6 +107,29 @@ $CurrentGen = $null
 if (Test-Path $Pointer) { $CurrentGen = (Get-Content $Pointer -TotalCount 1).Trim() }
 $QtPrefix = $null
 if ($CurrentGen) { $QtPrefix = Get-GenPrefix $CurrentGen }
+
+if ($Prune) {
+    $removed = 0
+    foreach ($d in Get-ChildItem -Directory -Path $GenRoot -ErrorAction SilentlyContinue) {
+        if ($d.Name -eq $CurrentGen) { continue }
+        $owner = ($d.Name -split '-')[-1]
+        if (-not (Test-Path (Join-Path $d.FullName ".aether-qt-stamp")) -and
+            (Get-Process -Id $owner -ErrorAction SilentlyContinue)) {
+            Write-Host "Keeping $($d.Name): an install is still running in it"
+            continue
+        }
+        Write-Host "Removing $($d.Name)"
+        Remove-Item -Recurse -Force $d.FullName
+        $removed++
+    }
+    foreach ($ptr in Get-ChildItem -File -Path $CacheRoot -Filter "*.current" -ErrorAction SilentlyContinue) {
+        if ($ptr.FullName -eq $Pointer) { continue }
+        $target = (Get-Content $ptr.FullName -TotalCount 1).Trim()
+        if (-not (Test-Path (Join-Path $GenRoot $target))) { Remove-Item -Force $ptr.FullName }
+    }
+    Write-Host "Pruned $removed generation(s). Live: $CurrentGen"
+    exit 0
+}
 
 if ($PrintPrefix) {
     if ($QtPrefix -and (Test-Path (Join-Path $QtPrefix "bin\qmake.exe"))) { Write-Output $QtPrefix; exit 0 }
@@ -304,10 +334,10 @@ try {
 }
 $QtPrefix = $StagedPrefix
 Write-Host "Qt $QtVersion installed at $QtPrefix" -ForegroundColor Green
-# Only now is the superseded generation unreferenced. A build configured
-# against it re-runs CMake on its next build and picks up the new pointer.
+# The superseded generation stays: binaries built against it keep launching.
+# Builds pick up the new generation on their next configure; -Prune reclaims it.
 if ($CurrentGen -and $CurrentGen -ne $NewGen) {
-    Remove-Item -Recurse -Force (Join-Path $GenRoot $CurrentGen) -ErrorAction SilentlyContinue
+    Write-Host "Previous generation $CurrentGen kept; run with -Prune to remove it."
 }
 
 Build-Keychain

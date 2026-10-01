@@ -76,21 +76,63 @@ macro(_aether_read_pin_prefix)
 endmacro()
 _aether_read_pin_prefix()
 
-# A reinstall deletes the superseded generation, so a build directory configured
-# against it is left with Qt6_DIR, Qt6Core_DIR, ... naming a directory that no
-# longer exists. Read as "the builder chose a Qt", that would skip the cache
-# below and let find_package fall through to whatever else is installed. Drop
-# exactly those entries — ours, and gone — so the build re-resolves to the
-# live generation; a Qt the builder named is never touched.
+# A build directory remembers the Qt it was configured against in Qt6_DIR,
+# Qt6Core_DIR, ... When that is one of OUR generations but not the live one —
+# superseded by a reinstall, pruned, or left behind by a pin bump (6.12.0 ->
+# 6.12.1 leaves the old version's generation on disk) — the cached entry would read as "the
+# builder chose a Qt": the cache below would be skipped and the build would
+# silently stay on the superseded kit, or fall through to whatever else is
+# installed. Drop exactly those entries — ours, and not live — so the build
+# re-resolves to the live generation. A Qt the builder named outside our cache
+# is never touched.
+set(_aether_live_gen "")
+if(AETHER_QT_PIN_PREFIX)
+    set(_aether_live_gen "${_aether_qt_cache}/gen/${_aether_gen}/")
+endif()
 get_cmake_property(_aether_cache_vars CACHE_VARIABLES)
 foreach(_v IN LISTS _aether_cache_vars)
     if(_v MATCHES "^Qt6.*_DIR$")
         string(FIND "${${_v}}" "${_aether_qt_cache}/gen/" _at)
-        if(_at EQUAL 0 AND NOT EXISTS "${${_v}}")
-            unset(${_v} CACHE)
+        if(_at EQUAL 0)
+            set(_live -1)
+            if(_aether_live_gen)
+                string(FIND "${${_v}}" "${_aether_live_gen}" _live)
+            endif()
+            if(NOT EXISTS "${${_v}}" OR NOT _live EQUAL 0)
+                unset(${_v} CACHE)
+            endif()
         endif()
     endif()
 endforeach()
+
+# The same trap, from outside our cache: a build directory that once
+# auto-found a distro Qt below the floor (say Arch's 6.11) keeps it in
+# Qt6_DIR. That kit can never configure this tree, and leaving it cached would
+# make the error below repeat even after setup-qt.sh has installed the release
+# Qt. So a cached kit below QT_SOURCE_FLOOR is dropped, with every Qt6*_DIR
+# entry it brought, and the build re-resolves. Read from the kit's own
+# Qt6ConfigVersion*.cmake rather than include()d, which would leak its
+# variables into this scope.
+if(Qt6_DIR AND _aether_pin_QT_SOURCE_FLOOR)
+    file(GLOB _aether_cfgver "${Qt6_DIR}/Qt6ConfigVersion*.cmake")
+    set(_aether_cached_qt "")
+    foreach(_f IN LISTS _aether_cfgver)
+        file(STRINGS "${_f}" _aether_line REGEX "^set\\(PACKAGE_VERSION \"[0-9.]+\"\\)")
+        if(_aether_line MATCHES "\"([0-9.]+)\"")
+            set(_aether_cached_qt "${CMAKE_MATCH_1}")
+        endif()
+    endforeach()
+    if(_aether_cached_qt AND _aether_cached_qt VERSION_LESS _aether_pin_QT_SOURCE_FLOOR)
+        message(STATUS "Cached Qt ${_aether_cached_qt} (${Qt6_DIR}) is below the "
+                       "${_aether_pin_QT_SOURCE_FLOOR} floor; dropping it from this build directory")
+        get_cmake_property(_aether_cache_vars CACHE_VARIABLES)
+        foreach(_v IN LISTS _aether_cache_vars)
+            if(_v MATCHES "^Qt6.*_DIR$")
+                unset(${_v} CACHE)
+            endif()
+        endforeach()
+    endif()
+endif()
 
 # Has the builder already pointed CMake at a Qt? Qt6_DIR / Qt6_ROOT name one
 # outright. A CMAKE_PREFIX_PATH entry names one when find_package() would find
