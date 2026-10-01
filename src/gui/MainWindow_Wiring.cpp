@@ -4938,6 +4938,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfBlankerThreshold(1.15f);
         sw->setWfBlankerMode(0);
         sw->setShowCursorFreq(false);
+        // The panel below is synced with showGrid=true, so the widget must be
+        // told too: setShowGrid() updates the live grid and persists the key.
+        sw->setShowGrid(true);
         sw->setBackgroundImage(":/bg-default.jpg");
         sw->setBackgroundOpacity(80);
         sw->setBackgroundFillColor(QColor(0x0a, 0x0a, 0x14));
