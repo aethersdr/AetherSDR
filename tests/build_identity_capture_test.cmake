@@ -64,7 +64,8 @@ set(ENV{GIT_CONFIG_GLOBAL} "${WORK_DIR}/empty.gitconfig")
 set(ENV{GIT_CONFIG_NOSYSTEM} "1")
 # The scratch tree usually sits inside a build directory inside the AetherSDR
 # checkout; stop git from finding THAT repository above it.
-set(ENV{GIT_CEILING_DIRECTORIES} "${WORK_DIR}")
+file(REAL_PATH "${WORK_DIR}" _work_real)
+set(ENV{GIT_CEILING_DIRECTORIES} "${_work_real}")
 set(ENV{GIT_AUTHOR_NAME} "t")
 set(ENV{GIT_AUTHOR_EMAIL} "t@example.invalid")
 set(ENV{GIT_COMMITTER_NAME} "t")
@@ -186,6 +187,73 @@ git_in(checkout -q -- file.txt)
 file(WRITE "${_repo}/untracked.txt" "x\n")
 capture("${_repo}")
 expect("untracked only" AETHER_BUILD_DIRTY "false")
+
+# ---- 8. Real Ninja consumer: restat and commit-without-reconfigure ---------
+# A tiny compiled consumer checks the build graph as well as the capture
+# script. No Qt, sockets, or device peer is involved.
+find_program(_ninja NAMES ninja ninja-build)
+if(_ninja)
+    set(_fixture "${WORK_DIR}/fixture")
+    set(_build "${WORK_DIR}/fixture-build")
+    file(MAKE_DIRECTORY "${_fixture}")
+    file(WRITE "${_fixture}/main.cpp"
+         "#include <cstdio>\n#include \"AetherBuildIdentity.h\"\nint main() { std::puts(AETHER_BUILD_SHA); }\n")
+    file(WRITE "${_fixture}/CMakeLists.txt.in" [=[
+cmake_minimum_required(VERSION 3.21)
+project(BuildIdentityConsumer LANGUAGES CXX)
+set(header "${CMAKE_CURRENT_BINARY_DIR}/AetherBuildIdentity.h")
+add_custom_target(identity ALL
+    BYPRODUCTS "${header}"
+    COMMAND "@CMAKE_COMMAND@"
+        "-DAETHER_SRC_DIR=@_repo@"
+        "-DAETHER_IN_FILE=@_template@"
+        "-DAETHER_OUT_FILE=${header}"
+        -P "@_script@"
+    VERBATIM)
+add_executable(consumer main.cpp)
+add_dependencies(consumer identity)
+target_include_directories(consumer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+]=])
+    configure_file("${_fixture}/CMakeLists.txt.in" "${_fixture}/CMakeLists.txt" @ONLY)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -S "${_fixture}" -B "${_build}"
+                    -G Ninja "-DCMAKE_MAKE_PROGRAM=${_ninja}"
+                    RESULT_VARIABLE _rv OUTPUT_QUIET ERROR_VARIABLE _err)
+    if(NOT _rv EQUAL 0)
+        message(FATAL_ERROR "consumer configure failed: ${_err}")
+    endif()
+    function(build_consumer)
+        execute_process(COMMAND "${CMAKE_COMMAND}" --build "${_build}"
+                        RESULT_VARIABLE _rv OUTPUT_QUIET ERROR_VARIABLE _err)
+        if(NOT _rv EQUAL 0)
+            message(FATAL_ERROR "consumer build failed: ${_err}")
+        endif()
+    endfunction()
+    set(_binary "${_build}/consumer")
+    if(CMAKE_HOST_WIN32)
+        string(APPEND _binary ".exe")
+    endif()
+    build_consumer()
+    file(TIMESTAMP "${_binary}" _binary_before "%s" UTC)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 1.2)
+    build_consumer()
+    file(TIMESTAMP "${_binary}" _binary_after "%s" UTC)
+    if(NOT _binary_before STREQUAL _binary_after)
+        message(FATAL_ERROR "unchanged HEAD rebuilt the consumer")
+    endif()
+    message(STATUS "PASS Ninja restat leaves unchanged consumer untouched")
+    file(WRITE "${_repo}/file.txt" "four\n")
+    git_in(commit -q -am four)
+    head_sha(_sha4)
+    build_consumer()
+    execute_process(COMMAND "${_binary}" RESULT_VARIABLE _rv
+                    OUTPUT_VARIABLE _reported OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _rv EQUAL 0 OR NOT _reported STREQUAL _sha4)
+        message(FATAL_ERROR "consumer did not follow new HEAD without reconfigure: ${_reported}")
+    endif()
+    message(STATUS "PASS compiled consumer follows new HEAD without reconfigure")
+else()
+    message(STATUS "SKIP Ninja consumer check: Ninja not found")
+endif()
 
 file(REMOVE_RECURSE "${WORK_DIR}")
 

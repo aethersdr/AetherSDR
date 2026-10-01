@@ -1,7 +1,7 @@
-#include "AetherBuildIdentity.h"   // generated at build time; see cmake/AetherBuildIdentity.cmake
 #include "core/DroopCalibration.h"
 #include "core/backends/AutoRfGainControl.h"
 #include "AutomationServer.h"
+#include "AetherBuildIdentity.h"   // generated at build time; see cmake/AetherBuildIdentity.cmake
 #include "core/CtcssTones.h"
 #include "core/RadioCertification.h"
 #include "LogManager.h"
@@ -13304,8 +13304,6 @@ const char* msgTypeName(int t)
 
 } // namespace
 
-// Serialize one event for the wire. PII is redacted here, on egress, so the
-// in-memory ring stays raw (cheap tap) but nothing sensitive ever leaves.
 QJsonObject AutomationServer::buildIdentityJson(const QString& describe, const QString& sha,
                                                 const QString& baseline, int commitsSinceTag,
                                                 bool dirty)
@@ -13319,6 +13317,8 @@ QJsonObject AutomationServer::buildIdentityJson(const QString& describe, const Q
     };
 }
 
+// Serialize one event for the wire. PII is redacted here, on egress, so the
+// in-memory ring stays raw (cheap tap) but nothing sensitive ever leaves.
 QJsonObject AutomationServer::logEventToJson(const LogEvent& e)
 {
     return QJsonObject{
