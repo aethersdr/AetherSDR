@@ -34,7 +34,7 @@ FILES = [
 ]
 
 PIN = check_qt_pin.read_pin(REPO / "cmake" / "qt-pin.env")
-V, REV, FLOOR = PIN["QT_VERSION"], PIN["QT_PACKAGE_REVISION"], PIN["QT_FLOOR_VERSION"]
+V, REV, FLOOR = PIN["QT_VERSION"], PIN["QT_PACKAGE_REVISION"], PIN["QT_SOURCE_FLOOR"]
 
 # (name, file, old text, new text, substring the finding must contain)
 CASES = [
@@ -43,9 +43,6 @@ CASES = [
     ("ci.yml revision", check_qt_pin.CI,
      f"  QT_PACKAGE_REVISION: '{REV}'", "  QT_PACKAGE_REVISION: '1'",
      "QT_PACKAGE_REVISION is '1'"),
-    ("floor-lane version", check_qt_pin.CI,
-     f"QT_FLOOR_VERSION: '{FLOOR}'", "QT_FLOOR_VERSION: '6.8.4'",
-     "QT_FLOOR_VERSION is '6.8.4'"),
     ("windows py7zr", check_qt_pin.WIN_INSTALLER,
      f"py7zrversion: '=={PIN['PY7ZR_VERSION']}'", "py7zrversion: '==9.9.9'",
      "PY7ZR_VERSION is '9.9.9'"),
@@ -64,8 +61,17 @@ CASES = [
     ("windows module dropped", check_qt_pin.WIN_INSTALLER,
      "modules: 'qtmultimedia qtserialport", "modules: 'qtmultimedia", "modules ["),
     ("CMake floor", "CMakeLists.txt",
-     "find_package(Qt6 6.8 REQUIRED", "find_package(Qt6 6.9 REQUIRED",
-     "Qt floor is 6.9"),
+     f"find_package(Qt6 {FLOOR} REQUIRED", "find_package(Qt6 6.11 REQUIRED",
+     "Qt floor is 6.11"),
+    ("CMake below-floor check", "CMakeLists.txt",
+     f"Qt6_VERSION VERSION_LESS {FLOOR})", "Qt6_VERSION VERSION_LESS 6.8)",
+     "Qt floor is 6.8"),
+    ("floor above the pin", "cmake/qt-pin.env",
+     f"QT_SOURCE_FLOOR={FLOOR}", "QT_SOURCE_FLOOR=6.99",
+     "QT_SOURCE_FLOOR 6.99 is above"),
+    ("old floor literal reappears", check_qt_pin.CI,
+     "runs-on: windows-latest", "runs-on: windows-latest\n    env: { X: 6.8.3 }",
+     "literal 6.8.3"),
     ("unlisted literal", check_qt_pin.APPIMAGE,
      "runs-on: ${{ matrix.runner }}",
      "runs-on: ${{ matrix.runner }}  # ok\n    timeout-minutes: 60 # fine\n"

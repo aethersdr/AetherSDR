@@ -48,10 +48,9 @@ SITES: list[tuple[str, str, str, int]] = [
     # ci.yml — workflow-level env shared by check-windows / check-macos.
     (CI, r"^\s{2}QT_VERSION:\s*'([^']+)'", "QT_VERSION", 1),
     (CI, r"^\s{2}QT_PACKAGE_REVISION:\s*'([^']+)'", "QT_PACKAGE_REVISION", 1),
-    (CI, r"^\s+AQTINSTALL_VERSION:\s*'([^']+)'", "AQTINSTALL_VERSION", 2),
+    (CI, r"^\s+AQTINSTALL_VERSION:\s*'([^']+)'", "AQTINSTALL_VERSION", 1),
     (CI, r"^\s{2}AQTINSTALL_GIT_REF:\s*'([^']+)'", "AQTINSTALL_GIT_REF", 1),
     (CI, r"^\s{2}PY7ZR_VERSION:\s*'([^']+)'", "PY7ZR_VERSION", 1),
-    (CI, r"^\s+QT_FLOOR_VERSION:\s*'([^']+)'", "QT_FLOOR_VERSION", 1),
     # Release workflows.
     (APPIMAGE, r"^\s+QT_VERSION:\s*'([^']+)'", "QT_VERSION", 1),
     (APPIMAGE, r"^\s+AQTINSTALL_VERSION:\s*'([^']+)'", "AQTINSTALL_VERSION", 1),
@@ -73,7 +72,7 @@ SITES: list[tuple[str, str, str, int]] = [
 
 # Files whose `-m <modules>` aqt lists must equal QT_MODULES, with the minimum
 # number of aqt invocations each carries.
-MODULE_SITES = {CI: 3, APPIMAGE: 1, MACOS_DMG: 1, DOCKERFILE: 1}
+MODULE_SITES = {CI: 2, APPIMAGE: 1, MACOS_DMG: 1, DOCKERFILE: 1}
 MODULES_RE = re.compile(r"-m\s+((?:qt\w+\s*)+)")
 # install-qt-action's `modules:` also lists debug-symbol modules; those are
 # packaging, not the Qt API surface, so only the plain module names must match.
@@ -115,7 +114,7 @@ def check(repo: Path) -> tuple[list[str], int]:
     if not pin_path.exists():
         return [f"{pin_path.relative_to(repo)} is missing"], 0
     pin = read_pin(pin_path)
-    required = ("QT_VERSION", "QT_PACKAGE_REVISION", "QT_FLOOR_VERSION",
+    required = ("QT_VERSION", "QT_PACKAGE_REVISION", "QT_SOURCE_FLOOR",
                 "AQTINSTALL_VERSION", "AQTINSTALL_GIT_REF", "PY7ZR_VERSION",
                 "QT_MODULES")
     for key in required:
@@ -171,7 +170,12 @@ def check(repo: Path) -> tuple[list[str], int]:
     if win_hits < 1:
         findings.append(f"{WIN_INSTALLER}: no install-qt-action `modules:` line found")
 
-    floor_mm = ".".join(pin["QT_FLOOR_VERSION"].split(".")[:2])
+    floor_mm = pin["QT_SOURCE_FLOOR"]
+    pin_mm = ".".join(pin["QT_VERSION"].split(".")[:2])
+    if tuple(map(int, floor_mm.split("."))) > tuple(map(int, pin_mm.split("."))):
+        findings.append(f"cmake/qt-pin.env: QT_SOURCE_FLOOR {floor_mm} is above "
+                        f"the pinned Qt {pin['QT_VERSION']} — no shipped build "
+                        f"could satisfy it")
     cmake_text = (repo / "CMakeLists.txt").read_text(encoding="utf-8")
     for regex in CMAKE_FLOOR_RES:
         values = regex.findall(cmake_text)
@@ -182,10 +186,9 @@ def check(repo: Path) -> tuple[list[str], int]:
             checked += 1
             if value != floor_mm:
                 findings.append(f"CMakeLists.txt: Qt floor is {value}, "
-                                f"cmake/qt-pin.env QT_FLOOR_VERSION is "
-                                f"{pin['QT_FLOOR_VERSION']} ({floor_mm})")
+                                f"cmake/qt-pin.env QT_SOURCE_FLOOR is {floor_mm}")
 
-    allowed = {pin["QT_VERSION"], pin["QT_FLOOR_VERSION"]}
+    allowed = {pin["QT_VERSION"]}
     for rel in UNKNOWN_SCAN:
         path = repo / rel
         if not path.exists():
@@ -194,8 +197,7 @@ def check(repo: Path) -> tuple[list[str], int]:
             for value in QT_LITERAL_RE.findall(text):
                 if value not in allowed:
                     findings.append(f"{rel}:{number}: Qt version literal {value} "
-                                    f"is neither the pin ({pin['QT_VERSION']}) nor "
-                                    f"the floor ({pin['QT_FLOOR_VERSION']})")
+                                    f"is not the pin ({pin['QT_VERSION']})")
     return findings, checked
 
 

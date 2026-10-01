@@ -46,8 +46,9 @@ permissions:
 
 # Qt inputs shared by check-windows and check-macos. Declared once so the two
 # per-PR legs cannot drift apart: both aqt invocations and both cache keys
-# read these. 6.12.0 is the binary pin (#5487); find_package still floors at
-# 6.8 so Debian Trixie / Pi OS Trixie keep building. windows-installer.yml /
+# read these. 6.12.0 is the binary pin (#5487), and since the source floor is
+# the same 6.12 (cmake/qt-pin.env QT_SOURCE_FLOOR), every leg here builds the
+# only Qt the tree supports. windows-installer.yml /
 # macos-dmg.yml / appimage.yml / the Linux CI image spell the same 6.12.0, so
 # the per-PR build and the release build agree by construction.
 #
@@ -326,77 +327,6 @@ jobs:
           # a stable key would make every save after the first a silent no-op
           # and freeze the cache at its first-ever contents.
           key: ccache-linux-build-${{ github.run_id }}
-
-
-  # Source-floor compile (#5487 / #4688 item 5). The binary pin is 6.12.0;
-  # this job keeps 6.12-only APIs from landing without a 6.8 guard. It reuses
-  # the CI image for compiler deps. While that image still ships 6.8.3 the
-  # Linux `build` job IS the floor and this job no-ops; after the image
-  # rebuilds to 6.12 it aqt-installs 6.8.3 beside it and compiles again.
-  #
-  # Both steps below first strip the image's Qt from the environment. The
-  # image exports 6.12 on CMAKE_PREFIX_PATH, Qt6_DIR, PATH and LD_LIBRARY_PATH,
-  # and -DCMAKE_PREFIX_PATH only puts the floor FIRST — it does not hide the
-  # rest. aqt's 6.8.3 ships no Qt6GuiPrivate package, so find_package() for it
-  # fell through to 6.12's and configure died mixing the two ("Unknown CMake
-  # command _qt_internal_show_private_module_warning"), reproduced against a
-  # 6.12 environment before this was added. PATH matters because CMake derives
-  # search prefixes from its bin/ entries; LD_LIBRARY_PATH because it outranks
-  # the floor tools' own RUNPATH at build time. With the image's Qt gone, its
-  # 6.12-built qtkeychain goes too, so credential persistence compiles out in
-  # this lane by design — linking it would be the same ABI mix.
-  check-linux-qt68-floor:
-    runs-on: ubuntu-latest
-    container: ghcr.io/aethersdr/aethersdr-ci:latest
-    env:
-      QT_FLOOR_VERSION: '6.8.3'
-      AQTINSTALL_VERSION: '3.3.0'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Resolve Qt 6.8.3
-        id: floor
-        run: |
-          FLOOR_ROOT="/opt/Qt/${QT_FLOOR_VERSION}/gcc_64"
-          if [ -x "${FLOOR_ROOT}/bin/qmake" ] && \
-             [ "$("${FLOOR_ROOT}/bin/qmake" -query QT_VERSION)" = "${QT_FLOOR_VERSION}" ]; then
-            echo "CI image still provides Qt ${QT_FLOOR_VERSION}; the Linux build job is the floor."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          python3 -m venv /tmp/aqt-venv
-          /tmp/aqt-venv/bin/pip install --no-cache-dir "aqtinstall==${AQTINSTALL_VERSION}"
-          /tmp/aqt-venv/bin/aqt install-qt linux desktop "${QT_FLOOR_VERSION}" linux_gcc_64 \
-            -m qtmultimedia qtwebsockets qtserialport qtshadertools \
-            --outputdir /opt/Qt
-          test -x "${FLOOR_ROOT}/bin/qmake"
-          "${FLOOR_ROOT}/bin/qmake" -query QT_VERSION
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "QT_FLOOR_ROOT=${FLOOR_ROOT}" >> "$GITHUB_ENV"
-
-      - name: Configure against Qt 6.8.3
-        if: steps.floor.outputs.skip != 'true'
-        run: |
-          unset CMAKE_PREFIX_PATH Qt6_DIR LD_LIBRARY_PATH
-          PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vF "$QT_ROOT" | paste -sd: -)"
-          cmake -B build-floor -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_PREFIX_PATH="$QT_FLOOR_ROOT" \
-            -DAETHER_GPU_SPECTRUM=ON > configure-floor.log 2>&1 || {
-            cat configure-floor.log
-            exit 1
-          }
-          grep -Fq "GPU spectrum rendering enabled (QRhi, Qt ${QT_FLOOR_VERSION})" configure-floor.log || {
-            echo "ERROR: floor build did not enable GPU spectrum with Qt ${QT_FLOOR_VERSION}. Relevant output:"
-            grep -iE "GPU spectrum|Qt6GuiPrivate|private headers" configure-floor.log || true
-            exit 1
-          }
-
-      - name: Build against Qt 6.8.3
-        if: steps.floor.outputs.skip != 'true'
-        run: |
-          unset CMAKE_PREFIX_PATH Qt6_DIR LD_LIBRARY_PATH
-          PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vF "$QT_ROOT" | paste -sd: -)"
-          cmake --build build-floor -j$(nproc)
 
 
   # Cross-platform build check — runs on every PR (no path gating).

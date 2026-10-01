@@ -2,10 +2,10 @@
 # setup-qt.sh — Install the exact Qt AetherSDR releases are built with, for a
 # source build on Linux or macOS.
 #
-# AetherSDR compiles against any Qt from the 6.8 floor up, so a distro Qt is
-# fine for most source builds. This script is for when it is not: a distro
-# below the floor (Ubuntu 24.04 ships 6.4.2), macOS (Homebrew's Qt is a rolling
-# release no artifact ships), or wanting to build what the release builds.
+# AetherSDR requires Qt 6.12 (QT_SOURCE_FLOOR in cmake/qt-pin.env), the Qt
+# every release is built against, and few distros package it yet. This is the
+# supported way to get it for a source build; a distro or Qt-installer Qt that
+# is already 6.12+ works too.
 #
 # It installs the pinned version from cmake/qt-pin.env — the same file that
 # every CI leg and release workflow is checked against — with the same pinned
@@ -83,8 +83,8 @@ case "$OS/$MACHINE" in
         AQT_HOST=mac; AQT_ARCH=clang_64; KIT_DIR=macos
         REPO_HOST=mac_x64; MIN_GLIBC="" ;;
     *)
-        die "Qt publishes no desktop binaries for $OS/$MACHINE. Build Qt from
-       source, or use a distro Qt ${QT_FLOOR_VERSION%.*}+ if yours ships one." ;;
+        die "Qt publishes no desktop binaries for $OS/$MACHINE. Build Qt $QT_SOURCE_FLOOR+
+       from source, or use a distro Qt $QT_SOURCE_FLOOR+ if yours ships one." ;;
 esac
 
 if [ "$OS" = "Darwin" ]; then
@@ -144,11 +144,12 @@ if [ -n "$MIN_GLIBC" ]; then
     GLIBC="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
     if [ -z "$GLIBC" ]; then
         die "this system's C library is not glibc (musl?). Qt's Linux binaries
-       need glibc $MIN_GLIBC+. Use a distro Qt ${QT_FLOOR_VERSION%.*}+ instead."
+       need glibc $MIN_GLIBC+. Use a distro Qt $QT_SOURCE_FLOOR+ if yours ships one,
+       or build Qt from source."
     fi
     if older_than "$GLIBC" "$MIN_GLIBC"; then
         die "Qt $QT_VERSION's $MACHINE binaries need glibc $MIN_GLIBC; this system has $GLIBC.
-       They would install, then fail to load. Options: a distro Qt ${QT_FLOOR_VERSION%.*}+,
+       They would install, then fail to load. Options: a distro Qt $QT_SOURCE_FLOOR+,
        a newer OS release, or the AetherSDR AppImage (no build needed)."
     fi
     echo "glibc $GLIBC — OK (Qt $QT_VERSION needs $MIN_GLIBC)"

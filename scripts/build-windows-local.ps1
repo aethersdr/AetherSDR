@@ -18,7 +18,7 @@
     * Visual Studio 2022 (or Build Tools) with "Desktop development with C++".
       RUN THIS SCRIPT FROM the "x64 Native Tools Command Prompt for VS 2022"
       (then `pwsh`), so cl.exe/link.exe and the MSVC env are set.
-    * Qt 6.8+ for msvc2022_64 + modules: qtmultimedia qtserialport qtwebsockets
+    * Qt 6.12+ for msvc2022_64 + modules: qtmultimedia qtserialport qtwebsockets
       qtshadertools. Easiest: scripts\setup\setup-qt.ps1 installs the release Qt,
       and this script then finds it with no -QtDir. (The released aqtinstall
       cannot install Qt 6.11+ on Windows; see docs/BUILDING.md.)

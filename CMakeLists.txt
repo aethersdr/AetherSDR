@@ -251,37 +251,23 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Qt6 components
-# Qt 6.8 minimum (source floor). The binary pin is 6.12.0 (#5487): the
-# AppImage (both arches, .github/workflows/appimage.yml), the Windows
-# installer, check-windows/check-macos in ci.yml, and the Linux CI image
-# (.github/docker/Dockerfile) all install 6.12.0 via aqt. The floor stays
-# 6.8 so Debian Trixie / Pi OS Trixie keep building; 6.12-only APIs must
-# stay version-guarded until a floor-lane CI job compiles this tree on 6.8.
+# Qt 6.12 minimum: the same Qt every release artifact and every CI leg builds
+# against (#5487). A source build no longer depends on what a distro happens to
+# package — scripts/setup/setup-qt.{sh,ps1} install exactly this Qt in one
+# command, and cmake/AetherQtPin.cmake finds it with no flags. A distro or
+# Qt-installer Qt that is 6.12 or newer still works. The floor is
+# QT_SOURCE_FLOOR in cmake/qt-pin.env; tools/check_qt_pin.py fails Static
+# Checks if this file disagrees with it.
 #
-# Raised from 6.2 deliberately. The old floor was nominal — nothing tested it
-# after Ubuntu 22.04 left the matrix, and the only leg anywhere near it was the
-# CI image on Ubuntu 24.04's Qt 6.4.2, a release EOL upstream since the 6.4
-# series ended at 6.4.3. That gap rejected valid code (PR #4646, QList::assign)
-# while testing a Qt no artifact shipped.
-#
-# Consequence for source builds: Ubuntu 24.04's distro Qt (6.4.2) no longer
-# satisfies this — build against 6.8+ from aqt/Qt online installer, or use a
-# distro carrying it (Debian Trixie, Ubuntu 25.10+, Fedora 41+, Arch).
-# 6.8 also clears QRhiWidget (6.7+), so the GPU spectrum path is no longer
-# conditionally compiled out on Linux CI.
+# One version, so no API needs a QT_VERSION guard for an older Qt, and no CI
+# job has to compile the tree against a second Qt to keep such guards honest.
 #
 # Probe QUIET first so a below-floor Qt gets an actionable error instead of
 # CMake's bare "the version found is not compatible", which names neither the
-# floor as a project decision nor the way out. Ubuntu 24.04 LTS (Qt 6.4.2) is
-# the common case, it has the largest install base of any supported distro, and
-# it was a documented apt line here until this floor moved — so the people most
-# likely to hit this have the least context for it, and the README they need is
-# a document they have already scrolled past.
-#
-# Both failure modes name scripts/setup/setup-qt.{sh,ps1}, which install the
-# pinned release Qt into a per-user cache that cmake/AetherQtPin.cmake then
-# finds with no flags — one command, instead of a manual aqt recipe (which on
-# Windows does not work with the released aqt at all) and a prefix path.
+# floor as a project decision nor the way out. A distro Qt below 6.12 is the
+# common case (Debian Trixie 6.8, Ubuntu 24.04 6.4, Arch and Debian sid 6.11 at
+# the time of writing), and those builders have the least context for it, so
+# both failure modes name the one command that fixes them.
 include(cmake/AetherQtPin.cmake)
 find_package(Qt6 QUIET COMPONENTS Core)
 if(WIN32)
@@ -294,21 +280,18 @@ set(_aether_qt_way_out
     "    ${_aether_qt_setup}\n"
     "(or configure with -DAETHER_FETCH_QT=ON to have cmake run it). "
     "See docs/BUILDING.md for what it checks and where it installs.")
-if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
+if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.12)
     message(FATAL_ERROR
-        "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.8 or newer.\n"
-        "That is the source floor; release binaries are built against Qt 6.12.\n"
-        "Ubuntu 24.04 LTS ships 6.4.2; Debian Trixie, Ubuntu 25.10+, "
-        "Fedora 41+ and Arch all ship 6.8 or newer.\n"
+        "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.12 or newer — "
+        "the Qt every release is built against.\n"
         ${_aether_qt_way_out})
 elseif(NOT Qt6_FOUND)
     message(FATAL_ERROR
-        "No Qt 6 found. AetherSDR needs Qt 6.8 or newer: a distro Qt "
-        "(e.g. qt6-base-dev and friends, see the README) or the release Qt.\n"
+        "No Qt 6 found. AetherSDR requires Qt 6.12 or newer.\n"
         ${_aether_qt_way_out})
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS
+find_package(Qt6 6.12 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
@@ -579,14 +562,14 @@ endif()
 
 # GPU-accelerated spectrum/waterfall rendering via QRhi (#391)
 # Requires: Qt 6.7+ (QRhiWidget), Qt6::ShaderTools (build-time shader compilation)
-# The version guard below is unreachable now that find_package demands 6.8 — it
+# The version guard below is unreachable now that find_package demands 6.12 — it
 # is kept as a cheap backstop so lowering the floor again can't silently produce
 # a build that references QRhiWidget on a Qt that lacks it.
 if(AETHER_GPU_SPECTRUM)
     if(Qt6_VERSION VERSION_LESS "6.7")
         set(AETHER_GPU_SPECTRUM OFF)
         # 6.12.0, not 6.7.x, in the suggested path: this guard is unreachable
-        # while the floor is 6.8, so if it ever fires the floor has been
+        # while the floor is 6.12, so if it ever fires the floor has been
         # lowered — and pointing that reader at a 6.7 install would send them
         # to a Qt find_package still rejects.
         message(STATUS "GPU spectrum rendering disabled (QRhiWidget requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/gcc_64 to use a newer Qt installation)")

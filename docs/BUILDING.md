@@ -32,9 +32,8 @@ cmake -B build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix)"
 Qt 6.12 needs **Xcode 16** (the macOS 15 SDK): Qt's own CMake stops at
 configure with "Qt requires at least version 16 of Xcode" on anything older,
 and the script checks before it downloads. Xcode 16 itself needs a macOS 14.5+
-host. On an older Mac, install Qt 6.8.3 (the source floor) with aqt instead
-and pass its `macos` directory in `CMAKE_PREFIX_PATH`. Anything built against
-6.12 runs on macOS 14.4+ only.
+host, so a Mac below macOS 14.5 cannot build AetherSDR from source — use the
+DMG if it runs there. Anything built against 6.12 runs on macOS 14.4+ only.
 
 `clang_64` is the only macOS desktop build Qt publishes, and it is universal2 —
 there is no separate arm64 archive to pick. `$(brew --prefix)` stays on the
@@ -61,7 +60,6 @@ or higher) with the MSVC C++ workload, CMake 3.25+, Ninja, Git, and Python 3.
 7-Zip is recommended. The 17.14 floor comes from Qt 6.12 itself: its static
 `Qt6EntryPoint.lib`, which every Windows GUI app links, is built by MSVC 14.44,
 and an MSVC linker must be at least as new as the compiler behind any input.
-Qt 6.8.3 links with 17.9+.
 
 Qt 6.12 is the last Qt release that supports Windows 10 (1809 or later), so
 the next binary Qt bump will make AetherSDR's Windows builds Windows 11-only.
@@ -97,8 +95,9 @@ index per architecture. `setup-qt.ps1` installs aqt from the commit CI uses
 extracts with 7-Zip because aqt's built-in extractor fails at random on Windows
 Qt archives.
 
-**Using a Qt you installed yourself** (e.g. the Qt Online Installer, which needs
-a Qt account): skip step 2, then point both qtkeychain and CMake at the kit, with
+**Using a Qt you installed yourself** (6.12 or newer, e.g. from the Qt Online
+Installer, which needs a Qt account): skip step 2, then point both qtkeychain
+and CMake at the kit, with
 forward slashes (CMake reads the path literally):
 
 ```bat
@@ -140,10 +139,10 @@ explicitly so this only bites users who install just the AppImage.
 
 ## The release Qt: `setup-qt.sh`
 
-AetherSDR builds against any Qt from 6.8 up, so a distro Qt is the easy path
-where the distro has one. When it does not — Ubuntu 24.04 LTS ships 6.4.2 —
-or on macOS, or to build exactly what the release builds use, install the
-pinned release Qt with one command:
+AetherSDR requires Qt 6.12, the Qt every release is built against, and few
+distros package it yet (Debian Trixie ships 6.8, Ubuntu 24.04 6.4, Arch and
+Debian sid 6.11 at the time of writing). Install the pinned release Qt with
+one command:
 
 ```bash
 scripts/setup/setup-qt.sh
@@ -172,27 +171,28 @@ minute on a fast connection.
   still serves the exact build the pin names.
 - **Re-running** is a no-op once installed. `--print-prefix` prints the Qt
   path CMake will use.
-- **Using another Qt anyway:** pass `-DAETHER_USE_PINNED_QT=OFF`, or point
-  `CMAKE_PREFIX_PATH`/`Qt6_DIR` at it — an explicit choice always wins.
+- **Using another Qt:** any Qt 6.12+ works — a distro's, once it ships one, or
+  a Qt Online Installer kit. Pass `-DAETHER_USE_PINNED_QT=OFF`, or point
+  `CMAKE_PREFIX_PATH`/`Qt6_DIR` at it; an explicit choice always wins.
 - **Let CMake run it:** `-DAETHER_FETCH_QT=ON` runs the script at configure
   time when the Qt is missing. Off by default — a plain configure should never
   start a 2 GB download.
 - **An existing build directory** remembers the Qt it first found; reconfigure
   with `cmake --fresh -B build` after installing.
 
-Qt's binaries also need the X11/xcb runtime libraries a distro Qt would have
-pulled in. Desktop installs nearly always have them; a minimal one may not —
-`.github/docker/Dockerfile` lists the full set CI installs.
+Qt's binaries also need the X11/xcb, GL and PulseAudio libraries a distro Qt
+would have pulled in; the README's per-distro install lines include them, and
+`.github/docker/Dockerfile` is the set CI builds with.
 
 On Windows, use `setup-qt.ps1` instead — see [Windows 11](#windows-11).
 
-*Note: GPU rendering also needs the private QtGui headers (`qt6-base-private-dev` on Debian-family, included by default in the Qt Online Installer).*
+*Note: GPU rendering also needs the private QtGui headers. The release Qt and the Qt Online Installer include them; a distro Qt needs its private-headers package (`qt6-base-private-dev` on Debian-family).*
 
 ---
 
 ## GPU spectrum rendering
 
-GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater (`QRhiWidget`). Since the build now requires Qt 6.8 as a minimum, no build is held back by the Qt version any more — the aarch64 AppImage included. What decides whether a given binary renders via QRhi is the `AETHER_GPU_SPECTRUM` build option, and for a source build whether Qt's private GUI headers are installed: CMake turns the option off with `GPU spectrum rendering disabled — Qt6GuiPrivate not found` when they are missing (install `qt6-base-private-dev` / `qt6-qtbase-private-devel`).
+GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater (`QRhiWidget`). The build requires Qt 6.12, so no build is held back by the Qt version — the aarch64 AppImage included. What decides whether a given binary renders via QRhi is the `AETHER_GPU_SPECTRUM` build option, and for a source build whether Qt's private GUI headers are installed: CMake turns the option off with `GPU spectrum rendering disabled — Qt6GuiPrivate not found` when they are missing (install `qt6-base-private-dev` / `qt6-qtbase-private-devel`).
 
 The CPU `QPainter` path is a **build-time alternative, not a runtime fallback**. `AETHER_GPU_SPECTRUM` selects `SpectrumWidget`'s base class — `QRhiWidget` or `QWidget` — and `SpectrumWidget::paintEvent()`, which is what draws the spectrum on the CPU, is compiled only into the `QWidget` build. (A GPU build still uses `QPainter`, but only to rasterise overlays into textures QRhi then composites.) Of the shipped artifacts only the Intel macOS DMG is built the other way, and deliberately: `QRhiWidget` misbehaves on older Metal/OpenGL hardware.
 
