@@ -880,6 +880,7 @@ set(CORE_SOURCES
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
     src/core/GpuSelector.cpp
+    src/core/QtAudioBackendGuard.cpp  # pre-QApplication: keeps Qt 6.12 off a crashing PipeWire backend
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
     src/core/OccupiedRegion.cpp
@@ -3041,6 +3042,14 @@ if(ENABLE_SPECBLEACH)
         # Suppress warnings from third-party C code
         set_source_files_properties(${SPECBLEACH_SOURCES} PROPERTIES COMPILE_FLAGS "-w")
     endif()
+endif()
+
+# QtAudioBackendGuard loads libpipewire at runtime (dlopen), the way Qt itself
+# does, so it has no build-time PipeWire dependency. libdl is part of libc on
+# every glibc this tree supports; linked explicitly so the guard does not ride
+# on the DFNR or AFX blocks below happening to pull it in.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(aethercore PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 if(ENABLE_DFNR)
