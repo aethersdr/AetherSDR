@@ -2422,6 +2422,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_tests_properties(qt_audio_backend_guard_no_config qt_audio_backend_guard_user_choice
         PROPERTIES SKIP_RETURN_CODE 77
                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PIPEWIRE_CONFIG_DIR=${_aether_empty_pw_conf};PIPEWIRE_CONFIG_PREFIX=/nonexistent")
+    # Exercise the default-selection path even when the developer has chosen a
+    # backend in their shell. The user-choice scenario keeps its explicit value.
+    set_property(TEST qt_audio_backend_guard_no_config PROPERTY
+        ENVIRONMENT_MODIFICATION "QT_AUDIO_BACKEND=unset:")
     set_property(TEST qt_audio_backend_guard_user_choice APPEND PROPERTY
         ENVIRONMENT "QT_AUDIO_BACKEND=pulseaudio")
 endif()
