@@ -4,6 +4,7 @@
 
 #include <QByteArray>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <vector>
 #include <Accelerate/Accelerate.h>
@@ -31,7 +32,11 @@ namespace AetherSDR {
 //   - User-adjustable strength: 0 = bypass, 1 = full NR.
 //
 // Processing chain (entirely in the configured sample-rate domain):
-//   stereo float32 -> shared mono FFT NR mask -> independent L/R OLA synthesis
+//   stereo float32 -> per-channel noise estimate and mask -> L/R OLA synthesis
+//
+// Each channel has its own noise estimator, as RN2 runs one RNNoise state
+// per channel: the two sides of a diversity pair are different antennas with
+// different noise, and neither should be masked by the other's estimate.
 
 class MacNRFilter {
 public:
@@ -58,8 +63,21 @@ public:
 
 private:
     const int m_sampleRate;
-    void updateGainFromFrame(const float* inBuf);
+    // Noise estimator state, one per channel.
+    struct ChannelEstimator {
+        std::vector<float> powerHistory;   // smoothed periodograms, HIST rows of m_bins
+        int                histIdx{0};
+        std::vector<float> noiseEst;       // current noise floor estimate [m_bins]
+        std::vector<float> smoothedPower;  // current smoothed periodogram [m_bins]
+        std::vector<float> prevPostSnr;    // previous a-posteriori SNR [m_bins]
+        std::vector<float> filterGain;     // unblended synthesis mask [m_bins]
+        bool               noiseInitialized{false};
+    };
+
+    void resetEstimator(ChannelEstimator& estimator);
+    void updateGainFromFrame(const float* inBuf, ChannelEstimator& estimator);
     void synthesizeFrameWithCurrentGain(const float* inBuf, float* outBuf,
+                                        const ChannelEstimator& estimator,
                                         float synthesisStrength);
 
     // ── FFT parameters ─────────────────────────────────────────────────
@@ -89,26 +107,21 @@ private:
 
     // ── OLA buffers ────────────────────────────────────────────────────
     std::vector<float> m_window;    // sqrt-Hann analysis+synthesis window [m_fftSize]
-    std::vector<float> m_inAccum;   // mono float input accumulator [m_fftSize]
     std::vector<float> m_inAccumL;  // left-channel input accumulator [m_fftSize]
     std::vector<float> m_inAccumR;  // right-channel input accumulator [m_fftSize]
     std::vector<float> m_olaBufferL; // left overlap-add accumulator [m_fftSize]
     std::vector<float> m_olaBufferR; // right overlap-add accumulator [m_fftSize]
     std::vector<float> m_frameBuf;  // windowed analysis frame [m_fftSize]
     std::vector<float> m_synthBuf;  // synthesis frame [m_fftSize]
+    std::vector<float> m_outFrameL; // windowed left synthesis frame [m_fftSize]
+    std::vector<float> m_outFrameR; // windowed right synthesis frame [m_fftSize]
     std::vector<float> m_outAccumL; // processed left-channel output
     std::vector<float> m_outAccumR; // processed right-channel output
 
     // ── Noise estimator state ─────────────────────────────────────────
-    std::vector<float> m_powerHistory; // smoothed periodograms, HIST rows of m_bins
-    int                m_histIdx{0};
-    std::vector<float> m_noiseEst;       // current noise floor estimate [m_bins]
-    std::vector<float> m_smoothedPower;  // current smoothed periodogram [m_bins]
-    std::vector<float> m_prevPostSnr;    // previous a-posteriori SNR [m_bins]
-    std::vector<float> m_filterGain;     // unblended synthesis mask [m_bins]
-    std::vector<float> m_powerBuf;       // current power spectrum [m_bins]
-    std::vector<float> m_gainBuf;        // raw Wiener gain per bin [m_bins]
-    bool               m_noiseInitialized{false};
+    std::array<ChannelEstimator, 2> m_estimators; // [0] = left, [1] = right
+    std::vector<float> m_powerBuf;       // current power spectrum scratch [m_bins]
+    std::vector<float> m_gainBuf;        // raw Wiener gain scratch [m_bins]
 
     std::atomic<float> m_strength{1.0f};
 };

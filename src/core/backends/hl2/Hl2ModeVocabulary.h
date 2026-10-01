@@ -72,9 +72,16 @@
 // on NEITHER (CW and CWU both transmit correctly through the gateware keyer).
 // Collapsing one spelling onto the other moves nothing across that boundary --
 // hl2_mode_vocabulary_test pins the equivalence for every accepted spelling.
-// The duplicate entries stay: CAT, TCI and Hl2Backend::setSliceMode still put
-// either spelling on the slice at run time, and those entries are what refuse
-// the key when they do.
+// The duplicate entries stay, and the reason has NARROWED rather than gone:
+// this file used to say "CAT, TCI and Hl2Backend::setSliceMode still put
+// either spelling on the slice at run time", and setSliceMode() no longer
+// does -- it runs canonicalOfferedMode() on what it is handed, the same way
+// applyRestoredState() always has, so the last backend-side route that could
+// leave a slice holding an unpublished spelling is closed. That was a
+// description of the behaviour and never a requirement of it; the equivalence
+// above is what made closing it safe. The duplicate receiveOnlyModes entries
+// are kept regardless, because a membership test is not alias normalisation
+// and the cost of an extra entry is nothing against the cost of a missing one.
 //
 // modeFromString() maps both members of each pair onto ONE WdspChannel mode, so
 // the reconciliation is a no-op on the DSP: it renames what the operator is

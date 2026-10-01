@@ -1,6 +1,7 @@
 #ifdef HAVE_SPECBLEACH
 
 #include "SpecbleachFilter.h"
+#include "core/dsp/FftwPlannerLock.h"
 #include <specbleach_denoiser.h>
 #include <cstring>
 #include <algorithm>
@@ -12,41 +13,49 @@ static constexpr float kFrameSizeMs = 40.0f;  // 40ms frames (~960 samples)
 
 SpecbleachFilter::SpecbleachFilter(int sampleRate)
     : m_sampleRate(sampleRate)
-    , m_stereoAdapter(0, sampleRate)
 {
-    if (!m_stereoAdapter.isValid()) {
+    if (sampleRate != 24000 && sampleRate != 48000) {
         qWarning() << "SpecbleachFilter: unsupported sample rate" << sampleRate;
         return;
     }
-    m_handle = specbleach_initialize(sampleRate, kFrameSizeMs);
-    if (!m_handle) {
+    {
+        auto lock = fftwfPlannerLock();
+        for (auto& handle : m_handles) {
+            handle = specbleach_initialize(sampleRate, kFrameSizeMs);
+        }
+    }
+    if (!isValid()) {
         qWarning() << "SpecbleachFilter: failed to initialize";
         return;
     }
-    m_stereoAdapter.setProcessingLatencyFrames(
-        static_cast<int>(specbleach_get_latency(m_handle)));
     applyParams();
     qDebug() << "SpecbleachFilter: initialized, latency ="
-             << specbleach_get_latency(m_handle) << "samples";
+             << specbleach_get_latency(m_handles[0]) << "samples";
 }
 
 SpecbleachFilter::~SpecbleachFilter()
 {
-    if (m_handle)
-        specbleach_free(m_handle);
+    auto lock = fftwfPlannerLock();
+    for (auto handle : m_handles) {
+        if (handle) {
+            specbleach_free(handle);
+        }
+    }
 }
 
 void SpecbleachFilter::reset()
 {
     m_frameCount = 0;
-    m_stereoAdapter.reset();
-    if (m_handle)
-        specbleach_reset_noise_profile(m_handle);
+    for (auto handle : m_handles) {
+        if (handle) {
+            specbleach_reset_noise_profile(handle);
+        }
+    }
 }
 
 void SpecbleachFilter::applyParams()
 {
-    if (!m_handle) return;
+    if (!isValid()) return;
 
     SpectralBleachDenoiserParameters params{};
     params.learn_noise = 0;
@@ -61,13 +70,15 @@ void SpecbleachFilter::applyParams()
     params.aggressiveness = 0.0f;
     params.tonal_reduction = 0.0f;
 
-    specbleach_load_parameters(m_handle, params);
+    for (auto handle : m_handles) {
+        specbleach_load_parameters(handle, params);
+    }
     m_paramsDirty = false;
 }
 
 QByteArray SpecbleachFilter::process(const QByteArray& pcmStereo)
 {
-    if (!m_handle)
+    if (!isValid())
         return pcmStereo;
 
     // Apply parameter changes if dirty
@@ -75,35 +86,46 @@ QByteArray SpecbleachFilter::process(const QByteArray& pcmStereo)
         applyParams();
 
     const int totalFloats = pcmStereo.size() / static_cast<int>(sizeof(float));
-    const int monoSamples = totalFloats / 2;
-    if (monoSamples <= 0)
+    const int frames = totalFloats / 2;
+    if (frames <= 0)
         return pcmStereo;
 
     // Resize buffers if needed
-    if (static_cast<int>(m_monoIn.size()) < monoSamples) {
-        m_monoIn.resize(monoSamples);
-        m_monoOut.resize(monoSamples);
+    if (static_cast<int>(m_channelIn[0].size()) < frames) {
+        for (int channel = 0; channel < 2; ++channel) {
+            m_channelIn[channel].resize(frames);
+            m_channelOut[channel].resize(frames);
+        }
     }
 
-    // Stereo float32 → mono float (average L+R)
     const auto* in = reinterpret_cast<const float*>(pcmStereo.constData());
-    for (int i = 0; i < monoSamples; ++i)
-        m_monoIn[i] = (in[i * 2] + in[i * 2 + 1]) * 0.5f;
+    for (int i = 0; i < frames; ++i) {
+        m_channelIn[0][i] = in[i * 2];
+        m_channelIn[1][i] = in[i * 2 + 1];
+    }
 
     // Process — feed audio to build noise profile even during learning
-    specbleach_process(m_handle, monoSamples, m_monoIn.data(), m_monoOut.data());
+    for (int channel = 0; channel < 2; ++channel) {
+        specbleach_process(m_handles[channel], frames,
+                           m_channelIn[channel].data(),
+                           m_channelOut[channel].data());
+    }
 
     // During the learning period, pass original audio through so the user
     // hears unprocessed audio instead of silence while the noise profile
     // builds. The library still receives the audio above for profiling. (#827)
     if (m_frameCount < kLearningFrames) {
         ++m_frameCount;
-        m_stereoAdapter.reset();
         return pcmStereo;
     }
 
-    m_stereoAdapter.pushDryStereo(pcmStereo);
-    return m_stereoAdapter.takeProcessedMono(m_monoOut.data(), monoSamples);
+    QByteArray output(pcmStereo.size(), Qt::Uninitialized);
+    auto* out = reinterpret_cast<float*>(output.data());
+    for (int i = 0; i < frames; ++i) {
+        out[i * 2] = std::clamp(m_channelOut[0][i], -1.0f, 1.0f);
+        out[i * 2 + 1] = std::clamp(m_channelOut[1][i], -1.0f, 1.0f);
+    }
+    return output;
 }
 
 // Parameter setters — mark dirty so next process() applies them

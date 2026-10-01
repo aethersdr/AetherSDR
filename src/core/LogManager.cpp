@@ -56,6 +56,11 @@ Q_LOGGING_CATEGORY(lcClock,      "aether.clock",       QtWarningMsg)
 // are the only record of what the companion filter board was told to do, so
 // they have to be in a support log that was captured without foreknowledge.
 Q_LOGGING_CATEGORY(lcHl2,        "aether.hl2",         QtInfoMsg)
+// NO default-severity argument, deliberately: this is verbatim the declaration
+// that lived in Hl2Backend.cpp, moved rather than rewritten, so the category
+// keeps exactly the default it already had. applyFilterRules() is what turns
+// it off; the registry row below is what lets the Support dialog turn it back on.
+Q_LOGGING_CATEGORY(lcHl2Tx,      "aether.hl2.tx")
 
 LogManager::LogManager()
 {
@@ -83,7 +88,7 @@ LogManager::LogManager()
         // share the rig-control plumbing that the qCInfo lines report on.
         // The description names the TX-summary fields (blocks/peak/rms/clips)
         // because those are the tokens an operator greps a support log for.
-        {"aether.cat",        "TCI / CAT / rigctld",  "TCI server (slice and DAX arming, TX audio summary: blocks, peak, rms, clips), rigctld TCP servers, PTY virtual serial ports"},
+        {"aether.cat",        "TCI / CAT / rigctld",  "TCI server (slice and DAX arming, TX audio summary, TX_CHRONO stall summary at debug: maxGap/latePolls/catch-up), rigctld TCP servers, PTY virtual serial ports"},
         {"aether.dax",        "DAX",          "Virtual audio bridge (PipeWire/CoreAudio)"},
         {"aether.meters",     "Meters",       "Meter definitions and value conversion"},
         {"aether.transmit",   "Transmit",     "TX state, ATU, profiles, power control"},
@@ -109,7 +114,7 @@ LogManager::LogManager()
         {"aether.clock",      "AetherClock",  "WWV/WWVB time-signal decoder: state transitions, per-second alignment, frame decodes, voter verdicts"},
         {"aether.hl2",        "Hermes-Lite 2", "HL2 backend: band changes, J16 companion-filter selection, LNA gain, and radio health telemetry"},
         // Registered so the TRANSMIT telemetry is reachable at all. The category
-        // is declared locally in Hl2Backend.cpp and was never listed here, so
+        // was declared locally in Hl2Backend.cpp and was never listed here, so
         // applyFilterRules()'s blanket "aether.*.debug=false" switched it off and
         // no UI toggle could switch it back on. What that hid is the TX IQ FIFO
         // depth plus its underflow/overflow flags — which the backend's own
@@ -123,7 +128,10 @@ LogManager::LogManager()
         // explicitly in the description because the two labels otherwise read as
         // one control, and someone chasing transmit telemetry will tick the
         // wrong box and conclude the logging is still broken.
-        {"aether.hl2.tx",     "Hermes-Lite 2 TX", "HL2 transmit telemetry: TX IQ FIFO depth with underflow/overflow flags, and forward/reflected power counts. Separate toggle — ticking \"Hermes-Lite 2\" does NOT enable this (high-rate)"},
+        // It is declared in LogManager.h now, beside every other category,
+        // because "aether.hl2.tx" has a SECOND writer: MetisClient logs the
+        // host queue's own starvation there, and that is not this FIFO.
+        {"aether.hl2.tx",     "Hermes-Lite 2 TX", "HL2 transmit telemetry — TWO different instruments on one toggle, and the difference is the point. The RADIO’s DSIQ FIFO depth with its underflow/overflow flags and the forward/reflected power counts; AND the HOST queue’s own starvation lines, which are NOT that FIFO and which that FIFO cannot see. Separate toggle — ticking \"Hermes-Lite 2\" does NOT enable this (high-rate)"},
         // ICOM — the same "declared locally, never registered" hole the HL2
         // categories above had. All five were unreachable: applyFilterRules()'s
         // blanket `aether.*.debug=false` switched them off and no UI toggle

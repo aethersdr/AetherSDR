@@ -345,6 +345,10 @@ Q_SIGNALS:
     void aetherVoiceRequested();   // user clicked the AetherVoice button on the DSP tab
     void splitToggled();
     void swapRequested();
+    // Right-click on the SPLIT/SWAP badge. The menu itself is built by
+    // MainWindow, which owns the split pair and the remembered arrangement;
+    // this widget only reports where the operator clicked. (#2242, #311)
+    void splitBadgeMenuRequested(const QPoint& globalPos);
     void autotuneRequested(bool intermittent);  // CW auto-tune: false=stop, true=loop
     void autotuneOnceRequested();               // CW auto-tune one-shot
     void zeroBeatRequested();                   // client-side CW zero-beat

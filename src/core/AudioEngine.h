@@ -993,10 +993,10 @@ private:
     void processNr2(const QByteArray& stereoPcm,
                     RxDspSource source = RxDspSource::Main,
                     ExternalRxAudioSourceState* externalSource = nullptr);
-    static void processNr2StereoSharedMask(SpectralNR& nr2,
-                                           const float* src,
-                                           int stereoFrames,
-                                           QByteArray& output);
+    static void processNr2Stereo(SpectralNR& nr2,
+                                 const float* src,
+                                 int stereoFrames,
+                                 QByteArray& output);
     void updateRxBufferStats();
     ExternalRxAudioSourceState* externalKiwiSource(const QString& sourceId,
                                                    bool create);

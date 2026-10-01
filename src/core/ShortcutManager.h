@@ -34,6 +34,8 @@ struct ShortcutExportResult {
 class ShortcutManager : public QObject {
     Q_OBJECT
 public:
+    enum class ShortcutPolicy { Operating, WindowManagement };
+
     struct Action {
         QString id;
         QString displayName;
@@ -50,6 +52,7 @@ public:
                                   // drifts (#4057 review: atu_start was missed).
         TxController::Activity txActivity{TxController::Activity::Mox};
         std::function<void(const TxController::Input&)> txHandler;
+        ShortcutPolicy policy{ShortcutPolicy::Operating};
     };
 
     explicit ShortcutManager(QObject* parent = nullptr);
@@ -61,7 +64,8 @@ public:
                         const QString& category, const QKeySequence& defaultKey,
                         std::function<void()> handler,
                         bool autoRepeat = false,
-                        bool keysTx = false);
+                        bool keysTx = false,
+                        ShortcutPolicy policy = ShortcutPolicy::Operating);
 
     // Binding management
     void setBinding(const QString& actionId, const QKeySequence& key);
@@ -85,11 +89,13 @@ public:
     ShortcutImportResult importFromFile(const QString& path);
 
     // Create/destroy QShortcuts on the target widget.
-    // guardFn is called before each handler — return false to suppress.
+    // Operating actions are window-scoped and consult guardFn. WindowManagement
+    // actions are application-scoped and remain available while operating input
+    // is disabled/captured. TX actions always retain the operating policy.
     void rebuildShortcuts(QWidget* parent,
                           std::function<bool()> guardFn = nullptr);
 
-    // Enable or disable all active QShortcut objects. Used to yield key
+    // Enable or disable operating QShortcut objects. Used to yield key
     // events to focused child widgets (e.g. sliders) that would otherwise
     // have their arrow keys stolen by window-level shortcuts.
     void setShortcutsEnabled(bool enabled);
@@ -112,6 +118,7 @@ private:
 
     QVector<Action> m_actions;
     QVector<QShortcut*> m_shortcuts;
+    QVector<QShortcut*> m_windowShortcuts;
 };
 
 } // namespace AetherSDR

@@ -45,6 +45,7 @@
 #include <QElapsedTimer>
 #include <QThread>
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <complex>
@@ -129,11 +130,12 @@ std::vector<float> firstFrame(AnanRxDsp& dsp, const std::vector<std::complex<flo
 // The analyzer's own output for `iq`, with no AnanRxDsp involved -- the
 // independent reference the droop groups compare against. Slot 60: channels
 // only ever take slots 0..31, so this never collides with one.
-std::vector<float> rawAnalyzerFrame(const std::vector<std::complex<float>>& iq, int rateHz)
+std::vector<float> rawAnalyzerFrame(const std::vector<std::complex<float>>& iq, int rateHz,
+                                    int points = kPoints)
 {
     AnanPanAnalyzer::Settings s;
     s.sampleRateHz = rateHz;
-    s.numPoints = kPoints;
+    s.numPoints = points;
     s.framesPerSecond = 25;
     std::string err;
     auto a = AnanPanAnalyzer::create(60, s, &err);
@@ -509,6 +511,66 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- Group 1d: the point count follows the panel width ----
+    // A 1917-pixel panel with the 4% edge crop asks for 2083 points
+    // (panPointsForPixelWidth()). The tone must still land at its frequency
+    // on the wider grid -- point i sits at fraction i / (N - 1) of the span --
+    // both when the count is built in and when it changes mid-stream, and a
+    // mid-stream change must re-seed rather than blend two point grids.
+    {
+        constexpr int kWide = 2083;
+        const auto expectedAt = [](int points, double offsetHz) {
+            return static_cast<int>(std::lround((points - 1) * (0.5 + offsetHz / 48000.0)));
+        };
+
+        AnanRxDsp built;
+        std::string err;
+        AnanRxDsp::Config wideCfg = spectrumConfig(48000);
+        wideCfg.panPoints = kWide;
+        check(built.configure(wideCfg, &err),
+              err.empty() ? "width: configure() at 2083 points succeeds" : err.c_str());
+        const std::vector<float> w1 = firstFrame(built, wireTone(kOneFft, 6000.0, 48000, 0.25f));
+        check(w1.size() == static_cast<std::size_t>(kWide), "width: a 2083-point frame");
+        std::fprintf(stderr, "width: built at %d points, peak %d, expected %d\n",
+                     kWide, peakBin(w1), expectedAt(kWide, 6000.0));
+        check(std::abs(peakBin(w1) - expectedAt(kWide, 6000.0)) <= 2,
+              "at 2083 points a wire tone lands at its frequency");
+
+        // Mid-stream, averaging on: 1024 points, then the panel reports its
+        // width. The next frame is the new count, at the tone's frequency and
+        // level -- seeded, not ramping up from WDSP's -160 dB.
+        AnanRxDsp live;
+        AnanRxDsp::Config liveCfg = spectrumConfig(48000);
+        liveCfg.spectrumAverageMs = 250;
+        check(live.configure(liveCfg, &err),
+              err.empty() ? "width: live configure() succeeds" : err.c_str());
+        const auto tone = wireTone(2 * kOneFft, 6000.0, 48000, 0.25f);
+        const std::vector<std::complex<float>> firstHalf(tone.begin(), tone.begin() + kOneFft);
+        const std::vector<std::complex<float>> secondHalf(tone.begin() + kOneFft, tone.end());
+        const std::vector<float> before = firstFrame(live, firstHalf);
+        live.setPanPoints(kWide);
+        const std::vector<float> after = firstFrame(live, secondHalf);
+        check(before.size() == static_cast<std::size_t>(kPoints)
+                  && after.size() == static_cast<std::size_t>(kWide),
+              "width: setPanPoints() changes the next frame's point count");
+        if (!before.empty() && after.size() == static_cast<std::size_t>(kWide)) {
+            const int pk = peakBin(after);
+            std::fprintf(stderr, "width: mid-stream 1024 -> %d, peak %d (%.2f dB), expected %d; "
+                         "1024-point peak %.2f dB\n", kWide, pk,
+                         after[static_cast<std::size_t>(pk)], expectedAt(kWide, 6000.0),
+                         before[static_cast<std::size_t>(peakBin(before))]);
+            check(std::abs(pk - expectedAt(kWide, 6000.0)) <= 2,
+                  "after a mid-stream width change the tone still lands at its frequency");
+            check(after[static_cast<std::size_t>(pk)] > -40.0f,
+                  "a mid-stream width change re-seeds the average -- no fade-in from -160 dB");
+        }
+        live.setPanPoints(1);
+        const auto more = wireTone(kOneFft, 6000.0, 48000, 0.25f, 2 * kOneFft);
+        check(firstFrame(live, more).size() == static_cast<std::size_t>(kWide),
+              "a point count below 2 is ignored");
+
+    }
+
     // ---- Group 2: bench-confirmed handedness pin (see file header) ----
     {
         AnanRxDsp dsp;
@@ -600,12 +662,19 @@ int main(int argc, char** argv)
         cfg.agcMode = 3;
         cfg.maximumAgcGainDb = 40.0;
         cfg.blockForOutput = true;
+        cfg.noiseBlankerEnabled = true;
+        cfg.noiseBlankerLevel = 50;
 
         AnanRxDsp dsp;
         dsp.beginInitialBuild(cfg);
         AnanRxDsp::RebuildResult initial = AnanRxDsp::buildChannel(cfg);
         check(initial.channel != nullptr,
               initial.error.empty() ? "initial background build succeeds" : initial.error.c_str());
+        // Read BEFORE the install: installChannel() re-applies m_config's
+        // blanker anyway, so only the built channel shows buildChannel() did.
+        check(initial.channel && initial.channel->noiseBlankerEnabled()
+                  && initial.channel->config().noiseBlankerLevel == 50,
+              "buildChannel() opens the channel with the requested noise blanker");
         check(dsp.installRebuiltChannel(std::move(initial)),
               "first-connect installs its asynchronously built channel");
         check(dsp.channelForTest()->config().mode == cfg.mode,
@@ -638,6 +707,9 @@ int main(int argc, char** argv)
               "a failed install does not disturb the operator's mode change either");
 
         dsp.beginRebuild();
+        // The operator moves the NB button WHILE the background build runs.
+        // Deferred, not pushed: the swap below has to apply it.
+        dsp.setNoiseBlanker(false, 80);
 
         // buildChannel() is static and thread-agnostic -- built here from a
         // config that does NOT reflect the operator's LSB/filter/AGC change
@@ -661,6 +733,120 @@ int main(int argc, char** argv)
         check(installed->config().agcMode == 2
               && installed->config().maximumAgcGainDb == 25.0,
               "installRebuiltChannel() re-applies the operator's CURRENT AGC setting");
+        check(!installed->noiseBlankerEnabled()
+                  && installed->config().noiseBlankerLevel == 80,
+              "installRebuiltChannel() re-applies a noise blanker change made "
+              "during the build, not buildChannel()'s (stale) NB-on snapshot");
+
+        // Live, with no rebuild in flight, the change reaches the channel.
+        dsp.setNoiseBlanker(true, 120);
+        check(dsp.channelForTest()->noiseBlankerEnabled()
+                  && dsp.channelForTest()->config().noiseBlankerLevel == 100,
+              "setNoiseBlanker() reaches the live channel, level clamped to 100");
+    }
+
+    // ---- Group 4b: a mute must not de-arm the noise blanker ----
+    // setAudioMuted() clocks the channel with zeros (a rate change's settle
+    // window), and the blanker triggers on a RATIO against a running average
+    // magnitude. Unheld, that average decays to nothing during the silence and
+    // the first real audio afterwards is gated as if it were an impulse.
+    // Mirrors hl2_noise_blanker_test's section 5 and measures it the same way:
+    // blanker-on recovery against blanker-off recovery, in blocks, so the
+    // pipeline's own settling (paid by both arms) cancels out.
+    {
+        constexpr int kEdgeBlock = 256;   // short, so a ~7 ms hole spans blocks
+        constexpr double kToneHz = 1000.0;
+        constexpr double kToneAmp = 0.02;
+        constexpr int kNbLevel = 80;
+
+        // WIRE-convention tone, demodulated in LSB -- Group 2's geometry.
+        auto tone = [&](int samples, int phaseOffset) {
+            std::vector<std::complex<float>> out(static_cast<std::size_t>(samples));
+            for (int n = 0; n < samples; ++n) {
+                const double ph = 2.0 * kPi * kToneHz * (n + phaseOffset) / kInputRate;
+                out[static_cast<std::size_t>(n)] = {
+                    static_cast<float>(kToneAmp * std::cos(ph)),
+                    static_cast<float>(kToneAmp * std::sin(ph))
+                };
+            }
+            return out;
+        };
+        auto feed = [&](AnanRxDsp& dsp, const std::vector<std::complex<float>>& s) {
+            for (std::size_t off = 0; off < s.size(); off += kEdgeBlock) {
+                const std::size_t n = std::min<std::size_t>(kEdgeBlock, s.size() - off);
+                dsp.processIqBlock(std::vector<std::complex<float>>(
+                    s.begin() + static_cast<std::ptrdiff_t>(off),
+                    s.begin() + static_cast<std::ptrdiff_t>(off + n)));
+            }
+        };
+
+        int recoveryBlockOff = -1;
+        int recoveryBlockOn = -1;
+        for (int pass = 0; pass < 2; ++pass) {
+            const bool blankerOn = (pass == 1);
+            AnanRxDsp::Config cfg;
+            cfg.inputSampleRateHz = kInputRate;
+            cfg.audioSampleRateHz = kAudioRate;
+            cfg.dspBlockSize = kEdgeBlock;
+            cfg.panPoints = 256;
+            cfg.mode = WdspChannel::Mode::Lsb;
+            cfg.filterLowHz = -3000.0;
+            cfg.filterHighHz = -150.0;
+            cfg.agcMode = 0;               // AGC off: it would hide the hole
+            cfg.maximumAgcGainDb = 40.0;
+            cfg.blockForOutput = true;
+            AnanRxDsp dsp;
+            std::string err;
+            check(dsp.configure(cfg, &err),
+                  err.empty() ? "AnanRxDsp configures for the mute-edge case" : err.c_str());
+            if (blankerOn)
+                dsp.setNoiseBlanker(true, kNbLevel);
+
+            std::vector<double> blockRms;
+            bool collecting = false;
+            const auto conn = QObject::connect(&dsp, &AnanRxDsp::audioReady, &dsp,
+                [&](const std::vector<float>& pcm) {
+                    if (!collecting)
+                        return;
+                    double sum = 0.0;
+                    std::size_t count = 0;
+                    for (std::size_t k = 0; k < pcm.size(); k += 2) {
+                        sum += static_cast<double>(pcm[k]) * pcm[k];
+                        ++count;
+                    }
+                    blockRms.push_back(count > 0 ? std::sqrt(sum / static_cast<double>(count))
+                                                 : 0.0);
+                });
+
+            feed(dsp, tone(kInputRate, 0));            // arm on real signal
+            dsp.setAudioMuted(true);
+            feed(dsp, tone(kInputRate / 2, kInputRate)); // muted: channel sees zeros
+            dsp.setAudioMuted(false);
+            collecting = true;
+            feed(dsp, tone(kInputRate / 2, kInputRate + kInputRate / 2));
+            QObject::disconnect(conn);
+
+            double steady = 0.0;
+            const std::size_t tail = std::min<std::size_t>(10, blockRms.size());
+            for (std::size_t k = blockRms.size() - tail; k < blockRms.size(); ++k)
+                steady += blockRms[k];
+            steady = tail > 0 ? steady / static_cast<double>(tail) : 0.0;
+            int recovered = -1;
+            for (std::size_t k = 0; k < blockRms.size(); ++k) {
+                if (blockRms[k] > steady * 0.5) {
+                    recovered = static_cast<int>(k);
+                    break;
+                }
+            }
+            (blankerOn ? recoveryBlockOn : recoveryBlockOff) = recovered;
+        }
+
+        std::fprintf(stderr, "post-mute recovery block off=%d on=%d (%d samples each)\n",
+                     recoveryBlockOff, recoveryBlockOn, kEdgeBlock);
+        check(recoveryBlockOff >= 0, "the blanker-off arm recovers audio after a mute");
+        check(recoveryBlockOn >= 0, "the blanker-on arm recovers audio after a mute");
+        check(recoveryBlockOn >= 0 && recoveryBlockOn <= recoveryBlockOff,
+              "the noise blanker adds NO delay to the return of audio after a mute");
     }
 
     // ---- Group 5: droop-correction insertion point ----
@@ -736,6 +922,50 @@ int main(int argc, char** argv)
         check(tailMatched,
               "the tail points match applyEdgeFade() run on raw+table -- the cosmetic "
               "fade is the second step, not a replacement for the real correction");
+    }
+
+    // ---- Group 5b: the droop correction still lands at a panel-width count ----
+    // The tables stay at 1024 points. At any other count an exact-size apply
+    // would skip the correction without a word and bring the roll-off back,
+    // so the emitted frame must equal the analyzer's raw frame at that count
+    // plus the table read onto it (applyDroopCorrectionDbResampled()).
+    {
+        constexpr int kWide = 2083;
+        AnanRxDsp dsp;
+        std::string err;
+        AnanRxDsp::Config cfg = spectrumConfig(48000);
+        cfg.panPoints = kWide;
+        check(dsp.configure(cfg, &err),
+              err.empty() ? "droop at width: configure() succeeds" : err.c_str());
+        DroopCorrectionTable table{};
+        for (std::size_t k = 0; k < table.size(); ++k)
+            table[k] = 3.25f + 0.01f * static_cast<float>(k % 50);
+        dsp.setDroopCorrectionTable(48, std::vector<float>(table.begin(), table.end()));
+
+        const auto iq = wireTone(kOneFft, 1300.0, 48000, 0.25f);
+        const std::vector<float> emitted = firstFrame(dsp, iq);
+        const std::vector<float> raw = rawAnalyzerFrame(iq, 48000, kWide);
+        check(emitted.size() == static_cast<std::size_t>(kWide) && raw.size() == emitted.size(),
+              "droop at width: emitted and reference frames are both 2083 points");
+
+        std::vector<float> expected = raw;
+        applyDroopCorrectionDbResampled(expected, table);
+        applyEdgeFade(expected);
+        bool matched = expected.size() == emitted.size() && !emitted.empty();
+        for (std::size_t k = 0; matched && k < emitted.size(); ++k) {
+            if (std::fabs(emitted[k] - expected[k]) > 1.0e-3f) {
+                matched = false;
+                std::fprintf(stderr, "  point %zu: emitted=%.6f expected=%.6f\n",
+                             k, emitted[k], expected[k]);
+            }
+        }
+        check(matched,
+              "at 2083 points the emitted frame is the raw frame plus the resampled table, "
+              "then the edge fade -- the correction is not skipped");
+        // Non-vacuous: the resampled table is not zero, so a skipped
+        // correction could not match.
+        check(!raw.empty() && std::fabs(emitted[kWide / 2] - raw[kWide / 2]) > 3.0f,
+              "droop at width: the correction actually moved the centre point");
     }
 
     // ---- Group 6: rate change picks up the NEW rate's droop table ----

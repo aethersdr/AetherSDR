@@ -38,7 +38,7 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #ifdef HAVE_WEBSOCKETS
-#include <QWebSocket>
+#include "core/TciClient.h"
 #endif
 
 #include <cstdio>
@@ -111,7 +111,7 @@ public:
     static bool hasPendingTrx(TciServer& s) { return s.m_pendingTrxRequest.has_value(); }
     static bool splitRequested(TciServer& s) { return s.m_routingState.splitRequested(); }
 
-    static void trx(TciServer& s, QWebSocket* c, const TciProtocol::TrxRequest& r) {
+    static void trx(TciServer& s, TciClient* c, const TciProtocol::TrxRequest& r) {
         s.handleTrxRequest(c, r);
     }
 
@@ -120,7 +120,7 @@ public:
     // slice via TciProtocol::resolveSliceForTrx(), which returns null on a model
     // that is not connected to real hardware — every assertion below it would
     // then pass without the code under test ever running.
-    static void createVfoB(TciServer& s, QWebSocket* c,
+    static void createVfoB(TciServer& s, TciClient* c,
                            const TciProtocol::VfoRequest& r, SliceModel* rx,
                            const QString& routeConfirmation, bool splitOnly) {
         s.createTxSliceForVfoB(c, r, rx, routeConfirmation, splitOnly);
@@ -362,7 +362,7 @@ static void testSeamBackendCannotWedgeOnVfoB()
           "fixture precondition: maxSlices() reports the backend's own capacity");
 
     TciServer server(&model);
-    QWebSocket client;
+    TciClient client;
 
     // What handleSplitRequest() does for WSJT-X's split_enable:0,true; once
     // resolveVfoB() has returned RouteAction::Create: split already latched

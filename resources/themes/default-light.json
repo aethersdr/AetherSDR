@@ -201,6 +201,17 @@
                 { "at": 0.75, "color": "#800080" },
                 { "at": 1.00, "color": "#ffffff" }
               ]
+            },
+            "glacier": {
+              "type": "linear-gradient",
+              "angle": 180,
+              "stops": [
+                { "at": 0.00, "color": "#05183c" },
+                { "at": 0.30, "color": "#0a5ad2" },
+                { "at": 0.55, "color": "#3ca0ff" },
+                { "at": 0.80, "color": "#a8dcff" },
+                { "at": 1.00, "color": "#ffffff" }
+              ]
             }
           },
           "slice": {

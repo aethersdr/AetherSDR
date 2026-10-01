@@ -21,13 +21,19 @@ selects the wrapper's processing domain.
 | Specbleach | Existing library rate and 40 ms frame request | Native48000 library rate and the same 40 ms request |
 | macOS MNR | Existing 512-point FFT / 256-sample hop | 1024-point FFT / 512-sample hop; same frequency resolution and elapsed estimator history |
 
-DeepFilterNet and NVIDIA retain their existing mono algorithm and stereo
-level-balance behavior. They do not become independent stereo denoisers in this
-change. The default playback path and native stereo RNNoise/MNR do not inherit
-that limitation. `MonoDspStereoAdapter` takes its rate as the second constructor
-argument; its five-second queue cap and power-envelope timing follow that rate.
-Legacy24 coefficients remain unchanged. DeepFilterNet's three-hop model delay
-is expressed in the selected producer domain before pairing delayed stereo.
+Every wrapper denoises stereo as two independent channels, the way RNNoise's
+`PreserveRxStereo` does: each side has its own algorithm state (and, on the
+24 kHz paths, its own SRC pair), and both advance through the same frame
+count per block so the image cannot drift. Nothing is mixed to mono, so a
+hard-panned diversity pair keeps one antenna per ear and a pan change is heard
+as soon as the audio carrying it arrives.
+
+The cost is one instance per channel: about twice the per-block work for every
+method, two DeepFilterNet3 models on the DSP thread for DFNR, and two NVIDIA
+AFX denoiser effects, each with its own TensorRT engine, for BNR, which roughly
+doubles BNR's VRAM and its enable time. BNR uses two single-stream effects
+rather than one effect with `NVAFX_PARAM_NUM_STREAMS = 2`, because the batched
+form did not isolate the streams.
 
 Each concurrently processed source must own its wrappers. Alternating main48
 and Kiwi24 through one instance is invalid even when the rates happen to match:
@@ -37,10 +43,10 @@ state at a rate, session, source, or discontinuity boundary. Construction may
 load models and allocate; it belongs outside an active processing callback.
 
 `MacNRFilter::reset()` clears its complete state. DeepFilterNet's reset recreates
-the model. NVIDIA's existing reset only clears wrapper FIFOs/SRC, and
-Specbleach's existing reset clears its noise profile and stereo adapter while
-the library may retain overlap history. For a strict new epoch, recreate the
-complete NVIDIA/Specbleach object. A2 must apply this lifecycle rule to main,
+both channels' models. NVIDIA's reset clears wrapper FIFOs/SRC and calls
+`NvAFX_Reset` on both effects. Specbleach's reset clears each channel's noise
+profile while the library may retain overlap history. For a strict new epoch,
+recreate the complete NVIDIA/Specbleach object. A2 must apply this lifecycle rule to main,
 legacy Kiwi and each managed Kiwi source, preserving effect configuration.
 
 The tests distinguish evidence layers. `nr_rate_domain_test` compiles the real
