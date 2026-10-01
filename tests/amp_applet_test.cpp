@@ -180,7 +180,9 @@ void testRadioFallbackDropsHarmonicLoadTemp()
     AmpApplet applet;
     auto* button = tempButton(applet);
     report("fallback button exists", button != nullptr);
-    if (!button) return;
+    if (!button) {
+        return;
+    }
 
     applet.setDirectConnected(true);
     applet.setPaHeatsinkTemp(34.7f);

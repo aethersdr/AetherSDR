@@ -333,6 +333,23 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_shader_dialects.py --strict
 
+      # ── Qt pin consistency (#5487). cmake/qt-pin.env states the Qt every
+      # artifact ships and every CI leg builds, and scripts/setup/setup-qt.sh
+      # installs it for source builders. The workflows and the CI Dockerfile
+      # cannot read that file — `env:` is evaluated before any step runs — so
+      # each still spells the values out, and a bump that misses one ships a
+      # Qt nothing else tested. This fails on any disagreement, and on a Qt
+      # version literal in a workflow that is neither the pin nor the floor
+      # (--strict). The self-test breaks each site on purpose and requires a
+      # finding, so the gate cannot silently stop matching.
+      - name: Qt pin consistency
+        if: ${{ !cancelled() }}
+        run: python tools/check_qt_pin.py --strict
+
+      - name: Qt pin checker self-test
+        if: ${{ !cancelled() }}
+        run: python tools/test_check_qt_pin.py
+
       # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
       # above the PR's base. The gate is a DELTA rather than a stored constant:
       # main gains colours from unrelated UI merges, so a frozen baseline goes

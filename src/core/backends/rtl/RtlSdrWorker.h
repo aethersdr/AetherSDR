@@ -62,7 +62,6 @@ signals:
 
     // Relayed from RtlSdrDdc (cross-thread queued connection to main thread)
     void spectrumFrameReady(int panId, const QByteArray& frame);
-    void waterfallRowReady(int panId, const QByteArray& row);
     void audioFrameReady(const QByteArray& pcm);
 
     // USB control completion, emitted only after the transfer has run between

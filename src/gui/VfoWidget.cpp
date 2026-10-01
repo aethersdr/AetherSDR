@@ -810,6 +810,10 @@ void VfoWidget::buildUI()
                 ? m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId())
                 : QString();
         QMenu* menu = new QMenu(m_rxAntBtn);
+        // Same as RxApplet: the entry is labelled with the alias / KiwiSDR
+        // profile name, so the tooltip carrying the raw antenna token only
+        // renders once the menu opts in (#5546).
+        menu->setToolTipsVisible(true);
         connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
         for (const QString& ant : menuOptions) {
             auto* act = menu->addAction(antennaMenuLabel(ant, menuOptions));
@@ -853,6 +857,7 @@ void VfoWidget::buildUI()
         // open cannot strand a suspended frame (#5566).
         QPointer<SliceModel> slice = m_slice;
         QMenu* menu = new QMenu(m_txAntBtn);
+        menu->setToolTipsVisible(true);  // raw token behind the alias (#5546)
         connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
         const QStringList options = txAntennaOptions();
         for (const QString& ant : options) {
