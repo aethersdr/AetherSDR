@@ -4133,6 +4133,15 @@ add_test(NAME build_identity_capture_test
                  -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/build_identity_capture_test
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/build_identity_capture_test.cmake)
 
+# Socket-free pointer verbs through handleLine: double-click and click event
+# sequences, JSON x/y folding, dragAt fidelity, parented-window de-duplication
+# in dumpTree/floors, and the authenticated positional `args` form.
+add_executable(automation_boundary_widgets_test tests/automation_boundary_widgets_test.cpp)
+target_include_directories(automation_boundary_widgets_test PRIVATE src tests)
+target_link_libraries(automation_boundary_widgets_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME automation_boundary_widgets_test COMMAND automation_boundary_widgets_test)
+set_tests_properties(automation_boundary_widgets_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(automation_menu_lookup_test tests/automation_menu_lookup_test.cpp)
 target_include_directories(automation_menu_lookup_test PRIVATE src tests)
 target_link_libraries(automation_menu_lookup_test PRIVATE aethercore Qt6::Widgets)
@@ -4169,6 +4178,14 @@ target_link_libraries(automation_connect_family_test PRIVATE
     aethercore Qt6::Core Qt6::Network
 )
 add_test(NAME automation_connect_family_test COMMAND automation_connect_family_test)
+
+# Socket-free bridge boundaries through handleLine: JSON id rules, the MHz
+# contract, deferred connect failures, FM repeater and transmit verbs, and DEXP
+# omission on the in-process sim backend. TX permission only on a transport-less model.
+add_executable(automation_boundary_core_test tests/automation_boundary_core_test.cpp)
+target_include_directories(automation_boundary_core_test PRIVATE src tests)
+target_link_libraries(automation_boundary_core_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME automation_boundary_core_test COMMAND automation_boundary_core_test)
 
 # Retired local-listener fixture. Positive behavior is covered through the live
 # bridge; deterministic boundary behavior belongs in socket-free tests.
@@ -6913,6 +6930,8 @@ endforeach()
 set(AETHER_AUTOMATION_SERVER_TESTS
     anan_noise_blanker_readback_test
     automation_cell_test
+    automation_boundary_core_test
+    automation_boundary_widgets_test
     automation_menu_lookup_test
     automation_ping_build_identity_test
     automation_gauge_verb_test
