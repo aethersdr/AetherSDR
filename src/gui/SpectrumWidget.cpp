@@ -5064,6 +5064,7 @@ void SpectrumWidget::resetWfTimeScale() {
     m_wfPrevTimecodeMs = 0;
     m_wfCalibrationCount = 0;
     m_wfTimeScaleLocked = false;
+    m_wfTimeScaleDriftSamples = 0;
     m_wfRowsSinceRateChange = 0;
     m_wfCalibrationResumeMs = nowMs + 500;
     m_nextFallbackWaterfallRowMs = 0;
@@ -5137,13 +5138,9 @@ void SpectrumWidget::updateWaterfallMsPerRowFromHistory()
         return;
     }
 
-    constexpr int kSampleRows = 24;
-    constexpr int kMinSampleRows = 8;
-    constexpr int kSamplesBeforeVisibleUpdate = 3;
-    const int maxAgeRows = std::min({kSampleRows,
-                                     m_wfHistoryRowCount - 1,
-                                     m_wfRowsSinceRateChange - 1});
-    if (maxAgeRows < kMinSampleRows) {
+    const int maxAgeRows = waterfallTimeScaleSampleSpanRows(
+        m_wfHistoryRowCount, m_wfRowsSinceRateChange);
+    if (maxAgeRows <= 0) {
         return;
     }
 
@@ -5173,23 +5170,28 @@ void SpectrumWidget::updateWaterfallMsPerRowFromHistory()
         const int lineDuration = std::clamp(m_wfLineDuration,
                                             kWaterfallRateMin,
                                             kWaterfallRateMax);
-        const int previousSamples =
-            m_wfMeasuredSampleCountByLineDuration.value(lineDuration, 0);
-        const float previousMeasured =
-            m_wfMeasuredMsPerRowByLineDuration.value(lineDuration, measured);
-        const float updatedMeasured = previousSamples > 0
-            ? (0.85f * previousMeasured + 0.15f * measured)
-            : measured;
-        const int updatedSamples = std::min(previousSamples + 1, 1000);
+        const WaterfallTimeScaleEstimate estimate = foldWaterfallTimeScaleSample(
+            {m_wfMeasuredMsPerRowByLineDuration.value(lineDuration, measured),
+             m_wfMeasuredSampleCountByLineDuration.value(lineDuration, 0)},
+            measured);
 
-        m_wfMeasuredMsPerRowByLineDuration.insert(lineDuration, updatedMeasured);
-        m_wfMeasuredSampleCountByLineDuration.insert(lineDuration, updatedSamples);
+        m_wfMeasuredMsPerRowByLineDuration.insert(lineDuration, estimate.msPerRow);
+        m_wfMeasuredSampleCountByLineDuration.insert(lineDuration, estimate.samples);
         m_wfHasMeasuredMsPerRow = true;
         m_wfLastMeasuredLineDurationMs = lineDuration;
-        m_wfLastMeasuredMsPerRow = updatedMeasured;
-        if (!m_wfTimeScaleLocked && updatedSamples >= kSamplesBeforeVisibleUpdate) {
-            m_wfMsPerRow = updatedMeasured;
-            m_wfTimeScaleLocked = true;
+        m_wfLastMeasuredMsPerRow = estimate.msPerRow;
+        // The lock keeps per-row jitter off the scale (#106). It is not final:
+        // an estimate that has settled away from the visible value replaces it
+        // (WaterfallTimeScaleLock.h). Fallback and TX rows are paced from
+        // m_wfMsPerRow itself, so they never drive a re-lock.
+        const bool rowsPacedByScale = m_transmitting || m_waterfallFallbackActive;
+        WaterfallTimeScaleLock lock{m_wfTimeScaleLocked, m_wfTimeScaleDriftSamples};
+        const bool adopt = waterfallTimeScaleShouldAdopt(
+            lock, m_wfMsPerRow, measured, estimate, rowsPacedByScale);
+        m_wfTimeScaleLocked = lock.locked;
+        m_wfTimeScaleDriftSamples = lock.driftSamples;
+        if (adopt) {
+            m_wfMsPerRow = estimate.msPerRow;
             markOverlayDirty();
         }
         return;

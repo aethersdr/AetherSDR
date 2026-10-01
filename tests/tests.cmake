@@ -4410,6 +4410,12 @@ target_include_directories(waterfall_time_markers_test PRIVATE src)
 target_link_libraries(waterfall_time_markers_test PRIVATE Qt6::Core)
 add_test(NAME waterfall_time_markers_test COMMAND waterfall_time_markers_test)
 
+# Waterfall time scale ms-per-row: the lock against row jitter (#106) and the
+# conditions under which it is replaced. Header-only pure logic, no Qt.
+add_executable(waterfall_time_scale_lock_test tests/waterfall_time_scale_lock_test.cpp)
+target_include_directories(waterfall_time_scale_lock_test PRIVATE src)
+add_test(NAME waterfall_time_scale_lock_test COMMAND waterfall_time_scale_lock_test)
+
 add_executable(waterfall_history_buffer_test
     tests/waterfall_history_buffer_test.cpp
     src/gui/WaterfallHistoryBuffer.cpp

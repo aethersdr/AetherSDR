@@ -33,6 +33,7 @@
 #include "SpectrumPreviewLogic.h"
 #include "WaterfallHistoryBuffer.h"
 #include "WaterfallTimeMarkers.h"
+#include "WaterfallTimeScaleLock.h"
 
 class QVariantAnimation;
 class QSoundEffect;
@@ -2172,11 +2173,14 @@ private:
     // corrected from real appended-row timestamps once the current rate has
     // enough samples.  Per-rate measurements are cached so later drags can use
     // the observed cadence immediately without re-jittering the visible scale.
+    // The visible value is locked against per-row jitter and re-locked only
+    // when the estimate has settled somewhere else (WaterfallTimeScaleLock.h).
     float    m_wfMsPerRow{100.0f};
     quint32  m_wfPrevTimecode{0};      // previous tile timecode (frame counter)
     qint64   m_wfPrevTimecodeMs{0};    // wall-clock time of previous timecode
     int      m_wfCalibrationCount{0};  // tiles measured so far
     bool     m_wfTimeScaleLocked{false};
+    int      m_wfTimeScaleDriftSamples{0}; // consecutive settled-elsewhere samples
     bool     m_wfHasMeasuredMsPerRow{false};
     int      m_wfLastMeasuredLineDurationMs{100};
     float    m_wfLastMeasuredMsPerRow{100.0f};
