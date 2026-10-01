@@ -278,24 +278,22 @@ endif()
 # likely to hit this have the least context for it, and the README they need is
 # a document they have already scrolled past.
 #
-# Both failure modes name scripts/setup/setup-qt.sh, which installs the pinned
-# release Qt into a per-user cache that cmake/AetherQtPin.cmake then finds with
-# no flags — one command, instead of a manual aqt recipe and a prefix path.
-# Windows keeps CMake's own not-found error: setup-qt.sh is bash-only, and
-# docs/BUILDING.md's Windows section is the way there.
+# Both failure modes name scripts/setup/setup-qt.{sh,ps1}, which install the
+# pinned release Qt into a per-user cache that cmake/AetherQtPin.cmake then
+# finds with no flags — one command, instead of a manual aqt recipe (which on
+# Windows does not work with the released aqt at all) and a prefix path.
 include(cmake/AetherQtPin.cmake)
 find_package(Qt6 QUIET COMPONENTS Core)
-if(NOT WIN32)
-    set(_aether_qt_way_out
-        "Install the release Qt (${AETHER_QT_PIN_VERSION}) with one command, then re-run cmake:\n"
-        "    scripts/setup/setup-qt.sh\n"
-        "(or configure with -DAETHER_FETCH_QT=ON to have cmake run it). "
-        "See docs/BUILDING.md for what it checks and where it installs.")
+if(WIN32)
+    set(_aether_qt_setup "powershell -File scripts\\setup\\setup-qt.ps1")
 else()
-    set(_aether_qt_way_out
-        "Install Qt 6.8+ (msvc2022_64) with the Qt online installer or aqt and "
-        "pass -DCMAKE_PREFIX_PATH — see docs/BUILDING.md.")
+    set(_aether_qt_setup "scripts/setup/setup-qt.sh")
 endif()
+set(_aether_qt_way_out
+    "Install the release Qt (${AETHER_QT_PIN_VERSION}) with one command, then re-run cmake:\n"
+    "    ${_aether_qt_setup}\n"
+    "(or configure with -DAETHER_FETCH_QT=ON to have cmake run it). "
+    "See docs/BUILDING.md for what it checks and where it installs.")
 if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
     message(FATAL_ERROR
         "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.8 or newer.\n"
@@ -303,7 +301,7 @@ if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
         "Ubuntu 24.04 LTS ships 6.4.2; Debian Trixie, Ubuntu 25.10+, "
         "Fedora 41+ and Arch all ship 6.8 or newer.\n"
         ${_aether_qt_way_out})
-elseif(NOT Qt6_FOUND AND NOT WIN32)
+elseif(NOT Qt6_FOUND)
     message(FATAL_ERROR
         "No Qt 6 found. AetherSDR needs Qt 6.8 or newer: a distro Qt "
         "(e.g. qt6-base-dev and friends, see the README) or the release Qt.\n"

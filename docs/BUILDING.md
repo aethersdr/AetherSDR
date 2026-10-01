@@ -57,11 +57,11 @@ workflow asserts this; your machine will not.
 ## Windows 11
 
 Prerequisites: Visual Studio 2022 **17.14 or newer** (Build Tools, Community,
-or higher) with the MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.8+
-(`msvc2022_64`; both CI and the release binaries use 6.12.0 LTS). The 17.14
-floor comes from Qt 6.12 itself: its static `Qt6EntryPoint.lib`, which every
-Windows GUI app links, is built by MSVC 14.44, and an MSVC linker must be at
-least as new as the compiler behind any input. Qt 6.8.3 links with 17.9+.
+or higher) with the MSVC C++ workload, CMake 3.25+, Ninja, Git, and Python 3.
+7-Zip is recommended. The 17.14 floor comes from Qt 6.12 itself: its static
+`Qt6EntryPoint.lib`, which every Windows GUI app links, is built by MSVC 14.44,
+and an MSVC linker must be at least as new as the compiler behind any input.
+Qt 6.8.3 links with 17.9+.
 
 Qt 6.12 is the last Qt release that supports Windows 10 (1809 or later), so
 the next binary Qt bump will make AetherSDR's Windows builds Windows 11-only.
@@ -71,33 +71,44 @@ the next binary Qt bump will make AetherSDR's Windows builds Windows 11-only.
 ::    Professional / Enterprise) to match your install; run "vswhere" if unsure.
 "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 
-:: 2. Point at your Qt kit once, with forward slashes (CMake reads the path
-::    literally, so backslashes would be taken as escape sequences). Change the
-::    version/edition here to match your install; both steps below reuse it.
-::    setup-qtkeychain.ps1 (step 4) reads QT_ROOT_DIR; on CI that variable is
-::    exported by install-qt-action, so a local build has to set it explicitly
-::    or the script exits with "Qt not found".
-set "QT_KIT=C:/Qt/6.12.0/msvc2022_64"
-set "QT_ROOT_DIR=%QT_KIT%"
+:: 2. Install the release Qt and build qtkeychain against it. Checks Visual
+::    Studio, Python, disk space and the Qt build before downloading ~2 GB into
+::    %LOCALAPPDATA%\aethersdr\qt\ (AETHER_QT_CACHE overrides). Re-running is a
+::    no-op once installed.
+powershell -File scripts\setup\setup-qt.ps1
 
 :: 3. Generate the single-precision FFTW import lib (needed by NR4/libspecbleach)
 powershell -File scripts\setup\setup-fftw.ps1
 
-:: 4. Build qtkeychain (needed for QRZ/SmartLink credential persistence).
-::    Downloads source and builds it against your Qt kit into third_party\qtkeychain\.
-::    Skip this step and the build still succeeds, but QRZ/SmartLink passwords
-::    won't be saved between runs.
-powershell -File scripts\setup\setup-qtkeychain.ps1
+:: 4. Configure. CMake finds the Qt from step 2 on its own. Ninja is required:
+::    the default Visual Studio generator is multi-config (it ignores
+::    CMAKE_BUILD_TYPE) and takes a different manifest-embed path.
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
-:: 5. Configure. Ninja is required: the default Visual Studio generator is
-::    multi-config (it ignores CMAKE_BUILD_TYPE) and takes a different
-::    manifest-embed path. Point CMAKE_PREFIX_PATH at your Qt kit so
-::    find_package(Qt6) resolves.
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%QT_KIT%"
-
-:: 6. Build
+:: 5. Build
 cmake --build build --target AetherSDR
 ```
+
+**Why a script and not "install Qt with aqt":** the newest aqtinstall on PyPI
+(3.3.0) cannot install Qt 6.11 or newer on Windows — it stops with *Failed to
+locate XML data for Qt version*, because Qt moved its Windows repository to one
+index per architecture. `setup-qt.ps1` installs aqt from the commit CI uses
+(`AQTINSTALL_GIT_REF` in [`cmake/qt-pin.env`](../cmake/qt-pin.env)), and
+extracts with 7-Zip because aqt's built-in extractor fails at random on Windows
+Qt archives.
+
+**Using a Qt you installed yourself** (e.g. the Qt Online Installer, which needs
+a Qt account): skip step 2, then point both qtkeychain and CMake at the kit, with
+forward slashes (CMake reads the path literally):
+
+```bat
+set "QT_ROOT_DIR=C:/Qt/6.12.0/msvc2022_64"
+powershell -File scripts\setup\setup-qtkeychain.ps1
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%QT_ROOT_DIR%"
+```
+
+An explicit `CMAKE_PREFIX_PATH` always wins over the cached release Qt;
+`-DAETHER_USE_PINNED_QT=OFF` ignores the cache outright.
 
 ---
 
@@ -168,8 +179,7 @@ Qt's binaries also need the X11/xcb runtime libraries a distro Qt would have
 pulled in. Desktop installs nearly always have them; a minimal one may not —
 `.github/docker/Dockerfile` lists the full set CI installs.
 
-On Windows the script does not apply: install Qt 6.8+ (`msvc2022_64`) with the
-Qt Online Installer or aqt, as in [Windows 11](#windows-11).
+On Windows, use `setup-qt.ps1` instead — see [Windows 11](#windows-11).
 
 *Note: GPU rendering also needs the private QtGui headers (`qt6-base-private-dev` on Debian-family, included by default in the Qt Online Installer).*
 

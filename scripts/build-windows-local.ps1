@@ -18,16 +18,19 @@
     * Visual Studio 2022 (or Build Tools) with "Desktop development with C++".
       RUN THIS SCRIPT FROM the "x64 Native Tools Command Prompt for VS 2022"
       (then `pwsh`), so cl.exe/link.exe and the MSVC env are set.
-    * Qt 6.8.x for msvc2022_64 + modules: qtmultimedia qtserialport qtwebsockets
-      qtshadertools (Qt online installer or aqt). Pass its path via -QtDir.
+    * Qt 6.8+ for msvc2022_64 + modules: qtmultimedia qtserialport qtwebsockets
+      qtshadertools. Easiest: scripts\setup\setup-qt.ps1 installs the release Qt,
+      and this script then finds it with no -QtDir. (The released aqtinstall
+      cannot install Qt 6.11+ on Windows; see docs/BUILDING.md.)
     * CMake + Ninja on PATH.
     * (optional, for -Installer) Inno Setup 6 (ISCC.exe).
     The Vulkan SDK, ONNX Runtime, sherpa-onnx, opus, fftw, hidapi, deepfilter and
     qtkeychain are all staged automatically by the setup-*.ps1 scripts below.
 
 .PARAMETER QtDir
-    Path to the Qt msvc2022_64 kit, e.g. C:\Qt\6.8.2\msvc2022_64
-    (must contain bin\windeployqt.exe). Defaults to $env:QT_ROOT_DIR.
+    Path to the Qt msvc2022_64 kit, e.g. C:\Qt\6.12.0\msvc2022_64
+    (must contain bin\windeployqt.exe). Defaults to $env:QT_ROOT_DIR, then to
+    the release Qt installed by scripts\setup\setup-qt.ps1.
 
 .PARAMETER Jobs
     Build parallelism. Defaults to the CPU count. Do NOT copy CI's -j2 workaround
@@ -42,9 +45,9 @@
     via `gh release upload` (e.g. a pre-release asset tag). Requires gh + auth.
 
 .EXAMPLE
-    pwsh scripts\build-windows-local.ps1 -QtDir C:\Qt\6.8.2\msvc2022_64
+    pwsh scripts\build-windows-local.ps1 -QtDir C:\Qt\6.12.0\msvc2022_64
 .EXAMPLE
-    pwsh scripts\build-windows-local.ps1 -QtDir C:\Qt\6.8.2\msvc2022_64 -Installer
+    pwsh scripts\build-windows-local.ps1 -QtDir C:\Qt\6.12.0\msvc2022_64 -Installer
 #>
 param(
     [string]$QtDir = $env:QT_ROOT_DIR,
@@ -68,8 +71,12 @@ Write-Host "== Prerequisite checks ==" -ForegroundColor Cyan
 Assert-Tool cl    "Run from the 'x64 Native Tools Command Prompt for VS 2022' so MSVC is on PATH."
 Assert-Tool cmake "Install CMake (bundled with VS, or standalone) and add it to PATH."
 Assert-Tool ninja "Install Ninja (e.g. 'winget install Ninja-build.Ninja') and add it to PATH."
+if (-not $QtDir) {
+    $pinned = & "$PSScriptRoot\setup\setup-qt.ps1" -PrintPrefix
+    if ($pinned -and (Test-Path "$pinned\bin\windeployqt.exe")) { $QtDir = $pinned }
+}
 if (-not $QtDir -or -not (Test-Path "$QtDir\bin\windeployqt.exe")) {
-    throw "Qt not found. Pass -QtDir C:\Qt\6.8.x\msvc2022_64 (must contain bin\windeployqt.exe)."
+    throw "Qt not found. Run scripts\setup\setup-qt.ps1, or pass -QtDir C:\Qt\6.x.y\msvc2022_64 (must contain bin\windeployqt.exe)."
 }
 Write-Host "  MSVC + CMake + Ninja OK; Qt = $QtDir; jobs = $Jobs" -ForegroundColor Green
 
