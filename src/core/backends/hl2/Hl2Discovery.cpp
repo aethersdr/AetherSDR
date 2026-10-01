@@ -6,9 +6,13 @@
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QNetworkDatagram>
+#include <QNetworkInterface>
+#include <QNetworkAddressEntry>
 #include <QRegularExpression>
 #include <QTimer>
 #include <QUdpSocket>
+
+#include <utility>
 
 #ifdef Q_OS_WIN
 // winsock2.h pulls in windows.h, whose min/max function-like macros otherwise
@@ -151,16 +155,6 @@ bool Hl2Discovery::isRunning() const noexcept
 
 void Hl2Discovery::start(int intervalMs)
 {
-    if (!m_socket) {
-        m_socket = new QUdpSocket(this);
-        if (!m_socket->bind(QHostAddress::AnyIPv4, 0)) {
-            m_socket->deleteLater();
-            m_socket = nullptr;
-            return;   // no socket: stay silent rather than half-running
-        }
-        enableBroadcast(*m_socket);
-        connect(m_socket, &QUdpSocket::readyRead, this, &Hl2Discovery::onReadyRead);
-    }
     m_timer->start(intervalMs);
     sweepNow();   // don't make the operator wait a full interval for the first sweep
 }
@@ -169,21 +163,84 @@ void Hl2Discovery::stop()
 {
     if (m_timer)
         m_timer->stop();
-    if (m_socket) {
-        m_socket->deleteLater();
-        m_socket = nullptr;
+    for (QUdpSocket* socket : std::as_const(m_sockets)) {
+        socket->close();
+        socket->deleteLater();
     }
+    m_sockets.clear();
     m_seen.clear();
 }
 
 void Hl2Discovery::sweepNow()
 {
-    if (!m_socket)
+    // Interfaces can come up after the application starts (common with a
+    // directly attached HL2 link). Refreshing here also mirrors Thetis's
+    // per-sweep NIC walk instead of freezing the initial adapter list.
+    refreshSockets();
+    if (m_sockets.isEmpty())
         return;
     const auto pkt = discoveryRequest();
-    m_socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
-                            static_cast<qint64>(pkt.size()),
-                            QHostAddress::Broadcast, kMetisPort);
+    for (QUdpSocket* socket : std::as_const(m_sockets)) {
+        const QHostAddress local = socket->localAddress();
+        QHostAddress directedBroadcast;
+        for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+            for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
+                if (entry.ip() == local) {
+                    directedBroadcast = entry.broadcast();
+                    break;
+                }
+            }
+            if (!directedBroadcast.isNull())
+                break;
+        }
+
+        if (!directedBroadcast.isNull()) {
+            socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
+                                  static_cast<qint64>(pkt.size()),
+                                  directedBroadcast, kMetisPort);
+        }
+        // Keep the global broadcast as a compatibility fallback for networks
+        // whose interface does not expose a usable directed broadcast.
+        if (directedBroadcast != QHostAddress::Broadcast) {
+            socket->writeDatagram(reinterpret_cast<const char*>(pkt.data()),
+                                  static_cast<qint64>(pkt.size()),
+                                  QHostAddress::Broadcast, kMetisPort);
+        }
+    }
+}
+
+void Hl2Discovery::refreshSockets()
+{
+    for (QUdpSocket* socket : std::as_const(m_sockets)) {
+        socket->close();
+        socket->deleteLater();
+    }
+    m_sockets.clear();
+
+    for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+        const auto flags = iface.flags();
+        if (!flags.testFlag(QNetworkInterface::IsUp)
+            || !flags.testFlag(QNetworkInterface::IsRunning)
+            || flags.testFlag(QNetworkInterface::IsLoopBack)) {
+            continue;
+        }
+
+        for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
+            const QHostAddress local = entry.ip();
+            if (local.protocol() != QAbstractSocket::IPv4Protocol)
+                continue;
+
+            auto* socket = new QUdpSocket(this);
+            if (!socket->bind(local, 0)) {
+                socket->deleteLater();
+                continue;
+            }
+            enableBroadcast(*socket);
+            connect(socket, &QUdpSocket::readyRead,
+                    this, &Hl2Discovery::onReadyRead);
+            m_sockets.append(socket);
+        }
+    }
 }
 
 void Hl2Discovery::onSweepTimer()
@@ -204,8 +261,12 @@ void Hl2Discovery::onSweepTimer()
 
 void Hl2Discovery::onReadyRead()
 {
-    while (m_socket && m_socket->hasPendingDatagrams()) {
-        const QNetworkDatagram dg = m_socket->receiveDatagram();
+    auto* socket = qobject_cast<QUdpSocket*>(sender());
+    if (!socket)
+        return;
+
+    while (socket->hasPendingDatagrams()) {
+        const QNetworkDatagram dg = socket->receiveDatagram();
         const QByteArray data = dg.data();
         const auto reply = parseDiscoveryReply(
             {reinterpret_cast<const std::uint8_t*>(data.constData()),
