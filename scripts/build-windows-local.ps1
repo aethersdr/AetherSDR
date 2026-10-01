@@ -4,11 +4,9 @@
 
 .DESCRIPTION
     Mirrors .github/workflows/windows-installer.yml end-to-end so a native build
-    produces the same artifact as CI -- but on hardware with enough cores/RAM that
-    the full ASR + GPU (whisper Vulkan) build finishes fast instead of hitting the
-    GitHub runner's 6-hour timeout. (That timeout is a 4-core/16 GB free-runner
-    resource limit, not a real build problem; a 32-core box with plenty of RAM
-    builds it in well under an hour at full -j.)
+    produces the same artifact as CI, on hardware with enough cores/RAM to run
+    the full ASR + GPU (whisper Vulkan) build at full -j. CI itself builds the
+    same tree at -j 2 on a 4-core/16 GB runner in about 35-45 min end to end.
 
     Stages the third_party deps via the same setup-*.ps1 scripts CI uses,
     configures with the release flags (ASR ONNX + sherpa + GPU Vulkan all

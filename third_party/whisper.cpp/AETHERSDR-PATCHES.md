@@ -113,11 +113,12 @@ completion in 75 minutes on a Radeon Pro 560X.
    same on `ggml-org/whisper.cpp` `master`, so a `COMMIT` bump alone would not
    pick up a fix.
 
-   **The Windows release does not compile this file.** It links the prebuilt
-   `whisper.lib` from the `whisper-gpu-<ver>` release asset
-   (`ASR_USE_PREBUILT_WHISPER_GPU`, top-level `CMakeLists.txt`), so this patch
-   reaches Windows release binaries only when that pack is rebuilt from a tree
-   that contains it and its pinned SHA-256 is updated.
+   The Windows release compiles this file from the vendored tree, like the
+   other platforms. The fallback `ASR_USE_PREBUILT_WHISPER_GPU=ON` (top-level
+   `CMakeLists.txt`) links the prebuilt `whisper.lib` from the
+   `whisper-gpu-<ver>` release asset instead; the `whisper-gpu-1.9.1` asset
+   predates this patch, so a build that turns the fallback on does not have it
+   until that pack is rebuilt and its pinned SHA-256 updated.
 
 ## Refreshing
 

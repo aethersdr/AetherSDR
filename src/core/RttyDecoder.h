@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DecoderPcmAdapter.h"
+
 #include <QObject>
 #include <QByteArray>
 #include <QMutex>
@@ -7,16 +9,18 @@
 
 #include <atomic>
 #include <cmath>
+#include <memory>
 
 namespace AetherSDR {
 
 // Client-side RTTY (Baudot/ITA2) decoder using mark/space bandpass filters.
-// Runs decoding on a worker thread. Feed it 24 kHz stereo float32 PCM
-// (the same format rxDemodAudioReady carries) and it emits decoded text.
+// Runs decoding on its existing worker thread. Production RX supplies mono
+// fixed24 blocks from DecoderAudioModel, retaining source revocation through
+// queued text/stat delivery. The byte API remains a stereo24 compatibility path.
 //
 // Usage:
 //   decoder.start();
-//   connect(&radioModel, &RadioModel::rxDemodAudioReady, ...); // unwrap with PcmFrame::legacyStereo24()
+//   connect(&audio, &DecoderAudioModel::pcmReady, &decoder, &RttyDecoder::feedPcmBlock);
 //   connect(&decoder, &RttyDecoder::textDecoded, panel, &PanadapterApplet::appendRttyText);
 
 class RttyDecoder : public QObject {
@@ -37,6 +41,8 @@ public:
 
 public slots:
     void feedAudio(const QByteArray& pcm24kStereoFloat);
+    void feedPcmBlock(const AetherSDR::DecoderPcmBlock& block);
+    void resetInput();
 
     void setMarkFreqHz(int hz);
     void setShiftHz(int hz);
@@ -52,6 +58,9 @@ signals:
     void statsUpdated(float markLevel, float spaceLevel, float snrDb, bool locked);
 
 private:
+    void queueResetStats(quint64 generation);
+    void appendMono(const QByteArray& mono, const PcmEpochLease& source, bool typed,
+                    bool discontinuity);
     void decodeLoop();
     void recalcFilterCoeffs();
 
@@ -69,9 +78,12 @@ private:
     static constexpr int    kBaudotNull  = 0x00;
     static constexpr int    kRingCapacity = static_cast<int>(kSampleRate) * sizeof(float) * 4; // 4 s mono
 
-    QThread*   m_workerThread{nullptr};
+    std::unique_ptr<QThread> m_workerThread;
     QMutex     m_bufMutex;
     QByteArray m_ringBuf;
+    PcmEpochLease m_source; // protected together with the ring buffer
+    bool m_typedSource = false;
+    std::atomic<quint64> m_inputGeneration{0};
 
     std::atomic<bool>  m_running{false};
     std::atomic<bool>  m_paramsChanged{false};

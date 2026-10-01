@@ -221,6 +221,10 @@ public:
     // report one per port, so its strips leave the cell out rather than
     // standing an N/A in it forever.
     void setFrequencyVisible(bool visible);
+    // The tuner only knows what is on a port while it is hearing it, so its
+    // strips leave the source cell out rather than guess at one. The
+    // amplifier's source is configuration and stays shown — the default.
+    void setSourceVisible(bool visible);
     // The port carrying the radio's transmit path, outlined to match the
     // panel's highlight of the port in use.
     void setActive(bool active);

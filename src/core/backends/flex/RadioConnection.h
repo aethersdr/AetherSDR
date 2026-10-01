@@ -1,8 +1,8 @@
 #pragma once
 
 #include "CommandParser.h"
-#include "RadioDiscovery.h"
-#include "backends/IndependentTxControl.h"
+#include "core/RadioDiscovery.h"
+#include "core/backends/IndependentTxControl.h"
 
 #include <QObject>
 #include <QTcpSocket>

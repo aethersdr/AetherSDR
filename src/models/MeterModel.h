@@ -63,6 +63,35 @@ public:
     bool updateValueByName(const QString& source, const QString& name,
                            float converted, int sourceIndex = -1);
 
+    // Split a backend's "SOURCE:NAME" meter id into the triple that actually
+    // identifies a meter here: source, name and sourceIndex.
+    //
+    // IRadioBackend::meterUpdate carries a single string, so a backend with more
+    // than one of the same meter has no field to say WHICH one. The convention
+    // this parses is that trailing decimal digits on the source token are the
+    // sourceIndex — "SLC1:LEVEL" is source "SLC", sourceIndex 1 — which is what
+    // Hl2Backend::sliceMeterName already emits for its second receiver.
+    //
+    // A source with no trailing digit yields sourceIndex -1, findMeter()'s
+    // match-any, exactly as before this existed: "TX:FWDPWR" must keep
+    // resolving against a definition whose sourceIndex is whatever the backend
+    // chose. Returns false if the id has no colon or either half is empty.
+    //
+    // THIS IS A CONSTRAINT ON BACKENDS, NOT ONLY A PARSER. A meterUpdate source
+    // token MUST NOT END IN A DECIMAL DIGIT unless that digit is the source
+    // index. No emitter in the tree does today — HL2's ten literals, Icom's
+    // spec table and Sim's "TX:SWR" were checked — and a backend that one day
+    // names a source "TX2" literally would have it silently rewritten to source
+    // "TX", index 2. Its definition, declared as source "TX2", would then never
+    // be found and its updates would vanish with no error anywhere: exactly the
+    // invisible drop this function exists to fix, reintroduced from the other
+    // end. Put the index in MeterDef::sourceIndex and keep it out of the name.
+    //
+    // This lives here rather than in RadioModel because the naming scheme is
+    // MeterDef's, not the transport's — see RadioModel's meterUpdate handler.
+    static bool splitMeterId(const QString& meterId, QString* source,
+                             QString* name, int* sourceIndex);
+
     // Lookup a meter definition by index.
     const MeterDef* meterDef(int index) const;
 
@@ -99,11 +128,53 @@ public:
     QJsonArray allMeters() const;
     QJsonArray metersForSource(const QString& source, int sourceIndex = -1) const;
 
-    // Convenience: S-meter (slice LEVEL meter) in dBm.
-    float sLevel() const { return m_sLevel; }
+    // Convenience: the S-meter (slice LEVEL meter) reading for ONE slice, in
+    // dBm — std::nullopt when that slice declares no LEVEL meter, when none has
+    // ever been fed, or when the last sample has fallen outside the shared
+    // vitals window.
+    //
+    // THIS REPLACES A SCALAR sLevel() THAT NOTHING WROTE. m_sLevel was assigned
+    // in exactly one place in the tree — clear(), to -130.0f — because #155
+    // moved the S-meter onto m_sLevelIdxBySlice (correctly: the single
+    // m_sLevelIdx made every slice show the newest slice's signal) and deleted
+    // the scalar's store in the same hunk. The getter and its two callers were
+    // left pointing at a member with no writer, so `get meters`.sLevel answered
+    // -130 dBm for 1304 consecutive samples and rigctl's `get_level STRENGTH`
+    // answered -57.0 dB to every hamlib client on every backend, forever
+    // (#5499 item 2).
+    //
+    // Per-slice BY CONSTRUCTION rather than by convention: the caller has to
+    // name a receiver, so there is no radio-wide scalar left for a future
+    // reader to resolve as "whichever slice updated last".
+    //
+    // sliceIndex is the meter's MeterDef::sourceIndex, which every backend
+    // keys by slice id: Flex carries the manifest's `num` straight into it,
+    // HL2 and Icom declare one S-meter and leave it at 0. That is why
+    // RigctlProtocol can pass slice->sliceId() here. The one place the two
+    // disagree today is HL2's second receiver, published as SLC1:LEVEL with
+    // no matching definition -- see #5852 and its fix, #5866.
+    std::optional<float> sLevelForSlice(int sliceIndex) const;
+
+    // The radio-wide S-meter reading — what `get meters` publishes as a scalar
+    // — WHEN THERE IS ONE. Exactly one slice declaring a LEVEL meter is the
+    // only case in which "the" S-level has a single answer; with two receivers
+    // this declines rather than picking one, because picking the most recently
+    // updated one is precisely the bug #155 fixed. A client that wants a named
+    // receiver reads it out of the per-meter `all` array, which carries a row
+    // per slice.
+    std::optional<float> sLevelIfLive() const;
 
     // Convenience: forward power in watts.
     float fwdPower() const { return m_fwdPower; }
+    // Forward power when the forward-power SAMPLE ITSELF is live, std::nullopt
+    // when it is not. Judged on its own timestamp rather than on the aggregate
+    // TX stamp, and against kTxMeterStaleMs — the same shape, and the same
+    // reason, as swrIfLive() (#4536): a radio that keeps streaming SWR but
+    // stops streaming FWDPWR must not report minutes-old watts as current.
+    // The duration is shared with `get meters`.txMetersFresh; the timestamp
+    // is not. Fresh SWR or REFPWR can keep that aggregate flag true while
+    // forward power is absent here.
+    std::optional<float> fwdPowerIfLive() const;
     float fwdPowerInstant() const { return m_fwdPowerInstant; }
     float reflectedPower() const { return m_reflectedPower; }
     float tgxlFwdPower() const { return m_tgxlFwdPwr; }
@@ -488,7 +559,6 @@ private:
     qint64 m_lastTgxlSwrUpdateMs{0};
 
     // Cached values
-    float m_sLevel{-130.0f};
     float m_fwdPower{0.0f};
     float m_fwdPowerInstant{0.0f};
     float m_reflectedPower{0.0f};

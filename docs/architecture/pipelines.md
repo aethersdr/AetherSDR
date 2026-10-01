@@ -10,11 +10,12 @@ high-level routing overview; it intentionally omits many audio-stage details.
 
 ### Data Pipelines
 
-Multi-thread architecture — up to 12 threads depending on features enabled:
-- **Main thread**: GUI rendering (paintEvent), RadioModel + all sub-models, user input
+Multi-thread architecture — up to 13 threads depending on features enabled:
+- **Main thread**: GUI rendering (paintEvent), RadioModel + all sub-models, TciServer control/routing/PTT, user input
 - **Connection thread**: RadioConnection (TCP 4992 I/O, kernel TCP_INFO RTT)
 - **Audio thread**: AudioEngine (RX/TX audio; NR2/RN2/NR4/DFNR/BNR/MNR DSP, QAudioSink/Source)
 - **Network thread**: PanadapterStream (VITA-49 UDP parsing, FFT/waterfall/meter demux)
+- **TCI thread** (`TciIo`): TciIoWorker owns WebSocket I/O, RX/TX audio conversion and TX_CHRONO. Flex DAX ingress bypasses the GUI event loop; host-backend slice PCM still crosses the model owner.
 - **ExtControllers thread**: FlexControl, MIDI, SerialPort (USB/serial I/O, RtMidi callbacks)
 - **Spot thread**: DxCluster, RBN, WSJT-X, POTA, FreeDV spot clients
 - **CwDecoder thread**: ggmorse decode loop (QThread::create, on-demand)
@@ -66,9 +67,10 @@ SpectrumWidget   SpectrumWidget  MeterModel     AudioEngine
                       ┌──────┴──────┐
                       │ DAX streams │
                       └──────┬──────┘
-                             ▼ MAIN
+                             ▼ MAIN / TCI
                      VirtualAudioBridge / PipeWireAudioBridge / TCI / RADE
-                     (virtual devices, digital apps, modem paths)
+                     (virtual devices, digital apps, modem paths;
+                      TCI WebSocket send lives on the TciIo worker thread)
 
 TX AUDIO ROUTING SUMMARY:                  ◄── AUDIO THREAD
   QAudioSource (PC mic) ──→ AudioEngine.onTxAudioReady()
@@ -217,6 +219,7 @@ SPOT PIPELINES:                             ◄── SPOT WORKER THREAD
 | **Connection** | RadioConnection, QTcpSocket, kernel TCP_INFO RTT | ~0% | moveToThread | Heap-allocated, init() slot pattern |
 | **Audio** | AudioEngine, NR2/RN2 DSP, QAudioSink/Source, TX encoding | ~1.5% | moveToThread | std::atomic flags, recursive_mutex for DSP lifecycle |
 | **Network** | PanadapterStream, QUdpSocket, VITA-49 parsing, per-stream stats | ~0.3% | moveToThread | QMutex guards stream ID sets |
+| **TCI** | TciIoWorker, WebSockets, RX/TX conversion, TX_CHRONO | workload-dependent | moveToThread on start | Model-free worker; main-thread TciServer controller owns lifecycle |
 | **ExtControllers** | FlexControlManager, MidiControlManager, SerialPortController | ~0% | moveToThread | USB serial I/O, RtMidi, poll timers |
 | **Spot** | DxCluster, RBN, WSJT-X, POTA, FreeDV clients | ~0% | moveToThread | Batched 1/sec forwarding |
 | **CwDecoder** | ggmorse decode loop | ~0% | QThread::create | On-demand start/stop per CW mode |
@@ -225,6 +228,35 @@ SPOT PIPELINES:                             ◄── SPOT WORKER THREAD
 | **DXCC** | DxccColorProvider ADIF parser | ~0% | moveToThread | One-shot at startup |
 | **RADE** | RADEEngine neural encoder/decoder | ~0% | moveToThread | On-demand, HAVE_RADE |
 | **BNR** | NvidiaAfxFilter in-process AFX denoiser | varies | audio thread | local NVIDIA GPU, HAVE_NVIDIA_AFX |
+
+**TCI controller/worker boundary:** `TciServer` stays with `RadioModel`.
+Its protocol handlers, slice routing, DAX ownership, PTT admission and settings
+remain on that owner thread. The worker receives copied stream configurations,
+revocable route bindings, owning `PcmFrame`s and TX cancellation handles. It
+never dereferences a model or waits for the GUI. Start/stop use a one-way
+controller-to-worker barrier; stop destroys sockets on their owner thread,
+returns the idle worker to the controller, then joins before deletion. TCI is
+stopped before AudioEngine teardown.
+
+- Network → TCI: Flex DAX PCM enters a bounded mailbox through a lifetime-safe
+  closure. It does not wait for a GUI event. The mailbox holds at most 256
+  items / 4 MiB and drains at most 32 per event; overflow retires clients.
+- Main → TCI: copied client configuration, RX bindings, gains and admitted TX
+  contexts use the same ordered mailbox. Route retirement revokes an atomic
+  token immediately, including frames already queued.
+- TCI → Main: one unacknowledged text command per client, at most 64 queued
+  commands / 64 KiB text per client. Inputs are captured before delivery;
+  explicit releases discard captured TX inputs and disconnect invalidates
+  producer authority immediately. Only Main can admit a request.
+- TCI → Audio: converted TX PCM retains its original `TxCoordinator::Context`;
+  the audio consumer rechecks authority before dispatch.
+- TCI → Main: level notifications have at most one pending event per channel.
+  Chrono diagnostics are copied into a mutex-protected snapshot once per
+  second and on transitions; GUI inspection never invokes the worker.
+
+IQ/spectrum conversion and host-backend slice PCM ingress still depend on the
+model event loop. This split isolates Flex DAX audio and established TX chrono;
+it does not claim that every radio/control path survives a stalled GUI.
 
 **Cross-thread signals (auto-queued):**
 - Connection → Main: statusReceived, messageReceived, commandResponse, pingRttMeasured

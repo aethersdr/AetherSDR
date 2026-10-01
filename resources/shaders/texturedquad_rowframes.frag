@@ -16,6 +16,12 @@ layout(std140, binding = 0) uniform Uniforms {
     float texelHeightUnit;
     float waterfallRows;
     float padding7;
+    // The palette's t=0 colour (SpectrumWidget::waterfallFloorRgb()). Every
+    // "no data here" exit below returns it rather than black, so the GPU
+    // pipeline agrees with the CPU fills by construction instead of by
+    // parallel edits. Glacier (#5670) is the first palette where the two
+    // differ visibly.
+    vec4 floorColor;
 };
 
 vec4 sampleWaterfallSourceAge(float sourceAge, float unit, float rows)
@@ -27,7 +33,7 @@ vec4 sampleWaterfallSourceAge(float sourceAge, float unit, float rows)
     float rowY = fract(rowOffset + (clampedAge + 0.5) * unit);
     vec4 rowFrame = texture(rowFrequencyFrame, vec2(0.5, rowY));
     if (rowFrame.y <= 0.0) {
-        return vec4(0.0, 0.0, 0.0, 1.0);
+        return floorColor;
     }
     float sourceU = 0.5 + (targetCenterOffsetMhz - rowFrame.x) / rowFrame.y
         + (v_uv.x - 0.5) * targetBandwidthMhz / rowFrame.y;
@@ -42,7 +48,7 @@ vec4 sampleWaterfallSourceAge(float sourceAge, float unit, float rows)
             return texture(supplementalTex, vec2(supplementalU, rowY));
         }
     }
-    return vec4(0.0, 0.0, 0.0, 1.0);
+    return floorColor;
 }
 
 void main()
@@ -50,7 +56,7 @@ void main()
     // Terminate the logical bottom edge instead of allowing the four-row
     // reconstruction kernel to wrap the newest row into a one-pixel echo.
     if (v_uv.y >= 1.0 - texelHeightUnit) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        fragColor = floorColor;
         return;
     }
 

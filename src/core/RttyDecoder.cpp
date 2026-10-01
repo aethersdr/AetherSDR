@@ -32,20 +32,18 @@ RttyDecoder::~RttyDecoder()
 
 void RttyDecoder::start()
 {
-    if (m_running) return;
+    if (m_running) {
+        return;
+    }
 
     m_running       = true;
     m_paramsChanged = true;
 
-    {
-        QMutexLocker lock(&m_bufMutex);
-        m_ringBuf.clear();
-    }
+    resetInput();
 
     auto* worker = QThread::create([this]() { decodeLoop(); });
     worker->setObjectName("RttyDecoder");
-    connect(worker, &QThread::finished, worker, &QThread::deleteLater);
-    m_workerThread = worker;
+    m_workerThread.reset(worker);
     worker->start();
 
     qCDebug(lcDsp) << "RttyDecoder: started baud=" << m_baudRate.load()
@@ -54,12 +52,16 @@ void RttyDecoder::start()
 
 void RttyDecoder::stop()
 {
-    if (!m_running) return;
+    if (!m_running) {
+        return;
+    }
     m_running = false;
+    resetInput();
     if (m_workerThread) {
-        if (!m_workerThread->wait(2000))
-            qCWarning(lcDsp) << "RttyDecoder: worker did not stop within 2 s — abandoning";
-        m_workerThread = nullptr;
+        // The loop has only bounded 240-sample work and a 10 ms idle wait.
+        // Join before destroying its ring/filter owner, including during restart.
+        m_workerThread->wait();
+        m_workerThread.reset();
     }
     qCDebug(lcDsp) << "RttyDecoder: stopped";
 }
@@ -83,20 +85,86 @@ void RttyDecoder::setReversePolarity(bool r) {
 
 void RttyDecoder::feedAudio(const QByteArray& pcm24kStereoFloat)
 {
-    if (!m_running) return;
+    if (!m_running || pcm24kStereoFloat.size() % (2 * sizeof(float)) != 0
+        || pcm24kStereoFloat.size() > kRingCapacity * 2) {
+        return;
+    }
 
     const auto* src = reinterpret_cast<const float*>(pcm24kStereoFloat.constData());
     const int frames = pcm24kStereoFloat.size() / (2 * static_cast<int>(sizeof(float)));
 
     QByteArray mono(frames * static_cast<int>(sizeof(float)), Qt::Uninitialized);
     auto* dst = reinterpret_cast<float*>(mono.data());
-    for (int i = 0; i < frames; ++i)
-        dst[i] = (src[2 * i] + src[2 * i + 1]) * 0.5f;
+    for (int i = 0; i < frames; ++i) {
+        if (!std::isfinite(src[2 * i]) || !std::isfinite(src[2 * i + 1])) {
+            resetInput();
+            return;
+        }
+        dst[i] = src[2 * i] * 0.5f + src[2 * i + 1] * 0.5f;
+    }
+    appendMono(mono, {}, false, false);
+}
 
+void RttyDecoder::appendMono(const QByteArray& mono, const PcmEpochLease& source,
+                             bool typed, bool discontinuity)
+{
     QMutexLocker lock(&m_bufMutex);
+    if (!m_running || (typed && !source.current())) {
+        return;
+    }
+    if (discontinuity || typed != m_typedSource
+        || (typed && source.stream() != m_source.stream())
+        || (typed && m_ringBuf.size() + mono.size() > kRingCapacity)) {
+        ++m_inputGeneration;
+        m_ringBuf.clear();
+        queueResetStats(m_inputGeneration.load());
+    }
+    m_source = source;
+    m_typedSource = typed;
     m_ringBuf.append(mono);
-    if (m_ringBuf.size() > kRingCapacity)
+    // The legacy byte API keeps its trim-oldest backlog policy, as CwDecoder's
+    // does; typed RX overflow is a source discontinuity and retires state above.
+    if (!typed && m_ringBuf.size() > kRingCapacity) {
         m_ringBuf.remove(0, m_ringBuf.size() - kRingCapacity);
+    }
+}
+
+void RttyDecoder::feedPcmBlock(const DecoderPcmBlock& block)
+{
+    if (!m_running || !block.current() || block.samples.size() > PcmFrame::kMaxFrames) {
+        return;
+    }
+    for (float sample : block.samples) {
+        if (!std::isfinite(sample)) {
+            resetInput();
+            return;
+        }
+    }
+    appendMono(QByteArray(reinterpret_cast<const char*>(block.samples.constData()),
+                         block.samples.size() * sizeof(float)),
+               block.source, true, block.discontinuity);
+}
+
+void RttyDecoder::resetInput()
+{
+    QMutexLocker lock(&m_bufMutex);
+    ++m_inputGeneration;
+    m_ringBuf.clear();
+    m_source = {};
+    m_typedSource = false;
+    queueResetStats(m_inputGeneration.load());
+}
+
+void RttyDecoder::queueResetStats(quint64 generation)
+{
+    // Post while the ring lock is held so this precedes any new worker result.
+    // Queued delivery also keeps UI callbacks outside the buffer lock and avoids
+    // reentrant destruction during start/stop or the source-reset operation.
+    QMetaObject::invokeMethod(this, [this, generation] {
+        if (m_inputGeneration.load() == generation) {
+            emit statsUpdated(0.5f, 0.5f, 0.0f, false);
+        }
+    }, Qt::QueuedConnection);
 }
 
 // ── Filter design ────────────────────────────────────────────────────────────
@@ -184,6 +252,7 @@ void RttyDecoder::decodeLoop()
     bool   figsMode    = false;
     double bitClock    = 0.0;
     double samplesPerBit = kSampleRate / baud;
+    quint64 workerGeneration = m_inputGeneration.load();
 
     while (m_running) {
         if (m_paramsChanged.exchange(false)) {
@@ -204,6 +273,9 @@ void RttyDecoder::decodeLoop()
         }
 
         QByteArray chunk;
+        quint64 generation = 0;
+        PcmEpochLease source;
+        bool typed = false;
         {
             QMutexLocker lock(&m_bufMutex);
             if (m_ringBuf.size() < kChunkBytes) {
@@ -213,11 +285,34 @@ void RttyDecoder::decodeLoop()
             }
             chunk = m_ringBuf.left(kChunkBytes);
             m_ringBuf.remove(0, kChunkBytes);
+            generation = m_inputGeneration.load();
+            source = m_source;
+            typed = m_typedSource;
+        }
+
+        if (workerGeneration != generation) {
+            workerGeneration = generation;
+            recalcFilterCoeffs();
+            prevBit = curBit = 1;
+            inChar = false;
+            bitCount = shiftReg = statsTick = 0;
+            figsMode = false;
+            bitClock = 0.0;
+        }
+        const auto current = [this, generation, source, typed] {
+            return m_running && m_inputGeneration.load() == generation
+                && (!typed || source.current());
+        };
+        if (!current()) {
+            continue;
         }
 
         const auto* samples = reinterpret_cast<const float*>(chunk.constData());
 
         for (int i = 0; i < kChunkSamples; ++i) {
+            if (!current()) {
+                break;
+            }
             const double x = samples[i];
 
             // Bandpass + envelope
@@ -275,7 +370,12 @@ void RttyDecoder::decodeLoop()
                                 if (total > 1e-8)
                                     conf = static_cast<float>(
                                         std::max(m_markEnv, m_spaceEnv) / total);
-                                emit textDecoded(QString(QChar::fromLatin1(ch)), conf);
+                                const QString text(QChar::fromLatin1(ch));
+                                QMetaObject::invokeMethod(this, [this, current, text, conf] {
+                                    if (current()) {
+                                        emit textDecoded(text, conf);
+                                    }
+                                }, Qt::QueuedConnection);
                             }
                         }
                     }
@@ -299,7 +399,12 @@ void RttyDecoder::decodeLoop()
                 snrDb  = static_cast<float>(10.0 * std::log10(ratio / (1.0 - ratio + 1e-12)));
                 locked = snrDb > 3.0f;
             }
-            emit statsUpdated(markLevel, spaceLevel, snrDb, locked);
+            QMetaObject::invokeMethod(this,
+                [this, current, markLevel, spaceLevel, snrDb, locked] {
+                    if (current()) {
+                        emit statsUpdated(markLevel, spaceLevel, snrDb, locked);
+                    }
+                }, Qt::QueuedConnection);
         }
     }
 }

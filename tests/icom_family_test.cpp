@@ -95,10 +95,44 @@ int main(int argc, char** argv)
     RadioModel model;
 
     const auto icomNotice = experimentalRadioDescriptor(QStringLiteral("icom"));
+    const auto ic7300Mk2Notice = experimentalRadioDescriptor(
+        QStringLiteral("icom"), QStringLiteral("IC-7300MK2"));
+    const auto ic705Notice = experimentalRadioDescriptor(
+        QStringLiteral("icom"), QStringLiteral("IC-705"));
     const auto hl2Notice = experimentalRadioDescriptor(QStringLiteral("hl2"));
     const auto ananNotice = experimentalRadioDescriptor(QStringLiteral("anan"));
     check(icomNotice && icomNotice->displayName == QStringLiteral("Icom"),
           "Icom is identified as an experimental radio family");
+    check(!ic7300Mk2Notice,
+          "CI-V-resolved IC-7300MK2 is not classified as experimental");
+    check(ic705Notice && ic705Notice->displayName == QStringLiteral("Icom"),
+          "another identified Icom model remains experimental");
+    check(experimentalRadioIdentityPending(
+              QStringLiteral("icom"), QStringLiteral("Unknown Icom")),
+          "an unresolved Icom identity waits before family classification");
+    check(!experimentalRadioIdentityPending(
+              QStringLiteral("icom"), QStringLiteral("IC-7300MK2")),
+          "a verified IC-7300MK2 identity is settled");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("icom"), QStringLiteral("Unknown Icom"), false, false)
+              == ExperimentalRadioIdentityHold::UntilTimeout,
+          "an ordinary Icom connect holds only for the bounded identity window");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("icom"), QStringLiteral("Unknown Icom"), true, false)
+              == ExperimentalRadioIdentityHold::UntilWakeEnds,
+          "a wake reconnect holds until the wake ends, not the ordinary window");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("icom"), QStringLiteral("Unknown Icom"), false, true)
+              == ExperimentalRadioIdentityHold::None,
+          "an expired identity window classifies an unidentified Icom");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("icom"), QStringLiteral("IC-7300MK2"), true, false)
+              == ExperimentalRadioIdentityHold::None,
+          "an identified radio is not held even while a wake is finishing");
+    check(experimentalRadioIdentityHold(
+              QStringLiteral("hl2"), QString(), false, false)
+              == ExperimentalRadioIdentityHold::None,
+          "non-Icom families classify on the connected edge");
     check(hl2Notice && hl2Notice->displayName == QStringLiteral("Hermes-Lite 2"),
           "Hermes-Lite 2 is identified as an experimental radio family");
     check(ananNotice && ananNotice->displayName == QStringLiteral("ANAN-G2"),
@@ -254,6 +288,12 @@ int main(int argc, char** argv)
     // ownership invariant.
     {
         RadioModel reconnectModel;
+        int connectTimeDroppedCommands = 0;
+        QObject::connect(&reconnectModel, &RadioModel::commandDropped,
+                         &reconnectModel,
+                         [&connectTimeDroppedCommands](const QString&) {
+            ++connectTimeDroppedCommands;
+        });
         reconnectModel.connectToRadio(infoFor(QStringLiteral("icom")));
         auto* icomBackend =
             dynamic_cast<icom::IcomCivBackend*>(reconnectModel.backend());
@@ -268,6 +308,15 @@ int main(int argc, char** argv)
                 icomBackend, "onSessionConnected", Qt::DirectConnection,
                 Q_ARG(QString, QStringLiteral("IC-705")));
             check(firstConnected, "the first Icom session reaches its connected edge");
+            check(connectTimeDroppedCommands == 0,
+                  "Icom connect does not leak Flex commands into the unsupported-control notice");
+            reconnectModel.setPanWnb(false);
+            reconnectModel.setPanWnbLevel(50);
+            reconnectModel.setWaterfallColorGain(50);
+            reconnectModel.setWaterfallBlackLevel(15);
+            reconnectModel.setWaterfallAutoBlack(false);
+            check(connectTimeDroppedCommands == 0,
+                  "Icom display-state sync does not emit Flex-only pan or waterfall commands");
             check(!icomBackend->capabilities().hasGpsHardware,
                   "a familiar network name cannot grant GPS before CI-V identity");
             icom::CivFrame identity;

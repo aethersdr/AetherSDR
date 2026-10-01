@@ -54,6 +54,10 @@
 #         the instruction file, not a governance change. Keeping them
 #         maintainer-gated bottlenecked ~173 commits a year on a
 #         single-member team for no governance gain.
+#         AND the two release skills (.claude/skills/release-prep/,
+#         .claude/skills/tag-release/), claimed whole. Those arrive from
+#         the other direction — up from Tier 3, where their scripts fell
+#         through `*` — for the reason given at their lines below.
 #         Narrower owner set than Tier 3 because infrastructure changes
 #         need deeper repo context than routine source review.
 # Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T,
@@ -155,6 +159,31 @@ tests/                       @aethersdr/reviewers
 # would fall through to the `*` line — i.e. Tier 3, which is BROADER than
 # where it started. Keep this line even if the directory only holds .md today.
 .claude/commands/            @aethersdr/infrastructure
+
+# Release skills. /release-prep edits the six release files (all of them
+# *.md or CMakeLists.txt — Tier 2) and lands the prep PR; /tag-release tags
+# the merged commit, publishes the release, watches the signing and Store
+# workflows and verifies the asset set. A wrong step in either changes what
+# ships under the project's name. Each directory is claimed WHOLE, scripts
+# and agent stanza included, so the roster matches the files the skills act
+# on instead of the SKILL.md landing at Tier 2 via *.md while its scripts
+# and agents/openai.yaml fall through to `*`. NOTE the direction: that
+# fall-through is Tier 3, so this NARROWS the roster on those non-markdown
+# files from the reviewer team to infrastructure — the opposite of the
+# tests/ move above, and intended.
+#
+# Tier 2, not Tier 1, even though the risk argument reads like Tier 1's
+# criterion: a skill is instructions an operator runs interactively and
+# supervises through its decision gate, not a control that signs or
+# publishes on its own. Everything that actually does — the signing key,
+# sign-release.yml, the artifact workflows — stays Tier 1 below, and both
+# skills are barred by their own rules from pushing to main, editing
+# .github/workflows/, or touching the Store. If a skill ever gains
+# credentials or an unattended path to a release, it belongs back at Tier 1.
+# The other skills under .claude/skills/ (fb, papercuts, pr-review, pr-land)
+# are deliberately NOT here: they open PRs, they do not publish anything.
+.claude/skills/release-prep/ @aethersdr/infrastructure
+.claude/skills/tag-release/  @aethersdr/infrastructure
 
 # GitHub-specific tooling
 # Routine CI workflow definitions live at Tier 2 to unblock day-to-day CI
@@ -267,8 +296,9 @@ docs/VERIFYING-RELEASES.md   @aethersdr/maintainers
 .github/workflows/docker-ci-image.yml    @aethersdr/maintainers
 
 # NOTE: the AI-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md,
-# .github/copilot-instructions.md, .claude/commands/) are intentionally NOT
-# gated here — they sit at Tier 2.
+# .github/copilot-instructions.md, .claude/commands/) and the two release
+# skills (.claude/skills/release-prep/, .claude/skills/tag-release/) are
+# intentionally NOT gated here — they sit at Tier 2.
 # See the Tier 2 section above for the reasoning. Do NOT re-add them.
 #
 # What makes that safe is that the one genuinely normative rule about agent

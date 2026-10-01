@@ -18,19 +18,25 @@ need only on a specific platform, or when something goes wrong.
 ## macOS: Qt and qtkeychain
 
 Qt and qtkeychain do **not** come from Homebrew. Homebrew's `qt`
-formula (aliased `qt6` and `qt@6`) is a *rolling* release — 6.11.1 at the time
-of writing — while the DMG ships 6.8.3 LTS like every other artifact. Building
+formula (aliased `qt6` and `qt@6`) is a *rolling* release — 6.11.2 at the time
+of writing — while the DMG ships 6.12.0 LTS like every other artifact. Building
 against Homebrew's Qt means testing a Qt no release ships. Install the matching
 one and point CMake at it:
 
 ```bash
 # A venv rather than a bare `pip install`: a PEP 668 python3 refuses the latter.
 python3 -m venv ~/.venv/aqt && ~/.venv/aqt/bin/pip install aqtinstall
-~/.venv/aqt/bin/aqt install-qt mac desktop 6.8.3 clang_64 \
+~/.venv/aqt/bin/aqt install-qt mac desktop 6.12.0 clang_64 \
   -m qtmultimedia qtwebsockets qtserialport qtshadertools \
   --outputdir ~/Qt
-cmake -B build -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos;$(brew --prefix)"
+cmake -B build -DCMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/macos;$(brew --prefix)"
 ```
+
+Qt 6.12 needs **Xcode 16** (the macOS 15 SDK): Qt's own CMake stops at
+configure with "Qt requires at least version 16 of Xcode" on anything older, and
+Xcode 16 itself needs a macOS 14.5+ host. On an older Mac, build against Qt
+6.8.3 instead (`aqt install-qt mac desktop 6.8.3 clang_64 …`) — it is still a
+supported source floor. Anything built against 6.12 runs on macOS 14.4+ only.
 
 `clang_64` is the only macOS desktop build Qt publishes, and it is universal2 —
 there is no separate arm64 archive to pick. `$(brew --prefix)` stays on the
@@ -42,7 +48,7 @@ against the Qt you just installed instead — or skip it and build without
 SmartLink credential persistence:
 
 ```bash
-CMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos" bash scripts/setup/setup-qtkeychain.sh
+CMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/macos" bash scripts/setup/setup-qtkeychain.sh
 ```
 
 **Two Qt installations visible to CMake at once is a real failure, not a
@@ -56,9 +62,15 @@ workflow asserts this; your machine will not.
 
 ## Windows 11
 
-Prerequisites: Visual Studio 2022 (Build Tools, Community, or higher) with the
-MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.8+ (`msvc2022_64`; both CI and
-the release binaries use 6.8.3 LTS).
+Prerequisites: Visual Studio 2022 **17.14 or newer** (Build Tools, Community,
+or higher) with the MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.8+
+(`msvc2022_64`; both CI and the release binaries use 6.12.0 LTS). The 17.14
+floor comes from Qt 6.12 itself: its static `Qt6EntryPoint.lib`, which every
+Windows GUI app links, is built by MSVC 14.44, and an MSVC linker must be at
+least as new as the compiler behind any input. Qt 6.8.3 links with 17.9+.
+
+Qt 6.12 is the last Qt release that supports Windows 10 (1809 or later), so
+the next binary Qt bump will make AetherSDR's Windows builds Windows 11-only.
 
 ```bat
 :: 1. Activate the MSVC environment. Adjust the edition (BuildTools / Community /
@@ -71,7 +83,7 @@ the release binaries use 6.8.3 LTS).
 ::    setup-qtkeychain.ps1 (step 4) reads QT_ROOT_DIR; on CI that variable is
 ::    exported by install-qt-action, so a local build has to set it explicitly
 ::    or the script exits with "Qt not found".
-set "QT_KIT=C:/Qt/6.8.3/msvc2022_64"
+set "QT_KIT=C:/Qt/6.12.0/msvc2022_64"
 set "QT_ROOT_DIR=%QT_KIT%"
 
 :: 3. Generate the single-precision FFTW import lib (needed by NR4/libspecbleach)
@@ -130,11 +142,11 @@ LTS at 6.4.2), install a newer Qt manually:
    The `kubuntu-backports` PPA may provide a newer Qt — verify the version it ships before relying on it.
 
 2. **Option 2: Using the Qt Online Installer**
-   Install Qt into your home directory (e.g., `~/Qt/6.8.3/gcc_64`). Because CMake otherwise defaults to the system-provided Qt, point it at the newer install with `-DCMAKE_PREFIX_PATH`:
+   Install Qt into your home directory (e.g., `~/Qt/6.12.0/gcc_64`). Because CMake otherwise defaults to the system-provided Qt, point it at the newer install with `-DCMAKE_PREFIX_PATH`:
 
    ```bash
    cmake -B build -G Ninja \
-       -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/gcc_64" \
+       -DCMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/gcc_64" \
        -DCMAKE_BUILD_TYPE=RelWithDebInfo
    ```
 

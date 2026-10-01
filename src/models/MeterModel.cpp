@@ -254,6 +254,26 @@ QList<int> MeterModel::firstDefinedIndices(int limit, std::optional<int> after) 
 
 void MeterModel::removeMeter(int index)
 {
+    // WITHDRAWING WHAT WAS NEVER DECLARED IS A NO-OP, and saying so here covers
+    // every caller at once.
+    //
+    // Backends withdraw defensively — a teardown loop runs over the receivers it
+    // is dropping and does not know which of their declarations actually landed
+    // (Hl2Backend's trim withdraws for every receiver at or past the failure,
+    // including ones whose chain never opened). Without this the rest of the
+    // function still ran for an index nothing defines: it reset
+    // m_manifestSliceContext, so the NEXT definition to arrive lost the SLC
+    // context it should have inherited, and it emitted meterRemoved() on to the
+    // telemetry adapter and the DSP applets for a meter no consumer ever saw.
+    // Wasted work and a misleading store write rather than a wrong reading, but
+    // there is no caller for which the old behaviour was the wanted one.
+    //
+    // m_defs is the right question to ask: it is the only map defineMeter()
+    // populates unconditionally, and every cache below is keyed from a
+    // definition that is in it — so an index absent here is absent everywhere.
+    if (!m_defs.contains(index)) {
+        return;
+    }
     const int activeSwAlcIdx = swAlcIndexForActiveTxSlice();
     // Resolved BEFORE the maps are erased, exactly like the filter taps below:
     // once the entry is gone the resolver returns -1 and the reading would
@@ -274,7 +294,28 @@ void MeterModel::removeMeter(int index)
     const bool removedCompSource = m_compPeakIdxByTxSource.removeIf(matchesIndex) > 0;
     const bool removedCompSlice = m_compPeakIdxBySlice.removeIf(matchesIndex) > 0;
     const bool compressionMapChanged = removedCompSource || removedCompSlice;
-    if (index == m_fwdPwrIdx) { m_fwdPwrIdx = -1; m_fwdPwrUnit.clear(); }
+    if (index == m_fwdPwrIdx) {
+        m_fwdPwrIdx = -1;
+        m_fwdPwrUnit.clear();
+        // AND THE SAMPLE, not only the route. Clearing the index alone left
+        // m_fwdPower and m_lastFwdPowerUpdateMs holding the departed meter's
+        // reading, and fwdPowerIfLive() gates on the STAMP: declare any FWDPWR
+        // meter again inside kTxMeterStaleMs -- which defineMeter() itself
+        // triggers when an index is reused for a different meter -- and
+        // `get radio`.txPower answers the previous meter's smoothed watts for
+        // one that has carried no packet. That is the declared-but-never-fed
+        // case this whole change exists to report as null. REFPWR immediately
+        // below already zeroed both of its members; this is that, for the
+        // reading that has two.
+        //
+        // Zeroing the stamp also puts swrSampleLive() back on its
+        // "backend never published forward power" branch, which is correct: a
+        // radio whose FWDPWR meter has been removed is a radio with no forward
+        // power to gate the ratio on, exactly like one that never declared it.
+        m_fwdPower = 0.0f;
+        m_fwdPowerInstant = 0.0f;
+        m_lastFwdPowerUpdateMs = 0;
+    }
     if (index == m_refPwrIdx) {
         m_refPwrIdx = -1;
         m_refPwrUnit.clear();
@@ -394,6 +435,48 @@ float MeterModel::convertRaw(const MeterDef& def, qint16 raw) const
     return static_cast<float>(raw);
 }
 
+bool MeterModel::splitMeterId(const QString& meterId, QString* source,
+                              QString* name, int* sourceIndex)
+{
+    const int colon = meterId.indexOf(QLatin1Char(':'));
+    if (colon <= 0 || colon + 1 >= meterId.size()) {
+        return false;
+    }
+
+    QString src = meterId.left(colon);
+
+    // Trailing digits are the source index. Consumed from the END so a source
+    // whose NAME contains a digit is untouched, and only when at least one
+    // non-digit remains — a token that is all digits is not a source with an
+    // index, it is a malformed id, and stripping it would leave nothing to
+    // match on.
+    int firstDigit = src.size();
+    while (firstDigit > 0 && src.at(firstDigit - 1).isDigit()) {
+        --firstDigit;
+    }
+
+    int index = -1;
+    if (firstDigit > 0 && firstDigit < src.size()) {
+        bool ok = false;
+        const int parsed = src.mid(firstDigit).toInt(&ok);
+        if (ok) {
+            index = parsed;
+            src.truncate(firstDigit);
+        }
+    }
+
+    if (source) {
+        *source = src;
+    }
+    if (name) {
+        *name = meterId.mid(colon + 1);
+    }
+    if (sourceIndex) {
+        *sourceIndex = index;
+    }
+    return true;
+}
+
 bool MeterModel::updateValueByName(const QString& source, const QString& name,
                                    float converted, int sourceIndex)
 {
@@ -474,7 +557,6 @@ void MeterModel::clear()
     m_tgxlSwr = 1.0f;
     m_lastTgxlFwdPowerUpdateMs = 0;
     m_lastTgxlSwrUpdateMs = 0;
-    m_sLevel = -130.0f;
     m_fwdPower = 0.0f;
     m_fwdPowerInstant = 0.0f;
     m_reflectedPower = 0.0f;
@@ -778,6 +860,57 @@ std::optional<float> MeterModel::swrIfLive() const
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     return swrSampleLive(now, kTxMeterStaleMs) ? std::optional<float>(m_swr)
                                                : std::nullopt;
+}
+
+std::optional<float> MeterModel::sLevelForSlice(int sliceIndex) const
+{
+    const auto it = m_sLevelIdxBySlice.constFind(sliceIndex);
+    if (it == m_sLevelIdxBySlice.constEnd()) {
+        return std::nullopt;      // this receiver declares no LEVEL meter
+    }
+    const int index = it.value();
+    // DECLARED IS NOT FED AND FED IS NOT CURRENT. m_sLevelIdxBySlice is
+    // populated by the meter DEFINITION, so gating on the index alone would
+    // publish the m_values default for a meter no packet has ever carried —
+    // the fabricated-reading failure this whole issue is about, in a new
+    // place. vitalIsFresh is the predicate `get radio` already runs over
+    // PATEMP (#5516), reused here so one window governs both rather than a
+    // third literal appearing next to two existing ones. At the ~100 Hz the
+    // SLC:LEVEL row is fed while receiving, kVitalsFreshMs is 150 packets of
+    // slack; it bites only when the stream has actually stopped.
+    //
+    // The declared-and-fed argument is a literal true because valueAgeMs()
+    // already carries it: it returns -1 when the stamp is 0 or no value has
+    // been stored, and vitalIsFresh() rejects a negative age. Re-deriving the
+    // stamp here would be a second expression that has to agree with the
+    // first. (ten9876's review of #5499)
+    if (!vitalIsFresh(true, valueAgeMs(index))) {
+        return std::nullopt;
+    }
+    return m_values.value(index, 0.0f);
+}
+
+std::optional<float> MeterModel::sLevelIfLive() const
+{
+    // One receiver, one answer. See the header: with two LEVEL meters declared
+    // there is no single "the" S-level, and resolving it by recency would
+    // reintroduce #155 through the back door.
+    if (m_sLevelIdxBySlice.size() != 1) {
+        return std::nullopt;
+    }
+    return sLevelForSlice(m_sLevelIdxBySlice.constBegin().key());
+}
+
+std::optional<float> MeterModel::fwdPowerIfLive() const
+{
+    if (m_fwdPwrIdx < 0 || m_lastFwdPowerUpdateMs <= 0) {
+        return std::nullopt;      // undeclared, or declared and never fed
+    }
+    const qint64 age = QDateTime::currentMSecsSinceEpoch() - m_lastFwdPowerUpdateMs;
+    if (age < 0 || age > kTxMeterStaleMs) {
+        return std::nullopt;
+    }
+    return m_fwdPower;
 }
 
 bool MeterModel::hasRecentTxMeters(qint64 maxAgeMs) const

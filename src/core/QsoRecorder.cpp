@@ -791,6 +791,23 @@ bool QsoRecorder::patchWavHeader()
 
 // ── Playback ───────────────────────────────────────────────────────────────
 
+std::optional<QByteArray> QsoRecorder::lastRecordingPcm(const QAudioFormat& format,
+                                                        QString* error,
+                                                        qint64 maxFrames,
+                                                        bool prefixOnly) const
+{
+    if (m_lastRecordingPath.isEmpty()) {
+        if (error) *error = tr("nothing has been recorded");
+        return std::nullopt;
+    }
+    QFile file(m_lastRecordingPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error) *error = file.errorString();
+        return std::nullopt;
+    }
+    return prepareQsoWavPlayback(file, format, error, maxFrames, prefixOnly);
+}
+
 bool QsoRecorder::preparePlaybackPcm(const QAudioFormat& sinkFormat, QString& error)
 {
     m_playPcm.clear();

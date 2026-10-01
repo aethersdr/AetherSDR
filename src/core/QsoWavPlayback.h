@@ -22,9 +22,12 @@ namespace AetherSDR {
 // would otherwise replay half as long as an Int16 one (#3231's WASAPI path).
 // 67,108,864 stereo frames is ~46.6 min at 24 kHz and ~23.3 min at 48 kHz, and
 // caps the allocation at ~536 MiB in the worst case (Float stereo, 8 B/frame).
+// prefixOnly accepts longer recordings but converts only the longest complete
+// source-frame prefix that fits maxOutputFrames; full playback still refuses
+// an over-budget recording.
 inline constexpr qint64 kQsoPlaybackMaxFrames = 67'108'864;
 [[nodiscard]] std::optional<QByteArray> prepareQsoWavPlayback(
     QIODevice& source, const QAudioFormat& sinkFormat, QString* error = nullptr,
-    qint64 maxOutputFrames = kQsoPlaybackMaxFrames);
+    qint64 maxOutputFrames = kQsoPlaybackMaxFrames, bool prefixOnly = false);
 
 } // namespace AetherSDR

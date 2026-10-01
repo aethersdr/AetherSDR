@@ -556,8 +556,11 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
             m_model->setBypass(false);
             m_model->setOperate(true);
         } else {
-            m_model->setBypass(false);
+            // Operate first: a status arriving between the two commands then
+            // already reads STANDBY (operate=0), where bypass first would
+            // report operate=1 bypass=0 and flash OPERATE on the way down.
             m_model->setOperate(false);
+            m_model->setBypass(false);
         }
     });
     connect(m_bypBtn, &QPushButton::clicked, this, [this]() {
@@ -923,13 +926,15 @@ void TunerApplet::updatePortRows()
     // Fallback: the Flex-relayed "amplifier" status carries no per-port block
     // at all, so without the direct connection this is the client's view of
     // its own radio rather than the tuner's report. Port A is assumed to be
-    // the networked radio's and port B to be on RF sense — true of the common
-    // wiring, and the honest limit of what is knowable on this path.
+    // the networked radio's, and shows its name while one is connected. What
+    // is on port B — a second radio, RF sense, nothing — is not knowable on
+    // this path, and neither is either port's trigger mode, so its source
+    // cell is left out rather than guessed at.
     const QString modelName = m_radioModelName.trimmed();
-    m_portA->setSourceText(m_radioConnected && !modelName.isEmpty()
-                               ? modelName
-                               : tr("NO RADIO"));
-    m_portB->setSourceText(tr("RF SENSE"));
+    const bool haveRadio = m_radioConnected && !modelName.isEmpty();
+    if (haveRadio) m_portA->setSourceText(modelName);
+    m_portA->setSourceVisible(haveRadio);
+    m_portB->setSourceVisible(false);
 
     const bool haveFreq = m_radioConnected && m_portAFreqMhz > 0.0;
     m_portA->setFrequencyMhz(haveFreq ? m_portAFreqMhz : 0.0);
@@ -948,12 +953,14 @@ void TunerApplet::updatePortRows()
 void TunerApplet::applyPortInfo(AccessoryPortRow* row, const TunerPortInfo& info)
 {
     // A port the tuner has no live reading on is one nothing is being heard
-    // on. It is labelled RF SENSE rather than with the radio name the tuner
-    // reports there anyway: `flexB` reads FLEX-8600 on a port carrying
-    // nothing, so trusting it would put a radio on a port that has none.
-    row->setSourceText(info.live && !info.source.trimmed().isEmpty()
-                           ? info.source.trimmed()
-                           : tr("RF SENSE"));
+    // on, and its source cell is left out. The radio name the tuner reports
+    // there anyway is not trusted — `flexB` reads FLEX-8600 on a port
+    // carrying nothing — and nor is a guess at the port's trigger mode: the
+    // status carries none, so "RF SENSE" would be wrong on a PTT-keyed port.
+    const QString source = info.source.trimmed();
+    const bool showSource = info.live && !source.isEmpty();
+    if (showSource) row->setSourceText(source);
+    row->setSourceVisible(showSource);
 
     // freqX is kHz on the wire. The band comes from that frequency through
     // the project's own band table rather than from the tuner's `bandX`
@@ -1189,9 +1196,10 @@ void TunerApplet::cycleOperateState()
         // Currently OPERATE → go to BYPASS
         m_model->setBypass(true);
     } else if (m_model->isOperate() && m_model->isBypass()) {
-        // Currently BYPASS → go to STANDBY
-        m_model->setBypass(false);
+        // Currently BYPASS → go to STANDBY. Operate first, for the same
+        // reason as the STBY key's.
         m_model->setOperate(false);
+        m_model->setBypass(false);
     } else {
         // Currently STANDBY → go to OPERATE
         m_model->setBypass(false);

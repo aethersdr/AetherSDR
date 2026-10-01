@@ -120,6 +120,32 @@ namespace AetherSDR::hl2 {
 // never as "no room". The two are opposite instructions.
 inline constexpr std::int64_t kHeadroomMaxAgeMs = 3000;
 
+// IS THIS BLOCK STILL DESCRIBING NOW? The predicate above, named, so that
+// every reader of one bandscope block asks the SAME question of it.
+//
+// It exists because two readers of this block disagreed. bandscopeHeadroom()
+// below has always applied all three conditions; Hl2Backend::healthSnapshot()
+// applied only the first, so the auto-gain loop refused a stale block while
+// the level rows beside it published the same stale block as a current
+// reading. One gate produces these blocks, so one answer to "is it current"
+// is the only self-consistent arrangement -- and a second, separately chosen
+// threshold would only make the disagreement smaller rather than remove it.
+//
+// `ageMs < 0` is "never observed", which is the same ABSENT as too old and is
+// deliberately not a separate state: neither is a level, and a caller that
+// could tell them apart would have nothing different to do about it.
+//
+// Constexpr, clock-free and Qt-free for this header's stated reason: as a pure
+// function every branch is reachable by arithmetic, where driving a real gate
+// to a real expiry is not something a test suite can arrange.
+[[nodiscard]] inline constexpr bool bandscopeBlockIsCurrent(
+    const Ep4Stats& block,
+    std::int64_t ageMs,
+    std::int64_t maxAgeMs = kHeadroomMaxAgeMs) noexcept
+{
+    return block.samples > 0 && ageMs >= 0 && ageMs <= maxAgeMs;
+}
+
 // ---- the observation, classified ------------------------------------------
 
 enum class BandscopeHeadroom {
@@ -195,7 +221,9 @@ inline const double kGoodLevelKneeHeadroomDb =
 {
     HeadroomObservation out;
     out.ageMs = ageMs;
-    if (block.samples <= 0 || ageMs < 0 || ageMs > maxAgeMs) {
+    // The same predicate the health rows now use, called rather than restated,
+    // so the two cannot drift apart again.
+    if (!bandscopeBlockIsCurrent(block, ageMs, maxAgeMs)) {
         return out;                       // Absent
     }
     out.clippedSamples = block.clippedSamples;

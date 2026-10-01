@@ -420,6 +420,52 @@ with C&C **before** `metis-start`. (The earlier `CONFIG_MERCURY` diagnosis was
 wrong — HL2 gateware never decodes that bit; ordering was the real cause. Both
 the design note and `docs/archive/hl2-phase0-spike.md` carry the correction.)
 
+### The EP6 mic word runs at 12 kHz, not at the DDC rate
+
+Each EP6 round is *N* receivers' IQ followed by one 2-byte mic word, so the mic
+word is **delivered** once per round — that is, at the DDC sample rate. It does
+not follow that the mic word *changes* at that rate, and it does not.
+
+**Measured 2026-09-20** against a SquareSDR 2 (an HL2-compatible board, gateware
+7.5), receive-only, never keyed — every `C0` byte even so MOX stays clear. Each
+value is repeated for exactly `ddcRate / 12000` consecutive rounds:
+
+| DDC rate | dominant run length | implied update rate |
+|---|---|---|
+| 48 kHz  | 4  (21 728 of ~23 800 runs) | 12 kHz |
+| 96 kHz  | 8  (21 682 runs)            | 12 kHz |
+| 192 kHz | 16 (21 623 runs)            | 12 kHz |
+
+Idle values sat at DC ≈ −1430 with roughly ±50 counts of variation.
+
+**What this is NOT evidence of.** That the slot carries an actual microphone.
+A DC bias with a little noise on it looks identical whether it is an idle codec
+input or some unrelated internal signal the gateware parks there. The test that
+would settle it — watch the level about the mean while making noise near the
+radio — was not run. "It is the codec's mic input" is the likely reading and
+should be labelled as such until somebody measures it.
+
+**Why it matters, and where the reference client is wrong.** deskHPSDR computes
+`mic_sample_divisor = rate / 48000` and takes every *N*-th sample, under the
+comment `// reduce to 48000`. That describes something that is not happening:
+the stream is not at the DDC rate, so nothing is being reduced. It is harmless
+there — a zero-order hold preserves the fundamental, so the pitch comes out
+right anyway — but the description should not be inherited.
+
+For any future radio-mic transmit path here, the consequence is that **no
+anti-alias filter is needed**. The source is bandlimited to 6 kHz, so
+decimating the round stream by `ddcRate / 24000` to reach the 24 kHz that
+`Hl2Backend::submitTxAudio()` requires is safe on its own; the hold's images sit
+at ≥12 kHz, where the transmit filter removes them. The naive decimation that
+would be wrong for a genuine DDC-rate stream is exactly right for this one.
+
+**Not yet consumed.** `kRoundMicBytes` has no reader — it appears only in
+`ep6RoundBytes()`, as stride. `ep6DecodeRounds()` walks past the word with the
+comment *"the round's trailing 2 mic bytes are ignored"*. The capability comment
+at `Hl2Backend::capabilities()` saying `no on-radio mic jacks` is true of a bare
+HL2 and false of the HL2+ and SquareSDR 2 variants; it should be corrected by
+whatever change first reads this word.
+
 ---
 
 ## 5. WDSP configuration facts
@@ -1464,7 +1510,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
 | ~~1~~ | ~~Mute ramps `0.010/0.025/0.000/0.010` instead of all zeros~~ **DONE** | A3 §2 | `WdspChannel::Config` carries exactly those four values and `WdspChannel::open` hands them to `OpenChannel`. **Not HL2-scoped** — it is the shared `WdspChannel::Config`, so ANAN already opens with the same anti-click envelope, and the RTL registry will once it is wired (`RtlReceiverRegistry` has no production caller today). Flex, Icom, Sim and Web-888 never touch this path | — |
-| ~~2~~ | ~~S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS~~ **DONE** | A3 §7 | `Hl2RxDsp` emits `meterUpdate` from `WdspChannel::meter(Meter::SignalPeak)`, which is `GetRXAMeter(..., RXA_S_PK)`; the AGC-holds-it-flat reasoning is written at the call site. `AnanRxDsp` reads the same meter. **No audio-RMS meter survives on either path** | — |
+| ~~2~~ | ~~S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS~~ **DONE** | A3 §7 | `Hl2RxDsp` emits `meterUpdate` from `WdspChannel::meter(Meter::SignalAverage)`, which is `GetRXAMeter(..., RXA_S_AV)` — #5785 moved both backends off the peak tap, whose peak-hold reads the band noise floor 11–14 dB high; the AGC-holds-it-flat reasoning is written at the call site. `AnanRxDsp` reads the same meter, and both gate the read through `WdspSMeter.h`. **No audio-RMS meter survives on either path** | — |
 | ~~3~~ | ~~Rename `kC0AdcAssign`; document the `0x0e` dual meaning~~ **DONE** | O §4 | The constant is `kC0AdcAssignOrTxGain`, and the comment above it splits the generic-openHPSDR reading (per-receiver ADC assignment) from the HL2 one (TX LNA gain, `[15]` enable / `[14]` mode / `[13:8]` value) and names the two unbuilt things that need `0x0e` to carry a real value: the T/R gain switch and PureSignal's feedback path. The hazard is now documented rather than latent | — |
 | ~~4~~ | ~~Pipeline reset `0x39[7:4]=0x8` after an NCO move~~ **WITHDRAWN** | A2 §B2 | Built and tried. `ccPipelineReset()` still encodes the bank and `hl2_metis_protocol_test` still pins its bytes, but `MetisClient::requestPipelineReset()` is a **deliberate no-op**: driving it per NCO move fired ~30 resets/second during a pan drag and wedged the board until a physical power cycle. It validated at 7 resets ~2 s apart; the drag path was never exercised. Two causes were never separated — the reset rate, and the zeros we wrote to `0x39[27:24]`/`[11:8]` on an unverified assumption. The preconditions for bringing it back are written at the function, and `CERTIFICATION.md` §1.7 carries the general lesson (validate at the rate the UI actually produces). **Do not re-open this as cheap work** | — |
 | ~~5~~ | ~~Normalize by `2^23-1`, not `2^23`~~ **DONE** | A1 §A2 | `kFullScale = (1 << 23) - 1` in `MetisProtocol.h`, applied in the EP6 sample decode. **Not HL2-scoped in effect** — `P2Protocol.h`'s `kFullScale24Bit` is the same constant with a comment pointing back here, so ANAN has the same dBFS scale. Both are asserted in `hl2_metis_protocol_test` and `anan_p2_protocol_test` | — |
@@ -1977,9 +2023,10 @@ and Display->Waterfall Rate sliders governed neither — they emitted `display p
 set … fps=` and `display panafall set … line_duration=`, Flex wire text
 addressed to a command interpreter this radio does not have.
 
-For the waterfall this was **correctness, not just load**: the widget scales its
-time axis from `line_duration`, so rows arriving at 375/s against a 100 ms
-calibration made the visible history up to **37x shorter than it claimed**.
+For the waterfall this was **correctness, not just load**: the widget seeds its
+time axis from `line_duration` until it has measured real row arrivals, so rows
+arriving at 375/s against a 100 ms seed made the visible history up to **37x
+shorter than the axis claimed**.
 
 **The cap lives at the SOURCE** (`Hl2RxDsp::setSpectrumRateFps`, reached through
 `IRadioBackend::setPanFrameRate`), where a frame that is not due costs nothing.

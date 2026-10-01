@@ -30,6 +30,7 @@
 #include "GuardedSlider.h"
 #include "MeterSlider.h"
 #include "PanLayoutDialog.h"
+#include "PanZoomModeGate.h"
 #include "PanadapterStack.h"
 #include "RxApplet.h"
 #include "SpectrumOverlayMenu.h"
@@ -55,6 +56,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QSpinBox>
+#include <QStatusBar>
 #include <QTextEdit>
 #include <QTimer>
 
@@ -337,6 +339,157 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
 }
 
 
+bool MainWindow::handleSplitMonitorShortcut(QKeyEvent* keyEvent,
+                                            QEvent::Type eventType)
+{
+    // Monitor TX (Hold) — the XFC/TF-SET/TXW control. Same shape as
+    // handlePttHoldShortcut(), and for the same reason: QShortcut has no
+    // "released" signal, so a hold control cannot be one and has to be driven
+    // from the app-level event filter, resolving its rebindable key through
+    // ShortcutManager rather than hardcoding one.
+    if (!keyEvent || keyEvent->isAutoRepeat())
+        return false;   // a held key must not re-issue the mute pair per repeat
+    if (eventType != QEvent::KeyPress && eventType != QEvent::KeyRelease)
+        return false;
+
+    const QKeySequence seq = shortcutSequenceFromKeyEvent(keyEvent);
+    const auto* action = m_shortcutManager.actionForKey(seq);
+    bool isMonitor = action && action->id == QLatin1String(kSplitMonitorActionId);
+
+    // Modifier-tolerant release (Principle VI), exactly as PTT-hold: a combo
+    // binding released modifier-first delivers the base key on KeyRelease, so
+    // `seq` no longer matches the binding. Without this the restore never runs
+    // and the split is left monitoring — the operator hears the wrong slice,
+    // with nothing on screen to say why.
+    if (!isMonitor && eventType == QEvent::KeyRelease && m_splitMonitor.active())
+        isMonitor = keyEventMatchesActionBaseKey(kSplitMonitorActionId, keyEvent);
+
+    if (!isMonitor)
+        return false;
+
+    // Release is unconditional while a hold is live. Unlike the press below it
+    // is never gated on focus or on the shortcuts-enabled flag: whatever became
+    // true mid-hold, the audio has to go back.
+    if (eventType == QEvent::KeyRelease) {
+        if (!m_splitMonitor.active())
+            return false;
+        endSplitMonitor();
+        return true;
+    }
+
+    // Don't steal the key from a text field, and honour the global disable.
+    // textEntryCaptured() (not textInputCaptured()) for the same reason
+    // PTT-hold uses it: a focused non-editable combo keeps focus after its
+    // popup closes (#3908) and would otherwise swallow the first press.
+    if (textEntryCaptured() || !m_keyboardShortcutsEnabled)
+        return false;
+
+    beginSplitMonitor(/*keyHeld=*/true);
+    return true;   // consume the bound key so it can't also activate a button
+}
+
+
+// ─── Momentary Monitor TX (#2242) ───────────────────────────────────────────
+//
+// The Icom XFC / Kenwood TF-SET / Yaesu TXW control: hold to hear where you are
+// about to transmit. On a single-receiver rig that means the receiver MOVES,
+// which is what Solo reproduces (mute RX, unmute TX). Both makes the RX slice
+// audible too — the sub-receiver convention, for operators who have already
+// arranged the two slices across the stereo field.
+//
+// SplitMonitorHold records which native mute the press actually changed, and
+// the release restores exactly that — never a slice whose audio DAX/TCI/Kiwi
+// has replaced, where setAudioMute() writes a different domain.
+
+void MainWindow::beginSplitMonitor(bool keyHeld)
+{
+    if (m_splitMonitor.active()) return;
+    SliceModel* rx = nullptr;
+    SliceModel* tx = nullptr;
+    if (!activeSplitPair(rx, tx)) {
+        // A control that does nothing should say so (#5265). With more than
+        // one split running, the operator has to say which by selecting it.
+        QHash<QString, SliceModel*> txByPan, rxByPan;
+        resolveSplitPairs(txByPan, rxByPan);
+        statusBar()->showMessage(rxByPan.isEmpty()
+            ? tr("Monitor TX needs a split.")
+            : tr("Monitor TX: select a slice on the split to monitor."), 3000);
+        return;
+    }
+
+    m_splitAudioApplying = true;
+    const bool began = m_splitMonitor.begin(rx, tx, loadSplitAudioProfile().monitor);
+    m_splitAudioApplying = false;
+    m_splitMonitorKeyHeld = began && keyHeld;
+}
+
+void MainWindow::endSplitMonitor(bool deferWrites)
+{
+    if (!m_splitMonitor.active()) return;
+    m_splitMonitorKeyHeld = false;
+    // The hold is over NOW (its ids may be reused by the next slice); only the
+    // restoring writes may wait a turn — see recordSplitAudioMirror().
+    auto hold = m_splitMonitor;
+    m_splitMonitor = {};
+    if (deferWrites) {
+        // A live removal: the removed slice is gone for good; restore the
+        // survivor after the radio's queued status burst.
+        QTimer::singleShot(0, this, [this, hold]() mutable {
+            m_splitAudioApplying = true;
+            hold.end(m_radioModel.slice(hold.rxId()), m_radioModel.slice(hold.txId()));
+            m_splitAudioApplying = false;
+        });
+        return;
+    }
+    // Released while the connection is down: RadioModel has parked the slices
+    // (alive, out of the live map) and will reclaim the SAME objects. The
+    // radio still holds the hold's mutes, so the restore must wait for them.
+    const bool rxParked = hold.rxObject() && !m_radioModel.slice(hold.rxId());
+    const bool txParked = hold.txObject() && !m_radioModel.slice(hold.txId());
+    if (rxParked || txParked) {
+        m_splitMonitorPendingRelease = hold;
+        qCInfo(lcGui) << "Split monitor: released while slices are parked;"
+                      << "restore waits for the reclaim";
+        return;
+    }
+    m_splitAudioApplying = true;
+    hold.end(m_radioModel.slice(hold.rxId()), m_radioModel.slice(hold.txId()));
+    m_splitAudioApplying = false;
+}
+
+void MainWindow::tryCompletePendingMonitorRelease()
+{
+    auto& p = m_splitMonitorPendingRelease;
+    if (!p.active()) return;
+    const bool rxParked = p.rxObject() && !m_radioModel.slice(p.rxId());
+    const bool txParked = p.txObject() && !m_radioModel.slice(p.txId());
+    if (rxParked || txParked) return;   // not everything is back yet
+    // Reclaimed objects are restored; a destroyed or replaced one is not
+    // written (SplitMonitorHold's identity fence).
+    m_splitAudioApplying = true;
+    p.end(m_radioModel.slice(p.rxId()), m_radioModel.slice(p.txId()));
+    m_splitAudioApplying = false;
+}
+
+void MainWindow::endSplitMonitorForSlice(int sliceId, bool deferWrites)
+{
+    if (m_splitMonitor.active()
+        && (sliceId == m_splitMonitor.rxId() || sliceId == m_splitMonitor.txId()))
+        endSplitMonitor(deferWrites);
+}
+
+void MainWindow::endSplitMonitorForPan(const QString& panId)
+{
+    if (!m_splitMonitor.active() || panId.isEmpty()) return;
+    for (const int id : {m_splitMonitor.rxId(), m_splitMonitor.txId()}) {
+        if (auto* s = m_radioModel.slice(id); s && s->panId() == panId) {
+            endSplitMonitor();
+            return;
+        }
+    }
+}
+
+
 bool MainWindow::keyEventMatchesActionBaseKey(const char* actionId,
                                               const QKeyEvent* ev)
 {
@@ -455,8 +608,15 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     // the application leaves the active state. Do not consume the event.
     if (obj == qApp && event->type() == QEvent::ApplicationStateChange) {
         auto* stateEvent = static_cast<QApplicationStateChangeEvent*>(event);
-        if (stateEvent->applicationState() != Qt::ApplicationActive)
+        if (stateEvent->applicationState() != Qt::ApplicationActive) {
             failSafeMomentaryKeyingToRx("app-deactivate");
+            // A Monitor TX hold whose KeyRelease went to another application
+            // would otherwise leave the split's audio rearranged with no key
+            // left to release. Same fail-safe reasoning as the line above.
+            // A controller toggle has no release to lose and is left alone.
+            if (m_splitMonitorKeyHeld)
+                endSplitMonitor();
+        }
     }
 
     if (auto* slider = qobject_cast<QAbstractSlider*>(obj)) {
@@ -526,6 +686,11 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         // rather than a hardcoded Space, so reassigning it actually moves the
         // transmit key (#3879).
         if (handlePttHoldShortcut(ke, event->type()))
+            return true;
+
+        // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
+        // same missing-released-signal reason.
+        if (handleSplitMonitorShortcut(ke, event->type()))
             return true;
 
         // MeterSlider (TCI/DAX gain) handles its own arrow stepping, badge,
@@ -1027,16 +1192,19 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("af_gain_up", "AF Gain Up", "Audio",
         QKeySequence(Qt::Key_Up), [this]() {
             auto* s = activeSlice();
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (s) s->setAudioGain(std::min(100.0f, s->audioGain() + 5.0f));
         });
     m_shortcutManager.registerAction("af_gain_down", "AF Gain Down", "Audio",
         QKeySequence(Qt::Key_Down), [this]() {
             auto* s = activeSlice();
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (s) s->setAudioGain(std::max(0.0f, s->audioGain() - 5.0f));
         });
     m_shortcutManager.registerAction("mute_toggle", "Mute Toggle", "Audio",
         QKeySequence(Qt::Key_M), [this]() {
             auto* s = activeSlice();
+            AetherSDR::SplitAudioOperatorEdit op;  // #2242: operator-origin
             if (s) s->setAudioMute(!s->audioMute());
         });
     m_shortcutManager.registerAction("mute_all_slices_toggle", "Mute All Slices", "Audio",
@@ -1123,6 +1291,22 @@ void MainWindow::registerShortcutActions()
                 disableSplit();
             }
         });
+    // Monitor TX (Hold) is driven by the app-level event filter
+    // (handleSplitMonitorShortcut) because QShortcut has no "released" signal.
+    // Registered with a null handler so the keyboard map lists it as bindable
+    // — the same arrangement PTT (Hold) uses, and the place operators look for
+    // hold-style controls. No default key: it is opt-in, and every unmodified
+    // letter is already spoken for.
+    m_shortcutManager.registerAction(kSplitMonitorActionId, "Monitor TX (Hold)",
+        "Slice", QKeySequence(), nullptr);
+    // Split Up N — the one-touch pileup offsets every modern rig has (#311).
+    // These tune the TX slice; the RX slice does not move.
+    m_shortcutManager.registerAction("split_up_1", "Split Up 1 kHz", "Slice",
+        QKeySequence(), [this]() { applySplitOffsetKHz(1.0); });
+    m_shortcutManager.registerAction("split_up_5", "Split Up 5 kHz", "Slice",
+        QKeySequence(), [this]() { applySplitOffsetKHz(5.0); });
+    m_shortcutManager.registerAction("split_up_10", "Split Up 10 kHz", "Slice",
+        QKeySequence(), [this]() { applySplitOffsetKHz(10.0); });
     m_shortcutManager.registerAction("cycle_tx_slice", "Cycle TX Slice", "Slice",
         QKeySequence(), [this]() {
             const auto slices = m_radioModel.slices();
@@ -1364,7 +1548,23 @@ void MainWindow::registerShortcutActions()
         QKeySequence(Qt::Key_Minus), [this]() { zoomActivePanadapter(kPanZoomFactor); });
     m_shortcutManager.registerAction("open_memories", "Open Memories Dialog", "Display",
         QKeySequence(Qt::Key_Slash), [this]() { showMemoryDialog(); });
-    // No key sequence: Ctrl+M lives as an application QShortcut in
+#ifdef Q_OS_MAC
+    const QKeySequence windowMinimizeKey(QStringLiteral("Ctrl+M"));
+    const QKeySequence windowFullScreenKey(QStringLiteral("Ctrl+Meta+F"));
+#else
+    const QKeySequence windowMinimizeKey;
+    const QKeySequence windowFullScreenKey(Qt::Key_F11);
+#endif
+    m_shortcutManager.registerAction(
+        "window_minimize", "Minimize Active Window", "Display",
+        windowMinimizeKey, [this]() { minimizeActiveApplicationWindow(); },
+        false, false, ShortcutManager::ShortcutPolicy::WindowManagement);
+    m_shortcutManager.registerAction(
+        "window_fullscreen", "Toggle Active Window Full Screen", "Display",
+        windowFullScreenKey,
+        [this]() { toggleActiveApplicationWindowFullScreen(); },
+        false, false, ShortcutManager::ShortcutPolicy::WindowManagement);
+    // No key sequence: Ctrl+Shift+M lives as an application QShortcut in
     // MainWindow.cpp (it must work with the menu bar hidden, which is
     // minimal mode's whole situation).  Registering the ACTION makes the
     // toggle reachable for MIDI bindings and the bridge's `shortcut`
@@ -1529,18 +1729,45 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
     // Radio-authoritative toggle (#4057). band_zoom/segment_zoom are per-pan,
     // radio-owned flags broadcast in pan status (FlexLib Panadapter.cs:933) and
     // decoded into PanadapterModel. Reading the model instead of a client-side
-    // bool keeps every entry point — keyboard/MIDI shortcut, right-click menu,
-    // FlexControl, RC28 — in sync with the radio: a manual pan/zoom clears the
+    // bool keeps every entry point — the B/S buttons, the shortcut actions,
+    // MIDI, FlexControl, the RC28/Stream Deck/T-Mate2 chain, the wheel and the
+    // automation bridge — in sync with the radio: a manual pan/zoom clears the
     // flag on the radio, the status echo clears the model, and the next press
     // correctly sends =1 again instead of a dead =0. Band/segment mutual
     // exclusion is likewise the radio's own (it clears the other flag and
     // broadcasts both), per-pan state is naturally per-pan, and a failed send
     // can't invert anything because nothing is latched client-side.
-    if (panId.isEmpty()) {
+    // THE CAPABILITY GATE THE BUTTONS HONOUR, honoured here too. Reaching this
+    // function by keyboard shortcut, MIDI, FlexControl, RC28 or the automation
+    // bridge used to skip it entirely, because only SpectrumWidget's "B"/"S"
+    // buttons were ever disabled -- so a grayed-out button and a live keystroke
+    // did opposite things on a radio that answers neither. One predicate now
+    // decides both; see PanZoomModeGate.h, including why refusing this cannot
+    // withhold anything that transmits.
+    //
+    // AND THE REFUSAL SAYS SO, on the capability rung. A gate refuses BEFORE
+    // the send, so sendCmd is never reached and commandDropped() never fires:
+    // without this the six surfaces would go from the #5263 loud drop to
+    // silence, which is the dead-control shape this function is closing. Same
+    // qCWarning + notice pairing as the split_toggle gate above and the
+    // VfoWidget::splitToggled gate in MainWindow_Wiring.cpp; see
+    // MainWindow::showUnsupportedControlNotice()'s own comment for the rule
+    // and for the shared one-per-session latch. Only this rung announces --
+    // NotConnected and NoPan were silent early returns before and stay silent,
+    // so this restores exactly what the gate took away and nothing more.
+    auto* pan = panId.isEmpty() ? nullptr : m_radioModel.panadapter(panId);
+    const auto refusal = panZoomModeRefusal(
+        m_radioModel.isConnected(),
+        m_radioModel.backendCapabilities().panZoomModes.has_value(),
+        /*panKnown=*/pan != nullptr);
+    if (refusal == PanZoomModeRefusal::NotDeclared) {
+        qCWarning(lcDevices)
+            << (segmentZoom ? "segment zoom" : "band zoom")
+            << "ignored: this radio declares no band/segment zoom";
+        showUnsupportedControlNotice();
         return;
     }
-    auto* pan = m_radioModel.panadapter(panId);
-    if (!pan) {
+    if (refusal != PanZoomModeRefusal::None) {
         return;
     }
     const bool on = segmentZoom ? !pan->segmentZoomOn() : !pan->bandZoomOn();
@@ -1591,7 +1818,22 @@ void MainWindow::zoomActivePanadapter(double factor)
 
 void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
 {
-    if (!m_radioModel.isConnected()) {
+    // THE CAPABILITY RUNG FIRST, ahead of the slice and pan lookup. Whether
+    // this radio takes band_zoom=/segment_zoom= at all is a property of the
+    // RADIO, not of which pan the write would land on, so it is asked with the
+    // pan taken as present -- the same question, and the same call shape, that
+    // bandSegmentZoomAvailable() asks for the B/S buttons. Asking it here also
+    // means the refusal is announced even when no slice happens to be active,
+    // rather than disappearing into the `!s` return below.
+    const bool panZoomDeclared =
+        m_radioModel.backendCapabilities().panZoomModes.has_value();
+    if (panZoomModeRefusal(m_radioModel.isConnected(), panZoomDeclared,
+                           /*panKnown=*/true)
+            == PanZoomModeRefusal::NotDeclared) {
+        qCWarning(lcDevices)
+            << (segmentZoom ? "segment zoom" : "band zoom")
+            << "ignored: this radio declares no band/segment zoom";
+        showUnsupportedControlNotice();
         return;
     }
     auto* s = activeSlice();
@@ -1601,11 +1843,16 @@ void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
     const QString panId = !s->panId().isEmpty()
         ? s->panId()
         : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
-    if (panId.isEmpty()) {
-        return;
-    }
-    auto* pan = m_radioModel.panadapter(panId);
-    if (!pan) {
+    // The remaining rungs, through the same predicate as
+    // togglePanZoomModeForPan above -- and it must be the same one: this is
+    // the explicit-state form of the identical wire text, reached from the
+    // FlexControl and RC28 wheel handlers. It checked isConnected() and a pan
+    // id and never the capability. NotDeclared is already handled at the top
+    // of this function, so what is left here is NotConnected and NoPan, both
+    // of which were silent early returns before this PR and stay silent.
+    auto* pan = panId.isEmpty() ? nullptr : m_radioModel.panadapter(panId);
+    if (!panZoomModeWritable(m_radioModel.isConnected(), panZoomDeclared,
+                             /*panKnown=*/pan != nullptr)) {
         return;
     }
     const bool current = segmentZoom ? pan->segmentZoomOn() : pan->bandZoomOn();
@@ -1620,9 +1867,13 @@ void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
 
 void MainWindow::togglePanZoomMode(bool segmentZoom)
 {
-    if (!m_radioModel.isConnected()) {
-        return;
-    }
+    // No isConnected() check here: it was a second copy of the NotConnected
+    // rung this PR centralised, sitting AHEAD of the gate on five of the six
+    // surfaces -- the same two-copies-of-one-condition shape the gate exists
+    // to remove, one layer up. togglePanZoomModeForPan asks the one predicate;
+    // this only resolves which pan it asks about. (Deleting it does not make a
+    // disconnected press speak -- activeSlice() below still returns early, and
+    // the disconnected path was silent before this PR and stays silent.)
     auto* s = activeSlice();
     if (!s) {
         return;

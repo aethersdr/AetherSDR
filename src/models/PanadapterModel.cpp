@@ -332,6 +332,16 @@ void PanadapterModel::setLocalAverage(int average)
     emit averageReported(average);
 }
 
+void PanadapterModel::setLocalWeightedAverage(bool weighted)
+{
+    m_weightedAverageKnown = true;
+    if (weighted != m_weightedAverage) {
+        m_weightedAverage = weighted;
+        emit weightedAverageChanged(m_weightedAverage);
+    }
+    emit weightedAverageReported(weighted);
+}
+
 void PanadapterModel::setRequestedFftSettings(int average, int fps)
 {
     // Only call after dispatch. Do not emit *Reported, persist, or schedule a

@@ -78,6 +78,11 @@ public:
         int ddc0AdcIndex = 0;          // 0 = ADC0, 1 = ADC1/RX2
         bool bypassAdc0Filters = true;
         bool bypassAdc1Filters = true;
+        // Receive step attenuators, 0-31 dB (buildHighPriority()). Unlike the
+        // options above these ARE live: setStepAttenuationDb() changes them
+        // mid-session. The values here are what the session starts with.
+        int adc0AttenuationDb = 0;
+        int adc1AttenuationDb = 0;
 
         // Multi-DDC session. EMPTY (the default) means "single DDC0
         // session", built from ddc0RateKsps/ddc0AdcIndex above -- so every
@@ -116,6 +121,13 @@ public:
     // above this seam. Takes effect immediately (not on the next keepalive
     // tick) and is what the keepalive resends from then on.
     Q_INVOKABLE void setDdc0FrequencyHz(double hz);
+
+    // Set one ADC's receive step attenuator (0 = ADC0, 1 = ADC1), clamped to
+    // 0-31 dB by the encoder. Sent at once when running, and carried by every
+    // keepalive from then on -- the High Priority packet is resent every
+    // 100 ms, so a value held anywhere else would be overwritten by the next
+    // tick. An out-of-range adcIndex is ignored.
+    Q_INVOKABLE void setStepAttenuationDb(int adcIndex, int db);
 
     // Change one DDC's sample rate on a LIVE session -- no stop, no restart,
     // no reconnect. Returns false (sending nothing) if the session is not
@@ -226,6 +238,10 @@ private:
     // own comment on why these are connect-time-only).
     bool m_bypassAdc0Filters = true;
     bool m_bypassAdc1Filters = true;
+    // Step attenuation per ADC, seeded from Params at start() and changed
+    // live by setStepAttenuationDb(); every buildHighPriority() carries it.
+    int m_adc0AttenuationDb = 0;
+    int m_adc1AttenuationDb = 0;
 
     // The session's resolved DDC list and the dither/random flags that went
     // with it, RETAINED (rather than consumed and dropped in start()) so

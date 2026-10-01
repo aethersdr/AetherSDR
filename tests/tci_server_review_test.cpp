@@ -19,6 +19,8 @@
 #include <QSet>
 #include <QStringList>
 #include <QTimer>
+#include <QScopeGuard>
+#include <QThread>
 #include <QUrl>
 #include <QWebSocket>
 
@@ -117,8 +119,8 @@ public:
     {
         RadioModel model;
         TciServer server(&model);
-        QWebSocket client;
-        QWebSocket otherClient;
+        TciClient client;
+        TciClient otherClient;
 
         server.m_routeTransitionInFlight = true;
         server.handleVfoRequest(&client, TciProtocol::VfoRequest{
@@ -166,9 +168,9 @@ public:
     {
         RadioModel model;
         TciServer server(&model);
-        QWebSocket wsjtxA;
-        QWebSocket wsjtxB;
-        QWebSocket controlOnly;
+        TciClient wsjtxA;
+        TciClient wsjtxB;
+        TciClient controlOnly;
 
         TciServer::ClientState a;
         a.socket = &wsjtxA;
@@ -210,7 +212,7 @@ public:
     // is the one place that sets it, from each OTHER client's declared
     // audio_start receiver resolved through the strict trx map. The
     // tci_trxmap_test cases hand-build the flag, so this is the case that
-    // fails if the join stops setting it. Socket-free: the QWebSocket objects
+    // fails if the join stops setting it. Socket-free: the TciClient objects
     // are never opened — they are identity keys for ClientState, exactly as
     // in pttBindsToTheDeclaredAudioReceiver() above.
     // CONSTRUCTED from the measured #5193 topology (FLEX-8400, 2026-09-13):
@@ -235,10 +237,10 @@ public:
             return false;
         }
 
-        QWebSocket wsjtxA;
-        QWebSocket wsjtxB;
-        QWebSocket controlOnly;
-        QWebSocket staleDeclarer;
+        TciClient wsjtxA;
+        TciClient wsjtxB;
+        TciClient controlOnly;
+        TciClient staleDeclarer;
 
         TciServer::ClientState a;
         a.socket = &wsjtxA;
@@ -385,11 +387,38 @@ public:
                 == QStringLiteral("capacity test");
     }
 
+    static bool chronoStallSnapshotIsIdle()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        const QJsonObject chrono =
+            server.routingSnapshot().value(QStringLiteral("chrono")).toObject();
+        return chrono.value(QStringLiteral("polls")).toInteger() == 0
+            && chrono.value(QStringLiteral("latePolls")).toInteger() == 0
+            && chrono.value(QStringLiteral("catchUpFrames")).toInteger() == 0
+            && chrono.value(QStringLiteral("active")).toBool() == false
+            && chrono.contains(QStringLiteral("periodMs"));
+    }
+
+    static bool chronoStallCountsCatchUpAndLatePolls()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        server.m_io->noteTxChronoPoll(5'000'000, 1);
+        server.m_io->noteTxChronoPoll(50'000'000, 3);
+        return server.m_io->m_txChronoPollCount == 2
+            && server.m_io->m_txChronoLatePolls == 1
+            && server.m_io->m_txChronoCatchUpBursts == 1
+            && server.m_io->m_txChronoCatchUpFrames == 2
+            && server.m_io->m_txChronoMaxCatchUp == 3
+            && server.m_io->m_txChronoMaxPollGapNs == 50'000'000;
+    }
+
     static bool disconnectSnapshotIsPayloadFreeAndUsesUnsetError()
     {
         RadioModel model;
         TciServer server(&model);
-        QWebSocket socket;
+        TciClient socket;
         TciServer::ClientState client;
         client.socket = &socket;
 
@@ -404,7 +433,7 @@ public:
     {
         RadioModel model;
         TciServer server(&model);
-        QWebSocket socket;
+        TciClient socket;
         TciServer::ClientState client;
         client.socket = &socket;
         server.m_clients.append(client);
@@ -458,7 +487,7 @@ public:
     {
         RadioModel model;
         TciServer server(&model);
-        QWebSocket client;
+        TciClient client;
         if (!pttRouteFixture(model, server)) {
             return false;
         }
@@ -521,7 +550,7 @@ public:
     {
         RadioModel model;
         TciServer server(&model);
-        QWebSocket client;
+        TciClient client;
         if (!pttRouteFixture(model, server)) {
             return false;
         }
@@ -586,7 +615,7 @@ public:
     {
         RadioModel model;
         TciServer server(&model);
-        QWebSocket client;
+        TciClient client;
         if (!pttRouteFixture(model, server)) {
             return false;
         }
@@ -647,7 +676,7 @@ public:
     static bool powerBroadcastRateLimits()
     {
         RadioModel model;
-        QWebSocket sock;
+        TciClient sock;
         TciServer server(&model);
         TciServer::ClientState cs;
         cs.socket = &sock;
@@ -685,7 +714,7 @@ public:
     static bool driveTrxSurvivesTxFlagClear()
     {
         RadioModel model;
-        QWebSocket sock;
+        TciClient sock;
         TciServer server(&model);
         TciServer::ClientState cs;
         cs.socket = &sock;
@@ -754,7 +783,7 @@ public:
     static bool flagRelaySeedsAndDeDups()
     {
         RadioModel model;
-        QWebSocket sock;
+        TciClient sock;
         TciServer server(&model);
         TciServer::ClientState cs;
         cs.socket = &sock;
@@ -796,7 +825,7 @@ public:
     static bool flagSeedReadsSettledNotTransient()
     {
         RadioModel model;
-        QWebSocket sock;
+        TciClient sock;
         TciServer server(&model);
         TciServer::ClientState cs;
         cs.socket = &sock;
@@ -833,7 +862,7 @@ public:
     static bool lastTxTrxResetsOnClose()
     {
         RadioModel model;
-        QWebSocket sock;
+        TciClient sock;
         TciServer server(&model);
         TciServer::ClientState cs;
         cs.socket = &sock;
@@ -1221,12 +1250,12 @@ public:
         // tuneSliceAndConfirm's own explicit confirmation, never the automatic
         // path it now defers to on channel 0 (#5086).
         server.wireSlice(0, slice);
-        QWebSocket client;
+        TciClient client;
         // broadcastSliceFrequencies() bails early on an empty m_clients (it
         // has no client to send to yet), unlike the explicit confirmation
         // below it, which broadcast()s unconditionally. A registered client
         // is what makes the automatic path observable here at all.
-        QWebSocket sock;
+        TciClient sock;
         TciServer::ClientState cs;
         cs.socket = &sock;
         server.m_clients.append(cs);
@@ -1287,7 +1316,7 @@ public:
             return false;
 
         TciServer server(&model);
-        QWebSocket client;
+        TciClient client;
 
         const long long parked = TciProtocol::mhzToHz(slice->frequency());
         slice->setLocked(true);
@@ -1328,7 +1357,7 @@ public:
             return false;
 
         TciServer server(&model);
-        QWebSocket client;
+        TciClient client;
 
         QStringList sent;
         QObject::connect(&server, &TciServer::tciMessage,
@@ -1365,12 +1394,12 @@ public:
         // this, frequencyChanged -> broadcastSliceFrequencies() is never
         // live, and the test can't observe the duplicate this fix removes.
         server.wireSlice(0, slice);
-        QWebSocket client;
+        TciClient client;
         // broadcastSliceFrequencies() bails early on an empty m_clients,
         // unlike the explicit confirmation, which broadcast()s
         // unconditionally — a registered client makes the automatic path
         // observable here at all.
-        QWebSocket sock;
+        TciClient sock;
         TciServer::ClientState cs;
         cs.socket = &sock;
         server.m_clients.append(cs);
@@ -1399,11 +1428,141 @@ public:
     // #4744: switching from resampled TCI RX to native rate carries staged
     // samples into the native frame source. Releasing that buffer before
     // gain conversion or sendBinaryMessage() left the payload pointer dangling.
+    // Our real WebSocket server and a local client run while the model owner
+    // deliberately does not process events. No radio is connected: a standalone
+    // coordinator supplies only an in-process media permit for the chrono test.
+    static bool workerKeepsStreamingDuringOwnerStall()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error)) { return false; }
+        model.slice(0)->setDaxChannel(1);
+        if (!server.start(0)) { return false; }
+        if (server.thread() != model.thread() || server.m_io->thread() == model.thread()) { return false; }
+
+        QThread peerThread;
+        QObject peer;
+        QThread* ownerThread = QThread::currentThread();
+        peer.moveToThread(&peerThread);
+        peerThread.start();
+        QWebSocket* socket = nullptr;
+        std::atomic<int> audioFrames{0};
+        std::atomic<int> chronoFrames{0};
+        const auto cleanup = qScopeGuard([&] {
+            QMetaObject::invokeMethod(&peer, [&] {
+                delete socket;
+                peer.moveToThread(ownerThread);
+            }, Qt::BlockingQueuedConnection);
+            peerThread.quit();
+            peerThread.wait();
+        });
+        const quint16 port = server.port();
+        QMetaObject::invokeMethod(&peer, [&] {
+            socket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, &peer);
+            QObject::connect(socket, &QWebSocket::connected, socket, [socket] {
+                socket->sendTextMessage(QStringLiteral("audio_samplerate:24000;audio_start:0;"));
+            });
+            QObject::connect(socket, &QWebSocket::binaryMessageReceived, socket,
+                [&](const QByteArray& packet) {
+                    if (packet.size() < qsizetype(sizeof(TciAudioHeader))) { return; }
+                    TciAudioHeader header{};
+                    std::memcpy(&header, packet.constData(), sizeof(header));
+                    if (header.type == 1) { ++audioFrames; }
+                    if (header.type == 3) { ++chronoFrames; }
+                });
+            socket->open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
+        }, Qt::BlockingQueuedConnection);
+        for (int i = 0; i < 100 && (server.m_clients.isEmpty() || !server.m_clients.first().audioEnabled); ++i) {
+            spin(10);
+        }
+        if (server.m_clients.isEmpty() || !server.m_clients.first().audioEnabled) { return false; }
+        const quint64 id = server.m_clients.first().socket->id();
+        TxCoordinator coordinator([](const auto&, auto) {});
+        const auto actor = coordinator.registerActor({true, 0});
+        const auto producer = coordinator.registerProducer(actor);
+        const auto request = producer.request();
+        const auto admission = coordinator.acquire(actor, TxCoordinator::monotonicMs());
+        const auto intent = coordinator.beginRequest(request, admission.operation, TxCoordinator::Activity::Mox);
+        const auto media = coordinator.mediaContext(request);
+        if (!media.permitsDispatch(TxCoordinator::monotonicMs())) { return false; }
+        server.m_io->post([io = server.m_io.get(), id, producer, media] {
+            io->activate(id, producer);
+            io->startChrono(id, 0, media);
+        });
+        const auto sink = server.daxPcmSink();
+        QMetaObject::invokeMethod(&peer, [&, sink] {
+            auto pcm = std::make_shared<PcmProducer>();
+            pcm->start(PcmPurpose::Auxiliary);
+            auto* timer = new QTimer(socket);
+            QObject::connect(timer, &QTimer::timeout, socket, [pcm, sink] {
+                if (const auto frame = pcm->produce(QVector<float>(480, 0.125f))) { sink(1, *frame); }
+            });
+            timer->start(10);
+        }, Qt::BlockingQueuedConnection);
+        // No spin()/processEvents(): both the peer and TCI must make progress
+        // without any controller callback, model access or GUI acknowledgement.
+        QThread::msleep(350);
+        const bool progressed = audioFrames.load() >= 4 && chronoFrames.load() >= 4;
+        const bool snapshots = !server.routingSnapshot().isEmpty()
+            && server.connectedClients().size() == 1;
+        QMetaObject::invokeMethod(&peer, [&] {
+            socket->sendTextMessage(QStringLiteral("trx:0,false;"));
+        }, Qt::BlockingQueuedConnection);
+        QThread::msleep(100);
+        const int stoppedAt = chronoFrames.load();
+        const bool released = !media.permitsDispatch(TxCoordinator::monotonicMs());
+        QThread::msleep(100);
+        const bool chronoStopped = chronoFrames.load() == stoppedAt;
+        QMetaObject::invokeMethod(&peer, [&] { socket->abort(); }, Qt::BlockingQueuedConnection);
+        QThread::msleep(50);
+        const bool disconnected = !producer.valid();
+        server.stop();
+        const bool stopped = (!server.m_ioThread || !server.m_ioThread->isRunning()) && server.m_io->thread() == ownerThread;
+        // A callback already copied by the network source cannot reach freed
+        // worker storage after teardown (covered under ASan in the churn case).
+        std::printf("      stalled owner: RX=%d chrono=%d released=%d disconnected=%d\n",
+                    audioFrames.load(), chronoFrames.load(), released, disconnected);
+        return progressed && snapshots && released && chronoStopped && disconnected && stopped;
+    }
+
+    static bool ingressReleaseFencesEarlierCommands()
+    {
+        TxCoordinator coordinator([](const auto&, auto) {});
+        const auto actor = coordinator.registerActor({true, 0});
+        TciIoWorker worker;
+        TciIoWorker::Client client;
+        client.lifetime = std::make_shared<TciClientLifetime>();
+        client.producer = coordinator.registerProducer(actor);
+        client.texts.push_back({QStringLiteral("trx:0,true;"), {}});
+        client.texts.push_back({QStringLiteral("trx:0,false;"), {}});
+        client.texts.push_back({QStringLiteral("trx:0,true;"), {}});
+        worker.captureTextInputs(client);
+        const auto old = client.texts[0].input;
+        const auto fresh = client.texts[2].input;
+        worker.captureTextInputs(client);
+        // Recapturing an invalidated request would renew stale input.
+        return !old.valid() && !client.texts[0].input.valid()
+            && fresh.valid() && fresh.sameRequest(client.texts[2].input);
+    }
+
+    static bool lateKeyIsAbortedOnModelThread()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        const auto producer = model.registerTxProducer();
+        const auto request = producer.request();
+        server.m_tciPttRequest = request;
+        server.m_tciPttCancelPending = true;
+        server.onRadioTransmittingChanged(true);
+        return !request.valid();
+    }
+
     static bool native24kAudioDiscardsPriorRatePayload()
     {
         RadioModel model;
         TciServer server(&model);
-        if (!server.start(0) || !server.m_server) {
+        if (!server.start(0) || !server.isRunning()) {
             std::printf("      TCI server failed to bind an ephemeral port\n");
             return false;
         }
@@ -1454,7 +1613,7 @@ public:
             samples[i] = static_cast<float>(i + 1) / 1024.0f;
         }
         constexpr float kGain = 0.5f;
-        server.m_rxChannelGain[0] = kGain;
+        server.setRxChannelGain(1, kGain);
 
         // Seed a sub-threshold 48 kHz resampler accumulation, then switch to
         // native 24 kHz.  The old implementation retained this staging buffer
@@ -1578,7 +1737,7 @@ public:
         QObject::connect(&model.daxIqModel(), &DaxIqModel::commandReady,
                          [&h](const QString& c) { h.iqCommands.append(c); });
 
-        if (!server.start(0) || !server.m_server) {
+        if (!server.start(0) || !server.isRunning()) {
             std::printf("      TCI server failed to bind an ephemeral port\n");
             return false;
         }
@@ -1701,7 +1860,7 @@ public:
         QObject::connect(&model.daxIqModel(), &DaxIqModel::commandReady,
                          [&h](const QString& c) { h.iqCommands.append(c); });
 
-        if (!server.start(0) || !server.m_server) {
+        if (!server.start(0) || !server.isRunning()) {
             std::printf("      TCI server failed to bind an ephemeral port\n");
             return false;
         }
@@ -1807,7 +1966,7 @@ public:
         QObject::connect(&model.daxIqModel(), &DaxIqModel::commandReady,
                          [&h](const QString& c) { h.iqCommands.append(c); });
 
-        if (!server.start(0) || !server.m_server) {
+        if (!server.start(0) || !server.isRunning()) {
             std::printf("      TCI server failed to bind an ephemeral port\n");
             return false;
         }
@@ -1879,7 +2038,7 @@ public:
             return srv.startIqForClient(cs, 0);
         };
 
-        if (!server.start(0) || !server.m_server) {
+        if (!server.start(0) || !server.isRunning()) {
             std::printf("      TCI server failed to bind an ephemeral port\n");
             return false;
         }
@@ -1895,7 +2054,7 @@ public:
         server.stop();
         iqCommands.clear();
 
-        if (!server.start(0) || !server.m_server) {
+        if (!server.start(0) || !server.isRunning()) {
             return false;
         }
         if (!startOnce(server)) {
@@ -1922,8 +2081,8 @@ public:
         if (!model.automationApplySliceFixture(0, QString(), &error)) {
             return false;
         }
-        QWebSocket clientA;
-        QWebSocket clientB;
+        TciClient clientA;
+        TciClient clientB;
         TciServer::ClientState a;
         a.socket = &clientA;
         TciServer::ClientState b;
@@ -2029,6 +2188,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::iqStreamRearmsAfterStopStartCycle();
     const bool iqClientScoped
         = AetherSDR::TciServerReviewTest::sharedIqSubscriptionIsClientScoped();
+    const bool chronoIdle
+        = AetherSDR::TciServerReviewTest::chronoStallSnapshotIsIdle();
+    const bool chronoCatchUp
+        = AetherSDR::TciServerReviewTest::chronoStallCountsCatchUpAndLatePolls();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -2099,8 +2262,19 @@ int main(int argc, char** argv)
                 iqRearms ? "PASS" : "FAIL");
     std::printf("%s  shared IQ subscriptions are client-scoped\n",
                 iqClientScoped ? "PASS" : "FAIL");
+    std::printf("%s  TX_CHRONO stall snapshot is idle before TX\n",
+                chronoIdle ? "PASS" : "FAIL");
+    std::printf("%s  TX_CHRONO stall counts late polls and catch-up bursts\n",
+                chronoCatchUp ? "PASS" : "FAIL");
 
-    return validProfile && deferredAbort && observableFailure
+    const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
+    const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
+    const bool inputFence = AetherSDR::TciServerReviewTest::ingressReleaseFencesEarlierCommands();
+    std::printf("%s  release fences queued key input without renewing it\n", inputFence ? "PASS" : "FAIL");
+    std::printf("%s  worker streams and revokes TX while owner is stalled\n", workerStall ? "PASS" : "FAIL");
+    std::printf("%s  late key abort runs on model owner\n", lateKeyAbort ? "PASS" : "FAIL");
+
+    return workerStall && lateKeyAbort && inputFence && validProfile && deferredAbort && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap && ownershipJoin
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
@@ -2112,5 +2286,6 @@ int main(int argc, char** argv)
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped
+        && chronoIdle && chronoCatchUp
         ? 0 : 1;
 }

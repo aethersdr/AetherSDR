@@ -563,9 +563,12 @@ public:
 
     // ── Master RX bypass ─────────────────────────────────────────
     // Sibling of the TX bypass plumbing above.  Same snapshot-and-
-    // restore semantics applied to the RX chain.  Stages without an
-    // implemented DSP class (currently DeEss) are skipped — they're
-    // already no-ops in the dispatcher, so disabling them is moot.
+    // restore semantics applied to the RX chain, plus the AetherNR
+    // cluster: whichever noise-reduction method is running is switched
+    // off with the chain and put back on release, so a bypassed RX
+    // path is genuinely unprocessed.  Stages without an implemented DSP
+    // class (currently DeEss) are skipped — they're already no-ops in
+    // the dispatcher, so disabling them is moot.
     // Emits rxBypassChanged(bool) on transitions.
     void setRxBypassed(bool on);
     bool isRxBypassed() const;
@@ -990,10 +993,10 @@ private:
     void processNr2(const QByteArray& stereoPcm,
                     RxDspSource source = RxDspSource::Main,
                     ExternalRxAudioSourceState* externalSource = nullptr);
-    static void processNr2StereoSharedMask(SpectralNR& nr2,
-                                           const float* src,
-                                           int stereoFrames,
-                                           QByteArray& output);
+    static void processNr2Stereo(SpectralNR& nr2,
+                                 const float* src,
+                                 int stereoFrames,
+                                 QByteArray& output);
     void updateRxBufferStats();
     ExternalRxAudioSourceState* externalKiwiSource(const QString& sourceId,
                                                    bool create);
@@ -1470,7 +1473,11 @@ private:
     // RX RN2 lives in the NR cluster, not the RxChainStage enum, but
     // BYPASS must still suppress it so the post-bypass RX path is truly
     // transparent (#3054).  Same parallel-bool pattern as TX above.
-    bool m_rxBypassSnapshotRn2{false};
+    // Which NR methods RX BYPASS switched off, to put back on release.
+    enum class RxBypassNr : unsigned {
+        Nr2 = 1, Nr4 = 2, Mnr = 4, Dfnr = 8, Rn2 = 16, NvAfx = 32, Nnr = 64
+    };
+    unsigned m_rxBypassSnapshotNr{0};
     bool m_rxBypassActive{false};
     // Scratch buffer for in-place EQ on the RX path (avoids per-call alloc).
     // One scratch buffer per RX stage, reused block after block. Grouped

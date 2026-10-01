@@ -763,14 +763,18 @@ QString TciProtocol::cmdTrx(const QStringList& args, bool isSet)
         return QStringLiteral("trx:%1,%2;").arg(trx).arg(tx ? "true" : "false");
     }
 
-    if (args.size() < 2) return {};
-    const QString state = args[1].trimmed().toLower();
-    if (state != QStringLiteral("true") && state != QStringLiteral("false")) {
-        return {};
-    }
-    const QString source = args.size() >= 3 ? args[2].trimmed().toLower() : QString();
-    m_trxRequest = TrxRequest { trx, state == QStringLiteral("true"), source };
+    m_trxRequest = parseTrxRequest(args);
     return {};
+}
+
+std::optional<TciProtocol::TrxRequest> TciProtocol::parseTrxRequest(const QStringList& args)
+{
+    int trx = 0;
+    if (args.size() < 2 || !argToInt(args, 0, trx) || trx < 0) { return {}; }
+    const QString state = args[1].trimmed().toLower();
+    if (state != QStringLiteral("true") && state != QStringLiteral("false")) { return {}; }
+    const QString source = args.size() >= 3 ? args[2].trimmed().toLower() : QString();
+    return TrxRequest{trx, state == QStringLiteral("true"), source};
 }
 
 // ── TX_ENABLE: output-only TX assignment state ─────────────────────────────

@@ -29,11 +29,8 @@ public:
         m_decoder.disconnect(this);
         m_decoder.stop();
     }
-    void reset() override { const bool running = isRunning(); stop(); if (running) { start(); } }
-    void feed(const PcmFrame& frame) override {
-        const QByteArray pcm = frame.legacyStereo24();
-        if (!pcm.isEmpty()) { m_decoder.feedAudio(pcm); }
-    }
+    void reset() override { m_decoder.resetInput(); }
+    void feedFixed24(const DecoderPcmBlock& block) override { m_decoder.feedPcmBlock(block); }
     bool isRunning() const override { return m_decoder.isRunning(); }
     bool supportsTuning() const override { return true; }
     void lockPitch(bool on) override { m_decoder.lockPitch(on); }
@@ -175,4 +172,8 @@ void CwRxModel::queueState()
     }, Qt::QueuedConnection);
 }
 void CwRxModel::feed(const PcmFrame& frame) { if (isRunning()) { m_backend->feed(frame); } }
+void CwRxModel::feedFixed24(const DecoderPcmBlock& block)
+{
+    if (isRunning()) { m_backend->feedFixed24(block); }
+}
 }

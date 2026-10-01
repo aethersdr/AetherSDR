@@ -30,9 +30,11 @@ Guards the dependency direction the aetherd RFC
        This is RFC step 2.4's ratchet: the interface already exists, so
        no new code should reach around it — existing includers are
        decoupled subsystem-by-subsystem (each routed through the seam)
-       and their rows driven to empty. Ratchet-only: the vendor files
-       are NOT relocated in this step; EB3 makes the boundary
-       enforceable in place. The vendor vocabulary is derived at runtime
+       and their rows driven to empty. Relocation does not convert a
+       touchpoint: the five Flex wire classes now live under
+       src/core/backends/flex/ (#5554 §2.6 slice 1) and their callers
+       use those explicit paths, still tracked by EB3. Matching is by
+       header STEM, so a move changes no baseline row. The vendor vocabulary is derived at runtime
        from the touchpoint audit (docs/architecture/
        aetherd-touchpoint-tags.json) so the audit is the single source
        of truth — a header newly tagged vendor there is enforced without
@@ -104,7 +106,7 @@ KNOWN_WIDGETS_LEGACY = {
 VENDOR_TAGS_JSON = REPO / "docs" / "architecture" / "aetherd-touchpoint-tags.json"
 # The audit is the source of truth for what IS vendor; this set is the ratchet
 # on what may STOP being vendor. A bare count floor could not do that job: the
-# live vocabulary spans 33 stems across seven families, so a floor conservative
+# original vocabulary spanned 33 stems across seven families, so a floor conservative
 # enough to survive a deliberate reclassification (the old 15) left roughly
 # eighteen headers that could be retagged `mixed(...)`/`peripheral(...)` one at
 # a time, each silently un-gating that header for every file above the seam on
@@ -141,7 +143,7 @@ VENDOR_STEMS_PINNED = frozenset({
     # rtl
     "RtlSdrDiscovery",
     # sim
-    "NoiseMixer", "SimBackend",
+    "DemoRadioConstants", "NoiseMixer", "SimBackend",
 })
 
 
@@ -149,8 +151,8 @@ def load_vendor_vocabulary():
     """Derive (stem -> family, {vendor TU rel-paths}) from the touchpoint audit.
 
     - stems: an include is a vendor include when the included header's basename
-      stem is a key here (so "core/RadioConnection.h", "RadioConnection.h",
-      "../core/RadioConnection.h", and <...> all resolve the same).
+      stem is a key here (so "core/backends/flex/RadioConnection.h", "RadioConnection.h",
+      "../core/backends/flex/RadioConnection.h", and <...> all resolve the same).
     - tu_paths: the EXACT rel-paths of the vendor translation units (each tagged
       header plus its sibling impl files). The below-seam exemption keys on these
       full paths, NOT a bare stem — so a *different* file that merely shares a
@@ -172,7 +174,7 @@ def load_vendor_vocabulary():
             continue
         family = tag[tag.find("(") + 1:tag.find(")")] if "(" in tag else "vendor"
         stems[Path(hdr).stem] = family
-        base = Path("src") / hdr           # e.g. "src/core/CommandParser.h"
+        base = Path("src") / hdr           # e.g. "src/core/backends/flex/CommandParser.h"
         for suf in ENGINE_SUFFIXES:         # header + sibling impl TUs
             tu_paths.add(base.with_suffix(suf).as_posix())
     missing = sorted(VENDOR_STEMS_PINNED - set(stems))
