@@ -1114,6 +1114,13 @@ public:
     // straight down to that backend. Returns false on Flex, where the caller
     // sends the weighted_average= wire command itself.
     bool requestLocalPanWeightedAverage(const QString& panId, bool on);
+    // "Show TX in Waterfall" for a backend whose waterfall rows are made on
+    // this host: there is no radio-side display engine to tell and nothing
+    // will echo the flag, so the transmit model takes it here and the value
+    // is remembered per radio. Returns false on Flex, where the caller sends
+    // the show_tx_in_waterfall= wire command itself and the radio's echo sets
+    // the model. A display flag: it never keys anything.
+    bool requestLocalShowTxInWaterfall(bool on);
     // Panel width in spectrum points for a backend that shapes its own
     // spectrum: straight down to that backend. Returns false on Flex, where
     // the caller sends the xpixels= wire command itself.
@@ -1763,6 +1770,9 @@ private:
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
     void handRestoredStateToBackend();  // RFC #4603
+    // Put the remembered "Show TX in Waterfall" back into the transmit model
+    // on connect, for a backend that will never report it. No-op on Flex.
+    void restoreClientShowTxInWaterfall();
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
     // Build the offline health source for `family` on first need, or return

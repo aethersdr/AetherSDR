@@ -2221,6 +2221,32 @@ target producing 9 fps are only consistent with frames arriving every ~25 ms —
 40 fps, not the 375 the sample rate implied. The simulator was reporting a
 384 kHz span while delivering a 48 kHz stream.
 
+### 15.3.1 Show TX in Waterfall is a client flag here
+
+Radio Setup's **Show TX in Waterfall** is one setting on a Flex: `transmit set
+show_tx_in_waterfall=`, stored by the radio and echoed in its transmit status.
+The echo is the only thing that sets `TransmitModel::showTxInWaterfall()`, and
+that flag is what `SpectrumWidget` reads while keyed: true, the pane holding the
+TX passband draws its pan frames as waterfall rows; false, it drops every row
+for the whole over.
+
+The HL2 has no command plane and no display engine, so the command was dropped,
+nothing echoed, and the toggle could not be switched on (bench, 6 of 6 polls
+false). There is something to draw: `Hl2RxDsp::setAudioMuted` mutes the
+demodulator while keyed and says the spectrum keeps running on real IQ, so pan
+frames keep arriving.
+
+`RadioModel::requestLocalShowTxInWaterfall` takes the flag wherever
+`shapesDisplayRatesLocally()` is true: it writes the transmit model through the
+path an echo would take, and stores the value per radio in the `ClientDisplay`
+document, because a disconnect clears the model and nothing will report it
+again. `onConnected()` puts it back. On a Flex the request declines and the
+caller sends the wire text as before.
+
+**Not measured:** what the HL2's own receive path reads while keyed, and
+therefore what colour those rows take. The keyed rows are coloured by
+`SpectrumWidget::dbmToWaterfallLevel`, the same law a Flex's keyed rows use.
+
 ### 15.4 Killing the client wedges the radio
 
 **Cost more time during this work than any code defect, so it goes first.**

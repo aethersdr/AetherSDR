@@ -2833,8 +2833,13 @@ QWidget* RadioSetupDialog::buildTxTab()
             "border: 1px solid #20a040; }");
         connect(swBtn, &QPushButton::toggled, this, [this, swBtn](bool on) {
             swBtn->setText(on ? "Enabled" : "Disabled");
-            m_model->sendCommand(
-                QString("transmit set show_tx_in_waterfall=%1").arg(on ? 1 : 0));
+            // A radio whose waterfall rows are made on this host has no
+            // display engine to tell: the model takes the flag itself. On a
+            // Flex that returns false and the radio is told, as before.
+            if (!m_model->requestLocalShowTxInWaterfall(on)) {
+                m_model->sendCommand(
+                    QString("transmit set show_tx_in_waterfall=%1").arg(on ? 1 : 0));
+            }
         });
         grid->addWidget(swBtn, 1, 1);
 

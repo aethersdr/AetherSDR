@@ -34,6 +34,7 @@
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
 #include "core/WaterfallRate.h"
+#include "core/ClientDisplaySettings.h"  // per-radio client display state
 #include "ProfileLoadCommand.h"
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
@@ -6420,6 +6421,45 @@ bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
     return true;
 }
 
+bool RadioModel::requestLocalShowTxInWaterfall(bool on)
+{
+    // Local-shaping backends only, as requestLocalPanWeightedAverage(): on
+    // Flex the caller still sends the show_tx_in_waterfall= wire text itself,
+    // and moving it in here would add a raw command above the seam
+    // (tools/check_command_plane.py, #5262 M4).
+    if (!shapesDisplayRatesLocally()) {
+        return false;
+    }
+    // The flag decides one thing, and it is decided in this client:
+    // SpectrumWidget draws the keyed pan frames as waterfall rows, or drops
+    // them for the over. On a Flex the radio holds the flag and echoes it; here
+    // nothing will, so the model is written directly. Through applyChanges(),
+    // the path a radio's echo takes, so stateChanged reaches the same
+    // consumers either way.
+    TransmitDelta delta;
+    delta.showTxInWaterfall = on;
+    m_transmitModel.applyChanges(delta);
+    // And remembered, because TransmitModel::resetState() clears it on every
+    // disconnect and no radio status will put it back.
+    ClientDisplaySettings::saveShowTxInWaterfall(settingsScope(), true, on);
+    return true;
+}
+
+void RadioModel::restoreClientShowTxInWaterfall()
+{
+    if (!shapesDisplayRatesLocally()) {
+        return;
+    }
+    const std::optional<bool> saved =
+        ClientDisplaySettings::showTxInWaterfall(settingsScope(), true);
+    if (!saved) {
+        return;
+    }
+    TransmitDelta delta;
+    delta.showTxInWaterfall = *saved;
+    m_transmitModel.applyChanges(delta);
+}
+
 bool RadioModel::requestLocalPanPixelWidth(const QString& panId, int points)
 {
     // Local-shaping backends only, as requestLocalPanWeightedAverage(): on
@@ -7213,6 +7253,12 @@ void RadioModel::onConnected()
     // unambiguous again: any `file update` status arriving now belongs to this
     // connection, not to an attempt dispatched before the radio rebooted (#5572).
     m_firmwareRetryBlocked = false;
+
+    // A Flex reports show_tx_in_waterfall in its transmit status. A radio with
+    // no display engine reports nothing, and the disconnect cleared the model,
+    // so the remembered value goes back in on this edge, before the GUI wires
+    // its pans and reads it. No-op on a Flex.
+    restoreClientShowTxInWaterfall();
 
     emit connectionStateChanged(true);
     // A Flex dumps its memory slots as status during the handshake below. A

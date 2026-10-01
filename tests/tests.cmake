@@ -5232,6 +5232,21 @@ target_include_directories(rtl_slice_settings_test PRIVATE src tests)
 target_link_libraries(rtl_slice_settings_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_slice_settings_test COMMAND rtl_slice_settings_test)
 
+# "Show TX in Waterfall" as a client flag where no radio stores it. Socket-free:
+# a real RadioModel with an injected seam backend (and Hl2Backend / FlexBackend
+# built but never connected), the bridge verb through handleLine, the real
+# settings store in a TestSettingsProfile. Qt6::Widgets for AutomationServer.
+# AETHER_SOURCE_DIR because the last block reads RadioSetupDialog.cpp as text.
+add_executable(show_tx_in_waterfall_client_flag_test
+    tests/show_tx_in_waterfall_client_flag_test.cpp)
+target_include_directories(show_tx_in_waterfall_client_flag_test PRIVATE src tests)
+target_link_libraries(show_tx_in_waterfall_client_flag_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets)
+target_compile_definitions(show_tx_in_waterfall_client_flag_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME show_tx_in_waterfall_client_flag_test
+         COMMAND show_tx_in_waterfall_client_flag_test)
+
 add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
 target_include_directories(radio_state_memory_test PRIVATE src tests)
 target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -6718,6 +6733,7 @@ set(AETHER_SETTINGS_CONSUMERS
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
+    show_tx_in_waterfall_client_flag_test
     automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test
