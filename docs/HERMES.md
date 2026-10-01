@@ -4134,21 +4134,68 @@ a shared cache when two processes exported at once (a 48 KB cache came back as
 
 ### 22.3 The planning cost is one-time per MACHINE, not per rate
 
-Measured cold, both orderings, with `WdspChannel` opened exactly as
-`Hl2RxDsp::configure` builds it:
+Measured cold, both orderings, by calling `Hl2RxDsp::configure` with
+`Hl2RxDsp::Config`'s defaults on a fresh `Hl2RxDsp` per open. Median of five
+cold processes per ordering, range in brackets (re-measured 2026-10-01, #5456):
 
 | Order | 1st open | 2nd | 3rd | 4th |
 |---|---|---|---|---|
-| 48 → 96 → 192 → 384 kHz | **18865 ms** | 100 ms | 71 ms | 39 ms |
-| 384 → 192 → 96 → 48 kHz | **18666 ms** | 64 ms | 99 ms | 175 ms |
+| 48 → 96 → 192 → 384 kHz | **1335 ms** (1324–1337) | 116 ms (113–120) | 81 ms (81–84) | 62 ms (61–66) |
+| 384 → 192 → 96 → 48 kHz | **1215 ms** (1208–1226) | 82 ms (81–85) | 113 ms (113–114) | 183 ms (181–184) |
 
-The first open costs ~19 s whichever rate it is; every other rate afterwards is
-40–175 ms. The plan sets overlap almost completely, so **do not reason about
-"cold wisdom for this sample rate"** — there is one cold open per machine, ever.
+A new process started on the wisdom those runs wrote opens each of the four
+rates in 33–48 ms (ten processes, forty opens).
+
+**Conditions, because these are figures about a machine and a tree:**
+
+- Apple M6 (12 cores, 32 GB), macOS 27.0.1, arm64. One-minute load 5.3–5.9
+  through the run, no build running.
+- `main` at `25da98de`, RelWithDebInfo, Qt 6.12.0, FFTW 3.3.11 (Homebrew).
+- `filterTaps` = `Hl2RxDsp::kRxFilterTaps` = 8192; USB, 150–3000 Hz, so
+  minimum phase is on (`rxMinimumPhaseFor`); noise blanker off.
+- Planner unbounded: `AETHER_WDSP_FFTW_TIMELIMIT` set to the empty string.
+  The wisdom directory was empty before every cold process and held one file
+  of 8.2–9.5 KB after it.
+- One channel open per figure, not a connect. §22.1's connect figures are the
+  2026-08-05 measurement and were not re-taken.
+
+The first open costs 1.2–1.3 s here whichever rate leads (the two orderings
+differ by 10 %); every other rate afterwards is 60–185 ms. The plan sets
+overlap almost completely, so **do not reason about "cold wisdom for this
+sample rate"** — there is one cold open per machine, ever. The first open is
+now 6.6–11.5× the largest later one, not the 107–189× of the first
+measurement.
+
+**The magnitude moved with the tree, three times.** First open in each
+ordering; the last three rows are the same benchmark on one machine (the M6
+above):
+
+| Tree | What changed | 48 kHz first | 384 kHz first |
+|---|---|---|---|
+| `57c2eb94` (#4775, 2026-08-05) | the first measurement: `filterTaps` at WDSP's 2048 default, machine not recorded | 18865 ms | 18666 ms |
+| `9ef15a74` (parent of #5697) | 8192 taps since #4780, WDSP 2.10 since #5686 | 40917 ms (40609–40985) | 40874 ms (40556–41147) |
+| `5fb9b58d` (#5697) | the minimum-phase workspace is built only when used | 11543 ms (11480–11551) | 11365 ms (11279–11502) |
+| `25da98de` (2026-10-01) | `create_minphase()` plans with `FFTW_ESTIMATE` (WDSP patch 12, #5954), and minimum phase is on outside CW | 1335 ms | 1215 ms |
+
+The two middle rows are adjacent commits, three cold processes per ordering,
+built against Qt 6.8.3; the step to the last row was not isolated commit by
+commit. The first row's 100 / 71 / 39 ms and 64 / 99 / 175 ms later opens
+are within 1.6× of every later row. On an Apple M2 at 26.9.1, before #5697,
+the same first open measured 94.7 s (#5456); `AETHERSDR-PATCHES.md` records
+10.9 s for one RX channel create on x86_64 after patch 12. So quote a
+first-open time only with its machine and its commit.
+
+**To re-measure, two traps, both silent.** Do not time a registered test:
+every one links `tests/TestWdspWisdomIsolation.cpp`, which caps the planner, so
+cold and warm read the same and nothing is exported. And set
+`AETHER_WDSP_FFTW_TIMELIMIT` to the empty string rather than unsetting it: the
+initializer does not overwrite, and `plannerTimeLimitSeconds()` maps empty to
+unbounded. Then check the export, not just the clock — a cold run that wrote
+no wisdom file was capped.
 
 That "once per machine" is what the first-connect dialog tells the operator, and
-saying it is the point: a 20 s wait you are told happens once reads very
-differently from a 20 s wait with a window on screen that says "Connecting…".
+saying it is the point: a wait you are told happens once reads very differently
+from the same wait with a window on screen that says "Connecting…".
 The dialog is gated on elapsed time (1500 ms), not on a cold-cache predicate —
 `WdspChannel` exposes none, and one could not be exact anyway, since a cache
 that imports cleanly may still lack plans for these geometries and would report
