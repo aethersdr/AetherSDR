@@ -370,6 +370,11 @@ public:
     // are set from applyCapabilitiesToUi and again when a pane is added after
     // connect. Together they form the auto-floor gate, an OR — see
     // noiseFloorAutoAdjustAllowed() and RadioCapabilities::panBinsAbsolute().
+    //
+    // Second reader: intensityToWaterfallLevel. A radio with absolute bins has
+    // no waterfall plane, so its row is the pan frame in dBm and the manual
+    // Black Level needs a dBm threshold (WaterfallLevelMap.h). Rows already
+    // drawn keep their colour; the flag is set at connect, before any row.
     void setPanBinsAbsolute(bool on) { m_panBinsAbsolute = on; }
     bool panBinsAbsolute() const { return m_panBinsAbsolute; }
     double centerMhz()    const { return m_centerMhz; }

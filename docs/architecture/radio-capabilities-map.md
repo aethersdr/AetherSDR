@@ -533,6 +533,17 @@ stay on the echo alone. HL2, ANAN and RTL-SDR declare `binsAbsolute = true`,
 each quoting the expression that produces its bins; ANAN is the one whose loop
 this turned back on.
 
+**It has a second consumer: the unit of a waterfall row.** A backend with
+absolute bins has no waterfall plane of its own, so
+`RadioModel::onBackendSpectrumFrame` reuses the pan frame as the row and the row
+is dBm, where a Flex tile is intensity (about 96..120). The manual Black Level
+(button on Off) is a threshold in the row's unit, so
+`SpectrumWidget::intensityToWaterfallLevel` passes the same flag to
+`WaterfallLevelMap::level` as `rowsAreDbm`: false keeps the tile law
+`160 - level`, true takes `-60 dBm - level`. Before that the tile threshold was
+applied to dBm rows and Off blanked the waterfall at every slider position. SW
+and HW do not read the flag.
+
 **THE HL2 KEEPS THE PERMISSIVE DEFAULT, and that is deliberate rather than an
 omission.** `Hl2Backend::capabilities()` never assigns the field and says why at
 the point where it would: the flag answers two questions, and on this radio the
