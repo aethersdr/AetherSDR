@@ -65,6 +65,14 @@ unset(_aether_root_code)
 unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
+# ── Baseline: what existed before this file declared anything ────────────────
+# Taken here, before the first target below, and subtracted again by the
+# deferred retrofits near the end of this file ("Deferred retrofits"). The
+# difference is every executable this file declares, with no list to maintain.
+# Keep it above the first add_executable(); nothing else about its position
+# matters.
+get_property(_aether_targets_before_tests DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+
 
 # Typed producer PCM, queued lifetime and compatibility: QtCore only, no sockets.
 add_executable(pcm_frame_test tests/pcm_frame_test.cpp)
@@ -6878,8 +6886,11 @@ endforeach()
 # quietly degrades the next real connect.
 #
 # Blanket application is safe because the variable is read in exactly one place
-# (WdspChannel), so it is inert in every test that never opens a channel, and it
-# cannot be escaped by a future test under any name.
+# (WdspChannel), so it is inert in every test that never opens a channel. That it
+# cannot be escaped by a future test, under any name and at any line of this
+# file, is not a property of this comment: the cap is applied by a deferred call
+# that runs after the last test is declared, and the configure step fails if a
+# registered test is left without it (see "Deferred retrofits" below).
 #
 # To re-check this hasn't regressed:
 #   ctest --test-dir build -j8 && \
@@ -6983,30 +6994,43 @@ if (NOT _aether_ggml_baseline_str STREQUAL "")
 endif()
 add_test(NAME system_inventory_test COMMAND system_inventory_test)
 
-# GUI harnesses that link aethercore used to receive ThemeManager,
-# SettingsHelpers, and ShortcutManager accidentally from that engine archive.
-# Run this retrofit only after every test target has been declared, preserving
-# their desktop dependency without exposing desktop support to engine-only tests.
-get_property(_aether_desktop_test_candidates DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
-foreach(_desktop_test IN LISTS _aether_desktop_test_candidates)
-    get_target_property(_desktop_test_type ${_desktop_test} TYPE)
-    if(NOT _desktop_test_type STREQUAL "EXECUTABLE")
-        continue()
-    endif()
-    get_target_property(_desktop_test_links ${_desktop_test} LINK_LIBRARIES)
-    if(";${_desktop_test_links};" MATCHES ";aethercore;"
-            AND ";${_desktop_test_links};" MATCHES ";Qt6::Widgets;"
-            AND NOT ";${_desktop_test_links};" MATCHES ";aetherdesktop_support;")
-        target_link_libraries(${_desktop_test} PRIVATE aetherdesktop_support)
-    endif()
-endforeach()
-unset(_aether_desktop_test_candidates)
-unset(_desktop_test)
-unset(_desktop_test_type)
-unset(_desktop_test_links)
+# ── Deferred retrofits: applied after the LAST test, wherever it is declared ──
+#
+# Three things have to hold for every test in this file: GUI harnesses get
+# aetherdesktop_support, every test gets the FFTW planner cap and the isolation
+# object, and every test gets a timeout. None of them can be applied at a fixed
+# line, because a line only sees what is above it. They used to be plain loops
+# at this spot, new tests were appended below them, and those tests were skipped
+# without any message (#6063).
+#
+# So the loops are one function, scheduled with cmake_language(DEFER CALL). This
+# file is include()d, so the deferral scope is the ROOT directory: the call runs
+# after the last line of the root CMakeLists.txt, whatever is declared below
+# this point. Targets and tests are still mutable there; generation has not
+# started.
+#
+# The set of executables is DERIVED, not listed: everything this directory has
+# declared since the baseline taken at the top of this file. Not the registered
+# test names: a test can be registered under a name that is not its target's
+# (settings_browser_dialog, app_settings_safety_<scenario>), and a test's COMMAND
+# cannot be read back at configure time. Not a `_test$` name match either:
+# naming is not a reliable proxy for what a binary opens (see the planner-bound
+# comment above), and some executables named *_test are registered as no test
+# at all. The set therefore also holds the developer probes and analysis tools
+# declared in this file (icom_live_probe, ax25_replay, ...). For those the
+# isolation does nothing unless they open a WDSP channel, and then it keeps a
+# probe from replacing the developer's real wisdom cache. The baseline keeps
+# every production target (AetherSDR, aetherd, aethercore) out of the set.
+# "Since the baseline" is exactly this file today, because the root file
+# declares no target after its include(). An executable declared there later
+# would be treated as one of these.
+#
+# aether_assert_tests_retrofitted() then reads the result back and fails the
+# configure step, naming each miss. It is scheduled from inside the retrofit, so
+# it also runs after any call that was deferred in between.
 
-
-# The isolation TU, compiled once and linked into every test target below. An
+# The isolation TU, compiled once and linked into every executable declared in
+# this file by aether_retrofit_tests() below. Declared here, not deferred. An
 # OBJECT library rather than STATIC on purpose: its only content is a
 # namespace-scope object whose CONSTRUCTOR is the entire point, and a static
 # library's unreferenced object file can be dropped at link time, which would
@@ -7016,30 +7040,6 @@ add_library(aether_test_wisdom_isolation OBJECT
 target_compile_definitions(aether_test_wisdom_isolation PRIVATE
     AETHER_TEST_WISDOM_DIR="${AETHER_TEST_WISDOM_DIR}"
     AETHER_TEST_FFTW_TIMELIMIT_STR="${AETHER_TEST_FFTW_TIMELIMIT}")
-
-get_property(_aether_registered_tests DIRECTORY PROPERTY TESTS)
-set(_aether_test_targets "")
-foreach(_aether_test IN LISTS _aether_registered_tests)
-    # ctest ENVIRONMENT covers `ctest` runs and documents the values in
-    # CTestTestfile.cmake. APPEND, so the QT_QPA_PLATFORM=offscreen entries
-    # already set on the GUI-touching ones survive rather than being replaced.
-    set_property(TEST ${_aether_test} APPEND PROPERTY ENVIRONMENT
-        "AETHER_WDSP_FFTW_TIMELIMIT=${AETHER_TEST_FFTW_TIMELIMIT}"
-        "AETHER_WDSP_WISDOM_DIR=${AETHER_TEST_WISDOM_DIR}")
-    # ...and the linked-in initializer covers running the binary DIRECTLY, which
-    # ctest properties cannot reach and which is how a test is usually debugged.
-    if(TARGET ${_aether_test})
-        list(APPEND _aether_test_targets ${_aether_test})
-    endif()
-endforeach()
-# A target can back more than one registered test; link the TU once per target.
-list(REMOVE_DUPLICATES _aether_test_targets)
-foreach(_aether_target IN LISTS _aether_test_targets)
-    get_target_property(_aether_type ${_aether_target} TYPE)
-    if(_aether_type STREQUAL "EXECUTABLE")
-        target_link_libraries(${_aether_target} PRIVATE aether_test_wisdom_isolation)
-    endif()
-endforeach()
 
 # ── Default test timeout — every test gets a ceiling ────────────────────────
 #
@@ -7061,14 +7061,115 @@ endforeach()
 # The loop only fills the gap: a test that already declares its own TIMEOUT
 # (vkamp_connection_test, asr_gpu_probe_test) keeps it. A CMake TIMEOUT
 # property always beats a `ctest --timeout` flag, so this is authoritative
-# in every lane — gate steps, sanitizers, and local dev alike.
-get_directory_property(_aether_registered_tests TESTS)
-foreach(_aether_test IN LISTS _aether_registered_tests)
-    get_test_property(${_aether_test} TIMEOUT _aether_existing_timeout)
-    if(NOT _aether_existing_timeout)
-        set_tests_properties(${_aether_test} PROPERTIES TIMEOUT 300)
+# in every lane — gate steps, sanitizers, and local dev alike. Applied by
+# aether_retrofit_tests() below.
+
+# Every executable declared in this file: the directory's targets now, minus the
+# baseline from the top of the file.
+function(aether_collect_test_executables out_var)
+    if(NOT _aether_targets_before_tests)
+        message(FATAL_ERROR
+            "tests/tests.cmake: the target baseline (_aether_targets_before_tests) "
+            "is empty or unset, so the test executables cannot be told apart from "
+            "production targets.")
     endif()
-endforeach()
+    get_property(_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    list(REMOVE_ITEM _targets ${_aether_targets_before_tests})
+    set(_executables "")
+    foreach(_target IN LISTS _targets)
+        get_target_property(_type ${_target} TYPE)
+        if(_type STREQUAL "EXECUTABLE")
+            list(APPEND _executables ${_target})
+        endif()
+    endforeach()
+    set(${out_var} "${_executables}" PARENT_SCOPE)
+endfunction()
+
+function(aether_retrofit_tests)
+    aether_collect_test_executables(_test_executables)
+    foreach(_target IN LISTS _test_executables)
+        get_target_property(_links ${_target} LINK_LIBRARIES)
+
+        # GUI harnesses that link aethercore used to receive ThemeManager,
+        # SettingsHelpers, and ShortcutManager accidentally from that engine
+        # archive. Preserve their desktop dependency without exposing desktop
+        # support to engine-only tests. Test executables only: this runs after
+        # the root file's aether_assert_no_qtwidgets() checks, so it must never
+        # be able to add a link to a production target.
+        if(";${_links};" MATCHES ";aethercore;"
+                AND ";${_links};" MATCHES ";Qt6::Widgets;"
+                AND NOT ";${_links};" MATCHES ";aetherdesktop_support;")
+            target_link_libraries(${_target} PRIVATE aetherdesktop_support)
+        endif()
+
+        # The linked-in initializer covers running the binary DIRECTLY, which
+        # ctest properties cannot reach and which is how a test is usually
+        # debugged. Once per executable, however many tests it backs.
+        if(NOT ";${_links};" MATCHES ";aether_test_wisdom_isolation;")
+            target_link_libraries(${_target} PRIVATE aether_test_wisdom_isolation)
+        endif()
+    endforeach()
+
+    get_property(_tests DIRECTORY PROPERTY TESTS)
+    foreach(_test IN LISTS _tests)
+        # ctest ENVIRONMENT covers `ctest` runs and documents the values in
+        # CTestTestfile.cmake. APPEND, so the QT_QPA_PLATFORM=offscreen entries
+        # already set on the GUI-touching ones survive rather than being replaced.
+        set_property(TEST ${_test} APPEND PROPERTY ENVIRONMENT
+            "AETHER_WDSP_FFTW_TIMELIMIT=${AETHER_TEST_FFTW_TIMELIMIT}"
+            "AETHER_WDSP_WISDOM_DIR=${AETHER_TEST_WISDOM_DIR}")
+
+        # The default ceiling (see "Default test timeout" above). Only fills the
+        # gap: a test that declares its own TIMEOUT keeps it.
+        get_test_property(${_test} TIMEOUT _existing_timeout)
+        if(NOT _existing_timeout)
+            set_tests_properties(${_test} PROPERTIES TIMEOUT 300)
+        endif()
+    endforeach()
+
+    cmake_language(DEFER CALL aether_assert_tests_retrofitted)
+endfunction()
+
+# The check that makes the three guarantees above true rather than stated: a
+# miss here would otherwise pass silently (the suite still goes green without a
+# cap or a timeout). Reads the properties back from the tests and targets; it
+# does not trust the loops above to have run.
+function(aether_assert_tests_retrofitted)
+    set(_misses "")
+    get_property(_tests DIRECTORY PROPERTY TESTS)
+    foreach(_test IN LISTS _tests)
+        get_test_property(${_test} ENVIRONMENT _environment)
+        if(NOT ";${_environment};" MATCHES ";AETHER_WDSP_FFTW_TIMELIMIT="
+                OR NOT ";${_environment};" MATCHES ";AETHER_WDSP_WISDOM_DIR=")
+            list(APPEND _misses "test ${_test}: no FFTW planner cap in ENVIRONMENT")
+        endif()
+        get_test_property(${_test} TIMEOUT _timeout)
+        if(NOT _timeout)
+            list(APPEND _misses "test ${_test}: no TIMEOUT")
+        endif()
+    endforeach()
+    aether_collect_test_executables(_test_executables)
+    foreach(_target IN LISTS _test_executables)
+        get_target_property(_links ${_target} LINK_LIBRARIES)
+        if(NOT ";${_links};" MATCHES ";aether_test_wisdom_isolation;")
+            list(APPEND _misses
+                "executable ${_target}: aether_test_wisdom_isolation not linked")
+        endif()
+    endforeach()
+    if(_misses)
+        list(LENGTH _misses _miss_count)
+        list(JOIN _misses "\n  " _miss_text)
+        message(FATAL_ERROR
+            "tests/tests.cmake: ${_miss_count} test retrofit(s) missing:\n"
+            "  ${_miss_text}\n"
+            "Every registered test needs the FFTW planner cap and a TIMEOUT, and "
+            "every executable declared in tests/tests.cmake links "
+            "aether_test_wisdom_isolation. aether_retrofit_tests() applies all "
+            "three; see the comment above it.")
+    endif()
+endfunction()
+
+cmake_language(DEFER CALL aether_retrofit_tests)
 
 # Socket-free capability/extension tests: injected transport, no QLocalServer
 # and no radio connect. Exercises the same dispatcher used by the bridge.
