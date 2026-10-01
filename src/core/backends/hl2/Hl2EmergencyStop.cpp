@@ -62,7 +62,30 @@ struct StopTarget {
 // Every member is constant-initialised, so these are alive before main() and a
 // handler installed at any point has something well-formed to read.
 StopTarget g_slots[2];
-unsigned   g_nextSlot = 0;                    // arm() only; never read by a handler
+
+// arm() only; never read by a handler. PLAIN, NOT ATOMIC, and that rests on a
+// precondition this file does not enforce: ARMS ARE SERIALISED, never two in
+// flight at once. Two concurrent arms would race this counter and could both
+// fill the same slot. Making it atomic would not help: two arms handed two
+// different indices hold both slots between them, and while a target is armed
+// one of those is the published one. Writing it is the one way to break the
+// invariant above.
+//
+// It holds because there is one caller with one thread at a time.
+// armEmergencyStop() is called from MetisClient::start() and nowhere else.
+// start() and stop() run on the thread the MetisClient lives on, which is
+// Hl2Backend's I/O thread; Hl2Backend marshals both across. A process has one
+// Hl2Backend at a time: one RadioSession, one RadioModel, one backend, and
+// RadioModel destroys a backend, joining that thread, before it builds the
+// next. So successive arms may come from DIFFERENT threads (a family switch
+// away and back makes a new I/O thread), each ordered after the last by that
+// join. "One writer" is the claim; "one thread" is not.
+//
+// A SECOND RADIO IN ONE PROCESS BREAKS MORE THAN THIS COUNTER. There is one
+// armed target, so the later arm would replace the earlier radio's and either
+// radio's stop() would disarm both. That needs a target per radio, not a lock
+// around this.
+unsigned   g_nextSlot = 0;
 std::atomic<StopTarget*> g_armed{nullptr};
 
 // A handler may only touch lock-free atomics, and this pointer load is the
@@ -125,10 +148,26 @@ void armEmergencyStop(qintptr fd, const QHostAddress& host, quint16 port,
 
 void disarmEmergencyStop() noexcept
 {
-    // A handler that has already loaded the pointer still completes its sends;
-    // that is harmless, because the target it holds is complete and the socket
-    // is still open until MetisClient::stop() closes it — which is why stop()
-    // disarms before the close and not after.
+    // A handler that loads the pointer AFTER this store sends nothing. A handler
+    // that loaded it BEFORE is not reached: it holds a complete target, makes
+    // its three sends, and NOTHING ORDERS THOSE AGAINST WHAT THE CALLER DOES
+    // NEXT.
+    //
+    // MetisClient::stop() closes the descriptor next. A handler that interrupted
+    // the thread in stop() has finished before stop() resumes, so it sent on an
+    // open socket. A handler on ANOTHER thread, already past its load, can
+    // still be sending when the close lands. It then sends on a closed
+    // descriptor, which fails and is ignored, or, if another thread opened
+    // something in between, on whatever now owns that number; for a connected
+    // stream socket that can be 64 stray bytes in the stream.
+    //
+    // stop() has sent the stop through the normal path before it disarms, so
+    // the radio has been sent it once either way, and the handler re-raises
+    // with the default disposition straight after its sends. Disarming before
+    // the close keeps a closed descriptor from staying armed. It narrows this
+    // window to a handler already in flight; it does not close it. Closing it
+    // would take the closing thread waiting for handlers in flight, which
+    // nothing here does.
     g_armed.store(nullptr, std::memory_order_release);
 }
 
