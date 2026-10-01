@@ -706,6 +706,8 @@ static void populateFamilyParams(RadioConnectRequest& req, const QString& family
                           anan::AnanSettings::bypassAdc0Filters());
         req.params.insert(QStringLiteral("anan.bypassAdc1Filters"),
                           anan::AnanSettings::bypassAdc1Filters());
+        req.params.insert(QStringLiteral("anan.speakerAudioEnabled"),
+                          anan::AnanSettings::speakerAudioEnabled());
         return;
     }
 
@@ -12100,6 +12102,15 @@ void RadioModel::setLineoutGain(int v)
     m_lineoutGain = v;
     qCDebug(lcAudio) << "setLineoutGain:" << v;
     sendCmd(QString("mixer lineout gain %1").arg(v));
+    // The same request, typed, for a backend with no command plane to receive the
+    // string on. Without it this control reached a Flex and nothing else, so on
+    // every other radio the master volume had no effect at all once PC Audio was
+    // off -- MainWindow::applyMasterVolume() routes here in exactly that case.
+    // Same shape as the rx-antenna and pan-dimension calls above: guarded on
+    // usesFlexCommandPlane() so a Flex is not told twice.
+    if (m_backend && !usesFlexCommandPlane()) {
+        m_backend->setLineoutGain(v);
+    }
     emit audioOutputChanged();
 }
 
@@ -12125,6 +12136,12 @@ void RadioModel::setLineoutMute(bool m)
 {
     qCDebug(lcAudio) << "setLineoutMute:" << m;
     sendCmd(QString("mixer lineout mute %1").arg(m ? 1 : 0));
+    // Sent unconditionally, like the command above and for the reason this
+    // function's own comment gives: a mute is a request, and a model that has
+    // drifted from the radio must stay recoverable from the UI.
+    if (m_backend && !usesFlexCommandPlane()) {
+        m_backend->setLineoutMute(m);
+    }
     if (m_lineoutMute != m) {
         m_lineoutMute = m;
         emit audioOutputChanged();

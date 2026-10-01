@@ -19,13 +19,19 @@ jobs:
           # carry it — a cache step cannot see a value that a `run:` block picks
           # with an if/else.
           #
-          # The legs differ on purpose. Apple Silicon stays at 14.0 because
-          # CMakeLists.txt gates the ASR Metal kernels on it (>= 14.0 builds
-          # metal3.1 with bf16, below that metal3.0 with props.has_bfloat
-          # clamped) and upstream ONNX Runtime 1.27.0 is built at exactly 14.0 —
-          # no Apple Silicon Mac is stuck below it. Intel goes to 12.0: nothing
-          # in that artifact needs a higher floor, and it exists to serve the
-          # aging hardware that cannot go higher (#4532).
+          # Both legs are 14.4 because Qt is: every framework and plugin in the
+          # final Qt 6.12.0 SDK carries LC_BUILD_VERSION minos 14.4 on both
+          # slices (Qt6ConfigExtras.cmake: QT_SUPPORTED_MIN_MACOS_VERSION
+          # "14.4"), and dyld enforces the highest minos in the bundle, so no
+          # lower target can be honest. The assertion step after macdeployqt
+          # fails both legs at 13.0 or 14.0 against this SDK.
+          #
+          # Apple Silicon loses only Sonoma 14.0–14.3: the ASR Metal kernels'
+          # >= 14.0 gate in CMakeLists.txt and upstream ONNX Runtime 1.27.0's
+          # 14.0 build are both satisfied. Intel loses every Mac that cannot run
+          # Sonoma — 2017 and earlier, including the #4532 reporter's 2017 iMac
+          # on Ventura. That cost is a maintainer decision taken with the 6.12
+          # pin (#5487), not a side effect of it.
           #
           # arch is the qtkeychain cache-key tag, kept separate from label so the
           # Apple Silicon key stays byte-identical to ci.yml's — that sharing is
@@ -33,17 +39,18 @@ jobs:
           - runner: macos-15
             label: apple-silicon
             arch: arm64
-            deploy_target: '14.0'
+            deploy_target: '14.4'
           - runner: macos-15-intel
             label: intel
             arch: x86_64
-            deploy_target: '12.0'
+            deploy_target: '14.4'
     runs-on: ${{ matrix.runner }}
 
     # One place each for the versions this workflow pins. ci.yml's check-macos
     # pins the same values and shares the qtkeychain cache key built from them.
     env:
-      QT_VERSION: '6.8.3'
+      QT_VERSION: '6.12.0'
+      QT_PACKAGE_REVISION: '202609280346'
       AQTINSTALL_VERSION: '3.3.0'
 
     steps:
@@ -55,7 +62,7 @@ jobs:
         run: |
           # No Homebrew Qt on either leg. Apple Silicon used to take qt@6 here,
           # which is a rolling formula — it shipped 6.11.1 while every other
-          # artifact pinned 6.8.3, so the most-downloaded macOS artifact linked
+          # artifact pinned 6.12.0, so the most-downloaded macOS artifact linked
           # a Qt no other build tested and could change between tags with no PR
           # (#4688 §1). Both legs now take the same pinned aqt Qt below.
           #
@@ -107,17 +114,16 @@ jobs:
           #   $ file .../QtCore.framework/Versions/A/QtCore
           #   Mach-O universal binary with 2 architectures: x86_64, arm64
           #   $ llvm-otool -l ... | grep -A4 LC_BUILD_VERSION
-          #   platform 1   sdk 14.4   minos 12.0
+          #   platform 1   sdk 26.0   minos 14.4   (Qt 6.12.0; 6.8.3 was minos 12.0)
           #
-          # minos 12.0 is what retires the Intel from-source build. #802 built Qt
-          # by hand because "Homebrew Qt bottles on macos-15-intel target macOS
-          # 14.0, breaking on 2017 iMacs stuck on Ventura" — a property of
-          # HOMEBREW's bottles, not of Qt. Qt's own binary reaches further back
-          # than the 13.0 we were hand-building for. The option was invisible at
-          # the time only because #711 had removed aqt from macOS the previous
-          # day, for the unrelated dual-Qt conflict.
+          # That minos is the DMGs' floor on both legs (see deploy_target above).
+          # #802 built Qt by hand because "Homebrew Qt bottles on macos-15-intel
+          # target macOS 14.0, breaking on 2017 iMacs stuck on Ventura" — a
+          # property of HOMEBREW's bottles at the time. Qt's own 6.12 binaries
+          # now set a higher floor than that, so those iMacs are out of reach on
+          # this pin whichever way Qt is obtained.
           #
-          # `aqt list-qt mac desktop --arch 6.8.3` returns clang_64 alone, and
+          # `aqt list-qt mac desktop --arch 6.12.0` returns clang_64 alone, and
           # all four modules below are published for it.
           "$RUNNER_TEMP/aqtvenv/bin/aqt" install-qt mac desktop "$QT_VERSION" clang_64 \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
@@ -208,7 +214,7 @@ jobs:
           # are visible to every ref, so the entry restored here is normally the
           # one check-macos wrote). Intel gets its own key; nothing else builds
           # that leg's qtkeychain.
-          key: qtkeychain-macos-${{ matrix.arch }}-qt${{ env.QT_VERSION }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-qtkeychain.sh') }}
+          key: qtkeychain-macos-${{ matrix.arch }}-qt${{ env.QT_VERSION }}-${{ env.QT_PACKAGE_REVISION }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-qtkeychain.sh') }}
 
       # Both legs now. #812 gave up SmartLink credential persistence on Intel
       # ("qtkeychain pulls in qt@6 as a dependency, so skip it too") purely to

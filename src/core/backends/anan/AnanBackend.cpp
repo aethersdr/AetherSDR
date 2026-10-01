@@ -342,14 +342,34 @@ AnanBackend::AnanBackend(QObject* parent)
     });
 
     connect(m_dsp, &AnanRxDsp::pcmReady, this, [this](const PcmFrame& frame) {
-        const QByteArray bytes = frame.legacyStereo24();
+        QByteArray bytes = frame.legacyStereo24();
         if (bytes.isEmpty()) {
             return;
         }
+        // THIS SLICE's audio for per-slice consumers (a TCI receiver channel, a
+        // decoder), published BEFORE the receiver's audio stage. The seam
+        // contract on IRadioBackend::sliceAudioFrameReady is pre-mute, pre-gain
+        // and pre-balance, so muting a slice does not stop WSJT-X decoding on it
+        // -- the same split a Flex gets from DAX and HL2 makes in its mixer.
         publishLegacySliceAudio(kSliceId, bytes);
+
+        // The receiver's own audio stage, applied HERE rather than in the DSP.
+        //
+        // legacyStereo24() already hands back a fresh buffer this backend owns,
+        // and the non-const data() below detaches from anything the slice tap
+        // above may still share, so the stage never reaches that tap. Doing it here also keeps the whole stage on one thread with
+        // the state the three setters write, so a mute needs no queued hop to
+        // take effect on the next block. Both listening paths -- this computer's
+        // speaker and the radio's own speaker below -- see the same audio.
+        applySliceAudioInPlace(reinterpret_cast<float*>(bytes.data()),
+                               static_cast<std::size_t>(bytes.size())
+                                   / (2 * sizeof(float)),
+                               m_sliceAudioMuted, m_sliceAudioGainPercent,
+                               m_sliceAudioPanPercent);
         // One DDC, so "mixing" the speaker feed is the identity -- no
         // separate mix stage needed for a single receiver.
         publishLegacyAudio(bytes);
+        sendSpeakerAudioToRadio(bytes);
     });
     connect(m_dsp, &AnanRxDsp::spectrumReady, this, [this](const std::vector<float>& binsDbfs) {
         std::vector<float> dbm(binsDbfs.size());
@@ -468,7 +488,10 @@ RadioCapabilities AnanBackend::capabilities() const
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine, 0, 0};
     c.receiveModeControl = std::nullopt; // mode/passband transition contract not yet qualified
     c.receiveFilterControl = std::nullopt;
-    c.receiveAudioControl = std::nullopt;
+    // Gain and mute both act on this receiver's audio and are applied by this
+    // backend, which is what the record promises. Engine authority: the state is
+    // ours, the radio echoes nothing back, and there is no register to read.
+    c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
     c.receivePanCenterControl = std::nullopt; // center also retunes the slice
     c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
                                                          48'000, 1'536'000};
@@ -627,6 +650,12 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         request.params.value(QStringLiteral("anan.bypassAdc0Filters"), true).toBool();
     m_pendingParams.bypassAdc1Filters =
         request.params.value(QStringLiteral("anan.bypassAdc1Filters"), true).toBool();
+    // FALSE by default, unlike the options above, and for the opposite reason:
+    // their default is the hardware's shipped state, while this one's is "the
+    // operator has not asked for an outbound stream". A connect that never
+    // populated this param must not start one.
+    m_pendingParams.speakerAudioEnabled =
+        request.params.value(QStringLiteral("anan.speakerAudioEnabled"), false).toBool();
     // applyRestoredState() seeds both ADC values before this connect.
     m_attenuationDb = m_pendingParams.ddc0AdcIndex == 1
         ? m_pendingParams.adc1AttenuationDb
@@ -638,6 +667,7 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         ? request.params.value(QStringLiteral("anan.rxFrequencyHz")).toDouble()
         : 10'000'000.0;
 
+    m_speakerAudioEnabled = m_pendingParams.speakerAudioEnabled;
     m_pendingDspConfig = AnanRxDsp::Config{};
     m_pendingDspConfig.inputSampleRateHz = m_pendingParams.ddc0RateKsps * 1000;
     m_pendingDspConfig.audioSampleRateHz = 24000;
@@ -742,6 +772,12 @@ void AnanBackend::finishDspSetup(quint64 generation, bool ok, const QString& err
 
 void AnanBackend::startP2ClientSession(quint64 generation)
 {
+    // Rebuilt here rather than at connect, because this is the one place BOTH a
+    // first connect and a rate change pass through. A converter carries filter
+    // state, and the audio either side of a DSP rebuild is not one continuous
+    // stream, so carrying that state across would ring the tail of the old rate
+    // into the head of the new one.
+    resetSpeakerResamplers();
     const P2Client::Params params = m_pendingParams;
     const bool isRateChange = m_rateChanging;
     QMetaObject::invokeMethod(m_client, [this, generation, params, isRateChange]() {
@@ -929,6 +965,58 @@ void AnanBackend::setSliceNoiseBlanker(int sliceId, bool on, int level)
         QMetaObject::invokeMethod(m_dsp, "setNoiseBlanker", Qt::QueuedConnection,
             Q_ARG(bool, m_nbOn), Q_ARG(int, m_nbLevel));
     }
+}
+
+void AnanBackend::setSliceAudioMute(int sliceId, bool mute)
+{
+    Q_UNUSED(sliceId);   // one slice in this phase
+    if (m_sliceAudioMuted == mute) {
+        return;
+    }
+    m_sliceAudioMuted = mute;
+    // Published, not just stored. The gate that decides whether the control is
+    // offered at all requires an OBSERVATION as well as the capability, so a
+    // mute that is applied but never echoed leaves the control refused with
+    // "capability.unavailable" -- working audio behind a dead control.
+    emitSliceState();
+}
+
+void AnanBackend::setSliceAudioGain(int sliceId, int gainPercent)
+{
+    Q_UNUSED(sliceId);
+    const int bounded = std::clamp(gainPercent, 0, 100);
+    if (m_sliceAudioGainPercent == bounded) {
+        return;
+    }
+    m_sliceAudioGainPercent = bounded;
+    emitSliceState();
+}
+
+void AnanBackend::setSliceAudioPan(int sliceId, int panPercent)
+{
+    Q_UNUSED(sliceId);
+    // NOT published: SliceDelta carries no balance field, so there is no
+    // observation to echo and nothing downstream reads one. Applied all the
+    // same -- the audio stage is the same stage either way.
+    m_sliceAudioPanPercent = std::clamp(panPercent, 0, 100);
+}
+
+void AnanBackend::setLineoutGain(int percent)
+{
+    // The percent runs through the SAME dB law as the per-slice fader
+    // (sliceAudioAmplitude, at the send), so 50 here is -20 dB and not half
+    // amplitude. Worth knowing when comparing families: a Flex's own lineout
+    // route sends `mixer lineout gain 50` and whatever that means at the radio is
+    // its own scale, so the same slider position is not promised to be the same
+    // loudness across radios. One law for both of OUR level controls is the
+    // trade taken -- the alternative is a fader whose feel changes depending on
+    // which of the three levels the operator happens to be moving.
+    m_lineoutGainPercent = std::clamp(percent, 0, 100);
+}
+
+void AnanBackend::setLineoutMute(bool mute)
+{
+    m_lineoutMuted = mute;
 }
 
 void AnanBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent intent)
@@ -1498,6 +1586,15 @@ void AnanBackend::emitSliceState()
     // Publish the retained NB request so that fresh model agrees with the DSP.
     d.nb = m_nbOn;
     d.nbLevel = m_nbLevel;
+    // The audio stage as APPLIED. Both are required, not cosmetic: the receive
+    // control gate refuses an operation whose observation is absent, so without
+    // these two the mute and the fader are offered and then rejected.
+    //
+    // Safe to echo unconditionally -- SliceModel::applyChanges() assigns these
+    // into its observation without re-emitting a command, so a published value
+    // cannot loop back as a fresh intent (Principle II).
+    d.audioGain = m_sliceAudioGainPercent;
+    d.audioMute = m_sliceAudioMuted;
     // Without this, RadioModel::sliceChanged's handler never assigns the
     // slice a panId (SliceDelta::panId is std::optional and SliceModel::
     // applyChanges() only touches it when set) -- the slice materialised by
@@ -1527,6 +1624,108 @@ void AnanBackend::emitPanState()
     // number; the roll-off is visible again, same as before that attempt.
     m_droopCalibrator.setLandedRate(static_cast<int>(sampleRateHz / 1000.0));
     emit panCenterBandwidthChanged(kPanId, m_sliceFreqHz / 1.0e6, sampleRateHz / 1.0e6);
+}
+
+void AnanBackend::resetSpeakerResamplers()
+{
+    m_speakerResampleL.reset();
+    m_speakerResampleR.reset();
+    m_speakerOutL.clear();
+    m_speakerOutR.clear();
+    if (!m_speakerAudioEnabled) {
+        return;
+    }
+    const int src = m_pendingDspConfig.audioSampleRateHz;
+    if (src <= 0 || src == kSpeakerSampleRateHz) {
+        // Already at the stream's rate: no converter, and none is built rather
+        // than a 1:1 one being built and trusted to be transparent. A ratio-1
+        // resampler still costs a filter and still adds its group delay.
+        return;
+    }
+    m_speakerResampleL = std::make_unique<Resampler>(static_cast<double>(src),
+                                                     static_cast<double>(kSpeakerSampleRateHz));
+    m_speakerResampleR = std::make_unique<Resampler>(static_cast<double>(src),
+                                                     static_cast<double>(kSpeakerSampleRateHz));
+}
+
+void AnanBackend::sendSpeakerAudioToRadio(const QByteArray& stereoFloat)
+{
+    if (!m_speakerAudioEnabled || m_client == nullptr) {
+        return;
+    }
+    const std::size_t frames =
+        static_cast<std::size_t>(stereoFloat.size()) / (2 * sizeof(float));
+    if (frames == 0) {
+        return;
+    }
+    const auto* in = reinterpret_cast<const float*>(stereoFloat.constData());
+
+    // Split before converting. The two channels have to travel through separate
+    // converters to keep their difference (see the member declaration), and a
+    // deinterleaved copy is what a mono converter takes.
+    m_speakerSrcL.resize(frames);
+    m_speakerSrcR.resize(frames);
+    for (std::size_t i = 0; i < frames; ++i) {
+        m_speakerSrcL[i] = in[i * 2];
+        m_speakerSrcR[i] = in[i * 2 + 1];
+    }
+
+    const float* outL = m_speakerSrcL.data();
+    const float* outR = m_speakerSrcR.data();
+    std::size_t outFrames = frames;
+    if (m_speakerResampleL && m_speakerResampleR) {
+        const int nL = m_speakerResampleL->process(m_speakerSrcL.data(),
+                                                   static_cast<int>(frames), m_speakerOutL);
+        const int nR = m_speakerResampleR->process(m_speakerSrcR.data(),
+                                                   static_cast<int>(frames), m_speakerOutR);
+        // Identical configuration and identical input length, so these agree;
+        // taking the shorter is not a correction but a refusal to walk off the
+        // end of one buffer if they ever stop agreeing. A converter's first
+        // calls legitimately return 0 while its filter fills.
+        const int n = std::min(nL, nR);
+        if (n <= 0) {
+            return;
+        }
+        outFrames = static_cast<std::size_t>(n);
+        outL = reinterpret_cast<const float*>(m_speakerOutL.constData());
+        outR = reinterpret_cast<const float*>(m_speakerOutR.constData());
+    }
+
+    // The RADIO's own level, on top of the per-slice stage the block already
+    // carries. Applied here and not in the shared stage because it belongs to
+    // this output alone: the computer's speakers must not get quieter because the
+    // operator turned the radio down.
+    //
+    // A MUTE SENDS SILENCE, IT DOES NOT STOP SENDING, and that distinction is
+    // load-bearing twice over. Stopping would starve the radio's codec, so the
+    // FIFO would underflow for as long as the mute lasted -- turning the one
+    // honest fault signal we have into noise, and clicking on unmute as the FIFO
+    // refilled. It also keeps the pacer's estimate meaningful across a mute
+    // instead of having to be reset on both edges. The cost is 260 kB/s of
+    // zeros, which is the same bandwidth the unmuted stream uses anyway.
+    const float lineout = m_lineoutMuted ? 0.0f
+                                         : sliceAudioAmplitude(m_lineoutGainPercent);
+
+    // Interleave and quantise. CLAMPED BEFORE SCALING: the converter is
+    // linear-phase and overshoots on transients, so a block that was inside
+    // [-1,1] going in can leave it, and an unclamped cast of that wraps sign --
+    // a loud transient becomes a full-scale click of the opposite polarity,
+    // which is far more audible than the clipping it replaces.
+    m_speakerInterleaved.resize(outFrames * 2);
+    for (std::size_t i = 0; i < outFrames; ++i) {
+        const float l = std::clamp(outL[i] * lineout, -1.0f, 1.0f);
+        const float r = std::clamp(outR[i] * lineout, -1.0f, 1.0f);
+        m_speakerInterleaved[i * 2] = static_cast<qint16>(l * 32767.0f);
+        m_speakerInterleaved[i * 2 + 1] = static_cast<qint16>(r * 32767.0f);
+    }
+
+    // One queued hand-off per block. P2Client owns the socket, the packetising
+    // and the pacing on its own thread; this side owns the DSP and the audio
+    // stage. Copying the block is the price of that boundary and it is a few
+    // hundred bytes.
+    QMetaObject::invokeMethod(m_client, "enqueueSpeakerAudio", Qt::QueuedConnection,
+        Q_ARG(QByteArray, QByteArray(reinterpret_cast<const char*>(m_speakerInterleaved.data()),
+                                     static_cast<qsizetype>(outFrames * 2 * sizeof(qint16)))));
 }
 
 void AnanBackend::scheduleTuneApply()

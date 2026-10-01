@@ -75,6 +75,10 @@ void testDefaultPlaceholder()
     report("default placeholder uses Celsius",
            button->text() == QStringLiteral("PA     \u2014 C"),
            button->text());
+    // Spoken in words, not as the visible dash.
+    report("placeholder is spoken as not reported",
+           button->accessibleName() == QStringLiteral("PA heatsink not reported"),
+           button->accessibleName());
 }
 
 void testConnectionSourceIndicator()
@@ -128,7 +132,7 @@ void testSingleSensorToggle()
     report("single sensor button exists", button != nullptr);
     if (!button) return;
 
-    applet.setTemp(34.7f);
+    applet.setPaHeatsinkTemp(34.7f);
     report("single sensor displays Celsius",
            button->text() == QStringLiteral("PA  34.7 C"),
            button->text());
@@ -153,11 +157,12 @@ void testDualSensorToggle()
     report("dual sensor button exists", button != nullptr);
     if (!button) return;
 
-    // Both sensors are named. The amplifier's own panel runs them unlabelled
-    // ("24.4/24.2 C"); on hardware the operator knows which is which, and
-    // here two bare numbers say nothing about what either is measuring.
-    applet.setTemp(34.7f);
-    applet.setTempB(28.4f);
+    // The PGXL front panel shows both temperatures without labels, for
+    // example "24.4/24.2 C". The applet labels them PA (PA heatsink) and
+    // HL (Harmonic Load heatsink). HL comes only over a direct connection.
+    applet.setDirectConnected(true);
+    applet.setPaHeatsinkTemp(34.7f);
+    applet.setHarmonicLoadHeatsinkTemp(28.4f);
     report("dual sensor displays Celsius pair",
            button->text() == QStringLiteral("PA  34.7 / HL  28.4 C"),
            button->text());
@@ -165,6 +170,55 @@ void testDualSensorToggle()
     button->click();
     report("dual sensor toggles to Fahrenheit pair",
            button->text() == QStringLiteral("PA  94.5 / HL  83.1 F"),
+           button->text());
+}
+
+void testRadioFallbackDropsHarmonicLoadTemp()
+{
+    resetSettings();
+
+    AmpApplet applet;
+    auto* button = tempButton(applet);
+    report("fallback button exists", button != nullptr);
+    if (!button) {
+        return;
+    }
+
+    applet.setDirectConnected(true);
+    applet.setPaHeatsinkTemp(34.7f);
+    applet.setHarmonicLoadHeatsinkTemp(28.4f);
+    report("direct connection shows both heatsinks",
+           button->text() == QStringLiteral("PA  34.7 / HL  28.4 C"),
+           button->text());
+    report("direct connection explains HL in the tooltip",
+           button->toolTip().contains(QStringLiteral("HL: Harmonic Load heatsink")),
+           button->toolTip());
+
+    // A FlexRadio relays only the PA heatsink temperature, so the HL value
+    // must not stay on screen after the direct connection drops.
+    applet.setDirectConnected(false);
+    report("radio fallback drops the Harmonic Load heatsink",
+           button->text() == QStringLiteral("PA  34.7 C"),
+           button->text());
+    // The tooltip explains only what is on the button.
+    report("radio fallback drops HL from the tooltip",
+           !button->toolTip().contains(QStringLiteral("HL:")), button->toolTip());
+
+    // A late HL write after the drop must not bring the stale value back.
+    applet.setHarmonicLoadHeatsinkTemp(28.5f);
+    report("a late Harmonic Load write after the drop stays hidden",
+           button->text() == QStringLiteral("PA  34.7 C"),
+           button->text());
+
+    applet.setPaHeatsinkTemp(36.0f);
+    report("radio fallback keeps updating the PA heatsink",
+           button->text() == QStringLiteral("PA  36.0 C"),
+           button->text());
+
+    applet.setDirectConnected(true);
+    applet.setHarmonicLoadHeatsinkTemp(29.0f);
+    report("direct reconnection restores the Harmonic Load heatsink",
+           button->text() == QStringLiteral("PA  36.0 / HL  29.0 C"),
            button->text());
 }
 
@@ -193,7 +247,7 @@ void testPreferenceReload()
            button->text() == QStringLiteral("PA     \u2014 F"),
            button->text());
 
-    restored.setTemp(0.0f);
+    restored.setPaHeatsinkTemp(0.0f);
     report("reloaded value displays Fahrenheit",
            button->text() == QStringLiteral("PA  32.0 F"),
            button->text());
@@ -601,12 +655,12 @@ void testReadoutWidthIsStable()
     const int vddWidth = vdd->text().length();
     const int vacWidth = vac->text().length();
 
-    applet.setTemp(9.9f);
-    applet.setTempB(9.9f);
+    applet.setPaHeatsinkTemp(9.9f);
+    applet.setHarmonicLoadHeatsinkTemp(9.9f);
     const int pairWidth = button->text().length();
 
-    applet.setTemp(100.4f);
-    applet.setTempB(-5.0f);
+    applet.setPaHeatsinkTemp(100.4f);
+    applet.setHarmonicLoadHeatsinkTemp(-5.0f);
     report("temperature pair keeps its width across a digit change",
            button->text().length() == pairWidth, button->text());
 
@@ -719,6 +773,7 @@ int main(int argc, char** argv)
     testConnectionSourceIndicator();
     testSingleSensorToggle();
     testDualSensorToggle();
+    testRadioFallbackDropsHarmonicLoadTemp();
     testPreferenceReload();
     testFanModePulldown();
     testReadoutWidthIsStable();

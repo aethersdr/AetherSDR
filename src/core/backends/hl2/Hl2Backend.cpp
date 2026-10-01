@@ -2481,7 +2481,14 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
-    c.alwaysUseClientSideSpots = false;
+    // Spots live in this client or nowhere. The Flex path publishes every
+    // DX-cluster, RBN, WSJT-X, POTA and manual spot as `spot add` wire text and
+    // waits for the radio's `spot <id>` status to put it on the panadapter. The
+    // HL2 has no command plane, so RadioModel::sendCmd drops that text and no
+    // status ever comes back: with this false, spots were fetched and never
+    // drawn. True routes them into the passive-local SpotModel, the same
+    // fallback Icom declares for the same reason.
+    c.alwaysUseClientSideSpots = true;
     // Manual notches, and the one piece of DSP on this radio that is NOT absent
     // just because hasRadioSideDsp is false. The notch runs in WDSP on this
     // host, which is the whole point: the HL2 sends raw IQ, so a notch either
