@@ -201,8 +201,19 @@ public:
     // baseline. The second of exactly two numbers the operator owns; the first
     // is the on/off switch.
     //
-    // DEFAULT 26 dB, a CHOSEN value inside a MEASURED bound. From the stock
-    // +20 dB baseline it reaches -6 dB, which is the gain
+    // A BACKEND STARTS AT 24 dB. The floor is part of a law's configuration,
+    // and the law installed at construction and on every connect is the
+    // bandscope one (defaultAutoGainLaw). Its 24 is probingReleaseConfig()'s:
+    // four whole 6 dB steps, and the number #5535's ruling holds --
+    // "maxOffsetDb stays at 24 dB", not re-sized against the AD9866 fold.
+    //
+    // EACH LAW CARRIES ITS OWN FLOOR, and setAutoRfGainMode() installs it: 24
+    // for "bandscope" and "probe", 26 for "ramp" and "binary". This setter
+    // moves the installed one, up to kAutoRfGainFloorMaxDb. Neither the law nor
+    // the floor is persisted, so the next connect is back at 24.
+    //
+    // THE RAMP'S 26 dB is a CHOSEN value inside a MEASURED bound. From the
+    // stock +20 dB baseline it reaches -6 dB, which is the gain
     // aethersdr/AetherSDR#5354's own sweep measures as the first clean one on
     // this station. The bound is that measurement; the choice is here. Anything
     // deeper reaches past what the measurement supports and into a range where
@@ -212,11 +223,6 @@ public:
     // Everything else in Hl2AutoGainPolicy.h is deliberately NOT operator-
     // settable. Nine knobs is nine ways to build a loop that hunts, and none of
     // them is a decision an operator has the evidence to make.
-    //
-    // THE 26 ABOVE IS THE RAMP'S FLOOR, NOT THE ONE A BACKEND STARTS WITH. The
-    // floor is part of a law's configuration (setAutoRfGainMode), and the law
-    // installed at construction and on every connect is the bandscope one,
-    // whose floor is the 24 dB RFC #5535's ruling holds.
     void setAutoRfGainFloorDb(int floorDb);
     [[nodiscard]] int autoRfGainFloorDb() const noexcept
     {

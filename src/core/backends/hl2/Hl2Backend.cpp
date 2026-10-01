@@ -6404,7 +6404,8 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         // ONE CALLER OF THIS VERB, and it is the automation bridge:
         // AutomationServer's `bandscope` verb (doBandscope). That is the whole
         // operator-facing surface this feature has, and deliberately so — the
-        // panadapter-style display and the policy that would act on what it sees are #5535 and a
+        // panadapter-style display and the policy that would act on what it
+        // sees are #5535 and a
         // display RFC, neither of which this PR pre-empts. Earlier rounds of
         // review held this open as "no caller anywhere in src/", which was true
         // and is no longer: the route landed in review round 3 rather than
