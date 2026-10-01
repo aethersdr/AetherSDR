@@ -42,7 +42,8 @@
 //
 // SOCKETS: three UDP sockets on 127.0.0.1, ports chosen by the kernel. Two are
 // sinks for our own sendto() and one is the descriptor that gets armed. None
-// stands in for a radio. A failed bind exits 77 (skipped).
+// stands in for a radio. A failed bind, or a bound socket that exposes no
+// descriptor, exits 77 (skipped).
 
 #include "core/backends/hl2/Hl2EmergencyStop.h"
 
@@ -168,8 +169,13 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "SKIP: cannot bind a UDP socket on 127.0.0.1\n");
         return 77;
     }
+    // Not a check(): with no descriptor every arm below takes the disarm path
+    // and every later check fails for a reason none of them names.
     const qintptr fd = sender.socketDescriptor();
-    check(fd >= 0, "sending socket has a descriptor to arm with");
+    if (fd < 0) {
+        std::fprintf(stderr, "SKIP: bound UDP socket exposes no descriptor to arm with\n");
+        return 77;
+    }
 
     // ---- armed target is the one that receives ----
     armEmergencyStop(fd, QHostAddress::LocalHost, firstPort, markedPacket(0xA1));
@@ -195,8 +201,11 @@ int main(int argc, char** argv)
     // ---- disarm silences it ----
     disarmEmergencyStop();
     fireEmergencyStop();
-    check(drain(first, 100).empty() && drain(second, 20).empty(),
-          "a disarmed stop sends nothing");
+    // Both drains run before either is judged: && would skip the second when
+    // the first found something, and the verdict would cover one socket.
+    const bool firstQuiet = drain(first, 100).empty();
+    const bool secondQuiet = drain(second, 20).empty();
+    check(firstQuiet && secondQuiet, "a disarmed stop sends nothing");
 
     // ---- arming with an unusable fd disarms rather than leaving the old one ----
     armEmergencyStop(fd, QHostAddress::LocalHost, firstPort, markedPacket(0xD4));

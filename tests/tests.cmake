@@ -5022,7 +5022,7 @@ add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
 # narrowing; see the file header.
 # SOCKETS: binds three UDP sockets on 127.0.0.1 (kernel-chosen ports): two sinks
 # for our own sendto() and the descriptor that is armed. No fake radio. A failed
-# bind exits 77.
+# bind, or a bound socket with no descriptor, exits 77.
 add_executable(hl2_emergency_stop_test tests/hl2_emergency_stop_test.cpp)
 target_include_directories(hl2_emergency_stop_test PRIVATE src)
 target_link_libraries(hl2_emergency_stop_test PRIVATE aethercore Qt6::Core Qt6::Network)
