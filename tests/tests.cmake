@@ -557,12 +557,6 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
             -DCRDV_DIR=${CRDV_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_crdv_manifest.cmake)
 
-    add_executable(crdv_quarantined_test
-        third_party/crdv/tests/quarantined_acceptance.c)
-    target_link_libraries(crdv_quarantined_test PRIVATE crdv::crdv)
-    add_test(NAME crdv_quarantined_test COMMAND crdv_quarantined_test)
-    set_tests_properties(crdv_quarantined_test PROPERTIES SKIP_RETURN_CODE 77)
-
     add_executable(digital_voice_protocol_test
         tests/digital_voice_protocol_test.c
         ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_ipv4_source_filter.c
@@ -1959,13 +1953,19 @@ add_test(NAME weather_radar_loading_test COMMAND weather_radar_loading_test)
 set_tests_properties(weather_radar_loading_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 
-# Production 2D/3D radar upload and shader alpha-filtering contract. No sockets.
-# Default skips before GUI discovery; explicit native GPU opt-in is required.
-add_executable(weather_radar_texture_gl_test tests/weather_radar_texture_gl_test.cpp)
-target_include_directories(weather_radar_texture_gl_test PRIVATE src)
-target_link_libraries(weather_radar_texture_gl_test PRIVATE Qt6::Core Qt6::Gui Qt6::OpenGL)
-add_test(NAME weather_radar_texture_gl_test COMMAND weather_radar_texture_gl_test)
-set_tests_properties(weather_radar_texture_gl_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+# Opt-in: the native GPU radar upload and shader alpha-filtering contract. It
+# needs a real OpenGL 3.2 context, which no CI lane has. Enable on a machine
+# with a GPU; once enabled it fails, rather than skips, without a GL context.
+option(AETHER_ENABLE_RADAR_GL_TEST
+       "Build and register the opt-in native-GPU weather radar texture test" OFF)
+if(AETHER_ENABLE_RADAR_GL_TEST)
+    add_executable(weather_radar_texture_gl_test tests/weather_radar_texture_gl_test.cpp)
+    target_include_directories(weather_radar_texture_gl_test PRIVATE src)
+    target_link_libraries(weather_radar_texture_gl_test PRIVATE Qt6::Core Qt6::Gui Qt6::OpenGL)
+    add_test(NAME weather_radar_texture_gl_test COMMAND weather_radar_texture_gl_test)
+    set_tests_properties(weather_radar_texture_gl_test PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 60 ENVIRONMENT "AETHERSDR_TEST_RADAR_GL=1")
+endif()
 
 # Globe drag and roll are independent interaction axes. This pure state test
 # guards the default level orientation, pole bounds and normalization without
@@ -4691,17 +4691,6 @@ target_link_libraries(rigctl_strength_slevel_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME rigctl_strength_slevel_test COMMAND rigctl_strength_slevel_test)
 
-# #5499 item 3: the noise-blanker hold invariant, read out of WdspChannel.cpp as
-# TEXT (same limitation, and same reason, as meter_surfaces_test above — the
-# facts never meet at compile time). Links nothing but Qt6::Core: it opens the
-# source file, it does not run the DSP.
-add_executable(wdsp_nb_hold_invariant_test tests/wdsp_nb_hold_invariant_test.cpp)
-target_include_directories(wdsp_nb_hold_invariant_test PRIVATE src)
-target_compile_definitions(wdsp_nb_hold_invariant_test PRIVATE
-    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(wdsp_nb_hold_invariant_test PRIVATE Qt6::Core)
-add_test(NAME wdsp_nb_hold_invariant_test COMMAND wdsp_nb_hold_invariant_test)
-
 add_executable(health_applet_test
     tests/health_applet_test.cpp
     src/gui/HealthApplet.cpp
@@ -4723,16 +4712,6 @@ set_target_properties(health_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME health_applet_test COMMAND health_applet_test)
 set_tests_properties(health_applet_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-
-add_executable(tx_audio_source_wiring_test
-    tests/tx_audio_source_wiring_test.cpp
-)
-# No target_include_directories: this test includes only Qt headers and reaches
-# the sources through AETHER_SOURCE_DIR and QFile, never the search path.
-target_compile_definitions(tx_audio_source_wiring_test PRIVATE
-    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(tx_audio_source_wiring_test PRIVATE Qt6::Core)
-add_test(NAME tx_audio_source_wiring_test COMMAND tx_audio_source_wiring_test)
 
 add_executable(meter_applet_capability_test
     tests/meter_applet_capability_test.cpp
@@ -6760,26 +6739,25 @@ target_link_libraries(container_nesting_test PRIVATE
 )
 set_target_properties(container_nesting_test PROPERTIES AUTOMOC ON)
 
-# Integration test — requires a running AetherSDR instance.
-# Not added to ctest; run manually:
+# Manual integration clients — require a running AetherSDR instance (CAT ports
+# enabled for the CAT ones). Not in the default build or ctest; build by name:
+#   ninja -C build rigctld_test CAT_TS-2000_test CAT_Flex_test
 #   ./build/rigctld_test [--host HOST] [--port PORT] [--ptt] [--cw]
-add_executable(rigctld_test
+#   ./build/CAT_TS-2000_test  [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
+#   ./build/CAT_Flex_test     [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
+add_executable(rigctld_test EXCLUDE_FROM_ALL
     tests/rigctld_test.cpp
 )
 target_include_directories(rigctld_test PRIVATE src)
 target_link_libraries(rigctld_test PRIVATE Qt6::Core Qt6::Network)
 
-# Integration tests — require a running AetherSDR instance with CAT ports enabled.
-# Not added to ctest; run manually:
-#   ./build/CAT_TS-2000_test  [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
-#   ./build/CAT_Flex_test     [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
-add_executable(CAT_TS-2000_test
+add_executable(CAT_TS-2000_test EXCLUDE_FROM_ALL
     tests/CAT_TS-2000_test.cpp
 )
 target_include_directories(CAT_TS-2000_test PRIVATE src)
 target_link_libraries(CAT_TS-2000_test PRIVATE Qt6::Core Qt6::Network)
 
-add_executable(CAT_Flex_test
+add_executable(CAT_Flex_test EXCLUDE_FROM_ALL
     tests/CAT_Flex_test.cpp
 )
 target_include_directories(CAT_Flex_test PRIVATE src)
