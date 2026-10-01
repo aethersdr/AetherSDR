@@ -26,7 +26,8 @@ python3 tools/hl2/discover.py
 python3 tools/hl2/spectrum.py --host 192.168.1.21 --freq 10000000
 ```
 
-`spectrum.py` needs `numpy`; the other three are standard library only.
+`spectrum.py` needs `numpy` for its FFT (its `capture()` does not); the other
+three are standard library only.
 
 `spectrum.py` draws signals above the tuned frequency on the `+` side. The wire
 carries the conjugate of that, and `hpsdr.analytic()` is where the conversion

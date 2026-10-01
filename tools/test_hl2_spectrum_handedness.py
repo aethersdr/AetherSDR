@@ -13,18 +13,26 @@ radio is addressed. The packets carry one carrier 3 kHz ABOVE the tuned
 frequency, written the way the wire carries it: I = cos(wt), Q = -sin(wt).
 
 WHAT IT PROVES. That the samples capture() returns have that carrier at
-+3 kHz, and, when numpy is installed, that panadapter() prints its strongest
-row on the + side. A second carrier at zero offset shows why the old validation
-was blind: its result is the same with and without the conversion.
++3 kHz, and, with --panadapter, that panadapter() prints its strongest row on
+the + side. A second carrier at zero offset shows why the old validation was
+blind: its result is the same with and without the conversion.
 
-WHAT IT DOES NOT PROVE. That a Hermes-Lite 2 sends the conjugate. The stimulus
-is this repository's own statement of the wire convention, taken from
-docs/HERMES.md and from Hl2RxDsp, which conjugates before its spectrum. A wrong
-statement there would make this test agree with a wrong tool. Only an
-off-centre capture from a radio settles that.
+WHAT IT DOES NOT PROVE. That this probe, run against a radio, draws a station
+on the correct side: no capture was taken for it. The stimulus is this
+repository's statement of the wire convention (docs/HERMES.md, "Receive
+handedness and tuning", and Hl2RxDsp, which conjugates before its spectrum).
+That section records the convention as measured on a Hermes-Lite 2 with a
+carrier parked off the dial, so the direction does not rest on this test. An
+off-centre capture with the probe itself is still the check that is missing.
 
-Stdlib only for the first two checks. The panadapter check needs numpy and says
-so when it is skipped.
+TWO REGISTRATIONS, so that a skip is visible. Without arguments the checks are
+stdlib only and always run. With --panadapter the one check that needs numpy
+runs alone and exits 77 when numpy is missing: ctest reports that registration
+as Skipped (SKIP_RETURN_CODE 77), never as Passed.
+
+No check here depends on how fast the test runs. capture() reads its settle
+window and its give-up bound from the clock it is given, and the test gives it
+one that advances a fixed step per reading.
 """
 
 import cmath
@@ -44,6 +52,12 @@ RATE = 48000
 OFFSET_HZ = 3000
 AMPLITUDE = 1 << 20
 SAMPLES_PER_PACKET = 126     # two 512-byte frames, 63 one-receiver samples each
+NSAMP = 4032                 # 32 packets; 3 kHz is bin-exact over it at 48 kHz
+SKIP_RC = 77                 # SKIP_RETURN_CODE of the --panadapter registration
+DST = ("192.0.2.1", hpsdr.METIS_PORT)
+EP2 = bytes([0xEF, 0xFE, 0x01, 0x02])
+START = bytes([0xEF, 0xFE, 0x04, 0x01])
+STOP = bytes([0xEF, 0xFE, 0x04, 0x00])
 
 failures = 0
 
@@ -73,13 +87,30 @@ def wire_packet(seq, first_sample, offset_hz):
     return bytes(out)
 
 
+class StepClock:
+    """The clock capture() is given: a fixed step per reading. Its settle window
+    and its give-up bound are then counted in readings, not in seconds."""
+
+    def __init__(self, step):
+        self.step = step
+        self.now = 0.0
+
+    def __call__(self):
+        self.now += self.step
+        return self.now
+
+
 class WireSocket:
     """Stands in for the UDP socket capture() is given. Not a peer: it answers
     every recvfrom() with the next packet of a fixed carrier and records what
     capture() sent."""
+    # Why this is not the fake radio the test canon rules out: it holds no
+    # session, discovery, sequencing policy or refusal. It is a fixed input to
+    # a decoder, and the sign it carries is a property of HPSDR Protocol 1.
 
-    def __init__(self, offset_hz):
+    def __init__(self, offset_hz, answers=True):
         self.offset_hz = offset_hz
+        self.answers = answers
         self.seq = 0
         self.sent = []
 
@@ -87,35 +118,78 @@ class WireSocket:
         self.sent.append(bytes(data))
 
     def recvfrom(self, _size):
+        if not self.answers:
+            return b"", DST          # not an EP6 packet: capture() skips it
         pkt = wire_packet(self.seq, self.seq * SAMPLES_PER_PACKET, self.offset_hz)
         self.seq += 1
-        return pkt, ("192.0.2.1", hpsdr.METIS_PORT)
+        return pkt, DST
 
 
 def level(iq, hz):
     """Magnitude of the single DFT bin at `hz`, normalised to the carrier."""
+    if not iq:
+        return 0.0               # an empty capture fails its own check above
     acc = 0j
     for n, x in enumerate(iq):
         acc += x * cmath.exp(-2j * math.pi * hz * n / RATE)
     return abs(acc) / (len(iq) * AMPLITUDE)
 
 
-def captured(offset_hz, nsamp=4032):
-    sock = WireSocket(offset_hz)
-    # settle < 0: keep every packet. capture() discards until `settle` seconds
-    # have passed, and a clock that has not advanced yet would drop the first.
-    iq, drops = spectrum.capture(sock, ("192.0.2.1", hpsdr.METIS_PORT), 10_000_000,
-                                 0, 20, nsamp, settle=-1.0)
+def captured(offset_hz, nsamp=NSAMP, answers=True, step=0.001):
+    sock = WireSocket(offset_hz, answers)
+    # settle < 0: keep every packet. The give-up bound is then 7 s of the
+    # StepClock, which is 7 / step readings however long the test takes.
+    iq, drops = spectrum.capture(sock, DST, 10_000_000, 0, 20, nsamp,
+                                 settle=-1.0, clock=StepClock(step))
     return sock, iq, drops
 
 
-def main():
+def panadapter_check(iq):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        spectrum.panadapter(iq, 10_000_000, RATE, 64)
+    rows = []
+    for line in buf.getvalue().splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[1] == "kHz":
+            rows.append((float(parts[2]), float(parts[0])))
+    peak_db, peak_khz = max(rows) if rows else (0.0, 0.0)
+    print(f"       panadapter(): strongest row at {peak_khz:+.1f} kHz ({peak_db:.1f} dBFS)")
+    check(len(rows) == 64 and 2.0 < peak_khz <= 3.0,
+          "panadapter() prints the carrier on the + side, in the column that holds +3 kHz")
+
+
+def main(argv):
     sock, iq, drops = captured(OFFSET_HZ)
-    check(len(iq) == 4032 and drops == 0, "capture() returns the samples it was fed, no drops")
-    check(all(p[:4] in (bytes([0xEF, 0xFE, 0x04, 0x01]), bytes([0xEF, 0xFE, 0x04, 0x00]),
-                        bytes([0xEF, 0xFE, 0x01, 0x02])) for p in sock.sent)
-          and all(p[11] & 1 == 0 and p[523] & 1 == 0 for p in sock.sent if p[2] == 0x01),
+
+    if "--panadapter" in argv:
+        if spectrum.np is None:
+            print("[SKIP] panadapter() row check: numpy is not installed")
+            return SKIP_RC
+        panadapter_check(iq)
+        if failures == 0:
+            print("test_hl2_spectrum_handedness --panadapter: all checks passed")
+        return 1 if failures else 0
+
+    packets = NSAMP // SAMPLES_PER_PACKET
+    ep2 = [p for p in sock.sent if p[:4] == EP2]
+    check(len(iq) == NSAMP and drops == 0, "capture() returns the samples it was fed, no drops")
+    # len(iq) cannot show a wrong samples-per-packet: capture() truncates to
+    # nsamp. The number of packets it had to read can.
+    check(sock.seq == packets and len(ep2) == packets,
+          f"capture() read {sock.seq} packets and sent {len(ep2)} EP2 frames "
+          f"for {NSAMP} samples (want {packets})")
+    check(all(p[:4] in (START, STOP, EP2) for p in sock.sent)
+          and all(p[11] & 1 == 0 and p[523] & 1 == 0 for p in ep2),
           "capture() sent only start, stop and EP2 frames with MOX clear")
+
+    # The give-up bound is read from the clock capture() is given. One reading
+    # per second and a socket that never answers: 7 s of bound is 6 frames.
+    deaf, nothing, _ = captured(OFFSET_HZ, answers=False, step=1.0)
+    deaf_ep2 = sum(1 for p in deaf.sent if p[:4] == EP2)
+    check(nothing == [] and deaf_ep2 == 6 and deaf.sent[-1][:4] == STOP,
+          f"capture() gives up on its own clock ({deaf_ep2} EP2 frames, want 6) "
+          f"and still sends stop")
 
     above = level(iq, +OFFSET_HZ)
     below = level(iq, -OFFSET_HZ)
@@ -131,26 +205,10 @@ def main():
     check(abs(level(centred, 0) - level(as_wire, 0)) < 1e-9,
           "a carrier at zero offset reads the same with and without the conversion")
 
-    if spectrum.np is None:
-        print("[SKIP] panadapter() row check: numpy is not installed")
-    else:
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            spectrum.panadapter(iq, 10_000_000, RATE, 64)
-        rows = []
-        for line in buf.getvalue().splitlines():
-            parts = line.split()
-            if len(parts) >= 3 and parts[1] == "kHz":
-                rows.append((float(parts[2]), float(parts[0])))
-        peak_db, peak_khz = max(rows) if rows else (0.0, 0.0)
-        print(f"       panadapter(): strongest row at {peak_khz:+.1f} kHz ({peak_db:.1f} dBFS)")
-        check(len(rows) == 64 and 2.0 < peak_khz <= 3.0,
-              "panadapter() prints the carrier on the + side, in the column that holds +3 kHz")
-
     if failures == 0:
         print("test_hl2_spectrum_handedness: all checks passed")
     return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

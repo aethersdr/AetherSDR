@@ -44,11 +44,14 @@ except ImportError:      # capture() needs no numpy; only the FFT does
 SPEED = {48000: 0, 96000: 1, 192000: 2, 384000: 3}
 
 
-def capture(sock, dst, freq, speed_code, gain_db, nsamp, settle):
+def capture(sock, dst, freq, speed_code, gain_db, nsamp, settle, clock=time.monotonic):
     """Round-robin config+gain+freq, discard `settle` seconds, return (iq, drops).
 
     iq is a list of complex samples in the ANALYTIC convention (hpsdr.analytic):
-    a signal above the tuned frequency is at a positive baseband frequency."""
+    a signal above the tuned frequency is at a positive baseband frequency.
+
+    `clock` is what the settle window and the give-up bound (settle + 8 s) are
+    read from. A test passes its own, so neither depends on how fast it runs."""
     regs = [hpsdr.cc_config(speed=speed_code, n_rx=1),
             hpsdr.cc_rx_gain(gain_db),
             hpsdr.cc_rx1_freq(freq)]
@@ -57,9 +60,9 @@ def capture(sock, dst, freq, speed_code, gain_db, nsamp, settle):
     iq = []
     drops = 0
     exp = None
-    t0 = time.monotonic()
+    t0 = clock()
     try:
-        while len(iq) < nsamp and time.monotonic() - t0 < settle + 8:
+        while len(iq) < nsamp and clock() - t0 < settle + 8:
             sock.sendto(hpsdr.ep2_packet(seq, regs[ri % 3], regs[(ri + 1) % 3]), dst)
             seq += 1; ri += 1
             try:
@@ -74,7 +77,7 @@ def capture(sock, dst, freq, speed_code, gain_db, nsamp, settle):
                 if gap < 0x80000000:         # forward gap = real loss; the reverse
                     drops += gap             # half = a reordered/dup packet
             exp = (seq_rx + 1) & 0xFFFFFFFF
-            if time.monotonic() - t0 > settle:           # let AGC/NCO settle first
+            if clock() - t0 > settle:                    # let AGC/NCO settle first
                 for i, q in hpsdr.iq_samples(data):
                     iq.append(hpsdr.analytic(i, q))
     finally:
