@@ -146,7 +146,14 @@ but the live RX speaker strip is the explicit order inside `writeAudio()`.
 ### Pan handling
 
 Radio speaker audio enters as stereo with the radio's per-slice pan already
-applied. Every client NR method denoises L and R independently, preserving
+applied. For a backend that demodulates on this host there is no radio to do
+that, so the backend applies it: `applySliceAudioInPlace()` is the ANAN
+receiver's mute, AF gain and balance stage, and it runs on the demodulated block
+before the speaker feed is published. The per-slice tap (`sliceAudioFrameReady`,
+which feeds TCI receiver channels and decoders) is published first, pre-mute and
+pre-gain, as the seam contract requires. It uses the same balance law as `applyRxPanInPlace()`
+below -- attenuate the opposite channel, never boost either -- so the same
+setting is the same loudness whichever kind of receiver it is applied to. Every client NR method denoises L and R independently, preserving
 channel separation but not the balance of a signal present in both channels
 (see step 2 above). The RX strip and the RX upsampler described below preserve
 their input balance. The only client pan stage is `applyRxPanInPlace()` in
@@ -869,6 +876,8 @@ Radio-provided taps:
 | Radio speaker decode, narrow | `PanadapterStream::decodeNarrowAudio()` | VITA PCC `0x03E3`, big-endian float32 stereo | native float32 stereo | 24 kHz | 2 | Emits `audioDataReady()` for normal RX or `daxAudioReady()` for DAX streams |
 | Radio speaker decode, reduced | `PanadapterStream::decodeReducedBwAudio()` | VITA PCC `0x0123`, big-endian Int16 mono | float32 stereo | 24 kHz | 1 -> 2 | Duplicates mono to L/R |
 | Radio Opus RX decode | `PanadapterStream::decodeOpusAudio()` | VITA PCC `0x8005`, Opus | float32 stereo | 24 kHz | 2 | Decodes Opus to Int16 stereo, then converts to float32 |
+| ANAN receiver audio stage | `AnanSliceAudio.h`, `applySliceAudioInPlace()` | float32 stereo | float32 stereo | 24 kHz | 2 | Per-receiver mute, dB AF gain and L/R balance on the speaker and radio-speaker feeds; the per-slice tap is published before it |
+| ANAN radio speaker send | `AnanBackend::sendSpeakerAudioToRadio()` -> `P2Client::enqueueSpeakerAudio()` | float32 stereo | big-endian Int16 stereo, UDP | 24 kHz -> 48 kHz | 2 | Separate L/R resamplers; 64-frame packets to the radio's own codec, credit-paced |
 | RX NR entry | `AudioEngine::feedAudioData()` | float32 stereo | float32 stereo | 24 kHz | 2 | Optional NR; bypassed while radio is transmitting |
 | RX NR2 | `AudioEngine::processNr2()` | float32 stereo | float32 stereo | producer rate | 2 | One `SpectralNR` estimate and mask per channel |
 | RX BNR | `NvidiaAfxFilter::process()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz -> 24 kHz, or native 48 kHz | 2 | One AFX denoiser effect per channel |

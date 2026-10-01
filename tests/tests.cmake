@@ -930,6 +930,19 @@ target_link_libraries(anan_noise_blanker_readback_test PRIVATE aethercore Qt6::C
 add_test(NAME anan_noise_blanker_readback_test COMMAND anan_noise_blanker_readback_test)
 set_tests_properties(anan_noise_blanker_readback_test PROPERTIES TIMEOUT 120)
 
+# ANAN speaker stream (DDC Audio, PC -> radio) -- the SEND PLUMBING: queue,
+# whole-packet boundary, sequence counter, overflow policy and enable gate, read
+# from the datagrams P2Client really sends. Loopback only, no radio.
+# Binds 127.0.0.1:1028 (kSpeakerAudioPort).
+add_executable(anan_speaker_audio_test tests/anan_speaker_audio_test.cpp)
+target_include_directories(anan_speaker_audio_test PRIVATE src tests)
+target_link_libraries(anan_speaker_audio_test
+    PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME anan_speaker_audio_test COMMAND anan_speaker_audio_test)
+# Exit 77 == the speaker port was already held, so nothing could be observed.
+# Without this property that is a green pass with zero checks.
+set_tests_properties(anan_speaker_audio_test PROPERTIES SKIP_RETURN_CODE 77)
+
 # IcomCIV wire layers — pure encode/decode, standalone (no Qt / aethercore).
 # An Icom networked radio is two protocols stacked: CI-V is the command plane
 # and RS-BA1 is the UDP transport it travels inside. Both halves unit-test

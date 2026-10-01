@@ -2092,6 +2092,25 @@ MainWindow::MainWindow(QWidget* parent)
             m_radioModel.removeRxAudioStream();
         }
 
+        // RE-APPLY THE MASTER VOLUME, because this toggle changes WHERE it
+        // applies. applyMasterVolume() routes to the local sink while PC Audio is
+        // on and to the radio's own output when it is off, so flipping this
+        // without re-applying leaves the newly-selected destination at whatever
+        // level it happened to hold -- and on a backend whose radio-side level
+        // starts at its own default, the operator's setting never arrives at all.
+        //
+        // Found on the G2 bench: with RX audio going to the radio, toggling PC
+        // Audio made no difference to anything, because the only other caller of
+        // applyMasterVolume() is the slider itself and the slider had not moved.
+        //
+        // ANAN ONLY. The same gap exists in principle on other families, but
+        // closing it there changes shipped behavior: on a Flex this would write
+        // MasterVolume to `mixer lineout gain` on every PC Audio toggle,
+        // overwriting a level the operator set at the radio. Widening this is a
+        // separate, reviewed change, not a rider on an ANAN feature.
+        if (m_radioModel.family().compare(QLatin1String("anan"), Qt::CaseInsensitive) == 0)
+            applyMasterVolume(AppSettings::instance().value("MasterVolume", "50").toInt());
+
         // On Icom this CLICK -- and only a click -- asks the radio to switch
         // DATA OFF MOD: the network source while on, and whatever the operator
         // had before we first touched it while off. DATA MOD is deliberately
