@@ -115,6 +115,8 @@ struct MemoryRecallDetails {
 //
 // The interface grows one method at a time per the touchpoint burndown
 // (docs/architecture/aetherd-touchpoints.md).
+
+// Owned by the model, borrowed by a backend. See backends/OfflineHealthSource.h.
 class IOfflineHealthSource;
 
 class IRadioBackend : public QObject {

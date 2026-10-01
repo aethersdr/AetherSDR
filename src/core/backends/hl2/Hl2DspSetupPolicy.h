@@ -5,7 +5,10 @@
 // (#5413). An uncached WDSP/FFTW open measures plans (#5052): one receiver's
 // cold open measured ~19-220 s, so fail at 600 s (~3x the worst, still finite);
 // failing a connect that would succeed costs more than a late error on a hang.
-// Figures are for one chain; later receivers open outside this phase.
+// The figures are for one receive chain, which is what an ordinary app connect
+// opens. A connect that passes numRx>1 opens one chain per receiver in this
+// phase (plus the TX chain in the TXA build), and these bounds were not measured
+// against that. Receivers added after connect open outside this phase.
 
 #include <cstdint>
 
