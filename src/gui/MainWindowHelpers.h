@@ -26,6 +26,7 @@
 #include "models/XvtrPolicy.h"
 
 #include "ClientDisconnectDialog.h"  // QList<ClientDisconnectDialog::Client> returns
+#include "SpotLabelPolicy.h"        // spot ID bases, isPassiveLocalSpotId()
 
 class QKeyEvent;
 
@@ -80,15 +81,13 @@ QString buildTnfTooltip(const TnfModel& tnfModel);
 // ─── Memory / passive spot ID math ───────────────────────────────────────────
 //
 // Memory spots and passive local spots are folded into the spot model with
-// negative indices offset by these bases so they can't collide with radio
-// spot indices.
-
-inline constexpr int kMemorySpotIdBase = 1000000;
-inline constexpr int kPassiveSpotIdBase = 2000000;
+// negative indices offset by kMemorySpotIdBase / kPassiveSpotIdBase so they
+// can't collide with radio spot indices. The bases and isPassiveLocalSpotId()
+// live in SpotLabelPolicy.h, header-only, so the right-click menu and its
+// test share the one definition (#6037).
 
 int memorySpotId(int memoryIndex);
 int memoryIndexFromSpotId(int spotIndex);
-bool isPassiveLocalSpotId(int spotIndex);
 QString memorySpotLabel(const MemoryEntry& memory);
 QString memorySpotComment(const MemoryEntry& memory);
 
