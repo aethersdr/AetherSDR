@@ -31,21 +31,9 @@ inline constexpr std::uint16_t kSerialPort  = 50002;
 inline constexpr std::uint16_t kAudioPort   = 50003;
 
 // The token must be renewed or the radio stops the streams WITHOUT sending a
-// disconnect. There is no error packet and no log line on the radio — audio
-// simply stops. wfview renews at 60 s; kappanhang re-auths on a 1-minute
-// ticker. 60 s is the observed contract, so renew comfortably inside it.
-inline constexpr int kTokenRenewalMs   = 60'000;
-// Renew the token 20 s before the 60 s expiry: a renewal is one UDP datagram
-// and a lost one is silent. NOTE: these kToken* constants are currently unused;
-// the live lease timing is IcomSession::Params (30 s first renewal, 60 s
-// cadence, 3 s ack grace, 80 s dead).
-inline constexpr int kTokenRenewEarlyMs = 20'000;
-// How long a renewal may go unacknowledged before we resend it. Sized off the
-// observed worst-case round trip on a power-saving link, with margin.
-inline constexpr int kTokenAckGraceMs   = 2'500;
-// No auth acknowledgement for this long means the token is gone or about to be.
-// Below the 60 s contract so the failure is reported while it is still true.
-inline constexpr int kTokenDeadMs       = 50'000;
+// disconnect: no error packet, no log line, the audio just stops. 60 s is the
+// observed contract (wfview renews at 60 s; kappanhang re-auths each minute).
+// The lease timing lives in IcomSession::Params.
 
 // Idle keepalive cadence. The radio drops a stream that goes quiet. kappanhang
 // sends every 100 ms and relaxes to 1 s once nothing has been transmitted for
