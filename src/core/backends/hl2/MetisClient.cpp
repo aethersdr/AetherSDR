@@ -449,109 +449,32 @@ void MetisClient::onWatchdogTick()
         const qint64 silentMs = m_sinceLastEp6.elapsed();
         // ---- STAGE 1: ASK THE RADIO AGAIN BEFORE GIVING UP ON IT ----
         //
-        // Until this existed, an established link that went quiet had NO
-        // recovery at the protocol level. This tick cleared m_linkUp and could
-        // not then fire again FOR AS LONG AS THE LINK STAYED DOWN -- its own
-        // first line returns on !m_linkUp, and the only thing that sets m_linkUp
-        // back to true is an EP6 packet reaching handleDatagram, which is
-        // precisely what does not happen once the gateware has halted its
-        // stream. (A link that recovers on its own does re-arm the watchdog;
-        // that was never the stuck case.) Meanwhile
-        // m_startRetryTimer was armed by exactly two paths -- start() and
-        // setReceiverCount() -- neither of which is this one. The only recovery
-        // in the product was a layer up: RadioModel's reconnect timer re-driving
-        // connectRadio five seconds after disconnected(), which closes and
-        // reopens every WDSP channel. The protocol-level answer is one 64-byte
-        // datagram.
+        // Once EP6 stops, nothing else re-arms this tick (m_linkUp only returns on an
+        // EP6 packet), and if the gateware halted because EP2 stopped (its anti-wedge
+        // watchdog in dsopenhpsdr1.v drops `run` when EP2 arrivals stop), resuming EP2
+        // does not restart it — only a run command does. So arm the same
+        // metisRunCommand retry start() and setReceiverCount() use. Without it, the
+        // only recovery is RadioModel's reconnect, which reopens every WDSP channel.
         //
-        // This matters most in the case the client cannot otherwise get out of:
-        // if the gateware halted its stream because EP2 stopped arriving, then
-        // EP2 resuming does NOT restart it. The radio needs a new run command,
-        // and nothing was sending one.
+        // A duplicate start is safe: dsopenhpsdr1.v's RUNSTOP state assigns
+        // `run_next = eth_data[0]` as a level, with no FIFO flush, DDC reset or counter
+        // clear. It also re-latches wide_spectrum (bit 1) and watchdog_disable (bit 7),
+        // so the bandscope gate is reset first and this datagram sends
+        // wideSpectrum=false.
         //
-        // THE WIRE ACT HERE IS NOT NEW. metisRunCommand to a radio whose run
-        // state we cannot observe, repeated on m_startRetryTimer, is exactly
-        // what start() and setReceiverCount() already do on every connect and
-        // every receiver-count change: a lost start and a slow one are
-        // indistinguishable, so that retry has always been willing to re-send
-        // to a radio that may already be streaming. What is new is a third path
-        // arming it.
+        // No metis-stop and no sendPrimingBurst(): the EP6 layout is unchanged, and the
+        // priming burst msleeps on the thread that paces EP2.
         //
-        // AND THE GATEWARE SAYS IT IS SAFE, which is worth having written down
-        // because "commanding a radio that thinks it is already streaming" is
-        // the obvious objection. dsopenhpsdr1.v decodes the run byte in ONE
-        // state, RUNSTOP, as a plain level assignment with no edge detection:
-        //     run_next = eth_data[0];  wide_spectrum_next = eth_data[1];
-        // It sets no state_next, flushes no FIFO, resets no DDC and clears no
-        // counter. A second start while run is already 1 re-writes 1 over 1 and
-        // nothing downstream sees an edge; every consumer in hermeslite_core.v
-        // takes run as a level. The duplicate also re-latches wide_spectrum
-        // from bit 1 and watchdog_disable from bit 7. Stage 1 does not send the
-        // live bandscope bit: resetBandscopeGate() runs first and the datagram
-        // below passes wideSpectrum=false, so a sensor that is no longer armed
-        // is not left asserted. metisStart() would be the same bytes while the
-        // gate is idle, and it is still the wrong helper -- it hard-clears bit 1
-        // with no way to say otherwise. The shared retry lambda keeps
-        // metisRunCommand keyed on m_bsState for the callers where the gate may
-        // be mid-cycle; after the reset here that state is Idle, so the
-        // re-sends are wide_spectrum clear too.
+        // m_linkUp stays true during the attempt, so a recovered stream does not
+        // re-emit linkUp() and make Hl2Backend republish its state over live panes.
         //
-        // One more thing the gateware settles: its own anti-wedge watchdog
-        // (dsopenhpsdr1.v, watchdog_cnt, tripping at &watchdog_cnt to
-        // `run <= 0`) is cleared by EP2 ARRIVALS -- watchdog_clr, asserted in
-        // SEQNO0, the state an EP2 data packet enters -- and advances while
-        // watchdog_up is high. watchdog_up is TOGGLED in usopenhpsdr1.v and
-        // sampled here as a LEVEL, so it is not one count per EP6 frame and no
-        // timing figure is claimed from it. So the failure it produces is the one with
-        // no client-side recovery before this: EP2 stops, EP6 keeps flowing so
-        // our silence timer never runs, the gateware eventually sets run to 0,
-        // EP6 stops, and only THEN does this watchdog fire -- at which point
-        // resuming EP2 cannot restart the radio and only a run command can.
-        //
-        // NO metis-stop, and NO sendPrimingBurst(). setReceiverCount() uses both
-        // because it is changing the EP6 payload layout and needs a hard edge;
-        // here the layout is unchanged and there is nothing to re-prime. It also
-        // matters that sendPrimingBurst() spends 20 ms in QThread::msleep on
-        // THIS thread -- two msleep(10) calls per invocation, and
-        // setReceiverCount() invokes it twice, so ~40 ms there -- on the thread
-        // pacing EP2, and stalling the pacer is a plausible cause of the very
-        // silence being recovered from.
-        //
-        // m_linkUp DELIBERATELY STAYS TRUE for the length of the attempt. The
-        // start-retry's own comment gives the reason and setReceiverCount()
-        // relies on it: clearing it makes a stream that comes back re-emit
-        // linkUp(), and Hl2Backend republishes its entire initial state on that,
-        // over the operator's live panes. A recovery that succeeded should be
-        // invisible except in the counters.
-        //
-        // AND THE CLAIM "NOTHING WAS SENDING ONE" IS TRUE ONLY WITH THE
-        // BANDSCOPE OFF. bandscopeArm() reaches sendBandscopeRunByte(true),
-        // which is metisRunCommand(true, m_watchdogEnabled) -- run bit SET --
-        // and the guard's disarm sends metisRunCommand(false, ...), run bit set
-        // again. So with the gate running, a wedged radio was already being
-        // told to run twice per kBandscopeSampleMs, by a sensor that exists for
-        // something else entirely. That is an accident, not a recovery: it is
-        // absent in the default configuration, it is invisible in the counters,
-        // and it stops the moment the operator turns the bandscope off.
-        //
-        // THE GATE THEREFORE STOPS FOR THE LENGTH OF THE ATTEMPT, so that the
-        // command below is the only thing asking this radio to run. Three
-        // things fall out of that and all three are wanted:
-        //   - the attempt is attributable. A recovery whose success might have
-        //     been bought by a 1 Hz sensor tick is not evidence about this code.
-        //   - no bandscopeTimeouts are manufactured. resetBandscopeGate() stops
-        //     the guard as well as the tick, so the extra time stage 1 buys
-        //     cannot charge an operator-visible row for a radio that is quiet.
-        //   - wide_spectrum comes DOWN on the wire, in this datagram, rather
-        //     than being left up by whichever phase the gate was in.
-        // resetBandscopeGate() is the right tool and not bandscopeDisarm():
-        // disarm would put a run byte of its own out first, which is the thing
-        // being stopped. It does not touch m_params.bandscope -- the operator's
-        // standing intent survives -- and it does not answer an outstanding
-        // requestBandscopeFrame(), which is correct here rather than an
-        // oversight: the request is still answerable. If the recovery works,
-        // handleDatagram re-applies the gate and a later block answers it; if
-        // it does not, stage 2 fails it with the link, exactly as before.
+        // The bandscope gate stops for the attempt (resetBandscopeGate(), not
+        // bandscopeDisarm(), which would send its own run byte). Its arm/disarm also
+        // send run-set commands, so stopping it makes this command the only one —
+        // attributable — avoids manufacturing bandscopeTimeouts, and brings
+        // wide_spectrum down. m_params.bandscope (operator intent) is untouched, and an
+        // outstanding requestBandscopeFrame() stays answerable: a recovered link
+        // answers it, and stage 2 fails it with the link.
         if (!m_silenceRecoveryArmed && m_socket && m_startRetryTimer) {
             m_silenceRecoveryArmed = true;
             ++m_link.silenceRecoveryAttempts;
@@ -1118,82 +1041,30 @@ bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
 {
     // ---- THE ALLOW-LIST ----
     //
-    // These addresses, and nothing else. The SHAPE is the point, and it is a
-    // deliberate inversion of the deny-list this started as: a deny-list FAILS
-    // OPEN — the next person to add a register to the C&C map gets it
-    // RQST-able for free, without having thought about it once — and an
-    // allow-list FAILS CLOSED. Adding an entry is then a reviewable act with a
-    // reason written next to it, which is what the entries below are. There are
-    // zero callers today, so this is the cheapest moment the inversion will
-    // ever have.
+    // These addresses and nothing else. An allow-list fails closed: adding an entry
+    // is a reviewable act with its reason written beside it.
     //
-    // WHAT THIS GUARANTEES, stated narrowly, because the broad version is not
-    // true and a reader who takes it away will be wrong:
+    // The rule is RE-ASSERTED-OR-EXCLUDED. 0x0a and 0x0e are re-asserted by the
+    // round robin in buildNextControlPacket (gain and ADC-assign slots), so a bad
+    // write self-corrects within one rotation (~16 ms at four receivers). Neither
+    // emits RF or reaches outside the radio's case. Excluded:
     //
-    //   * neither of these two registers emits RF, and neither reaches anything
-    //     outside the radio's own case. In particular 0x3d (I2C2) is NOT here.
-    //     MetisProtocol.h's IO-board note says what sits on that bus: a
-    //     Raspberry Pi Pico that switches amplifiers, antenna relays and
-    //     transverters. An arbitrary-data RQST there is a direct I2C write to
-    //     that board. It is absent because nothing needs it — not because it
-    //     would be harmless.
+    //   0x01  TX1 NCO: sent once per tune and never refreshed, so a bad write
+    //         persists silently.
+    //   0x3d  I2C2: the IO board's Pico switching amplifiers, relays, transverters.
+    //   0x3b  not a read: control.v's RESP_READ returns cmd_resp_data_i2c for the
+    //         AD9866 branch ("FIXME: suppor read cmd_resp_data_ad9866") and
+    //         ad9866ctrl has no data output. It is a generic AD9866 SPI write
+    //         (cookie 8'h06) of an arbitrary register, including TX gain 0x0a,
+    //         0x0c, 0x0e, 0x10/0x11, and the 0x09 handler's shadow register means
+    //         the gateware would not re-assert the old gain.
+    //   0x09  TX drive, PA enable, ATU.
+    //   0x39  sync/reset; carries the watchdog and master enables (see
+    //         requestPipelineReset).
     //
-    //   * THE RULE IS RE-ASSERTED-OR-EXCLUDED. 0x0a and 0x0e are RE-ASSERTED by
-    //     the round robin in buildNextControlPacket (the gain slot and the
-    //     ADC-assign slot), so a wrong value written through here self-corrects
-    //     within one rotation, ~16 ms at four receivers. That property is most
-    //     of why these two are the safe ones, and it is exactly what 0x01 (the
-    //     TX1 NCO) does NOT have: this client sends the transmit frequency once
-    //     per tune and never refreshes it, so a bad write there would persist
-    //     silently until the operator moved the dial, with our own idea of the
-    //     TX frequency now wrong. 0x01 is therefore off the list too.
-    //
-    // 0x3b WAS ON THIS LIST AND IS NOT ANY MORE. It was admitted as "the
-    // subsystem READ path". Read against `ad9866ctrl.v` — which we hold at
-    // /tmp/hl2/gateware/rtl and which is not vendored in this tree — that
-    // description is wrong twice over, and both corrections point the same way:
-    //
-    //   1. IT IS NOT A READ. `control.v`'s RESP_READ has exactly one data
-    //      source, and for the AD9866 branch it is the WRONG one, with the
-    //      gateware's own note saying so:
-    //          end else if (~cmd_ack_ad9866) begin
-    //            resp_cmd_data_next = cmd_resp_data_i2c; // FIXME: suppor read cmd_resp_data_ad9866
-    //      `ad9866ctrl` has no data output at all — control.v instantiates it
-    //      with cmd_addr/cmd_data/cmd_rqst/cmd_ack and nothing more, and inside,
-    //      `assign sdo = 1'b0;` with `//assign dataout` commented out. A 0x3b
-    //      ACK carries our own echo, or the 0x3F refusal. Never a value.
-    //
-    //   2. IT IS A WRITE, AND IT REACHES THE TRANSMIT PATH. ad9866ctrl.v:
-    //          // Generic AD9866 write
-    //          6'h3b: begin
-    //            if (cmd_data[31:24] == 8'h06) begin
-    //              if (rffe_ad9866_sen_n) cmd_state_next = CMD_WRITE;
-    //      and CMD_WRITE puts `{3'b000, cmd_data[20:16], cmd_data[7:0]}` on the
-    //      converter's SPI bus — an ARBITRARY AD9866 register (five bits) with
-    //      an ARBITRARY byte. Among the registers that reaches: 0x0a, which is
-    //      where the gateware's own TX-gain command writes
-    //      (`icmd_data = {5'h0a,4'b0100,tx_gain}`), plus 0x0c (TX interpolation),
-    //      0x0e (IAMP enable) and 0x10/0x11 (TX gain select) from its own
-    //      initarray comments. So "none of these registers emits RF" was
-    //      UNVERIFIED for 0x3b, and against the RTL it is false.
-    //
-    //   3. AND IT PERSISTS HARDER THAN 0x01 DOES. The 0x09 handler issues its
-    //      SPI write only `if (tx_gain != cmd_data[31:28])` against an FPGA-side
-    //      shadow register that a 0x3b write does not touch. So after a 0x3b
-    //      write to AD9866 0x0a the gateware still believes the old gain and
-    //      will NOT re-assert it — the mechanism that would have corrected the
-    //      value is suppressed by its own change detector. By this list's own
-    //      rule that is an exclusion, not a judgement call.
-    //
-    // There are zero callers, so dropping it costs nothing. An item that really
-    // needs converter SPI adds it back deliberately, with the 8'h06 cookie and
-    // the register it means named at the call site.
-    //
-    // 0x09 (TX drive, onboard PA enable, ATU) and 0x39 (sync/reset, which
-    // carries the watchdog enable at [27:24] and the master enable at [11:8],
-    // and which wedged a radio once already — see requestPipelineReset above)
-    // are absent and must not be added unconditionally. A future item that
-    // needs either has to gate it on transmitEnabled() deliberately.
+    // A future need for 0x09 or 0x39 must gate on transmitEnabled(); one for
+    // converter SPI adds 0x3b back with the cookie and target register named at the
+    // call site.
     static constexpr int kRequestableAddresses[] = {
         kC0AdcGain >> 1,            // 0x0a  AD9866 RX LNA gain (ccRxGain)
         kC0AdcAssignOrTxGain >> 1,  // 0x0e  ADC assign / TX LNA gain (ccAdcAssign)

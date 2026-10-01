@@ -2,58 +2,30 @@
 
 // Green Heron "Everyware" antenna-switch wire protocol (TCP port 10000).
 //
-// PROVENANCE (Constitution Principle IV — clean-room). There is no vendor
-// documentation for this protocol. Everything encoded here was determined by
-// observing traffic on the wire between the vendor's own client and the
-// vendor's own server (tcpdump captures, plus a hexdump probe run against a
-// live installation), which Principle IV names explicitly as a clean input.
-// No binary was decompiled, disassembled, or read for strings, and nothing
-// here is transcribed from such output.
+// Clean-room (Principle IV): there is no vendor documentation; everything here
+// comes from observing traffic between the vendor's own client and server.
+// Nothing was decompiled or disassembled. The code is a from-scratch Qt port of
+// the author's own MIT-licensed implementation (github.com/motoham88/
+// everyware-linux), contributed under GPLv3 by the same copyright holder.
 //
-// CODE PROVENANCE, which is a separate question from the protocol provenance
-// above: this is a from-scratch Qt port of the author's own prior MIT-licensed
-// implementation (github.com/motoham88/everyware-linux), contributed under
-// this repository's GPLv3 by the same copyright holder. Nothing is vendored —
-// the Python was read for facts about the wire and the Qt written from
-// scratch. The two front ends that project also ships — a curses TUI and an
-// MQTT/Home Assistant bridge — are deliberately NOT part of this port.
+// The far end is the Everyware server (a PC with the switch hardware on serial),
+// not a switch. One socket carries both the antenna switches (SWITCHADD /
+// SWITCHUPDATE / SWITCHLOCKS / SET_SWITCH) and any rotator (ADD / POINT / TURN).
+// Switch names are unique only within one server, so key on host + switch name.
 //
-// One socket carries BOTH halves of the device: the antenna switches
-// (SWITCHADD / SWITCHUPDATE / SWITCHLOCKS / SET_SWITCH) and any rotator the
-// Everyware server has a controller for (ADD / POINT / TURN). That is why
-// there is one model and one tile rather than two of each: a second
-// connection to the same server for the rotator would buy nothing and cost a
-// socket.
-//
-// What is on the far end of port 10000 is the Everyware *server* — a service
-// running on a PC with the switch hardware attached to it over serial — not a
-// switch. It presents several switches, and switch names are only unique
-// within one server, so anything driving more than one server must key on
-// host + switch name rather than switch name alone.
-//
-// Framing, all ASCII and line-oriented:
+// Framing, ASCII and line-oriented:
 //
 //     record   := VERB US field (US field)* CRLF
 //     field    := text | subfield (GS subfield)*
 //
-//     US   = 0x1f   between fields
-//     GS   = 0x1d   between subfields within one field
-//     CRLF = 0x0d0a ends a record
+//     US = 0x1f between fields, GS = 0x1d between subfields, CRLF ends a record.
+//     TURN is the exception and ends with a bare CR (see kTurnVerb).
 //
-// …in the device→client direction and for SET_SWITCH. TURN is the one
-// exception and ends with a BARE CR — see kTurnVerb below. That asymmetry is
-// captured, not assumed.
+// Record boundaries do not align with TCP segments (observed both ways), so feed
+// every read through splitRecords() and keep the remainder.
 //
-// Record boundaries do NOT align with TCP segments. That is observed, not
-// assumed: one 585-byte segment carried three whole SWITCHADD records, while
-// the recurring 109-byte segment carries SWITCHLOCKS + SWITCHUPDATE +
-// SWITCHLOCKS starting mid-cycle. Feed every read through splitRecords() and
-// keep the remainder for next time.
-//
-// This translation unit is PURE — no sockets, no timers, no Qt GUI. That is
-// deliberate: it lets the parser be tested against verbatim bytes captured
-// off the device (tests/green_heron_protocol_test.cpp) with no hardware and
-// no network. GreenHeronModel owns the socket and drives this.
+// Pure — no sockets, timers or GUI — so the parser is tested against captured
+// bytes (tests/green_heron_protocol_test.cpp). GreenHeronModel owns the socket.
 
 #include <QByteArray>
 #include <QString>

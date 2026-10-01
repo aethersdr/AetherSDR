@@ -46,96 +46,30 @@ namespace AetherSDR::anan {
 
 class SpeakerAudioPacer {
 public:
-    // Frames to keep unplayed in the radio.
+    // Frames to keep unplayed in the radio: sixteen packets (~21 ms). Not smaller,
+    // not larger, and it is also the burst cap.
     //
-    // SIXTEEN PACKETS (~21 ms). The first version of this was FOUR and it made
-    // the radio's audio unintelligible on the bench -- worth the arithmetic,
-    // because "a small target keeps latency down" is the intuition that produced
-    // it and the intuition is wrong.
+    // - The caller drains on a 5 ms timer (240 frames per tick), packetsToSend()
+    //   releases whole 64-frame packets, and a Qt timer interval is only a floor.
+    //   Sixteen packets spans ~4 nominal ticks, so truncation and a late tick are
+    //   absorbed instead of starving the radio (heard as garbled speech).
+    // - It is exactly one source block at the default 48 ksps DDC
+    //   (WdspChannel::computeOutputBlockSize(): 512 frames at 24 kHz -> 1024 frames
+    //   at the stream rate). Audio arrives a block at a time, so a target below
+    //   one block grows the queue until it drops.
+    // - It is the G2's whole speaker FIFO: 1024 locations on gateware 13+
+    //   (saturnregisters.c DMAFIFODepths[eSpkCodecDMA]). There is no headroom
+    //   above it, and 21 ms is all the host-stall tolerance this path has; on a
+    //   saturated host the radio reports underflows that sound mildly crackly and
+    //   self-correct (BENCH.md 9.10). Measured on a G2 (2026-09-28): median FIFO
+    //   occupancy 995 of 1024, so the estimate is accurate.
     //
-    // The caller drains on a timer. One tick of T milliseconds removes
-    // T * 48 frames from the radio: at the 5 ms tick this class is driven by,
-    // 240 frames, or 3.75 packets. Two consequences, and the target has to
-    // survive both.
-    //
-    //   * TRUNCATION. packetsToSend() releases whole packets, so the room left by
-    //     a 240-frame drain yields floor(240/64) = THREE packets, 192 frames. With
-    //     a 256-frame target there is no slack for the estimate to sit above the
-    //     tick's drain, so the stream delivers 4 ms of audio per 5 ms elapsed and
-    //     falls behind permanently. The radio plays a gap every few milliseconds,
-    //     which is heard as garbled speech rather than as clicks.
-    //   * JITTER. A Qt timer's interval is a floor. One 15 ms tick drains 720
-    //     frames -- more than a 256-frame target can ever hold -- so any scheduling
-    //     hiccup emptied the FIFO completely.
-    //
-    // Sixteen packets covers roughly four nominal ticks, so truncation only makes
-    // the estimate hover slightly under target instead of starving, and a late tick
-    // is absorbed rather than fatal. The cost is ~21 ms of added latency at the
-    // radio, which is inaudible for listening and is anyway less than the host
-    // audio path already contributes.
-    //
-    // SIXTEEN IS ALSO EXACTLY ONE SOURCE BLOCK, which is the floor this really has
-    // to respect. WdspChannel::computeOutputBlockSize() is inputBlockSize *
-    // outputRate / inputRate, so at the DEFAULT 48 ksps DDC that is
-    // 1024 * 24000/48000 = 512 frames of 24 kHz audio arriving every 21.3 ms --
-    // 1024 frames, sixteen packets, once resampled to the stream's rate. Audio
-    // reaches this pacer in bursts of one block, so a target below one block can
-    // never release a block before the next arrives: the queue grows until it hits
-    // its cap and then drops. That is the second half of what the first bench run
-    // heard, and it is worst at the DEFAULT rate -- at 1536 ksps a block is only
-    // 16 frames and nothing about the old target was visible.
-    //
-    // NO HEADROOM ABOVE THIS, and that is a fact about the radio rather than a
-    // choice here. The G2's speaker FIFO holds 1024 LOCATIONS on gateware 13 and
-    // later -- 2048 samples, 1024 stereo frames -- per
-    // saturnregisters.c's DMAFIFODepths[eSpkCodecDMA] (the compiled-in default for
-    // older gateware is 256). So this target IS the radio's entire speaker FIFO,
-    // and it cannot be reduced either, because one source block pins it from
-    // below. One DSP block at the default DDC rate fills the whole FIFO.
-    //
-    // MEASURED, 2026-09-28: the radio really does run this full. With the credit
-    // target governing releases, the G2 reported a median occupancy of 995
-    // locations and a 90th percentile of 1011 against its 1024 capacity, touching
-    // 1024 itself -- so the estimate is ACCURATE and this target keeps the speaker
-    // FIFO at 97-100%. An earlier revision of this comment claimed the estimate
-    // merely "hovers near the target" while the radio held 53-165, and explained
-    // the gap away as a constant offset that cancels. That reading came from a run
-    // where a mis-set catch-up threshold bypassed the target on every block, so it
-    // was measuring the wrong regime. There is no offset and nothing cancels.
-    //
-    // Consequences, both real and neither fixable here. The radio has no headroom
-    // for an overshoot -- one packet is 64 locations and the 90th percentile
-    // leaves 13. And the FIFO holds 21 ms, so 21 ms is ALL the jitter tolerance
-    // this path has: a host stall longer than that empties it however much audio
-    // is queued on our side, because there is nowhere further ahead to send. On a
-    // fully saturated host (a clean parallel rebuild) that is exactly what happens
-    // -- ~2800 underflow reports, 90% of them with audio in hand. What that SOUNDS
-    // like is milder than the count reads: slightly crackly, self-correcting, and
-    // clear again before the build even finished. The report only means the bit
-    // latched once in a ~200 ms window, not that the window was lost. See
-    // BENCH.md 9.10.
-    //
-    // High Priority status bytes 37-38 remain the only real measurement, carried
-    // by HighPriorityStatus::speakerFifoLevel.
-    //
-    // The reference client throttles at ~500 frames, which is less than this, and
-    // that is not a contradiction: its sender is semaphore-driven, one packet per
-    // 64-frame block, so its figure is a ceiling on running AHEAD rather than a
-    // budget that has to span a scheduling interval and a source block. A
-    // timer-driven sender needs the larger number. Its wired/wireless split is
-    // deliberately not copied -- every ANAN path here is Ethernet, and a second
-    // threshold nothing exercises is a branch that cannot be trusted when it
-    // finally runs.
-    //
-    // THIS IS ALSO THE BURST CAP, and there is deliberately no second constant
-    // for that. An earlier revision carried a separate kMaxBurstPackets = 8 to
-    // bound how far one late tick could overshoot. It could never bind: the
-    // estimate floors at zero, so the room below the target is at most the target
-    // itself, and a cap above the target is unreachable by construction. It read
-    // as protection and provided none, and the test asserting it was a test that
-    // could not fail. The target alone is the bound -- and now that the target is
-    // the thing sized against the tick, that is the right place for the bound to
-    // live.
+    // The real measurement is High Priority status bytes 37-38
+    // (HighPriorityStatus::speakerFifoLevel). The reference client's ~500-frame
+    // throttle is a ceiling on running ahead for a semaphore-driven sender, not a
+    // budget spanning a timer interval and a source block. Because the estimate
+    // floors at zero, the target alone bounds a burst; a separate cap above it
+    // could never bind.
     static constexpr double kTargetFifoFrames = 16.0 * kSpeakerFramesPerPacket;
 
     [[nodiscard]] double estimatedFifoFrames() const noexcept { return m_fifoFrames; }

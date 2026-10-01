@@ -681,61 +681,23 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
            "of the four tones — the same convention as WSJT-X"));
 
     m_beaconLevel = new QSpinBox(beaconBox);
-    // Hard-coded at -20 dBFS before this. WSJT-X generates at full scale and
-    // attenuates digitally through its Pwr slider (SoundOutput::setAttenuation);
-    // the equivalent knob here had no UI at all, so an operator who came out
-    // underdriven had nothing to reach for. Ceiling of -3 rather than 0 keeps a
-    // little headroom ahead of the radio's own TX chain.
+    // WSPR beacon audio level, -60..-3 dBFS (headroom ahead of the radio's TX
+    // chain). WSJT-X likewise generates at full scale and attenuates digitally.
+    // With the HL2's ALC reduction-only, the level set here is the level
+    // transmitted.
     //
-    // THE DEFAULT IS BACKEND-DEPENDENT, AND SO IS THE STORED VALUE. Both
-    // decisions live in PskBeaconLevelPolicy.h, evaluated rather than copied,
-    // so psk_beacon_level_policy_test pins the expressions this runs.
+    // The default and the stored value are backend-dependent
+    // (PskBeaconLevelPolicy.h, pinned by psk_beacon_level_policy_test), and the
+    // level is PER RADIO: it lives in the radio-scoped WsprBeacon feature document
+    // keyed by RadioModel::settingsScope(), so an HL2 and a Flex get separate
+    // answers.
     //
-    // While Hl2TxDsp's ALC still has its makeup half, this spinbox is very
-    // nearly inert on the HL2: processAudioBlock() normalises anything from
-    // roughly -45 dBFS up to alcTargetPeak (0.85, -1.412 dBFS) onto that
-    // target, for any audio submitted with clientLeveled=false -- which the
-    // WSPR pump is, since AudioEngine::startWsprPump() reaches
-    // feedDaxTxAudioInternal() with markExternalSource=false. So -20 and -3
-    // go out at the SAME level today, and the knob added for the underdriven
-    // operator cannot help them. Measured: -1.412 dBFS on air from a
-    // -20.000 dBFS stimulus.
-    //
-    // Once the makeup half goes and the ALC becomes reduction-only, the
-    // setting is real -- the level set here is the level transmitted -- and
-    // -20 dBFS becomes 18.577 dB of unattended shortfall, measured against
-    // two binaries differing by that one change with the same stimulus and a
-    // txraw control at 0.000 dB.
-    //
-    // THE LEVEL IS PER RADIO, not per installation. It is a property of the
-    // transmit chain the audio is about to enter, so a station with an HL2 and
-    // a Flex needs two answers and gets them: the value lives in the
-    // radio-scoped WsprBeacon feature document (AGENTS.md, "Radio-Scoped
-    // Feature Documents"), keyed by RadioModel::settingsScope(). It used to be
-    // one app-global key, which meant a level chosen on the Flex silently
-    // became the HL2's unattended beacon level and nothing could correct it.
-    //
-    // RE-EVALUATED ON EVERY CAPABILITY CHANGE, not once at construction. The
-    // dialog is built on first open and cached for the session
-    // (MainWindow_DigitalModes.cpp, a QPointer with no WA_DeleteOnClose), so an
-    // operator who opens PSK Reporter BEFORE connecting would otherwise keep
-    // the disconnected answer for the whole session with nothing on screen to
-    // say so. applyBeaconLevel() therefore rides
-    // RadioModel::connectionStateChanged -- which carries the identity change,
-    // so it re-reads the new radio's stored level -- and
-    // TransmitModel::hostModulationChanged for a capability republish inside a
-    // live session. The second is not enough on its own: it is a change signal,
-    // and connecting a Flex leaves hostModulation() false either side, so it
-    // emits nothing. Caught by driving the demo radio, not by reading it.
-    //
-    // It deliberately does NOT ride RadioModel::callsignChanged, which is what
-    // updateBeaconDefaults() runs on: that signal is emitted only by the
-    // operator editing their own callsign, by the Flex `info` reply, and by a
-    // RadioDelta carrying a callsign. No HL2, sim or ANAN backend ever supplies
-    // one, so connecting an HL2 with this window open fired nothing at all --
-    // reproduced offscreen against the demo radio, where the beacon callsign
-    // field stayed empty on connect while a connect-then-open run filled it
-    // (PR #5651 review).
+    // Re-evaluated on every capability change, because the dialog is cached for the
+    // session: applyBeaconLevel() rides RadioModel::connectionStateChanged (identity
+    // change; re-reads the new radio's level) and
+    // TransmitModel::hostModulationChanged (republish within a session; not enough
+    // alone, since a Flex connect leaves hostModulation() false). Not
+    // callsignChanged, which non-Flex backends never emit.
     m_beaconLevel->setRange(-60, -3);
     m_beaconLevel->setSingleStep(1);
     m_beaconLevel->setSuffix(tr(" dBFS"));

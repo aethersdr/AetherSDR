@@ -7297,59 +7297,21 @@ void MainWindow::onSpectrumReadyForAdaptiveFilter(quint32 streamId,
 void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
 {
     if (m_splitActive) return;
-    // Split creates its TX slice with Flex wire text, which a backend
-    // with no command plane drops before any wire write. Same gate
-    // #5266 put on the FlexControl and RC-28/HID Split actions; this
-    // on-screen badge and the split_toggle shortcut are the two
-    // primary operator paths and were not in #5263's item-3
-    // enumeration (issue 5277).
+    // Split creates its TX slice with Flex wire text, which a backend with no
+    // command plane drops (#5277; same gate #5266 put on the FlexControl and
+    // RC-28/HID Split actions). Return BEFORE the writes below: m_splitActive is
+    // latched ahead of the command, so a dropped create would leave the app
+    // believing split is on (blocking SWR sweeps, stopping TxFollowsActiveSlice,
+    // and adopting the next arriving slice as the split TX slice).
     //
-    // It returns BEFORE the three writes below rather than merely
-    // skipping the send, because the writes are the worse half of the
-    // defect: m_splitActive is latched AHEAD of the command, so an HL2
-    // that never created the slice left the application believing
-    // split was on while the SPLIT badge — derived from model truth in
-    // updateSplitState() — correctly showed it off. From there
-    // startSwrSweep() refuses with "Disable split before running an
-    // SWR sweep" for a split the operator does not have,
-    // TxFollowsActiveSlice silently stops following, and the next
-    // slice to arrive from ANY source is adopted as the split TX
-    // slice, muted and made TX, by MainWindow::onSliceAdded.
+    // qCWarning plus the status-bar notice, matching how an ungated dead control
+    // reports since #5265. Not permissive on disconnect, unlike the enablement
+    // gates in applyCapabilitiesToUi(): this gates an action that latches state.
     //
-    // qCWarning, not the qCDebug the #5266 sites use: since #5265 an
-    // UNGATED dead control warns and shows the operator a status-bar
-    // notice, so a gate that logged at debug and said nothing would
-    // make the CONVERTED control the quieter of the two. The refusal
-    // is the drop, one layer up, and it reports the same way.
-    //
-    // This is the M0 gate, not the end state. TciServer::
-    // createTxSliceForVfoB already carries a family-blind split for
-    // exactly this radio — createPanadapter() brings up another DDC
-    // with its slice synchronously — so #5263's own "conversion beats
-    // gating where the seam verb exists" applies to these two GUI
-    // sites as an M4 item.
-    //
-    // Deliberately NOT permissive on disconnect, unlike every gate in
-    // applyCapabilitiesToUi() (which spells that rule out at the
-    // cmdPlane/`!connected ||` gate in MainWindow.cpp). Those gate
-    // ENABLEMENT of a visible control, where staying permissive with no
-    // radio attached is right. This gates an ACTION that writes
-    // m_splitActive ahead of its send, so admitting the press while
-    // disconnected would reinstate exactly the latch this guard exists
-    // to remove. The cost is that an offline press reports "this radio
-    // doesn't support that control" when there is no radio; the wording
-    // is the price of sharing one notice with the drop path.
-    //
-    // Which families this refuses is a property of the predicate, not a
-    // list kept here: hasCommandPlane() is m_wanConn || m_connection,
-    // and RadioModel::buildBackend() harvests m_connection in exactly
-    // two branches — dynamic_cast<FlexBackend*>, and the else-if
-    // dynamic_cast<SimBackend*> that vends the synthetic connection per
-    // RFC #4288 Route A. So Flex (LAN, and WAN via m_wanConn) and Sim
-    // pass unchanged, and every family that vends no RadioConnection
-    // refuses: hl2, icom, anan and rtl alike. Nothing here enumerates
-    // them, and a future backend that vends one passes with no edit to
-    // this site.
+    // hasCommandPlane() is m_wanConn || m_connection, so Flex (LAN/WAN) and Sim
+    // pass and every family without a RadioConnection (hl2, icom, anan, rtl)
+    // refuses, with no list kept here. The end state (#5263 M4) is converting
+    // these sites to the seam split TciServer::createTxSliceForVfoB already uses.
     if (!m_radioModel.hasCommandPlane()) {
         qCWarning(lcDevices)
             << "Split entry ignored: this backend takes no Flex"

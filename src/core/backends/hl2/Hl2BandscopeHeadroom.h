@@ -1,50 +1,18 @@
 #pragma once
 
-// CONVERTER HEADROOM FROM THE WIDEBAND BANDSCOPE, as a pure decision.
+// CONVERTER HEADROOM FROM THE WIDEBAND BANDSCOPE, as a pure decision. Turns one
+// accepted EP4 bandscope block (MetisProtocol.h Ep4Stats) into "how much room is
+// left below the rails".
 //
-// The wideband bandscope (endpoint 0x04, MetisProtocol.h's Ep4Stats) is the
-// first observation on this radio that answers "how much room is left below
-// the rails" rather than only "you are already too high". This header turns
-// one accepted bandscope block into that answer, and states precisely what
-// the answer is worth.
+// WHY THIS SENSOR. The bandscope samples `rx_data`, the AD9866 output register,
+// pre-DDC, so it sees all of DC..38.4 MHz as the converter does. The S-meter and
+// WDSP's RXA_ADC_PK are post-DDC and describe one slice, so an out-of-slice
+// station can saturate the converter while the slice sits 40 dB down
+// (docs/HERMES.md 12.5). This is the pre-DDC half, with a magnitude.
 //
-// ---------------------------------------------------------------------------
-// WHY THIS IS THE RIGHT SENSOR, AND IT IS ABOUT WHAT IS OUTSIDE THE SLICE
-// ---------------------------------------------------------------------------
-//
-// The bandscope samples `rx_data` -- the AD9866's output register, PRE-DDC,
-// pre-decimation, pre-NCO. It therefore sees the whole first Nyquist zone,
-// DC..38.4 MHz, exactly as the converter does.
-//
-// That is the property that matters, and neither of the two level readings
-// this application already had can supply it:
-//
-//   * THE S-METER is computed after the DDC, after decimation and after the
-//     demodulator. It describes one slice.
-//   * WDSP's RXA_ADC_PK is also POST-DDC (RXA.c's adcmeter runs on the IQ
-//     entering the chain). It describes one slice too, in dB relative to WIRE
-//     full scale, with the DDC's own unquantified processing gain between it
-//     and the converter.
-//
-// So a broadcast station 20 MHz away can saturate the converter while the
-// operator's slice sits 40 dB below full scale, and NOTHING the operator can
-// see will say so. docs/HERMES.md 12.5 calls the pre-DDC/post-DDC pairing "the
-// single most useful diagnostic pairing on the HL2" for this reason. The
-// bandscope is the pre-DDC half, with a MAGNITUDE rather than a boolean.
-//
-// ---------------------------------------------------------------------------
-// WHAT IS CALIBRATED HERE, AND IT IS EXACTLY ONE THING
-// ---------------------------------------------------------------------------
-//
-// NOTHING IN THIS FILE IS ANTENNA-REFERRED. No dBm, no microvolts, no LNA
-// correction, no `Hl2DbReference` (which is per-slice and defaults
-// `isCalibrated()` false). Nobody has compared a bandscope reading against a
-// signal generator, and the study's Procedure C -- which would -- needs a live
-// antenna and has not been run.
-//
-// What IS exact, and it is exact BY CONSTRUCTION rather than by measurement,
-// is the relationship between this reading and the converter's own clip
-// threshold. `ad9866.v` derives all three from the same register:
+// WHAT IS EXACT. Nothing here is antenna-referred (no dBm, no LNA correction, no
+// Hl2DbReference). What is exact by construction is the relation to the clip
+// threshold, because ad9866.v derives all three from the same register:
 //
 //     always @ (posedge clk) rx_data <= rx_data_assemble;
 //     assign rxclipp    = (rx_data == 12'b011111111111);   // +2047
@@ -52,49 +20,18 @@
 //     assign rxgoodlvlp = (rx_data[11:9] == 3'b011);       // >= +1536
 //     assign rxgoodlvln = (rx_data[11:9] == 3'b100);       // <= -1536
 //
-// ONE REGISTER, THREE CONSUMERS. The bandscope is not *like* what the clip
-// detector sees; it is that, sampled. So "this block peaked 6 dB below the
-// code at which rxclip fires" is a true statement with no reference in it,
-// and it is the only kind of statement this header makes.
+// So units are "dB below the converter's clip point", never bare "dBFS".
 //
-// The unit is therefore written "dB below the converter's clip point" and
-// never "dBFS" alone, because the second invites being read as a calibrated
-// absolute. Every label that leaves here must survive an operator asking
-// "below what?".
+// GATE DUTY CYCLE. Gated to one 2048-sample block per
+// MetisClient::kBandscopeSampleMs, the bandscope covers 0.0027 % of samples, so:
+//   1. it can miss a transient entirely — the clip flag (which sees every
+//      sample) is the VETO and this reading the MAGNITUDE, never the reverse;
+//   2. it systematically underestimates the peak; gatedPeakBiasDb() bounds the
+//      bias, and headroomLicensesStepDb() budgets it for any move in the loud
+//      direction.
 //
-// ---------------------------------------------------------------------------
-// THE GATE'S DUTY CYCLE BIASES THE PEAK, AND THE BIAS IS COMPUTABLE
-// ---------------------------------------------------------------------------
-//
-// `rxclip` inspects EVERY sample. The bandscope, gated to one block a second
-// by MetisClient::kBandscopeSampleMs, inspects 2048 consecutive samples out of
-// every 76 800 000. That is 0.0027 % coverage, and it has two consequences
-// that pull in opposite directions and must both be stated:
-//
-//   1. IT CAN MISS A TRANSIENT ENTIRELY. A lightning crash or a key-click that
-//      rails the converter between blocks leaves no trace in a reading taken
-//      400 ms later. The clip flag still sees it -- enabling the bandscope
-//      removes nothing -- which is why a consumer must treat the flag as the
-//      VETO and this reading as the MAGNITUDE, never the other way round.
-//
-//   2. IT SYSTEMATICALLY UNDERESTIMATES THE PEAK, because the maximum of a
-//      sample is a function of how many samples you took. That is not a risk;
-//      it is a bias, and `gatedPeakBiasDb` below computes its bound.
-//
-// A consumer that acts in the loud direction on this number MUST budget (2) as
-// margin. That is what `headroomLicensesStepDb` is for, and it is the whole
-// reason this header exists rather than a bare `-peakDbfs()` at the call site.
-//
-// ---------------------------------------------------------------------------
-// A SEAM RATHER THAN AN INLINE CONDITION
-// ---------------------------------------------------------------------------
-//
-// For Hl2OverloadPolicy.h's reason, which binds harder here: every branch below
-// is otherwise reachable only by driving a real converter into a real overload
-// with a real out-of-slice signal, which is not a thing a test suite can
-// arrange. As pure functions they are reachable by arithmetic.
-//
-// No Qt, no clock, no radio. Age is an INPUT.
+// Pure functions so every branch is testable without a real overload. No Qt, no
+// clock, no radio; age is an input.
 
 #include <cmath>
 #include <cstdint>

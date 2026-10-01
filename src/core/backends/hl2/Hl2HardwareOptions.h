@@ -32,56 +32,28 @@ class RadioSettingsScope;
 struct Hl2HardwareOptions {
     // ---- local audio codec ----
     //
-    // WHAT THE THREE VALUES RECORD IS WHICH BOARD IS FITTED, not which policy
-    // applies to the dither bit. That distinction is worth stating up front,
-    // because the bit is the reason this enum was originally three-way and it
-    // no longer is — see ditherBitOnWire() and the note below it.
+    // Records WHICH BOARD IS FITTED:
     //
     //   None        bare Hermes-Lite 2. No codec: the EP2 audio slot is the
     //               extended address register and must stay zero.
     //   Ak4951      the HL2+ companion board. Codec over I2S.
     //   SquareSdr2  the SquareSDR 2, codec on the mainboard.
     //
-    // Ak4951 and SquareSdr2 are behaviourally IDENTICAL today — every consumer
-    // but the UI asks hasLocalCodec(), i.e. `codec != None`. They are kept
-    // apart anyway, for two reasons that are not cosmetic: the document is
-    // already persisted as 0/1/2 at schema version 1, so collapsing them is a
-    // migration; and the boards genuinely differ elsewhere — the EP6 microphone
-    // word runs at a different rate on the SquareSDR 2 (docs/HERMES.md). A
-    // reader adding the first real per-board branch should add it here rather
-    // than re-widening a bool.
+    // Ak4951 and SquareSdr2 behave identically today (consumers ask
+    // hasLocalCodec()), but stay distinct: the document persists 0/1/2 at schema
+    // version 1, and the boards differ elsewhere (EP6 mic word rate, docs/HERMES.md).
+    // Add the first per-board branch here rather than re-widening a bool.
     //
-    // THE DITHER BIT IS NOT ONE OF THOSE DIFFERENCES. Protocol 1's config
-    // register carries a "dither" bit at 0x00[11] which on genuine openHPSDR
-    // hardware turns on the LT2208's dither generator. The HL2 has no LT2208
-    // and hijacked the bit, but it is the OPERATOR'S on all three variants:
+    // The dither bit (0x00[11]) is the operator's on every variant, not a codec
+    // interlock (gateware is the authority over client code): on a bare HL2 it is
+    // the band-voltage output (control.v `band_volts_enabled <= cmd_data[11]`), on
+    // an AK4951 or SquareSDR 2 the loudspeaker (i2c_bus2.v `ak4951_spon_next`). See
+    // ditherBitOnWire().
     //
-    //   None        the HL2's BAND VOLTAGE output — a DC level per band on the
-    //               CL2 jack (control.v: `band_volts_enabled <= cmd_data[11]`).
-    //   Ak4951      the AK4951's loudspeaker (i2c_bus2.v under `ifdef AK4951`:
-    //               `ak4951_spon_next = cmd_data[11]`, writing codec register
-    //               0x02 as `8'h2e | (bit ? 8'h80 : 8'h00)`).
-    //   SquareSdr2  the SquareSDR 2's internal loudspeaker, same shape.
-    //
-    // IT IS NOT A "CODEC IS PRESENT" INTERLOCK, and an earlier revision of this
-    // file said it was. deskHPSDR's old_protocol.c forces LT2208_DITHER_ON for
-    // HL2_CODEC_AK4951 with a comment that some firmware abuses the bit that
-    // way, and that comment was the only source. The gateware says otherwise
-    // and this repo ranks the gateware above client code (Principle I):
-    // `localaudio` is instantiated on the bitstream parameter AK4951
-    // (hermeslite_core.v), its power-down pin is tied to the I2C reset
-    // (localaudio.v: `assign i2s_pdn = ~clk_i2c_rst;`), and cmd_data[11] on
-    // address 0x00 has exactly two consumers in the tree — the speaker branch
-    // above and band_volts_enabled. Nothing withholds the codec.
-    //
-    // ONE ASYMMETRY SURVIVES AND THE UI HAS TO KNOW ABOUT IT. The gateware's
-    // own AK4951 init sequence ends by writing register 0x02 = 0xae — which is
-    // 0x2e | 0x80, the speaker ALREADY ON — before the host has said anything
-    // (i2c.v, STATE_AK4951S8). Since ak4951_spon_reg resets to 0 and the write
-    // is guarded on a CHANGE, a host sending the bit low first emits no I2C
-    // write at all and the speaker stays on. So the operator's stored intent
-    // for an AK4951 starts HIGH, seeded when the board is declared, and the
-    // checkbox is honest from the first frame.
+    // The gateware's AK4951 init writes register 0x02 = 0xae (speaker ON) before the
+    // host speaks (i2c.v STATE_AK4951S8), and a low bit sent first produces no I2C
+    // write. So an AK4951's stored speaker intent starts HIGH when the board is
+    // declared, keeping the checkbox honest from the first frame.
     enum class Codec : int {
         None       = 0,   // bare HL2: no codec, audio slot stays EADDR-safe zero
         Ak4951     = 1,   // HL2+ companion board, codec over I2S

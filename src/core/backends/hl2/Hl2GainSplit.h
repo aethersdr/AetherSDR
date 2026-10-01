@@ -2,60 +2,24 @@
 
 // TWO LNA NUMBERS, NOT ONE: the operator's baseline, and what reaches the wire.
 //
-// WHY THIS EXISTS
+// The baseline (Hl2Backend::m_lnaGainDb) is also the per-band memory written by
+// rememberCurrentBandState, the `rfGain` extension persisted through
+// RadioStateMemory (this backend owns ClientSettingsDomain::RfGain), and what
+// setPanRfGain compares against. An automatic writer on that path would bake
+// its transients into the operator's per-band memory and persisted state on the
+// next band change, so automatic action is kept separate.
 //
-// `Hl2Backend::m_lnaGainDb` is not only the register value. It is also:
+// THE AXIS IS AN ATTENUATION: a non-negative offset in dB below the baseline. An
+// automatic action can never make the radio louder than the operator asked
+// (only undo its own reduction), the operator's number is the ceiling, and the
+// AD9866 region above +19 dB is reachable only if the operator is already there.
 //
-//   * what `Hl2Backend::rememberCurrentBandState` writes into `m_lnaDbByBand`
-//     through `bandMemoryWriteback` on every band change;
-//   * what `Hl2Backend::currentOperatingState` publishes as the `rfGain`
-//     extension object, i.e. what `RadioStateMemory` puts on disk — the backend
-//     declares `RadioCapabilities::ClientSettingsDomain::RfGain` and
-//     `restoreLegacyRfGain` refuses to replay `DisplayRfGain_hl2` for this
-//     family precisely because the backend owns the value;
-//   * what `Hl2Backend::setPanRfGain` compares against to decide `moved`.
+// The applied offset is returned as well as the effective gain, because
+// `baseline - offset` can hit the register floor: a controller must see it has
+// run out of range (an operator-facing "attenuate ahead of the radio"
+// condition) rather than attack against a clamp.
 //
-// So ANY automatic writer on that path — an ADC-overload servo being the
-// obvious one — writes its own transients into the operator's per-band memory
-// and into persisted state, where the next band change makes them permanent.
-// That is not hypothetical: it is the shape of an already-open defect in this
-// lab's acceptance table (`D-lna-overwrite`), where 40 m went -6 -> -12 dB on
-// disk with no operator action beyond one band change.
-//
-// The split is therefore a PREREQUISITE and it is also independently correct:
-// with no automatic writer at all, separating "the number the operator chose"
-// from "the number currently on the AD9866" costs nothing and removes a class
-// of silent data loss before anything can trigger it.
-//
-// THE AXIS IS AN ATTENUATION, NOT A GAIN
-//
-// The automatic variable is a NON-NEGATIVE offset in dB BELOW the baseline. It
-// has no representation for a gain above the operator's own setting, so:
-//
-//   * an automatic action can never make the radio louder than the operator
-//     asked for — the only automatic action in that direction is undoing one of
-//     its own;
-//   * there is no "automatic ceiling" to design, document or explain, because
-//     the ceiling IS the operator's number;
-//   * the AD9866 register region above +19 dB, where this lab measured +48 dB
-//     reading identically to +18 dB, is unreachable unless the operator is
-//     already in it. Nothing here caps or moves their number to achieve that;
-//     the axis simply cannot express it.
-//
-// WHY THIS RETURNS THE APPLIED OFFSET AS WELL
-//
-// `baseline - offset` can fall below the register's floor, and then the offset
-// that was REQUESTED is not the offset that was APPLIED. A controller that
-// assumed otherwise would keep attacking against a clamp, believing it had
-// taken gain it never took, and would then have to release through phantom
-// decibels before anything moved. So the clamp reports what it actually did and
-// the caller can see it has run out of range — which is a real operator-facing
-// condition ("the front end needs attenuation ahead of the radio"), not an
-// internal detail.
-//
-// No Qt, no clock, no radio: this is arithmetic, and `Hl2Backend` evaluates it
-// rather than keeping a copy, for the reason `Hl2TxLevelPolicy.h` states — a
-// test against a re-typed copy of a mapping proves only that two copies agree.
+// No Qt, clock or radio; Hl2Backend evaluates this rather than keeping a copy.
 
 namespace AetherSDR::hl2 {
 
