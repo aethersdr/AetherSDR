@@ -102,7 +102,7 @@ The bar is: *would a different answer have changed the work?* If yes, ask.
   is not this: dropping a stem whose coupling the push actually removed,
   lowering a freeze count, deleting an emptied row — canon demands those of a
   conversion, so do them and say so in one line.
-- **Restructuring toward the aetherd RFC.** `AGENTS.md` is explicit: do not
+- **Restructuring toward the aetherd RFC.** `docs/agents/backends.md` is explicit: do not
   pre-emptively restructure code toward it — no new engine/UI seams, no
   backend interfaces, no speculative library targets — and architecture ahead
   of the RFC's staged order is maintainer-only. A remediation pass helpfully
@@ -269,14 +269,14 @@ the reason this pass exists rather than a checklist of replies.
 - **Audit governance on the current head**, because the head has moved since
   the review: `CONSTITUTION.md` (I FlexLib authority — and the HL2 gateware
   RTL as its analogue; II/III radio-authoritative state and capability-shaped
-  persistence; V feature-owned config; VI TX safety), `AGENTS.md` settings
+  persistence; V feature-owned config; VI TX safety), `docs/agents/settings.md` settings
   persistence, credentials policy, capability declarations, the CMake settings
   contract, `docs/style/theme-style-guide.md` (every colour through a
   ThemeManager token), `docs/a11y.md`, test registration in `tests/tests.cmake`.
   Quote the sentence in canon or it is a nit, not a blocker.
 - **Audit the aetherd migration ratchets**, which that list does not reach.
-  Read `AGENTS.md` § "In-flight: aetherd engine/UI decoupling" on the head you
-  are landing — the whole section, because it changes as the RFC's staged
+  Read `docs/agents/backends.md` on the head you
+  are landing — the whole file, because it changes as the RFC's staged
   order advances — and audit the diff against it: EB1/EB2/EB3, the
   build-target link rules, the capability-record and command-plane freezes,
   the routing table for where radio-facing code goes, and the THREADING AND
@@ -350,7 +350,7 @@ the same shape and was resolved by one producer and one path through `panFeed`
 rather than by a gate.
 
 **The #5554 items are mostly invisible to CI.** The notice at the top of
-`AGENTS.md` § "AI Agent Guidelines" gates any change touching
+`AGENTS.md` § "AI Agent Guidelines" (full text in `docs/agents/backends.md`) gates any change touching
 `src/core/backends/`, `RadioModel`, `RadioSession`, `TransmitModel`,
 `ConnectionPanel`, discovery or `RadioCapabilities` — which is most of what
 this skill pushes into. Check the diff adds to none of its items: no new
@@ -359,8 +359,8 @@ above the seam, no new `dynamic_cast` to a concrete backend, no new capability
 without a verb behind it, no HL2 scaffolding copied into another host-DSP
 family, no keying-class verb that skips `RadioModel`'s TX gate.
 
-**If the PR touches `src/aetherd/` or `RadioResourceAdapter`**, that same
-AGENTS.md section carries the protocol audit: new resource fields belong in
+**If the PR touches `src/aetherd/` or `RadioResourceAdapter`**, `docs/agents/backends.md` (rules) and the RFC's
+"Implementation status" appendix (current contract) carry the protocol audit: new resource fields belong in
 the adapter and the versioned catalogue, never in a transport and never via
 QObject reflection; the local transport defaults to observe permission and
 `--allow-local-control` grants non-TX control only; admission is fail-closed
@@ -410,7 +410,7 @@ Standing prohibitions, each of which has cost something real:
     demands each of these of the PR that does the conversion. Do them, prove
     the coupling is gone, and note it in one line.
   - **Growing is the prohibition.** A larger count, a new stem or row, a
-    raised `FROZEN_BOOL_COUNT`, a retagged header. AGENTS.md's rule is to
+    raised `FROZEN_BOOL_COUNT`, a retagged header. `docs/agents/backends.md`'s rule is to
     restructure the change — not to move the file, weaken the check, or add an
     exemption. The tags file is the sharpest edge, because EB3 derives its
     vendor vocabulary from it at runtime: retagging a `vendor(...)` header as
@@ -431,7 +431,7 @@ Standing prohibitions, each of which has cost something real:
   in the root `CMakeLists.txt`. A test not being in a CI gate regex is not a
   coverage gap — the sanitizer sweep runs the unfiltered tree.
 - **A socket-owning test needs operator direction before it is executed**
-  (`AGENTS.md` § Test-layer boundary). Notify, do not run it, continue.
+  (`docs/agents/tests-ci.md` § Test-layer boundary). Notify, do not run it, continue.
 
 ## 5. Prove each fix
 
