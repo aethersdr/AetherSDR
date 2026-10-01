@@ -278,19 +278,36 @@ endif()
 # likely to hit this have the least context for it, and the README they need is
 # a document they have already scrolled past.
 #
-# Falls through untouched when Qt is absent entirely (the REQUIRED call below
-# emits the normal not-found error) or already satisfies the floor.
+# Both failure modes name scripts/setup/setup-qt.sh, which installs the pinned
+# release Qt into a per-user cache that cmake/AetherQtPin.cmake then finds with
+# no flags — one command, instead of a manual aqt recipe and a prefix path.
+# Windows keeps CMake's own not-found error: setup-qt.sh is bash-only, and
+# docs/BUILDING.md's Windows section is the way there.
+include(cmake/AetherQtPin.cmake)
 find_package(Qt6 QUIET COMPONENTS Core)
+if(NOT WIN32)
+    set(_aether_qt_way_out
+        "Install the release Qt (${AETHER_QT_PIN_VERSION}) with one command, then re-run cmake:\n"
+        "    scripts/setup/setup-qt.sh\n"
+        "(or configure with -DAETHER_FETCH_QT=ON to have cmake run it). "
+        "See docs/BUILDING.md for what it checks and where it installs.")
+else()
+    set(_aether_qt_way_out
+        "Install Qt 6.8+ (msvc2022_64) with the Qt online installer or aqt and "
+        "pass -DCMAKE_PREFIX_PATH — see docs/BUILDING.md.")
+endif()
 if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
     message(FATAL_ERROR
         "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.8 or newer.\n"
         "That is the source floor; release binaries are built against Qt 6.12.\n"
         "Ubuntu 24.04 LTS ships 6.4.2; Debian Trixie, Ubuntu 25.10+, "
         "Fedora 41+ and Arch all ship 6.8 or newer.\n"
-        "To build on a distro below the floor, install Qt 6.8+ with aqtinstall "
-        "or the Qt online installer and re-run with "
-        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 — see the README's "
-        "\"Building from Source\" dependency section.")
+        ${_aether_qt_way_out})
+elseif(NOT Qt6_FOUND AND NOT WIN32)
+    message(FATAL_ERROR
+        "No Qt 6 found. AetherSDR needs Qt 6.8 or newer: a distro Qt "
+        "(e.g. qt6-base-dev and friends, see the README) or the release Qt.\n"
+        ${_aether_qt_way_out})
 endif()
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS

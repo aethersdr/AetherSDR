@@ -9,7 +9,7 @@ need only on a specific platform, or when something goes wrong.
 - [Windows 11](#windows-11)
 - [What each dependency enables](#what-each-dependency-enables)
 - [Distro notes](#distro-notes)
-- [Older distro Qt (Ubuntu 24.04 LTS)](#older-distro-qt-ubuntu-2404-lts)
+- [The release Qt: `setup-qt.sh`](#the-release-qt-setup-qtsh)
 - [GPU spectrum rendering](#gpu-spectrum-rendering)
 - [Wayland and XWayland](#wayland-and-xwayland)
 
@@ -21,35 +21,29 @@ Qt and qtkeychain do **not** come from Homebrew. Homebrew's `qt`
 formula (aliased `qt6` and `qt@6`) is a *rolling* release — 6.11.2 at the time
 of writing — while the DMG ships 6.12.0 LTS like every other artifact. Building
 against Homebrew's Qt means testing a Qt no release ships. Install the matching
-one and point CMake at it:
+one with [`scripts/setup/setup-qt.sh`](#the-release-qt-setup-qtsh), which also
+builds qtkeychain against it, then configure as usual:
 
 ```bash
-# A venv rather than a bare `pip install`: a PEP 668 python3 refuses the latter.
-python3 -m venv ~/.venv/aqt && ~/.venv/aqt/bin/pip install aqtinstall
-~/.venv/aqt/bin/aqt install-qt mac desktop 6.12.0 clang_64 \
-  -m qtmultimedia qtwebsockets qtserialport qtshadertools \
-  --outputdir ~/Qt
-cmake -B build -DCMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/macos;$(brew --prefix)"
+scripts/setup/setup-qt.sh
+cmake -B build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix)"
 ```
 
 Qt 6.12 needs **Xcode 16** (the macOS 15 SDK): Qt's own CMake stops at
-configure with "Qt requires at least version 16 of Xcode" on anything older, and
-Xcode 16 itself needs a macOS 14.5+ host. On an older Mac, build against Qt
-6.8.3 instead (`aqt install-qt mac desktop 6.8.3 clang_64 …`) — it is still a
-supported source floor. Anything built against 6.12 runs on macOS 14.4+ only.
+configure with "Qt requires at least version 16 of Xcode" on anything older,
+and the script checks before it downloads. Xcode 16 itself needs a macOS 14.5+
+host. On an older Mac, install Qt 6.8.3 (the source floor) with aqt instead
+and pass its `macos` directory in `CMAKE_PREFIX_PATH`. Anything built against
+6.12 runs on macOS 14.4+ only.
 
 `clang_64` is the only macOS desktop build Qt publishes, and it is universal2 —
 there is no separate arm64 archive to pick. `$(brew --prefix)` stays on the
 path for fftw, librtlsdr, portaudio and hidapi.
 
 Homebrew's `qtkeychain` is left out for a related reason: the formula depends
-on `qtbase`, so installing it pulls a second Qt in behind your back. Build it
-against the Qt you just installed instead — or skip it and build without
-SmartLink credential persistence:
-
-```bash
-CMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/macos" bash scripts/setup/setup-qtkeychain.sh
-```
+on `qtbase`, so installing it pulls a second Qt in behind your back.
+`setup-qt.sh` builds qtkeychain against the pinned Qt instead
+(`--no-keychain` skips it, at the cost of SmartLink credential persistence).
 
 **Two Qt installations visible to CMake at once is a real failure, not a
 theoretical one** — it is what #711 and #812 were, and `CMakeLists.txt` puts
@@ -133,24 +127,49 @@ install `gstreamer1.0-pulseaudio`. For PipeWire systems, also install `gstreamer
 by default for the desktop image; the build-deps line above includes it
 explicitly so this only bites users who install just the AppImage.
 
-## Older distro Qt (Ubuntu 24.04 LTS)
+## The release Qt: `setup-qt.sh`
 
-On a distribution whose Qt is older than the required 6.8 (notably Ubuntu 24.04
-LTS at 6.4.2), install a newer Qt manually:
+AetherSDR builds against any Qt from 6.8 up, so a distro Qt is the easy path
+where the distro has one. When it does not — Ubuntu 24.04 LTS ships 6.4.2 —
+or on macOS, or to build exactly what the release builds use, install the
+pinned release Qt with one command:
 
-1. **Option 1: Using a PPA (Ubuntu/Mint)**
-   The `kubuntu-backports` PPA may provide a newer Qt — verify the version it ships before relying on it.
+```bash
+scripts/setup/setup-qt.sh
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+```
 
-2. **Option 2: Using the Qt Online Installer**
-   Install Qt into your home directory (e.g., `~/Qt/6.12.0/gcc_64`). Because CMake otherwise defaults to the system-provided Qt, point it at the newer install with `-DCMAKE_PREFIX_PATH`:
+The script reads [`cmake/qt-pin.env`](../cmake/qt-pin.env) — the same pin
+every CI leg and release workflow is checked against — installs that Qt with
+a pinned aqtinstall, and builds qtkeychain against it. CMake then finds it on
+its own; no `CMAKE_PREFIX_PATH` needed. Expect ~2 GB on disk and well under a
+minute on a fast connection.
 
-   ```bash
-   cmake -B build -G Ninja \
-       -DCMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/gcc_64" \
-       -DCMAKE_BUILD_TYPE=RelWithDebInfo
-   ```
+- **Where it goes:** `~/.cache/aethersdr/qt/` on Linux,
+  `~/Library/Caches/aethersdr/qt/` on macOS, shared by every checkout. Set
+  `AETHER_QT_CACHE` to put it elsewhere. Builds link it by absolute path, so
+  delete it and they stop launching until you re-run the script.
+- **What it checks first**, so an unsupported machine is told before the
+  download rather than after: glibc 2.34+ (x86_64) or 2.38+ (aarch64), Xcode
+  16+ on macOS, a working `python3 -m venv` (on Debian, Ubuntu and Raspberry Pi
+  OS: `sudo apt install python3-venv`), ~3 GB free, and that Qt's repository
+  still serves the exact build the pin names.
+- **Re-running** is a no-op once installed. `--print-prefix` prints the Qt
+  path CMake will use.
+- **Using another Qt anyway:** pass `-DAETHER_USE_PINNED_QT=OFF`, or point
+  `CMAKE_PREFIX_PATH`/`Qt6_DIR` at it — an explicit choice always wins.
+- **Let CMake run it:** `-DAETHER_FETCH_QT=ON` runs the script at configure
+  time when the Qt is missing. Off by default — a plain configure should never
+  start a 2 GB download.
+- **An existing build directory** remembers the Qt it first found; reconfigure
+  with `cmake --fresh -B build` after installing.
 
-   Make sure the `qtshadertools` and `qt5compat` (or equivalent) modules are selected in the Qt Online Installer along with `qtbase`.
+Qt's binaries also need the X11/xcb runtime libraries a distro Qt would have
+pulled in. Desktop installs nearly always have them; a minimal one may not —
+`.github/docker/Dockerfile` lists the full set CI installs.
+
+On Windows the script does not apply: install Qt 6.8+ (`msvc2022_64`) with the
+Qt Online Installer or aqt, as in [Windows 11](#windows-11).
 
 *Note: GPU rendering also needs the private QtGui headers (`qt6-base-private-dev` on Debian-family, included by default in the Qt Online Installer).*
 

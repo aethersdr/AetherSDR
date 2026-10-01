@@ -1,0 +1,238 @@
+#!/bin/bash
+# setup-qt.sh — Install the exact Qt AetherSDR releases are built with, for a
+# source build on Linux or macOS.
+#
+# AetherSDR compiles against any Qt from the 6.8 floor up, so a distro Qt is
+# fine for most source builds. This script is for when it is not: a distro
+# below the floor (Ubuntu 24.04 ships 6.4.2), macOS (Homebrew's Qt is a rolling
+# release no artifact ships), or wanting to build what the release builds.
+#
+# It installs the pinned version from cmake/qt-pin.env — the same file that
+# every CI leg and release workflow is checked against — with the same pinned
+# aqtinstall, into a per-user cache shared by every checkout:
+#
+#   Linux:  ${XDG_CACHE_HOME:-~/.cache}/aethersdr/qt/<version>-<revision>/
+#   macOS:  ~/Library/Caches/aethersdr/qt/<version>-<revision>/
+#
+# (override with AETHER_QT_CACHE). CMake looks there on its own
+# (cmake/AetherQtPin.cmake), so after this script a plain `cmake -B build`
+# picks the pinned Qt up with no flags.
+#
+# Then it builds qtkeychain against that Qt (setup-qtkeychain.sh). A
+# qtkeychain built against a different Qt is an ABI mismatch, and leaving it
+# out silently compiles SmartLink credential persistence away (#3639).
+#
+# The checks run BEFORE the 2 GB download, so an unsupported machine is told
+# what is wrong and what to do instead, rather than discovering it as a loader
+# error after the fact:
+#   - glibc new enough for Qt's Linux binaries (QT_MIN_GLIBC_* in the pin file)
+#   - Xcode new enough for Qt's macOS SDK check (QT_MIN_XCODE)
+#   - a working `python3 -m venv` (Debian/Ubuntu split it into python3-venv)
+#   - free disk space
+#   - the repository still serving the pinned package revision
+#
+# Usage:
+#   scripts/setup/setup-qt.sh                 install (no-op if already present)
+#   scripts/setup/setup-qt.sh --print-prefix  print the Qt prefix CMake will use
+#   scripts/setup/setup-qt.sh --no-keychain   skip the qtkeychain build
+#
+# Requires: python3, curl, and for qtkeychain: git, cmake, ninja, a C++
+# compiler. Windows builders: see docs/BUILDING.md (Qt online installer or aqt).
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PIN_FILE="$REPO_ROOT/cmake/qt-pin.env"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+[ -f "$PIN_FILE" ] || die "$PIN_FILE is missing."
+# shellcheck source=../../cmake/qt-pin.env
+. "$PIN_FILE"
+
+PRINT_PREFIX=0
+WITH_KEYCHAIN=1
+for arg in "$@"; do
+    case "$arg" in
+        --print-prefix) PRINT_PREFIX=1 ;;
+        --no-keychain)  WITH_KEYCHAIN=0 ;;
+        -h|--help)      sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+        *)              die "unknown argument: $arg (try --help)" ;;
+    esac
+done
+
+# ── Platform → aqt host/arch and the directory aqt lays the kit down in ──
+OS="$(uname -s)"
+MACHINE="$(uname -m)"
+case "$OS/$MACHINE" in
+    Linux/x86_64)
+        AQT_HOST=linux; AQT_ARCH=linux_gcc_64; KIT_DIR=gcc_64
+        REPO_HOST=linux_x64; MIN_GLIBC="$QT_MIN_GLIBC_X86_64" ;;
+    Linux/aarch64|Linux/arm64)
+        AQT_HOST=linux_arm64; AQT_ARCH=linux_gcc_arm64; KIT_DIR=gcc_arm64
+        REPO_HOST=linux_arm64; MIN_GLIBC="$QT_MIN_GLIBC_AARCH64" ;;
+    Darwin/*)
+        # clang_64 is universal2 — one kit for Intel and Apple Silicon.
+        AQT_HOST=mac; AQT_ARCH=clang_64; KIT_DIR=macos
+        REPO_HOST=mac_x64; MIN_GLIBC="" ;;
+    *)
+        die "Qt publishes no desktop binaries for $OS/$MACHINE. Build Qt from
+       source, or use a distro Qt ${QT_FLOOR_VERSION%.*}+ if yours ships one." ;;
+esac
+
+if [ "$OS" = "Darwin" ]; then
+    CACHE_ROOT="${AETHER_QT_CACHE:-$HOME/Library/Caches/aethersdr/qt}"
+else
+    CACHE_ROOT="${AETHER_QT_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/aethersdr/qt}"
+fi
+# The revision is part of the path: RC and final share a version string, and a
+# rebuilt Qt behind an unchanged pin must never be mistaken for the old one.
+INSTALL_ROOT="$CACHE_ROOT/$QT_VERSION-$QT_PACKAGE_REVISION"
+QT_PREFIX="$INSTALL_ROOT/$QT_VERSION/$KIT_DIR"
+STAMP="$INSTALL_ROOT/.aether-qt-stamp"
+STAMP_CONTENT="version=$QT_VERSION revision=$QT_PACKAGE_REVISION arch=$AQT_ARCH modules=$QT_MODULES aqt=$AQTINSTALL_VERSION"
+
+if [ "$PRINT_PREFIX" = 1 ]; then
+    echo "$QT_PREFIX"
+    exit 0
+fi
+
+# True when version $1 is older than $2.
+older_than() {
+    [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
+
+build_keychain() {
+    [ "$WITH_KEYCHAIN" = 1 ] || return 0
+    echo
+    echo "Building qtkeychain against Qt $QT_VERSION (skip with --no-keychain)..."
+    (cd "$REPO_ROOT" && CMAKE_PREFIX_PATH="$QT_PREFIX" bash scripts/setup/setup-qtkeychain.sh)
+}
+
+# ── Already installed? ───────────────────────────────────────────────────
+if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$STAMP_CONTENT" ] &&
+   [ -x "$QT_PREFIX/bin/qmake" ] &&
+   [ "$("$QT_PREFIX/bin/qmake" -query QT_VERSION)" = "$QT_VERSION" ]; then
+    echo "Qt $QT_VERSION ($QT_PACKAGE_REVISION) already installed at $QT_PREFIX"
+    build_keychain
+    exit 0
+fi
+
+# ── Preflight: refuse before downloading, with the way out ───────────────
+if [ -n "$MIN_GLIBC" ]; then
+    GLIBC="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+    if [ -z "$GLIBC" ]; then
+        die "this system's C library is not glibc (musl?). Qt's Linux binaries
+       need glibc $MIN_GLIBC+. Use a distro Qt ${QT_FLOOR_VERSION%.*}+ instead."
+    fi
+    if older_than "$GLIBC" "$MIN_GLIBC"; then
+        die "Qt $QT_VERSION's $MACHINE binaries need glibc $MIN_GLIBC; this system has $GLIBC.
+       They would install, then fail to load. Options: a distro Qt ${QT_FLOOR_VERSION%.*}+,
+       a newer OS release, or the AetherSDR AppImage (no build needed)."
+    fi
+    echo "glibc $GLIBC — OK (Qt $QT_VERSION needs $MIN_GLIBC)"
+fi
+
+if [ "$OS" = "Darwin" ]; then
+    XCODE="$(xcodebuild -version 2>/dev/null | awk '/^Xcode/ {print $2}')"
+    if [ -z "$XCODE" ]; then
+        die "Xcode not found. Qt $QT_VERSION needs Xcode $QT_MIN_XCODE+ (the Command Line
+       Tools alone are not enough for Qt's SDK check)."
+    fi
+    if older_than "$XCODE" "$QT_MIN_XCODE"; then
+        die "Qt $QT_VERSION needs Xcode $QT_MIN_XCODE+; this Mac has Xcode $XCODE. Qt's CMake
+       stops at configure otherwise. Xcode $QT_MIN_XCODE needs macOS 14.5+."
+    fi
+    MACOS="$(sw_vers -productVersion)"
+    if older_than "$MACOS" "$QT_MIN_MACOS"; then
+        echo "WARNING: this Mac runs macOS $MACOS; Qt $QT_VERSION apps need $QT_MIN_MACOS+." >&2
+        echo "         It can build here, but the result will not launch on this Mac." >&2
+    fi
+    echo "Xcode $XCODE — OK (Qt $QT_VERSION needs $QT_MIN_XCODE)"
+fi
+
+command -v python3 >/dev/null 2>&1 || die "python3 not found (needed for aqtinstall)."
+command -v curl >/dev/null 2>&1 || die "curl not found."
+
+mkdir -p "$CACHE_ROOT"
+# 3 GB: ~2 GB installed plus the archives aqt holds while extracting.
+FREE_KB="$(df -Pk "$CACHE_ROOT" | awk 'NR==2 {print $4}')"
+if [ "${FREE_KB:-0}" -lt 3145728 ]; then
+    die "need ~3 GB free under $CACHE_ROOT, have $((FREE_KB / 1024)) MB.
+       Point AETHER_QT_CACHE at a roomier disk."
+fi
+
+# The repository must still serve the build the pin names. aqt asks for the
+# version string only, so a republished Qt would otherwise install silently —
+# the same trap the CI cache keys guard against with QT_PACKAGE_REVISION.
+VER_TAG="qt6_$(echo "$QT_VERSION" | tr -d .)"
+UPDATES_URL="https://download.qt.io/online/qtsdkrepository/$REPO_HOST/desktop/$VER_TAG/$VER_TAG/Updates.xml"
+PKG="qt.qt6.$(echo "$QT_VERSION" | tr -d .).$AQT_ARCH"
+# Fetched whole, then parsed: piping curl straight into an awk that exits at the
+# first match kills curl with SIGPIPE, which pipefail reports as a failed fetch.
+UPDATES_XML="$(curl -fsSL --max-time 60 "$UPDATES_URL")" \
+    || die "could not read $UPDATES_URL (offline?)."
+SERVED="$(printf '%s\n' "$UPDATES_XML" | tr -d '\r' | awk -v pkg="$PKG" '
+    /<Name>/    { name = $0; sub(/.*<Name>/, "", name); sub(/<\/Name>.*/, "", name) }
+    /<Version>/ && name == pkg && !done { v = $0; sub(/.*<Version>/, "", v); sub(/<\/Version>.*/, "", v); print v; done = 1 }')"
+case "$SERVED" in
+    *-"$QT_PACKAGE_REVISION") echo "Qt repository serves $SERVED — matches the pin" ;;
+    "") die "$PKG is not listed in $UPDATES_URL." ;;
+    *)  die "the Qt repository now serves $PKG $SERVED, but cmake/qt-pin.env pins
+       revision $QT_PACKAGE_REVISION. Qt has republished $QT_VERSION; the pin needs a
+       deliberate bump (and CI a re-run) before anyone builds against it." ;;
+esac
+
+# ── Install ──────────────────────────────────────────────────────────────
+# Into a scratch directory first, renamed into place only once complete: an
+# interrupted extraction must never leave a half-populated kit behind that a
+# later configure would trust.
+# The marker, not bin/aqt, says the venv is complete: an interrupted pip can
+# leave the aqt entry point in place with its dependencies half-installed.
+VENV="$CACHE_ROOT/aqt-venv-$AQTINSTALL_VERSION-py7zr$PY7ZR_VERSION"
+if [ ! -f "$VENV/.complete" ]; then
+    rm -rf "$VENV"
+    if ! python3 -m venv "$VENV" >/dev/null 2>&1; then
+        rm -rf "$VENV"
+        die "python3 cannot create a virtual environment. On Debian, Ubuntu and
+       Raspberry Pi OS install it with:  sudo apt install python3-venv"
+    fi
+    "$VENV/bin/pip" install -q "aqtinstall==$AQTINSTALL_VERSION" "py7zr==$PY7ZR_VERSION"
+    touch "$VENV/.complete"
+fi
+
+STAGING="$CACHE_ROOT/.staging-$QT_VERSION-$QT_PACKAGE_REVISION-$$"
+trap 'rm -rf "$STAGING"' EXIT
+rm -rf "$STAGING"
+echo "Installing Qt $QT_VERSION $AQT_ARCH ($QT_MODULES) — about 2 GB..."
+# shellcheck disable=SC2086  # QT_MODULES is a deliberate word list
+"$VENV/bin/aqt" install-qt "$AQT_HOST" desktop "$QT_VERSION" "$AQT_ARCH" \
+    -m $QT_MODULES --outputdir "$STAGING"
+
+STAGED_PREFIX="$STAGING/$QT_VERSION/$KIT_DIR"
+[ -x "$STAGED_PREFIX/bin/qmake" ] || die "aqt finished but left no qmake at $STAGED_PREFIX."
+GOT="$("$STAGED_PREFIX/bin/qmake" -query QT_VERSION)"
+[ "$GOT" = "$QT_VERSION" ] || die "aqt installed Qt $GOT, expected $QT_VERSION."
+# qmake only proves qtbase landed; a partial install can still exit 0. Same
+# assertion as the CI image (.github/docker/Dockerfile).
+for m in $QT_MODULES; do
+    case "$m" in
+        qtmultimedia) pkg=Multimedia ;; qtwebsockets) pkg=WebSockets ;;
+        qtserialport) pkg=SerialPort ;; qtshadertools) pkg=ShaderTools ;;
+        *) continue ;;
+    esac
+    [ -f "$STAGED_PREFIX/lib/cmake/Qt6$pkg/Qt6${pkg}Config.cmake" ] ||
+        die "aqt did not install Qt6$pkg ($m)."
+done
+
+rm -rf "$INSTALL_ROOT"
+mv "$STAGING" "$INSTALL_ROOT"
+trap - EXIT
+echo "$STAMP_CONTENT" > "$STAMP"
+echo "Qt $QT_VERSION installed at $QT_PREFIX"
+
+build_keychain
+
+echo
+echo "Done. CMake finds this Qt automatically:  cmake -B build -G Ninja"
+echo "(-DAETHER_USE_PINNED_QT=OFF to build against another Qt instead.)"
