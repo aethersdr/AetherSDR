@@ -1566,7 +1566,7 @@ void AppletPanel::setPooDooActiveSide(PooDooSide side)
             }
         }
     };
-    applyVisibility(kTxOnly, txActive);
+    applyVisibility(kTxOnly, txActive && !m_txAudioPathBlocked);
     applyVisibility(kRxOnly, !txActive);
 
     // If the parent tx_dsp container is currently floating, the set of
@@ -1584,6 +1584,15 @@ void AppletPanel::setPooDooActiveSide(PooDooSide side)
             }
         }
     }
+}
+
+void AppletPanel::setTxAudioPathBlocked(bool blocked)
+{
+    if (m_txAudioPathBlocked == blocked) return;
+    m_txAudioPathBlocked = blocked;
+    if (!m_clientChainApplet) return;
+    setPooDooActiveSide(m_clientChainApplet->activeTab() == ClientChainApplet::ChainMode::Tx
+        ? PooDooSide::Tx : PooDooSide::Rx);
 }
 
 void AppletPanel::setScrollBarOnLeft(bool onLeft)

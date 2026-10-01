@@ -1,6 +1,7 @@
+#include "AutomationServer.h"
 #include "core/DroopCalibration.h"
 #include "core/backends/AutoRfGainControl.h"
-#include "AutomationServer.h"
+#include "AetherBuildIdentity.h"   // generated at build time; see cmake/AetherBuildIdentity.cmake
 #include "core/CtcssTones.h"
 #include "core/RadioCertification.h"
 #include "LogManager.h"
@@ -3099,13 +3100,22 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                          std::move(parse), std::move(dispatch)});
         };
 
-        add("ping", {}, "liveness check → app + version + whether a token is required",
+        add("ping", {}, "liveness check → app + version + build identity + whether a token is required",
             parseNothing,
             [](AutomationServer& self, A&, QLocalSocket*) {
+                // `version` alone cannot tell two builds apart: main and a
+                // branch carrying unmerged changes both answer the same
+                // release string. `build` is captured at build time (#5804),
+                // so a harness can check which binary it is talking to.
+                const QJsonObject build = AutomationServer::buildIdentityJson(
+                    QStringLiteral(AETHER_BUILD_DESCRIBE), QStringLiteral(AETHER_BUILD_SHA),
+                    QStringLiteral(AETHER_BUILD_BASELINE), AETHER_BUILD_COMMITS_SINCE_TAG,
+                    AETHER_BUILD_DIRTY);
                 return QJsonObject{
                     {QStringLiteral("ok"), true},
                     {QStringLiteral("app"), QStringLiteral("AetherSDR")},
                     {QStringLiteral("version"), QCoreApplication::applicationVersion()},
+                    {QStringLiteral("build"), build},
                     {QStringLiteral("authRequired"), !self.m_authToken.isEmpty()},
                     {QStringLiteral("readOnly"), self.m_readOnly},
                 };
@@ -13293,6 +13303,19 @@ const char* msgTypeName(int t)
 }
 
 } // namespace
+
+QJsonObject AutomationServer::buildIdentityJson(const QString& describe, const QString& sha,
+                                                const QString& baseline, int commitsSinceTag,
+                                                bool dirty)
+{
+    return QJsonObject{
+        {QStringLiteral("describe"), describe},
+        {QStringLiteral("sha"), sha},
+        {QStringLiteral("baseline"), baseline},
+        {QStringLiteral("commitsSinceTag"), commitsSinceTag},
+        {QStringLiteral("dirty"), dirty},
+    };
+}
 
 // Serialize one event for the wire. PII is redacted here, on egress, so the
 // in-memory ring stays raw (cheap tap) but nothing sensitive ever leaves.

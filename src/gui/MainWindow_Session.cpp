@@ -1126,6 +1126,7 @@ void MainWindow::wireRadioModel()
                 m_aetherialStrip->setMicInputReady(ready);
                 m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
             }
+            updateTxAudioPathNotice();
 
             // If the user pulls the plug on readiness mid-recording
             // (mic source away from PC, or DAX back on), stop the
@@ -2994,7 +2995,11 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
     if (connected && pcAudioRequired && !savedPcAudio) {
         settings.setValue("PcAudioEnabled", "True");
         settings.save();
+        if (m_appletPanel && m_appletPanel->clientChainApplet()) {
+            m_appletPanel->clientChainApplet()->setRxPcAudioEnabled(true);
+        }
     }
+    updateTxAudioPathNotice();
     // Evaluate stream state on the audio thread, after any preceding update.
     // Repeated capabilities must not enqueue duplicate capture starts.
     AudioEngine* audio = m_audio;

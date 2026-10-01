@@ -305,7 +305,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 
 | Category | Verb | One-liner |
 |---|---|---|
-| **Introspection** | [`ping`](#ping) | Handshake; returns app + version. |
+| **Introspection** | [`ping`](#ping) | Handshake; returns app + version + build identity. |
 | | [`verbs`](#verbs) | Machine-readable catalog of every verb + aliases + help. |
 | | [`dumpTree`](#dumptree) | ARIA-style snapshot of the whole widget tree. |
 | | [`grab <target> [path]`](#grab) | PNG of one widget (GPU-correct for the panadapter). |
@@ -389,12 +389,25 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 > the running app disagree, trust `verbs` — it cannot go stale.
 
 ### `ping`
-Connectivity / handshake.
+Connectivity / handshake, and which build is answering.
 
 ```json
 → {"cmd":"ping"}
-← {"ok":true,"app":"AetherSDR","version":"26.6.3"}
+← {"ok":true,"app":"AetherSDR","version":"26.9.3",
+   "build":{"describe":"v26.9.3-68-g7e841682","sha":"7e841682",
+            "baseline":"v26.9.3","commitsSinceTag":68,"dirty":false},
+   "authRequired":false,"readOnly":false}
 ```
+
+`version` is the release string, and a branch with unmerged changes reports the
+same one as `main`. `build` tells them apart (#5804). It is `git describe --tags
+--always --dirty`, captured when the binary is **built**, not when CMake was
+configured, so it cannot name an older commit after an incremental rebuild.
+`dirty` is `git describe`'s own notion: tracked files differed from `HEAD` at
+build time. Outside a git checkout (a source tarball) the strings are
+`"unknown"` and `commitsSinceTag` is `-1`; when no tag is reachable (a shallow
+clone), `describe` and `sha` carry the bare hash, `baseline` is `"unknown"` and
+`commitsSinceTag` is likewise `-1`.
 
 ### `verbs`
 Machine-readable catalog of every verb the running build understands —
@@ -4513,7 +4526,7 @@ still a separate radiocert task.
 
 | Verb | Aliases | Description |
 |---|---|---|
-| `ping` | — | liveness check → app + version + whether a token is required |
+| `ping` | — | liveness check → app + version + build identity + whether a token is required |
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |
 | `floors` | — | per-pan measured noise + display floor (dBm) |

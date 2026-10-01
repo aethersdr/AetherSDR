@@ -5394,12 +5394,28 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     });
     connect(sw, &SpectrumWidget::spotRemoveRequested, this, [this](int spotIndex) {
-        if (isPassiveLocalSpotId(spotIndex)) {
+        // Only a radio-owned spot reaches the wire. Passive-local and
+        // TCI-injected spots are client-side and are dropped from the model
+        // here; TCI IDs are positive (TciProtocol::cmdSpot, from 10000 up),
+        // so the route reads the spot's source, not the sign of its ID (#6037).
+        const auto& spots = m_radioModel.spotModel().spots();
+        const auto it = spots.constFind(spotIndex);
+        const QString source = it != spots.cend() ? it->source : QString();
+        switch (SpotLabelPolicy::removeRoute(spotIndex, source)) {
+        case SpotLabelPolicy::RemoveRoute::LocalModel:
             m_passiveSpotExpiryMs.remove(spotIndex);
             m_radioModel.spotModel().removeSpot(spotIndex);
             return;
+        case SpotLabelPolicy::RemoveRoute::RadioCommand:
+            m_radioModel.sendCommand(QString("spot remove %1").arg(spotIndex));
+            return;
+        case SpotLabelPolicy::RemoveRoute::Ignore:
+            // Unreachable today: menuFor() gives memory labels no Remove
+            // Spot. Logged so a fourth ID class does not fail silently.
+            qCWarning(lcGui) << "Remove Spot: no removal route for spot"
+                             << spotIndex << "source" << source << "- ignored";
+            return;
         }
-        m_radioModel.sendCommand(QString("spot remove %1").arg(spotIndex));
     });
 
     // ── +RX / +TNF buttons ───────────────────────────────────────────────
