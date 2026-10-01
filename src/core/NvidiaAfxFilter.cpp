@@ -12,11 +12,18 @@
 Q_LOGGING_CATEGORY(lcNvAfx, "aether.nvafx")
 
 #if defined(_WIN32)
+// windows.h's min/max function-like macros otherwise clobber std::min and
+// std::numeric_limits<>::max() at their use sites (MSVC error C2589).
+#  ifndef NOMINMAX
+#  define NOMINMAX
+#  endif
 #  include <windows.h>
 #else
 #  include <dlfcn.h>
 #endif
+#include <algorithm>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace AetherSDR {
@@ -76,6 +83,10 @@ using fn_GetU32        = int (*)(NvAFX_Handle, const char* param, unsigned int* 
 using fn_Load          = int (*)(NvAFX_Handle);
 using fn_Run           = int (*)(NvAFX_Handle, const float** in, float** out,
                                  unsigned num_samples, unsigned num_channels);
+// SDK 1.x declared NvAFX_Reset(effect); later SDKs add a per-stream reset
+// list. Called with the list form: a one-argument implementation ignores the
+// trailing arguments under both the SysV x86-64 and Win64 conventions.
+using fn_Reset         = int (*)(NvAFX_Handle, bool* reset_list, unsigned list_length);
 using fn_InitLogger    = int (*)(int level, int target, const char* file,
                                  void* cb, void* userdata);
 
@@ -105,6 +116,7 @@ struct NvidiaAfxFilter::Api {
     fn_GetU32        GetU32{nullptr};
     fn_Load          Load{nullptr};
     fn_Run           Run{nullptr};
+    fn_Reset         Reset{nullptr};
 };
 
 // ─── Pack resolution ────────────────────────────────────────────────────────
@@ -147,16 +159,12 @@ static QString findModel(const QString& packDir)
 NvidiaAfxFilter::NvidiaAfxFilter(const QString& packDir, int sampleRate)
     : m_sampleRate(sampleRate)
     , m_api(std::make_unique<Api>())
-    , m_stereoAdapter(0, sampleRate)
 {
-    if (!m_stereoAdapter.isValid()) {
+    if (sampleRate != 24000 && sampleRate != 48000) {
         m_lastError = QStringLiteral("Unsupported sample rate: %1").arg(sampleRate);
         return;
     }
-    if (sampleRate == 24000) {
-        m_up = std::make_unique<Resampler>(24000, 48000);
-        m_down = std::make_unique<Resampler>(48000, 24000);
-    }
+    createResamplers();
     const QString dir = resolvePackDir(packDir);
     if (!QDir(dir).exists()) {
         m_lastError = QStringLiteral("AFX pack directory not found: %1").arg(dir);
@@ -165,8 +173,15 @@ NvidiaAfxFilter::NvidiaAfxFilter(const QString& packDir, int sampleRate)
     }
     if (!loadRuntime(dir))
         return;
-    if (!createDenoiser(dir))
-        return;
+    // One single-stream effect per channel, not one effect with
+    // NVAFX_PARAM_NUM_STREAMS = 2. The batched form was tried: one pointer per
+    // stream crashed inside the SDK, and a single stream-major buffer leaked
+    // audio between streams. Two effects cost a second TensorRT engine (VRAM
+    // and enable time) but keep the channels isolated.
+    for (void*& handle : m_handles) {
+        if (!createDenoiser(dir, &handle))
+            return;
+    }
     m_ready = true;
     qCDebug(lcNvAfx) << "NvidiaAfxFilter: ready (frame =" << m_afxFrame << "@ 48 kHz)";
 }
@@ -178,9 +193,11 @@ NvidiaAfxFilter::~NvidiaAfxFilter()
 
 void NvidiaAfxFilter::teardown()
 {
-    if (m_handle && m_api && m_api->DestroyEffect) {
-        m_api->DestroyEffect(m_handle);
-        m_handle = nullptr;
+    for (void*& handle : m_handles) {
+        if (handle && m_api && m_api->DestroyEffect) {
+            m_api->DestroyEffect(handle);
+        }
+        handle = nullptr;
     }
     // Close library handles in reverse order. (CUDA libs are typically retained
     // by the driver; closing is best-effort cleanup.)
@@ -249,6 +266,7 @@ bool NvidiaAfxFilter::loadRuntime(const QString& packDir)
     m_api->GetU32        = reinterpret_cast<fn_GetU32>(sym("NvAFX_GetU32"));
     m_api->Load          = reinterpret_cast<fn_Load>(sym("NvAFX_Load"));
     m_api->Run           = reinterpret_cast<fn_Run>(sym("NvAFX_Run"));
+    m_api->Reset         = reinterpret_cast<fn_Reset>(sym("NvAFX_Reset"));
 
     if (!m_api->CreateEffect || !m_api->SetU32 || !m_api->SetString ||
         !m_api->SetFloat || !m_api->GetU32 || !m_api->Load || !m_api->Run ||
@@ -259,7 +277,7 @@ bool NvidiaAfxFilter::loadRuntime(const QString& packDir)
     return true;
 }
 
-bool NvidiaAfxFilter::createDenoiser(const QString& packDir)
+bool NvidiaAfxFilter::createDenoiser(const QString& packDir, void** handle)
 {
     const QString model = findModel(packDir);
     if (model.isEmpty()) {
@@ -267,36 +285,50 @@ bool NvidiaAfxFilter::createDenoiser(const QString& packDir)
         return false;
     }
 
-    if (m_api->CreateEffect(EFFECT_DENOISER, &m_handle) != NVAFX_OK || !m_handle) {
+    if (m_api->CreateEffect(EFFECT_DENOISER, handle) != NVAFX_OK || !*handle) {
         m_lastError = QStringLiteral("NvAFX_CreateEffect(denoiser) failed");
         return false;
     }
     // 0 = let the SDK auto-select a supported (Turing+) GPU. On a hybrid
     // Intel-iGPU + NVIDIA-dGPU laptop, 1 ("OS default GPU") may pick the
     // unsupported Intel iGPU and fail Load. (#nvidia-afx)
-    m_api->SetU32(m_handle, P_USE_DEFAULT_GPU, 0);
-    if (m_api->SetU32(m_handle, P_SAMPLE_RATE, kSampleRate) != NVAFX_OK)
-        m_api->SetU32(m_handle, P_SAMPLE_RATE_LEGACY, kSampleRate);
-    if (m_api->SetString(m_handle, P_MODEL_PATH, model.toLocal8Bit().constData()) != NVAFX_OK) {
+    m_api->SetU32(*handle, P_USE_DEFAULT_GPU, 0);
+    if (m_api->SetU32(*handle, P_SAMPLE_RATE, kSampleRate) != NVAFX_OK)
+        m_api->SetU32(*handle, P_SAMPLE_RATE_LEGACY, kSampleRate);
+    if (m_api->SetString(*handle, P_MODEL_PATH, model.toLocal8Bit().constData()) != NVAFX_OK) {
         m_lastError = QStringLiteral("NvAFX_SetString(model_path) failed: %1").arg(model);
         return false;
     }
-    m_api->SetU32(m_handle, P_NUM_STREAMS, 1);
-    if (m_api->SetU32(m_handle, P_FRAME_IN, kRequestedFrame) != NVAFX_OK)
-        m_api->SetU32(m_handle, P_FRAME, kRequestedFrame);
+    m_api->SetU32(*handle, P_NUM_STREAMS, 1);
+    if (m_api->SetU32(*handle, P_FRAME_IN, kRequestedFrame) != NVAFX_OK)
+        m_api->SetU32(*handle, P_FRAME, kRequestedFrame);
 
-    if (m_api->Load(m_handle) != NVAFX_OK) {
+    if (m_api->Load(*handle) != NVAFX_OK) {
         m_lastError = QStringLiteral("NvAFX_Load() failed (GPU unsupported or model incompatible)");
         return false;
     }
 
     unsigned frame = 0;
-    if (m_api->GetU32(m_handle, P_FRAME, &frame) != NVAFX_OK || frame == 0)
-        m_api->GetU32(m_handle, P_FRAME_OUT, &frame);
+    if (m_api->GetU32(*handle, P_FRAME, &frame) != NVAFX_OK || frame == 0)
+        m_api->GetU32(*handle, P_FRAME_OUT, &frame);
     m_afxFrame = frame > 0 ? static_cast<int>(frame) : kRequestedFrame;
 
-    m_api->SetFloat(m_handle, P_INTENSITY, m_intensity.load());
+    m_api->SetFloat(*handle, P_INTENSITY, m_intensity.load());
+    resetEffect(*handle);
     return true;
+}
+
+// A new effect is not guaranteed a clean state. While another denoiser effect
+// keeps the SDK loaded, an effect created after one is destroyed starts from
+// that effect's leftover recurrent state, and its first ~0.5 s differs from a
+// fresh start by up to the full signal level. NvAFX_Reset clears it.
+void NvidiaAfxFilter::resetEffect(void* handle)
+{
+    if (!handle || !m_api->Reset) {
+        return;
+    }
+    bool resetStream = true;
+    m_api->Reset(handle, &resetStream, 1);
 }
 
 void NvidiaAfxFilter::setIntensity(float ratio)
@@ -313,68 +345,89 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcmStereo)
     if (!m_ready || m_afxFrame <= 0 || pcmStereo.isEmpty())
         return pcmStereo;
 
-    if (m_paramsDirty.exchange(false))
-        m_api->SetFloat(m_handle, P_INTENSITY, m_intensity.load());
+    if (m_paramsDirty.exchange(false)) {
+        for (void* handle : m_handles)
+            m_api->SetFloat(handle, P_INTENSITY, m_intensity.load());
+    }
 
     const auto* src = reinterpret_cast<const float*>(pcmStereo.constData());
     const int stereoFrames = pcmStereo.size() / (2 * static_cast<int>(sizeof(float)));
-    m_stereoAdapter.pushDryStereo(pcmStereo);
 
-    // 1. Downmix and convert legacy24 to48; native48 needs no SRC. Keep dry stereo
-    // queued so the BNR attenuation can be applied without collapsing pan.
-    m_monoInput.resize(stereoFrames);
-    for (int i = 0; i < stereoFrames; ++i) {
-        m_monoInput[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
+    // Both channels see the same sample counts through identically configured
+    // resamplers, so they reach the same whole-frame count and the two
+    // effects advance in lockstep.
+    int frames = std::numeric_limits<int>::max();
+    std::array<int, 2> total{0, 0};
+    for (int channel = 0; channel < 2; ++channel) {
+        // 1. Split out this channel and convert legacy24 to 48; native48
+        // needs no SRC.
+        auto& channelInput = m_channelInput[channel];
+        channelInput.resize(stereoFrames);
+        for (int i = 0; i < stereoFrames; ++i) {
+            channelInput[i] = src[i * 2 + channel];
+        }
+        const QByteArray input48k = m_up[channel]
+            ? m_up[channel]->process(channelInput.data(), stereoFrames)
+            : QByteArray(reinterpret_cast<const char*>(channelInput.data()),
+                         stereoFrames * static_cast<int>(sizeof(float)));
+
+        // 2. Accumulate to whole AFX frames.
+        const int prev = m_inAccum[channel].size() / static_cast<int>(sizeof(float));
+        m_inAccum[channel].append(input48k);
+        total[channel] = prev + input48k.size() / static_cast<int>(sizeof(float));
+        frames = std::min(frames, total[channel] / m_afxFrame);
     }
-    QByteArray mono48k = m_up
-        ? m_up->process(m_monoInput.data(), stereoFrames)
-        : QByteArray(reinterpret_cast<const char*>(m_monoInput.data()),
-                     stereoFrames * static_cast<int>(sizeof(float)));
-    const auto* mono = reinterpret_cast<const float*>(mono48k.constData());
-    const int monoSamples = mono48k.size() / static_cast<int>(sizeof(float));
 
-    // 2. Accumulate and process complete AFX frames
-    const int prev = m_inAccum.size() / static_cast<int>(sizeof(float));
-    m_inAccum.resize((prev + monoSamples) * sizeof(float));
-    std::memcpy(m_inAccum.data() + prev * sizeof(float), mono, monoSamples * sizeof(float));
-
-    const int total = prev + monoSamples;
-    const int frames = total / m_afxFrame;
     if (frames > 0) {
-        auto* accum = reinterpret_cast<float*>(m_inAccum.data());
-        const size_t outN = static_cast<size_t>(frames) * m_afxFrame;
-        if (m_runScratch.size() < outN) {
-            m_runScratch.resize(outN);   // grows to steady state, then alloc-free
-        }
-        float* out = m_runScratch.data();
-        for (int f = 0; f < frames; ++f) {
-            const float* in[1]  = { &accum[f * m_afxFrame] };
-            float*       op[1]  = { &out[f * m_afxFrame] };
-            if (m_api->Run(m_handle, in, op,
-                           static_cast<unsigned>(m_afxFrame), 1) != NVAFX_OK) {
-                // On a transient failure, pass the frame through unprocessed.
-                std::memcpy(op[0], in[0], m_afxFrame * sizeof(float));
-            }
-        }
         const int consumed = frames * m_afxFrame;
-        const int leftover = total - consumed;
-        if (leftover > 0) {
-            std::memmove(m_inAccum.data(),
-                         reinterpret_cast<const char*>(&accum[consumed]),
-                         leftover * sizeof(float));
-            m_inAccum.resize(leftover * sizeof(float));
-        } else {
-            m_inAccum.clear();
+        int outputFrames = std::numeric_limits<int>::max();
+        for (int channel = 0; channel < 2; ++channel) {
+            auto* accum = reinterpret_cast<float*>(m_inAccum[channel].data());
+            auto& scratch = m_runScratch[channel];
+            if (scratch.size() < static_cast<size_t>(consumed)) {
+                scratch.resize(consumed);   // grows to steady state, then alloc-free
+            }
+            float* out = scratch.data();
+            for (int f = 0; f < frames; ++f) {
+                const float* in[1]  = { &accum[f * m_afxFrame] };
+                float*       op[1]  = { &out[f * m_afxFrame] };
+                if (m_api->Run(m_handles[channel], in, op,
+                               static_cast<unsigned>(m_afxFrame), 1) != NVAFX_OK) {
+                    // On a transient failure, pass the frame through unprocessed.
+                    std::memcpy(op[0], in[0], m_afxFrame * sizeof(float));
+                }
+            }
+            m_inAccum[channel].remove(0, consumed * static_cast<int>(sizeof(float)));
+
+            // 3. Convert only legacy24.
+            m_channelOutput[channel] = m_down[channel]
+                ? m_down[channel]->process(out, consumed)
+                : QByteArray(reinterpret_cast<const char*>(out),
+                             consumed * static_cast<int>(sizeof(float)));
+            outputFrames = std::min(
+                outputFrames,
+                static_cast<int>(m_channelOutput[channel].size() / sizeof(float)));
         }
-        // 3. Convert only legacy24, then restore the existing delayed stereo
-        // level balance at the configured rate.
-        const QByteArray downsampled = m_down
-            ? m_down->process(out, consumed)
-            : QByteArray(reinterpret_cast<const char*>(out),
-                         consumed * static_cast<int>(sizeof(float)));
-        const auto* downsampledMono = reinterpret_cast<const float*>(downsampled.constData());
-        const int downsampledFrames = downsampled.size() / static_cast<int>(sizeof(float));
-        m_outAccum.append(m_stereoAdapter.takeProcessedMono(downsampledMono, downsampledFrames));
+        // Identical resamplers fed identical counts stay in lockstep, so the
+        // min above never drops a sample. A mismatch would be a silent,
+        // cumulative L/R skew: log it once in release, abort in debug.
+        if (m_channelOutput[0].size() != m_channelOutput[1].size()
+            && !m_lockstepWarned) {
+            m_lockstepWarned = true;
+            qCWarning(lcNvAfx) << "NvidiaAfxFilter: L/R output lengths diverged"
+                   << m_channelOutput[0].size() << m_channelOutput[1].size();
+        }
+        Q_ASSERT(m_channelOutput[0].size() == m_channelOutput[1].size());
+
+        const auto* left = reinterpret_cast<const float*>(m_channelOutput[0].constData());
+        const auto* right = reinterpret_cast<const float*>(m_channelOutput[1].constData());
+        const int start = m_outAccum.size() / static_cast<int>(sizeof(float));
+        m_outAccum.resize((start + outputFrames * 2) * static_cast<int>(sizeof(float)));
+        auto* stereo = reinterpret_cast<float*>(m_outAccum.data()) + start;
+        for (int i = 0; i < outputFrames; ++i) {
+            stereo[i * 2] = std::clamp(left[i], -1.0f, 1.0f);
+            stereo[i * 2 + 1] = std::clamp(right[i], -1.0f, 1.0f);
+        }
     }
 
     // 4. Return exactly the input byte count. Use a read cursor instead of an
@@ -396,18 +449,31 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcmStereo)
     return QByteArray(needed, '\0');  // priming silence at startup
 }
 
+void NvidiaAfxFilter::createResamplers()
+{
+    // Resampler has no reset, so a flush rebuilds them.
+    for (int channel = 0; channel < 2; ++channel) {
+        if (m_sampleRate == 24000) {
+            m_up[channel] = std::make_unique<Resampler>(24000, 48000);
+            m_down[channel] = std::make_unique<Resampler>(48000, 24000);
+        }
+    }
+}
+
 void NvidiaAfxFilter::reset()
 {
-    // Flush jitter accumulators and rebuild the resamplers (Resampler has no
-    // reset) so no stale or pre-discontinuity audio carries into the next block.
-    m_inAccum.clear();
+    // Flush jitter accumulators, rebuild the resamplers and clear the effects'
+    // recurrent state so no stale or pre-discontinuity audio carries into the
+    // next block.
+    for (void* handle : m_handles) {
+        resetEffect(handle);
+    }
+    for (auto& accum : m_inAccum) {
+        accum.clear();
+    }
     m_outAccum.clear();
     m_outReadPos = 0;
-    m_stereoAdapter.reset();
-    if (m_sampleRate == 24000) {
-        m_up = std::make_unique<Resampler>(24000, 48000);
-        m_down = std::make_unique<Resampler>(48000, 24000);
-    }
+    createResamplers();
 }
 
 } // namespace AetherSDR

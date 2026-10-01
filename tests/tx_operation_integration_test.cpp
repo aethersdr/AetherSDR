@@ -10,13 +10,13 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/flex/FlexPttWireSession.h"
 #include "core/ClientQuindarTone.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/RigctlProtocol.h"
 #include "core/SmartCatProtocol.h"
 #include "core/AudioEngine.h"
 #include "core/TciServer.h"
 #ifdef HAVE_WEBSOCKETS
-#include <QWebSocket>
+#include "core/TciClient.h"
 #endif
 
 #include <QCoreApplication>
@@ -50,16 +50,20 @@ public:
     }
     static void serialClose(SerialPortController& source) { source.retireTxInputs(); }
 #ifdef HAVE_WEBSOCKETS
-    static void addTciClient(TciServer& server, QWebSocket& socket, RadioModel& radio)
+    static void addTciClient(TciServer& server, TciClient& socket, RadioModel& radio)
     {
         TciServer::ClientState client;
         client.socket = &socket;
         client.txProducer = radio.registerTxProducer(&socket);
         server.m_clients.append(std::move(client));
     }
-    static void tciRequest(TciServer& server, QWebSocket& socket, bool on)
+    static void tciRequest(TciServer& server, TciClient& socket, bool on)
     {
         server.handleTrxRequest(&socket, {0, on, QStringLiteral("tci")});
+    }
+    static void discardTciInputs(TciServer& server, TciClient& socket)
+    {
+        server.clientStateFor(&socket)->txProducer.discardInputs();
     }
     static void deferTciRoute(TciServer& server) { server.m_routeTransitionInFlight = true; }
     static void drainTciRoute(TciServer& server)
@@ -67,7 +71,7 @@ public:
         server.m_routeTransitionInFlight = false;
         server.drainDeferredRoutingAndPtt();
     }
-    static void disconnectTciClient(TciServer& server, QWebSocket& socket)
+    static void disconnectTciClient(TciServer& server, TciClient& socket)
     {
         server.clientStateFor(&socket)->txProducer.invalidate();
         server.abortTciPtt();
@@ -75,17 +79,17 @@ public:
     // Wire the binary tap exactly as acceptClient() does, so QObject::sender()
     // inside onBinaryMessage is the real socket. Calling the handler directly
     // would leave sender() null and silently retire the owner half of its gate.
-    static void wireTciBinary(TciServer& server, QWebSocket& socket)
+    static void wireTciBinary(TciServer& server, TciClient& socket)
     {
-        QObject::connect(&socket, &QWebSocket::binaryMessageReceived,
+        QObject::connect(&socket, &TciClient::binaryMessageReceived,
                          &server, &TciServer::onBinaryMessage);
     }
-    static void sendTciBinary(QWebSocket& socket, const QByteArray& frame)
+    static void sendTciBinary(TciClient& socket, const QByteArray& frame)
     {
         emit socket.binaryMessageReceived(frame);
     }
     // Incremented only for a frame that passed the ownership + header gates.
-    static qint64 tciAudioBlocks(const TciServer& server) { return server.m_txAudioBlocks; }
+    static qint64 tciAudioBlocks(const TciServer& server) { return server.m_io->m_txAudioBlocks; }
 #endif
     static void transmitDelta(RadioModel& radio, const TransmitDelta& delta)
     {
@@ -2250,7 +2254,7 @@ void tciProducerLifetimes()
     // Drive the production server handler with disconnected WebSocket
     // objects. No listen(), connect(), socket peer, or radio transport.
     Fixture f;
-    QWebSocket socket;
+    TciClient socket;
     TciServer server(&f.radio);
     TxOperationIntegrationTestAccess::addTciClient(server, socket, f.radio);
     TxOperationIntegrationTestAccess::deferTciRoute(server);
@@ -2274,11 +2278,9 @@ void tciProducerLifetimes()
     // whole gate passes every other TX suite, so nothing pinned it. The frame
     // below is well-formed, so a refusal can only come from ownership.
     Fixture g;
-    AudioEngine audio;
-    QWebSocket owner;
-    QWebSocket intruder;
+    TciClient owner;
+    TciClient intruder;
     TciServer shared(&g.radio);
-    shared.setAudioEngine(&audio);
     TxOperationIntegrationTestAccess::addTciClient(shared, owner, g.radio);
     TxOperationIntegrationTestAccess::addTciClient(shared, intruder, g.radio);
     TxOperationIntegrationTestAccess::wireTciBinary(shared, owner);
@@ -2311,7 +2313,11 @@ void tciProducerLifetimes()
     QCoreApplication::processEvents();
     check(TxOperationIntegrationTestAccess::tciAudioBlocks(shared) > beforeIntruder,
           "the owning TCI client's audio still reaches the modulator");
+    g.commands.clear();
+    TxOperationIntegrationTestAccess::discardTciInputs(shared, owner);
     TxOperationIntegrationTestAccess::tciRequest(shared, owner, false);
+    check(g.commands.contains("mox:off"),
+          "worker-side input revocation still permits owner-thread PTT cleanup");
 }
 #endif
 } // namespace

@@ -102,7 +102,7 @@ struct MemoryRecallDetails {
 //
 //  2. EVERY SEAM SIGNAL IS EMITTED FROM THAT THREAD. This includes the
 //     high-rate data plane (audioFrameReady, sliceAudioFrameReady,
-//     spectrumFrameReady, waterfallRowReady, meterUpdate) and the cadence
+//     spectrumFrameReady, meterUpdate) and the cadence
 //     signals (linkStatsUpdated). A backend whose socket, DSP or timer lives
 //     on a worker thread brings the result back to its own thread FIRST — a
 //     queued connection with `this` as the receiver context, or
@@ -435,6 +435,44 @@ public:
     {
         Q_UNUSED(panId);
         Q_UNUSED(fps);
+    }
+
+    // The operator's FFT-average setting (Display -> FFT AVG), 0..100:
+    // 0 = no time averaging; what one step means is the backend's call.
+    // Same situation as setPanFrameRate(): a backend
+    // that computes its own spectrum has no radio-side display engine to
+    // ask, so the setting reaches it here or not at all.
+    //
+    // Default no-op: a Flex radio averages on the radio, and a host-computed
+    // backend that does not override this keeps its own fixed behaviour.
+    virtual void setPanAverage(const QString& panId, int average)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(average);
+    }
+
+    // The operator's weighted-average toggle (Display -> FFT). Same routing
+    // and same default as setPanAverage(); what the two states mean for a
+    // host-computed spectrum is the backend's call.
+    virtual void setPanWeightedAverage(const QString& panId, bool on)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(on);
+    }
+
+    // How many screen pixels the pan's full reported bandwidth would cover
+    // -- the panel's device-pixel width, widened by any display-side crop --
+    // so a backend that computes its own spectrum can return one point per
+    // pixel instead of a fixed count stretched across the panel. A Flex is
+    // told the same thing as `xpixels` on its own wire.
+    //
+    // Default no-op: a Flex radio takes xpixels on the wire, and a
+    // host-computed backend that does not override this keeps its own
+    // fixed point count.
+    virtual void setPanPixelWidth(const QString& panId, int pixels)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(pixels);
     }
 
     // ---- per-slice audio ----
@@ -1376,8 +1414,17 @@ signals:
     // Declared here so backends have a normalized outlet for spectrum/waterfall/
     // audio; the concrete zero-copy/binary frame formats are step-4 work. Until
     // then a backend may relay the existing in-tree frame types.
+    //
+    // There is deliberately NO separate waterfall outlet. RadioModel derives
+    // the waterfall row from spectrumFrameReady (onBackendSpectrumFrame, paced
+    // by the pan's waterfall rate), so a backend's spectrum frame IS its row.
+    // A waterfallRowReady(int, QByteArray) used to be declared here; RTL-SDR
+    // emitted it with the byte-identical frame and nothing ever connected it
+    // (#5678 row 2.5). Wiring it would have fed RTL every row twice and
+    // bypassed the pacing gate. A backend with a genuinely separate waterfall
+    // plane (as Flex has, via PanadapterStream) adds an outlet together with
+    // its consumer, in the same change.
     void spectrumFrameReady(int panId, const QByteArray& frame);
-    void waterfallRowReady(int panId, const QByteArray& row);
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 
 protected:

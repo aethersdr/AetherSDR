@@ -143,6 +143,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.hasFmRepeaterOffset = false;
     c.hasCwTune = false;
     c.twoToneGenerator = std::nullopt;  // receive only; there is no transmitter.
+    c.panZoomModes = std::nullopt;      // no command plane, no per-pan zoom flags.
     c.hasAmCarrierLevel = false;
     c.hasVoxDelay = false;
     c.hasAgcThreshold = false;
@@ -418,8 +419,6 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
     // Relay worker/DDC signals to IRadioBackend outputs via cross-thread queued connection
     connect(m_worker.get(), &RtlSdrWorker::spectrumFrameReady,
             this, &IRadioBackend::spectrumFrameReady);
-    connect(m_worker.get(), &RtlSdrWorker::waterfallRowReady,
-            this, &IRadioBackend::waterfallRowReady);
     connect(m_worker.get(), &RtlSdrWorker::audioFrameReady,
             this, [this, producer = QPointer<RtlSdrWorker>(m_worker.get())](const QByteArray& pcm) {
                 if (!producer || producer.data() != m_worker.get()) {

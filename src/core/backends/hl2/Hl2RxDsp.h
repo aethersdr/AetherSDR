@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/dsp/WdspSMeter.h"
+
 #include <QElapsedTimer>
 #include <QObject>
 
@@ -53,6 +55,27 @@ public:
     static_assert(kMinNotchWidthHz <= 50.0,
                   "RX filter taps no longer allow a 50 Hz notch; the width "
                   "presets in the TNF menu assume one.");
+
+    // RX filter PHASE, per mode (#5498). A linear-phase FIR of kRxFilterTaps
+    // delays everything by half its length — 4096 samples, ~85 ms at
+    // kWdspDspSampleRateHz — on top of the channel's own buffering, and that
+    // delay is what an operator meets after every unkey as ~130–150 ms of
+    // silence before the band comes back: not lost audio, the chain's
+    // latency seen from the unmute. Minimum phase keeps the same length, so
+    // the magnitude response, the notch depth and the kMinNotchWidthHz floor
+    // are unchanged, and collapses the group delay: the post-unmute return
+    // measured 128 -> 44 ms (AGC off) and 137 -> 53 ms (AGC medium).
+    //
+    // NOT IN CW, by maintainer ruling (KK7GWY, 2026-09-26, on #5498). Through
+    // a 300 Hz CW filter minimum phase measured overshoot 5.8 -> 19.6 % and a
+    // post-edge ring at +10 ms of -33 -> -21 dB (#5578); through an SSB-wide
+    // passband keying edges are essentially unchanged and data modes see under
+    // two samples of differential delay. So CW keeps linear phase and its
+    // latency, and every other mode takes the shorter chain.
+    [[nodiscard]] static constexpr bool rxMinimumPhaseFor(WdspChannel::Mode mode) noexcept
+    {
+        return mode != WdspChannel::Mode::Cwl && mode != WdspChannel::Mode::Cwu;
+    }
 
     struct Config {
         int inputSampleRateHz = 48000;   // HL2 IQ sample rate
@@ -424,6 +447,18 @@ public:
     // therefore stays running at constant latency and contains nothing but
     // silence when transmit ends.
     Q_INVOKABLE void setAudioMuted(bool muted);
+    // WHAT THIS OBJECT IS ACTUALLY DOING, not what it was last asked to do.
+    //
+    // The distinction is the whole point and it is the one channelConfig()'s
+    // comment makes about read-backs generally. Hl2Backend does not call
+    // setAudioMuted() — it POSTS it across a thread boundary — so the backend's
+    // own m_rxAudioMuted is a request, and the only place the applied state
+    // exists is here. #5497 turns on exactly that gap: a hold that is working
+    // and a mute that never arrived look identical from the backend side.
+    //
+    // Const and trivial; safe to read from the DSP's own thread, which is where
+    // setAudioMuted() runs.
+    [[nodiscard]] bool isAudioMuted() const noexcept { return m_audioMuted; }
     [[nodiscard]] bool isConfigured() const noexcept { return m_channel != nullptr; }
 
     // What the WDSP channel was actually OPENED WITH, for the read-back verb.
@@ -570,6 +605,9 @@ signals:
     void meterUpdate(float dbfs);                           // audio-RMS S-meter
 
 private:
+    // Pushes rxMinimumPhaseFor(m_config.mode) to the live channel. Only
+    // called where the control verbs may reach it (setMode, installChannel).
+    void applyMinimumPhaseForMode();
     // True when the next panadapter frame may be computed. Stays true until one
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
@@ -581,9 +619,9 @@ private:
     // their results cannot drift apart — this class re-applies SIX things across
     // a rebuild and a second copy of that list would lose one of them.
     void installChannel(RebuildResult result);
-    // Arm m_meterSettleBlocks from the current geometry. One site for the
-    // arithmetic, called on the mute's release edge and on a channel install so
-    // the two cannot drift apart. DSP thread only.
+    // Arm m_meterTap from the current geometry. One site for the arithmetic,
+    // called on the mute's release edge and on a channel install so the two
+    // cannot drift apart. DSP thread only.
     void armMeterSettle();
 
     // May a control verb push at m_channel right now? False while a background
@@ -645,13 +683,13 @@ private:
     WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
-    // Blocks for which the S-meter tap must stay suppressed after the channel
-    // starts being fed real IQ again — see the settle note in processIqBlock().
-    // Armed on the mute's release edge and on a channel swap, counted down one
-    // per block that WDSP actually completes, and only on the unmuted path, so
-    // it measures the same clock the meter itself integrates on. DSP thread
-    // only, like m_audioMuted.
-    int m_meterSettleBlocks = 0;
+    // The S-meter tap's gate — the settle window after the channel starts
+    // being fed real IQ again, and the read cadence — see the settle note in
+    // processIqBlock() and WdspSMeter.h. Armed on the mute's release edge and
+    // on a channel swap, ticked once per block that WDSP actually completes,
+    // and only on the unmuted path, so it measures the same clock the meter
+    // itself integrates on. DSP thread only, like m_audioMuted.
+    WdspSMeterTap m_meterTap;
     // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on
     // the first block and only read/written on the DSP thread.
     int m_spectrumIntervalMs = 0;

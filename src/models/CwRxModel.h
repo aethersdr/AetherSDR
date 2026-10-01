@@ -1,5 +1,5 @@
 #pragma once
-#include "core/PcmFrame.h"
+#include "core/DecoderPcmAdapter.h"
 #include <QObject>
 #include <QStringList>
 #include <memory>
@@ -13,7 +13,9 @@ public:
     virtual void start() = 0;
     virtual void stop() = 0;
     virtual void reset() = 0;
-    virtual void feed(const PcmFrame&) = 0;
+    // Native frames and converted samples are distinct ownership contracts.
+    virtual void feed(const PcmFrame&) {}
+    virtual void feedFixed24(const DecoderPcmBlock&) {}
     virtual bool isRunning() const = 0;
     virtual bool supportsTuning() const { return false; }
     virtual void lockPitch(bool) {}
@@ -47,7 +49,10 @@ public:
     void start();
     void stop();
     void reset();
+    // DecoderAudioModel supplies both outputs; only the selected backend's
+    // matching entry point consumes audio. No converted block becomes a producer.
     void feed(const PcmFrame& frame);
+    void feedFixed24(const DecoderPcmBlock& block);
     bool isRunning() const { return m_backend->isRunning(); }
     bool supportsTuning() const { return m_backend->supportsTuning(); }
     void lockPitch(bool on) { m_backend->lockPitch(on); }

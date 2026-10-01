@@ -7,7 +7,7 @@
 #include "core/LogManager.h"
 #include "core/SupportBundle.h"
 #include "models/RadioModel.h"
-#include "core/RadioConnection.h"
+#include "core/backends/flex/RadioConnection.h"
 
 #include <QCheckBox>
 #include <QCursor>

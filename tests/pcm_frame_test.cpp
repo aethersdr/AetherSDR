@@ -72,12 +72,10 @@ void formatsAndOwnership()
     check(producer.setFormat({48000, PcmLayout::Mono}), "mono native PCM supported");
     const auto mono = producer.produce({0.0f, 0.25f, -0.5f});
     check(mono->frameCount() == 3 && mono->legacyStereo24().isEmpty(), "mono count and legacy refusal");
-#if QT_VERSION >= QT_VERSION_CHECK(6, 11, 0)
     float borrowedSamples[]{0.5f, -0.5f};
     const auto borrowedFrame = producer.produce(QVector<float>::fromReadOnlyData(borrowedSamples));
     borrowedSamples[0] = 0.0f;
     check(borrowedFrame->samples()[0] == 0.5f, "native frame owns external Qt container storage");
-#endif
     check(!producer.start(PcmPurpose::Slice, -1), "slice requires stable slot");
     check(!producer.start(PcmPurpose::Speaker, 0), "speaker cannot masquerade as a slice");
     check(!producer.start(static_cast<PcmPurpose>(10)), "unknown purpose rejected");

@@ -1,6 +1,6 @@
 #include "SmartLinkClient.h"
-#include "AppSettings.h"
-#include "LogManager.h"
+#include "core/AppSettings.h"
+#include "core/LogManager.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>

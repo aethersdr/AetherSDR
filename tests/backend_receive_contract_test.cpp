@@ -53,7 +53,6 @@ struct Hl2DspReadbackTestAccess {
     }
 };
 }
-
 using namespace AetherSDR;
 namespace {
 int failures = 0;
@@ -285,7 +284,6 @@ void intentVariants()
     check(icom::IcomCivBackendTestAccess::queuedCount(icom) == 0,
           "new AGC adapter preserves Icom's refusal of AGC off");
 }
-
 void hostConfiguration()
 {
     // These cold backends have configuration state but no configured receive

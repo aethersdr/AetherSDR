@@ -123,6 +123,12 @@ public:
     // emitting both Changed and Reported so the widget's existing Flex wiring
     // picks it up with no special case.
     void setLocalAverage(int average);
+    // The weighted-average toggle from a backend that shapes its own spectrum
+    // -- same authority and same reasoning as setLocalAverage(): no radio echo
+    // is coming, so this IS the known value and weightedAverageKnown() flips
+    // true. Emits Reported as well as Changed so the widget's existing Flex
+    // wiring picks it up unchanged.
+    void setLocalWeightedAverage(bool weighted);
     // Flex-specific WNB extension applied from the backend's namespaced
     // extensionStatus("flex","panWnb",…). Applies only the keys present;
     // emits wnbChanged/wnbStateChanged when anything changes. (aetherd RFC 2.3

@@ -1,5 +1,7 @@
 #include "core/backends/sim/SimSignalSource.h"
 
+#include "core/backends/sim/DemoRadioConstants.h"
+
 #include <QDebug>
 
 namespace AetherSDR {
@@ -143,7 +145,9 @@ void SimSignalSource::onTick()
         if (!m_scopeStalled && ++m_frames % kSpectrumRowEveryNFrames == 0) {
             constexpr int kBins = 1024;
             constexpr double kFloorDbm = -120.0;
-            constexpr double kAudioSpanHz = 8000.0;   // ±4 kHz around the VFO
+            // ±4 kHz around the VFO — the same span the synthetic connect
+            // publishes as the pan bandwidth, in Hz. One definition.
+            constexpr double kAudioSpanHz = DemoRadio::kAudioSpanHz;
             const QVector<float> row =
                 m_audio.spectrum(kBins, kFloorDbm, kAudioSpanHz, kBins / 2);
             const QByteArray bytes(

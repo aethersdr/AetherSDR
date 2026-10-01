@@ -1,7 +1,7 @@
 #pragma once
 
 #include "core/RadioDiscovery.h"
-#include "core/SmartLinkClient.h"
+#include "core/backends/flex/SmartLinkClient.h"
 #include "core/IConnectionAutomation.h"
 
 #include <QWidget>
