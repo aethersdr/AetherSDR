@@ -202,6 +202,25 @@ is the sole authority on visual design and UX direction.
 - **Atomic parameters for cross-thread DSP** — main thread writes via `std::atomic`, audio thread reads. Never hold a mutex in the audio callback for parameter updates.
 - **Error handling**: log with `qCWarning(lcCategory)`, don't throw exceptions
 
+### Comments
+
+A comment states what is true **now** and why the code has this shape: the
+invariant, the constraint, the non-obvious protocol fact (with firmware
+version). Aim for five lines or fewer; a design that needs more goes in a
+`docs/` file the comment links to.
+
+History does not go in code. How the bug was found, what the code used to do,
+which review caught it, who reported it, and the incident narrative belong in
+the commit message and PR body, where `git blame` finds them. A bare `(#NNNN)`
+tag is fine; retelling the issue is not.
+
+Don't restate the code, don't add banner dividers, and don't cite
+Constitution principles in code — that tag belongs in the commit subject.
+
+Deleting or shortening a historical comment is welcome cleanup, as long as
+the guard or test it describes stays. The guard and its test are the
+protection; the prose is not.
+
 ## Build
 
 ```bash
