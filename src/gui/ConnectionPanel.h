@@ -322,6 +322,8 @@ private:
     QCheckBox*   m_manualAnanBypassAdc0Check{nullptr};
     QWidget*     m_manualAnanBypassAdc1Row{nullptr};
     QCheckBox*   m_manualAnanBypassAdc1Check{nullptr};
+    QWidget*     m_manualAnanSpeakerAudioRow{nullptr};
+    QCheckBox*   m_manualAnanSpeakerAudioCheck{nullptr};
     // Staged by probeRadio(), committed by setConnected(true), discarded on
     // failure. A password is only worth persisting once the radio has said it
     // is the right one.

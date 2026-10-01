@@ -4938,6 +4938,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfBlankerThreshold(1.15f);
         sw->setWfBlankerMode(0);
         sw->setShowCursorFreq(false);
+        // The panel below is synced with showGrid=true, so the widget must be
+        // told too: setShowGrid() updates the live grid and persists the key.
+        sw->setShowGrid(true);
         sw->setBackgroundImage(":/bg-default.jpg");
         sw->setBackgroundOpacity(80);
         sw->setBackgroundFillColor(QColor(0x0a, 0x0a, 0x14));
@@ -5012,9 +5015,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->resetDisplay3DSettings();
 
         // Sync all Display panel UI controls (incl. the 2D/3D combo + 3D Floor).
+        // The line width argument is in pixels and must equal the 1.0f applied
+        // to the widget above, or the slider and label read a width the trace
+        // is not drawn at.
         menu->syncDisplaySettings(0, 25, 70, false, QColor(0x00, 0xe5, 0xff),
                                   50, 15, true, 50, 100, 75, false, true, 0,
-                                  true, 2.0f, false, 0, 6, 70,
+                                  true, 1.0f, false, 0, 6, 70,
                                   QColor(0x00, 0xe5, 0xff), 100);
         menu->syncExtraDisplaySettings(false, 1.15f, 80, 0,
                                        QColor(0x0a, 0x0a, 0x14));
@@ -6491,25 +6497,27 @@ void MainWindow::wireMeters()
     connect(&m_pgxlConn, &PgxlConnection::statusUpdated, this, [this](const QMap<QString, QString>& kvs) {
         qCDebug(lcTuner) << "PGXL status:" << kvs;
         auto* amp = m_appletPanel->ampApplet();
+        // Heatsink temperatures, in degrees Celsius:
+        //   `temp` is the PA heatsink.
+        //   `hltemp` is the Harmonic Load heatsink (seen on firmware 3.8.9
+        //   and 3.9.8).
+        // Two other forms are accepted but have never been seen in a capture:
+        // both temperatures packed into `temp` as "PA/HL" (e.g. "30.5/26.5"),
+        // and the HL temperature named `tempb`.
         if (kvs.contains("temp")) {
-            // Some PGXL firmware encodes both PA module temps as "A/B" in a
-            // single field (e.g. "30.5/26.5"); others use separate tempb key.
             const QString tv = kvs["temp"];
             const int slash = tv.indexOf('/');
             if (slash >= 0) {
-                amp->setTemp(tv.left(slash).toFloat());
-                amp->setTempB(tv.mid(slash + 1).toFloat());
+                amp->setPaHeatsinkTemp(tv.left(slash).toFloat());
+                amp->setHarmonicLoadHeatsinkTemp(tv.mid(slash + 1).toFloat());
             } else {
-                amp->setTemp(tv.toFloat());
+                amp->setPaHeatsinkTemp(tv.toFloat());
             }
         }
-        // The second sensor. Firmware 3.8.9 sends it as `hltemp`; other builds
-        // use `tempb`, and some pack both into `temp` as "A/B" above. All
-        // three are the same reading, so whichever arrives wins.
         if (kvs.contains("hltemp"))
-            amp->setTempB(kvs["hltemp"].toFloat());
+            amp->setHarmonicLoadHeatsinkTemp(kvs["hltemp"].toFloat());
         else if (kvs.contains("tempb"))
-            amp->setTempB(kvs["tempb"].toFloat());
+            amp->setHarmonicLoadHeatsinkTemp(kvs["tempb"].toFloat());
         if (kvs.contains("id"))
             amp->setDrainCurrent(kvs["id"].toFloat());
         if (kvs.contains("vdd"))
@@ -6570,7 +6578,7 @@ void MainWindow::wireMeters()
         m_appletPanel->ampApplet()->setDirectConnected(false);
     });
     // Radio amplifier status → AmpApplet telemetry (fallback path).
-    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, temp, hltemp, state) in its
+    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, state) in its
     // amplifier status messages, so the applet keeps updating even when the direct
     // PGXL TCP connection isn't established.  When direct TCP IS connected, that
     // path is faster and higher-precision (the radio rebroadcast may round/lag),
@@ -6580,20 +6588,10 @@ void MainWindow::wireMeters()
             this, [this](const QMap<QString, QString>& kvs) {
         if (m_pgxlConn.isConnected()) return;
         auto* amp = m_appletPanel->ampApplet();
-        if (kvs.contains("temp")) {
-            const QString tv = kvs["temp"];
-            const int slash = tv.indexOf('/');
-            if (slash >= 0) {
-                amp->setTemp(tv.left(slash).toFloat());
-                amp->setTempB(tv.mid(slash + 1).toFloat());
-            } else {
-                amp->setTemp(tv.toFloat());
-            }
-        }
-        if (kvs.contains("hltemp"))
-            amp->setTempB(kvs["hltemp"].toFloat());
-        else if (kvs.contains("tempb"))
-            amp->setTempB(kvs["tempb"].toFloat());
+        // A FlexRadio relays no temperature in the amplifier status at all:
+        // the PA heatsink temperature arrives as the AMP `TEMP` meter
+        // (MeterModel::ampMetersChanged, below). The Harmonic Load heatsink
+        // temperature is available only over a direct connection to the PGXL.
         if (kvs.contains("id"))
             amp->setDrainCurrent(kvs["id"].toFloat());
         if (kvs.contains("vdd"))
@@ -7184,7 +7182,9 @@ void MainWindow::wireMeters()
         // must not read those as the relay being the live source of power.
         m_appletPanel->ampApplet()->setRadioMeters(
             fwdPwr, swr, m_radioModel.meterModel().hasAmpPower());
-        m_appletPanel->ampApplet()->setTemp(temp);
+        // The radio's AMP TEMP meter is the PA heatsink temperature. It is
+        // the only temperature a FlexRadio relays.
+        m_appletPanel->ampApplet()->setPaHeatsinkTemp(temp);
         // Exciter power at the amplifier's input — the amp's own DRV meter,
         // relayed by the radio. There is no second source for it: the PGXL's
         // port-9008 status carries no drive field (probed on firmware 3.8.9;

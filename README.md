@@ -140,7 +140,8 @@ Pre-built binaries are available from [Releases](https://github.com/aethersdr/Ae
 |----------|----------|-------|
 | **Linux x86_64** | `AetherSDR-*-x86_64.AppImage` | Single file, no install needed. `chmod +x` and run. |
 | **Linux ARM** | `AetherSDR-*-aarch64.AppImage` | Raspberry Pi, ARM laptops. `chmod +x` and run. |
-| **macOS** | `AetherSDR-*-macOS-apple-silicon.dmg` | Apple Silicon (M1+). Intel Macs via Rosetta. Signed & notarized. |
+| **macOS Apple Silicon** | `AetherSDR-*-macOS-apple-silicon.dmg` | Apple Silicon (M1+), macOS 14.4 or newer. Signed & notarized. |
+| **macOS Intel** | `AetherSDR-*-macOS-intel.dmg` | Intel Macs, macOS 14.4 (Sonoma) or newer. Signed & notarized. |
 | **Windows Installer** | `AetherSDR-*-Windows-x64-setup.exe` | Setup wizard with Start Menu shortcut and uninstaller. |
 | **Windows Portable** | `AetherSDR-*-Windows-x64-portable.zip` | No install needed. Extract and run. |
 
@@ -148,39 +149,48 @@ Pre-built binaries are available from [Releases](https://github.com/aethersdr/Ae
 
 ## Building from Source
 
-**Qt 6.8 or newer is required** — the same Qt the release binaries are built
-against (6.8.3 LTS), so what CI compiles is what ships. Distro Qt clears this on
-Debian Trixie, Ubuntu 25.10+, Fedora 41+ and Arch. It does **not** clear on
-Ubuntu 24.04 LTS (6.4.2), and on macOS Qt does not come from Homebrew at all —
-both cases are covered in [`docs/BUILDING.md`](docs/BUILDING.md).
+**Qt 6.12 is required** — the Qt every release is built against. Few distros
+package it yet, so Qt comes from `scripts/setup/setup-qt.sh`
+(`setup-qt.ps1` on Windows), which installs exactly the release Qt and
+qtkeychain in one command; CMake then finds it on its own. A distro Qt that is
+already 6.12 or newer also works. See
+[`docs/BUILDING.md`](docs/BUILDING.md#the-release-qt-setup-qtsh) for what the
+script checks and where it installs.
 
 ### Dependencies
 
-Optional packages are noted in the build docs; the build succeeds without them
-with the corresponding features disabled.
+Everything except Qt and qtkeychain comes from the system. Optional packages
+are noted in the build docs; the build succeeds without them with the
+corresponding features disabled.
 
 ```bash
 # Arch / CachyOS / Manjaro
-sudo pacman -S qt6-base qt6-multimedia qt6-websockets qt6-serialport \
-  qt6-shadertools cmake ninja pkgconf autoconf automake libtool \
-  fftw rtl-sdr portaudio hidapi qtkeychain-qt6
+sudo pacman -S cmake ninja pkgconf autoconf automake libtool python curl git \
+  fftw rtl-sdr portaudio hidapi \
+  libpulse libglvnd fontconfig wayland libxkbcommon-x11 pipewire \
+  xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
-# Debian Trixie / Ubuntu 25.10+ / Linux Mint 23+
-# (Ubuntu 24.04's Qt is 6.4.2 — below the floor; see the note above.)
-sudo apt install qt6-base-dev qt6-base-private-dev qt6-multimedia-dev \
-  qt6-websockets-dev qt6-serialport-dev qt6-shader-baker qt6-shadertools-dev \
-  cmake ninja-build pkg-config autoconf automake libtool \
-  libfftw3-dev librtlsdr-dev portaudio19-dev libhidapi-dev qtkeychain-qt6-dev \
-  libxkbcommon-dev libopengl0 \
-  gstreamer1.0-pulseaudio gstreamer1.0-plugins-base
+# Debian / Ubuntu / Linux Mint
+sudo apt install cmake ninja-build pkg-config autoconf automake libtool \
+  python3 python3-venv curl git \
+  libfftw3-dev librtlsdr-dev portaudio19-dev libhidapi-dev \
+  libgl1-mesa-dev libpulse-dev libasound2-dev libpipewire-0.3-dev pipewire-bin \
+  libdbus-1-dev libglib2.0-dev libfontconfig1-dev libfreetype6-dev \
+  libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  libxcb-cursor0 libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+  libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-util1 \
+  libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
+  libopengl0 gstreamer1.0-pulseaudio gstreamer1.0-plugins-base
 
 # Fedora
-sudo dnf install qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtmultimedia-devel \
-  qt6-qtwebsockets-devel qt6-qtserialport-devel qt6-qtshadertools-devel \
-  cmake ninja-build autoconf automake libtool \
-  fftw3-devel rtl-sdr-devel portaudio-devel hidapi-devel qtkeychain-qt6-devel
+sudo dnf install cmake ninja-build autoconf automake libtool python3 curl git \
+  fftw3-devel rtl-sdr-devel portaudio-devel hidapi-devel \
+  libglvnd-devel pulseaudio-libs-devel fontconfig-devel freetype-devel \
+  dbus-devel glib2-devel libX11-devel libxcb-devel \
+  libxkbcommon-devel libxkbcommon-x11-devel \
+  xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
-# macOS (Homebrew) — everything EXCEPT Qt and qtkeychain; see docs/BUILDING.md
+# macOS (Homebrew); Qt needs Xcode 16 — see docs/BUILDING.md
 brew install ninja cmake pkgconf autoconf automake libtool \
   fftw librtlsdr portaudio hidapi
 ```
@@ -190,6 +200,7 @@ brew install ninja cmake pkgconf autoconf automake libtool \
 ```bash
 git clone https://github.com/aethersdr/AetherSDR.git
 cd AetherSDR
+scripts/setup/setup-qt.sh            # Qt 6.12 (cached per user) + qtkeychain
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
 ./build/AetherSDR

@@ -410,7 +410,7 @@ void AmpApplet::buildUI()
     m_tempBtn->setCursor(Qt::PointingHandCursor);
     m_tempBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_tempBtn->setMinimumWidth(76);
-    m_tempBtn->setAccessibleDescription("Toggles amplifier temperature between Celsius and Fahrenheit");
+    m_tempBtn->setAccessibleDescription(tr("Toggles the PA heatsink and Harmonic Load heatsink temperatures between Celsius and Fahrenheit"));
     connect(m_tempBtn, &QPushButton::clicked, this, [this]() {
         m_tempFahrenheit = !m_tempFahrenheit;
         writeTempFahrenheit(m_tempFahrenheit);
@@ -1142,17 +1142,22 @@ void AmpApplet::setSwr(float swr)
     // Label text is updated by the 100 ms timer (updateValueLabels).
 }
 
-void AmpApplet::setTemp(float degC)
+void AmpApplet::setPaHeatsinkTemp(float degC)
 {
-    m_tempA = degC;
-    m_hasTempA = true;
+    m_paHeatsinkTemp = degC;
+    m_hasPaHeatsinkTemp = true;
     updateTempLabel();
 }
 
-void AmpApplet::setTempB(float degC)
+void AmpApplet::setHarmonicLoadHeatsinkTemp(float degC)
 {
-    m_tempB = degC;
-    m_hasTempB = true;
+    // Direct connection only, like Vdd and Vac: a late write after the
+    // connection drops must not put a stale value back on screen.
+    if (!m_directConnected) {
+        return;
+    }
+    m_harmonicLoadHeatsinkTemp = degC;
+    m_hasHarmonicLoadHeatsinkTemp = true;
     updateTempLabel();
 }
 
@@ -1162,39 +1167,50 @@ void AmpApplet::updateTempLabel()
         return;
     }
 
-    const QString tempA = m_hasTempA
-        ? formatTemp(m_tempA, m_tempFahrenheit)
+    const QString paText = m_hasPaHeatsinkTemp
+        ? formatTemp(m_paHeatsinkTemp, m_tempFahrenheit)
         : QStringLiteral("—");
     const QString unit = m_tempFahrenheit
         ? QStringLiteral("F")
         : QStringLiteral("C");
 
-    // Both sensors are named. The amplifier's own panel runs them unlabelled
-    // as "24.4/24.2 C", which is fine on hardware where the operator knows
-    // which is which and nothing else on screen is a temperature; here two
-    // bare numbers say nothing about what either one is measuring.
-    //
-    // HL is the wire's own name for the second (`hltemp`). PA is not — the
-    // first arrives as a bare `temp`, and PA is what an unqualified
-    // temperature on a power amplifier is. A one-line change if 4O3A ever
-    // says otherwise.
-    if (m_hasTempB) {
+    // The PGXL front panel shows both temperatures without labels, for
+    // example "24.4/24.2 C". The first is the PA heatsink and the second is
+    // the Harmonic Load heatsink (PowerGeniusXL User Guide v3.9.8, p. 55).
+    // We label them PA and HL so the operator knows which is which.
+    if (m_hasHarmonicLoadHeatsinkTemp) {
         m_tempBtn->setText(
             QStringLiteral("PA %1 / HL %2 %3")
-                .arg(pad(tempA))
-                .arg(pad(formatTemp(m_tempB, m_tempFahrenheit)))
+                .arg(pad(paText))
+                .arg(pad(formatTemp(m_harmonicLoadHeatsinkTemp, m_tempFahrenheit)))
                 .arg(unit));
     } else {
-        m_tempBtn->setText(QStringLiteral("PA %1 %2").arg(pad(tempA)).arg(unit));
+        m_tempBtn->setText(QStringLiteral("PA %1 %2").arg(pad(paText)).arg(unit));
     }
 
     const QString nextUnit = m_tempFahrenheit
         ? tr("Celsius")
         : tr("Fahrenheit");
-    m_tempBtn->setToolTip(
-        tr("Amplifier temperature\nClick to show degrees %1").arg(nextUnit));
-    m_tempBtn->setAccessibleName(
-        tr("Amplifier temperature %1").arg(m_tempBtn->text()));
+    // The tooltip explains only the labels on the button: HL is named only
+    // while an HL value is showing.
+    m_tempBtn->setToolTip(m_hasHarmonicLoadHeatsinkTemp
+        ? tr("PA: PA heatsink temperature\n"
+             "HL: Harmonic Load heatsink temperature\n"
+             "Click to show degrees %1").arg(nextUnit)
+        : tr("PA: PA heatsink temperature\n"
+             "Click to show degrees %1").arg(nextUnit));
+    // Spoken in words: before the first reading the visible dash becomes
+    // "not reported", which a screen reader says plainly.
+    const QString unitName = m_tempFahrenheit ? tr("Fahrenheit") : tr("Celsius");
+    const QString paSpoken = m_hasPaHeatsinkTemp
+        ? tr("PA heatsink %1 degrees %2").arg(paText, unitName)
+        : tr("PA heatsink not reported");
+    m_tempBtn->setAccessibleName(m_hasHarmonicLoadHeatsinkTemp
+        ? tr("%1, Harmonic Load heatsink %2 degrees %3")
+              .arg(paSpoken,
+                   formatTemp(m_harmonicLoadHeatsinkTemp, m_tempFahrenheit),
+                   unitName)
+        : paSpoken);
     if (QAccessible::isActive()) {
         QAccessibleEvent event(m_tempBtn, QAccessible::NameChanged);
         QAccessible::updateAccessibility(&event);
@@ -1448,6 +1464,11 @@ void AmpApplet::setDirectConnected(bool direct)
         // Vdd and Vac are not proxied by the radio — clear the stale values.
         m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"), QStringLiteral("—")));
         m_vacLabel->setText(voltsReadout(QStringLiteral("Vac"), QStringLiteral("—")));
+        // The radio relays only the PA heatsink temperature. Drop the Harmonic
+        // Load heatsink temperature so its last value does not stay on screen
+        // as if it were still live. It returns with the next direct reading.
+        m_hasHarmonicLoadHeatsinkTemp = false;
+        updateTempLabel();
         // Fan mode is only available via the direct PGXL protocol — drop it
         // until the amplifier is back rather than leaving a control up that
         // can no longer command anything.

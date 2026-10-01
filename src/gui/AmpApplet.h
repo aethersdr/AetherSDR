@@ -68,8 +68,15 @@ public:
     // "not measured".
     void setDrivePower(float watts, bool valid);
 
-    void setTemp(float degC);
-    void setTempB(float degC);
+    // The PGXL reports two heatsink temperatures in degrees Celsius
+    // (PowerGeniusXL User Guide v3.9.8, p. 55):
+    //   PA: the power amplifier heatsink. Status key `temp`.
+    //   HL: the Harmonic Load heatsink. Captured status key `hltemp`.
+    //       `tempb` is also accepted, but has not been seen in a capture.
+    // A FlexRadio relays only the PA heatsink temperature. The HL
+    // temperature is available only over a direct connection to the PGXL.
+    void setPaHeatsinkTemp(float degC);
+    void setHarmonicLoadHeatsinkTemp(float degC);
     void setDrainCurrent(float amps);
     void setDrainVoltage(float volts);
     void setMainsVoltage(int volts);
@@ -190,7 +197,7 @@ private:
     QLabel*  m_idLabel{nullptr};    // "Id   39"
 
     // Right-side info column (one per gauge row)
-    QPushButton* m_tempBtn{nullptr}; // "34.7/28.4 C"  (click to toggle C/F)
+    QPushButton* m_tempBtn{nullptr}; // "PA 34.7 / HL 28.4 C"; click to toggle C/F
     QLabel*  m_vddLabel{nullptr};   // "Vdd  50.0 V"  (beside SWR row)
     QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
     QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
@@ -296,10 +303,10 @@ private:
     float    m_drvWatts{0.0f};
     bool     m_haveDrive{false};
     float    m_drainAmps{0.0f};
-    float    m_tempA{0.0f};
-    float    m_tempB{0.0f};
-    bool     m_hasTempA{false};
-    bool     m_hasTempB{false};
+    float    m_paHeatsinkTemp{0.0f};           // degrees Celsius
+    float    m_harmonicLoadHeatsinkTemp{0.0f}; // degrees Celsius
+    bool     m_hasPaHeatsinkTemp{false};
+    bool     m_hasHarmonicLoadHeatsinkTemp{false};
     bool     m_tempFahrenheit{false};
     int      m_mainsVolts{0};
 };

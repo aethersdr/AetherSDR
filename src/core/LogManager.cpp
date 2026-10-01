@@ -108,6 +108,16 @@ LogManager::LogManager()
         {"aether.ax25.link",  "AX.25 Link",  "Connected-mode data link: session open/close, measured round-trip vs configured T1, retransmits, idle-link polls"},
         {"aether.waveform",   "Waveform",    "Docker waveform image install upload and local waveform helper lifecycle"},
         {"aether.kiwisdr",    "KiwiSDR",     "KiwiSDR remote RX antennas: connect, handshake, audio/waterfall negotiation, reconnect, profile lifecycle"},
+        // ANAN Protocol 2. Curated because the speaker-audio bench has no other
+        // way in: applyFilterRules() emits "aether.*.debug=false" and hands the
+        // whole string to setFilterRules(), which REPLACES the rules
+        // QT_LOGGING_RULES set — so relaunching with the environment variable does
+        // not reach this category, and an uncurated id can only be enabled through
+        // the bridge's `log set`. The speaker FIFO level and underflow reports are
+        // the only instrumentation the radio gives us for audio sent to it, and a
+        // diagnostic nobody can switch on is the one needed at 2am (see
+        // setEnabled()'s own note on exactly this).
+        {"aether.anan.p2",    "ANAN Protocol 2", "ANAN/Saturn Protocol 2 wire session: DDC sequence gaps, speaker-audio FIFO level and underflow reports, unexpected sender ports"},
         {"aether.kiwisdr.audio", "KiwiSDR Audio/DSP", "Verbose KiwiSDR receive audio: frame decode, resampler, jitter/FIFO under/overrun, mixing (high-rate; off by default)"},
         {"aether.automation", "Automation Bridge", "Agent-drivable test bridge (#3646): QLocalServer verbs, widget snapshots, captures (AETHER_AUTOMATION only)"},
         {"aether.qrz",        "QRZ Lookup",   "QRZ.com callsign lookups: session, cache, CW callsign spotting, photos"},

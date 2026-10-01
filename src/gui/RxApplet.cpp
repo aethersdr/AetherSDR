@@ -412,6 +412,11 @@ void RxApplet::buildUI()
                     ? m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId())
                     : QString();
             QMenu* menu = new QMenu(m_rxAntBtn);
+            // The label is antennaMenuLabel() — an alias or KiwiSDR profile
+            // name — so the per-action tooltip is the only place the raw
+            // ANT1/RX_A token is legible.  Qt discards it unless the menu opts
+            // in (#5546).
+            menu->setToolTipsVisible(true);
             connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
             for (const QString& ant : menuOptions) {
                 QAction* act = menu->addAction(antennaMenuLabel(ant, menuOptions));
@@ -458,6 +463,7 @@ void RxApplet::buildUI()
             const QPointer<QPushButton> button(m_txAntBtn);
             ScopedChildWidget<QMenu> menuOwner(this);
             QMenu& menu = *menuOwner.get();
+            menu.setToolTipsVisible(true);  // raw token behind the alias (#5546)
             const QString cur = m_slice ? m_slice->txAntenna() : "";
             const QStringList options = txAntennaOptions();
             for (const QString& ant : options) {
