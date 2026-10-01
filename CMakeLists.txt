@@ -284,12 +284,12 @@ find_package(Qt6 QUIET COMPONENTS Core)
 if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
     message(FATAL_ERROR
         "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.8 or newer.\n"
-        "This is the Qt every AetherSDR release binary is built against.\n"
+        "That is the source floor; release binaries are built against Qt 6.12.\n"
         "Ubuntu 24.04 LTS ships 6.4.2; Debian Trixie, Ubuntu 25.10+, "
         "Fedora 41+ and Arch all ship 6.8 or newer.\n"
         "To build on a distro below the floor, install Qt 6.8+ with aqtinstall "
         "or the Qt online installer and re-run with "
-        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/gcc_64 — see the README's "
+        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 — see the README's "
         "\"Building from Source\" dependency section.")
 endif()
 

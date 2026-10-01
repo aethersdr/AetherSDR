@@ -333,6 +333,18 @@ jobs:
   # the CI image for compiler deps. While that image still ships 6.8.3 the
   # Linux `build` job IS the floor and this job no-ops; after the image
   # rebuilds to 6.12 it aqt-installs 6.8.3 beside it and compiles again.
+  #
+  # Both steps below first strip the image's Qt from the environment. The
+  # image exports 6.12 on CMAKE_PREFIX_PATH, Qt6_DIR, PATH and LD_LIBRARY_PATH,
+  # and -DCMAKE_PREFIX_PATH only puts the floor FIRST — it does not hide the
+  # rest. aqt's 6.8.3 ships no Qt6GuiPrivate package, so find_package() for it
+  # fell through to 6.12's and configure died mixing the two ("Unknown CMake
+  # command _qt_internal_show_private_module_warning"), reproduced against a
+  # 6.12 environment before this was added. PATH matters because CMake derives
+  # search prefixes from its bin/ entries; LD_LIBRARY_PATH because it outranks
+  # the floor tools' own RUNPATH at build time. With the image's Qt gone, its
+  # 6.12-built qtkeychain goes too, so credential persistence compiles out in
+  # this lane by design — linking it would be the same ABI mix.
   check-linux-qt68-floor:
     runs-on: ubuntu-latest
     container: ghcr.io/aethersdr/aethersdr-ci:latest
@@ -365,6 +377,8 @@ jobs:
       - name: Configure against Qt 6.8.3
         if: steps.floor.outputs.skip != 'true'
         run: |
+          unset CMAKE_PREFIX_PATH Qt6_DIR LD_LIBRARY_PATH
+          PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vF "$QT_ROOT" | paste -sd: -)"
           cmake -B build-floor -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_PREFIX_PATH="$QT_FLOOR_ROOT" \
             -DAETHER_GPU_SPECTRUM=ON > configure-floor.log 2>&1 || {
@@ -379,7 +393,10 @@ jobs:
 
       - name: Build against Qt 6.8.3
         if: steps.floor.outputs.skip != 'true'
-        run: cmake --build build-floor -j$(nproc)
+        run: |
+          unset CMAKE_PREFIX_PATH Qt6_DIR LD_LIBRARY_PATH
+          PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vF "$QT_ROOT" | paste -sd: -)"
+          cmake --build build-floor -j$(nproc)
 
 
   # Cross-platform build check — runs on every PR (no path gating).
@@ -918,10 +935,10 @@ jobs:
     # must match macos-dmg.yml's apple-silicon DEPLOY_TARGET: the two jobs share
     # a qtkeychain cache key, so whichever runs first produces the dylib the
     # other ships, and a mismatch would put a minos-15 library inside a bundle
-    # that advertises 14.0.
+    # that advertises 14.4 (the floor Qt 6.12's own frameworks set).
     env:
       # QT_VERSION / AQTINSTALL_VERSION are workflow-level env (top of file).
-      MACOS_DEPLOYMENT_TARGET: '14.0'
+      MACOS_DEPLOYMENT_TARGET: '14.4'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

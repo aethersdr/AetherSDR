@@ -140,8 +140,8 @@ Pre-built binaries are available from [Releases](https://github.com/aethersdr/Ae
 |----------|----------|-------|
 | **Linux x86_64** | `AetherSDR-*-x86_64.AppImage` | Single file, no install needed. `chmod +x` and run. |
 | **Linux ARM** | `AetherSDR-*-aarch64.AppImage` | Raspberry Pi, ARM laptops. `chmod +x` and run. |
-| **macOS Apple Silicon** | `AetherSDR-*-macOS-apple-silicon.dmg` | Apple Silicon (M1+), macOS 14 or newer. Signed & notarized. |
-| **macOS Intel** | `AetherSDR-*-macOS-intel.dmg` | Intel Macs, macOS 13 (Ventura) or newer. Signed & notarized. |
+| **macOS Apple Silicon** | `AetherSDR-*-macOS-apple-silicon.dmg` | Apple Silicon (M1+), macOS 14.4 or newer. Signed & notarized. |
+| **macOS Intel** | `AetherSDR-*-macOS-intel.dmg` | Intel Macs, macOS 14.4 (Sonoma) or newer. Signed & notarized. |
 | **Windows Installer** | `AetherSDR-*-Windows-x64-setup.exe` | Setup wizard with Start Menu shortcut and uninstaller. |
 | **Windows Portable** | `AetherSDR-*-Windows-x64-portable.zip` | No install needed. Extract and run. |
 

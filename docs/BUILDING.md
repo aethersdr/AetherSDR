@@ -32,6 +32,12 @@ python3 -m venv ~/.venv/aqt && ~/.venv/aqt/bin/pip install aqtinstall
 cmake -B build -DCMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/macos;$(brew --prefix)"
 ```
 
+Qt 6.12 needs **Xcode 16** (the macOS 15 SDK): Qt's own CMake stops at
+configure with "Qt requires at least version 16 of Xcode" on anything older, and
+Xcode 16 itself needs a macOS 14.5+ host. On an older Mac, build against Qt
+6.8.3 instead (`aqt install-qt mac desktop 6.8.3 clang_64 …`) — it is still a
+supported source floor. Anything built against 6.12 runs on macOS 14.4+ only.
+
 `clang_64` is the only macOS desktop build Qt publishes, and it is universal2 —
 there is no separate arm64 archive to pick. `$(brew --prefix)` stays on the
 path for fftw, librtlsdr, portaudio and hidapi.
@@ -56,9 +62,15 @@ workflow asserts this; your machine will not.
 
 ## Windows 11
 
-Prerequisites: Visual Studio 2022 (Build Tools, Community, or higher) with the
-MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.8+ (`msvc2022_64`; both CI and
-the release binaries use 6.12.0 LTS).
+Prerequisites: Visual Studio 2022 **17.14 or newer** (Build Tools, Community,
+or higher) with the MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.8+
+(`msvc2022_64`; both CI and the release binaries use 6.12.0 LTS). The 17.14
+floor comes from Qt 6.12 itself: its static `Qt6EntryPoint.lib`, which every
+Windows GUI app links, is built by MSVC 14.44, and an MSVC linker must be at
+least as new as the compiler behind any input. Qt 6.8.3 links with 17.9+.
+
+Qt 6.12 is the last Qt release that supports Windows 10 (1809 or later), so
+the next binary Qt bump will make AetherSDR's Windows builds Windows 11-only.
 
 ```bat
 :: 1. Activate the MSVC environment. Adjust the edition (BuildTools / Community /

@@ -198,7 +198,7 @@ built at `minos 15.5`, and dyld enforces that floor on every Mach-O it loads —
 so a DMG carrying it requires macOS 15.5 no matter what it advertises, which
 excludes most of the older Intel hardware that artifact exists for (#4713,
 #4532). Dropping ASR avoids raising the Intel DMG to macOS 15.5; its Qt 6.12
-dependency requires macOS 13 (Ventura) or newer. Intel Macs
+dependency requires macOS 14.4 (Sonoma) or newer. Intel Macs
 also have no GPU worth running ASR on, so what was left there after the ONNX
 and sherpa backends came out was CPU-only whisper.
 
