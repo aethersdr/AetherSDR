@@ -284,15 +284,6 @@
 #include <QStandardPaths>
 #include "core/ThemeManager.h"
 
-// CMake captures the short git SHA at configure time and passes it as a
-// preprocessor definition (see CMakeLists.txt).  Defaulted to "unknown" so
-// non-CMake builds (e.g. raw clang invocations during local experiments)
-// still compile.  See issue #2991 for the rationale on hoisting this to
-// file scope rather than the inline definition inside buildMenuBar().
-#ifndef AETHER_GIT_SHA
-#define AETHER_GIT_SHA "unknown"
-#endif
-
 namespace AetherSDR {
 
 namespace {
@@ -2736,9 +2727,19 @@ MainWindow::MainWindow(QWidget* parent)
     }
 
     // Restore the Aetherial Audio Channel Strip if it was open on last
-    // exit (#2301).  toggleAetherialStrip() lazy-creates and shows.
-    if (s.value("AetherialStripVisible", "False").toString() == "True")
-        toggleAetherialStrip();
+    // exit (#2301). toggleAetherialStrip() lazy-creates and shows. Before a
+    // session connects the route is unknown, so restore is allowed; a later
+    // capability/mic update hides the editor silently if its route is blocked.
+    if (s.value("AetherialStripVisible", "False").toString() == "True") {
+        if (txAudioPathBlock() == TxAudioPathBlock::None) {
+            toggleAetherialStrip();
+        } else {
+            // Restore is automatic, not an operator attempt to open AetherTX.
+            // Leave the applet's callout to explain the route without a modal.
+            s.setValue("AetherialStripVisible", "False");
+            s.save();
+        }
+    }
     // Clear stale splitter state — layout has changed across versions.
     s.remove("SplitterState");
     // Force 4-pane sizing: CWX=0, DVK=0 (hidden), applet=260px, center=stretch.
@@ -10022,6 +10023,10 @@ void MainWindow::setFramelessWindow(bool on)
 
 void MainWindow::toggleAetherialStrip()
 {
+    // All entry points (Tools and the CHAIN edit gesture) arrive here. Check
+    // the connected radio's TX audio route when opening, but always allow an
+    // already-open strip to close.
+    if (!windowIsShowing(m_aetherialStrip) && showTxAudioPathErrorIfBlocked()) return;
     if (!m_aetherialStrip) {
         m_aetherialStrip = new AetherialAudioStrip(m_audio, this);
         // Override the parent-window relationship so the strip behaves as
@@ -10070,6 +10075,7 @@ void MainWindow::toggleAetherialStrip()
         const bool ready = (tx.micSelection() == "PC") && !tx.daxOn();
         m_aetherialStrip->setMicInputReady(ready);
         m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
+        updateTxAudioPathNotice();
     }
     // windowIsShowing() rather than isVisible(): a minimized strip still
     // reports isVisible(), so the bare check sent it down the hide() branch and

@@ -21,6 +21,7 @@
 #include "SliceColors.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include "SpotLabelPolicy.h"
 #include "core/EibiClient.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include "NoiseFloorEstimator.h"
@@ -10113,49 +10114,32 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         const double freqMhz = xToMhz(mx);
         const int hitTnf = tnfAtPixel(mx);
 
-        // Check if right-click is on an existing spot label
-        int hitSpotIdx = -1;
-        QString hitSpotCall;
-        double hitSpotFreq = 0;
-        QString hitSpotSource;
-        for (const auto& hr : m_spotClickRects) {
-            if (hr.rect.contains(mx, static_cast<int>(ev->position().y()))) {
-                if (hr.markerIndex >= 0 && hr.markerIndex < m_spotMarkers.size()) {
-                    const auto& sm = m_spotMarkers[hr.markerIndex];
-                    hitSpotIdx = sm.index;
-                    hitSpotCall = sm.callsign;
-                    hitSpotFreq = sm.freqMhz;
-                    hitSpotSource = sm.source;
-                }
-                break;
-            }
-        }
+        // Check if right-click is on an existing spot label. Presence comes
+        // from the rect hit, never from the spot ID: client-side IDs (memory,
+        // passive-local — DX/RBN/WSJT-X/POTA/manual on HL2, Icom, Passive
+        // mode) are negative by construction, TCI-injected ones positive, so
+        // the sign says nothing about presence (#6037).
+        const SpotLabelPolicy::LabelHit hit = SpotLabelPolicy::resolveLabelHit(
+            m_spotClickRects, m_spotMarkers,
+            QPoint(mx, static_cast<int>(ev->position().y())));
 
         ScopedChildWidget<QMenu> menuOwner(this);
         QMenu& menu = *menuOwner.get();
 
         // Spot-on-label context menu
-        if (hitSpotIdx >= 0) {
-            if (hitSpotSource == "Memory") {
-                const QString title = hitSpotCall.isEmpty()
-                    ? QStringLiteral("Apply Memory")
-                    : QString("Apply %1").arg(hitSpotCall);
-                menu.addAction(title, this, [this, hitSpotIdx]{
-                    emit spotTriggered(hitSpotIdx);
-                });
-            } else {
-                menu.addAction(QString("Tune to %1").arg(hitSpotCall), this,
-                    [this, hitSpotFreq]{ emit frequencyClicked(hitSpotFreq); });
-                menu.addAction("Copy Callsign", this, [hitSpotCall]{
-                    QApplication::clipboard()->setText(hitSpotCall);
-                });
-                menu.addAction("Lookup on QRZ", this, [hitSpotCall]{
-                    QDesktopServices::openUrl(QUrl("https://www.qrz.com/db/" + hitSpotCall));
-                });
-                menu.addSeparator();
-                menu.addAction("Remove Spot", this,
-                    [this, hitSpotIdx]{ emit spotRemoveRequested(hitSpotIdx); });
-            }
+        if (hit.menu != SpotLabelPolicy::Menu::General) {
+            SpotLabelPolicy::SpotLabelActions actions;
+            actions.applyMemory = [this](int id) { emit spotTriggered(id); };
+            actions.tune = [this](double mhz) { emit frequencyClicked(mhz); };
+            actions.copyCallsign = [](const QString& call) {
+                QApplication::clipboard()->setText(call);
+            };
+            actions.lookupQrz = [](const QString& call) {
+                QDesktopServices::openUrl(QUrl("https://www.qrz.com/db/" + call));
+            };
+            actions.remove = [this](int id) { emit spotRemoveRequested(id); };
+            SpotLabelPolicy::addSpotLabelActions(menu, this, hit.menu, hit.spotId,
+                                                 hit.callsign, hit.freqMhz, actions);
         }
         // TNF context menu (when clicking on a TNF marker)
         else if (hitTnf >= 0) {

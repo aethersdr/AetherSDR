@@ -775,6 +775,13 @@ private:
     QJsonObject doMark(const QString& text);
     struct LogEvent;
     static QJsonObject logEventToJson(const LogEvent& e);  // redacts on egress
+    // `ping`'s `build` object (#5804). Takes the values rather than reading the
+    // generated header itself, so a test can drive it with fields that differ:
+    // in a clone with no reachable tag, describe and sha are the same string and
+    // the live reply cannot show which key carries which.
+    static QJsonObject buildIdentityJson(const QString& describe, const QString& sha,
+                                         const QString& baseline, int commitsSinceTag,
+                                         bool dirty);
 
     // Resolve a target string to a widget, including pan-index scoped targets:
     // exact objectName first, then class name (with or without namespace) or
