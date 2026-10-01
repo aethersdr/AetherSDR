@@ -1126,8 +1126,8 @@ struct RadioCapabilities {
     // operator's Passive toggle and every existing radio-publication path.
     //
     // This is intentionally a backend policy, not a `family == "icom"` check
-    // above the seam. It lets Icom declare its CI-V limitation without
-    // changing Flex, HL2, or Sim spot behavior.
+    // above the seam. Icom declares its CI-V limitation with it, and HL2 its
+    // missing command plane, without changing Flex or Sim spot behavior.
     bool alwaysUseClientSideSpots = false;
 
     // The RADIO reports its own position/time from an on-board GNSS receiver, so

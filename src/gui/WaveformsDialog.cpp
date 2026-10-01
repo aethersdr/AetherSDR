@@ -1350,6 +1350,11 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     m_installBtn->setEnabled(false);  // updated after installer state is known
     auto* installMenu = new QMenu(m_installBtn);
     installMenu->setStyleSheet(QString::fromLatin1(kWaveformsInstallMenuStyle));
+    // updateInstallButtonState() puts dockerInstallBlockerText()'s per-blocker
+    // reason on the Docker entry's tooltip when it greys the entry out, and
+    // that string has no other outlet in the UI.  Qt drops per-action tooltips
+    // unless the menu opts in (#5546).
+    installMenu->setToolTipsVisible(true);
     installMenu->addAction(tr("Legacy Waveform (.ssdr_waveform)..."),
                            this, &WaveformsDialog::onInstallLegacyClicked);
     m_installDockerAction = installMenu->addAction(tr("Docker Waveform Image..."),
