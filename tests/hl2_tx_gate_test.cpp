@@ -1457,6 +1457,12 @@ int main(int argc, char** argv)
     {
         // The voice chain's figure rides in the same line, and an unpublished
         // one says so instead of printing -1 as if it were a delay.
+        //
+        // WITH THE PRIME (#6052) the first queued IQ is no longer the packet
+        // after the first delivery: the queue holds until it is at its target.
+        // So the line is reported when the hold lets go, and it carries the
+        // hold beside the empty-queue silence -- the two are the queue's whole
+        // share of the leading silence and neither is counted in the other.
         TxTestAuthority tx;
         ScopedTxFifoLog log;
         MetisClient over;
@@ -1464,28 +1470,45 @@ int main(int argc, char** argv)
         AetherSDR::TxChainLatency::publishVoiceProcessorFrames(970);
         over.setMox(true, tx.operation);
         (void)over.buildNextControlPacket();                // one empty packet
-        const std::vector<std::complex<float>> block(
-            static_cast<std::size_t>(kTxSamplesPerPacket), std::complex<float>(0.25f, -0.25f));
+        const std::size_t packet = static_cast<std::size_t>(kTxSamplesPerPacket);
+        const std::vector<std::complex<float>> block(packet, std::complex<float>(0.25f, -0.25f));
         over.queueTxIq(block, tx.context);
-        (void)over.buildNextControlPacket();                // first queued IQ
-        (void)over.buildNextControlPacket();                // nothing queued: no second line
+        const auto held = over.buildNextControlPacket();    // samples waiting, below the target
+        check(!payloadNonZero(held) && log.keyDownLines().isEmpty(),
+              "a packet the prime holds is not the first queued IQ: no key-down line yet");
+        const std::vector<std::complex<float>> rest(
+            MetisClientTestAccess::primeTarget() - packet, std::complex<float>(0.25f, -0.25f));
+        over.queueTxIq(rest, tx.context);
+        check(payloadNonZero(over.buildNextControlPacket()),  // first queued IQ
+              "at the target the first queued IQ goes out");
+        (void)over.buildNextControlPacket();                // same over: no second line
         QStringList lines = log.keyDownLines();
         check(lines.size() == 1 && lines.first().contains(QStringLiteral("970 frames")),
               "the key-down line carries TxVoiceProcessor::latencyFrames() as published");
-        check(over.lastKeyDownUnderflowSamples()
-                  == static_cast<std::uint64_t>(kTxSamplesPerPacket),
+        check(over.lastKeyDownUnderflowSamples() == static_cast<std::uint64_t>(packet),
               "one empty packet before the first IQ is one packet of key-down silence");
+        check(over.lastKeyDownPrimeHoldPackets() == 1
+                  && over.lastKeyDownUnderflowSamples() == over.txUnderflowSamples(),
+              "the packet the prime held is reported as a hold, and not as underflow");
+        check(!lines.isEmpty()
+                  && lines.first().contains(QStringLiteral("126 samples"))
+                  && lines.first().contains(QStringLiteral("and 1 packet(s)")),
+              "and the line carries both: the empty-queue silence and the prime's hold");
 
         over.setMox(false, tx.operation);
+        over.flushTxIq();                                    // how an over ends
         AetherSDR::TxChainLatency::publishVoiceProcessorFrames(-1);
         over.setMox(true, tx.operation);                     // a NEW over re-arms it
-        over.queueTxIq(block, tx.context);
+        const std::vector<std::complex<float>> whole(
+            MetisClientTestAccess::primeTarget(), std::complex<float>(0.25f, -0.25f));
+        over.queueTxIq(whole, tx.context);
         (void)over.buildNextControlPacket();
         lines = log.keyDownLines();
         check(lines.size() == 2 && lines.last().contains(QStringLiteral("n/a")),
               "each over reports once, and an unpublished chain figure reads n/a");
-        check(over.lastKeyDownUnderflowSamples() == 0,
-              "an over whose queue was primed at MOX-on reports no key-down silence");
+        check(over.lastKeyDownUnderflowSamples() == 0 && over.lastKeyDownPrimeHoldPackets() == 0,
+              "an over whose queue was at the target at MOX-on reports no key-down "
+              "silence and no hold");
     }
 
     {

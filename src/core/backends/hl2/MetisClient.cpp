@@ -1297,8 +1297,10 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
     // The key-down report (#6052): armed on the rising edge, disarmed on the
     // falling one so an over that never carried queued IQ says nothing.
     m_keyDownReportPending = m_mox;
-    if (m_mox)
+    if (m_mox) {
         m_keyDownUnderflowBase = m_txUnderflowSamples;
+        m_keyDownPrimeHoldBase = m_txPrimeHoldPackets;
+    }
 
     // THE BANDSCOPE'S TRANSMIT INTERLOCK, on the edges of the one member that
     // is the final authority for keying on the wire (buildNextControlPacket
@@ -1512,6 +1514,7 @@ void MetisClient::reportKeyDown()
 {
     m_keyDownReportPending = false;
     m_lastKeyDownUnderflowSamples = m_txUnderflowSamples - m_keyDownUnderflowBase;
+    m_lastKeyDownPrimeHoldPackets = m_txPrimeHoldPackets - m_keyDownPrimeHoldBase;
     // Both figures are 48 kHz samples: EP2 is clocked at kEp2AudioRateHz and
     // latencyFrames() is defined at 48 kHz, so they add without conversion.
     const auto ms = [](double samples) {
@@ -1525,10 +1528,13 @@ void MetisClient::reportKeyDown()
         << "HL2 tx key-down: first queued IQ after "
         << m_lastKeyDownUnderflowSamples << " samples ("
         << ms(static_cast<double>(m_lastKeyDownUnderflowSamples))
-        << " ms) of EMPTY-QUEUE keyed silence (txUnderflowSamples since MOX-on);"
-        << " upstream of the queue, TxVoiceProcessor::latencyFrames() = "
+        << " ms) of EMPTY-QUEUE keyed silence (txUnderflowSamples since MOX-on)"
+        << " and " << m_lastKeyDownPrimeHoldPackets << " packet(s) ("
+        << ms(static_cast<double>(m_lastKeyDownPrimeHoldPackets * kTxSamplesPerPacket))
+        << " ms) HELD BY THE PRIME with samples waiting (txPrimeHoldPackets since"
+        << " MOX-on); upstream of the queue, TxVoiceProcessor::latencyFrames() = "
         << chainText
-        << ". Neither figure includes the WDSP TXA channel's own delay, which is"
+        << ". None of these includes the WDSP TXA channel's own delay, which is"
         << " fixed by its configuration and measured offline (hl2_tx_latency_test).";
 }
 

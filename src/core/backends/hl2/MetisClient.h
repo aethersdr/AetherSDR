@@ -408,6 +408,13 @@ public:
     {
         return m_lastKeyDownUnderflowSamples;
     }
+    // Packets the prime held from MOX-on to the first queued sample, with samples
+    // waiting. With lastKeyDownUnderflowSamples it is the queue's whole share of
+    // the over's leading silence; neither contains the other.
+    [[nodiscard]] std::uint64_t lastKeyDownPrimeHoldPackets() const noexcept
+    {
+        return m_lastKeyDownPrimeHoldPackets;
+    }
     // Keyed packets sent as silence by the prime with samples waiting (#6052):
     // not an underflow. Overs the prime let go at its deadline rather than its
     // target. Totals since process start, I/O thread only, like the three above.
@@ -841,13 +848,15 @@ private:
             / static_cast<std::uint64_t>(kTxSamplesPerPacket);
     std::uint64_t m_txUnderflowRunQuietPackets = 0;
     void reportTxUnderflowRun();
-    // Key-down report (#6052): armed on MOX's rising edge with the underflow
-    // total, reported once on the first keyed packet carrying queued IQ. The
-    // difference is the empty-queue silence this queue put at the head of the
-    // over. CW and the test tone never reach the queued arm and log nothing.
+    // Key-down report (#6052): armed on MOX's rising edge with the underflow and
+    // prime-hold totals, reported once on the first keyed packet carrying queued
+    // IQ. The differences are the silence this queue put at the head of the over
+    // (empty packets, and packets the prime held). CW and the test tone log nothing.
     bool m_keyDownReportPending = false;
     std::uint64_t m_keyDownUnderflowBase = 0;
     std::uint64_t m_lastKeyDownUnderflowSamples = 0;
+    std::uint64_t m_keyDownPrimeHoldBase = 0;
+    std::uint64_t m_lastKeyDownPrimeHoldPackets = 0;
     void reportKeyDown();
     double m_toneHz = 0.0;
     double m_toneAmp = 0.0;
