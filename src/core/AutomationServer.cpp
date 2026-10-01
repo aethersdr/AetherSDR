@@ -1,6 +1,6 @@
+#include "AutomationServer.h"
 #include "core/DroopCalibration.h"
 #include "core/backends/AutoRfGainControl.h"
-#include "AutomationServer.h"
 #include "AetherBuildIdentity.h"   // generated at build time; see cmake/AetherBuildIdentity.cmake
 #include "core/CtcssTones.h"
 #include "core/RadioCertification.h"
