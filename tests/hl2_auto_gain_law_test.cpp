@@ -349,5 +349,64 @@ int main(int argc, char** argv)
         backend.disconnectRadio();
     }
 
+    // ---- 7. A LINK THAT RESUMES ON THE SAME SESSION RE-ASKS FOR THE GATE ---
+    // A second defect, separate from which law a connect installs, and one
+    // that law makes reachable. After 2 s of EP6 silence MetisClient ends the
+    // bandscope gate's intent and emits linkDown without stopping; when EP6
+    // resumes it emits linkUp again. No connectRadio() and no
+    // applyRestoredState() run in between, so the loop stays armed and nothing
+    // on that path used to ask for the gate again: the bandscope law then held
+    // its offset on HeadroomAbsent until the operator toggled the switch.
+    //
+    // Section 5 fires that edge once. This section pins the claim from each
+    // side, on the request and not on a stream (see the file header).
+    {
+        // (a) The gate was the OPERATOR'S before the silence. The explicit
+        // enable takes the claim away from the loop; the silence then ends the
+        // operator's stream as well, so there is nothing of theirs left to
+        // protect and the armed loop has to claim one of its own.
+        hl2::Hl2Backend backend;
+        connectWith(backend, savedProfile(true));
+        check(backend.isArmed() && Access::gateAskedFor(backend),
+              "positive control: armed under the bandscope law, gate asked for");
+        backend.invokeExtension(QStringLiteral("hl2"),
+                                QStringLiteral("bandscope.enable"), 0, QVariant(true));
+        check(!Access::gateAskedFor(backend),
+              "an explicit operator enable takes the claim from the loop");
+        Access::linkDown(backend);
+        Access::linkUp(backend);
+        check(backend.isConnected() && backend.isArmed(),
+              "the silence and the resume leave the loop armed");
+        check(Access::gateAskedFor(backend),
+              "and the resumed link asks for the gate on the loop's behalf");
+        backend.disconnectRadio();
+    }
+    {
+        // (b) NOT FOR A LAW THAT DOES NOT READ THE BANDSCOPE. The loop is
+        // armed across the same edge and no gate is asked for.
+        hl2::Hl2Backend backend;
+        connectWith(backend, savedProfile(true));
+        check(backend.setLaw(QStringLiteral("ramp")) && backend.isArmed(),
+              "positive control: armed under the ramp");
+        Access::linkDown(backend);
+        Access::linkUp(backend);
+        check(backend.isArmed() && !Access::gateAskedFor(backend),
+              "a resumed link asks for no gate under a law that ignores it");
+        backend.disconnectRadio();
+    }
+    {
+        // (c) AND NOT FOR A LOOP THAT IS OFF, whatever law is installed.
+        hl2::Hl2Backend backend;
+        connectWith(backend, savedProfile(false));
+        Access::linkDown(backend);
+        Access::linkUp(backend);
+        check(backend.isConnected() && !backend.isArmed()
+                  && backend.law() == kApprovedLaw,
+              "positive control: resumed, bandscope law, loop off");
+        check(!Access::gateAskedFor(backend),
+              "a resumed link asks for no gate while the loop is off");
+        backend.disconnectRadio();
+    }
+
     return failures ? 1 : 0;
 }

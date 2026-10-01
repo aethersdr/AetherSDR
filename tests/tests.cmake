@@ -6737,6 +6737,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_mode_vocabulary_test
     hl2_client_side_spots_declaration_test
     hl2_gain_split_test
+    hl2_auto_gain_law_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test
