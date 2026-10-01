@@ -4013,6 +4013,14 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME seam_probe_table_scanner
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_seam_probe_table.py)
+    # tools/hl2/spectrum.py draws a signal on the side of the tuned frequency
+    # it is on (#4265). Runs the probe's real capture() with the socket replaced
+    # by an object that returns EP6 packets built in the test: nothing is bound,
+    # no radio. Stdlib only; the panadapter() row check runs when numpy is
+    # installed and prints a SKIP line when it is not.
+    add_test(NAME hl2_probe_spectrum_handedness
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_hl2_spectrum_handedness.py)
 endif()
 
 # Retired local-listener fixture. Positive behavior is covered through the live
