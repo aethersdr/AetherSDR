@@ -2726,6 +2726,26 @@ target_include_directories(firmware_uploader_test PRIVATE src)
 target_link_libraries(firmware_uploader_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME firmware_uploader_test COMMAND firmware_uploader_test)
 
+# #5958: socket-free capability policy; no discovery, transport, or radio peer.
+add_executable(tx_audio_path_policy_test tests/tx_audio_path_policy_test.cpp)
+target_include_directories(tx_audio_path_policy_test PRIVATE src)
+target_link_libraries(tx_audio_path_policy_test PRIVATE Qt6::Core)
+add_test(NAME tx_audio_path_policy_test COMMAND tx_audio_path_policy_test)
+
+# #5958: production CHAIN visibility under injected route notices; no sockets.
+add_executable(client_chain_audio_path_test
+    tests/client_chain_audio_path_test.cpp
+    src/gui/ClientChainApplet.cpp
+    src/gui/ClientChainWidget.cpp
+    src/gui/ClientRxChainWidget.cpp
+)
+target_include_directories(client_chain_audio_path_test PRIVATE src tests)
+target_link_libraries(client_chain_audio_path_test PRIVATE
+    aetherdesktop_support Qt6::Widgets)
+add_test(NAME client_chain_audio_path_test COMMAND client_chain_audio_path_test)
+set_tests_properties(client_chain_audio_path_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
 # Local Qt dialog + injected uploader callbacks; no radio connection or peer.
 add_executable(firmware_close_dialog_test
     tests/firmware_close_dialog_test.cpp
@@ -3287,6 +3307,18 @@ target_compile_definitions(passive_spots_policy_test PRIVATE
     AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(passive_spots_policy_test PRIVATE Qt6::Core)
 add_test(NAME passive_spots_policy_test COMMAND passive_spots_policy_test)
+
+# Right-click on a client-side spot label offers Remove Spot and removes it
+# locally, never as `spot remove` wire text (#6037). Header-only helpers;
+# offscreen QMenu, socket-free.
+add_executable(spot_label_menu_test tests/spot_label_menu_test.cpp)
+target_include_directories(spot_label_menu_test PRIVATE src)
+target_compile_definitions(spot_label_menu_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(spot_label_menu_test PRIVATE Qt6::Core Qt6::Widgets)
+add_test(NAME spot_label_menu_test COMMAND spot_label_menu_test)
+set_tests_properties(spot_label_menu_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(spot_mode_resolver_test
     tests/spot_mode_resolver_test.cpp
@@ -4150,6 +4182,25 @@ target_include_directories(automation_cell_test PRIVATE src)
 target_link_libraries(automation_cell_test PRIVATE aethercore Qt6::Widgets)
 add_test(NAME automation_cell_test COMMAND automation_cell_test)
 set_tests_properties(automation_cell_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# #5804: `ping` reports the build identity the aether_build_identity target
+# generates. Socket-free handleLine injection; no listener, no radio.
+add_executable(automation_ping_build_identity_test
+    tests/automation_ping_build_identity_test.cpp)
+target_include_directories(automation_ping_build_identity_test PRIVATE
+    src tests "${AETHER_BUILD_ID_DIR}")
+add_dependencies(automation_ping_build_identity_test aether_build_identity)
+target_link_libraries(automation_ping_build_identity_test PRIVATE aethercore Qt6::Core)
+add_test(NAME automation_ping_build_identity_test
+         COMMAND automation_ping_build_identity_test)
+# #5804: the capture script itself, driven against a scratch git repository --
+# no tag, on a tag, past a tag without re-configuring, dirty, and unchanged
+# HEAD leaving the header untouched.
+add_test(NAME build_identity_capture_test
+         COMMAND ${CMAKE_COMMAND}
+                 -DAETHER_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                 -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/build_identity_capture_test
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/build_identity_capture_test.cmake)
 
 add_executable(automation_menu_lookup_test tests/automation_menu_lookup_test.cpp)
 target_include_directories(automation_menu_lookup_test PRIVATE src tests)
@@ -6958,6 +7009,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_cell_test
     automation_menu_lookup_test
     automation_sensitive_grab_command_test
+    automation_ping_build_identity_test
     automation_gauge_verb_test
     automation_persist_diagnostics_test
     automation_server_gesture_test
