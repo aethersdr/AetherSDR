@@ -374,11 +374,15 @@ int main(int argc, char** argv)
               "and what is stored for the band is +19 throughout — never the 8");
 
         // ---- THE OPERATOR'S FLOOR. The second, and last, of the two numbers
-        // they own. 26 dB is a CHOSEN default inside a MEASURED bound: from
-        // the stock +20 dB baseline it reaches -6 dB, which is the first gain
-        // #5354's own sweep measures as clean on this station.
-        check(s.backend.autoRfGainFloorDb() == 26,
-              "the floor defaults to 26 dB below the operator's setting");
+        // they own. The floor belongs to the law, and after a connect the law
+        // is the bandscope one: 24 dB, the value RFC #5535's ruling holds.
+        //
+        // THIS LINE ASSERTED 26 AND WAS GREEN ON THE DEFECT. 26 is the ramp's
+        // floor, which applyRestoredState() installed on every connect in
+        // place of the constructed law; the check pinned what the session
+        // happened to have, not what was approved.
+        check(s.backend.autoRfGainFloorDb() == 24,
+              "the floor defaults to 24 dB below the operator's setting");
         s.backend.setAutoRfGainFloorDb(9);
         check(s.backend.autoRfGainFloorDb() == 9, "and the operator can pull it in");
         s.backend.setAutoRfGainFloorDb(500);

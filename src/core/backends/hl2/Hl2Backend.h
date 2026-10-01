@@ -212,6 +212,11 @@ public:
     // Everything else in Hl2AutoGainPolicy.h is deliberately NOT operator-
     // settable. Nine knobs is nine ways to build a loop that hunts, and none of
     // them is a decision an operator has the evidence to make.
+    //
+    // THE 26 ABOVE IS THE RAMP'S FLOOR, NOT THE ONE A BACKEND STARTS WITH. The
+    // floor is part of a law's configuration (setAutoRfGainMode), and the law
+    // installed at construction and on every connect is the bandscope one,
+    // whose floor is the 24 dB RFC #5535's ruling holds.
     void setAutoRfGainFloorDb(int floorDb);
     [[nodiscard]] int autoRfGainFloorDb() const noexcept
     {
@@ -242,6 +247,12 @@ public:
     // Selecting a mode also installs that mode's floor, because the floor is
     // part of the configuration; re-issue the floor afterwards to override it.
     // Returns false and changes nothing if the name is not one of the four.
+    //
+    // "default" is accepted as a name for whichever law a backend starts with.
+    //
+    // NEITHER THE LAW NOR THE FLOOR IS PERSISTED. A connect returns both to
+    // the constructed default (applyRestoredState), so a law selected here
+    // lasts until the next connect and has to be selected again after it.
     bool setAutoRfGainMode(const QString& mode);
 
     // ---- IAutoRfGainControl (AutoRfGainControl.h) ----
@@ -1144,9 +1155,21 @@ private:
     // reset path. The config struct cannot answer "which law is this" -- it is
     // just numbers -- and inferring it back from the numbers would be a second
     // copy of the choice.
-    // DEFAULTED IN THE CONSTRUCTOR, not here: bandscopeReleaseConfig() computes
-    // its bias budget with a logarithm and cannot be a constant initialiser.
-    QString m_autoGainMode = QStringLiteral("bandscope");
+    // NO INITIALISER HERE, ON PURPOSE. The name and the config are installed
+    // together by installDefaultAutoGainLaw(), from the constructor and from
+    // applyRestoredState(); a literal here would be a second copy of the
+    // default, which is how the two came to disagree.
+    QString m_autoGainMode;
+    // A law is a name and its numbers. Kept as one value so neither can be
+    // installed without the other.
+    struct AutoGainLaw {
+        QString name;
+        AetherSDR::hl2::AutoGainConfig config;
+    };
+    // The law a backend starts with. The one source for the constructor, for
+    // applyRestoredState() and for the name "default". See the definition.
+    [[nodiscard]] static AutoGainLaw defaultAutoGainLaw();
+    void installDefaultAutoGainLaw();
     // Band and baseline as the loop last saw them, so a change in either
     // reaches the policy as the input it is rather than as a surprise.
     QString m_autoGainBandKey;
