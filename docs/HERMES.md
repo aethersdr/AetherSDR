@@ -513,8 +513,9 @@ in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
   independently by `hl2_rxdsp_test` and `hl2_shift_test`. This is the single
   least intuitive fact in the whole backend and everything in §16 follows from
   it.
-- **TX — in `Hl2TxDsp` — is the mirror image: the MODE selects the sideband and
-  the bandpass is an audio-domain magnitude.** `Hl2TxDsp` filters with one real
+- **TX — in `Hl2TxDsp`'s phasing build (`AETHER_HL2_TX_TXA=OFF`) — is the mirror
+  image: the MODE selects the sideband and the bandpass is an audio-domain
+  magnitude.** The phasing modulator filters with one real
   bandpass plus a Hilbert pair built from **positive** edges, and chooses the
   sideband in `isLowerSideband()`, which negates Q. Handing it the RX table's
   signed pairs put LSB and DIGL on the upper sideband — caught by
@@ -539,20 +540,17 @@ in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
   `rtype = 1`, so this one function is the mechanism behind both the RX bullet
   above and the TX correction here.
 
-The trap: RXA and `Hl2TxDsp` use **opposite conventions**, and both look
+The trap: RXA and the phasing modulator use **opposite conventions**, and both look
 plausible. A table written for one and reused for the other is silently wrong on
 exactly half the modes. The second trap is assuming the first one describes
 WDSP's transmit path: it does not.
 
-> **Forward note — not an instruction, and nothing here changes behaviour.**
-> Whether transmit should move from `Hl2TxDsp` onto a real TXA channel is the
-> open question in **#5678**; nothing has been decided. An **unfiled** analysis
-> behind that issue argues such a migration should drop `Hl2TxDsp`'s wire
-> conjugation and feed TXA *signed* RX-style edges rather than
-> `defaultTxPassbandForMode`. It is unfiled deliberately — there is no artifact
-> to cite and no number to follow, so treat the arrangement as unestablished. It
-> is a code change for a migration PR to settle and measure, not a claim this
-> section makes.
+> **The default build transmits through a WDSP TXA channel**
+> (`AETHER_HL2_TX_TXA=ON`, #5678; see the option in `CMakeLists.txt`). It takes
+> `defaultTxPassbandForMode`'s positive pair and signs it per sideband in
+> `Hl2TxDsp::applyModeAndFilter()` (LSB, CWL and DIGL negated), and it does **not**
+> conjugate: the signed passband already gives the wire's handedness. The
+> phasing modulator above is the `AETHER_HL2_TX_TXA=OFF` fallback.
 
 ### CW has no BFO unless you build one
 
@@ -1791,8 +1789,10 @@ have exposed the bug was the one that always looked fine.
 
 **Why the loopback could not have caught it, and what changed.** The second row
 above is worth being precise about. `hl2_tx_loopback_test` measures a loop that
-conjugates twice — `Hl2TxDsp` for the wire on the way out, `Hl2RxDsp` for the
-panadapter on the way back — so a handedness error present at BOTH ends cancels
+flips handedness twice — into wire order on the way out (the tone generator and
+the phasing build by conjugating, the default TXA modulator by its signed
+passband), `Hl2RxDsp`'s conjugate for the panadapter on the way back — so a
+handedness error present at BOTH ends cancels
 exactly. Whichever sign that test asserted, it was blind to a global flip; it
 was another instrument sharing the convention. The test now takes an
 **independent bearing on the receive end first**: hpsdrsim generates its own
@@ -1836,7 +1836,8 @@ second receiver remains the only check that comes from outside it.
   works (`wdsp_channel_test` proves it), but driven from this backend's config it
   returned underruns and zeros. Chasing an undocumented init sequence for a path
   that keys a transmitter is a bad trade against fifty lines whose correctness is
-  a number a test prints.
+  a number a test prints. (The default build uses TXA, with the signed passband
+  §5 describes.)
 
 ### 14.8 Still open
 
@@ -4473,5 +4474,5 @@ superseded design. Whether a zoom now keeps the audio clean is **open**, and
 closing it needs hardware — as does the length of the unmuted latch window
 above.
 
-The opt-in TXA modulator and its offline evidence are described in
+The TXA modulator (the default, `AETHER_HL2_TX_TXA=ON`) and its evidence are described in
 [HL2 TXA configuration and lifecycle](hl2-txa-configuration-diff.md).
