@@ -50,6 +50,7 @@
 #include "DaxIqApplet.h"
 #include "TciApplet.h"
 #include "PanadapterStack.h"
+#include "PanSpanControlGate.h"
 #include "workspace/WorkspaceController.h"
 #include "gui/MiniPanApplet.h"
 #include "gui/MiniPanScope.h"
@@ -899,10 +900,19 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    // A removed TX slice hands a radio-wide span control to the fallback
+    // pane (#5750). Queued: the slice may still be in the model's list while
+    // sliceRemoved is being delivered.
+    connect(&m_radioModel, &RadioModel::sliceRemoved, this,
+            [this](int) { syncPanSpanControlPlacement(); }, Qt::QueuedConnection);
     // A reconnect reclaims our slice objects without sliceAdded; a Monitor TX
     // release that happened while they were parked completes here. (#2242)
     connect(&m_radioModel, &RadioModel::slotOccupancyChanged,
             this, [this](int) { tryCompletePendingMonitorRelease(); });
+    // The same reclaim can bring back the TX slice without sliceAdded or a
+    // txSliceChanged edge, so the span control's owner is re-derived (#5750).
+    connect(&m_radioModel, &RadioModel::slotOccupancyChanged,
+            this, [this](int) { syncPanSpanControlPlacement(); });
     connect(&m_radioModel, &RadioModel::sliceConnectEnumerationStarted,
             this, [this]() {
         m_connectSliceEnumeration.arm(QDateTime::currentMSecsSinceEpoch());
@@ -2920,6 +2930,50 @@ void MainWindow::showUnsupportedControlNotice()
         tr("This radio doesn't support that control — nothing was sent to "
            "the radio. Further unsupported controls are logged."),
         8000);
+}
+
+
+// ONE SPAN CONTROL WHEN THERE IS ONE SPAN (#5750).
+//
+// Re-derived from scratch on every call rather than patched per event: the
+// answer depends on the connected radio's declaration, the set of panes, and
+// which slice transmits, and each of those changes on a different signal
+// (connect/disconnect, panAdded/panRemoved/panRekeyed, txSliceChanged,
+// panIdChanged, sliceRemoved). One idempotent function that every one of them
+// calls cannot drift the way per-event deltas can.
+//
+// Disconnected reads as NOT radio-wide, so a disconnect restores every pane's
+// pair live with no tooltip -- the permissive value HERMES.md asks for when a
+// capability gate lets go.
+//
+// Not ControlAvailabilityRegistry: its predicate sees (connected, caps) and
+// re-applies on capabilitiesChanged only, while which pane stays live also
+// moves with the TX slice and the pane set, with no capability change. The
+// dim-with-a-reason shape is the one the registry applies, done here.
+void MainWindow::syncPanSpanControlPlacement()
+{
+    if (!m_panStack) {
+        return;
+    }
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    const bool radioWide = m_radioModel.isConnected()
+        && caps.panSpanModel.has_value()
+        && caps.panSpanModel->radioWide;
+    const SliceModel* tx = m_radioModel.txSlice();
+    const QString txPanId = tx ? tx->panId() : QString();
+    // Docked panes in the order the layout shows them, then floating or
+    // canvas-lent ones: the fallback owner is a pane in this window whenever
+    // one exists. panIds() alone is pan-id order, not screen order.
+    const QStringList panIds = panIdsInSpanFallbackOrder(
+        m_panStack->dockedPanIdsInLayoutOrder(), m_panStack->panIds());
+    for (const QString& panId : panIds) {
+        SpectrumWidget* sw = m_panStack->spectrum(panId);
+        if (!sw) {
+            continue;
+        }
+        sw->setSpanControlPlacement(
+            spanControlLiveOnPan(radioWide, panIds, txPanId, panId), radioWide);
+    }
 }
 
 } // namespace AetherSDR

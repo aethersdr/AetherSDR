@@ -427,6 +427,16 @@ target_include_directories(atu_seam_gate_test PRIVATE src tests)
 target_link_libraries(atu_seam_gate_test PRIVATE aethercore Qt6::Core)
 add_test(NAME atu_seam_gate_test COMMAND atu_seam_gate_test)
 
+# #5637 §1: a TransmitModel verb the backend already applied through the seam
+# (rfpower, miclevel, TX passband, cw pitch) raises no commandDropped on a
+# backend with no command plane, while an unrouted verb, and a cw pitch this
+# backend was never handed, still does. Injected
+# backend records the seam calls; no sockets, no radio.
+add_executable(transmit_seam_drop_notice_test tests/transmit_seam_drop_notice_test.cpp)
+target_include_directories(transmit_seam_drop_notice_test PRIVATE src tests)
+target_link_libraries(transmit_seam_drop_notice_test PRIVATE aethercore Qt6::Core)
+add_test(NAME transmit_seam_drop_notice_test COMMAND transmit_seam_drop_notice_test)
+
 # Socket-free frequency control: a recording engine backend and normalized
 # observations exercise the production target/service. LocalControlServer
 # instances only test startup binding; neither listens or opens an endpoint.
@@ -2888,6 +2898,31 @@ target_link_libraries(radio_setup_label_theme_token_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME radio_setup_label_theme_token_test COMMAND radio_setup_label_theme_token_test)
 set_tests_properties(radio_setup_label_theme_token_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# #5637 §3: Radio Setup's Max Power field. A watt ceiling from the backend's
+# txPowerBands (HL2) reads W once reported (nothing before), read-only with an
+# accessible reason where there is no command plane to write it; the Flex path
+# is unchanged from main (editable, same write; unit not asserted). Same
+# target shape as radio_setup_region_field_test; the HL2 backend is built
+# through rebuildBackendForTest() and never connected -- no socket.
+add_executable(radio_setup_max_power_field_test
+    tests/radio_setup_max_power_field_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_max_power_field_test PRIVATE src tests)
+target_link_libraries(radio_setup_max_power_field_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_max_power_field_test COMMAND radio_setup_max_power_field_test)
+set_tests_properties(radio_setup_max_power_field_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 
@@ -6312,6 +6347,10 @@ add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
 add_executable(hl2_pan_limits_declaration_test tests/hl2_pan_limits_declaration_test.cpp)
 target_include_directories(hl2_pan_limits_declaration_test PRIVATE src tests)
 target_link_libraries(hl2_pan_limits_declaration_test PRIVATE aethercore Qt6::Core)
+# AETHER_SOURCE_DIR: the #5750 section also reads MainWindow*/SpectrumWidget
+# source for the call-site contracts no linked target can observe.
+target_compile_definitions(hl2_pan_limits_declaration_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME hl2_pan_limits_declaration_test COMMAND hl2_pan_limits_declaration_test)
 # Socket-free HL2 FM-control DECLARATIONS: the repeater duplex offset it does
 # not have (hasFmRepeaterOffset was INHERITED true, and the two backend verbs
@@ -6915,7 +6954,9 @@ set(AETHER_SETTINGS_CONSUMERS
     flex_control_visibility_test
     radio_setup_region_field_test
     radio_setup_label_theme_token_test
+    radio_setup_max_power_field_test
     atu_seam_gate_test
+    transmit_seam_drop_notice_test
     backend_capability_revision_test
     icom_panadapter_capacity_test
     backend_receive_contract_test

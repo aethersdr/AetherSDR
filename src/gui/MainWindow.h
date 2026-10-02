@@ -518,6 +518,11 @@ private:
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
     void syncTxWaterfallSliceToSpectrums();
+    // #5750: on a radio whose span is one register for the whole board, keep
+    // the -/+ span pair live on ONE pane (the TX slice's, else the first
+    // docked one) and dim it with the reason on the others; otherwise every
+    // pane keeps its own live pair. PanSpanControlGate.h.
+    void syncPanSpanControlPlacement();
     void updateSplitState();
     void disableSplit();
     // The split pair, derived from model truth (#3726) rather than from the

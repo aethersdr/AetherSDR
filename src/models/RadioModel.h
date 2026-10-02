@@ -1552,6 +1552,10 @@ private:
     // family change.
     QString m_offlineHealthFamily;
     QVector<TxPowerBand> m_txPowerBands;
+    // The CW pitch last handed to THIS m_backend through setCwPitch(), -1 when
+    // none has been; teardownBackend() resets it. The commandReady forward uses
+    // it to tell a dropped `cw pitch N` from one the backend already holds.
+    int m_cwPitchHandedToBackend{-1};
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;
     // RFC #4288 Route A: when true, m_backend is a wire-less SimBackend (the demo
