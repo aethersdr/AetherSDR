@@ -1,6 +1,7 @@
 #include "TcpByteProxy.h"
 
 #include "LogManager.h"
+#include "TcpSocketEndpoint.h"
 
 #include <QAbstractSocket>
 #include <QNetworkInterface>
@@ -29,27 +30,6 @@ bool isUsableUnicastIpv4(const QHostAddress& address)
     }
     return v4 != 0 && v4 != 0xFFFFFFFFu && !address.isMulticast();
 }
-
-class SocketEndpoint final : public ByteRelayEndpoint {
-public:
-    explicit SocketEndpoint(QTcpSocket* socket) : m_socket(socket) {}
-
-    qint64 bytesAvailable() const override { return m_socket->bytesAvailable(); }
-    QByteArray read(qint64 maxBytes) override { return m_socket->read(maxBytes); }
-    qint64 write(const QByteArray& data) override
-    {
-        if (m_socket->state() != QAbstractSocket::ConnectedState) {
-            return -1;
-        }
-        return m_socket->write(data);
-    }
-    qint64 bytesToWrite() const override { return m_socket->bytesToWrite(); }
-    void closeGracefully() override { m_socket->disconnectFromHost(); }
-    void abort() override { m_socket->abort(); }
-
-private:
-    QTcpSocket* m_socket;
-};
 
 QString endReasonText(ByteRelay::EndReason reason)
 {
@@ -273,8 +253,8 @@ private:
     quint64 m_generation;
     QTcpSocket* m_down;
     QTcpSocket* m_up;
-    SocketEndpoint m_downEp;
-    SocketEndpoint m_upEp;
+    TcpSocketEndpoint m_downEp;
+    TcpSocketEndpoint m_upEp;
     Tuning m_tuning;
     ByteRelay* m_relay{nullptr};
     QTimer* m_connectTimer{nullptr};

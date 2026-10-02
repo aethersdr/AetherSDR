@@ -12,7 +12,7 @@ namespace AetherSDR {
 
 class Ctr2ProxyModel;
 
-// CTR2 Proxy applet: explicit listen/radio endpoints, Start/Stop, and the
+// CTR2 Proxy applet: Wi-Fi or USB mode, explicit endpoints, Start/Stop, and the
 // relay's state, endpoints, byte counters and last local error. All behavior
 // lives in Ctr2ProxyModel; hiding the applet does not stop the proxy.
 class Ctr2ProxyApplet : public QWidget {
@@ -31,7 +31,9 @@ private:
     void syncStats();
 
     QPointer<Ctr2ProxyModel> m_model;
+    GuardedComboBox* m_modeCombo{nullptr};
     GuardedComboBox* m_listenCombo{nullptr};
+    GuardedComboBox* m_usbCombo{nullptr};
     QPushButton* m_refreshBtn{nullptr};
     QLineEdit* m_listenPortEdit{nullptr};
     QLineEdit* m_radioEdit{nullptr};

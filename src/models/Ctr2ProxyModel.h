@@ -1,7 +1,9 @@
 #pragma once
 
+#include "core/Ctr2HidPort.h"
 #include "core/TcpByteProxy.h"
 
+#include <QList>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -10,30 +12,48 @@ class QTimer;
 
 namespace AetherSDR {
 
-// Operator-facing state for the CTR2 TCP proxy prototype. Owns the
-// TcpByteProxy, validates the explicit listen/radio endpoints, and freezes
-// them while the proxy runs. Independent of RadioModel and every backend:
-// the CTR2 is its own radio client and the proxy never touches AetherSDR's
-// command connection. Nothing persists; the proxy is off on every launch.
-// Design: docs/ctr2-tcp-proxy-design.md.
+class Ctr2UsbRelay;
+
+// Operator-facing state for the CTR2 relay. Wi-Fi mode runs TcpByteProxy
+// (the CTR2 connects to this PC over TCP); USB mode runs Ctr2UsbRelay over
+// a selected HID device. Both forward to an explicit radio endpoint and
+// freeze their configuration while running. Independent of RadioModel and
+// every backend: the CTR2 is its own radio client. Nothing persists; the
+// relay is off on every launch.
+// Design: docs/ctr2-tcp-proxy-design.md, docs/ctr2-usb-relay-design.md.
 class Ctr2ProxyModel : public QObject {
     Q_OBJECT
 
 public:
     static constexpr quint16 kDefaultPort = 4992;
 
+    enum class Transport { Wifi, Usb };
+
     explicit Ctr2ProxyModel(QObject* parent = nullptr);
     ~Ctr2ProxyModel() override;
 
-    // Local non-loopback IPv4 addresses the operator may bind to.
-    QStringList availableListenAddresses() const { return m_listenChoices; }
-    void refreshListenAddresses();
+    // True when this build includes USB HID support (hidapi).
+    static bool usbSupported();
+
+    // Rescans local IPv4 addresses and CTR2-class USB HID devices.
+    void refreshDevices();
 
     // Setters refuse (return false) while running.
+    Transport transport() const { return m_transport; }
+    bool setTransport(Transport transport);
+
+    // Local non-loopback IPv4 addresses the operator may bind to (Wi-Fi).
+    QStringList availableListenAddresses() const { return m_listenChoices; }
     QString listenAddress() const { return m_listenAddress; }
     bool setListenAddress(const QString& address);
     QString listenPortText() const { return m_listenPort; }
     bool setListenPortText(const QString& port);
+
+    // HID interfaces on usage page 0xFF00, usage 0x01 (USB).
+    QList<Ctr2HidPort::DeviceInfo> availableUsbDevices() const { return m_usbChoices; }
+    QString usbDevicePath() const { return m_usbDevicePath; }
+    bool setUsbDevicePath(const QString& path);
+
     QString radioAddress() const { return m_radioAddress; }
     bool setRadioAddress(const QString& address);
     QString radioPortText() const { return m_radioPort; }
@@ -46,17 +66,17 @@ public:
     bool start();
     void stop();
 
-    TcpByteProxy::State state() const { return m_proxy->state(); }
-    QString stateText() const { return TcpByteProxy::stateName(state()); }
-    QString lastError() const { return m_proxy->lastError(); }
-    QString listenerEndpoint() const { return m_proxy->listenerDescription(); }
+    TcpByteProxy::State state() const;
+    QString stateText() const;
+    QString lastError() const;
+    QString listenerEndpoint() const;
     QString peerEndpoint() const;
-    QString radioEndpoint() const { return m_proxy->upstreamDescription(); }
-    TcpByteProxy::Stats stats() const { return m_proxy->stats(); }
+    QString radioEndpoint() const;
+    TcpByteProxy::Stats stats() const;
 
 signals:
     void configurationChanged();
-    void listenAddressesChanged();
+    void listenAddressesChanged();   // also covers the USB device list
     void stateChanged();
     void endpointsChanged();
     void statsChanged();      // coalesced for display
@@ -65,13 +85,22 @@ signals:
 private:
     static bool parsePort(const QString& text, quint16* port);
     static bool parseIpv4(const QString& text, QHostAddress* address);
+    bool buildRadioEndpoint(QHostAddress* address, quint16* port, QString* problem) const;
     bool buildConfig(TcpByteProxy::Config* config, QString* problem) const;
+    const Ctr2HidPort::DeviceInfo* selectedUsbDevice() const;
+    bool usbActive() const { return m_activeTransport == Transport::Usb; }
 
     TcpByteProxy* m_proxy{nullptr};
+    Ctr2UsbRelay* m_usb{nullptr};
     QTimer* m_statsTimer{nullptr};
+    Transport m_transport{Transport::Wifi};
+    Transport m_activeTransport{Transport::Wifi};
+    QString m_usbStartError;
     QStringList m_listenChoices;
     QString m_listenAddress;
     QString m_listenPort{QString::number(kDefaultPort)};
+    QList<Ctr2HidPort::DeviceInfo> m_usbChoices;
+    QString m_usbDevicePath;
     QString m_radioAddress;
     QString m_radioPort{QString::number(kDefaultPort)};
 };

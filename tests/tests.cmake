@@ -367,6 +367,16 @@ target_link_libraries(tcp_byte_proxy_test PRIVATE aethercore Qt6::Core Qt6::Netw
 add_test(NAME tcp_byte_proxy_test COMMAND tcp_byte_proxy_test)
 set_tests_properties(tcp_byte_proxy_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
+# Our Ctr2UsbRelay link state machine is the subject. The HID port is an
+# injected fake (no device); binds 127.0.0.1 ephemeral TCP for a generic byte
+# peer standing in for the radio endpoint. No radio protocol or firmware
+# stand-in. Exit 77 when loopback cannot be bound.
+add_executable(ctr2_usb_relay_test tests/ctr2_usb_relay_test.cpp)
+target_include_directories(ctr2_usb_relay_test PRIVATE src)
+target_link_libraries(ctr2_usb_relay_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME ctr2_usb_relay_test COMMAND ctr2_usb_relay_test)
+set_tests_properties(ctr2_usb_relay_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
 # Socket-free Stage-3 resource/service proof: revision stability, atomic
 # snapshot-to-event sequencing, multi-client delivery, unsubscribe,
 # coalescing/resync under pressure, normalized backend reconnect reclaim,

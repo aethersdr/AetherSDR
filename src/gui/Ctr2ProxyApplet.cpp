@@ -35,6 +35,8 @@ const QString kButtonStyle = QStringLiteral(
     "color: {{color.button.foreground.disabled}}; "
     "border: 1px solid {{color.button.border.disabled}}; }");
 
+const QString kComboExtra = QStringLiteral("QComboBox { font-size: 10px; }");
+
 QLabel* makeLabel(const QString& text, const QString& colorToken, QWidget* parent)
 {
     auto* label = new QLabel(text, parent);
@@ -47,6 +49,12 @@ QLabel* makeLabel(const QString& text, const QString& colorToken, QWidget* paren
 QString formatBytes(quint64 bytes)
 {
     return QLocale::c().toString(bytes) + QStringLiteral(" B");
+}
+
+void setAvailability(QWidget* w, bool enabled, const QString& reason)
+{
+    w->setEnabled(enabled);
+    w->setAccessibleDescription(enabled ? QString() : reason);
 }
 
 } // namespace
@@ -69,9 +77,9 @@ void Ctr2ProxyApplet::buildUi()
     vbox->setSpacing(4);
 
     auto* note = makeLabel(
-        tr("Relays a CTR2 TCP connection to the radio unchanged. TCP only: no UDP, "
-           "discovery or SmartLink. The CTR2 is its own radio client; its commands "
-           "do not pass AetherSDR's transmit guards."),
+        tr("Relays a CTR2's radio connection unchanged over Wi-Fi (TCP) or USB. "
+           "No UDP, discovery or SmartLink. The CTR2 is its own radio client; its "
+           "commands do not pass AetherSDR's transmit guards."),
         QStringLiteral("color.text.secondary"), this);
     note->setAccessibleName(tr("CTR2 proxy scope"));
     vbox->addWidget(note);
@@ -80,13 +88,29 @@ void Ctr2ProxyApplet::buildUi()
     grid->setHorizontalSpacing(4);
     grid->setVerticalSpacing(3);
 
-    grid->addWidget(makeLabel(tr("Listen"), QStringLiteral("color.text.label"), this), 0, 0);
+    grid->addWidget(makeLabel(tr("Mode"), QStringLiteral("color.text.label"), this), 0, 0);
+    m_modeCombo = new GuardedComboBox(this);
+    m_modeCombo->setObjectName(QStringLiteral("ctr2ProxyMode"));
+    m_modeCombo->setAccessibleName(tr("CTR2 connection mode"));
+    m_modeCombo->addItem(tr("Wi-Fi (TCP)"));
+    m_modeCombo->addItem(tr("USB"));
+    applyComboStyle(m_modeCombo, kComboExtra);
+    m_modeCombo->setFixedHeight(20);
+    grid->addWidget(m_modeCombo, 0, 1, 1, 2);
+
+    m_refreshBtn = new QPushButton(tr("Rescan"), this);
+    m_refreshBtn->setObjectName(QStringLiteral("ctr2ProxyRescan"));
+    m_refreshBtn->setAccessibleName(tr("Rescan local addresses and USB devices"));
+    ThemeManager::instance().applyStyleSheet(m_refreshBtn, kButtonStyle);
+    grid->addWidget(m_refreshBtn, 0, 3);
+
+    grid->addWidget(makeLabel(tr("Listen"), QStringLiteral("color.text.label"), this), 1, 0);
     m_listenCombo = new GuardedComboBox(this);
     m_listenCombo->setObjectName(QStringLiteral("ctr2ProxyListenAddress"));
     m_listenCombo->setAccessibleName(tr("CTR2 proxy listen address"));
-    applyComboStyle(m_listenCombo, QStringLiteral("QComboBox { font-size: 10px; }"));
+    applyComboStyle(m_listenCombo, kComboExtra);
     m_listenCombo->setFixedHeight(20);
-    grid->addWidget(m_listenCombo, 0, 1);
+    grid->addWidget(m_listenCombo, 1, 1);
 
     m_listenPortEdit = new QLineEdit(this);
     m_listenPortEdit->setObjectName(QStringLiteral("ctr2ProxyListenPort"));
@@ -94,21 +118,23 @@ void Ctr2ProxyApplet::buildUi()
     m_listenPortEdit->setValidator(new QIntValidator(1, 65535, m_listenPortEdit));
     m_listenPortEdit->setFixedWidth(48);
     ThemeManager::instance().applyStyleSheet(m_listenPortEdit, kFieldStyle);
-    grid->addWidget(m_listenPortEdit, 0, 2);
+    grid->addWidget(m_listenPortEdit, 1, 2);
 
-    m_refreshBtn = new QPushButton(tr("Rescan"), this);
-    m_refreshBtn->setObjectName(QStringLiteral("ctr2ProxyRescan"));
-    m_refreshBtn->setAccessibleName(tr("Rescan local addresses"));
-    ThemeManager::instance().applyStyleSheet(m_refreshBtn, kButtonStyle);
-    grid->addWidget(m_refreshBtn, 0, 3);
+    grid->addWidget(makeLabel(tr("USB"), QStringLiteral("color.text.label"), this), 2, 0);
+    m_usbCombo = new GuardedComboBox(this);
+    m_usbCombo->setObjectName(QStringLiteral("ctr2ProxyUsbDevice"));
+    m_usbCombo->setAccessibleName(tr("CTR2 USB device"));
+    applyComboStyle(m_usbCombo, kComboExtra);
+    m_usbCombo->setFixedHeight(20);
+    grid->addWidget(m_usbCombo, 2, 1, 1, 3);
 
-    grid->addWidget(makeLabel(tr("Radio"), QStringLiteral("color.text.label"), this), 1, 0);
+    grid->addWidget(makeLabel(tr("Radio"), QStringLiteral("color.text.label"), this), 3, 0);
     m_radioEdit = new QLineEdit(this);
     m_radioEdit->setObjectName(QStringLiteral("ctr2ProxyRadioAddress"));
     m_radioEdit->setAccessibleName(tr("Radio IPv4 address"));
     m_radioEdit->setPlaceholderText(tr("IPv4 address"));
     ThemeManager::instance().applyStyleSheet(m_radioEdit, kFieldStyle);
-    grid->addWidget(m_radioEdit, 1, 1);
+    grid->addWidget(m_radioEdit, 3, 1);
 
     m_radioPortEdit = new QLineEdit(this);
     m_radioPortEdit->setObjectName(QStringLiteral("ctr2ProxyRadioPort"));
@@ -116,13 +142,13 @@ void Ctr2ProxyApplet::buildUi()
     m_radioPortEdit->setValidator(new QIntValidator(1, 65535, m_radioPortEdit));
     m_radioPortEdit->setFixedWidth(48);
     ThemeManager::instance().applyStyleSheet(m_radioPortEdit, kFieldStyle);
-    grid->addWidget(m_radioPortEdit, 1, 2);
+    grid->addWidget(m_radioPortEdit, 3, 2);
 
     m_startBtn = new QPushButton(tr("Start"), this);
     m_startBtn->setObjectName(QStringLiteral("ctr2ProxyStart"));
     m_startBtn->setAccessibleName(tr("Start CTR2 proxy"));
     ThemeManager::instance().applyStyleSheet(m_startBtn, kButtonStyle);
-    grid->addWidget(m_startBtn, 1, 3);
+    grid->addWidget(m_startBtn, 3, 3);
     grid->setColumnStretch(1, 1);
     vbox->addLayout(grid);
 
@@ -143,9 +169,20 @@ void Ctr2ProxyApplet::buildUi()
     m_errorLabel->setObjectName(QStringLiteral("ctr2ProxyError"));
     vbox->addWidget(m_errorLabel);
 
+    connect(m_modeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (m_model) {
+            m_model->setTransport(idx == 1 ? Ctr2ProxyModel::Transport::Usb
+                                           : Ctr2ProxyModel::Transport::Wifi);
+        }
+    });
     connect(m_listenCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int idx) {
         if (m_model) {
             m_model->setListenAddress(idx > 0 ? m_listenCombo->itemText(idx) : QString());
+        }
+    });
+    connect(m_usbCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (m_model) {
+            m_model->setUsbDevicePath(idx > 0 ? m_usbCombo->itemData(idx).toString() : QString());
         }
     });
     connect(m_listenPortEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
@@ -165,7 +202,7 @@ void Ctr2ProxyApplet::buildUi()
     });
     connect(m_refreshBtn, &QPushButton::clicked, this, [this] {
         if (m_model) {
-            m_model->refreshListenAddresses();
+            m_model->refreshDevices();
         }
     });
     connect(m_startBtn, &QPushButton::clicked, this, [this] {
@@ -203,16 +240,33 @@ void Ctr2ProxyApplet::setModel(Ctr2ProxyModel* model)
 
 void Ctr2ProxyApplet::syncAddresses()
 {
-    const QSignalBlocker block(m_listenCombo);
-    m_listenCombo->clear();
-    // Placeholder first: the listen address is always an explicit choice.
-    m_listenCombo->addItem(tr("Select address"));
-    if (m_model) {
-        m_listenCombo->addItems(m_model->availableListenAddresses());
-        const int idx = m_listenCombo->findText(m_model->listenAddress());
-        m_listenCombo->setCurrentIndex(idx > 0 ? idx : 0);
-        if (idx <= 0 && !m_model->listenAddress().isEmpty() && !m_model->isRunning()) {
-            m_model->setListenAddress(QString());
+    {
+        const QSignalBlocker block(m_listenCombo);
+        m_listenCombo->clear();
+        // Placeholder first: the listen address is always an explicit choice.
+        m_listenCombo->addItem(tr("Select address"));
+        if (m_model) {
+            m_listenCombo->addItems(m_model->availableListenAddresses());
+            const int idx = m_listenCombo->findText(m_model->listenAddress());
+            m_listenCombo->setCurrentIndex(idx > 0 ? idx : 0);
+            if (idx <= 0 && !m_model->listenAddress().isEmpty() && !m_model->isRunning()) {
+                m_model->setListenAddress(QString());
+            }
+        }
+    }
+    {
+        const QSignalBlocker block(m_usbCombo);
+        m_usbCombo->clear();
+        m_usbCombo->addItem(tr("Select CTR2 USB device"));
+        if (m_model) {
+            for (const Ctr2HidPort::DeviceInfo& d : m_model->availableUsbDevices()) {
+                m_usbCombo->addItem(d.label(), d.path);
+            }
+            const int idx = m_usbCombo->findData(m_model->usbDevicePath());
+            m_usbCombo->setCurrentIndex(idx > 0 ? idx : 0);
+            if (idx <= 0 && !m_model->usbDevicePath().isEmpty() && !m_model->isRunning()) {
+                m_model->setUsbDevicePath(QString());
+            }
         }
     }
 }
@@ -222,15 +276,26 @@ void Ctr2ProxyApplet::syncConfiguration()
     const bool haveModel = m_model != nullptr;
     const bool running = haveModel && m_model->isRunning();
     const bool editable = haveModel && !running;
-    const QString frozenReason = running ? tr("Stop the proxy to edit its endpoints")
-                                         : (haveModel ? QString() : tr("Proxy unavailable"));
+    const bool usb = haveModel && m_model->transport() == Ctr2ProxyModel::Transport::Usb;
+    const QString frozen = !haveModel ? tr("Proxy unavailable")
+                                      : tr("Stop the proxy to change its settings");
 
-    for (QWidget* w : {static_cast<QWidget*>(m_listenCombo), static_cast<QWidget*>(m_listenPortEdit),
-                       static_cast<QWidget*>(m_radioEdit), static_cast<QWidget*>(m_radioPortEdit),
-                       static_cast<QWidget*>(m_refreshBtn)}) {
-        w->setEnabled(editable);
-        w->setAccessibleDescription(frozenReason);
+    if (haveModel) {
+        const QSignalBlocker block(m_modeCombo);
+        m_modeCombo->setCurrentIndex(usb ? 1 : 0);
     }
+    setAvailability(m_modeCombo, editable, frozen);
+    setAvailability(m_refreshBtn, editable, frozen);
+    setAvailability(m_radioEdit, editable, frozen);
+    setAvailability(m_radioPortEdit, editable, frozen);
+    const QString wifiOnly = tr("Used in Wi-Fi mode only");
+    setAvailability(m_listenCombo, editable && !usb, editable ? wifiOnly : frozen);
+    setAvailability(m_listenPortEdit, editable && !usb, editable ? wifiOnly : frozen);
+    const QString usbReason = !Ctr2ProxyModel::usbSupported()
+        ? tr("This build has no USB HID support (hidapi)")
+        : tr("Used in USB mode only");
+    const bool usbEditable = editable && usb && Ctr2ProxyModel::usbSupported();
+    setAvailability(m_usbCombo, usbEditable, editable ? usbReason : frozen);
 
     if (haveModel) {
         if (m_listenPortEdit->text() != m_model->listenPortText()) {
@@ -264,12 +329,13 @@ void Ctr2ProxyApplet::syncStatus()
     m_stateLabel->setText(tr("State: %1").arg(m_model->stateText()));
     m_stateLabel->setAccessibleName(m_stateLabel->text());
 
+    const bool usb = m_model->transport() == Ctr2ProxyModel::Transport::Usb;
     QStringList parts;
     if (!m_model->listenerEndpoint().isEmpty()) {
         parts << tr("Listening %1").arg(m_model->listenerEndpoint());
     }
     if (!m_model->peerEndpoint().isEmpty()) {
-        parts << tr("CTR2 %1").arg(m_model->peerEndpoint());
+        parts << (usb ? tr("USB %1") : tr("CTR2 %1")).arg(m_model->peerEndpoint());
     }
     if (m_model->isRunning() && !m_model->radioEndpoint().isEmpty()) {
         parts << tr("Radio %1").arg(m_model->radioEndpoint());
