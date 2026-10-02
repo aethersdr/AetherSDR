@@ -6304,6 +6304,10 @@ add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
 add_executable(hl2_pan_limits_declaration_test tests/hl2_pan_limits_declaration_test.cpp)
 target_include_directories(hl2_pan_limits_declaration_test PRIVATE src tests)
 target_link_libraries(hl2_pan_limits_declaration_test PRIVATE aethercore Qt6::Core)
+# AETHER_SOURCE_DIR: the #5750 section also reads MainWindow*/SpectrumWidget
+# source for the call-site contracts no linked target can observe.
+target_compile_definitions(hl2_pan_limits_declaration_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME hl2_pan_limits_declaration_test COMMAND hl2_pan_limits_declaration_test)
 # Socket-free HL2 FM-control DECLARATIONS: the repeater duplex offset it does
 # not have (hasFmRepeaterOffset was INHERITED true, and the two backend verbs

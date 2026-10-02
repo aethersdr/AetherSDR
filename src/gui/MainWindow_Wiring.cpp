@@ -2067,6 +2067,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 s->isDiversityChild(), s->diversityIndex());
         syncTxWaterfallSliceToSpectrums();
         updateSplitState();
+        // A radio-wide span control follows the TX slice's pane (#5750).
+        syncPanSpanControlPlacement();
 
         // TX flag just moved — keyer availability follows the TX slice (#4173).
         updateKeyerAvailability();
@@ -2159,6 +2161,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // superseded by #4037's reattachSliceVisualsToPanadapter.
         clearCenterLockForSlice(s->sliceId(), /*clearPersistedIntent=*/true);
         reattachSliceVisualsToPanadapter(s);
+        // The TX slice moving pane moves a radio-wide span control (#5750).
+        syncPanSpanControlPlacement();
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
         syncKiwiSdrPanadapterUiStates();
@@ -2290,6 +2294,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     refreshSliceLinkUi();
     updateAetherDspModePolicy();
+
+    // A slice can arrive ALREADY flagged TX: RadioModel applies its fields
+    // before emitting sliceAdded, so the txSliceChanged lambda above never
+    // sees the false->true edge. Re-derive once now, or on connect the live
+    // span control stays on the fallback pane instead of the TX pane (#5750).
+    syncPanSpanControlPlacement();
 }
 
 void MainWindow::requestSliceClose(int sliceId)
