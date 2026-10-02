@@ -65,9 +65,7 @@ int main()
     // draft SUBTRACTED the 2 dB of transformer and filter-board insertion loss
     // instead of adding it, and then quoted DL1YCF's "-34 dBm clipping at
     // +33 dB" as agreeing with the result to the digit. The agreement was the
-    // tell, not the evidence: that figure also assumes +33 dB was delivered,
-    // and IF the gain folds -- which #5752 left unresolved against the native
-    // bit-6-selected RTL path -- a commanded +33 would apply as +1.
+    // tell, not the evidence: that figure also assumes +33 dB was delivered.
     //
     // If this block ever fails again, the question to ask is not "has the
     // arithmetic drifted" but "has the DERIVATION been falsified" -- and the

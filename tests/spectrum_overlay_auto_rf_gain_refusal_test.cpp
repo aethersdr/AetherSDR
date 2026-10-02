@@ -24,6 +24,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QSlider>
 #include <QWidget>
 
 #include <cstdio>
@@ -46,9 +47,9 @@ void report(const char* name, bool ok)
 // business and is asserted in hl2_gain_split_test; all this file needs is that
 // it is non-empty and distinguishable from the help text.
 const QString kWhy = QStringLiteral(
-    "Auto RF gain declined — the RF Gain baseline is 20 dB and this radio's "
-    "gain axis is not trusted above 19 dB. Lower RF Gain to 19 dB or below and "
-    "try again. Your setting has not been changed.");
+    "Auto RF gain declined — the RF Gain baseline is 49 dB, above this "
+    "radio's 48 dB maximum. Lower RF Gain to 48 dB or below and try again. "
+    "Your setting has not been changed.");
 
 } // namespace
 
@@ -118,6 +119,46 @@ int main(int argc, char* argv[])
     menu.setAutoRfGainAvailable(false);
     report("hiding the control for a family without the loop clears the reason",
            box->accessibleDescription().isEmpty() && box->toolTip() == help);
+
+    // ---- THE SLIDER DESCRIBES THE RANGE THE RADIO PUBLISHED (#5943) ----
+    //
+    // An HL2 publishes -12..+48 in 1 dB steps; an unarmed slider must not go on
+    // describing Flex's -8..+32 on either channel, and an armed one keeps its
+    // read-only reason when a range arrives.
+    auto* slider = parent.findChild<QSlider*>(QStringLiteral("antennaRfGainSlider"));
+    report("the RF Gain slider is reachable by object name", slider != nullptr);
+    if (!slider) {
+        return 1;
+    }
+    menu.setRfGainRange(-12, 48, 1, QStringLiteral(" dB"));
+    menu.setAutoRfGainEnabled(false);
+    report("unarmed: the accessible description names the published range",
+           slider->accessibleDescription().contains(QStringLiteral("-12"))
+               && slider->accessibleDescription().contains(QStringLiteral("48"))
+               && !slider->accessibleDescription().contains(QStringLiteral("32")));
+    report("unarmed: and so does the tooltip",
+           slider->toolTip().contains(QStringLiteral("+48"))
+               && !slider->toolTip().contains(QStringLiteral("32")));
+
+    // "Armed" needs the Auto box visible, so show the antenna panel it sits on.
+    parent.show();
+    menu.setAutoRfGainAvailable(true);
+    for (QWidget* w = box->parentWidget(); w && w != &parent; w = w->parentWidget()) {
+        w->show();
+    }
+    menu.setAutoRfGainEnabled(true);
+    report("precondition: armed, the slider is a read-only readout",
+           !slider->isEnabled());
+    const QString armedWhy = slider->accessibleDescription();
+    menu.setRfGainRange(-12, 48, 1, QStringLiteral(" dB"));
+    report("armed: a range push keeps the read-only reason on both channels",
+           slider->accessibleDescription() == armedWhy
+               && slider->toolTip().contains(QStringLiteral("read-only")));
+    menu.setAutoRfGainEnabled(false);
+    report("disarmed: both channels return to the published range",
+           slider->isEnabled()
+               && slider->accessibleDescription().contains(QStringLiteral("48"))
+               && slider->toolTip().contains(QStringLiteral("+48")));
 
     return g_failed == 0 ? 0 : 1;
 }
