@@ -7,24 +7,11 @@
 
 namespace AetherSDR {
 
-// Per-instance dial-frequency memory for the WSJT-X UDP feed (#3595).
-//
-// A WSJT-X Decode datagram carries only the audio offset of the decoded
-// signal (0–5000 Hz); the dial frequency it must be added to arrives
-// separately, in that instance's Status datagram. Every WSJT-X message
-// begins with the instance `id` ("WSJT-X", "WSJT-X - 2", …), and two
-// instances sharing one UDP port interleave their traffic freely, so a
-// single "last dial frequency seen" is wrong whenever more than one
-// instance is running: a decode from the 40 m instance added to the 20 m
-// instance's dial paints a 40 m station on the 20 m panadapter.
-//
-// This keeps one dial frequency per instance id. A decode whose instance
-// has not yet reported a dial frequency cannot be placed on any band and
-// is refused (nullopt) rather than guessed — WSJT-X emits a Status with
-// every decode cycle, so in practice the only unplaceable decode is the
-// first one after AetherSDR starts listening mid-cycle. Header-only and
-// Qt-Core-only so it is testable without WsjtxClient's socket and logging
-// dependencies.
+// Per-instance dial frequency for the WSJT-X UDP feed (#3595). Decodes carry
+// only the audio offset (0–5000 Hz); the dial comes in each instance's Status,
+// and instances (id "WSJT-X", "WSJT-X - 2", …) share the port, so one global
+// dial would misplace spots. A decode from an instance with no dial yet is
+// refused (nullopt). Header-only, Qt-Core-only for testing.
 class WsjtxDialTracker {
 public:
     // Record the dial frequency `id` reported in its Status message.

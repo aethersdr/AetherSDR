@@ -7,18 +7,11 @@
 
 namespace AetherSDR {
 
-// Normalized, vendor-neutral radio-global status delta (aetherd RFC 2.3 —
-// RadioModel residual). Same typed, compiler-checked, present-only contract as
-// the sub-model deltas: FlexBackend::decodeRadioStatus populates only the fields
-// the wire reported, and RadioModel::applyRadioChanges applies exactly those,
-// keeping the model-side orchestration (slice-capacity bounding, propagating
-// rtty_mark_default to slices, the TNF/DAX-IQ sub-models, the infoChanged /
-// audioOutputChanged / callsign / autoSave emits).
-//
-// The universal fields (model, callsign, nickname, network identity, region,
-// GPS/audio-out) map to
-// any radio; the Flex-specific ones (MultiFlex, radio_options, freq calibration,
-// rtty default) are simply absent for a backend that has no analog.
+// Normalized radio-global status delta (aetherd RFC 2.3), present-only like the
+// sub-model deltas: FlexBackend::decodeRadioStatus fills only reported fields and
+// RadioModel::applyRadioChanges applies those plus its own orchestration. The
+// Flex-specific fields (MultiFlex, radio_options, freq calibration, rtty default)
+// are simply absent on a backend with no analog.
 struct RadioDelta {
     // Identity / capability
     std::optional<QString> model;

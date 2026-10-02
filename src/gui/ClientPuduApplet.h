@@ -10,18 +10,9 @@ class AudioEngine;
 class ClientCompKnob;       // reused — generic rotary knob
 class PooDooLogo;
 
-// Docked tile for the PUDU exciter — centrepiece of the PooDoo Audio™
-// chain.  Layout:
-//
-//   ┌──────── PooDoo™ logo (pulses with wet RMS) ────────┐
-//   │                                                    │
-//   │  ┌─────── A | B mode toggle ───────┐               │
-//   │                                                    │
-//   │  Poo: [Drive] [Tune] [Mix]                         │
-//   │  Doo: [Tune] [Harmonics] [Mix]                     │
-//   │                                                    │
-//   │  [Enable]                                 [Edit…]  │
-//   └────────────────────────────────────────────────────┘
+// Docked tile for the PUDU exciter: PooDoo logo (pulses with wet RMS), A|B mode
+// toggle, Poo knobs (Drive/Tune/Mix), Doo knobs (Tune/Harmonics/Mix), Enable
+// and Edit… buttons.
 class ClientPuduApplet : public QWidget {
     Q_OBJECT
 

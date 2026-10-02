@@ -8,20 +8,11 @@ namespace AetherSDR {
 
 class ClientPhaseRotator;
 
-// Client-side TX dynamics processor — the foundation of the Pro-XL-style
-// compression chain (#1661).  Phase 1 scope: core feed-forward compressor
-// with soft-knee static curve + attack/release envelope follower, plus a
-// brickwall peak limiter on the output.  Later phases will add expander/
-// gate, de-esser, tube, enhancer, low contour, and IKA/IRC auto modes.
-//
-// Thread model mirrors ClientEq: the UI thread writes parameters via
-// set*()  setters that update atomics and bump a version counter; the
-// audio thread reads the version once per block and recaches the values.
-// No locks, no allocations in process(), no exceptions.
-//
-// Stereo-linked detection: the envelope is driven by max(|L|, |R|) and
-// the computed gain multiplier is applied identically to both channels
-// so phase coherence is preserved.
+// Client-side TX compressor (#1661): feed-forward, soft-knee static curve with an
+// attack/release envelope follower, plus a brickwall peak limiter on the output.
+// Stereo-linked: envelope from max(|L|, |R|), same gain on both channels. UI
+// thread writes atomics + bumps a version; the audio thread recaches once per
+// block. No locks, allocations or exceptions in process().
 class ClientComp {
 public:
     ClientComp();

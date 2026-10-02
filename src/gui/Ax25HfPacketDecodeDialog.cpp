@@ -1609,18 +1609,10 @@ QJsonObject linkSnapshot(const Ax25Connection& link)
         {QStringLiteral("infoBytesSent"), double(s.infoBytesSent)},
         {QStringLiteral("infoBytesReceived"), double(s.infoBytesReceived)},
     };
-    // Frame-error-rate inputs. FER cannot be computed from one side: only the
-    // SENDER knows how many transmissions went out, and only the RECEIVER knows
-    // how many decoded. Each side therefore publishes its own half, and the
-    // pairing is
-    //
+    // FER inputs. Only the sender knows transmissions and only the receiver knows
+    // decodes, so each side publishes its half:
     //     FER = 1 - (peer.rxDecoded / self.txAttempts)
-    //
-    // measured over the same session. Deliberately NOT a single number here: a
-    // side that invented one would be guessing at the other end's count, and
-    // this is the metric the TXDELAY sweep turns on. It is also immune to T1
-    // behaviour — it counts transmissions against decodes and does not care how
-    // long we waited between them, so timing changes cannot skew it.
+    // over the same session. Independent of T1 timing.
     const quint32 txAttempts = s.iSent + s.iResent;
     const quint32 rxDecoded = s.iRcvd + s.iDuplicate;
     QJsonObject quality{
@@ -2025,17 +2017,9 @@ void Ax25HfPacketDecodeDialog::overrideImpossibleT1ForProfile()
     if (overrideMs >= modelRttMs)
         return; // aggressive, perhaps, but not impossible — leave it alone
 
-    // Below the modelled round trip T1 cannot succeed: it expires before the
-    // peer's acknowledgement can physically arrive, so every I-frame
-    // retransmits and the link dies at N2.
-    //
-    // Override the LINK only — the operator's stored value is left exactly as
-    // they set it. This runs on every profile change, so rewriting the setting
-    // would silently destroy a deliberate choice: an 8 s T1 is impossible on
-    // HF 300 but perfectly sensible on VHF 1200, and a single band switch would
-    // otherwise erase it for good with no way to get it back. The value is
-    // theirs; only its applicability to *this* profile is ours to judge, and
-    // switching back restores it.
+    // Below the modelled round trip T1 always expires before the ack can arrive,
+    // so the link dies at N2. Override the link only; the operator's stored value
+    // stays (it may suit another profile) and applies again on switching back.
     m_terminal->setRetryTimeoutMs(m_terminal->recommendedRetryTimeoutMs());
     appendSystemLine(QStringLiteral(
         "Retry timeout of %1 s is shorter than this profile's %2 ms round trip — "
@@ -2649,25 +2633,10 @@ bool Ax25HfPacketDecodeDialog::txAudioBypassesDax() const
         return false;
     const RadioCapabilities caps = m_radio->backendCapabilities();
 
-    // THE QUESTION IS "DOES TX AUDIO NEED A DAX STREAM", NOT "WHO RUNS THE
-    // MODULATOR" — and those came apart when takesTxAudioOverSeam was added.
-    //
-    // hostModulates is FALSE on an Icom, correctly: the RADIO modulates. So
-    // this returned false, the caller asked for a DAX TX stream, and an Icom
-    // has none. ensureDaxTxStream() answers TRUE for a seam backend — "there
-    // IS a route, it just isn't DAX" — so the caller's failure path never fires
-    // either. m_txPendingStream is left set, waiting on a stream that cannot
-    // arrive, until the timeout: PTT never keys and every queued frame dies
-    // with it.
-    //
-    // That is the same outage the call site records for the HL2 on 2026-07-31
-    // ("PTT never keyed, 181 audio chunks never sent"), reached from the
-    // opposite direction — the HL2 was excluded because it host-modulates, and
-    // a seam backend needs excluding because its transmit audio does not go
-    // through DAX at all.
-    //
-    // Both take the direct path, so this is ORed here rather than at each call
-    // site: both callers are asking this same question.
+    // The question is "does TX audio bypass DAX?", not "who modulates": HL2
+    // host-modulates, and seam backends (e.g. Icom, hostModulates false) take TX
+    // audio over the seam. Requesting a DAX TX stream for either waits on a stream
+    // that never arrives, so PTT never keys. Both callers ask this, so OR it here.
     return caps.hostModulates || caps.takesTxAudioOverSeam;
 }
 

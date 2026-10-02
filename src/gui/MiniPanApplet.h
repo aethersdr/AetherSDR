@@ -1,37 +1,13 @@
 #pragma once
 
-// MiniPanApplet — the K4-style narrow scope, as an applet.
-//
-// It is an APPLET rather than a View-menu window for one decisive reason: the
-// menu bar does not exist in Minimal Mode (MainWindow::toggleMinimalMode strips
-// the title bar to heartbeat + logo + restore/feature buttons), and Minimal Mode
-// is the feature's headline use case. The applet panel IS the Minimal Mode UI —
-// it is reparented into the central layout and shown — so the tray button is the
-// only entry point reachable when the operator actually wants this. (#4562)
-//
-// Everything the standalone window used to hand-roll now comes from the
-// container framework, which is why this file is so much smaller than the
-// MiniPanWidget it replaced: float-out into a top-level window (so it still
-// floats over contest-logging software), always-on-top (#2430), geometry
-// persistence, and close==hide are all ContainerWidget/FloatingContainerWindow
-// behaviour, driven from the standard ContainerTitleBar.
-//
-// The mini-pan is a VIEW, not a radio object: it creates no panadapter and no
-// slice. MainWindow re-slices the FFT frames the active slice's pan is already
-// streaming down to this window's +/-5 or +/-10 kHz, and drives carrier/passband
-// from the followed VFO through the setters below. So the applet costs a radio
-// nothing to open — no pan slot, nothing to leak, no phantom slice.
-//
-// The window is centred on the PASSBAND centre rather than the carrier, so on
-// SSB the received signal sits in the middle instead of hard against one edge.
-// MainWindow and MiniPanScope share MiniPan::passbandCenterOffsetHz for that.
-//
-// This widget holds NO radio/slice references (so it links into a light
-// offscreen test). It reports two intents back up: feedWanted() (shown/hidden)
-// and spanChanged().
-//
-// The only genuinely feature-owned setting left is the ±5/±10 kHz span, in
-// core/MiniPanSettings.h (Constitution Principle V).
+// MiniPanApplet — K4-style narrow scope as an applet, because the menu bar is
+// absent in Minimal Mode, whose UI is the applet panel (#4562). Float-out,
+// always-on-top (#2430), geometry and close==hide come from the container
+// framework. A VIEW: no pan or slice of its own; MainWindow re-slices the
+// active pan's FFT to ±5/±10 kHz centred on the PASSBAND
+// (MiniPan::passbandCenterOffsetHz) and drives it through the setters. Holds no
+// radio references; reports feedWanted() and spanChanged(). The span setting
+// lives in core/MiniPanSettings.h.
 
 #include <QWidget>
 

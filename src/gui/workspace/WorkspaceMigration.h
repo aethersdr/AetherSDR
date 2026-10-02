@@ -1,18 +1,9 @@
 #pragma once
 
-// One-way migration from the legacy layout keys to a workspace document
-// (RFC #4887, phase 2).
-//
-// Today's arrangement is spread across a dozen independent AppSettings keys
-// with three different schemas and no single writer.  This reads them once,
-// builds the "Classic" workspace, and hands it back.  It does not delete
-// anything: the legacy keys keep being written by their current owners for a
-// release (dual-write), so a downgrade still finds the state it expects.
-//
-// THE KEYS, as they actually exist in the code today — the RFC's table was
-// written from a grep and is looser than this:
-//
-//   Applet_<ID>               "True"/"False"     AppletPanel   (26 of them)
+// One-way migration from legacy layout keys to a "Classic" workspace document
+// (RFC #4887). Reads once and deletes nothing: owners keep dual-writing the
+// legacy keys so a downgrade still works. Keys read:
+//   Applet_<ID>               "True"/"False"     AppletPanel
 //   AppletOrder               comma-joined ids   AppletPanel
 //   ButtonBarLayout           {"order":[],"hidden":[]}         AppletPanel
 //   AppletPanelDockedLeft     "True"/"False"     MainWindow
@@ -21,15 +12,10 @@
 //   PanadapterLayout          layout id          MainWindow_Shortcuts
 //   FloatingPanIds            comma-joined ids   PanadapterStack
 //   ContainerTree             {version,containers{}}           ContainerManager
-//   ContainerGeometry_<id>    base64             ContainerManager (per container)
-//   ContainerAlwaysOnTop_<id> bool               ContainerManager (per container)
-//
-// WHAT MIGRATION DELIBERATELY DOES NOT DO: it does not pull floating things
-// onto the canvas.  Pop-out stays (RFC decision 1), so a pan or container the
-// operator floated is left floating and is not placed in Classic.  Dragging
-// someone's pop-outs into a canvas they have not opted into would be a
-// user-visible change in a phase whose whole contract is that there is none.
-// Phase 6's "import current pop-out arrangement" is the opt-in that does it.
+//   ContainerGeometry_<id>    base64             ContainerManager
+//   ContainerAlwaysOnTop_<id> bool               ContainerManager
+// Floating pans/containers stay floating and are not placed (pop-out stays,
+// RFC decision 1); importing them is an explicit opt-in.
 
 #include "gui/workspace/WorkspaceDocument.h"
 

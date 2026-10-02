@@ -1,23 +1,11 @@
 #pragma once
 
-// Payload builder for the MQTT `aethersdr/radio/state` topic (#5518).
-//
-// Lives here, apart from MainWindow, for one reason: the payload's shape is
-// conditional — slice fields appear only with a slice up, power fields only once
-// the radio has actually reported power — and four of those conditions are
-// ordering/timing states (fresh connect, disconnect, no slice, mid-CWX) that a
-// test cannot reach through MainWindow. A pure function over a plain input
-// struct can be driven into every one of them directly, which is what
-// tests/mqtt_radio_state_test.cpp does. MainWindow keeps the wiring; this keeps
-// the contract.
-//
-// Subscribers key off FIELD PRESENCE, not sentinel values: an absent `drive` is
-// "this radio has not told us its drive", never "drive is 0". That distinction is
-// the whole point for the amplifier-interlock consumer the topic was asked for —
-// a sentinel reads as a number and arms on it. `drive` and `max_power_level`
-// appear and disappear independently: a radio can report its drive without ever
-// reporting a ceiling, and computing watts from a missing ceiling is exactly the
-// arithmetic this presence rule exists to refuse.
+// Payload builder for the MQTT `aethersdr/radio/state` topic (#5518). A pure
+// function over a plain struct so tests/mqtt_radio_state_test.cpp can reach every
+// conditional shape (fresh connect, disconnect, no slice, mid-CWX); MainWindow
+// keeps the wiring. Subscribers key off FIELD PRESENCE, not sentinels: absent
+// `drive` means "not reported", never 0, and `drive` and `max_power_level` come
+// and go independently, so watts are never computed from a missing ceiling.
 
 #include <QJsonObject>
 #include <QString>
@@ -48,19 +36,13 @@ struct MqttRadioStateInputs {
     // and one gate published a compiled-in 100 W default as a firmware answer.
     bool haveTransmitStatus = false;   // gates `drive` and `drive_confirmed`
     int drive = 0;                     // raw 0..100 RF-power setting, NOT watts
-    // WHAT max_power_level MEANS, precisely (#5733 review): the best ceiling the
-    // CLIENT has, which is not always a firmware answer.
-    //   Flex — radio status `max_power_level=`, and the 500 W Aurora/PGXL ceiling
-    //          from slice status `max_internal_pa_power` (#484). Firmware.
-    //   Icom — the per-model rated output in IcomModels.cpp, via txPowerBands.
-    //   HL2  — kHl2RatedOutputWatts, compiled in, via txPowerBands.
-    // So presence means "we have a ceiling we stand behind", NOT "the radio
-    // reported one". `watts = drive/100 * max_power_level` is the right
-    // arithmetic in every case; only the provenance differs, and a per-model
-    // rating is real data rather than the compiled-in 100 default this latch
-    // exists to keep off the wire. There is deliberately no
-    // `max_power_level_confirmed`: the value is trustworthy on every family, so a
-    // second flag would suggest a doubt that does not exist.
+    // max_power_level is the best ceiling the CLIENT has:
+    //   Flex - radio status `max_power_level=`, and the 500 W Aurora/PGXL ceiling
+    //          from slice `max_internal_pa_power` (#484).
+    //   Icom - per-model rated output (IcomModels.cpp, via txPowerBands).
+    //   HL2  - kHl2RatedOutputWatts, via txPowerBands.
+    // Presence means "a ceiling we stand behind"; watts = drive/100 * this in every
+    // case. No separate _confirmed flag: the value is trustworthy on every family.
     bool haveMaxPowerLevel = false;    // gates `max_power_level` on its own
     int maxPowerLevel = 0;             // watts = drive/100 * this
 

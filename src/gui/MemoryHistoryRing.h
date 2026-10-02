@@ -1,27 +1,14 @@
 #pragma once
 
-// The Memory tab's history (#2554): a bounded ring of process-memory readings
-// and the slicing that turns it into chart points for a chosen timeframe.
-//
-// Deliberately gui-side, header-only, and free of core includes. The record it
-// stores is its own flat copy of what the dialog receives in a MemorySample —
-// SystemInfoDialog::applyMemorySample() does the conversion — so this header adds
-// no gui→core touchpoint for the aetherd burndown (docs/architecture/
-// aetherd-touchpoints.md counts includers per engine header, and this class is
-// read by the dialog alone). The compacting seven-day history the issue
-// describes (SystemInfoHistory, the NetworkDiagnosticsHistory pattern) is the
-// Overview increment's; this holds the selector's longest window — one hour at
-// the collector's 1.5 s cadence — raw, and nothing more.
-//
-// Slicing follows NetworkDiagnosticsDialog::updateCharts() so the two dialogs'
-// charts read alike: raw points at one-second resolution up to five minutes,
-// bucket averages of max(5 s, range / 300) beyond placed at the bucket centre,
-// x = seconds since the window's cutoff, which is what
-// TimeSeriesGraphWidget::setSeries() expects alongside its rangeSeconds.
-// A record the platform could not fill is not plotted: an invalid sample, or
-// a field left at zero (Windows never reports virtualBytes, Linux leaves
-// privateBytes at zero without /proc/self/smaps_rollup — MemoryTelemetry.cpp).
-// Zero is never a real reading for any of the four fields, so it means "unset".
+// Memory tab history (#2554): a bounded ring of process-memory readings and
+// timeframe slicing into chart points. Gui-side, header-only, no core includes
+// (SystemInfoDialog::applyMemorySample() converts MemorySample), so it adds no
+// aetherd touchpoint. Holds one hour raw at the 1.5 s cadence. Slicing matches
+// NetworkDiagnosticsDialog::updateCharts(): raw 1 s points up to 5 min, beyond
+// that bucket averages of max(5 s, range / 300) at bucket centres; x = seconds
+// since cutoff (TimeSeriesGraphWidget::setSeries()). Zero means "unset" for all
+// four fields (Windows lacks virtualBytes; Linux lacks privateBytes without
+// smaps_rollup) and is not plotted.
 
 #include <QPointF>
 #include <QString>

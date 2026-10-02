@@ -71,18 +71,10 @@ void AsrAudioTap::onRxAudio(const QString& source,
     // wrong (and says so below) instead of silently mis-decoding.
     const QVector<float> mono = AsrTapPolicy::toMono(pcmFloat, channels);
     if (mono.isEmpty()) {
-        // Rejecting a block toMono() cannot decode is right, but it is also
-        // invisible: Copy Assist simply produces nothing, which looks exactly
-        // like a model that failed to load or a tap that never connected. The
-        // guard exists to catch a FUTURE emit site stating the wrong channel
-        // count, so the one person who needs this message is the one who has
-        // no reason to suspect this code at all — say it out loud.
-        //
-        // Once per enable, not per block: this runs on every audio block
-        // (~5 ms apart on a Flex LAN stream), and a mis-stated channel count
-        // is permanent for a given emit site, so the first block says
-        // everything the log needs. setEnabled() clears the latch so a later
-        // session reports again.
+        // Warn about an undecodable block: otherwise Copy Assist silently produces
+        // nothing, which looks like a model or wiring failure. The guard targets an
+        // emit site stating the wrong channel count, which is permanent, so warn once
+        // per enable (setEnabled() clears the latch), not per ~5 ms block.
         if (!m_warnedUndecodable) {
             m_warnedUndecodable = true;
             qCWarning(lcAsrTap) << "dropping undecodable RX audio from" << source
