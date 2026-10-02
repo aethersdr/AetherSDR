@@ -2230,6 +2230,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // disabled widget, only the base class's auto-display is what's skipped.
     m_zoomSegBtn->installEventFilter(this);
     m_zoomBandBtn->installEventFilter(this);
+    // Same workaround for the -/+ span pair: setSpanControlPlacement() dims it
+    // on every pane but one when the span is radio-wide, and the tooltip
+    // saying why must still show on the dimmed buttons. (#5750)
+    m_zoomOutBtn->installEventFilter(this);
+    m_zoomInBtn->installEventFilter(this);
 
     // SmartSDR pcap: B sends "band_zoom=1", S sends "segment_zoom=1"
     connect(m_zoomBandBtn, &QPushButton::clicked, this, [this]() {
@@ -11576,10 +11581,11 @@ bool SpectrumWidget::eventFilter(QObject* watched, QEvent* event)
         return SPECTRUM_BASE_CLASS::eventFilter(watched, event);
     }
 
-    // See the installEventFilter() call sites in the constructor: only these
-    // two are ever disabled-with-an-explanatory-tooltip, so only these two
-    // need the disabled-widget tooltip workaround.
-    if ((widget == m_zoomSegBtn || widget == m_zoomBandBtn)
+    // See the installEventFilter() call sites in the constructor: only the
+    // S/B pair and the -/+ span pair are ever disabled-with-an-explanatory-
+    // tooltip, so only these four need the disabled-widget tooltip workaround.
+    if ((widget == m_zoomSegBtn || widget == m_zoomBandBtn
+         || widget == m_zoomOutBtn || widget == m_zoomInBtn)
         && event->type() == QEvent::ToolTip && !widget->isEnabled()
         && !widget->toolTip().isEmpty()) {
         auto* helpEvent = static_cast<QHelpEvent*>(event);
