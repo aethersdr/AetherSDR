@@ -670,7 +670,12 @@ void UlanziDialMacOSManager::presenceMatchedCb(void* ctx, int /*result*/, void* 
     // inside the probe's own callback: claim on the next event-loop turn, which
     // is where start() releases the probe.
     auto* self = static_cast<UlanziDialMacOSManager*>(ctx);
-    QMetaObject::invokeMethod(self, &UlanziDialMacOSManager::start, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(self, [self] {
+        // stop() can retire the watcher before this queued delivery runs.
+        if (self->m_presenceManager) {
+            self->start();
+        }
+    }, Qt::QueuedConnection);
 }
 
 void UlanziDialMacOSManager::stop()

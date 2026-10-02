@@ -6222,6 +6222,22 @@ target_include_directories(ulanzi_chord_decoder_test PRIVATE src)
 target_link_libraries(ulanzi_chord_decoder_test PRIVATE Qt6::Core)
 add_test(NAME ulanzi_chord_decoder_test COMMAND ulanzi_chord_decoder_test)
 
+if(APPLE)
+    # Socket-free: inject the native arrival callback, then retire the watcher
+    # before Qt delivers it. No HID device is opened; skip if a dial is present.
+    add_executable(ulanzi_macos_presence_lifetime_test
+        tests/ulanzi_macos_presence_lifetime_test.cpp
+        src/core/UlanziDialMacOSManager.cpp
+        src/core/UlanziDialMacOSManager.h
+        src/core/UlanziChordDecoder.cpp
+    )
+    target_include_directories(ulanzi_macos_presence_lifetime_test PRIVATE src)
+    target_link_libraries(ulanzi_macos_presence_lifetime_test PRIVATE
+        Qt6::Core "-framework IOKit" "-framework CoreFoundation")
+    add_test(NAME ulanzi_macos_presence_lifetime_test COMMAND ulanzi_macos_presence_lifetime_test)
+    set_tests_properties(ulanzi_macos_presence_lifetime_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 add_executable(ulanzi_mapping_migration_test
     tests/ulanzi_mapping_migration_test.cpp
     src/core/UlanziDialMappings.cpp

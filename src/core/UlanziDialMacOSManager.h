@@ -41,6 +41,8 @@ signals:
     void stateReported(bool connected, const QString& name);
 
 private:
+    friend struct UlanziDialMacOSManagerTestAccess;
+
     enum class AccessMode {
         None,
         Exclusive,
