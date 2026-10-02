@@ -20,25 +20,13 @@ namespace {
     constexpr int    kMaxLowCutHz   = 400;
     constexpr int    kMinHighCutHz  = 1800;
 
-    // ── Frame pacing (wall-clock) ────────────────────────────────────────────
-    // Every constant below is counted in FRAMES and was calibrated at the
-    // panadapter's historical ~25-30 fps. The pan fps ceiling is now 60
-    // (perf(gui) #3958), which would halve every dwell/hold/confidence window
-    // in wall-clock time AND push the frame-counted send throttle to ~15
-    // filt/s — violating RFC #3878 cond. 2 (<= ~8/s). Rather than re-express
-    // the whole pipeline in seconds (a redesign), we DECIMATE to the ~30 fps
-    // the constants were calibrated at, using a fixed-period accumulator:
-    // st.lastFrameNs holds the scheduled PHASE of the last accepted frame (not
-    // its arrival), and a frame is accepted only once the phase clock has
-    // advanced a full kFramePeriodNs. Because the phase marches at a constant
-    // period regardless of input jitter, 40/60/90 fps (and jittery) sources all
-    // decimate to a stable ~30 fps average — unlike a min-spacing-vs-last-
-    // arrival gate, which snaps its reference to each accepted frame and so
-    // collapses intermediate rates into a 20-40 fps sawtooth. kFramePeriodNs is
-    // set just below the native 33.3 ms (30 fps) interval so a native-30 stream
-    // passes untouched with a couple ms of jitter headroom. kMinSendSpacingNs
-    // additionally enforces the filt-rate condition directly in wall-clock,
-    // independent of any fps assumption.
+    // Frame pacing. All frame-counted constants were calibrated at ~30 fps; the pan
+    // can now run at 60 fps, which would halve every window and exceed RFC #3878's
+    // <= ~8 filt/s. So decimate to ~30 fps with a fixed-period accumulator:
+    // st.lastFrameNs is the scheduled PHASE of the last accepted frame, advancing by
+    // kFramePeriodNs, so any input rate or jitter averages to ~30 fps. The period is
+    // just under 33.3 ms so a native 30 fps stream passes. kMinSendSpacingNs enforces
+    // the filt rate in wall-clock independently.
     constexpr qint64 kFramePeriodNs    = 31LL * 1000000LL;   // ~30 fps target
     constexpr qint64 kMinSendSpacingNs = 125LL * 1000000LL;  // <= 8 filt/s
 
@@ -105,44 +93,22 @@ namespace {
     constexpr int    kDeadbandHz    = 220;    // ignore sub-deadband wiggle (locks
                                               // the edge; only a real width change
                                               // > this commits a move)
-    // ── Low-SNR / fade protection for the NARROWING direction ───────────────
-    // Narrowing cuts into the signal, and two situations make a narrow
-    // measurement untrustworthy even after the median/hold smoothing:
-    //   * LOW SNR — on a soft skirt the floor-relative crossing moves inward
-    //     as the signal weakens (the level-invariant cap needs headroom it
-    //     doesn't have down here), so a weak station's "narrow" reading is an
-    //     SNR artifact: widen-only until the peak clears the floor by
-    //     (minPeakDb + kNarrowFreezeMarginDb). Scaled to the ACTIVE presence
-    //     preset so the freeze always sits just ABOVE the engagement gate
-    //     (Sensitive 6->9, Normal 9->12, Strong 14->17); a fixed threshold
-    //     (was 16 dB) sat far above the Sensitive/Normal gates and made a
-    //     medium signal that engaged never able to narrow.
-    //   * FADING — while the in-band reference is falling (QSB fade in
-    //     progress) the measured width is shrinking with it; freeze narrowing
-    //     until the level stabilises. Median-of-first vs median-of-last over a
-    //     short trail so a single frame cannot fake a fade.
-    // Both suppress only the narrowing COMMIT — measurement, dwell and
-    // widening stay live, so a genuine width change commits the moment the
-    // freeze lifts.
+    // Narrowing freezes (commit only; measurement, dwell and widening stay live):
+    //   * LOW SNR: on a soft skirt the crossing moves inward as the signal weakens,
+    //     so narrow only once peak clears the floor by minPeakDb +
+    //     kNarrowFreezeMarginDb (Sensitive 6->9, Normal 9->12, Strong 14->17).
+    //   * FADING: while the in-band reference falls; median of first vs last
+    //     kFadeEndFrames over the window so one frame can't fake a fade.
     constexpr float  kNarrowFreezeMarginDb = 3.0f;   // over the presence gate
     constexpr int    kFadeWindowFrames     = 20;     // ~0.7 s at the paced rate
     constexpr int    kFadeEndFrames        = 6;      // median span at each end
     constexpr float  kFadeDropDb           = 2.5f;
-    // Sustained-step flush (kill the QSO width carry-over). In a QSO two
-    // operators alternate on ONE dial frequency; when op A (say 4 kHz) unkeys
-    // and op B (3.5 kHz) keys up, A's medians linger in the 75-frame peak-hold
-    // window and its 80th-pct high-cut stays applied to B for ~2 s. Counting
-    // "gap" frames does NOT work: the per-offset peak-hold envelope (avgEnv,
-    // ~1.1 s release) rides the PTT gap so the measurement stays VALID at A's
-    // width across it. But that same peak-hold means the measurement only reads
-    // sustainedly NARROWER than the applied filter when the signal itself is
-    // genuinely narrower (a different, narrower operator) — a brief word/sibilant
-    // gap keeps the envelope wide. So: when the instantaneous measured width
-    // sits more than kStepMarginHz inside the current target for kStepFlushFrames
-    // consecutive frames, retire the stale peak-hold (flushSmoothing) so B fits
-    // its own width promptly. kStepMarginHz is well above the deadband so only a
-    // real operator-sized step (not QSB jitter or a small legitimate narrowing,
-    // which the normal slow narrow-dwell handles) triggers it.
+    // Sustained-step flush: in a QSO a narrower operator inherits the previous one's
+    // peak-hold width for ~2 s. The peak-hold envelope (~1.1 s release) rides PTT and
+    // word gaps, so measurement only reads sustainedly narrower for a genuinely
+    // narrower signal. When it sits > kStepMarginHz inside the target for
+    // kStepFlushFrames frames, flushSmoothing(). The margin is well above the
+    // deadband so QSB jitter and small narrowing use the normal narrow-dwell.
     constexpr int    kStepFlushFrames = 20;   // ~0.67 s sustained (> a word gap)
     constexpr int    kStepMarginHz    = 350;  // operator-sized step, not jitter
     constexpr int    kSnapHz        = 50;     // 50 Hz grid

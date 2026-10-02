@@ -15,21 +15,12 @@
 
 namespace AetherSDR {
 
-// Peripheral transport for an SPE Expert linear amplifier (1.3K-FA/1.5K-FA/
-// 2K-FA) — a standalone USB/RS-232 device with no FlexRadio awareness at
-// all, so this is a peripheral(spe) accessory alongside AcomConnection/
-// PgxlConnection/TgxlConnection, not an IRadioBackend implementor. See
-// docs/architecture/spe-expert-amplifier-design.md for the full design note.
-//
-// The wire protocol is transport-agnostic — the exact same bytes flow
-// whether the peer is a local COM port or a raw-mode ser2net TCP proxy —
-// so a single Spe::FrameParser instance decodes either transport. Only one
-// transport is active at a time, selected by which connect method is called.
-//
-// Unlike the ACOM (which pushes telemetry continuously), the SPE only ever
-// speaks when spoken to: the host polls the Status string with command 0x90.
-// This class owns that poll loop (kPollIntervalMs) and emits statusUpdated
-// for every valid reply.
+// Peripheral transport for SPE Expert amplifiers (1.3K/1.5K/2K-FA): an
+// accessory alongside Acom/Pgxl/TgxlConnection, not an IRadioBackend. Design:
+// docs/architecture/spe-expert-amplifier-design.md. The same bytes flow over a
+// local COM port or a ser2net TCP proxy, so one Spe::FrameParser serves
+// whichever transport is active. The SPE only answers polls, so this class
+// owns the 0x90 Status poll loop (kPollIntervalMs) and emits statusUpdated.
 class SpeConnection : public QObject {
     Q_OBJECT
 
@@ -49,18 +40,11 @@ public:
     // user-configurable.
     void connectSerial(const QString& portName);
 #endif
-    // Network mode expects a ser2net-style TCP proxy in either raw or
-    // telnet mode — both verified against real 1.5K-FA hardware (the
-    // validation station runs telnet mode). The LCD parser accepts both raw
-    // binary frames and telnet's doubled-IAC form and validates their 16-bit
-    // checksum. A rare Status checksum byte of 0xFF is still dropped and
-    // simply re-polled 100 ms later. Telnet mode is also what the remote
-    // power-ON pulse needs — it drives the proxy's DTR/RTS lines via RFC 2217
-    // COM-port control, so ser2net must run the port as
-    // `accepter: telnet(rfc2217=true),<port>`. A raw or plain-telnet port
-    // still monitors and sends keystrokes fine; only powerOn() is affected,
-    // and it detects and reports that case rather than assuming. See the
-    // design note §4.
+    // Expects a ser2net proxy in raw or telnet mode (both verified on a 1.5K-FA);
+    // the LCD parser handles raw and doubled-IAC frames. A Status checksum byte of
+    // 0xFF is dropped and re-polled 100 ms later. powerOn() needs RFC 2217
+    // (`accepter: telnet(rfc2217=true),<port>`); other modes still monitor and
+    // send keys, and powerOn() reports the gap. See design note §4.
     void connectNetwork(const QString& host, quint16 port);
     void disconnect();
 
@@ -83,17 +67,12 @@ public:
     // so polling it there would be pure link noise.
     void setLcdPolling(bool on);
 
-    // Power the amplifier ON — a hardware pulse on the serial connector's
-    // control lines, not a protocol command, so it works while the amp is
-    // silent. Network mode drives the proxy's DTR/RTS via RFC 2217, which
-    // needs ser2net running the port as
-    // `accepter: telnet(rfc2217=true),<port>`; serial mode drives the local
-    // lines directly. The pulse is always sent — a proxy that ignores
-    // COM-port control just discards it — but the completion message reports
-    // what the peer actually agreed to (DO / DONT / no answer at all) rather
-    // than assuming it landed. The pulse sequence and timing are carried verbatim
-    // from the field-proven reference application (see Spe::Rfc2217 and
-    // design note §4). No-op while a pulse is already in progress.
+    // Power ON via a hardware pulse on the connector's control lines (works while
+    // the amp is silent): RFC 2217 DTR/RTS in network mode (needs
+    // `accepter: telnet(rfc2217=true),<port>`), local lines in serial mode. The
+    // pulse is always sent; completion reports what the peer agreed to (DO / DONT
+    // / no answer). Timing per Spe::Rfc2217 and design note §4. No-op while a
+    // pulse is in progress.
     void powerOn();
 
     const Spe::Status& lastStatus() const { return m_lastStatus; }
@@ -195,45 +174,19 @@ private:
     // nearly saturates the wire — see the design note §11's proxy baud
     // recommendation.)
     static constexpr int kLcdPollIntervalMs = 250;
-    // Lost-reply fallback, armed while a request is in flight. Sized so
-    // far above the worst plausible round trip (a 9600 baud proxy serial
-    // side spends ~390 ms serializing the frame alone) that a reply
-    // arriving AFTER it is implausible rather than merely unlikely.
-    //
-    // That margin is load-bearing, and it is the only mitigation the
-    // protocol permits: there is no request id — buildRequest() is a
-    // fixed packet and the reply carries no sequence field — so a reply
-    // that does arrive after the fallback CANNOT be told from the
-    // retry's own reply. The scheduler then credits it to the wrong
-    // request and two requests stay on the wire until the next reset().
-    // Bookkeeping cannot fix that: a counter that swallows the late
-    // reply swallows a genuinely-retried one just as often, freezing the
-    // mirror instead. Widening the window is the fix.
-    //
-    // Also deliberately NOT a multiple of kPollIntervalMs: when replies
-    // stop entirely this timer is the only thing pacing requests and it
-    // free-runs, which is exactly the evenly-dividing-period condition
-    // that phase-locked the original 600 ms cadence to the Status poll.
-    //
-    // Interacts with kLcdStaleTimeoutMs (2400 ms): a retry at 2000 ms
-    // has ~400 ms to land a frame before the FRONT PANEL keys gate, so a
-    // single VANISHED reply can now brush the gate where 1000 ms did
-    // not. Corrupted replies — the field case — take the 80 ms
-    // kLcdRetryGapMs path instead and are unaffected. Keep this below
-    // kLcdStaleTimeoutMs if either constant moves.
+    // Lost-reply fallback while a request is in flight. Must stay far above the
+    // worst round trip (~390 ms to serialize a frame at 9600 baud): replies carry
+    // no request id, so a reply arriving after the fallback is credited to the
+    // retry and two requests stay on the wire until reset(). Not a multiple of
+    // kPollIntervalMs (avoids phase lock when it free-runs). Keep below
+    // kLcdStaleTimeoutMs (2400): a vanished reply's retry needs time to land
+    // before the front-panel keys gate.
     static constexpr int kLcdLostReplyMs = 2000;
-    // Retry pause after a display frame arrives complete but fails
-    // validation. Short enough that a mostly-corrupted mid-transmit
-    // stream still lands a clean frame within the staleness window
-    // whenever one gets through at all; long enough that the retry stream
-    // (each retry provoked by a full received frame) stays well under the
-    // wire's capacity even at 115200 with Status polling. Deliberately
-    // NOT bounded below by kLcdPollIntervalMs: a corrupted stream is
-    // answered FASTER than a healthy one, because the mirror needs only
-    // one clean frame to stay live and the retry cannot run away — each
-    // one costs a full received frame's serialization time. The trade is
-    // wire share on a slow link, which is what the design note's ≥57600
-    // proxy recommendation covers.
+    // Retry pause after a complete display frame fails validation. Short so a
+    // mostly-corrupted stream still lands a clean frame inside the staleness
+    // window; each retry costs a full received frame, so it can't run away.
+    // Intentionally below kLcdPollIntervalMs; on slow links it costs wire share
+    // (hence the design note's ≥57600 proxy recommendation).
     static constexpr int kLcdRetryGapMs = 80;
     // Absolute, deliberately decoupled from the poll gap: it must cover a
     // full lost frame plus a retry on the slowest plausible link (a 9600

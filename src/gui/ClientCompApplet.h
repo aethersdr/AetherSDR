@@ -12,16 +12,11 @@ class ClientCompCurveWidget;
 class ClientCompGrBar;
 class ClientCompKnob;
 
-// Docked dashboard tile for the client-side TX compressor.  View-only —
-// shows the transfer curve with a live "ball" at the current envelope
-// level, plus a compact horizontal gain-reduction strip, plus Bypass /
-// Edit… buttons.  The full interactive editor lives in a separate
-// floating window (ClientCompEditor).
-//
-// Path is locked at construction; AppletPanel instantiates one Tx-
-// bound copy and one Rx-bound copy for the two PooDoo Audio sub-
-// containers.  Engine accesses route through comp() / saveCompSettings()
-// so a single class serves both sides.
+// Docked, view-only tile for the client-side compressor: transfer curve with a
+// live envelope ball, a gain-reduction strip, and Bypass / Edit… buttons (the
+// editor is ClientCompEditor). The path is fixed at construction; AppletPanel
+// makes one Tx- and one Rx-bound copy, and engine access goes through comp()
+// / saveCompSettings().
 class ClientCompApplet : public QWidget {
     Q_OBJECT
 

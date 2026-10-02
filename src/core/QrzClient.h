@@ -13,18 +13,10 @@ class QNetworkReply;
 namespace AetherSDR {
 
 // Minimal QRZ.com XML API client (https://xmldata.qrz.com/xml/current/).
-//
-// Handles the session-key lifecycle the API requires: login with
-// username/password once, reuse the returned key for every lookup, and
-// transparently re-login + retry when the server invalidates the key
-// (keys have no guaranteed lifetime and die on IP change).  The session
-// key is memory-only; credentials live in AppSettings (username) and the
-// OS keychain (password) and are handed in via setCredentials().
-//
-// One lookup is in flight at a time; callers queue freely and results
-// come back per-callsign through lookupSucceeded/lookupFailed.  Callers
-// wanting caching or request coalescing use CallsignLookupService, not
-// this class directly.
+// Logs in once, reuses the session key, and re-logs in + retries when the
+// server invalidates it (keys die on IP change). The key is memory-only;
+// credentials come from setCredentials(). One lookup is in flight at a time;
+// for caching/coalescing use CallsignLookupService.
 class QrzClient : public QObject {
     Q_OBJECT
 

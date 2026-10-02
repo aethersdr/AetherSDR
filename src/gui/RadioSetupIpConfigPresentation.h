@@ -11,16 +11,9 @@ struct IpConfigPresentationState {
     bool canConfigure{false};
 };
 
-// DIM WITH A REASON, not hide (#5262 M3a doctrine; #4896).
-//
-// This was a bare setVisible(), and #5299 applied it to twelve Radio Setup
-// surfaces four days after #5266 had given the Enforce Private IP button a
-// disabled state, a tooltip and an accessibleDescription — deleting all three.
-// A hidden control tells a blind operator nothing at all: it is not announced,
-// so there is no way to learn the radio simply does not support it.
-//
-// `reason` is required for the same regression not to recur: a dimmed control
-// with no stated cause is only marginally better than a hidden one.
+// Dim with a reason, never hide (#5262 M3a, #4896): a hidden control is not
+// announced, so a screen-reader user cannot learn the radio lacks it. `reason`
+// is required because a dimmed control without one is barely better.
 inline void applyCapabilitySurfaceAvailability(QWidget* surface,
                                                bool connected,
                                                bool supported,

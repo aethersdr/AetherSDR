@@ -8,45 +8,23 @@ namespace AetherSDR {
 
 class Resampler;
 
-// ---------------------------------------------------------------------------
-// WfmDsp — pure DSP core of the WFM data demodulator.
-//
-// No Qt audio, no radio I/O, fully unit-testable (tests/wfm_dsp_test.cpp).
-// Replicates the receive chain of SkyRoof's Slicer (VE3NEA), the reference
-// implementation whose output HS-SoundModem decodes flawlessly:
-//
+// Pure DSP core of the WFM data demodulator (tests/wfm_dsp_test.cpp),
+// replicating SkyRoof's Slicer (VE3NEA):
 //   IQ @ native device rate
 //     → [1] NCO mix-down   (phase-continuous offset/Doppler correction)
 //     → [2] twin linear-phase resamplers → exactly 48 kHz
 //     → [3] phase-difference FM discriminator (atan2, amplitude-invariant)
 //     → [4] FIR low-pass, 95 taps, fc = 20 kHz, Hamming, linear phase
 //     → mono float audio @ 48 kHz
-//
-// Why the NCO matters: the panadapter (and with it the DAX IQ centre) stays
-// FIXED during a satellite pass while external Doppler software steps the
-// slice frequency. An FM signal offset Δf from the IQ centre demodulates
-// with a DC term of 2·Δf·kGain/fs; at kGain = 3 that hard-clips downstream
-// beyond ≈8 kHz offset — half the UHF Doppler swing. Mixing the offset down
-// BEFORE the discriminator removes the DC term, and because only the NCO
-// frequency changes (never its phase) each Doppler step is click-free, so
-// the modem never loses lock. SkyRoof does exactly this (Slicer.SetOffset).
-//
-// Why native-rate input matters: capturing the DAX IQ endpoint at a forced
-// 48 kHz lets the OS mixer silently resample whatever rate DAX is really
-// set to (24/48/96/192 k). A 24 k stream upsampled by Windows has no energy
-// above ±12 kHz — the "10–13.5 kHz waterfall notch" previously chased with
-// EQ compensators. Feed this class the true device rate instead; it
-// resamples to exactly 48 kHz with r8brain, flat to 0.95·Nyquist — the same
-// useful-bandwidth ratio SkyRoof uses for its Kaiser decimators.
-//
-// Deliberately NO de-emphasis, squelch, AGC or EQ anywhere in the chain:
-// the output feeds data modems (G3RUH 9600 bd needs a flat, linear-phase
-// discriminator response). The rising f² noise floor on a waterfall is the
-// normal signature of an FM discriminator — do not "fix" it here.
-//
-// Threading: single-threaded by design. All calls — including
-// setFreqOffsetHz() — must come from the same thread (the main thread today).
-// ---------------------------------------------------------------------------
+// NCO: the pan stays fixed while Doppler software steps the slice; an offset
+// Δf gives a DC term 2·Δf·kGain/fs that clips beyond ≈8 kHz at kGain = 3.
+// Mixing down first removes it, and changing only NCO frequency keeps steps
+// click-free. Native-rate input: forcing 48 kHz lets the OS mixer resample
+// (a 24 k stream has nothing above ±12 kHz); r8brain resamples flat to
+// 0.95·Nyquist instead. No de-emphasis, squelch, AGC or EQ: data modems
+// (G3RUH 9600 bd) need a flat linear-phase response; the f² noise rise is
+// normal. Single-threaded: all calls, including setFreqOffsetHz(), from one
+// thread.
 class WfmDsp
 {
 public:

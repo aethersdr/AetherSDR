@@ -1,24 +1,10 @@
-// MainWindow_AetherClock.cpp — AetherClock wiring for MainWindow.
-//
-// Constructs the AetherClock engine + model pair and connects them to the
-// rest of the app:
-//
-//   • AetherClockEngine (core) — decodes WWV/WWVB from the bound slice's
-//     DAX RX audio; owns the DAX-hold lifecycle through the injected
-//     provider below (never a private stream registration).
-//   • AetherClockModel — first-class Q_PROPERTY mirror consumed by the
-//     strip applet and the automation bridge's `get clock` verb.
-//   • AetherClockApplet (strip) — receives the engine action surface +
-//     model via attach(); slice binding rides AppletPanel::setSlice.
-//
-// The pan stream is backend-owned and does not exist until a radio session
-// is up, so nothing here touches it at construction time: the DAX-hold
-// provider resolves panStream() at call time (the engine only drives it
-// while started, which requires a live slice and therefore a live backend),
-// and the daxPcmReady feed is connected on runningChanged(true) and torn
-// down on runningChanged(false). The engine itself ignores PCM whose
-// channel differs from the bound slice's live daxChannel(), and PCM whose
-// slice id differs from the bound slice on the seam-native feed.
+// MainWindow_AetherClock.cpp — AetherClock wiring: AetherClockEngine (decodes
+// WWV/WWVB from the bound slice's DAX audio; holds DAX via the injected
+// provider), AetherClockModel (Q_PROPERTY mirror for the strip applet and
+// `get clock`), AetherClockApplet (attach(); slice via AppletPanel::setSlice).
+// The pan stream exists only with a live session: the provider resolves
+// panStream() at call time and daxPcmReady is connected on runningChanged(true)
+// and torn down on false. The engine ignores PCM for other channels/slices.
 
 #include "MainWindow.h"
 

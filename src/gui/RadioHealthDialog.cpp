@@ -111,23 +111,11 @@ void RadioHealthDialog::refresh()
 {
     if (!m_model)
         return;
-    // THE SAME MERGE THE BRIDGE DOES, for the same reason and by the same rule.
-    //
-    // `backendHealthSnapshot()` is `m_backend ? ... : {}`, and the backend now
-    // blanks its in-band rows whenever the stream is not delivering — which is
-    // right, and is what lets the stream-free source own them instead. Reading
-    // it unmerged would render every one of those rows as an em dash in the one
-    // window a human opens to find out whether the radio is alive, exactly in
-    // the states the offline source exists for (aethersdr-agent, #5642 review).
-    //
-    // Family-neutral: the rule lives in backends/HealthSnapshotMerge.h and this
-    // file names no family. Offline is the base, in-band the winner, so a live
-    // stream still overrides a poll.
-    //
-    // offlineHealthRows() is deliberately NOT const — reading the rows IS the
-    // demand signal for the poller. This dialog refreshing while open is
-    // therefore a real demand, which is what it should be: a window showing
-    // health is someone asking for it.
+    // Same merge as the bridge (backends/HealthSnapshotMerge.h): offline rows
+    // are the base and in-band rows win. The backend blanks in-band rows when
+    // the stream is not delivering, so unmerged they would show dashes exactly
+    // when the offline source matters. offlineHealthRows() is non-const on
+    // purpose: reading rows is the poller's demand signal.
     const IRadioBackend::HealthSnapshot snap =
         m_model->hasOfflineHealth()
             ? mergeHealthSnapshots(m_model->offlineHealthRows(),

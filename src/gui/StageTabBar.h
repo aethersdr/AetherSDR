@@ -15,18 +15,10 @@ class QVBoxLayout;
 
 namespace AetherSDR {
 
-// The vertical stage column shared by AetherRX and AetherTX.
-//
-// One row per stage: a drag grip, the tab that selects its page, and an enable
-// checkbox. The bar owns the look and the gestures and knows nothing about
-// audio — the host says which stages exist and answers the questions the bar
-// asks (is this stage enabled, what is the chain order), so the same column
-// serves a receive chain and a transmit one without either growing a copy.
-//
-// Rows that are not chain stages — noise reduction ahead of the chain, the
-// output meter at the end of it — carry no grip and, if the host says so, no
-// checkbox, and hold their declared position while the rest reorder around
-// them.
+// Vertical stage column shared by AetherRX and AetherTX: per row a drag grip,
+// a page tab and an enable checkbox. Audio-agnostic; the host declares stages
+// and answers enabled/order queries. Non-chain rows (NR ahead, output meter
+// after) have no grip, optionally no checkbox, and keep their declared position.
 class StageTabBar : public QFrame {
     Q_OBJECT
 

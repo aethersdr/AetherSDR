@@ -11,22 +11,14 @@
 namespace AetherSDR::icom {
 namespace {
 
-// The table.
-//
-// Two rows are `verified`, meaning their numbers were read out of that model's
-// OWN Icom CI-V Reference Guide (both are in sources/icom-official/):
-//
+// `verified` rows were read from that model's OWN Icom CI-V Reference Guide:
 //   IC-705      475 points, range 0..160, division max 1 over WLAN / 11 over
-//               USB, one receiver, one scope (0x27 0x12 and 0x27 0x13 are both
-//               fixed at 00), 10 W.
-//   IC-7300MK2  CI-V address 0xB6 (the guide's own frame diagram reads
-//               FE FE E0 B6), 475 points, range 0..160, LAN data length 490,
-//               0.03-74.8 MHz, and all FOUR scope modes.
-//
-// The rest are cross-referenced hardware facts and are marked unverified. Each
-// one needs its own model's CI-V guide read before this backend advertises
-// support for it — the shape of the transport is shared, the command table and
-// scope geometry are not.
+//               USB, one receiver, one scope (0x27 0x12 / 0x27 0x13 fixed at
+//               00), 10 W.
+//   IC-7300MK2  CI-V address 0xB6 (FE FE E0 B6), 475 points, range 0..160, LAN
+//               data length 490, 0.03-74.8 MHz, all FOUR scope modes.
+// The rest are cross-referenced hardware facts, unverified: the transport is
+// shared, but each model's command table and scope geometry need its own guide.
 constexpr std::array<IcomModel, 7> kModels{{
     {
         /*civAddress*/ 0xA4, /*name*/ "IC-705",
@@ -38,33 +30,16 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*hasTransmit*/ true, /*txPowerMaxWatts*/ 10.0,
         /*tuningMinHz*/ 30'000ULL, /*tuningMaxHz*/ 470'000'000ULL,
         /*verified*/ true,
-        // HF/50/144/430 — the amateur allocations inside the guide's own
-        // 30 kHz – 470 MHz range above. 70 cm is spelled 440 because that is
-        // what BandDefs names it.
-        //
-        // 2200m/630m are deliberately absent: they are non-declarable by
-        // #4027's non-goals and keep their own utility buttons, so naming them
-        // here would be dropped at the boundary anyway. 4 m likewise — this
-        // radio receives there and transmits nowhere in the band, and a band
-        // button is a tune-and-operate affordance rather than a coverage
-        // claim. Both stay reachable by typing the frequency.
+        // Amateur allocations inside the 30 kHz – 470 MHz range above; 70 cm is "440"
+        // as BandDefs names it. 2200m/630m are non-declarable (#4027) and 4 m is
+        // RX-only here, so they get no band button; typing the frequency still works.
         /*bands*/ "160m,80m,60m,40m,30m,20m,17m,15m,12m,10m,6m,2m,440",
     },
     {
-        // IC-9700 — scope geometry MEASURED on a live radio 2026-08-05 (G0JKN),
-        // not read from the guide, so `verified` stays false: that flag means
-        // "confirmed against this model's own CI-V Reference Guide" and this
-        // evidence is a different kind.
-        //
-        // 618 consecutive scope frames off an IC-9700 at 10.0.0.7, every one
-        // 475 pixels wide, decoded through the RS-BA1 CI-V data stream. The
-        // frame's own bounds header cross-checks: centre 439.864060 MHz (where
-        // the radio was tuned) and a 500 kHz span, giving 1052.6 Hz per pixel.
-        //
-        // So the 475/160/11 inherited from the IC-705 turn out to be RIGHT for
-        // this model — worth recording precisely because it could not be
-        // assumed. The IC-7610 row below is the counter-example: 689 points and
-        // a 0..200 range.
+        // IC-9700 — scope geometry MEASURED on a live radio (618 frames, all 475
+        // pixels; bounds header centre 439.864060 MHz, 500 kHz span = 1052.6 Hz/pixel),
+        // not read from the guide, so `verified` stays false. 475/160/11 match the
+        // IC-705; the IC-7610 (689 points, 0..200) shows this cannot be assumed.
         0xA2, "IC-9700", 2, 2,
         /*hasNetwork*/ true, /*hasWifi*/ false,
         /*hasScope*/ true, 475, 160, 11,
@@ -114,18 +89,11 @@ constexpr std::array<IcomModel, 7> kModels{{
         /*bands*/ "",
     },
     {
-        // IC-7300MK2 — VERIFIED against Icom's own CI-V Reference Guide
-        // (IC-7300MK2_ENG_CI-V_0), which is in sources/icom-official/.
-        //
-        // The big difference from the original IC-7300: it has a LAN PORT, so
-        // it speaks the RS-BA1 transport and this backend reaches it directly
-        // rather than needing Icom's server as a front end. The guide's own
-        // words: over LAN "it is sent all at once", over USB "divided into 11
-        // segments" — the same division-max 01/11 split as the IC-705.
-        //
-        // Its guide also states the LAN data length as 490 bytes, which
-        // independently confirms the 15-byte first-division header this
-        // decoder computes (3 + 1 + 5*2 + 1 == 15, and 15 + 475 == 490).
+        // IC-7300MK2 — VERIFIED against IC-7300MK2_ENG_CI-V_0. Unlike the IC-7300 it
+        // has a LAN port, so it speaks RS-BA1 directly. Scope over LAN is "sent all at
+        // once", over USB "divided into 11 segments" (division max 01/11, as IC-705).
+        // The guide's LAN data length of 490 confirms the 15-byte first-division header
+        // (3 + 1 + 5*2 + 1 == 15, and 15 + 475 == 490).
         0xB6, "IC-7300MK2", 1, 2,
         /*hasNetwork*/ true, /*hasWifi*/ false,   // Ethernet, not WiFi
         /*hasScope*/ true, 475, 160, 11,
@@ -170,21 +138,11 @@ constexpr IcomModel kUnknown{
     /*bands*/ "",
 };
 
-// THE IC-9700's THREE RF DECKS — the one place these numbers live.
-//
-// This radio is not a continuous 144-1300 MHz receiver with a wide tuning
-// range; it is three separate RF decks with two large holes between them, and
-// each deck has its own PA rating. Both facts have to agree, because they
-// describe the same hardware: the tune guard refuses the holes, and
-// IcomCivBackend::capabilities() publishes the ratings as txPowerBands. When
-// those two lists were kept separately, nothing stopped an edge correction
-// landing in one and not the other — a radio that would tune 430-450 while the
-// power scale still described 430-440, or the reverse.
-//
-// Ranges are the US/A version's published coverage. A region whose radio is
-// narrower (the EU 9700 stops at 146 and 440) is REFUSED BY THE RADIO, which
-// is the safe direction to be wrong in: we offer a frequency it declines,
-// rather than silently withholding one it supports.
+// The IC-9700's three RF decks, each with its own PA rating — the single source
+// for both the tune guard (refuses the holes between decks) and
+// IcomCivBackend::capabilities() txPowerBands. Ranges are the US/A version;
+// narrower regional radios (EU stops at 146 and 440) refuse the excess
+// themselves, which is the safe direction to be wrong in.
 constexpr std::array<IcomBand, 3> kIc9700Bands{{
     {"2m",     144'000'000ULL,   148'000'000ULL, 100.0},
     {"440",    430'000'000ULL,   450'000'000ULL,  75.0},
@@ -520,49 +478,22 @@ std::span<const std::string_view> preampLabelsFor(const IcomModel& model)
 
 std::span<const std::string_view> modeListFor(const IcomModel& model)
 {
-    // THE IC-705's OWN 0x06 MODE TABLE, in neutral names.
-    //
-    // The guide lists ten wire modes — LSB, USB, AM, CW, RTTY, FM, WFM, CW-R,
-    // RTTY-R and DV. Eight of them appear here; the two that do not are absent
-    // for reasons that would show up as a broken control:
-    //
-    //   RTTY / RTTY-R — modeToNeutral() collapses both onto DIGL/DIGU, which are
-    //                   already in the list. Offering "RTTY" would set the radio
-    //                   correctly and then have the confirmation read move the
-    //                   combo to DIGL, which reads as the button not working.
-    //   DV            — D-STAR is a whole waveform, not a demodulator setting,
-    //                   and modeToNeutral() returns an empty string for it. There
-    //                   is nothing honest to put in a mode combo.
-    //
-    // DFM, DIGU and DIGL are the DATA-flag forms of FM, USB and LSB; they are
-    // separate entries here because they are separate entries in the neutral
-    // vocabulary and cmdSetVfoMode carries the flag.
-    //
-    // WFM is the mode this list exists for. It has always been implemented end
-    // to end in CivCodec — wire value, both directions of the neutral mapping,
-    // its own 200 kHz filter slot and a carrier-straddling passband — and was
-    // unreachable only because nothing published a mode list, so the UI stayed on
-    // its compiled-in FlexRadio one, which has no WFM because a FLEX-6000 has no
-    // WFM (#5040).
+    // The IC-705's 0x06 modes in neutral names. Omitted wire modes:
+    //   RTTY / RTTY-R — modeToNeutral() maps them to DIGL/DIGU, so offering "RTTY"
+    //                   would make the combo jump on the confirmation read.
+    //   DV            — D-STAR is a waveform; modeToNeutral() returns "" for it.
+    // DFM/DIGU/DIGL are the DATA-flag forms of FM/USB/LSB (cmdSetVfoMode carries
+    // the flag). Publishing this list is what makes WFM reachable (#5040).
     return profileFor(model).modes;
 }
 
 bool modeIsReceiveOnly(const IcomModel& model, std::string_view neutralMode)
 {
-    // WFM IS A BROADCAST RECEIVE MODE. The IC-705 covers 76-108 MHz in it and its
-    // transmitter does not follow: the mode exists to listen to FM broadcast, and
-    // that segment is outside every amateur allocation the radio transmits in.
-    //
-    // Answered only for a model whose mode table has been read — an unfilled row
-    // gets no claim in either direction, the same rule modeListFor() states above.
-    //
-    // That "no claim" is safe for the WITHDRAWN identity too, which is the one
-    // case where it looks unsafe: after the ambiguous-bus revert the combos keep
-    // offering the previous radio's WFM (they ignore an empty mode list, #891),
-    // so it looks as though keying in WFM has quietly become permitted again.
-    // It has not — kUnknown also reports hasTransmit=false, so capabilities()
-    // says canTransmit=false and RadioModel refuses to key it in ANY mode. This
-    // gate never has to answer for a radio we cannot characterise. (#5106 review)
+    // WFM is broadcast receive only (IC-705: 76-108 MHz, outside every amateur TX
+    // allocation). Answered only for models whose mode table has been read. The
+    // withdrawn identity (kUnknown) is still safe even though stale combos may
+    // offer WFM (#891): it reports hasTransmit=false, so RadioModel refuses to key
+    // it in any mode (#5106).
     const std::span<const std::string_view> modes = profileFor(model).receiveOnlyModes;
     return std::ranges::find(modes, neutralMode) != modes.end();
 }

@@ -28,16 +28,10 @@ SpeConnection::SpeConnection(QObject* parent)
                 emit lcdFrameReceived(*frame);
                 setLcdFresh(true);
                 m_lcdStaleTimer.start();
-                // Pacing the next request from the REPLY is what breaks
-                // the send-side phase-lock: two free-running timers whose
-                // periods divide evenly (the original 600 ms cadence was
-                // an exact multiple of the 100 ms Status poll) coalesce —
-                // Qt's coarse timers do it actively — with every display
-                // reply straddling a status poll on the wire, for many
-                // seconds at a time. Folding the amp's variable response
-                // latency into the period makes a stable phase
-                // relationship impossible, and lets kLcdPollIntervalMs be
-                // a small idle gap rather than a worst-case-link period.
+                // Pace the next request from the REPLY so the amp's variable latency keeps
+                // it from phase-locking with the 100 ms Status poll (evenly dividing timer
+                // periods coalesce under Qt's coarse timers); kLcdPollIntervalMs is then
+                // just an idle gap.
                 applyLcdEffect(m_lcdScheduler.replyValid());
             }
         }
@@ -88,16 +82,11 @@ SpeConnection::SpeConnection(QObject* parent)
         setLcdFresh(false);
     });
 
-    // A display frame that died on the wire is re-requested promptly (the
-    // field case: strong RF near the serial run mid-transmit corrupts the
-    // long display replies far more often than the short Status ones, and
-    // one clean frame every second or two is all the mirror needs to stay
-    // live). The scheduler classifies the outstanding request as resolved
-    // and supersedes its lost-reply fallback with the short retry pause —
-    // a late-arriving corrupted frame therefore cannot leave two timers
-    // racing toward two sends. The pause is the flood guard; each retry
-    // is additionally self-limited by the link's own serialization time,
-    // since only a complete received-and-rejected frame provokes one.
+    // Re-request a corrupted display frame promptly (RF near the serial run
+    // corrupts long display replies far more than Status). The scheduler resolves
+    // the outstanding request and replaces its lost-reply fallback with the short
+    // retry pause, so a late frame can't leave two timers racing. Each retry
+    // needs a full received frame, so it self-limits.
     m_parser.setDisplayRejectCallback([this]() {
         if (!m_lcdWanted || !m_connected) {
             return;
@@ -359,17 +348,11 @@ void SpeConnection::onReadyRead()
     if (!m_device) { return; }
     const QByteArray chunk = m_device->readAll();
 
-    // Watch for the proxy's answer to our WILL COM-PORT-OPTION before the
-    // bytes go to the frame parser. Read-only — the parser resyncs past
-    // negotiation on its own, so nothing is consumed here; this only records
-    // whether RFC 2217 control is actually available, which powerOn() needs
-    // to know before it claims the pulse reached the amplifier.
-    //
-    // Scanned over the previous read's 2-byte tail + this chunk: the 3-byte
-    // DO/DONT sequence can straddle a TCP segment boundary, and a stateless
-    // per-chunk scan would miss it — reporting "never confirmed" against a
-    // correctly configured proxy. Only the tail is carried, never re-scanning
-    // whole chunks, so a reply can't be double-counted either.
+    // Read-only scan for the proxy's answer to WILL COM-PORT-OPTION, so powerOn()
+    // knows whether RFC 2217 control is available (the parser resyncs past
+    // negotiation itself). Scans the previous chunk's 2-byte tail + this chunk,
+    // since the 3-byte DO/DONT can straddle segments; only the tail is carried,
+    // so a reply is never counted twice.
     if (m_mode == Mode::Network && m_rfc2217NegotiationPending) {
         const auto reply = Spe::Rfc2217::scanComPortOptionReply(m_rfc2217Tail + chunk);
         m_rfc2217Tail = chunk.right(2);

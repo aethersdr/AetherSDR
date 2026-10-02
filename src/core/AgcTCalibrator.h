@@ -9,27 +9,13 @@ namespace AetherSDR {
 
 class SliceModel;
 
-// AgcTCalibrator — headless engine that calibrates a slice's AGC-T value
-// against the receiver noise floor.
-//
-// Background (see docs/agc-t-calibration-design.md):
-//   * When AGC mode is slow/med/fast, the AGC-T knob is `agc_threshold` (the
-//     AGC "knee"). The goal is to find the knee: lower the threshold until the
-//     audio noise *just begins to decrease*. We detect that elbow on a curve of
-//     post-AGC audio RMS vs threshold value.
-//   * When AGC mode is off, the knob is `agc_off_level` (a fixed gain). There is
-//     no knee; instead we solve for the value that places the audio-noise level
-//     at a comfortable target.
-//
-// The 0-100 knob value has no radio-exposed dBm mapping (firmware v4.2.18), so
-// calibration is empirical: we vary the knob and observe the post-AGC audio RMS
-// fed in via onAudioLevel(). The radio remains authoritative — we only ever set
-// the value through SliceModel's setters (acting like a user turning the knob).
-//
-// Auto and manual calibration share this one engine: in auto mode a timer steps
-// the value and samples; in manual mode the user moves the slider and we record
-// (value, rms) points after each value settles. Both build the same curve, and
-// the same knee/target detector runs over it.
+// Headless engine that calibrates a slice's AGC-T against the noise floor (see
+// docs/agc-t-calibration-design.md). AGC slow/med/fast: AGC-T is agc_threshold;
+// find the knee where post-AGC audio RMS just begins to drop. AGC off: AGC-T is
+// agc_off_level; solve for a target noise level. The 0-100 value has no
+// radio-exposed dBm mapping (fw v4.2.18), so calibration is empirical, writing
+// only through SliceModel setters. Auto (timer-stepped) and manual (user-moved)
+// modes build the same curve for the same detector.
 class AgcTCalibrator : public QObject {
     Q_OBJECT
 
