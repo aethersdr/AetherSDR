@@ -8,6 +8,7 @@
 
 #include <hidapi/hidapi.h>
 
+#include <algorithm>
 #include <array>
 
 namespace AetherSDR {
@@ -182,6 +183,10 @@ QList<Ctr2HidPort::DeviceInfo> Ctr2HidapiPort::enumerate()
         out.append(info);
     }
     hid_free_enumeration(list);
+    // Recognised CTR2 boards first; otherwise keep enumeration order.
+    std::stable_sort(out.begin(), out.end(), [](const DeviceInfo& a, const DeviceInfo& b) {
+        return !a.ctr2Model().isEmpty() && b.ctr2Model().isEmpty();
+    });
     return out;
 }
 

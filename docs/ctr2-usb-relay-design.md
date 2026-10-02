@@ -1,9 +1,8 @@
 # CTR2 USB HID relay design
 
-Status: link format v0 agreed in outline with Lynn (his layout, with the
-additions below for him to confirm); host side implemented in PR #6090 under
-approved RFC #6091. The CTR2 USB firmware is in progress; end-to-end USB
-operation has not been verified. Jeremy reports the TCP relay working with a
+Status: link format v0 agreed with Lynn; host side implemented in PR #6090
+under approved RFC #6091. The CTR2 USB firmware is in progress; end-to-end
+USB operation has not been verified. Jeremy reports the TCP relay working with a
 stock CTR2.
 
 ## Goal
@@ -301,21 +300,31 @@ existing transmit indicator covers on-air visibility. Its amendment for the
 HID I/O thread is recorded on the issue. This design does not change
 AetherSDR's existing transmit policy or its own radio command paths.
 
-## Open items with Lynn
+## Firmware status
 
-- Confirm the version-0 additions: message type in byte 3, the Output
-  report, packet count in reports, counter wrap `0x7F` -> `0x00`, and the
-  512-byte DATA / 1474-byte DATAGRAM maximums (RAM).
-- UDP registration through a DATAGRAM to port 4992 rather than
-  `client udpport`.
-- Later, nice to have: USB vendor and product IDs so AetherSDR can find the
-  CTR2 without the operator picking it; and, for CW testing, what the CTR2
-  does if CLOSED arrives while it is keying.
+Lynn has confirmed version 0 as specified here (one start byte, type in
+byte 3, exact payload count, no checksum, 512-byte DATA buffering) and is
+implementing it, Output report included.
+
+The CTR2 runs on three ESP32-S3 boards, each enumerating with the board's
+own product string. AetherSDR names these in its device list and sorts them
+first; the operator still picks the device, since other ESP32-S3 boards can
+share the strings:
+
+| Product string | CTR2 model |
+| --- | --- |
+| `ESP32S3_DEV` | CTR2-Max, and the CTR2-Nano in development |
+| `STAMP-S3` | CTR2 units based on the M5Stack M5Dial |
+| `XIAO_ESP32S3` | CTR2-MIDI (Seeed XIAO) |
+
+Still open: UDP registration through a DATAGRAM to port 4992 rather than
+`client udpport`, and, for CW testing, what the CTR2 does if CLOSED arrives
+while it is keying.
 
 ## Next steps and acceptance
 
-1. Lynn confirms version 0 and adds USB mode beneath the controller's
-   existing Wi-Fi radio logic.
+1. Lynn adds USB mode beneath the controller's existing Wi-Fi radio logic
+   (in progress).
 2. Bench the link with the reference vectors and AetherSDR's USB mode:
    startup, radio greeting, controls, display updates, MultiFlex binding,
    unplug and replug. Verify AetherSDR's existing RX operation remains intact.

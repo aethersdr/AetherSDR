@@ -610,6 +610,21 @@ void testDatagramBeforeReady()
     check(waitUntil([&] { return rig.dev.count(MessageType::Closed) == 1; }), "a datagram before READY is a fault");
 }
 
+void testDeviceLabels()
+{
+    Ctr2HidPort::DeviceInfo max{QStringLiteral("p"), 0x303A, 0x1001,
+                                QStringLiteral("Espressif Systems"), QStringLiteral("ESP32S3_DEV"), {}};
+    Ctr2HidPort::DeviceInfo dial{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("STAMP-S3"), {}};
+    Ctr2HidPort::DeviceInfo midi{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("XIAO_ESP32S3"), {}};
+    Ctr2HidPort::DeviceInfo other{QStringLiteral("p"), 0x04F3, 0x32BC, {}, QStringLiteral("Touchpad"), {}};
+    check(max.label() == QStringLiteral("CTR2-Max / Nano: Espressif Systems ESP32S3_DEV (303a:1001)"),
+          "CTR2-Max/Nano product string is named");
+    check(dial.ctr2Model() == QStringLiteral("CTR2 (M5Dial)") && midi.ctr2Model() == QStringLiteral("CTR2-MIDI"),
+          "M5Dial and MIDI product strings are named");
+    check(other.ctr2Model().isEmpty() && other.label() == QStringLiteral("Touchpad (04f3:32bc)"),
+          "other devices keep their plain label");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -628,6 +643,7 @@ int main(int argc, char** argv)
     testDatagramsBothWays();
     testDatagramFloodIsDropped();
     testDatagramBeforeReady();
+    testDeviceLabels();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

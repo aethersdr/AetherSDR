@@ -26,6 +26,10 @@ public:
         QString product;
         QString serial;
 
+        // The CTR2 model this interface's product string belongs to, or empty.
+        // These are the ESP32-S3 boards' own strings, so a match is a strong
+        // hint, not proof; the operator still picks the device.
+        QString ctr2Model() const;
         QString label() const;
     };
 
