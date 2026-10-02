@@ -1,25 +1,11 @@
 #pragma once
 
-// MiniPanScope — the slim K4-style spectrum trace at the heart of the mini-pan.
-//
-// A deliberately bare tuning-aid render: dark field, a translucent passband band,
-// a carrier hairline, a filled FFT trace, and ±span corner labels. NO overlay menu,
-// dBm strip, waterfall or time axis — everything SpectrumWidget carries that a
-// tuning aid does not want (which is why the mini-pan does not reuse it; see
-// docs/minipan-implementation.md §3).
-//
-// The view is centred on the PASSBAND centre, not on the carrier — so on SSB the
-// received audio sits in the middle of the scope and the hairline marking the
-// carrier sits off to one side (MiniPan::passbandCenterOffsetHz). Everything the
-// paint draws is an offset from that centre, which is also the centre of the
-// window MainWindow re-slices, so the trace and the chrome agree.
-//
-// Appearance MIRRORS the main pan rather than inventing its own: MainWindow
-// pushes the source pan's FFT line/fill colours and its dBm window every frame,
-// so the operator's Display-panel settings apply to both views and the mini-pan
-// reads as a magnifier on the main trace instead of a differently-styled second
-// opinion. Only the chrome the main pan has no equivalent for — the passband
-// band, the centre hairline, the ±span labels — comes from theme tokens.
+// MiniPanScope — bare tuning-aid trace: passband band, carrier hairline, filled
+// FFT, ±span labels; none of SpectrumWidget's overlays
+// (docs/minipan-implementation.md §3). Centred on the passband centre
+// (MiniPan::passbandCenterOffsetHz). MainWindow pushes the source pan's FFT
+// colours and dBm window each frame so it mirrors the main pan; only the
+// passband, hairline and labels use theme tokens.
 
 #include <QWidget>
 #include <QVector>

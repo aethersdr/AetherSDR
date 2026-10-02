@@ -52,16 +52,10 @@ bool CtyDatParser::loadFromResource(const QString& resourcePath)
     return isLoaded();
 }
 
-// ---------------------------------------------------------------------------
-// cty.dat parser
-//
-// Format:
+// cty.dat format:
 //   Entity Name:  CQ:  ITU:  Continent:  lat:  lon:  tz:  PrimaryPrefix:
 //       alias1,alias2,=EXACT1,=EXACT2;
-//
-// Alias tokens may have zone overrides in () or [] which we strip.
-// Tokens starting with '=' are exact callsign matches.
-// ---------------------------------------------------------------------------
+// Zone overrides in () or [] on aliases are stripped; '=' marks an exact call.
 void CtyDatParser::parse(const QStringList& lines)
 {
     m_exactMatch.clear();

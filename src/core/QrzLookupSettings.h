@@ -8,16 +8,9 @@
 
 namespace AetherSDR {
 
-// Persistence helper for the QRZ callsign-lookup feature.
-//
-// One nested JSON blob under AppSettings["QrzLookup"], per the
-// config-as-single-object rule (constitution Principle V):
-//
-//   AppSettings["QrzLookup"] = {"enabled": "True", "username": "ki6bcj"}
-//
-// The password deliberately does NOT live here — it goes to the OS
-// keychain via CallsignLookupService (key "qrz_password"), so the
-// settings file never holds a credential.
+// Persistence for QRZ lookup: one JSON blob, AppSettings["QrzLookup"] =
+// {"enabled": "True", "username": "..."}. The password lives in the OS
+// keychain (CallsignLookupService, key "qrz_password"), never in settings.
 class QrzLookupSettings {
 public:
     static bool enabled()

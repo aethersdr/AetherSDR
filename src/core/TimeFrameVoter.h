@@ -1,15 +1,10 @@
 #pragma once
 
-// AetherClock shared time-frame machinery: the per-second/per-frame result
-// types both time-signal decoders emit, plus cross-frame confidence-weighted
-// bit voting over a sliding window of decoded frames.
-//
-// Field maps are supplied by each decoder from the NIST time-code tables
-// (WWV/WWVH per NIST SP 432; WWVB legacy AM per NIST SP 250-67). This unit is
-// map-agnostic: it votes bits, scores minute increments across consecutive
-// frames, and reports lock + aggregate confidence.
-//
-// Pure DSP/logic — no Qt, no GUI (engine-boundary EB1/EB2).
+// AetherClock shared time-frame machinery: result types for both time-signal
+// decoders, plus cross-frame confidence-weighted bit voting over a sliding
+// window. Field maps come from each decoder (WWV/WWVH per NIST SP 432; WWVB
+// legacy AM per NIST SP 250-67); this unit is map-agnostic. Pure logic, no Qt
+// (engine-boundary EB1/EB2).
 
 #include <array>
 #include <cstddef>
@@ -167,18 +162,11 @@ public:
         int minFramesForLock = 2;        // consistent frames required for lock
         float agingFactor = 0.9f;        // per-frame-age weight multiplier
 
-        // WS-4.5 honesty gates (all default-off = pre-WS-4.5 behavior).
-        //
-        // Trust floor: a bit whose WINNING side has no single vote at/above
-        // this margin contributes zero trust (its value still composes — only
-        // the certification collapses). Rationale (2026-07-20 live false lock,
-        // decoded 2006-01-01 at q100): a deep fade zero-biases the SAME bits in
-        // EVERY window frame, so the misread is unanimous — margin 1.0, full
-        // participation — and a disagreement-based quality metric certifies it.
-        // Unanimity of noise-grade reads is not evidence; a lock-quality floor
-        // then refuses the lock. (Deliberately NOT an eligibility gate on the
-        // votes themselves: silencing noise-grade votes flips coherence
-        // verdicts and vote topology on real corpora — measured 2026-07-20.)
+        // WS-4.5 honesty gates (default off). Trust floor: a bit whose winning side
+        // has no single vote at/above this margin contributes zero trust (its value
+        // still composes). A deep fade biases the same bits in every frame, so a
+        // unanimous misread would otherwise certify itself. Not a vote-eligibility
+        // gate: silencing noise-grade votes changes vote topology on real corpora.
         float minBitConfidence = 0.0f;
         // locked() additionally requires the resolution quality to reach this.
         float minLockQuality = 0.0f;
@@ -221,16 +209,10 @@ public:
     int frameCount() const;   // frames currently in the window
     int windowSize() const { return static_cast<int>(m_cfg.window); }
 
-    // Lock = at least minFramesForLock frames in the window, AND at least
-    // (minFramesForLock - 1) adjacent frame pairs whose per-frame minutes
-    // decode increments by exactly +1 (mod 60), AND voted static fields
-    // self-consistent (each static field carries a strictly positive winning
-    // margin in the same normalized space votedField/lockConfidence use — an
-    // all-Unknown window yields zero margin everywhere and must not lock).
-    // Increment support is COUNTED across the window, not required of every pair
-    // — live per-frame decodes are routinely imperfect and one corrupted frame
-    // must not permanently prevent or drop the lock (the reference scores
-    // increments: marker_score + 4 * increment_count).
+    // Lock = >= minFramesForLock frames, AND >= (minFramesForLock - 1) adjacent
+    // pairs whose minutes increment by exactly +1 (mod 60), counted across the
+    // window so one bad frame can't block it, AND every static field with a
+    // strictly positive winning margin (an all-Unknown window must not lock).
     bool locked() const;
 
     // WS-7: which gate locked() is currently refusing on (None when locked, or
@@ -239,55 +221,28 @@ public:
     // so the two can never disagree.
     ClockLockRefusal lockRefusal() const;
 
-    // Voted value of a timestamp field (minute/hour/doy/year), reported "as of
-    // the newest frame". The contract is NORMALIZE, THEN PER-BIT:
-    //   1. Each frame's whole timestamp is decoded from its own bits and
-    //      extrapolated forward by its age in minutes (calendar arithmetic), so
-    //      every in-window frame is expressed at the SAME (newest) epoch.
-    //   2. Bits are then voted per-field across that normalized space. For a
-    //      field the extrapolation left unchanged (the common case away from a
-    //      boundary) each frame votes its ORIGINAL symbols with their ORIGINAL
-    //      per-second confidences — a faded bit carries a low matched-filter
-    //      margin and loses, which is what corrects the single-bit fades that
-    //      corrupt noisy corpora frame-by-frame. For a field the extrapolation
-    //      moved across a carry (minutes almost always; hour/doy/year only when
-    //      the window straddles a boundary) the frame re-encodes the normalized
-    //      value and weights every bit by its field-MIN original confidence — a
-    //      BCD value is only as reliable as its weakest bit.
-    //   3. Per-bit weights are max(confidence, 0.01) * agingFactor^age.
-    //   4. Composition is COHERENCE-GATED. Per-bit statistics alone cannot certify
-    //      a multi-bit BCD value: sibling bits can be won by DIFFERENT frame camps
-    //      (a faded bit plus a confident sibling misread), assembling a value no
-    //      frame held. A bit is coherent only when its confidence-weighted winner
-    //      agrees with its aging-only count majority. If every bit of a field is
-    //      coherent the field is that per-bit compose (the fade-rescue / clean
-    //      path); if any bit is incoherent the field falls back to the top HELD
-    //      value — one a frame actually carried, voted per-value with the same
-    //      aged x field-min weighting.
-    // This is rollover-safe BECAUSE the extrapolation removes the epoch skew: a
-    // stale hour can never outvote the current one, since after normalization
-    // every frame is voting on the current hour. Cross-frame bit blending is
-    // confined to normalized space AND to coherent bits, so blending there is
-    // correction, not synthesis across epochs or across frame camps. Should the
-    // compose ever produce an out-of-range BCD value, the vote falls back to the
-    // single highest-aged-weight frame's extrapolated tuple (a guarded fallback,
-    // never the primary path). Returns -1 if no frame decodes to a range-valid
-    // timestamp.
+    // Voted value of a timestamp field (minute/hour/doy/year) as of the newest
+    // frame; -1 if no frame decodes to a range-valid timestamp.
+    //   1. Each frame's timestamp is extrapolated by its age to the newest epoch,
+    //      so a stale hour can't outvote the current one across a rollover.
+    //   2. Fields unchanged by extrapolation vote original symbols at original
+    //      confidences (fade rescue); fields moved across a carry re-encode the
+    //      normalized value weighted by the field-MIN confidence.
+    //   3. Per-bit weight = max(confidence, 0.01) * agingFactor^age.
+    //   4. A bit is coherent when its confidence winner matches its aging-only
+    //      count majority. All bits coherent → per-bit compose; otherwise the top
+    //      HELD value (one a frame carried), so per-bit voting can't synthesize a
+    //      value no frame held.
+    // An out-of-range compose falls back to the highest-weight frame's tuple.
     int votedField(FieldIndex field) const;
 
     // Raw per-frame minutes decode of the newest frame (no voting).
     int lastFrameMinute() const;
 
     // Aggregate lock quality 0..1: the MINIMUM winning-vote margin across the
-    // voted bits of the timestamp, measured in the SAME normalized
-    // (age-extrapolated) space as votedField, saturating with frame count. The
-    // min — not the mean — is the honest aggregate: a timestamp is only as
-    // trustworthy as its least-certain bit, so quality collapses to the single
-    // most-contested bit's margin. Averaging let dozens of clean bits mask the
-    // one bit that decided a field, reporting near-1.0 while the value was wrong.
-    // A clean rollover still reads ~1.0 (every bit unanimous once normalized), so
-    // value and quality can no longer decouple. A bit with zero participating
-    // votes across the window scores margin 0. ~0 with < minFramesForLock frames.
+    // timestamp's voted bits in the normalized space votedField uses, saturating
+    // with frame count. Min, not mean, so one contested deciding bit isn't masked.
+    // A bit with no participating votes scores 0; ~0 below minFramesForLock.
     float lockConfidence() const;
 
 private:
@@ -332,17 +287,11 @@ private:
     // vote. Empty when no frame qualifies.
     std::vector<NormalizedFrame> buildNormalizedFrames() const;
 
-    // The whole timestamp resolved from the normalized window, PLUS the quality
-    // of that resolution — computed together so value and quality can never
-    // disagree. Per field: if every bit is COHERENT (its confidence-weighted
-    // winner agrees with its aging-only count majority) the field is the per-bit
-    // compose, as before; if any bit is incoherent (a confident sibling misread
-    // would let per-bit voting assemble a value no frame held) the field falls
-    // back to the top HELD value (one a frame actually carried). Quality is the
-    // MIN across fields of the field's contribution: for a coherent field the min
-    // per-bit trust (margin x participation), for an incoherent field the min of
-    // the held-value margin and the coherent bits' trust. An out-of-range compose
-    // falls back to the highest-aged-weight frame's tuple at quality 0.
+    // Timestamp from the normalized window plus its quality, computed together.
+    // Per field: all bits coherent → per-bit compose; else the top HELD value.
+    // Quality = MIN across fields of: min per-bit trust (margin x participation)
+    // for coherent fields; min(held-value margin, coherent bits' trust) otherwise.
+    // Out-of-range compose → highest-weight frame's tuple at quality 0.
     struct Resolution {
         TimeFields value;    // all -1 when no frame qualifies
         double quality = 0.0;  // pre-saturation; 0 on the range fallback

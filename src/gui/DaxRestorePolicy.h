@@ -4,23 +4,12 @@
 #include <QString>
 #include <QStringList>
 
-// DaxRestorePolicy — when the last-session per-slice DAX restore (#1221) may
-// apply, and which persisted keys a quit may prune (#4558).
-//
-// Background (#4558): the restore reads `DaxChannel_Slice<letter>` keyed by
-// SLICE LIST POSITION (A = index 0, ...) because radio-assigned slice ids are
-// not stable across sessions. That is sound for the launch-time restore it was
-// designed for and unsound for anything later: a band-stack switch destroys and
-// recreates its slice, and the recreate re-enters the list at the TAIL, so with
-// another slice alive it resolves the OTHER position's key and re-assigns that
-// stale channel to itself 300 ms after the add — stealing the surviving slice's
-// live DAX channel, unannounced. Confining the restore to the initial
-// post-connect enumeration removes the mis-key's only opportunity.
-//
-// Pulled out of MainWindow as pure, header-only logic so both decisions can be
-// unit-tested without a radio, an event loop, or a settings store — mirroring
-// CenterLockRebindTracker / KiwiRebindTracker / SliceLinkPolicy, which cover
-// the same live-vs-prune reasoning in the same two handlers.
+// When the last-session per-slice DAX restore (#1221) may apply, and which keys
+// a quit may prune (#4558). `DaxChannel_Slice<letter>` is keyed by slice LIST
+// POSITION (ids are not stable across sessions). Only the initial post-connect
+// enumeration is safe: a band-stack switch recreates its slice at the list tail,
+// so a later restore would read another position's key and steal that slice's
+// live DAX channel. Pure, so it is unit-tested like KiwiRebindTracker.
 
 namespace AetherSDR {
 
@@ -57,19 +46,12 @@ public:
     // timeout cannot close the window this connect just opened.
     int generation() const { return m_generation; }
 
-    // A sliceRemoved arrived. `liveRemoval` is the caller's live-vs-prune
-    // discriminator (`m_radioModel.slice(id) == nullptr` — live removals emit
-    // AFTER the slice leaves the model, so a non-null lookup means the id
-    // already names a NEW-session slice and this is the post-reconnect stale
-    // prune). Returns true when this call is what closed the window, so the
-    // caller can log the transition once.
-    //
-    // The discriminator is one-directional: non-null proves "prune", null does
-    // not prove "live". A stale prune of an id the new session never
-    // re-enumerated, the foreign-owner takeover path, and the family-switch
-    // drop all read as live. Every one of those fails toward closing the window
-    // EARLY, and an early close can only skip a restore (see restoreAllowed()'s
-    // sole consumer, whose false branch is log-and-skip) — never fire one.
+    // A sliceRemoved arrived. `liveRemoval` is `m_radioModel.slice(id) ==
+    // nullptr` (live removals emit after the slice leaves the model; non-null
+    // means a post-reconnect stale prune). Returns true when this call closed
+    // the window. Non-null proves "prune" but null does not prove "live"; every
+    // misread closes the window early, which can only skip a restore, never fire
+    // one.
     bool onSliceRemoved(bool liveRemoval)
     {
         if (!m_windowOpen || !liveRemoval) {
@@ -104,33 +86,12 @@ public:
         return QStringLiteral("DaxChannel_Slice%1").arg(QChar('A' + index));
     }
 
-    // Keys a quit should REMOVE beyond the live slices it just wrote.
-    //
-    // #4558's precondition is a key written by an earlier multi-slice quit that
-    // no later quit could clean, because the writer's loop was bounded by the
-    // slices open at quit — so `DaxChannel_SliceB` from an old two-slice
-    // session survived every single-slice quit and stayed armed forever.
-    // Pruning the tail at quit makes an affected config self-heal.
-    //
-    // Both guards are load-bearing, and each was a data-loss bug in review:
-    //
-    //  - `connected`: a radio-less quit (never connected, failed connect, or
-    //    disconnected first) has an empty list that says nothing about the
-    //    operator's saved layout. Erasing there loses the restore data on every
-    //    radio-less launch. (#4572 review 1)
-    //  - `liveSliceCount > 0`: "connected" alone does NOT mean the list is an
-    //    authoritative enumeration. RadioModel::onConnected() clears m_slices
-    //    (stageSessionModelsForReconnect) BEFORE emitting
-    //    connectionStateChanged(true), so the list is empty for the whole
-    //    pre-enumeration window, and stays empty for a connected session that
-    //    owns no slices — GUI registration rejected (#4563), every slice owned
-    //    by another client, a stalled WAN/SmartLink status trickle. An empty
-    //    list in those states is absence of evidence, not an authoritative
-    //    zero. (#4572 review 2)
-    //
-    // Refusing to prune at zero costs nothing: a session that owns no slices
-    // cannot have written a stale key, and the next quit that does own slices
-    // prunes the tail anyway.
+    // Keys a quit should REMOVE beyond the live slices it just wrote, so stale
+    // tail keys from an earlier larger session get pruned (#4558).
+    // `connected`: a radio-less quit's empty list says nothing about the saved
+    // layout. `liveSliceCount > 0`: connected is not authoritative either —
+    // onConnected() clears m_slices before connectionStateChanged(true), and a
+    // session may own no slices. A session with no slices wrote no stale key.
     static QStringList staleKeysToPrune(bool connected, int liveSliceCount)
     {
         QStringList keys;

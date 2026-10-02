@@ -125,19 +125,9 @@ void IcomStream::beginHandshake()
     if (!m_socket)
         return;
 
-    // RETRY, DO NOT JUST WAIT.
-    //
-    // This used to send AreYouThere twice and then sit on a 3 s deadline. Over
-    // WiFi that is one shot: the pair goes out together, and if the radio is
-    // mid-wake, momentarily off-channel, or still tearing down a session an
-    // earlier client left behind, both are lost and the connect fails with a
-    // message about Network Control that is simply wrong. It was the single
-    // most common failure during bring-up and every time the fix was "try
-    // again", which is exactly what a client should be doing for the operator.
-    //
-    // A second apart, because the failure being covered is a radio that is busy
-    // for a moment rather than a lossy link — retrying faster than the radio
-    // can answer just adds sessions for it to sort out.
+    // Retry, don't just wait: over WiFi the radio may be mid-wake, off-channel or
+    // still tearing down an earlier client's session. One second apart, because
+    // the case covered is a briefly busy radio, not a lossy link.
     m_handshakeAttempts = 0;
     if (!m_handshakeTimer) {
         m_handshakeTimer = new QTimer(this);
@@ -149,27 +139,12 @@ void IcomStream::beginHandshake()
             }
             if (++m_handshakeAttempts >= kHandshakeAttempts) {
                 m_handshakeTimer->stop();
-                // The handshake has no explicit failure packet — a radio that is
-                // off, busy with another client, or has Network Control disabled
-                // simply says nothing. A deadline is the only way to report it,
-                // and now it is a deadline the radio has been asked repeatedly
-                // to beat.
-                //
-                // Port mismatch leads the causes because custom port triplets
-                // shipped in #5230: the radio and this client can now disagree
-                // about the port while both are configured and reachable, and it
-                // is the one cause the old message never suggested. A raw probe
-                // to the default port can even answer while the radio listens for
-                // RS-BA1 somewhere else, which reads as proof the port is right.
-                // The control stream is the one that proves the session-wide
-                // conditions. Media streams only handshake from
-                // openMediaStreams(), which is reached after m_authOk AND a
-                // granted stream request -- so by then Network Control is
-                // demonstrably on, the credentials are demonstrably good, and
-                // nobody else holds the session. Repeating those causes for a
-                // CI-V or audio timeout would point the operator at three
-                // settings that are provably fine, which is the misdirection
-                // this message exists to remove.
+                // The handshake has no failure packet, so a deadline is the only report. Port
+                // mismatch leads the causes (custom port triplets, #5230); a probe to the
+                // default port can answer while RS-BA1 listens elsewhere. Only the Control
+                // stream lists the session-wide causes: media streams handshake only after
+                // m_authOk and a granted stream request, so Network Control, credentials and
+                // exclusivity are already proven for them.
                 const QString causes = (m_config.role == Role::Control)
                     ? QStringLiteral(
                         "Check the radio's Network menu: that its port for this "
@@ -190,16 +165,8 @@ void IcomStream::beginHandshake()
                         .arg(causes));
                 return;
             }
-            // Name the target on every line. Six identical lines that do not say
-            // where they were sent read as an AetherSDR networking fault; the
-            // address and port are what turn them into a radio-side check.
-            //
-            // Deliberately still INF. A retry is not yet a failure -- a connect
-            // that succeeds on attempt 2 is a normal connect, and warning on
-            // each one would put up to 18 warnings on the log for a single
-            // failed connect across three streams. The terminal failure is the
-            // event worth the level, and IcomSession::fail already logs that at
-            // qCWarning. What was missing here was the TARGET, not the severity.
+            // Name the target address and port on every retry line. Stays INF: a retry is
+            // not a failure; IcomSession::fail logs the terminal failure at qCWarning.
             qCInfo(lcIcomStream)
                 << "no IAmHere from"
                 << QStringLiteral("%1:%2").arg(m_config.host.toString())
@@ -278,20 +245,11 @@ void IcomStream::retain(quint16 seq, const std::vector<std::uint8_t>& packet,
                         const std::optional<TxCoordinator::Context>& context,
                         const std::optional<TxCoordinator::Command>& command)
 {
-    // FIFO BY INSERTION, not by key.
-    //
-    // m_replay is a QMap keyed by sequence, so erase(begin()) drops the
-    // numerically-lowest key — which is the oldest packet only while the
-    // sequence space has not wrapped. Once m_txSeq rolls past 0xFFFF the map
-    // holds keys near 0xFFFF and near 0x0000 together, and the lowest key is
-    // the FRESHEST packet: the buffer then evicts exactly the sequences most
-    // likely to be asked for. A retransmit request for one of them finds
-    // nothing and gets an Idle carrying that sequence instead of the payload —
-    // a silently dropped CI-V command or audio frame. On the audio stream at
-    // ~100 packets/s that comes round about every 11 minutes of transmit.
-    //
-    // This is the same wrap hazard onReorderTick() documents at length and
-    // deliberately avoids; it bit here in the other direction.
+    // Evict FIFO BY INSERTION, not by key: m_replay is keyed by sequence, and after
+    // m_txSeq wraps past 0xFFFF the lowest key is the FRESHEST packet. Evicting it
+    // would answer retransmit requests with an Idle — a silently dropped CI-V
+    // command or audio frame (~every 11 min of audio TX). Same wrap hazard as
+    // onReorderTick().
     if (!m_replay.contains(seq))
         m_replayOrder.push_back(seq);
     m_replay.insert(seq, ReplayPacket{packet, context, command});
@@ -460,17 +418,10 @@ void IcomStream::handleDatagram(const QByteArray& datagram)
             qCInfo(lcIcomStream) << roleName(m_config.role) << "handshake complete on local port"
                                  << m_boundPort;
 
-            // NO PERIODIC IDLES ON THE AUDIO STREAM.
-            //
-            // kappanhang is explicit about this — "this stream does not use
-            // periodic pkt0 idle packets" — and it matters more than it looks.
-            // Our idles are TRACKED: each consumes a sequence number and enters
-            // the replay buffer, so the radio can ask for any of them back. On
-            // the audio stream that is 10 extra tracked packets a second layered
-            // on top of 100 audio packets a second, competing for the same
-            // airtime and the same sequence space as the audio it is meant to be
-            // keeping alive. The pkt7 ping below is what actually holds the
-            // stream open.
+            // No periodic idles on the audio stream (kappanhang: "this stream does not use
+            // periodic pkt0 idle packets"). Our idles are tracked and consume sequence
+            // numbers and replay slots, competing with ~100 audio packets/s; the pkt7 ping
+            // holds the stream open.
             if (m_config.role != Role::Audio) {
                 m_idleTimer = new QTimer(this);
                 connect(m_idleTimer, &QTimer::timeout, this, &IcomStream::onIdleTick);

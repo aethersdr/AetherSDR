@@ -9,19 +9,11 @@ namespace AetherSDR {
 
 class AudioEngine;
 
-// JSON-backed profile library for the AetherTX window.
-//
-// Stored at ~/.config/AetherSDR/AetherTxProfiles.json. Live working state
-// still lives in AetherSDR.settings through the per-module load/save paths;
-// this file is only what the operator explicitly saves into and recalls from.
-//
-// TX-only, the mirror of AetherRxProfiles. ChannelStripPresets already stores
-// a whole strip — both directions at once — so recalling one to change how you
-// sound on air would take your receive chain with it. A profile here carries
-// the seven transmit chain stages, their enables and their order, and the
-// final limiter; applying one writes nothing on the RX side.
-//
-// Format:
+// JSON profile library for the AetherTX window, at
+// ~/.config/AetherSDR/AetherTxProfiles.json; holds only what the operator saves
+// and recalls (live state stays in AetherSDR.settings). TX-only mirror of
+// AetherRxProfiles: a profile carries the seven TX chain stages, enables, order
+// and the final limiter, and applying one writes nothing on the RX side. Format:
 //   {
 //     "version": 1,
 //     "profiles": {
@@ -35,10 +27,8 @@ class AudioEngine;
 //       }
 //     }
 //   }
-//
-// Export writes one profile at the top level with its "name" alongside, so a
-// file is readable on its own and easy to pass to someone else. Import
-// accepts that form or a whole library.
+// Export writes one profile at top level with its "name"; import accepts that
+// or a whole library.
 class AetherTxProfiles : public QObject {
     Q_OBJECT
 
@@ -80,19 +70,11 @@ signals:
 
 private:
 
-    // One-time import of the retired channel-strip library.
-    //
-    // ChannelStripPresets stored both directions in one preset, and the window
-    // that was its only UI is gone. Rather than strand what an operator saved,
-    // each preset is split: its transmit half lands here, its receive half in
-    // AetherRxProfiles, both under the preset's own name. The legacy file is
-    // read, never written or deleted -- if this goes wrong the original is
-    // still there, and a future version can try again.
-    //
-    // Runs once. The flag lives in this library's own root rather than in
-    // AppSettings so the decision travels with the file: re-importing after
-    // the operator has deliberately deleted a migrated profile would be worse
-    // than not importing at all.
+    // One-time import of the retired ChannelStripPresets library: each preset's
+    // transmit half lands here and its receive half in AetherRxProfiles, under the
+    // preset's name. The legacy file is only read. The done flag lives in this
+    // library's root (not AppSettings) so a deliberately deleted profile is never
+    // re-imported.
     void migrateLegacyPresets();
 
     QString filePath() const;
