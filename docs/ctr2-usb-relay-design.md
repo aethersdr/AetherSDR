@@ -141,6 +141,12 @@ Message types:
 | `0x01` | HELLO | device -> host | none | Start or restart the link |
 | `0x02` | READY | host -> device | none | Radio connection is open; DATA may flow |
 | `0x03` | CLOSED | both | none | The radio connection has ended |
+| `0x04` | DATAGRAM | reserved | | Reserved for UDP datagrams; not sent in version 0 |
+
+Every header starts with `0xFF`, whatever it carries; the type byte, not a
+second start byte, distinguishes TCP data, control messages, and (later) UDP.
+A version-0 receiver treats an unknown type, including `0x04`, as a framing
+error.
 
 Control messages (HELLO, READY, CLOSED) are always a single header report
 with packet count 1 and payload count 0. A receiver accepts a control
@@ -240,9 +246,9 @@ only CW. The first HID milestone carries the entire TCP byte stream.
 
 UDP discovery and streams are separate from TCP. Lynn to confirm which of
 these, if any, the CTR2 requires for full Wi-Fi-mode functionality. If
-required, a later version adds a minimal transport-level way to identify
-their endpoints and carry opaque datagrams while preserving datagram
-boundaries. Radio payloads still remain unchanged; TCP commands are not
+required, message type `0x04` (reserved) carries them: a later version
+defines how it identifies each flow's endpoint and carries opaque datagrams
+while preserving datagram boundaries. Radio payloads still remain unchanged; TCP commands are not
 parsed to infer UDP routing and embedded addresses are not rewritten.
 
 A successful TCP-over-HID test does not establish full UDP-dependent feature
@@ -281,7 +287,11 @@ AetherSDR's existing transmit policy or its own radio command paths.
 - USB vendor and product IDs and the product string.
 - What the CTR2 should do if CLOSED arrives while it is keying; its local
   keyer and sidetone are its own.
-- Which UDP channels, if any, Wi-Fi mode relies on.
+- Which UDP flows the CTR2 relies on in Wi-Fi mode: ports, direction,
+  typical datagram size and rate. Type `0x04` is reserved for them; the
+  datagram format (stream identifier, boundaries, sizes above 512 bytes)
+  is defined once those are known. At ~7 KB/s per direction, small status or
+  meter traffic can fit; panadapter or audio streams cannot.
 
 ## Next steps and acceptance
 

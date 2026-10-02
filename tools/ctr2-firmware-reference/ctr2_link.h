@@ -38,6 +38,7 @@ extern "C" {
 #define CTR2_TYPE_HELLO         0x01u
 #define CTR2_TYPE_READY         0x02u
 #define CTR2_TYPE_CLOSED        0x03u
+/* 0x04 is reserved for UDP datagrams and is not sent in version 0. */
 
 /* Called once per outgoing 8-byte report, in order. Prepend report ID 0x01
  * if your USB stack needs it in the buffer. */

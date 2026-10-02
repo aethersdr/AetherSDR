@@ -35,6 +35,7 @@ enum class MessageType : std::uint8_t {
     Hello = 0x01,   // device -> host: start or restart the link
     Ready = 0x02,   // host -> device: radio connection open
     Closed = 0x03,  // either direction: link ended; device restarts with Hello
+    // 0x04 is reserved for UDP datagrams; not sent in version 0.
 };
 
 struct Message {
