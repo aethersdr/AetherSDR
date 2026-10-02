@@ -1,7 +1,7 @@
 # Experimental native digital FM receiver
 
 This is the separate draft proposal in RFC #6079, following the analog RTL
-delivery in PR #6077. Analog RFC #5468 does not depend on this feature. Maintainer architecture approval remains pending. Native build,
+delivery in PR #6083 (replacement for #6077). Analog RFC #5468 does not depend on this feature. Maintainer architecture approval remains pending. Native build,
 recorded-input and packaged-startup evidence is recorded separately for each
 tested checkpoint. The approved analog WFM work does not approve these dependencies,
 worker, or digital receiver. No merge or release readiness is implied.
