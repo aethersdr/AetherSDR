@@ -791,7 +791,22 @@ it gives zero faults and a phase-continuous tone with the patch, and 1 fault and
 ~120 splices in two seconds without it. It does NOT pin the `dexchange()`
 reorder: that closes a narrow window between the count and the copy on another
 thread, which no deterministic test here reaches. The reorder rests on the
-argument above, not on a test.
+argument above and on one measurement: a scratch host (not committed) that
+spins on `GetChannelOutputReady()` and exchanges the instant it reads 1, 4000
+blocks a run, saw torn blocks (phase splices) in 3 of 15 runs with upstream's
+order and in 0 of 20 with the reorder.
+
+**What the reorder does to RX.** Every RX channel is non-blocking too, but none
+asks before it exchanges. The reorder makes the count visible one `memcpy` of
+`r2_insize` complex samples later (microseconds) and moves nothing else: the
+priming, the ring indices and `Sem_OutReady` are untouched, so no channel gains
+latency. The only behaviour that differs is a host exchange landing inside that
+window, which can happen only when the worker is already a whole block late: it
+now underruns (counted) where upstream's order handed it a torn block (silent).
+`wdsp_*` and `hl2_rxdsp*` tests pass unchanged.
+
+**Upstream status.** Not reported. TAPR/OpenHPSDR-wdsp 2.10 `dexchange()` still
+counts before it copies and has no readiness query.
 
 When updating WDSP, keep this unless upstream grows an equivalent query; keep
 the reorder unless upstream's `dexchange()` already copies before it counts.

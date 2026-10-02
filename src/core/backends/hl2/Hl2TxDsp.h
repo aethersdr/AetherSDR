@@ -123,14 +123,11 @@ public slots:
     // The ALC applies to all. m_inBuffer carries up to dspBlockSize-1 samples
     // between calls; a source change mid-transmission drops that carry.
     //
-    // The TXA build is not rate-free: its channel uses blockForOutput = false,
-    // so a caller faster than real time gets Underrun (unpaced: 240-255 of 256
-    // blocks; 0 at the live 21.33 ms period), and each underrun leaves the
-    // stream one DSP buffer ahead permanently (fexchange2 advances r2_outidx).
-    // AudioEngine's TX poll is paced only on average: one delivery can carry
-    // two or more blocks, so each exchange waits for the channel's output (see
-    // exchangeDueBlocks()). A caller faster than real time on average must
-    // still pace itself. Starved blocks count in modulatorFaultBlocks().
+    // TXA build: the channel is non-blocking, and one underrun leaves its output
+    // ring out of step for the rest of the over (fexchange2 advances r2_outidx
+    // anyway). So each exchange waits for the channel's output
+    // (exchangeDueBlocks()); a caller faster than real time on average grows a
+    // warned queue instead. Failed blocks count in modulatorFaultBlocks().
     void processAudioBlock(const std::vector<float>& mono,
                            TxAudioSource source,
                            const TxCoordinator::Context& context);

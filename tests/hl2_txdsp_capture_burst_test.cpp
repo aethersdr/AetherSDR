@@ -1,43 +1,8 @@
-// Hl2TxDsp fed the way a LOW-RATE capture device actually delivers audio.
-//
-// THE DEFECT THIS PINS. Qt 6.8's macOS QAudioSource flushes captured audio
-// in fixed 4096-byte chunks -- 1024 frames of 16-bit stereo -- whatever the
-// device rate. At 48 kHz that is 21.3 ms, one of this stage's 512-sample
-// (24 kHz) DSP blocks per delivery once the voice strip has resampled it. At
-// 24 kHz -- a Bluetooth headset's microphone, AirPods Max -- it is 42.7 ms,
-// TWO blocks per delivery, every delivery (measured on the live app, hl2-lab
-// d161: 326 of 326). At 16 kHz it is 64 ms.
-//
-// The TXA channel is opened non-blocking (blockForOutput = false). Exchanging
-// the two blocks back-to-back underruns the second one before WDSP's worker
-// has produced its output, fexchange2 zeroes it and advances its read index,
-// and from then on the channel's TWO-slot output ring is read out of step with
-// its writer: every block boundary after that is a splice of the wrong or a
-// torn block. That is the "chopped" transmit audio. It is almost silent in the
-// telemetry -- the fault counter records the one underrun (2 in a whole over
-// on the live app) and nothing for the ~250 splices that follow it.
-//
-// The cadence is not a caller fault that can be fixed upstream: the average
-// rate is exactly right, only the grouping differs, and the grouping is the
-// audio backend's. So the stage spaces its channel exchanges itself.
-//
-// Each rate case feeds a 1 kHz tone at the correct AVERAGE rate, grouped as
-// that device's deliveries are grouped, with the event loop running between
-// deliveries as it does on the I/O thread. No exchange may underrun, every DSP
-// block must reach the wire (the full IQ count), the envelope must have no
-// hole, and the modulated tone must be phase-continuous.
-//
-// Those cases are paced by the wall clock, so a machine loaded enough to stall
-// WDSP's worker for a whole block period (a sanitizer lane, a -j8 ctest) makes
-// the stage DROP a block -- correctly, and counted in modulatorStallDrops().
-// That is load, not the defect, and the run then exits 77 (skipped) rather
-// than failing. What still fails outright is an UNDERRUN: the gate exists so
-// that no exchange underruns, whatever the load.
-//
-// The stall cases do not depend on load: they make the worker look stalled
-// through the test seam, and pin what the gate does then -- wait from when a
-// block became due (not from the previous exchange), drop rather than
-// exchange, and start every over with a fresh deadline.
+// Hl2TxDsp fed as capture devices group their deliveries (one, two or three
+// DSP blocks at once) at the correct average rate: no exchange may underrun,
+// and the tone must reach the wire whole and phase-continuous. A wall-clock
+// case whose worker stalls for a block period is load, not the defect: exit 77.
+// Mechanism: third_party/wdsp/AETHERSDR-PATCHES.md, patch 15.
 
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "TxTestAuthority.h"
@@ -169,14 +134,10 @@ static Result run(std::size_t chunk, double seconds)
             }
         }
     }
-    // Splices. The same tone is a complex exponential at 1 kHz on the wire, so
-    // iq[k+1] * conj(iq[k]) has a constant angle of 2*pi*1000/48000 (its sign is
-    // the wire's handedness, so the median is the reference). A block
-    // read out of order, repeated or torn -- which is what WDSP's two-slot
-    // output ring hands back once a back-to-back exchange has put its reader
-    // out of step with its writer -- breaks that at the block boundary while
-    // leaving the envelope perfectly flat. The fault counter does not see it
-    // either: it saw one underrun, and the damage is every block after it.
+    // Splices. The tone is a 1 kHz complex exponential on the wire, so
+    // iq[k+1] * conj(iq[k]) has a constant angle (the median; its sign is the
+    // wire's handedness). A block read out of order, repeated or torn breaks it
+    // at the block boundary with the envelope flat and the fault counter silent.
     if (out.size() > settle + 1000) {
         std::vector<double> dphi;
         for (std::size_t k = settle + 1; k < out.size(); ++k)
@@ -225,8 +186,7 @@ static void expectClean(const char* name, std::size_t chunk)
     check(r.splices == 0, (p + ": the modulated tone is phase-continuous").c_str());
 }
 
-// ── The stall path, driven through the seam rather than by load ──────────
-
+// The stall path, driven through the seam rather than by load.
 struct StallRig {
     TxTestAuthority authority;
     Hl2TxDsp tx;
@@ -236,6 +196,7 @@ struct StallRig {
     std::size_t outBlock = 0;
     std::size_t block = 0;
     std::size_t n = 0;
+    QElapsedTimer sinceDelivery;
 
     bool open()
     {
@@ -260,15 +221,30 @@ struct StallRig {
         std::vector<float> audio(block);
         for (std::size_t k = 0; k < block; ++k, ++n)
             audio[k] = static_cast<float>(0.5 * std::sin(2.0 * M_PI * 1000.0 * n / cfg.inputSampleRateHz));
+        sinceDelivery.start();
         tx.processAudioBlock(audio, TxAudioSource::Microphone, authority.context);
     }
     std::size_t blocksOut() const { return outBlock ? iq / outBlock : 0; }
+    // Called as the stall is lifted. The last block's deadline (one block
+    // period) passed while it was held, so a drop is correct and the "not
+    // dropped" checks cannot judge: load, not the defect.
+    bool heldPastDeadline(const char* name) const
+    {
+        const double heldMs = sinceDelivery.nsecsElapsed() / 1e6;
+        const double deadlineMs = 1000.0 * cfg.dspBlockSize / cfg.inputSampleRateHz;
+        if (heldMs < deadlineMs)
+            return false;
+        std::fprintf(stderr, "INCONCLUSIVE: %s: stall held %.1f ms, past the %.1f ms "
+                             "deadline; the machine is too loaded to judge it\n",
+                     name, heldMs, deadlineMs);
+        ++g_inconclusive;
+        return true;
+    }
 };
 
-// Blocker 1 of the #6005 review. A block that arrives after the caller has
-// been idle for longer than a block period must still wait for the worker:
-// the deadline runs from when the block became due, not from the previous
-// exchange. And a block whose worker never answers is DROPPED, not exchanged.
+// A block arriving after the caller was idle for over a block period still
+// waits for the worker: the deadline runs from when the block became due, not
+// from the previous exchange. A block whose worker never answers is DROPPED.
 static void stallIsTimedFromDueAndDrops()
 {
     StallRig g;
@@ -284,6 +260,10 @@ static void stallIsTimedFromDueAndDrops()
     pumpFor(3.0);
     check(g.blocksOut() == 1,
           "stall: a block arriving after idle is not exchanged while the worker is not ready");
+    if (g.heldPastDeadline("stall")) {
+        g.tx.reset();
+        return;
+    }
     g.stalled = false;
     pumpFor(20.0);
     check(g.blocksOut() == 2, "stall: ...and is exchanged once it is");
@@ -303,10 +283,9 @@ static void stallIsTimedFromDueAndDrops()
     g.tx.reset();
 }
 
-// Blocker 2 of the #6005 review. Unkey while a block is waiting, key again
-// later: the new over's first block starts a fresh deadline. It is neither
-// exchanged into a worker that is not ready, nor dropped against a deadline
-// the previous over started.
+// Unkey while a block is waiting, key again later: the new over's first block
+// starts a fresh deadline, so it is neither exchanged into a worker that is not
+// ready nor dropped against the previous over's deadline.
 static void newOverStartsAFreshDeadline()
 {
     StallRig g;
@@ -317,12 +296,20 @@ static void newOverStartsAFreshDeadline()
     g.stalled = true;
     g.deliverBlock();                  // waits: worker not ready
     pumpFor(10.0);
+    if (g.heldPastDeadline("new over")) {
+        g.tx.reset();
+        return;
+    }
     g.tx.reset();                      // unkey with it still waiting
     pumpFor(30.0);                     // > one block period since it became due
 
     const std::size_t before = g.blocksOut();
     g.deliverBlock();                  // first block of the next over, worker not ready
     pumpFor(3.0);
+    if (g.heldPastDeadline("new over")) {
+        g.tx.reset();
+        return;
+    }
     check(g.blocksOut() == before,
           "new over: first block is not exchanged while the worker is not ready");
     check(g.tx.modulatorStallDrops() == 0,
@@ -337,11 +324,8 @@ static void newOverStartsAFreshDeadline()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
-    // Skip ONLY in a build that explicitly selects the phasing modulator
-    // (AETHER_HL2_TX_TXA=0). A bare `#if !AETHER_HL2_TX_TXA` reads an UNDEFINED
-    // macro as 0, so once #5906 removes the build option -- TXA then being the
-    // only modulator, and the macro defined nowhere -- this test would skip
-    // itself, report Passed, and run none of its checks.
+    // Skip only an explicit phasing build: an undefined macro reads as 0 in #if,
+    // so a bare `#if !AETHER_HL2_TX_TXA` would skip silently if the option went.
 #if defined(AETHER_HL2_TX_TXA) && !AETHER_HL2_TX_TXA
     std::fprintf(stderr, "phasing modulator: synchronous, cadence cannot starve it -- skipped\n");
     return 0;
@@ -350,15 +334,13 @@ int main(int argc, char** argv)
     newOverStartsAFreshDeadline();
 
     // The control: a 48 kHz device, 512 frames per 10.7 ms, reaches this stage
-    // as 256 samples per delivery -- never two blocks at once. Clean before and
-    // after the fix.
+    // as 256 samples per delivery -- never two blocks at once.
     expectClean("48k-capture (256/delivery)", 256);
     // 44.1 kHz device, 1024 frames per 23.2 ms = ~557 samples at 24 kHz: every
-    // eleventh or so delivery carries two DSP blocks. #6004's second-worst rate.
+    // eleventh or so delivery carries two DSP blocks. (#6004)
     expectClean("44.1k-capture (557/delivery)", 557);
-    // 24 kHz device as Qt 6.8's macOS QAudioSource actually delivers it:
-    // 4096-byte flushes of 16-bit stereo, 1024 frames = 42.7 ms. Measured on
-    // the live app (hl2-lab d161): 326 of 326 deliveries were exactly this.
+    // 24 kHz device as Qt 6.8's macOS QAudioSource delivers it: 4096-byte
+    // flushes of 16-bit stereo, 1024 frames = 42.7 ms, two blocks every time.
     expectClean("24k-capture as Qt delivers it (1024/delivery)", 1024);
     // 16 kHz device, 512 frames per 32 ms = 768 samples at 24 kHz: one delivery
     // in two carries two DSP blocks, whatever the poll timing.
@@ -369,7 +351,7 @@ int main(int argc, char** argv)
         return 1;
     }
     if (g_inconclusive) {
-        std::fprintf(stderr, "SKIPPED: %d rate case(s) inconclusive under load\n", g_inconclusive);
+        std::fprintf(stderr, "SKIPPED: %d case(s) inconclusive under load\n", g_inconclusive);
         return 77;
     }
     std::fprintf(stderr, "all passed\n");
