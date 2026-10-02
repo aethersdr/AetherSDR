@@ -157,6 +157,9 @@ already 6.12 or newer also works. See
 [`docs/BUILDING.md`](docs/BUILDING.md#the-release-qt-setup-qtsh) for what the
 script checks and where it installs.
 
+See [BUILD-OPTIONS.md](BUILD-OPTIONS.md) for compile-time switches, defaults and
+prerequisites, including optional decoders and experimental radio backends.
+
 ### Dependencies
 
 Everything except Qt and qtkeychain comes from the system. Optional packages
