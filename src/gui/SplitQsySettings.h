@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace AetherSDR {
 
@@ -92,10 +93,16 @@ inline bool shouldCloseSplitOnQsy(const SplitQsySettings& settings,
                                   double frequencyMhz,
                                   double referenceFrequencyMhz)
 {
-    const double thresholdMhz =
-        static_cast<double>(settings.thresholdHz) / 1000000.0;
+    if (!std::isfinite(frequencyMhz) || !std::isfinite(referenceFrequencyMhz)) {
+        return false;
+    }
+    // Compare whole Hz: MHz doubles differ by float error at the boundary
+    // (14.227 - 14.225 is slightly above 0.002).
+    const long long deltaHz = std::llabs(
+        std::llround(frequencyMhz * 1.0e6)
+        - std::llround(referenceFrequencyMhz * 1.0e6));
     return settings.closeSplitOnQsy && splitActive && rxSlice
-        && std::abs(frequencyMhz - referenceFrequencyMhz) > thresholdMhz;
+        && deltaHz > static_cast<long long>(settings.thresholdHz);
 }
 
 } // namespace AetherSDR

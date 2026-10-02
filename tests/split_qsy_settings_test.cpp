@@ -93,6 +93,20 @@ void testQsyClosePolicy()
               settings, true, false, 14.005000, 14.000000),
           "TX slice QSY does not close split");
 
+    // Realistic MHz values: 14.227 - 14.225 is above 0.002 in doubles.
+    check(!AetherSDR::shouldCloseSplitOnQsy(
+              settings, true, true, 14.226999, 14.225),
+          "1999 Hz change keeps split active");
+    check(!AetherSDR::shouldCloseSplitOnQsy(
+              settings, true, true, 14.227, 14.225),
+          "exactly 2000 Hz change keeps split active");
+    check(!AetherSDR::shouldCloseSplitOnQsy(
+              settings, true, true, 14.223, 14.225),
+          "exactly 2000 Hz downward change keeps split active");
+    check(AetherSDR::shouldCloseSplitOnQsy(
+              settings, true, true, 14.227001, 14.225),
+          "2001 Hz change closes split");
+
     auto disabled = settings;
     disabled.closeSplitOnQsy = false;
     check(!AetherSDR::shouldCloseSplitOnQsy(
