@@ -66,6 +66,8 @@ public:
 
     // CW decode panel
     void setCwPanelVisible(bool visible);
+    // The four CW confidence colors, lowest cost (green) to highest (red).
+    static QString cwCostColor(float cost);
     void appendCwText(const QString& text, float cost = 0.0f);
     void appendCwTextTx(const QString& text, float cost = 0.0f);
     void setCwStats(float pitchHz, float speedWpm);
@@ -76,6 +78,8 @@ public:
     void setCwBackendState(const QString& key, bool tuning, const QString& status, bool preparing,
                          bool canRetry, const QString& detail);
     void appendUnscoredCwText(const QString& text);
+    // Colored like appendCwText, but never dropped by the Sens threshold.
+    void appendColoredCwText(const QString& text, float cost);
 #endif
     QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
     QPushButton* lockSpeedButton()  const { return m_lockSpeedBtn; }
