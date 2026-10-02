@@ -2482,27 +2482,7 @@ void SpectrumWidget::loadSettings()
 {
     m_wfTimeMarkerSeconds = DisplaySettings::waterfallTimeMarkerSeconds(m_panIndex);
     auto& s = AppSettings::instance();
-    // These four values are stored by the radio (including in profiles). Older
-    // releases persisted a competing client copy and reasserted it after status
-    // updates (#2465, #4126). Remove the stale copies once; the member defaults
-    // are only placeholders until the first PanadapterModel status arrives.
-    bool removedRadioOwnedDisplaySetting = false;
-    const QStringList radioOwnedDisplaySettings = {
-        QStringLiteral("DisplayFftAverage"),
-        QStringLiteral("DisplayFftFps"),
-        QStringLiteral("DisplayFftWeightedAvg"),
-        QStringLiteral("DisplayWfLineDuration"),
-    };
-    for (const QString& base : radioOwnedDisplaySettings) {
-        const QString key = settingsKey(base);
-        if (s.contains(key)) {
-            s.remove(key);
-            removedRadioOwnedDisplaySetting = true;
-        }
-    }
-    if (removedRadioOwnedDisplaySetting) {
-        s.save();
-    }
+    DisplaySettings::retireRadioOwnedPanSettings(m_panIndex);
 
     m_spectrumFrac   = std::clamp(s.value(settingsKey("SpectrumSplitRatio"), "0.40").toFloat(), 0.10f, 0.90f);
     m_fftFillAlpha   = s.value(settingsKey("DisplayFftFillAlpha"), "0.70").toFloat();

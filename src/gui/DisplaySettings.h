@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 namespace AetherSDR {
 
@@ -15,6 +16,32 @@ namespace AetherSDR {
 // (flat blob), "panLockEnabled" (nested in TitleBar), "PanLockEnabled" (flat).
 class DisplaySettings {
 public:
+    // Live pan status owns these values. Retire competing legacy copies for
+    // the slot being loaded, preserving client-rendered and other-slot state.
+    static void retireRadioOwnedPanSettings(int slot)
+    {
+        AppSettings& settings = AppSettings::instance();
+        const QStringList keys = {
+            QStringLiteral("DisplayFftAverage"),
+            QStringLiteral("DisplayFftFps"),
+            QStringLiteral("DisplayFftWeightedAvg"),
+            QStringLiteral("DisplayWfLineDuration"),
+            QStringLiteral("DisplayWnbEnabled"),
+            QStringLiteral("DisplayWnbLevel"),
+        };
+        bool removed = false;
+        for (const QString& base : keys) {
+            const QString key = slot == 0 ? base : QString("%1_%2").arg(base).arg(slot);
+            if (settings.contains(key)) {
+                settings.remove(key);
+                removed = true;
+            }
+        }
+        if (removed) {
+            settings.save();
+        }
+    }
+
     static int waterfallTimeMarkerSeconds(int slot)
     {
         if (!isValidPanSlotIndex(slot)) {
