@@ -29,23 +29,17 @@ public:
 
     [[nodiscard]] int fftSize() const noexcept { return m_fftSize; }
 
-    // Display frames the spectrum integrates over (1 = none, the default), as a
-    // power-domain EMA with alpha = 1/frames (averaging dB biases low, -2.51 dB
-    // on noise; RFC #5782 §3, #5794). Display frames, so N = 8 at 25 fps ~320 ms.
-    // For fixtures that want an exact 1/N: the operator's FFT AVG arrives as a
-    // time, through setAverageTimeMs(), and setting this clears that time.
-    // Drops accumulated state. Call on the hl2-io thread (unsynchronised).
+    // A fixed depth in display frames (1 = none): EMA with alpha = 1/frames, for
+    // fixtures. The operator's FFT AVG is a time (setAverageTimeMs()); setting
+    // this clears it. Drops the state. Call on the hl2-io thread (unsynchronised).
     void setAverageFrames(int frames) noexcept;
     [[nodiscard]] int averageFrames() const noexcept { return m_averageFrames; }
 
-    // Average over a time constant in ms (0 = none): what the operator's FFT AVG
-    // reaches (Hl2Backend::setPanAverage). Each emitted frame is blended with
-    // alpha = 1 - exp(-dt / tau), dt = IQ samples since the previous emitted frame
-    // (accumulate()'s discards included) / sample rate: WDSP's analyzer law on the
-    // ANAN. The response time is fps-invariant; the noise reduction is not, since
-    // only displayed frames are integrated. A transport gap does not advance the
-    // clock: reset() keeps the count and the average, so the pre-gap estimate is
-    // held. Changing the time drops the state. Inert without a sample rate.
+    // The operator's FFT AVG as a time constant in ms (0 = none). Each frame blends
+    // with alpha = 1 - exp(-dt/tau), dt = IQ samples since the last frame / rate
+    // (WDSP's analyzer law): response time is fps-invariant, noise reduction is not.
+    // A transport gap does not advance this clock, so the pre-gap estimate holds.
+    // A change drops the state. Inert without a sample rate.
     void setAverageTimeMs(double tauMs) noexcept;
     [[nodiscard]] double averageTimeMs() const noexcept { return m_averageTimeMs; }
 
@@ -61,8 +55,9 @@ public:
     void setLogAverage(bool on) noexcept;
     [[nodiscard]] bool logAverage() const noexcept { return m_logAverage; }
 
-    // Forget the running average and take the next frame whole: for a move of
-    // the frequency axis (NCO), which rebuilds nothing. Keeps the partial frame.
+    // Forget the running average and take the next frame whole. Keeps the
+    // partial frame, which a setting change leaves valid; a retune (NCO move)
+    // also calls reset() to discard it.
     void dropAverage() noexcept;
 
     // Append IQ samples; each time a full frame accumulates, compute one
@@ -84,8 +79,8 @@ public:
     // Drop the partial frame on a transport sequence gap, returning samples
     // discarded (0 = none): discard, not zero-fill, which renders as a transient.
     // Averaging state is kept (same spectrum). A retune wants the opposite
-    // answer and calls dropAverage(); buildChannel() rebuilds this object on FFT
-    // size/rate change.
+    // answer and calls this AND dropAverage(); buildChannel() rebuilds this
+    // object on FFT size/rate change.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = m_acc.size();
@@ -114,11 +109,10 @@ private:
     // time-constant blend. Counts accumulate()'s discards too: they are time
     // that passed, whether or not they reach a transform.
     std::uint64_t m_samplesSinceFrame = 0;
-    // Per-bin EMA state, fftshifted the same way the emitted bins are: in
-    // power, or in dBFS while m_logAverage is set. HL2-private on purpose
-    // (RFC #5782 q3): one consumer today; it moves to src/core/dsp/ when RTL
-    // becomes the second. Sized once at construction so the setters and computeFrame()
-    // never allocate — process() promises that in the header above.
+    // Per-bin EMA state, fftshifted like the emitted bins; power, or dBFS while
+    // m_logAverage is set. Sized once at construction so nothing here allocates.
+    // HL2-private on purpose (RFC #5782 q3): it moves to src/core/dsp/ when a
+    // second consumer (RTL) needs it.
     std::vector<double> m_avgPower;
     // Whether m_avgPower holds a frame yet. An EMA seeded at zero would show
     // the operator roughly `frames` frames of an artificially low floor every

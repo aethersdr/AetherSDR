@@ -184,9 +184,9 @@ public:
     // and re-applied in installChannel(): every zoom builds a fresh Hl2Spectrum.
     Q_INVOKABLE void setSpectrumAverageMs(int ms);
     Q_INVOKABLE void setSpectrumLogAverage(bool on);
-    // The NCO moved: forget the running average so bins integrated at the old
-    // frequency do not ghost across the new one. Not a transport gap (see
-    // Hl2Spectrum::reset()).
+    // The NCO moved: forget the running average and the held partial window, so
+    // old-axis IQ does not ghost across the new axis. Not a transport gap, which
+    // keeps the average (see Hl2Spectrum::reset()).
     Q_INVOKABLE void dropSpectrumAverage();
     // What the installed spectrum is actually running, for tests. DSP thread.
     [[nodiscard]] double spectrumAverageMsApplied() const noexcept

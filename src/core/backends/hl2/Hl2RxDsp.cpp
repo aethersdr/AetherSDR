@@ -474,8 +474,12 @@ void Hl2RxDsp::setSpectrumLogAverage(bool on)
 
 void Hl2RxDsp::dropSpectrumAverage()
 {
-    if (m_spectrum)
-        m_spectrum->dropAverage();
+    if (!m_spectrum)
+        return;
+    // The window accumulate() holds between due frames is old-axis IQ too;
+    // keeping it would seed the fresh average with the old spectrum.
+    m_spectrum->reset();
+    m_spectrum->dropAverage();
 }
 
 void Hl2RxDsp::setShift(double shiftHz)

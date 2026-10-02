@@ -1229,7 +1229,7 @@ add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
 # #5678 row 2.1 on HL2: FFT AVG as a time constant in Hl2Spectrum (RFC #5782).
 # The mapping, the variance reduction on noise against theory, fps-invariance of
 # the step response (with a frame-depth control), the domain toggle, the retune
-# drop, and re-application across an Hl2RxDsp rebuild.
+# drop (average and held window), and re-application across an Hl2RxDsp rebuild.
 add_executable(hl2_pan_averaging_test tests/hl2_pan_averaging_test.cpp)
 target_include_directories(hl2_pan_averaging_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
 target_link_libraries(hl2_pan_averaging_test PRIVATE aethercore Qt6::Core Qt6::Network ${FFTW3_LIBRARIES})
@@ -1471,8 +1471,8 @@ target_link_libraries(hl2_slice_meter_lifecycle_test PRIVATE aethercore Qt6::Cor
 add_test(NAME hl2_slice_meter_lifecycle_test COMMAND hl2_slice_meter_lifecycle_test)
 
 # HL2 backend seam on a default-constructed backend: capabilities, link edges,
-# span policy, CW hang ownership, tune drive and its health rows, notch ids.
-# Binds nothing: link edges are MetisClient's own signals emitted in-process.
+# span policy, CW hang ownership, tune drive and its health rows, notch ids,
+# FFT AVG reaching an injected receiver chain. Binds nothing: link edges are MetisClient's own signals emitted in-process.
 add_executable(hl2_backend_seam_test tests/hl2_backend_seam_test.cpp)
 target_include_directories(hl2_backend_seam_test PRIVATE src tests)
 target_link_libraries(hl2_backend_seam_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)

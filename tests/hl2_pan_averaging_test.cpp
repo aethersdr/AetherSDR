@@ -1,23 +1,9 @@
-// #5678 row 2.1 on the Hermes-Lite 2: the operator's FFT AVG reaches the
-// panadapter, as a TIME CONSTANT, and the average is in the domain the
-// weighted toggle selects (power by default). RFC #5782's ruling puts the
-// averaging in the host's backend layer; this is that layer's arithmetic.
-//
-// What is asserted, and why each needs a control:
-//   1. the 0..100 -> ms mapping and the blend weight (pure arithmetic);
-//   2. on noise, the average cuts the per-bin power variance by the factor an
-//      exponential average of independent exponential variates predicts,
-//      alpha / (2 - alpha) -- with the un-averaged spectrum as the positive
-//      control that the fixture's variance is what theory says it is (1);
-//   3. the response to a step takes the SAME wall time at a 21 ms and a
-//      100 ms display interval -- the fps-slider coupling on8st raised on
-//      #5782 -- with a frame-depth estimator as the control that the fixture
-//      can see the coupling at all;
-//   4. the weighted toggle really changes the domain (log-recursive reads the
-//      noise floor ~2.5 dB lower, E[ln X] = ln E[X] - gamma);
-//   5. dropAverage() forgets the old axis and a replayed setting does not;
-//   6. Hl2RxDsp re-applies the operator's averaging to the fresh Hl2Spectrum
-//      every rebuild constructs -- without it the first zoom turns it off.
+// The HL2's FFT AVG (#5678 row 2.1, RFC #5782): a time constant, in the domain
+// the weighted toggle selects. Each section carries a control: (1) the mapping;
+// (2) per-bin variance falls by alpha/(2-alpha) on noise; (3) the step response
+// is tau at 21 ms and 100 ms frames; (4) log reads ~2.5 dB below power;
+// (5) dropAverage() vs a replay; (6) the setting survives an Hl2RxDsp rebuild;
+// (7) a retune drop also discards the shaper's held old-axis window.
 
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
@@ -25,10 +11,12 @@
 
 #include <QCoreApplication>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdio>
 #include <random>
+#include <string>
 #include <vector>
 
 using namespace AetherSDR::hl2;
@@ -163,6 +151,24 @@ double stepResponseMs(int intervalSamples, double tauMs, int depthFrames)
     return 1e9;
 }
 
+
+// Hl2RxDsp, fed the way the EP6 fan-out feeds it: 126-sample blocks of a tone
+// at bin k0 (before the spectrum's conjugation), returning the first frame
+// emitted, or an empty vector.
+struct FirstFrame {
+    std::vector<float> bins;
+    void take(const std::vector<float>& b) { if (bins.empty()) bins = b; }
+};
+std::vector<std::complex<float>> toneBlock(int k0, int fft, long start)
+{
+    std::vector<std::complex<float>> v(static_cast<std::size_t>(kBlock));
+    for (int n = 0; n < kBlock; ++n) {
+        const double ph = 2.0 * 3.14159265358979323846 * k0 * static_cast<double>(start + n) / fft;
+        v[static_cast<std::size_t>(n)] = 0.5f * std::complex<float>(
+            static_cast<float>(std::cos(ph)), static_cast<float>(std::sin(ph)));
+    }
+    return v;
+}
 }  // namespace
 
 int main(int argc, char** argv)
@@ -216,14 +222,10 @@ int main(int argc, char** argv)
         const double slow = stepResponseMs(4800, tauMs, 0);          // 100 ms frames
         std::printf("step 63%%: %.0f ms at 21 ms frames, %.0f ms at 100 ms frames (tau %.0f)\n",
                     fast, slow, tauMs);
-        // The bound is +-(frame interval + FFT window + noise margin), and
-        // symmetric on purpose. Each displayed periodogram stands for the
-        // whole dt since the previous frame, so a step landing mid-interval
-        // is credited up to one interval EARLY by the frame that first sees
-        // it, and the crossing is only observable at the next frame, up to
-        // one interval LATE. Measured at 100 ms: 426 ms, the early side.
-        // What must NOT happen is the control's 4x: the time constant stays
-        // tau, quantised to the display interval.
+        // +-(frame interval + FFT window + margin), symmetric: a frame stands for
+        // the whole dt since the last, so a mid-interval step is credited up to
+        // one interval early, and the crossing is seen up to one interval late.
+        // What must not happen is the control's 4x.
         const double win = 1000.0 * kFft / kFs;
         check(std::abs(fast - tauMs) < win + win + 30.0,
               "63% of a step after ~tau at the uncapped frame rate");
@@ -313,6 +315,56 @@ int main(int argc, char** argv)
         check(dsp.spectrumAverageMsApplied() == 300.0,
               "the averaging time survives the rebuild");
         check(dsp.spectrumLogAverageApplied(), "and so does the domain");
+    }
+
+
+    // ---- 7. a retune drop discards the held old-axis window --------------
+    {
+        constexpr int fft = 256;
+        auto config = [] {
+            Hl2RxDsp::Config cfg;
+            cfg.inputSampleRateHz = 48000;
+            cfg.audioSampleRateHz = 48000;
+            cfg.dspBlockSize = 1024;
+            cfg.fftSize = fft;
+            cfg.blockForOutput = true;
+            return cfg;
+        };
+        std::string err;
+        // Reference: the new axis alone, averaging off, uncapped.
+        Hl2RxDsp ref;
+        check(ref.configure(config(), &err), "configure reference");
+        FirstFrame raw;
+        QObject::connect(&ref, &Hl2RxDsp::spectrumReady, [&raw](const std::vector<float>& b) { raw.take(b); });
+        for (long t = 0; raw.bins.empty() && t < 20 * kBlock; t += kBlock)
+            ref.processIqBlock(toneBlock(-60, fft, t));
+
+        // Averaging at 1 s; one frame due, then capped at 1 fps so the shaper
+        // holds fft - 1 samples of the OLD axis in accumulate().
+        Hl2RxDsp dsp;
+        check(dsp.configure(config(), &err), "configure");
+        dsp.setSpectrumAverageMs(1000);
+        dsp.setSpectrumRateFps(1);
+        for (long t = 0; t < 8 * kBlock; t += kBlock)
+            dsp.processIqBlock(toneBlock(30, fft, t));
+        dsp.dropSpectrumAverage();   // the NCO moved
+        dsp.setSpectrumRateFps(0);   // the next frame is due at once
+        FirstFrame after;
+        QObject::connect(&dsp, &Hl2RxDsp::spectrumReady, [&after](const std::vector<float>& b) { after.take(b); });
+        for (long t = 0; after.bins.empty() && t < 20 * kBlock; t += kBlock)
+            dsp.processIqBlock(toneBlock(-60, fft, t));
+
+        check(raw.bins.size() == fft && after.bins.size() == fft, "both chains emitted a frame");
+        if (raw.bins.size() == fft && after.bins.size() == fft) {
+            float worst = 0.0f;
+            for (int k = 0; k < fft; ++k)
+                worst = std::max(worst, std::abs(after.bins[static_cast<std::size_t>(k)]
+                                                 - raw.bins[static_cast<std::size_t>(k)]));
+            std::printf("retune: first frame after the drop differs from the raw new-axis frame by %.2f dB at worst\n",
+                        worst);
+            check(worst < 0.01f,
+                  "the first frame after a retune drop is the new axis only, with no held old-axis samples");
+        }
     }
 
     if (g_failures == 0)
