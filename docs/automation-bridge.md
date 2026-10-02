@@ -3748,8 +3748,11 @@ record:
    "detail":"Client-Side recording requires PC Audio; no RX audio stream exists."}
 ```
 
-`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio`, so the radio
-is the recorder and this verb has nothing local to drive:
+`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio` and the radio
+can record on its own side, so the radio is the recorder and this verb has
+nothing local to drive. A radio with no command plane (HL2, ANAN, Icom, RTL) has
+no radio-side recorder, so there Radio Side falls back to this recorder and the
+start proceeds:
 
 ```json
 ← {"ok":false,"record":"start","recording":false,"path":"",

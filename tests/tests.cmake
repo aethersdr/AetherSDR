@@ -1208,6 +1208,18 @@ target_link_libraries(hl2_receiver_count_restart_test
     PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_receiver_count_restart_test COMMAND hl2_receiver_count_restart_test)
 
+# HL2 receiver-count restart pacing (#5678 row 3.5) — the stop/prime/start
+# sequence is spaced by a timer on MetisClient's thread instead of msleep, so
+# EP2 keeps flowing and setReceiverCount() returns at once. Socket-free: C&C and
+# run/stop datagrams go to injected sinks, EP6 is fed to handleDatagram().
+add_executable(hl2_receiver_count_restart_paced_test
+    tests/hl2_receiver_count_restart_paced_test.cpp)
+target_include_directories(hl2_receiver_count_restart_paced_test PRIVATE src)
+target_link_libraries(hl2_receiver_count_restart_paced_test
+    PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_receiver_count_restart_paced_test
+         COMMAND hl2_receiver_count_restart_paced_test)
+
 # HL2 per-receiver index-space map — standalone, needs only QtCore for QString.
 add_executable(hl2_receivers_test
     tests/hl2_receivers_test.cpp
@@ -1273,6 +1285,15 @@ add_executable(hl2_noise_blanker_test tests/hl2_noise_blanker_test.cpp)
 target_include_directories(hl2_noise_blanker_test PRIVATE src)
 target_link_libraries(hl2_noise_blanker_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_noise_blanker_test COMMAND hl2_noise_blanker_test)
+
+# Receive squelch from Hl2RxDsp to the WDSP channel: held before configure,
+# moved by mode, kept across configure() and the asynchronous rebuild (#5678
+# row 1.5). The stage/threshold maps and the audible gate are in
+# wdsp_channel_test.
+add_executable(hl2_rxdsp_squelch_test tests/hl2_rxdsp_squelch_test.cpp)
+target_include_directories(hl2_rxdsp_squelch_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_squelch_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_squelch_test COMMAND hl2_rxdsp_squelch_test)
 
 # AM/SAM come back from WDSP's envelope detector with the carrier as a DC
 # pedestal; the blocker on the audio output must strip it without touching the
@@ -4986,6 +5007,16 @@ add_executable(hl2_txdsp_test tests/hl2_txdsp_test.cpp)
 target_include_directories(hl2_txdsp_test PRIVATE src)
 target_link_libraries(hl2_txdsp_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_txdsp_test COMMAND hl2_txdsp_test)
+
+# A low-rate capture device (24/16 kHz, e.g. a Bluetooth headset) delivers two
+# DSP blocks per poll; the TXA channel must not be exchanged back-to-back.
+add_executable(hl2_txdsp_capture_burst_test tests/hl2_txdsp_capture_burst_test.cpp)
+target_include_directories(hl2_txdsp_capture_burst_test PRIVATE src tests)
+target_link_libraries(hl2_txdsp_capture_burst_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_txdsp_capture_burst_test COMMAND hl2_txdsp_capture_burst_test)
+# 77 = a rate case saw the worker stalled by machine load (sanitizer lane):
+# inconclusive, not failed. An underrun still fails.
+set_tests_properties(hl2_txdsp_capture_burst_test PROPERTIES SKIP_RETURN_CODE 77)
 
 # radiocert's measurement primitives. Header-only by design so this needs no
 # Qt and no link against aethercore — see the test's header comment for why it
