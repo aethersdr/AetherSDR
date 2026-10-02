@@ -374,6 +374,10 @@ public:
 signals:
     void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
+    // Emitted for every valid radio-reported frequency, including same-value
+    // reports. Unlike frequencyChanged(), this never represents an optimistic
+    // local tune request.
+    void frequencyStatusReported(double mhz);
     // Supplemental observation notification when frequencyChanged does not
     // fire (same-value reports, optimistic-value echoes, or invalidation).
     void frequencyReported();
