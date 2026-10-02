@@ -438,12 +438,10 @@ int main(int argc, char** argv)
 
     // ---- THE FIRST TICK ON A FRESH INSTALL ARMS (#5817) ----
     //
-    // #5817 found the very first tick of Auto declined in silence, because the
-    // constructed +20 dB baseline sat above the old +19 ceiling. With the
-    // ceiling at the top of the native range that tick arms, and there is no
-    // refusal sentence to give. The refusal mechanism itself (reason kept,
-    // cleared on success and on a radio swap) is no longer reachable through
-    // the public API, so it is not exercised here.
+    // The constructed +20 dB baseline is inside the arming range, so the first
+    // tick arms and there is no refusal sentence to give. The refusal mechanism
+    // (reason kept, cleared on success and on a radio swap) is not reachable
+    // through the public API, so it is not exercised here.
     {
         hl2::Hl2Backend fresh;
         check(fresh.lastArmRefusalReason().isEmpty(),

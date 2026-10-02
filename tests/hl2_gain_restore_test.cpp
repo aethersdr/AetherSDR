@@ -400,13 +400,10 @@ int main(int argc, char** argv)
     }
     // THE OPERATOR'S "OFF" MUST REACH THE PROFILE (#5828).
     //
-    // #5828 was an "off" after a DECLINED arm returning before the disarm
-    // branch, leaving `autoEnabled: true` on disk. The decline it rode on was
-    // the shipped +20 dB default above the old +19 ceiling. The ceiling is now
-    // the top of the native range (kLnaGainMaxDb), so the setter cannot produce
-    // a baseline that declines and this leg exercises the arm-then-off path
-    // from the shipped default instead: the withdrawal still has to reach the
-    // profile, clear the reason, and settle.
+    // The ceiling is the top of the native range (kLnaGainMaxDb), so the setter
+    // cannot produce a baseline that declines. This leg arms from the shipped
+    // default and switches off: the withdrawal has to reach the profile, clear
+    // the reason, and settle.
     //
     // Asserted on the persisted document rather than on a flag, because the
     // harm is not the flag -- it is the next session, which leg three shows.
