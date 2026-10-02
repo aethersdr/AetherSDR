@@ -98,11 +98,9 @@ public:
     // this object's own thread. Returns false (and sets error, if given) when the
     // WDSP channel cannot be created.
     //
-    // STILL THE CONNECT PATH'S ENTRY POINT (Hl2Backend::beginDspSetup) and the
-    // add-a-panadapter path's (createPanadapter), where nothing is streaming yet
-    // and blocking the I/O thread costs nothing. A LIVE rate change must NOT use
-    // it — see buildChannel()/installRebuiltChannel() below and
-    // Hl2Backend::applyPanBandwidth().
+    // Connect uses this before streaming starts. Live rate changes and added
+    // receivers use beginRebuild/buildChannel/installRebuiltChannel so WDSP
+    // setup does not hold the I/O pacer (docs/HERMES.md §22.4).
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
 
     // Asynchronous rebuild: build off-thread, swap on-thread. MetisClient's EP2

@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include <QScopedValueRollback>
 #include "TxController.h"
 #include "models/AprsDigipeaterModel.h"
 #include <QPointer>
@@ -1576,14 +1577,7 @@ void RadioModel::wireBackendReceiverState()
                 return;
             }
             s = new SliceModel(sliceId, this);
-            // AGC is the same shape: the RX applet's mode combo and threshold
-            // slider drive SliceModel, whose Flex wire text a non-Flex backend
-            // never sees. Without this the controls move, the model updates and
-            // the DSP keeps whatever it was opened with — a dead slider.
-            connect(s, &SliceModel::agcCommandIssued, this,
-                    [this, s](const QString& mode, int thresholdDb) {
-                if (m_backend) m_backend->setSliceAgc(s->sliceId(), mode, thresholdDb);
-            });
+            wireSliceReceiveIntentsToBackend(s);
             // Receive DSP the radio runs. Same reasoning as AGC above: the
             // applet toggles drive SliceModel, whose Flex wire text a non-Flex
             // backend never sees, so without these the controls move and the
@@ -1938,6 +1932,9 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TxCoordinator::StopRequest>();
     qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
+    qRegisterMetaType<SliceTuneRequest>();
+    qRegisterMetaType<SliceFilterRequest>();
+    qRegisterMetaType<SliceAgcRequest>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
@@ -6706,6 +6703,10 @@ void RadioModel::onConnected()
 
 void RadioModel::stageSessionModelsForReconnect()
 {
+    // onConnected has already opened the new backend session, but old slices
+    // remain in m_slices while invalidation emits model notifications. A
+    // reentrant UI callback must not dispatch through that temporary identity.
+    const QScopedValueRollback<bool> staging(m_stagingReceiveModels, true);
     ++m_sessionModelGeneration;
     // The PREVIOUS session's handle, captured when that session registered
     // (m_ownSessionHandle). clientHandle() is useless here: by stage time the
@@ -8785,8 +8786,8 @@ bool RadioModel::recallCachedMemory(int index)
     }
 
     // These are the operator-issue setters, the same ones the panel controls
-    // call, so each emits its *CommandIssued signal and reaches the radio
-    // through the backend seam. Mode goes first because it resets the filter
+    // call, so each emits a typed intent through the backend seam. Mode goes
+    // first because it resets the filter
     // to the mode default; the stored filter follows, and tuning precedes the
     // grouped FM repeater state for the IC-705 quirk documented below.
     if (!memory.mode.isEmpty())
@@ -9581,6 +9582,71 @@ PanadapterModel* RadioModel::resolveBackendPan(const QString& backendPanId)
     return panadapter(neutralPanIdString(neutralPanIndexFor(backendPanId)));
 }
 
+void RadioModel::wireSliceReceiveIntentsToBackend(SliceModel* s)
+{
+    if (!s) {
+        return;
+    }
+    // Member-function connections make UniqueConnection effective. These
+    // bindings belong to the slice/model, not one backend generation, so a
+    // reclaimed slice continues to work without accumulating duplicate sinks.
+    // Both objects live on the owner thread. Do not queue an intent that could
+    // arrive after reconnect with the same numeric slice id; the receiver
+    // rejects an off-thread caller before consulting the sender or backend.
+    const auto type = Qt::ConnectionType(Qt::DirectConnection | Qt::UniqueConnection);
+    connect(s, &SliceModel::receiveTuneRequested,
+            this, &RadioModel::dispatchSliceTune, type);
+    connect(s, &SliceModel::modeChangeRequested,
+            this, &RadioModel::dispatchSliceMode, type);
+    connect(s, &SliceModel::receiveFilterRequested,
+            this, &RadioModel::dispatchSliceFilter, type);
+    connect(s, &SliceModel::receiveAgcRequested,
+            this, &RadioModel::dispatchSliceAgc, type);
+}
+
+SliceModel* RadioModel::receiveCommandSource() const
+{
+    if (QThread::currentThread() != thread()) {
+        return nullptr;
+    }
+    SliceModel* source = qobject_cast<SliceModel*>(sender());
+    // A retired object must not control a new slice reusing its id. Resolve
+    // the current backend only after checking exact active object identity.
+    if (!source || m_stagingReceiveModels || slice(source->sliceId()) != source || !m_backend
+        || !m_backend->isConnected()) {
+        return nullptr;
+    }
+    return source;
+}
+
+void RadioModel::dispatchSliceTune(const SliceTuneRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        m_backend->requestSliceTune(source->sliceId(), request);
+    }
+}
+
+void RadioModel::dispatchSliceMode(const QString& mode)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        m_backend->setSliceMode(source->sliceId(), mode);
+    }
+}
+
+void RadioModel::dispatchSliceFilter(const SliceFilterRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        m_backend->requestSliceFilter(source->sliceId(), request);
+    }
+}
+
+void RadioModel::dispatchSliceAgc(const SliceAgcRequest& request)
+{
+    if (SliceModel* source = receiveCommandSource()) {
+        m_backend->requestSliceAgc(source->sliceId(), request);
+    }
+}
+
 void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThroughBackend)
 {
     if (!s)
@@ -9595,28 +9661,6 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThro
         return !s->confirmsControls()
             || (m_backend->isConnected() && slice(s->sliceId()) == s);
     };
-    connect(s, &SliceModel::frequencyCommandIssued, this,
-            [this, s, geometryThroughBackend, canDispatch](double mhz) {
-        if (canDispatch() && (geometryThroughBackend || s->confirmsControls())) {
-            m_backend->setSliceFrequency(s->sliceId(), mhz * 1.0e6);
-        }
-    }, Qt::DirectConnection);
-    connect(s, &SliceModel::filterCommandIssued, this,
-            [this, s, geometryThroughBackend, canDispatch](int low, int high) {
-        if (canDispatch() && (geometryThroughBackend || s->confirmsControls())) {
-            m_backend->setSliceFilter(s->sliceId(), low, high);
-        }
-    }, Qt::DirectConnection);
-    connect(s, &SliceModel::modeChangeRequested, this,
-            [this, s, geometryThroughBackend, canDispatch](const QString& mode) {
-        if (!canDispatch()) { return; }
-        if (geometryThroughBackend || s->confirmsControls()) {
-            m_backend->setSliceMode(s->sliceId(), mode);
-        } else if (m_flexBackend) {
-            m_flexBackend->setSliceMode(s->sliceId(), mode);
-        }
-    }, Qt::DirectConnection);
-
     if (m_radioDialLocked && backendCapabilities().hasRadioDialLock) {
         SliceDelta delta;
         delta.locked = *m_radioDialLocked;
@@ -11667,6 +11711,7 @@ void RadioModel::handleSliceStatus(int id,
             // The per-slice audio and TX-slice intents, wired at EVERY
             // construction site rather than only the backend-materialising one.
             wireSliceAudioIntentsToBackend(s);
+            wireSliceReceiveIntentsToBackend(s);
             connect(s, &SliceModel::digitalVoiceSliceDisplaced,
                     this, [this](int sliceId, const QString& previousMode) {
                 SliceModel* displaced = slice(sliceId);

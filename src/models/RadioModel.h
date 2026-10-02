@@ -1700,6 +1700,13 @@ private:
     // backend seam and select its receive publication policy. Called at every
     // SliceModel construction site — see the definition for why.
     void wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThroughBackend = false);
+    void wireSliceReceiveIntentsToBackend(SliceModel* s);
+    bool m_stagingReceiveModels{false};
+    SliceModel* receiveCommandSource() const;
+    void dispatchSliceTune(const SliceTuneRequest& request);
+    void dispatchSliceMode(const QString& mode);
+    void dispatchSliceFilter(const SliceFilterRequest& request);
+    void dispatchSliceAgc(const SliceAgcRequest& request);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend

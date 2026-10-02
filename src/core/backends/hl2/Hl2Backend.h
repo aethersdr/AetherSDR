@@ -234,6 +234,7 @@ signals:
 
 private:
     friend struct Hl2DspReadbackTestAccess;
+    friend struct Hl2PanCreateTestAccess;
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
@@ -460,8 +461,15 @@ private:
         // reconciles them on success.
         int configuredRateHz = 0;
 
+        // A pending initial build must not be synchronously reconciled by a rate crossing.
+        bool dspBuildInFlight = false;
+
+        // UI numbers are reused. Only the generation stamped for this DSP can complete it.
+        quint64 dspBuildGeneration = 0;
+
         // Per-receiver S-meter ballistics, so one receiver's signal never moves another's
         // needle.
+
         SMeterSmoother sMeter;
     };
 
@@ -555,6 +563,17 @@ private:
     // Create and wire one receiver's DSP chain at `ddc`. Shared by buildReceivers()
     // and createPanadapter() so both paths wire identically.
     bool openReceiverDsp(int ddc, std::string* error);
+
+    // Snapshot on GUI, mark/swap on I/O, open on the existing DSP build thread.
+    // Carry UI number (DDC indices move) plus generation (UI numbers are reused).
+    // Derive config here for both initial setup and rate catch-up.
+    void startReceiverDspBuild(int uiNumber);
+    void finishReceiverDspBuild(int uiNumber, quint64 generation, bool ok,
+                                int channelId, int builtRateHz,
+                                const std::string& error);
+    // Backend-lifetime counter: never reset on reconnect, which also reuses UI ids.
+    // releaseReceiverDsps() clears each retiring receiver's stamp before copying it.
+    quint64 m_nextDspBuildGeneration = 0;
     // How many receivers this radio may run right now: the board's reported
     // count, capped by the link budget at the current sample rate.
     [[nodiscard]] int receiverCeiling() const;

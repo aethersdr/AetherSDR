@@ -304,10 +304,12 @@ uses the real model, backend and worker with an injected USB device, without
 opening hardware or sockets. Multiple membership is admitted only by its test
 fixture; it does not raise production admission.
 
-This implementation is local to this PR and does not import PR #5919 or its
-stack. Reconciliation with that routing work remains a later integration task:
-typed dispatch alone is not acknowledgment, and every adapter must preserve
-sparse stable IDs. The publication-policy seam, RTL-owned settings hooks/domain
+The shared typed tune, filter and AGC routing on main preserves this backend's
+confirmed publication policy. Confirmed setters emit intent without changing
+observed getters, and model dispatch checks the connected backend and exact
+live slice object. Tune/filter/mode have one routing binding. PR #5919's
+remaining receive controls still need reconciliation: typed dispatch alone is
+not acknowledgment, and every adapter must preserve sparse stable IDs. The publication-policy seam, RTL-owned settings hooks/domain
 transfer and FM passband transition were ratified in the ruling linked above.
 A second backend adopting the settings takeover must justify it separately.
 The new DC placement and joint tune/view intents still need ratification. Offline

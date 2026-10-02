@@ -946,13 +946,6 @@ bool Hl2Backend::createPanadapter()
 
     const int ddc = m_ids.append();
 
-    // Build the new receiver's state outside m_rx, then append it. Derived from
-    // the EXISTING receivers, which is why it is assembled before the push rather
-    // than patched up after it.
-    //
-    // Inherit the first receiver's settings, not construction defaults: a new
-    // pane opening on 10 MHz USB when the operator is working 40 m would look
-    // like the radio changed band on its own. Same reasoning as at connect.
     Receiver seed;
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -966,18 +959,10 @@ bool Hl2Backend::createPanadapter()
     }
     m_rx.push_back(seed);
 
-    // The WIRE FIRST, so the radio is already streaming the new layout before the
-    // DSP that consumes it exists. The reverse order would leave a configured
-    // chain briefly reading a payload with one fewer receiver in it. The extra
-    // slot the radio now sends goes nowhere until publishIoDsps() below — the
-    // fan-out is still working from a list one shorter and clamps to it.
-    // This restarts the EP6 stream — see MetisClient::setReceiverCount.
     if (m_metis) {
-        QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::BlockingQueuedConnection,
+        QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::QueuedConnection,
             Q_ARG(int, static_cast<int>(m_rx.size())));
     }
-
-    Receiver& r = m_rx.back();
 
     std::string err;
     if (!openReceiverDsp(ddc, &err)) {
@@ -992,60 +977,198 @@ bool Hl2Backend::createPanadapter()
         return false;
     }
 
-    Hl2RxDsp::Config dc;
-    // THE COMMITTED RATE, NOT m_sampleRateHz. A receiver can be opened while a
-    // rate change is still building, and m_sampleRateHz has already moved to the
-    // rate being ATTEMPTED. Building this chain for that rate would hand it a
-    // decimation geometry for IQ the radio is not producing yet — and if the
-    // build in flight then fails, never will. The chain is built for what the
-    // wire is actually carrying; finishRateChange() rebuilds it if and when the
-    // crossing commits.
-    dc.inputSampleRateHz = m_rateLedger.committed();
-    dc.audioSampleRateHz = 24000;
-    dc.mode = modeFromString(r.mode);
-    std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
-    dc.agcMode = wdspAgcMode(r.agcMode);
-    dc.maximumAgcGainDb = m_dbRef.agcCeilingDb(r.agcThresholdDb);
-    bool ok = false;
-    Hl2RxDsp* dsp = r.dsp;
-    QMetaObject::invokeMethod(dsp, [dsp, &dc, &err, &ok] {
-        ok = dsp->configure(dc, &err);
-    }, Qt::BlockingQueuedConnection);
+    const Hl2ReceiverIds* const opened = m_ids.byDdc(ddc);
+
+    // TCI and layout callers discover the new receiver before this call returns.
+    emitPanState(ddc);
+    emitSliceState(ddc);
+    if (opened) {
+        emit panBandwidthLimitsChanged(
+            opened->panId,
+            static_cast<double>(kIqSampleRatesHz[0]) / 1.0e6,
+            static_cast<double>(m_sampleRateHz) / 1.0e6);
+        emit panRfGainInfoChanged(opened->panId, kLnaGainMinDb, kLnaGainMaxDb,
+                                  kLnaGainStepDb);
+        // EFFECTIVE, not baseline: a pan created while an automatic control is
+        // holding gain down must come up showing the same number as its
+        // siblings, not the operator's untouched baseline (Hl2GainSplit.h).
+        emit panRfGainChanged(opened->panId, lnaEffectiveDb());
+    }
+    // A new receiver can change whether the set spans bands.
+    applyBandFilter("add receiver");
+    publishWideState();
+
+    startReceiverDspBuild(opened ? opened->uiNumber : -1);
+
+    return true;
+}
+
+void Hl2Backend::startReceiverDspBuild(int uiNumber)
+{
+    const Hl2ReceiverIds* const ids = m_ids.byUi(uiNumber);
+    Receiver* const r = ids ? rx(ids->ddcIndex) : nullptr;
+    if (!r || !r->dsp) {
+        qCWarning(lcHl2) << "HL2: no receiver behind UI" << uiNumber
+                         << "to build a DSP chain for";
+        return;
+    }
+
+    Hl2RxDsp::Config config;
+    config.inputSampleRateHz = m_rateLedger.committed();
+    config.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
+    config.mode = modeFromString(r->mode);
+    std::tie(config.filterLowHz, config.filterHighHz) = dspFilterHz(*r);
+    config.agcMode = wdspAgcMode(r->agcMode);
+    config.maximumAgcGainDb = m_dbRef.agcCeilingDb(r->agcThresholdDb);
+
+    // Rate reconciliation must leave this DSP alone until its own build completes.
+    r->dspBuildInFlight = true;
+
+    // A UI number can be recycled during any of the queued hops.
+    const quint64 generation = ++m_nextDspBuildGeneration;
+    r->dspBuildGeneration = generation;
+
+    Hl2RxDsp* const dsp = r->dsp;
+    MetisClient* const metis = m_metis;
+
+    if (!metis || !m_dspBuildContext || !m_ioThread || !m_ioThread->isRunning()
+        || QThread::currentThread() == m_ioThread) {
+        // NO THREADS TO SPLIT ACROSS. Before the I/O thread starts, after it is
+        // joined, or called from it — the same four conditions publishIoDspList()
+        // tests, and for the same reason: a queued hop into a dead event loop
+        // never arrives and one into your own deadlocks. Build inline instead of
+        // leaving a receiver with no chain. Nothing is streaming in any of these.
+        std::string error;
+        const bool ok = dsp->configure(config, &error);
+        finishReceiverDspBuild(uiNumber, generation, ok,
+                               ok ? dsp->wdspChannelId() : -1,
+                               config.inputSampleRateHz, error);
+        return;
+    }
+
+    QMetaObject::invokeMethod(dsp, [this, metis, dsp, config, uiNumber, generation] {
+        // Mirror control changes during the build; installation replays them.
+        dsp->beginRebuild(config);
+        const bool nbOn = dsp->noiseBlankerEnabled();
+        const int nbLevel = dsp->noiseBlankerLevel();
+        QPointer<Hl2RxDsp> guard(dsp);
+
+        QMetaObject::invokeMethod(m_dspBuildContext, [this, metis, guard, config,
+                                                      uiNumber, generation,
+                                                      nbOn, nbLevel] {
+            Hl2RxDsp::RebuildResult built =
+                Hl2RxDsp::buildChannel(config, nbOn, nbLevel);
+
+            QMetaObject::invokeMethod(metis, [this, guard, config, uiNumber,
+                                              generation,
+                                              b = std::move(built)]() mutable {
+                bool ok = false;
+                int channelId = -1;
+                std::string error = b.error;
+                // Check QPointer on the I/O thread that owns and deletes the DSP.
+                if (!guard) {
+                    error = "the receiver was closed while its chain was building";
+                } else {
+                    ok = guard->installRebuiltChannel(std::move(b));
+                    channelId = guard->wdspChannelId();
+                }
+
+                QMetaObject::invokeMethod(this, [this, uiNumber, generation, ok,
+                                                 channelId,
+                                                 rate = config.inputSampleRateHz,
+                                                 error] {
+                    finishReceiverDspBuild(uiNumber, generation, ok, channelId,
+                                           rate, error);
+                }, Qt::QueuedConnection);
+            }, Qt::QueuedConnection);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
+void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool ok,
+                                        int channelId, int builtRateHz,
+                                        const std::string& error)
+{
+    const Hl2ReceiverIds* ids = m_ids.byUi(uiNumber);
+    Receiver* r = ids ? rx(ids->ddcIndex) : nullptr;
+    if (!r) {
+        // Closed while it built, and nothing has taken its number yet.
+        // installRebuiltChannel() was never reached (the QPointer was already
+        // null) or the chain it installed is already queued for deletion on the
+        // I/O thread — either way there is nothing here to finish and nothing to
+        // withdraw.
+        qCInfo(lcHl2) << "HL2: receiver UI" << uiNumber
+                      << "was closed before its DSP chain finished building";
+        return;
+    }
+    if (r->dspBuildGeneration != generation) {
+        qCInfo(lcHl2) << "HL2: discarding a DSP build completion for UI" << uiNumber
+                      << "generation" << generation
+                      << "— the DSP owning that build has retired"
+                      << "(the receiver holding it now is on generation"
+                      << r->dspBuildGeneration << ")";
+        return;
+    }
+    const int ddc = ids->ddcIndex;
+    r->dspBuildInFlight = false;
+    r->dspBuildGeneration = 0;
+
     if (!ok) {
         qCWarning(lcHl2) << "HL2: receiver" << ddc << "DSP failed —"
-                         << QString::fromStdString(err);
-        dsp->disconnect(this);
-        dsp->deleteLater();
-        // THE S-METER, HOWEVER, WAS PUBLISHED. openReceiverDsp() succeeded just
-        // above -- it is the CONFIGURE that failed -- and declaring the meter is
-        // the last thing it does. Withdraw it before m_ids.remove(ddc) below
-        // takes the UI number away, or this rolled-back receiver keeps a meter
-        // in the catalogue for a chain that is being deleted on the next line.
-        if (const Hl2ReceiverIds* ids = m_ids.byDdc(ddc)) {
-            withdrawSliceLevelMeter(ids->uiNumber);
+                         << QString::fromStdString(error);
+        const QString removedPanId = ids->panId;
+        const int removedUi = ids->uiNumber;
+        // Retire the published meter before the DSP and UI identities disappear.
+        withdrawSliceLevelMeter(removedUi);
+        Hl2RxDsp* const doomed = r->dsp;
+        r->dsp = nullptr;
+        // WITHDRAW, THEN DESTROY. publishIoDspList() blocks until the I/O thread
+        // has taken the list, so by the time the deletion below is posted the
+        // fan-out has already stopped feeding this chain. This is the one
+        // blocking hop left on this path, it is on the failure path only, and it
+        // is the same ordering removePanadapter() documents at length.
+        withdrawIoDsps();
+        if (doomed) {
+            doomed->disconnect(this);
+            doomed->deleteLater();
         }
-        // Safe to destroy without withdrawing it first: this chain was never
-        // published, so the fan-out has never held a pointer to it.
-        m_rx.pop_back();
-        m_ids.remove(ddc);
+        // The announced slice can be selected before its build fails.
+        const bool txWasHere = (m_txDdc == ddc);
+        const bool activeWasHere = (m_activeDdc == ddc);
+        if (txWasHere) {
+            qCInfo(lcHl2) << "HL2: transmit moves from DDC" << ddc
+                          << "to 0 — its receiver's DSP chain failed to build";
+        }
+        m_txDdc = txWasHere ? 0 : hl2RoleAfterRemove(m_txDdc, ddc);
+        m_activeDdc = activeWasHere ? 0 : hl2RoleAfterRemove(m_activeDdc, ddc);
+        m_rx.erase(m_rx.begin() + ddc);
+        m_ids.remove(ddc);        // renumbers DDC indices; UI numbers are untouched
+        m_mixPending.clear();     // the per-receiver queues describe the old set
+        m_mixAccum.clear();
         if (m_metis) {
             QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::QueuedConnection,
                 Q_ARG(int, static_cast<int>(m_rx.size())));
         }
-        return false;
+        publishIoDsps();
+        emit sliceLifecycleFailed(QStringLiteral("create"), removedUi,
+                                  QString::fromStdString(error));
+        emit sliceRemoved(removedUi);
+        emit panRemoved(removedPanId);
+        applyBandFilter("receiver DSP build failed");
+        publishWideState();
+        if (txWasHere || activeWasHere) {
+            emitAllSliceState();
+        }
+        return;
     }
 
     // What this chain was actually built for, so a rate change that commits
     // while it was being opened can tell that it still needs rebuilding.
-    r.configuredRateHz = dc.inputSampleRateHz;
+    r->configuredRateHz = builtRateHz;
 
-    int channelId = -1;
-    QMetaObject::invokeMethod(dsp, [dsp, &channelId] {
-        channelId = dsp->wdspChannelId();
-    }, Qt::BlockingQueuedConnection);
-    if (auto* ids = m_ids.mutableByDdc(ddc)) {
-        ids->dspChannel = channelId;
-        ids->analyzerId = ids->uiNumber;
+    if (auto* mutableIds = m_ids.mutableByDdc(ddc)) {
+        mutableIds->dspChannel = channelId;
+        mutableIds->analyzerId = mutableIds->uiNumber;
     }
 
     // Put the NCO where this receiver's state says it should be. setReceiverCount
@@ -1054,48 +1177,36 @@ bool Hl2Backend::createPanadapter()
     if (m_metis) {
         QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
             Q_ARG(int, ddc),
-            Q_ARG(std::uint32_t, ncoCommandHz(r.ncoHz)));
+            Q_ARG(std::uint32_t, ncoCommandHz(r->ncoHz)));
     }
-    QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
-        Q_ARG(double, rxShiftHz(r)));
+    QMetaObject::invokeMethod(r->dsp, "setShift", Qt::QueuedConnection,
+        Q_ARG(double, rxShiftHz(*r)));
     // Notches are radio-wide, so a receiver that appears after them has to be
     // brought up to date. Otherwise adding a second panadapter gives you one
     // receiver with the interferer notched out and one without.
-    seedNotches(r);
+    seedNotches(*r);
     // Per-receiver, so a new panadapter starts from ITS OWN state rather than
     // inheriting RX1's — which for a receiver that has never been configured is
     // the default of off.
-    pushNoiseBlanker(r);
+    pushNoiseBlanker(*r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
     // in a receiver that is fully set up, rather than one still being assembled.
     publishIoDsps();
 
-    const auto* ids = m_ids.byDdc(ddc);
-    qCInfo(lcHl2) << "HL2: added receiver — DDC" << ddc << "pan" << (ids ? ids->panId : QString())
+    qCInfo(lcHl2) << "HL2: added receiver — DDC" << ddc << "pan" << ids->panId
                   << "WDSP channel" << channelId
-                  << "; running" << m_rx.size() << "of" << ceiling;
+                  << "; running" << m_rx.size() << "of" << receiverCeiling();
 
-    // Publish it exactly as at connect, in the same order: pan geometry first so
-    // the model can materialise the pane, then the slice that lives in it.
-    emitPanState(ddc);
-    emitSliceState(ddc);
-    if (ids) {
-        emit panBandwidthLimitsChanged(
-            ids->panId,
-            static_cast<double>(kIqSampleRatesHz[0]) / 1.0e6,
-            static_cast<double>(m_sampleRateHz) / 1.0e6);
-        emit panRfGainInfoChanged(ids->panId, kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb);
-        // EFFECTIVE, not baseline: a pan created while an automatic control is
-        // holding gain down must come up showing the same number as its
-        // siblings, not the operator's untouched baseline (Hl2GainSplit.h).
-        emit panRfGainChanged(ids->panId, lnaEffectiveDb());
+
+    // A rate crossing may have committed while this build ran.
+    if (m_rateLedger.committed() != builtRateHz) {
+        qCInfo(lcHl2) << "HL2: receiver" << ddc << "opened at" << builtRateHz
+                      << "Hz but the radio committed to" << m_rateLedger.committed()
+                      << "Hz while it built — rebuilding";
+        startReceiverDspBuild(uiNumber);
     }
-    // A new receiver can change whether the set spans bands.
-    applyBandFilter("add receiver");
-    publishWideState();
-    return true;
 }
 
 bool Hl2Backend::removePanadapter(const QString& panId)
@@ -1432,6 +1543,9 @@ void Hl2Backend::releaseReceiverDsps()
     // DDC index to find the receiver's UI NUMBER, and m_rx is indexed by DDC.
     for (std::size_t k = 0; k < m_rx.size(); ++k) {
         Receiver& r = m_rx[k];
+        // Build identity belongs to the retiring DSP, not the state copied on reconnect.
+        r.dspBuildInFlight = false;
+        r.dspBuildGeneration = 0;
         if (!r.dsp)
             continue;
         // Withdraw its S-meter: a non-null dsp means openReceiverDsp() declared
@@ -3551,6 +3665,23 @@ void Hl2Backend::finishRateChange(bool ok, quint64 generation, int targetRate,
     // only receivers opened within one rebuild window.
     for (Receiver& r : m_rx) {
         if (!r.dsp || r.configuredRateHz == targetRate)
+            continue;
+        // A CHAIN WHOSE OWN BUILD IS STILL IN FLIGHT IS NOT OURS TO RECONCILE.
+        //
+        // createPanadapter() no longer opens a chain inline — it posts the build
+        // to m_dspBuildThread and returns (startReceiverDspBuild()). A receiver
+        // opened inside this crossing's window can therefore still be BUILDING
+        // when this runs, and the configure() below would then run a second
+        // OpenChannel against the process-wide WDSP setup mutex the first one is
+        // holding: on the GUI thread, for the length of the build, which is the
+        // stall this whole family of changes exists to remove. And it would be
+        // pointless as well as slow, because the in-flight build installs over
+        // the result the moment it lands.
+        //
+        // Left to finishReceiverDspBuild(), which re-reads the ledger when its
+        // build completes and starts another one if the rate moved under it. The
+        // flag is cleared there before that check, so nothing is dropped.
+        if (r.dspBuildInFlight)
             continue;
         const bool wasCovered =
             std::any_of(covered.begin(), covered.end(),

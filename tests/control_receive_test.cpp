@@ -45,6 +45,7 @@ public:
     QString method;
     QString panId;
     QJsonObject args;
+    SliceFilterRequest::Origin filterOrigin{SliceFilterRequest::Origin::ModeNormalization};
     mutable int reads{0};
     RadioCapabilities capabilities() const override { ++reads; return caps; }
     bool isConnected() const override { return connected; }
@@ -53,6 +54,11 @@ public:
     void setSliceFrequency(int, double hz) override { record("frequency", {{"hz", hz}}); }
     void setSliceMode(int id, const QString& mode) override { record("mode", {{"slice", id}, {"mode", mode}}); }
     void setSliceFilter(int id, int low, int high) override { record("filter", {{"slice", id}, {"low", low}, {"high", high}}); }
+    void requestSliceFilter(int id, const SliceFilterRequest& request) override
+    {
+        filterOrigin = request.origin;
+        IRadioBackend::requestSliceFilter(id, request);
+    }
     void setSliceAudioGain(int id, int gain) override { record("gain", {{"slice", id}, {"gain", gain}}); }
     void setSliceAudioMute(int id, bool muted) override { record("mute", {{"slice", id}, {"muted", muted}}); }
     void setSliceAgc(int, const QString&, int) override {}
@@ -277,7 +283,12 @@ void modeAndFilterOrdering()
     check(!f.target->available(ReceiveOperation::Filter), "partial filter readback does not invent its other edge");
     SliceDelta high; high.filterHigh = -100; f.radio.slice(0)->applyChanges(high);
     auto filter = f.params(ReceiveOperation::Filter); filter.insert("lowHz", -2900); filter.insert("highHz", -200);
+    const quint64 epoch = f.radio.slice(0)->userFilterEpoch();
     check(f.send(ReceiveOperation::Filter, filter).contains("result"), "new-mode passband dispatches after full observation");
+    check(f.backend->filterOrigin == SliceFilterRequest::Origin::Operator
+              && f.radio.slice(0)->userFilterEpoch() == epoch + 1
+              && f.radio.slice(0)->filterLow() == -2800,
+          "daemon filter is explicit operator intent with one epoch advance and no optimistic passband");
     for (const auto& edges : {std::pair{200, 2900}, std::pair{-100, -200}, std::pair{-12001, -1}, std::pair{-5, 0}}) {
         filter = f.params(ReceiveOperation::Filter); filter.insert("lowHz", edges.first); filter.insert("highHz", edges.second);
         f.reject(ReceiveOperation::Filter, filter, "request.out_of_range");

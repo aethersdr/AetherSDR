@@ -399,6 +399,13 @@ target_include_directories(backend_receive_contract_test PRIVATE src tests)
 target_link_libraries(backend_receive_contract_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME backend_receive_contract_test COMMAND backend_receive_contract_test)
 
+# #5904: production receive bindings, injected observations/dispatch only.
+# No bound socket, firmware peer, hardware, DSP worker or TX operation.
+add_executable(receive_intent_routing_test tests/receive_intent_routing_test.cpp)
+target_include_directories(receive_intent_routing_test PRIVATE src tests)
+target_link_libraries(receive_intent_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME receive_intent_routing_test COMMAND receive_intent_routing_test)
+
 # ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
 # backend records setAtu(); no sockets, no radio.
 add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
@@ -1274,6 +1281,14 @@ add_executable(hl2_rxdsp_async_rebuild_test tests/hl2_rxdsp_async_rebuild_test.c
 target_include_directories(hl2_rxdsp_async_rebuild_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_async_rebuild_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_async_rebuild_test COMMAND hl2_rxdsp_async_rebuild_test)
+
+# Socket-free injected receiver setup and link edge; no discovery/start or UDP.
+# Holds I/O/build threads to check scheduling, stale completions across removal
+# and reconstruction, and rollback of roles/meters. Uses isolated settings.
+add_executable(hl2_pan_create_async_test tests/hl2_pan_create_async_test.cpp)
+target_include_directories(hl2_pan_create_async_test PRIVATE src tests)
+target_link_libraries(hl2_pan_create_async_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_pan_create_async_test COMMAND hl2_pan_create_async_test)
 
 # RFC #5535 approved the automatic RF-gain loop ON THE CONDITION that it is
 # visible -- the clipping AND the regulator's own action. This pins both, and
@@ -6919,6 +6934,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    hl2_pan_create_async_test
     anan_backend_test
     anan_noise_blanker_readback_test
     tci_rx_audio_test
@@ -6943,6 +6959,7 @@ set(AETHER_SETTINGS_CONSUMERS
     backend_capability_revision_test
     icom_panadapter_capacity_test
     backend_receive_contract_test
+    receive_intent_routing_test
     radio_capacity_declaration_test
     extension_namespace_gate_test
     control_availability_registry_test
