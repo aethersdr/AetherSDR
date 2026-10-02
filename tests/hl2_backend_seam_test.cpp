@@ -22,6 +22,9 @@
 #include <cstdio>
 
 namespace AetherSDR::hl2 {
+struct MetisClientTestAccess {
+    static void setStreaming(MetisClient& c) { c.m_running = true; }
+};
 struct Hl2TxGateTestAccess {
     // Emit a MetisClient signal on its own thread, then deliver the backend's
     // queued handler, exactly as a datagram-driven edge would arrive.
@@ -67,6 +70,14 @@ struct Hl2TxGateTestAccess {
     {
         b.m_bandwidthThrottle->stop();
         QMetaObject::invokeMethod(b.m_bandwidthThrottle, "timeout", Qt::DirectConnection);
+    }
+    // A session without a socket: MetisClient queues a drive bank only while
+    // running (#4579), so wireDrive() would otherwise read nothing.
+    static void startSession(Hl2Backend& b)
+    {
+        QMetaObject::invokeMethod(b.m_metis, [metis = b.m_metis] {
+            MetisClientTestAccess::setStreaming(*metis);
+        }, Qt::BlockingQueuedConnection);
     }
     // The last drive level carried by the EP2 packets MetisClient would send
     // next, after every queued call has landed; -1 when none carries one.
@@ -273,6 +284,7 @@ static void tunePowerAndRestore()
     TxTestAuthority authority;
     Hl2Backend b;
     const auto reg = [&b] { return health(b, "txDriveRegister").toInt(); };
+    Access::startSession(b);
 
     b.setTxPower(100);
     check(reg() == driveFor(100) && Access::wireDrive(b) == driveFor(100),
@@ -314,6 +326,7 @@ static void driveGateHealthRows()
     qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
     Hl2Backend b;
     qunsetenv("AETHER_AUTOMATION");
+    Access::startSession(b);
 
     check(health(b, "txDriveGated").toBool(),
           "#4912: the gate is reported before any drive is commanded");

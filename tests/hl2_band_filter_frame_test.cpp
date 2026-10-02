@@ -69,9 +69,12 @@ struct MetisClientTestAccess {
     static std::size_t oneShotQueued(const MetisClient& c) { return c.m_oneShot.size(); }
     // The session boundary without a socket, as hl2_tx_gate_test does it. What
     // start() adds beyond m_running is Params, the counters and the wire; it
-    // does not touch m_oneShot, so for the question section 6 asks -- what is
-    // already queued when the first frame is built -- this is the same state.
+    // touches m_oneShot only to queue the CL1 sequence, which no section here
+    // configures, so for the question section 6 asks -- what is already queued
+    // when the first frame is built -- this is the same state.
     static void setStreaming(MetisClient& c) { c.m_running = true; }
+    // Section 6: a refused ATU request is not recorded either.
+    static bool atuTune(const MetisClient& c) { return c.m_atuTune; }
 };
 }  // namespace AetherSDR::hl2
 
@@ -165,8 +168,8 @@ int main(int argc, char** argv)
     //
     // m_oneShot is cleared nowhere -- not in start() alongside m_txSeq,
     // m_roundRobin, m_haveRxSeq, m_drops and m_linkUp -- and stop() deliberately
-    // preserves everything that is not an unfinished IO-board write or a drive
-    // bank (section 6c). So a bank
+    // preserves everything that is not an unfinished IO-board write, a CL1
+    // sequence or a drive bank (section 6c). So a bank
     // queued by a band change while disconnected would ride the next session's
     // first frames. Queuing nothing is what closes that here.
     {
@@ -321,6 +324,8 @@ int main(int argc, char** argv)
         c.setAtuTuneRequest(true);
         check(MetisClientTestAccess::oneShotQueued(c) == 0,
               "stopped: the four live-control setters queue no one-shot bank");
+        check(!MetisClientTestAccess::atuTune(c),
+              "stopped: the ATU tune request is refused, not recorded");
 
         // The next session. Its rotation is RX1 NCO, gain, ADC assignment
         // (one receiver), so the first frames' bank B must be exactly that.

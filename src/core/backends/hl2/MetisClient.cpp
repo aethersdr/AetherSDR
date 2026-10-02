@@ -539,8 +539,8 @@ void MetisClient::stop()
     resetBandscopeGate();
     failPendingBandscopeFrame(QStringLiteral("the radio stopped streaming"));
     m_params.bandscope = false;
-    // An interrupted write must not finish in the next session. That covers
-    // two kinds of bank, and only two:
+    // An interrupted write must not finish in the next session. Three kinds of
+    // bank: the two below, and the CL1 VersaClock sequence (dropQueuedCl1Banks()):
     //   - the IO board's five-bank I2C write, which a later session would
     //     complete against a board that may have been power-cycled since;
     //   - the 0x09 drive bank. It carries the PA enable and the ATU tune
@@ -626,9 +626,9 @@ void MetisClient::queueOneShotIfRunning(const Cc& bank)
     // setup" meaning what it says (#4579).
     //
     // It says nothing about a bank queued WHILE RUNNING and not yet drained
-    // when the session ends. stop() decides those: it drops the IO-board write
-    // and the drive bank, and keeps the RX and TX NCO banks, which do cross
-    // into the next session's first frames. See stop().
+    // when the session ends. stop() decides those: it drops the IO-board write,
+    // the drive bank and the CL1 sequence, and keeps the RX and TX NCO banks,
+    // which do cross into the next session's first frames. See stop().
     //
     // The setting itself is not dropped: every caller records it before this
     // runs. What reaches the next session is decided by that session's own
