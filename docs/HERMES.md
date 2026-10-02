@@ -770,7 +770,7 @@ apart from that audit loses the point.
 | 2 | Missing ADC-assign C&C bank | All-zero IQ on conforming devices | `5c6c2fdd` |
 | 3 | AGC never reached the backend | **Dead slider** — UI moved, DSP unchanged | `4d2bc494` |
 | 4 | `dsp_rate` derived from audio rate | Low-pitched, warbling audio | `74f10f53` |
-| 5 | Mode change mirrors the passband in the model **without** emitting operator intent | Model and DSP silently diverge | *Open* — `slice filter` verb works around it |
+| 5 | Mode-change passband normalization must reach host DSP without overwriting radio-owned mode-filter memory | Model and DSP can diverge | #5904 tags normalization separately from operator edits; live convergence remains to be verified |
 | 6 | AM is in neither filter-polarity family (`SliceModel.cpp:47-57`) | AM gets an SSB passband that excludes the carrier | *Open* |
 | 7 | No pan-geometry down-verb on `IRadioBackend` | Zoom/pan can't reach the backend; waterfall and pan disagree | *Open* — structural |
 | 8 | Slice frequency **is** pan center (`Hl2Backend.cpp:165`) | Click-to-tune recenters the world instead of landing | *Open* — needs slice-offset-within-passband |
@@ -816,8 +816,10 @@ the stale echo the suppression existed to reject.
 **Principle II trap (hit twice):** `agcModeChanged`/`agcThresholdChanged` and
 `filterChanged` are emitted from *both* operator setters and status
 application. Driving a backend command off them echoes the radio's own state
-back at it as a request. Operator-only intent signals are required —
-`frequencyCommandIssued`, `filterCommandIssued`, and now `agcCommandIssued`.
+back at it as a request. Operator-only intent signals are required. Frequency, filter and AGC dispatch
+through `receiveTuneRequested`, `receiveFilterRequested` and
+`receiveAgcRequested`, bound once by `RadioModel` to the typed backend requests.
+The legacy `*CommandIssued` signals are local notifications, not dispatch paths.
 
 ---
 
