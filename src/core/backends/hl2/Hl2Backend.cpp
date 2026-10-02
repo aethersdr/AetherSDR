@@ -438,7 +438,8 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         publishWideState();
         // Restore the auto-gain switch last: setAutoRfGain() checks the
         // baseline against kAutoRfGainMaxBaselineDb, and the restored baseline
-        // reaches m_lnaGainDb only in pushInitialState(). A refusal is logged.
+        // reaches m_lnaGainDb only in pushInitialState(). A restored baseline is
+        // clamped to the native range, so it arms; a refusal would be logged.
         if (m_autoRfGainWanted && !m_autoRfGainEnabled) {
             setAutoRfGain(true);
         }
@@ -6120,9 +6121,9 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     }
 
     // Records the wish only; the connect edge arms it once the restored
-    // baseline is applied. Absent means off: the shipped LNA default
-    // (kLnaDefaultGainDb, +20 dB) exceeds kAutoRfGainMaxBaselineDb (+19), so
-    // arming by default would be refused on every new install.
+    // baseline is applied. Absent means off: default-on for a profile that
+    // never expressed a wish is a separate decision (#5535). A stored
+    // `autoEnabled: true` arms, including one saved while arming was refused.
     m_autoRfGainWanted =
         rfGain.value(QStringLiteral("autoEnabled")).toBool(false);
     const QJsonObject lnaByBand =
@@ -6369,23 +6370,23 @@ void Hl2Backend::setAutoRfGain(bool on)
         // REFUSED, NOT CLAMPED. See kAutoRfGainMaxBaselineDb. Moving the
         // operator's own number so the feature could be switched on would be a
         // UI reporting one value while the wire carried another.
+        // Defensive: every writer of m_lnaGainDb clamps to the native range,
+        // so no baseline above the ceiling exists today.
         if (m_lnaGainDb > kAutoRfGainMaxBaselineDb) {
             // The request survives the refusal and is persisted, so the next
             // connect from a trusted baseline arms without asking twice.
             m_autoRfGainWanted = true;
             // Kept for the GUI (#5817): shown on the panadapter and read by
-            // screen readers, so translated and without the issue number,
-            // which stays on the qWarning.
+            // screen readers, so translated and without an issue number.
             m_autoRfGainRefusal = tr(
                        "Auto RF gain declined — the RF Gain baseline is "
-                       "%1 dB and this radio's gain axis is not trusted above "
-                       "%2 dB. Lower RF Gain to %2 dB or below and try again. "
+                       "%1 dB, above this radio's %2 dB maximum. Lower RF "
+                       "Gain to %2 dB or below and try again. "
                        "Your setting has not been changed.")
                        .arg(m_lnaGainDb)
                        .arg(kAutoRfGainMaxBaselineDb);
             qWarning().noquote()
-                << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal
-                     + QStringLiteral(" (#5354: +48 dB measures like +18 dB)");
+                << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal;
             // SETTLED AS NOT ARMED, and said so. A refusal that only the
             // caller's own readback could discover was invisible on the two
             // routes that have no readback: the restore below and the bridge.

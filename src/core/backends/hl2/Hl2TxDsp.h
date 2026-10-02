@@ -3,15 +3,19 @@
 #include "core/dsp/WdspChannel.h"
 #include "core/TxCoordinator.h"
 
+#include <QElapsedTimer>
 #include <QObject>
 
 #include <complex>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
 #include <vector>
 #include "core/backends/TxAudioSource.h"
+
+class QTimer;
 
 namespace AetherSDR::hl2 {
 
@@ -95,6 +99,17 @@ public:
     // where processAudioBlock also runs, so no atomic.
     [[nodiscard]] unsigned long long modulatorFaultBlocks() const noexcept;
     [[nodiscard]] unsigned long long modulatorBlocks() const noexcept;
+    // The part of modulatorFaultBlocks() dropped unexchanged because the worker
+    // had not produced the previous block's output within a block period (TXA
+    // build; 0 in the phasing build). A drop means the worker was starved; any
+    // other fault means the exchange gate failed.
+    [[nodiscard]] unsigned long long modulatorStallDrops() const noexcept;
+
+    // Test seam: filters the readiness answer the exchange gate acts on. It can
+    // only narrow the channel's own answer (make the worker look stalled),
+    // never exchange into a channel that is not ready. Empty = unfiltered.
+    // TXA build only; a no-op in the phasing build.
+    void setOutputReadyProbeForTest(std::function<bool(bool channelReady)> probe);
 
 public slots:
     // Mono TX audio at inputSampleRateHz. `source` decides whether m_micGain
@@ -108,12 +123,11 @@ public slots:
     // The ALC applies to all. m_inBuffer carries up to dspBlockSize-1 samples
     // between calls; a source change mid-transmission drops that carry.
     //
-    // The TXA build is not rate-free: its channel uses blockForOutput = false,
-    // so a caller faster than real time gets Underrun (unpaced: 240-255 of 256
-    // blocks; 0 at the live 21.33 ms period), and each underrun leaves the
-    // stream one DSP buffer ahead permanently (fexchange2 advances r2_outidx).
-    // AudioEngine's TX poll is paced; tests and offline renders must pace
-    // themselves. Starved blocks count in modulatorFaultBlocks().
+    // TXA build: the channel is non-blocking, and one underrun leaves its output
+    // ring out of step for the rest of the over (fexchange2 advances r2_outidx
+    // anyway). So each exchange waits for the channel's output
+    // (exchangeDueBlocks()); a caller faster than real time on average grows a
+    // warned queue instead. Failed blocks count in modulatorFaultBlocks().
     void processAudioBlock(const std::vector<float>& mono,
                            TxAudioSource source,
                            const TxCoordinator::Context& context);
@@ -181,6 +195,29 @@ private:
     std::vector<float> m_outQ;
     unsigned long long m_txBlocks = 0;
     unsigned long long m_txFaultBlocks = 0;
+
+    // Exchange pacing. One capture delivery can carry several blocks (two per
+    // delivery at 24 kHz), and a back-to-back exchange underruns. Levelled
+    // audio waits here; a block is exchanged only when outputReady() says the
+    // previous block's output is out, and a 1 ms timer retries the rest. A head
+    // block still not ready after exchangeStallNs() is dropped, not exchanged.
+    void exchangeDueBlocks();
+    void onExchangeTimer();
+    void noteFault(const char* why);
+    bool channelOutputReady();
+    qint64 exchangeStallNs() const noexcept;
+    std::vector<float> m_exchangePending;
+    QTimer* m_exchangeTimer = nullptr;
+    // When the block now at the head of m_exchangePending got there. Invalid
+    // while no whole block waits and after every over boundary, so an over
+    // never inherits a deadline from the previous one.
+    QElapsedTimer m_headWait;
+    unsigned long long m_txStallDrops = 0;
+    // Queue depth, in blocks, above which the stage warns that it is being fed
+    // faster than the channel drains. Warned once per excursion.
+    static constexpr std::size_t kPendingWarnBlocks = 4;
+    bool m_pendingWarned = false;
+    std::function<bool(bool)> m_outputReadyProbe;
 #else
     // 255 taps at 48 kHz with a Blackman window: enough opposite-sideband
     // suppression for voice at a 300 Hz low edge, not at the digital modes'
