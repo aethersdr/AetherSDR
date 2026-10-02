@@ -593,7 +593,6 @@ int main()
         applySliceAudioInPlace(both, 1, true, 50, 0);
         check(both[0] == 0.0f && both[1] == 0.0f, "mute wins over gain and balance");
 
-        // Degenerate input must not walk off anything.
         // Quantising to the wire format. NaN is the case a clamp cannot catch;
         // infinity pins the predicate as isfinite rather than isnan.
         check(sliceAudioToInt16(0.0f) == 0, "silence quantises to zero");
@@ -608,6 +607,7 @@ int main()
         check(sliceAudioToInt16(-std::numeric_limits<float>::infinity()) == 0,
               "including a negative infinity");
 
+        // Degenerate input must not walk off anything.
         applySliceAudioInPlace(nullptr, 4, false, 50, 50);
         float untouched[2] = {1.0f, -1.0f};
         applySliceAudioInPlace(untouched, 0, false, 0, 0);
