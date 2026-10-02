@@ -34,6 +34,8 @@
 #include "Ctr2ProxyApplet.h"
 #include "models/Ctr2ProxyModel.h"
 
+#include <QHostAddress>
+
 #include <QColor>
 #include <QPainter>
 #include <QThread>
@@ -2544,9 +2546,38 @@ void MainWindow::registerMidiParams()
 
 void MainWindow::setupCtr2Proxy()
 {
-    // Independent of RadioModel by design: the CTR2 is its own radio client,
-    // so selecting another radio in AetherSDR never retargets a live proxy.
+    // The relay targets the radio AetherSDR is connected to. The model only
+    // receives this; it captures the destination at Start, so switching
+    // radios here never retargets a running relay.
     m_ctr2ProxyModel = new Ctr2ProxyModel(this);
+    const auto pushRadio = [this] {
+        if (!m_radioModel.isConnected()) {
+            m_ctr2ProxyModel->setAetherRadio({}, {}, tr("Connect AetherSDR to a radio first"));
+            return;
+        }
+        if (m_radioModel.isWan()) {
+            m_ctr2ProxyModel->setAetherRadio(
+                {}, {}, tr("AetherSDR is connected through SmartLink; the CTR2 relay "
+                           "needs a direct LAN or VPN connection to the radio"));
+            return;
+        }
+        if (!m_radioModel.backendCapabilities().hasMultiClientSessions) {
+            m_ctr2ProxyModel->setAetherRadio(
+                {}, {}, tr("This radio does not accept another client alongside AetherSDR"));
+            return;
+        }
+        const QHostAddress address = m_radioModel.radioAddress();
+        QString label = m_radioModel.model();
+        if (!m_radioModel.name().isEmpty() && m_radioModel.name() != label) {
+            label += QStringLiteral(" \"%1\"").arg(m_radioModel.name());
+        }
+        label += QStringLiteral("  %1").arg(address.toString());
+        m_ctr2ProxyModel->setAetherRadio(address, label.trimmed(), {});
+    };
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, m_ctr2ProxyModel,
+            [pushRadio](bool) { pushRadio(); });
+    connect(&m_radioModel, &RadioModel::infoChanged, m_ctr2ProxyModel, pushRadio);
+    pushRadio();
     if (m_appletPanel) {
         if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
             applet->setModel(m_ctr2ProxyModel);

@@ -337,6 +337,13 @@ target_include_directories(byte_relay_test PRIVATE src)
 target_link_libraries(byte_relay_test PRIVATE aethercore Qt6::Core)
 add_test(NAME byte_relay_test COMMAND byte_relay_test)
 
+# CTR2 relay model: the destination is only the radio the owner pushes in, and
+# every unusable case keeps Start disabled with its reason. Socket-free.
+add_executable(ctr2_proxy_model_test tests/ctr2_proxy_model_test.cpp)
+target_include_directories(ctr2_proxy_model_test PRIVATE src)
+target_link_libraries(ctr2_proxy_model_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME ctr2_proxy_model_test COMMAND ctr2_proxy_model_test)
+
 # CTR2 USB link codec (wire format v0): published known-answer vectors, round
 # trips and fail-closed reassembly over in-memory 8-byte reports. No device,
 # no sockets.

@@ -77,9 +77,10 @@ void Ctr2ProxyApplet::buildUi()
     vbox->setSpacing(4);
 
     auto* note = makeLabel(
-        tr("Relays a CTR2's radio connection unchanged over Wi-Fi (TCP) or USB. "
-           "No UDP, discovery or SmartLink. The CTR2 is its own radio client; its "
-           "commands do not pass AetherSDR's transmit guards."),
+        tr("Relays a CTR2's radio connection unchanged, over Wi-Fi (TCP) or USB "
+           "(TCP and UDP), to the radio AetherSDR is connected to. No discovery or "
+           "SmartLink. The CTR2 is its own radio client; its commands do not pass "
+           "AetherSDR's transmit guards."),
         QStringLiteral("color.text.secondary"), this);
     note->setAccessibleName(tr("CTR2 proxy scope"));
     vbox->addWidget(note);
@@ -129,20 +130,10 @@ void Ctr2ProxyApplet::buildUi()
     grid->addWidget(m_usbCombo, 2, 1, 1, 3);
 
     grid->addWidget(makeLabel(tr("Radio"), QStringLiteral("color.text.label"), this), 3, 0);
-    m_radioEdit = new QLineEdit(this);
-    m_radioEdit->setObjectName(QStringLiteral("ctr2ProxyRadioAddress"));
-    m_radioEdit->setAccessibleName(tr("Radio IPv4 address"));
-    m_radioEdit->setPlaceholderText(tr("IPv4 address"));
-    ThemeManager::instance().applyStyleSheet(m_radioEdit, kFieldStyle);
-    grid->addWidget(m_radioEdit, 3, 1);
-
-    m_radioPortEdit = new QLineEdit(this);
-    m_radioPortEdit->setObjectName(QStringLiteral("ctr2ProxyRadioPort"));
-    m_radioPortEdit->setAccessibleName(tr("Radio port"));
-    m_radioPortEdit->setValidator(new QIntValidator(1, 65535, m_radioPortEdit));
-    m_radioPortEdit->setFixedWidth(48);
-    ThemeManager::instance().applyStyleSheet(m_radioPortEdit, kFieldStyle);
-    grid->addWidget(m_radioPortEdit, 3, 2);
+    // Always the radio AetherSDR is connected to; captured when Start is pressed.
+    m_radioLabel = makeLabel(QString(), QStringLiteral("color.text.primary"), this);
+    m_radioLabel->setObjectName(QStringLiteral("ctr2ProxyRadio"));
+    grid->addWidget(m_radioLabel, 3, 1, 1, 2);
 
     m_startBtn = new QPushButton(tr("Start"), this);
     m_startBtn->setObjectName(QStringLiteral("ctr2ProxyStart"));
@@ -188,16 +179,6 @@ void Ctr2ProxyApplet::buildUi()
     connect(m_listenPortEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
         if (m_model) {
             m_model->setListenPortText(text);
-        }
-    });
-    connect(m_radioEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
-        if (m_model) {
-            m_model->setRadioAddress(text);
-        }
-    });
-    connect(m_radioPortEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
-        if (m_model) {
-            m_model->setRadioPortText(text);
         }
     });
     connect(m_refreshBtn, &QPushButton::clicked, this, [this] {
@@ -286,8 +267,6 @@ void Ctr2ProxyApplet::syncConfiguration()
     }
     setAvailability(m_modeCombo, editable, frozen);
     setAvailability(m_refreshBtn, editable, frozen);
-    setAvailability(m_radioEdit, editable, frozen);
-    setAvailability(m_radioPortEdit, editable, frozen);
     const QString wifiOnly = tr("Used in Wi-Fi mode only");
     setAvailability(m_listenCombo, editable && !usb, editable ? wifiOnly : frozen);
     setAvailability(m_listenPortEdit, editable && !usb, editable ? wifiOnly : frozen);
@@ -301,12 +280,12 @@ void Ctr2ProxyApplet::syncConfiguration()
         if (m_listenPortEdit->text() != m_model->listenPortText()) {
             m_listenPortEdit->setText(m_model->listenPortText());
         }
-        if (m_radioEdit->text() != m_model->radioAddress()) {
-            m_radioEdit->setText(m_model->radioAddress());
-        }
-        if (m_radioPortEdit->text() != m_model->radioPortText()) {
-            m_radioPortEdit->setText(m_model->radioPortText());
-        }
+    }
+
+    if (haveModel) {
+        const QString radio = m_model->aetherRadioLabel();
+        m_radioLabel->setText(radio.isEmpty() ? tr("Not connected") : radio);
+        m_radioLabel->setAccessibleName(tr("Relay radio: %1").arg(m_radioLabel->text()));
     }
 
     const QString problem = editable ? m_model->configurationProblem() : QString();

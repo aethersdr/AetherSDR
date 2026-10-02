@@ -36,8 +36,7 @@ private:
     GuardedComboBox* m_usbCombo{nullptr};
     QPushButton* m_refreshBtn{nullptr};
     QLineEdit* m_listenPortEdit{nullptr};
-    QLineEdit* m_radioEdit{nullptr};
-    QLineEdit* m_radioPortEdit{nullptr};
+    QLabel* m_radioLabel{nullptr};
     QPushButton* m_startBtn{nullptr};
     QLabel* m_stateLabel{nullptr};
     QLabel* m_endpointsLabel{nullptr};

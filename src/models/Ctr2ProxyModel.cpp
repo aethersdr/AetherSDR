@@ -22,6 +22,7 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     : QObject(parent)
     , m_proxy(new TcpByteProxy(this))
     , m_usb(new Ctr2UsbRelay(this))
+    , m_aetherRadioReason(tr("Connect AetherSDR to a radio first"))
 {
     m_statsTimer = new QTimer(this);
     m_statsTimer->setSingleShot(true);
@@ -151,29 +152,25 @@ bool Ctr2ProxyModel::setUsbDevicePath(const QString& path)
     return true;
 }
 
-bool Ctr2ProxyModel::setRadioAddress(const QString& address)
+void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, const QString& label,
+                                    const QString& unavailableReason)
 {
-    if (isRunning()) {
-        return false;
+    QHostAddress ipv4;
+    bool ok = false;
+    const quint32 v4 = address.toIPv4Address(&ok);
+    if (ok && v4 != 0) {
+        ipv4 = QHostAddress(v4);
     }
-    const QString trimmed = address.trimmed();
-    if (m_radioAddress != trimmed) {
-        m_radioAddress = trimmed;
-        emit configurationChanged();
+    const QString reason = ipv4.isNull() && unavailableReason.isEmpty()
+        ? tr("Connect AetherSDR to a radio first") : unavailableReason;
+    if (ipv4 == m_aetherRadioAddress && label == m_aetherRadioLabel
+        && reason == m_aetherRadioReason) {
+        return;
     }
-    return true;
-}
-
-bool Ctr2ProxyModel::setRadioPortText(const QString& port)
-{
-    if (isRunning()) {
-        return false;
-    }
-    if (m_radioPort != port) {
-        m_radioPort = port;
-        emit configurationChanged();
-    }
-    return true;
+    m_aetherRadioAddress = ipv4;
+    m_aetherRadioLabel = label;
+    m_aetherRadioReason = ipv4.isNull() ? reason : QString();
+    emit configurationChanged();
 }
 
 bool Ctr2ProxyModel::parsePort(const QString& text, quint16* port)
@@ -203,26 +200,20 @@ bool Ctr2ProxyModel::parseIpv4(const QString& text, QHostAddress* address)
     return true;
 }
 
-bool Ctr2ProxyModel::buildRadioEndpoint(QHostAddress* address, quint16* port,
-                                        QString* problem) const
+bool Ctr2ProxyModel::radioProblem(QString* problem) const
 {
-    if (m_radioAddress.isEmpty()) {
-        *problem = tr("Enter the radio's IPv4 address");
-        return false;
+    if (m_aetherRadioAddress.isNull()) {
+        *problem = m_aetherRadioReason;
+        return true;
     }
-    if (!parseIpv4(m_radioAddress, address)) {
-        *problem = tr("Radio address must be an IPv4 address such as 192.168.1.50");
-        return false;
-    }
-    if (!parsePort(m_radioPort, port)) {
-        *problem = tr("Radio port must be 1-65535");
-        return false;
-    }
-    return true;
+    return false;
 }
 
 bool Ctr2ProxyModel::buildConfig(TcpByteProxy::Config* config, QString* problem) const
 {
+    if (radioProblem(problem)) {
+        return false;
+    }
     if (m_listenAddress.isEmpty()) {
         *problem = tr("Select the local address the CTR2 will connect to");
         return false;
@@ -236,9 +227,8 @@ bool Ctr2ProxyModel::buildConfig(TcpByteProxy::Config* config, QString* problem)
         *problem = tr("Listen port must be 1-65535");
         return false;
     }
-    if (!buildRadioEndpoint(&config->upstreamAddress, &config->upstreamPort, problem)) {
-        return false;
-    }
+    config->upstreamAddress = m_aetherRadioAddress;
+    config->upstreamPort = kDefaultPort;
     const QString invalid = TcpByteProxy::validate(*config);
     if (!invalid.isEmpty()) {
         *problem = invalid;
@@ -264,16 +254,16 @@ QString Ctr2ProxyModel::configurationProblem() const
         if (!usbSupported()) {
             return tr("This build has no USB HID support (hidapi)");
         }
+        if (radioProblem(&problem)) {
+            return problem;
+        }
         if (m_usbDevicePath.isEmpty()) {
             return tr("Select the CTR2 USB device");
         }
         if (!selectedUsbDevice()) {
             return tr("The selected USB device is no longer connected; rescan");
         }
-        QHostAddress address;
-        quint16 port = 0;
-        buildRadioEndpoint(&address, &port, &problem);
-        return problem;
+        return {};
     }
     TcpByteProxy::Config config;
     buildConfig(&config, &problem);
@@ -296,10 +286,6 @@ bool Ctr2ProxyModel::start()
     bool ok = false;
     if (m_transport == Transport::Usb) {
 #ifdef HAVE_HIDAPI
-        QHostAddress address;
-        quint16 port = 0;
-        QString problem;
-        buildRadioEndpoint(&address, &port, &problem);
         QString error;
         Ctr2HidapiPort* hid = Ctr2HidapiPort::open(*selectedUsbDevice(), &error);
         if (!hid) {
@@ -307,7 +293,7 @@ bool Ctr2ProxyModel::start()
             emit lastErrorChanged();
             emit stateChanged();
         } else {
-            ok = m_usb->start(hid, address, port);
+            ok = m_usb->start(hid, m_aetherRadioAddress, kDefaultPort);
             if (!ok) {
                 delete hid;
             }

@@ -3,6 +3,7 @@
 #include "core/Ctr2HidPort.h"
 #include "core/TcpByteProxy.h"
 
+#include <QHostAddress>
 #include <QList>
 #include <QObject>
 #include <QString>
@@ -16,10 +17,11 @@ class Ctr2UsbRelay;
 
 // Operator-facing state for the CTR2 relay. Wi-Fi mode runs TcpByteProxy
 // (the CTR2 connects to this PC over TCP); USB mode runs Ctr2UsbRelay over
-// a selected HID device. Both forward to an explicit radio endpoint and
-// freeze their configuration while running. Independent of RadioModel and
-// every backend: the CTR2 is its own radio client. Nothing persists; the
-// relay is off on every launch.
+// a selected HID device. Both forward to the radio AetherSDR is connected
+// to, which the owner pushes in through setAetherRadio(); that destination is
+// captured at start() and never retargeted while running. The model never
+// reads RadioModel or a backend itself: the CTR2 is its own radio client.
+// Nothing persists; the relay is off on every launch.
 // Design: docs/ctr2-tcp-proxy-design.md, docs/ctr2-usb-relay-design.md.
 class Ctr2ProxyModel : public QObject {
     Q_OBJECT
@@ -54,10 +56,11 @@ public:
     QString usbDevicePath() const { return m_usbDevicePath; }
     bool setUsbDevicePath(const QString& path);
 
-    QString radioAddress() const { return m_radioAddress; }
-    bool setRadioAddress(const QString& address);
-    QString radioPortText() const { return m_radioPort; }
-    bool setRadioPortText(const QString& port);
+    // The radio AetherSDR is connected to. A null address means the relay
+    // has no usable destination, and unavailableReason says why.
+    void setAetherRadio(const QHostAddress& address, const QString& label,
+                        const QString& unavailableReason);
+    QString aetherRadioLabel() const { return m_aetherRadioLabel; }
 
     // Empty when Start may be pressed; otherwise the reason it may not.
     QString configurationProblem() const;
@@ -85,7 +88,7 @@ signals:
 private:
     static bool parsePort(const QString& text, quint16* port);
     static bool parseIpv4(const QString& text, QHostAddress* address);
-    bool buildRadioEndpoint(QHostAddress* address, quint16* port, QString* problem) const;
+    bool radioProblem(QString* problem) const;
     bool buildConfig(TcpByteProxy::Config* config, QString* problem) const;
     const Ctr2HidPort::DeviceInfo* selectedUsbDevice() const;
     bool usbActive() const { return m_activeTransport == Transport::Usb; }
@@ -101,8 +104,9 @@ private:
     QString m_listenPort{QString::number(kDefaultPort)};
     QList<Ctr2HidPort::DeviceInfo> m_usbChoices;
     QString m_usbDevicePath;
-    QString m_radioAddress;
-    QString m_radioPort{QString::number(kDefaultPort)};
+    QHostAddress m_aetherRadioAddress;
+    QString m_aetherRadioLabel;
+    QString m_aetherRadioReason;
 };
 
 } // namespace AetherSDR

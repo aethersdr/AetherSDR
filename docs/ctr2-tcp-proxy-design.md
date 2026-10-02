@@ -26,8 +26,9 @@ AetherSDR's existing radio connection remains separate.
 ```
 
 The operator sets the CTR2's radio IP to the AetherSDR PC's LAN address.
-The upstream destination is the radio's address reachable from the PC,
-including a routed VPN or tailnet address. The PC must be reachable from
+The upstream destination is the radio AetherSDR is connected to, at the
+address AetherSDR reached it by, including a routed VPN or tailnet address;
+the operator does not enter it. The PC must be reachable from
 the CTR2. The proxy uses the operating system's routing; it does not establish
 a VPN, implement SmartLink authentication, or create a network tunnel.
 
@@ -80,7 +81,7 @@ Add a small CTR2 Proxy applet using existing applet patterns:
 | --- | --- |
 | Listen address | Explicit local IPv4 LAN address selected by operator |
 | Listen port | 4992, editable while stopped |
-| Radio address and port | Explicit upstream IPv4 address; port defaults to 4992 |
+| Radio | The radio AetherSDR is connected to (port 4992), captured at Start; unavailable when AetherSDR is disconnected, on SmartLink, or on a radio without multi-client sessions |
 | Start and Stop | Start listening or close listener and current connection |
 | State | Stopped, Listening, Connecting, Relaying, Closing, or Error |
 | Endpoints | Actual listener, connected CTR2 peer, and upstream destination |
@@ -123,8 +124,12 @@ Suggested responsibilities, with names adjustable to repository conventions:
   new feature behavior out of MainWindow.cpp. The model stops before its
   owning window is destroyed. Hiding the applet does not imply Stop.
 
-The destination is explicit and frozen per connection. Changing the selected
-AetherSDR radio must not retarget a live proxy. No RadioSession ownership
+The destination is captured from AetherSDR's connected radio when the
+operator presses Start and stays fixed until Stop. Changing the selected
+AetherSDR radio must not retarget a live proxy. The model never reads
+RadioModel: MainWindow pushes the radio in, and withholds it (with a reason)
+when AetherSDR is disconnected, on SmartLink, or on a radio without
+multi-client sessions. No RadioSession ownership
 change or new IRadioBackend API is required by this design. Existing slice 0
 RX, GUI session state, and audio/spectrum paths must remain unaffected.
 
