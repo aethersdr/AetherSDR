@@ -1498,17 +1498,12 @@ void AnanBackend::sendSpeakerAudioToRadio(const QByteArray& stereoFloat)
     const float lineout = m_lineoutMuted ? 0.0f
                                          : sliceAudioAmplitude(m_lineoutGainPercent);
 
-    // Interleave and quantise. CLAMPED BEFORE SCALING: the converter is
-    // linear-phase and overshoots on transients, so a block that was inside
-    // [-1,1] going in can leave it, and an unclamped cast of that wraps sign --
-    // a loud transient becomes a full-scale click of the opposite polarity,
-    // which is far more audible than the clipping it replaces.
+    // Interleave and quantise. sliceAudioToInt16() carries the
+    // clamp-before-scale law and the non-finite guard, with the tests for both.
     m_speakerInterleaved.resize(outFrames * 2);
     for (std::size_t i = 0; i < outFrames; ++i) {
-        const float l = std::clamp(outL[i] * lineout, -1.0f, 1.0f);
-        const float r = std::clamp(outR[i] * lineout, -1.0f, 1.0f);
-        m_speakerInterleaved[i * 2] = static_cast<qint16>(l * 32767.0f);
-        m_speakerInterleaved[i * 2 + 1] = static_cast<qint16>(r * 32767.0f);
+        m_speakerInterleaved[i * 2] = sliceAudioToInt16(outL[i] * lineout);
+        m_speakerInterleaved[i * 2 + 1] = sliceAudioToInt16(outR[i] * lineout);
     }
 
     // One queued hand-off per block. P2Client owns the socket, the packetising

@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <span>
 #include <string>
 #include <vector>
@@ -593,6 +594,20 @@ int main()
         check(both[0] == 0.0f && both[1] == 0.0f, "mute wins over gain and balance");
 
         // Degenerate input must not walk off anything.
+        // Quantising to the wire format. NaN is the case a clamp cannot catch;
+        // infinity pins the predicate as isfinite rather than isnan.
+        check(sliceAudioToInt16(0.0f) == 0, "silence quantises to zero");
+        check(sliceAudioToInt16(1.0f) == 32767, "full scale is the positive peak");
+        check(sliceAudioToInt16(-1.0f) == -32767, "negative full scale mirrors it");
+        check(sliceAudioToInt16(2.0f) == 32767, "an overshoot clamps, not wraps");
+        check(sliceAudioToInt16(-2.0f) == -32767, "and so does a negative overshoot");
+        check(sliceAudioToInt16(std::numeric_limits<float>::quiet_NaN()) == 0,
+              "a NaN quantises to silence, not to undefined behaviour");
+        check(sliceAudioToInt16(std::numeric_limits<float>::infinity()) == 0,
+              "an infinity quantises to silence, not a full-scale click");
+        check(sliceAudioToInt16(-std::numeric_limits<float>::infinity()) == 0,
+              "including a negative infinity");
+
         applySliceAudioInPlace(nullptr, 4, false, 50, 50);
         float untouched[2] = {1.0f, -1.0f};
         applySliceAudioInPlace(untouched, 0, false, 0, 0);
