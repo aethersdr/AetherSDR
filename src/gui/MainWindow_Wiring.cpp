@@ -35,6 +35,7 @@
 #include "SpeApplet.h"
 #include "VkampApplet.h"
 #include "LpMeterApplet.h"
+#include "Kpa500Applet.h"
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
 #include "MeterApplet.h"
@@ -6132,7 +6133,10 @@ void MainWindow::wireMeters()
     // (~100 W) and amp (~1500 W) values race into the same widget. (#2927)
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
             this, [this](float fwd, float swr, bool swrValid) {
-        if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
+        if ((m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
+            || (m_kpa500Conn.isConnected()
+                && m_kpa500Conn.isResponding()
+                && m_kpa500Conn.lastStatus().operate.value_or(false)))
             return;
         // Absent SWR is forwarded as 1.0: RadioSwrValidityFilter downstream
         // reads <1.0 WITH forward power as the radio's over-range sentinel
@@ -6153,8 +6157,11 @@ void MainWindow::wireMeters()
             &MeterModel::directionalPowerMetersChanged,
             this, [this](float fwd, float reflected, float swr,
                          bool swrValid, bool reflectedPowerMeasured) {
-        if (m_radioModel.amplifier().present()
-            && m_radioModel.amplifier().operate()) {
+        if ((m_radioModel.amplifier().present()
+             && m_radioModel.amplifier().operate())
+            || (m_kpa500Conn.isConnected()
+                && m_kpa500Conn.isResponding()
+                && m_kpa500Conn.lastStatus().operate.value_or(false))) {
             return;
         }
         // The cross-needle already clamps sub-1.0 values to 1.0 (its rest
@@ -6228,6 +6235,7 @@ void MainWindow::wireMeters()
         m_speConn.setAutoReconnect(ar);
         m_vkampConn.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
+        m_kpa500Conn.setAutoReconnect(ar);
     }
 
     // Wire TgxlConnection to TunerModel
@@ -6839,12 +6847,53 @@ void MainWindow::wireMeters()
 #endif
     }
 
+    // ── Elecraft KPA500 amplifier — serial only, no FlexRadio relay ──────────
+    // See docs/architecture/elecraft-kpa500-kat500-design.md. Wire ALL signals
+    // before the auto-connect trigger — connectSerial() can call
+    // onTransportUp() synchronously, so anything wired after the trigger
+    // misses the first connected().
+    connect(&m_kpa500Conn, &Kpa500Connection::connected, this, [this]() {
+        m_appletPanel->kpa500Applet()->setConnected(true);
+        m_appletPanel->setKpa500Visible(true);
+    });
+    connect(&m_kpa500Conn, &Kpa500Connection::disconnected, this, [this]() {
+        m_appletPanel->kpa500Applet()->setConnected(false);
+        m_appletPanel->setKpa500Visible(false);
+    });
+    connect(&m_kpa500Conn, &Kpa500Connection::respondingChanged, this, [this](bool responding) {
+        m_appletPanel->kpa500Applet()->setResponding(responding);
+    });
+    connect(&m_kpa500Conn, &Kpa500Connection::statusUpdated, this,
+            [this](const AetherSDR::Kpa500::Status& s) {
+        m_appletPanel->kpa500Applet()->applyStatus(s);
+        if (s.operate.value_or(false) && s.forwardPowerW.has_value())
+            applyAmpTxMeters(s.forwardPowerW.value(), s.swr.value_or(1.0f),
+                             /*fromRelay=*/false);
+    });
+    connect(m_appletPanel->kpa500Applet(), &Kpa500Applet::operateToggled,
+            this, [this](bool on) { m_kpa500Conn.setOperate(on); });
+    connect(m_appletPanel->kpa500Applet(), &Kpa500Applet::clearFaultClicked,
+            this, [this]() { m_kpa500Conn.clearFault(); });
+    connect(m_appletPanel->kpa500Applet(), &Kpa500Applet::fanSpeedChangeRequested,
+            this, [this](int n) { m_kpa500Conn.setFanSpeed(n); });
+
+    // Startup auto-connect from saved Peripherals settings.
+    {
+#ifdef HAVE_SERIALPORT
+        const QString port = PeripheralSettings::deviceString("Kpa500", "SerialPort");
+        if (!port.isEmpty()) {
+            const int baud = PeripheralSettings::deviceInt("Kpa500", "BaudRate", 4800);
+            m_kpa500Conn.connectSerial(port, baud);
+        }
+#endif
+    }
+
     // Fwd power gauge scale from radio max power and amp presence, applied to
     // TxApplet, TunerApplet and SMeterWidget together; with the PGXL in STANDBY
     // use the barefoot scale. Redundant re-applies are skipped inside each
     // gauge's setPowerScale(), not here: infoChanged bursts on ordinary status,
     // and an automation test action writes the widget scale directly, so a
-    // cache here could skip a needed re-apply.
+    // cache here could skip a needed re-apply. upstream/main
     auto updatePowerScale = [this]() {
         int maxW = m_radioModel.transmitModel().maxPowerLevel();
         // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
@@ -6856,6 +6905,16 @@ void MainWindow::wireMeters()
         }
         const bool ampActive = m_radioModel.amplifier().present()
                             && m_radioModel.amplifier().operate();
+        // When KPA500 is in OPERATE (but no PGXL present), override maxW so
+        // the 600W gauge tier activates rather than the barefoot 200W range.
+        // hasAmplifier (ampActive) stays false — KPA500 is 500W, not 1.5kW,
+        // so the 2kW PGXL scale would make every reading look tiny.
+        if (!ampActive
+            && m_kpa500Conn.isConnected()
+            && m_kpa500Conn.isResponding()
+            && m_kpa500Conn.lastStatus().operate.value_or(false)) {
+            maxW = 500;
+        }
         m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->setMeterPowerScale(maxW, ampActive);
@@ -6863,9 +6922,14 @@ void MainWindow::wireMeters()
     };
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
     connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, updatePowerScale);
+    // Re-evaluate scale when KPA500 operate state changes or disconnects.
+    connect(&m_kpa500Conn, &Kpa500Connection::statusUpdated, this, updatePowerScale);
+    connect(&m_kpa500Conn, &Kpa500Connection::disconnected, this, updatePowerScale);
+    connect(&m_kpa500Conn, &Kpa500Connection::respondingChanged, this, updatePowerScale);
     // Also refresh on infoChanged (#4813): maxPowerLevelChanged does not fire
     // when the radio's limit equals the 100 W default (the AU- case), and
     // infoChanged is the signal tied to the model() data this reads.
+    
     connect(&m_radioModel, &RadioModel::infoChanged, this, updatePowerScale);
 
     // TGXL indicator: two-line rich text — label on top, state smaller below.

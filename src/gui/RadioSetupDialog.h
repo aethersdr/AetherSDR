@@ -36,6 +36,7 @@ class AcomConnection;
 class SpeConnection;
 class VkampConnection;
 class LpMeterConnection;
+class Kpa500Connection;
 
 // Radio Setup dialog — searchable, category-based configuration window.
 class RadioSetupDialog : public PersistentDialog {
@@ -51,6 +52,7 @@ public:
                               SpeConnection* spe = nullptr,
                               VkampConnection* vkamp = nullptr,
                               LpMeterConnection* lpMeter = nullptr,
+                              Kpa500Connection* kpa500 = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     void done(int result) override;
@@ -187,6 +189,7 @@ private:
     SpeConnection* m_spe{nullptr};
     VkampConnection* m_vkamp{nullptr};
     LpMeterConnection* m_lpMeter{nullptr};
+    Kpa500Connection* m_kpa500{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};

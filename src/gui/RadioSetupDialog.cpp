@@ -37,6 +37,7 @@
 #include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
+#include "core/Kpa500Connection.h"
 #include "core/backends/flex/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
@@ -710,12 +711,14 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    SpeConnection* spe,
                                    VkampConnection* vkamp,
                                    LpMeterConnection* lpMeter,
+                                   Kpa500Connection* kpa500,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp),
+      m_lpMeter(lpMeter), m_kpa500(kpa500)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);
@@ -2090,8 +2093,10 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             // make that visible rather than letting a toggle silently no-op.
             if (AutomationBridgeSettings::envForced()) {
                 mcpBtn->setEnabled(false);
-                mcpBtn->setToolTip(mcpBtn->toolTip()
-                    + "\n\nForced on by the AETHER_AUTOMATION launch environment variable.");
+                const QString mcpForcedTip = mcpBtn->toolTip()
+                    + "\n\nForced on by the AETHER_AUTOMATION launch environment variable.";
+                mcpBtn->setToolTip(mcpForcedTip);
+                mcpBtn->setAccessibleDescription(mcpForcedTip);
             }
             m_automationBridgeBtn = mcpBtn;
             connect(mcpBtn, &QPushButton::toggled, this,
@@ -2185,12 +2190,16 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
             if (envBlocksTx) {
                 txCheck->setEnabled(false);
-                txCheck->setToolTip(txCheck->toolTip()
-                    + "\n\nPinned off by the AETHER_AUTOMATION_NO_TX launch variable.");
+                const QString txBlockedTip = txCheck->toolTip()
+                    + "\n\nPinned off by the AETHER_AUTOMATION_NO_TX launch variable.";
+                txCheck->setToolTip(txBlockedTip);
+                txCheck->setAccessibleDescription(txBlockedTip);
             } else if (envForcesTx) {
                 txCheck->setEnabled(false);
-                txCheck->setToolTip(txCheck->toolTip()
-                    + "\n\nForced on by the AETHER_AUTOMATION_ALLOW_TX launch variable.");
+                const QString txForcedTip = txCheck->toolTip()
+                    + "\n\nForced on by the AETHER_AUTOMATION_ALLOW_TX launch variable.";
+                txCheck->setToolTip(txForcedTip);
+                txCheck->setAccessibleDescription(txForcedTip);
             }
             connect(txCheck, &QCheckBox::toggled, this, [this, txCheck](bool on) {
                 const QPointer<RadioSetupDialog> self(this);
@@ -2262,8 +2271,10 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
             if (envForcesRo) {
                 roCheck->setEnabled(false);
-                roCheck->setToolTip(roCheck->toolTip()
-                    + "\n\nForced on by the AETHER_AUTOMATION_READONLY launch variable.");
+                const QString roForcedTip = roCheck->toolTip()
+                    + "\n\nForced on by the AETHER_AUTOMATION_READONLY launch variable.";
+                roCheck->setToolTip(roForcedTip);
+                roCheck->setAccessibleDescription(roForcedTip);
             }
             connect(roCheck, &QCheckBox::toggled, this, [this](bool on) {
                 AutomationBridgeSettings::setReadOnly(on);
@@ -2406,6 +2417,7 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     dhcpBtn->setChecked(!isStatic);
     dhcpBtn->setEnabled(canConfigure);
     dhcpBtn->setToolTip(canConfigure ? QString() : unavailableTip);
+    if (!canConfigure) dhcpBtn->setAccessibleDescription(unavailableTip);
     AetherSDR::ThemeManager::instance().applyStyleSheet(dhcpBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
         "padding: 4px 16px; }"
@@ -2419,6 +2431,7 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     staticBtn->setChecked(isStatic);
     staticBtn->setEnabled(canConfigure);
     staticBtn->setToolTip(dhcpBtn->toolTip());
+    if (!canConfigure) staticBtn->setAccessibleDescription(unavailableTip);
     staticBtn->setStyleSheet(dhcpBtn->styleSheet());
     btnRow->addWidget(staticBtn);
 
@@ -9642,6 +9655,122 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         });
     }
 
+    // KPA500 amplifier — serial only (KPA500 Programmer's Ref does not define
+    // a network protocol; communication is RS-232/USB-serial exclusively). The
+    // default rate is 4800 baud per §^BRP; configurable via the selector below
+    // for units previously reconfigured with ^BRP.
+    if (m_kpa500) {
+        const int row = grid->rowCount();
+        auto& tm = AetherSDR::ThemeManager::instance();
+
+        static const QString kKpaComboStyle =
+            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox::drop-down { border: none; }";
+        static const QString kKpaStatusOkStyle =
+            "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
+        static const QString kKpaStatusIdleStyle =
+            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
+
+        auto* devLbl = new QLabel("Elecraft KPA500");
+        tm.applyStyleSheet(devLbl, kLabelStyleTemplate);
+        grid->addWidget(devLbl, row, 0);
+
+#ifdef HAVE_SERIALPORT
+        auto* serialCombo = new QComboBox;
+        serialCombo->setAccessibleName(tr("KPA500 serial port"));
+        tm.applyStyleSheet(serialCombo, kKpaComboStyle);
+        auto* serialCustomEdit = new QLineEdit;
+        serialCustomEdit->setAccessibleName(tr("KPA500 custom serial port"));
+        serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
+        tm.applyStyleSheet(serialCustomEdit, kEditStyleTemplate);
+
+        const QString savedPort = PeripheralSettings::deviceString("Kpa500", "SerialPort");
+        populateSerialPortCombo(serialCombo, serialCustomEdit, savedPort);
+        serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
+        connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [serialCombo, serialCustomEdit](int idx) {
+            serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
+        });
+        auto reseed = [combo = QPointer<QComboBox>(serialCombo),
+                       edit  = QPointer<QLineEdit>(serialCustomEdit)]() {
+            if (!combo || !edit) return;
+            edit->setVisible(refreshSerialPortCombo(combo, edit));
+        };
+        m_serialPortReseeds.append(reseed);
+        serialReseeds->append(reseed);
+
+        auto* portPage = new QWidget;
+        auto* portLay = new QHBoxLayout(portPage);
+        portLay->setContentsMargins(0, 0, 0, 0);
+        portLay->addWidget(serialCombo, 1);
+        portLay->addWidget(serialCustomEdit, 1);
+        grid->addWidget(portPage, row, 1);
+#endif
+
+        // Baud rate selector — KPA500 supports 4800/9600/19200/38400 via ^BRP.
+        // Default is 4800 per the spec; user changes it here if the amp was
+        // previously reconfigured with ^BRP.
+        auto* baudCombo = new QComboBox;
+        baudCombo->setAccessibleName(tr("KPA500 baud rate"));
+        tm.applyStyleSheet(baudCombo, kKpaComboStyle);
+        for (int rate : {4800, 9600, 19200, 38400})
+            baudCombo->addItem(QStringLiteral("%1").arg(rate), rate);
+        {
+            const int savedBaud = PeripheralSettings::deviceInt("Kpa500", "BaudRate", 4800);
+            const int idx = baudCombo->findData(savedBaud);
+            baudCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        connect(baudCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [baudCombo](int idx) {
+            PeripheralSettings::setDeviceInt("Kpa500", "BaudRate",
+                                             baudCombo->itemData(idx).toInt());
+        });
+        grid->addWidget(baudCombo, row, 2);
+
+        auto* statusLbl = new QLabel(m_kpa500->isConnected() ? "Connected" : "Not connected");
+        tm.applyStyleSheet(statusLbl,
+            m_kpa500->isConnected() ? kKpaStatusOkStyle : kKpaStatusIdleStyle);
+        grid->addWidget(statusLbl, row, 4);
+
+        auto* kpaBtn = new QPushButton(m_kpa500->isConnected() ? "Disconnect" : "Connect");
+        tm.applyStyleSheet(kpaBtn, kBtnStyle);
+        grid->addWidget(kpaBtn, row, 3);
+
+        auto updateKpaState = [this, kpaBtn, statusLbl]() {
+            const bool conn = m_kpa500->isConnected();
+            kpaBtn->setText(conn ? "Disconnect" : "Connect");
+            statusLbl->setText(conn ? "Connected" : "Not connected");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                conn ? kKpaStatusOkStyle : kKpaStatusIdleStyle);
+        };
+        connect(m_kpa500, &Kpa500Connection::connected, this, updateKpaState);
+        connect(m_kpa500, &Kpa500Connection::disconnected, this, updateKpaState);
+        connect(m_kpa500, &Kpa500Connection::connectionFailed, this,
+                [statusLbl](const QString& err) {
+            statusLbl->setText("Error: " + err);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl,
+                "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
+        });
+
+        connect(kpaBtn, &QPushButton::clicked, this, [=, this]() {
+            if (m_kpa500->isConnected()) {
+                m_kpa500->disconnect();
+                return;
+            }
+#ifdef HAVE_SERIALPORT
+            QString port = serialCombo->currentData().toString();
+            if (port == "__custom__")
+                port = serialCustomEdit->text().trimmed();
+            if (port.isEmpty()) return;
+            const int baud = baudCombo->currentData().toInt();
+            PeripheralSettings::setDeviceString("Kpa500", "SerialPort", port);
+            PeripheralSettings::setDeviceInt("Kpa500", "BaudRate", baud);
+            m_kpa500->connectSerial(port, baud);
+#endif
+        });
+    }
+
     for (auto* lbl : group->findChildren<QLabel*>())
         if (lbl->styleSheet().isEmpty()) applyLabelStyle(lbl);
 
@@ -9674,6 +9803,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
         if (m_lpMeter) {
             m_lpMeter->setAutoReconnect(on);
+        }
+        if (m_kpa500) {
+            m_kpa500->setAutoReconnect(on);
         }
         // NOTE: m_vkamp is deliberately NOT propagated here, and that is a
         // pre-existing gap from #4919 rather than an intentional omission --

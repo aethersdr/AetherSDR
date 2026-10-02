@@ -36,6 +36,7 @@ class DemoApplet;
 class AcomApplet;
 class SpeApplet;
 class VkampApplet;
+class Kpa500Applet;
 class LpMeterApplet;
 class TxApplet;
 class PhoneCwApplet;
@@ -107,6 +108,7 @@ public:
     AcomApplet*   acomApplet()    { return m_acomApplet; }
     SpeApplet*    speApplet()     { return m_speApplet; }
     VkampApplet*  vkampApplet()   { return m_vkampApplet; }
+    Kpa500Applet* kpa500Applet()  { return m_kpa500Applet; }
     LpMeterApplet* lpMeterApplet() { return m_lpMeterApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
@@ -189,11 +191,16 @@ public:
     // VK3AMP all present at once, each fully independent hardware.
     void setVkampVisible(bool visible);
 
+    // Show/hide the KPA500 button and applet based on a direct Elecraft KPA500
+    // serial amplifier connection. Fully independent of all other amp applets.
+    void setKpa500Visible(bool visible);
+
     // Show/hide the LP100 button and applet from the direct LP-100A connection,
     // independent of any amplifier applet. Gated on the connection like
     // ACOM/SPE/VKAMP; LpMeterConnection keeps the link when the meter stops
     // answering (the tile shows NO DATA), so only an absent transport hides it.
-    void setLpMeterVisible(bool visible);
+
+     void setLpMeterVisible(bool visible);
 
     // Show/hide the AG button and applet based on Antenna Genius presence.
     void setAgVisible(bool visible);
@@ -406,6 +413,8 @@ private:
     VkampApplet* m_vkampApplet{nullptr};
     LpMeterApplet* m_lpMeterApplet{nullptr};
     QPushButton* m_vkampBtn{nullptr};
+    Kpa500Applet* m_kpa500Applet{nullptr};
+    QPushButton*  m_kpa500Btn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};
     PhoneApplet*   m_phoneApplet{nullptr};

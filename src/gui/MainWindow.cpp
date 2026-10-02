@@ -3589,7 +3589,7 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
                           &m_radioModel, m_audio,
                           &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
                           m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn,
-                          &m_lpMeterConn);
+                          &m_lpMeterConn, &m_kpa500Conn);
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())
@@ -10041,9 +10041,11 @@ void MainWindow::updateToolsMenuState()
 
     if (m_swrScanAction) {
         m_swrScanAction->setEnabled(txReady);
-        m_swrScanAction->setToolTip(txReady ? QString()
+        const QString swrTip = txReady ? QString()
             : tr("Requires an idle, TX-capable radio with this client holding "
-                 "the interlock"));
+                 "the interlock");
+        m_swrScanAction->setToolTip(swrTip);
+        m_swrScanAction->setStatusTip(swrTip);
     }
 
     // Every disabling condition names itself. A greyed control with no stated
@@ -10051,7 +10053,7 @@ void MainWindow::updateToolsMenuState()
     if (m_preTuneAction) {
         m_preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
             && hasTxApplet);
-        m_preTuneAction->setToolTip(
+        const QString preTuneTip =
             !caps.hasTunerMemories
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
@@ -10063,11 +10065,13 @@ void MainWindow::updateToolsMenuState()
             : !txReady
                 ? tr("Requires an idle, TX-capable radio with this client "
                      "holding the interlock")
-            : QString());
+            : QString();
+        m_preTuneAction->setToolTip(preTuneTip);
+        m_preTuneAction->setStatusTip(preTuneTip);
     }
     if (m_clearAtuAction) {
         m_clearAtuAction->setEnabled(connected && memories && hasTxApplet);
-        m_clearAtuAction->setToolTip(
+        const QString clearAtuTip =
             !caps.hasTunerMemories
                 ? tr("ATU memory controls are unavailable for this radio")
             : tgxlOperate
@@ -10076,7 +10080,9 @@ void MainWindow::updateToolsMenuState()
                 ? tr("The transmit applet is unavailable in this build")
             : !connected
                 ? tr("Connect to a radio first")
-            : QString());
+            : QString();
+        m_clearAtuAction->setToolTip(clearAtuTip);
+        m_clearAtuAction->setStatusTip(clearAtuTip);
     }
 
     if (m_gpsDashboardAction) {
@@ -10089,7 +10095,7 @@ void MainWindow::updateToolsMenuState()
         const bool externalRx = active
             && active->externalReceiveReplacementActive();
         m_agcTCalibrationMenuAction->setEnabled(connected && active && !externalRx);
-        m_agcTCalibrationMenuAction->setToolTip(
+        const QString agcCalTip =
             !connected
                 ? tr("Connect to a radio first")
             : !active
@@ -10097,7 +10103,9 @@ void MainWindow::updateToolsMenuState()
             : externalRx
                 ? tr("Not available while an external receive source "
                      "replaces this slice's RX")
-            : QString());
+            : QString();
+        m_agcTCalibrationMenuAction->setToolTip(agcCalTip);
+        m_agcTCalibrationMenuAction->setStatusTip(agcCalTip);
     }
 }
 

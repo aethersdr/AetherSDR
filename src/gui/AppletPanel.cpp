@@ -15,6 +15,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "Kpa500Applet.h"
 #include "LpMeterApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
@@ -853,6 +854,18 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // Elecraft KPA500 serial amplifier — strictly serial (no TCP), independent
+    // of every other amplifier applet. See
+    // docs/architecture/elecraft-kpa500-kat500-design.md.
+    m_kpa500Applet = new Kpa500Applet;
+    {
+        auto entry = makeEntry("KPA500", "Elecraft KPA500 Amplifier", m_kpa500Applet,
+                               false, m_drawer, m_drawerLayout);
+        m_kpa500Btn = entry.btn;
+        markHardwareConditional("KPA500");
+        m_appletOrder.append(entry);
+    }
+
     // LP-100A wattmeter — an instrument rather than an amplifier, so it is
     // independent of every amplifier applet above and lives in the Metering
     // category. Deliberately NOT in kDefaultOrder: it has no discovery path,
@@ -1365,6 +1378,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("AMP"),   QStringLiteral("Amplifiers")},
         {QStringLiteral("ACOM"),  QStringLiteral("Amplifiers")},
         {QStringLiteral("SPE"),   QStringLiteral("Amplifiers")},
+        {QStringLiteral("KPA500"), QStringLiteral("Amplifiers")},
         {QStringLiteral("EQ"),    QStringLiteral("Audio & DSP")},
         {QStringLiteral("TXDSP"), QStringLiteral("Audio & DSP")},
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
@@ -1775,6 +1789,12 @@ void AppletPanel::setSpeVisible(bool visible)
 void AppletPanel::setVkampVisible(bool visible)
 {
     updateHardwareAvailability("VKAMP", "Applet_VKAMP", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setKpa500Visible(bool visible)
+{
+    updateHardwareAvailability("KPA500", "Applet_KPA500", visible);
     applyBarLayout();
 }
 
