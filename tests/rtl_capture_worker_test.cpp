@@ -186,11 +186,14 @@ static void receiverTuneKeepsDisplayAverage()
     receiver.setPanAverage({}, 100);
     int frames = 0;
     float lastDc = -999;
+    int waterfallRows = 0;
     QObject::connect(&receiver, &IRadioBackend::spectrumFrameReady,
         [&](int, const QByteArray& frame, const SpectrumCoverage&) {
             ++frames;
             std::memcpy(&lastDc, frame.constData() + frame.size() / 2, sizeof(lastDc));
         });
+    QObject::connect(&receiver, &IRadioBackend::waterfallRowReady,
+        [&](int, const QByteArray&) { ++waterfallRows; });
     for (int i = 0; i < 8; ++i) { device->block(); }
     check(waitFor([&] { return frames > 0; }), "averaging worker seeds a complete observation");
     const int writes = device->writes;
@@ -213,11 +216,29 @@ static void receiverTuneKeepsDisplayAverage()
     check(waitFor([&] { return frames > beforeGainFrames; }), "new gain emits complete frame");
     check(std::abs(lastDc - raw) < .02,
           "gain transition discards incompatible amplitude history");
+    const T::State beforePpm = rtl::RtlCaptureBackendTestAccess::state(receiver);
     device->iqLevel = 130;
     receiver.invokeExtension("rtl", "ppm.set", 1, 1);
     check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(receiver); }),
           "PPM change completes its hardware readback");
+    const T::State afterPpm = rtl::RtlCaptureBackendTestAccess::state(receiver);
+    SharedCapturePolicy::CaptureDescriptor expectedCapture = beforePpm.capture;
+    expectedCapture.generation = afterPpm.capture.generation;
+    T::Hardware expectedHardware = beforePpm.hardware;
+    expectedHardware.ppm = 1;
+    check(afterPpm.token.session == beforePpm.token.session
+        && afterPpm.token.revision > beforePpm.token.revision
+        && afterPpm.capture.generation > beforePpm.capture.generation
+        && afterPpm.capture == expectedCapture && afterPpm.hardware == expectedHardware
+        && afterPpm.receivers == beforePpm.receivers && afterPpm.receivingIds == beforePpm.receivingIds,
+          "PPM changes capture generation without changing WFM receiver or RF geometry");
     const int beforePpmFrames = frames;
+    const int beforePpmRows = waterfallRows;
+    const QByteArray obsolete(65536 * int(sizeof(float)), '\0');
+    rtl::RtlCaptureBackendTestAccess::spectrum(receiver, obsolete, beforePpm.token);
+    rtl::RtlCaptureBackendTestAccess::waterfall(receiver, obsolete, beforePpm.token);
+    check(frames == beforePpmFrames && waterfallRows == beforePpmRows,
+          "PPM adoption rejects queued spectrum and waterfall from the old capture");
     for (int i = 0; i < 8; ++i) { device->block(); }
     check(waitFor([&] { return frames > beforePpmFrames; }), "PPM change emits complete observation");
     const double weak = 20 * std::log10(std::sqrt(2.) * (130 - 127.5) / 127.5
