@@ -34,11 +34,6 @@ SimSignalSource::SimSignalSource(QObject* parent) : QObject(parent)
     m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"), 1200.0);
 }
 
-void SimSignalSource::start()
-{
-    startSession(0);
-}
-
 void SimSignalSource::startSession(quint64 session)
 {
     // Both callers pass the backend's monotonic pcmSession(), so a repeated

@@ -7,6 +7,7 @@
 #include "core/backends/sim/SimBackend.h"
 #include "core/backends/sim/DemoRadioConstants.h"
 #include "core/backends/flex/RadioConnection.h"
+#include "core/backends/sim/SimSignalSource.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -241,11 +242,10 @@ QByteArray oneSpectrumRow()
     return QByteArray(1024 * int(sizeof(float)), '\0');
 }
 
-// Rule 6 on the RadioModel path (#6084): the synthetic wire's disconnected()
-// reaches the backend, which must close its forward gate BEFORE it announces
-// disconnected() on the seam. A worker row delivered inside that announcement
-// (the queued-delivery window CI hit) must not be forwarded. Emitting from
-// this thread makes every hop direct, so the window is hit deterministically.
+// Rule 6 on the RadioModel path (#6084): the backend closes its forward gate
+// BEFORE it announces disconnected(). Emitting from this thread runs the
+// handler direct, so this pins that ordering, not the queued interleaving;
+// the ordering is the fix, since one handler leaves no gap to land in.
 void testNoSpectrumForwardedOnceDisconnectedIsAnnounced()
 {
     SessionPeekSim sim;
@@ -266,8 +266,8 @@ void testNoSpectrumForwardedOnceDisconnectedIsAnnounced()
 }
 
 // The session half (#6084): a row the previous session's worker queued that
-// lands after a reconnect is dropped on identity, as stale audio is; a row
-// from the live session still goes through, so the drop is not vacuous.
+// lands after a reconnect is dropped on identity; a live-session row still
+// goes through, so the drop is not vacuous.
 void testStaleSessionSpectrumIsDropped()
 {
     SessionPeekSim sim;
@@ -278,6 +278,11 @@ void testStaleSessionSpectrumIsDropped()
     const quint64 liveSession = sim.pcmSession();
     report("a reconnect starts a new session", liveSession != firstSession);
 
+    // Silence the live worker and drain what it already queued, so only the
+    // rows emitted below can reach the spy.
+    QMetaObject::invokeMethod(sim.signalSourceForTest(), &AetherSDR::SimSignalSource::stop,
+                              Qt::BlockingQueuedConnection);
+    QCoreApplication::processEvents();
     QSignalSpy spectrumSpy(&sim, &SimBackend::spectrumFrameReady);
     emit sim.signalSourceForTest()->spectrumFrameReady(0, firstSession, oneSpectrumRow());
     report("a previous session's spectrum row is dropped", spectrumSpy.count() == 0);

@@ -20,7 +20,7 @@ namespace AetherSDR {
 //
 // Threading contract: construct anywhere, moveToThread(worker), then touch it
 // ONLY through queued calls; every public slot assumes it runs on the worker.
-// start()/stop() are slots so the member QTimer starts on its own thread.
+// startSession()/stop() are slots so the member QTimer starts on its own thread.
 // Signals are emitted on the worker and cross back queued.
 class SimSignalSource : public QObject {
     Q_OBJECT
@@ -32,7 +32,6 @@ public:
     static constexpr int kSpectrumRowEveryNFrames = 9;
 
 public slots:
-    void start();
     void startSession(quint64 session);
     void stop();
 

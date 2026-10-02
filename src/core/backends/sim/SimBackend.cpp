@@ -42,9 +42,8 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
                     publishLegacySliceAudio(sliceId, frame.legacyStereo24());
                 }
             });
-    // Spectrum carries the session too (#6084): m_connected closes the window
-    // after disconnected(), the session drops a row the previous session's
-    // worker queued that lands after a reconnect.
+    // m_connected drops a row arriving after disconnected(); the session drops
+    // a row the previous session's worker queued that lands after a reconnect.
     connect(m_signalSource, &SimSignalSource::spectrumFrameReady,
             this, [this](int panId, quint64 session, const QByteArray& bins) {
                 if (m_connected && session == pcmSession()) {
@@ -117,9 +116,8 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
             if (m_connected) emitInitialState();
         });
     });
-    // ONE handler closes the gate and THEN announces (#6084). As two queued
-    // slots the order hung on connect order, and a worker frame could be
-    // delivered between them: forwarded after the seam said disconnected().
+    // One handler closes the forward gate and THEN announces disconnected()
+    // (#6084), so no queued worker row can be delivered in between.
     connect(m_connection, &RadioConnection::disconnected, this, [this]() {
         m_connected = false;
         m_wirePanIds.clear();
