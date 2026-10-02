@@ -189,13 +189,10 @@ static void cwPitchReachesSeamWithoutDropNotice()
           "cw pitch: no commandDropped for a pitch the backend applied");
 }
 
-// Reported from the radio (ON8ST, 2026-09-29): the TUNE power slider works on
-// the HL2 — TUNE keys at the slider's power — yet every move logged "dropping
-// transmit set tunepower=N". The value has no setter of its own: RadioModel
-// hands m_transmitModel.tunePower() to setTune() at key time (PR #4551), and a
-// backend that owns its drive and can key applies it there. So the text is not
-// a drop. The key-time half is asserted, not assumed: TUNE is keyed and the
-// backend is seen receiving the slider's value.
+// Tune power has no setter of its own: RadioModel hands tunePower() to
+// setTune() at key time (#4551), where a backend that owns its drive and can
+// key applies it. So the text is not a drop. The key-time half is asserted:
+// TUNE is keyed on the recording backend and the slider's value arrives.
 static void tunePowerDeliveredAtKeyTimeWithoutDropNotice()
 {
     Fixture f(hostModulatingTransmitter());
@@ -209,7 +206,26 @@ static void tunePowerDeliveredAtKeyTimeWithoutDropNotice()
     f.radio.transmitModel().stopTune();
 }
 
-// #6015 review: TransmitModel::setCwPitch emits `cw pitch N` on every call but
+// The value rides setTune() only at key-down. A change while TUNE is already
+// keyed is not re-applied to the carrier, so its text is a real drop.
+static void tunePowerChangedWhileKeyedKeepsDropNotice()
+{
+    Fixture f(hostModulatingTransmitter());
+    check(f.installTxSlice(), "premise: a TX slice is installed");
+    f.radio.transmitModel().setTunePower(10);
+    f.radio.transmitModel().startTune();
+    check(f.radio.transmitModel().isTuning(), "premise: TUNE is keyed");
+    const auto tunesAtKeyDown = f.backend->tunes;
+    f.dropped.clear();
+    f.radio.transmitModel().setTunePower(30);
+    check(f.backend->tunes == tunesAtKeyDown,
+          "premise: a mid-carrier tune power change reaches no seam setter");
+    check(f.droppedStartingWith(QStringLiteral("transmit set tunepower=")),
+          "tunepower changed while TUNE is keyed: the drop notice stands");
+    f.radio.transmitModel().stopTune();
+}
+
+// TransmitModel::setCwPitch emits `cw pitch N` on every call but
 // cwPitchChanged only on a change, and the host-modulating seam connection is
 // the change-gated one. A set that repeats the model's value therefore hands
 // the backend nothing. Withholding the notice is right only if THIS backend
@@ -242,6 +258,22 @@ static void cwPitchHandedToPreviousBackendKeepsDropNotice()
           "premise: the repeat reaches no setter on the new backend");
     check(f.droppedStartingWith(QStringLiteral("cw pitch ")),
           "pitch handed only to the previous backend: the drop notice stands");
+}
+
+// The value must match, not merely exist: a backend that holds 700 and is
+// handed nothing when the model moves to 800 (its capabilities stopped routing
+// the pitch) has not received 800.
+static void cwPitchDifferentFromHandedValueKeepsDropNotice()
+{
+    Fixture f(hostModulatingTransmitter());
+    f.radio.transmitModel().setCwPitch(700);
+    f.backend->caps.hostModulates = false;
+    f.dropped.clear();
+    f.radio.transmitModel().setCwPitch(800);
+    check(f.backend->cwPitches == QList<int>{700},
+          "premise: 800 reaches no setter once the pitch is not routed");
+    check(f.droppedStartingWith(QStringLiteral("cw pitch 800")),
+          "pitch other than the one this backend holds: the drop notice stands");
 }
 
 // The control for the two above: a repeat of a value this backend WAS handed
@@ -321,8 +353,10 @@ int main(int argc, char** argv)
     txFilterReachesSeamWithoutDropNotice();
     cwPitchReachesSeamWithoutDropNotice();
     tunePowerDeliveredAtKeyTimeWithoutDropNotice();
+    tunePowerChangedWhileKeyedKeepsDropNotice();
     cwPitchNeverHandedToBackendKeepsDropNotice();
     cwPitchHandedToPreviousBackendKeepsDropNotice();
+    cwPitchDifferentFromHandedValueKeepsDropNotice();
     cwPitchRepeatOfHandedValueStaysQuiet();
     unroutedVerbStillRaisesDropNotice();
     undeclaredCapabilityKeepsDropNotice();

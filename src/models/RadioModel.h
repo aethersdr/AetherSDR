@@ -1553,10 +1553,8 @@ private:
     QString m_offlineHealthFamily;
     QVector<TxPowerBand> m_txPowerBands;
     // The CW pitch last handed to THIS m_backend through setCwPitch(), -1 when
-    // none has been. teardownBackend() resets it. Read by the commandReady
-    // forward to decide whether `cw pitch N` on a backend with no command plane
-    // is a real drop or a duplicate of a value the backend already holds
-    // (#5637, #6015 review).
+    // none has been; teardownBackend() resets it. The commandReady forward uses
+    // it to tell a dropped `cw pitch N` from one the backend already holds.
     int m_cwPitchHandedToBackend{-1};
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;

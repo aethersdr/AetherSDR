@@ -159,11 +159,9 @@ private slots:
         QCOMPARE(dropped.count(), 0);
     }
 
-    // The state the review found (#6015): an HL2 backend built but not yet
-    // connected, so refreshTxPowerLimit() has never run and maxPowerLevel() is
-    // still TransmitModel's compiled-in 100. That is not the radio's rating,
-    // and "100 W" described as "the radio's rated output" is wrong for a 5 W
-    // radio.
+    // An HL2 backend built but not yet connected: refreshTxPowerLimit() has
+    // never run, so maxPowerLevel() is still TransmitModel's compiled-in 100,
+    // which is not the radio's rating.
     void hl2UnreportedRatingShowsNoPhantomWatts()
     {
         RadioModel model;

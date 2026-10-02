@@ -2689,19 +2689,11 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* mpLbl = new QLabel("Max Power:");
         applyLabelStyle(mpLbl);
         grid->addWidget(mpLbl, 0, 0);
-        // #5637. On a backend that declares txPowerBands, maxPowerLevel() is
-        // set by RadioModel::refreshTxPowerLimit() from the band's rated WATTS
-        // (the Hermes-Lite 2's 5 W power class, which the forward-power gauges
-        // already read as watts), so it is shown as W. Until that rating has
-        // been reported (haveMaxPowerLevel()), the model holds a compiled-in
-        // default, not a rating, and neither a number nor a unit is shown.
-        //
-        // The field is editable only where a command plane can carry the
-        // write. Without one, the old handler's text was dropped and the next
-        // open read the rating back: the reported "reverts to 5". Where there
-        // is a command plane, the field is exactly what it has always been —
-        // the same label, editor, clamp and write. This change makes no claim
-        // about the unit of the value on that path.
+        // A backend declaring txPowerBands reports maxPowerLevel() as the
+        // band's rated watts, shown only once haveMaxPowerLevel() says it was
+        // reported (#5637). Without a command plane the field is read-only,
+        // since its write would be dropped. With one, it is the original Flex
+        // field: same unit, editor, clamp and write.
         const bool maxPowerIsRatedWatts =
             !m_model->backendCapabilities().txPowerBands.isEmpty();
         const bool ratedWattsReported = maxPowerIsRatedWatts
@@ -2735,9 +2727,8 @@ QWidget* RadioSetupDialog::buildTxTab()
                     QString("transmit set max_power_level=%1").arg(val));
             });
         } else {
-            // Read-only rather than disabled: the value stays readable and
-            // focusable. The reason rides on accessibleDescription because a
-            // tooltip never reaches a screen reader (docs/a11y.md, #4896).
+            // Read-only, not disabled, so it stays focusable; the reason goes
+            // on accessibleDescription too (docs/a11y.md).
             const QString why = ratedWattsReported
                 ? tr("The radio's rated output. This radio does not accept a "
                      "maximum power setting from here.")

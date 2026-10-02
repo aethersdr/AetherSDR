@@ -1881,55 +1881,25 @@ void RadioModel::evaluateTxFilterAudioLoss(float scFilt1, float scFilt2)
 }
 
 namespace {
-// Whether TransmitModel's Flex text `command` duplicates a typed intent that
-// the constructor's seam connections below hand to a backend declaring `caps`
-// — i.e. whether, on a backend with no command plane, dropping the text loses
-// nothing (#5637). TransmitModel emits the text and the typed intent from the
-// same setter, synchronously, so "handed" includes the intent that follows the
-// text in that one call (rfpower's comes after it).
-//
-// Each verb names the sibling connection that carries it, and is honoured only
-// under the capability that says the backend's setter does something. The
-// connection alone is not enough: IRadioBackend's setters default to no-ops,
-// and the ANAN declares drive ownership while implementing no setTxPower(), so
-// its RF-power text must keep reporting a drop.
-//
-//   transmit set rfpower=       rfPowerCommandIssued  -> setTxPower()
-//                               canTransmit + transmitDriveControl declared
-//   transmit set miclevel=      micLevelCommandIssued -> setMicGain()
-//                               canTransmit
-//   transmit set filter_low= filter_high=
-//                               txFilterCommandIssued -> setTxFilter()
-//                               hasTxFilterControls
-//   transmit set tunepower=     no setter of its own: the value is handed as
-//                               setTune()'s tunePowerPercent at key time
-//                               (dispatchTuneIntent passes tunePower()), and
-//                               a backend that owns its drive applies it there
-//                               (HL2 applyDrive, Icom setTxPower; PR #4551).
-//                               canTransmit + transmitDriveControl declared:
-//                               without canTransmit TUNE never keys, and
-//                               without drive ownership there is nothing to
-//                               apply a tune power with.
-//   cw pitch N                  cwPitchChanged / cwPitchCommandIssued -> setCwPitch()
-//                               N == cwPitchHandedToBackend: the value THIS
-//                               backend was last handed. Not a capability,
-//                               because the host-modulating connection is
-//                               change-gated: a set that repeats the model's
-//                               value hands nothing (#6015 review). Quiet when
-//                               the backend already holds N; loud when it was
-//                               never handed it (before any push, or after a
-//                               backend swap).
-//
-// NOT listed, deliberately: vox_*, mon/mon_gain_sb, speech_processor_*,
-// `cw wpm`, `cw break_in`. They have seam connections too, but the Hermes-Lite
-// 2 implements none of those setters, so on it the drop notice is the truth.
-// Adding one here needs the capability that proves the setter is real.
-//
-// A `transmit set` line qualifies only if EVERY key in it is routed, so text
-// that also carries an unrouted key still reaches the loud drop.
+// Whether TransmitModel's Flex text duplicates a typed intent that a backend
+// with no command plane really applied, so dropping it loses nothing (#5637).
+// Every key must be routed, and each only under the capability that says its
+// setter is real (setters default to no-ops):
+//   rfpower, tunepower    canTransmit + transmitDriveControl (setTxPower;
+//                         tunepower rides setTune()'s tunePowerPercent, so
+//                         only while TUNE is not keyed: the next key-down
+//                         carries it, and nothing re-applies it mid-carrier)
+//   miclevel              canTransmit (setMicGain)
+//   filter_low/_high      hasTxFilterControls (setTxFilter)
+//   cw pitch N            N is the pitch last handed to THIS backend, because
+//                         the host-modulating connection is change-gated
+// vox, mon, speech_processor, cw wpm and cw break_in are not routed: no
+// capability proves their setters real, so they keep the notice even where one
+// is (an Icom implements setVox, setSpeechProcessor, setCwSpeed, setCwBreakIn).
 bool transmitCommandDeliveredThroughSeam(const QString& command,
                                          const RadioCapabilities& caps,
-                                         int cwPitchHandedToBackend)
+                                         int cwPitchHandedToBackend,
+                                         bool tuneKeyed)
 {
     static const QString kCwPitch = QStringLiteral("cw pitch ");
     if (command.startsWith(kCwPitch)) {
@@ -1950,8 +1920,11 @@ bool transmitCommandDeliveredThroughSeam(const QString& command,
     for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
         const QString& key = it.key();
         bool routed = false;
-        if (key == QLatin1String("rfpower") || key == QLatin1String("tunepower")) {
+        if (key == QLatin1String("rfpower")) {
             routed = caps.canTransmit && caps.transmitDriveControl.has_value();
+        } else if (key == QLatin1String("tunepower")) {
+            routed = caps.canTransmit && caps.transmitDriveControl.has_value()
+                && !tuneKeyed;
         } else if (key == QLatin1String("miclevel")) {
             routed = caps.canTransmit;
         } else if (key == QLatin1String("filter_low")
@@ -2367,16 +2340,12 @@ RadioModel::RadioModel(QObject* parent)
             }
         }
 
-        // The Flex text for a verb this backend already received as a typed
-        // intent is NOT a dropped command (#5637): the value was applied, and
-        // reporting it as dropped both misdirected a bug report and spent the
-        // once-per-session "nothing was sent to the radio" notice on a control
-        // that works. Only that case is withheld; every other verb still falls
-        // through to sendCmd()'s loud drop, which is how the controls that
-        // really do nothing on this radio are found (#5263).
+        // A verb the backend already applied as a typed intent is not a drop
+        // (#5637); every other verb still reaches sendCmd()'s notice (#5263).
         if (!hasCommandPlane() && m_backend
             && transmitCommandDeliveredThroughSeam(trimmed, m_backend->capabilities(),
-                                                   m_cwPitchHandedToBackend)) {
+                                                   m_cwPitchHandedToBackend,
+                                                   m_transmitModel.isTuning())) {
             qCDebug(lcProtocol).noquote()
                 << "RadioModel: no command plane; value already delivered through the seam:"
                 << cmd;
