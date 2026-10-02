@@ -238,10 +238,9 @@ void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 void SetRXAFMDeviation(int channel, double deviationHz);
 void SetTXAMode(int channel, int mode);
 void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
-// TXA's AM and FM modulator stages (ammod.c, fmmod.c). create_txa() builds
-// ammod with a 0.5 carrier and fmmod with a 5000 Hz deviation and -- the one
-// that matters -- ctcss_run = 1 at 100 Hz, level 0.10: a TXA channel put in FM
-// transmits a CTCSS tone nobody asked for unless SetTXACTCSSRun turns it off.
+// TXA's AM and FM modulator stages (ammod.c, fmmod.c). create_txa() defaults:
+// carrier 0.5, deviation 5000 Hz, and ctcss_run = 1 (100 Hz, level 0.10), so
+// FM carries a CTCSS tone unless SetTXACTCSSRun turns it off.
 // WdspChannel::open() pushes all three on every transmit open.
 void SetTXAAMCarrierLevel(int channel, double carrierLevel);
 void SetTXAFMDeviation(int channel, double deviationHz);
@@ -397,6 +396,12 @@ int GetWDSPVersion(void);
 
 uint64_t wdspPortAllocationSequence(void);
 uint64_t wdspPortOutstandingAllocations(void);
+
+// TEST ONLY (AetherSDR patch 13). Makes the DSP worker sleep for this long
+// immediately after dexchange() has released the host's blocked fexchange*,
+// which is the window in which #5734's input overwrite happened. 0 (the
+// default) is a single relaxed load and no sleep. Process-global.
+void wdspPortSetHandoffPauseForTest(unsigned microseconds);
 
 #ifdef __cplusplus
 }

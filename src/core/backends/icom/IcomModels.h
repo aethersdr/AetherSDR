@@ -7,22 +7,13 @@
 
 #include "core/backends/icom/IcomMeters.h"
 
-// Phase 5 — model identity and per-model capability.
-//
-// CI-V command 19 00 returns a model ID independently of the configurable bus
-// address in the reply envelope. The table's civAddress is the factory default
-// (numerically equal to the model ID), never the current command destination.
-// Network Radio Name is arbitrary display text and cannot select a profile.
-//
-// Qt-free; icom_models_test drives it.
-//
-// PROVENANCE. Everything here is a HARDWARE FACT — a CI-V address, a spectrum
-// point count, a receiver count — not anyone's creative work. The IC-705's
-// numbers are tier 1, confirmed against Icom's own CI-V Reference Guide (475
-// points, 0..160 range, one receiver, one scope). The other models are
-// cross-referenced but NOT verified against their own guides, and every one of
-// them says so in `verified`. A backend must treat an unverified model as a
-// reason to be careful, not as licence to stream.
+// Model identity and per-model capability. CI-V 19 00 returns a model ID
+// independent of the configurable bus address; the table's civAddress is the
+// factory default (equal to the model ID), never the current destination.
+// Network Radio Name is display text and cannot select a profile.
+// Everything here is a hardware fact. Rows not checked against their own CI-V
+// guide say so in `verified`; treat that as a reason for caution, not licence to
+// stream. Qt-free; icom_models_test drives it.
 
 namespace AetherSDR::icom {
 
@@ -62,26 +53,12 @@ struct IcomModel {
     // should decline to advertise capabilities it cannot stand behind.
     bool verified = false;
 
-    // Amateur bands this radio covers, as canonical BandDefs names, comma
-    // separated -- the same "bands=" vocabulary a gateway declares, validated
-    // model-side by parseDeclaredBands() before anything renders it.
-    //
-    // What it buys is the band BUTTONS. With no declaration the band menu falls
-    // back to its built-in HF grid plus FlexLib's ModelCapabilities has4Meters/
-    // has2Meters flags -- and an IC-705 matches nothing in that Flex model
-    // table, so a radio that reaches 2 m and 70 cm natively had no button for
-    // either, and 70 cm has no entry in that grid at any radio (#5041).
-    //
-    // EMPTY MEANS "the built-in HF grid is already right", not "unknown". Every
-    // HF-only row below is served correctly by that grid, and tuningMaxHz
-    // already disables whatever it cannot reach. So declare only where the grid
-    // cannot express the radio -- i.e. it covers VHF/UHF -- and only within the
-    // coverage the row itself already claims in tuningMinHz/tuningMaxHz, which
-    // keeps this from becoming a second, drifting statement about the same
-    // hardware. icom_family_test pins that containment.
-    //
-    // A name outside BandDefs is dropped at the boundary (Principle VII), so a
-    // typo here costs a missing button, never a bogus one.
+    // Amateur bands as comma-separated BandDefs names (the gateway "bands="
+    // vocabulary, validated by parseDeclaredBands()); drives the band BUTTONS (#5041).
+    // EMPTY means the built-in HF grid is already right, not "unknown". Declare only
+    // where the grid can't express the radio (VHF/UHF), and only within
+    // tuningMinHz/tuningMaxHz — icom_family_test pins that containment. Unknown names
+    // are dropped at the boundary, so a typo costs a button, never a bogus one.
     std::string_view bands;
 
     [[nodiscard]] bool isKnown() const noexcept { return civAddress != 0; }
@@ -151,29 +128,13 @@ struct FmRepeaterProfile {
 [[nodiscard]] std::optional<ModulationProfile>
 modulationProfileFor(const IcomModel& model);
 
-// THE SSB TRANSMIT PASSBAND, and why it cannot be two sliders.
-//
-// AetherSDR's seam carries setTxFilter(lowHz, highHz) — two continuous
-// numbers, because that is what a Flex takes. An Icom does not have that
-// control at all. It has:
-//
-//   * a SHORT LIST of low edges and a SHORT LIST of high edges, and nothing in
-//     between is reachable;
-//   * FOUR STORED SLOTS holding one (low, high) pair each — WIDE, MID, NAR for
-//     voice SSB and one more for SSB-DATA;
-//   * 16 58, which picks WHICH voice slot is live — and the radio also swaps
-//     slots on its own depending on whether the speech compressor is on.
-//
-// So a request lands by SNAPPING both edges to the nearest the model has and
-// writing them into the slot currently in circuit. What the operator then sees
-// must be the snapped pair read back from the radio, never the pair they asked
-// for: an IC-705 asked for 150 Hz gives 100 or 200, and a Phone applet that
-// kept showing 150 would be reporting a passband that does not exist.
-//
-// THE MODELS GENUINELY DIFFER, which is the reason this is per-model metadata
-// and not a shared constant. The IC-7300MK2 added two low edges the IC-705 does
-// not have (120 and 150 Hz), and the two radios keep the four slots at
-// completely different SET-menu item numbers.
+// SSB TX passband. The seam's setTxFilter(lowHz, highHz) is continuous; an Icom
+// has a short list of low edges and of high edges, four stored (low, high) slots
+// (WIDE, MID, NAR for voice SSB, one for SSB-DATA), and 16 58 to pick the live
+// voice slot (the radio also swaps slots with the speech compressor). Requests
+// SNAP both edges and write the slot in circuit; the UI must show the snapped
+// pair read back. Per-model: the IC-7300MK2 adds 120/150 Hz low edges and stores
+// the slots at different SET-menu items than the IC-705.
 struct TxBandwidthProfile {
     // Ascending. Snapping assumes it.
     std::span<const int> lowEdgesHz;
@@ -231,18 +192,11 @@ struct IcomBand {
     double maxWatts = 0.0;
 };
 
-// This model's discontinuous band table, or an EMPTY span when its tuning
-// range is the one continuous tuningMinHz..tuningMaxHz interval.
-//
-// THE SINGLE SOURCE OF TRUTH for both halves of a banded model: the tune
+// This model's discontinuous band table, or an EMPTY span when tuning is the
+// single tuningMinHz..tuningMaxHz interval. Single source of truth for the tune
 // guard (supportsFrequency/nearestSupportedFrequency) and the capability
-// ceilings (IcomCivBackend::capabilities) both read this one table, so a
-// corrected edge or PA rating lands in every consumer at once. Two hand-kept
-// copies would have let the guard and the power scale disagree silently —
-// exactly the shape of drift that only shows up on the air.
-//
-// Emptiness is also the predicate the tune path keys on: no table means no
-// holes to refuse, so continuous models keep their untouched command path.
+// ceilings (IcomCivBackend::capabilities). Empty also tells the tune path there
+// are no holes to refuse.
 [[nodiscard]] std::span<const IcomBand> bandsFor(const IcomModel& model) noexcept;
 
 // Rated PA ceiling for the RF deck containing hz. Empty when the model has no
@@ -278,32 +232,16 @@ struct IcomBand {
 [[nodiscard]] std::span<const CurvePoint> powerCurveFor(const IcomModel& model);
 
 // The front-end stages this model offers, in register order (index 0 is OFF).
-//
-// EMPTY means we have no verified ladder for this model, and the caller must
-// publish NOTHING rather than fall back to another radio's — the same rule
-// powerCurveFor states above, for the same reason. The stages are genuinely
-// per-model: an IC-7610's attenuator has several steps where the IC-705 has
-// one, and the IC-9700's preamp ladder is not the HF ladder. A button labelled
-// "20 dB" on a radio whose register means something else is exactly the
-// misdescription the control registry exists to make visible.
-//
-// A control that does not appear is a better answer than one that appears and
-// lies, so an empty span means the operator simply does not get the button.
+// EMPTY means no verified ladder: publish NOTHING rather than borrow another
+// radio's (stages are genuinely per-model), so the operator gets no button
+// instead of a mislabelled one.
 [[nodiscard]] std::span<const std::string_view> preampLabelsFor(const IcomModel& model);
 
-// The demodulator modes this model offers, in AetherSDR's NEUTRAL vocabulary —
-// the same strings SliceModel carries and the mode combo displays.
-//
-// EMPTY means we have no verified mode table for this model, and the caller must
-// publish NOTHING rather than borrow another radio's — the rule powerCurveFor
-// and preampLabelsFor already state, for the same reason. An empty list leaves
-// the UI on its compiled-in FlexRadio default, which is today's behaviour.
-//
-// NEUTRAL, not wire values, and every entry must ROUND-TRIP through
-// modeFromNeutral/modeToNeutral. A name the radio can be put into but never
-// reports back (RTTY, which comes home as DIGL) would make the combo jump on the
-// confirmation read; a name modeFromNeutral refuses (SAM) would silently revert.
-// Both read as a broken control, which is what this list exists to stop.
+// The demodulator modes this model offers, in AetherSDR's NEUTRAL vocabulary
+// (SliceModel / mode combo strings). EMPTY means no verified table: publish
+// NOTHING, leaving the UI on its FlexRadio default. Every entry must ROUND-TRIP
+// through modeFromNeutral/modeToNeutral, or the combo jumps on the confirmation
+// read (RTTY comes back as DIGL) or silently reverts (SAM is refused).
 [[nodiscard]] std::span<const std::string_view> modeListFor(const IcomModel& model);
 
 // True when this model's `mode` is RECEIVE-ONLY — the radio will not transmit in

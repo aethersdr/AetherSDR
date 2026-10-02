@@ -34,12 +34,18 @@ public:
     int keys{0};
     int lastSlice{-1};
     double lastHz{0};
+    SliceTuneRequest::PanIntent lastPanIntent{SliceTuneRequest::PanIntent::AllowRecenter};
     mutable int capabilityReads{0};
     RadioCapabilities capabilities() const override { ++capabilityReads; return caps; }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override { connected = true; }
     void disconnectRadio() override { connected = false; }
     void setSliceFrequency(int id, double hz) override { ++tunes; lastSlice = id; lastHz = hz; }
+    void requestSliceTune(int id, const SliceTuneRequest& request) override
+    {
+        lastPanIntent = request.panIntent;
+        IRadioBackend::requestSliceTune(id, request);
+    }
     void setSliceMode(int, const QString&) override {}
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
@@ -191,8 +197,9 @@ void authoritativeObservations()
     (void) f.controller.takePendingFrames();
     check(f.tune(request).value("result").toObject().value("accepted").toBool()
               && f.backend->tunes == 1 && f.backend->lastSlice == 0
-              && f.backend->lastHz == 14'230'000,
-          "production target dispatches exactly one typed Hz intent");
+              && f.backend->lastHz == 14'230'000
+              && f.backend->lastPanIntent == SliceTuneRequest::PanIntent::PreservePan,
+          "production target dispatches exactly one typed Hz intent preserving the pan");
     check(f.store.get(f.address)->value.value("frequencyObservation").toObject()
                   .value("authority").toString() == "radio",
           "published observation authority reflects the bound backend");

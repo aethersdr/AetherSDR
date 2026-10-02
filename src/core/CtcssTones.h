@@ -1,20 +1,11 @@
 #pragma once
 
-// The CTCSS tone set, in one place.
-//
-// The operator's dropdown (RxApplet) and the automation bridge's `slice tone`
-// verb must agree about what a legal tone is: a bridge that accepts 123.4 Hz
-// can ask the radio for a tone no operator could ever dial in, and nothing
-// downstream says no.
-//
-// The set is the one #5140 landed on main for the Icom backend: the Motorola
-// PL tones plus the EIA interstitials. CISA AUXFOG Appendix G independently
-// confirms the Motorola WZ designation for 69.3 Hz. Entries outside the
-// original numbered sequence retain code 0; designation is independent, and
-// callers render a bare frequency only when that designation is empty.
-// Hoisting the table here rather than keeping a per-widget copy is the
-// point of this file: main now offers 50 tones in two dropdowns, and the
-// bridge has to accept exactly those.
+// The CTCSS tone set, shared by the RxApplet dropdown and the bridge's
+// `slice tone` verb so the bridge accepts exactly the tones an operator can
+// dial (50 tones). Motorola PL tones plus EIA interstitials (as in the Icom
+// backend, #5140); CISA AUXFOG Appendix G confirms the WZ designation for 69.3
+// Hz. Entries outside the numbered sequence have code 0; callers show a bare
+// frequency only when the designation is empty.
 
 #include <cmath>
 #include <cstddef>

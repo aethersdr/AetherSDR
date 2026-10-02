@@ -6,12 +6,6 @@
 // the mode is RTTY. The operator sees a mode they chose and hears a mode they
 // did not, and nothing in the path disagrees with them.
 //
-// WHY THIS TARGET IS SEPARATE. The natural home for a seam assertion is the
-// fake-radio fixture in hl2_backend_test.cpp — which is RETIRED inside a
-// commented block in tests/tests.cmake, so an assertion written there would be
-// compiled by nothing and green forever. tests.cmake already states the rule
-// beside hl2_pan_limits_declaration_test: "a declaration must not be pinned
-// only inside something that does not build." Same reasoning, same shape.
 //
 // WHAT IS AND IS NOT PINNED HERE. The lists and the relations between them are,
 // against the SAME accessors production reads rather than a retyped copy — a
@@ -154,13 +148,16 @@ int main(int argc, char** argv)
     // review raised, answered against the declaration rather than by assertion.
     hl2::Hl2Backend backend;
     const RadioCapabilities caps = backend.capabilities();
-    // AM, DSB and FM joined when the WDSP TXA chain was configured for them;
-    // SAM stays receive-only (see Hl2Backend::capabilities()).
-    static const QStringList kTransmittable = {
+    // AM, DSB and FM are transmittable in the TXA build only; SAM stays
+    // receive-only (see Hl2Backend::capabilities()).
+    QStringList kTransmittable = {
         QStringLiteral("LSB"), QStringLiteral("USB"), QStringLiteral("CW"),
         QStringLiteral("CWL"), QStringLiteral("DIGU"), QStringLiteral("DIGL"),
-        QStringLiteral("AM"),  QStringLiteral("DSB"), QStringLiteral("FM"),
     };
+    if (AETHER_HL2_TX_TXA) {
+        kTransmittable << QStringLiteral("AM") << QStringLiteral("DSB")
+                       << QStringLiteral("FM");
+    }
     for (const QString& m : std::as_const(published)) {
         check(kTransmittable.contains(m) || caps.receiveOnlyModes.contains(m),
               QStringLiteral("%1 is offered and is either transmittable or "

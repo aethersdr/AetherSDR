@@ -36,17 +36,11 @@ struct PskReporterMonitor {
     qint64 frequencyHz{0};
 };
 
-// Fetches reception reports for the selected map scope from pskreporter.info.
-//
-// Two transports:
-//   * HTTP polling of https://retrieve.pskreporter.info/query — XML
-//     receptionReport records. PSK Reporter policy: poll no more often
-//     than once every five minutes, so the interval is clamped to >= 5
-//     minutes and `lastseqno` is used so repeat polls are incremental.
-//     There is deliberately NO manual-refresh path.
-//   * Live MQTT (mqtt.pskreporter.info, TLS) — the officially sanctioned
-//     real-time callsign feed; used when intervalMs == kLiveMqtt. The map's
-//     separate global client owns the reusable all-stations snapshot.
+// Fetches reception reports from pskreporter.info, either by HTTP polling
+// (retrieve.pskreporter.info/query; policy caps polling at once per 5 min, so
+// the interval is clamped and `lastseqno` makes polls incremental; no manual
+// refresh) or live MQTT (mqtt.pskreporter.info, TLS) when intervalMs == kLiveMqtt.
+// The map's separate global client owns the all-stations snapshot.
 class PskReporterClient : public QObject {
     Q_OBJECT
 

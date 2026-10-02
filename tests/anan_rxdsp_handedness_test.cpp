@@ -130,11 +130,12 @@ std::vector<float> firstFrame(AnanRxDsp& dsp, const std::vector<std::complex<flo
 // The analyzer's own output for `iq`, with no AnanRxDsp involved -- the
 // independent reference the droop groups compare against. Slot 60: channels
 // only ever take slots 0..31, so this never collides with one.
-std::vector<float> rawAnalyzerFrame(const std::vector<std::complex<float>>& iq, int rateHz)
+std::vector<float> rawAnalyzerFrame(const std::vector<std::complex<float>>& iq, int rateHz,
+                                    int points = kPoints)
 {
     AnanPanAnalyzer::Settings s;
     s.sampleRateHz = rateHz;
-    s.numPoints = kPoints;
+    s.numPoints = points;
     s.framesPerSecond = 25;
     std::string err;
     auto a = AnanPanAnalyzer::create(60, s, &err);
@@ -510,6 +511,66 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- Group 1d: the point count follows the panel width ----
+    // A 1917-pixel panel with the 4% edge crop asks for 2083 points
+    // (panPointsForPixelWidth()). The tone must still land at its frequency
+    // on the wider grid -- point i sits at fraction i / (N - 1) of the span --
+    // both when the count is built in and when it changes mid-stream, and a
+    // mid-stream change must re-seed rather than blend two point grids.
+    {
+        constexpr int kWide = 2083;
+        const auto expectedAt = [](int points, double offsetHz) {
+            return static_cast<int>(std::lround((points - 1) * (0.5 + offsetHz / 48000.0)));
+        };
+
+        AnanRxDsp built;
+        std::string err;
+        AnanRxDsp::Config wideCfg = spectrumConfig(48000);
+        wideCfg.panPoints = kWide;
+        check(built.configure(wideCfg, &err),
+              err.empty() ? "width: configure() at 2083 points succeeds" : err.c_str());
+        const std::vector<float> w1 = firstFrame(built, wireTone(kOneFft, 6000.0, 48000, 0.25f));
+        check(w1.size() == static_cast<std::size_t>(kWide), "width: a 2083-point frame");
+        std::fprintf(stderr, "width: built at %d points, peak %d, expected %d\n",
+                     kWide, peakBin(w1), expectedAt(kWide, 6000.0));
+        check(std::abs(peakBin(w1) - expectedAt(kWide, 6000.0)) <= 2,
+              "at 2083 points a wire tone lands at its frequency");
+
+        // Mid-stream, averaging on: 1024 points, then the panel reports its
+        // width. The next frame is the new count, at the tone's frequency and
+        // level -- seeded, not ramping up from WDSP's -160 dB.
+        AnanRxDsp live;
+        AnanRxDsp::Config liveCfg = spectrumConfig(48000);
+        liveCfg.spectrumAverageMs = 250;
+        check(live.configure(liveCfg, &err),
+              err.empty() ? "width: live configure() succeeds" : err.c_str());
+        const auto tone = wireTone(2 * kOneFft, 6000.0, 48000, 0.25f);
+        const std::vector<std::complex<float>> firstHalf(tone.begin(), tone.begin() + kOneFft);
+        const std::vector<std::complex<float>> secondHalf(tone.begin() + kOneFft, tone.end());
+        const std::vector<float> before = firstFrame(live, firstHalf);
+        live.setPanPoints(kWide);
+        const std::vector<float> after = firstFrame(live, secondHalf);
+        check(before.size() == static_cast<std::size_t>(kPoints)
+                  && after.size() == static_cast<std::size_t>(kWide),
+              "width: setPanPoints() changes the next frame's point count");
+        if (!before.empty() && after.size() == static_cast<std::size_t>(kWide)) {
+            const int pk = peakBin(after);
+            std::fprintf(stderr, "width: mid-stream 1024 -> %d, peak %d (%.2f dB), expected %d; "
+                         "1024-point peak %.2f dB\n", kWide, pk,
+                         after[static_cast<std::size_t>(pk)], expectedAt(kWide, 6000.0),
+                         before[static_cast<std::size_t>(peakBin(before))]);
+            check(std::abs(pk - expectedAt(kWide, 6000.0)) <= 2,
+                  "after a mid-stream width change the tone still lands at its frequency");
+            check(after[static_cast<std::size_t>(pk)] > -40.0f,
+                  "a mid-stream width change re-seeds the average -- no fade-in from -160 dB");
+        }
+        live.setPanPoints(1);
+        const auto more = wireTone(kOneFft, 6000.0, 48000, 0.25f, 2 * kOneFft);
+        check(firstFrame(live, more).size() == static_cast<std::size_t>(kWide),
+              "a point count below 2 is ignored");
+
+    }
+
     // ---- Group 2: bench-confirmed handedness pin (see file header) ----
     {
         AnanRxDsp dsp;
@@ -861,6 +922,50 @@ int main(int argc, char** argv)
         check(tailMatched,
               "the tail points match applyEdgeFade() run on raw+table -- the cosmetic "
               "fade is the second step, not a replacement for the real correction");
+    }
+
+    // ---- Group 5b: the droop correction still lands at a panel-width count ----
+    // The tables stay at 1024 points. At any other count an exact-size apply
+    // would skip the correction without a word and bring the roll-off back,
+    // so the emitted frame must equal the analyzer's raw frame at that count
+    // plus the table read onto it (applyDroopCorrectionDbResampled()).
+    {
+        constexpr int kWide = 2083;
+        AnanRxDsp dsp;
+        std::string err;
+        AnanRxDsp::Config cfg = spectrumConfig(48000);
+        cfg.panPoints = kWide;
+        check(dsp.configure(cfg, &err),
+              err.empty() ? "droop at width: configure() succeeds" : err.c_str());
+        DroopCorrectionTable table{};
+        for (std::size_t k = 0; k < table.size(); ++k)
+            table[k] = 3.25f + 0.01f * static_cast<float>(k % 50);
+        dsp.setDroopCorrectionTable(48, std::vector<float>(table.begin(), table.end()));
+
+        const auto iq = wireTone(kOneFft, 1300.0, 48000, 0.25f);
+        const std::vector<float> emitted = firstFrame(dsp, iq);
+        const std::vector<float> raw = rawAnalyzerFrame(iq, 48000, kWide);
+        check(emitted.size() == static_cast<std::size_t>(kWide) && raw.size() == emitted.size(),
+              "droop at width: emitted and reference frames are both 2083 points");
+
+        std::vector<float> expected = raw;
+        applyDroopCorrectionDbResampled(expected, table);
+        applyEdgeFade(expected);
+        bool matched = expected.size() == emitted.size() && !emitted.empty();
+        for (std::size_t k = 0; matched && k < emitted.size(); ++k) {
+            if (std::fabs(emitted[k] - expected[k]) > 1.0e-3f) {
+                matched = false;
+                std::fprintf(stderr, "  point %zu: emitted=%.6f expected=%.6f\n",
+                             k, emitted[k], expected[k]);
+            }
+        }
+        check(matched,
+              "at 2083 points the emitted frame is the raw frame plus the resampled table, "
+              "then the edge fade -- the correction is not skipped");
+        // Non-vacuous: the resampled table is not zero, so a skipped
+        // correction could not match.
+        check(!raw.empty() && std::fabs(emitted[kWide / 2] - raw[kWide / 2]) > 3.0f,
+              "droop at width: the correction actually moved the centre point");
     }
 
     // ---- Group 6: rate change picks up the NEW rate's droop table ----

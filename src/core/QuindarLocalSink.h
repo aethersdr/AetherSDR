@@ -12,18 +12,11 @@ namespace AetherSDR {
 
 class ClientQuindarTone;
 
-// Dedicated local audio sink for Quindar tones (#2262).  Independent
-// of the CW sidetone path because Quindar and CW are mutually exclusive
-// modes — mixing them would conflate two unrelated systems.
-//
-// Lifecycle: started alongside the RX stream so the sink is always
-// primed when the operator hits MOX.  Pulls samples every 10 ms via a
-// push-mode QTimer (matches the CwSidetoneQAudioSink pattern that
-// keeps Pulse/PipeWire pull-mode happy with a moderate buffer).
-//
-// The hard rule: every sample the Quindar tone overlays into the TX
-// stream MUST also play through the local output.  Users must never
-// transmit a sound they aren't hearing themselves.
+// Dedicated local sink for Quindar tones (#2262), separate from the CW
+// sidetone path (the modes are mutually exclusive). Started with the RX stream
+// so it is primed at MOX; pushed every 10 ms by a QTimer like
+// CwSidetoneQAudioSink. Invariant: every Quindar sample overlaid on TX also
+// plays locally — the operator never transmits a sound they can't hear.
 class QuindarLocalSink : public QObject {
     Q_OBJECT
 

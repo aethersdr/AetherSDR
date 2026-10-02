@@ -12,16 +12,10 @@ class ClientCompKnob;
 class ClientGateCurveWidget;
 class ClientGateGrBar;
 
-// Docked tile for the client-side gate / expander.  View-only — shows
-// the static transfer curve with a live ball at the current input
-// level, plus a compact horizontal gain-reduction strip.  The
-// interactive editor lives in a separate floating window
-// (ClientGateEditor).
-//
-// Path is locked at construction; AppletPanel instantiates one Tx-
-// bound copy and one Rx-bound copy for the two PooDoo Audio sub-
-// containers.  All engine accesses route through the gate() / save()
-// helpers below so a single class serves both sides.
+// Docked, view-only tile for the client-side gate / expander: transfer curve
+// with a live input-level ball plus a gain-reduction strip. Editing lives in
+// ClientGateEditor. Path is fixed at construction (AppletPanel builds one Tx and
+// one Rx copy); all engine access goes through gate() / save().
 class ClientGateApplet : public QWidget {
     Q_OBJECT
 

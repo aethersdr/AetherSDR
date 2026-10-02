@@ -90,24 +90,25 @@ int main(int argc, char** argv)
 
     // ---- The modes the LIVE HL2 backend declares it will not transmit in ----
     //
-    // THIS ASSERTS THE DECLARATION; hl2_txdsp_test asserts the modulator. The
-    // list was eight strings while the transmit chain was a phasing SSB
-    // modulator that sent every non-SSB mode as USB. With the WDSP TXA chain
-    // configured for them (symmetric bp0, CTCSS forced off, explicit carrier
-    // and deviation), AM, DSB, FM and NFM came off it, and hl2_txdsp_test is
-    // where the emitted IQ is shown to be AM, DSB and FM.
-    //
-    // FOUR strings, THREE enumerators: modeFromString() maps WFM onto
-    // Mode::Wbfm, and refuseKeyInReceiveOnlyMode() compares the string the
-    // SLICE holds rather than the enumerator this backend would have mapped it
-    // to -- so dropping either spelling leaves that one keying while its twin
-    // is refused. FM and NFM are the same pair the other way round: both off.
+    // This asserts the DECLARATION; hl2_txdsp_test holds the modulator half
+    // (TXA build: AM, DSB and FM measured off a real channel; phasing build:
+    // every mode on the list is bit-identical to USB). The guard compares the
+    // string the slice holds, so each alias pair is on the list both ways or
+    // neither: dropping one spelling would leave it keying.
     {
         const RadioCapabilities caps = model.backendCapabilities();
-        const QStringList declared = {
+        // AM, DSB, FM and NFM transmit in the TXA build only.
+        const QStringList txaOnly = {
+            QStringLiteral("AM"),  QStringLiteral("DSB"),
+            QStringLiteral("FM"),  QStringLiteral("NFM"),
+        };
+        QStringList declared = {
             QStringLiteral("SAM"),  QStringLiteral("WBFM"),
             QStringLiteral("WFM"),  QStringLiteral("DRM"),
         };
+        if (!AETHER_HL2_TX_TXA) {
+            declared += txaOnly;
+        }
         for (const QString& m : declared) {
             check(modeIsReceiveOnly(caps, m),
                   qPrintable(QStringLiteral("HL2 declares %1 receive-only").arg(m)));
@@ -115,19 +116,23 @@ int main(int argc, char** argv)
         // Exactly these. An ADDITION is a mode in which the operator silently
         // loses MOX, CW keying and TUNE.
         check(caps.receiveOnlyModes.size() == declared.size(),
-              "HL2 declares exactly these modes receive-only");
-        // What transmits: the SSB family, CW through the gateware keyer, and
-        // -- since the TXA chain was configured for them -- AM, DSB, FM and
-        // its NFM alias. Both spellings of the FM pair, and case-insensitively,
-        // because the guard compares whatever string the slice holds.
+              "HL2 declares exactly these modes receive-only in this build");
+        // The deliberate exclusions: SSB modulates correctly, and CW keys the
+        // gateware NCO through MetisClient::setCwKeyDown without ever reaching
+        // Hl2TxDsp. If one of these ever appears on the list it takes an
+        // operator's transmit mode away.
         for (const QString& m : {QStringLiteral("USB"),  QStringLiteral("LSB"),
                                  QStringLiteral("DIGU"), QStringLiteral("DIGL"),
                                  QStringLiteral("CW"),   QStringLiteral("CWU"),
-                                 QStringLiteral("CWL"),  QStringLiteral("AM"),
-                                 QStringLiteral("DSB"),  QStringLiteral("FM"),
-                                 QStringLiteral("NFM"),  QStringLiteral("nfm")}) {
+                                 QStringLiteral("CWL")}) {
             check(!modeIsReceiveOnly(caps, m),
-                  qPrintable(QStringLiteral("HL2 transmits in %1").arg(m)));
+                  qPrintable(QStringLiteral("HL2 still transmits in %1").arg(m)));
+        }
+        // Case-insensitively too: the guard compares whatever the slice holds.
+        for (const QString& m : txaOnly + QStringList{QStringLiteral("nfm")}) {
+            check(modeIsReceiveOnly(caps, m) == !AETHER_HL2_TX_TXA,
+                  qPrintable(QStringLiteral("HL2 transmits in %1 exactly when "
+                                            "the TXA modulator is built").arg(m)));
         }
     }
 

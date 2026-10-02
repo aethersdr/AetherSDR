@@ -65,24 +65,13 @@ QHostAddress chooseLanBindAddress(RadioConnection* conn,
 
 } // namespace
 
-// ─── VITA-49 header layout (28 bytes, big-endian) ─────────────────────────────
-// Word 0 (bytes  0- 3): Packet header (type=3 ExtData, flags, count, size)
-// Word 1 (bytes  4- 7): Stream ID
-// Word 2 (bytes  8-11): Class ID OUI
-// Word 3 (bytes 12-15): Class ID — InformationClassCode[15:0] | PacketClassCode[15:0]
-// Word 4 (bytes 16-19): Integer timestamp
-// Word 5 (bytes 20-23): Fractional timestamp (upper)
-// Word 6 (bytes 24-27): Fractional timestamp (lower)
-// Byte 28+            : Payload
-//
-// All FLEX radio streams use ExtDataWithStream (type 3), including audio.
-// Audio is identified by PacketClassCode (lower 16 bits of word 3):
-//   0x03E3 — SL_VITA_IF_NARROW_CLASS        — float32 stereo, big-endian
-//   0x0123 — SL_VITA_IF_NARROW_REDUCED_BW   — int16 mono, big-endian
-//   0x8005 — SL_VITA_OPUS_CLASS             — Opus compressed (not yet handled)
-//
-// Panadapter FFT: PCC = 0x8003 (SL_VITA_FFT_CLASS)
-// Waterfall tile: PCC = 0x8004 (SL_VITA_WATERFALL_CLASS)
+// VITA-49 header (28 bytes, big-endian):
+//   word 0 packet header (type 3 ExtData, flags, count, size)   word 1 stream ID
+//   word 2 class ID OUI   word 3 InformationClassCode | PacketClassCode
+//   words 4-6 integer + fractional timestamps   byte 28+ payload
+// Every FLEX stream, audio included, is ExtDataWithStream (type 3). PCCs:
+//   0x03E3 IF_NARROW float32 stereo BE   0x0123 NARROW_REDUCED_BW int16 mono BE
+//   0x8005 Opus   0x8003 panadapter FFT   0x8004 waterfall tile   0x8002 meters
 
 PanadapterStream::PanadapterStream(QObject* parent)
     : QObject(parent)
@@ -168,17 +157,11 @@ void PanadapterStream::applyReceiveBufferSize()
 {
     if (!m_socket)
         return;
-    // The VITA-49 streams (panadapter FFT + waterfall tiles + audio + meters)
-    // burst well above the OS default receive buffer (~208 KB on Linux). A burst
-    // — or a brief worker-thread drain stall while the host is loaded — then
-    // overflows the kernel buffer, and the kernel silently drops the excess
-    // datagrams. Those drops surface as VITA-49 sequence gaps, which the network
-    // monitor reads as packet loss and the adaptive throttle reacts to by capping
-    // the radio's pan FPS — a visible "network stats dropped" event. Request a
-    // generous SO_RCVBUF so normal bursts are absorbed. The kernel caps the grant
-    // at net.core.rmem_max; we log the granted size so an undersized rmem_max is
-    // visible in the logs rather than silently limiting us. The requested size
-    // is operator-adjustable (Radio Setup → Advanced); default 4 MiB. (#3810)
+    // The VITA-49 streams burst above the OS default receive buffer (~208 KB on
+    // Linux); overflow drops datagrams, which show up as sequence gaps and make the
+    // adaptive throttle cap pan FPS. Request a larger SO_RCVBUF (operator-adjustable
+    // in Radio Setup → Advanced, default 4 MiB) and log the grant, which the kernel
+    // caps at net.core.rmem_max (#3810).
     const int requested = m_desiredRcvBufBytes;
     m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, requested);
     const int granted =
@@ -209,20 +192,9 @@ bool PanadapterStream::start(RadioConnection* conn)
     m_pcmProducer.start();
 
     if (conn && conn->isSyntheticDemo()) {
-        // Demo radio: nothing to bind and nothing to generate.
-        //
-        // SimBackend (RFC #4288 Route A) produces the demo's audio AND its
-        // panadapter FFT from its own NoiseMixer and delivers both over the
-        // IRadioBackend seam, so one noise scene drives both what the operator
-        // hears and what the display shows. This stream is deliberately idle:
-        // an earlier revision ran a 20 fps 1024-bin spectrum timer and a 10 ms
-        // audio timer here against a SECOND NoiseMixer, which had no consumers
-        // at all (pure CPU burn) and risked drifting out of step with the scene
-        // actually being heard.
-        //
-        // The stream object still exists and starts cleanly — RadioModel harvests
-        // it from SimBackend and the rest of AE treats it as a normal idle pan
-        // stream.
+        // Demo radio: nothing to bind or generate. SimBackend produces the demo's audio
+        // and FFT from one NoiseMixer over the IRadioBackend seam (RFC #4288 Route A),
+        // so this stream stays idle; RadioModel still harvests it as a normal pan stream.
         return true;
     }
 
@@ -1019,22 +991,13 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     emit spectrumReady(streamId, bins, emittedNs);
 }
 
-// ─── Waterfall tile decode ───────────────────────────────────────────────────
-//
-// Tile sub-header (36 bytes, big-endian, at byte 28):
-//   int64  FrameLowFreq      (Hz × 1e6 — i.e. VitaFrequency)
-//   int64  BinBandwidth      (Hz × 1e6)
-//   uint32 LineDurationMS
-//   uint16 Width             (bins per row)
-//   uint16 Height            (rows in this tile)
-//   uint32 Timecode          (frame index for reassembly)
-//   uint32 AutoBlackLevel
-//   uint16 TotalBinsInFrame  (total bins if fragmented across packets)
-//   uint16 FirstBinIndex
-//
-// Payload: Width × Height uint16 values (big-endian).
-// Conversion: treat as signed int16, divide by 128.  Typical noise floor
-// ~96-106, signal peaks ~110-115.  Colour-mapped in SpectrumWidget.
+// Waterfall tile sub-header (36 bytes, big-endian, at byte 28):
+//   int64 FrameLowFreq (Hz × 1e6)   int64 BinBandwidth (Hz × 1e6)
+//   uint32 LineDurationMS   uint16 Width (bins/row)   uint16 Height (rows)
+//   uint32 Timecode (frame index)   uint32 AutoBlackLevel
+//   uint16 TotalBinsInFrame   uint16 FirstBinIndex
+// Payload: Width × Height uint16 BE, read as int16 / 128 (noise ~96-106, peaks
+// ~110-115).
 
 void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId)
 {

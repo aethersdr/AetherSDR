@@ -3,6 +3,7 @@
 #include "core/DtcsCodes.h"
 #include "core/KiwiSdrProtocol.h"
 #include <QDebug>
+#include <QPointer>
 
 #include <cmath>
 
@@ -73,19 +74,12 @@ bool SliceModel::filterCarrierStraddlingFamily(const QString& mode)
 
 bool SliceModel::normalizeFilterPolarity()
 {
-    // Mirror across the carrier, preserving BOTH edges (asymmetric-safe):
-    // (lo,hi) → (-hi,-lo). For symmetric SSB this matches the historical
-    // flip (0,2700 → -2700,0); for asymmetric FDVL it keeps the low cut
-    // (95,2000 → -2000,-95) instead of collapsing it to (-2000,0), which is
-    // the discarded-edge regression #3092 worked around by excluding FDV.
-    // Sign-guarded and idempotent: values already in canonical form (and
-    // carrier-straddling passbands) are left untouched.
-    // Carrier-straddling modes: a passband inherited from a sideband mode sits
-    // entirely to one side of the carrier and must be mirrored out to span it.
-    // 150..3000 (a USB passband) becomes -3000..3000 — 6 kHz of AM, with the
-    // carrier back inside the filter. Sign-guarded and idempotent: a passband
-    // that already straddles zero is left exactly as the operator set it, so
-    // narrow AM and a deliberately asymmetric passband both survive.
+    // Carrier-straddling modes: a one-sided passband inherited from a sideband
+    // mode is widened to straddle the carrier (150..3000 -> -3000..3000).
+    // Sideband modes: a wrong-side passband is mirrored preserving both edges,
+    // (lo,hi) -> (-hi,-lo), so asymmetric FDVL keeps its low cut (#3092).
+    // Sign-guarded and idempotent: a passband already in canonical form (or one
+    // that already straddles zero) is left as the operator set it.
     if (filterCarrierStraddlingFamily(m_mode)) {
         const bool straddlesCarrier = m_filterLow < 0 && m_filterHigh > 0;
         if (straddlesCarrier)
@@ -118,12 +112,18 @@ void SliceModel::setFrequency(double mhz)
         return;
     }
     if (qFuzzyCompare(m_frequency, mhz)) return;
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_tuneIntentRevision;
     m_frequency = mhz;
-    // autopan=0 prevents the radio from recentering the pan (#292).
-    // SmartSDR pcap confirms: scroll-wheel uses "slice tune <id> <freq> autopan=0".
-    sendCommand(QString("slice tune %1 %2 autopan=0").arg(m_id).arg(mhz, 0, 'f', 6));
     emit frequencyChanged(mhz);
+    if (!alive || revision != m_tuneIntentRevision) {
+        return;
+    }
     emit frequencyCommandIssued(mhz);
+    if (!alive || revision != m_tuneIntentRevision) {
+        return;
+    }
+    emit receiveTuneRequested({mhz * 1.0e6, SliceTuneRequest::PanIntent::PreservePan});
 }
 
 void SliceModel::tuneAndRecenter(double mhz)
@@ -133,12 +133,18 @@ void SliceModel::tuneAndRecenter(double mhz)
         return;
     }
     if (qFuzzyCompare(m_frequency, mhz)) return;
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_tuneIntentRevision;
     m_frequency = mhz;
-    // Without autopan=0, the radio recenters the pan on the new frequency.
-    // Used for band changes where recentering is desired.
-    sendCommand(QString("slice tune %1 %2").arg(m_id).arg(mhz, 0, 'f', 6));
     emit frequencyChanged(mhz);
+    if (!alive || revision != m_tuneIntentRevision) {
+        return;
+    }
     emit frequencyCommandIssued(mhz);
+    if (!alive || revision != m_tuneIntentRevision) {
+        return;
+    }
+    emit receiveTuneRequested({mhz * 1.0e6, SliceTuneRequest::PanIntent::AllowRecenter});
 }
 
 void SliceModel::setMode(const QString& mode)
@@ -185,28 +191,24 @@ void SliceModel::setMode(const QString& mode)
     }
 
     m_mode = mode;
+    const QPointer<SliceModel> alive(this);
+    const quint64 modeRevision = ++m_modeIntentRevision;
     // aetherd RFC 2.3: express intent; FlexBackend builds "slice set N mode=…"
     // and routes it through the TX-inhibit-guarded slice sink.
     emit modeChangeRequested(mode);
-    emit modeChanged(mode);
+    if (!alive || modeRevision != m_modeIntentRevision) {
+        return;
+    }
+    emit modeChanged(m_mode);
+    if (!alive || modeRevision != m_modeIntentRevision) {
+        return;
+    }
 
-    // The passband belongs to the mode. Changing mode without re-checking it
-    // leaves the previous mode's filter in place — switching USB -> AM kept
-    // 150..3000, an upper-sideband passband that EXCLUDES the carrier the AM
-    // detector needs. A radio that owns its own DSP heals this by echoing a
-    // mode-appropriate filter back; a backend that owns an engine-side chain
-    // gets no such echo and simply keeps demodulating through the wrong filter.
-    //
-    // So normalize the model here and hand the corrected passband to the
-    // engine-side backend via filterCommandIssued (RadioModel only wires that
-    // signal for a non-Flex backend). The Flex path is deliberately NOT sent a
-    // proactive `filt`: the Flex radio heals the passband on the mode echo (as
-    // above), so pushing our mirror to the wire would only race — and override —
-    // the radio's own per-mode filter memory. Keeping the Flex wire path
-    // untouched is why the model normalize is decoupled from the wire send.
+    // Normalize the desktop passband with explicit origin. Host DSP applies
+    // the repair; Flex keeps its radio-owned per-mode filter memory. This
+    // does not advance the adaptive engine's operator epoch.
     if (normalizeFilterPolarity()) {
-        emit filterChanged(m_filterLow, m_filterHigh);
-        emit filterCommandIssued(m_filterLow, m_filterHigh);
+        notifyReceiveFilterIntent(SliceFilterRequest::Origin::ModeNormalization);
     }
 }
 
@@ -222,16 +224,11 @@ void SliceModel::setFilterWidth(int low, int high)
     // status echo will arrive to heal it. Sign-guarded: canonical input is
     // untouched.
     normalizeFilterPolarity();
-    low = m_filterLow;
-    high = m_filterHigh;
     // Operator-driven filter change (preset/drag): bump the user epoch so the
     // adaptive engine adopts this as its new baseline. applyAdaptiveFilter()
     // deliberately does NOT bump it. RFC #3878.
     ++m_userFilterEpoch;
-    // FlexAPI: "filt <id> <low_hz> <high_hz>"
-    sendCommand(QString("filt %1 %2 %3").arg(m_id).arg(low).arg(high));
-    emit filterChanged(low, high);
-    emit filterCommandIssued(low, high);
+    notifyReceiveFilterIntent(SliceFilterRequest::Origin::Operator);
 }
 
 // ── Adaptive RX filter (RFC #3878) ──────────────────────────────────────
@@ -309,9 +306,23 @@ void SliceModel::applyAdaptiveFilter(int low, int high)
     // preset/drag for baseline tracking.
     m_filterLow  = low;
     m_filterHigh = high;
-    sendCommand(QString("filt %1 %2 %3").arg(m_id).arg(low).arg(high));
-    emit filterChanged(low, high);
-    emit filterCommandIssued(low, high);
+    notifyReceiveFilterIntent(SliceFilterRequest::Origin::Adaptive);
+}
+
+void SliceModel::notifyReceiveFilterIntent(SliceFilterRequest::Origin origin)
+{
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_filterIntentRevision;
+    const SliceFilterRequest request{m_filterLow, m_filterHigh, origin};
+    emit filterChanged(request.lowHz, request.highHz);
+    if (!alive || revision != m_filterIntentRevision) {
+        return;
+    }
+    emit filterCommandIssued(request.lowHz, request.highHz);
+    if (!alive || revision != m_filterIntentRevision) {
+        return;
+    }
+    emit receiveFilterRequested(request);
 }
 
 void SliceModel::setRxAntenna(const QString& ant)
@@ -557,9 +568,18 @@ void SliceModel::setAgcMode(const QString& mode)
         return;
     }
     m_agcMode = mode;
-    sendCommand(QString("slice set %1 agc_mode=%2").arg(m_id).arg(mode));
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_agcModeIntentRevision;
     emit agcModeChanged(mode);
+    if (!alive || revision != m_agcModeIntentRevision) {
+        return;
+    }
     emit agcCommandIssued(m_agcMode, m_agcThreshold);
+    if (!alive || revision != m_agcModeIntentRevision) {
+        return;
+    }
+    emit receiveAgcRequested({SliceAgcRequest::Field::Mode, mode,
+                              m_agcThreshold, m_agcOffLevel});
 }
 
 int SliceModel::receiveAgcThresholdMinimum() const
@@ -620,9 +640,18 @@ void SliceModel::setAgcThreshold(int value)
         return;
     }
     m_agcThreshold = value;
-    sendCommand(QString("slice set %1 agc_threshold=%2").arg(m_id).arg(value));
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_agcThresholdIntentRevision;
     emit agcThresholdChanged(value);
+    if (!alive || revision != m_agcThresholdIntentRevision) {
+        return;
+    }
     emit agcCommandIssued(m_agcMode, m_agcThreshold);
+    if (!alive || revision != m_agcThresholdIntentRevision) {
+        return;
+    }
+    emit receiveAgcRequested({SliceAgcRequest::Field::Threshold, m_agcMode,
+                              value, m_agcOffLevel});
 }
 
 void SliceModel::setAgcOffLevel(int value)
@@ -641,8 +670,14 @@ void SliceModel::setAgcOffLevel(int value)
         return;
     }
     m_agcOffLevel = value;
-    sendCommand(QString("slice set %1 agc_off_level=%2").arg(m_id).arg(value));
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_agcOffLevelIntentRevision;
     emit agcOffLevelChanged(value);
+    if (!alive || revision != m_agcOffLevelIntentRevision) {
+        return;
+    }
+    emit receiveAgcRequested({SliceAgcRequest::Field::OffLevel, m_agcMode,
+                              m_agcThreshold, value});
 }
 
 void SliceModel::setSquelch(bool on, int level)
@@ -1568,21 +1603,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
         int v = *d.mnLevel;
         if (m_mnLevel != v) { m_mnLevel = v; emit mnLevelChanged(v); }
     }
-    // GUARDED, like nrfLevel/anflLevel/mnLevel immediately above. These two
-    // were the only assign-and-emit pair in this block without an equality
-    // check, which was harmless while no backend published them from anything
-    // but a real change (Flex carry()s them only when the status carries the
-    // key; Sim sets them only inside setSliceAgc). HL2 publishes the pair on
-    // EVERY emitSliceState() — tune step, mode, filter, mute, TX-slice
-    // reassignment — so an unguarded emit turns a VFO drag into a stream of
-    // agcThresholdChanged at an unchanged value.
-    //
-    // That is not only churn. AgcCalibrationDialog wires agcThresholdChanged to
-    // AgcTCalibrator::onValueChanged, which in manual mode starts a settle timer
-    // that calls recordPoint() — and recordPoint() REPLACES an existing sample
-    // at the same value with a fresh currentRmsDb() reading. With the AGC
-    // Calibration dialog open on an HL2, tuning the VFO would overwrite a good
-    // calibration point with an RMS reading taken mid-tune, silently.
+    // Equality-guarded like the levels above: HL2 publishes the AGC pair on every
+    // emitSliceState(), and an unchanged-value agcThresholdChanged drives
+    // AgcTCalibrator::onValueChanged, whose settle timer would overwrite a
+    // calibration point with a mid-tune RMS reading.
     if (d.agcMode.has_value()) {
         const QString v = *d.agcMode;
         if (m_agcMode != v) { m_agcMode = v; emit agcModeChanged(v); }
@@ -1759,6 +1783,12 @@ void SliceModel::applyChanges(const SliceDelta& d)
 
 void SliceModel::invalidateFrequencyObservation()
 {
+    ++m_tuneIntentRevision;
+    ++m_modeIntentRevision;
+    ++m_filterIntentRevision;
+    ++m_agcModeIntentRevision;
+    ++m_agcThresholdIntentRevision;
+    ++m_agcOffLevelIntentRevision;
     if (m_receiveObservation != ReceiveObservation{}) {
         m_receiveObservation = {};
         emit receiveObservationChanged();

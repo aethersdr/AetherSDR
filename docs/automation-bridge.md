@@ -305,7 +305,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 
 | Category | Verb | One-liner |
 |---|---|---|
-| **Introspection** | [`ping`](#ping) | Handshake; returns app + version. |
+| **Introspection** | [`ping`](#ping) | Handshake; returns app + version + build identity. |
 | | [`verbs`](#verbs) | Machine-readable catalog of every verb + aliases + help. |
 | | [`dumpTree`](#dumptree) | ARIA-style snapshot of the whole widget tree. |
 | | [`grab <target> [path]`](#grab) | PNG of one widget (GPU-correct for the panadapter). |
@@ -389,12 +389,25 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 > the running app disagree, trust `verbs` — it cannot go stale.
 
 ### `ping`
-Connectivity / handshake.
+Connectivity / handshake, and which build is answering.
 
 ```json
 → {"cmd":"ping"}
-← {"ok":true,"app":"AetherSDR","version":"26.6.3"}
+← {"ok":true,"app":"AetherSDR","version":"26.9.3",
+   "build":{"describe":"v26.9.3-68-g7e841682","sha":"7e841682",
+            "baseline":"v26.9.3","commitsSinceTag":68,"dirty":false},
+   "authRequired":false,"readOnly":false}
 ```
+
+`version` is the release string, and a branch with unmerged changes reports the
+same one as `main`. `build` tells them apart (#5804). It is `git describe --tags
+--always --dirty`, captured when the binary is **built**, not when CMake was
+configured, so it cannot name an older commit after an incremental rebuild.
+`dirty` is `git describe`'s own notion: tracked files differed from `HEAD` at
+build time. Outside a git checkout (a source tarball) the strings are
+`"unknown"` and `commitsSinceTag` is `-1`; when no tag is reachable (a shallow
+clone), `describe` and `sha` carry the bare hash, `baseline` is `"unknown"` and
+`commitsSinceTag` is likewise `-1`.
 
 ### `verbs`
 Machine-readable catalog of every verb the running build understands —
@@ -1490,23 +1503,23 @@ inside AetherSDR on the host, not in radio firmware (#5401).
   more than one chain and they need not share a vocabulary, so key off `chain`
   rather than guessing from which fields are present. `rx-wdsp` entries also
   carry `receiver` — the **DDC index**, not a slice id.
-- `backend.chains[].modulator` — **which transmit modulator produced the
-  signal**, on an `hl2-tx` entry. Always `wdsp-txa`: the Hermes-Lite 2 has
-  exactly one transmit path, it is not selectable at run time and not at build
-  time either, and there is no second value to expect. The field is reported
-  rather than omitted because a transmit report that does not name the chain is
-  not actionable, and because a future second modulator — if one is ever
-  proposed again — must not arrive as a silent change of meaning. A reader
-  should treat an unrecognised value as "a modulator this client does not know
-  about", never as a failure.
-- On a **configured** `hl2-tx` entry, `level` is `channel-config` and `filterLowHz` /
-  `filterHighHz` are the signed passband last accepted by the channel (negative
-  for LSB/DIGL). `dspBlockSize` is the channel's DSP-rate size; `inputBlockSize`
-  is its audio-rate size, and `dspRateHz` names the DSP rate. Refused requests
-  leave applied values unchanged.
-- `wdspChannelId`, `modulatorBlocks`, `modulatorFaultBlocks` — present on a
-  configured `hl2-tx` entry, because the modulator always has a WDSP channel
-  behind it.
+- `backend.chains[].modulator` — **which transmit modulator this binary was
+  built with**, on an `hl2-tx` entry: `wdsp-txa` (WDSP's TXA chain, selected
+  by default on a fresh configure or explicitly with `-DAETHER_HL2_TX_TXA=ON`)
+  or `phasing` (the in-tree fallback, selected with `-DAETHER_HL2_TX_TXA=OFF`).
+  Existing build caches retain their configured choice. It is decided by the
+  `AETHER_HL2_TX_TXA` compile flag and there is **no runtime switch** — the
+  other chain is not in the process, so an operator cannot select the wrong
+  one. It is reported because they can be running the wrong **build**, and a
+  transmit report that does not say which modulator produced the signal is not
+  actionable.
+- On TXA entries, `level` is `channel-config` and `filterLowHz` / `filterHighHz`
+  are the signed passband last accepted by the channel (negative for LSB/DIGL).
+  `dspBlockSize` is the channel's DSP-rate size; `inputBlockSize` is its audio-rate
+  size, and `dspRateHz` names the DSP rate. Refused requests leave applied values unchanged. Phasing entries retain
+  `dsp-config` and audio-domain positive passband magnitudes.
+- `wdspChannelId`, `modulatorBlocks`, `modulatorFaultBlocks` — present only
+  when the modulator has a WDSP channel behind it (so, `wdsp-txa` only).
   `modulatorFaultBlocks` counts blocks the modulator could not place on the
   wire, and is present **even at zero**: "no blocks were dropped" and "nobody
   counted" must not look the same. Non-zero means the modulator is being fed
@@ -1778,9 +1791,9 @@ re-poll `get slices`.
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
 | `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
-| `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, the operator-intent setter — so the edges reach `IRadioBackend::setSliceFilter` and not just the model. Necessary because a mode change mirrors the passband *inside* the model without emitting that intent, which can leave a backend that owns its own DSP chain running the pre-mirror passband while `get_state` reports the mirrored one. Assert the passband before measuring anything through the audio path. Returns both the requested edges and the post-normalization `filterLow`/`filterHigh` the model actually holds. Use `-4000 4000` for a carrier-straddling AM passband |
+| `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, which emits a typed `receiveFilterRequested` with Operator origin and reaches `IRadioBackend::requestSliceFilter`. Mode normalization emits a separately tagged request: host DSP applies it, while Flex preserves its radio-owned mode-filter memory. Assert the passband before measuring the audio path. Returns requested edges and post-normalization `filterLow`/`filterHigh`; desktop model readback alone does not prove hardware application. Use `-4000 4000` for a carrier-straddling AM passband |
 | `filterpreset` | `<FIL1\|FIL2\|FIL3>` | select a stable radio-owned RX filter slot without conflating it with a passband-width edit. Returns the requested slot; re-poll `get slice active filterPreset` and the filter edges for radio-authoritative readback |
-| `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set the active slice's receive AGC through `SliceModel`'s operator setters, so it emits `agcCommandIssued` and reaches `IRadioBackend::setSliceAgc`. Applies the threshold before the mode so a combined request arrives at the backend as one coherent pair. On a backend that owns its DSP chain (HL2) this maps to the WDSP RXA AGC mode and the AGC ceiling in dB; on Flex it is the firmware's own AGC. Use `off` with a low threshold to get a linear path for measurement |
+| `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set receive AGC through `SliceModel` operator setters and typed `receiveAgcRequested` requests. Applies threshold before mode; each changed field dispatches independently. Flex writes only that field; the default backend adapter passes the current mode/threshold pair to host DSP for either edit. HL2 maps this to WDSP RXA AGC mode and ceiling in dB. This is not an atomic paired command. Use `off` with a low threshold for a linear measurement path |
 | `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
 | `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
 | `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
@@ -3281,6 +3294,28 @@ The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 base64 `pcmBase64`. Use `audioCapture status` for metadata only and
 `audioCapture stop` to stop early.
 
+#### DSP stereo probe: NR2, NR4, MNR, DFNR, BNR, NNR
+
+`audioCapture probeDspStereo <mode>` (or `all`, optionally with `strict`) runs
+the same deterministic three-second stereo signal through three fresh filters
+of that method: once as generated, once with the right channel replaced by
+unrelated tones, and once with the left replaced. Every client NR method
+denoises L and R independently, as RN2 does, so `ok` means each side's output
+is bit-identical whatever the other side carries (`leftIndependent`,
+`rightIndependent`, `channelsIndependent`) and both sides stay `audible`.
+
+The RMS `input`/`output`, `ratioError`, and level-ratio fields are reported
+but not judged: independent, level-dependent suppression treats the louder
+and quieter copies of one off-centre signal differently, so the L/R balance
+is not held (see the RX DSP ordering in `docs/architecture/audio-pipeline.md`). These modes no longer
+return `preserved`, the old L/R-ratio verdict; read `channelsIndependent` and
+`ok` instead (RN2 keeps `preserved`). `leftIndependenceMaxError` and
+`rightIndependenceMaxError` give the largest per-sample difference behind each
+verdict, or `-1` when the runs differ in length or produced no output. The NR2 run disables post2, whose per-instance random comfort noise
+would otherwise make the three runs differ, and says so with
+`post2Disabled: true`. A method that removes the probe's
+steady tones entirely (BNR does) reports `audible: false`.
+
 #### RN2 deterministic stereo probe
 
 `audioCapture probeDspStereo RN2` is an automation-only, synthetic RX proof
@@ -4491,7 +4526,7 @@ still a separate radiocert task.
 
 | Verb | Aliases | Description |
 |---|---|---|
-| `ping` | — | liveness check → app + version + whether a token is required |
+| `ping` | — | liveness check → app + version + build identity + whether a token is required |
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |
 | `floors` | — | per-pan measured noise + display floor (dBm) |

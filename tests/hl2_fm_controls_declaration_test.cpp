@@ -14,25 +14,11 @@
 //     from legacyFmToneModes(), i.e. it offers CTCSS ENCODE, on a backend with
 //     no tone-encode verb.
 //
-// FM NOW KEYS, AND BOTH WITHDRAWALS STAND. This target used to rest its
-// argument on FM being receive-only. That premise is gone: the WDSP TXA chain
-// was configured for FM and FM/NFM came off receiveOnlyModes, which is
-// asserted below so that the change is visible here rather than inferred. The
-// argument that survives is the one that was always sufficient on its own:
-// there is no VERB behind either control. The repeater offset has no override
-// on this backend, and TXA's own CTCSS encoder -- create_txa() builds fmmod
-// with it ON -- is forced off by WdspChannel::open() rather than exposed;
-// hl2_txdsp_test shows an FM over carries no 100 Hz component.
-//
-// Nothing here says the HL2 cannot RECEIVE FM; it can. What is withdrawn is a
-// transmit-side control surface with nothing behind it.
-//
-// WHY A SEPARATE TARGET. Same reason tests.cmake gives beside
-// hl2_pan_limits_declaration_test: the fake-radio fixture that would naturally
-// carry an HL2 seam assertion — hl2_backend_test — is retired inside a
-// commented block, so an assertion written there would be compiled by nothing
-// and green forever, and "a declaration must not be pinned only inside
-// something that does not build."
+// Both withdrawals hold in both builds because there is no verb behind either
+// control. The modulator is selected at BUILD time by AETHER_HL2_TX_TXA: ON
+// (default) is a WDSP TXA channel that keys FM, with TXA's CTCSS encoder forced
+// off by WdspChannel::open(); OFF is the phasing SSB modulator, where FM and
+// NFM stay receive-only. Nothing here says the HL2 cannot RECEIVE FM.
 //
 // SOCKET-FREE. Constructs a backend and reads capabilities(); binds nothing,
 // connects nothing, pumps no event loop, and reaches no radio. It does read one
@@ -110,28 +96,23 @@ int main(int argc, char** argv)
     // the rule. The constructed hl2::Hl2Backend above is what makes this the
     // HL2 descriptor; every line below reads a capability.
 
-    // ---- FM keys now, which is what makes the rest of this file matter ----
+    // ---- whether FM keys, read from production ----
     //
-    // Read from production, not re-typed: receiveOnlyModes is the list the
-    // key-on guard reads (RadioModel::refuseKeyInReceiveOnlyMode). While FM
-    // was on it, a dead tone control was a dead control on a mode nobody could
-    // transmit in; now that it is off, the withdrawals below are what stand
-    // between an operator and a control that claims a tone the air never gets.
-    check(!modeIsReceiveOnly(caps, QStringLiteral("FM"))
-              && !modeIsReceiveOnly(caps, QStringLiteral("NFM")),
-          "FM and NFM TRANSMIT here — the TXA chain modulates them");
+    // receiveOnlyModes is the list the key-on guard reads
+    // (RadioModel::refuseKeyInReceiveOnlyMode). FM and NFM key exactly when the
+    // TXA modulator is built; the withdrawals below hold either way.
+    check(modeIsReceiveOnly(caps, QStringLiteral("FM")) == !AETHER_HL2_TX_TXA
+              && modeIsReceiveOnly(caps, QStringLiteral("NFM")) == !AETHER_HL2_TX_TXA,
+          "FM and NFM transmit exactly when the TXA modulator is built");
+    // receiveModeControl is a different list, read only on the receive side.
     check(caps.receiveModeControl
               && caps.receiveModeControl->modes.contains(QStringLiteral("FM")),
-          "FM is still STEERABLE on the receive control surface");
-    // NFM is NOT on receiveModeControl, and that is deliberate rather than an
-    // oversight. receiveOnlyModes is a membership test run on whatever string a
-    // slice holds, so it treats every alias alike (FM and NFM are now both
-    // off it); receiveModeControl is a REQUEST surface, and an alias on it would be
-    // rewritten by Hl2Backend::setSliceMode and then never match the pending
-    // observation ModelReceiveControlTarget is waiting for. Asserted, because
-    // "the lists differ" is exactly the shape a careless edit would repair.
+          "FM is STEERABLE on the receive control surface");
+    // NFM is deliberately not requestable: receiveModeControl is a REQUEST
+    // surface, and Hl2Backend::setSliceMode would rewrite the alias so it never
+    // matched the pending observation ModelReceiveControlTarget waits for.
     check(!caps.receiveModeControl->modes.contains(QStringLiteral("NFM")),
-          "and the NFM alias is receive-ONLY but not requestable — the two lists differ on purpose");
+          "and the NFM alias is not requestable — the two lists differ on purpose");
 
     // ---- no repeater duplex ----
     check(!caps.hasFmRepeaterOffset,

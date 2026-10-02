@@ -26,7 +26,6 @@ constexpr int kAverageLinearRecursive = 1;
 constexpr int kAverageLogRecursive = 3;
 constexpr int kMaxDisplays = 72;   // dMAX_DISPLAYS
 constexpr int kMaxAverage = 60;    // dMAX_AVERAGE
-constexpr int kMaxPoints = 16384;  // dMAX_PIXELS
 
 int nextPowerOfTwo(int n) noexcept
 {
@@ -90,7 +89,7 @@ std::unique_ptr<AnanPanAnalyzer> AnanPanAnalyzer::create(int disp, const Setting
         if (error) *error = "analyzer slot out of range";
         return nullptr;
     }
-    if (settings.numPoints < 2 || settings.numPoints > kMaxPoints) {
+    if (settings.numPoints < 2 || settings.numPoints > AnanPanAnalyzer::kMaxPoints) {
         if (error) *error = "analyzer point count out of range";
         return nullptr;
     }
@@ -240,6 +239,21 @@ void AnanPanAnalyzer::setFramesPerSecond(int fps)
     m_settings.framesPerSecond = fps;
     // SetAnalyzer() resets the analyzer's input ring; drop our partial block
     // with it so the next block starts clean.
+    m_stagedCount = 0;
+    applySettings();
+}
+
+void AnanPanAnalyzer::setNumPoints(int points)
+{
+    points = std::clamp(points, 2, kMaxPoints);
+    if (points == m_settings.numPoints)
+        return;
+    m_settings.numPoints = points;
+    m_scratch.assign(static_cast<std::size_t>(points), 0.0f);
+    // The averaging history is kept per point, in the old layout: seed from
+    // the next frame instead of blending two different point grids.
+    m_seeded = false;
+    // SetAnalyzer() resets the input ring, as in setFramesPerSecond().
     m_stagedCount = 0;
     applySettings();
 }

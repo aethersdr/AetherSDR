@@ -13,23 +13,11 @@ class QLabel;
 
 namespace AetherSDR {
 
-// Non-modal, frameless-aware picker for the AppletPanel top-bar buttons.
-//
-// Two columns:
-//   * Active — every button shown in the bar.  Top `favoriteSplit`
-//     entries appear in the favourites row; the rest appear in the
-//     drawer.  Reordering within this column rearranges both halves
-//     accordingly.
-//   * Hidden — buttons removed from the bar entirely.  Their applets
-//     are disabled (Applet_<id>=False) when moved here.
-//
-// Derives from PersistentDialog so it inherits the canonical title-bar
-// + frameless-chrome + geometry-persistence boilerplate
-// (docs/style/dialog-patterns.md).
-//
-// Lifetime: opened via AppletPanel::openFavoritesPicker() with the
-// standard lazy-construct + WA_DeleteOnClose + QPointer slot pattern.
-// Emits layoutAccepted() on OK with the new order + hidden lists.
+// Non-modal picker for the AppletPanel top-bar buttons. Active column: buttons
+// in the bar, the top `favoriteSplit` in the favourites row, the rest in the
+// drawer. Hidden column: removed from the bar, their applets disabled
+// (Applet_<id>=False). Opened via AppletPanel::openFavoritesPicker() (lazy +
+// WA_DeleteOnClose + QPointer); emits layoutAccepted() on OK.
 class FavoritesPickerDialog : public PersistentDialog {
     Q_OBJECT
 

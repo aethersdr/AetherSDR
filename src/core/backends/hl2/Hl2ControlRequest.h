@@ -5,117 +5,19 @@
 
 #include "core/backends/hl2/MetisProtocol.h"
 
-// The Hermes-Lite 2 RQST/ACK state machine (docs/HERMES.md §13 item 13,
-// oracle §5). Qt-free and socket-free, like MetisProtocol, so it unit-tests
-// against synthetic responses with no radio and no event loop.
-//
-// ---------------------------------------------------------------------------
-// THIS IS NOT AN RPC, AND MODELLING IT AS ONE IS THE FAILURE MODE
-// ---------------------------------------------------------------------------
-//
-// There is no call, no future, no correlation id, and no guarantee of an
-// answer. Three properties of the wire make an RPC abstraction actively
-// dangerous here, and each one is answered by a specific piece of this class:
-//
-//  1. SINGLE OUTSTANDING. The gateware's response register holds exactly one
-//     reply — control.v says so in a comment on the line that writes it
-//     ("Queue size is 1"). Worse than dropping a second request, the response
-//     FSM SILENTLY DISCARDS the first: a command arriving while the FSM sits in
-//     RESP_ACK or RESP_READ gets no reply at all, and one arriving in RESP_WAIT
-//     overwrites the saved address and data of the request still waiting for a
-//     slot. So a pipelined pair does not give you two answers late; it gives
-//     you one answer and one silence, and no error anywhere.
-//
-//     BOTH OF THOSE ARE GATED ON THE RQST BIT, which is what makes this a host
-//     discipline problem rather than an impossibility. control.v enters the
-//     sequence only on `cmd_rqst & cmd_requires_resp & ~cmd_is_alt`, and the
-//     RESP_WAIT overwrite is inside `if (resp_rqst & ~resp_cnt)` and then
-//     `if (cmd_rqst & cmd_requires_resp)` — `cmd_requires_resp` being C0[7],
-//     wired from `cmd_resprqst` in hermeslite_core.v. The ordinary round robin,
-//     which never sets C0[7], therefore CANNOT clobber a pending reply however
-//     fast it runs. Only another RQST can, and only one party issues those.
-//     --> arm() REFUSES unless the machine is Idle, and says so in its return
-//         type. There is no queue. A caller that wants two reads does two.
-//
-//  2. ECHO-MATCHED, NO TRANSACTION ID. The reply carries the six-bit command
-//     address in C0[6:1] and, for a plain register write, an echo of the data
-//     we sent (control.v RESP_START: resp_cmd_data_next = cmd_data). That is
-//     the whole of the correspondence. Matching is therefore a JUDGEMENT about
-//     equality, not a lookup, and getting it wrong pairs a reply with the wrong
-//     request in a way that looks exactly like success.
-//     --> matches() is explicit and narrow: address equality always, plus data
-//         equality for Echo::Exact requests. A response that fails it is not
-//         "probably ours" — it is counted as stale and dropped.
-//
-//  3. A LATE REPLY IS INDISTINGUISHABLE FROM A TIMELY ONE. With no id, an
-//     answer to a request we gave up on looks identical to an answer to the
-//     request we just made — IF the two can ever be in flight together.
-//     --> Quarantine makes that UNLIKELY. It does not make it impossible, and
-//         an earlier version of this comment claimed it did. A deadline that
-//         expires does not return the machine to Idle; it moves it to
-//         Quarantine, where every ACK is swallowed and counted, and arm() stays
-//         refused until the quarantine elapses. So a late reply has nowhere to
-//         land FOR AS LONG AS THE QUARANTINE LASTS — and how long that is in
-//         wall-clock terms is the whole of the guarantee. See the clock note
-//         below; it is why there is a wall-clock floor and not only a frame
-//         count. What survives even the floor: a caller that re-issues the
-//         IDENTICAL request (same address, same data) after a timeout is asking
-//         for a reply that is byte-for-byte the abandoned one, and no amount of
-//         matching can separate those two. Echo::SubsystemRead is weaker still,
-//         which is why MetisClient::requestRegister refuses it outright today.
-//
-// ---------------------------------------------------------------------------
-// TWO MORE FACTS THE WIRE IMPOSES
-// ---------------------------------------------------------------------------
-//
-// THE CLOCK IS EP6 FRAMES — AND A FRAME IS NOT A FIXED AMOUNT OF TIME.
-// resp_rqst toggles once per 512-byte EP6 frame (usopenhpsdr1.v, SYNC_RESP) and
-// the whole EP6 emit path is gated on `run`. An idle radio answers discovery
-// and nothing else: no stream, no response slots, no replies, for ever. A
-// deadline in pure wall-clock would report "the radio timed out" for a
-// condition that is really "we never gave it an opportunity to answer". That is
-// why the frame count exists and why it stays.
-//
-// BUT THE FRAME COUNT ALONE WAS WRONG, and the error is worth naming because it
-// is the shape of error this file keeps making: a number that is true in ONE
-// configuration, quoted as if it were general. A frame carries
-// `504 / (6*numRx + 2)` rounds, so frames per second rise with BOTH the sample
-// rate and the receiver count. Computed from MetisProtocol.h's own geometry and
-// filtered by maxReceiversAtRate()'s 70 Mbit/s budget, 32 frames is:
-//
-//      rate    numRx   rounds/frame   frames/s   32 frames   +32 quarantine
-//      48 k      1          63           762      42.0 ms       84.0 ms
-//      96 k      4          19         5,053       6.33 ms      12.7 ms
-//     192 k      2          36         5,333       6.0 ms       12.0 ms
-//     192 k      4          19        10,105       3.17 ms       6.33 ms
-//     384 k      1          63         6,095       5.25 ms      10.5 ms
-//     384 k      3          25        15,360       2.08 ms       4.17 ms
-//
-// The old comment sized the constant at the FIRST ROW and described the result
-// as "~42 ms". Across the configurations Hl2Backend actually offers that is a
-// twentyfold spread, and the short end is the problem: what eats the deadline
-// is HOST-SIDE delivery latency, which is wall-clock and which the frame count
-// cannot see. Every frame drained after onRequestSent() counts against the
-// deadline, including frames the radio emitted BEFORE it saw the request and
-// which were still sitting in the socket buffer. docs/HERMES.md records a
-// 6.08 ms worst-case EP6 inter-arrival gap; at 384 kHz with three receivers one
-// gap that size is ~93 frames, drained in a single onReadyRead() pass — the
-// whole deadline AND the whole quarantine, before the radio's reply could be
-// read at all.
-//
-// So the deadline is BOTH: the frame count (no stream, no timeout) AND a
-// wall-clock floor that must also elapse. The clock is PASSED IN, not read
-// here, so this class stays pure and a test can pin any rate it likes with no
-// real time passing.
-//
-// THERE IS NO READ-ONLY REQUEST. Bit 7 does not mean "read". The gateware
-// applies the write regardless and then echoes it; the only commands whose
-// reply is not an echo are the AD9866 SPI and I2C subsystem writes, which carry
-// a read opcode in their data and come back with the read value instead
-// (RESP_READ, Echo::SubsystemRead below). Every RQST this machine issues is a
-// WRITE that asks to be acknowledged. Callers, and reviewers, have to read it
-// that way.
-//
+// The Hermes-Lite 2 RQST/ACK state machine (docs/HERMES.md §13 item 13), Qt-
+// and socket-free. Not an RPC: no correlation id, no guaranteed answer.
+//  1. Single outstanding: the response register holds one reply (control.v,
+//     "Queue size is 1"), so arm() refuses unless Idle. No queue.
+//  2. No transaction id: the reply echoes the address in C0[6:1] (and our data
+//     for a plain write); matches() checks both, other ACKs count as stale.
+//  3. A late reply looks timely: an expired deadline enters Quarantine, which
+//     swallows ACKs and refuses arm() until it elapses.
+// The deadline is EP6 frames AND a wall-clock floor; both must elapse. No
+// stream means no timeout, but 32 frames is 42 ms at 48 kHz/1 RX and ~2 ms at
+// 384 kHz/3 RX (504/(6*numRx+2) rounds per frame). The clock is passed in.
+// C0[7] means "acknowledge", not "read": every RQST is a write the gateware
+// applies and echoes; only I2C subsystem writes return a read value.
 namespace AetherSDR::hl2 {
 
 class Hl2ControlRequest {
@@ -128,32 +30,12 @@ public:
         // only evidence, beyond a six-bit address, that this reply belongs to
         // this request rather than to the last one at the same register.
         Exact,
-        // A command whose reply carries the value READ rather than the bytes
-        // written. On this gateware that is the I2C buses and ONLY the I2C
-        // buses — 0x3c (internal: Versa clock, AD9866) and 0x3d (the external
-        // companion bus). MetisProtocol.h documents both, and picking
-        // Echo::Exact for either would silently throw away the data half of the
-        // match.
-        //
-        // NOT 0x3b. An earlier version of this comment said the AD9866 SPI
-        // command read a converter register back; it does not, and the RTL is
-        // explicit about it. `control.v`'s RESP_READ has only one data source:
-        //
-        //     end else if (~cmd_ack_ad9866) begin
-        //       resp_cmd_data_next = cmd_resp_data_i2c; // FIXME: suppor read cmd_resp_data_ad9866
-        //
-        // — the I2C bus's data, with the gateware's own FIXME saying the AD9866
-        // read is unimplemented. `ad9866ctrl` has no data output to read from
-        // (control.v's instantiation passes cmd_addr/cmd_data/cmd_rqst/cmd_ack
-        // and nothing else; ad9866ctrl.v ties `assign sdo = 1'b0;` and leaves
-        // `//assign dataout` commented out). A 0x3b ACK carries the ECHO
-        // latched in RESP_START, or the 0x3F refusal. NO allow-listed address
-        // is of this shape today, and MetisClient::requestRegister refuses a
-        // caller that asks for one.
-        //
-        // Only the address can be matched, so such a request is strictly weaker
-        // evidence — which is exactly why the quarantine on timeout is not
-        // optional, and why nothing reaches this mode until an item needs it.
+        // The reply carries the value READ, not the bytes written: only the I2C
+        // buses 0x3c (Versa clock, AD9866) and 0x3d (external bus). Not 0x3b:
+        // control.v RESP_READ sources only cmd_resp_data_i2c ("FIXME: suppor
+        // read cmd_resp_data_ad9866") and ad9866ctrl.v ties sdo low, so a 0x3b
+        // ACK is the echo or the 0x3F refusal. Only the address can match, so
+        // MetisClient::requestRegister refuses this mode today.
         SubsystemRead,
     };
 
@@ -183,46 +65,19 @@ public:
         std::uint32_t data = 0;     // meaningless unless outcome == Answered
     };
 
-    // Deadline and quarantine, in EP6 FRAMES. See the class note for why the
-    // unit is frames.
-    //
-    // The gateware answers fast, but NOT every frame, and the difference is
-    // worth stating because 32 was sized against it. control.v toggles
-    // `resp_cnt` on every `resp_rqst` and then acts "Only every other
-    // resp_rqst" (its own comment): both the RESP_WAIT exit and the write of
-    // the command reply into `iresp` are guarded by `~resp_cnt`. So a COMMAND
-    // RESPONSE SLOT OPENS ON ALTERNATE EP6 FRAMES, not on every frame — the
-    // free-running telemetry slots are the other half of that alternation.
-    //
-    // RESP_START latches on the command and RESP_ACK/RESP_READ each take a
-    // cycle or two of clk_ctrl, which is nothing beside a frame; the wait for a
-    // slot is the whole of the latency, and it is one frame at best and two at
-    // worst depending on the phase `resp_cnt` happens to be in. Call it two to
-    // four frames end to end. 32 frames is therefore SIXTEEN response
-    // opportunities, not thirty-two — generous in SLOTS at every rate, which is
-    // what this count is for. How long those slots take is the floor's job, not
-    // this constant's; see the table in the class note.
+    // Deadline and quarantine, in EP6 frames. control.v acts on a command reply
+    // only on alternate resp_rqst (`~resp_cnt`), so a response slot opens every
+    // other frame; a reply takes 2-4 frames and 32 frames = 16 slots. Elapsed
+    // time is the floor's job, not this count's.
     static constexpr int kDefaultDeadlineFrames = 32;
-    // Equal to the deadline: whatever the radio still owes us is released on the
-    // next slot after it becomes available, so one more deadline's worth of
-    // frames is past any reply that could still be in flight for the abandoned
-    // request. Symmetry is the point — a quarantine shorter than the deadline
-    // would leave a window where a late reply meets a new request.
+    // Equal to the deadline: a shorter quarantine would leave a window where a
+    // late reply to the abandoned request meets a new one.
     static constexpr int kDefaultQuarantineFrames = 32;
 
-    // The wall-clock floor, in milliseconds, that must elapse ALONGSIDE the
-    // frame count before a deadline or a quarantine may expire. Never instead
-    // of it: a stopped stream still times nothing out, because the frames never
-    // come.
-    //
-    // DERIVED, not picked. It is exactly what 32 frames lasts in the one
-    // configuration the frame count was originally sized in — 48 kHz, one
-    // receiver, 63 rounds per 512-byte frame — so the floor's effect is to make
-    // the "~42 ms" this file has always claimed TRUE AT EVERY RATE instead of
-    // true at one of them. It covers the 6.08 ms worst-case EP6 inter-arrival
-    // gap docs/HERMES.md records with about seven times margin, and it does not
-    // lengthen the 48 kHz case at all, which is the case that was already
-    // agreed to be short enough not to strand a caller.
+    // Wall-clock floor (ms) that must elapse alongside the frame count, never
+    // instead of it (a stopped stream still times nothing out). Derived: 32
+    // frames at 48 kHz / 1 RX (63 rounds per frame) = 42 ms, so ~42 ms holds at
+    // every rate; ~7x the 6.08 ms worst-case EP6 gap in docs/HERMES.md.
     static constexpr int kFloorReferenceRateHz = 48000;
     static constexpr int kDefaultFloorMs =
         kDefaultDeadlineFrames * ep6RoundsPerFrame(1) * 1000 / kFloorReferenceRateHz;
