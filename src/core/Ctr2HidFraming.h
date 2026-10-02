@@ -9,56 +9,70 @@
 
 namespace AetherSDR::ctr2hid {
 
-// DRAFT wire format for carrying an opaque radio TCP byte stream over the
-// CTR2's 8-byte HID reports. Nothing here is agreed with the firmware yet;
-// every negotiable value lives in WireFormat so the agreement is one edit.
-// A Report is the 8 payload bytes only, excluding any HID report ID.
-// Design: docs/ctr2-usb-relay-design.md ("Host-side status").
+// CTR2 USB link, wire format version 0, carried in 8-byte HID reports
+// (report ID 0x01, both directions). A Report here is the 8 bytes after the
+// report ID. Full specification and test vectors:
+// docs/ctr2-usb-relay-design.md ("USB link specification").
 //
-// Header report: [marker][version][counter][packets lo][packets hi]
-//                [length lo][length hi][reserved = 0]
-// Data report:   [counter][up to 7 payload bytes][padding]
+// Header: [0xFF][version][counter][type][packets hi][packets lo]
+//         [length hi][length lo]      packets includes the header
+// Data:   [counter][7 payload bytes, zero-padded after the last]
+//
+// Counters are 7-bit (0x00-0x7F, wrapping 0x7F -> 0x00), so a data report
+// never starts with the 0xFF header marker.
 constexpr int kReportBytes = 8;
 constexpr int kDataBytesPerReport = 7;
+constexpr std::uint8_t kReportId = 0x01;
+constexpr std::uint8_t kMarker = 0xFF;
+constexpr std::uint8_t kVersion = 0x00;
+constexpr std::uint8_t kCounterMask = 0x7F;
+constexpr int kMaxPayloadBytes = 512;
+
 using Report = std::array<std::uint8_t, kReportBytes>;
 
-struct WireFormat {
-    std::uint8_t marker{0xA5};
-    std::uint8_t version{1};
-    // Counters start here on a fresh connection and wrap modulo 256,
-    // independently per direction.
-    std::uint8_t firstCounter{0};
-    // Upper bound on one message's payload; the length field allows 65535.
-    int maxMessageBytes{4096};
+enum class MessageType : std::uint8_t {
+    Data = 0x00,    // opaque radio TCP bytes, either direction
+    Hello = 0x01,   // device -> host: start or restart the link
+    Ready = 0x02,   // host -> device: radio connection open
+    Closed = 0x03,  // either direction: link ended; device restarts with Hello
+};
+
+struct Message {
+    MessageType type{MessageType::Data};
+    QByteArray payload;
 };
 
 constexpr int packetsFor(int payloadBytes)
 {
-    return (payloadBytes + kDataBytesPerReport - 1) / kDataBytesPerReport;
+    return 1 + (payloadBytes + kDataBytesPerReport - 1) / kDataBytesPerReport;
 }
 
-// Splits a byte stream into messages of at most maxMessageBytes and emits
-// each as one header report followed by its data reports, in order.
+constexpr std::uint8_t nextCounter(std::uint8_t c)
+{
+    return static_cast<std::uint8_t>((c + 1) & kCounterMask);
+}
+
+// Emits messages as reports. Data longer than kMaxPayloadBytes becomes
+// several messages; control messages carry no payload.
 class FrameEncoder {
 public:
-    explicit FrameEncoder(const WireFormat& format = {});
-
-    void encode(const QByteArray& payload, std::vector<Report>* out);
-    void reset();
-    std::uint8_t nextCounter() const { return m_counter; }
+    void encodeData(const QByteArray& payload, std::vector<Report>* out);
+    void encodeControl(MessageType type, std::vector<Report>* out);
+    // Hello (device) and Ready (host) start a link with counter 0.
+    void reset() { m_counter = 0; }
+    std::uint8_t counter() const { return m_counter; }
 
 private:
-    void encodeMessage(const char* data, int size, std::vector<Report>* out);
+    void encodeMessage(MessageType type, const char* data, int size, std::vector<Report>* out);
 
-    WireFormat m_format;
-    std::uint8_t m_counter;
+    std::uint8_t m_counter{0};
 };
 
-// Rebuilds the byte stream from reports. Report position, not content,
-// distinguishes headers from data: while a message is incomplete every report
-// is data, even one whose first byte equals the marker. Any violation puts
-// the reassembler into a failed state that refuses all input until reset();
-// the owner must end the connection, never release a partial message.
+// Rebuilds messages from reports. Report position separates headers from
+// data. Control messages are accepted with any counter and set the expected
+// counter for the Data that follows; Data before any control message, or
+// out of sequence, is an error. Any error is sticky until reset(): no
+// partial message is ever released, and the owner ends the link.
 class FrameReassembler {
 public:
     enum class Error {
@@ -66,19 +80,18 @@ public:
         BadReportSize,
         BadMarker,
         BadVersion,
-        BadReserved,
-        CounterMismatch,
+        BadType,
+        BadCounter,
         BadLength,
         PacketCountMismatch,
+        NotStarted,
+        CounterMismatch,
         DataCounterMismatch,
     };
 
-    explicit FrameReassembler(const WireFormat& format = {});
-
-    // Appends a completed message's payload to *out. Returns false on error.
-    bool feed(const Report& report, QByteArray* out);
-    // Host APIs hand over raw buffers; anything but exactly 8 bytes fails.
-    bool feed(const std::uint8_t* data, int size, QByteArray* out);
+    bool feed(const Report& report, std::vector<Message>* out);
+    // Raw buffer from a host API; anything but exactly 8 bytes fails.
+    bool feed(const std::uint8_t* data, int size, std::vector<Message>* out);
 
     void reset();
     bool failed() const { return m_error != Error::None; }
@@ -86,16 +99,15 @@ public:
     QString errorText() const;
     bool isMidMessage() const { return m_packetsLeft > 0; }
     int bufferedBytes() const { return static_cast<int>(m_partial.size()); }
-    std::uint8_t expectedCounter() const { return m_expectedCounter; }
 
 private:
     bool fail(Error error);
-    bool feedHeader(const Report& report);
-    bool feedData(const Report& report, QByteArray* out);
+    bool feedHeader(const Report& r, std::vector<Message>* out);
+    bool feedData(const Report& r, std::vector<Message>* out);
 
-    WireFormat m_format;
     Error m_error{Error::None};
-    std::uint8_t m_expectedCounter;
+    bool m_started{false};
+    std::uint8_t m_expected{0};
     std::uint8_t m_messageCounter{0};
     int m_packetsLeft{0};
     int m_bytesLeft{0};

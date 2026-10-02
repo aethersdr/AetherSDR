@@ -1,7 +1,8 @@
-// Draft CTR2 HID framing codec: round trips and fail-closed reassembly.
-// Socket-free and device-free; every case compares complete byte streams.
+// CTR2 USB link codec (wire format v0): known-answer vectors, round trips
+// and fail-closed reassembly. Socket-free and device-free.
 
 #include "core/Ctr2HidFraming.h"
+#include "ctr2_hid_vectors.h"
 
 #include <QByteArray>
 
@@ -34,248 +35,241 @@ QByteArray randomBytes(int size, unsigned seed)
     return out;
 }
 
-QByteArray roundTrip(const QByteArray& payload, const WireFormat& format,
-                     std::vector<Report>* reportsOut = nullptr, bool* ok = nullptr)
+std::vector<Report> toReports(const ctr2vectors::Vector& v)
 {
-    FrameEncoder enc(format);
-    FrameReassembler dec(format);
-    std::vector<Report> reports;
-    enc.encode(payload, &reports);
-    QByteArray out;
-    bool good = true;
-    for (const Report& r : reports) {
-        good = dec.feed(r, &out) && good;
-    }
-    if (reportsOut) {
-        *reportsOut = reports;
-    }
-    if (ok) {
-        *ok = good && !dec.isMidMessage();
+    std::vector<Report> out;
+    for (int i = 0; i < v.reportCount; ++i) {
+        Report r{};
+        std::copy(v.reports[i], v.reports[i] + kReportBytes, r.begin());
+        out.push_back(r);
     }
     return out;
 }
 
-Report header(const WireFormat& f, std::uint8_t counter, int packets, int length,
-              std::uint8_t reserved = 0)
+// Encodes each vector from a fresh encoder at the vector's counter and
+// compares report bytes exactly; then decodes them back.
+void testKnownAnswerVectors()
 {
-    return {f.marker, f.version, counter,
-            static_cast<std::uint8_t>(packets & 0xFF), static_cast<std::uint8_t>(packets >> 8),
-            static_cast<std::uint8_t>(length & 0xFF), static_cast<std::uint8_t>(length >> 8),
-            reserved};
+    for (const ctr2vectors::Vector& v : ctr2vectors::kVectors) {
+        FrameEncoder enc;
+        std::vector<Report> scratch;
+        while (enc.counter() != v.counter) {
+            enc.encodeControl(MessageType::Hello, &scratch);
+        }
+        std::vector<Report> got;
+        const QByteArray payload(reinterpret_cast<const char*>(v.payload), v.payloadLength);
+        if (v.type == 0) {
+            enc.encodeData(payload, &got);
+        } else {
+            enc.encodeControl(static_cast<MessageType>(v.type), &got);
+        }
+        char msg[160];
+        std::snprintf(msg, sizeof msg, "vector '%s' encodes byte-exact", v.name);
+        check(got == toReports(v), msg);
+
+        FrameReassembler dec;
+        std::vector<Message> msgs;
+        if (v.type == 0) {
+            const Report start{kMarker, kVersion,
+                               static_cast<std::uint8_t>((v.counter - 1) & kCounterMask),
+                               static_cast<std::uint8_t>(MessageType::Ready), 0, 1, 0, 0};
+            dec.feed(start, &msgs);
+            msgs.clear();
+        }
+        bool ok = true;
+        for (const Report& r : got) {
+            ok = dec.feed(r, &msgs) && ok;
+        }
+        std::snprintf(msg, sizeof msg, "vector '%s' decodes to its message", v.name);
+        check(ok && msgs.size() == 1 && static_cast<int>(msgs[0].type) == v.type
+                  && msgs[0].payload == payload,
+              msg);
+    }
 }
 
-void testAllByteValues()
+QByteArray streamRoundTrip(const QByteArray& payload, bool* ok)
+{
+    FrameEncoder enc;
+    FrameReassembler dec;
+    std::vector<Report> reports;
+    enc.encodeControl(MessageType::Hello, &reports);
+    enc.encodeData(payload, &reports);
+    std::vector<Message> msgs;
+    bool good = true;
+    for (const Report& r : reports) {
+        good = dec.feed(r, &msgs) && good;
+    }
+    QByteArray out;
+    for (const Message& m : msgs) {
+        if (m.type == MessageType::Data) {
+            out += m.payload;
+        }
+    }
+    *ok = good && !dec.isMidMessage() && !msgs.empty() && msgs[0].type == MessageType::Hello;
+    return out;
+}
+
+void testRoundTrips()
 {
     QByteArray all;
     for (int v = 0; v < 256; ++v) {
         all.append(static_cast<char>(v));
     }
-    all += QByteArray("\r\n\0\r", 4);
     bool ok = false;
-    check(roundTrip(all, {}, nullptr, &ok) == all && ok, "every byte value survives a round trip");
-}
-
-void testLengthsAndPadding()
-{
-    WireFormat big;
-    big.maxMessageBytes = 65535;
-    for (int len : {1, 6, 7, 8, 13, 14, 15, 4096, 65535}) {
+    check(streamRoundTrip(all, &ok) == all && ok, "every byte value, including 0x00 and 0xFF, survives");
+    for (int len : {1, 6, 7, 8, 13, 14, 15, kMaxPayloadBytes - 1, kMaxPayloadBytes,
+                    kMaxPayloadBytes + 1, 20000}) {
         const QByteArray p = randomBytes(len, static_cast<unsigned>(len));
-        std::vector<Report> reports;
-        bool ok = false;
-        const QByteArray out = roundTrip(p, big, &reports, &ok);
-        check(out == p && ok, "length round trip is exact (padding never released)");
-        check(static_cast<int>(reports.size()) == 1 + packetsFor(len),
-              "one header plus ceil(len/7) data reports");
+        check(streamRoundTrip(p, &ok) == p && ok, "length round trip is exact; padding never released");
     }
-    // Final-report padding is not part of the payload, whatever its value.
-    WireFormat f;
-    FrameReassembler dec(f);
-    QByteArray out;
-    dec.feed(header(f, f.firstCounter, 1, 3), &out);
-    dec.feed(Report{f.firstCounter, 'a', 'b', 'c', 0xFF, f.marker, 0x00, 0x7F}, &out);
-    check(out == QByteArray("abc"), "exact length strips non-zero padding");
+    // Trailing zeros in the payload are payload, not padding.
+    const QByteArray zeros("cmd\n\0\0\0", 7);
+    check(streamRoundTrip(zeros, &ok) == zeros && ok, "payload zeros survive (exact length, not zero-stripping)");
 }
 
-void testSplitAcrossMessagesAndCounterWrap()
+void testCounterWrapAndChunking()
 {
-    WireFormat f;
-    f.maxMessageBytes = 10;
-    const QByteArray p = randomBytes(10 * 300 + 3, 99);  // 301 messages: counter wraps
-    FrameEncoder enc(f);
-    std::vector<Report> reports;
-    enc.encode(p, &reports);
-    check(enc.nextCounter() == static_cast<std::uint8_t>(f.firstCounter + 301),
-          "encoder counter wraps modulo 256");
-    FrameReassembler dec(f);
-    QByteArray out;
-    bool good = true;
-    for (const Report& r : reports) {
-        good = dec.feed(r, &out) && good;
-        check(dec.bufferedBytes() <= f.maxMessageBytes, "reassembly buffer stays within max");
-        if (g_failures) {
-            break;
-        }
-    }
-    check(good && out == p, "a stream split into many messages reassembles in order across wrap");
-}
-
-void testIncrementalEncodeMatchesStream()
-{
-    // Chunk boundaries on the sending side need not match anything.
     FrameEncoder enc;
     FrameReassembler dec;
-    const QByteArray p = randomBytes(20000, 5);
-    std::mt19937 rng(6);
-    QByteArray out;
-    int pos = 0;
-    while (pos < p.size()) {
-        const int n = std::min<int>(static_cast<int>(rng() % 900) + 1, p.size() - pos);
-        std::vector<Report> reports;
-        enc.encode(p.mid(pos, n), &reports);
-        for (const Report& r : reports) {
-            dec.feed(r, &out);
-        }
-        pos += n;
+    std::vector<Report> reports;
+    enc.encodeControl(MessageType::Ready, &reports);
+    const QByteArray p = randomBytes(300 * 5, 3);
+    for (int i = 0; i < 300; ++i) {  // 300 messages: counter wraps twice
+        enc.encodeData(p.mid(i * 5, 5), &reports);
     }
-    check(!dec.failed() && out == p, "independent chunking reassembles exactly");
+    check(enc.counter() == (301 & kCounterMask), "encoder counter wraps 0x7F -> 0x00");
+    bool sevenBit = true;
+    for (const Report& r : reports) {
+        sevenBit = sevenBit && (r[0] == kMarker || r[0] <= kCounterMask);
+    }
+    check(sevenBit, "byte 0 is 0xFF for headers and never above 0x7F for data");
+    std::vector<Message> msgs;
+    bool good = true;
+    for (const Report& r : reports) {
+        good = dec.feed(r, &msgs) && good;
+        check(dec.bufferedBytes() <= kMaxPayloadBytes, "reassembly buffer within the maximum");
+    }
+    QByteArray out;
+    for (const Message& m : msgs) {
+        out += m.payload;
+    }
+    check(good && out == p, "300 messages across counter wrap reassemble in order");
 }
 
-void testMarkerByteInsideDataIsData()
+void testControlMessagesResync()
 {
-    WireFormat f;
-    const QByteArray p(21, static_cast<char>(f.marker));
-    QByteArray tricky;
-    tricky.append(static_cast<char>(f.marker));
-    tricky.append(static_cast<char>(f.version));
-    tricky.append(p);
-    bool ok = false;
-    check(roundTrip(tricky, f, nullptr, &ok) == tricky && ok,
-          "marker-valued payload bytes are never mistaken for a header");
-
-    // A data report whose counter equals the marker value is still data.
-    WireFormat w;
-    w.firstCounter = w.marker;
-    bool ok2 = false;
-    check(roundTrip(randomBytes(30, 8), w, nullptr, &ok2) == randomBytes(30, 8) && ok2,
-          "report position, not content, distinguishes header from data");
+    FrameEncoder dev;
+    FrameReassembler host;
+    std::vector<Report> r;
+    dev.encodeControl(MessageType::Hello, &r);
+    dev.encodeData(QByteArray("a\n"), &r);
+    dev.encodeData(QByteArray("b\n"), &r);
+    // Device restarts mid-stream: HELLO with counter 0 again.
+    dev.reset();
+    dev.encodeControl(MessageType::Hello, &r);
+    dev.encodeData(QByteArray("c\n"), &r);
+    std::vector<Message> msgs;
+    bool good = true;
+    for (const Report& rep : r) {
+        good = host.feed(rep, &msgs) && good;
+    }
+    check(good && msgs.size() == 5 && msgs[3].type == MessageType::Hello
+              && msgs[4].payload == QByteArray("c\n"),
+          "a new HELLO resynchronizes the counter");
 }
 
 void expectFailure(const char* what, const std::vector<Report>& reports,
-                   FrameReassembler::Error expected, const WireFormat& f = {})
+                   FrameReassembler::Error expected, bool startFirst = true)
 {
-    FrameReassembler dec(f);
-    QByteArray out;
-    bool anyFalse = false;
+    FrameReassembler dec;
+    std::vector<Message> msgs;
+    if (startFirst) {
+        dec.feed(Report{kMarker, kVersion, 0x7F, 0x01, 0, 1, 0, 0}, &msgs);  // HELLO, next = 0
+        msgs.clear();
+    }
+    bool rejected = false;
     for (const Report& r : reports) {
-        if (!dec.feed(r, &out)) {
-            anyFalse = true;
+        if (!dec.feed(r, &msgs)) {
+            rejected = true;
             break;
         }
     }
     char msg[160];
     std::snprintf(msg, sizeof msg, "%s: rejected with the right error", what);
-    check(anyFalse && dec.error() == expected, msg);
+    check(rejected && dec.error() == expected, msg);
     std::snprintf(msg, sizeof msg, "%s: no partial payload released", what);
-    check(out.isEmpty(), msg);
-    // Failed state is sticky until reset.
+    check(msgs.empty(), msg);
     std::vector<Report> good;
-    FrameEncoder enc(f);
-    enc.encode(QByteArray("ok"), &good);
+    FrameEncoder enc;
+    enc.encodeControl(MessageType::Hello, &good);
+    enc.encodeData(QByteArray("ok"), &good);
     for (const Report& r : good) {
-        dec.feed(r, &out);
+        dec.feed(r, &msgs);
     }
-    std::snprintf(msg, sizeof msg, "%s: input refused until reset", what);
-    check(out.isEmpty() && dec.failed(), msg);
+    std::snprintf(msg, sizeof msg, "%s: failure is sticky until reset", what);
+    check(msgs.empty() && dec.failed(), msg);
     dec.reset();
     for (const Report& r : good) {
-        dec.feed(r, &out);
+        dec.feed(r, &msgs);
     }
-    std::snprintf(msg, sizeof msg, "%s: reset starts fresh framing", what);
-    check(out == QByteArray("ok") && !dec.failed(), msg);
+    std::snprintf(msg, sizeof msg, "%s: reset starts fresh", what);
+    check(msgs.size() == 2 && msgs[1].payload == QByteArray("ok"), msg);
 }
 
 void testFailClosed()
 {
-    const WireFormat f;
-    const std::uint8_t c = f.firstCounter;
-    expectFailure("data before header", {Report{c, 1, 2, 3, 4, 5, 6, 7}}, FrameReassembler::Error::BadMarker);
-    {
-        Report h = header(f, c, 1, 1);
-        h[1] = static_cast<std::uint8_t>(f.version + 1);
-        expectFailure("wrong version", {h}, FrameReassembler::Error::BadVersion);
-    }
-    expectFailure("reserved byte set", {header(f, c, 1, 1, 1)}, FrameReassembler::Error::BadReserved);
-    expectFailure("first counter not fresh", {header(f, static_cast<std::uint8_t>(c + 5), 1, 1)},
-                  FrameReassembler::Error::CounterMismatch);
-    expectFailure("zero length", {header(f, c, 0, 0)}, FrameReassembler::Error::BadLength);
-    expectFailure("length over max", {header(f, c, packetsFor(f.maxMessageBytes + 1), f.maxMessageBytes + 1)},
-                  FrameReassembler::Error::BadLength);
-    expectFailure("packet count disagrees", {header(f, c, 3, 8)},
-                  FrameReassembler::Error::PacketCountMismatch);
-    expectFailure("data counter disagrees",
-                  {header(f, c, 2, 10), Report{c, 1, 2, 3, 4, 5, 6, 7},
-                   Report{static_cast<std::uint8_t>(c + 1), 8, 9, 10, 0, 0, 0, 0}},
-                  FrameReassembler::Error::DataCounterMismatch);
-    // Truncated message followed by the next header: the header is consumed
-    // as data and its counter byte (the marker) mismatches.
-    expectFailure("truncated then new header",
-                  {header(f, c, 2, 10), Report{c, 1, 2, 3, 4, 5, 6, 7},
-                   header(f, static_cast<std::uint8_t>(c + 1), 1, 1)},
-                  FrameReassembler::Error::DataCounterMismatch);
-    {
-        // Skipped message: second header jumps the counter.
-        FrameEncoder enc(f);
-        std::vector<Report> first;
-        std::vector<Report> second;
-        std::vector<Report> third;
-        enc.encode(QByteArray("a"), &first);
-        enc.encode(QByteArray("b"), &second);
-        enc.encode(QByteArray("c"), &third);
-        std::vector<Report> stream = first;
-        stream.insert(stream.end(), third.begin(), third.end());
-        FrameReassembler dec(f);
-        QByteArray out;
-        for (const Report& r : stream) {
-            dec.feed(r, &out);
-        }
-        check(dec.error() == FrameReassembler::Error::CounterMismatch && out == QByteArray("a"),
-              "a lost message is detected; only complete earlier messages were released");
-    }
-    {
-        FrameReassembler dec(f);
-        QByteArray out;
-        const std::uint8_t shortReport[5] = {f.marker, f.version, c, 1, 0};
-        check(!dec.feed(shortReport, 5, &out) && dec.error() == FrameReassembler::Error::BadReportSize,
-              "a report that is not 8 bytes is rejected");
-    }
+    using E = FrameReassembler::Error;
+    expectFailure("data report where a header belongs", {Report{0, 1, 2, 3, 4, 5, 6, 7}}, E::BadMarker);
+    expectFailure("wrong version", {Report{kMarker, 1, 0, 0, 0, 2, 0, 1}}, E::BadVersion);
+    expectFailure("counter above 0x7F", {Report{kMarker, kVersion, 0x80, 0, 0, 2, 0, 1}}, E::BadCounter);
+    expectFailure("unknown type", {Report{kMarker, kVersion, 0, 4, 0, 1, 0, 0}}, E::BadType);
+    expectFailure("empty DATA", {Report{kMarker, kVersion, 0, 0, 0, 1, 0, 0}}, E::BadLength);
+    expectFailure("control with payload", {Report{kMarker, kVersion, 0, 1, 0, 2, 0, 1}}, E::BadLength);
+    expectFailure("DATA over 512 bytes", {Report{kMarker, kVersion, 0, 0, 0, 75, 0x02, 0x01}}, E::BadLength);
+    expectFailure("packet count disagrees", {Report{kMarker, kVersion, 0, 0, 0, 3, 0, 7}},
+                  E::PacketCountMismatch);
+    expectFailure("DATA before any control message", {Report{kMarker, kVersion, 0, 0, 0, 2, 0, 1}},
+                  E::NotStarted, false);
+    expectFailure("skipped message", {Report{kMarker, kVersion, 1, 0, 0, 2, 0, 1}}, E::CounterMismatch);
+    expectFailure("data report counter disagrees",
+                  {Report{kMarker, kVersion, 0, 0, 0, 3, 0, 10}, Report{0, 1, 2, 3, 4, 5, 6, 7},
+                   Report{1, 8, 9, 10, 0, 0, 0, 0}},
+                  E::DataCounterMismatch);
+    expectFailure("truncated message then a new header",
+                  {Report{kMarker, kVersion, 0, 0, 0, 3, 0, 10}, Report{0, 1, 2, 3, 4, 5, 6, 7},
+                   Report{kMarker, kVersion, 1, 0, 0, 2, 0, 1}},
+                  E::DataCounterMismatch);
+    FrameReassembler dec;
+    std::vector<Message> msgs;
+    const std::uint8_t withReportId[9] = {kReportId, kMarker, kVersion, 0, 1, 0, 1, 0, 0};
+    check(!dec.feed(withReportId, 9, &msgs) && dec.error() == E::BadReportSize,
+          "a buffer that still carries the report ID is rejected, not misparsed");
 }
 
-void testMidMessageVisibility()
+void testMidMessageHeld()
 {
-    const WireFormat f;
-    FrameReassembler dec(f);
-    QByteArray out;
-    dec.feed(header(f, f.firstCounter, 2, 9), &out);
-    check(dec.isMidMessage(), "mid-message after header");
-    dec.feed(Report{f.firstCounter, 1, 2, 3, 4, 5, 6, 7}, &out);
-    check(dec.isMidMessage() && out.isEmpty() && dec.bufferedBytes() == 7,
-          "incomplete message is held, not released");
+    FrameReassembler dec;
+    std::vector<Message> msgs;
+    dec.feed(Report{kMarker, kVersion, 5, 2, 0, 1, 0, 0}, &msgs);  // READY, next = 6
+    msgs.clear();
+    dec.feed(Report{kMarker, kVersion, 6, 0, 0, 3, 0, 9}, &msgs);
+    dec.feed(Report{6, 1, 2, 3, 4, 5, 6, 7}, &msgs);
+    check(dec.isMidMessage() && msgs.empty() && dec.bufferedBytes() == 7,
+          "an incomplete message is held, not released");
     dec.reset();
-    check(!dec.isMidMessage() && dec.bufferedBytes() == 0, "reset discards the partial message");
+    check(!dec.isMidMessage() && dec.bufferedBytes() == 0, "reset discards it");
 }
 
 } // namespace
 
 int main()
 {
-    testAllByteValues();
-    testLengthsAndPadding();
-    testSplitAcrossMessagesAndCounterWrap();
-    testIncrementalEncodeMatchesStream();
-    testMarkerByteInsideDataIsData();
+    testKnownAnswerVectors();
+    testRoundTrips();
+    testCounterWrapAndChunking();
+    testControlMessagesResync();
     testFailClosed();
-    testMidMessageVisibility();
+    testMidMessageHeld();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

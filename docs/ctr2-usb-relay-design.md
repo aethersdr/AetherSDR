@@ -1,8 +1,10 @@
 # CTR2 USB HID relay design
 
-Status: Updated proposal, assuming Lynn agrees to the opaque HID relay
-approach. Jeremy reports that the TCP relay is working. HID firmware and
-end-to-end USB operation have not yet been verified.
+Status: link format v0 agreed in outline with Lynn (his layout, with the
+additions below for him to confirm); host side implemented in PR #6090 under
+approved RFC #6091. The CTR2 USB firmware is in progress; end-to-end USB
+operation has not been verified. Jeremy reports the TCP relay working with a
+stock CTR2.
 
 ## Goal
 
@@ -17,7 +19,7 @@ The CTR2 needs neither Wi-Fi credentials nor access to that network in USB
 mode. USB is the sole radio transport in this mode; commands are not also
 sent over Wi-Fi.
 
-Lynn will provide the firmware implementation. Binary patching and reverse
+Lynn provides the firmware implementation. Binary patching and reverse
 engineering are not dependencies of this design.
 
 ## Architecture
@@ -34,12 +36,12 @@ CTR2 controls, display, keyer, and local sidetone
                   Flex radio
 ```
 
-The existing TCP relay is the starting point. Replace its controller-facing
-TCP connection with HID framing and reassembly. Keep a dedicated upstream
-radio connection, separate from AetherSDR's own command connection.
+The TCP relay is the starting point: the controller-facing TCP connection is
+replaced by the HID link below, and the dedicated upstream radio connection,
+separate from AetherSDR's own command connection, stays.
 
-After the initial HID handshake, forward radio payload bytes unchanged in
-both directions. The adapter understands HID framing only. It does not
+After the link starts, radio payload bytes are forwarded unchanged in both
+directions. The adapter understands the HID link framing only; it does not
 inspect or interpret the enclosed radio protocol.
 
 - Forward all controller traffic and all replies and unsolicited output
@@ -51,84 +53,170 @@ inspect or interpret the enclosed radio protocol.
   AetherSDR backend command socket.
 - Keep transport errors and diagnostics outside the radio byte stream.
 
-The radio processes the CTR2's commands and returns the results. No list of
-supported API commands or copy of Lynn's command parser is needed in the
-host relay. HID message boundaries need not match API command boundaries;
-TCP payload can be split into transport chunks and reconstructed in order.
+The radio processes the CTR2's commands and returns the results. HID message
+boundaries need not match API command boundaries.
 
 The CTR2 remains an independent radio client. Its existing registration and
 MultiFlex binding behavior remains its responsibility. The relay does not
 assign AetherSDR's client identity or guarantee selection of its GUI session.
 
-## HID agreement
+## USB link specification (version 0)
 
-Lynn reports that his controllers already send HID reports with 8-byte
-payloads, currently carrying MIDI data. He will add the receive path and the
-USB operating mode. Device identifiers, report descriptor, report IDs, and
-host-to-device report details will come from Lynn before implementation.
+### HID interface
 
-Use his proposed small envelope, with an exact payload byte length added
-so the receiver can distinguish data from final-report padding:
+Vendor-defined usage page `0xFF00`, usage `0x01`, report ID `0x01`, 8-byte
+reports in **both** directions. Lynn's descriptor declares only the Input
+(device-to-host) report; the host also needs an Output report to send to
+the CTR2. Add the two marked lines before End Collection:
 
-| Report | Proposed contents |
+```c
+static constexpr uint8_t REPORT_ID = 0x01;
+static const uint8_t report_descriptor[] = {
+    0x06, 0x00, 0xFF,  // Usage Page (Vendor Defined 0xFF00)
+    0x09, 0x01,        // Usage (0x01)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, REPORT_ID,   //   Report ID (1)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x26, 0xFF, 0x00,  //   Logical Maximum (255)
+    0x75, 0x08,        //   Report Size (8 bits)
+    0x95, 0x08,        //   Report Count (8 bytes)
+    0x09, 0x01,        //   Usage (0x01)
+    0x81, 0x02,        //   Input (Data, Var, Abs)    device -> host
+    0x09, 0x01,        //   Usage (0x01)              <-- add
+    0x91, 0x02,        //   Output (Data, Var, Abs)   <-- add: host -> device
+    0xC0               // End Collection
+};
+```
+
+Use a 1 ms polling interval (`bInterval = 1`) on the interrupt IN and OUT
+endpoints. At one 8-byte report per millisecond per direction, payload
+throughput is about 7 KB/s each way; the radio's initial status burst after
+connecting can take a few seconds to arrive. That is expected, not a fault.
+
+In everything below, a *report* is the 8 bytes after the report ID.
+
+### Messages
+
+Every message is one header report followed by zero or more data reports.
+
+Header report:
+
+| Byte | Field | Value |
+| --- | --- | --- |
+| 0 | Start of message | `0xFF` |
+| 1 | Version | `0x00` |
+| 2 | Message counter | `0x00`-`0x7F` |
+| 3 | Message type | see below (Lynn's "Future" byte) |
+| 4 | Packet count, MSB | number of **reports** in the message, including this header |
+| 5 | Packet count, LSB | |
+| 6 | Payload byte count, MSB | exact number of payload bytes |
+| 7 | Payload byte count, LSB | |
+
+Data reports (packet count - 1 of them):
+
+| Byte | Field |
 | --- | --- |
-| Message header | Start marker, protocol version, 8-bit message counter, packet count, and exact payload byte length |
-| Message data | Matching message counter followed by up to seven payload bytes |
+| 0 | Message counter, same as the header |
+| 1-7 | Next 7 payload bytes; after the last payload byte, pad with `0x00` |
 
-A compact candidate header fits the existing eight payload bytes: one byte
-each for marker, version, and counter; two bytes each for packet count and
-payload length; one reserved byte. This is a proposal for agreement with
-Lynn, not a finalized wire format. Agree on byte order, marker value, report
-IDs, padding, and a practical maximum message length together. A two-byte
-length caps each message at 65,535 payload bytes; longer streams use multiple
-messages. Packet count must agree with the length and seven-byte fragments.
+Rules:
 
-Send each message's fragments in order, without interleaving messages in the
-same direction. Each direction has its own counter, wrapping modulo 256.
-These are transport counters, not Flex command sequences. Reassembly state
-and report boundaries distinguish headers from fragments; do not search the
-radio payload for a special marker.
+- Packet count = 1 + ceil(payload bytes / 7).
+- The payload byte count is exact, so a receiver drops the padding by count
+  rather than by stripping zeros. A payload may contain `0x00` or `0xFF`.
+- Counters are per direction, 7 bits, and wrap `0x7F` -> `0x00`. A data
+  report therefore never starts with `0xFF`.
+- Each DATA message carries the previous message's counter + 1.
+- A message's reports are sent back to back; messages in one direction are
+  never interleaved.
+- Maximum payload per message is **512 bytes**. Longer data is sent as
+  several messages. The receiver buffers one whole message before using it.
+- There is no checksum in version 0. The version byte leaves room to add one.
 
-The initial handshake identifies a compatible relay protocol version and
-establishes readiness before radio bytes are forwarded. AetherSDR opens the
-configured radio connection and retains any initial radio output until the
-HID side is ready. The precise handshake and connection-failure indication
-must be agreed with Lynn. A new connection starts with fresh framing state.
-No application heartbeat, command acknowledgments, or command-specific
-message types are required by this proposal.
+Message types:
 
-The only ongoing inspection is of the HID envelope needed for transport:
-length, counter, and fragment completeness. It never extends into the radio
-payload. Terminal output and MIDI events must not be mixed into the relay
-payload stream.
+| Type | Name | Direction | Payload | Meaning |
+| --- | --- | --- | --- | --- |
+| `0x00` | DATA | both | 1-512 bytes | Radio TCP bytes, unchanged |
+| `0x01` | HELLO | device -> host | none | Start or restart the link |
+| `0x02` | READY | host -> device | none | Radio connection is open; DATA may flow |
+| `0x03` | CLOSED | both | none | The radio connection has ended |
 
-## Applet and connection lifecycle
+Control messages (HELLO, READY, CLOSED) are always a single header report
+with packet count 1 and payload count 0. A receiver accepts a control
+message with any counter and expects the next DATA to carry that counter + 1;
+this is how both sides resynchronize. A sender starts its counter at 0 with
+the message that starts a link: HELLO from the device, READY from the host.
 
-Extend the working relay applet with HID device discovery and selection,
-the upstream radio address and port, Connect and Disconnect, connection
-state, and directional byte counters. Enumerate compatible devices using
-Lynn's identifiers and report information; distinguish multiple controllers
-using the available device identity. Start with one controller connection.
+### Link flow
 
-The operator selects USB mode on the controller, plugs it in, selects it in
-AetherSDR, chooses the reachable radio endpoint, and connects. The host and
-controller complete the handshake, then relay bytes in both directions.
-The destination remains fixed for that connection. Changing the selected
-AetherSDR radio must not silently retarget it.
+```text
+CTR2                                   AetherSDR                    Radio
+  | -- HELLO (counter 0) ------------->  |                            |
+  |                                      | -- new TCP connection ---> |
+  | <------------ READY (counter 0) ---  |  (connected)               |
+  | -- DATA "C1|..." ----------------->  | -- bytes ----------------> |
+  | <-------------------------- DATA --  | <-- replies / status ----- |
+  |              ...                     |              ...           |
+  | <------------------------- CLOSED -  | <-- radio closed --------- |
+  | -- HELLO --------------------------> |  (start again)             |
+```
 
-Use bounded buffers and preserve partial transfers without blocking the UI.
-Agree on maximum message size and incomplete-message timeout with Lynn.
-Do not release an incomplete HID message as a valid payload. Backpressure,
-USB throughput, and fragment scheduling must be tested under sustained radio
-output and CW operation. Eight-byte reports are the starting point, not a
-proven bandwidth or latency result.
+Treat READY exactly like the Wi-Fi TCP socket connecting and CLOSED exactly
+like it disconnecting. Every HELLO gets a **fresh** radio connection, so the
+CTR2's normal registration and binding sequence runs again.
 
-On disconnect, framing failure, or transport error, end the connection and
-clear pending buffers and reassembly state. Reconnection requires a fresh
-handshake and radio connection. Never replay old commands, reuse stale
-fragments after counter wrap, or reconnect the radio underneath an ongoing
-controller session. Show the failure in the applet; do not inject radio
-protocol text to explain it.
+Host behavior:
+
+- **HELLO received:** close any existing radio connection, discard all link
+  state, open a new radio connection (10 s timeout). On success send READY
+  and start forwarding, including any radio output that arrived first. On
+  failure send CLOSED.
+- **DATA received:** forward the payload to the radio.
+- **CLOSED received:** forward any DATA that came before it, then close the
+  radio connection. No reply is sent.
+- **Radio connection closes:** forward the radio's remaining bytes, then send
+  CLOSED.
+- **Framing error, a DATA message arriving with no radio connection, or an
+  incomplete message older than 1 s:** close the radio connection, send
+  CLOSED, and wait for HELLO.
+- **USB device removed, or Stop pressed:** close the radio connection (and
+  send CLOSED if the device is still there).
+
+Device behavior:
+
+- On entering USB mode, reset the counter and send HELLO.
+- Send DATA only after READY, and only until CLOSED.
+- **Payload is a byte stream.** The host splits radio output at arbitrary
+  points, so a DATA message may end mid-line and one line may span several
+  messages. Feed received payload into the same parser the Wi-Fi TCP path
+  uses. Commands the CTR2 sends may be one per message or batched; either
+  works.
+- On CLOSED, behave as when the Wi-Fi socket drops; send HELLO to reconnect.
+- On a framing error in what it receives, send HELLO to restart the link.
+
+### Test vectors
+
+Each line is one 8-byte report (after the report ID), in hex.
+
+| Message | Reports |
+| --- | --- |
+| HELLO, counter 0x00 | `FF 00 00 01 00 01 00 00` |
+| READY, counter 0x00 | `FF 00 00 02 00 01 00 00` |
+| CLOSED, counter 0x7F | `FF 00 7F 03 00 01 00 00` |
+| DATA `C1\|ping\n` (8 bytes), counter 0x01 | `FF 00 01 00 00 03 00 08` / `01 43 31 7C 70 69 6E 67` / `01 0A 00 00 00 00 00 00` |
+| DATA `abcdef\n` (exactly 7 bytes), counter 0x02 | `FF 00 02 00 00 02 00 07` / `02 61 62 63 64 65 66 0A` |
+| DATA `00 FF 0A`, counter 0x7E | `FF 00 7E 00 00 02 00 03` / `7E 00 FF 0A 00 00 00 00` |
+
+### Reference implementation for the firmware
+
+`tools/ctr2-firmware-reference/ctr2_link.{h,c}` implements both directions in
+portable C99 with no heap: `ctr2_tx_send()` emits one message as reports
+through a callback, and `ctr2_rx_feed()` takes one received report at a time
+and returns a complete message or an error. Those two files are
+**MIT-licensed** so they can go straight into the firmware. AetherSDR's test
+suite compiles them, checks them against the vectors above, and
+cross-checks them against the application's codec in both directions.
 
 ## CW behavior
 
@@ -137,135 +225,79 @@ forwards the resulting bytes exactly as it forwards all other traffic.
 It neither runs another paddle keyer nor changes event timestamps or indices.
 
 This is an independent external-client connection, not AetherSDR's own
-transmit command path. Do not claim TxCoordinator admission or ownership
-for opaque traffic. The relay must not generate key-down, retry commands,
-or invent a key-up on disconnect. Loss of the connection does not prove the
-radio is idle. Validate failure behavior with Lynn and the operator as part
-of controlled CW testing.
+transmit command path. It does not claim TxCoordinator admission or
+ownership for opaque traffic. The relay never generates key-down, retries
+commands, or invents a key-up on disconnect. On any link failure the host
+closes the CTR2's radio connection, so the radio's own handling of a
+disconnected client applies; whether that releases transmit must be verified
+on hardware in controlled CW testing. Loss of the connection does not by
+itself prove the radio is idle.
 
 ## Full transport coverage
 
 The goal remains replacement of all radio traffic used by Wi-Fi mode, not
-only CW. The first HID milestone carries the entire TCP byte stream through
-the proven relay approach.
+only CW. The first HID milestone carries the entire TCP byte stream.
 
-UDP discovery and streams are separate from TCP. Ask Lynn which of these
-his controllers require for full Wi-Fi-mode functionality. If required,
-agree on a minimal transport-level way to identify their endpoints and carry
-opaque datagrams while preserving datagram boundaries. Radio payloads still
-remain unchanged; do not parse TCP commands to infer UDP routing or rewrite
-embedded addresses. Endpoint setup must be explicit between the firmware
-and host transport.
+UDP discovery and streams are separate from TCP. Lynn to confirm which of
+these, if any, the CTR2 requires for full Wi-Fi-mode functionality. If
+required, a later version adds a minimal transport-level way to identify
+their endpoints and carry opaque datagrams while preserving datagram
+boundaries. Radio payloads still remain unchanged; TCP commands are not
+parsed to infer UDP routing and embedded addresses are not rewritten.
 
 A successful TCP-over-HID test does not establish full UDP-dependent feature
 parity. Account for every required channel before calling USB a complete
 replacement. This follow-up must not introduce radio-command mediation.
 
-## Implementation boundaries
+## Host implementation
 
-Reuse the working TCP relay's upstream connection and byte-pump behavior
-where its implementation permits. Put HID framing, reassembly, and transport
-in libaethercore, expose status and controls through a model, and keep the
-applet limited to UI. Use existing theme, accessibility, configuration, and
-lifetime conventions. Any saved preferences belong to one feature-owned
-AppSettings document; never persist pending traffic or transmit state.
+| Piece | File |
+| --- | --- |
+| Opaque byte pump, both directions, bounded | `src/core/ByteRelay.{h,cpp}` |
+| Link codec (v0) | `src/core/Ctr2HidFraming.{h,cpp}` |
+| HID device access on its own I/O thread (hidapi) | `src/core/Ctr2HidPort.{h,cpp}` |
+| Link state machine and radio connection | `src/core/Ctr2UsbRelay.{h,cpp}` |
+| Applet: Wi-Fi or USB, device list, radio endpoint | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
 
-Choose the HID host implementation after checking existing dependencies and
-Lynn's report descriptor. USB serial is not the transport in this design.
-Verify enumeration, device access, report sizing, and teardown on Linux,
-macOS, and Windows. Do not assume identical report-ID handling across host
-APIs. No additional thread or dependency is selected by this document.
+HID I/O runs on one dedicated worker thread because hidapi reads and writes
+block; a stalled controller can then never freeze the UI or other
+controllers. Everything else runs on the GUI event loop, as the TCP relay
+does. hidapi is an existing optional dependency; a build without it shows
+USB mode dimmed with the reason. The device list shows every HID interface
+on usage page `0xFF00`, usage `0x01`, and the operator picks one explicitly;
+the CTR2's USB vendor and product IDs will narrow it once known.
 
 RFC #6091 (approved) covers this design and the independent-client transmit
 boundary: the relay runs only after the operator enables it, and AetherSDR's
-existing transmit indicator covers on-air visibility. The host HID API choice
-is confirmed once the descriptor is known. This design does not change
+existing transmit indicator covers on-air visibility. Its amendment for the
+HID I/O thread is recorded on the issue. This design does not change
 AetherSDR's existing transmit policy or its own radio command paths.
+
+## Open items with Lynn
+
+- Confirm the version-0 additions: message type in byte 3, the Output
+  report, packet count in reports, counter wrap `0x7F` -> `0x00`, 512-byte
+  maximum payload (does it fit the CTR2's RAM?).
+- USB vendor and product IDs and the product string.
+- What the CTR2 should do if CLOSED arrives while it is keying; its local
+  keyer and sidetone are its own.
+- Which UDP channels, if any, Wi-Fi mode relies on.
 
 ## Next steps and acceptance
 
-1. Agree with Lynn on the eight-byte report layout, exact length field,
-   counter behavior, initial handshake, and disconnect/error signaling.
-   Obtain device identifiers and the report descriptor.
-2. Lynn adds USB mode and bidirectional HID transport beneath the controller's
-   existing Wi-Fi radio logic. AetherSDR adds the matching HID adapter and
-   device selection to the working relay.
-3. Test framing independently with arbitrary bytes, padding, fragmentation,
-   counter wrap, malformed/incomplete reports, bounded buffering, and
-   disconnect/reconnect. Compare complete reconstructed streams in both
-   directions; they must match the original bytes exactly.
-4. Test hardware startup, radio greetings, controls, display updates, and
-   MultiFlex binding. Verify AetherSDR's existing RX operation remains intact.
-5. With the operator's transmit authorization and test setup, verify paddle
-   keying, local sidetone, latency under load, and disconnect behavior.
-6. Confirm required UDP coverage with Lynn and test those features before
+1. Lynn confirms version 0 and adds USB mode beneath the controller's
+   existing Wi-Fi radio logic.
+2. Bench the link with the reference vectors and AetherSDR's USB mode:
+   startup, radio greeting, controls, display updates, MultiFlex binding,
+   unplug and replug. Verify AetherSDR's existing RX operation remains intact.
+3. With the operator's transmit authorization and test setup, verify paddle
+   keying, local sidetone, latency under load, and what the radio does when
+   the link drops mid-transmission.
+4. Confirm required UDP coverage with Lynn and test those features before
    declaring full Wi-Fi/USB parity. Repeat on the intended VPN/tailnet route
    and record the host platforms actually verified.
 
 No packet capture or API-parser implementation is a prerequisite for the
-opaque relay. Use captures only to investigate observed failures when useful.
-The inputs to this design are Jeremy's requirements, his report of the
-working TCP relay, and Lynn's HID proposal. Host implementation must remain
-independent of proprietary firmware disassembly.
-
-## Host-side status
-
-What exists on the AetherSDR side so the firmware work has a concrete
-counterpart. Everything below is a draft until agreed with Lynn.
-
-| Piece | File | State |
-| --- | --- | --- |
-| Opaque byte pump, both directions, bounded | `src/core/ByteRelay.{h,cpp}` | Working with the TCP relay |
-| Upstream radio connection and session lifecycle | `src/core/TcpByteProxy.{h,cpp}` | Working with the TCP relay |
-| HID envelope encoder and reassembler | `src/core/Ctr2HidFraming.{h,cpp}` | Draft; unit-tested, no device yet |
-| HID device adapter, enumeration, handshake | not started | Needs the items below |
-
-`ByteRelayEndpoint` is the seam for USB mode: a HID adapter implements it on
-the controller side (reports in, reassembled payload out; payload in, encoded
-reports out) and the radio side keeps the existing upstream TCP connection
-and per-connection session pattern. The relay itself does not change.
-
-### Draft envelope as implemented
-
-`Ctr2HidFraming.h` keeps every negotiable value in one `WireFormat` struct.
-A report here means the eight payload bytes, excluding any HID report ID.
-
-| Field | Draft value |
-| --- | --- |
-| Header layout | marker, version, counter, packet count (2), payload length (2), reserved |
-| Byte order of 2-byte fields | Little-endian |
-| Marker | `0xA5` |
-| Version | `1` |
-| Reserved byte | Must be `0` |
-| Data report | Counter, then up to 7 payload bytes; padding ignored via exact length |
-| Counters | Per direction, start at `0` on a fresh connection, wrap modulo 256 |
-| Maximum message | 4096 payload bytes (length field allows 65,535); longer writes become several messages |
-| Packet count | Must equal ceil(length / 7) |
-
-Reassembly is fail-closed. Report position, never content, separates headers
-from data, so a payload byte equal to the marker is just data. Any wrong
-marker, version, reserved byte, message counter, zero or oversize length,
-packet-count mismatch, data-report counter mismatch, or report that is not
-8 bytes puts the reassembler into a failed state. It releases no partial
-message and refuses input until reset, and the owner ends the connection.
-The incomplete-message timeout belongs to the adapter that owns the device,
-using `isMidMessage()`.
-
-`tests/ctr2_hid_framing_test.cpp` covers every byte value, lengths around the
-7-byte boundary up to 65,535, non-zero padding, splitting into many messages
-across counter wrap, independent sender chunking, marker-valued payload, each
-failure class above, sticky failure until reset, and partial-message holding.
-
-### Needed from Lynn
-
-- USB vendor and product IDs, and how to tell two controllers apart.
-- The report descriptor, report IDs, and the host-to-device report.
-- Sign-off on, or changes to, the draft table above.
-- The initial handshake: version check, readiness, and how a failed radio
-  connection is signalled to the controller.
-- Maximum message size and the incomplete-message timeout.
-- Which UDP channels Wi-Fi mode relies on, if any.
-
-hidapi is already an optional AetherSDR dependency for other USB controllers;
-the host HID API is still to be chosen once the descriptor is known, and must
-be verified on Linux, macOS and Windows.
+opaque relay. The inputs to this design are Jeremy's requirements, his
+report of the working TCP relay, and Lynn's HID proposal. Host
+implementation remains independent of proprietary firmware disassembly.

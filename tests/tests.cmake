@@ -337,12 +337,26 @@ target_include_directories(byte_relay_test PRIVATE src)
 target_link_libraries(byte_relay_test PRIVATE aethercore Qt6::Core)
 add_test(NAME byte_relay_test COMMAND byte_relay_test)
 
-# Draft CTR2 USB HID envelope codec: round trips and fail-closed reassembly
-# over in-memory 8-byte reports. No device, no sockets.
+# CTR2 USB link codec (wire format v0): published known-answer vectors, round
+# trips and fail-closed reassembly over in-memory 8-byte reports. No device,
+# no sockets.
 add_executable(ctr2_hid_framing_test tests/ctr2_hid_framing_test.cpp)
-target_include_directories(ctr2_hid_framing_test PRIVATE src)
+target_include_directories(ctr2_hid_framing_test PRIVATE src tests)
 target_link_libraries(ctr2_hid_framing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME ctr2_hid_framing_test COMMAND ctr2_hid_framing_test)
+
+# MIT firmware reference for the CTR2 USB link, compiled as C99, held to the
+# same vectors and cross-checked against the application codec both ways.
+add_executable(ctr2_hid_reference_test
+    tests/ctr2_hid_reference_test.cpp
+    tools/ctr2-firmware-reference/ctr2_link.c)
+set_source_files_properties(tools/ctr2-firmware-reference/ctr2_link.c
+    PROPERTIES LANGUAGE C)
+set_property(TARGET ctr2_hid_reference_test PROPERTY C_STANDARD 99)
+target_include_directories(ctr2_hid_reference_test PRIVATE
+    src tests tools/ctr2-firmware-reference)
+target_link_libraries(ctr2_hid_reference_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ctr2_hid_reference_test COMMAND ctr2_hid_reference_test)
 
 # Our TcpByteProxy server is the subject. Binds 127.0.0.1 ephemeral TCP ports
 # (proxy listener + a generic byte peer standing in for the upstream); no radio

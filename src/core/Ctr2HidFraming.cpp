@@ -4,76 +4,48 @@
 
 namespace AetherSDR::ctr2hid {
 
-namespace {
-
-constexpr int kMaxLengthField = 0xFFFF;
-
-int effectiveMax(const WireFormat& format)
+void FrameEncoder::encodeData(const QByteArray& payload, std::vector<Report>* out)
 {
-    return std::clamp(format.maxMessageBytes, 1, kMaxLengthField);
-}
-
-} // namespace
-
-FrameEncoder::FrameEncoder(const WireFormat& format)
-    : m_format(format)
-    , m_counter(format.firstCounter)
-{
-}
-
-void FrameEncoder::reset()
-{
-    m_counter = m_format.firstCounter;
-}
-
-void FrameEncoder::encode(const QByteArray& payload, std::vector<Report>* out)
-{
-    const int maxBytes = effectiveMax(m_format);
     int offset = 0;
     while (offset < payload.size()) {
-        const int size = std::min<int>(maxBytes, static_cast<int>(payload.size()) - offset);
-        encodeMessage(payload.constData() + offset, size, out);
+        const int size = std::min<int>(kMaxPayloadBytes, static_cast<int>(payload.size()) - offset);
+        encodeMessage(MessageType::Data, payload.constData() + offset, size, out);
         offset += size;
     }
 }
 
-void FrameEncoder::encodeMessage(const char* data, int size, std::vector<Report>* out)
+void FrameEncoder::encodeControl(MessageType type, std::vector<Report>* out)
+{
+    encodeMessage(type, nullptr, 0, out);
+}
+
+void FrameEncoder::encodeMessage(MessageType type, const char* data, int size,
+                                 std::vector<Report>* out)
 {
     const int packets = packetsFor(size);
-    Report header{};
-    header[0] = m_format.marker;
-    header[1] = m_format.version;
-    header[2] = m_counter;
-    header[3] = static_cast<std::uint8_t>(packets & 0xFF);
-    header[4] = static_cast<std::uint8_t>((packets >> 8) & 0xFF);
-    header[5] = static_cast<std::uint8_t>(size & 0xFF);
-    header[6] = static_cast<std::uint8_t>((size >> 8) & 0xFF);
-    header[7] = 0;
-    out->push_back(header);
-
-    for (int p = 0; p < packets; ++p) {
+    out->push_back(Report{kMarker, kVersion, m_counter, static_cast<std::uint8_t>(type),
+                          static_cast<std::uint8_t>(packets >> 8),
+                          static_cast<std::uint8_t>(packets & 0xFF),
+                          static_cast<std::uint8_t>(size >> 8),
+                          static_cast<std::uint8_t>(size & 0xFF)});
+    for (int p = 1; p < packets; ++p) {
         Report r{};
         r[0] = m_counter;
-        const int start = p * kDataBytesPerReport;
+        const int start = (p - 1) * kDataBytesPerReport;
         const int n = std::min(kDataBytesPerReport, size - start);
         for (int i = 0; i < n; ++i) {
             r[1 + i] = static_cast<std::uint8_t>(data[start + i]);
         }
         out->push_back(r);
     }
-    m_counter = static_cast<std::uint8_t>(m_counter + 1);
-}
-
-FrameReassembler::FrameReassembler(const WireFormat& format)
-    : m_format(format)
-    , m_expectedCounter(format.firstCounter)
-{
+    m_counter = nextCounter(m_counter);
 }
 
 void FrameReassembler::reset()
 {
     m_error = Error::None;
-    m_expectedCounter = m_format.firstCounter;
+    m_started = false;
+    m_expected = 0;
     m_messageCounter = 0;
     m_packetsLeft = 0;
     m_bytesLeft = 0;
@@ -89,7 +61,7 @@ bool FrameReassembler::fail(Error error)
     return false;
 }
 
-bool FrameReassembler::feed(const std::uint8_t* data, int size, QByteArray* out)
+bool FrameReassembler::feed(const std::uint8_t* data, int size, std::vector<Message>* out)
 {
     if (failed()) {
         return false;
@@ -102,48 +74,59 @@ bool FrameReassembler::feed(const std::uint8_t* data, int size, QByteArray* out)
     return feed(r, out);
 }
 
-bool FrameReassembler::feed(const Report& report, QByteArray* out)
+bool FrameReassembler::feed(const Report& report, std::vector<Message>* out)
 {
     if (failed()) {
         return false;
     }
-    if (m_packetsLeft > 0) {
-        return feedData(report, out);
-    }
-    return feedHeader(report);
+    return m_packetsLeft > 0 ? feedData(report, out) : feedHeader(report, out);
 }
 
-bool FrameReassembler::feedHeader(const Report& r)
+bool FrameReassembler::feedHeader(const Report& r, std::vector<Message>* out)
 {
-    if (r[0] != m_format.marker) {
+    if (r[0] != kMarker) {
         return fail(Error::BadMarker);
     }
-    if (r[1] != m_format.version) {
+    if (r[1] != kVersion) {
         return fail(Error::BadVersion);
     }
-    if (r[7] != 0) {
-        return fail(Error::BadReserved);
+    if (r[2] > kCounterMask) {
+        return fail(Error::BadCounter);
     }
-    if (r[2] != m_expectedCounter) {
-        return fail(Error::CounterMismatch);
+    if (r[3] > static_cast<std::uint8_t>(MessageType::Closed)) {
+        return fail(Error::BadType);
     }
-    const int packets = r[3] | (r[4] << 8);
-    const int length = r[5] | (r[6] << 8);
-    if (length < 1 || length > effectiveMax(m_format)) {
+    const auto type = static_cast<MessageType>(r[3]);
+    const int packets = (r[4] << 8) | r[5];
+    const int length = (r[6] << 8) | r[7];
+    const bool control = type != MessageType::Data;
+    if (length > kMaxPayloadBytes || (control && length != 0) || (!control && length == 0)) {
         return fail(Error::BadLength);
     }
     if (packets != packetsFor(length)) {
         return fail(Error::PacketCountMismatch);
     }
+    if (control) {
+        m_started = true;
+        m_expected = nextCounter(r[2]);
+        out->push_back(Message{type, {}});
+        return true;
+    }
+    if (!m_started) {
+        return fail(Error::NotStarted);
+    }
+    if (r[2] != m_expected) {
+        return fail(Error::CounterMismatch);
+    }
     m_messageCounter = r[2];
-    m_packetsLeft = packets;
+    m_packetsLeft = packets - 1;
     m_bytesLeft = length;
     m_partial.clear();
     m_partial.reserve(length);
     return true;
 }
 
-bool FrameReassembler::feedData(const Report& r, QByteArray* out)
+bool FrameReassembler::feedData(const Report& r, std::vector<Message>* out)
 {
     if (r[0] != m_messageCounter) {
         return fail(Error::DataCounterMismatch);
@@ -151,11 +134,10 @@ bool FrameReassembler::feedData(const Report& r, QByteArray* out)
     const int n = std::min(kDataBytesPerReport, m_bytesLeft);
     m_partial.append(reinterpret_cast<const char*>(r.data() + 1), n);
     m_bytesLeft -= n;
-    --m_packetsLeft;
-    if (m_packetsLeft == 0) {
-        out->append(m_partial);
+    if (--m_packetsLeft == 0) {
+        out->push_back(Message{MessageType::Data, m_partial});
         m_partial.clear();
-        m_expectedCounter = static_cast<std::uint8_t>(m_messageCounter + 1);
+        m_expected = nextCounter(m_messageCounter);
     }
     return true;
 }
@@ -165,12 +147,14 @@ QString FrameReassembler::errorText() const
     switch (m_error) {
     case Error::None:                return {};
     case Error::BadReportSize:       return QStringLiteral("HID report is not 8 bytes");
-    case Error::BadMarker:           return QStringLiteral("Expected a message header; marker byte wrong");
-    case Error::BadVersion:          return QStringLiteral("Unsupported relay protocol version");
-    case Error::BadReserved:         return QStringLiteral("Header reserved byte is not zero");
+    case Error::BadMarker:           return QStringLiteral("Expected a message header (0xFF)");
+    case Error::BadVersion:          return QStringLiteral("Unsupported link version");
+    case Error::BadType:             return QStringLiteral("Unknown message type");
+    case Error::BadCounter:          return QStringLiteral("Message counter above 0x7F");
+    case Error::BadLength:           return QStringLiteral("Payload length invalid for this message type");
+    case Error::PacketCountMismatch: return QStringLiteral("Packet count does not match payload length");
+    case Error::NotStarted:          return QStringLiteral("Data before the link was started");
     case Error::CounterMismatch:     return QStringLiteral("Message counter out of sequence");
-    case Error::BadLength:           return QStringLiteral("Message length is zero or exceeds the maximum");
-    case Error::PacketCountMismatch: return QStringLiteral("Packet count does not match message length");
     case Error::DataCounterMismatch: return QStringLiteral("Data report counter does not match its header");
     }
     return {};
