@@ -229,6 +229,14 @@ switch-without-stopping sequence, and a lock indicator.
 table at 48 kHz, and `MetisClient::stop()` drops any remainder rather than
 letting a half-written table finish in the next session.
 
+Clock changes accepted while DSP setup is opening also update the pending
+transport parameters; the eventual start consumes the latest CL1 intent and
+zeroed calibration. Interrupted OFF recovery is keyed by serial in a
+process-owned registry, so switching to another radio family and recreating the
+HL2 backend does not forget a still-powered radio. Only handing all twenty-four
+OFF writes to the transport releases that record. It is not radio readback and
+does not survive an application restart.
+
 **The lock indicator was not built, and the reason is narrower than "Protocol 1
 cannot".** An earlier version of this section said there is no I2C read path.
 That is wrong, and the correction matters because it separates a protocol limit

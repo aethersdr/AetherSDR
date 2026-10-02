@@ -4358,12 +4358,20 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
         QMetaObject::invokeMethod(m_metis, "clearSpeakerAudio", Qt::QueuedConnection);
     }
     if (m_hw.cl1RefClock != before.cl1RefClock) {
+        // DSP setup is asynchronous; start() must consume the latest accepted
+        // intent rather than overwrite the idle transport with its old snapshot.
+        if (m_pendingConnect) {
+            m_pendingConnect->mp.cl1RefClock = m_hw.cl1RefClock;
+        }
         QMetaObject::invokeMethod(m_metis, "setCl1RefClock", Qt::QueuedConnection,
                                   Q_ARG(bool, m_hw.cl1RefClock));
         // AND ZERO THE MANUAL CORRECTION — through the one rule that owns it,
         // because the checkbox is not the only way the two documents can end up
         // disagreeing. See normalizeCl1Calibration().
         if (normalizeCl1Calibration("CL1 external reference engaged")) {
+            if (m_pendingConnect) {
+                m_pendingConnect->mp.rxFrequencyHz = ncoCommandHz(m_rx.front().ncoHz);
+            }
             repushAllFrequencies();
         }
     }
@@ -4380,6 +4388,14 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
         applyBandFilter("hardware options");
         publishWideState();
     }
+}
+
+std::optional<std::pair<bool, std::uint32_t>> Hl2Backend::pendingCl1ReferenceForTest() const
+{
+    if (!m_pendingConnect) {
+        return std::nullopt;
+    }
+    return std::pair(m_pendingConnect->mp.cl1RefClock, m_pendingConnect->mp.rxFrequencyHz);
 }
 
 bool Hl2Backend::normalizeCl1Calibration(const char* why)

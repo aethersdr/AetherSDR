@@ -5,7 +5,6 @@
 #include <QHostAddress>
 #include <QTimer>
 #include <QList>
-#include <QSet>
 #include <QObject>
 
 #include <complex>
@@ -658,28 +657,15 @@ private:
     // expression buried in a 200-line function.
     [[nodiscard]] bool cl1RecoveryPending() const noexcept
     {
-        return !m_params.radioSerial.isEmpty()
-            && m_cl1MaybeOn.contains(m_params.radioSerial);
+        return cl1RecoveryPendingFor(m_params.radioSerial);
     }
-
-    // EVERY RADIO THIS PROCESS MAY HAVE LEFT ON CL1, by serial. The only record
-    // that a still-powered radio is running from an external reference the
-    // operator has since cleared; nothing on the wire can be asked. Survives
-    // stop() and start() on purpose.
-    //
-    // A SET AND NOT ONE SERIAL. With a single QString, switching a SECOND radio
-    // on overwrote the first one's record, and the first radio then never got
-    // its off table — it stayed on CL1 with nothing left that knew (#5923
-    // review). This object outlives a radio swap, so the record has to as well.
-    //
-    // ADDED PESSIMISTICALLY, at queue time, because a sequence interrupted
-    // half-way may have switched the part already. REMOVED ONLY ON PROOF: see
-    // m_cl1BanksUnsent.
-    QSet<QString> m_cl1MaybeOn;
+    // Process-owned recovery survives backend recreation on a family switch.
+    // Registry operations run only on the control plane, never in audio callbacks.
+    [[nodiscard]] static bool cl1RecoveryPendingFor(const QString& serial) noexcept;
     // The sequence currently draining out of m_oneShot: whose it is, whether it
     // is the OFF table, and how many of its banks have not yet been CONFIRMED
     // SENT. Only when the last one is confirmed does its radio leave
-    // m_cl1MaybeOn.
+    // the process recovery registry.
     //
     // WHY CONFIRMED AND NOT MERELY QUEUED. queueCl1Sequence() used to clear the
     // record the instant the OFF table was queued, before any of its twenty-four

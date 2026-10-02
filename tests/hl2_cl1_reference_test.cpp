@@ -48,6 +48,10 @@
 
 #include <cstdio>
 #include <functional>
+#include <initializer_list>
+#include <optional>
+#include <utility>
+#include <cstdint>
 
 using namespace AetherSDR;
 
@@ -91,7 +95,8 @@ struct MetisClientTestAccess {
     static bool recoveryPending(const MetisClient& c) { return c.cl1RecoveryPending(); }
     static bool knows(const MetisClient& c, const QString& serial)
     {
-        return c.m_cl1MaybeOn.contains(serial);
+        Q_UNUSED(c);
+        return MetisClient::cl1RecoveryPendingFor(serial);
     }
     static std::size_t queued(const MetisClient& c) { return c.m_oneShot.size(); }
     // The recovery decision start() makes, without binding a socket.
@@ -105,6 +110,15 @@ struct MetisClientTestAccess {
 using hl2::MetisClient;
 using hl2::MetisClientTestAccess;
 using Access = hl2::MetisClientTestAccess;
+
+namespace AetherSDR::hl2 {
+struct Hl2Cl1ReferenceTestAccess {
+    static std::optional<std::pair<bool, std::uint32_t>> pendingReference(const Hl2Backend& backend)
+    {
+        return backend.pendingCl1ReferenceForTest();
+    }
+};
+}
 
 namespace {
 
@@ -229,6 +243,34 @@ void partA_recoverySurvivesAnInterruptedOff()
               "an unknown serial is tracked as nothing — not writing the clock bus "
               "is always the safe failure");
     }
+}
+
+void recoverySurvivesTransportRecreation()
+{
+    const QString serial = QStringLiteral("AA:BB:CC:DD:EE:31");
+    {
+        MetisClient original;
+        Access::runWith(original, serial, false);
+        original.setCl1RefClock(true);
+        Access::deliver(original, static_cast<int>(hl2::kVersaClockCl1Banks));
+        original.setCl1RefClock(false);
+        Access::deliver(original, 3);
+        original.stop();
+    }
+    {
+        MetisClient recreated;
+        Access::runWith(recreated, serial, false);
+        check(Access::startWouldQueueOff(recreated),
+              "transport recreation retains interrupted OFF recovery for this radio");
+        recreated.setCl1RefClock(false);
+        Access::deliver(recreated, static_cast<int>(hl2::kVersaClockCl1Banks));
+        check(!Access::recoveryPending(recreated),
+              "the recreated transport releases recovery only after all OFF writes");
+    }
+    MetisClient subsequent;
+    Access::runWith(subsequent, serial, false);
+    check(!Access::startWouldQueueOff(subsequent),
+          "completed recovery does not return on another transport recreation");
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +424,46 @@ void partC_freqCalGetCarriesTheReasonItIsRefused()
           "and the refusal names CL1, so the page has something to show the operator");
 }
 
+void pendingConnectUsesLatestCl1Intent()
+{
+    for (const bool initiallyOn : {false, true}) {
+        const QString serial = initiallyOn ? QStringLiteral("AA:BB:CC:DD:EE:42")
+                                          : QStringLiteral("AA:BB:CC:DD:EE:41");
+        const RadioSettingsScope scope(QStringLiteral("hl2"), serial);
+        Hl2HardwareOptions hw;
+        hw.cl1RefClock = initiallyOn;
+        Hl2HardwareOptions::save(scope, hw);
+        if (!initiallyOn) {
+            Hl2FreqCal::savePpb(scope, 500);
+        }
+
+        hl2::Hl2Backend backend;
+        RadioConnectRequest request;
+        request.host = QStringLiteral("192.0.2.1");
+        request.serial = serial;
+        request.params.insert(QStringLiteral("boardMaxRx"), 4);
+        backend.connectRadio(request);
+        check(hl2::Hl2Cl1ReferenceTestAccess::pendingReference(backend)->first == initiallyOn,
+              "DSP setup holds the original clock intent before a change");
+
+        const bool latest = !initiallyOn;
+        setCl1(backend, latest);
+        check(hl2::Hl2Cl1ReferenceTestAccess::pendingReference(backend)->first == latest,
+              "a CL1 change during DSP setup updates the actual start snapshot");
+        check(Hl2HardwareOptions::load(scope).cl1RefClock == latest,
+              "the pending transport and persisted clock intent agree");
+        if (latest) {
+            check(hl2::Hl2Cl1ReferenceTestAccess::pendingReference(backend)->second == 10'000'000u,
+                  "the pending RX oscillator no longer carries the old manual correction");
+            check(askFreqCal(backend).value(QStringLiteral("ppb")).toInt() == 0,
+                  "enabling CL1 during DSP setup removes manual calibration");
+            check(Hl2FreqCal::loadPpb(scope) == 0,
+                  "the pending-connect calibration repair persists");
+        }
+        backend.disconnectRadio();
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -395,10 +477,13 @@ int main(int argc, char** argv)
 
     std::fprintf(stderr, "-- Part A: the OFF-table recovery latch\n");
     partA_recoverySurvivesAnInterruptedOff();
+    recoverySurvivesTransportRecreation();
     std::fprintf(stderr, "-- Part B: CL1 against a stale manual calibration\n");
     partB_inconsistentDocumentIsNormalisedOnConnect();
     std::fprintf(stderr, "-- Part C: freqcal.get carries externalReference\n");
     partC_freqCalGetCarriesTheReasonItIsRefused();
+    std::fprintf(stderr, "-- Part D: CL1 intent during asynchronous DSP setup\n");
+    pendingConnectUsesLatestCl1Intent();
 
     if (g_failures == 0) {
         std::fprintf(stderr, "hl2_cl1_reference_test: all checks passed\n");
