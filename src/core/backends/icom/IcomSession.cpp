@@ -20,18 +20,10 @@ Q_LOGGING_CATEGORY(lcIcom, "aether.icom.session")
 
 namespace {
 
-// The radio consumes one 20 ms frame at a time. Keep this timer as the wire
-// clock, but drain by ELAPSED TIME rather than "everything that is ready" or
-// "exactly one": a late or coalesced tick sends the frames it owes (bounded by
-// kTxPumpMaxFramesPerTick), so backlog cannot ratchet — while steady state
-// still never turns a host-side lead buffer into a burst on the RS-BA1 stream.
-//
-// Both extremes were tried. Draining everything at 10 ms made the modem's
-// deliberate lead buffer arrive as a burst. Draining exactly one per tick had
-// no recovery at all: a Qt timer only ever fires late, so producer and
-// consumer ran at equal rate with a monotonic backlog until TxPacketizer's
-// 250 ms cap started dropping the OLDEST bytes mid-over — and this pump clocks
-// every Icom transmission, voice included, not only AX.25.
+// The radio consumes one 20 ms frame at a time; this timer is the wire clock.
+// Drain by ELAPSED TIME, bounded by kTxPumpMaxFramesPerTick: a late tick sends
+// the frames it owes so backlog can't ratchet into TxPacketizer's 250 ms
+// drop-oldest cap, while the modem's lead buffer never leaves as a burst.
 constexpr int kTxPumpMs = 20;
 constexpr qint64 kTxPumpMaxFramesPerTick = 3;
 
@@ -110,17 +102,8 @@ bool IcomSession::start(const Params& params)
     connect(m_audio, &IcomStream::ready, this, &IcomSession::onAudioReady);
     connect(m_audio, &IcomStream::payloadReady, this, &IcomSession::onAudioPayload);
     connect(m_audio, &IcomStream::failed, this, &IcomSession::fail);
-    // LOSS IS CONCEALED, not merely counted.
-    //
-    // This used to forward the count and stop there, and nothing downstream
-    // connected to audioLost — so when the reorder buffer gave up and skipped
-    // forward, the decoded stream simply got shorter by that many packets and
-    // the receive timeline WALKED. RxAssembler::concealLoss() existed for
-    // exactly this and was reachable only from its own unit test, which read
-    // as implemented while doing nothing.
-    //
-    // Emitting the fill through the same audioReady path keeps the timeline
-    // continuous; the signal still goes out so a consumer can count the gaps.
+    // Loss is CONCEALED, not just counted: the fill goes out through audioReady so
+    // the RX timeline stays continuous; audioLost still fires for gap counting.
     connect(m_audio, &IcomStream::packetsLost, this, [this](int packets) {
         emit audioLost(packets);
         if (packets <= 0)
@@ -148,40 +131,19 @@ void IcomSession::stop()
             *t = nullptr;
         }
     }
-    // DEAUTHENTICATE BEFORE TEARING DOWN.
-    //
-    // A per-stream disconnect (type 0x05) closes the STREAMS; it does not end
-    // the SESSION. The radio goes on holding the authenticated session until it
-    // times out, and the next login is refused — which is exactly the
-    // "auth failed on reconnect" the operator hit, and why a retry a minute
-    // later works. kappanhang sends auth 0x01 here for the same reason.
-    //
-    // Send it TWICE as TRACKED packets. buildAuth() leaves the outer sequence
-    // at zero for IcomStream to stamp; sending it through sendRaw() bypassed
-    // that stamp, so a live IC-7300MK2 discarded the deauth behind the already
-    // advanced control-stream sequence. The next login succeeded but its first
-    // token request was rejected with 0xffffffff until the old lease expired.
-    // Two distinct tracked sequence numbers also avoid depending on a replay
-    // request we cannot serve after closing the socket.
+    // Deauthenticate before teardown: a per-stream disconnect (0x05) closes the
+    // streams but not the SESSION, and the radio refuses the next login until it
+    // times out (kappanhang also sends auth 0x01 here). Send it TWICE as TRACKED
+    // packets so IcomStream stamps the outer sequence; an unstamped deauth is
+    // discarded and the next token request is rejected with 0xffffffff.
     if (m_control && m_control->isReady()) {
         const auto bye = buildAuth(m_control->localSessionId(),
                                    m_control->remoteSessionId(), m_innerSeq++, m_authId,
                                    AuthKind::Deauth);
         m_control->sendTracked(bye);
         m_control->sendTracked(bye);
-        // FLUSH, don't sleep.
-        //
-        // This was QThread::msleep(150), which was wrong twice over. It froze
-        // the GUI thread for 150 ms on every disconnect — and on every
-        // reconnect too, since connectRadio() calls disconnectRadio() first.
-        // Worse, it could not do what it was for: sendRaw() only writes into
-        // QAbstractSocket's buffer, and blocking the event loop is precisely
-        // what stops Qt draining it. The deauth sat queued locally for the
-        // whole wait and then left in the same flush as the disconnect packets
-        // it had been carefully ordered ahead of.
-        //
-        // Flushing puts it on the wire immediately, which is what the wait was
-        // trying to buy.
+        // Flush, don't sleep: sendRaw() only fills the socket buffer, and blocking the
+        // event loop would stop Qt draining it (and freeze the GUI on every reconnect).
         m_control->flush();
     }
 
@@ -497,20 +459,11 @@ void IcomSession::requestStreamsIfReady()
 
 void IcomSession::openMediaStreams()
 {
-    // THE RATE INVARIANT, CHECKED WHERE IT IS ACTUALLY DECIDED.
-    //
-    // IcomProtocol.h's static_assert reads kAudioRateHz, a compile-time
-    // constant, while the rate that reaches the wire is this runtime field. So
-    // that assert cannot catch the failure its own comment describes: setting
-    // sampleRateHz to 16000 still yields 1920-byte frames, still 60 ms of audio
-    // per frame, and still the silent zero-power transmit that cost a live
-    // session to find. The build stays green the whole way.
-    //
-    // Clamped rather than refused: a wrong rate here is a transmitter that
-    // keys and radiates nothing, which is far worse than ignoring a request
-    // the packetiser cannot honour. When the low-bandwidth work lands it must
-    // re-derive the 1364/556 split, and this is the guard that will make that
-    // requirement impossible to skip.
+    // The runtime rate check. IcomProtocol.h's static_assert only sees the
+    // compile-time kAudioRateHz; any other sampleRateHz here would still produce
+    // 1920-byte frames (60 ms at 16 kHz) and a transmitter that keys with zero
+    // forward power. Clamped rather than refused. Supporting another rate requires
+    // re-deriving the 1364/556 split.
     if (m_params.sampleRateHz != kAudioRateHz) {
         qCWarning(lcIcom) << "audio sample rate" << m_params.sampleRateHz
                           << "Hz cannot be honoured — the packet split is sized for"
@@ -523,20 +476,11 @@ void IcomSession::openMediaStreams()
     m_audio->beginHandshake();
 }
 
-// The token ticker, and the renewal watchdog — one timer doing both.
-//
-// THE FAILURE THIS EXISTS FOR. The radio requires a renewal on the 60 s
-// reference cadence and eventually stops media silently after the last accepted
-// token: no disconnect packet, no error, and the UDP transport keeps running
-// because idle keepalives are not token-gated. So `isConnected()` stays true,
-// link statistics keep climbing, and CI-V is simply dead. It reads as a radio
-// that stopped talking rather than as a session that expired.
-//
-// wfview and kappanhang both renew once per minute. A live IC-7300MK2 stopped
-// serial and audio about 90 s after an established token, but an immediate
-// reconnect grant stopped around 45 s even though its 60 s renewal was later
-// accepted. We renew once at 30 s, then every 60 s, retry within 3 s, and fail
-// at 80 s so the session cannot sit falsely green past the observed expiry.
+// Token ticker and renewal watchdog in one timer. The radio stops media
+// silently after the last accepted token (no disconnect packet; untokened idle
+// keepalives keep the transport and isConnected() alive). Observed on an
+// IC-7300MK2: ~90 s after an established token, ~45 s after a reconnect grant.
+// So: renew once at 30 s, then every 60 s, retry within 3 s, fail at 80 s.
 void IcomSession::onTokenRenew()
 {
     if (!m_control || !m_control->isReady())
@@ -572,16 +516,9 @@ void IcomSession::onTokenRenew()
                             .arg(m_renewRetries));
             return;
         }
-        // RELEASE THE LATCH. Retries are exhausted for THIS renewal, but the
-        // token is alive until tokenDeadMs — so falling through to the cadence
-        // below starts a fresh one with a fresh budget, which is effectively
-        // continuous retry up to the dead-session deadline.
-        //
-        // Leaving it latched meant nothing was ever sent again: the cadence
-        // branch could not run, and the session coasted into a guaranteed
-        // teardown. A 10 s outage at t=20 s would lose the four resends and
-        // then sit silent from t=30 s to the fail() at t=50 s — a full
-        // disconnect for an outage that had been over for twenty seconds.
+        // Release the latch: retries for THIS renewal are exhausted, but the token
+        // lives until tokenDeadMs, so fall through and let the cadence start a fresh
+        // renewal with a fresh budget — effectively continuous retry until the deadline.
         m_renewUnacked = false;
         m_renewRetries = 0;
     }
@@ -606,18 +543,10 @@ void IcomSession::onSerialReady()
     m_serial->sendTracked(buildSerialOpen(m_serial->localSessionId(),
                                           m_serial->remoteSessionId(), m_serialSendSeq++, true));
 
-    // ⛔ ONE OPEN IS NOT ENOUGH. Observed on a live IC-9700 2026-08-05: the
-    // radio accepts the open, reports the pipe ready, and then streams nothing
-    // — not one CI-V frame in 45 s. Every consequence is downstream and silent:
-    // no 0x19 0x00 reply, so the model never resolves; no model, so scope and
-    // transmit stay disabled and no dBm range is published; no range, so the pan
-    // auto-ranges into a runaway MainWindow rejects once a second. The operator
-    // sees a blank frequency and a waterfall that keeps resetting.
-    //
-    // kappanhang and the SDR9700 reference both re-send the open on a 100 ms
-    // timer until data flows (their startCivDataTimer), and Aether-gate does the
-    // same driving THIS radio — 1356 frames in 45 s, 30.1 fps. An IC-705 that
-    // happens to start on the first open would never expose this.
+    // One open is not enough: an IC-9700 can accept the CI-V open, report ready,
+    // and stream nothing (then the model never resolves and scope/TX stay off).
+    // Re-send the open on a timer until data flows, as kappanhang/SDR9700
+    // (startCivDataTimer, 100 ms) do.
     m_civDataSeen = false;
     m_civOpenAttempts = 0;
     if (!m_civOpenRetry) {
@@ -679,33 +608,12 @@ void IcomSession::onSerialPayload(const QByteArray& packet)
         auto frame = parseFrame(raw);
         if (!frame)
             continue;
-        // Drop our OWN commands. CI-V is a bus protocol and the radio echoes
-        // everything addressed to it straight back; treating those echoes as
-        // radio state makes every command look confirmed the instant it is
-        // sent, including the ones the radio goes on to reject with FA.
-        //
-        // `from` ALONE is the test, because a frame we sent is never radio
-        // state — whoever it happened to be addressed to. This used to also
-        // require `to` to be our own address or the 0x00 broadcast, which was
-        // true of every frame we send right up until setCivAddress() made our
-        // address movable mid-session: after a CI-V retarget the echoes of
-        // frames still in flight at the OLD address match neither arm and get
-        // handed up as though the radio had spoken.
-        //
-        // Today's traffic through that window is read-only, so those echoes
-        // carry no data byte and are rejected downstream anyway — but
-        // applyScopeStartup() sends 0x27 WITH a payload, so the class is not
-        // structurally empty, and an invariant that merely happens to hold is
-        // the thing this filter was written not to depend on.
-        //
-        // The broadcast case is what first made the `to` test insufficient: a
-        // 0x19 0x00 sent to 0x00 — the address query that needs no prior
-        // knowledge of who is out there — echoes back as to=0x00, from=0xE0.
-        // Measured on an IC-9700 and an IC-705 on 2026-08-14: the echo always
-        // arrives first, ahead of the real reply.
-        //
-        // A radio answering transceive to 0x00 is a real frame and still gets
-        // through, because its `from` is the radio's address, not ours.
+        // Drop our OWN commands: the radio echoes every frame on the CI-V bus, and an
+        // echo is never radio state. `from` ALONE is the test — `to` isn't reliable
+        // because setCivAddress() can move our target mid-session, and a 0x19 0x00
+        // query to broadcast 0x00 echoes as to=0x00, from=0xE0 (the echo arrives before
+        // the real reply). A radio's transceive to 0x00 still passes: its `from` is the
+        // radio's address.
         if (frame->from == kControllerAddress)
             continue;
         emit civFrameReady(*frame);

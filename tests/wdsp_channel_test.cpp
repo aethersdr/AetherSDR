@@ -1977,8 +1977,9 @@ TransmitRun runTransmitChannel(int plane, double toneHz, WdspChannel::Mode mode,
 // at the live 21.33 ms period. Retried, it comes back clean. A transient on a
 // shared machine must not read as a transmit regression.
 //
-// THE PREDICATE IS "NO UNDERRUN", NOT "LONG ENOUGH", and the difference was
-// found the hard way. A capture length guard was tried first and let the defect
+// THE PREDICATE IS "NO CAPTURE FAULT", NOT "LONG ENOUGH", and the difference was
+// found the hard way. Underruns and other non-Ok results both invalidate
+// collection. A capture length guard was tried first and let the defect
 // through: an underrun at block 31 of 104 leaves 72 contiguous blocks, 90% of
 // the full length and a whole number of cycles of every tone -- and the LSB
 // 2000 Hz point still read 81.91 dB where a clean run reads 289.61. The reason
@@ -2011,15 +2012,17 @@ TransmitRun runTransmitChannelSettled(int plane, double toneHz,
         TransmitRun run = runTransmitChannel(plane, toneHz, mode, lowHz, highHz,
                                              blocks, discardBlocks, pace,
                                              amplitude);
-        if (!run.created || run.underrunBlocks == 0) {
+        if (!run.created || (run.underrunBlocks == 0 && run.otherBlocks == 0)) {
             return run;
         }
         const int had = run.underrunBlocks;
+        const int other = run.otherBlocks;
         if (run.iq.size() > best.iq.size()) {
             best = std::move(run);
         }
-        std::cout << "  (starved at " << toneHz << " Hz: " << had
-                  << " underrun(s) at " << pace << " us -- retrying slower)\n";
+        std::cout << "  (capture fault at " << toneHz << " Hz: " << had
+                  << " underrun(s), " << other << " other non-Ok block(s) at "
+                  << pace << " us -- retrying slower)\n";
     }
     return best;
 }
@@ -2417,18 +2420,15 @@ struct SweepPoint
     std::size_t samples = 0;        // after the whole-cycle trim
     std::size_t captured = 0;       // before it
     int underruns = 0;
+    int otherBlocks = 0;
 };
 
-SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz,
-                             bool wireUpper, double toneHz,
-                             std::size_t blocks, std::size_t discardBlocks,
-                             int paceUs, double amplitude)
+SweepPoint sweepPointFromRun(const TransmitRun& run, bool wireUpper,
+                             double toneHz)
 {
     SweepPoint point;
-    const TransmitRun run =
-        runTransmitChannel(0, toneHz, mode, lowHz, highHz, blocks, discardBlocks,
-                           paceUs, amplitude);
     point.underruns = run.underrunBlocks;
+    point.otherBlocks = run.otherBlocks;
     if (!run.created || run.iq.empty()) {
         return point;
     }
@@ -2454,7 +2454,18 @@ SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz
     return point;
 }
 
-// One sweep point, re-run if the modulator was STARVED.
+SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz,
+                             bool wireUpper, double toneHz,
+                             std::size_t blocks, std::size_t discardBlocks,
+                             int paceUs, double amplitude)
+{
+    const TransmitRun run =
+        runTransmitChannel(0, toneHz, mode, lowHz, highHz, blocks, discardBlocks,
+                           paceUs, amplitude);
+    return sweepPointFromRun(run, wireUpper, toneHz);
+}
+
+// One sweep point, re-run if the capture contains any non-Ok block.
 //
 // A starved run does not announce itself. runTransmitChannel restarts
 // collection after any non-Ok block -- correlating across the seam would
@@ -2468,35 +2479,87 @@ SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz
 // true statement about the capture and a false one about the chain, and only
 // the second one is what the assertion is for.
 //
-// THE PREDICATE IS "NO UNDERRUN", NOT "LONG ENOUGH". A length guard was tried
-// first and let the defect through -- see runTransmitChannelSettled.
+// THE PREDICATE IS "NO CAPTURE FAULT", NOT "LONG ENOUGH". A length guard was tried
+// first and let the defect through -- see runTransmitChannelSettled. Other
+// non-Ok results also reset collection, so they are counted and retried too.
 //
 // Retrying is the right place for this and a retry inside Hl2TxDsp would not
 // be: pacing is the CALLER's responsibility, and here the caller is this
 // function. Four attempts, and each retry is PRINTED rather than hidden -- a
 // point that needs retrying on an idle machine is evidence about the chain.
-SweepPoint measureSweepPointSettled(WdspChannel::Mode mode, double lowHz,
-                                    double highHz, bool wireUpper, double toneHz,
-                                    std::size_t blocks, std::size_t discardBlocks,
-                                    int paceUs, double amplitude)
+// The sampler seam exercises retry selection without a scheduler-dependent
+// fault or a synthetic radio peer. The normal caller still measures real WDSP.
+template<typename Measure>
+SweepPoint measureSweepPointSettledBy(double toneHz, int paceUs, Measure&& measure)
 {
     SweepPoint best;
     for (int attempt = 0; attempt < 4; ++attempt) {
         // The pace BACKS OFF on each retry -- see runTransmitChannelSettled.
         const int pace = paceUs * (attempt + 1);
-        const SweepPoint point =
-            measureSweepPoint(mode, lowHz, highHz, wireUpper, toneHz, blocks,
-                              discardBlocks, pace, amplitude);
-        if (point.measured && point.underruns == 0) {
+        const SweepPoint point = measure(pace);
+        if (point.measured && point.underruns == 0 && point.otherBlocks == 0) {
             return point;
         }
         if (point.samples > best.samples) {
             best = point;
         }
-        std::cout << "  (starved at " << toneHz << " Hz: " << point.underruns
-                  << " underrun(s) at " << pace << " us -- retrying slower)\n";
+        std::cout << "  (capture fault at " << toneHz << " Hz: " << point.underruns
+                  << " underrun(s), " << point.otherBlocks
+                  << " other non-Ok block(s) at " << pace
+                  << " us -- retrying slower)\n";
     }
     return best;
+}
+
+SweepPoint measureSweepPointSettled(WdspChannel::Mode mode, double lowHz,
+                                    double highHz, bool wireUpper, double toneHz,
+                                    std::size_t blocks, std::size_t discardBlocks,
+                                    int paceUs, double amplitude)
+{
+    return measureSweepPointSettledBy(toneHz, paceUs, [&](int pace) {
+        return measureSweepPoint(mode, lowHz, highHz, wireUpper, toneHz, blocks,
+                                 discardBlocks, pace, amplitude);
+    });
+}
+
+bool runCaptureFaultRetryTest()
+{
+    // A non-underrun fault also resets collection. Retaining real-sized IQ
+    // must not turn such a capture into a clean point merely because the
+    // underrun counter is zero.
+    TransmitRun run;
+    run.created = true;
+    run.otherBlocks = 1;
+    run.iq.assign(96, std::complex<float> {0.5f, 0.0f});
+    run.index.resize(run.iq.size());
+    std::iota(run.index.begin(), run.index.end(), std::size_t {0});
+    const SweepPoint faulty = sweepPointFromRun(run, false, 1000.0);
+    if (!require(faulty.measured && faulty.underruns == 0 &&
+                     faulty.otherBlocks == 1 && faulty.samples == 96,
+                 "a non-underrun capture fault was lost during measurement")) {
+        return false;
+    }
+    run.otherBlocks = 0;
+    const SweepPoint clean = sweepPointFromRun(run, false, 1000.0);
+    int attempts = 0;
+    const SweepPoint recovered = measureSweepPointSettledBy(1000.0, 2000,
+        [&](int pace) {
+            ++attempts;
+            return (pace == 2000) ? faulty : clean;
+        });
+    if (!require(attempts == 2 && recovered.otherBlocks == 0,
+                 "the settled sweep accepted a non-underrun fault instead of retrying")) {
+        return false;
+    }
+    attempts = 0;
+    const SweepPoint exhausted = measureSweepPointSettledBy(1000.0, 2000,
+        [&](int) {
+            ++attempts;
+            return faulty;
+        });
+    return require(attempts == 4 && exhausted.measured &&
+                       exhausted.otherBlocks == 1,
+                   "exhausted capture retries lost their non-underrun fault");
 }
 
 bool runTransmitSuppressionSweepTest()
@@ -2577,8 +2640,9 @@ bool runTransmitSuppressionSweepTest()
             // alone, and only one of them is about the transmitter.
             what = std::string("sweep ") + band.name + " at " +
                    std::to_string(static_cast<int>(toneHz)) +
-                   " Hz was not starved (no underruns in the measured run)";
-            if (!require(point.underruns == 0, what.c_str())) {
+                   " Hz was fault-free (no non-Ok blocks in the measured run)";
+            if (!require(point.underruns == 0 && point.otherBlocks == 0,
+                         what.c_str())) {
                 return false;
             }
 
@@ -2692,16 +2756,40 @@ bool runTransmitSuppressionSweepTest()
     // averages down as 1/sqrt(N) while a real tone does not. The point of
     // printing it is to be able to say which, rather than quoting 297 dB at
     // anyone.
+    //
+    // BOTH PROBES GO THROUGH THE SETTLED HARNESS, like every sweep point above
+    // (#5962). They were written against measureSweepPoint directly, so under
+    // CPU load they got one roll at kPaceUs -- the FIRST attempt's pace -- and
+    // an underrun either emptied the capture ("produced no IQ") or left one
+    // that opens inside the post-underrun transient. A transient is amplitude
+    // modulation, the two runs caught different amounts of it, and the ratio
+    // walked off 0.5: a scheduler fault reported as an ALC fault. The
+    // predicate is "no non-Ok blocks": every such block restarts collection.
+    // The retry budget can run out, so it is checked here rather than trusted.
+    // Exhaustion reports a capture fault; only a clean capture reaches the
+    // unchanged 1 % ALC bound.
     {
         const SweepPoint full =
-            measureSweepPoint(WdspChannel::Mode::Usb, 300.0, 2700.0, false,
-                              1000.0, kBlocks, kDiscard, kPaceUs, kAmplitude);
+            measureSweepPointSettled(WdspChannel::Mode::Usb, 300.0, 2700.0,
+                                     false, 1000.0, kBlocks, kDiscard, kPaceUs,
+                                     kAmplitude);
         const SweepPoint half =
-            measureSweepPoint(WdspChannel::Mode::Usb, 300.0, 2700.0, false,
-                              1000.0, kBlocks, kDiscard, kPaceUs,
-                              0.5 * kAmplitude);
-        if (!require(full.measured && half.measured,
-                     "the ALC linearity probe produced no IQ")) {
+            measureSweepPointSettled(WdspChannel::Mode::Usb, 300.0, 2700.0,
+                                     false, 1000.0, kBlocks, kDiscard, kPaceUs,
+                                     0.5 * kAmplitude);
+        if (!require(full.measured && half.measured &&
+                         full.underruns == 0 && half.underruns == 0 &&
+                         full.otherBlocks == 0 && half.otherBlocks == 0,
+                     "the ALC linearity probe could not get a fault-free "
+                     "capture")) {
+            return false;
+        }
+        // Comparable, not merely present: the same span of the same stream.
+        // Faults are counted above; retain this independent span invariant.
+        if (!require(full.captured == half.captured &&
+                         full.samples == half.samples,
+                     "the ALC linearity probe's two captures cover different "
+                     "spans")) {
             return false;
         }
         const double ratio = half.wanted / std::max(1.0e-20, full.wanted);
@@ -2715,22 +2803,28 @@ bool runTransmitSuppressionSweepTest()
             return false;
         }
 
-        const std::size_t halfLength =
-            wholeCycleCount(full.samples / 2, 1000.0, 48000.0);
+        // Gated on the probe's OWN run: comparing its length against `full`
+        // failed it for a reason unrelated to the floor whenever the two runs
+        // were starved differently.
         const TransmitRun probe =
             runTransmitChannelSettled(0, 1000.0, WdspChannel::Mode::Usb, 300.0,
                                       2700.0, kBlocks, kDiscard, kPaceUs,
                                       kAmplitude);
-        if (!require(probe.created && probe.iq.size() >= full.samples,
-                     "the floor probe produced no IQ")) {
+        const std::size_t fullLength =
+            wholeCycleCount(probe.iq.size(), 1000.0, 48000.0);
+        if (!require(probe.created && probe.underrunBlocks == 0 &&
+                         probe.otherBlocks == 0 && fullLength > 0,
+                     "the floor probe could not get a fault-free capture")) {
             return false;
         }
+        const std::size_t halfLength =
+            wholeCycleCount(fullLength / 2, 1000.0, 48000.0);
         const double imageFull =
-            binPower(probe.iq, probe.index, 1000.0, 48000.0, full.samples);
+            binPower(probe.iq, probe.index, 1000.0, 48000.0, fullLength);
         const double imageHalf =
             binPower(probe.iq, probe.index, 1000.0, 48000.0, halfLength);
         std::cout << "  instrument floor probe at USB 1 kHz: image over "
-                  << full.samples << " samples " << imageFull << ", over "
+                  << fullLength << " samples " << imageFull << ", over "
                   << halfLength << " samples " << imageHalf << " (ratio "
                   << (imageHalf / std::max(1.0e-30, imageFull))
                   << "; a real tone gives 1, broadband floor gives ~1.41)\n";
@@ -3790,6 +3884,7 @@ int main()
     }));
     check(runLeakChecked("TX discard", runTransmitDiscardTest));
     check(runLeakChecked("TX live geometry", runTransmitLiveGeometryTest));
+    check(runLeakChecked("capture fault retry", runCaptureFaultRetryTest));
     check(runLeakChecked("TX suppression sweep", runTransmitSuppressionSweepTest));
     check(runLeakChecked("TX zeros census", runTransmitZerosCensusTest));
     check(runLeakChecked("underrun test", runUnderrunTest));

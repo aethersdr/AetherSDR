@@ -15,25 +15,17 @@ class QNetworkReply;
 
 namespace AetherSDR {
 
-// Download-on-demand cache for the NVIDIA AFX denoiser "pack" (AFX runtime libs
-// + CUDA/TensorRT + the per-GPU denoiser model). Lives under the app data dir so
-// the in-process NvidiaAfxFilter can dlopen it with no env var.
-//
-// v2 "split" sourcing — we host almost nothing:
-//   * CUDA libs (cublas/cudart/cufft/nvrtc) come straight from NVIDIA's PyPI
-//     wheels, anonymously. We pin (package, version); the wheel URL + sha256 are
-//     resolved from the PyPI JSON API at runtime, so we get integrity for free
-//     and don't hardcode volatile CDN paths.
-//   * The AFX proprietary libs + TensorRT runtime libs + the denoiser model ship
-//     as one small .tar.zst we host (NVIDIA redistributables we're permitted to
-//     redistribute as part of the app).
-// Components are fetched sequentially, extracted into a staging pack, then the
-// pack is atomically swapped into place and the feature lib is symlinked onto
-// the core's RPATH.
-//
-// install() runs the full v2 fetch; installFromFile() imports a single
-// pre-assembled .tar.zst (offline / air-gapped). Network I/O is async; archive
-// extraction runs via unzip/tar in a QProcess.
+// Download-on-demand cache for the NVIDIA AFX denoiser pack (AFX libs +
+// CUDA/TensorRT + per-GPU model) under the app data dir, so NvidiaAfxFilter can
+// dlopen it without env vars. v2 split sourcing:
+//   - CUDA libs (cublas/cudart/cufft/nvrtc) from NVIDIA's PyPI wheels; (package,
+//     version) is pinned, URL and sha256 resolved from the PyPI JSON API.
+//   - AFX libs + TensorRT runtime + model in one small .tar.zst we host
+//     (permitted redistributables).
+// Fetched sequentially into a staging pack, swapped in atomically, feature lib
+// symlinked onto the core's RPATH. installFromFile() imports a pre-assembled
+// .tar.zst (offline). Network I/O is async; extraction runs unzip/tar in a
+// QProcess.
 class NvidiaAfxPack : public QObject {
     Q_OBJECT
 public:

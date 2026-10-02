@@ -41,38 +41,24 @@ struct OccupiedRegionParams {
                                        // strong interferer sitting near the edge
 };
 
-// measureOccupiedRegion — a single-signal occupied-bandwidth edge-finder
-// (RFC #3878). This is deliberately NOT VoiceSignalDetector::detectVoiceSignals(),
-// which is a band-scan marker detector that splits wide regions into ~2.7 kHz
-// chunks and would fragment a wide ESSB signal. Here we anchor on the slice
-// carrier, scan only a local window on the signal's energy side, and fit the
-// contiguous run of energy.
-//
-// Edge logic, in relative terms (never absolute calibration):
-//  * INNER (low-cut) edge is floor-relative — the first bin clearing
-//    floorCurve + kEnvGateDb. This must stay floor-relative: a peak-relative
-//    inner threshold floated narrower on loud syllables and wider on quiet ones.
-//  * OUTER (high-cut) edge is bounded by the inner of: the floor return, a
-//    SEPARATE stronger lobe (rebound), and a splatter cap placed relative to the
-//    in-band reference (referenceDbm - kSplatterDownDb), so a slowly-decaying
-//    dirty tail is excluded rather than chased to the floor.
-//  * Each edge is then refined per-edge: snapped to a steep transition when a
-//    clear cliff exists (modern DSP rigs), else left at the level/floor extent
-//    (soft analog roll-offs).
-//
+// measureOccupiedRegion: single-signal occupied-bandwidth edge finder (RFC
+// #3878). Not VoiceSignalDetector::detectVoiceSignals(), which chunks wide
+// regions (~2.7 kHz) and would fragment ESSB. Anchors on the carrier and fits the
+// contiguous energy on the signal's side. Edges are relative, never calibrated:
+//   * INNER (low-cut): first bin clearing floorCurve + kEnvGateDb; must stay
+//     floor-relative (peak-relative floats with syllable level).
+//   * OUTER (high-cut): innermost of the floor return, a separate stronger lobe,
+//     and the splatter cap (referenceDbm - kSplatterDownDb).
+//   * Each edge snaps to a steep transition if one exists, else stays at the
+//     level/floor extent.
 //  binsDbm        full-pan FFT magnitudes (dBm)
-//  centerMhz/bandwidthMhz   the pan span
+//  centerMhz/bandwidthMhz  the pan span
 //  carrierMhz     the slice's suppressed-carrier frequency
 //  mode           "USB" or "LSB" (selects the energy side)
-//  noiseFloorDbm  rolling floor from SpectrumWidget (sentinel <= -500 => unknown);
-//                 used to seed and cross-check the per-frequency floor curve
-//  avgEnv         in/out per-slice temporal average (video averaging): a
-//                 per-offset EMA of the envelope that reduces frame-to-frame
-//                 noise before the edge threshold — stabilises edges on
-//                 weak/medium signals. Persistent per-slice; reinit on geometry
-//                 change. (NOT a peak-hold — a per-bin peak-hold accumulated and
-//                 inflated the width over time; QSB is ridden by the bounded
-//                 edge peak-hold instead.)
+//  noiseFloorDbm  SpectrumWidget's rolling floor (<= -500 = unknown); seeds and
+//                 cross-checks the floor curve
+//  avgEnv         in/out per-slice temporal envelope average (persistent;
+//                 reinit on geometry change). Not a per-bin peak-hold.
 OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
                                      double centerMhz, double bandwidthMhz,
                                      double carrierMhz, const QString& mode,

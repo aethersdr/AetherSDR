@@ -6,42 +6,13 @@ namespace AetherSDR {
 
 class RadioSettingsScope;
 
-// Manual frequency calibration for the Hermes-Lite 2.
-//
-// WHY THIS EXISTS AT ALL. The HL2 tunes off a free-running 38.4 MHz crystal
-// multiplied to 76.8 MHz by the VersaClock. That 76.8 MHz is baked into the
-// BITSTREAM: radio.v computes the NCO phase word as
-//
-//     freqcomp = f_Hz * M2 + 2^24,   M2 = 2^57 / 76'800'000   (a localparam)
-//     phase    = freqcomp[56:25]
-//
-// so there is no register anywhere in the HL2 map — and no function in the
-// HL2's own tooling — that can be told the crystal's actual error. Correction
-// is the host's job or it does not happen. (Quisk reaches the same conclusion
-// from the other direction, carrying the measured clock as `rx_udp_clock` and
-// reconciling it against the FPGA constant in Freq2Phase().)
-//
-// THE ONE RESULT THIS FILE RESTS ON. With a true clock of 76.8 MHz * (1 + e):
-//
-//   1. the hardware LO lands at U*(1+e) for a commanded U;
-//   2. samples arrive at 48000*(1+e) but every stage above — the WDSP shift,
-//      the demodulator, the panadapter axis — labels them 48000, so a real
-//      baseband offset b READS as b/(1+e);
-//   3. displayed frequency = U + (F - U(1+e))/(1+e) = F/(1+e).
-//
-// The whole frequency scale is off by exactly 1/(1+e) — independent of where
-// the NCO sits and of how much software shift is in play. That is what makes a
-// single multiplicative scalar sufficient, and it is why this is NOT a per-band
-// offset table: the error is fractional, not additive. A "1 Hz" correction that
-// is right on 10 MHz is wrong everywhere else.
-//
-// SIGN CONVENTION, stated once so every caller can stop guessing:
-//
-//   ppb > 0  =>  clock FAST  =>  signals appear LOW before correction.
-//
-// Matching the vocabulary of the Flex path already in RadioSetupDialog
-// ("radio set freq_error_ppb"), so the two families' calibration UIs do not
-// disagree about what a positive number means.
+// Manual frequency calibration for the Hermes-Lite 2. The 76.8 MHz clock is a
+// bitstream constant (radio.v: freqcomp = f_Hz * 2^57/76'800'000 + 2^24, phase
+// = freqcomp[56:25]); no register takes the crystal error, so the host corrects.
+// With a true clock of 76.8 MHz*(1+e) the LO lands at U(1+e) and baseband reads
+// b/(1+e), so displayed = F/(1+e) everywhere: one multiplicative scalar, not a
+// per-band offset. Sign (matches Flex freq_error_ppb): ppb > 0 => clock fast =>
+// signals appear low before correction.
 class Hl2FreqCal {
 public:
     // Nominal AD9866 sample clock. The value the gateware assumes; the whole
@@ -50,7 +21,7 @@ public:
 
     // +/- 50 ppm. A stock HL2 lands inside +/- 10 ppm and a good one inside
     // 0.2 ppm; this leaves room for a bad crystal without letting a typo command
-    // something absurd (Principle VII — validate rather than trust).
+    // something absurd.
     static constexpr int kMinPpb = -50'000;
     static constexpr int kMaxPpb =  50'000;
 

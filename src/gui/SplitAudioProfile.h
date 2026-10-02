@@ -5,25 +5,11 @@
 
 namespace AetherSDR {
 
-// The audio arrangement an operator left behind at the end of their last split,
-// so the next split can restore it without a setup step (#2242).
-//
-// Two kinds of field live here and they are NOT the same kind of state:
-//
-//   • the four audio values are LEARNED — never typed in, never defaulted.
-//     Each carries a has* companion because "the operator never touched the TX
-//     pan" and "the operator centred the TX pan" are different facts, and only
-//     the second one should be replayed. A bare int cannot tell them apart, and
-//     replaying a value nobody chose is the failure this feature exists to
-//     avoid: it would move slice audio the operator never asked us to move.
-//
-//   • monitor is a CHOSEN preference. It survives "Forget remembered audio",
-//     which clears only what was learned — see forgetLearnedState().
-//
-// Split is a MainWindow feature and this is its client-side preference, so it
-// lives beside the window rather than in the engine. The struct is free of
-// AppSettings — the storage decision (one JSON key, Principle V) belongs to the
-// caller — so the parsing rules below are unit-testable on their own.
+// Audio arrangement from the operator's last split, restored on the next (#2242).
+// The four audio values are learned; each has a has* flag because "never
+// touched" must not be replayed as "set to centre". monitor is a chosen
+// preference and survives "Forget remembered audio" (forgetLearnedState()).
+// Free of AppSettings (the caller stores it as one JSON key) so parsing is testable.
 struct SplitAudioProfile {
     // What a momentary Monitor TX hold does.
     //   Solo — mute RX, unmute TX. The Icom XFC / Kenwood TF-SET / Yaesu TXW
@@ -70,18 +56,11 @@ struct SplitAudioProfile {
     static constexpr const char* kSettingsKey = "SplitAudio";
 };
 
-// Marks an audio write as the OPERATOR's own, for as long as it is in scope.
-//
-// SliceModel emits audio*CommandIssued for every caller of its setters — the
-// operator's controls, but also TCI (rx_mute, rx_balance), SmartCAT (ZZMA/ZZMB,
-// ZZLB/ZZLF), rigctld MUTE, Mute All, RADE and memory recall. Only the first
-// kind is a preference: a logger muting VFO B over TCI must not wipe the
-// arrangement, and a CAT pan must not be replayed on every split. So the
-// operator's own controls wrap their setter call in one of these, and the
-// recorder notes a change only while one is live.
-//
-// GUI thread only, synchronous by construction: the remote paths reach the
-// setters through queued invocations, which run later, outside any scope.
+// Marks an audio write as the operator's own while in scope. SliceModel emits
+// audio*CommandIssued for every setter caller (TCI, SmartCAT, rigctld, Mute All,
+// RADE, memory recall...); only operator edits are preferences, so the recorder
+// notes changes only while a scope is live. GUI thread only: remote paths reach
+// the setters via queued invocations, outside any scope.
 class SplitAudioOperatorEdit {
 public:
     SplitAudioOperatorEdit() { ++s_depth; }
@@ -94,17 +73,10 @@ private:
     static inline int s_depth = 0;
 };
 
-// What the operator did to the two slices during ONE split.
-//
-// The decision of what counts as a preference — and what the RX pan has to be
-// put back to — does not need a window, a radio, or a slice, so it is here
-// where it can be tested directly. MainWindow owns one of these, forwards the
-// *CommandIssued signals into the note* methods, and asks merge() for the
-// profile to store.
-//
-// It also has to outlive the TX slice: when the radio removes it out of band,
-// MainWindow's onSliceRemoved runs with the model object already destroyed, so
-// there is nothing left to read the values off. This recorder IS the record.
+// What the operator did to the two slices during one split. MainWindow forwards
+// *CommandIssued into the note* methods and stores merge()'s result. It must
+// outlive the TX slice: when the radio removes it, onSliceRemoved runs after the
+// model object is destroyed, so this recorder is the only record.
 class SplitAudioRecorder {
 public:
     // rxPanBefore is the RX slice's pan from BEFORE the remembered arrangement
@@ -187,16 +159,10 @@ struct SplitAudioApplyResult {
     bool restored{false};       // a learned arrangement was applied
 };
 
-// Put a remembered arrangement onto a freshly created split. With nothing
-// learned — or a TX slice whose receive audio another subsystem (DAX, TCI,
-// KiwiSDR) has replaced — it only mutes the TX slice, the pre-#2242 behaviour.
-// These are the app's writes, not the operator's: the caller must keep them
-// out of the recorder.
-//
-// This and SplitMonitorHold are templates over the slice type (SliceModel in
-// the app) so this header needs no models/ include: the callers that
-// instantiate them already have SliceModel, and the test drives them with the
-// production class.
+// Apply a remembered arrangement to a new split. With nothing learned, or a TX
+// slice whose RX audio is replaced (DAX/TCI/KiwiSDR), it only mutes the TX
+// slice. These are app writes: keep them out of the recorder. Templated over
+// the slice type so this header needs no models/ include.
 template <class Slice>
 SplitAudioApplyResult applySplitAudioProfile(const SplitAudioProfile& profile,
                                              Slice* rx, Slice* tx)
@@ -233,18 +199,11 @@ SplitAudioApplyResult applySplitAudioProfile(const SplitAudioProfile& profile,
     return r;
 }
 
-// A momentary Monitor TX hold. It remembers which slice's NATIVE mute it
-// actually changed, and release restores exactly those and nothing else:
-//  • only into the SAME slice objects it changed: a reconnect that reclaims
-//    them (RadioModel keeps the objects) restores normally, while a new slice
-//    that merely reuses the id — a later session, a recreated slice — is never
-//    written;
-//  • a slice whose receive audio is replaced (DAX/TCI/Kiwi) is never touched,
-//    because SliceModel::setAudioMute() on it writes the replacement mute, a
-//    different domain from the one being restored;
-//  • a slice that came under replacement DURING the hold is left alone on
-//    release, for the same reason;
-//  • a mute that already had the wanted value is not recorded as changed.
+// Momentary Monitor TX hold. Release restores only the native mutes it changed:
+//   - only on the same slice objects (a new slice reusing the id is never written);
+//   - never on a slice whose RX audio is replaced (DAX/TCI/Kiwi), before or
+//     during the hold, since setAudioMute() there writes the replacement mute;
+//   - a mute already at the wanted value is not recorded as changed.
 template <class Slice>
 class SplitMonitorHold {
 public:

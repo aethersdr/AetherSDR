@@ -155,6 +155,44 @@ void testPortRowReadings()
            QStringLiteral("an unkeyed port reads as idle"));
 }
 
+// The source cell is shown by default: the amplifier's strips carry the
+// source radio as configuration and never touch its visibility, so a row that
+// started hidden would silently drop it from every PGXL panel. The tuner hides
+// it when it cannot say what is on the port, and a hidden cell is left out of
+// the spoken sentence too — reading its stale text would announce a radio that
+// is no longer on screen.
+void testPortRowSourceVisibility()
+{
+    AccessoryPortRow row(QStringLiteral("B"));
+    row.setSourceText(QStringLiteral("FLEX-6600"));
+    row.setBandText(QStringLiteral("20m"));
+
+    const auto sourceCell = [&row]() -> const QLabel* {
+        for (const QLabel* label : row.findChildren<QLabel*>()) {
+            if (label->text() == QStringLiteral("FLEX-6600")) return label;
+        }
+        return nullptr;
+    };
+    expect(sourceCell() && !sourceCell()->isHidden(),
+           QStringLiteral("a fresh row shows its source cell"));
+    expect(row.accessibleDescription().startsWith(QStringLiteral("FLEX-6600, band 20m")),
+           QStringLiteral("a shown source leads the spoken sentence"));
+
+    row.setSourceVisible(false);
+    expect(sourceCell() && sourceCell()->isHidden(),
+           QStringLiteral("setSourceVisible(false) hides the cell"));
+    expect(!row.accessibleDescription().contains(QStringLiteral("FLEX-6600")),
+           QStringLiteral("a hidden source is not spoken"));
+    expect(row.accessibleDescription().startsWith(QStringLiteral("band 20m")),
+           QStringLiteral("and leaves no dangling separator"));
+
+    row.setSourceVisible(true);
+    expect(sourceCell() && !sourceCell()->isHidden(),
+           QStringLiteral("setSourceVisible(true) brings it back"));
+    expect(row.accessibleDescription().contains(QStringLiteral("FLEX-6600")),
+           QStringLiteral("and it is spoken again"));
+}
+
 void testDialAnnouncements()
 {
     QVector<QString> announcements;
@@ -409,6 +447,7 @@ int main(int argc, char** argv)
     }
 
     testPortRowReadings();
+    testPortRowSourceVisibility();
     testDialAnnouncements();
     testAlertSeverityRule();
     testActivePortRule();

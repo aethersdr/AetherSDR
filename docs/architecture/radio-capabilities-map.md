@@ -167,7 +167,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasFullDuplex` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Status-bar FDX indicator |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` (Tools ▸ Waveforms… + AetherModem D-STAR tab), `MainWindow::scheduleDigitalVoiceAutoStart` | ThumbDV helper needs a SmartSDR D-STAR waveform. Flex sets true; Icom/HL2/Sim set false; ANAN/RTL inherit the `= false` default. Disconnected restores the tab. Autostart of `aether-dv-waveform` is gated on the same flag so a non-Flex connect cannot launch a helper with no Stop surface |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
-| `alwaysUseClientSideSpots` | ❌ | ❌ | ❌ | `MainWindow_Spots.cpp`, `MainWindow_Wiring.cpp` through `SpotCommandPolicy` | Forces SpotHub and manual spots into the existing passive-local `SpotModel` instead of emitting Flex `spot add` commands. Icom: ✅ because CI-V has no compatible spot service. Flex, HL2, and Sim remain under the existing operator Passive toggle. |
+| `alwaysUseClientSideSpots` | ❌ | ✅ | ❌ | `MainWindow_Spots.cpp`, `MainWindow_Wiring.cpp` through `SpotCommandPolicy` | Forces SpotHub and manual spots into the existing passive-local `SpotModel` instead of emitting Flex `spot add` commands. Icom: ✅ because CI-V has no compatible spot service. HL2: ✅ because it has no command plane — `RadioModel::sendCmd` drops `spot add`, so with ❌ no DX-cluster, RBN, WSJT-X, POTA or manual spot was ever drawn (N1MM and EiBi markers were always client-side). Flex and Sim remain under the existing operator Passive toggle. ANAN/RTL inherit the `= false` default and have no command plane either. |
 | `hasGpsLocation` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi`, `RadioModel::hasGpsHardware`, GPS dashboard | Family/model can provide coordinates. Flex combines this with per-unit GPSDO/GNSS presence; IC-705 is ✅ from verified `23 00` |
 | `hasGpsSatelliteTelemetry` | ✅ | ❌ | ❌ | `GpsLocationDialog::refreshGps` | Shows tracked/visible satellite metrics. Icom: ❌ because the IC-705 CI-V surface provides neither counts nor SNR |
 | `hasGpsFrequencyReference` | ✅ | ❌ | ❌ | `MainWindow` status stack, `GpsLocationDialog::refreshGps` | Treats GPS as a 10 MHz/GPSDO reference. Icom: ❌; its receiver reports position/time and does not discipline RF |
@@ -634,10 +634,18 @@ Both live in one `std::optional<PanSpanModel> panSpanModel`. Absent is *not* a
 pair of `false`s: it means no backend has been read, and a client that needs the
 distinction checks `has_value()` before the fields.
 
-Both are declared and nothing reads them yet — the behaviour they describe is
-already implemented, by `Hl2Backend::applyPanBandwidth` snapping through
-`nearestIqSampleRateHz` and by `panBandwidthLimitsChanged` clamping the zoom
-control. What was missing was the **claim**, so a client had no way to ask.
+`followsSampleRate` is declared and nothing reads it yet — the behaviour it
+describes is already implemented, by `Hl2Backend::applyPanBandwidth` snapping
+through `nearestIqSampleRateHz` and by `panBandwidthLimitsChanged` clamping the
+zoom control. What was missing was the **claim**, so a client had no way to ask.
+
+`radioWide` has one consumer (#5750): `MainWindow::syncPanSpanControlPlacement`
+keeps the −/+ span pair **live** on one pane when it is true — the pane holding
+the TX slice, else the first docked pane in layout order — saying the span is
+shared, and **dims** it on every other pane with the reason in the tooltip and
+the accessible description (dimmed, never hidden). It leaves every pane its own
+live pair when it is false or the record is absent. The decision is `gui/PanSpanControlGate.h`, pinned in
+`tests/hl2_pan_limits_declaration_test.cpp` against the HL2's own declaration.
 
 On the HL2 the pan span *is* the DDC sample rate, so `sampleRatesHz` is not a
 list of stream rates that happens to exist alongside a span control: it is every
@@ -684,7 +692,6 @@ backend side the whole time.
 |---|:--:|:--:|:--:|---|
 | `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists. On the HL2 it is also the complete span set — see `panSpanModel` below |
 | `panSpanModel->followsSampleRate` | — (absent) | ✅ | — (absent) | The span IS the rate, so `sampleRatesHz` is every deliverable span and its first entry is a floor |
-| `panSpanModel->radioWide` | — (absent) | ✅ | — (absent) | One DDC rate for the board; a span change moves every receiver |
 | `dbmAxisIsCalibrated()` | — (absent ⇒ ✅) | ❌ | — (absent ⇒ ✅) | Whether the dBm axis is absolute. HL2 reads it off `Hl2DbReference::isCalibrated()` |
 | `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Global fallback ceiling; Flex still omits it despite transmitting, which remains wrong but inert while `txPowerBands` is empty |
 | `hasAmplifier` | — (❌) | ❌ | ❌ | The AMP applet is driven by `TunerModel::presenceChanged`, not by this |

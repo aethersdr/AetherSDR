@@ -26,16 +26,11 @@ const QStringList& bandTable()
 
 const QMap<QString, ModelSpec>& modelTable()
 {
-    // 1.5K-FA thresholds (1450/1500/1600) are carried from a field-proven
-    // control application for that exact model (see the design note); the
-    // 1.3K-FA and 2K-FA rows apply the same rated/rated±/rated+100 shape to
-    // SPE's published rated output for those models. Memory banks: the spec
-    // documents A/B for the 1.3K-FA (and the 1.5K-FA reports them in the
-    // same field); the 2K-FA always reads "x". Combiner/lower-heatsink
-    // temperatures are only real on the 2K-FA (spec §5's field table).
-    // LOW/MID nominals: 1.5K-FA's 500/1000 are hardware-validated (the
-    // field-proven control application rescaled its bar to exactly those on
-    // level changes); 1.3K-FA and 2K-FA LOW/MID are derived, not measured.
+    // 1.5K-FA thresholds (1450/1500/1600) and LOW/MID 500/1000 W are
+    // hardware-validated; the 1.3K-FA and 2K-FA rows apply the same shape to SPE's
+    // rated output and their LOW/MID are derived. Memory banks A/B exist on 1.3K
+    // and 1.5K; the 2K-FA reads "x". Combiner/lower-heatsink temps are only real
+    // on the 2K-FA (spec §5).
     static const QMap<QString, ModelSpec> table = {
         {"13K", ModelSpec{"13K", "1.3K-FA", 1300.0f, 1400.0f, 1250.0f,  500.0f, 1000.0f, true,  false}},
         {"15K", ModelSpec{"15K", "1.5K-FA", 1500.0f, 1600.0f, 1450.0f,  500.0f, 1000.0f, true,  false}},

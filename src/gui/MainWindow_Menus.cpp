@@ -8,6 +8,7 @@
 // only the About-dialog button and its connection.
 
 #include "MainWindow.h"
+#include "AetherBuildIdentity.h"   // generated at build time (#5804)
 
 #include "workspace/WorkspaceController.h"
 
@@ -291,6 +292,11 @@ void MainWindow::buildMenuBar()
 
     // ── Settings menu ──────────────────────────────────────────────────────
     auto* settingsMenu = menuBar()->addMenu("&Settings");
+    // QMenu shows per-action tooltips only when the menu opts in, and a
+    // submenu's menuAction() renders on the PARENT, so opt in here too. Needed
+    // for the "Not supported by this radio" reasons on greyed entries (#5546).
+    // Entries without an explicit tooltip stay silent, so this costs nothing.
+    settingsMenu->setToolTipsVisible(true);
 
     auto* radioSetup = settingsMenu->addAction("Radio Setup...");
     radioSetup->setMenuRole(QAction::PreferencesRole);  // macOS: appears in app menu as Preferences (#883, #1013)
@@ -1006,17 +1012,13 @@ void MainWindow::buildMenuBar()
     toolsMenu->setToolTipsVisible(true);
 
     auto* viewMenu = menuBar()->addMenu("&View");
+    viewMenu->setToolTipsVisible(true);  // see settingsMenu above (#5546)
 
-    // Workspace canvas (RFC #4887 phase 3) — opt-in, reversible.  The check
-    // state persists inside the workspace document itself (Principle V), not
-    // in a settings key: wireWorkspaceCanvas() re-applies it at startup and
-    // enabledChanged keeps the action honest if enabling fails.
-    //
-    // Two postures since the edit-mode field request: Enabled turns the
-    // canvas shell on, Edit Layout arms placement (select/drag/resize/
-    // drops/nudges/dots).  Enabled-but-locked is the OPERATING posture —
-    // interacting with an applet just uses it.  Edit state is session-
-    // transient by design; wireWorkspaceCanvas() syncs both directions.
+    // Workspace canvas (RFC #4887). The Enabled state persists in the workspace
+    // document, not a settings key; wireWorkspaceCanvas() re-applies it at
+    // startup and enabledChanged corrects the action if enabling fails. Edit
+    // Layout arms placement and is session-transient; enabled-but-locked is the
+    // operating posture.
     QMenu* wsMenu = viewMenu->addMenu("Workspace &Canvas");
     m_workspaceCanvasAction = wsMenu->addAction("&Enabled");
     m_workspaceCanvasAction->setCheckable(true);
@@ -1509,32 +1511,11 @@ void MainWindow::buildMenuBar()
     toolsMenu->addAction(memoryAction);
     toolsMenu->addAction(waveformsAct);
 
-    // The wideband converter view — docs/HERMES.md §13 item 18. ADDITIVE: a new
-    // entry that opens a new window. Nothing existing changes behaviour, and no
-    // other entry in this menu is touched.
-    //
-    // IN TOOLS, BESIDE RADIO HEALTH, not in View. #5595 sorted the menu bar
-    // Tools-first: Tools holds the instrument windows (Add Panadapter, Radio
-    // Health, GPS Dashboard, Runtime Monitor, SWR Scan) and View keeps the
-    // presentation settings (themes, marker size, UI scale, band plan). A
-    // window showing the converter is an instrument. Created on toolsMenu
-    // directly rather than through the removeAction/addAction shim above,
-    // which exists to MIGRATE actions that used to live in View.
-    //
-    // GATED ON THE CAPABILITY AND NOT ON A FAMILY. The action starts disabled
-    // and follows RadioCapabilities::widebandConverterView, which today exactly
-    // one backend engages. Disabled rather than hidden, and rather than the
-    // permissive-on-disconnect convention the other capability gates use: this
-    // is not a control a connected radio might be shy about reporting — with no
-    // radio there is no converter to look at, so an enabled entry would open a
-    // window that could only say so.
-    //
-    // AND IT SAYS WHY IT IS GREYED. The tooltip describes what the entry is;
-    // nothing there tells an operator looking at a disabled row what would
-    // change it. A QAction has no accessibleDescription, so a screen reader
-    // gets the text and nothing else — the status tip is the one string Qt
-    // announces for an action, and it is cleared again when the entry is live
-    // so the reason cannot outlive the condition that produced it.
+    // Wideband converter view (docs/HERMES.md §13 item 18), in Tools with the
+    // other instrument windows. Gated on RadioCapabilities::widebandConverterView,
+    // disabled (not hidden, and not permissive while disconnected: no radio, no
+    // converter). QAction has no accessibleDescription, so the reason goes in
+    // the status tip, cleared again when the entry is live.
     auto* bandscopeAct = toolsMenu->addAction("Wideband Bandscope...");
     bandscopeAct->setMenuRole(QAction::NoRole);
     bandscopeAct->setToolTip(
@@ -1750,10 +1731,9 @@ void MainWindow::buildMenuBar()
         vbox->addWidget(iconLbl);
 
         // Header
-        // The git SHA captured at CMake configure time identifies the build —
-        // useful when bug-reporting against a dev/test build that doesn't
-        // correspond to a tagged release.  See CMakeLists.txt for the capture
-        // and the file-top #define for the non-CMake-build fallback.
+        // The git SHA identifies the build — useful when bug-reporting against
+        // a dev/test build that doesn't correspond to a tagged release. It is
+        // captured at build time; see cmake/AetherBuildIdentity.cmake.
         const QString rendererDescription = [this]() {
             if (SpectrumWidget* sw = spectrum()) {
                 return sw->rendererDescription();
@@ -1774,21 +1754,18 @@ void MainWindow::buildMenuBar()
             "</div>")
             .arg(QCoreApplication::applicationVersion(), qVersion(),
                  QStringLiteral(__DATE__),
-                 QStringLiteral(AETHER_GIT_SHA),
+                 QStringLiteral(AETHER_BUILD_SHA),
                  rendererDescription.toHtmlEscaped()));
         header->setAlignment(Qt::AlignCenter);
         header->setWordWrap(true);
-        // Tooltip explains the staleness possibility — the SHA is baked at
-        // CMake configure time, so a dev who runs `cmake --build` after a
-        // new commit without re-configuring sees the previous SHA here.
-        // Re-running `cmake --fresh` (or deleting CMakeCache.txt) captures
-        // the current HEAD. The renderer line comes from the active pan at
-        // dialog-open time, after Qt has picked a real QRhi backend when the
-        // GPU path is active.
+        // The SHA comes from the header cmake/AetherBuildIdentity.cmake
+        // regenerates on every build (#5804), so an incremental `cmake --build`
+        // after a new commit shows the new SHA without re-configuring. The
+        // renderer line comes from the active pan at dialog-open time, after Qt
+        // has picked a real QRhi backend when the GPU path is active.
         header->setToolTip(
-            QStringLiteral("Build identity and active pan renderer. SHA is captured at CMake "
-                           "configure time — re-run `cmake -B build` after "
-                           "a new commit if you need the current value."));
+            QStringLiteral("Build identity and active pan renderer. The SHA is captured "
+                           "when the binary is built."));
         vbox->addWidget(header);
 
         // Separator

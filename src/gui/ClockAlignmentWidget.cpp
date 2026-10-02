@@ -19,20 +19,11 @@
 
 #include <algorithm>
 
-// AetherClock alignment scope. Renders one ClockAlignmentFrame per visible
-// second (oldest -> newest, left -> right; newest hugs the right edge):
-//
-//   - received AM envelope as the primary trace, with the matched-filter
-//     template of the decoded symbol overlaid on the same vertical scale so
-//     the eye reads how well the received second matches the ideal;
-//   - a per-second tick at the detected AM-drop edge (offset within the 1 s
-//     window, NIST time-code second-edge concept);
-//   - a classification-confidence lane (bar height = margin);
-//   - a decoded-symbol glyph lane ('0' / '1' / 'M' marker / '?' unknown).
-//
-// GUI only: paints exclusively from the frame payload in paintEvent, no
-// decoder / engine / radio access and no timers (repaints ride the 1 Hz
-// appendFrame signal). Per-paint cost is O(window x envelope size).
+// One ClockAlignmentFrame per visible second, oldest left, newest at the right
+// edge: received AM envelope with the decoded symbol's matched-filter template
+// overlaid, a tick at the detected AM-drop edge, a confidence lane (height =
+// margin) and a glyph lane ('0'/'1'/'M'/'?'). Paints only from frame payloads;
+// no timers (repaints follow the 1 Hz appendFrame).
 
 namespace AetherSDR {
 

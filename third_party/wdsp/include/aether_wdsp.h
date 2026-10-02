@@ -239,28 +239,16 @@ void SetRXAFMDeviation(int channel, double deviationHz);
 
 // ── Receive squelch: fmsq and amsq ────────────────────────────────────────
 //
-// NO VENDORED PATCH IS INVOLVED, for exactly the reason the block above gives:
-// `upstream/wdsp.h` (upstream's generated public interface) declares these.
-// `fmsq.h` omitting SetRXAFMSQRun is the per-module header being an unreliable
-// negative, not a hidden symbol. RXA.c creates both stages with run = 0.
-//
-//   fmsq — runs after xfmd and triggers on the NOISE in the FM detector's
-//          output above 5 kHz (create_fmsq's cutoff). Meaningful only in FM:
-//          outside it the trigger buffer is an fmd output nothing refreshes.
-//          Mutes when the averaged noise exceeds the threshold, so a LARGER
-//          threshold is a MORE OPEN squelch. SetRXAFMSQThreshold sets the tail
-//          threshold to `threshold` and the unmute threshold to 0.9x it.
-//   amsq — captures its trigger (xamsqcap) right after the notched bandpass,
-//          BEFORE the AGC, and gates at the very end of the chain. It compares
-//          a 10 ms average of |IQ| with 10^(thresholdDb/20) in wire-full-scale
-//          units (unmute above it, tail below 0.9x), so the threshold is dBFS
-//          at the passband. Not AM-specific: it is a level squelch in any mode.
-//
-// ssql (WU2O's syllabic squelch) is deliberately NOT declared here: it does
-// not work on this chain's audio levels — see WdspChannel::setSquelch().
-//
-// Each Set* takes ch[channel].csDSP, so they are control-path calls. None of
-// them allocates.
+// No vendored patch: `upstream/wdsp.h` declares these. RXA.c creates both
+// stages with run = 0.
+//   fmsq — after xfmd; triggers on noise in the FM detector's output above
+//          5 kHz, so it is meaningful only in FM. Mutes when the averaged noise
+//          exceeds the threshold: a LARGER threshold is a MORE OPEN squelch.
+//   amsq — trigger captured (xamsqcap) after the notched bandpass, before the
+//          AGC; compares a 10 ms average of |IQ| with 10^(thresholdDb/20) in
+//          wire-full-scale units. A level squelch in any mode.
+// ssql is not declared: it does not open at this chain's audio levels (see
+// WdspChannel::setSquelch()). Each Set* takes ch[channel].csDSP: control path.
 void SetRXAFMSQRun(int channel, int run);
 void SetRXAFMSQThreshold(int channel, double threshold);
 void SetRXAAMSQRun(int channel, int run);
