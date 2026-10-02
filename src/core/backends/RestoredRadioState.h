@@ -5,22 +5,12 @@
 
 namespace AetherSDR {
 
-// The typed restore contract of RFC #4603 proposal B: what the client's
-// settings store remembers about a radio whose declared ClientSettingsDomains
-// make the client its memory. Handed to the backend BEFORE connect
-// (IRadioBackend::applyRestoredState) so the connect/pushInitialState path can
-// bring the radio up where the operator left it.
-//
-// Shape follows the aetherd 2.3 universal/extension field classification:
-// typed fields for state every family shares, plus a per-family extension
-// document that ONLY the owning backend writes, reads, and validates
-// (Principle VII — boundary input validation lives with the owner). Generic
-// engine code (RadioStateMemory) round-trips the extension opaquely and must
-// never interpret it.
-//
-// A zero/empty field means "not restored" — the backend keeps its own default.
-// Restoring NEVER keys transmit (Principle VI): the struct carries setpoints,
-// and the TX gate is untouched.
+// The typed restore contract of RFC #4603 proposal B: what the client remembers
+// about a radio whose ClientSettingsDomains make the client its memory, handed to
+// the backend BEFORE connect (IRadioBackend::applyRestoredState). Typed universal
+// fields plus a per-family extension document that only the owning backend
+// writes, reads and validates; RadioStateMemory round-trips it opaquely. A
+// zero/empty field means "not restored". Restoring NEVER keys transmit.
 struct RestoredRadioState {
     // Universal — gated per-domain by RadioCapabilities::clientSettingsDomains
     double rfFrequencyHz = 0.0;   // Tuning
@@ -29,15 +19,9 @@ struct RestoredRadioState {
     double filterHighHz = 0.0;    // Passband
     int sampleRateHz = 0;         // SpanRate
 
-    // Agc. The AGC lives in the HOST's DSP for a radio with no AGC of its own,
-    // so the operator's choice has nowhere to live but here — without it every
-    // launch reopened the WDSP channel on Config's construction defaults
-    // ("med" / 65) and silently discarded the setting (#4909).
-    //
-    // The threshold sentinel is -1, NOT 0: zero is a legitimate AGC-T the
-    // operator can select, so "not restored" needs a value outside the 0..100
-    // control range or a deliberate 0 would be indistinguishable from an
-    // absent field and would round-trip into the default.
+    // Agc. Persisted here because on a radio without its own AGC it lives in the
+    // host's DSP (#4909). The threshold sentinel is -1, NOT 0: zero is a selectable
+    // AGC-T, so "not restored" needs a value outside the 0..100 range.
     QString agcMode;              // Agc — "off" | "slow" | "med" | "fast"
     int agcThreshold = -1;        // Agc — 0..100 OPERATOR UNITS, not dB; -1 = not
                                   // restored. Deliberately NOT "…Db": the backend
@@ -62,13 +46,10 @@ struct RestoredRadioState {
     int monGainCw = -1;           // Cw — 0..100; -1 = not restored
     int monPanCw = -1;            // Cw — 0..100; -1 = not restored
 
-    // Per-family extension document (per-band gain/drive maps live here —
-    // RFC PR 3). Versioned by its owner. GATED PER DOMAIN at the top level:
-    // the engine hands over only the sub-objects named for declared domains —
-    // "rfGain" (ClientSettingsDomain::RfGain) and "txSetpoints"
-    // (ClientSettingsDomain::TxSetpoints) — and each sub-object's CONTENTS
-    // stay opaque to everything above the seam; the owning backend writes and
-    // validates them (Principle VII; PR #4614 review).
+    // Per-family extension document (per-band gain/drive maps), versioned by its
+    // owner. GATED PER DOMAIN: the engine hands over only the sub-objects named for
+    // declared domains ("rfGain" for RfGain, "txSetpoints" for TxSetpoints); their
+    // contents are opaque above the seam and validated by the owning backend.
     int extensionSchemaVersion = 0;
     QJsonObject extension;
 

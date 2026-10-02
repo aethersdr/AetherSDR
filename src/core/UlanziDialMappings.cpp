@@ -70,6 +70,38 @@ bool writeDocument(const QJsonObject& obj, const QString& what)
 
 }  // namespace
 
+QString UlanziDialMappings::enabledSettingsKey()
+{
+    return QStringLiteral("UlanziDialEnabled");
+}
+
+bool UlanziDialMappings::enabled()
+{
+    return AppSettings::instance()
+               .value(enabledSettingsKey(), QStringLiteral("True"))
+               .toString()
+           == QLatin1String("True");
+}
+
+bool UlanziDialMappings::setEnabled(bool on)
+{
+    auto& s = AppSettings::instance();
+    const QString value = on ? QStringLiteral("True") : QStringLiteral("False");
+    s.setValue(enabledSettingsKey(), value);
+    s.save();
+
+    // Same proof as writeDocument(): a failed save() keeps the value in memory,
+    // so only a file read shows it was committed. With the default on, an
+    // uncommitted "off" fails open — the dial is claimed again next launch.
+    QString onDisk;
+    if (!s.readAppRowFromDisk(enabledSettingsKey(), onDisk) || onDisk != value) {
+        qCWarning(lcDevices) << "Ulanzi Dial: failed to persist" << enabledSettingsKey()
+                             << "=" << value << "— the choice will not survive a restart";
+        return false;
+    }
+    return true;
+}
+
 QString UlanziDialMappings::rootSettingsKey()
 {
     return QStringLiteral("UlanziDialMappings");

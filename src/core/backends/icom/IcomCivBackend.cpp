@@ -33,22 +33,10 @@ namespace {
 struct TrackedStateField {
     const char* key;
     const char* label;
-    // Whether a stale value here should drop trackedStateReady.
-    //
-    // SQUELCH DOES NOT, and the reason is a polling asymmetry rather than a
-    // judgement about importance: level::kSquelch is re-read periodically only
-    // when the model profile sets pollCwSquelchAndTxBandwidth, which today is
-    // the IC-7300MK2 alone. Every other Icom reads squelch once at connect and
-    // never again, so an aggregate that required it went false about five
-    // seconds into every IC-705 and IC-9700 session and stayed there — a false
-    // negative on a perfectly healthy radio, which is the same misreading this
-    // diagnostic exists to prevent (#5516 review).
-    //
-    // The FIELD is still reported, and its `stale` is accurate: nothing does
-    // reconcile squelch on those models. Only the roll-up is narrowed, to mean
-    // "the state this app actually keeps current is current". Adding squelch to
-    // the unconditional poll would justify gating on it again, but that is a
-    // change to the shared CI-V stream and belongs in its own issue.
+    // Whether a stale value here should drop trackedStateReady. Squelch does
+    // not: it is re-polled only on profiles with pollCwSquelchAndTxBandwidth
+    // (IC-7300MK2), so elsewhere it goes stale after connect on a healthy
+    // radio (#5516). Its field and accurate `stale` are still reported.
     bool gatesReadiness;
 };
 
@@ -81,17 +69,9 @@ Q_LOGGING_CATEGORY(lcIcomAddr, "aether.icom.address")
 // difference between a deliberate gate and a dead command plane.
 Q_LOGGING_CATEGORY(lcIcomTx, "aether.icom.tx")
 
-// EVERY CI-V FRAME, both directions, as hex.
-//
-// The in-memory ring behind `civ trace` already recorded these, but it dies
-// with the backend — disconnect and the evidence is gone, which is exactly
-// when you want it. A log category survives the session and can be read after
-// the fact.
-//
-// This is the difference between three indistinguishable failures: the query
-// was never sent, the radio never answered, or the answer arrived and our
-// decode rejected it. Diagnosing a mode-reporting bug without it means
-// inferring from published state, which cannot tell those apart.
+// Every CI-V frame, both directions, as hex. Unlike the `civ trace` ring, the
+// log survives disconnect, and it separates "never sent", "never answered" and
+// "answer rejected by our decode".
 Q_LOGGING_CATEGORY(lcIcomCiv, "aether.icom.civ")
 
 // Metering is examined this often; the MeterPoller decides what is actually
@@ -257,17 +237,9 @@ bool validNtpServer(const QString& address)
 IcomCivBackend::IcomCivBackend(QObject* parent)
     : IRadioBackend(parent), m_model(&unknownModel())
 {
-    // MONOTONIC, NOT WALL CLOCK. Every timestamp in this file measures an
-    // INTERVAL — a dispatch slot, a reply timeout, a poll period, a stall
-    // threshold, a frame's age in the trace — and none is ever reported as an
-    // absolute time. Wall clock was therefore never the right source, and once
-    // every CI-V producer runs through one scheduler it is an actively
-    // dangerous one: a backward step (an NTP correction after suspend/resume
-    // being the realistic case) makes every `now - then` negative at once, so
-    // the dispatch slot never opens, the in-flight read never times out, and
-    // the stall detector never warns. That is a silent, total command-plane
-    // freeze — meters, controls, PTT poll and operator writes alike —
-    // recoverable only by reconnecting. QElapsedTimer cannot step backwards.
+    // Monotonic clock: every timestamp here is an interval (dispatch slot,
+    // timeout, poll period, stall threshold). A backward wall-clock step would
+    // make every `now - then` negative and freeze the whole CI-V scheduler.
     m_clock.start();
     m_diagnosticInstanceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
@@ -312,7 +284,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
 
     c.canCreateSlices = false;
     c.maxSlices = m.receivers;
-    c.maxPanadapters = m.hasScope ? m.receivers : 0;
+    // The implemented scope path publishes one panId ("0"), even on models
+    // with two receivers. Advertise streams we can supply, not hardware VFOs
+    // (#5347); independent receiver/scope selection remains separate work.
+    c.maxPanadapters = m.hasScope ? 1 : 0;
     c.tuningMinHz = static_cast<double>(m.tuningMinHz);
     c.tuningMaxHz = static_cast<double>(m.tuningMaxHz);
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio,
@@ -387,19 +362,11 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
         SliceFrequencyControl::Authority::Radio};
 
-    // THE MODES THIS RADIO RECEIVES BUT WILL NOT TRANSMIT IN — WFM on an
-    // IC-705, which covers 76-108 MHz broadcast and whose transmitter does not
-    // follow (#5040). Derived from the same two functions the mode combo is
-    // built from rather than listed a third time, so a mode cannot be offered
-    // without the transmit answer for it being consistent.
-    //
-    // The key guards in RadioModel read this: only that side can roll back
-    // TransmitModel's optimistic MOX/TUNE state, which is why the refusal that
-    // the operator SEES lives there and the one below is only the wire backstop.
-    //
-    // Empty for a model whose mode table nobody has read, and for the unknown
-    // model — which also reports canTransmit=false, so keying it is refused
-    // outright and the narrower gate never has to answer for it.
+    // Modes this radio receives but cannot transmit in (e.g. IC-705 WFM,
+    // #5040), derived from the same functions as the mode list. RadioModel's
+    // key guards read this and own the operator-visible refusal;
+    // refuseKeyingInReceiveOnlyMode() is the wire backstop. Empty for the
+    // unknown model, which already reports canTransmit=false.
     for (const std::string_view mode : modeListFor(m))
         if (icom::modeIsReceiveOnly(m, mode))
             c.receiveOnlyModes << QString::fromUtf8(mode.data(),
@@ -512,20 +479,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // the command; family membership alone is not protocol evidence.
     c.hasRadioDialLock = profile.supports(IcomFeature::DialLock);
 
-    // THE ATU MATCHING CAPABILITY IS PROFILE-SPECIFIC.
-    //
-    // `1C 01` drives an EXTERNAL AH-705 and there is no command to ask whether
-    // one is attached, so this capability is genuinely unanswerable from the
-    // radio. It was false on the reasoning that a button which might do nothing
-    // is worse than no button — but that reasoning cost every IC-705 operator
-    // who DOES own an AH-705 the only way to reach it, and the radio reports
-    // its tuner state (1C 01 read) well enough for the button to tell the truth
-    // once a cycle has run.
-    //
-    // Preserve that established surface only for exact profiles whose guides
-    // document the tuner path: IC-705, IC-7300/MK2, IC-7610, and IC-785x. The
-    // IC-9700 and unprofiled radios fail closed, while the shared UI keeps the
-    // controls visible and presents them as unavailable.
+    // ATU matching is per profile (IC-705, IC-7300/MK2, IC-7610, IC-785x, whose
+    // guides document the tuner path); IC-9700 and unprofiled radios fail
+    // closed. On the IC-705, `1C 01` drives an external AH-705 whose presence
+    // cannot be queried, but the 1C 01 read reports tuner state truthfully.
     c.hasTuner = m.hasTransmit && profile.supports(IcomFeature::AntennaTuner);
     // The shared MEM control is a separate capability. CI-V 1C 01 exposes
     // matching state, not Flex's client-selectable memory recall/database.
@@ -713,17 +670,9 @@ void IcomCivBackend::publishScopeDbmRange()
     if (!m_model->hasScope)
         return;
 
-    // THE AXIS MUST MATCH THE DECODER, INCLUDING THE SIGN.
-    //
-    // toDbm() maps a sample to `floorDbm + (v/max)*spanDb - referenceDb`, so
-    // raising the radio's reference level moves the decoded trace DOWN in dBm.
-    // The axis has to move the same way. An earlier version of this added
-    // referenceDb here while toDbm subtracted it, which left the scale wrong by
-    // 2x the reference whenever it was non-zero — invisible at the default 0,
-    // and a growing error the further the operator moved it.
-    //
-    // Derived from the same ScopeCalibration toDbm() uses rather than repeating
-    // the arithmetic, so the two cannot drift apart again.
+    // Must match ScopeCalibration::toDbm(), sign included: it maps a sample to
+    // `floorDbm + (v/max)*spanDb - referenceDb`, so the axis subtracts
+    // referenceDb too.
     const double floorDbm = m_scopeCal.floorDbm - m_scopeCal.referenceDb;
     emit panRangeChanged(panId(), floorDbm, floorDbm + m_scopeCal.spanDb);
 }
@@ -733,17 +682,9 @@ QString IcomCivBackend::currentNeutralMode() const
     return QString::fromStdString(modeToNeutral(m_mode, m_dataMode));
 }
 
-// THE MODE THE FILTER LADDER IS KEYED ON, which is not always the neutral one.
-//
-// AetherSDR has no RTTY neutral mode, so modeToNeutral collapses RTTY/RTTY-R to
-// DIGL/DIGU — correct for the slice's mode indicator and wrong for the filter
-// ladder, because an IC-705 in RTTY runs 2.4k/500/250 where SSB runs
-// 3.0k/2.4k/1.8k. Feeding the collapsed name to CivCodec's ladder made its RTTY
-// row unreachable and published the SSB widths on a radio in RTTY: the button
-// labelled "1.8k" selected FIL3, which is 250 Hz there, and the passband drawn
-// over the waterfall was seven times the one actually in circuit. The operator
-// can only get here from the radio's own front panel, which is exactly the case
-// this backend's connect-time adoption exists to respect.
+// The mode the filter ladder is keyed on. modeToNeutral collapses RTTY/RTTY-R
+// to DIGL/DIGU (no neutral RTTY), but the IC-705's RTTY ladder is
+// 2.4k/500/250 versus SSB's 3.0k/2.4k/1.8k, so the ladder needs "RTTY".
 QString IcomCivBackend::currentLadderMode() const
 {
     if (m_mode == CivMode::Rtty)
@@ -760,17 +701,10 @@ void IcomCivBackend::publishModeState()
         return;   // D-STAR: a waveform, not a demodulator setting
     SliceDelta s;
     s.mode = neutral;
-    // The passband travels WITH the mode, in the same delta, because the radio
-    // will never send one unprompted. Applied after the mode by SliceModel's
-    // own ordering, which is what stops a narrow CW window surviving into DIGU.
-    //
-    // THE RADIO'S OWN WIDTH WINS WHERE WE HAVE IT. 1A 03 reports the Hz the
-    // selected slot is actually defined as and 14 07 / 14 08 report where that
-    // window sits, so between them they describe the real response. The slot
-    // ladder below is the FALLBACK for the interval before the radio has
-    // answered, and for FM/DV/WFM where there is no settable width to read —
-    // it is a table of factory defaults, and an operator who redefined a slot
-    // is exactly who it is wrong for.
+    // The passband travels in the same delta as the mode (SliceModel applies
+    // it after the mode); the radio never sends one unprompted. The radio's
+    // own width (1A 03) and PBT (14 07 / 14 08) win; the factory-default slot
+    // ladder is the fallback until they answer, and for FM/DV/WFM.
     const auto [low, high] = currentPassbandHz();
     s.filterLow  = low;
     s.filterHigh = high;
@@ -813,16 +747,10 @@ std::pair<int, int> IcomCivBackend::currentPassbandHz() const
     return passbandForModeAndFilter(ladder, m_filter);
 }
 
-// THE PASSBAND ALONE, WITHOUT THE MODE, and the distinction is load-bearing.
-//
-// A width or PBT reply says nothing about the operating mode, but it arrives
-// asynchronously — so routing it through publishModeState() republished
-// whatever m_mode/m_dataMode happened to hold at that instant. During a
-// front-panel mode change the two are briefly out of step (the 01 push carries
-// no DATA flag, so the DATA half is still the previous mode's until 26
-// answers), and a width reply landing in that window put a stale DIGL on the
-// slice's mode indicator. Publishing only what the frame actually reported
-// removes the window rather than narrowing it.
+// Publishes the passband without the mode. A width/PBT reply says nothing about
+// mode, and during a front-panel mode change m_mode and m_dataMode are briefly
+// out of step until 26 answers, so republishing the mode here could show a
+// stale DATA mode.
 void IcomCivBackend::publishPassband()
 {
     const auto [low, high] = currentPassbandHz();
@@ -903,17 +831,10 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
         request.params.value(QStringLiteral("icom.audioPort"), kAudioPort).toUInt());
     p.username = request.params.value(QStringLiteral("icom.username")).toString();
     p.password = request.params.value(QStringLiteral("icom.password")).toString();
-    // "AUTO" IS CARRIED, NOT COLLAPSED.
-    //
-    // This line used to read the address with 0xA4 as its default, which made an
-    // absent parameter and a deliberate IC-705 pick the same input. They are not
-    // the same: 0xA4 is right for one model in kModels and silently ignored by
-    // every other, and CI-V has no error for "nobody is at that address" — the
-    // radio simply never answers, so the session comes up, publishes the
-    // conservative unknown capabilities, and reads as a half-finished backend.
-    //
-    // Auto learns the destination from the source of the CI-V ID reply.
-    // The seed cannot authorize ordinary polling before identification.
+    // An absent/invalid address means Auto, kept distinct from an explicit
+    // 0xA4: CI-V never errors on a wrong address, the radio just stays silent.
+    // Auto learns the destination from the source of the CI-V ID reply; the
+    // seed cannot authorize ordinary polling before identification.
     const bool haveCiv = request.params.contains(QStringLiteral("icom.civAddress"));
     const uint civParam = request.params.value(QStringLiteral("icom.civAddress"), 0).toUInt();
     const bool civValid = haveCiv && civParam > 0 && civParam <= 0xFF;
@@ -931,24 +852,11 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
     m_waitingForWake = request.params.value(QStringLiteral("icom.waitingForWake")).toBool();
     m_wakeOnConnect = request.params.value(QStringLiteral("icom.wakeOnConnect")).toBool();
     m_wakeModelId = request.params.value(QStringLiteral("icom.wakeModelId")).toUInt();
-    // 48 kHz, FIXED — the rate is deliberately not negotiable here.
-    //
-    // It is tempting on a weak link: 48 kHz LPCM is ~768 kbps each way, and a
-    // 2.4 GHz path with power-save latency genuinely struggles with it. But the
-    // rate cannot move on its own. The 1364/556 packet split is sized for a
-    // 20 ms frame AT this rate, and lowering the rate without re-deriving the
-    // split produces frames of the wrong DURATION — measured at 16 kHz: 60 ms
-    // frames, discarded by the radio's jitter buffer, a keyed transmitter with
-    // zero forward power and nothing on the air or on the radio's own scope.
-    //
-    // The codecs that would reduce bandwidth without touching framing are not
-    // available either: wfview force-downgrades Opus and ADPCM to LPCM16 unless
-    // the peer is another wfview SERVER, so on real Icom hardware they do not
-    // exist. kappanhang, which is byte-exact for this radio, only ever speaks
-    // 48 kHz LPCM 1ch 16-bit.
-    //
-    // So this mirrors kappanhang, and the connect path deliberately offers no
-    // way to change it.
+    // Fixed 48 kHz LPCM 1ch 16-bit, as kappanhang (byte-exact for this radio).
+    // The 1364/556 packet split is sized for 20 ms frames at 48 kHz; another
+    // rate yields wrong-duration frames the radio's jitter buffer discards (TX
+    // with zero output). Opus/ADPCM are unavailable: wfview downgrades them to
+    // LPCM16 unless the peer is a wfview server.
     m_audioRateHz = kRadioAudioRateHz;
     p.sampleRateHz = static_cast<quint32>(m_audioRateHz);
 
@@ -1085,21 +993,10 @@ void IcomCivBackend::disconnectRadio()
 
 bool IcomCivBackend::isConnected() const { return m_connected; }
 
-// The connect-edge read burst.
-//
-// Kept as one named snapshot so every connect and address retarget enters the
-// same scheduler path:
-//
-//   * a radio whose NAME we do not recognise has to learn its CI-V address from
-//     the broadcast reply before there is a correct address to burst at, and
-//   * a retarget has to RE-ISSUE it. Those reads went to an address nobody was
-//     answering on, so they returned nothing; re-sending them at the address the
-//     radio actually reported is the only thing that recovers the session, and
-//     it is cheap because it happens at most once per connect.
-//
-// The order below expresses startup preference only. IcomCivScheduler paces the
-// frames, coalesces duplicates, and keeps this snapshot from becoming the
-// connect-edge burst called out by RFC #4983.
+// The connect-edge read snapshot, re-issued on a CI-V address retarget (reads
+// sent to the wrong address are never answered; at most once per connect). The
+// order is startup preference only: IcomCivScheduler paces and coalesces the
+// frames (RFC #4983).
 void IcomCivBackend::sendConnectReadBurst()
 {
     if (!m_session)
@@ -1173,16 +1070,9 @@ void IcomCivBackend::sendConnectReadBurst()
         }
     }
 
-    // ADOPT THE RADIO'S OWN LEVELS. Constitution II/III says an Icom is
-    // authoritative over its operating state and the client must never push a
-    // restored one — but that cuts both ways, and the reading half was missing.
-    // Every control opened at its construction default instead: the power
-    // slider said one thing while the radio ran at another, and the first touch
-    // of any control JUMPED the radio to the UI's invented value rather than
-    // nudging it from where it actually was.
-    //
-    // Read-only. Nothing here writes; each answer is decoded in onCivFrame and
-    // published as a delta, exactly as an unsolicited change would be.
+    // Read the radio's own levels so controls open at its values, not
+    // construction defaults. Read-only: each answer is decoded in onCivFrame
+    // and published as a delta, like an unsolicited change.
     for (std::uint8_t which : {level::kRfPower, level::kAf, level::kSquelch,
                                level::kMicGain, level::kCompLevel, level::kMonitor,
                                level::kNrLevel, level::kNbLevel,
@@ -1234,17 +1124,10 @@ void IcomCivBackend::sendConnectReadBurst()
         queueStartupRead(cmdReadTransmitFrequency(m_session->civAddress()));
     }
 
-    // THE PASSBAND ITSELF, not just the slot that holds it: the width the
-    // selected slot is actually defined as (1A 03) and where both Twin PBT
-    // edges are sitting (14 07 / 14 08). Without these the connect snapshot
-    // knew which of three buttons was lit and had to invent the Hz.
-    //
-    // Queued unconditionally here rather than through requestPassbandState(),
-    // because at this point in the burst the mode reads above have not been
-    // answered yet — m_mode is still the constructor's USB, and gating a read
-    // on a mode we have not been told is how a connect into FM ends up asking
-    // for a width that does not exist there. The decode validates the code
-    // against the mode that has arrived by the time the reply lands.
+    // Filter width (1A 03) and Twin PBT edges (14 07 / 14 08). Queued
+    // unconditionally, not via requestPassbandState(): the mode reads above are
+    // unanswered yet, so m_mode is still the constructor default. The decode
+    // validates against the mode known when the reply lands.
     {
         const auto width = cmdReadFilterWidth(m_session->civAddress());
         queueStartupRead(width);
@@ -1551,17 +1434,10 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
     emit connected();
     publishCapabilities();
 
-    // THE PAN FIRST, then the slice that names it.
-    //
-    // RadioModel maps a backend pan id to a neutral index on FIRST SIGHT, and
-    // the slice delta below carries that id. Announcing the slice first left it
-    // pointing at a pan nothing had registered, so the slice belonged to no
-    // pane — which is why click-to-tune reported "Slice capacity is full": the
-    // spectrum could not resolve a tune target on a pan it thought was empty,
-    // and fell through to the create-a-slice path against a one-slice radio.
-    //
-    // Provisional geometry: the first 0x27 sweep replaces it a few tens of ms
-    // later. A placeholder that is replaced beats an association that never forms.
+    // The pan must be announced before the slice that names it: RadioModel
+    // maps a pan id to a neutral index on first sight, and a slice naming an
+    // unregistered pan belongs to no pane. Geometry is provisional until the
+    // first 0x27 sweep.
     emit panCenterBandwidthChanged(panId(), 0.0, 0.0);
 
     // One slice, and it exists from the moment we connect. Without it nothing
@@ -1579,17 +1455,8 @@ void IcomCivBackend::onSessionConnected(const QString& deviceName)
 
     publishMeterDefs();
 
-    // THE RF GAIN IS A REAL REGISTER, and it is not the preamp.
-    //
-    // This slider used to drive 16 02 — the three-position preamp — and label
-    // its positions "0 dB", "1 dB", "2 dB". None of those is a decibel of
-    // anything: the radio calls them OFF, P.AMP1 and P.AMP2 and publishes no
-    // gain figures for them. Meanwhile 14 02, the radio's actual continuous RF
-    // gain, was not wired at all, so the one control an operator reaches for
-    // when a strong band overloads the front end was unreachable.
-    //
-    // PERCENT, not dB. 14 02 is 0000..0255 with no published dB mapping, so a
-    // dB label here would be the same invention in a new place.
+    // RF gain is the continuous 14 02 register (0000..0255, no published dB
+    // mapping, hence percent), not the 16 02 preamp.
     emit panRfGainInfoChanged(panId(), 0, 100, 1, QStringLiteral("%"));
 
     // A small default set so the status bar is alive before any UI declares
@@ -1631,22 +1498,11 @@ void IcomCivBackend::publishModelControls()
         // the construction default or a client-side saved antenna.
     }
     emit sliceChanged(sliceId(), s);
-    // The two DISCRETE stages, published as named positions. Their size is the
-    // control's range, so a model with a different preamp ladder or a different
-    // attenuator step describes itself correctly without a UI change.
-    //
-    // The preamp collapses to two positions above 50 MHz — the guide says
-    // 00/01/02 on HF and 00/01 on 144/430 — and this publishes the HF ladder.
-    // Selecting P.AMP2 on 2 m is refused by the radio, which then reports what
-    // it actually did; the alternative, republishing on every band change,
-    // would rewrite the control under an operator mid-adjustment.
-    // PER MODEL, and silent when we do not know. These ladders used to be
-    // IC-705 literals emitted to every Icom, so an IC-7610 (multi-step
-    // attenuator) or an IC-9700 (different preamp ladder) got a control that
-    // misdescribed its own register — the defect class this backend's registry
-    // exists to surface, reintroduced by the fix for it. Same rule as
-    // powerCurveFor: no verified table means publish nothing, and the operator
-    // gets no button rather than a lying one.
+    // Preamp and attenuator published as per-model named positions; a model
+    // with no verified ladder publishes nothing (same rule as powerCurveFor).
+    // The HF preamp ladder is published even on VHF/UHF (00/01 only there):
+    // the radio refuses P.AMP2 and reports what it did, and republishing per
+    // band would rewrite the control under the operator.
     const auto preampLabels = preampLabelsFor(*m_model);
     if (!preampLabels.empty()) {
         QStringList labels;
@@ -1936,45 +1792,12 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         return;
     }
 
-    // A REFUSED TUNE MUST NOT READ AS A SUCCESSFUL ONE.
-    //
-    // FA is the radio's NG. Until now nothing consumed it: observe() treats
-    // FB and FA identically (both merely retire the transaction and carry no
-    // state), so a refused write left the optimistic frequency standing in the
-    // model and the operator looking at a number the radio never entered.
-    //
-    // The IC-9700 makes this reachable in ordinary use. It has three bands and
-    // two receivers, so a receiver cannot be tuned to a band the other one
-    // already holds; the radio answers cmd 05 with FA and stays put. Measured
-    // on hardware 2026-08-29 — six cross-band sets, six FAs, and the display
-    // followed all six. See #4840.
-    //
-    // Correct on every model, not just that one: FA on a frequency write means
-    // the write did not take, whatever the reason.
-    //
-    // Deliberately narrow. Only a frequency write is corrected here, because
-    // that is the case with hardware evidence and a known-good restoration
-    // value (m_frequencyHz, which is radio-authoritative). Other refused
-    // writes are a separate question and are left alone rather than guessed at.
-    // ⚠ EVERY clause of the predicate is load-bearing, and `lastCompletedKey`
-    // alone is NOT enough. observe() sets it only when a frame MATCHES the
-    // in-flight transaction; an unmatched FA returns Observation::Unmatched and
-    // leaves the key at its previous value. Frequency writes are the most
-    // common transaction, so `lastCompletedKey == "frequency"` is usually true
-    // from the last real tune — and a later stray or duplicate NG, or an NG for
-    // a transaction that already expired, would fire this block with no
-    // frequency write refused at all: a false "the radio refused the tune"
-    // toast plus a redundant re-assert. That is precisely the lying-indicator
-    // failure this block exists to remove, inverted.
-    //
-    // Observation::Accepted is the signal that THIS frame completed the
-    // in-flight transaction; the key then says WHICH transaction it was.
-    //
-    // The key alone is still one step too coarse: semanticKey() folds the
-    // poll's 03 READ and the +60 ms confirmation read onto "frequency" as
-    // well, and matches() retires ANY in-flight transaction on an FA. An NG
-    // to a read is not a refused tune, so the command byte of the retired
-    // frame has to say 05 before this is allowed to speak.
+    // FA (NG) to a cmd 05 frequency write means the tune did not take, so the
+    // radio-authoritative m_frequencyHz is restored (e.g. IC-9700 refuses a
+    // band the other receiver holds, #4840). Only frequency writes are handled.
+    // Every clause is needed: Accepted means THIS frame retired the in-flight
+    // transaction (an Unmatched NG leaves a stale lastCompletedKey), and the
+    // cmd must be 05 because 03 reads share the "frequency" semantic key.
     if (frame.isNg()
         && observation == IcomCivScheduler::Observation::Accepted
         && m_civScheduler.stats().lastCompletedKey == "frequency"
@@ -2062,22 +1885,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         // changing the filter on the radio's own front panel.
         if (frame.data.size() >= 2 && frame.data[1] >= 1 && frame.data[1] <= 3)
             m_filter = frame.data[1];
-        // ASK WHETHER THIS MODE IS A DATA MODE, because the frame that just
-        // arrived cannot say. 0x01 is the unsolicited push the radio sends when
-        // the operator turns the MODE knob, and USB→USB-D on the front panel
-        // produces exactly the same 01 01 xx as USB→USB. Nothing else in the
-        // protocol announces that change, so following it means asking — and
-        // 0x26 is the only command that can answer.
-        //
-        // Event-driven, not a timer: one read per front-panel mode change, on
-        // the unsolicited form only. Answering our own 04 poll with another
-        // read would be a second poll of a state the connect snapshot and this
-        // path already cover, and the confirmation read in setSliceMode covers
-        // app-originated changes.
-        // Do not publish a capable radio's 04/01 frame: it cannot refresh
-        // m_dataMode, so combining it with the new ordinary mode would expose a
-        // transient false DIGU/DIGL (or false voice mode) until 26 answered.
-        // Command 26 is the single authoritative publication for these models.
+        // An unsolicited 01 (front-panel MODE knob) cannot carry the DATA flag:
+        // USB->USB-D sends the same 01 01 xx. On VfoMode radios, read 0x26 once
+        // per such push (not for our own 04 poll), and never publish 04/01
+        // directly — 26 is the single authoritative mode publication there.
         if (frame.cmd == cmd::kSetModeTrx && m_session
             && profileFor(*m_model).supports(IcomFeature::VfoMode)) {
             const auto read = cmdReadVfoMode(m_session->civAddress());
@@ -2220,24 +2031,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         return;
     }
 
-    // THE RADIO'S OWN LEVELS AND SWITCHES, adopted into the models.
-    //
-    // These arrive as answers to the connect-time reads above, and also
-    // unsolicited whenever the operator turns a knob on the radio — the same
-    // decode serves both, which is what keeps the UI honest while someone is
-    // standing at the rig.
-    //
-    // EVERY DECODE ALSO ADOPTS INTO THE SCRUB MIRROR. The "last intent per
-    // control" block in the header is what `controls.scrub` re-asserts, and it
-    // was written ONLY by the setters — so on a session where the operator had
-    // touched nothing, the mirrors still held their construction defaults and a
-    // scrub documented as leaving the radio untouched drove RF gain to 0 (a
-    // deaf receiver), AF gain to 0, the preamp and attenuator off and AGC to
-    // MID, then reported every one of those rows LINKED because the intent did
-    // reach the wire. Same shape as the noise-reduction bug fixed earlier on
-    // this branch, on a dozen sibling rows. The header's own claim — "a radio
-    // that disagrees corrects these through the ordinary decode path" — is what
-    // these assignments make true.
+    // The radio's levels and switches, from connect-time reads and from
+    // unsolicited front-panel changes alike. Every decode also updates the
+    // "last intent per control" mirror that `controls.scrub` re-asserts, so a
+    // scrub writes back the radio's value rather than a construction default.
     case cmd::kLevel: {
         if (!frame.hasSub)
             return;
@@ -2490,23 +2287,11 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             return;
         }
         case func::kAgc: {
-            // 01 FAST, 02 MID, 03 SLOW.
-            //
-            // DROPPED, BUT NOT IN SILENCE. Unlike the 1C 00 PTT readback --
-            // where an unparseable payload still has to reach the publish path,
-            // because "we do not understand this" and "not keyed" are different
-            // answers and only one of them is safe to swallow -- there is no
-            // honest agcMode to publish here. The decode below collapses every
-            // value that is not 01 or 03 to "med", so publishing an off-shape
-            // payload would invent a setting the radio never reported, and
-            // capabilities().agcModes has no representation for anything else
-            // anyway. So: drop the value, log the payload, and record no
-            // confirmation (#5516 review).
-            //
-            // civ.22.18 gates trackedStateReady, so a radio that answered this
-            // way persistently would hold readiness false. No profiled model
-            // does; if one turns up, the fix is a decode for whatever it means,
-            // not a fabricated default.
+            // 01 FAST, 02 MID, 03 SLOW. An off-shape payload is logged and
+            // dropped with no confirmation (#5516): unlike the PTT readback
+            // there is no safe value to publish, and the decode below would
+            // collapse it to "med". civ.22.18 gates trackedStateReady, so a
+            // radio answering this way persistently stays not-ready.
             if (frame.data.size() != 1 || v < 1 || v > 3) {
                 qCWarning(lcIcomScheduler)
                     << "AGC readback has an unexpected payload; not publishing"
@@ -2563,19 +2348,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         return;
     }
 
-    // 26 00 <mode> <data> <filter> — MODE, DATA STATE AND FILTER TOGETHER.
-    //
-    // This case is what makes a front-panel USB-D visible. Mode byte 0x01 is
-    // USB whether or not DATA is on, so until this decoded, a radio the
-    // operator had put in USB-D read as plain USB indefinitely — and every
-    // AetherSDR decision that follows from the mode name (the indicator, the
-    // passband, whether the mod-input warning applies) was taken for the wrong
-    // mode.
-    //
-    // RADIO-AUTHORITATIVE (Constitution II): this OVERWRITES whatever
-    // setSliceMode optimistically assumed. The optimistic value exists only to
-    // fill the gap until this arrives; when the two disagree the radio is
-    // right, including when the radio simply refused the change.
+    // 26 00 <mode> <data> <filter>: the only report that distinguishes USB
+    // from USB-D (mode byte 0x01 either way). Radio-authoritative: it
+    // overwrites whatever setSliceMode optimistically assumed.
     case cmd::kVfoMode: {
         // THE SELECTED VFO ONLY. A reply for the unselected one describes a VFO
         // the app does not model, and adopting it would publish the other VFO's
@@ -2596,18 +2371,10 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         if (st->filter != 0)
             m_filter = st->filter;
         publishModeState();
-        // THE WIDTH AND BOTH PBTs ARE PER MODE AND PER SLOT, and the radio
-        // swaps all three without announcing any of them. A width read once at
-        // connect is right until the operator's first mode or filter change and
-        // quietly stale afterwards — which is the exact failure this whole
-        // change exists to remove, reintroduced one level up.
-        //
-        // The DATA flag counts too: USB and USB-D are different filter contexts
-        // on the radio and hold different widths.
-        //
-        // ASKED BY CONTEXT, NOT BY CHANGE. Comparing the reply against our own
-        // state cannot see a move the optimistic setters have already applied —
-        // that is what left every mode drawing AM's width on real hardware.
+        // Width and both PBTs are stored per mode, DATA flag and filter slot,
+        // and the radio swaps them silently. Re-read whenever that context
+        // differs from the one the width was read in — not on a detected
+        // change, which optimistic setters would already have masked.
         if (!passbandWidthIsCurrent())
             requestPassbandState();
         // A TRANSMIT slot change rides on the same edge, because which TBW item
@@ -2996,16 +2763,8 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         if (!spec)
             return;
 
-        // OVF IS ONE BYTE, not a two-byte BCD level.
-        //
-        // 15 07 answers 00 or 01 — a flag, not a reading — and decodeLevel
-        // rejects anything shorter than two bytes. So every ADC-overflow reply
-        // was dropped before markAnswered, the poller re-asked on the in-flight
-        // timeout forever, and the indicator that tells an operator they are
-        // clipping the converter never moved once. `controls meters` reported it
-        // as NEVER FED with the replies plainly visible in `civ trace` — which
-        // is the whole reason to measure a meter's age rather than its
-        // definition.
+        // 15 07 (OVF) answers a one-byte 00/01 flag, not a two-byte BCD level,
+        // and decodeLevel rejects anything shorter than two bytes.
         std::optional<int> raw = spec->id == MeterId::Overflow
             ? (frame.data.empty() ? std::nullopt
                                   : std::optional<int>(frame.data[0] != 0 ? 1 : 0))
@@ -3080,16 +2839,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     case cmd::kControl: {
         if (frame.hasSub && frame.sub == control::kPtt && !frame.data.empty()) {
             const bool keyed = frame.data[0] != 0;
-            // THE SHAPE GATES EVIDENCE, NOT PUBLICATION (#5516 review).
-            //
-            // A 1C 00 answer is one byte, 00 or 01. Anything else is a frame we
-            // do not understand — but "do not understand" and "not keyed" are
-            // not the same answer, and this block is the fail-closed path for a
-            // radio that reports KEYED after an unkey request. Dropping an
-            // unrecognised payload here would make that report silent, which is
-            // the one direction Constitution VI will not accept. So publish on
-            // the broad guard as before, and refuse only to let an off-shape
-            // frame become a *confirmation* that something else can cite.
+            // A 1C 00 answer is one byte, 00 or 01. An off-shape payload is
+            // still published (any non-zero reads as keyed, failing closed) but
+            // never recorded as a confirmation others can cite (#5516).
             const bool wellFormed = frame.data.size() == 1 && frame.data[0] <= 1;
             if (!wellFormed) {
                 qCWarning(lcIcomScheduler)
@@ -3098,24 +2850,13 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
                     << "but refusing to record it as a confirmation. bytes ="
                     << frame.data.size() << "first =" << int(frame.data[0]);
             }
-            // A read can already be on the wire when the operator keys.  Its
-            // pre-write OFF answer then arrives after the newer ON request.
-            // During the bounded confirmation window only the requested value
-            // may confirm the intent; a contradictory value is diagnostic
-            // history, not a newer state transition.  Once the window expires,
-            // the next fresh radio report wins again (Constitution II).
-            //
-            // ONE DIRECTION ONLY — suppression applies while the pending intent
-            // is KEY ON, never while it is key off.  The two directions are not
-            // symmetric risks.  Swallowing a stale OFF after a key-on request
-            // costs a transmission (the captured FT8 failure).  Swallowing an
-            // unexpected ON after an unkey request costs the operator any
-            // indication that the radio is still on the air — when the unkey was
-            // lost, refused, or overridden at the front panel, that report is
-            // the only thing that says so.  RFC #4983 states the rule directly:
-            // "Explicit PTT OFF and fail-safe unkey are never suppressed by a
-            // key-on transition guard", and Constitution VI wants every path
-            // that can transmit to fail closed.
+            // A read already on the wire when the operator keys answers with
+            // the pre-write OFF. Inside the confirmation window, while the
+            // pending intent is KEY ON, only the requested value confirms it; a
+            // contradiction is diagnostic, and after the window fresh reports
+            // win again. Never suppressed while the intent is key off: an
+            // unexpected ON after unkey is the only sign the radio is still on
+            // the air (RFC #4983).
             bool republishContradiction = false;
             if (m_pendingPttIntent) {
                 const bool confirmsIntent = keyed == *m_pendingPttIntent;
@@ -3381,38 +3122,13 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     if (!m_session || !m_connected)
         return;
 
-    // ONLY WHILE KEYED — and the engine is relying on us for this.
-    //
-    // AudioEngine deliberately does NOT PTT-gate the tap that feeds this
-    // ("No PTT gate here: Hl2Backend::submitTxAudio drops audio unless keyed"),
-    // because the seam contract puts the gate in the backend. This one had no
-    // gate at any layer: not here, not in IcomSession::sendAudio, and not in
-    // onTxPump. So the operator's live microphone streamed into the radio's
-    // WLAN modulation input for the entire session.
-    //
-    // Two things that costs, and the first is a transmit-safety question. A
-    // radio with VOX enabled keys on that feed, with no intent expressed
-    // anywhere in this client — and this backend can neither read nor clear VOX
-    // (Principle VI: nothing automates into a keyed transmitter). The second is
-    // that TxPacketizer caps at 250 ms and drops the OLDEST on overflow, so a
-    // continuously-fed queue saturates and then sheds periodically.
-    //
-    // SAFE TO GATE, because the audio stream does not depend on this traffic to
-    // stay up: IcomStream runs its own idle and ping timers, and RS-BA1's
-    // keepalive is the 0x00 idle packet rather than the audio payload. Stopping
-    // audio between overs stops audio, not the session.
-    //
-    // TUNE has a backend-owned, radio-rate producer. Letting microphone
-    // callbacks feed this path at the same time creates a second packet cadence
-    // and can overrun the bounded transmit queue.
-    //
-    // BOTH terms are load-bearing, for different reasons. txAudioGateOpen()
-    // (#5311) follows PTT INTENT inside the bounded key-on window, so a finite
-    // AX.25 packet's resampler tail is not dropped between the unkey intent and
-    // the radio's 1C 00 readback. hasTransmit is about WHICH RADIO: identity is
-    // late on this backend, and until 19 00 answers m_model is unknownModel(),
-    // which has no transmit. Keeping only the first would submit audio against
-    // an unidentified radio; keeping only the second reopens #5311.
+    // The seam contract puts the PTT gate in the backend (AudioEngine does not
+    // gate this tap). Ungated, live mic audio would reach the radio's WLAN
+    // modulation input all session and key a radio with VOX on, which this
+    // backend can neither read nor clear. Gating is safe: IcomStream's own idle
+    // (0x00) and ping packets keep the session up. TUNE owns its own producer.
+    // txAudioGateOpen() follows PTT intent in the key-on window (#5311);
+    // hasTransmit refuses audio until 19 00 identifies the model.
     if (m_tuning || !txAudioGateOpen() || !m_model->hasTransmit) {
         return;
     }
@@ -3464,21 +3180,11 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     m_session->sendAudio(mono, context);
 }
 
-// The transmit-audio admission gate, shared by the seam feed, the TUNE tone
-// producer and the finite-stream barrier.
-//
-// Commanded intent leads inside its bounded confirmation window; radio truth
-// decides everywhere else. setKeying() no longer moves m_keyed on its own
-// (the readback does), so gating on m_keyed alone would head-clip every voice,
-// DAX and TCI over by one CI-V round trip — up to the 250 ms fallback poll —
-// and leave the TUNE carrier silent until the radio answered, the exact edge
-// setTune()'s priming frame exists to cover. Admitting audio on the key-on
-// intent restores the established timing; refusing it on the unkey intent
-// keeps audio out of a queue that setKeying(false) has just flushed. Past the
-// window an unconfirmed key-on stops admitting audio to a radio that still
-// says RX (fail closed), and a refused unkey re-admits it once the radio has
-// said it is still keyed — audio into a keyed transmitter is the truthful
-// state, not a stray emission.
+// Transmit-audio admission gate for the seam feed, the TUNE tone producer and
+// the finite-stream barrier. Inside the bounded confirmation window the PTT
+// intent decides (so overs are not head-clipped by a CI-V round trip, and audio
+// stays out of a queue setKeying(false) just flushed); outside it the radio's
+// confirmed m_keyed decides, failing closed on an unconfirmed key-on.
 bool IcomCivBackend::txAudioGateOpen() const
 {
     if (m_pendingPttIntent && nowMs() < m_pendingPttUntilMs) {
@@ -3500,16 +3206,11 @@ int IcomCivBackend::finishTxAudio(const TxCoordinator::Context& context)
         return 0;
     }
 
-    // A finite packet ends while r8brain still holds one linear-phase group
-    // delay of real samples. The 24->48 kHz converter measures about 70 ms on
-    // this path — enough to hide the AX.25 FCS and postamble. Drain those
-    // samples while PTT is still confirmed, then finish the packetizer's last
-    // 20 ms frame with silence so none of that recovered tail remains pending
-    // when unkey flushes the queue.
-    //
-    // The padding is unconditional: a producer already at the negotiated rate
-    // has no resampler and no tail, but its final partial frame would be lost
-    // to the unkey flush exactly the same way.
+    // r8brain holds one group delay of real samples (~70 ms for 24->48 kHz,
+    // enough to hide an AX.25 FCS and postamble). Drain it while PTT is still
+    // confirmed, then pad the last 20 ms packetizer frame with silence so the
+    // unkey flush drops nothing. Padding is unconditional: a non-resampled
+    // producer's final partial frame would be lost the same way.
     int drainedSamples = 0;
     if (m_txResampler) {
         const QByteArray tail = m_txResampler->drain();
@@ -3811,31 +3512,15 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
 void IcomCivBackend::confirmState(const QString& key, const QVariant& value,
                                   bool accepted)
 {
-    // Called after decode, and after the stale-generation and PTT-intent
-    // rejections in onCivFrame — with one structural exception: a stale frame
-    // that ARRIVES WHILE A PTT INTENT IS PENDING and agrees with that intent
-    // reaches here, because the Stale check is an `else if` on the intent
-    // branch. ACKs, setters and control-map "seen" counters never confirm.
-    //
-    // `accepted` is what separates the two, and it means NOT SUPERSEDED rather
-    // than "matched an in-flight read": an unsolicited publication and a reply
-    // slower than the scheduler's wait are both Unmatched and both
-    // authoritative, while Stale is the one outcome that proves a newer
-    // semantic generation replaced this frame. Everything reaching here by the
-    // ordinary decode path is non-stale already (the filter above drops stale
-    // non-PTT frames outright); only that one PTT case can arrive Stale. It is
-    // recorded rather than filtered because the publication is still radio
-    // truth and Constitution VI will not have it suppressed — but a consumer
-    // citing this as PROOF of an unkey needs to know which it got, so
-    // `stateFreshness` exports it and the TX harness requires it (#5516).
-    //
-    // `pending` has no timer, and does not need one only because every tracked
-    // key is reconciled by something: sendUserCommand() queues confirmationFor()
-    // behind each write, and onLinkTick() re-polls frequency/mode (phase % 2),
-    // AGC and RF power (phase % 3) and PTT at 4 Hz. Squelch is the exception —
-    // see kTrackedStateFields, which is why it no longer gates readiness. If a
-    // future change removes one of those polls, the matching field can stick in
-    // `pending` for the rest of the session; add an expiry then.
+    // Called after onCivFrame's stale-generation and PTT-intent rejections;
+    // ACKs, setters and "seen" counters never confirm. `accepted` means "not
+    // superseded" (Unmatched replies are authoritative). Only a stale PTT frame
+    // that agrees with a pending intent arrives with accepted=false; it is still
+    // radio truth, so it is recorded and `stateFreshness` exports it (#5516).
+    // `pending` has no timer because every tracked key is re-polled
+    // (confirmationFor() after writes; onLinkTick() for frequency/mode, AGC,
+    // RF power, PTT). Squelch is the exception (see kTrackedStateFields); a
+    // removed poll would need an expiry here.
     const auto previous = m_confirmedState.constFind(key);
     if ((key == QLatin1String("frequency") || key == QLatin1String("mode"))
         && previous != m_confirmedState.cend() && previous->value != value) {
@@ -4175,18 +3860,10 @@ void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame,
     pumpCiv(now);
 }
 
-// Re-assert the radio's real VFO one event-loop turn from now.
-//
-// Deferred because SliceModel has already accepted and announced the
-// operator's request by the time a seam verb or a CI-V reply runs; a direct
-// emit would be applied and then announced away, and the indicator would keep
-// lying. Same ordering contract as setSliceMode().
-//
-// Read at FIRE time, not captured: a 03 reply can land in the gap and move
-// m_frequencyHz, and the radio's newest word is the one to publish. Guarded
-// by m_tuneEpoch: if the operator issued a newer tune in that gap, the
-// correction is for a request they have already abandoned and re-asserting it
-// would drag the readout back behind a write that may well succeed.
+// Re-assert the radio's real VFO one event-loop turn from now, after SliceModel
+// has announced the operator's request (same ordering contract as
+// setSliceMode()). m_frequencyHz is read at fire time so a 03 reply in the gap
+// wins, and a newer tune (m_tuneEpoch changed) cancels the restore.
 void IcomCivBackend::scheduleFrequencyRestore()
 {
     const std::uint64_t epoch = m_tuneEpoch;
@@ -4244,25 +3921,11 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
     bool data = false;
     auto civ = modeFromNeutral(mode.toStdString(), data);
     if (!civ) {
-        // No IC-705 equivalent (SAM, DRM, DSB). Refusing beats substituting USB:
-        // a slice that asked for SAM and silently got USB has a mode indicator
-        // that lies about what is being demodulated.
-        //
-        // But refusing SILENTLY leaves it lying too. SliceModel has already
-        // taken the operator's choice by the time we see it, so a bare return
-        // left the mode indicator reading SAM on a radio demodulating AM —
-        // which is how a broadcast station ended up being received through a
-        // 2.4 kHz window with the UI insisting it was in synchronous AM.
-        // Re-assert what the radio is ACTUALLY in.
-        //
-        // QUEUED, for the same reason the refused pan centre is (see
-        // setPanCenter). SliceModel::setMode has already written the refused
-        // mode into its own field and calls us from modeChangeRequested — and
-        // it emits modeChanged(mode) on the line AFTER that signal returns. A
-        // direct emit here is applied and then immediately announced away: the
-        // model ends up holding AM while the last modeChanged the UI saw said
-        // SAM, so the indicator still lies. Deferring one event-loop turn puts
-        // the correction after that announcement.
+        // No CI-V equivalent (SAM, DRM, DSB): refuse rather than substitute,
+        // and re-assert the radio's actual mode because SliceModel has already
+        // taken the operator's choice. Queued: SliceModel::setMode emits
+        // modeChanged(mode) after modeChangeRequested returns, which would
+        // announce a direct correction away.
         const QString actual = QString::fromStdString(modeToNeutral(m_mode, m_dataMode));
         if (!actual.isEmpty()) {
             const auto [lo, hi] =
@@ -4292,21 +3955,10 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
     // narrow CW filter lost it the moment they visited another mode and came
     // back.
     const std::uint8_t addr = m_session ? m_session->civAddress() : 0xA4;
-    // MODE AND THE DATA FLAG IN ONE FRAME, because command 06 cannot carry the
-    // flag at all.
-    //
-    // THE BUG THIS FIXES: DIGU and USB are the same mode byte. Sending 06 01
-    // alone asked for plain USB, so an operator selecting DIGU on a radio
-    // sitting in DATA OFF got a radio modulating from the MICROPHONE while
-    // AetherSDR's indicator, passband and capabilities all said DIGU. Digital
-    // transmit looked completely wired and produced no output — no error
-    // anywhere, because nothing was wrong except which modulator the radio was
-    // listening to.
-    //
-    // ONE FRAME, not an ordered pair. Writing the ordinary mode is what clears
-    // DATA on the radio, so mode-then-DATA is a sequence whose correctness
-    // depends on both frames landing and landing in order; 26 states all three
-    // at once and the radio applies or refuses them as a unit.
+    // Mode, DATA flag and filter go in one 0x26 frame: DIGU and USB share a
+    // mode byte and command 06 cannot carry the DATA flag (06 alone would
+    // modulate from the mic). Writing 06 also clears DATA, so a mode-then-DATA
+    // pair would depend on ordering; 26 is applied or refused as a unit.
     if (profileFor(*m_model).supports(IcomFeature::VfoMode)) {
         m_dataMode = data;
         sendUserCommand(cmdSetVfoMode(addr, *civ, data, m_filter));
@@ -4318,21 +3970,10 @@ void IcomCivBackend::setSliceMode(int, const QString& mode)
         m_dataMode = false;
         sendUserCommand(cmdSetMode(addr, *civ, m_filter));
     }
-    // CONFIRM. Everything above is a request; only the radio's own answer is
-    // state (Constitution II). sendUserCommand queues that confirmation read
-    // itself, at Operator priority and one generation ahead of any poll already
-    // on the wire, and it is what corrects the optimistic publish below if the
-    // radio refused or altered the change — a mode with no DATA variant, a band
-    // where the radio will not enter it. One extra frame on the operator's own
-    // mode change, not a new poll.
-    // PUBLISH THE PASSBAND NOW, from the mode we just commanded.
-    //
-    // Waiting for the radio to report the mode back is not good enough: the
-    // report only arrives if CI-V Transceive is on, and even then it lands
-    // milliseconds later. radiocert's passband-after-mode-change stage caught
-    // exactly that — CW then DIGU left the window at the previous mode's width,
-    // so a decoder in a wide mode saw a narrow slot. The radio owns its DSP and
-    // sends no passband, so this is the only place it can come from.
+    // sendUserCommand queues an Operator-priority confirmation read, which
+    // corrects the optimistic publish below if the radio refused or altered
+    // the change. The passband is published now from the commanded mode: the
+    // radio sends no passband, and its mode report needs CI-V Transceive on.
     const QString publishedMode = currentNeutralMode();
     const auto [low, high] =
         passbandForModeAndFilter(publishedMode.toStdString(), m_filter);
@@ -4517,20 +4158,10 @@ void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent int
     const double centreMhz = static_cast<double>(m_scopeCentreHz) / 1e6;
     const double widthMhz  = static_cast<double>(m_scopeSpanHz * 2) / 1e6;
 
-    // A ZOOM's centre is refused, and re-asserted immediately.
-    //
-    // Centre and bandwidth travel together on a range change, so every zoom
-    // click arrives here carrying a centre. Honouring it would walk the VFO
-    // across the band one click at a time, which is what this whole method used
-    // to do to a DRAG as well. Without the re-assert the widget keeps its
-    // optimistic centre for up to a frame and the trace visibly slides before
-    // the next sweep contradicts it.
-    //
-    // QUEUED, and that is not incidental. RadioModel writes the REQUESTED
-    // centre into the pan model on the line after it calls us, so a direct emit
-    // here is overwritten by the very value we are refusing. Deferring to the
-    // next event loop iteration puts the correction after that write and still
-    // lands inside the same frame — sooner than the next sweep would.
+    // A range change (zoom) carries a centre too; honouring it would walk the
+    // VFO across the band, so it is refused and the real centre re-asserted.
+    // Queued: RadioModel writes the requested centre into the pan model after
+    // this call returns, so a direct emit would be overwritten.
     if (intent != PanCenterIntent::Drag) {
         qCDebug(lcIcomPan) << "pan-centre from a range change REFUSED;"
                            << "asked" << hz << "Hz, radio is at" << m_scopeCentreHz << "Hz";
@@ -4540,24 +4171,11 @@ void IcomCivBackend::setPanCenter(const QString&, double hz, PanCenterIntent int
         return;
     }
 
-    // A DRAG RETUNES, and on this radio there is no third option.
-    //
-    // In centre mode the scope window IS the operating frequency — the radio
-    // offers no way to offset one from the other, and its FIXED mode is not a
-    // free-form window either (three saved edge presets per band, 0x27 0x1E,
-    // which following a drag would overwrite thirty times a second). So the
-    // window cannot slide over stationary spectrum the way it does on a Flex:
-    // the only way to show the operator the spectrum they dragged toward is to
-    // tune there.
-    //
-    // This method used to refuse a drag too, and re-assert. The result was a
-    // trace that slid under the mouse and snapped back a frame later, on every
-    // attempt — the panadapter's most basic gesture reading as a bug.
-    //
-    // The DEAD ZONE is what keeps a click from being a tune. A press-and-release
-    // with a pixel of hand movement arrives here as a centre a few Hz away, and
-    // one-to-one tuning would move the dial on every stray click. One percent of
-    // the visible span is far below what anyone can aim at and far above jitter.
+    // A drag retunes. In centre mode the scope window is the operating
+    // frequency, and FIXED mode is three saved edge presets per band (0x27 0x1E)
+    // that a drag must not overwrite, so tuning is the only way to follow it.
+    // The dead zone (kPanDragDeadZoneFraction of the span) keeps a click with a
+    // pixel of hand movement from moving the dial.
     const double requestedHz = hz;
     const double deltaHz = requestedHz - static_cast<double>(m_scopeCentreHz);
     const double deadZoneHz = static_cast<double>(m_scopeSpanHz) * kPanDragDeadZoneFraction;
@@ -4624,20 +4242,10 @@ void IcomCivBackend::setPanRfGain(const QString&, int gainDb)
                                 level::kRf, percentToLevelRaw(std::clamp(gainDb, 0, 100))));
 }
 
-// ADOPT THE REQUESTED STEP, do not wait for an echo.
-//
-// A set on this radio is answered with a bare FB — an acknowledgement, not a
-// report of the new value. Nothing follows it. Both of these used to publish
-// nothing and leave the button to be corrected by a `panPreampChanged` that
-// never arrives, so the control cycled OFF -> P.AMP1 and then stuck: the click
-// emitted step 2, the widget reverted itself to its pre-click state waiting for
-// the radio, and the radio said only "understood".
-//
-// The optimistic publish is what the connect-time and front-panel reads are for:
-// if the radio refused the request — an IC-705 has no P.AMP2 above 50 MHz, and
-// no attenuator there at all — the next unsolicited 16 02 / 11 report corrects
-// it. Claiming a position the radio took is right far more often than showing
-// none at all.
+// Publish the requested step optimistically: a set is answered with a bare FB,
+// never an echo of the new value, so waiting would leave the widget stuck. If
+// the radio refused (the IC-705 has no P.AMP2 and no attenuator above 50 MHz),
+// the next unsolicited 16 02 / 11 report corrects it.
 void IcomCivBackend::setPanPreamp(const QString&, int step)
 {
     // Operator intent is bounded by the model's verified presentation ladder.
@@ -5204,25 +4812,11 @@ void IcomCivBackend::setRitOffset(int hz)
     sendUserCommand(cmdTuneOffsetHz(m_session ? m_session->civAddress() : 0xA4, hz));
 }
 
-// The receive-only mode gate — the WIRE BACKSTOP, shared by every path here
-// that can start an emission.
-//
-// WFM is the case today (#5040): the IC-705 offers it to listen to FM broadcast,
-// 76-108 MHz, and its transmitter does not follow. Refused HERE rather than left
-// to the radio because "the radio will say no" is not a property the protocol
-// lets us verify — CI-V answers NG for a command it rejects, but a key request
-// that is simply IGNORED is indistinguishable from one that worked, right up
-// until the meters fail to move.
-//
-// SILENT ON PURPOSE, apart from the log line. This is the second of two gates:
-// RadioModel::refuseKeyInReceiveOnlyMode() runs first, off the receiveOnlyModes
-// capability published above, and it is the one that tells the operator and
-// rolls back the optimistic MOX/TUNE state. A backend cannot reach
-// TransmitModel, so anything it emitted here would be an indicator that never
-// cleared plus a second message for one refusal (#5106 review). What this gate
-// still buys is the guarantee no PTT frame leaves by ANY path, including one
-// that never passed through RadioModel.
-//
+// Receive-only mode gate: the wire backstop for every path that can key. WFM on
+// the IC-705 is RX-only (#5040), and CI-V cannot confirm a refusal (an ignored
+// key request looks like success), so no PTT frame leaves in such a mode by any
+// path. Silent apart from the log: RadioModel::refuseKeyInReceiveOnlyMode()
+// gates first, tells the operator and rolls back MOX/TUNE (#5106).
 // Returns true when the caller must not key.
 bool IcomCivBackend::refuseKeyingInReceiveOnlyMode()
 {
@@ -5275,20 +4869,12 @@ void IcomCivBackend::applyKeying(bool key, const std::optional<TxCoordinator::Co
     m_pttIncidentReported = false;
     sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key),
                     command);
-    // DO NOT publish intent as radio state. The scheduler sends a confirming
-    // 1C 00 read and the normal 250 ms fallback poll keeps asking. Only that
-    // decoded reply moves m_keyed, the meters, and transmitChanged. Publishing
-    // here made AetherModem release sample zero while the IC-705 still reported
-    // RX, truncating the AX.25 preamble and header on air.
-    //
-    // Three things still happen on the command, because none of them is a
-    // claim about the air: the transmit-audio gate follows this intent inside
-    // its window (txAudioGateOpen), the queued audio of a finished transmission
-    // is discarded, and the DERIVED IC-9700 forward-power estimate is zeroed —
-    // CI-V stops Po polling at unkey, so waiting for the readback would leave a
-    // stale wattage on the meter for as long as that reply takes, or forever
-    // if it is lost. A readback that then contradicts the unkey is republished
-    // by onCivFrame; nothing here pre-empts it.
+    // Intent is not published as radio state: only the decoded 1C 00 reply
+    // (confirming read + 250 ms fallback poll) moves m_keyed, the meters and
+    // transmitChanged, so audio consumers never start before the radio is in TX.
+    // On the command itself: txAudioGateOpen follows intent, queued TX audio is
+    // dropped on unkey, and the derived IC-9700 forward power is zeroed (Po
+    // polling stops at unkey). A contradicting readback is republished by onCivFrame.
     if (!key) {
         clearDerivedForwardPower();
     }
@@ -5729,16 +5315,11 @@ QVariantMap IcomCivBackend::repeaterStateMap() const
     return out;
 }
 
-// The METER half of the registry: every 0x15 subcommand this backend polls,
-// with the scale it publishes and — the part that matters — how long ago it last
-// produced a reading.
-//
-// AGE IS THE FINDING. A meter that is defined and never fed renders as a real
-// instrument reading a quiet band, which is worse than a missing one
-// (docs/radio-certification.md opens on exactly this). A definition alone proves
-// nothing; `ageMs` is what separates a meter that works from one that merely
-// exists. A TX-only meter reading -1 while receiving is correct and is labelled
-// as such, so the two cannot be confused.
+// The meter half of the registry: every 0x15 subcommand polled, its published
+// scale, and `ageMs` since its last reading — the field that distinguishes a
+// working meter from one that is defined but never fed
+// (docs/radio-certification.md). TX-only meters read -1 while receiving and are
+// labelled as such.
 QVariantList IcomCivBackend::meterMap() const
 {
     const auto sv = [](std::string_view v) {
@@ -5903,38 +5484,22 @@ QVariantMap IcomCivBackend::controlScrub(const QString& filter)
     return out;
 }
 
-// Re-assert one control at whatever it is already set to.
-//
-// Returns false when there is no safe way to drive this row — no tracked value,
-// or a guard that would need the operator's setting changed to get past. That is
-// a THIRD outcome, distinct from "the frame reached the radio" and from "the
-// verb ran and emitted nothing", and collapsing it into either would misreport a
-// control the scrub simply did not test.
-//
-// THE DEDUPE SENTINELS ARE CLEARED FIRST. NR, NB and both notches suppress an
-// enable that matches what was last sent — correct in normal use, and fatal to a
-// linkage check, because re-asserting the current value is precisely what the
-// dedupe exists to swallow. Clearing the sentinel makes the verb send the SAME
-// value it would have sent anyway, so nothing on the radio changes and the frame
-// becomes observable.
+// Re-assert one control at its current value. Returns false (NOT-TESTED, a
+// third outcome distinct from sent / sent-nothing) when there is no safe way to
+// drive the row: no tracked value, or a guard needing the operator's setting
+// changed. The NR/NB/notch dedupe sentinels are cleared first so the unchanged
+// value actually reaches the wire and the frame is observable.
 bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
 {
     const int slice = sliceId();
     const QString pan = panId();
     const QString id = QString::fromUtf8(c.id.data(), static_cast<int>(c.id.size()));
 
-    // A MIRROR NOBODY HAS ESTABLISHED IS NOT A CURRENT VALUE.
-    //
-    // Generalises the rule the nr/nb/anf/notch sentinels state one control at a
-    // time. Until either the radio has answered for this row or we have
-    // commanded it, the mirror holds a construction default — 0 % for every
-    // gain, "off" for every switch — and re-asserting it is not a no-op, it is
-    // a silent write of that default. A scrub documented as leaving the radio
-    // untouched would deafen the receiver and report the row LINKED, because
-    // the intent did reach the wire. NOT-TESTED is the honest outcome and the
-    // scrub already has that state; the connect-time read burst establishes
-    // every row here in the normal case, so this only fires when a read was
-    // lost — which on the lossy link this backend exists for is one datagram.
+    // Until the radio has answered for this row or we have commanded it, the
+    // mirror holds a construction default (0 % gain, switches off), and
+    // re-asserting it would silently write that default to the radio. Report
+    // NOT-TESTED instead; normally the connect-time read burst establishes
+    // every row, so this fires only when a read was lost.
     if (!m_controlsValueKnown.contains(id))
         return false;
 
@@ -6164,20 +5729,9 @@ void IcomCivBackend::traceCiv(bool outbound, std::span<const std::uint8_t> frame
     // scanning a log, and the whole point of switching this on is to answer
     // "did the 1A 06 query go out, and did the radio answer it".
     if (lcIcomCiv().isDebugEnabled()) {
-        // THE TWO CALL SITES PASS DIFFERENT LAYOUTS, so the command index is a
-        // parameter and not an assumption:
-        //
-        //   TX (sendUserCommand) — the raw wire frame from buildFrame:
-        //       FE FE <to> <from> <cmd> [<sub>] <data…> FD   -> cmd at 4
-        //   RX (onCivFrame)      — re-serialised, envelope deliberately dropped
-        //       <cmd> [<sub>] <data…>                        -> cmd at 0
-        //
-        // Reading index 4 for both printed a payload byte as the command on
-        // every received frame, and silently printed NOTHING for any RX frame
-        // shorter than five bytes — which is most of them. `1a 06 01 01`, the
-        // reply this whole category was added to make visible, is four bytes
-        // and came out undecorated. Exactly the wrong-but-plausible output the
-        // comment below warns about, in the direction that was not checked.
+        // The two call sites pass different layouts:
+        //   TX (sendUserCommand): FE FE <to> <from> <cmd> [<sub>] <data…> FD -> cmd at 4
+        //   RX (onCivFrame):      <cmd> [<sub>] <data…> (envelope dropped)   -> cmd at 0
         const int cmdIdx = outbound ? 4 : 0;
         QString tag;
         if (frame.size() > static_cast<std::size_t>(cmdIdx)) {
@@ -6568,21 +6122,11 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         emit extensionResult(requestId, true);
         return;
     }
-    // TWO VERBS, because there are two different things to say about PC Audio
-    // and only one of them is a command.
-    //
-    // `audio.pc.state` is an OBSERVATION — the client's local audio routing is
-    // on or off. It is what the connect edge publishes, and it exists so
-    // checkModInput() can advise ("PC Audio is on but DATA OFF MOD is MIC")
-    // without the client writing anything. Replaying a client-persisted value
-    // onto DATA OFF MOD at connect is what Constitution III forbids in as many
-    // words: the radio persists that register itself, so a client that pushes
-    // its remembered copy back hands the operator two sources of truth that
-    // fight on every reconnect.
-    //
-    // `audio.pc` is a REQUEST, and only an operator click issues it.
-    // Principle II allows exactly that — a user action is a request to the
-    // radio — which is why the write lives here and nowhere else.
+    // `audio.pc.state` is an observation of the client's local audio routing,
+    // published at connect so checkModInput() can advise without writing
+    // anything; the radio persists DATA OFF MOD itself, so a client value is
+    // never replayed onto it. `audio.pc` is the operator-click request and the
+    // only path that writes DATA OFF MOD.
     if (verb == QLatin1String("audio.pc.state")) {
         m_pcAudioEnabled = arg.toBool();
         checkModInput();
@@ -6609,19 +6153,11 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
             return;
         }
         const bool on = arg.toBool();
-        // CAPTURE WHATEVER IS ABOUT TO BE OVERWRITTEN, every time rather than
-        // only once. This is the last moment the operator's own selection is
-        // observable — after the write the readback reports what we put there.
-        //
-        // Re-capturing matters because the register is theirs between clicks:
-        // an operator who turns PC Audio off and then moves DATA OFF MOD to ACC
-        // on the front panel must get ACC back next time, not the USB the
-        // session opened on. The link-tick poll keeps m_dataOffModInput current,
-        // so the value here is the radio's, not a stale belief.
-        //
-        // The network source is never captured: putting THAT back on "off"
-        // would leave PC Audio off with the radio still listening to the
-        // network, which is the state where nothing modulates at all.
+        // Capture the operator's DATA OFF MOD selection on every click, not
+        // once: the register is theirs between clicks (a front-panel change to
+        // ACC must be restored as ACC), and the link-tick poll keeps
+        // m_dataOffModInput current. The network source is never captured —
+        // restoring it on "off" would leave nothing modulating.
         if (m_dataOffModInput >= 0 && m_dataOffModInput != mod->networkOnlyValue) {
             m_dataOffModRestore = m_dataOffModInput;
         }
@@ -6925,20 +6461,10 @@ void IcomCivBackend::onLinkTick()
         m_schedulerTimeoutsReported = schedulerStats.timeouts;
     }
 
-    // ---- CI-V STALL DETECTION ------------------------------------------
-    //
-    // The UDP transport can be perfectly healthy while the COMMAND PLANE is
-    // dead: the control stream keeps pinging, rxPackets keeps climbing, and
-    // `alive` above stays true, while the radio has answered no CI-V frame for a
-    // minute. That happened during this bring-up and cost real time to diagnose
-    // — every meter frozen at the same instant, `isConnected()` still true, and
-    // nothing anywhere saying so.
-    //
-    // WHAT MAKES THIS TRIAGEABLE IS THE COMMAND, not the silence. Naming the
-    // last frame we sent turns "the radio stopped talking" into "the radio
-    // stopped talking after 16 02 02", which is the difference between a bug
-    // report and a guess. Logged once per stall, not once per tick, because a
-    // warning that repeats every second is one nobody reads.
+    // CI-V stall detection. The UDP transport (pings, rxPackets, `alive`) can
+    // stay healthy while the radio answers no CI-V frame at all, so the command
+    // plane is watched separately. The stall log names the last frame sent and
+    // fires once per stall, not once per tick.
     if (!m_connected)
         return;
     const qint64 now = nowMs();

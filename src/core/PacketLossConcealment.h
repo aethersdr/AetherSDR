@@ -18,18 +18,11 @@ struct AudioPlcState {
 // this, audio drops to clean silence rather than extending the synth.
 constexpr int kMaxConcealPackets = 8;
 
-// Prepend faded-silence concealment to a float32 stereo PCM buffer
-// before emit.  Returns the (possibly enlarged) buffer with a cosine
-// fade-down from the cached tail, zero-pad for the rest of the gap,
-// and cosine fade-up into the newly received head.
-//
-// Pure function: state is captured in `plc`, `enabled` is passed in so
-// the caller can flip behaviour at runtime without touching this
-// translation unit.  Returns `pcm` unchanged when concealment is
-// disabled or no loss is pending; otherwise returns a new QByteArray
-// with concealment frames prepended to the input PCM.  In both cases
-// `plc.tailL/R` and `plc.lastFrames` are updated to reflect the output's
-// last samples and `plc.pendingMissed` is reset to 0.  (#2731)
+// Prepend faded-silence concealment to float32 stereo PCM: cosine fade-down from
+// the cached tail, zeros for the rest of the gap, cosine fade-up into the new
+// head. Returns `pcm` unchanged when disabled or no loss is pending. Either way
+// updates plc.tailL/R and plc.lastFrames from the output and resets
+// plc.pendingMissed. (#2731)
 QByteArray applyConcealmentFade(QByteArray pcm, AudioPlcState& plc,
                                 bool enabled);
 

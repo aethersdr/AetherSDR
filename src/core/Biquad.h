@@ -1,39 +1,11 @@
 #pragma once
 
-// Canonical 2-pole biquad section for AetherSDR DSP modules.
-//
-// Coefficient computation follows the Audio EQ Cookbook (Robert
-// Bristow-Johnson):
-//   https://www.w3.org/TR/audio-eq-cookbook/
-//
-// Topology: Direct Form II Transposed.  Chosen because it produces
-// the cleanest single-precision state behaviour of the four standard
-// biquad forms and matches the existing high-quality reference
-// implementation in ClientEq.  Coefficients are stored in `double`
-// for numerical stability across the full audio band; per-sample
-// state is `float` to keep the inner loop lean — this matches the
-// long-standing ClientEq layout and is the precision split the
-// scattered DESS / Pudu implementations should have used.
-//
-// Thread model: no synchronisation.  setCoefficients() is intended
-// to be called from the audio thread (typically once per block when
-// a parameter version counter changes); process() is also audio-
-// thread.  Holding a Biquad across threads is the caller's
-// responsibility — wrap it with whatever atomics + version counter
-// the surrounding DSP module already uses.
-//
-// Cascade pattern: for higher-order filters that need N biquad stages
-// in series (DESS bandpass cascade, PhaseRotator's 4-stage all-pass,
-// EqApplet's per-band sections), use std::array<Biquad, N> for fixed
-// stage counts or std::vector<Biquad> for runtime-variable counts and
-// iterate explicitly:
-//
-//   for (auto& stage : stages) sample = stage.process(sample);
-//
-// No dedicated BiquadCascade class — the std::array/std::vector idiom
-// is simpler than a wrapper and lets each consumer choose its own
-// stage-count semantics (compile-time vs. runtime, reset granularity,
-// per-stage coefficient sets).
+// Canonical 2-pole biquad section for AetherSDR DSP modules. Coefficients per
+// the Audio EQ Cookbook (https://www.w3.org/TR/audio-eq-cookbook/). Direct Form
+// II Transposed; coefficients in double, per-sample state in float (the ClientEq
+// layout). No synchronisation: setCoefficients() and process() are both audio
+// thread; cross-thread use is the caller's job. Cascade with
+// std::array/std::vector<Biquad> and `for (auto& s : stages) x = s.process(x);`.
 
 namespace AetherSDR {
 
@@ -52,15 +24,12 @@ public:
     };
 
     // Compute and store coefficients per Audio EQ Cookbook.
-    //   sampleRateHz : audio thread sample rate, clamped to >= 1.0 Hz
-    //   centerHz     : corner / centre / shelf-midpoint, clamped to
-    //                  [1.0, sampleRateHz * 0.499].  Avoids the
-    //                  sin(0)=0 / cos(π)=-1 collapse the cookbook math
-    //                  exhibits at the closed endpoints.
-    //   Q            : resonance / bandwidth control, clamped to >= 0.1
-    //   gainDb       : used only by PeakingEq / LowShelf / HighShelf
-    // Does NOT touch state — call reset() separately if a discontinuous
-    // restart is required.
+    //   sampleRateHz : clamped to >= 1.0 Hz
+    //   centerHz     : clamped to [1.0, sampleRateHz * 0.499] (the cookbook math
+    //                  collapses at the closed endpoints)
+    //   Q            : clamped to >= 0.1
+    //   gainDb       : PeakingEq / LowShelf / HighShelf only
+    // Does NOT touch state; call reset() for a discontinuous restart.
     void setCoefficients(Type type, double sampleRateHz, double centerHz,
                          double Q, double gainDb = 0.0) noexcept;
 
@@ -77,18 +46,9 @@ public:
         return y;
     }
 
-    // Block tick.  `in` and `out` may alias.  Bit-identical to N
-    // successive process(x) calls, which is the property the
-    // block-process-matches-per-sample test pins down so future
-    // SIMD vectorisation has a known reference.
-    //
-    // Caveat for future SIMD work: the bit-identity guarantee assumes
-    // the compiler doesn't introduce FMA contraction or reassociation
-    // asymmetrically between this path and the per-sample inline
-    // process(x) above.  Block-form locals pre-narrow to float, which
-    // can tempt vectorisation in a way the per-call narrowing doesn't.
-    // Any SIMD rewrite of this function must preserve the test's
-    // bit-identity assertion — break it and the test fails loudly.
+    // Block tick; `in` and `out` may alias. Bit-identical to N process(x) calls, as
+    // the block-process-matches-per-sample test pins; a SIMD rewrite must keep that
+    // (watch for FMA contraction or reassociation differing between the two paths).
     void process(const float* in, float* out, int n) noexcept;
 
     // Zero state (z1, z2) without touching coefficients.  After

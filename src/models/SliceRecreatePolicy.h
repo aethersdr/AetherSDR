@@ -2,21 +2,11 @@
 
 #include <QString>
 
-// SliceRecreatePolicy — decides how to recover a default slice when the radio
-// reports zero slices at GUI-attach time ("slice list" returns empty).
-//
-// Background (#3212): when AetherSDR reconnects to a radio that remembers our
-// persistent client_id, the radio's GUIClientID session restore can bring back
-// our panadapter WITHOUT its slice (observed after an unexpected disconnect +
-// auto-reconnect). The pan is "claimed" well before the "slice list" query
-// resolves, so by decision time we already hold the restored pan. The old code
-// unconditionally issued "display panafall create", allocating a SECOND, empty
-// panadapter on top of the restored one — the duplicate-PAN bug in #3212.
-//
-// The decision is pulled out of RadioModel into this pure, header-only function
-// so it can be unit-tested without a live radio connection (mirrors the
-// RadioStatusOwnership pattern). RadioModel feeds it the runtime state and acts
-// on the returned Decision.
+// Decides how to recover a default slice when "slice list" returns empty at
+// GUI-attach. A radio restoring our persistent client_id can bring back our
+// panadapter without its slice (#3212); the pan is already claimed by decision
+// time, so creating a new panafall would duplicate it. Pure and header-only so
+// it is unit-testable; RadioModel feeds it state and acts on the Decision.
 
 namespace AetherSDR::SliceRecreatePolicy {
 
@@ -55,19 +45,10 @@ struct Decision {
     QString antenna{QStringLiteral("ANT1")};
 };
 
-// Pure decision. No I/O, no Qt event loop — safe to unit-test.
-//
-// Frequency choice rationale:
-//   * Reuse path: place the slice at the RESTORED PAN'S OWN center, not at
-//     LastFrequency. The radio's restored pan center is authoritative for where
-//     that pan is displayed right now; LastFrequency is a client-side guess that
-//     can be on a different band entirely (in the #3212 bundle the restored pan
-//     was on 20m / 14.282 MHz while LastFrequency was 28.305 MHz / 10m — using
-//     LastFrequency would drop the slice ~14 MHz outside the visible span).
-//     LastFrequency / 14.225 are fallbacks only for the brief window before the
-//     radio has reported the pan's center.
-//   * Create path: no pan exists to anchor to, so LastFrequency (or the 14.225
-//     default) is the best available starting point.
+// Pure decision, no I/O. Reuse path: put the slice at the restored pan's own
+// center (radio-authoritative); LastFrequency may be on another band entirely
+// and land outside the span. LastFrequency / 14.225 are fallbacks only until
+// the pan's center is reported. Create path: LastFrequency or 14.225 MHz.
 inline Decision decide(const Inputs& in)
 {
     Decision d;

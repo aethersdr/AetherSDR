@@ -250,16 +250,10 @@ void VkampConnection::onUdpReadyRead()
         m_udpSocket.readDatagram(data.data(), data.size());
         const auto telemetry = Vkamp::parseTelemetry(data);
         if (telemetry) {
-            // Below the lowest raw count the output calibration curve was
-            // ever actually fit to (~133W true output -- VkampProtocol.cpp's
-            // own kOutputCalMinRaw doc comment), outputWatts() correctly
-            // returns 0 rather than extrapolate into a bogus reading -- but
-            // that also means real sub-~130W raw counts go unrecorded
-            // anywhere right now. Logged at debug level purely so a real
-            // external-meter reading at this raw count can become a new
-            // calibration point later, same evidence bar as the existing
-            // ones (design doc Section 3.2) -- never a constant invented
-            // from this log alone.
+            // Below the lowest calibrated raw count (~133 W, kOutputCalMinRaw)
+            // outputWatts() returns 0. Log the raw count at debug level so an
+            // external-meter reading can later become a calibration point (design doc
+            // §3.2); never invent a constant from this log alone.
             if (telemetry->output > 0 && telemetry->outputWatts() <= 0.0f) {
                 qCDebug(lcTuner) << "VkampConnection: raw output" << telemetry->output
                                   << "below the calibrated floor -- pair with an "

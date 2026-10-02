@@ -12,18 +12,10 @@
 
 namespace AetherSDR {
 
-// Silero VAD (ONNX) implementation of IVad — a learned voice-activity detector
-// that is far more robust in HF noise than an energy threshold (RFC #4333
-// follow-up). Runs the ~2 MB Silero v5 model in an ONNX Runtime session, reusing
-// the runtime AetherSDR already ships for the signal classifier.
-//
-// The model consumes fixed 512-sample (32 ms @ 16 kHz) windows and carries an
-// LSTM state across them, so this class buffers the incoming stream into windows,
-// runs one inference per window to get a speech probability, and reports
-// isSpeech() = (latest probability >= threshold). State is dropped on reset().
-//
-// Compiles to an inert stub (load() returns false) when HAVE_ONNX is undefined,
-// so the segmenter transparently keeps using the energy VAD.
+// Silero v5 VAD (ONNX) implementation of IVad, using the bundled ONNX Runtime.
+// Buffers input into 512-sample (32 ms @ 16 kHz) windows, carries LSTM state
+// across them, and reports isSpeech() = latest probability >= threshold; reset()
+// drops state. Inert stub (load() returns false) without HAVE_ONNX.
 class SileroVad : public IVad {
 public:
     SileroVad();

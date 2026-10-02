@@ -13,23 +13,18 @@ enum class DssOutlinePipelineMode {
     SharedFillPipeline,
 };
 
-// QRhi's OpenGLES2 backend, which covers desktop GL as well as GLES, reuses the
-// fill program for ribbon outlines: live probes showed flat/stale outlines
-// with a separate, identically configured program.
-// Whether the "3D Span" control can actually affect the display.
-//
-// rowSpanFactor is a dss_mesh.vert uniform, so ONLY the GPU height-map mesh
-// honours it: DssRenderer::rebuild(), the CPU image fallback, ignores it and
-// always draws the narrowing trapezoid. Two independent ways to end up there --
-// a build configured with AETHER_GPU_SPECTRUM=OFF, and a runtime without
-// RGBA16F support leaving m_dssMeshReady false -- and BOTH must disable the
-// control, or it moves, labels and persists while nothing on screen changes,
-// which an operator cannot tell apart from "this source ships no overhang".
+// Whether the "3D Span" control can affect the display. rowSpanFactor is a
+// dss_mesh.vert uniform honoured only by the GPU height-map mesh; the CPU
+// fallback (DssRenderer::rebuild()) ignores it. Both an AETHER_GPU_SPECTRUM=OFF
+// build and a runtime without RGBA16F (m_dssMeshReady false) must disable it.
 constexpr bool dssRowSpanSupported(bool gpuSpectrumBuild, bool meshReady)
 {
     return gpuSpectrumBuild && meshReady;
 }
 
+// QRhi's OpenGLES2 backend (desktop GL and GLES) must reuse the fill program
+// for ribbon outlines: a separate, identically configured program renders
+// flat/stale outlines there.
 constexpr DssOutlinePipelineMode dssOutlinePipelineModeForBackend(
     bool openGlEs2Backend)
 {
@@ -38,13 +33,9 @@ constexpr DssOutlinePipelineMode dssOutlinePipelineModeForBackend(
         : DssOutlinePipelineMode::DedicatedRibbonPipeline;
 }
 
-// The pipeline the outline draw binds, given the mode above. Templated on the
-// pipeline type purely so the selection stays testable without a QRhi device:
-// SpectrumWidget instantiates it with QRhiGraphicsPipeline*. Keeping the
-// selection here rather than as a ternary at the draw site is what lets
-// spectrum_preview_logic_test pin the mapping the renderer actually uses.
-// dedicatedPipeline is null on OpenGL — never created — so the shared-fill
-// answer must not depend on it.
+// The pipeline the outline draw binds. Templated so spectrum_preview_logic_test
+// can pin the mapping without a QRhi device. dedicatedPipeline is null on
+// OpenGL (never created), so the shared-fill answer must not depend on it.
 template <typename PipelineT>
 constexpr PipelineT* dssOutlinePipelineFor(DssOutlinePipelineMode mode,
                                            PipelineT* fillPipeline,
@@ -73,17 +64,10 @@ struct FrequencyFrame {
 // drops these bins from the trace, waterfall and 3D surface, and
 // effectiveBandwidthMhz() narrows mhzToX()/xToMhz() to match. The bandwidth
 // requested from and reported to the backend is never narrowed.
-//
-// 0.04, not the 0.09 fade it replaces. The shipped DDC0 droop defaults
-// (AnanDroopDefaults) are non-zero only in the outer 88 of 1024 bins per side
-// (~8.6%), all of which a 0.09 margin hid. At 0.04 the corrected 4-8.6% band
-// is on screen, and only the outermost 4% -- the steepest part of the DDC
-// FIR's transition band, where the correction climbs to its 90 dB clamp --
-// is dropped.
-//
-// NOTE for anyone lowering this further: AnanRxDsp's applyEdgeFade() rewrites
-// the outer 3% of every frame (tailFraction 0.03), and that is only invisible
-// because it sits inside this crop. Below 0.03 it would show on screen.
+// The DDC0 droop defaults (AnanDroopDefaults) correct the outer ~8.6% per
+// side; 0.04 keeps that band visible and drops only the steepest FIR
+// transition (where correction hits its 90 dB clamp). Must stay >= 0.03:
+// AnanRxDsp::applyEdgeFade() rewrites the outer 3% and relies on this crop.
 inline constexpr double kEdgeTaperFraction = 0.04;
 
 // A Kiwi overlay shares the native radio's widget/capabilities but supplies
@@ -447,13 +431,9 @@ inline WaterfallPaletteRecolorPlan waterfallPaletteRecolorPlan(
 // Scanline that a retained row of age `ageRows` occupies in a visible ring
 // whose newest row sits at `writeRowOrigin`. appendVisibleRow() decrements the
 // write row *before* writing, so age 0 is the origin itself and age grows
-// downward, wrapping — which is exactly the order drawWaterfall() blits from.
-//
-// The origin is the whole reason a palette recolour is not just a viewport
-// rebuild: a rebuild re-lays the ring out from scanline 0 (origin 0), which is
-// invisible only because it repaints everything at once. Recolouring in place
-// must keep the live origin, or the waterfall jumps by m_wfWriteRow rows the
-// moment the operator touches the Scheme dropdown.
+// downward, wrapping — the order drawWaterfall() blits from. An in-place
+// palette recolour must keep the live origin (a rebuild restarts at 0), or the
+// waterfall jumps by m_wfWriteRow rows.
 inline int waterfallVisibleRowForAge(int writeRowOrigin, int ageRows,
                                      int height)
 {
