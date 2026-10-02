@@ -1,29 +1,8 @@
-// HL2 forward power — the window maximum, through MetisClient's receive loop.
-// Socket-free: no bind, no peer, no radio. Synthetic EP6 datagrams go straight
-// into handleDatagram through MetisClientTestAccess, the friend seam
-// MetisClient.h already declares.
-//
-// hl2_metis_protocol_test owns the LEAF: ForwardPowerWindow keeps the loudest
-// non-ACK RADDR 1 and clear() empties it. This file owns the WIRING, which the
-// leaf test cannot see -- delete the observe() call in handleDatagram, or the
-// stamp-and-clear at the emit, and every assertion there still passes. Here:
-//
-//   1. the emitted Hl2Telemetry carries the window's PEAK, not the last value,
-//      and forwardPowerRaw keeps its last-value meaning beside it;
-//   2. an ACK whose command address is 1 never reaches the window -- the
-//      receive loop routes ACKs away before observe(), and its data is our
-//      own echo;
-//   3. a window that saw no RADDR 1 publishes nullopt, not the previous peak;
-//   4. the window clears at every emit, so a quiet window after a loud one
-//      reports the quiet one.
-//
-// THE 100 ms EMIT CLOCK, made deterministic. handleDatagram emits when
-// m_telemetryEmitClock is invalid or has run kTelemetryMinIntervalMs. The test
-// restarts it immediately before a datagram that must NOT emit (holdEmit) and
-// invalidates it before one that MUST (dueEmit), the same way
-// hl2_ep4_gate_test invalidates m_sinceUnkey rather than sleeping. A hold
-// needs only handleDatagram itself to finish inside 100 ms, which is a
-// function call, not a wait -- no wall-clock sleep appears anywhere here.
+// HL2 forward power: the window maximum through MetisClient's receive loop.
+// Socket-free: synthetic EP6 datagrams go into handleDatagram through
+// MetisClientTestAccess. hl2_metis_protocol_test owns the ForwardPowerWindow
+// rule; this owns its wiring (observe() in the loop, stamp-and-clear at emit).
+// The 100 ms emit clock is restarted (holdEmit) or invalidated (dueEmit) by hand.
 
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -76,7 +55,7 @@ static constexpr Slot ack(std::uint8_t cmd, std::uint32_t data)
 {
     return Slot{static_cast<std::uint8_t>(0x80 | (cmd << 1)), data};
 }
-// Forward power is DATA[15:0] of RADDR 1; DATA[31:16] is reverse power.
+// Forward power is DATA[15:0] of RADDR 1; DATA[31:16] is temperature.
 static constexpr Slot fwd(std::uint16_t counts)
 {
     return raddr(0x01, (1234u << 16) | counts);

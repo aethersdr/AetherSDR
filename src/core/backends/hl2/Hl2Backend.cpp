@@ -7093,11 +7093,10 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // MetisClient paces telemetry at kTelemetryMinIntervalMs. Forward power is
     // published through the peak hold; see kFwdPeakReleaseAlpha.
     if (t.forwardPowerRaw) {
-        // KEYED, the loudest RADDR-1 sample of the publish window rather than
-        // the last one: the radio re-samples the detector ~190 times a second
-        // and the last-value coalesce kept one in 19. UNKEYED, the
-        // last value exactly as before -- the maximum of 19 noise samples
-        // would sit above the no-carrier floor MeterModel snaps to zero on.
+        // Keyed: the window's loudest RADDR-1 sample, since the radio reports
+        // ~190 a second and the last one misses speech peaks. Unkeyed: the
+        // last value, because a maximum of noise samples would sit above the
+        // no-carrier floor MeterModel snaps to zero on.
         const int fwdRaw = (m_keyed && t.forwardPowerPeakRaw)
             ? *t.forwardPowerPeakRaw : *t.forwardPowerRaw;
         const double instantW = directionalWatts(fwdRaw);
@@ -7115,12 +7114,9 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          wattsToDbm(directionalWatts(*t.reversePowerRaw)));
     if (t.forwardPowerRaw && (*t.forwardPowerRaw != m_lastFwdRaw)) {
         m_lastFwdRaw = *t.forwardPowerRaw;
-        // The window peak and its sample count ride the same line: the count
-        // is what tells a "sluggish meter" report whether the RADDR-1 stream
-        // itself is thin (~19 per 100 ms is healthy at 48 kHz) or the meter
-        // is. The window length is adcWindowMs -- MetisClient stamps both
-        // accumulators at the same emit, so it is this window's length too,
-        // including the short or late ones a fixed 100 ms would misstate.
+        // The sample count shows whether the RADDR-1 stream itself is thin
+        // (~19 per 100 ms is healthy at 48 kHz); adcWindowMs is stamped at the
+        // same emit, so it is this window's real length.
         qCDebug(lcHl2Tx) << "HL2 directional: fwd" << *t.forwardPowerRaw
                          << "rev" << t.reversePowerRaw.value_or(-1)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"

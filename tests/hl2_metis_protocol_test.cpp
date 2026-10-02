@@ -746,12 +746,9 @@ int main()
         check(t.reversePowerRaw.value_or(-1) == 100, "reverse power from DATA[31:16]");
         check(t.biasCurrentRaw.value_or(-1) == 42, "bias current from DATA[15:0]");
 
-        // ---- Forward power: the window keeps the LOUDEST RADDR 1, not the last ----
-        //
-        // A speech envelope sampled ~190 times a second: the peak lands
-        // mid-window and the window ends on a trough. Last-value-wins reported
-        // the trough; the window must report the peak, and only from non-ACK
-        // RADDR 1 -- a RADDR 2 word or an ACK's echo is not forward power.
+        // Forward power: the window keeps the loudest non-ACK RADDR 1, not the
+        // last. The peak lands mid-window and the window ends on a trough; a
+        // RADDR 2 word or an ACK's echo is not forward power.
         {
             ForwardPowerWindow w;
             check(!w.peak.has_value() && w.samples == 0,
