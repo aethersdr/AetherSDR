@@ -337,6 +337,13 @@ target_include_directories(byte_relay_test PRIVATE src)
 target_link_libraries(byte_relay_test PRIVATE aethercore Qt6::Core)
 add_test(NAME byte_relay_test COMMAND byte_relay_test)
 
+# Draft CTR2 USB HID envelope codec: round trips and fail-closed reassembly
+# over in-memory 8-byte reports. No device, no sockets.
+add_executable(ctr2_hid_framing_test tests/ctr2_hid_framing_test.cpp)
+target_include_directories(ctr2_hid_framing_test PRIVATE src)
+target_link_libraries(ctr2_hid_framing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME ctr2_hid_framing_test COMMAND ctr2_hid_framing_test)
+
 # Our TcpByteProxy server is the subject. Binds 127.0.0.1 ephemeral TCP ports
 # (proxy listener + a generic byte peer standing in for the upstream); no radio
 # protocol or firmware stand-in. Exit 77 when loopback cannot be bound.

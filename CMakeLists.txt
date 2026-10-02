@@ -940,6 +940,7 @@ set(CORE_SOURCES
     src/core/RigctlProtocol.cpp
     src/core/ByteRelay.cpp
     src/core/TcpByteProxy.cpp
+    src/core/Ctr2HidFraming.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp

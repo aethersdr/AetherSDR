@@ -9,10 +9,10 @@ connection to the configured radio and forwards the complete byte stream in
 both directions. This tests the relay approach using current hardware before
 adding a USB transport to the CTR2 firmware.
 
-This document is the authority for this prototype. The earlier
-[USB relay draft](ctr2-usb-relay-design.md) describes a different, mediated
-design. Its command parsing, sequence remapping, filtering, clock translation,
-and shared-session dispatch requirements do not apply here.
+This document is the authority for this prototype. The
+[USB relay design](ctr2-usb-relay-design.md) builds on it, replacing the
+controller-facing TCP connection with HID framing while keeping the same
+opaque forwarding.
 
 ## Required behavior
 
