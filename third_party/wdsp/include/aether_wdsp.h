@@ -240,6 +240,19 @@ void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 // output is linear. `wdsp_channel_test`'s ratio assertion depends on that and
 // is what will say so if the limiter is ever switched on.
 void SetRXAFMDeviation(int channel, double deviationHz);
+
+// ── Receive squelch: fmsq and amsq ────────────────────────────────────────
+//
+// Declared by upstream/wdsp.h (no patch); RXA.c creates both with run = 0, and
+// each Set* takes csDSP, so control path only.
+//   fmsq — FM detector noise above 5 kHz; mutes when it exceeds the threshold,
+//          so a LARGER threshold is a MORE OPEN squelch. FM only.
+//   amsq — 10 ms average of |IQ| after the notched bandpass, before the AGC,
+//          against 10^(thresholdDb/20) of wire full scale. Any mode.
+void SetRXAFMSQRun(int channel, int run);
+void SetRXAFMSQThreshold(int channel, double threshold);
+void SetRXAAMSQRun(int channel, int run);
+void SetRXAAMSQThreshold(int channel, double thresholdDb);
 void SetTXAMode(int channel, int mode);
 void SetTXABandpassFreqs(int channel, double lowHz, double highHz);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength

@@ -1190,6 +1190,7 @@ void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool o
     // inheriting RX1's — which for a receiver that has never been configured is
     // the default of off.
     pushNoiseBlanker(*r);
+    pushSquelch(*r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -1758,8 +1759,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Modes the headless receive path accepts. ModelReceiveControlTarget checks
     // both the requested mode and the slice's observed mode against this list,
     // so every mode publishedModeStrings() offers must be here (including DSB,
-    // CWL, and FM, which demodulates but with default 5 kHz deviation, AGC
-    // cleared and no squelch). No alias spellings: slices hold canonical modes
+    // CWL, and FM, which demodulates but with default 5 kHz deviation and AGC
+    // cleared). No alias spellings: slices hold canonical modes
     // and an alias request would wedge "request.conflict" (control_receive_test
     // asserts canonicalOfferedMode(m) == m). WBFM/WFM and DRM stay off.
     c.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
@@ -1838,6 +1839,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // 3 §B4: the HL2 carries no DSP). NR and ANF are left off because they are
     // not implemented, not because they could not be.
     c.hasHostNoiseBlanker = true;
+    // Squelch is host-side too, per mode family: FM on WDSP's fmsq, AM/SAM/DSB/
+    // LSB/USB on the level squelch amsq (WdspChannel::setSquelch()). CW and the
+    // data modes have no stage, so this is false, stated explicitly: the client
+    // then disables SQL there instead of showing a button wired to nothing.
+    c.hasModeIndependentSquelch = false;
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -2974,6 +2980,22 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
             Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
 }
 
+void Hl2Backend::setSliceSquelch(int sliceId, bool on, int level)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r)
+        return;
+    // Per receiver, like the blanker. Not filtered by mode: the pair is stored
+    // whatever the mode, and WdspChannel decides which stage (if any) carries
+    // it and moves it on every mode change, so the result does not depend on
+    // the order mode and squelch were set in.
+    r->squelchOn = on;
+    r->squelchLevel = qBound(0, level, 100);
+    pushSquelch(*r);
+    emitSliceState(ddc);
+}
+
 void Hl2Backend::setSliceAudioMute(int sliceId, bool mute)
 {
     Receiver* r = rx(ddcForSlice(sliceId));
@@ -3126,6 +3148,15 @@ void Hl2Backend::pushNoiseBlanker(const Receiver& r)
     // unconditional push is the only version with no such case to reason about.
     QMetaObject::invokeMethod(r.dsp, "setNoiseBlanker", Qt::QueuedConnection,
         Q_ARG(bool, r.nbOn), Q_ARG(int, r.nbLevel));
+}
+
+void Hl2Backend::pushSquelch(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // Sent even when OFF — see pushNoiseBlanker().
+    QMetaObject::invokeMethod(r.dsp, "setSquelch", Qt::QueuedConnection,
+        Q_ARG(bool, r.squelchOn), Q_ARG(int, r.squelchLevel));
 }
 
 void Hl2Backend::seedNotches(const Receiver& r)
@@ -6805,6 +6836,7 @@ void Hl2Backend::pushInitialState()
         // so a reconnect into a session that had it on would leave the slice's
         // NB button lit over a chain that is not blanking anything.
         pushNoiseBlanker(r);
+        pushSquelch(r);
     }
     if (m_txDsp) {
         const Receiver* txRx = rx(m_txDdc);
@@ -7340,6 +7372,11 @@ void Hl2Backend::emitSliceState(int ddc)
     // agcCommandIssued.
     d.agcMode = r->agcMode;
     d.agcThreshold = r->agcThresholdDb;
+    // The squelch pair the receiver holds and has pushed to its chain, so the
+    // SQL control shows the receiver's state. Safe to echo:
+    // SliceModel::applyChanges() does not emit squelchCommandIssued.
+    d.squelchOn = r->squelchOn;
+    d.squelchLevel = r->squelchLevel;
     // Exactly one slice is the TX slice (the one on m_txDdc). Unset, txSlice()
     // is null and RadioModel's interlock refuses every key; set on all, the
     // operator could key from a receiver the TX NCO is not following.
