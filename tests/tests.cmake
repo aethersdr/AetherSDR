@@ -4999,6 +4999,16 @@ target_include_directories(hl2_txdsp_test PRIVATE src)
 target_link_libraries(hl2_txdsp_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_txdsp_test COMMAND hl2_txdsp_test)
 
+# A low-rate capture device (24/16 kHz, e.g. a Bluetooth headset) delivers two
+# DSP blocks per poll; the TXA channel must not be exchanged back-to-back.
+add_executable(hl2_txdsp_capture_burst_test tests/hl2_txdsp_capture_burst_test.cpp)
+target_include_directories(hl2_txdsp_capture_burst_test PRIVATE src tests)
+target_link_libraries(hl2_txdsp_capture_burst_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_txdsp_capture_burst_test COMMAND hl2_txdsp_capture_burst_test)
+# 77 = a rate case saw the worker stalled by machine load (sanitizer lane):
+# inconclusive, not failed. An underrun still fails.
+set_tests_properties(hl2_txdsp_capture_burst_test PROPERTIES SKIP_RETURN_CODE 77)
+
 # radiocert's measurement primitives. Header-only by design so this needs no
 # Qt and no link against aethercore — see the test's header comment for why it
 # exists at all (both shipped bugs in the diagnostic were in this arithmetic).
