@@ -6,22 +6,12 @@
 
 namespace AetherSDR::RxStageReorder {
 
-// The rule behind dragging a stage row up or down the AetherRX tab column.
-//
-// Kept out of the dialog because the dialog's version of it cannot be reached
-// from a test: it runs inside a drop handler, off a nested drag loop that the
-// offscreen platform plugin does not run at all. Everything here is arithmetic
-// on an order and a set of row positions, so it can be.
-//
-// `order`     — the chain, as stage ids, in the order the signal meets them.
-// `moved`     — the id being dragged; not in `order` means nothing to do.
-// `midpoints` — the vertical middle of each row, in the same order as `order`.
-// `dropY`     — where the drag was let go, in the same coordinates.
-//
-// The row lands one place past every row whose middle it was dropped below.
-// Midpoints are passed in rather than derived from a row height because the
-// column also holds rows that are not chain stages — AetherNR at the top and
-// Out at the foot — and they are not being counted.
+// Drop rule for reordering AetherRX stage rows, pure because the dialog's drop
+// handler runs in a drag loop the offscreen platform does not run. `order`:
+// stage ids in signal order; `moved`: the dragged id (absent → no-op);
+// `midpoints`: each row's vertical middle; `dropY`: release point. The row
+// lands one past every row whose middle is above dropY. Midpoints are passed in
+// because the column also holds non-stage rows (AetherNR, Out).
 inline QVector<int> dropped(const QVector<int>& order, int moved,
                             const QVector<int>& midpoints, int dropY)
 {

@@ -17,16 +17,10 @@ SimSignalSource::SimSignalSource(QObject* parent) : QObject(parent)
     // delete children. (Caught by sim_signal_source_test — zero frames.)
     m_timer.setParent(this);
 
-    // Frame cadence: kFrameLen (128) samples at kSampleRate (24 kHz) = 5.333 ms
-    // of audio per frame — NOT an integer number of milliseconds, so no fixed
-    // interval can be right on its own. The timer only sets the CHECK cadence;
-    // onTick() emits as many whole frames as real elapsed time has earned and
-    // carries the remainder, so the long-run rate is exactly 24 kHz.
-    //
-    // 10 ms coarse, not 3 ms precise: this object lives on its own worker
-    // (#4878), where a precise short timer buys nothing and a coarse one lets
-    // the kernel batch wakeups. 10 ms earns 1–2 frames per tick; the burst cap
-    // below covers stalls.
+    // A frame is 128 samples at 24 kHz = 5.333 ms, not whole ms, so the timer only
+    // sets the check cadence: onTick() emits every frame elapsed time has earned and
+    // carries the remainder (exact 24 kHz long-run). 10 ms coarse lets the kernel
+    // batch wakeups on this worker; the burst cap below covers stalls.
     m_timer.setTimerType(Qt::CoarseTimer);
     m_timer.setInterval(10);
     connect(&m_timer, &QTimer::timeout, this, &SimSignalSource::onTick);

@@ -99,17 +99,11 @@ void ClientEqFftAnalyzer::update(const float* samples, int count) noexcept
     }
     fftInPlace(buf, kFftSize);
 
-    // Magnitude → dB. The 2/N here is the single-sided normalisation for an
-    // UNWINDOWED transform and nothing more: it does NOT absorb the Hann
-    // window's 0.5 coherent gain, whatever the comment that used to sit here
-    // claimed. The scale this produces is therefore 6.02 dB below true dBFS —
-    // a full-scale sine peaks at -6.02, not at 0.
-    //
-    // Left that way on purpose. The EQ editor has drawn this scale since it
-    // shipped and only ever reads it as a shape, so changing `norm` would move
-    // a display for every existing user to fix a number none of them reads. A
-    // caller that states an ABSOLUTE level adds coherentGainCorrectionDb()
-    // instead; `bandscope_analyzer_test` pins both scales so neither can drift.
+    // 2/N is the single-sided normalisation for an UNWINDOWED transform; it does
+    // not absorb the Hann window's 0.5 coherent gain, so a full-scale sine reads
+    // -6.02 dB, not 0. Kept so the EQ editor's established display does not move;
+    // absolute-level callers add coherentGainCorrectionDb().
+    // bandscope_analyzer_test pins both scales.
     const float norm = 2.0f / static_cast<float>(kFftSize);
     for (int i = 0; i < kBinCount; ++i) {
         const float mag = std::abs(buf[i]) * norm;

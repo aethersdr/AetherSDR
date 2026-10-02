@@ -8,18 +8,12 @@
 
 namespace AetherSDR {
 
-// Normalized power-amplifier status delta (aetherd 2.4 — AmpModel decode split,
-// #4094). FlexBackend::decodeAmplifierStatus translates the SmartSDR "amplifier"
-// wire (the "model"/"ip"/"state" keys, the TunerGeniusXL discriminator) into
-// this typed, present-only shape; AmpModel::applyChanges owns the state machine
-// (presence latch, operate change-gating, handle matching). Same contract as the
-// sub-model deltas — a backend with no amp analog simply never emits one.
-//
-// The decode is stateless: it carries what the wire reported (a detected power-amp
-// model, its ip, the derived operate flag, the raw telemetry). The model decides
-// what to do with it. Command/encode is NOT here — AmpModel::setOperate emits the
-// neutral operateRequested intent, translated back to the wire by
-// FlexBackend::invokeExtension("flex", "amp.operate", …) (#4094).
+// Normalized power-amplifier status delta (aetherd 2.4, #4094), present-only.
+// FlexBackend::decodeAmplifierStatus translates the SmartSDR "amplifier" wire
+// ("model"/"ip"/"state", the TunerGeniusXL discriminator) statelessly;
+// AmpModel::applyChanges owns the state machine. Command/encode is not here:
+// AmpModel::setOperate's operateRequested intent goes back via
+// FlexBackend::invokeExtension("flex", "amp.operate", …).
 struct AmpDelta {
     QString handle;                        // amplifier handle from the status object
     bool    removed{false};                // "amplifier <handle> removed"

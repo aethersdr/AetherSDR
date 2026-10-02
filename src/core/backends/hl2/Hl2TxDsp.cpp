@@ -7,10 +7,8 @@
 #include <QDebug>
 #include <QLoggingCategory>
 
-// Same category string as Hl2Backend.cpp's lcHl2Tx, a different C++ symbol.
-// One name for "the HL2 transmit path" so an operator turning it on gets the
-// modulator and the backend together, which is the pair a transmit bug report
-// needs.
+// Same category string as Hl2Backend.cpp's lcHl2Tx, so one switch enables the
+// modulator and the backend together.
 static Q_LOGGING_CATEGORY(lcTxMod, "aether.hl2.tx")
 
 namespace AetherSDR::hl2 {
@@ -34,63 +32,16 @@ double blackman(std::size_t n, std::size_t N)
 Hl2TxDsp::Hl2TxDsp(QObject* parent) : QObject(parent) {}
 Hl2TxDsp::~Hl2TxDsp() = default;
 
-// ── WHICH MODULATOR, AND WHY IT IS A BUILD FLAG ─────────────────────────────
-//
-// AETHER_HL2_TX_TXA selects one of the two implementations below AT COMPILE
-// TIME. The other one is not in the binary. That is the point, and it is the
-// condition #5678 was approved on: a compile flag gives a way back without
-// giving an operator a way to be on the wrong one, because two silent transmit
-// paths are worse than one.
-//
-// WHAT THE PHASING MODULATOR WAS FOR, stated fairly, because it was right at
-// the time. WDSP's transmit path always WORKED -- wdsp_channel_test drove a TXA
-// channel and got IQ out of it -- so "WDSP TX is broken" was never the claim.
-// The claim was narrower: driven from THIS backend's configuration a TXA
-// channel returned Underrun on most blocks and zeros on the rest, and the
-// failure mode was SILENT. Fifty lines of arithmetic whose correctness is a
-// number a test can print beat a canonical chain that can fail without saying
-// so. Two speculative attempts at the missing initialisation sequence made
-// things worse. Choosing the measurable thing was the right trade.
-//
-// WHAT CHANGED IS THAT BOTH HALVES OF THAT FAILURE ARE NOW EXPLAINED, and
-// neither was a missing call:
-//
-//   * The UNDERRUNS were caller CADENCE, not configuration. Unpaced, 240-255
-//     of 256 blocks underrun; at 5 ms and at the live 21.33 ms block period,
-//     64 of 64 are Ok including the first. See processAudioBlock's note.
-//   * The ZEROS were the priming stretch -- create_slews' ndelup + ntup = 840
-//     input samples of mute ramp, plus the rest of the fill, bounded at about
-//     48.7 ms -- sampled through a starved reader that walked it one block at a
-//     time over hundreds of calls, which is what made a bounded transient look
-//     permanent. Audio placed in Q is a separate, real and permanently silent
-//     fault (xpanel's inselect = 2), and it is NOT what the note recorded,
-//     because it underruns nothing.
-//
-// The configuration it actually needs is TWO CALLS on top of create_txa's
-// defaults -- SetTXAMode and SetTXABandpassFreqs -- which applyModeAndFilter()
-// makes and which WdspChannel already wraps.
-//
-// AND WHAT THE MIGRATION IS WORTH, narrowly, because the wide claim is wrong.
-// Measured on the same instrument, at the live geometry, in the same units:
-//
-//     tone    mode    phasing modulator      TXA
-//     150 Hz  DIGU          22.06 dB      >= 180.6 dB
-//       1 kHz  USB          87.15 dB      >= 297.2 dB
-//
-// The 1 kHz column is worth NOTHING. MetisProtocol.cpp's ep2WriteTxIq packs I
-// and Q as signed 16-bit, so EP2 quantises the transmit stream at roughly 96 dB
-// before a sample reaches the radio: the incumbent's 87 dB is already at the
-// wire's own floor and TXA's advantage there is below the wire and unusable.
-//
-// THE ENTIRE RETURN IS THE LOW EDGE -- 22 dB against >= 180 dB at 150 Hz, on
-// the {150, 3000} passband, in DIGU and DIGL. That is the modes WSJT-X
-// transmits in and nothing else. Seventy decibels the wire could carry and 255
-// taps do not fill.
-//
-// Every TXA figure above is a LOWER BOUND, not a value: the image bin sits at
-// the measuring instrument's own numerical floor, established by a halving
-// probe rather than assumed. And every one of them was read off a unit test's
-// emitted IQ. No radio was keyed for any of it.
+// AETHER_HL2_TX_TXA selects one implementation at compile time; the other is
+// not in the binary (#5678). TXA needs only SetTXAMode and SetTXABandpassFreqs
+// (applyModeAndFilter()) on top of create_txa's defaults, plus a paced caller.
+// The first ~48.7 ms is the create_slews mute ramp and fill.
+// Opposite-sideband suppression from unit-test IQ (TXA figures are lower bounds):
+//     tone    mode    phasing     TXA
+//     150 Hz  DIGU    22.06 dB    >= 180.6 dB
+//       1 kHz  USB    87.15 dB    >= 297.2 dB
+// EP2 packs signed 16-bit I/Q (ep2WriteTxIq, ~96 dB floor), so the real gain
+// is the 150 Hz low edge of DIGU/DIGL (WSJT-X modes).
 
 #if AETHER_HL2_TX_TXA
 
@@ -101,12 +52,9 @@ bool Hl2TxDsp::buildModulator(std::string* error)
     m_txBlocks = 0;
     m_txFaultBlocks = 0;
 
-    // The LIVE geometry, and it is arithmetic rather than a table: WDSP's
-    // three-rate channel model wants the DSP block expressed in DSP-rate
-    // samples, so one input block of Config::dspBlockSize audio samples is
-    // m_upsample times that many at the DSP rate and the channel consumes
-    // exactly one input block per pass. That is the mirror of what
-    // Hl2RxDsp::configure does for receive.
+    // One input block of dspBlockSize audio samples is m_upsample times that
+    // at the DSP rate, so the channel consumes exactly one input block per
+    // pass (mirror of Hl2RxDsp::configure).
     WdspChannel::Config c;
     c.direction = WdspChannel::Direction::Transmit;
     c.inputSampleRate = m_config.inputSampleRateHz;
@@ -115,12 +63,9 @@ bool Hl2TxDsp::buildModulator(std::string* error)
     c.inputBlockSize = static_cast<std::size_t>(m_config.dspBlockSize);
     c.dspBlockSize = c.inputBlockSize * static_cast<std::size_t>(m_upsample);
     c.mode = m_config.mode;
-    // blockForOutput = false is WdspChannel::Config's default and is the
-    // setting every figure quoted above was measured at. Do not flip it to
-    // silence an underrun: with it set, fexchange2's `*error += -2` branch is
-    // structurally unreachable, so the stage would stop REPORTING starvation
-    // rather than stop being starved, and it would do that by blocking the
-    // audio I/O thread. The fix for an underrun is the caller's cadence.
+    // blockForOutput = false (the default, and what the figures above were
+    // measured at). Setting it true would block the audio I/O thread and make
+    // fexchange2's underrun report unreachable; fix underruns by pacing.
     c.blockForOutput = false;
 
     // Signed, from the mode. See applyModeAndFilter().
@@ -134,10 +79,7 @@ bool Hl2TxDsp::buildModulator(std::string* error)
     std::string err;
     m_channel = WdspChannel::create(c, &err);
     if (!m_channel) {
-        // A REFUSAL, reported. Hl2Backend::beginDspSetup already carries a
-        // txOk/txErr pair back to the GUI thread for exactly this, and it was
-        // dead weight until now because the phasing modulator could only fail
-        // its own argument validation.
+        // Reported to the GUI via Hl2Backend::beginDspSetup's txOk/txErr.
         if (error) {
             *error = err.empty() ? "WDSP transmit channel refused" : err;
         }
@@ -164,15 +106,8 @@ void Hl2TxDsp::applyModeAndFilter()
     if (!m_channel) {
         return;
     }
-    // BOTH calls, every time, and the order does not matter -- but leaving
-    // either out does. SetTXAMode alone does NOT choose a sideband for SSB:
-    // TXASetupBPFilters handles TXA_LSB and TXA_USB with the identical
-    // CalcBandpassFilter call, so the sideband rides entirely on the SIGN of
-    // the passband, exactly as it does in RXA. A mode change from USB to LSB
-    // that pushed only the mode would leave the transmitter on the upper
-    // sideband with the mode readout saying LSB -- the same class of fault as
-    // the missing conjugation, and just as invisible from inside this
-    // application, because the panadapter reads the same wire order.
+    // Both calls, every time: SetTXAMode does not pick an SSB sideband (the
+    // passband sign does), so a mode-only USB->LSB change would stay on USB.
     const double lo = std::min(std::abs(m_config.filterLowHz),
                                std::abs(m_config.filterHighHz));
     const double hi = std::max(std::abs(m_config.filterLowHz),
@@ -216,10 +151,8 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
         return;
     }
 
-    // Started HERE rather than on a key-down signal, because this stage has no
-    // key-down edge of its own -- reset() is the only transition it is told
-    // about. The first block of an over starts the channel and runs the mute
-    // envelope UP, which is the T/R shaping WDSP already owns.
+    // Started on the first block of an over (reset() is the only transition
+    // this stage sees); WDSP's mute envelope ramps up from there.
     if (!m_modulatorRunning) {
         if (!m_channel->setRunning(true)) {
             qCWarning(lcTxMod) << "HL2 TXA modulator: start refused; this over "
@@ -230,20 +163,14 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
     }
 
     for (std::size_t off = 0; off + block <= audio.size(); off += block) {
-        // MONO AUDIO IN I, ZEROS IN Q. Not a convenience: xpanel runs with
-        // inselect = 2 and multiplies Q by zero, which was measured rather than
-        // read -- a tone fed in Q alone produces bit-exact zeros on 200 of 200
-        // blocks with no error and no underrun. That is the silent fault this
-        // arrangement avoids by construction.
+        // Mono audio in I, zeros in Q: xpanel inselect = 2 zeroes Q (measured).
         const WdspChannel::ProcessResult r =
             m_channel->processIq(audio.subspan(off, block), m_zeroQ,
                                  m_outI, m_outQ);
         ++m_txBlocks;
         if (r != WdspChannel::ProcessResult::Ok) {
             ++m_txFaultBlocks;
-            // LOUD, and rate-limited so a starved caller does not drown the
-            // log it needs to read. The first one is always printed: the prior
-            // TXA attempt's whole defect was that this moment said nothing.
+            // Rate-limited, but the first fault is always logged.
             if (m_txFaultBlocks == 1 || m_txFaultBlocks % 64 == 0) {
                 qCWarning(lcTxMod).nospace()
                     << "HL2 TXA modulator: block not placed on the wire ("
@@ -253,23 +180,14 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
                     << " blocks so far. The caller is feeding faster than the "
                        "channel can drain, or the channel has stalled.";
             }
-            // DROPPED, not zero-filled. A block of zeros is what the original
-            // silent failure looked like from the outside, and it would leave
-            // the emitted stream sample-count-correct and phase-wrong -- an
-            // underrun already slips the channel's output by a whole DSP buffer
-            // permanently, so the samples this block WOULD have carried are
-            // gone whatever we emit in their place.
+            // Dropped, not zero-filled: an underrun already slips the output
+            // by a whole DSP buffer, so those samples are gone either way.
             continue;
         }
         for (std::size_t k = 0; k < outBlock; ++k) {
-            // NO CONJUGATION, and that is the opposite of the phasing build.
-            // fir_bandpass builds exp(-j*w_osc*pos), so the signed passband
-            // applied in applyModeAndFilter() already selects the half that
-            // gives the HPSDR wire's handedness. Adding the phasing modulator's
-            // -imag() here would transmit every SSB mode on the wrong sideband,
-            // which is the recommendation the S6 study made and the mutation
-            // that falsified it: flipping LSB's passband sign back to positive
-            // inverts every in-band row, 167.31 dB becoming -175.64 dB.
+            // No conjugation (opposite of the phasing build): the signed
+            // passband already gives the HPSDR wire's handedness. Adding -imag()
+            // here would put every SSB mode on the wrong sideband.
             m_iq.emplace_back(m_outI[k], m_outQ[k]);
         }
     }
@@ -328,22 +246,12 @@ bool Hl2TxDsp::buildModulator(std::string* error)
         }
         m_bandpass[n] = static_cast<float>(bp * w);
 
-        // Quadrature filter = the IMAGINARY part of the same analytic bandpass,
-        // NOT a wideband Hilbert transformer.
-        //
-        // This distinction is the whole correctness of the modulator. A textbook
-        // Hilbert (2/(pi*k) on odd taps) is all-pass in magnitude: it passes
-        // out-of-band audio at FULL amplitude with a 90-degree shift. Pairing it
-        // with a band-limited I meant energy above the passband arrived in Q
-        // only — which is a REAL signal, so it came out double-sideband on both
-        // sides of the carrier. Measured: a 5 kHz tone against a 2700 Hz filter
-        // appeared at both +5 kHz and -5 kHz, just 6 dB down, i.e. splatter
-        // outside our own passband.
-        //
-        // Deriving both filters from one analytic prototype,
-        //   ha[k] = (exp(j*2*pi*hi*k) - exp(j*2*pi*lo*k)) / (j*2*pi*k),
-        // makes I and Q share a passband by construction, and keeps their group
-        // delay identical for free.
+        // Quadrature filter = imaginary part of the SAME analytic bandpass, not
+        // a wideband Hilbert (2/(pi*k)): that is all-pass in magnitude, so
+        // out-of-band audio reaches Q only and goes out double-sideband
+        // (measured: 5 kHz tone vs 2700 Hz filter at +/-5 kHz, 6 dB down). One
+        // prototype ha[k] = (exp(j*2*pi*hi*k) - exp(j*2*pi*lo*k)) / (j*2*pi*k)
+        // gives I and Q the same passband and group delay.
         double hq;
         if (k == 0.0) {
             hq = 0.0;
@@ -405,21 +313,10 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
             // choice.
             const float q = lsb ? -bq : bq;
 
-            // CONJUGATE FOR THE WIRE.
-            //
-            // The HPSDR wire order has the OPPOSITE handedness to the standard
-            // analytic convention — the receive path already compensates for
-            // exactly this, conjugating with -imag() before handing IQ to WDSP.
-            // Transmit needs the same correction in the same place and did not
-            // have it, so every transmission went out on the wrong sideband.
-            //
-            // Caught on the air, not on the bench: the operator's Yaesu heard
-            // our LSB on its USB. It is invisible from inside this application
-            // because the panadapter reads the same wire order, so our own
-            // display and our own transmission agreed with each other while
-            // both disagreed with the rest of the band.
-            //
-            // A TXA CHANNEL MUST NOT HAVE THIS. See the TXA build above.
+            // Conjugate for the wire: HPSDR wire order has the opposite
+            // handedness to the analytic convention (RX conjugates too).
+            // Without it TX goes out on the wrong sideband, invisibly to our
+            // own panadapter. A TXA channel must NOT do this.
             m_iq.emplace_back(bi, -q);
         }
     }
@@ -451,11 +348,8 @@ bool Hl2TxDsp::configure(const Config& config, std::string* error)
     m_config = config;
     m_upsample = config.outputSampleRateHz / config.inputSampleRateHz;
     m_inBuffer.clear();
-    // The modulator may REFUSE now, which it could not before: the TXA build
-    // opens a WDSP channel here and a channel can be refused (the pool is 32
-    // wide and shared with every receiver). Leaving m_configured false on that
-    // path is what makes the readback honest -- Hl2Backend already carries the
-    // txOk/txErr pair back for it.
+    // The TXA build can be refused a channel here (pool of 32 shared with the
+    // receivers); m_configured then stays false.
     if (!buildModulator(error)) {
         return false;
     }
@@ -477,11 +371,9 @@ void Hl2TxDsp::setFilter(double lowHz, double highHz)
     m_config.filterLowHz = lowHz;
     m_config.filterHighHz = highHz;
 #if AETHER_HL2_TX_TXA
-    // A control call on the open channel, not a rebuild: SetTXABandpassFreqs is
-    // cheap and a rebuild would be FFTW planning on the I/O thread. The census
-    // shows a running channel keeps producing across an accepted setFilter
-    // (0.0705 RMS before, 0.0709 after) and REFUSES an inverted pair rather
-    // than going silent.
+    // A control call on the open channel, not a rebuild (that would be FFTW
+    // planning on the I/O thread). A running channel keeps producing across
+    // it, and an inverted pair is refused.
     applyModeAndFilter();
 #else
     buildModulator(nullptr);
@@ -543,24 +435,12 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     if (!m_configured || mono.empty())
         return;
 
-    // RESIDUE FROM THE PREVIOUS BLOCK IS NOT THIS BLOCK'S TO LEVEL.
-    //
-    // m_inBuffer keeps up to dspBlockSize-1 samples between calls, and micGain
-    // below is chosen from THIS block's source and applied to all of them. That
-    // cost nothing while every source shared one multiplier; now EngineGenerated
-    // bypasses m_micGain, so a carried-over sample can be levelled up to 40 dB
-    // away from where its own source wanted it.
-    //
-    // Nothing upstream should interleave two sources inside one transmission:
-    // AudioEngine::startWsprPump() calls setDaxTxMode(true), which makes
-    // onTxAudioReady() return early (the mic path), and feedDaxTxAudio() returns
-    // early while m_wsprBeacon->isActive() (the client path). That is an
-    // argument about three call sites in another class, and it is the kind of
-    // argument that stops being true quietly. This makes it structural instead:
-    // if the source changes mid-transmission the stale residue is dropped rather
-    // than mislevelled. It costs at most dspBlockSize-1 samples (~21 ms at
-    // 24 kHz) in a state that is already wrong, and nothing at all in normal
-    // operation, where this branch never runs.
+    // Residue carried from the previous call is not this block's to level:
+    // micGain below follows THIS block's source, and EngineGenerated bypasses
+    // m_micGain (up to 40 dB apart). AudioEngine should never interleave
+    // sources in one transmission (startWsprPump sets DAX TX mode; feedDaxTxAudio
+    // returns while the beacon is active), but if it does, the residue
+    // (<= dspBlockSize-1 samples, ~21 ms) is dropped rather than mislevelled.
     if (source != m_lastSource && !m_inBuffer.empty()) {
         // Once per transmission, not once per block: this runs on the DSP
         // worker, and a sustained interleave would alternate every block.
@@ -594,65 +474,13 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     float peak = 0.0f;
     float postAlcPeak = 0.0f;
 
-    // ---- ALC: protection only — it may reduce, never add ----
-    //
-    // Peak-tracking with a fast attack and a slow release, which is the
-    // conventional shape: catch the onset of a syllable, but do not pump
-    // audibly between words. The ceiling is UNITY, on every path, and there is
-    // no configuration field that can raise it. The result is hard-limited
-    // below full scale afterwards, because an ALC that can overshoot is a
-    // splatter generator.
-    //
-    // WHAT THIS STAGE STOPPED BEING. It used to carry up to 40 dB of upward
-    // makeup on the mic path, with an absolute hold threshold (-45 dBFS) below
-    // which it stopped lifting. Both halves are gone, and the second is why
-    // the first could not simply be turned down to 0 dB.
-    //
-    // The makeup half is gone because a level-dependent makeup stage cannot
-    // tell a voice from a room. Measured on this radio: 20.5 dB of
-    // speech-to-floor separation went in and 0.33 dB came out, because the
-    // hold threshold sat below the room noise, so between words the loop went
-    // on lifting until the fan and the mic hiss reached the same target peak
-    // as the speech. The 20-30 dB gap between a microphone and full modulation
-    // is real and still has to be closed; the operator's mic gain closes it
-    // now, which is why Hl2TxLevelPolicy.h reaches +40 dB rather than +20.
-    // WDSP draws the same line: create_txa() in
-    // third_party/wdsp/upstream/TXA.c builds its `alc` with run=1 and
-    // max_gain=1.0 and its `leveler` with run=0 and max_gain=1.778 (+5 dB).
-    //
-    // THE HOLD HAD TO GO WITH IT, not merely lose its `!clientLeveled` term.
-    // Under a unity ceiling a quiet block wants target = 1.0. If an earlier
-    // loud block left the gain below unity then target > m_alcGain, `reducing`
-    // is false, the block is under the threshold, and the move back to unity is
-    // suppressed — the transmission strands at whatever reduction its loudest
-    // block called for. That is #4796's own defect class mirrored onto the mic
-    // path: exactly the failure the `!clientLeveled` term was added to keep off
-    // the client path, handed to the mic path instead. A hold is only coherent
-    // when there is makeup gain to hold back.
-    //
-    // What remains is the half that was never the bug. m_micGain now reaches
-    // 100x (+40 dB, Hl2TxLevelPolicy.h) and is applied BEFORE this block, so a
-    // full-scale source with the TX gain slider up arrives far inside the hard
-    // clamp below — and flat-topping an SSB modulator input is a splatter
-    // generator, the one failure mode here that harms other operators rather
-    // than the operator who caused it. The clamp is a backstop, not a level
-    // control; it must not become the only thing standing between a hot source
-    // and the band.
-    //
-    // Below alcTargetPeak the ceiling binds, the gain sits at exactly 1.0, and
-    // output is proportional to input over the whole reported range — the
-    // property hl2_txdsp_test now asserts directly, as 20 dB in arriving as
-    // 20 dB out. Above the target the loop takes the reduction IMMEDIATELY —
-    // see the note at the assignment below for why the 5 ms attack constant
-    // this sentence used to name was deleted in 5607b565 (#5646) rather than
-    // shortened.
-    //
-    // THE MIC SLIDER IS A MICROPHONE CONTROL, so it does not reach the engine's
-    // own unattended audio. See the note on the declaration in Hl2TxDsp.h.
-    //
-    // Decided ONCE per block and used by both loops below, so the level the ALC
-    // measures and the level that reaches the modulator cannot disagree — they
-    // are the same number by construction rather than by two matching edits.
+    // ALC, protection only: peak tracking, instantaneous reduction, smoothed
+    // release, unity ceiling on every path, then a hard limit below full scale.
+    // No makeup gain and no hold: the operator's mic gain (+40 dB,
+    // Hl2TxLevelPolicy.h) closes the speech gap, as WDSP's create_txa runs
+    // `alc` at max_gain 1.0 with `leveler` off. Below alcTargetPeak output is
+    // proportional to input. micGain (not applied to EngineGenerated) is chosen
+    // once per block so the ALC measures what the modulator receives.
     const double micGain =
         (source == TxAudioSource::EngineGenerated) ? 1.0 : m_micGain;
 
@@ -668,37 +496,11 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
             const double target = std::min(wanted, 1.0);
             const double blockSec = static_cast<double>(consumed)
                                   / static_cast<double>(m_config.inputSampleRateHz);
-            // REDUCTION IS INSTANTANEOUS. Only the release is smoothed.
-            //
-            // This is the shape a splatter guard has to have, and the shape a
-            // smoothed attack cannot deliver at this block size. The attack
-            // constant was 5 ms against a 512-sample block on 24 kHz — 21.3 ms
-            // — so `1 - exp(-21.3/5)` already closed 98.6% of the error in a
-            // single block. It was not buying smoothing. It was leaving 1.4%
-            // of whatever step had just arrived sitting above the modulator's
-            // hard clamp, and 1.4% of 40 dB is not small.
-            //
-            // A one-shot key-on seed was tried first and covers only the FIRST
-            // reduction of an over. Measured on this class: a source that
-            // crosses the ALC target gently — an ordinary quiet word — spends
-            // the seed on a fraction of a dB, and the next loud syllable is
-            // then unprotected. A -38 dBFS word followed by a -12 dBFS
-            // syllable at slider 100 reached |IQ| 1.0768 with 223 samples
-            // clipped; a quiet passage, one loud burst and quiet again reached
-            // 1.5045 with 727 (15.2 ms). Both are speech, not corner cases.
-            // With reduction instantaneous every one of those shapes settles
-            // at 0.859 with nothing at the clamp.
-            //
-            // A short enough attack constant would also keep the clamp
-            // clear at TODAY'S block size — 0.5 ms does. That is the argument
-            // for instantaneous rather than against it: whether a constant is
-            // short enough depends on dspBlockSize and inputSampleRateHz, so
-            // it is a guarantee that expires silently the day either moves.
-            // Reduction that simply takes the target has no such dependency.
-            //
-            // The release keeps its slow constant, which is the half that
-            // actually needs smoothing: a limiter that releases as fast as it
-            // attacks pumps between words.
+            // Reduction is instantaneous; only the release is smoothed. Any
+            // attack constant leaves part of a step above the hard clamp, and
+            // whether it is short enough depends on dspBlockSize and the input
+            // rate. hl2_txdsp_test pins speech shapes settling at 0.859 with
+            // nothing clipped. The slow release keeps it from pumping.
             const bool reducing = target < m_alcGain;
             if (reducing) {
                 m_alcGain = target;
@@ -709,56 +511,31 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
             }
         }
     } else {
-        // ALC configured off: unity, and the clamp below is then the only
-        // over-level backstop there is. Pre-existing behaviour for an operator
-        // who has turned the ALC off, and the one remaining way to reach the
-        // clamp without the smooth limiting in front of it.
+        // ALC off: unity, and the hard clamp is the only over-level backstop.
         m_alcGain = 1.0;
     }
-    // Published unconditionally, including when the ALC is off and the answer
-    // is a flat 0 dB. The TX:ALCGAIN meter is fed from this, and a meter that
-    // stops updating reads as a stuck needle rather than as "no gain is being
-    // applied" — the same reason the mic peak below is not gated either.
-    //
-    // TX:ALC is NOT fed from here: it is the post-ALC level, published from
-    // alcPeak below. The two meters are the two halves of this stage and they
-    // move in opposite directions, which is why they are separate keys rather
-    // than one gauge that changes meaning.
+    // Published unconditionally (even a flat 0 dB) so TX:ALCGAIN never looks
+    // stuck. TX:ALC is the post-ALC level, from alcPeak below.
     emit alcGain(static_cast<float>(alcGainDb()));
 
     for (std::size_t s = 0; s < consumed; ++s) {
-        // Mic peak is measured BEFORE the ALC, deliberately.
-        //
-        // A post-ALC meter sits pinned near the target by definition and tells
-        // the operator nothing — it reports the ALC's success, not their input
-        // level. What a mic-gain control acts on is this, and how hard the ALC
-        // is working is reported separately as alcGain(), which is published
-        // to the model and diagnostic surfaces as TX:ALCGAIN.
+        // Mic peak is pre-ALC: a post-ALC meter would sit at the target. ALC
+        // effort is reported separately (TX:ALCGAIN).
         const float preAlc = static_cast<float>(m_inBuffer[s] * micGain);
         peak = std::max(peak, std::fabs(preAlc));
 
-        // Hard limit AFTER the ALC. The ALC is a smoothed estimate and will
-        // overshoot on a transient; letting that through would transmit
-        // distortion across the band rather than merely clipping our own audio.
+        // Hard limit after the ALC. With the ALC on, instantaneous reduction
+        // keeps the level at or below alcTargetPeak; this clamp is the backstop
+        // for the ALC-off path.
         const float in = std::clamp(static_cast<float>(preAlc * m_alcGain),
                                     -1.0f, 1.0f);
         postAlcPeak = std::max(postAlcPeak, std::fabs(in));
         m_levelled[s] = in;
     }
 
-    // ── AND HERE IS THE ONLY LINE THE BUILD FLAG MOVES ─────────────────────
-    //
-    // Everything above this point is the LEVEL chain and is identical in both
-    // builds: mic gain, the ALC and its client-leveled ceiling, the hold, the
-    // hard clamp and all three meters. Everything below is emission. The
-    // modulator is the single step between them, and it is the only thing
+    // Everything above is the level chain (mic gain, ALC, hard clamp, meters),
+    // shared by both builds; the modulator below is the only thing
     // AETHER_HL2_TX_TXA selects.
-    //
-    // That cut is deliberate and it is narrower than "the transmit path". The
-    // level chain is what #4796, #5646 and #5647 are about, it is pinned by
-    // most of hl2_txdsp_test, and duplicating it per modulator would be two
-    // level policies to keep in step -- which is the same failure shape as two
-    // runtime transmit paths, one level down.
     modulate(std::span<const float>(m_levelled.data(), consumed));
 
     m_inBuffer.erase(m_inBuffer.begin(),

@@ -8,29 +8,12 @@ class QWidget;
 
 namespace AetherSDR {
 
-// Shrinks a panel's graphics without touching its type.
-//
-// The RX stage panels were drawn for a window twice the size of the one they
-// live in now. Scaling the whole panel — a graphics-view transform over the
-// lot — fits it, but takes the text down with it, and a 9 px label at 0.6 is
-// not a label any more. Almost all of the space those panels spend is not
-// text: 76 px knobs, a 180 px tube curve, 42 px meters, an 80 px wordmark.
-// Taking those down leaves the labels at the size they were designed to be
-// read at.
-//
-// Originals are captured once, so a factor is always applied to the designed
-// size rather than to the last result — applying 0.8 twice would otherwise
-// leave a 76 px knob at 49 px rather than 61.
-//
-// A widget is left alone if it carries text (QLabel, buttons, combos, line
-// edits, spin boxes): their size IS their font, and changing it is the one
-// thing this must not do. Knobs are in that group too, even though they look
-// like pure graphics -- each holds an 11 px value edit across its middle, and
-// a knob narrower than 76 px delivers "-40.0 dB" as "0.0 dB". So is any
-// container holding text widgets, such as the EQ's per-band readout row:
-// its height is three stacked line edits. What gives way instead is the
-// stretchy graphics around them: curve views, level meters, scopes, the
-// wordmark.
+// Shrinks a panel's graphics (curve views, meters, scopes, wordmark)
+// without touching text, so labels stay at their designed size. Originals are
+// captured once and every factor applies to the designed size, not the last
+// result. Widgets that carry text are skipped — labels, buttons, combos, line
+// edits, spin boxes, knobs (each holds an 11 px value edit; narrower than 76 px
+// clips "-40.0 dB") and containers of text widgets.
 class CompactMetrics {
 public:
     // Captures every explicitly-sized graphical widget under `root`.

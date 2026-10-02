@@ -16,18 +16,12 @@ struct TciPeerProcessInfo {
     QString version;    // best-effort; empty when unknown — never guessed
 };
 
-// Resolve the local process that owns the TCP connection whose endpoint, as
-// seen from our side, is peerAddr:peerPort (i.e. the CLIENT's local address
-// and port).  Returns an unresolved struct for a non-loopback peer or on any
-// failure — this is decoration for a diagnostic log line, never a gate.
-// Blocking and potentially slow (a per-process descriptor sweep): call it
-// off the GUI thread.
-//
-// Same-user only: on Linux and macOS the sweep is restricted to processes
-// owned by this uid (checked, not merely a side effect of permissions).  On
-// Windows the kernel names the owning pid directly and the only limit is
-// OpenProcess() rights — an elevated instance can therefore name a client
-// running in another user's session.
+// Resolve the local process owning the TCP connection whose CLIENT-side
+// endpoint is peerAddr:peerPort. Returns unresolved for non-loopback peers or
+// any failure; it's log decoration, never a gate. Blocking (per-process
+// descriptor sweep): call off the GUI thread. Linux/macOS check the owner uid
+// matches ours; on Windows only OpenProcess() rights limit it, so an elevated
+// instance can name another session's client.
 TciPeerProcessInfo resolveLoopbackPeerProcess(const QHostAddress& peerAddr,
                                              quint16 peerPort);
 

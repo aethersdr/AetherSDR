@@ -376,11 +376,6 @@ int main(int argc, char** argv)
         // ---- THE OPERATOR'S FLOOR. The second, and last, of the two numbers
         // they own. The floor belongs to the law, and after a connect the law
         // is the bandscope one: 24 dB, the value RFC #5535's ruling holds.
-        //
-        // THIS LINE ASSERTED 26 AND WAS GREEN ON THE DEFECT. 26 is the ramp's
-        // floor, which applyRestoredState() installed on every connect in
-        // place of the constructed law; the check pinned what the session
-        // happened to have, not what was approved.
         check(s.backend.autoRfGainFloorDb() == 24,
               "the floor defaults to 24 dB below the operator's setting");
         s.backend.setAutoRfGainFloorDb(9);

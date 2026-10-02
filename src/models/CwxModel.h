@@ -106,18 +106,11 @@ public:
 
     // Status parsing (from radio)
     void applyStatus(const QMap<QString, QString>& kvs);
-    // Invoked by RadioModel with the reply to the final cwx send command.
-    // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83.
-    //
-    // radio_index is the INSERTION-START (first-char) queue position of the
-    // batch, NOT the last char — confirmed on FLEX-6500 fw 4.2.20.41343: a
-    // 23-char send into a queue at sent=48 replied radio_index=49 (=48+1), and
-    // `cwx sent=` then climbed 48→71 as the radio keyed. So the batch-end index
-    // to watch is radio_index + nChars - 1 (49+23-1 = 71, matching the observed
-    // final sent=). nChars is the char count of this send (spaces included).
-    // The epoch is the drainEpoch() snapshot taken when the command was emitted;
-    // a reply whose epoch no longer matches belongs to a batch that was since
-    // aborted (ESC/clear/disconnect) and is ignored. (#3949)
+    // Reply to the final cwx send: body "<radio_index>,<block>" (FlexLib
+    // CWX.cs:54-83). radio_index is the batch's first-char queue position, so the
+    // batch-end index is radio_index + nChars - 1 (FLEX-6500 fw 4.2.20.41343;
+    // nChars counts spaces). A reply whose epoch no longer matches drainEpoch()
+    // belongs to an aborted batch and is ignored (#3949).
     void handleSendReply(int resultCode, const QString& body, int epoch, int nChars);
 
     // Parses text for leading +/- speed modifiers on words.

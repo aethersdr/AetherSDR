@@ -76,21 +76,11 @@ static const QString kBlueActive =
     "QPushButton:checked { background-color: #0070c0; color: #ffffff; "
     "border: 1px solid #0090e0; }";
 
-// Vertical EQ band slider style — thin groove, accent-coloured handle.
-// Sizes kept site-local (intentional compact dimensions for the band
-// column rhythm); colours routed through color.slider.* so per-applet
-// override + live theme switching both light up.  Handle uses the
-// foreground (fill) token rather than the canonical handle token
-// because the EQ slider's visual idiom puts the accent colour on the
-// handle itself (there's no sub-page fill rule here).
-//
-// sub-page / add-page are pinned to the groove background to neutralise
-// the global app-wide QSlider::sub-page:vertical fill (Theme.h), which
-// otherwise cascades in and paints the accent colour.  On a vertical
-// slider Qt paints sub-page from the handle *upward*, so with the EQ
-// handle centred at 0 dB that leaked fill reads upside-down (blue from
-// centre up).  Both halves stay groove-coloured so only the handle
-// carries the accent, matching this applet's intended idiom.
+// Vertical EQ band slider: thin groove, accent handle. Sizes are local;
+// colours use color.slider.* tokens (fill token on the handle, since this
+// idiom has no sub-page fill). sub-page/add-page are pinned to the groove
+// colour to block the global QSlider::sub-page:vertical fill (Theme.h), which
+// Qt paints from the handle upward and would read inverted around 0 dB.
 static constexpr const char* kVSliderStyle =
     "QSlider::groove:vertical { width: 4px; background: {{color.slider.background}}; border-radius: 2px; }"
     "QSlider::sub-page:vertical { background: {{color.slider.background}}; border: none; border-radius: 2px; }"

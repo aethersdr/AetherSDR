@@ -1,12 +1,9 @@
 // WHICH AUTOMATIC RF GAIN LAW A CONNECT INSTALLS.
 //
-// RFC #5535 approved the loop driving on the wideband bandscope with a floor of
-// 24 dB, and the constructor installs that law. applyRestoredState() -- which
-// RadioModel calls on every engaged connect, also with an empty state -- reset
-// the law to the clip-counter "ramp" with a floor of 26. So a constructed
-// backend and a connected one ran different laws, and no test read the law
-// after a restore: hl2_auto_gain_policy_test pins the configurations
-// themselves, not which one the backend installs.
+// The constructor and applyRestoredState() -- which RadioModel calls on every
+// engaged connect, also with an empty state -- must install the same law: the
+// bandscope one, floor 24 dB (RFC #5535). hl2_auto_gain_policy_test pins the
+// configurations themselves, not which one the backend installs.
 //
 // WHAT THIS PROVES, AND WHAT IT DOES NOT. Socket-free and radio-free. The link
 // edges are fired through MetisClient's own signals, so the backend's real
@@ -350,16 +347,11 @@ int main(int argc, char** argv)
     }
 
     // ---- 7. A LINK THAT RESUMES ON THE SAME SESSION RE-ASKS FOR THE GATE ---
-    // A second defect, separate from which law a connect installs, and one
-    // that law makes reachable. After 2 s of EP6 silence MetisClient ends the
-    // bandscope gate's intent and emits linkDown without stopping; when EP6
-    // resumes it emits linkUp again. No connectRadio() and no
-    // applyRestoredState() run in between, so the loop stays armed and nothing
-    // on that path used to ask for the gate again: the bandscope law then held
-    // its offset on HeadroomAbsent until the operator toggled the switch.
-    //
-    // Section 5 fires that edge once. This section pins the claim from each
-    // side, on the request and not on a stream (see the file header).
+    // After 2 s of EP6 silence MetisClient ends the bandscope gate's intent and
+    // emits linkDown without stopping; when EP6 resumes it emits linkUp again,
+    // with no connectRadio() and no applyRestoredState() in between, so the
+    // loop stays armed and has to ask for the gate again. Section 5 fires that
+    // edge once; this pins it from each side, on the request, not on a stream.
     {
         // (a) The gate was the OPERATOR'S before the silence. The explicit
         // enable takes the claim away from the loop; the silence then ends the
