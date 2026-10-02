@@ -13736,6 +13736,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     releaseAfterFrame(oldSupplementalTexture);
                     m_wfFrameTexDirty = true;
                 } else if (rowPipelineWasActive) {
+                    // Same lifetime rule: hand the row-pipeline resources to
+                    // the end of the frame, then let the helper reset the mode.
+                    releaseAfterFrame(std::exchange(m_wfFramePipeline, nullptr));
+                    releaseAfterFrame(std::exchange(m_wfFrameSrb, nullptr));
+                    releaseAfterFrame(std::exchange(m_wfFrameTex, nullptr));
+                    releaseAfterFrame(
+                        std::exchange(m_wfSupplementalGpuTex, nullptr));
+                    releaseAfterFrame(std::exchange(m_wfFrameSampler, nullptr));
                     releaseWaterfallFramePipelineResources();
                     m_wfPipelineFallbackReason =
                         QStringLiteral("row texture resize transaction failed");
