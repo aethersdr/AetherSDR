@@ -1,11 +1,15 @@
+#include "TestSettingsProfile.h"
 #include "gui/SplitQsySettings.h"
 #include "gui/SplitQsyObservationPolicy.h"
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QJsonDocument>
+#include <QFile>
+#include <QProcess>
 
 #include <cstdio>
+#include <memory>
 
 namespace {
 
@@ -147,6 +151,11 @@ void testLocalTuneEchoAndIncrementalExternalQsy()
     check(splitActive, "optimistic local tuning does not close split");
     check(statusReports == 0,
           "optimistic local tuning is not emitted as a radio status report");
+    rx.applyChanges(frequencyObservation(14.000));
+    check(splitActive,
+          "queued pre-tune status does not close split during a local SWAP");
+    check(std::abs(referenceFrequencyMhz - 14.000) < 1e-9,
+          "pending local tune preserves the radio-observed reference");
     rx.applyChanges(frequencyObservation(14.005));
     check(splitActive,
           "radio echo of a local tune beyond threshold does not close split");
@@ -167,8 +176,21 @@ void testLocalTuneEchoAndIncrementalExternalQsy()
           "radio QSY beyond threshold from latest reference closes split");
 
     rx.applyChanges(frequencyObservation(14.0101));
-    check(statusReports == 5,
+    check(statusReports == 6,
           "status frequency signal includes changed and same-value reports");
+}
+
+void testSplitEntryUsesReportedFrequency()
+{
+    AetherSDR::SliceModel rx(0);
+    rx.applyChanges(frequencyObservation(14.000));
+    rx.setFrequency(14.005);
+    AetherSDR::SplitQsySettings settings;
+    settings.closeSplitOnQsy = true;
+    double referenceFrequencyMhz = rx.reportedFrequency();
+    check(!AetherSDR::shouldCloseSplitOnQsyObservation(
+              settings, true, true, 14.000, referenceFrequencyMhz),
+          "split entered during a pending tune keeps the last observed reference");
 }
 
 void testPendingTuneEchoesAreSliceSpecificAndExpire()
@@ -226,17 +248,101 @@ void testTwoOutstandingSwapEchoesDoNotCloseSplit()
           "both outstanding SWAP echoes are consumed");
 }
 
+void testSwapWiringPreservesObservedReference()
+{
+    // The model/policy tests cannot construct MainWindow's two-slice SWAP
+    // handler. Pin only that wiring: it must not overwrite the observed
+    // reference with an optimistic value before queued statuses arrive.
+    QFile wiring(QStringLiteral(AETHER_SOURCE_DIR "/src/gui/MainWindow_Wiring.cpp"));
+    check(wiring.open(QIODevice::ReadOnly), "SWAP wiring source is available");
+    const QByteArray source = wiring.readAll();
+    const qsizetype begin = source.indexOf("connect(w, &VfoWidget::swapRequested");
+    const qsizetype end = source.indexOf("\n    });", begin);
+    check(begin >= 0 && end > begin, "SWAP handler is found, not vacuously checked");
+    if (begin >= 0 && end > begin) {
+        check(!source.mid(begin, end - begin).contains("m_splitRxFrequencyMhz"),
+              "SWAP leaves the radio-observed QSY reference to the status handler");
+    }
+}
+
+bool runSettingsChild(const QString& argument)
+{
+    QProcess child;
+    child.start(QCoreApplication::applicationFilePath(), {argument});
+    if (!child.waitForStarted(5000) || !child.waitForFinished(5000)) {
+        child.kill();
+        child.waitForFinished(1000);
+        std::fprintf(stderr, "Settings child failed: %s\n",
+                     child.errorString().toUtf8().constData());
+        return false;
+    }
+    const QByteArray errors = child.readAllStandardError();
+    if (!errors.isEmpty()) {
+        std::fprintf(stderr, "%s", errors.constData());
+    }
+    return child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0;
+}
+
+void settingsChild(bool write)
+{
+    AetherSDR::AppSettings& store = AetherSDR::AppSettings::instance();
+    store.load();
+    const QString key = QLatin1String(AetherSDR::SplitQsySettings::kSettingsKey);
+    if (write) {
+        check(!store.contains(key), "fresh profile has no split settings row");
+        const AetherSDR::SplitQsySettings defaults = AetherSDR::SplitQsySettings::load();
+        check(!defaults.closeSplitOnQsy && defaults.thresholdHz == 2000,
+              "loading a fresh profile returns defaults");
+        check(!store.contains(key), "loading defaults does not persist an unused feature");
+        AetherSDR::SplitQsySettings settings;
+        settings.closeSplitOnQsy = true;
+        settings.thresholdHz = 7500;
+        settings.save();
+    } else {
+        const AetherSDR::SplitQsySettings restored = AetherSDR::SplitQsySettings::load();
+        check(store.contains(key), "saved settings survive the writer process exiting");
+        check(restored.closeSplitOnQsy && restored.thresholdHz == 7500,
+              "enable and threshold reload in a separate process");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
+    const bool settingsChildMode = argc == 2;
+    std::unique_ptr<TestSettingsProfile> profile;
+    if (!settingsChildMode) {
+        profile = std::make_unique<TestSettingsProfile>(QStringLiteral("split-qsy-settings"));
+        if (!profile->isValid()) {
+            return 1;
+        }
+    } else if (qEnvironmentVariableIsEmpty("AETHER_SETTINGS_DIR")) {
+        return 1;
+    }
     QCoreApplication app(argc, argv);
+    if (settingsChildMode) {
+        const QString argument = app.arguments().at(1);
+        if (argument != QLatin1String("--settings-write")
+            && argument != QLatin1String("--settings-read")) {
+            return 1;
+        }
+        settingsChild(argument == QLatin1String("--settings-write"));
+        return g_failures == 0 ? 0 : 1;
+    }
+    // Initialize the private database before children load it, so they never
+    // enter platform legacy-settings discovery in an uninitialized profile.
+    AetherSDR::AppSettings::instance().load();
     testDefaults();
     testRoundTrip();
     testClampAndMalformedValues();
     testQsyClosePolicy();
     testLocalTuneEchoAndIncrementalExternalQsy();
+    testSplitEntryUsesReportedFrequency();
     testPendingTuneEchoesAreSliceSpecificAndExpire();
     testTwoOutstandingSwapEchoesDoNotCloseSplit();
+    testSwapWiringPreservesObservedReference();
+    check(runSettingsChild(QStringLiteral("--settings-write")), "settings writer succeeds");
+    check(runSettingsChild(QStringLiteral("--settings-read")), "settings reader succeeds");
     return g_failures == 0 ? 0 : 1;
 }

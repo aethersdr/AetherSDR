@@ -1513,12 +1513,17 @@ set_tests_properties(split_audio_profile_test PROPERTIES TIMEOUT 30)
 
 # Split QSY settings and observation policy. SliceModel exercises the
 # radio-status-only path and local tune echo matching without a socket.
+# Persistence children share a private disk profile; they are not radio peers.
+# A narrow source pin covers the otherwise unreachable MainWindow SWAP wiring.
 add_executable(split_qsy_settings_test
     tests/split_qsy_settings_test.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
-target_include_directories(split_qsy_settings_test PRIVATE src)
+target_include_directories(split_qsy_settings_test PRIVATE src tests)
+target_compile_definitions(split_qsy_settings_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(split_qsy_settings_test PRIVATE Qt6::Core)
 add_test(NAME split_qsy_settings_test COMMAND split_qsy_settings_test)
 set_tests_properties(split_qsy_settings_test PROPERTIES TIMEOUT 30)
@@ -6655,6 +6660,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    split_qsy_settings_test
     anan_backend_test
     anan_noise_blanker_readback_test
     tci_rx_audio_test

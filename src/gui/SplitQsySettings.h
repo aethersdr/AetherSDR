@@ -65,9 +65,7 @@ struct SplitQsySettings {
     {
         auto& store = AppSettings::instance();
         if (!store.contains(QLatin1String(kSettingsKey))) {
-            SplitQsySettings defaults;
-            defaults.save();
-            return defaults;
+            return {};
         }
 
         const QString json = store.value(QLatin1String(kSettingsKey)).toString();

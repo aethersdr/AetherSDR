@@ -6159,9 +6159,8 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         const double txFreq = tx->frequency();
         applyTuneRequest(rx, txFreq, TuneIntent::IncrementalTune,
                          "split-swap-rx");
-        if (m_splitActive && m_splitRxSliceId == rx->sliceId()) {
-            m_splitRxFrequencyMhz = rx->frequency();
-        }
+        // Only radio observations advance the QSY reference; a queued status
+        // can still report the pre-SWAP frequency while these tunes are pending.
         applyTuneRequest(tx, rxFreq, TuneIntent::IncrementalTune, "split-swap-tx");
     });
 
@@ -7414,7 +7413,7 @@ void MainWindow::enterSplit(int rxSliceId, std::optional<double> offsetMhz)
 
     m_splitActive = true;
     m_splitRxSliceId = rxSliceId;
-    m_splitRxFrequencyMhz = rxSlice->frequency();
+    m_splitRxFrequencyMhz = rxSlice->reportedFrequency();
     m_radioModel.sendCommand(
         QString("slice create pan=%1 freq=%2")
             .arg(panId).arg(txFreq, 0, 'f', 6));

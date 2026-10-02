@@ -1944,6 +1944,7 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     // for a disabled QAction where a tooltip is never read.
     const QString blocker = paired ? QString() : splitEntryBlocker(sliceId);
 
+    const QJsonObject initialQsySettings = m_splitQsySettings.toJson();
     QMenu menu(this);
 
     // ── One-touch pileup offsets (#311) ──────────────────────────────────
@@ -1996,12 +1997,10 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     connect(closeSplitCheck, &QCheckBox::toggled, this, [this, thresholdSpin](bool enabled) {
         m_splitQsySettings.closeSplitOnQsy = enabled;
         thresholdSpin->setEnabled(enabled);
-        m_splitQsySettings.save();
     });
     connect(thresholdSpin, qOverload<int>(&QSpinBox::valueChanged), this,
             [this](int thresholdHz) {
         m_splitQsySettings.thresholdHz = thresholdHz;
-        m_splitQsySettings.save();
     });
 
     // ── Monitor TX ───────────────────────────────────────────────────────
@@ -2086,6 +2085,10 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     });
 
     menu.exec(globalPos);
+    // Keep edits live while the menu is open, but commit the document once.
+    if (m_splitQsySettings.toJson() != initialQsySettings) {
+        m_splitQsySettings.save();
+    }
 }
 
 } // namespace AetherSDR
