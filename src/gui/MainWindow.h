@@ -1080,6 +1080,9 @@ private:
     void beginSliderShortcutLease(QWidget* slider);
     void renewSliderShortcutLease();
     void releaseSliderShortcutLease(bool clearFocus);
+    // Arm the operating QShortcuts only when keyboard shortcuts are on and no
+    // slider holds the lease; otherwise their keys fall through (#5483).
+    void syncOperatingShortcutsEnabled();
 
     BandSnapshot captureCurrentBandState() const;
     void restoreBandState(const BandSnapshot& snap);
