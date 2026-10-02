@@ -39,6 +39,18 @@ bool validCapture(const Registry::Capture& capture)
 
 bool boundedDsp(const WdspChannel::Config& config)
 {
+    if (config.wbfmReceive) {
+        const auto& wide = *config.wbfmReceive;
+        if (config.mode != WdspChannel::Mode::Wbfm || config.fmReceive
+            || config.inputSampleRate != 384000 || config.inputBlockSize != 2048
+            || config.dspSampleRate != 192000 || config.dspBlockSize != 1024
+            || config.outputSampleRate != 48000
+            || !std::isfinite(wide.outputGain) || wide.outputGain < 0 || wide.outputGain > 1
+            || (wide.deemphasis != WdspChannel::WbfmReceive::Deemphasis::Us50
+                && wide.deemphasis != WdspChannel::WbfmReceive::Deemphasis::Us75)
+            || config.filterLowHz < -0.45 * config.inputSampleRate
+            || config.filterHighHz > 0.45 * config.inputSampleRate) { return false; }
+    }
     if (config.fmReceive && (config.mode != WdspChannel::Mode::Fm
         || !std::isfinite(config.fmDeviationHz) || config.fmDeviationHz <= 0
         || config.fmDeviationHz >= config.dspSampleRate / 2.0)) { return false; }
@@ -71,8 +83,8 @@ bool boundedDsp(const WdspChannel::Config& config)
         static_cast<int>(config.mode) <= static_cast<int>(WdspChannel::Mode::Wbfm) &&
         std::isfinite(config.filterLowHz) && std::isfinite(config.filterHighHz) &&
         config.filterLowHz < config.filterHighHz &&
-        config.filterLowHz >= -config.dspSampleRate / 2.0 &&
-        config.filterHighHz <= config.dspSampleRate / 2.0 &&
+        config.filterLowHz >= -(config.wbfmReceive ? config.inputSampleRate : config.dspSampleRate) / 2.0 &&
+        config.filterHighHz <= (config.wbfmReceive ? config.inputSampleRate : config.dspSampleRate) / 2.0 &&
         config.filterTaps >= 64 && config.filterTaps <= 16384 &&
         (config.filterTaps & (config.filterTaps - 1)) == 0 &&
         // WDSP derives again = rate / (fmDeviationHz * TWOPI) from this, so an
@@ -100,29 +112,60 @@ public:
     {
         if (spec.extractRf) {
             m_extractor = std::make_unique<RtlRfExtractor>(RtlRfExtractor::Config{
-                spec.capture, spec.passband, spec.dsp.inputSampleRate, spec.dsp.inputBlockSize});
+                spec.capture, spec.passband, spec.dsp.inputSampleRate, spec.dsp.inputBlockSize,
+                spec.dsp.outputSampleRate});
         }
     }
     bool valid() const noexcept { return !m_extractor || m_extractor->valid(); }
     bool processCapture(const Registry::SampleBlock& block, Registry::AudioSink& sink) noexcept override
     {
-        if (!m_extractor || block.session != m_spec.handle.session) { return false; }
+        if (!m_extractor || block.session != m_spec.handle.session) {
+            if (!m_failure) {
+                m_failure.emplace();
+                m_failure->reason = !m_extractor ? Registry::ProcessingFailureReason::NoExtractor
+                                                : Registry::ProcessingFailureReason::SessionMismatch;
+                m_failure->captureFirst = block.firstSample;
+                m_failure->captureFrames = block.samples.size();
+            }
+            return false;
+        }
+        const bool hadFailure = m_failure.has_value();
         m_sink = &sink;
         const bool success = m_extractor->process(block.capture, block.firstSample,
             block.samples, *this, block.discontinuity);
         m_sink = nullptr;
+        if (!success && !hadFailure) {
+            if (!m_failure) { m_failure.emplace(); }
+            m_failure->extraction = m_extractor->failure();
+            if (m_failure->extraction) {
+                const auto& failure = *m_failure->extraction;
+                m_failure->expectedCaptureFirst = failure.expectedCaptureFirst;
+                m_failure->captureFirst = failure.captureFirst;
+                m_failure->captureFrames = failure.captureFrames;
+                m_failure->hasExpectedCaptureFirst = failure.hasExpectedCaptureFirst;
+                m_failure->iqFirst = failure.iqFirst;
+                m_failure->iqFrames = failure.iqFrames;
+                m_failure->hasIqFirst = failure.hasIqFirst;
+            }
+        }
         return success;
     }
     WdspChannel::ProcessResult processIq(std::span<const float> i,
         std::span<const float> q) noexcept override
     {
-        if (i.data() == nullptr || q.data() == nullptr) {
-            return WdspChannel::ProcessResult::InvalidBuffer;
+        const WdspChannel::ProcessResult result = i.data() == nullptr || q.data() == nullptr
+            ? WdspChannel::ProcessResult::InvalidBuffer : m_channel->processIq(i, q, m_left, m_right);
+        if (result != WdspChannel::ProcessResult::Ok && !m_failure) {
+            m_failure.emplace();
+            m_failure->reason = Registry::ProcessingFailureReason::DspProcess;
+            m_failure->processResult = result;
+            m_failure->iqFrames = i.size();
         }
-        return m_channel->processIq(i, q, m_left, m_right);
+        return result;
     }
     std::span<const float> left() const noexcept override { return m_left; }
     std::span<const float> right() const noexcept override { return m_right; }
+    std::optional<Registry::ProcessingFailure> processingFailure() const noexcept override { return m_failure; }
 private:
     std::unique_ptr<WdspChannel> m_channel;
     std::vector<float> m_left;
@@ -131,14 +174,38 @@ private:
     std::unique_ptr<RtlRfExtractor> m_extractor;
     Registry::AudioSink* m_sink = nullptr;
     bool m_first = true;
+    std::optional<Registry::ProcessingFailure> m_failure;
     bool iqBlock(std::span<const float> i, std::span<const float> q,
                  std::uint64_t firstSample) noexcept override
     {
         // Nonblocking WDSP fexchange2 advances its ring even on underrun.
         // Withdraw this instance rather than later publishing a stale ring
         // position as current audio. Its replacement is prepared off-thread.
-        if (processIq(i, q) != WdspChannel::ProcessResult::Ok) { return false; }
-        m_sink->audioBlock(m_spec, firstSample, m_left, m_right, m_first);
+        const bool hadFailure = m_failure.has_value();
+        if (processIq(i, q) != WdspChannel::ProcessResult::Ok) {
+            if (!hadFailure) {
+                m_failure->iqFirst = firstSample;
+                m_failure->hasIqFirst = true;
+            }
+            return false;
+        }
+        // The extractor positions name IQ frames. The sink and mixer name
+        // final audio frames. Preparation aligns the first IQ block with that
+        // slower lattice; every fixed block advances it by an exact ratio.
+        const auto ratio = static_cast<std::uint64_t>(
+            m_spec.dsp.inputSampleRate / m_spec.dsp.outputSampleRate);
+        if (ratio == 0 || firstSample % ratio != 0) {
+            if (!m_failure) {
+                m_failure.emplace();
+                m_failure->reason = Registry::ProcessingFailureReason::AudioLattice;
+                m_failure->iqFirst = firstSample;
+                m_failure->iqFrames = i.size();
+                m_failure->hasIqFirst = true;
+            }
+            return false;
+        }
+        m_sink->audioBlockWithStatus(m_spec, firstSample / ratio, m_left, m_right, m_first,
+                                       m_channel->wbfmReceptionDiagnostics());
         m_first = false;
         return true;
     }
@@ -594,9 +661,17 @@ RtlReceiverRegistry::Result RtlReceiverRegistry::submitImpl(const Capture& captu
         if (slot < 0 || static_cast<std::size_t>(slot) >= state.limits.slotCount || used[slot] ||
             spec.handle.session != state.session.load() || state.reservations[slot] != spec.handle ||
             spec.passband.stableId != slot || !boundedDsp(spec.dsp)
-            || (spec.extractRf && (spec.dsp.inputSampleRate != 48000
-                || spec.dsp.dspSampleRate != 48000 || spec.dsp.outputSampleRate != 48000
-                || spec.dsp.inputBlockSize != 1024 || spec.dsp.dspBlockSize != 1024))) {
+            || (spec.dsp.wbfmReceive
+                && (spec.passband.guardLowHz < WdspChannel::WbfmReceive::kRfTransitionGuardHz
+                    || spec.passband.guardHighHz < WdspChannel::WbfmReceive::kRfTransitionGuardHz))
+            || (spec.extractRf && !((spec.dsp.inputSampleRate == 48000
+                && spec.dsp.dspSampleRate == 48000 && spec.dsp.outputSampleRate == 48000
+                && spec.dsp.inputBlockSize == 1024 && spec.dsp.dspBlockSize == 1024
+                && !spec.dsp.wbfmReceive)
+                || (spec.dsp.inputSampleRate == 384000 && spec.dsp.dspSampleRate == 192000
+                    && spec.dsp.outputSampleRate == 48000 && spec.dsp.inputBlockSize == 2048
+                    && spec.dsp.dspBlockSize == 1024 && spec.dsp.mode == WdspChannel::Mode::Wbfm
+                    && spec.dsp.wbfmReceive && !spec.dsp.fmReceive)))) {
             return Result::Invalid;
         }
         used[slot] = true;

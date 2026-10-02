@@ -31,6 +31,9 @@ public:
         int audioGain = 50;
         bool audioMute = false;
         int audioPan = 50;
+        // Optional in schema 1; old documents retain the legacy 75 us default.
+        int wfmDeemphasisUs = 75;
+        bool wfmForceMono = false;
     };
     struct Document {
         double captureCenterHz = 0;

@@ -194,6 +194,7 @@ void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.broadcastFmReceive = std::nullopt;
     // FlexLib 4.2.18 Slice.Freq delegates range refusal to firmware; its old
     // bounds are commented out. Do not guess coverage (including transverters).
     caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio, 0, 0};

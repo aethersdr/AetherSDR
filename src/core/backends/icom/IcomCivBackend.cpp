@@ -277,6 +277,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     const IcomModel& m = *m_model;
     const IcomModelProfile& profile = profileFor(m);
     RadioCapabilities c;
+    c.broadcastFmReceive = std::nullopt;
     c.fmDtcsCodes = {};
     c.family = QStringLiteral("icom");
     c.manufacturer = QStringLiteral("Icom");

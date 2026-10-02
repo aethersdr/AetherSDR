@@ -1295,6 +1295,8 @@ set(GUI_SOURCES
     src/gui/WaveformScopeModel.cpp
     src/gui/WaveformWidget.cpp
     src/gui/AetherClockApplet.cpp
+    src/gui/WfmApplet.cpp
+    src/gui/WfmLockScope.cpp
     src/gui/ClockAlignmentWidget.cpp
     src/gui/ClientEqApplet.cpp
     src/gui/ClientEqCurveWidget.cpp

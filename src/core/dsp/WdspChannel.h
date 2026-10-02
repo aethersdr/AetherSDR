@@ -3,6 +3,7 @@
 #include <QMetaType>
 
 #include <atomic>
+#include "core/WfmReceptionDiagnostics.h"
 #include <array>
 #include <cstddef>
 #include <memory>
@@ -58,6 +59,7 @@ public:
         enum class Deemphasis { Us75, Us50 };
         Deemphasis deemphasis = Deemphasis::Us75;
         double outputGain = 0.25;
+        bool forceMono = false;
         static constexpr double kRfTransitionGuardHz = 3000.0;
         bool operator==(const WbfmReceive&) const = default;
     };
@@ -213,10 +215,15 @@ public:
     bool setMode(Mode mode) noexcept;
     bool setFilter(double lowHz, double highHz) noexcept;
     bool setWbfmDeemphasis(WbfmReceive::Deemphasis deemphasis) noexcept;
-    // Lock-free latest completed decoder observation, sampled by processIq().
+    // Lock-free latest completed output-mode observation, sampled by processIq().
+    // Forced Mono is false independently of reception diagnostics.pilotLocked.
     // It is not an exact PCM-ring timestamp. False after stop/open; absent for
     // channels that do not own the broadcast recipe. Caller owns the lifetime.
     [[nodiscard]] std::optional<bool> wbfmStereoDetected() const noexcept;
+    // Acquisition thread only, immediately after processIq; control may read
+    // after joining/quiescing acquisition. Never reaches into mutable WDSP.
+    [[nodiscard]] const std::optional<AetherSDR::WfmReceptionDiagnostics>&
+        wbfmReceptionDiagnostics() const noexcept { return m_wbfmReception; }
     // Runtime RX AGC change. agcMode is the WDSP RXA AGC mode (0 off, 1 long,
     // 2 slow, 3 medium, 4 fast); maximumGainDb is the AGC "top", the ceiling on
     // how much gain the AGC may apply. Receive channels only — returns false on
@@ -351,6 +358,21 @@ public:
     // overwrote the input block the worker had not yet copied out. 0 restores
     // the shipping path.
     static void setWorkerHandoffPauseForTest(unsigned microseconds) noexcept;
+    // Test-only deterministic counterpart: arm the next worker handoff, then
+    // acknowledge that one worker is held until explicitly released. Fixtures
+    // serialize use, keep other channels idle, and release BEFORE destruction
+    // or reconfiguration. The default is inactive; this never holds acquisition.
+    static void setWorkerHandoffHoldForTest(bool enabled) noexcept;
+    [[nodiscard]] static bool workerHandoffHeldForTest() noexcept;
+    // Same serialized-fixture lifetime contract, before output bytes/credit.
+    static void setWorkerOutputCopyHoldForTest(bool enabled) noexcept;
+    [[nodiscard]] static bool workerOutputCopyHeldForTest() noexcept;
+    // Test/control thread only: locks existing exchange/output-count sections. The
+    // caller owns this open channel and excludes control/destruction.
+    [[nodiscard]] int outputSamplesReadyForTest() const noexcept;
+    // After output-count readiness, wait for the last hook and DSP body before
+    // arming another hold. Test/control only; NEVER call while a hold is armed.
+    void synchronizeWorkerForTest() const noexcept;
 
     // Forwards to AetherSDR::fftwPlannerLock() (core/dsp/FftwPlannerLock.h), which
     // owns the mutex and lists its users. Code outside this class should call
@@ -370,7 +392,7 @@ private:
     void applyNotchShift() noexcept;
     static std::size_t computeOutputBlockSize(const Config& config) noexcept;
 
-    void open() noexcept;
+    [[nodiscard]] bool open() noexcept;
     void close() noexcept;
     // Create/destroy the ANB stage alongside the channel. The blanker's id IS
     // the channel id: nob.c keeps its own table of 32, WDSP's channel table is
@@ -386,6 +408,7 @@ private:
     struct WbfmState;
     std::unique_ptr<WbfmState> m_wbfm;
     std::atomic<int> m_wbfmStereo {-1};
+    std::optional<AetherSDR::WfmReceptionDiagnostics> m_wbfmReception;
     int m_channelId = -1;
     Config m_config;
     // Fixed for a given Config; cached at open()/reconfigure() so the real-time
