@@ -241,8 +241,8 @@ stock CTR2 (recorded in [the USB relay design](ctr2-usb-relay-design.md));
 that hardware result was not observed by this branch's validation. Jeremy
 explicitly directed this scoped prototype (unchanged forwarding of everything
 the CTR2 sends, additive applet) via the implementation prompt. That direction
-does not settle the RFC requirement in GOVERNANCE.md; a production PR still
-needs an approved `[RFC]` issue covering the items below.
+does not settle the RFC requirement in GOVERNANCE.md; RFC #6091 covers the
+items below and must be approved before this merges.
 
 Architectural distinction for review:
 
