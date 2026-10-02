@@ -161,6 +161,30 @@ PhoneCwApplet::PhoneCwApplet(QWidget* parent)
 void PhoneCwApplet::setSelectableMicInputs(bool selectable)
 {
     m_selectableMicInputs = selectable;
+    // +ACC mixes the rear ACCESSORY connector in with the selected input --
+    // the same Flex connector family as the MIC/BAL/LINE/ACC entries the combo
+    // below collapses to PC, and the same `mic acc` wire text a radio without a
+    // command plane drops. It was the one control on this row left live: it
+    // toggled, lit green and stayed lit while nothing reached the radio.
+    // Unavailable, dimmed, with the reason where a screen reader hears it
+    // (theme-style-guide.md, Three-state controls); a tooltip alone is never
+    // announced.
+    if (m_accBtn) {
+        m_accBtn->setEnabled(selectable);
+        if (selectable) {
+            m_accBtn->setToolTip(QString());
+            m_accBtn->setAccessibleDescription(
+                QStringLiteral("Enable accessory microphone input"));
+        } else {
+            const QSignalBlocker blocker(m_accBtn);
+            m_accBtn->setChecked(false);
+            const QString reason = QStringLiteral(
+                "Unavailable: this radio has no accessory audio input. It takes "
+                "transmit audio from this computer.");
+            m_accBtn->setToolTip(reason);
+            m_accBtn->setAccessibleDescription(reason);
+        }
+    }
     if (!m_micSourceCombo)
         return;
     // Rebuild rather than disable: a greyed-out MIC entry still reads as "this
@@ -277,26 +301,12 @@ void PhoneCwApplet::buildPhonePanel()
     m_compGauge->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_compGauge);
 
-    // ── ALC Gain gauge (dB: -20 to +40) ──────────────────────────────────
-    // Beside Compression because they answer the same kind of question — how
-    // much is the chain changing my audio — where the ALC gauge below answers
-    // where the audio ended up. The two are easily confused and the difference
-    // is the whole reason this one exists: a post-ALC level meter sits pinned
-    // near its target by construction, so an operator whose microphone is 30 dB
-    // too quiet sees an ALC gauge that looks perfect.
-    //
-    // The range is the modulator's, not a preference: +40 dB is the HL2
-    // modulator's makeup ceiling (Hl2TxDsp::Config::alcMaxGainDb), so a reading
-    // at the top means the ALC has run out of gain rather than that the face
-    // has run out of scale. -20 covers the reductions this chain produces.
-    //
-    // The colour breaks are the modulator's too, not taste. The face's top is
-    // alcMaxGainDb, so yellow at +20 is "half the makeup is spent" and red at
-    // +30 is "three quarters of it is, and the last 10 dB is all that stands
-    // between this microphone and an ALC that cannot reach its target" --
-    // which is a setup fault to fix at the gain control, not in software. The
-    // reduction half is deliberately uncoloured: the ALC taking level away is
-    // it working, at any depth this chain produces.
+    // ALC Gain gauge (-20..+40 dB), beside Compression: both show how much the
+    // chain changes the audio, while a post-ALC level meter sits near target
+    // even with a mic 30 dB too quiet. +40 is the HL2 modulator's makeup ceiling
+    // (Hl2TxDsp::Config::alcMaxGainDb), so top-of-scale means the ALC is out of
+    // gain. Yellow at +20 = half the makeup spent, red at +30 = three quarters
+    // (fix at the gain control); the reduction side is uncoloured.
     m_alcGainGauge = new HGauge(kAlcGainGaugeMinDb, kAlcGainGaugeMaxDb, 30.0f,
         "ALC Gain", "dB",
         {{-20, "-20dB"}, {-10, "-10"}, {0, "0"}, {10, "+10"}, {20, "+20"},
@@ -1024,16 +1034,10 @@ void PhoneCwApplet::buildCwPanel()
         vbox->addWidget(m_apfRow);
     }
 
-    // ── One setStyleSheet() site per style, for the whole CW face ────────
-    // tools/audit_colours.py ratchets on setStyleSheet() CALL SITES rather than
-    // on colours, so every control added here used to cost the PR that added it
-    // two sites against its base. Styling the widgets together costs one apiece
-    // for the panel — and the next control is free.
-    //
-    // The two pan labels are deliberately left alone: they use kDimLabelStyle,
-    // and folding one-offs in here would trade a site for a conditional.
-    // m_iambicBtn used to be in that list; it is now styled with m_holdDelayBtn
-    // by the shared kBlueActive loop in buildCwPanel().
+    // One setStyleSheet() site per style for the whole CW face, since
+    // tools/audit_colours.py ratchets on call sites. The two pan labels keep
+    // kDimLabelStyle; m_iambicBtn is styled with m_holdDelayBtn in
+    // buildCwPanel()'s kBlueActive loop.
     for (QPushButton* btn : {m_sidetoneBtn, m_breakinBtn, m_apfBtn})
         btn->setStyleSheet(QString(kButtonBase) + kGreenActive);
     for (QLineEdit* edit : {m_delayEdit, m_speedEdit, m_sidetoneEdit, m_apfEdit})
@@ -1251,7 +1255,10 @@ void PhoneCwApplet::syncPhoneFromModel()
         m_micLevelSlider->setValue(m_model->micLevel());
         m_micLevelLabel->setText(QString::number(m_model->micLevel()));
     }
-    m_accBtn->setChecked(m_model->micAcc());
+    // Held, not merely set once: setSelectableMicInputs(false) unlights +ACC,
+    // and a refresh must not light a dimmed control back up from a model value
+    // that belongs to a radio whose inputs this client cannot select.
+    m_accBtn->setChecked(m_selectableMicInputs && m_model->micAcc());
     m_procBtn->setChecked(m_model->speechProcessorEnable());
 
     {

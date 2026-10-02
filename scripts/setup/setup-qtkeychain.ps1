@@ -29,12 +29,6 @@ $TarFile           = "$PSScriptRoot\..\..\third_party\qtkeychain-${QtKeychainVer
 $OutDir  = [System.IO.Path]::GetFullPath($OutDir)
 $TarFile = [System.IO.Path]::GetFullPath($TarFile)
 
-# ── Check if already set up ──────────────────────────────────────────────
-if (Test-Path "$OutDir\lib\cmake\Qt6Keychain\Qt6KeychainConfig.cmake") {
-    Write-Host "qtkeychain already set up in $OutDir" -ForegroundColor Green
-    exit 0
-}
-
 # ── Locate Qt ────────────────────────────────────────────────────────────
 # Resolve the Qt kit prefix from the first source that is set, most specific
 # first: install-qt-action's QT_ROOT_DIR, then Qt6_DIR (three levels up), then
@@ -59,6 +53,20 @@ if (-not $QtPrefix) {
     exit 1
 }
 Write-Host "Using Qt from: $QtPrefix" -ForegroundColor Cyan
+
+# ── Check if already set up ──────────────────────────────────────────────
+# The stamp records the Qt this was built against: switching Qt (a Qt online
+# installer kit → setup-qt.ps1's pinned one) must rebuild, or the library left
+# behind is an ABI mismatch against the new Qt. An install with no stamp
+# predates this check and is rebuilt once.
+$Stamp        = "$OutDir\.build-stamp"
+$StampContent = "version=$QtKeychainVersion qt=$([System.IO.Path]::GetFullPath($QtPrefix))"
+if ((Test-Path "$OutDir\lib\cmake\Qt6Keychain\Qt6KeychainConfig.cmake") -and
+    (Test-Path $Stamp) -and ((Get-Content $Stamp -Raw).Trim() -eq $StampContent)) {
+    Write-Host "qtkeychain already set up in $OutDir ($StampContent)" -ForegroundColor Green
+    exit 0
+}
+if (Test-Path $OutDir) { Remove-Item -Recurse -Force $OutDir }
 
 # ── Create staging directory ─────────────────────────────────────────────
 New-Item -ItemType Directory -Force -Path ([System.IO.Path]::GetFullPath("$OutDir\..\")) | Out-Null
@@ -111,6 +119,8 @@ if ($LASTEXITCODE -ne 0) { Write-Error "CMake install failed"; exit 1 }
 # ── Cleanup ──────────────────────────────────────────────────────────────
 Remove-Item -Recurse -Force $TempDir
 Remove-Item -Force $TarFile
+
+Set-Content -Path $Stamp -Value $StampContent -NoNewline
 
 Write-Host "qtkeychain ready in $OutDir" -ForegroundColor Green
 Write-Host "  cmake config: $OutDir\lib\cmake\Qt6Keychain\Qt6KeychainConfig.cmake"

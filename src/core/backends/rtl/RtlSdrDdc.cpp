@@ -182,8 +182,9 @@ void RtlSdrDdc::processSpectrum(const QVector<std::complex<float>>& samples)
         magOut[outIdx] = db;
     }
 
+    // The same frame is the waterfall row: RadioModel derives the row from
+    // spectrumFrameReady, so there is no second emit to make (#5678 2.5).
     emit spectrumFrameReady(0, frame);
-    emit waterfallRowReady(0, frame);
 }
 
 void RtlSdrDdc::processAudio(const QVector<std::complex<float>>& samples)

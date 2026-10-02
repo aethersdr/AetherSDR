@@ -8,6 +8,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.9.5] — 2026-09-27
+
+### Split remembers your audio, the chain windows gain live controls and noise reduction goes stereo · the ANAN-G2 gets an S-meter, noise blanker and WDSP panadapter, and the Hermes-Lite 2 hears 84 ms sooner
+
+52 merged changes from 13 human contributors, AetherClaude and one Dependabot update within that total. The operator-facing half makes split remember how you set up its audio and adds Monitor TX and Split Up. AetherRX and AetherTX get BYPASS, REC and PLAY at the foot of their stage columns, every client noise-reduction method denoises left and right independently, and a Window menu joins the menu bar. The ANAN-G2 takes the largest step since it arrived: an S-meter, a WDSP-computed panadapter at one point per pixel, the noise blanker and RF-gain attenuation. The Hermes-Lite 2 cuts receive latency by 84 ms outside CW and stops hearing its own carrier after an unkey. Underneath, the Flex wire classes move behind the backend directory, the seam's probe table is generated rather than hand-kept, and both FFTW planners are serialized.
+
+### Split, receive and transmit chains
+
+- **Split remembers your audio arrangement, with Monitor TX and Split Up (#5922).** The transmit slice is no longer born muted on every split. Unmute it, set its level, pan it and the receive slice apart, and every later split comes back the same way. Only the transmit slice's mute, level and pan are learned, plus the receive slice's pan if you moved it, and only from your own VFO, applet, keyboard and controller edits, never from TCI, CAT or radio status. Ending a split with the transmit slice muted forgets the arrangement. **Monitor TX (Hold)** is the `XFC`/`TF-SET`/`TXW` equivalent, either soloing the transmit frequency or making both slices audible for the hold. **Split Up 1 / 5 / 10 kHz** moves the transmit slice or starts a split at that offset. Right-clicking the SPLIT badge shows all of it and a way to forget what is remembered. Monitor TX is unbound by default.
+- **AetherRX and AetherTX: live controls in the stage column (#5913).** BYPASS moves out of each window's Settings dialog into the foot of the stage column, with a REC / PLAY pair above it. AetherTX's pair drives the transmit monitor. AetherRX's pair records received audio through the same routing as the VFO flag's record buttons. RX BYPASS now switches off whichever of the seven NR methods is running and restores it on release. Right-clicking AetherRX's PLAY offers **TX Playback**, which transmits the last client-side recording over the active slice, capped at the Recording section's idle timeout and ending with the transmitter released on any refusal or disconnect. The AetherRX and AetherTX launchers on the VFO flag are now always the same width.
+- The TX compressor's Drive and Phase settings are saved in and restored from channel-strip presets and AetherTX profiles. Older presets without them keep the current values (#5963).
+
+### Noise reduction and DSP
+
+- **Every client NR method denoises left and right independently (#5971).** NR4, DFNR, NNR and BNR used to fold to mono and rebuild stereo through a balance follower. A hard pan took about 5 seconds to land, and diversity receive put the same blended antenna in both ears. NR2 and MNR kept each channel's waveform but ran one noise estimate on the mix. All six now run one instance per channel, the way RN2 already did, so a pan is instant and each ear keeps its own antenna.
+- Both FFTW planners are serialized: double precision under one process-wide lock shared by NR2, WDSP, the HL2 and the ANAN, and single precision under its own lock for the RTL-SDR and NR4 (#5902).
+- WDSP patch 13 takes the worker's input before releasing a blocked host. Previously the worker could read an overwritten slot and report nothing. Production channels open non-blocking and are unaffected; the offline blocking-mode tests that went intermittently red now pass (#5960).
+- `WdspChannel` gains a settable FM detector deviation (default 5 kHz, unchanged) and runtime setters for the RX filter length and phase that keep the notch database. (#5872, #5878).
+
+### Meters, menus and panadapter
+
+- **One set of meter ballistics everywhere (#5847).** SmartMTR's ballistics are now the project's: `MeterSmoother` defaults to its 18.2 ms attack and 269 ms release, the six per-applet overrides are deleted, and `HGauge` peak markers run on SmartMTR's sliding-window engine instead of five hand-rolled hold-and-decay copies. Device-reported peaks such as the TGXL's `peak` and the radio's MICPEAK keep their own path.
+- **rigctl `STRENGTH` reports a real signal level (#5849).** It handed every hamlib client on every backend a constant −57.0 dB. It now reads the S-meter of the VFO-resolved slice. `get radio`.`txPower`, which read 0.0 W at every drive, now publishes display-smoothed measured forward power, or `null` when it is not live. `get meters`.`sLevel` answers only when exactly one slice declares an S-meter.
+- A **Window menu** between View and Help lists the open top-level windows, with Minimize, Zoom, Full Screen and Bring All to Front. Minimal Mode moves to Ctrl+Shift+M on every platform, freeing Command-M for Minimize on macOS (#5891).
+- Leaving minimal mode no longer crashes on Intel D3D11; the spectrum is shown only after the window's geometry is restored (#5916). macOS native menus no longer disappear after an automation-bridge menu lookup (#5926).
+- Band and segment zoom are gated on the radio's capability on all seven surfaces that reach them (shortcuts, MIDI, FlexControl, HID buttons, wheels and the bridge), not only the two on-screen buttons (#5875).
+- The **Glacier** waterfall palette joins the gradient choices (#5843). Radio Setup's value labels, captions and line edits follow the theme, so Default Light no longer draws near-white text on a near-white dialog (#5863, #5898). The PSK Reporter stats row is transparent on the footer surface (#5888).
+
+### CW, RTTY, Clock and TCI
+
+- **CW, RTTY and AetherClock decode the selected slice's audio (#5758).** On a Flex, assigning a DAX RX channel to the selected slice decodes that slice alone, independent of speaker gain and mute. Without one, the decoders use the shared receive stream as before, and the panel says so (`RX: shared audio`). Retuning the selected slice now resets decoder state so text from the previous signal cannot publish; operator pitch and speed locks survive. This is RFC #5468's A5 increment.
+- **TCI streaming runs on its own I/O thread (#5840).** WebSockets, RX and TX conversion and pacing move off the model thread, while protocol control, routing and every model access stay on their owner. PTT still passes through the main-thread TX coordinator. This is the first isolation stage of RFC #5682.
+
+### Amplifiers, tuners and devices
+
+- The TGXL port strips no longer label ports `RF SENSE`, a trigger mode the protocol never reports. A port's source is shown only while the tuner has a live reading on it. BYPASS → STANDBY is commanded operate-first, so it no longer flashes OPERATE on the way down (#5883).
+- Contour ShuttleXpress and ShuttlePro v2 buttons are decoded from the right bytes, so all five and all fifteen buttons report as themselves (#5931).
+
+### Hermes-Lite 2
+
+- **The band returns 84 ms sooner (#5954).** Outside CW the RX bandpass runs at minimum phase, at the same length, magnitude response and notch depth. Receive audio returns 44 ms after an unmute instead of 128 ms, which is 84 ms less latency on all SSB, AM, FM and digital receive audio, not only after an unkey. CW keeps linear phase. WDSP patch 12 plans the minimum-phase design FFTs with `FFTW_ESTIMATE`, so a minimum-phase open on an empty wisdom cache takes 10.9 s instead of 103.9 s. This closes #5498.
+- **The PA's own carrier stops reaching the demodulator after an unkey (#5850).** The receive unmute is deferred past the T/R turnaround, removing a +57 dB leak (#5497). It ships in the same release as #5954, as ruled, because on its own it lengthens the post-unkey gap. In CW full break-in the hold is skipped only when the break-in delay is shorter than the hold. #5855 adds the test that measures pre-mute audio persisting across the mute edge.
+- **Declare which HL2 variant is on the bench (#5867).** A per-radio hardware document for a bare HL2, the AK4951 companion board or a SquareSDR 2: the codec (which gates the EP2 audio slot and can feed the radio's own loudspeaker), the dither and random bits under the selected board's labels, the N2ADR filter board (RX+TX or TX-only), the gateware-driven ATU and the speaker level.
+- **An unvisited band comes up at +20 dB LNA gain on every profile (#5869).** `rfGain.defaultDb` was never written and was read back forever. It is no longer persisted or read. Profiles that carried a stuck value (the reporting station's was −6 dB) now come up **26 dB hotter** on a band not yet visited. Visited bands keep their stored gain, and no transmit path reads this value.
+- The second and later receivers' S-meters reach their slices instead of being computed and discarded (#5866). The FM repeater-duplex and CTCSS-encode controls the HL2 has no verb for are withdrawn, and DSB, CWU and CWL are declared (#5879). A radio that goes silent is asked to stream again before the link is declared down (#5882).
+- Health and telemetry: wideband ADC health rows expire when the bandscope stream stops rather than showing a frozen block as current (#5880). New counters record the substituted silence the host's TX IQ queue sends, which the radio's FIFO telemetry cannot see (#5881). Switching automatic RF gain off after a refused arm is now recorded, so the next connect does not re-arm it (#5862).
+- `Hl2Spectrum` gains power-domain frame averaging, taking the log once at emit; production still emits one frame (#5833). New test coverage for the FFTW setup lock (#5876), and `docs/HERMES.md` and the waterfall comments corrected to what landed (#5874, #5877).
+
+### Flex, Icom and ANAN
+
+- **ANAN-G2: an S-meter, a WDSP panadapter, the noise blanker and RF-gain attenuation.** The panadapter is computed with WDSP's display analyzer, averaging a ≥16384-point Kaiser-windowed FFT so no IQ is thrown away (at 192 ksps about 87% used to be). FFT AVG and Weighted average now drive it (#5814), and it returns one point per screen pixel (#5920). The S-meter publishes WDSP's average reading through arithmetic and ballistics now shared with the HL2 (#5818). The NB button runs WDSP's impulse blanker on raw IQ and survives reconnects and rate changes (#5824). RF Gain from −31 to 0 dB drives the ADC step attenuator, restored per radio (#5820). The G2 remains receive-only. **On upgrading**, G2 panadapter tones read about 7.4 dB lower than before (a test tone that read −6.0 dB now reads −13.4 dB; the G2 is not dBm-calibrated yet), so a saved reference level or waterfall black level wants re-trimming once (#5814).
+- **The IC-7300MK2 connects as a supported radio (#5871).** Over built-in Ethernet/RS-BA1, a radio identified by CI-V as an IC-7300MK2 no longer shows the EXPERIMENTAL badge or disclaimer (RFC #5517). Every other Icom model keeps the experimental treatment. Connect-time Flex-only writes are gated on the Flex command plane, so they no longer raise unsupported-control warnings.
+
+### Backend seam and aetherd
+
+- The Flex wire classes (`RadioConnection`, `PanadapterStream`, `SmartLinkClient`, `WanConnection`, `CommandParser`) move into `src/core/backends/flex/`. Demo constants move into a backend-only header, so `RadioConnection` no longer includes the simulator. This is #5554 §2.6 slice 1 (#5834).
+- The seam probe table is generated from `IRadioBackend.h`, with a `Static checks` gate, so a declared signal cannot go unprobed (#5897). #5865 repaired the `main` red that motivated it. The capability-record ratchet no longer loses the bool declared after an accessor (#5860).
+
+### Project and packaging
+
+- The Windows installer compiles whisper/ggml-vulkan from source, so vendored ASR patches reach Windows releases; the prebuilt asset remains the fallback (#5816).
+- `/release-prep` and `/tag-release` are checked in as project skills (#5864, #5885), owned by `@aethersdr/infrastructure` (#5884).
+- `jurplel/install-qt-action` moves to 4.4.1 (#5955).
+
+### Contributors
+
+Thanks to **@on8st** (23 commits — the Hermes-Lite 2 unkey, S-meter, capability, watchdog and health fixes, the FFTW planner locks, WDSP patch 13 and setters, the rigctl and meter repairs, generated seam probes and theme-token fixes), **@ten9876** (8 commits — maintainer; split audio memory with Monitor TX and Split Up, AetherRX/AetherTX live controls and TX Playback, stereo noise reduction, HL2 minimum phase, SmartMTR ballistics and the release skills), **@tropo1234** (5 commits — the ANAN-G2 S-meter, WDSP panadapter, noise blanker, attenuation and per-pixel points), **@jensenpat** (3 commits — TCI I/O isolation, IC-7300MK2 supported connection and the Window menu), **@rfoust** (2 commits — the Flex wire-class relocation and macOS menus), **@G6PWY-Chris** (1 commit — the seam probe repair), **@jcmerg** (1 commit — HL2 variant declaration), **@nigelfenton** (1 commit — the minimal-mode exit crash), **@Ozy311** (1 commit — CW, RTTY and Clock on typed PCM), **@rnash2** (1 commit — compressor Drive and Phase in presets), **@skerker** (1 commit — Windows whisper from source), **@sq9fk** (1 commit — Contour Shuttle buttons), **@WA8PAM** (1 commit — TGXL port labels and STANDBY order), **@aethersdr-agent** (2 commits — AetherClaude orchestrator; the Glacier palette and the PSK Reporter stats row). Dependabot contributed one dependency update. Counts cover primary commit authors; co-author credit remains in the commit history.
+
+Welcome to first-time contributors **@jcmerg**, **@rnash2**, **@sq9fk**!
+
+73, Jeremy KK7GWY & Claude (AI dev partner)
+
 ## [v26.9.4] — 2026-09-20
 
 ### AetherRX and AetherTX as one window each, Neural Noise Reduction and global precipitation · the Hermes-Lite 2 transmits through WDSP and reads its meters honestly

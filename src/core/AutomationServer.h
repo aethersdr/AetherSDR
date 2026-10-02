@@ -41,198 +41,101 @@ class QsoRecorder;
 class AetherClockModel;
 class TxPointerAction;
 
-// In-app, agent-first automation bridge (issue #3646, Phases 0-1).
-//
-// Exposes a tiny line/JSON command channel over a QLocalServer so an external
-// agent can introspect, drive, and capture the GUI without driving OS
-// accessibility APIs or pixel-hunting through VNC. It is off by default;
+// In-app, agent-first automation bridge (#3646). A line/JSON command channel
+// over a QLocalServer that lets an external agent introspect, drive and capture
+// the GUI without OS accessibility APIs or pixel-hunting. Off by default;
 // AETHER_AUTOMATION or the persisted operator opt-in starts it. Current-user
-// endpoint access, optional token authentication and TX permission are separate
-// controls; enabled sessions remain an intentional control surface.
+// endpoint access, optional token auth and TX permission are separate controls.
 //
-// Phase 0 verbs (read-only introspection + capture):
+// Requests are newline-delimited, either a bare command ("invoke masterVolume
+// setValue 30") or a JSON object ({"cmd":"invoke","target":"masterVolume",
+// "action":"setValue","value":"30"}); each yields exactly one compact-JSON line.
 //
-//   dumpTree                       -> ARIA-style JSON snapshot of every
-//                                     top-level QWidget hierarchy (objectName,
-//                                     class, accessibleName, role/value,
-//                                     enabled, visible, global geometry).
-//   grab <target> [path]           -> PNG capture of a single widget, resolved
-//                                     by objectName, class name, or
-//                                     accessibleName. Reads back the GPU
-//                                     framebuffer for the QRhi panadapter so
-//                                     the live spectrum is captured correctly.
+// Verb catalog (docs/automation-bridge.md is the full reference):
 //
-// Phase 1 verbs (drive + assert):
-//
-//   invoke <target> <action> [v]   -> drive a control deterministically:
-//                                     click / toggle / setChecked / setValue /
-//                                     setText / setCurrentText / setCurrentIndex /
-//                                     selectRow / showPopup / hidePopup (combo
-//                                     drop-down held open; container named
-//                                     aetherComboPopup). SAFETY: refuses any control
-//                                     marked as transmit-keying (markTxKeying() /
-//                                     the "aetherTxKeying" property — MOX/PTT,
-//                                     TUNE, ATU, CWX send, packet/APRS send)
-//                                     unless AETHER_AUTOMATION_ALLOW_TX is set, so
-//                                     the bridge can never key a live radio by
-//                                     accident. A button-scoped name heuristic is
-//                                     a logged fallback, kept narrow (mox/ptt/
-//                                     transmit/cwx) so RX-only buttons like "Tune
-//                                     Now" aren't false-blocked (#3918); setpoint
-//                                     sliders/combos are never blocked.
-//   invoke <view> selectRow <n>    -> select row n of an item view (QTableWidget /
-//                                     QTreeWidget / QListWidget) so the dialog's
-//                                     row-scoped buttons (Tune/Edit/Remove/Disable)
-//                                     become drivable; echoes selectedRow[Text].
-//   invoke <view> setCurrentText <label>
-//                                  -> recursively select an item-view entry by
-//                                     visible label. This drives hierarchical
-//                                     navigation such as Radio Setup categories.
-//   shortcut <id>                  -> invoke a registered ShortcutManager action
-//                                     by id, without requiring a physical key binding.
-//   get <model> [selector] [prop]  -> live JSON snapshot of a model:
-//                                     audio | dsp | radio | transmit |
-//                                     slice <id|active|tx> | slices |
-//                                     pan <panId|active> | pans |
-//                                     flags [sliceId|all] | waveforms | kiwi.
-//                                     With a trailing property name,
-//                                     returns just that field.
-//                                     Assert on state without screenshots.
-//                                     `dsp` is the client-side AetherDSP state:
-//                                     the six AudioEngine noise-reduction modules
-//                                     (NR2/NR4/MNR/DFNR/RN2/BNR) with active
-//                                     method, per-module enabled/available, and
-//                                     tuning values — the client-side counterpart
-//                                     to the radio-side nr/nb/anf in `get slice`.
-//   waveform start dstar          -> start the local AetherDV service (no TX).
-//   waveform stop                 -> stop the local service.
-//   waveform resync               -> request fresh raw slice mode lists.
-//   waveform unregister <name>    -> remove a radio runtime registration;
-//                                     response and raw mode-list verification
-//                                     are exposed through `get waveforms`.
-//   connect list                   -> list currently discovered local radios
-//   connect show                   -> show/raise the Connect to Radio dialog
-//   connect hide                   -> hide the Connect to Radio dialog
-//   connect local first            -> request a real local-radio connection via
-//                                     ConnectionPanel/MainWindow/RadioModel
-//   connect local serial <serial>  -> same, selecting by discovered serial
-//   connect ip <host-or-ip>        -> route through the manual Connect by IP
-//                                     probe path, then connect if the probe finds
-//                                     a radio
-//   connect wait <timeout_ms>      -> hold the response until RadioModel reports
-//                                     connected or the timeout expires
-//   disconnect                     -> request the normal user disconnect path
-//
-// Phase 2 verbs (fidelity — reach code paths invoke/get can't, #3646):
-//
-//   invoke <le> submit [value]     -> commit a QLineEdit: optional setText then
-//                                     fire returnPressed (the retune/login/send
-//                                     trigger). setText alone stays side-effect-
-//                                     free, so a plain value-set never logs in /
-//                                     connects / sends to a live cluster.
-//   invoke <label> trigger         -> now resolves a QAction anywhere in the menu
-//                                     bar even while its menu is CLOSED, so
-//                                     menu-launched dialogs (AetherControl…,
-//                                     Network…, MQTT…, Radio Setup…, Connect…)
-//                                     and Zoom are drivable headlessly.
-//   slice tx <id>                  -> make slice <id> the TX slice (the external-
-//                                     split transition). Set-only, radio-auth.
-//   key ptt on|off | key mox       -> drive PTT / MOX via the model — the space-
-//                                     bar PTT filter and mox_toggle shortcut that
-//                                     invoke can't target. KEYING is gated by
-//                                     AETHER_AUTOMATION_ALLOW_TX (unkey is not).
-//   station <name>                 -> set the per-GUI-client station name shown
-//                                     to other MultiFlex clients (never the radio
-//                                     callsign). Auto-applied to the agent name
-//                                     on connect, restored on stop.
-//   resize <w> <h> [target]        -> resize a top-level window (default full
-//                                     size) so the panadapter x_pixels reaches a
-//                                     realistic value for headless render tests.
-//   window <state> [target]        -> drive a window's state: maximize | restore
-//                                     | minimize | fullscreen. resize only set
-//                                     explicit geometry, so an un-maximize was
-//                                     unprovable; dumpTree now carries
-//                                     `windowState` to assert it (#3918).
-//   menu list | menu open <name>   -> enumerate the menu bar / pop a menu for a
-//                                     follow-up grab/dumpTree.
-//   whoami                         -> {pid, socket, label, station} — identify
-//                                     THIS instance among concurrent bridges.
-//
-// Phase 2b verbs (observability + reach, this batch — #3646):
-//
-//   grab pan <index> [path]        -> capture a SPECIFIC pan's raw spectrum
-//                                     surface (by SpectrumWidget::panIndex) in
-//                                     a multi-pan layout; plain `grab
-//                                     SpectrumWidget` only ever returns the
-//                                     first one.
-//   grab pan-visible <index> [path]-> capture the operator-visible pan applet,
-//                                     including VFO/flag child overlays above
-//                                     the GPU surface.
-//   close <target>                 -> close the target's top-level window
-//                                     (deferred; reaches the frameless title-bar
-//                                     close that invoke-click can't).
-//   drag <target> <dx> <dy>        -> synthesize press→move→release so resize
-//                                     grips / slider handles are provable end-to-
-//                                     end. `mouse` is an alias.
+//   dumpTree                        ARIA-style snapshot of every top-level widget
+//                                   tree: objectName, class, accessibleName,
+//                                   role/value, enabled, visible, geometry,
+//                                   toolTip, windowState, combo items/currentIndex,
+//                                   pan panIndex, checkable text + checked.
+//   grab <target> [path]            PNG of one widget (objectName, class or
+//                                   accessibleName); GPU readback for the QRhi pan.
+//   grab pan <index> [path]         one pan's raw spectrum surface in a multi-pan
+//                                   layout (plain `grab SpectrumWidget` returns
+//                                   only the first).
+//   grab pan-visible <index> [path] the operator-visible pan applet, including
+//                                   VFO/flag overlays above the GPU surface.
+//   invoke <target> <action> [v]    click / toggle / setChecked / setValue /
+//                                   setText / setCurrentText / setCurrentIndex /
+//                                   selectRow / showPopup / hidePopup / trigger /
+//                                   submit. `trigger` resolves a QAction anywhere
+//                                   in the menu bar even with its menu closed;
+//                                   `submit` does setText then returnPressed
+//                                   (setText alone stays side-effect-free);
+//                                   `setCurrentText` on an item view selects
+//                                   recursively by visible label.
+//                                   SAFETY: refuses controls marked transmit-keying
+//                                   (markTxKeying() / "aetherTxKeying": MOX/PTT,
+//                                   TUNE, ATU, CWX send, packet/APRS send) unless
+//                                   AETHER_AUTOMATION_ALLOW_TX is set. A narrow
+//                                   button-name fallback (mox/ptt/transmit/cwx) is
+//                                   logged; setpoint sliders/combos are never
+//                                   blocked (#3918).
+//   shortcut <id>                   invoke a ShortcutManager action by id.
+//   get <model> [selector] [prop]   live JSON of audio | dsp | radio | transmit |
+//                                   slice <id|active|tx> | slices | pan <id|active>
+//                                   | pans | flags [sliceId|all] | waveforms | kiwi;
+//                                   a trailing property returns just that field.
+//                                   `dsp` is the client-side NR modules (NR2/NR4/
+//                                   MNR/DFNR/RN2/BNR), the counterpart to the
+//                                   radio-side nr/nb/anf in `get slice`.
+//   waveform start dstar | stop | resync | unregister <name>
+//                                   local AetherDV service (no TX); verify via
+//                                   `get waveforms`.
+//   connect list | show | hide | local first | local serial <s> | ip <host> |
+//           wait <timeout_ms>       discovery and connection through the normal
+//                                   ConnectionPanel/MainWindow/RadioModel path.
+//   disconnect                      the normal user disconnect path.
+//   slice tx <id>                   make <id> the TX slice. Set-only, radio-auth.
+//   key ptt on|off | key mox        PTT/MOX via the model; keying is gated by
+//                                   AETHER_AUTOMATION_ALLOW_TX (unkey is not).
+//   station <name>                  per-GUI-client station name shown to other
+//                                   MultiFlex clients (never the callsign);
+//                                   auto-set to the agent name, restored on stop.
+//   resize <w> <h> [target]         resize a top-level window (realistic x_pixels
+//                                   for headless render tests).
+//   window <state> [target]         maximize | restore | minimize | fullscreen.
+//   menu list | menu open <name>    enumerate / pop a menu-bar menu.
+//   whoami                          {pid, socket, label, station} of this instance.
+//   close <target>                  close the target's top-level window (deferred).
+//   drag <target> <dx> <dy>         press→move→release (`mouse` is an alias).
 //   dragAt <target> <x> <y> <dx> <dy> [modifiers]
-//                                  -> drag from a target-local point, optionally
-//                                     with control/meta/shift/alt held. This
-//                                     reaches modifier-only custom-widget paths.
-//   gesture begin <target> [x y]   -> hold a real left-button press open across
-//   gesture move <dx> <dy>            requests on the SAME client connection;
-//   gesture end [dx dy]               end/cancel/disconnect/error/timeout always
-//   gesture cancel|status             release it. Enables delayed-event proof.
-//   showMenu <target>              -> pop a QToolButton/QPushButton drop-down,
-//                                     posted onto the GUI loop with the window
-//                                     raised (crash-safe on backgrounded macOS).
-//                                     `openMenu` is an alias.
-//   contextMenu <target> [x y]     -> trigger a custom right-click context menu
-//                                     (CustomContextMenu / overridden
-//                                     contextMenuEvent) via a synthesized
-//                                     QContextMenuEvent; deferred, then dumpTree
-//                                     to read it and invoke to drive it.
-//   rightClick <target> [x y]      -> synthesize a real right-button press for
-//                                     widgets whose context menus live in
-//                                     mousePressEvent (SpectrumWidget);
-//                                     deferred, then dumpTree/invoke.
-//   hitTest <target> [x y]         -> report Qt's widgetAt()/childAt() owner for
-//                                     a target-local point. Read-only proof for
-//                                     transparent overlays and input masks.
-//   pan add                        -> create a new panadapter (panafall); the
-//                                     only UI path is an unaddressable QLabel.
-//   pan close <id|index|active|all>-> tear down a panadapter regardless of how it
-//                                     was opened (sends display pan remove AND
-//                                     display panafall remove).
+//                                   drag from a target-local point with optional
+//                                   control/meta/shift/alt held.
+//   gesture begin <target> [x y] | move <dx> <dy> | end [dx dy] | cancel | status
+//                                   hold a real left-button press across requests
+//                                   on one connection; end/cancel/disconnect/error/
+//                                   timeout always release it.
+//   showMenu <target>               pop a QToolButton/QPushButton drop-down on the
+//                                   GUI loop, window raised (`openMenu` alias).
+//   contextMenu <target> [x y]      synthesized QContextMenuEvent (deferred).
+//   rightClick <target> [x y]       real right-button press for menus that live in
+//                                   mousePressEvent (SpectrumWidget).
+//   hitTest <target> [x y]          Qt's widgetAt()/childAt() owner for a point.
+//   pan add | pan close <id|index|active|all>
+//                                   create a panafall / tear one down (sends both
+//                                   display pan remove and display panafall remove).
 //   panmessage add|remove|clear|list
-//                                  -> inject/read panadapter overlay messages
-//                                     for deterministic UI screenshots; add
-//                                     accepts tone=info|warning, timed messages
-//                                     expose countdown in snapshots.
+//                                   inject/read pan overlay messages (tone=info|
+//                                   warning; timed messages expose a countdown).
 //   dss snapshot|reset|inject|scrollback|live
-//                                  -> automation-only 3D stacked-trace /
-//                                     waterfall scrollback proof surface.
-//                                     Injects synthetic RX rows through the
-//                                     normal SpectrumWidget row paths and reads
-//                                     compact DSS/waterfall counters.
-//   dumpTree (extended)            -> nodes now carry toolTip, and QComboBox
-//                                     nodes carry items[]/currentIndex and pans
-//                                     carry panIndex, all assertable without
-//                                     stepping a control. A checkable button
-//                                     also carries its text + a checked bool, so
-//                                     the six DSP method buttons (NR2 … BNR) are
-//                                     identifiable and readable from the tree
-//                                     instead of every one reporting only
-//                                     "checked"/"unchecked" (#3856).
+//                                   automation-only 3D stacked-trace / waterfall
+//                                   scrollback proof surface fed through the normal
+//                                   SpectrumWidget row paths.
 //
-// Requests are newline-delimited. Each line is either a bare command
-// ("dumpTree", "grab SpectrumWidget /tmp/pan.png", "invoke masterVolume
-// setValue 30", "get slice active") or a JSON object ({"cmd":"invoke",
-// "target":"masterVolume","action":"setValue","value":"30"}). Each request
-// yields exactly one compact-JSON response line.
-//
-// Keeping this separate from TciServer is deliberate — TCI has external
-// protocol-compat constraints (eesdr-tci aborts on unknown commands) and test
-// verbs must never leak into a radio-control protocol.
+// Kept separate from TciServer on purpose: TCI has external protocol-compat
+// constraints (eesdr-tci aborts on unknown commands), and test verbs must never
+// leak into a radio-control protocol.
 class AutomationServer : public QObject {
     Q_OBJECT
 
@@ -520,17 +423,11 @@ private:
     // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
     // under a target-local point according to childAt() and QApplication::widgetAt().
     QJsonObject doHitTest(const QString& target, const QString& value) const;
-    // clickAt [<target>] <x> <y>: synthesize a real left-click at a point. With no
-    // target, x/y are GLOBAL screen coordinates (matching dumpTree geometry); with
-    // a target they are LOCAL to that widget. Generic fallback for when name/text
-    // matching is ambiguous (e.g. several tiles share accessibleName
-    // "containerClose" and only the first is reachable by invoke). TX-gated on the
-    // whole ancestor chain; disabled widgets and (with the power ceiling armed)
-    // the RF/Tune power sliders are refused.
-    // A coordinate click, optionally a double-click. Double sends the full Qt
-    // sequence (Press, Release, DblClick, Release) — Qt does NOT promote two
-    // synthetic press/release pairs into a double-click, so a caller cannot
-    // build one out of two clickAt calls. (#5068)
+    // clickAt [<target>] <x> <y>: a real left-click (or double) at a point; x/y are
+    // GLOBAL (dumpTree geometry) without a target, LOCAL with one. TX-gated on the
+    // whole ancestor chain; disabled widgets and (power ceiling armed) the RF/Tune
+    // power sliders are refused. Double sends Press, Release, DblClick, Release: Qt
+    // never promotes two synthetic clicks into a double-click. (#5068)
     enum class ClickKind { Single, Double };
     QJsonObject doClickAt(const QString& target, const QString& value,
                           ClickKind kind = ClickKind::Single);
@@ -567,19 +464,14 @@ private:
     QJsonObject doDss(const QString& action,
                       const QString& target,
                       const QString& value) const;
-    // Radio-side display-stream inventory / leak detector (#3856).
-    //   streams        — Layer A: registered pan/wf streams + UDP "orphan"
-    //                     streams the radio is still transmitting that we let go.
-    //   streams radio   — Layer B: the radio-authoritative display-object set
-    //                     (pans + waterfalls) classified ours/foreign/orphan,
-    //                     plus leaked waterfalls (parent pan gone) — catches the
-    //                     resource-level lingering Layer A can't see.
-    //   streams resync  — re-subscribe (sub pan all) to force the radio to
-    //                     re-dump every allocated display object, refreshing the
-    //                     Layer-B maps to the radio's present-tense set; re-poll
-    //                     `streams radio` after it settles to confirm a lingering
-    //                     waterfall the client view had already purged.
-    //   streams reset   — clear the Layer-A orphan tally to re-baseline.
+    // Radio-side display-stream leak detector (#3856).
+    //   streams        - registered pan/wf streams + UDP streams still arriving for
+    //                    ids we released.
+    //   streams radio  - the radio's display objects classified ours/foreign/orphan,
+    //                    plus waterfalls whose parent pan is gone.
+    //   streams resync - `sub pan all` to make the radio re-dump its display objects;
+    //                    re-poll `streams radio` after it settles.
+    //   streams reset  - clear the orphan tally to re-baseline.
     QJsonObject doStreams(const QString& action);
     // Cross-platform process + subsystem memory profiler (the `memprofile`
     // verb — distinct from the `memory` frequency-recall verb). `start` samples
@@ -775,6 +667,13 @@ private:
     QJsonObject doMark(const QString& text);
     struct LogEvent;
     static QJsonObject logEventToJson(const LogEvent& e);  // redacts on egress
+    // `ping`'s `build` object (#5804). Takes the values rather than reading the
+    // generated header itself, so a test can drive it with fields that differ:
+    // in a clone with no reachable tag, describe and sha are the same string and
+    // the live reply cannot show which key carries which.
+    static QJsonObject buildIdentityJson(const QString& describe, const QString& sha,
+                                         const QString& baseline, int commitsSinceTag,
+                                         bool dirty);
 
     // Resolve a target string to a widget, including pan-index scoped targets:
     // exact objectName first, then class name (with or without namespace) or
@@ -941,16 +840,9 @@ private:
     };
     std::vector<std::shared_ptr<ConnectWait>> m_connectWaits;
 
-    // The last deferred connect/disconnect failure, and when it happened.
-    //
-    // Every connect verb schedules its real work onto the GUI event loop and
-    // replies {ok:true, deferred:true} before that work runs, so a failure
-    // afterwards existed only as a qCWarning — invisible to the client that
-    // asked (#4912). Keeping the last one here lets `connect wait` hand it
-    // back, which is where a caller is already looking when a connect does not
-    // land. The reply carries the error's AGE, not its timestamp, so a stale
-    // failure from a previous attempt is distinguishable from this one's
-    // without the caller needing a clock of its own.
+    // The last deferred connect/disconnect failure (verbs reply before the work runs),
+    // handed back by `connect wait` (#4912). The reply carries its AGE so a stale
+    // failure is distinguishable without a client clock.
     QString m_lastConnectError;
     qint64 m_lastConnectErrorMs{-1};
     // answerPendingWaits: whether this failure should complete outstanding

@@ -61,24 +61,15 @@ void writeProfileDocument(QXmlStreamWriter& xml, const QVector<MidiBinding>& bin
     xml.writeEndDocument();
 }
 
-// ── SmartSDR iOS/Mac ".map" import ──────────────────────────────────────────
-//
-// The ".map" is the mapping file consumed by the SmartSDR iOS/Mac family's
-// own Import-map tool and published per device by controller vendors
-// (e.g. Lynovation's CTR2 config packages). Plain ASCII, "#"-headed
-// sections, one assignment per line:
-//
+// SmartSDR iOS/Mac ".map" import (the format controller vendors publish, e.g.
+// Lynovation CTR2 packages). ASCII, "#"-headed sections, one assignment per line:
 //     # Controls
 //     C100=freq;active          C<CC#> = <function>[;flags]
 //     # Buttons
 //     B20=leftpaddle            B<note#> = <function>[;flags]
-//     # LEDs                    (device feedback — not bindings)
-//
-// The function vocabulary is SmartSDR's; this table carries the verified
-// CTR2-MIDI + CTR2-Quad vocabulary. Functions absent here are reported as
-// named skips, so growing coverage is a data change only. relativeCc marks
-// functions whose CC values are relative steps (the VFO knob) rather than
-// absolute levels.
+//     # LEDs                    (device feedback, not bindings)
+// This table holds the verified CTR2-MIDI + CTR2-Quad vocabulary; unknown
+// functions are reported as named skips. relativeCc marks relative-step CCs.
 struct MapFunctionEntry {
     const char* function;
     const char* paramId;
@@ -245,16 +236,9 @@ QVector<MidiBinding> parseSmartSdrMap(const QByteArray& bytes,
                 result.skippedUnknownParam << note;
         };
 
-        // A section we know carries device feedback is never a binding, and
-        // vendors key those in their own dialect ("L1=", "LED1="), so they are
-        // not ours to key-validate — reporting them beats failing the file.
-        //
-        // Counted per section rather than named per row: every row under a
-        // known feedback header is the same kind of thing and none of them can
-        // ever bind, so a device with sixty LEDs would otherwise put sixty
-        // lines in the details list saying nothing the first one didn't. Rows
-        // under a header we *couldn't read* get named individually below,
-        // because there the operator does need to see which row it was.
+        // Known device-feedback sections never bind and use vendor key dialects ("L1=",
+        // "LED1="), so they are counted per section rather than validated or listed per
+        // row; rows under an unreadable header are named individually below.
         if (section == Section::NonBinding) {
             ++nonBindingRows[sectionLabel];
             continue;
@@ -722,18 +706,11 @@ MidiImportResult MidiSettings::importProfile(
 {
     MidiImportResult result;
 
-    // A profile is kilobytes — the vendor CTR2-Quad map is a few. Two guards,
-    // because they cover different failures and neither covers the other:
-    //
-    //  1. Regular files only. QFile::size() reports 0 for character devices,
-    //     FIFOs and most /proc entries, so a size check alone lets exactly the
-    //     files with no end through. Pointing the picker at /dev/zero used to
-    //     read until the kernel OOM-killed the app (74 GB VM, no dialog, no log
-    //     line); a FIFO hung in the read forever. Principle VII: a parser must
-    //     not crash, hang, or over-allocate on the input it is handed.
-    //  2. A bounded read of one byte past the cap. This is what enforces the
-    //     size limit — checking size() first would re-trust the same number
-    //     guard 1 exists because we cannot trust.
+    // Two guards on profile size (kilobytes in practice):
+    //  1. Regular files only: QFile::size() is 0 for devices, FIFOs and /proc, which
+    //     would read forever (/dev/zero OOM, FIFO hang).
+    //  2. A bounded read of one byte past the cap enforces the limit without
+    //     trusting size().
     const QFileInfo info(filePath);
     if (!info.isFile()) {
         result.errors << QStringLiteral("%1 is not a regular file.")
@@ -796,16 +773,10 @@ MidiImportResult MidiSettings::importProfile(
     if (bindings.isEmpty())
         return result; // parsed, but every row was a named skip — nothing to store
 
-    // Store name = file base name; never overwrite an existing profile. The
-    // prompt-vs-suffix collision policy is an open maintainer call, and a
-    // suffix is the reversible default. Dotted names round-trip through the
-    // store now that it lists via completeBaseName() (#4974), so the old
-    // dots-to-underscores substitution is gone.
-    //
-    // completeBaseName() operates on fileName(), so any directory component of
-    // the chosen path is already stripped: "../../evil.map" yields "evil" —
-    // and the store rejects separator-bearing names itself (#4975), so a name
-    // taken from anywhere else is guarded too.
+    // Store name = file base name; never overwrite an existing profile (a suffix is
+    // the reversible default). Dotted names round-trip (#4974). completeBaseName()
+    // strips directories ("../../evil.map" -> "evil"), and the store rejects
+    // separator-bearing names itself (#4975).
     QString name = QFileInfo(filePath).completeBaseName().trimmed();
     // Not just isEmpty(): a file named "...map" derives ".." here, which the
     // store rightly refuses — without this fallback the refusal surfaces as a

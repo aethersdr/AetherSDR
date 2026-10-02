@@ -76,17 +76,10 @@ std::uint64_t IcomCivScheduler::enqueue(Request request, std::int64_t nowMs)
         ++currentGeneration;
     }
 
-    // CLAMP BEFORE COALESCING, not after.  The loop below compares this
-    // against the notBeforeMs of queued entries, which were clamped to a real
-    // monotonic timestamp when THEY were enqueued.  Comparing those against an
-    // unclamped 0 — the default every periodic producer passes — made the
-    // "an equal-or-better one is already queued" test below always false, so a
-    // duplicate erased and re-pushed the queued entry instead of collapsing
-    // into it.  That reset enqueuedAtMs, and enqueuedAtMs is what
-    // effectivePriority() ages on: any group re-queued at or faster than
-    // kPriorityAgingMs (onLinkTick re-queues NR/NB/notch every 1000 ms) could
-    // never age at all, and an Operator confirmation read was demoted to
-    // Control by the next poll tick that touched the same register.
+    // Clamp BEFORE coalescing: queued entries hold clamped notBeforeMs, so comparing
+    // against an unclamped 0 makes the "equal-or-better already queued" test fail,
+    // re-pushing the entry and resetting enqueuedAtMs — which effectivePriority()
+    // ages on, so a request re-queued faster than kPriorityAgingMs would never age.
     if (request.notBeforeMs < nowMs) {
         request.notBeforeMs = nowMs;
     }
@@ -203,18 +196,11 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
         return std::nullopt;
     }
 
-    // Two opposing pressures, both measured on the ready queue.
-    //
-    // meterOverdue: a visible meter has been waiting longer than its freshness
-    // budget, so background aging should stand down.
-    //
-    // backgroundStarved: the ceiling on that stand-down. A meter set that
-    // replenishes faster than the link drains it keeps meterOverdue true
-    // forever, and a floor that never lifts is not pacing — it is the
-    // starvation the aging rule exists to prevent, reappearing on the other
-    // side. Measured from the LATER of the request's own enqueue and the last
-    // background dispatch, so it is a rate limit on background work rather
-    // than a queue-age trigger that a backlog would latch permanently on.
+    // meterOverdue: a visible meter has waited past its freshness budget, so
+    // background aging stands down.
+    // backgroundStarved: the ceiling on that stand-down, measured from the LATER of
+    // the request's enqueue and the last background dispatch, so it rate-limits
+    // background work instead of latching on under a backlog.
     bool meterOverdue = false;
     bool backgroundStarved = false;
     for (const Queued& queued : m_queue) {
@@ -310,20 +296,11 @@ IcomCivScheduler::Priority
 IcomCivScheduler::effectivePriority(const Queued& request, std::int64_t nowMs,
                                      bool yieldToMeters) const noexcept
 {
-    // Aging lets background reconciliation make progress under meter load,
-    // but only one background request may win before the next ready meter.
-    // Otherwise an old control burst drains in FIFO order ahead of every TX
-    // meter, creating a gap even on a radio that answers promptly. Higher
-    // priority PTT/operator/emergency dispatches do not consume the meter turn.
-    // On slower dispatch loops, even alternating can exceed freshness budgets,
-    // so an overdue meter stands background aging down as well.
-    //
-    // BOTH OF THOSE ARE DELAYS, NEVER A HOLD. takeNext() lifts the floor again
-    // once kBackgroundStarvationCeilingMs has passed with no background
-    // dispatch: on a link whose meters replenish faster than it drains them,
-    // an overdue meter is always queued, and a floor conditioned on that alone
-    // would stop control reconciliation and the startup snapshot outright
-    // rather than merely deferring them.
+    // Aging lets background reconciliation progress under meter load, but only one
+    // aged background request may win before the next ready meter (PTT/operator/
+    // emergency dispatches don't consume the meter turn), and an overdue meter stands
+    // aging down. Both are DELAYS, never a hold: takeNext() lifts the floor once
+    // kBackgroundStarvationCeilingMs passes with no background dispatch.
     const int base = static_cast<int>(request.request.priority);
     if (base <= static_cast<int>(Priority::ActiveMeter)) {
         return request.request.priority;

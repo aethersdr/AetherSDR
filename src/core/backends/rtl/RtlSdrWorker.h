@@ -13,21 +13,16 @@ struct rtlsdr_dev;
 
 namespace AetherSDR::rtl {
 
-// Worker thread that manages the asynchronous USB read loop via rtlsdr_read_async().
-// Converts 8-bit unsigned USB I/Q samples to float complex samples and runs RtlSdrDdc
-// processing off the main thread.
+// Runs rtlsdr_read_async() and RtlSdrDdc off the main thread (u8 I/Q → float).
 //
-// Deadlock Prevention (§ Hazards #1):
-// rtlsdr_read_async() blocks until rtlsdr_cancel_async() is called.
-// Calling cancel before the callback loop starts causes a deadlock.
-// This class tracks m_readerRunning and uses a bounded QThread::wait(5000) on stop.
+// Deadlock prevention (§ Hazards #1): read_async blocks until cancel_async, and
+// a cancel issued just before the loop starts is lost, so stopReading() repeats
+// the cancel every 100 ms for up to 5 s.
 //
-// Thread Safety (§ Hazards #2):
-// rtlsdr_set_center_freq(), rtlsdr_set_tuner_gain(), and rtlsdr_set_direct_sampling()
-// are USB control transfers that block for ~100-300ms. They MUST NOT be called on the
-// main thread. Use the setCenterFrequency/setTunerGain/setDirectSampling slots which
-// are dispatched via QMetaObject::invokeMethod(Qt::QueuedConnection) from the backend.
-// The librtlsdr callbacks serialize with read_async, so there is no USB contention.
+// Thread safety (§ Hazards #2): set_center_freq / set_tuner_gain /
+// set_direct_sampling are USB control transfers (~100-300 ms) that fail or
+// deadlock inside the read callback. The setters store the request atomically
+// and cancel read_async; run() applies it between async-read sessions.
 class RtlSdrWorker : public QThread {
     Q_OBJECT
 
@@ -62,7 +57,6 @@ signals:
 
     // Relayed from RtlSdrDdc (cross-thread queued connection to main thread)
     void spectrumFrameReady(int panId, const QByteArray& frame);
-    void waterfallRowReady(int panId, const QByteArray& row);
     void audioFrameReady(const QByteArray& pcm);
 
     // USB control completion, emitted only after the transfer has run between

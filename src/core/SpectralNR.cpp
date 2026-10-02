@@ -264,17 +264,9 @@ std::string wisdomTempPathForDirectory(const std::string& directory)
 }
 
 #ifdef HAVE_FFTW3
-// DELIBERATELY NOT SELF-GUARDING — do not "fix" this by taking
-// fftwPlannerLock() here. fftw_export_wisdom_to_filename touches the
-// process-global wisdom store and does need the lock, but EVERY caller
-// already holds it, and one of them holds it ACROSS this call: the Windows
-// Thetis branch of generateWisdom() invokes this from inside its own lock
-// scope. fftwPlannerLock() hands out a plain std::mutex, which is not
-// recursive, so making this helper acquire the lock itself would deadlock on
-// Windows and nowhere else — a platform this tree does not build in CI.
-// Neither half of that was written down before #5895; it is written down now.
-//
-// CALLER MUST HOLD fftwPlannerLock().
+// CALLER MUST HOLD fftwPlannerLock(). Not self-guarding: the Windows Thetis
+// branch of generateWisdom() calls this inside its own lock scope, and the
+// lock is a non-recursive std::mutex (#5895).
 bool exportWisdomAtomically(const std::string& directory)
 {
     const std::string wisdomFile = wisdomPathForDirectory(directory);
@@ -402,42 +394,13 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate, int overlap,
     m_gainIm.resize(m_msize);
 
 #ifdef HAVE_FFTW3
-    // Create plans — uses wisdom if available for optimal performance.
-    // FFTW_MEASURE is used here: fast enough for the NR2 working sizes without
-    // prior wisdom, and will use wisdom when it's been generated.
-    //
-    // ONE PROCESS, ONE PLANNER, ONE LOCK. This class used to guard these two
-    // plans with a private static mutex of its own (#467, filed when "all
-    // FFTW usage is in SpectralNR.cpp" was still true). It stopped being true
-    // when WDSP was vendored: WdspChannel, Hl2Spectrum and AnanPanAnalyzer all
-    // reach the same process-global, double-precision planner, and two
-    // mutexes over one planner serialise nothing (#5895). See
-    // core/dsp/FftwPlannerLock.h — the lock is FFTW's, not any one class's.
-    //
-    // The window is one connect, and the two sides are on DIFFERENT threads
-    // whichever way this is reached. Hl2RxDsp::buildChannel runs
-    // WdspChannel::create() and then constructs Hl2Spectrum on the HL2 DSP
-    // build thread. createNr2Filter runs HERE, and which thread that is
-    // depends on the CALL SITE, because MainWindow moves AudioEngine to the
-    // audio worker thread (#502) and thread affinity does not redirect a
-    // DIRECT method call:
-    //
-    //   queued, audio worker thread — MainWindow.cpp's invokeMethod sites
-    //   direct, GUI thread          — AetherDspWidget's NR2 checkbox and
-    //                                 MainWindow_DspApplets, the two direct
-    //                                 sites that can pass TRUE and therefore
-    //                                 build a filter
-    //
-    // The other direct sites (AetherRxDialog, ClientRxChainWidget,
-    // MainWindow_Shortcuts) only ever pass false, so they reach the
-    // DESTRUCTOR on the GUI thread — microseconds of held work, but the same
-    // wait if another thread has the planner.
-    //
-    // The lock covers the ALLOCATIONS as well as the plans, the same width
-    // Hl2Spectrum's constructor uses and for the same reason: the two frames
-    // TSan named in #5424 are fftw_malloc_plain's memalign and a free on the
-    // WDSP thread, not the planner, so a plan-only lock leaves the reported
-    // edge unsynchronised. fftw_execute() stays unguarded.
+    // FFTW_MEASURE plans, using wisdom when available. fftwPlannerLock() is the
+    // process-wide FFTW lock shared with WdspChannel, Hl2Spectrum and
+    // AnanPanAnalyzer (core/dsp/FftwPlannerLock.h, #5895). Callers arrive on the
+    // audio worker thread (queued) or the GUI thread (direct calls from
+    // AetherDspWidget / MainWindow_DspApplets), so this may wait on another
+    // thread's planning. The lock covers allocations too (TSan #5424 named
+    // fftw_malloc/free); fftw_execute() stays unguarded.
     {
         auto lock = fftwPlannerLock();
         // FFTW-allocated complex arrays (16-byte aligned)
@@ -626,26 +589,12 @@ void SpectralNR::resetTransient()
     m_outReadPos = 0;
     m_outputAvailable = m_fftSize;
 
-    // The AGC common-mode references flush with the transients rather than
-    // surviving alongside the noise estimate: their calibration re-runs
-    // inside the re-armed ramp window (m_frameCount < m_rampFrames), and its
-    // first frame overwrites the level reference with weight 1/(0+1) anyway,
-    // so a retained value could only live for one frame. Flushing keeps the
-    // recalibration deterministic — and post-TX the receiver AGC state that
-    // these references describe is exactly what may have changed.
-    //
-    // What this cannot preserve is a level step that straddles the gap. NR2
-    // sees post-AGC audio on every path (the radio's AGC for a Flex, WDSP's
-    // inside Hl2RxDsp for an HL2), and the first post-TX frame re-seeds
-    // m_commonReferencePsd from the post-TX spectrum (detectCommonModeScale),
-    // so the scale corrector never observes the step and scalePowerHistory()
-    // will not rescale the retained noise estimate for it. The fallout is
-    // bounded rather than corrected: minimum statistics re-levels a floor that
-    // is now too high within a few frames, and one that is too low over the
-    // following windows — still climbing at 1.6 s (−15.5 dB against a
-    // −27.4 dB settled depth on the +6 dB row) and settled by 2.5 s, no
-    // slower than the full reset() this path replaced. Pinned by the
-    // ±6 dB step rows in nr2_tx_rx_reset_test, which measure both windows.
+    // Flush the AGC common-mode references with the transients: they recalibrate
+    // inside the re-armed ramp (m_frameCount < m_rampFrames), whose first frame
+    // overwrites them anyway, and post-TX AGC state may have changed. A level step
+    // across the gap is not rescaled (detectCommonModeScale re-seeds from post-TX);
+    // minimum statistics re-levels it within ~2.5 s, no slower than a full reset()
+    // (±6 dB rows in nr2_tx_rx_reset_test).
     std::fill(m_commonWantedProtected.begin(),
               m_commonWantedProtected.end(), 0);
     std::fill(m_commonReferencePsd.begin(),
@@ -739,19 +688,10 @@ bool SpectralNR::loadWisdom(const std::string& directory)
 {
 #ifdef HAVE_FFTW3
     const std::string wisdomFile = wisdomPathForDirectory(directory);
-    // The wisdom store is process-global and shared with WdspChannel's own
-    // cache at a different path, so an import mutates state the WDSP planner
-    // reads — and, because fftw_export_wisdom_to_filename writes the WHOLE
-    // accumulated store, each side's file already carries the other's
-    // entries. NOT RECURSIVE: generateWisdom() calls this before it takes the
-    // lock itself, and fftwPlannerLock() hands out a plain std::mutex.
-    //
-    // REACHED FROM THE GUI THREAD. AudioEngine's constructor
-    // (logNr2WisdomSummary) and AudioEngine::needsWisdomGeneration(), which
-    // MainWindow::enableNr2WithWisdom() calls before every NR2 enable, both
-    // land here. The import itself is well under a millisecond; what is new
-    // with a shared lock is the WAIT, bounded by whatever FFTW work another
-    // thread is holding the planner for.
+    // Wisdom is process-global and shared with WdspChannel's cache (each export
+    // writes the whole store). Not recursive: generateWisdom() calls this before
+    // taking the lock. Reached from the GUI thread (AudioEngine ctor,
+    // needsWisdomGeneration), so it may wait on another thread's FFTW work.
     auto lock = fftwPlannerLock();
     return fftw_import_wisdom_from_filename(wisdomFile.c_str()) != 0;
 #else
@@ -821,22 +761,9 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
         cbuf = fftw_alloc_complex(maxSize);
         rbuf = static_cast<double*>(fftw_malloc(maxSize * sizeof(double)));
     }
-    // fftw_free(nullptr) is a no-op, so this is safe on the allocation-failure
-    // path too. NEVER call it while already holding the lock —
-    // fftwPlannerLock() hands out a plain std::mutex and std::mutex is not
-    // recursive. The same rule is why exportWisdomAtomically() above does not
-    // lock itself; see its comment.
-    //
-    // IDEMPOTENT BY CONSTRUCTION, not by call-site discipline. It nulls what
-    // it frees. No second call is reachable today — all seven call sites
-    // below return before reaching another — but "today" is the whole of the
-    // guarantee, and the shape that would break it is a copy-paste: this
-    // function has thirteen loop iterations of four near-identical blocks,
-    // each ending freeBuffers() / remove() / return, and a fifth plan type or
-    // a new cancel point added by copying one of them is exactly the edit
-    // that drops the return. Nulling does not make that edit correct — it
-    // would then plan on a null buffer — but it turns silent heap corruption
-    // into a deterministic failure at the point of the mistake.
+    // fftw_free(nullptr) is a no-op, so safe on allocation failure. Never call
+    // while holding the lock (non-recursive std::mutex). Nulls what it frees, so a
+    // second call is harmless rather than a double free.
     const auto freeBuffers = [&cbuf, &rbuf] {
         auto lock = fftwPlannerLock();
         fftw_free(rbuf);
@@ -1171,45 +1098,21 @@ bool SpectralNR::updateMaskFromCurrentFrame()
     return true;
 }
 
-// ─── Psychoacoustic post-processing — WDSP emnr.c's post2 stage ──────────────
-//
-// Ported from third_party/wdsp/upstream/emnr.c (post2(), post2_calc_w(),
-// post2_init_table()). The arithmetic is WDSP's; two things are deliberately
-// not copied verbatim:
-//
-//  * `taper` is a FREQUENCY here, not WDSP's fraction of the bin count. 0.12
-//    of WDSP's 2048 bins over 24 kHz is 2871 Hz; 0.12 of our 513 bins over
-//    12 kHz would be 1435 Hz, which lowpasses voice to telephone quality. The
-//    default below is WDSP's value expressed in Hz, so the two implementations
-//    cover the same band and the control stays correct if the FFT geometry is
-//    retuned again (it has been once already: 256/2 -> 1024/4).
-//
-//  * the decay is a time constant in seconds rather than a precomputed
-//    per-frame coefficient, derived here from the live hop size, which is the
-//    same quantity WDSP computes as exp(-fsize / (tc * rate * ovrlp)).
-//
-// Everything else — the peak follower, the residual/white blend, the raised
-// cosine taper, zeroing DC and everything above the band — is as upstream.
+// Psychoacoustic post-processing, ported from third_party/wdsp/upstream/emnr.c
+// (post2(), post2_calc_w(), post2_init_table()), with two deliberate changes:
+//  * `taper` is a frequency, not WDSP's bin fraction (0.12 of 2048 bins over
+//    24 kHz = 2871 Hz), so it survives FFT geometry changes.
+//  * decay is a time constant in seconds, converted per frame from the live
+//    hop size (WDSP: exp(-fsize / (tc * rate * ovrlp))).
 
 namespace {
 constexpr int kPost2TableSize = 1024;
 
-// How loud the synthetic white term is, as a fraction of the band peak the
-// residual term is measured against.
-//
-// This is WDSP's `dmult = dmag * 4.0 * a->gain` with `POST2_NOISE_MAG =
-// 113.98` folded in -- but it CANNOT be copied as those two constants, which
-// was the first version of this port and was 16384x too loud. `a->gain` is
-// `ogain / fsize / ovrlp` (emnr.c:310), so upstream's white-to-residual ratio
-// is `4 * gain * 113.98`, which at WDSP's own 4096/4 geometry is 0.0278 --
-// about 3% of the in-band peak, sitting sensibly beside a residual term that
-// is at most 1.0 of it. Our bins carry no such gain factor (the 1/fftSize
-// lands after the inverse transform), so `4 * 113.98` bare made the white
-// term 456x the residual rather than 0.028x.
-//
-// Expressed as the ratio rather than as WDSP's two constants, the stage
-// behaves the same at any FFT size -- the same reasoning as the taper being a
-// frequency rather than a bin fraction.
+// White-term level as a fraction of the band peak. WDSP's `dmult = dmag * 4.0
+// * a->gain` with POST2_NOISE_MAG = 113.98, where a->gain = ogain/fsize/ovrlp
+// (emnr.c:310); at WDSP's 4096/4 geometry that's 4*113.98/(4096*4) ≈ 0.0278.
+// Our bins carry no such gain (1/fftSize is applied after the inverse FFT),
+// so the ratio is used directly and holds at any FFT size.
 constexpr double kPost2WhiteFraction = 4.0 * 113.98 / (4096.0 * 4.0);
 
 struct Post2PhasorTable {
@@ -2489,16 +2392,10 @@ void SpectralNR::applyAeFilter()
     std::copy(m_aeMask.begin(), m_aeMask.end(), m_mask.begin());
 }
 
-// ─── Modified Bessel Functions ────────────────────────────────────────────────
-// Exponentially-scaled polynomial approximations from Abramowitz & Stegun,
-// "Handbook of Mathematical Functions" (1964), formulas 9.8.1 and 9.8.2.
-// A&S is a U.S. government work and in the public domain.
-//
-// bessI0e(x) = exp(-|x|) * I0(x),  bessI1e(x) = exp(-|x|) * I1(x).
-//
-// Scaling eliminates the exp(|x|) overflow present in the unscaled large-x
-// branch.  The large-x formula simplifies to 1/sqrt(|x|) * poly — no
-// exponential is computed, so no overflow occurs at any finite x (#1507).
+// Exponentially scaled modified Bessel functions, Abramowitz & Stegun (1964)
+// 9.8.1 / 9.8.2 (public domain): bessI0e(x) = exp(-|x|) I0(x), bessI1e(x) =
+// exp(-|x|) I1(x). The large-x branch is 1/sqrt(|x|) * poly, so nothing
+// overflows at finite x (#1507).
 
 double SpectralNR::bessI0e(double x)
 {

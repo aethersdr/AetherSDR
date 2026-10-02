@@ -31,18 +31,8 @@ class SliceModel;
 class RadioModel;
 class KiwiSdrManager;
 
-// RX Applet — controls for a single receive slice.
-//
-// Layout (top to bottom):
-//  • RX antenna selector (ANT1 / ANT2)
-//  • Filter width presets (1.8 / 2.1 / 2.4 / 2.7 / 3.3 / 6.0 kHz)
-//  • AGC mode (OFF / SLOW / MED / FAST)
-//  • AF gain slider (audio output level)
-//  • RF gain slider (IF gain)
-//  • Squelch on/off + level slider
-//  • DSP toggles: NB, NR, ANF
-//  • RIT on/off + Hz offset with < > step buttons
-//  • XIT on/off + Hz offset with < > step buttons
+// RX Applet: controls for one receive slice (antenna, filter presets, AGC,
+// AF/RF gain, squelch, NB/NR/ANF, RIT/XIT).
 class RxApplet : public QWidget {
     Q_OBJECT
 
@@ -129,6 +119,11 @@ signals:
     void stepSizeChangedByUser(int hz);
     void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
     void flexRxAntennaSelected(int sliceId);
+    // The radio published no antenna port to choose and there is no virtual
+    // (Kiwi) receiver on offer, so the RX (tx=false) or TX (tx=true) antenna
+    // pick was refused rather than offering invented ANT1/ANT2
+    // (AntennaChoiceGate.h). MainWindow announces it.
+    void antennaChoiceRefused(bool tx);
     // Emitted when Auto SQL tracking is toggled.
     void sqlAutoChanged(bool on);
     // Emitted on every SQL mode transition (Off / Manual / Auto), so any

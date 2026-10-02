@@ -167,16 +167,10 @@ bool HdlcCodec::processBit(uint8_t nrziTone)
         }
         break;
 
-    // ── InPreamble: count consecutive flags, wait for first frame bit ───
-    //
-    // We require 8 consecutive non-flag bits before entering InFrame.
-    // This mirrors libmodem's (bitstream_size >= 8) check and prevents a
-    // false InFrame transition on the very first bit of the next preamble
-    // flag (which would briefly disrupt pat_det away from 0x7E).
-    //
-    // Bits accumulate during this window; they become the first byte of the
-    // frame.  A flag anywhere in the window calls beginFrame() and resets
-    // the count, discarding those partial bits.
+    // InPreamble: require 8 consecutive non-flag bits before InFrame (as libmodem's
+    // bitstream_size >= 8), so the first bit of the next preamble flag can't
+    // trigger a false transition. Accumulated bits become the first frame byte; a
+    // flag in the window calls beginFrame() and discards them.
     case State::InPreamble:
         if (m_patDet == 0x7E) {
             // Another consecutive preamble flag.

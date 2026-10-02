@@ -33,9 +33,11 @@
 #include "TestSettingsProfile.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "gui/PanSpanControlGate.h"
 #include "gui/PanZoomModeGate.h"
 
 #include <QCoreApplication>
+#include <QFile>
 
 #include <algorithm>
 #include <cstdio>
@@ -50,6 +52,93 @@ void check(bool condition, const char* label)
     if (!condition) {
         ++failures;
     }
+}
+
+// Read a source file of the tree this test was built from.
+QByteArray readSource(const char* relative)
+{
+    QFile f(QStringLiteral(AETHER_SOURCE_DIR "/") + QString::fromLatin1(relative));
+    if (!f.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return f.readAll();
+}
+
+// Visit `src` from `from`, calling `visit(index, depth)` for every character
+// outside comments and string/character literals, where depth counts the
+// braces opened since `from`. Stops when `visit` returns false.
+template <typename Visit>
+void scanCode(const QByteArray& src, qsizetype from, Visit visit)
+{
+    int depth = 0;
+    for (qsizetype i = from; i < src.size(); ++i) {
+        const char c = src.at(i);
+        if (c == '/' && i + 1 < src.size() && src.at(i + 1) == '/') {
+            const qsizetype nl = src.indexOf('\n', i);
+            i = nl < 0 ? src.size() : nl;
+            continue;
+        }
+        if (c == '/' && i + 1 < src.size() && src.at(i + 1) == '*') {
+            const qsizetype close = src.indexOf("*/", i + 2);
+            i = close < 0 ? src.size() : close + 1;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            for (++i; i < src.size() && src.at(i) != c; ++i) {
+                if (src.at(i) == '\\') {
+                    ++i;
+                }
+            }
+            continue;
+        }
+        if (c == '{') {
+            ++depth;
+        } else if (c == '}') {
+            --depth;
+        }
+        if (!visit(i, depth)) {
+            return;
+        }
+    }
+}
+
+// The body of the first function whose definition starts with `signature`,
+// from its opening brace to the matching closing brace, or empty.
+QByteArray functionBody(const QByteArray& src, const QByteArray& signature)
+{
+    const qsizetype start = src.indexOf(signature);
+    if (start < 0) {
+        return {};
+    }
+    const qsizetype open = src.indexOf('{', start + signature.size());
+    if (open < 0) {
+        return {};
+    }
+    qsizetype close = -1;
+    scanCode(src, open, [&](qsizetype i, int depth) {
+        if (depth == 0) {
+            close = i;
+            return false;
+        }
+        return true;
+    });
+    return close < 0 ? QByteArray() : src.mid(open, close - open + 1);
+}
+
+// Brace depth, relative to `body`'s own opening brace, of every occurrence of
+// `token` in its code (comments and literals skipped, so a brace or a mention
+// in a comment cannot count). Depth 1 is the function body itself; anything
+// deeper is inside a block or a lambda.
+QList<int> depthsOf(const QByteArray& body, const QByteArray& token)
+{
+    QList<int> depths;
+    scanCode(body, 0, [&](qsizetype i, int depth) {
+        if (body.mid(i, token.size()) == token) {
+            depths.append(depth);
+        }
+        return true;
+    });
+    return depths;
 }
 }  // namespace
 
@@ -306,6 +395,169 @@ int main(int argc, char** argv)
     //
     // Closing the remaining half needs a MainWindow seam that does not exist
     // today. Stated rather than left for the next reader to assume otherwise.
+
+    // ---- one span control when there is one span (#5750) ----
+    //
+    // radioWide was declared above and, until this section, read by nothing in
+    // src/gui/: every pane got its own -/+ pair and pressing one re-spanned
+    // them all. PanSpanControlGate.h decides which pane keeps the pair. The
+    // `radioWide` input is READ OFF THIS RADIO'S DECLARATION, the same way the
+    // band/segment section above reads panZoomModes, so reverting the
+    // declaration fails here rather than agreeing with a retyped literal.
+    {
+        const bool hl2RadioWide = caps.panSpanModel && caps.panSpanModel->radioWide;
+        const QStringList panes{QStringLiteral("0x40000000"),
+                                QStringLiteral("0x40000001"),
+                                QStringLiteral("0x40000002")};
+
+        int shown = 0;
+        for (const QString& p : panes) {
+            shown += spanControlLiveOnPan(hl2RadioWide, panes,
+                                           QStringLiteral("0x40000001"), p) ? 1 : 0;
+        }
+        check(shown == 1,
+              "HL2 with three panes: exactly ONE pane's span control is live, "
+              "because there is one span");
+        check(spanControlLiveOnPan(hl2RadioWide, panes,
+                                    QStringLiteral("0x40000001"),
+                                    QStringLiteral("0x40000001")),
+              "and it is the pane holding the TX slice");
+        check(radioWideSpanControlPan(hl2RadioWide, panes, QString())
+                  == QStringLiteral("0x40000000"),
+              "with no TX slice it falls back to the FIRST pane in fallback "
+              "order, a fixed pane rather than whichever was clicked last");
+        check(radioWideSpanControlPan(hl2RadioWide, panes,
+                                      QStringLiteral("0x40000009"))
+                  == QStringLiteral("0x40000000"),
+              "a TX slice on a pane the stack does not hold also falls back, "
+              "so a stale pan id can never leave ZERO panes with the control");
+        check(spanControlLiveOnPan(hl2RadioWide, {QStringLiteral("0x40000000")},
+                                    QString(), QStringLiteral("0x40000000")),
+              "a single pane on a radio-wide radio keeps its control live");
+
+        // The other families must keep today's per-pane controls. A Flex has
+        // genuinely independent spans; a radio with per-pan span declares
+        // radioWide false; a backend nobody has read declares no record at
+        // all, and absence must never hide a control.
+        const RadioCapabilities unread{};
+        const bool unreadRadioWide =
+            unread.panSpanModel && unread.panSpanModel->radioWide;
+        PanSpanModel perPan;
+        perPan.followsSampleRate = true;
+        perPan.radioWide = false;
+        for (const QString& p : panes) {
+            check(spanControlLiveOnPan(unreadRadioWide, panes,
+                                        QStringLiteral("0x40000001"), p),
+                  "no span record (Flex, Icom, Sim): every pane keeps a live control");
+            check(spanControlLiveOnPan(perPan.radioWide, panes,
+                                        QStringLiteral("0x40000001"), p),
+                  "a per-pan span (radioWide false, as ANAN declares): every "
+                  "pane keeps a live control");
+        }
+        check(radioWideSpanControlPan(false, panes, QStringLiteral("0x40000001"))
+                  .isEmpty(),
+              "per-pan answers 'every pane', not the TX pane");
+    }
+
+    // ---- the fallback is a pane in this window, in the order it is shown ----
+    //
+    // PanadapterStack::panIds() is QMap key order, not screen order, and still
+    // holds a pane that floats in its own window or is lent to the workspace
+    // canvas. The fallback is built from the DOCKED panes in layout order
+    // first (#6042 review), so it never sends the one live control behind the
+    // main window while a docked pane exists.
+    {
+        const bool hl2RadioWide = caps.panSpanModel && caps.panSpanModel->radioWide;
+        const QString a = QStringLiteral("0x40000000");
+        const QString b = QStringLiteral("0x40000001");
+        const QString c = QStringLiteral("0x40000002");
+        const QStringList all{a, b, c};  // what panIds() returns: id order
+
+        // c is shown first, b floats: fallback order is c, a, then b.
+        const QStringList order = panIdsInSpanFallbackOrder({c, a}, all);
+        check(order == QStringList({c, a, b}),
+              "fallback order: docked panes in layout order, then the floating one");
+        check(radioWideSpanControlPan(hl2RadioWide, order, QString()) == c,
+              "no TX slice: the live control goes to the first pane SHOWN, not "
+              "the lowest pan id");
+        check(radioWideSpanControlPan(hl2RadioWide,
+                                      panIdsInSpanFallbackOrder({b, c}, all),
+                                      QString()) == b,
+              "and it follows a rearranged layout");
+        check(radioWideSpanControlPan(hl2RadioWide,
+                                      panIdsInSpanFallbackOrder({c}, {a, c}),
+                                      QString()) == c,
+              "a floating pane with the lowest id does not take the fallback "
+              "from a docked one");
+        check(radioWideSpanControlPan(hl2RadioWide, order, b) == b,
+              "a floating pane holding the TX slice still keeps it live: the "
+              "TX pane is the one being worked");
+        check(radioWideSpanControlPan(hl2RadioWide,
+                                      panIdsInSpanFallbackOrder({}, all),
+                                      QString()) == a,
+              "every pane floating or on the canvas: still exactly one live "
+              "control, never zero");
+        check(panIdsInSpanFallbackOrder({QStringLiteral("0x40000009"), c}, all)
+                  == QStringList({c, a, b}),
+              "a docked id the stack no longer holds is dropped, never named");
+    }
+
+    // ---- the call sites and the widget, read from the source ----
+    //
+    // No registered target links MainWindow*.cpp, PanadapterStack.cpp or
+    // SpectrumWidget.cpp, so these are SOURCE contracts, the same kind
+    // meter_applet_capability_test and rf_gain_presentation_test carry. They
+    // pin the shape a reviewer found broken; they do not run it.
+    {
+        const QByteArray wiring = readSource("src/gui/MainWindow_Wiring.cpp");
+        const QByteArray onSliceAdded =
+            functionBody(wiring, "void MainWindow::onSliceAdded(SliceModel* s)");
+        check(!onSliceAdded.isEmpty(), "found MainWindow::onSliceAdded");
+        const QList<int> syncDepths =
+            depthsOf(onSliceAdded, "syncPanSpanControlPlacement()");
+        check(syncDepths.contains(1),
+              "onSliceAdded re-derives the span control in its OWN body, not "
+              "only inside a lambda: RadioModel applies a slice's fields before "
+              "sliceAdded, so a slice that arrives already TX never fires "
+              "txSliceChanged (#6042 review)");
+
+        const QByteArray session = readSource("src/gui/MainWindow_Session.cpp");
+        const QByteArray sync = functionBody(
+            session, "void MainWindow::syncPanSpanControlPlacement()");
+        check(sync.contains("dockedPanIdsInLayoutOrder()")
+                  && sync.contains("panIdsInSpanFallbackOrder("),
+              "the sync orders the fallback by the docked layout, not by "
+              "panIds() alone");
+        const qsizetype occ = session.indexOf(
+            "connect(&m_radioModel, &RadioModel::slotOccupancyChanged,\n"
+            "            this, [this](int) { syncPanSpanControlPlacement(); });");
+        check(occ >= 0,
+              "a reclaimed slice (no sliceAdded) re-derives the span control too");
+
+        const QByteArray header = readSource("src/gui/SpectrumWidget.h");
+        const QByteArray setter = functionBody(
+            header, "    void setSpanControlPlacement(bool live, bool radioWide)");
+        check(!setter.isEmpty(), "found SpectrumWidget::setSpanControlPlacement");
+        check(!setter.contains("setVisible") && !setter.contains("hide()"),
+              "the span pair is never hidden on a capability (AGENTS.md: dim "
+              "it, never hide it)");
+        check(setter.count("setEnabled(live)") == 2
+                  && setter.count("setAccessibleDescription(desc)") == 2,
+              "both buttons are dimmed, and both carry the reason where a "
+              "screen reader reads it");
+
+        const QByteArray widget = readSource("src/gui/SpectrumWidget.cpp");
+        check(widget.contains("m_zoomOutBtn->installEventFilter(this);")
+                  && widget.contains("m_zoomInBtn->installEventFilter(this);")
+                  && widget.contains("|| widget == m_zoomOutBtn || widget == m_zoomInBtn)"),
+              "the dimmed pair still shows its tooltip: Qt skips tooltips on a "
+              "disabled widget, and eventFilter() answers them for these two");
+    }
+
+    // WHAT THIS CANNOT SEE: the widgets running. That the dimmed pair renders
+    // dimmed, announces its description, and that each MainWindow event really
+    // fires in the app are not observed here -- the contracts above read the
+    // source; they do not execute it.
 
     std::printf("%s: %d failure(s)\n", argv[0], failures);
     return failures == 0 ? 0 : 1;

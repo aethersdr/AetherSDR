@@ -16,19 +16,12 @@ class QAudioSink;
 
 namespace AetherSDR {
 
-// PUDU monitor — captures up to 30 seconds of post-DSP TX audio (the
-// output of the full client-side PooDoo™ chain) into an in-memory
-// buffer, then plays it back through the RX sink so the user can hear
-// what their chain is producing without keying the radio.  On stop a
-// WAV snapshot is dropped into /tmp for offline inspection; playback
-// itself reads the in-memory buffer, never the file.
-//
-// Threading:
-//  - feedTxPostDsp() runs on the audio worker thread.  Single writer,
-//    lock-free via atomics.  Bails out early when not recording.
-//  - Everything else (start/stop, playback tick, signals) runs on the
-//    UI thread.  Audio thread hands off via Qt queued invoke when the
-//    30-second cap is reached.
+// PUDU monitor: records up to 30 s of post-DSP TX audio in memory and plays it
+// back through the RX sink, so the operator hears the chain without keying. On
+// stop a WAV snapshot goes to /tmp; playback reads the buffer, not the file.
+// feedTxPostDsp() runs on the audio thread (single writer, atomics, early-out
+// when not recording); everything else is UI thread, with a queued hand-off at
+// the 30 s cap.
 class ClientPuduMonitor : public QObject {
     Q_OBJECT
 
