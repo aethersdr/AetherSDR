@@ -93,6 +93,7 @@ public:
     // Impulse noise blanker, run in host WDSP (the HL2 has no firmware DSP). NR and
     // ANF are deliberately not implemented and stay hidden.
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceSquelch(int sliceId, bool on, int level) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
@@ -469,6 +470,13 @@ private:
         bool nbOn = false;
         int  nbLevel = 50;
 
+        // Authoritative squelch state, for the blanker's reasons: nothing on
+        // this radio echoes it and every rebuilt chain opens with it off.
+        // Defaults mirror SliceModel's (off, level 20). The mode decides which
+        // WDSP stage carries it — WdspChannel::setSquelch() — not this struct.
+        bool squelchOn = false;
+        int  squelchLevel = 20;
+
         // Host-side per-slice audio: the HL2 mixes nothing. gain is a linear multiplier
         // from the operator's 0..100; pan is 0=left .. 50=centre .. 100=right (SliceModel).
         bool audioMuted = false;
@@ -540,6 +548,8 @@ private:
     // Push this receiver's NB state into its chain. Needed wherever a chain is
     // (re)built: a fresh Hl2RxDsp opens with the blanker off.
     void pushNoiseBlanker(const Receiver& r);
+    // Same, for the squelch, and needed at the same places for the same reason.
+    void pushSquelch(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC. Never m_rx,
     // whose push_back/erase can move storage under the fan-out. Rebuilt by
