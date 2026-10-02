@@ -5178,14 +5178,39 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
         auto* radioSideBtn = new QPushButton("Radio Side");
         radioSideBtn->setCheckable(true);
-        radioSideBtn->setStyleSheet(modeBtnStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(radioSideBtn,
+            modeBtnStyle
+            + "QPushButton:disabled { background: {{color.button.background.disabled}}; "
+              "color: {{color.control.unavailable}}; "
+              "border-color: {{color.button.border.disabled}}; }");
         auto* clientSideBtn = new QPushButton("Client Side");
         clientSideBtn->setCheckable(true);
         clientSideBtn->setStyleSheet(modeBtnStyle);
 
-        bool clientSide = settings.value("RecordingMode", "Client").toString() == "Client";
-        radioSideBtn->setChecked(!clientSide);
-        clientSideBtn->setChecked(clientSide);
+        // A connected radio with no command plane has no radio-side recorder, so
+        // Client Side is in effect there (recordsOnClient()). Shown, never
+        // written: the saved choice returns on the next radio that has one.
+        // By hand, not ControlAvailabilityRegistry: command-plane reachability
+        // is not in RadioCapabilities.
+        const auto applyRecordingModeAvailability = [this, radioSideBtn, clientSideBtn]() {
+            const bool radioSideAvailable =
+                !m_model->isConnected() || m_model->radioSideRecordingReachable();
+            const bool clientSide = !radioSideAvailable
+                || AppSettings::instance().value("RecordingMode", "Client").toString()
+                       == "Client";
+            radioSideBtn->setEnabled(radioSideAvailable);
+            radioSideBtn->setChecked(!clientSide);
+            clientSideBtn->setChecked(clientSide);
+            const QString why = radioSideAvailable
+                ? QString()
+                : tr("Unavailable: this radio can't record on its own side. "
+                     "Recordings go to this computer.");
+            radioSideBtn->setToolTip(why);
+            radioSideBtn->setAccessibleDescription(why);
+        };
+        applyRecordingModeAvailability();
+        connect(m_model, &RadioModel::connectionStateChanged, radioSideBtn,
+                applyRecordingModeAvailability);
 
         connect(radioSideBtn, &QPushButton::clicked, this, [radioSideBtn, clientSideBtn]() {
             QSignalBlocker b(clientSideBtn);
@@ -5199,6 +5224,10 @@ QWidget* RadioSetupDialog::buildAudioTab()
             QSignalBlocker b(radioSideBtn);
             clientSideBtn->setChecked(true);
             radioSideBtn->setChecked(false);
+            // Already in effect while Radio Side is dimmed; saving would erase
+            // the Radio Side choice the next capable radio restores.
+            if (!radioSideBtn->isEnabled())
+                return;
             auto& s = AppSettings::instance();
             s.setValue("RecordingMode", "Client");
             s.save();

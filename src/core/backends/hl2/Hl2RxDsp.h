@@ -56,11 +56,11 @@ public:
                   "RX filter taps no longer allow a 50 Hz notch; the width "
                   "presets in the TNF menu assume one.");
 
-    // RX filter phase per mode (#5498). Linear phase at kRxFilterTaps delays by
-    // half the length (4096 samples, ~85 ms); minimum phase keeps the magnitude
-    // response and notch floor and cut post-unmute return from 128 -> 44 ms
-    // (AGC off). CW stays linear phase: through a 300 Hz filter minimum phase
-    // measured overshoot 5.8 -> 19.6 % and more post-edge ringing (#5578).
+    // RX filter phase per mode (#5498): minimum phase preserves the notch
+    // floor and cuts post-unmute return from 128 to 44 ms (AGC off). CW stays
+    // linear by the ruling linked in the WDSP patch ledger. Minimum
+    // phase costs ~14 ms per filter edit on hl2-io; patch 14 frees its design
+    // scratch. See third_party/wdsp/AETHERSDR-PATCHES.md for the measurements.
     [[nodiscard]] static constexpr bool rxMinimumPhaseFor(WdspChannel::Mode mode) noexcept
     {
         return mode != WdspChannel::Mode::Cwl && mode != WdspChannel::Mode::Cwu;

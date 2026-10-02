@@ -1286,6 +1286,15 @@ target_include_directories(hl2_rxdsp_unmute_return_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_unmute_return_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_unmute_return_test COMMAND hl2_rxdsp_unmute_return_test)
 
+# WDSP patch 14 (#5954): a minimum-phase FIR core frees its design workspace
+# after each design, so a minimum-phase RX channel holds no more WDSP
+# allocations than a linear one, before or after filter changes. Counts the
+# WDSP port's own live allocations; socket-free.
+add_executable(wdsp_minphase_workspace_test tests/wdsp_minphase_workspace_test.cpp)
+target_include_directories(wdsp_minphase_workspace_test PRIVATE src)
+target_link_libraries(wdsp_minphase_workspace_test PRIVATE aethercore)
+add_test(NAME wdsp_minphase_workspace_test COMMAND wdsp_minphase_workspace_test)
+
 # The host-side impulse noise blanker (WDSP ANB) ahead of the demodulator. The
 # HL2 runs no firmware DSP, so this stage is the only noise blanker the radio
 # has and there is no wire traffic to assert against — the test measures the
@@ -2970,6 +2979,29 @@ target_link_libraries(radio_setup_max_power_field_test PRIVATE
     aetherdesktop_support Qt6::Widgets Qt6::Test)
 add_test(NAME radio_setup_max_power_field_test COMMAND radio_setup_max_power_field_test)
 set_tests_properties(radio_setup_max_power_field_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+# Radio Setup's Record Mode pair on a connected radio with no command plane:
+# Radio Side dimmed with an announced reason, Client Side shown in effect, and
+# the saved RecordingMode never written (re-read from disk). Flex path
+# unchanged. Injected backend; no socket.
+add_executable(radio_setup_recording_mode_dim_test
+    tests/radio_setup_recording_mode_dim_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_recording_mode_dim_test PRIVATE src tests)
+target_link_libraries(radio_setup_recording_mode_dim_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_recording_mode_dim_test COMMAND radio_setup_recording_mode_dim_test)
+set_tests_properties(radio_setup_recording_mode_dim_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 
@@ -7043,6 +7075,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_setup_region_field_test
     radio_setup_label_theme_token_test
     radio_setup_max_power_field_test
+    radio_setup_recording_mode_dim_test
     atu_seam_gate_test
     transmit_seam_drop_notice_test
     backend_capability_revision_test

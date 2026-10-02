@@ -11,10 +11,10 @@ the DDC so the panadapter holds still while tuning.
 Section 11 audits the receive bring-up against the independent correctness
 oracles at `/Users/patj/oracles/hl2/`.
 
-**Start here for a new backend:** §15 (receive handedness and tuning) and §5's
+**Start here for a new backend:** §16 (receive handedness and tuning) and §5's
 sideband-selection rules. Those two describe the most expensive bug of the
 project — one that survived a full session of correct-looking measurements —
-and §15.6 is the checklist that would have caught it on day one.
+and §16.6 is the checklist that would have caught it on day one.
 
 ### For coding agents — keep bring-up inside the family backend
 
@@ -511,10 +511,11 @@ in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
 - **RX: WDSP's RXA selects the OPPOSITE sign to its passband bounds.** USB
   configured `[+150, +3000]` passes *negative* analytic frequencies. Confirmed
   independently by `hl2_rxdsp_test` and `hl2_shift_test`. This is the single
-  least intuitive fact in the whole backend and everything in §15 follows from
+  least intuitive fact in the whole backend and everything in §16 follows from
   it.
-- **TX — in `Hl2TxDsp` — is the mirror image: the MODE selects the sideband and
-  the bandpass is an audio-domain magnitude.** `Hl2TxDsp` filters with one real
+- **TX — in `Hl2TxDsp`'s phasing build (`AETHER_HL2_TX_TXA=OFF`) — is the mirror
+  image: the MODE selects the sideband and the bandpass is an audio-domain
+  magnitude.** The phasing modulator filters with one real
   bandpass plus a Hilbert pair built from **positive** edges, and chooses the
   sideband in `isLowerSideband()`, which negates Q. Handing it the RX table's
   signed pairs put LSB and DIGL on the upper sideband — caught by
@@ -539,20 +540,17 @@ in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
   `rtype = 1`, so this one function is the mechanism behind both the RX bullet
   above and the TX correction here.
 
-The trap: RXA and `Hl2TxDsp` use **opposite conventions**, and both look
+The trap: RXA and the phasing modulator use **opposite conventions**, and both look
 plausible. A table written for one and reused for the other is silently wrong on
 exactly half the modes. The second trap is assuming the first one describes
 WDSP's transmit path: it does not.
 
-> **Forward note — not an instruction, and nothing here changes behaviour.**
-> Whether transmit should move from `Hl2TxDsp` onto a real TXA channel is the
-> open question in **#5678**; nothing has been decided. An **unfiled** analysis
-> behind that issue argues such a migration should drop `Hl2TxDsp`'s wire
-> conjugation and feed TXA *signed* RX-style edges rather than
-> `defaultTxPassbandForMode`. It is unfiled deliberately — there is no artifact
-> to cite and no number to follow, so treat the arrangement as unestablished. It
-> is a code change for a migration PR to settle and measure, not a claim this
-> section makes.
+> **The default build transmits through a WDSP TXA channel**
+> (`AETHER_HL2_TX_TXA=ON`, #5678; see the option in `CMakeLists.txt`). It takes
+> `defaultTxPassbandForMode`'s positive pair and signs it per sideband in
+> `Hl2TxDsp::applyModeAndFilter()` (LSB, CWL and DIGL negated), and it does **not**
+> conjugate: the signed passband already gives the wire's handedness. The
+> phasing modulator above is the `AETHER_HL2_TX_TXA=OFF` fallback.
 
 ### CW has no BFO unless you build one
 
@@ -711,8 +709,8 @@ it does not work: the app's own 38 KB cache made no measurable difference to
 `wdsp_channel_test` (22.8 s warm vs 22.4 s cold on macOS/arm64), because the
 app's plan set and the tests' plan set are different FFTW problems. Only a cache
 the tests themselves wrote helped — which a fresh container never has. Instead
-every test now runs with `AETHER_WDSP_FFTW_TIMELIMIT` set (see the block at the
-end of `tests/tests.cmake`), which bounds the planner through
+every test now runs with `AETHER_WDSP_FFTW_TIMELIMIT` set (§22.3 describes
+how `tests/tests.cmake` applies it), which bounds the planner through
 `fftw_set_timelimit()` and, because rushed plans must never reach the cache the
 app imports, **skips the wisdom export entirely while it is set**. One knob, so
 it is not possible to bound the planner and forget to isolate the cache.
@@ -720,7 +718,8 @@ it is not possible to bound the planner and forget to isolate the cache.
 Two independent layers, because one was not enough. The planner bound stops the
 export; separately, `AETHER_WDSP_WISDOM_DIR` **redirects the cache path** to
 `<build>/test-fftw-wisdom`. Both are set by `tests/TestWdspWisdomIsolation.cpp`,
-a TU linked into every test target whose static initializer runs **before
+a TU linked into every executable `tests/tests.cmake` declares (registered as a
+test or not, unless it opts out), whose static initializer runs **before
 main()** — because a ctest `ENVIRONMENT` property only covers `ctest`, and
 running a test binary directly (`./build/hl2_rxdsp_test`, the normal way to
 debug one) inherits nothing and would export straight over the operator's real
@@ -1645,7 +1644,7 @@ from 6 dB to 100 dB; opposite-sideband suppression is 85 dB.
 | EP6 response C0 | `ACK` (bit 7) **changes how the rest of C0 decodes**: ACK=0 → RADDR in `[6:3]` (4 bits) + Dot/Dash/PTT; ACK=1 → RADDR in `[6:1]` (6 bits) |
 | TX inhibit | **Active low** — the bit is SET when transmit is permitted |
 | SWR | Counts are **voltage**-proportional → `(Vf+Vr)/(Vf−Vr)`, **no square root**. Validated by reading 1.0:1 into a dummy load |
-| **Wire handedness** | The wire is the **conjugate** of the standard analytic convention. RX compensates with `-imag()` before WDSP; **TX must conjugate too**. Omitting it transmits every signal on the wrong sideband — see §14.6 |
+| **Wire handedness** | The wire is the **conjugate** of the standard analytic convention. RX: the **spectrum** takes the conjugate (`std::conj` in `Hl2RxDsp::processIqBlock`) and WDSP takes the **raw wire**, because RXA selects the opposite sign to its passband bounds — see §16.1. TX: the default WDSP TXA modulator does **not** conjugate, its signed passband already gives the wire's handedness; the phasing modulator (`AETHER_HL2_TX_TXA=OFF`) and the TUNE/tone generator conjugate. Getting TX wrong transmits every signal on the wrong sideband — see §14.6 |
 | PA enable vs handedness | A tune carrier sits at **zero offset**, where handedness has no effect. TUNE therefore works even when the sideband convention is wrong, and is useless as evidence for it |
 
 ### 14.4 Seam gaps this phase exposed
@@ -1754,12 +1753,12 @@ receive path appeared to compensate (conjugating with `-imag()` before WDSP, the
 fix filed as "USB and LSB are swapped"), and transmit never got the same
 correction.
 
-> **Correction (see §15).** That receive-side `-imag()` was itself wrong. It
+> **Correction (see §16).** That receive-side `-imag()` was itself wrong. It
 > inverted every demodulated sideband, and a second error — feeding the
 > panadapter the raw wire — hid it. The reasoning recorded here ("RX already
 > compensates, TX needs the same") was right about the wire's handedness and
 > wrong about which stage should carry the correction. **Do not use this
-> paragraph as the model for a new backend; use §15.**
+> paragraph as the model for a new backend; use §16.**
 
 **Every internal check agreed with the bug**, because the panadapter reads the
 same wire order as the transmitter. Our display and our transmission were
@@ -1790,8 +1789,10 @@ have exposed the bug was the one that always looked fine.
 
 **Why the loopback could not have caught it, and what changed.** The second row
 above is worth being precise about. `hl2_tx_loopback_test` measures a loop that
-conjugates twice — `Hl2TxDsp` for the wire on the way out, `Hl2RxDsp` for the
-panadapter on the way back — so a handedness error present at BOTH ends cancels
+flips handedness twice — into wire order on the way out (the tone generator and
+the phasing build by conjugating, the default TXA modulator by its signed
+passband), `Hl2RxDsp`'s conjugate for the panadapter on the way back — so a
+handedness error present at BOTH ends cancels
 exactly. Whichever sign that test asserted, it was blind to a global flip; it
 was another instrument sharing the convention. The test now takes an
 **independent bearing on the receive end first**: hpsdrsim generates its own
@@ -1835,7 +1836,8 @@ second receiver remains the only check that comes from outside it.
   works (`wdsp_channel_test` proves it), but driven from this backend's config it
   returned underruns and zeros. Chasing an undocumented init sequence for a path
   that keys a transmitter is a bad trade against fifty lines whose correctness is
-  a number a test prints.
+  a number a test prints. (The default build uses TXA, with the signed passband
+  §5 describes.)
 
 ### 14.8 Still open
 
@@ -4472,5 +4474,5 @@ superseded design. Whether a zoom now keeps the audio clean is **open**, and
 closing it needs hardware — as does the length of the unmuted latch window
 above.
 
-The opt-in TXA modulator and its offline evidence are described in
+The TXA modulator (the default, `AETHER_HL2_TX_TXA=ON`) and its evidence are described in
 [HL2 TXA configuration and lifecycle](hl2-txa-configuration-diff.md).

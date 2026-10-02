@@ -1294,30 +1294,10 @@ MainWindow::MainWindow(QWidget* parent)
     });
     // Radio-Side recording needs a radio-side recorder to reach; where there is
     // none, this recorder records instead (recordsOnClient(),
-    // QsoRecordStartPolicy.h). Read live, like the provider above.
+    // QsoRecordStartPolicy.h). Read live, like the provider above. Radio Setup
+    // dims Radio Side there and shows Client Side in effect.
     m_qsoRecorder->setRadioSideRecordingReachableProvider([this]() {
         return m_radioModel.radioSideRecordingReachable();
-    });
-    // Say so when the fallback happens: the operator chose Radio Side, and a
-    // file appearing on this computer must not be a surprise. Said once, not
-    // once per recording (auto-record starts one every over); a client
-    // recording started outside the fallback re-arms it.
-    connect(m_qsoRecorder, &QsoRecorder::recordingStarted, this,
-            [this, noticeShown = false](const QString&) mutable {
-        const bool radioSideSelected =
-            AppSettings::instance().value("RecordingMode", "Client").toString()
-            != QLatin1String("Client");
-        if (!radioSideSelected || m_radioModel.radioSideRecordingReachable()) {
-            noticeShown = false;
-            return;
-        }
-        if (noticeShown)
-            return;
-        noticeShown = true;
-        statusBar()->showMessage(
-            tr("This radio can't record on its own side — recording on this "
-               "computer instead."),
-            6000);
     });
 
     // A refused start (#4629). The recorder lives below the UI seam and can only

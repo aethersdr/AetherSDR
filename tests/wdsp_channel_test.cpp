@@ -1197,28 +1197,10 @@ bool runCloseAfterStoppedClockingTest()
     return true;
 }
 
-// The minimum-phase path, which nothing else in this tree exercises:
-// WdspChannel::Config::minimumPhase is false everywhere, so RXASetMP() always
-// passes 0 and WDSP's mp == 1 branch is never entered by any other test.
-//
-// Two things are pinned here, and the second is why the first matters.
-//
-// 1. Turning minimum phase ON must still produce audio. The AetherSDR patch
-//    that builds the minimum-phase workspace lazily
-//    (third_party/wdsp/AETHERSDR-PATCHES.md) makes plan_fircore() build the
-//    minimum-phase workspace only when the core's mp flag is set, and
-//    calc_fircore() build it on first use. WdspChannel::open() calls RXASetNC()
-//    BEFORE RXASetMP(), so with minimumPhase = true the six cores RXASetNC()
-//    re-plans are planned at mp == 0 and only then flipped on: this test is the
-//    one that walks the lazy-construction path. Before the patch the workspace
-//    was always there; after it, getting the laziness wrong is a null
-//    dereference inside mp_imp_exec() on the very first mask build.
-//
-// 2. Minimum phase must COST something. If the workspace were still built
-//    unconditionally, a minimum-phase channel and a linear-phase one would hold
-//    the same number of live WDSP allocations, and (1) could pass on a patch
-//    that achieved nothing. The comparison is stated as a relation rather than
-//    a count so it does not re-hardcode WDSP's internal fircore inventory.
+// Minimum phase must produce audio and make more design allocations during
+// open than linear phase. Patch 10 avoids scratch for unused cores; patch 14
+// releases it after use. Counting allocations made, rather than held, keeps
+// this check sensitive to eager construction. runLeakChecked() pins teardown.
 bool runMinimumPhaseWorkspaceTest()
 {
     WdspChannel::Config config;
@@ -1237,15 +1219,18 @@ bool runMinimumPhaseWorkspaceTest()
     // under test is the large one.
     config.filterTaps = 8192;
 
-    // Live WDSP allocations held by one open channel, and the audio it makes.
+    // WDSP allocations made while opening one channel, and the audio it makes.
     // Both are taken while the channel is alive; it is destroyed before return,
     // so runLeakChecked() still sees a clean balance.
     const auto openAndMeasure = [&](bool minimumPhase,
-                                    uint64_t* liveAllocations,
+                                    uint64_t* allocationsMade,
                                     double* toneRms) -> bool {
         WdspChannel::Config channelConfig = config;
         channelConfig.minimumPhase = minimumPhase;
-        const uint64_t before = WdspChannel::outstandingAllocationsForTest();
+        // Patch 14 releases design scratch before open returns. Count the
+        // allocations made so patch 10's lazy construction remains observable:
+        // the minimum-phase open designs more cores than the linear one.
+        const uint64_t before = WdspChannel::allocationSequenceForTest();
         std::string error;
         std::unique_ptr<WdspChannel> channel =
             WdspChannel::create(channelConfig, &error);
@@ -1254,7 +1239,7 @@ bool runMinimumPhaseWorkspaceTest()
                       << minimumPhase << ": " << error << '\n';
             return false;
         }
-        *liveAllocations = WdspChannel::outstandingAllocationsForTest() - before;
+        *allocationsMade = WdspChannel::allocationSequenceForTest() - before;
 
         std::vector<float> inputI(config.inputBlockSize);
         std::vector<float> inputQ(config.inputBlockSize);
@@ -1300,8 +1285,8 @@ bool runMinimumPhaseWorkspaceTest()
         return false;
     }
     if (minimumAllocations <= linearAllocations) {
-        std::cerr << "FAIL: minimum phase cost no extra WDSP allocations "
-                     "(linear=" << linearAllocations
+        std::cerr << "FAIL: a minimum-phase open made no more WDSP allocations "
+                     "than a linear one (linear=" << linearAllocations
                   << " minimum=" << minimumAllocations
                   << ") - the minimum-phase workspace is still being built "
                      "for cores that do not use it\n";
