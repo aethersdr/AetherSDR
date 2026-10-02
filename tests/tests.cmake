@@ -6708,6 +6708,12 @@ target_link_libraries(amp_applet_test PRIVATE
 set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME amp_applet_test COMMAND amp_applet_test)
 
+# Socket-free legacy display-key retirement, including WNB and per-pan isolation.
+add_executable(radio_owned_display_settings_test tests/radio_owned_display_settings_test.cpp)
+target_include_directories(radio_owned_display_settings_test PRIVATE src tests)
+target_link_libraries(radio_owned_display_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME radio_owned_display_settings_test COMMAND radio_owned_display_settings_test)
+
 # Socket-free validation of scoped client display documents.
 add_executable(client_display_settings_test tests/client_display_settings_test.cpp)
 target_include_directories(client_display_settings_test PRIVATE src tests)

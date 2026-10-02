@@ -100,7 +100,6 @@ public:
     // Use the active regional plan when mapping the slice frequency to a
     // native band button. The manager is owned by MainWindow.
     void setBandPlanManager(BandPlanManager* manager);
-    void setWnbState(bool on, int level);
     // Show/hide the whole WNB row (button + level slider + readout) based on
     // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
     void setRadioSideDspAvailable(bool available);
