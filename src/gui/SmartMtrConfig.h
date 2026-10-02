@@ -7,18 +7,10 @@
 
 namespace AetherSDR {
 
-// ============================================================================
-// SmartMTR meter model
-// ============================================================================
-//
-// The SmartMtrWidget is render-only and radio-agnostic. The parent pushes a
-// MeterInput describing WHAT to show (kind + value + range); each kind owns a
-// static MeterConfig (scale markers + a value->position mapping) that tells the
-// widget how to draw it.
-//
-// To add a new kind: add a MeterKind value and one MeterConfig entry in the
-// registry (SmartMtrConfig.cpp). No widget changes.
-// ============================================================================
+// SmartMTR meter model. SmartMtrWidget is render-only and radio-agnostic: the
+// parent pushes a MeterInput (kind + value + range), and each kind owns a static
+// MeterConfig (scale markers + value->position mapping). New kind = a MeterKind
+// value plus a registry entry in SmartMtrConfig.cpp; no widget changes.
 
 // The measurement the control currently shows. Extend here for new kinds.
 // Signal is the RX scale; the rest are TX scales (see DisplaySettings::TxMeter).

@@ -6,24 +6,13 @@
 
 namespace AetherSDR {
 
-// Policy for retaining a KiwiSDR RX replacement across the slice remove->re-add
-// that a FLEX band-stack recall performs. With band_persistence a band recall
-// does NOT retune the slice: the radio DROPS it (in_use=0) and RE-CREATES it
-// (same id, new band) a moment later, so a naive "tear the Kiwi down on
-// sliceRemoved" reverts audio to the Flex antenna on every band change (#4158).
-//
-// This is a pure state machine — no widgets, no timers, no side effects — so
-// MainWindow owns the side effects (disconnect / re-establish / mute) and this
-// decides WHEN. Kept testable on its own because slice-id identity is subtle:
-//   * Flex recycles slice ids, so id + elapsed time is NOT identity — a re-bind
-//     must be gated on positive band-recall intent (noteBandRecall) or an
-//     unrelated close+create would steal the Kiwi onto the wrong slice;
-//   * the reconnect stale-slice prune emits sliceRemoved(oldId) while that id
-//     already belongs to a live new-session slice, so a non-live removal must
-//     never defer/tear down;
-//   * repeated remove->re-add->remove within the grace window must be
-//     generation-safe so an older expiry can't consume newer pending state.
-// Unit-tested in kiwi_rebind_tracker_test.
+// Keeps a KiwiSDR RX replacement across the slice remove → re-add of a FLEX
+// band recall (band_persistence drops and recreates the slice, same id) (#4158).
+// Pure state machine; MainWindow owns the side effects. Identity rules: ids
+// recycle, so re-bind needs positive intent (noteBandRecall); a reconnect
+// stale prune's sliceRemoved(oldId) may name a live new slice, so non-live
+// removals never defer or tear down; expiries are generation-safe.
+// Tested in kiwi_rebind_tracker_test.
 class KiwiRebindTracker {
 public:
     // A band recall was initiated by us on this pan; the slice the radio

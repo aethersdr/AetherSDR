@@ -19,31 +19,18 @@ class AccessoryPortRow;
 class PanelKey;
 struct AmpPortInfo;
 
-// Amplifier applet for the 4O3A Power Genius XL (PGXL).
-//
-// Two presentations, chosen by setFloating() from the container's dock mode —
-// the same docked-is-compact / popped-out-is-roomy split TunerApplet and
-// SpeApplet use, and the same scaling machinery (AccessoryPanelWidgets.h).
-//
-// Docked in the applet rail (compact):
-//  - PWR / SWR / Id horizontal gauges
-//  - temperature, drain and mains readouts beside a fan-mode pull-down and
-//    the OPERATE/STANDBY button
-//
-// Popped out or on the workspace canvas (expanded), laid out the way the
-// amplifier's own front panel is:
-//  - the same three gauges, taller, the SWR track carrying its scale gradient
-//  - a status strip per RF port: PTT lamp, band, bias profile, source radio
-//    — collapsed to a single STANDBY banner while the amplifier is in
-//    standby, since nothing on those strips is live then
-//  - the fan-speed and standby keys beside those strips, spanning both
-//  - the temperatures, drain and mains voltages as one row along the bottom
-//
-// The per-port block is only on the amplifier's own port-9008 status; the
-// radio-relayed "amplifier" object carries model, serial, ip, state and the
-// antenna map and nothing else. Without the direct connection the strips show
-// what is still knowable — which port is keyed, and which one transmit is
-// routed to — rather than inventing the rest.
+// Applet for the 4O3A Power Genius XL (PGXL). setFloating() picks a
+// presentation from dock mode, like TunerApplet/SpeApplet, using the
+// AccessoryPanelWidgets.h scaling.
+//  Docked (compact): PWR / SWR / Id gauges; temperature, drain and mains
+//  readouts beside the fan-mode pull-down and OPERATE/STANDBY.
+//  Expanded (popped out / canvas), laid out like the amp's front panel: taller
+//  gauges (SWR with scale gradient); a status strip per RF port (PTT, band,
+//  bias, source radio), collapsed to a STANDBY banner in standby; fan and
+//  standby keys; temperatures/drain/mains along the bottom.
+// Per-port data comes only from the 9008 socket (the relayed "amplifier"
+// object has model, serial, ip, state and antenna map); without it the strips
+// show only which port is keyed and where TX is routed.
 class AmpApplet : public QWidget {
     Q_OBJECT
 public:
@@ -68,8 +55,15 @@ public:
     // "not measured".
     void setDrivePower(float watts, bool valid);
 
-    void setTemp(float degC);
-    void setTempB(float degC);
+    // The PGXL reports two heatsink temperatures in degrees Celsius
+    // (PowerGeniusXL User Guide v3.9.8, p. 55):
+    //   PA: the power amplifier heatsink. Status key `temp`.
+    //   HL: the Harmonic Load heatsink. Captured status key `hltemp`.
+    //       `tempb` is also accepted, but has not been seen in a capture.
+    // A FlexRadio relays only the PA heatsink temperature. The HL
+    // temperature is available only over a direct connection to the PGXL.
+    void setPaHeatsinkTemp(float degC);
+    void setHarmonicLoadHeatsinkTemp(float degC);
     void setDrainCurrent(float amps);
     void setDrainVoltage(float volts);
     void setMainsVoltage(int volts);
@@ -190,7 +184,7 @@ private:
     QLabel*  m_idLabel{nullptr};    // "Id   39"
 
     // Right-side info column (one per gauge row)
-    QPushButton* m_tempBtn{nullptr}; // "34.7/28.4 C"  (click to toggle C/F)
+    QPushButton* m_tempBtn{nullptr}; // "PA 34.7 / HL 28.4 C"; click to toggle C/F
     QLabel*  m_vddLabel{nullptr};   // "Vdd  50.0 V"  (beside SWR row)
     QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
     QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
@@ -296,10 +290,10 @@ private:
     float    m_drvWatts{0.0f};
     bool     m_haveDrive{false};
     float    m_drainAmps{0.0f};
-    float    m_tempA{0.0f};
-    float    m_tempB{0.0f};
-    bool     m_hasTempA{false};
-    bool     m_hasTempB{false};
+    float    m_paHeatsinkTemp{0.0f};           // degrees Celsius
+    float    m_harmonicLoadHeatsinkTemp{0.0f}; // degrees Celsius
+    bool     m_hasPaHeatsinkTemp{false};
+    bool     m_hasHarmonicLoadHeatsinkTemp{false};
     bool     m_tempFahrenheit{false};
     int      m_mainsVolts{0};
 };

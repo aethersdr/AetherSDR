@@ -72,37 +72,15 @@ void CwSidetoneGenerator::setPan(float p) noexcept
 void CwSidetoneGenerator::setKeyDown(bool down,
                                      std::chrono::steady_clock::time_point when) noexcept
 {
-    // Several threads legitimately produce edges — the iambic and CWX
-    // workers call in directly, and the GUI thread delivers straight-key
-    // sources via RadioModel::cwKeyDownChanged — so slot write and head
-    // publish must be exclusive among producers.  A short spin is cheaper
-    // than any blocking primitive at tens of edges per second; process()
-    // only consumes the tail and never takes this lock, so the audio
-    // thread stays wait-free.  The stamp is resolved inside the lock so
-    // queue order equals timestamp order — process() relies on that for
-    // its edges-are-time-ordered early-out.  A caller-supplied scheduled
-    // instant lies slightly in the past (wake latency), so it is clamped
-    // against the newest queued stamp: without this, a
-    // wall-clock edge from another producer could sit ahead of it in the
-    // queue with a later stamp.  The clamp preserves the schedule's exact
-    // spacing whenever edges from one producer arrive back-to-back, which
-    // is the #4890 case that matters.  Since #4976 a keyer element reaches
-    // here exactly once — RadioModel::sendCwKeyEdge no longer echoes back
-    // through the GUI cwKeyDownChanged handler — so back-to-back keyer
-    // edges clamp against the previous *scheduled* edge rather than against
-    // that echo's wall-clock stamp.  The floor itself is still one value
-    // shared by every producer: a wall-clock edge from another one (a CWX
-    // macro draining through the 1-arg setCwKeyDown, a straight key, a
-    // stop/abort key-up) can still raise it past a keyer element's
-    // scheduled instant and clamp that element up to wall clock.  Removing
-    // the echo narrowed the coupling to genuinely concurrent producers; it
-    // did not make the floor per-producer.
-    // Worst case among producers: the GUI thread descheduled inside the
-    // section leaves a keying worker spinning until the holder resumes.
-    // The section is ~20 instructions, so the window is vanishingly
-    // small, and the cost is one edge timestamped late by the wait —
-    // the same per-edge epsilon class as wake latency, and never a
-    // correctness concern.
+    // Producers (iambic and CWX workers, GUI-thread straight key) serialize on this
+    // short spinlock; process() only consumes the tail and never takes it, so the
+    // audio thread stays wait-free. The stamp is resolved inside the lock and
+    // clamped to the newest queued stamp, so queue order equals time order (which
+    // process() relies on): a scheduled instant lies slightly in the past and a
+    // concurrent wall-clock edge could otherwise precede it. Back-to-back edges from
+    // one producer keep their exact spacing (#4890); the floor is shared, so a
+    // concurrent wall-clock edge can still clamp a keyer element up to wall clock.
+    // A descheduled holder costs at most one late edge.
     while (m_edgeLock.test_and_set(std::memory_order_acquire)) { /* spin */ }
     const auto now = std::max(when, m_lastQueuedStamp);
     const uint32_t head = m_edgeHead.load(std::memory_order_relaxed);
@@ -145,18 +123,11 @@ void CwSidetoneGenerator::reset() noexcept
     // Drop queued edges (consumer-side drain: only the tail moves).
     m_edgeTail.store(m_edgeHead.load(std::memory_order_acquire),
                      std::memory_order_release);
-    // m_lastQueuedStamp is deliberately NOT cleared, and must not be: it is
-    // a plain time_point written by producers under m_edgeLock, while
-    // reset() runs on the audio thread WITHOUT that lock — clearing it here
-    // would be a data race.  Retaining it is also correct: queue ordering
-    // is enforced by the max() clamp in setKeyDown(), not by steady_clock's
-    // monotonicity — a scheduled instant lies a few ms in the past, so an
-    // edge CAN carry a stamp below a floor that a wall-clock edge from
-    // another producer (straight key, stop/abort key-up) raised.  The cost
-    // of the retained floor is bounded and one-sided: the first edge queued
-    // after this drain clamps up to it rather than to its own scheduled
-    // instant, then the grid re-establishes itself within an element or
-    // two.
+    // m_lastQueuedStamp is deliberately NOT cleared: producers write it under
+    // m_edgeLock and reset() runs on the audio thread without it (data race).
+    // Ordering comes from the max() clamp in setKeyDown(), so retaining the floor
+    // only clamps the first edge after this drain; the grid recovers within an
+    // element or two.
 }
 
 void CwSidetoneGenerator::setSampleRateHz(int hz) noexcept
@@ -253,20 +224,12 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
     // audio callback never heap-allocates here.
     QVarLengthArray<std::pair<int, bool>, kEdgeQueueSize> blockEdges;
 
-    // ── Keep the mapping honest about real time ───────────────────────
-    // Everything below assumes process() is pumped in real time, so that
-    // m_streamPos and the anchor's wall clock advance together.  Not every
-    // consumer is: the recorder's sidetone generator renders only while the
-    // radio is transmitting a CW over (AudioEngine::onCwRecordPump), while
-    // setKeyDown() keeps queueing from every paddle edge regardless.  Left
-    // alone, that generator anchors on keying from seconds or minutes ago
-    // and replays it into the next over, and — when the pump stops with the
-    // gate still down — never reaches the Idle branch below that would have
-    // released the anchor, so it renders one unbroken tone instead.
-    //
-    // Two guards, both bounded by the same idle threshold that governs a
-    // normal re-anchor.  One clock read per block, and only while there is
-    // an anchor or something queued.
+    // Keep the mapping honest about real time. Everything below assumes process() is
+    // pumped in real time, but the recorder's generator renders only during a CW
+    // over (AudioEngine::onCwRecordPump) while setKeyDown() queues every edge. Two
+    // guards, bounded by the re-anchor idle threshold, stop it replaying stale keying
+    // or holding one unbroken tone. One clock read per block, only while anchored or
+    // queued.
     const bool haveQueued = m_edgeTail.load(std::memory_order_relaxed)
                             != m_edgeHead.load(std::memory_order_acquire);
     if (m_haveAnchor || haveQueued) {
@@ -277,20 +240,12 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
             return std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()
                    * m_sampleRateHz / 1'000'000'000LL;
         };
-        // (1) The mapping itself has gone stale — wall clock has run ahead of
-        // the samples we have rendered by more than a re-anchor's worth.
-        // What this measures is a stalled pump plus the carried slack: a
-        // fresh anchor is placed at blockStart + m_anchorSlack, so the
-        // mapping starts that far ahead of the head, and the cap on slack is
-        // what keeps that inside this threshold.  The per-edge forward shift
-        // does NOT accumulate here despite moving m_anchorPos — it moves the
-        // mapping onto the head, so afterwards this quantity is the wall time
-        // since that edge rather than a running total (measured: 2.4 ms peak
-        // over a 119-shift racing burst, no re-anchor).  Reaching the
-        // threshold therefore still means process() stopped being called.
-        // Tested one-sided on purpose: a stream position ahead
-        // of wall clock is ordinary prefill (the QAudioSink path fills a
-        // 50 ms buffer up front) and must not re-anchor.
+        // (1) The mapping is stale: wall clock has run ahead of rendered samples by more
+        // than idleLimit. A fresh anchor starts at blockStart + m_anchorSlack (the slack
+        // cap keeps that inside the threshold); per-edge forward shifts don't accumulate
+        // here (they move the mapping onto the head; measured 2.4 ms peak over 119
+        // shifts). So reaching it means process() stopped being called. One-sided: a
+        // stream position ahead of wall clock is ordinary prefill (50 ms on QAudioSink).
         if (m_haveAnchor) {
             const int64_t expected = m_anchorPos + toSamples(nowTp - m_anchorTime);
             if (expected - blockStart > idleLimit) {
@@ -345,33 +300,14 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
         if (target >= blockEnd)
             break;  // future block — edges are time-ordered, stop here
         if (target < blockStart) {
-            // The edge's exact position is already rendered.  Clamping just
-            // this edge would quantize it to the block boundary (#4890 —
-            // under a push-model sink the render head advances at wall-clock
-            // pace, so edges lose this race about half the time, and by whole
-            // refill-sized steps after a pump stall).  Shift the whole
-            // mapping forward instead: this edge plays at the head, every
-            // later edge keeps its exact distance from THIS one, and the
-            // learned slack makes the next burst anchor far enough ahead to
-            // stop racing.  Rhythm is preserved; only onset latency grows.
-            //
-            // The shift is not capped, and deliberately so: it re-aligns the
-            // mapping ONTO the render head rather than pushing it past, so it
-            // does not accumulate against the staleness guard.  After a shift
-            // the guard's quantity is the wall time elapsed since this edge,
-            // not a running total — measured at 2.4 ms peak over a racing
-            // burst of 119 shifts, against a 250 ms threshold, with no
-            // re-anchor.  Bounding it was tried and strands the mapping behind
-            // the head, so every later edge in the anchor clamps and element
-            // durations collapse to block multiples (5.0 ms rendering as
-            // 2.8 ms) — reintroducing the defect this branch removes.
-            // Only the CARRIED slack is capped, below.
-            //
-            // m_anchorTime is deliberately NOT advanced alongside m_anchorPos.
-            // That asymmetry is what makes the guard quantity come out as
-            // S(now - e.t) — wall time since THIS edge — rather than a running
-            // total: moving both would turn the guard back into an accumulator
-            // and reintroduce the mid-burst re-anchor this design rules out.
+            // The edge's exact position is already rendered. Clamping just this edge would
+            // quantize it to the block boundary (#4890), so shift the whole mapping forward:
+            // this edge plays at the head, later edges keep their spacing, and the learned
+            // slack makes the next burst anchor far enough ahead. Rhythm is preserved; only
+            // onset latency grows. The shift is deliberately uncapped (capping strands the
+            // mapping behind the head and collapses elements to block multiples); only the
+            // carried slack is capped. m_anchorTime is NOT advanced with m_anchorPos, so the
+            // staleness quantity is wall time since this edge, not a running total.
             const int64_t deficit = blockStart - target;
             m_anchorPos += deficit;
             m_anchorSlack = std::min<int64_t>(
@@ -408,24 +344,12 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
             m_idleSamples += frames;
             if (m_idleSamples >=
                 static_cast<int64_t>(m_sampleRateHz) * kReanchorIdleMs / 1000) {
-                // Releasing an anchor that never ran late says the sink had
-                // headroom to spare for that whole burst, so give some back:
-                // slack has to be able to shrink or one transient stall would
-                // tax onset latency for the rest of the session.  Halving
-                // converges within a few bursts while still costing several
-                // bursts to climb back if the stall repeats, and the floor
-                // avoids a long tail of single-sample slack.
-                // Two limits on the decay's reach: it runs only on the IDLE
-                // release of an anchor (the staleness re-anchor above frees
-                // the anchor with no decay decision either way), and
-                // kReanchorIdleMs of continuous idle is rare inside sustained
-                // sending — word gaps qualify below ~34 WPM, inter-character
-                // gaps below ~15 WPM, otherwise only the pauses between
-                // transmissions.  Under persistent sink clock drift slack
-                // cannot converge below the drift accrued per anchor
-                // lifetime: late anchors regrow what clean-anchor halvings
-                // release, and a pause-free stretch long enough to accrue the
-                // cap latches there until the next qualifying idle.
+                // An anchor released without ever running late shows sink headroom, so halve the
+                // slack (with a floor) so one transient stall doesn't tax onset latency for the
+                // whole session. Decay happens only on the IDLE release (not the staleness
+                // re-anchor), and kReanchorIdleMs of idle occurs mid-sending only for word gaps
+                // below ~34 WPM or character gaps below ~15 WPM. Under persistent sink clock
+                // drift slack can't fall below the drift accrued per anchor lifetime.
                 if (!m_anchorWentLate && m_anchorSlack > 0) {
                     m_anchorSlack /= 2;
                     if (m_anchorSlack < m_sampleRateHz / 1000)  // < 1 ms

@@ -1,15 +1,9 @@
 #pragma once
 
-// ─── Live Qt-Multimedia wrapper around the pure AudioFormatNegotiator ─────────
-//
-// This is the ONLY platform-specific part of the audio format/rate negotiation
-// stack. It builds a DeviceCaps snapshot from a real QAudioDevice and runs the
-// pure policy (AudioFormatNegotiator) against it, returning a ready-to-open
-// QAudioFormat plus the resampler strategy. Sinks/sources call this instead of
-// hand-rolling their own per-OS ladder (issue #3306).
-//
-// Keep all live device I/O here; the policy itself stays pure and headless-
-// testable in AudioFormatNegotiator. See docs/audio-sink-factory.md.
+// Live Qt-Multimedia wrapper around the pure AudioFormatNegotiator: builds
+// DeviceCaps from a real QAudioDevice, runs the policy, and returns a ready-to-open
+// QAudioFormat plus resampler strategy (#3306). All live device I/O stays here;
+// the policy stays headless-testable. See docs/audio-sink-factory.md.
 
 #include "core/AudioFormatNegotiator.h"
 

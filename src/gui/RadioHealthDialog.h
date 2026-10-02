@@ -10,19 +10,10 @@ namespace AetherSDR {
 
 class RadioModel;
 
-// Live view of the connected radio's health/status registers.
-//
-// The values come from IRadioBackend::healthSnapshot(), so the dialog knows
-// nothing about any particular radio family: the backend decides which
-// registers exist, what they are called and how they group. A family that
-// reports none gets an explanatory message instead of an empty table, because
-// "this radio does not report health registers" and "every register reads zero"
-// are completely different situations and the operator has to be able to tell
-// them apart.
-//
-// This is a DIAGNOSTIC read-out, not a control surface — nothing here writes to
-// the radio. The one thing it must never do is invent a value: a register the
-// radio has not reported shows a dash.
+// Live view of the radio's health/status registers from
+// IRadioBackend::healthSnapshot(); the backend decides which registers exist
+// and how they group. A family reporting none gets an explanatory message, not
+// an empty table. Read-only; an unreported register shows a dash, never a value.
 class RadioHealthDialog : public PersistentDialog {
     Q_OBJECT
 

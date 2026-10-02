@@ -38,16 +38,11 @@ struct RxChainScratch {
     QByteArray pudu;
 };
 
-// Walk `packed` (the AudioEngine::RxChainStage bytes, low slot first,
-// terminated by a None byte) and apply each stage in turn.
-//
-// Returns the buffer holding the result — `input` itself when every stage was
-// skipped, otherwise the scratch of the last stage that ran. `postEq`, when
-// non-null, receives the buffer as it stood immediately after the EQ slot,
-// wherever that slot sits, so the analyzer tap keeps meaning "after the EQ".
-//
-// A stage is skipped when its module is absent, disabled, or `bypass` is set
-// (TX). No allocation beyond the scratch buffers growing once to block size.
+// Apply each stage of `packed` (AudioEngine::RxChainStage bytes, low slot
+// first, None-terminated). Returns `input` if every stage was skipped, else the
+// last stage's scratch. `postEq`, if non-null, receives the buffer right after
+// the EQ slot wherever it sits. Stages skip when absent, disabled, or `bypass`
+// (TX). Allocates only when scratch first grows to block size.
 const QByteArray* runRxChain(uint64_t packed,
                              const QByteArray& input,
                              const RxChainModules& modules,

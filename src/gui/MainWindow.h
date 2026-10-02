@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DeferredSettingsWrites.h"
+#include "TxAudioPathPolicy.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  MainWindow is DECOMPOSED (#3351). Add member fields/declarations here ONLY
@@ -428,17 +429,11 @@ private:
     // permanence submenus, and the width clamps on drag-resize.
     void applyNotchCapabilities(SpectrumWidget* sw) const;
 
-    // The one place a declared RadioCapabilities flag turns into UI visibility.
-    //
-    // Bound to RadioModel::capabilitiesChanged, so it runs on every connect and
-    // disconnect edge and on any mid-session revision. Each surface gets exactly
-    // one owning call here rather than its own connect-time lambda: with several
-    // flags in play, scattered lambdas are how two callers end up both driving
-    // one widget's setVisible() and whichever fires last wins.
-    //
-    // Every flag reads `!connected || caps.x`. With no radio attached there is
-    // nothing to be honest about, and a control that stays hidden after
-    // unplugging reads as a fault rather than as an accurate report.
+    // The one place a declared RadioCapabilities flag becomes UI visibility.
+    // Bound to capabilitiesChanged (every connect/disconnect edge and
+    // mid-session revision); each surface gets exactly one owning call here so
+    // no two callers fight over setVisible(). Every flag reads
+    // `!connected || caps.x`.
     void applyCapabilitiesToUi(bool connected, const RadioCapabilities& caps);
     void applyTxAudioCapabilities(bool connected, const RadioCapabilities& caps);
     void wireStatusBarMessages();
@@ -449,16 +444,10 @@ private:
     // value — the same reason applyTuningRangeToOverlayMenu() exists.
     void applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const;
 
-    // AppSettings key for a pan's persisted RF gain, scoped by radio FAMILY.
-    //
-    // RF gain is the one "display" setting that is really a hardware register,
-    // and its range is family-specific: a Flex's is -8..+32 in 8 dB steps, the
-    // HL2's AD9866 LNA is -12..+48 in 1 dB steps. Sharing one key meant a value
-    // last set on a Flex was restored onto an HL2 as an LNA gain the operator
-    // never chose for that radio — harmless while the HL2 ignored it, real now
-    // that the slider reaches the register.
-    //
-    // Flex keeps the unsuffixed key so existing settings survive untouched.
+    // AppSettings key for a pan's persisted RF gain, scoped by radio family:
+    // RF gain is a hardware register with family-specific range (Flex -8..+32
+    // in 8 dB steps, HL2 AD9866 LNA -12..+48 in 1 dB steps). Flex keeps the
+    // unsuffixed key so existing settings survive.
     QString rfGainSettingsKey(SpectrumWidget* sw) const;
     // The Auto RF Gain switch's settings key, family-scoped the same way and
     // for the same reason: an HL2's automatic gain control is not a Flex's.
@@ -468,16 +457,11 @@ private:
                                                        const char* source);
     void applyTuneRequest(SliceModel* slice, double mhz,
                           TuneIntent intent, const char* source);
-    // Shared band-selection implementation, used by both the
-    // SpectrumOverlayMenu band buttons and the band_* shortcut/MIDI actions
-    // so they behave identically (#4543):
-    //   - Flex: freqMhz/mode are hints only. selectBand() sends a
-    //     radio-authoritative band-stack recall (display pan set <panId>
-    //     band=<key>) and the radio restores its own saved frequency/mode/
-    //     filters/antenna; freqMhz/mode are ignored.
-    //   - non-Flex: there is no radio-owned band stack, so freqMhz/mode ARE
-    //     the actual local tune target — selectBand() sets mode (if
-    //     non-empty) then frequency directly on the active slice.
+    // Shared band selection for overlay band buttons and band_* shortcut/MIDI
+    // actions (#4543). Flex: sends a band-stack recall (display pan set <panId>
+    // band=<key>) and the radio restores freq/mode/filters/antenna; freqMhz/mode
+    // are ignored. Non-Flex: sets mode (if non-empty) then freqMhz on the active
+    // slice.
     void selectBand(const QString& panId, const QString& bandName, double freqMhz,
                     const QString& mode, const QString& stackKeyHint = QString());
     // Lock / SWR-sweep guards shared by every tune source.  Returns true if the
@@ -626,6 +610,11 @@ private:
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
+    using TxAudioPathBlock = AetherSDR::TxAudioPathBlock;
+    TxAudioPathBlock txAudioPathBlock() const; // MainWindow_DspApplets.cpp
+    QString txAudioPathBlockMessage(TxAudioPathBlock block) const;
+    bool showTxAudioPathErrorIfBlocked(); // MainWindow_DspApplets.cpp
+    void updateTxAudioPathNotice(); // MainWindow_DspApplets.cpp
     // Binds the Flex-shaped voice controls — PROC and its NOR/DX/DX+ level — to
     // the client-side compressor on a backend that modulates on this host, and
     // publishes that compressor's gain reduction as the TX:COMPPEAK meter.

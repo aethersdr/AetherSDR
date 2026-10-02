@@ -5,21 +5,11 @@
 
 namespace AetherSDR {
 
-// Small, self-contained FFT analyzer used by the Client EQ editor to
-// render a live spectrum behind the response curve. Fixed 2048-point
-// radix-2 Cooley-Tukey — bin resolution fs/N = 11.7 Hz at 24 kHz, so
-// the first (non-DC) bin lands below the 20 Hz display floor and the
-// analyzer does not produce a visible "cutoff" artifact at the
-// leftmost visible frequency. Runs in ~200 µs on the UI thread, cheap
-// enough for a 25 Hz timer.
-//
-// Usage:
-//   ClientEqFftAnalyzer fft;
-//   fft.update(samples, ClientEqFftAnalyzer::kFftSize);  // from audio tap
-//   for (auto db : fft.magnitudesDb()) ...
-//
-// Magnitude bins are exponentially smoothed per-bin with asymmetric
-// attack (fast) and decay (slow) — the classic "analyzer follow" feel.
+// FFT analyzer for the Client EQ editor's live spectrum. Fixed 2048-point
+// radix-2: bin width fs/N = 11.7 Hz at 24 kHz, so the first non-DC bin sits
+// below the 20 Hz display floor (no visible cutoff at the left edge). ~200 µs
+// on the UI thread, fine for a 25 Hz timer. Bins are smoothed per bin with
+// fast attack and slow decay.
 class ClientEqFftAnalyzer {
 public:
     static constexpr int kFftSize = 2048;
@@ -44,26 +34,11 @@ public:
         return static_cast<float>(bin * sampleRate / kFftSize);
     }
 
-    // The dB to ADD to magnitudesDb() before reading a bin as an absolute
-    // level. +6.02 dB for the Hann window this class builds.
-    //
-    // WHY A CALLER HAS TO DO THIS. update() normalises by 2/N, which is the
-    // single-sided normalisation for an UNWINDOWED transform. It does not
-    // remove the analysis window's coherent gain — the window's mean, 1/2 for
-    // Hann — so a full-scale sine peaks at -6.02 dBFS and not at 0. That is
-    // invisible to the EQ editor, which draws a spectrum's shape against a
-    // response curve and never names an absolute number, and it is why the
-    // error survived here; it is NOT invisible to a caller that puts a dBFS
-    // figure on screen beside a converter's clip threshold.
-    //
-    // Offered as a correction for the caller to apply rather than folded into
-    // `norm`, because folding it in would move the EQ editor's displayed
-    // spectrum 6 dB for every existing user of that window, which is a
-    // separate decision from getting one new readout right.
-    //
-    // Computed from the window this instance actually built, so a change to
-    // buildWindow() carries the constant with it instead of stranding a 6.02
-    // somewhere else in the tree.
+    // dB to ADD to magnitudesDb() to read a bin as an absolute level (+6.02 dB
+    // for Hann). update() normalises by 2/N, which leaves the window's coherent
+    // gain (its mean, 1/2 for Hann) in place; it is not folded into `norm` so the
+    // EQ editor's display does not shift. Computed from the window actually
+    // built, so a buildWindow() change carries the constant with it.
     float coherentGainCorrectionDb() const noexcept;
 
     static constexpr float kFloorDb = -100.0f;

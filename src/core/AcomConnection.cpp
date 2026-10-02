@@ -239,16 +239,10 @@ void AcomConnection::onFrameReceived(const Acom::Frame& f)
 
     switch (static_cast<Acom::Address>(f.address)) {
         case Acom::Address::Telemetry: {
-            // No 0x86 ack here — Telemetry is auto-pushed continuously (every
-            // ~100ms in practice), not requested. The spec's per-message
-            // resend-until-acked mandate (§1/§5.5) reads as written for a
-            // request/reply exchange; the MIT-licensed reference client (see
-            // THIRD_PARTY_LICENSES) never sends 0x86 for anything, on any
-            // message type, and is a documented-working real-hardware
-            // implementation over direct RS-232 — so acking isn't required to
-            // keep the push stream flowing, and continuously acking a
-            // ~10/s broadcast is the one place blanket-acking every frame
-            // type stopped making sense.
+            // No 0x86 ack: Telemetry is auto-pushed (~100 ms), and the reference client (see
+            // THIRD_PARTY_LICENSES) never sends 0x86 yet keeps the stream flowing on real
+            // hardware. The spec's resend-until-acked rule (§1/§5.5) applies to
+            // request/reply exchanges.
             auto t = Acom::decodeTelemetry(f.data);
             if (t) {
                 if (m_telemetryDecodeFailed) {

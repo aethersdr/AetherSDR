@@ -1,24 +1,11 @@
 #pragma once
 
-// One additional canvas window (RFC #4887 phase 7): a thin top-level that
-// hosts one WorkspaceCanvas and remembers its own geometry HINT.  The canvas
-// does the work; this class holds it — deliberately following
-// FloatingContainerWindow's existing frameless/shutdown contract (flags
-// re-applied before show, WA_DeleteOnClose off, screen-clamped restore,
-// debounced geometry save, an explicit prepareShutdown()) rather than
-// inventing a new one, because that contract is where the #2495/#4803
-// top-level-window lessons already live.
-//
-// Geometry is a HINT by schema design (WorkspaceDocument.h): item rects are
-// authoritative fractions of this window's canvas, restored exactly; where
-// the desktop puts the window is advisory, and Wayland always declines the
-// position half.  A hint that is ignored costs one drag and loses no layout.
-//
-// Lifecycle is the controller's call, made through MainWindow's window-host
-// hooks: closing the window is HIDE-AND-KEEP (maintainer ruling) — the
-// closeEvent is forwarded as a request, never acted on locally, so the
-// controller can evict the surface's widgets first and record the hidden
-// flag.  Only prepareShutdown() closes for real.
+// One additional canvas window (RFC #4887): a thin top-level hosting one
+// WorkspaceCanvas. Follows FloatingContainerWindow's frameless/shutdown contract
+// (flags re-applied before show, no WA_DeleteOnClose, screen-clamped restore,
+// debounced geometry save, explicit prepareShutdown(); #2495/#4803). Its geometry
+// is only a hint (WorkspaceDocument.h). Close is hide-and-keep: closeEvent is
+// forwarded to the controller, never acted on; only prepareShutdown() closes.
 
 #include <QByteArray>
 #include <QString>

@@ -370,27 +370,11 @@ RadioCapabilities FlexBackend::capabilities() const
     // values; 10 Hz is where the model clamps.
     caps.notchMinWidthHz = 10.0;
     caps.notchMaxWidthHz = 6000.0;
-    // GPSDO / on-board GNSS, reported through the `gps` status.
-    //
-    // TRUE for every Flex, and deliberately COARSER than
-    // RadioModel::hasGpsHardware(). The two answer different questions and both
-    // are needed:
-    //
-    //   - this flag: "can a radio of this family have GPS at all" — a family
-    //     fact, which is what the capability seam is for and all a backend can
-    //     honestly assert before any status has arrived;
-    //   - hasGpsHardware(): "does THIS unit have it" — model name (8400/8600/
-    //     AU-), a live oscillator presence flag, OR a `gps` status that is not
-    //     "Not Present".
-    //
-    // Do not narrow this to the model-name test to match. That clause is one
-    // half of an OR: a FLEX-6700 with an optional GPSDO installed answers true
-    // through the STATUS clause, and a model-name test here would hide GPS on
-    // exactly those radios — a regression in the opposite direction from the one
-    // it would appear to fix.
-    //
-    // MainWindow therefore combines this family declaration with
-    // RadioModel::hasGpsHardware() while connected.
+    // GPSDO / on-board GNSS via the `gps` status. True for every Flex: a family fact,
+    // coarser than RadioModel::hasGpsHardware() (this unit: model name, oscillator
+    // presence, OR a `gps` status other than "Not Present"). Do not narrow this to
+    // the model-name test: a FLEX-6700 with an optional GPSDO is detected only via
+    // the status clause. MainWindow combines both while connected.
     caps.hasGpsLocation = true;
     caps.hasGpsSatelliteTelemetry = true;
     caps.hasGpsFrequencyReference = true;
@@ -475,17 +459,10 @@ void FlexBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(thresholdDb));
 }
 
-// ── Manual notch filters (TNF) ──────────────────────────────────────────────
-//
-// These emit exactly the strings TnfModel used to build itself, quirks
-// included, because the radio is the one thing this refactor must not notice.
-// The odd one is width: the radio REPORTS it in Hz but is WRITTEN in MHz, and
-// TnfModel has always sent it that way. Normalizing it here would be a wire
-// change wearing a cleanup's clothing.
-//
-// No id is minted locally. `tnf create` makes the radio assign one and report
-// it back as `tnf <id> …` status, which RadioModel already decodes — so unlike
-// a host-DSP backend, this one never emits notchChanged().
+// Manual notch filters (TNF). The radio REPORTS width in Hz but is WRITTEN in
+// MHz; keep that wire format. No id is minted locally: `tnf create` makes the
+// radio assign one and report `tnf <id> …` status, which RadioModel decodes, so
+// this backend never emits notchChanged().
 void FlexBackend::createNotch(double centerHz, double widthHz)
 {
     // Width is not settable at create time on the Flex wire; the radio picks a
@@ -1319,27 +1296,13 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
     carry(kvs, "daxiq_available", d.daxiqAvailable);
     emit radioChanged(d);
 
-    // #5594 (M1): announce the capability revision this status just caused.
-    //
-    // The Flex capability table is DERIVED FROM THE MODEL NAME — capabilities()
-    // runs capabilitiesFor(caps.model) to seed maxSlices, the DSP tier and the
-    // rest — and the model name is not known at the connect edge. It arrives
-    // here, in a `radio ...` status, some time after. Until now nothing said so,
-    // so every consumer that bound to capabilitiesChanged saw the pre-model
-    // table forever; RadioModel's own comment at the meterDefined handler
-    // records the symptom this produced (a mic gauge hidden at connect and
-    // un-hidden only if an unrelated status happened to land afterwards).
-    //
-    // Deliberately AFTER emit radioChanged(d): a consumer woken by
-    // capabilitiesChanged calls capabilities(), which reads the model back
-    // through m_modelProvider, and that provider only returns the new name once
-    // RadioModel has applied this delta. Same thread, direct delivery, so the
-    // apply above has already happened by the time this line runs.
-    //
-    // Change-guarded against the LAST ANNOUNCED name, not merely against the
-    // key being present: a Flex repeats `radio ...` status on unrelated edits
-    // (callsign, nickname, the audio gains above), and re-announcing on each
-    // would make a republish storm out of typing in a text field.
+    // Announce the capability revision a model-name change causes (#5594 M1):
+    // capabilities() derives its table from the model name, which arrives here in a
+    // `radio ...` status after connect. Must follow emit radioChanged(d): consumers
+    // re-read the model through m_modelProvider, which returns the new name only
+    // once RadioModel has applied this delta (same thread, direct delivery).
+    // Guarded against the last announced name because `radio ...` status repeats
+    // on unrelated edits (callsign, nickname, gains).
     if (d.model && *d.model != m_announcedModel) {
         m_announcedModel = *d.model;
         emit capabilitiesChanged();

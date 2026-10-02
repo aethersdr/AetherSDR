@@ -21,16 +21,10 @@ void TunerModel::setHandle(const QString& handle)
     m_handle = handle;
     bool nowPres = isPresent();
     qCDebug(lcTuner) << "TunerModel: handle set to" << m_handle;
-    // Losing the handle is how the relayed side says the tuner is gone (radio
-    // disconnect, or the amplifier object being removed). A tune reported
-    // before that goes unfinished as far as this client is concerned: the
-    // tuner completes on its own and sits idle while the flag stays true.
-    // Left latched it would pass abortTune()'s guard and start a tune on an
-    // idle tuner. A direct connection that is still up re-reports the truth
-    // on its next poll a second later.
-    // Not while a direct connection is up: it is still watching the tune and
-    // will report the end itself. Clearing here would drop the key back to
-    // TUNE mid-tune, and pressing it then aborts.
+    // An empty handle means the relayed side lost the tuner; a tune reported before
+    // that would stay latched and let abortTune() start a tune on an idle tuner, so
+    // clear it. Not while a direct connection is up: it still watches the tune and
+    // reports the end itself (clearing would flip the key to TUNE mid-tune).
     if (m_handle.isEmpty() && !hasDirectConnection()) {
         clearTuning();
     }
@@ -169,21 +163,11 @@ void TunerModel::abortTune()
 {
     if (!m_tuning) return;
 
-    // `autotune` is a toggle, not a start. Sent while the tuner is idle it
-    // begins a cycle; sent while tuning=1 it aborts the one running, and the
-    // tuner acknowledges that with a bare R<seq>|0| rather than the state
-    // push a start gets. Captured off the wire between the 4O3A
-    // TunerGeniusDesk application and the tuner (three aborts, three for
-    // three); FlexLib documents none of this — it exposes one tuner command
-    // and an ATUTuneStatus.TGXL_Aborted that nothing ever produces.
-    //
-    // So an abort is the same command as a start, and the guard above is what
-    // separates them. It is the tuning flag the firmware itself is keying
-    // off, so the two agree by construction: no tune running, nothing to
-    // abort, and no risk of this starting one instead.
-    //
-    // Crucially the tuner stays in OPERATE across an abort — bypass is never
-    // touched — so there is no state to restore afterwards.
+    // `autotune` is a toggle: idle it starts a cycle; with tuning=1 it aborts, and
+    // the tuner acks with a bare R<seq>|0| instead of a state push (captured from
+    // 4O3A TunerGeniusDesk; FlexLib does not document it). The m_tuning guard above
+    // is what makes this an abort and never a start. The tuner stays in OPERATE
+    // across an abort, so nothing needs restoring.
     qCDebug(lcTuner) << "TunerModel::abortTune: re-sending autotune to abort";
     if (m_directConn && m_directConn->isConnected()) {
         m_directConn->requestAutotune();

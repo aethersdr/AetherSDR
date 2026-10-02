@@ -8,16 +8,10 @@ class QPushButton;
 
 namespace AetherSDR {
 
-// In-app actionable reminder toast for an upcoming net. This is the *guaranteed*
-// notification path: OS-native notifications (tray balloon / Toast / Notification
-// Center) can be suppressed by Do-Not-Disturb, missing permissions, or platforms
-// that don't render action buttons, and QSystemTrayIcon::showMessage() cannot
-// carry a button at all. So the reliable "Tune Now" button lives here, in-app,
-// where the action actually happens; the OS notification is only the
-// attention-getter that raises the window.
-//
-// Rendered as a small frameless popup anchored to the bottom-right of its parent
-// window, styled like the rest of AetherSDR's chrome.
+// In-app reminder toast for an upcoming net, the guaranteed path with the
+// "Tune Now" button: OS notifications may be suppressed or lack buttons
+// (QSystemTrayIcon::showMessage() has none) and only raise the window.
+// Frameless popup anchored bottom-right of its parent.
 class NetReminderBanner : public QFrame {
     Q_OBJECT
 

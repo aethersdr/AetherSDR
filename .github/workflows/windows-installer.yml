@@ -67,21 +67,30 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
 
+      # Match CI: avoid parallel 7-Zip workers racing to create this root.
+      - name: Prepare Qt extraction directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path "$env:RUNNER_WORKSPACE\Qt\6.12.0\msvc2022_64" | Out-Null
+
       - name: Install Qt6
-        uses: jurplel/install-qt-action@bcb88e3bed2e992f5f9e24c0f9e364a231d278eb
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125
         with:
-          # Exact, not '6.8.*'. The wildcard resolved to 6.8.3 only because Qt
-          # stopped publishing open-source 6.8.x binaries after it — 6.8.4 is
-          # source-only and 6.8.5+ are absent from the open-source repo. That is
-          # a licensing accident holding the release build to the tested Qt, not
-          # a pin. ci.yml's check-windows leg already spells 6.8.3 exactly; with
-          # both exact, the per-PR build and the release build agree by
-          # construction rather than by coincidence.
-          version: '6.8.3'
+          # Exact, not a wildcard. ci.yml's check-windows leg spells 6.12.0
+          # exactly; with both exact, the per-PR build and the release build
+          # agree by construction rather than by coincidence (#5487).
+          version: '6.12.0'
           host: 'windows'
           target: 'desktop'
           # Qt 6.8 LTS dropped MSVC 2019 builds — arch must be msvc2022.
           arch: 'win64_msvc2022_64'
+          # PyPI aqtinstall 3.3.0 cannot read Windows 6.11+ per-arch folders
+          # (aqtinstall#959 / #1000). Pin the unreleased fix until >3.3.0
+          # ships. Same commit as ci.yml's AQTINSTALL_GIT_REF.
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@076e1659807d0b362a3ed684d54c2e9c775eb9c7'
+          # Match CI: this aqt revision requires >=1.1.3. Avoid the Windows
+          # py7zr extraction flake (#995) using the runner's 7-Zip.
+          py7zrversion: '==1.1.3'
+          extra: '--external 7z'
           # Base Qt PDBs live in debug_info; each add-on keeps its PDBs in a
           # separate .debug_information module. Restrict the base archives to
           # the QtBase/QtSvg binaries AetherSDR actually deploys so release CI
@@ -170,7 +179,7 @@ jobs:
         id: cache-qtkeychain
         with:
           path: third_party/qtkeychain
-          key: qtkeychain-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-qtkeychain.ps1') }}
+          key: qtkeychain-${{ runner.os }}-qt6.12.0-202609280346-${{ hashFiles('scripts/setup/setup-qtkeychain.ps1') }}
 
       - name: Setup qtkeychain (SmartLink credential persistence)
         if: steps.cache-qtkeychain.outputs.cache-hit != 'true'

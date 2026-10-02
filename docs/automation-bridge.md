@@ -305,7 +305,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 
 | Category | Verb | One-liner |
 |---|---|---|
-| **Introspection** | [`ping`](#ping) | Handshake; returns app + version. |
+| **Introspection** | [`ping`](#ping) | Handshake; returns app + version + build identity. |
 | | [`verbs`](#verbs) | Machine-readable catalog of every verb + aliases + help. |
 | | [`dumpTree`](#dumptree) | ARIA-style snapshot of the whole widget tree. |
 | | [`grab <target> [path]`](#grab) | PNG of one widget (GPU-correct for the panadapter). |
@@ -389,12 +389,25 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 > the running app disagree, trust `verbs` — it cannot go stale.
 
 ### `ping`
-Connectivity / handshake.
+Connectivity / handshake, and which build is answering.
 
 ```json
 → {"cmd":"ping"}
-← {"ok":true,"app":"AetherSDR","version":"26.6.3"}
+← {"ok":true,"app":"AetherSDR","version":"26.9.3",
+   "build":{"describe":"v26.9.3-68-g7e841682","sha":"7e841682",
+            "baseline":"v26.9.3","commitsSinceTag":68,"dirty":false},
+   "authRequired":false,"readOnly":false}
 ```
+
+`version` is the release string, and a branch with unmerged changes reports the
+same one as `main`. `build` tells them apart (#5804). It is `git describe --tags
+--always --dirty`, captured when the binary is **built**, not when CMake was
+configured, so it cannot name an older commit after an incremental rebuild.
+`dirty` is `git describe`'s own notion: tracked files differed from `HEAD` at
+build time. Outside a git checkout (a source tarball) the strings are
+`"unknown"` and `commitsSinceTag` is `-1`; when no tag is reachable (a shallow
+clone), `describe` and `sha` carry the bare hash, `baseline` is `"unknown"` and
+`commitsSinceTag` is likewise `-1`.
 
 ### `verbs`
 Machine-readable catalog of every verb the running build understands —
@@ -3281,6 +3294,28 @@ The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 base64 `pcmBase64`. Use `audioCapture status` for metadata only and
 `audioCapture stop` to stop early.
 
+#### DSP stereo probe: NR2, NR4, MNR, DFNR, BNR, NNR
+
+`audioCapture probeDspStereo <mode>` (or `all`, optionally with `strict`) runs
+the same deterministic three-second stereo signal through three fresh filters
+of that method: once as generated, once with the right channel replaced by
+unrelated tones, and once with the left replaced. Every client NR method
+denoises L and R independently, as RN2 does, so `ok` means each side's output
+is bit-identical whatever the other side carries (`leftIndependent`,
+`rightIndependent`, `channelsIndependent`) and both sides stay `audible`.
+
+The RMS `input`/`output`, `ratioError`, and level-ratio fields are reported
+but not judged: independent, level-dependent suppression treats the louder
+and quieter copies of one off-centre signal differently, so the L/R balance
+is not held (see the RX DSP ordering in `docs/architecture/audio-pipeline.md`). These modes no longer
+return `preserved`, the old L/R-ratio verdict; read `channelsIndependent` and
+`ok` instead (RN2 keeps `preserved`). `leftIndependenceMaxError` and
+`rightIndependenceMaxError` give the largest per-sample difference behind each
+verdict, or `-1` when the runs differ in length or produced no output. The NR2 run disables post2, whose per-instance random comfort noise
+would otherwise make the three runs differ, and says so with
+`post2Disabled: true`. A method that removes the probe's
+steady tones entirely (BNR does) reports `audible: false`.
+
 #### RN2 deterministic stereo probe
 
 `audioCapture probeDspStereo RN2` is an automation-only, synthetic RX proof
@@ -4491,7 +4526,7 @@ still a separate radiocert task.
 
 | Verb | Aliases | Description |
 |---|---|---|
-| `ping` | — | liveness check → app + version + whether a token is required |
+| `ping` | — | liveness check → app + version + build identity + whether a token is required |
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |
 | `floors` | — | per-pan measured noise + display floor (dBm) |

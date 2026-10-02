@@ -201,7 +201,7 @@ something unexpected on one with an AH-705.
 | `sliceChanged` | CI-V Transceive pushes + polled `03`/`04` |
 | `panCenterBandwidthChanged` | the `27 00` waveform header carries centre+span or edges |
 | `spectrumFrameReady` | `27 00` waveform data, 475 bins → float (see §6) |
-| `waterfallRowReady` | derived from the same frame |
+| (waterfall row) | derived by RadioModel from `spectrumFrameReady`; there is no separate seam signal |
 | `audioFrameReady` | audio stream, decoded to the engine's PCM format |
 | `sliceAudioFrameReady` | same buffer — one slice, so they are the same stream |
 | `meterUpdate` | polled `15 xx` through the calibration curves |

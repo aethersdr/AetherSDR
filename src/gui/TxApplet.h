@@ -21,18 +21,8 @@ class RadioModel;
 class TransmitModel;
 class TunerModel;
 
-// TX applet — transmit controls matching the SmartSDR TX panel.
-//
-// Layout (top to bottom):
-//  - Title bar: "TX"
-//  - Forward Power horizontal gauge (0–120 W, red > 100 W)
-//  - SWR horizontal gauge (1.0–3.0, red > 2.5)
-//  - RF Power slider (0–100%)
-//  - Tune Power slider (0–100%)
-//  - TX Profile dropdown + Success/Byp/Mem indicators
-//  - TUNE / MOX / ATU / MEM buttons
-//  - Active / Cal / Avail indicators
-//  - APD button
+// TX applet: transmit controls matching the SmartSDR TX panel (power/SWR
+// gauges, RF and Tune power, TX profile, TUNE/MOX/ATU/MEM, APD).
 class TxApplet : public QWidget {
     Q_OBJECT
 
@@ -142,18 +132,10 @@ private:
     QPushButton* m_apdBtn{nullptr};
     QWidget*     m_apdRow{nullptr};
 public:
-    // The APD row has TWO inputs and therefore ONE owner, for the same reason
-    // the ATU button does: two callers each doing setVisible() means whichever
-    // fires last wins.
-    //
-    //   apdConfigurable   the connected Flex reports `apd configurable=1`
-    //   hasRadioSideDsp   the radio runs its own DSP at all
-    //
-    // Both are needed. apdConfigurable alone was already correct in practice on
-    // an HL2 — nothing sets it — but only because the row's state carried over
-    // from a previous session: it arrives ONLY in Flex TransmitDelta status, so a
-    // backend that never sends it leaves the value to history, and m_apdRow is
-    // constructed visible. The capability makes it deterministic.
+    // The APD row has one owner for two inputs (as with the ATU button):
+    // apdConfigurable (Flex reports `apd configurable=1`, only via TransmitDelta
+    // status) and hasRadioSideDsp. Both are required so a backend that never sends
+    // apd (HL2) gets a deterministic hidden row; m_apdRow is constructed visible.
     void setApdVisible(bool v)
     {
         m_apdConfigurable = v;

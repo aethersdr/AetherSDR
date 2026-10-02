@@ -106,17 +106,12 @@ private:
     // isTxSlice() slice); no promotion side effect, so it is callable from const.
     SliceModel* currentTxSlice() const;
 
-    // True only when THIS connection engaged split (set_split_vfo 1 or an
-    // implicit VFOB set), regardless of where the radio's single transmitter
-    // sits. Split reporting over rigctld is therefore per-CONNECTION state, not
-    // rig state: split engaged in the AetherSDR GUI, or by another CAT client, is
-    // intentionally NOT surfaced here — matching SmartSDR CAT and the TCI fix
-    // (#4085/#4086), which is what lets N per-slice ports each behave as an
-    // independent single-VFO rig (#4851/#4853). includePending covers the
-    // create-on-demand window and is for the keying path (cmdSetPtt) only; the
-    // getters and the VFOB resolver pass false so they never advertise split
-    // before the TX slice exists. One source of truth for cmdGetSplitVfo,
-    // cmdGetVfoInfo, sliceForVfo, get_vfo_list and cmdSetPtt so it cannot drift.
+    // True only when THIS connection engaged split (set_split_vfo 1 or an implicit
+    // VFOB set); split from the GUI or another CAT client is not surfaced, so each
+    // per-slice port acts as an independent single-VFO rig (#4085, #4851).
+    // includePending covers the create-on-demand window and is for cmdSetPtt only;
+    // getters and the VFOB resolver pass false. Single source for cmdGetSplitVfo,
+    // cmdGetVfoInfo, sliceForVfo, get_vfo_list and cmdSetPtt.
     bool clientSplitActive(bool includePending = false) const;
     // If a split-enable arrived when only one slice existed, this promotes the
     // newly-created second slice to TX as soon as it appears in the model,
@@ -126,16 +121,12 @@ private:
     // (m_createdTxSliceId): re-resolves by id at removal time and skips if it's
     // already gone. No-op when we promoted an existing (operator) slice.
     void removeCreatedTxSlice();
-    // Ensure a distinct TX slice exists, enabling split on demand: promote an
-    // existing non-RX slice, or create one (deferred promotion). No-op if a TX
-    // slice already exists. Used by set_split_vfo's enable path and by
-    // set_freq/set_mode VFOB — targetable_vfo lets clients address the TX VFO
-    // directly without a preceding set_split_vfo (e.g. WSJT-X Rig split).
-    // recordExistingAsEnabled: when split is ALREADY engaged on a distinct slice,
-    // record m_lastSplitEnable=1 only for enable-intent callers (set_split_vfo 1,
-    // set_freq/set_mode VFOB). Passive set_split_freq/set_split_mode pass false so
-    // they don't claim an enable this client never made (would arm a spurious
-    // 1→0 reclaim on the next polled set_split_vfo 0).
+    // Ensure a distinct TX slice exists (promote a non-RX slice or create one,
+    // promoted later); no-op if one exists. Used by set_split_vfo enable and
+    // set_freq/set_mode VFOB (targetable_vfo, e.g. WSJT-X Rig split).
+    // recordExistingAsEnabled: set m_lastSplitEnable=1 for an already-engaged
+    // split only for enable-intent callers; set_split_freq/mode pass false so a
+    // later polled set_split_vfo 0 doesn't trigger a spurious 1→0 reclaim.
     void ensureSplitTxSlice(bool recordExistingAsEnabled = true);
     // Shared on-demand establish+resolve for set_split_freq / set_split_mode:
     // ensures a split TX slice (without claiming the enable), then either stashes

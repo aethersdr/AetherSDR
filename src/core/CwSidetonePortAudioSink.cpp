@@ -238,20 +238,10 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device,
     return paNoDevice;
 }
 
-// Record what PortAudio actually enumerated, before anything opens a stream.
-//
-// #5713: a Windows box died with STATUS_HEAP_CORRUPTION (0xc0000374) inside
-// this startup, and the support bundle could not say where — the log jumps
-// straight from "RX stream started" to nothing, because the process was killed
-// by the OS. Every Windows install runs this path on every connect
-// (startSidetoneStream() is unconditional at the tail of startRxStream()), so
-// the thing that distinguishes the one machine that crashes from the ones that
-// do not is its device set. That is precisely what was missing, and it costs
-// one pass over data PortAudio has already built.
-//
-// lcAudioSummary, not lcAudio: lcAudio is declared at QtWarningMsg
-// (LogManager.cpp), so a qCInfo on it never reaches a DEFAULT support bundle —
-// which is the only kind a crashing user can produce.
+// Log what PortAudio enumerated before any stream opens: on Windows this runs on
+// every connect and a heap corruption here (#5713) left no other trace, so the
+// device set is the distinguishing evidence. Uses lcAudioSummary because lcAudio
+// is QtWarningMsg (LogManager.cpp) and would miss a default support bundle.
 void logPortAudioInventory()
 {
     const PaHostApiIndex apiCount = Pa_GetHostApiCount();
@@ -568,19 +558,11 @@ int CwSidetonePortAudioSink::paCallback(const void* /*input*/,
     auto* self = static_cast<CwSidetonePortAudioSink*>(userData);
     auto* dst = static_cast<float*>(output);
 
-    // Count the host's own deadline misses. Cheap (two predictable branches
-    // on a value already in a register) and it is the only thing that can
-    // tell an underflow apart from wake jitter after the fact: both show up
-    // in the envelope as a displaced element and nothing else distinguishes
-    // them. Relaxed ordering — these are diagnostics read after the stream
-    // stops, never used to make a decision inside the callback.
-    //
-    // The first kPrimeCallbacks are exempt: filling a freshly started ring
-    // reports paOutputUnderflow essentially every time, on an idle stream
-    // that has missed no deadline at all. Counting it made the "timing is
-    // not clean" warning below fire on every single session — including
-    // sessions where the operator never keyed — which is how a real
-    // mid-run underflow stops being worth reading. (#5200)
+    // Count the host's deadline misses, the only way to tell an underflow from wake
+    // jitter afterwards. Relaxed: diagnostics read after the stream stops. The first
+    // kPrimeCallbacks are exempt: priming a fresh ring always reports
+    // paOutputUnderflow, which would make the warning below fire every session.
+    // (#5200)
     const quint64 seen = self->m_cbCount.fetch_add(1, std::memory_order_relaxed);
     if (seen >= kPrimeCallbacks) {
         if (statusFlags & paOutputUnderflow)

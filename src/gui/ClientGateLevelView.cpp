@@ -109,17 +109,9 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
         p.drawText(QPointF(full.left() + 2.0f, y + 3.0f), s);
     }
 
-    // History plot — newest sample at the right edge, older scrolling
-    // left.  Draw order (bottom to top visually so later strokes
-    // paint over earlier ones cleanly):
-    //   1. Audible band — from plot.bottom up to (input + grDb),
-    //      filled amber.  Represents the portion of the signal that
-    //      actually makes it through the gate.
-    //   2. Gated band — from (input + grDb) up to input level,
-    //      filled dark gray.  Represents the gain being "taken away"
-    //      from the input.
-    //   3. Input top-edge outline in bright white so the original
-    //      signal envelope stays legible on top of the fills.
+    // Newest sample at the right edge. Draw order: (1) audible band, bottom to
+    // input+grDb, amber; (2) gated band, input+grDb to input, dark gray;
+    // (3) input envelope outline in white on top.
     p.save();
     p.setClipRect(plot);
 

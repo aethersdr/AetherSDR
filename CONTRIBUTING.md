@@ -52,12 +52,11 @@ that matches our conventions.
 2. **Read the [AetherSDR Constitution](CONSTITUTION.md).** (Canonical
    source: [`.specify/memory/constitution.md`](.specify/memory/constitution.md);
    the root [`CONSTITUTION.md`](CONSTITUTION.md) is a byte-identical
-   mirror.) **14 principles total** (constitution v2.0.0): 7
-   AetherSDR-specific (FlexLib authority, radio-authoritative live
-   state, radio-persistable settings, clean-room contributions,
-   per-feature config ownership, transmit-on-intent, boundary input
-   validation) + 7 defensive engineering principles adopted from
-   Cisco's
+   mirror.) Its principles are AetherSDR-specific (FlexLib authority,
+   radio-authoritative live state, radio-persistable settings,
+   clean-room contributions, per-feature config ownership,
+   transmit-on-intent, boundary input validation) plus defensive
+   engineering principles adopted from Cisco's
    [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
    (Evidence Over Assertion, Surface Only What Survives, Atomic Claims,
    Demonstrated Fixes, Infra Sandbox, Operator Outranks Agents, Atomic
@@ -96,8 +95,8 @@ GitHub on every tier — your own PR always needs review from someone else.
 
 | Tier | Paths | Who can approve |
 |---|---|---|
-| **Source, tests & documentation (Tier 3)** | Everything not listed below — all of `src/`, **including the whole of `MainWindow`** — plus `tests/`, `docs/`, and `resources/`, **markdown included** (so `docs/DEVELOPER-GUIDE.md` and the in-app help text under `resources/help/` are both here). Two files under `docs/` are carved back to Tier 1 below | `@aethersdr/reviewers` (@ten9876, @jensenpat, @NF0T, @rfoust, @chibondking, @Ozy311, @K5PTB, @nigelfenton) |
-| **Infrastructure (Tier 2)** | `*.md` *outside* `docs/`, `resources/`, and `tests/` (`README.md`, `CHANGELOG.md`, `ROADMAP.md`, and the AI-instruction files `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `.github/copilot-instructions.md`), `.claude/commands/`, `CMakeLists.txt`, `THIRD_PARTY_LICENSES`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat, @rfoust) |
+| **Source, tests & documentation (Tier 3)** | Everything not listed below — all of `src/`, **including the whole of `MainWindow`** — plus `tests/`, `docs/`, and `resources/`, **markdown included** (so `docs/DEVELOPER-GUIDE.md` and the in-app help text under `resources/help/` are both here). `docs/agents/` is carved out to Tier 2, and two files under `docs/` are carved back to Tier 1 below | `@aethersdr/reviewers` (@ten9876, @jensenpat, @NF0T, @rfoust, @chibondking, @Ozy311, @K5PTB, @nigelfenton) |
+| **Infrastructure (Tier 2)** | `*.md` *outside* `docs/`, `resources/`, and `tests/` (`README.md`, `CHANGELOG.md`, `ROADMAP.md`, and the AI-instruction files `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `.github/copilot-instructions.md`), the agent guide's sub-docs under `docs/agents/`, `.claude/commands/`, `CMakeLists.txt`, `THIRD_PARTY_LICENSES`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat, @rfoust) |
 | **Maintainer-only (Tier 1)** | Governance docs (`CONSTITUTION.md` **and its canonical copy `.specify/memory/constitution.md`**, `GOVERNANCE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`), security/compliance (`SECURITY*`, `.github/CODEOWNERS`, `.github/codeql/`, `docs/RELEASE-SIGNING-KEY.pub.asc` and the `docs/VERIFYING-RELEASES.md` that publishes its fingerprint), and the workflows that hold release secrets, feed bytes into a signed artifact, or form part of the CodeQL scanner's trust chain (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`) | `@aethersdr/maintainers` (@ten9876) |
 
 The maintainer-only tier is deliberately narrow: it covers the rules of the

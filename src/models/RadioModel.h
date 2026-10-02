@@ -115,22 +115,10 @@ public:
     // through PanadapterStream. Null before the first connect.
     IRadioBackend*    backend()     { return m_backend.get(); }
 
-    // DAX channel holds, null-safe.
-    //
-    // A PanadapterStream is the Flex VITA-49 transport; a backend that carries
-    // its own IQ (HL2, KiwiSDR) has none, and panStream() is then null. Every
-    // caller of these three used to dereference it bare, so activating RADE or
-    // the DAX bridge on such a backend was a segfault rather than a decline --
-    // the same crash already fixed once at the startDax() entry, reachable by
-    // four more paths behind it.
-    //
-    // Routing the family through here makes "no stream means no channels to
-    // hold" a property of the seam instead of something every call site has to
-    // remember, which is the point: the next backend should not be able to
-    // reintroduce this by adding a call.
-    //
-    // Returns false when there is no stream, so callers can report honestly
-    // rather than believing they hold a channel they do not.
+    // DAX channel holds, null-safe: backends that carry their own IQ (HL2,
+    // KiwiSDR) have no PanadapterStream, so panStream() is null. Callers must
+    // go through these rather than dereference panStream(). Returns false when
+    // there is no stream.
     bool acquireDaxChannel(int channel, PanadapterStream::DaxConsumer who);
     void releaseDaxChannel(int channel, PanadapterStream::DaxConsumer who);
     void releaseAllDaxChannels(PanadapterStream::DaxConsumer who);
@@ -139,17 +127,9 @@ public:
     MeterModel&       meterModel()       { return m_meterModel; }
     const MeterModel& meterModel() const { return m_meterModel; }
 
-    // PROOF OF LIFE, per data class, in milliseconds since the last arrival.
-    //
-    // -1 means nothing of that class has EVER arrived this session, which is a
-    // different answer from "arrived a long time ago" and must not collapse
-    // into it. Negative-vs-large is the whole diagnostic.
-    //
-    // Why this exists: a revoked session keeps every model populated. `get
-    // model=pan` answered cheerfully with a centre and a bandwidth while the
-    // panadapter rendered a "Connecting to radio…" spinner, and the only thing
-    // that caught it was a screenshot. Models hold the LAST value they were
-    // given; nothing above them says whether anything is still coming.
+    // Proof of life per data class: ms since the last arrival, or -1 if none
+    // ever arrived this session (distinct from "long ago"). Models keep their
+    // last values after a session is revoked; this says whether data still flows.
     struct DataLiveness {
         qint64 spectrumMs = -1;   // scope sweeps / FFT frames
         qint64 audioMs    = -1;   // demodulated RX audio
@@ -243,26 +223,10 @@ public:
     QString serial()       const;
     QString chassisSerial() const { return m_chassisSerial; }
     // The operator's callsign, from the radio when it has one and from the
-    // client-side station setting when it does not.
-    //
-    // Only a FlexRadio stores a callsign: it arrives in the discovery RadioInfo
-    // and in the `info` reply, and `radio callsign <x>` writes it back. Every
-    // other family has nowhere to put one, so on an HL2 this returned empty
-    // forever — Radio Setup's field accepted an edit, sent Flex text nobody was
-    // listening for, and read back blank on reopen. Everything downstream then
-    // behaved as if the station had no identity: PSK Reporter had no callsign to
-    // query, so the map stayed empty and the status bar said "No callsign —
-    // connect to a radio first" against a perfectly connected radio, and the
-    // WSPR beacon could not prefill.
-    //
-    // A callsign is the OPERATOR's, not the radio's — unlike the nickname, which
-    // is per-radio and keyed by serial (Hl2Discovery::nicknameSettingsKey). One
-    // station-wide key is therefore correct: the same callsign is right on every
-    // radio the operator owns.
-    //
-    // The radio's own value still wins when present, so a Flex behaves exactly
-    // as before and a station callsign typed while running headless cannot
-    // silently override what the radio reports.
+    // client-side station setting when it does not. Only a Flex stores one
+    // (discovery/`info`, written by `radio callsign`). The callsign belongs to
+    // the operator, so the fallback is one station-wide key (unlike the
+    // per-radio nickname). The radio's own value always wins when present.
     QString callsign() const;
     // Persist the operator's callsign client-side and publish it. Safe to call
     // on any family; on a Flex the caller is additionally responsible for
@@ -357,24 +321,11 @@ public:
     // rather than as an empty table.
     IRadioBackend::HealthSnapshot backendHealthSnapshot() const;
 
-    // ---- health that survives disconnection ----
-    //
-    // SEPARATE FROM backendHealthSnapshot() ON PURPOSE. That one is
-    // `m_backend ? … : {}`, and while a backend does outlive a disconnect — it
-    // is built in setupBackend(), which runs from this class's constructor and
-    // from rebuildBackendForFamily(), not from connectToRadio() — what it
-    // reports does not: every family blanks its rows when it is not talking to
-    // the radio, so `health` on a disconnected app answers with nothing. That
-    // is the state another client holding the radio puts you in, and it is
-    // exactly when the questions below are worth asking. This seam is the fix.
-    //
-    // NO FAMILY IS NAMED ANYWHERE BELOW. A family declares an offline source
-    // from its own directory (OfflineHealthRegistry::declare), and this model
-    // asks the registry. A family that declared nothing gets nothing, which is
-    // the same answer a family string test gave and is arrived at without one.
-    //
-    // NOT const: reading the rows IS the demand signal, and a query that
-    // quietly restarts a demand window is a lie about what it does.
+    // Health that survives disconnection, separate from backendHealthSnapshot()
+    // because every backend blanks its rows when not talking to the radio
+    // (e.g. while another client holds it). Families declare sources via
+    // OfflineHealthRegistry::declare; no family is named here. Not const:
+    // reading the rows is the demand signal that restarts the polling window.
     [[nodiscard]] IRadioBackend::HealthSnapshot offlineHealthRows();
 
     // Whether an offline health source exists in this session at all. The gate
@@ -400,19 +351,10 @@ public:
     // is.
     enum class OfflineAimResult { Ok, FamilyDeclaresNone, SessionConnected };
 
-    // Aim the offline source at a radio WITHOUT connecting.
-    //
-    // `family` is the family of the RADIO BEING AIMED AT — resolved by the
-    // caller from discovery — not the family this session is connected to. That
-    // distinction is the whole verb: the radio worth probing is usually one
-    // this process has never taken a session on, and gating on the session's
-    // own family made it unreachable until you connected first.
-    //
-    // A null address stops the poller and releases the source, so the rows go
-    // away again and `health` returns to the snapshot the session started with.
-    //
-    // Never connects, never writes to the radio, and never changes this
-    // session's family.
+    // Aim the offline source at a radio WITHOUT connecting. `family` is the
+    // target radio's family (from discovery), not this session's. A null
+    // address stops the poller and releases the source. Never connects, never
+    // writes to the radio, never changes this session's family.
     OfflineAimResult setOfflineHealthTarget(const QString& family,
                                             const QHostAddress& addr);
 
@@ -424,56 +366,23 @@ public:
     // set rather than the impersonated model's.
     QStringList declaredBands() const { return m_declaredBands; }
 
-    // Returns true for BigBend/DragonFire-platform radios (8400, 8600,
-    // AU-/ML-/MLS-/CL-/CLS- series, RT-2122) that support the extended
-    // firmware DSP filters (NRL, NRS, RNN, NRF).  6000-series radios don't
-    // expose these filters and the UI hides them when this returns false. (#2177)
-    //
-    // Reads the CONNECTED BACKEND's declared RadioCapabilities::hasExtendedDsp,
-    // falling back to the FlexLib-sourced ModelCapabilities platform table
-    // (Principle I) only when no radio is connected.
-    //
-    // The backend is the authority here and the table is the guess. FlexBackend
-    // already populated caps.hasExtendedDsp — from that same table — but nothing
-    // read it: all three GUI call sites came through this method, which went
-    // straight to capabilitiesFor(m_model) and bypassed the seam entirely. A
-    // non-Flex backend declaring the capability honestly had no way to be heard,
-    // and a Flex refining the value from live radio status (as touchpoints
-    // convert) would have been ignored.
-    //
-    // Deliberately NOT ad-hoc substring checks, which the table replaced: the
-    // old prefix form silently missed the "S" server variants (MLS-9601 doesn't
-    // contain "ML-"; CLS-9301 doesn't contain "CL-") and was case-sensitive.
+    // True for radios with the extended firmware DSP filters (NRL, NRS, RNN,
+    // NRF): BigBend/DragonFire platforms (8400, 8600, AU-/ML-/MLS-/CL-/CLS-,
+    // RT-2122), not the 6000 series (#2177). The connected backend's
+    // RadioCapabilities::hasExtendedDsp is authoritative; the FlexLib
+    // ModelCapabilities table is the fallback only when disconnected.
     bool hasExtendedDspFilters() const;
 
-    // Whether the RADIO runs its own noise reduction / blanking / auto-notch
-    // (RadioCapabilities::hasRadioSideDsp) — NR, NB, ANF, NRL, ANFL, ANFT, the
-    // APD predistorter and the wideband noise blanker.
-    //
-    // Permissive when no radio is connected, like every other capability-gated
-    // surface: there is nothing to be honest about with nothing attached, and
-    // controls that stayed hidden after unplugging would read as a fault. Unlike
-    // hasExtendedDspFilters() there is no model-name table to fall back to, so
-    // the fallback is simply "assume present".
-    //
-    // Says nothing about the CLIENT-side modules (NR2/NR4/MNR/BNR/DFNR/RN2),
-    // which run on this host and work on any family.
+    // Whether the RADIO runs its own NR/NB/ANF family (NR, NB, ANF, NRL, ANFL,
+    // ANFT, APD, WNB) per RadioCapabilities::hasRadioSideDsp. Permissive
+    // (true) when disconnected. Says nothing about the host-side modules
+    // (NR2/NR4/MNR/BNR/DFNR/RN2), which work on any family.
     bool hasRadioSideDsp() const;
-    // The two NARROWER claims under it — see the capability struct.
-    //
-    // hasLmsNoiseFilters() keeps hasRadioSideDsp()'s permissive rule: NRL,
-    // ANFL and ANFT existed before the flag did, and hiding them on a
-    // Flex the moment it disconnects would be a regression rather than an
-    // honesty gain.
-    //
-    // hasAudioPeakingFilter() is the same permissive shape: APF already
-    // ships on the DSP tab, and hiding the P/CW CW-face row on a Flex
-    // unplug would blink a control the operator still has.
-    //
-    // hasManualNotch() does NOT, and that asymmetry is the point. MN is a
-    // new button; a permissive default would show it on every radio in
-    // the window before a backend reports, including the Flexes that
-    // notch with TNFs instead and will never claim it.
+    // Narrower claims under hasRadioSideDsp() (see the capability struct).
+    // hasLmsNoiseFilters() and hasAudioPeakingFilter() are permissive when
+    // disconnected (existing controls must not blink on unplug);
+    // hasManualNotch() is not, so MN never appears before a backend claims it
+    // (Flex notches with TNFs instead).
     bool hasLmsNoiseFilters() const;
     bool hasAudioPeakingFilter() const;
     bool hasManualNotch() const;
@@ -481,22 +390,11 @@ public:
     // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
     // reasoning as hasManualNotch(): it can only add the NB button.
     bool hasHostNoiseBlanker() const;
-    // The connected backend's own automatic receive-gain control, or nullptr
-    // when there is no radio or it has none. See AutoRfGainControl.h.
-    //
-    // ONE ACCESSOR RATHER THAN A FAMILY OF FORWARDERS. This class is shared
-    // infrastructure and docs/HERMES.md asks that family bring-up not grow it;
-    // an interface handle keeps the whole vocabulary of the control on the
-    // backend's side of the seam, so adding a law or a bound to some future
-    // family's loop does not touch this header at all. It also means the
-    // armed state is a TYPED read rather than a string key looked up in a
-    // health snapshot, which is what two callers were doing.
-    //
-    // NOT PERMISSIVE ON DISCONNECT, for the same reason hasHostNoiseBlanker()
-    // is not: it can only ever ADD a control, so answering with no backend
-    // attached would show an Auto checkbox on a family that never claims one.
-    //
-    // BORROWED, NEVER CACHED — the pointer dies with the backend.
+    // The backend's automatic receive-gain control (AutoRfGainControl.h), or
+    // nullptr with no radio or none offered. One interface handle instead of
+    // forwarders keeps the control's vocabulary behind the seam
+    // (docs/HERMES.md). Not permissive on disconnect: it can only add a
+    // control. Borrowed, never cached — the pointer dies with the backend.
     IAutoRfGainControl* autoRfGain() const;
 
     // The last front-end state the backend published, for a view that is built
@@ -521,24 +419,11 @@ public:
     // Says nothing about auto-black itself: the client-side (SW) estimate works
     // on every family and is never gated on this.
     bool hasRadioSideWaterfallAutoBlack() const;
-    // Whether the RADIO buffers CW text and sends it on its own keyer
-    // (RadioCapabilities::hasRadioSideCwKeyer), and whether it records and
-    // plays back voice-keyer messages (RadioCapabilities::hasVoiceKeyer). Same
-    // permissive disconnected rule as hasRadioSideDsp().
-    //
-    // These are accessors rather than inline capability reads because the `cwx`
-    // and `dvk` verbs have more entry points than the status-bar buttons: the
-    // FlexControl/Ulanzi macro actions, the MQTT CW-transmit topic, the TCI
-    // cw_msg / cw_macros commands, rigctl's send_morse / stop_morse, SmartCAT's
-    // KY and the automation bridge's `cwx` verb all reach CwxModel without
-    // passing through MainWindow's keyer gate. Every one of them asks here, so
-    // "the radio has no such verb" is answered in one place instead of once per
-    // surface — and the ones that owe a caller a return code answer with an
-    // error instead of a success for work that never happened.
-    //
-    // Says nothing about CW itself: a radio reporting hasRadioSideCwKeyer=false
-    // still transmits CW from a key, a paddle or the host keying path; what it
-    // lacks is a text buffer.
+    // Whether the RADIO has a CW text buffer/keyer (hasRadioSideCwKeyer) and a
+    // voice keyer (hasVoiceKeyer); permissive when disconnected. Every cwx/dvk
+    // entry point (macros, MQTT, TCI, rigctl, SmartCAT KY, bridge) bypasses
+    // MainWindow's gate and must ask here, returning an error when absent.
+    // Says nothing about CW keying itself, which works without a text buffer.
     bool hasRadioSideCwKeyer() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;
@@ -604,17 +489,9 @@ public:
         // 6300, 6400, 6600, 8400, Aurora: single SCU
         return 5.4;
     }
-    // The span limits to clamp a zoom against for ONE pan.
-    //
-    // Prefers what the backend reported for that pan over the model-string table
-    // below. The table is a FlexLib platform lookup, so it is right for a Flex
-    // radio and a guess for anything else: it falls through to 5.4 MHz for any
-    // model string it doesn't recognise, which let an HL2 delivering 384 kHz be
-    // zoomed fourteen times past its own data. A backend that knows its real
-    // rates says so, and then this returns the truth instead of the guess.
-    //
-    // Every zoom path — wheel, drag, keyboard, MIDI — must clamp through here, or
-    // the one that doesn't becomes the one that reopens the black bars.
+    // Span limits for zooming ONE pan: the backend-reported limits when known,
+    // else the Flex model-string table (only a guess for non-Flex radios).
+    // Every zoom path (wheel, drag, keyboard, MIDI) must clamp through here.
     double panMinBandwidthMhz(const QString& panId) const {
         const PanadapterModel* pan = panadapter(panId);
         if (pan && pan->bandwidthLimitsKnown())
@@ -760,18 +637,11 @@ public:
     // from anything that can flicker.
     bool hasWsprTxStream() const
     {
-        // The host-modulated claim is re-checked against the CURRENTLY connected
-        // radio, not just the latch. A latch alone was an unintended-transmission
-        // bug: connectToRadio() on a family switch runs
-        // dropAllSessionModelsForFamilySwitch() -> teardownBackend() ->
-        // setupBackend() and touches none of the WSPR state, so an armed HL2
-        // beacon carried "route ready" onto a Flex and would have keyed it for a
-        // full 111.6 s frame with no dax_tx stream behind it — transmitting
-        // nothing, on a radio the operator never armed. (PR #4537 review.)
-        //
-        // teardownBackend() now clears the latch as well; this is the backstop
-        // that makes a missed clear harmless rather than dangerous, which is the
-        // right split for anything guarding a transmitter.
+        // Re-check the latch against the CURRENTLY connected radio's
+        // capabilities: a stale latch surviving a family switch must never
+        // report a route ready on a radio that has no dax_tx stream (it would
+        // key a full 111.6 s frame). teardownBackend() also clears it; this is
+        // the transmitter-safety backstop.
         if (wsprSeamAudioRouteReady(m_wsprTxSeamAudioArmed,
                                     backendCapabilities()))
             return true;
@@ -1006,19 +876,11 @@ public:
     // squeeze while key transitions on each element boundary.
     void sendCwPtt(bool on, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0);
-    // `scheduledAt` (#4890): the edge's scheduled instant on the producer's
-    // element grid, when one exists.  The netcw `time=` field is derived
-    // from it instead of the send wall-clock, so the radio's timing
-    // reconstruction input carries the intended rhythm rather than
-    // worker-wake plus queued-hop jitter.  Default (epoch zero) = no
-    // schedule; send-time stamping is unchanged.
-    // Note the deliberate asymmetry with sendCwKey: this entry point does
-    // NOT emit cwKeyDownChanged.  It is the local iambic keyer's path, and
-    // that producer already drove the sidetone gate at the element's
-    // scheduled instant, so publishing here would queue a second,
-    // wall-clock-stamped edge for the same element (#4976).  m_cwKeyActive
-    // is tracked on both paths either way — it feeds the TX-ownership
-    // interlock.
+    // `scheduledAt` (#4890): the edge's instant on the producer's element grid;
+    // netcw `time=` is derived from it rather than send time, so the radio sees
+    // the intended rhythm. Default (epoch zero) = stamp at send. Unlike
+    // sendCwKey, does not emit cwKeyDownChanged: the iambic keyer already drove
+    // the sidetone (#4976). m_cwKeyActive is tracked on both paths.
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
                        quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
                        std::chrono::steady_clock::time_point scheduledAt = {});
@@ -1040,75 +902,18 @@ public:
     void setPanCenter(double centerMhz);
     void setPanDbmRange(float minDbm, float maxDbm);
 
-    // #4142 — the ONLY supported way for a USER-INTENT path to write a pan's
-    // center/bandwidth/band to the radio.
-    //
-    // `display pan set <id> center=…` (and bandwidth=/band=) is classified as
-    // a profile-owned radio state write, so sendCmd() DROPS it while the
-    // profile-load hold is armed: it returns before a sequence number is
-    // allocated and the command never reaches the wire. A user action that
-    // lands in that window (typed frequency, zoom, drag, band change, ATU
-    // sweep, automation) was silently lost, and the client kept its optimistic
-    // state — leaving the pan permanently claiming state the radio never took.
-    //
-    // requestPan*() defers instead of dropping: while the hold is armed it
-    // coalesces the request per pan (field-wise, last write wins per field)
-    // and returns false WITHOUT advancing local model state, so the client
-    // never claims state the radio does not have. The replay is scheduled by
-    // the act of deferring and re-checks the hold before sending.
-    //
-    // Deduping is centralized here against EFFECTIVE state — the pending value
-    // if one is queued, else the model (which keeps tracking radio status
-    // during the hold). A request equal to the model that supersedes a
-    // different pending value is a user CORRECTION: the pending entry is
-    // cancelled instead of replayed.
-    //
-    // Routing discipline is the user-intent boundary: model-echo/reconcile
-    // writers (active-slice reasserts, dBm auto-floor, fps/average reconciles)
-    // must keep their explicit guards and the sendCmd() backstop — #3563
-    // suppresses them during a profile load BY DESIGN. Do not route those.
-    //
-    // Pass bandwidthMhz > 0 to set center and bandwidth coherently in one
-    // command (zoom paths must never split the pair); pass <= 0 to leave the
-    // radio's bandwidth untouched.
-    //
-    // Returns true if the radio's state matches the request (dispatched, or a
-    // corrective cancel — the radio is already there); false if the request is
-    // deferred or could not be dispatched. Callers that also advance view
-    // state optimistically must gate that on the return value, or they will
-    // re-create the black-waterfall divergence.
-    //
-    // THE INTENT IS THE CALLER'S TO STATE, not something to infer here. On a
-    // backend whose scope window is slaved to the VFO (every networked Icom)
-    // Drag means RETUNE, so "which caller is this" decides whether the radio
-    // moves. Inferring it from whether a bandwidth came along classifies every
-    // centre-only writer — pan-follow, reveal, band change, the WFM recentre —
-    // as a drag, and reveal in particular asks for a DELIBERATELY OFFSET centre
-    // (settle distance from the edge), which would tune the radio most of a
-    // half-span off the signal the operator just clicked.
-    //
-    // Range is the default because it is the one that cannot move a radio: a
-    // slaved-scope backend refuses it and re-asserts its own geometry. Only the
-    // two genuine "the operator moved the window" sites pass Drag.
+    // The only supported way for a user-intent path to write pan center/
+    // bandwidth/band (#4142). During the profile-load hold (where sendCmd drops
+    // these, #3563) it defers: coalesced per pan and field, model not advanced,
+    // replayed later. Returns true only if the radio matches the request;
+    // optimistic callers must gate on it. bandwidthMhz > 0 sends center+bandwidth
+    // as one command. Drag retunes a VFO-slaved scope (Icom); default Range cannot.
     bool requestPanCenter(const QString& panId,
                           double centerMhz,
                           double bandwidthMhz = -1.0,
                           IRadioBackend::PanCenterIntent intent =
                               IRadioBackend::PanCenterIntent::Range);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
-    // The operator's Display→FFT FPS / Display→Waterfall Rate intent.
-    //
-    // On a Flex these are radio settings and this sends the wire text, exactly
-    // as the call sites used to inline. On a backend that streams raw spectra
-    // there is no radio to ask — the engine shapes the stream itself — so the
-    // values are applied to the pan model, which is what the shaper reads.
-    // Without this the sliders moved nothing on an HL2: the wire text was
-    // addressed to a command interpreter that does not exist on that radio.
-    //
-    // Returns true when the intent was applied or dispatched.
-    // `wfRate` is the 1..100 waterfall RATE control value, low slow / high
-    // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
-    // See core/WaterfallRate.h. (#4606)
     bool requestPanAverage(const QString& panId, int average);
     // Weighted-average toggle for a backend that shapes its own spectrum:
     // straight down to that backend. Returns false on Flex, where the caller
@@ -1118,42 +923,24 @@ public:
     // spectrum: straight down to that backend. Returns false on Flex, where
     // the caller sends the xpixels= wire command itself.
     bool requestLocalPanPixelWidth(const QString& panId, int points);
+    // Operator FFT FPS / waterfall rate intent: wire text on Flex; applied to
+    // the pan model on self-shaping backends. Returns true if applied or sent.
+    // `wfRate` is the 1..100 rate control, not milliseconds despite the Flex
+    // wire name `line_duration` (core/WaterfallRate.h, #4606).
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
-    // Retune a slice on behalf of the CAT servers (rigctld / SmartCAT) so a band
-    // change made over CAT (WSJT-X/FLDigi "change band") is recentered instead of
-    // leaving the panadapter behind. Applies the recenter policy: in-span keeps
-    // autopan=0 (no yank — external Doppler software like SatPC32 steps every few
-    // seconds); an out-of-span or cross-band target uses tuneAndRecenter. Both go
-    // through SliceModel, which updates the model and emits frequencyChanged —
-    // required to drive the client-side follow (Center Lock / Pan-Follows-VFO)
-    // that lets the radio actually move a centered slice. We issue no pan command
-    // directly; the client lock logic does, exactly as the GUI path does. Call on
-    // the GUI thread (owns SliceModel).
-    // Returns false (and issues no tune) when the target is rejected — a null
-    // slice, an implausible frequency (see isPlausibleCatTuneMhz), or a locked
-    // slice, which SliceModel refuses — so the CAT protocol layer can report the
-    // failure instead of acknowledging a tune that never happened. A retune to
-    // the frequency the slice already holds is a no-op, not a rejection, and
-    // still returns true — unless the slice is locked, since the lock is tested
-    // ahead of the no-op case and a locked slice always reports failure.
+    // CAT (rigctld / SmartCAT) retune. In-span keeps autopan=0 (Doppler tools
+    // step every few seconds); out-of-span/cross-band uses tuneAndRecenter. Goes
+    // through SliceModel so frequencyChanged drives the client-side pan follow;
+    // no pan command is sent here. GUI thread only. Returns false for a null,
+    // locked or implausible target; a same-frequency retune returns true.
     bool tuneSliceForCat(SliceModel* slice, double mhz);
 
-    // Is this a physically plausible CAT-tune target (MHz)? The single policy for
-    // the boundary check tuneSliceForCat applies. rigctld pre-validates with it
-    // too: its handlers answer the client synchronously and then marshal the tune
-    // through a queued call, so tuneSliceForCat's bool is unobservable to them —
-    // without this they would answer success and silently drop an out-of-range
-    // tune. Rejects non-positive, non-finite, and absurdly-high targets (an
-    // FA-5000;, a DN whose multi-step product underflows past 0, a parse that
-    // yielded NaN, a fat-fingered absurd set); the radio still enforces its real
-    // band limits — this only stops the physically impossible from being
-    // broadcast via frequencyChanged before the radio rejects it.
-    // NOT a bound on step arithmetic in the UP direction: the ceiling has to sit
-    // above the top amateur allocation, and a multi-step UP cannot reach it
-    // (2^31 steps at the usual 100 Hz is ~215 GHz), so a runaway UP is caught by
-    // the radio refusing the tune, not here.
+    // The single plausibility policy for CAT-tune targets (MHz): rejects
+    // non-positive, non-finite and absurdly high values. rigctld pre-validates
+    // with it because it answers before its queued tune runs. The radio still
+    // enforces real band limits; this is not a bound on multi-step UP arithmetic.
     static bool isPlausibleCatTuneMhz(double mhz);
 
     // Effective pan geometry: the deferred pending value if one is queued,
@@ -1214,32 +1001,16 @@ signals:
     void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
     void transmitSessionInvalidated();
-    // The connected backend's self-declared RadioCapabilities changed, or a
-    // connect/disconnect changed which backend is answering. Relays
-    // IRadioBackend::capabilitiesChanged and also fires on every
-    // connectionStateChanged edge, so a consumer that wants "the capability
-    // picture is now different, re-read it" needs exactly this one connection.
-    //
-    // `connected` is passed rather than left for the slot to query, because
-    // every capability-driven surface has to distinguish "the radio says it
-    // lacks this" from "there is no radio" — the latter restores the permissive
-    // value (see MainWindow::applyCapabilitiesToUi).
+    // The backend's RadioCapabilities changed, or a connect/disconnect edge
+    // changed which backend answers; this one signal covers both. `connected`
+    // lets surfaces tell "radio lacks this" from "no radio", which restores the
+    // permissive value (MainWindow::applyCapabilitiesToUi).
     void capabilitiesChanged(bool connected, const RadioCapabilities& caps);
     void transmitFrequencyCheckChanged(bool on);
-    // Emitted whenever the backend instance is (re)built — including the
-    // connect-time swap between FlexBackend and SimBackend (RFC #4288). The old
-    // m_backend is already destroyed and m_backend now points at the new one.
-    // Emitted whenever a straight-key-shaped local CW source transitions
-    // on/off — the funnel for the serial CW-key line, the TCI `keyer:trx`
-    // command, and the MIDI Gate / keyboard / HID straight-key actions.
-    // All of them reach it through RadioModel::sendCwKey.
-    // NOT the local iambic keyer: sendCwKeyEdge deliberately does not
-    // publish here (#4976), because that producer already drove the
-    // sidetone gate at the element's own scheduled instant.  NOT CWX
-    // either — CwxLocalKeyer calls AudioEngine::setCwKeyDown directly and
-    // never touches RadioModel.
-    // Wired to AudioEngine's CwSidetoneGenerator for low-latency local
-    // sidetone independent of the radio's own DAX-fed sidetone.
+    // Straight-key-shaped local CW edges (serial key line, TCI `keyer:trx`,
+    // MIDI/keyboard/HID), all via sendCwKey; drives the local sidetone
+    // generator. Not emitted for the iambic keyer's sendCwKeyEdge (#4976) or
+    // for CWX, which drive the sidetone gate themselves.
     void cwKeyDownChanged(bool down);
     // Non-Flex diagnostic edge emitted only after transmit preflight, directly
     // before IRadioBackend::setCwKeying(). Lets tests and diagnostics prove a
@@ -1272,14 +1043,9 @@ signals:
     // Emitted before teardown when the radio rejects `client gui`. The UI uses
     // this terminal signal to stop reconnect UX and preserve the radio's reason.
     void guiClientRegistrationFailed(const QString& message);
-    // aetherd Gap B (HL2 Phase 1c, Step 1): the backend-neutral panadapter render
-    // feed. Signatures mirror PanadapterStream.h:212-218 exactly, so the UI binds
-    // its panadapter/waterfall rendering to these instead of the Flex-only
-    // PanadapterStream and the wiring is family-agnostic. A Flex session forwards
-    // its PanadapterStream into these 1:1 (signal-to-signal, no transformation);
-    // an HL2 session (Step 2) synthesises them from IRadioBackend::spectrumFrameReady.
-    // Per-RadioModel → per-session, which is exactly what the two-panadapter end
-    // state needs.
+    // Backend-neutral panadapter render feed; signatures mirror PanadapterStream's
+    // so the UI binds here, not to the Flex-only stream. Flex forwards its
+    // PanadapterStream 1:1; other backends synthesise from spectrumFrameReady.
     void panFeedSpectrumReady(quint32 streamId, const QVector<float>& binsDbm,
                               qint64 emittedNs);
     void panFeedWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
@@ -1296,31 +1062,11 @@ signals:
     // audio arrives as DAX channels instead.
     void backendSliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
 
-    // ── The normalized demodulated-RX-audio bus ────────────────────────────
-    //
-    // The audio the OPERATOR HEARS, whoever produced it, with immutable
-    // producer format and lifetime. A1 preserves existing 24 kHz stereo PCM.
-    //
-    // Exactly one producer is connected at a time — PanadapterStream::
-    // pcmFrameReady for a Flex, IRadioBackend::audioFrameReady for a backend
-    // that answers ownsRxAudio() — and that choice is made in ONE place
-    // (wireRxDemodAudioBus). Consumers subscribe once and never rebind, because
-    // this signal belongs to RadioModel, which OUTLIVES the backend swap that
-    // destroys and rebuilds a PanadapterStream.
-    //
-    // That is the actual bug this fixes, and it is a shape rather than an
-    // instance. Three features — the CW decoder, the RTTY decoder and the QSO
-    // recorder's RX tap — were bound directly to the Flex stream, so on any
-    // radio without one they bound to nothing: no error, no log line, the
-    // toggle worked and nothing ever decoded. See docs/HERMES.md §18.
-    //
-    // This carries taps alongside playback. AudioEngine::feedPcmFrame keeps
-    // the existing speaker routing and delegates accepted 24 kHz stereo to
-    // feedAudioData; fixed-rate tap adapters unwrap after queued delivery.
-    //
-    // Named for the tap it carries. A future filter-flat, pre-AGC feed for
-    // modems is a SEPARATE signal (rxWidebandAudioReady), not a mode flag on
-    // this one — see docs/HERMES.md §18.5.
+    // Normalized demodulated-RX-audio bus: the audio the operator hears (24 kHz
+    // stereo), whoever produced it. Exactly one producer is bound, chosen only
+    // in wireRxDemodAudioBus(). RadioModel outlives backend swaps, so consumers
+    // (decoders, recorder tap) subscribe here once and never bind the Flex
+    // stream directly. A pre-AGC modem feed is a separate signal (docs/HERMES.md §18).
     void rxDemodAudioReady(const AetherSDR::PcmFrame& pcm);
     // The backend was replaced because the operator picked a radio of another
     // family. Consumers holding backend-owned objects (PanadapterStream) must
@@ -1495,17 +1241,10 @@ signals:
     void radioMessageReceived(const QString& text, MessageSeverity severity);
 
 public:
-    // Send a raw command to the radio (for dialogs that need direct protocol
-    // access). Returns whether the command was actually dispatched: false when
-    // the foreign-owner gate (#3977) drops a pan write, when the profile-load
-    // hold backstop suppresses a profile-owned write (#4142), or when a WAN
-    // session is not connected. The WAN case is the only transport failure
-    // this contract can see: the LAN path allocates a sequence number
-    // unconditionally, so a write queued onto a dead LAN socket still reports
-    // as dispatched (pre-existing optimistic behavior; a disconnect instead
-    // voids any deferred pan writes via onDisconnected()). Callers that
-    // advance local state to match a command MUST gate that on this return,
-    // or the client will claim state the radio never took.
+    // Send a raw command to the radio. Returns false when the foreign-owner
+    // gate (#3977) or profile-load hold (#4142) drops it, or WAN is down; a
+    // write onto a dead LAN socket still reports dispatched. Callers that
+    // advance local state to match MUST gate on this return.
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "icom", "sim", ...).
     QString family() const { return m_family; }
@@ -1659,20 +1398,12 @@ private:
     bool m_wfAutoBlackOn{true};         // mirrors the client auto-black on/off
     bool m_wfAutoBlackRadioSide{false}; // false = client-side, true = radio-side
     bool profileLoadRadioStateWritesHeld() const;
-    // Raw senders (#4142). Both keep ALL wire-string building for the pan
-    // touchpoint in one place (AGENTS.md seam step 2.4: command encode migrates
-    // to FlexBackend per-touchpoint — these two functions are that touchpoint).
-    //
-    // dispatchPanCenterBandwidth re-clamps the center against the pan's
-    // CURRENT geometry, puts the command on the wire FIRST, and advances the
-    // model only when the send actually happened — wire-before-model is what
-    // makes a re-entrant request converge (last wire write == last model
-    // write) instead of diverging. bandwidthMhz <= 0 means center-only;
-    // centerMhz as NaN means bandwidth-only.
-    // intent is forwarded to the seam untouched — see requestPanCenter(). A
-    // write replayed out of the profile-load queue is Range by construction:
-    // the queue stores geometry, not who asked for it, and Range is the value
-    // that cannot move a radio.
+    // Raw senders (#4142): the single pan touchpoint for wire-string building.
+    // dispatchPanCenterBandwidth re-clamps against the pan's current geometry,
+    // writes the wire FIRST and advances the model only if the send happened,
+    // so re-entrant requests converge. bandwidthMhz <= 0 = center-only; NaN
+    // centerMhz = bandwidth-only. Profile-load replays use intent Range, the
+    // value that cannot move a radio.
     bool dispatchPanCenterBandwidth(const QString& panId,
                                     double centerMhz,
                                     double bandwidthMhz,
@@ -1811,26 +1542,14 @@ private:
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
     std::unique_ptr<AprsDigipeaterModel> m_aprsDigipeater;
-    // Health that survives disconnection. Its lifetime is this model's and not
-    // a connection's — it must keep answering when the backend above has
-    // stopped talking to a radio, which is the whole reason it does not live
-    // inside the backend.
-    //
-    // A POINTER, NOT A VALUE MEMBER, and null unless the selected family
-    // declared one. As a value member every RadioModel constructed it and
-    // started its timer, Flex and Icom and Sim sessions included, and every
-    // consumer of this header compiled the family's wire headers. "Idle until
-    // demand" was true of the polling and not of the object.
-    //
-    // The type here is the INTERFACE. This header names no family and includes
-    // no family's header, which is the structural difference between this and
-    // the version that failed docs/HERMES.md's pre-PR grep.
+    // Health that survives disconnection, so it lives here rather than in the
+    // backend. Null unless the selected family declared one (only that family
+    // pays for its timer). Typed as the interface: this header must name no
+    // family and include no family's header (docs/HERMES.md pre-PR grep).
     std::unique_ptr<IOfflineHealthSource> m_offlineHealth;
-    // Which family's factory built m_offlineHealth. The interface carries no
-    // family and must not — it would be a wire concept in a header whose point
-    // is not having one — so the owner remembers instead. Empty when nothing is
-    // held. Without it, `if (!m_offlineHealth)` answers "we have one" for a
-    // source belonging to a different family.
+    // Which family built m_offlineHealth (the interface deliberately carries no
+    // family); empty when none is held. Lets ensureOfflineHealth() rebuild on a
+    // family change.
     QString m_offlineHealthFamily;
     QVector<TxPowerBand> m_txPowerBands;
     double m_activeTxPowerBandLowHz = 0.0;
@@ -1978,110 +1697,15 @@ private:
     // cannot resolve. Identity for Flex.
     QString backendPanIdFor(const QString& modelPanId) const;
 
-    // ---- waterfall pacing for raw-spectrum backends ------------------------
-    //
-    // The PAN rate is capped at the source (IRadioBackend::setPanFrameRate), so
-    // frames arrive here already at the operator's FFT FPS. The waterfall runs
-    // SLOWER than that — line_duration is its own control and typically 100 ms
-    // against 25-40 fps — so it needs one more gate, and only in that
-    // direction.
-    //
-    // A plain drop, not a coalesce. Frames are already scarce by the time they
-    // reach here, and combining them would mean a magnitude/log round trip per
-    // bin per frame for no gain the operator can see.
-    //
-    // It is also correctness, not just load: the widget scales its time axis
-    // from line_duration, so a row must actually ARRIVE every line_duration.
-    // Unpaced, rows arrived at the full frame rate and the visible history was
-    // several times shorter than the axis claimed.
-    //
-    // What the gate fixes is the CADENCE, and only the cadence. It does not
-    // make a row represent its interval, and an earlier wording here claimed it
-    // did -- which is why the remaining gap has been easy to miss. Each emitted
-    // row is still the single producer frame that happened to land on the gate:
-    // one frame out of the whole localRowIntervalMs. The loss is by frame
-    // SELECTION, not only by burst length -- a burst shorter than the gap
-    // between ROWS can miss the history entirely rather than merely being
-    // attenuated, AND a burst a pan frame DID catch is still absent from the
-    // history unless that frame is the one landing on the gate.
-    //
-    // Scope what follows to HL2, because this gate is not HL2's. It hangs off
-    // the generic IRadioBackend::spectrumFrameReady, which every family except
-    // Flex emits -- HL2, ANAN, Icom, RTL-SDR and the demo SimBackend -- and
-    // what a "frame" MEANS differs across them:
-    //
-    // - On HL2 the claim is exact. The frame is one unaveraged FFT window; at
-    //   384 kHz that window is 1024/384000 = 2.67 ms (docs/HERMES.md 15.2.1
-    //   states the same thing as 375 fps; fftSize is Hl2RxDsp.h's 1024) --
-    //   nominal, since Hl2Spectrum's Hanning window weights the ends down and
-    //   the effective span is shorter still -- and at rate 10
-    //   localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 -- 0.66 %,
-    //   an upper bound. Production depth is one window: Hl2Spectrum::setAverageFrames
-    //   defaults to 1 and only hl2_spectrum_test calls it (#5833), so m_avgPower
-    //   is present and unwired and the emitted frame is still unaveraged. m_acc
-    //   holds only the partial IQ window the NEXT frame completes from, which is
-    //   why HERMES 15.2.1 says the accumulator keeps filling on a skipped
-    //   interval. The frames between rows never reach the waterfall at all:
-    //   dropped, never accumulated. RTL-SDR's frames are unaveraged FFTs too,
-    //   so the shape carries there; only the numbers are HL2's.
-    // - On ANAN the frames between rows are not dropped. Every IQ block is
-    //   fed to the WDSP analyzer and only TAKING a frame is paced (AnanRxDsp:
-    //   "none are thrown away"), so the row that lands here is already
-    //   time-averaged. The FFT AVG slider sets that time through
-    //   AnanBackend::setPanAverage (steps of kMsPerAverageStep); the
-    //   weighted-average toggle selects log-recursive or linear-recursive.
-    //   That blend is still not an integration over localRowIntervalMs, and
-    //   #5782 owns the domain question. The fixed-alpha dB EMA this bullet
-    //   used to name (AnanRxDsp::smoothSpectrumBins) was removed in #5814.
-    // - Icom rows are reassembled CI-V scope sweeps, not FFT windows at all,
-    //   so neither the 2.67 ms nor the duty figure means anything there.
-    //   IcomScope.h's "Raw display units, 0..160. NOT dBm" describes the RAW
-    //   sweep, not what reaches this gate: IcomCivBackend emits
-    //   toDbm(sweep, geom, cal) before spectrumFrameReady, so the row here is
-    //   the converted vector.
-    //
-    // The interval a row SHOULD integrate is the gap between rows: this gate's
-    // own WaterfallRate::localRowIntervalMs(rate) while the gate is paced, and
-    // the pan frame interval at rate 100, where localRowIntervalMs() returns 0
-    // and the gate is lifted. Which layer that number has to reach is part of
-    // the open question below, not settled here.
-    // Note what does NOT rest on that number, because it reads the other way
-    // round. updateWaterfallRow() stamps each row with its ARRIVAL time and
-    // Q_UNUSED()s the timecode; updateWaterfallMsPerRowFromHistory() measures
-    // m_wfMsPerRow from those stamps (localMsPerRow only SEEDS the preview, in
-    // resetWfTimeScale); and waterfallTimeMarkers() takes rows, head, seconds,
-    // offset and height — it never sees the rate at all, and labels wall-clock
-    // boundaries off the same stamps. localRowIntervalMs() could not carry the
-    // axis anyway: it returns 0 at rate 100, where the gate is lifted.
-    //
-    // ARRIVAL there means arrival AT THE WIDGET, which is not this gate's
-    // stamp. The nowNs the gate passes out reaches PerfTelemetry only; the row
-    // is then routed through MainWindow::deferReceivePresentation, and
-    // updateWaterfallRow() takes its own QDateTime::currentMSecsSinceEpoch().
-    // So the axis calibrates from PRESENTATION cadence, which tracks this
-    // gate's cadence but is not it, and diverges under a presentation delay or
-    // a busy GUI thread.
-    //
-    // Nor does that contradict the retained rationale above, and the link is
-    // worth stating because the two paragraphs read as opposites. Both are true
-    // because resetWfTimeScale() seeds m_wfMsPerRow from localMsPerRow with
-    // m_wfTimeScaleLocked false, so the deterministic mapping IS the axis until
-    // updateWaterfallMsPerRowFromHistory() has enough rows at this rate to lock
-    // onto the measured value. The seeded half is the half unpaced rows
-    // falsified.
-    //
-    // The open question is which LAYER owns the accumulation and in
-    // which domain, because averaging dBFS is averaging logarithms -- see
-    // RFC #5782 (this repository's own; not one of the real upstreams), whose
-    // plan row 2.2 is the integrated waterfall row and whose Option C rules
-    // the above-the-seam variant out. Do not add an accumulator here until
-    // that lands.
+    // Waterfall pacing for raw-spectrum (non-Flex) backends: drops pan frames
+    // to one row per WaterfallRate::localRowIntervalMs(rate) (0 at rate 100 =
+    // gate lifted). A plain drop, not a coalesce: it fixes cadence only, and a
+    // row is the single frame that hit the gate (HL2/RTL: one unaveraged FFT,
+    // #5833; ANAN: WDSP-averaged; Icom: a CI-V sweep). Where rows get integrated
+    // is open in RFC #5782 — do not add an accumulator here until it lands.
     QHash<int, qint64> m_backendWfLastRowNs;
-    // Covers only the window before MainWindow seeds the pan model from the
-    // operator's sliders. 100 is the top of the 1..100 rate control and matches
-    // SpectrumWidget's own m_wfLineDuration default, so a self-shaping backend
-    // starts at full speed rather than at the 10 fps the number used to mean
-    // when it was read as milliseconds (#4606).
+    // Pre-seed default only; 100 is the top of the 1..100 rate control and
+    // matches SpectrumWidget's m_wfLineDuration default (#4606).
     static constexpr int kBackendDefaultWfRate = 100;
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;
@@ -2181,25 +1805,14 @@ private:
     QString     m_model;
     QStringList m_declaredBands;    // optional "bands=" declaration (see declaredBands())
     int         m_maxSlices{4};
-    // What the radio DECLARED it can run, from the discovery keys max_slices /
-    // max_panadapters (#5594 item 3). 0 = the radio did not say, so the FlexLib
-    // model table remains the fallback.
-    //
-    // A declared capacity is a fact about the hardware and licence, so it is
-    // taken at the connect edge and does not move. The radio ALSO reports
-    // `slices=N` / `panadapters=N` in its live status, but those are the FREE
-    // counts — occupancy, not capacity — and turning them into a capacity means
-    // pairing them with an object inventory that is not populated yet when the
-    // first status lands. That derivation was tried and withdrawn; see #5603.
     // Hand the radio-declared capacity to the Flex backend so the capability
-    // DESCRIPTOR agrees with what this model enforces. RadioResourceAdapter
-    // serializes backendCapabilities() onto the aetherd control protocol, so
-    // without this a protocol client is told the model-table estimate while the
-    // GUI and the automation bridge use the radio's own number. (#5594 item 3)
-    //
-    // Private: every caller is inside RadioModel, on the connect/seed edges.
+    // descriptor RadioResourceAdapter serializes onto the aetherd protocol
+    // agrees with what this model enforces (#5594). Called on connect/seed edges.
     void publishRadioReportedCapacity();
 
+    // Capacity declared in discovery (max_slices / max_panadapters), taken at
+    // the connect edge; 0 = undeclared, fall back to the FlexLib model table.
+    // Live-status `slices=N` / `panadapters=N` are FREE counts, not capacity (#5603).
     int         m_declaredMaxSlices{0};
     int         m_maxPanadapters{0};
     QString     m_version;          // software version from discovery (e.g. "4.1.5")
@@ -2664,30 +2277,16 @@ private:
     qint64 m_lastThrottleEngageMs{0};   // QDateTime::currentMSecsSinceEpoch() at last engage
     bool   m_pendingThrottleLift{false}; // lift deferred by min-dwell; fired in evaluateNetworkQuality()
 
-    // ── Backend-reported transport (non-Flex families) ──
-    //
-    // The Flex path measures the network off m_connection (TCP ping RTT) and
-    // m_panStream (VITA-49 counters). A family that owns neither has both null,
-    // and every getter below used to answer a flat zero for it — so the whole
-    // network readout rendered "connected, 0 kbps, 0 packets" on a link that was
-    // working. This is the same data arriving from the other side of the seam.
-    //
-    // Populated ONLY from IRadioBackend::linkStatsUpdated, and only a backend
-    // that overrides linkStats() ever sends one. `reported` staying false is
-    // what keeps the Flex path bit-for-bit unchanged: every fallback below is
-    // gated on it, and the Flex sources are always consulted first.
+    // Backend-reported transport stats for non-Flex families, which have no
+    // m_connection/m_panStream. Populated only from
+    // IRadioBackend::linkStatsUpdated; every fallback is gated on `reported`
+    // and consults the Flex sources first, so the Flex path is unaffected.
     IRadioBackend::LinkStats m_linkStats;
 
-    // What this backend's transport can MEASURE, as opposed to what it measured
-    // this second. m_linkStats above holds live counters and stopNetworkMonitor()
-    // drops it, because those numbers belong to the session that just ended —
-    // but "does this wire have a round trip to time" is a fact about the WIRE and
-    // stays true while it is down. Without the distinction a disconnected HL2
-    // falls back to the Flex branch, and lastPingRtt()'s 0 renders as "< 1 ms":
-    // the exact claim docs/HERMES.md § 21.3 exists to forbid, one state transition
-    // later. Latched sticky-once-true so a window that closes with no samples in
-    // it cannot flip a readout mid-session, and reset in teardownBackend(),
-    // because only a new backend can change the answer.
+    // What this backend's transport can measure, independent of the live
+    // counters stopNetworkMonitor() drops. Keeps a disconnected HL2 from falling
+    // back to the Flex branch and rendering "< 1 ms" (docs/HERMES.md § 21.3).
+    // Sticky-once-true per field; reset only in teardownBackend().
     struct BackendLinkShape {
         bool reports   = false;   // a backend has published a LinkStats at all
         bool hasRtt    = false;   // ...and that transport times a round trip
@@ -2706,19 +2305,11 @@ public:
     int     lastPingRtt()      const { return m_lastPingRtt; }
     int     maxPingRtt()       const { return m_maxPingRtt; }
 
-    // Whether the current transport has a round trip to time at all.
-    //
-    // Not every link does. Protocol 1 is a one-way stream — EP2 out on a wall
-    // clock, EP6 back free-running, and nothing in either direction answering
-    // anything in the other — so there is no RTT to report and no honest way to
-    // fake one. Every RTT readout must ask this first: lastPingRtt() answers 0
-    // when nothing measured it, and 0 renders as "< 1 ms", which is a link
-    // quality claim the app never made a measurement to support.
-    // Answers for the WIRE, not for the moment — which is why the last branch
-    // consults the latched shape rather than the live snapshot. While connected
-    // the snapshot is authoritative; between sessions m_linkStats is cleared and
-    // the honest answer is still "this transport never had an RTT", not the Flex
-    // default.
+    // Whether the current transport has a round trip to time at all (HL2
+    // Protocol 1 is one-way and has none). Every RTT readout must ask this
+    // first: lastPingRtt() answers 0 when unmeasured, which renders "< 1 ms".
+    // Answers for the wire, not the moment: between sessions m_linkStats is
+    // cleared, so the last branch consults the latched shape.
     bool    hasLinkRtt() const {
         if (m_panStream)
             return true;                        // Flex VITA-49 stack: TCP ping RTT
