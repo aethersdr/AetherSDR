@@ -122,16 +122,10 @@ private:
     int m_resetVal;
 };
 
-// ResetSlider whose fill anchors from the centre outward — for L/R pan
-// and L/R balance controls where the meaningful zero is the midpoint,
-// not the left edge.  Also paints a small centre-mark dot on the groove
-// so the operator can see the neutral position at a glance.
-//
-// The default Qt stylesheet sub-page rule paints (0 → handle) which
-// reads wrong for centre-anchored controls.  We over-paint that region
-// here: erase the unwanted half of the sub-page with groove colour, then
-// add the desired (centre → handle) fill in accent colour.  Clipping
-// excludes the handle pixel disc so the overpaint never bleeds into it.
+// ResetSlider filled from the centre outward with a centre-mark dot, for pan /
+// balance controls. Over-paints the stylesheet's (0 -> handle) sub-page with
+// groove colour, then fills (centre -> handle) in accent, clipped around the
+// handle disc.
 class CenterMarkSlider : public ResetSlider {
 public:
     explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
@@ -810,6 +804,10 @@ void VfoWidget::buildUI()
                 ? m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId())
                 : QString();
         QMenu* menu = new QMenu(m_rxAntBtn);
+        // Same as RxApplet: the entry is labelled with the alias / KiwiSDR
+        // profile name, so the tooltip carrying the raw antenna token only
+        // renders once the menu opts in (#5546).
+        menu->setToolTipsVisible(true);
         connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
         for (const QString& ant : menuOptions) {
             auto* act = menu->addAction(antennaMenuLabel(ant, menuOptions));
@@ -853,6 +851,7 @@ void VfoWidget::buildUI()
         // open cannot strand a suspended frame (#5566).
         QPointer<SliceModel> slice = m_slice;
         QMenu* menu = new QMenu(m_txAntBtn);
+        menu->setToolTipsVisible(true);  // raw token behind the alias (#5546)
         connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
         const QStringList options = txAntennaOptions();
         for (const QString& ant : options) {
@@ -6514,22 +6513,11 @@ void VfoWidget::configureRepeaterReverseControl()
     m_fmRevBtn->setCheckable(!xfc);
     m_fmRevBtn->setChecked(false);
     m_fmRevBtn->setDown(xfc && m_radioModel->transmitFrequencyCheck());
-    // REV IS GATED HERE AND NOT IN configureFmToneControls(), BECAUSE THIS
-    // BUTTON IS TWO CONTROLS. Its three neighbours in the same row -- the
-    // offset spin and -/Simplex/+ -- are repeater duplex and nothing else, so
-    // they take hasFmRepeaterOffset directly. This one wears XFC when the
-    // backend declares hasTransmitFrequencyCheck and REV otherwise, and only
-    // the REV personality moves the repeater offset: its toggled handler writes
-    // SliceModel::setTxOffsetFreq, while the XFC personality is momentary and
-    // drives RadioModel::setTransmitFrequencyCheck from pressed/released.
-    //
-    // Those two capabilities are INDEPENDENT, so hasFmRepeaterOffset alone is
-    // the wrong gate. IcomCivBackend derives hasFmRepeaterOffset from
-    // FmRepeaterProfile::hasDuplex and hasTransmitFrequencyCheck from
-    // FmRepeaterProfile::hasXfc, and the IC-7300MK2 declares hasXfc true with
-    // hasDuplex false -- a shipping radio whose XFC button would go dark.
-    // The honest test is whether the personality the button is CURRENTLY
-    // wearing has a verb behind it.
+    // REV is gated here, not in configureFmToneControls(), because the button is
+    // two controls: XFC when the backend has hasTransmitFrequencyCheck (momentary,
+    // drives RadioModel::setTransmitFrequencyCheck), otherwise REV (writes
+    // SliceModel::setTxOffsetFreq). The capabilities are independent (IC-7300MK2:
+    // XFC without duplex), so gate on the personality currently shown.
     const bool connected = m_radioModel && m_radioModel->isConnected();
     const bool repeaterAvailable = !connected
         || m_radioModel->backendCapabilities().hasFmRepeaterOffset;

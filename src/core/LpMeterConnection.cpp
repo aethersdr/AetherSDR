@@ -365,23 +365,10 @@ void LpMeterConnection::pollTick()
     const qint64 now = nowMs();
     const bool poll = m_gate.shouldPoll(now);
 
-    // Report the gate's state only once it settles -- see m_gateSettleTimer.
-    //
-    // Restart ONLY on an actual change. The condition used to include
-    // `|| !m_gateSettleTimer.isActive()`, which re-armed the timer on the
-    // first tick after every expiry: it fired, the next tick restarted it, it
-    // fired 1.5 s later, forever. The timeout early-returns when the state has
-    // not changed, so those wakeups did nothing but cost a timer event every
-    // ~1.6 s for the life of the connection. A state change is the only thing
-    // that ever needs debouncing, and it re-arms the timer by itself.
-    //
-    // The second clause keeps the one thing the old condition got right: the
-    // FIRST state after a connect must still be reported, and at that point
-    // the gate agrees with m_ridingAlongSeen's initial value, so a
-    // change-only test would never arm the timer and the opening
-    // POLLING/SHARED line would be lost from the support bundle.
-    // m_gateStateReported latches on the first report, so this arms once per
-    // connection and never again.
+    // Report the gate's state only once it settles (m_gateSettleTimer). Restart only
+    // on an actual change, plus once for the FIRST state after connect (which equals
+    // m_ridingAlongSeen's initial value) so the opening POLLING/SHARED line reaches
+    // the support bundle; m_gateStateReported latches that.
     if (m_gate.isRidingAlong() != m_ridingAlongSeen
         || (!m_gateStateReported && !m_gateSettleTimer.isActive())) {
         m_ridingAlongSeen = m_gate.isRidingAlong();

@@ -4,23 +4,11 @@
 #include <QVector>
 #include <QSet>
 
-// DisplayInventoryPolicy — classifies the radio-authoritative set of display
-// objects (panadapters + waterfalls, as accumulated from "display pan" /
-// "display waterfall" status) against what this client actually owns.
-//
-// This is the Layer-B half of the #3856 leak detector. Unlike the Layer-A
-// UDP-orphan detector (which sees streams the radio is still *transmitting*),
-// this works purely from status bookkeeping, so it catches the case the
-// packet-based detector cannot: a display object the radio keeps *allocated*
-// but no longer streams — e.g. a waterfall left behind by a panafall close that
-// omitted "display panafall remove" (#3843), on firmware that stops the
-// waterfall UDP on pan-removal. The headline signal is a waterfall whose parent
-// panadapter no longer exists on the radio.
-//
-// Pulled into a pure, header-only function (mirroring RadioStatusOwnership and
-// SliceRecreatePolicy) so it is unit-testable without a live radio: RadioModel
-// feeds it the accumulated radio-side maps + the owned set, and acts on the
-// returned Report.
+// Classifies the radio-side display objects (from "display pan" / "display
+// waterfall" status) against what this client owns: Layer B of the #3856 leak
+// detector. Status-based, so it catches objects the radio keeps allocated but
+// no longer streams, which the UDP-orphan detector cannot; the headline signal is
+// a waterfall whose parent pan no longer exists (#3843). Pure for unit tests.
 
 namespace AetherSDR::DisplayInventory {
 

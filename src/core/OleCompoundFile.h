@@ -8,22 +8,11 @@
 
 namespace AetherSDR {
 
-// Read-only reader for the Microsoft OLE Compound File Binary (CFB)
-// format, also known as Compound Document, Structured Storage, or
-// "the inside of a .doc/.xls/.msi". Specification: [MS-CFB].
-//
-// Scope: this implementation supports only the subset we need to
-// extract `cab*.cab` streams from FlexRadio's WiX MSI installers:
-//
-//   • Read-only; no write or modify operations.
-//   • Stream lookup by name (UTF-16LE → UTF-8 conversion).
-//   • Streams of any size (regular FAT chain).
-//   • Mini-stream (small file < 4096 bytes) read-out included for
-//     completeness but not exercised by our cab use case.
-//
-// Out of scope: storage hierarchies (we treat the directory as a
-// flat list, ignoring storage parent/child relationships), property
-// sets, transactioning, encryption.
+// Read-only reader for Microsoft OLE Compound File Binary ([MS-CFB]), enough to
+// extract `cab*.cab` streams from FlexRadio's WiX MSI installers: stream lookup
+// by name (UTF-16LE -> UTF-8), any size via the FAT chain; mini-stream support
+// included but unexercised. Directory treated as a flat list; no property sets,
+// transactions or encryption.
 class OleCompoundFile {
 public:
     OleCompoundFile() = default;

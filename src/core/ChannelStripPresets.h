@@ -9,37 +9,22 @@ namespace AetherSDR {
 
 class AudioEngine;
 
-// JSON-backed preset library for the Aetherial Audio Channel Strip.
-//
-// Stored at ~/.config/AetherSDR/ChannelStrip.settings as a single
-// JSON document.  Live working state continues to live in
-// AetherSDR.settings via the existing per-DSP-module load/save paths
-// — this file is purely a preset library that the user explicitly
-// saves into and recalls from.
-//
-// Format:
+// Legacy JSON preset library for the Channel Strip, at
+// ~/.config/AetherSDR/ChannelStrip.settings; holds only presets the user saves
+// (live state stays in AetherSDR.settings). Format:
 //   {
 //     "version": 1,
 //     "presets": {
 //       "Broadcast Voice": {
-//         "createdBy": "AetherSDR x.y.z",
-//         "createdAt": "ISO-8601",
-//         "chain":     ["Gate","Eq",...],
-//         "gate":      { ... },
-//         "eq":        { ... },
-//         "comp":      { ... },
-//         "deess":     { ... },
-//         "tube":      { ... },
-//         "pudu":      { ... },
-//         "reverb":    { ... }
-//       },
-//       "Contest Punch": { ... }
+//         "createdBy": "AetherSDR x.y.z", "createdAt": "ISO-8601",
+//         "chain": ["Gate","Eq",...],
+//         "gate": {...}, "eq": {...}, "comp": {...}, "deess": {...},
+//         "tube": {...}, "pudu": {...}, "reverb": {...}
+//       }
 //     }
 //   }
-//
-// Single-file Export writes a one-preset file with the same per-preset
-// schema at the top level (no "presets" wrapper) so it's easy to
-// share online.  Import accepts either form.
+// Export writes one preset at the top level (no "presets" wrapper); import
+// accepts either form.
 class ChannelStripPresets : public QObject {
     Q_OBJECT
 

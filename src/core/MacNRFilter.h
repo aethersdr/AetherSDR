@@ -11,32 +11,18 @@
 
 namespace AetherSDR {
 
-// macOS spectral noise reduction using Apple Accelerate (vDSP).
-//
-// MMSE-Wiener filter with minimum-statistics noise floor tracking.
-// Uses vDSP's real FFT, hardware-accelerated on Apple Silicon via AMX.
-//
-// Design characteristics:
-//   - Processes at its immutable 24 or 48 kHz rate without resampling.
-//     Eliminates the double-resampler chain that caused clicks, phase
-//     distortion, and int16 mid-point quantisation noise.
-//   - 512-point FFT at 24 kHz, 1024 at 48 kHz: 46.9 Hz/bin in both domains.
+// macOS spectral NR with Accelerate (vDSP real FFT): MMSE-Wiener gain with
+// minimum-statistics noise tracking.
+//   - Runs at its immutable 24 or 48 kHz rate, no resampling.
+//   - 512-point FFT at 24 kHz, 1024 at 48 kHz: 46.9 Hz/bin in both.
 //   - Smoothed-periodogram minimum statistics with calibrated bias and
-//     rate-limited upward tracking, using a 25-frame history (~267 ms).
-//   - Near-silent frames freeze the learned noise floor so mute, squelch, and
-//     TX gaps cannot collapse it and cause a burst when audio resumes.
-//   - Per-bin Wiener gain is temporally smoothed (GSMOOTH) to suppress
-//     musical-noise artefacts caused by rapid frame-to-frame gain swings.
-//   - Output accumulator ensures exact byte-count match with no silence
-//     gaps; the pre-filled FFT frame retains the same ≈21.3 ms delay at both rates.
-//   - User-adjustable strength: 0 = bypass, 1 = full NR.
-//
-// Processing chain (entirely in the configured sample-rate domain):
-//   stereo float32 -> per-channel noise estimate and mask -> L/R OLA synthesis
-//
-// Each channel has its own noise estimator, as RN2 runs one RNNoise state
-// per channel: the two sides of a diversity pair are different antennas with
-// different noise, and neither should be masked by the other's estimate.
+//     rate-limited upward tracking over 25 frames (~267 ms).
+//   - Near-silent frames freeze the noise floor (mute/squelch/TX gaps).
+//   - Per-bin gain is temporally smoothed (GSMOOTH) against musical noise.
+//   - Output accumulator keeps exact byte counts; ~21.3 ms delay at both rates.
+//   - Strength 0 = bypass, 1 = full NR.
+// Stereo float32 -> per-channel estimate and mask -> L/R OLA; each channel has
+// its own estimator (diversity pairs differ in noise).
 
 class MacNRFilter {
 public:

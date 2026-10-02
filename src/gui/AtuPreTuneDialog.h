@@ -18,19 +18,12 @@ namespace AetherSDR {
 class RadioModel;
 class BandPlanManager;
 
-// ATU pre-tune sweep dialog (#2624).
-//
-// Steps the active TX slice through a calculated set of center frequencies
-// across the selected HF/6m bands, triggering "atu start" at each point
-// and waiting for atuStateChanged before moving to the next. Band edges
-// come from the active BandPlanManager so the sweep stays within the
-// region's plan — band edges from the plan, not from kBands[].
-//
-// Two modes: Step (per-point confirmation) and Auto (unattended).
-// Safety: MEM must be enabled (gating is enforced before opening), an
-// always-visible Abort, a 30 s per-point timeout, and a hard stop after
-// 3 consecutive TUNE_FAIL_BYPASS results.  After the sweep the slice is
-// restored to its pre-sweep frequency.
+// ATU pre-tune sweep (#2624): steps the TX slice through computed centres
+// across the chosen HF/6m bands (edges from BandPlanManager, not kBands[]),
+// sending "atu start" and waiting for atuStateChanged at each. Step and Auto
+// modes. Safety: MEM must be enabled (checked before opening), always-visible
+// Abort, 30 s per-point timeout, hard stop after 3 consecutive
+// TUNE_FAIL_BYPASS. The slice's frequency is restored afterwards.
 class AtuPreTuneDialog : public QDialog {
     Q_OBJECT
 

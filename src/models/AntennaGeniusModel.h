@@ -55,24 +55,13 @@ struct AgPortStatus {
     bool    inhibited{false};
 };
 
-// State model for a 4O3A Antenna Genius connected via TCP/IP.
-//
-// Discovery: UDP broadcast listener on port 9007 (device sends "AG ip=... port=... ...")
-// Control:   TCP connection to device:9007, command/response protocol similar to SmartSDR
-//
-// Protocol summary:
-//   Commands:  C<seq>|<command>\r\n
-//   Responses: R<seq>|<hex_code>|<body>    (R<seq>|| = end of multi-line response)
-//   Status:    S0|<object> key=val ...      (async push after sub port all / sub relay)
-//
-// Commands used:
-//   antenna list        — enumerate antenna ports
-//   band list           — enumerate band definitions
-//   port get <id>       — get current port status
-//   port set <id> rxant=<n> txant=<n>  — select antenna for a port
-//   sub port all        — subscribe to port status changes
-//   sub relay           — subscribe to relay changes
-//   ping                — keep-alive heartbeat
+// 4O3A Antenna Genius over TCP. Discovery: UDP broadcast on 9007
+// ("AG ip=... port=..."). Control: TCP to device:9007.
+//   Command:  C<seq>|<command>\r\n
+//   Response: R<seq>|<hex_code>|<body>   (R<seq>|| ends a multi-line response)
+//   Status:   S0|<object> key=val ...     (async after `sub port all` / `sub relay`)
+// Commands used: antenna list, band list, port get <id>,
+// port set <id> rxant=<n> txant=<n>, sub port all, sub relay, ping (keep-alive).
 class AntennaGeniusModel : public QObject {
     Q_OBJECT
 

@@ -3,35 +3,15 @@
 #include <algorithm>
 #include <cmath>
 
-// One definition of what the "WtrFall Rate" control means.
-//
-// The control is a 1..100 rate, LOW IS SLOW and HIGH IS FAST. That direction is
-// not a choice made here — it is the behavior measured on real Flex hardware in
-// #3104 (issue #3070) and it is what the rest of the UI already assumes: the
-// slider label, the time-scale drag ("dragging up slows the waterfall, so
-// reduce the rate percent"), and SpectrumWidget's time-axis preview seed.
-//
-// The trap is the wire name. Flex calls the parameter `line_duration` and
-// FlexLib types it as milliseconds, so a backend that shapes its own display
-// rate reads the number literally and paces rows at `value` ms — which runs the
-// control BACKWARDS against every other consumer: 1 becomes the fastest setting
-// and 100 the slowest. That is exactly what the Hermes-Lite 2 did (#4606): rate
-// 1 gave 25 fps, rate 100 gave 10 fps.
-//
-// TWO PRODUCERS, TWO LAWS. Which one applies depends on who turns the rate into
-// rows, and they are deliberately not the same function:
-//
-//   flex*  — a Flex, whose display engine owns the conversion. We do not get to
-//            pick that law; we only know it by measurement, and it is steeply
-//            non-linear. Used to ASK a Flex for a cadence, and to seed the time
-//            axis before real row timestamps arrive.
-//
-//   local* — this host, for a backend that streams raw spectra and has no
-//            radio-side display engine (HL2, demo). Here the law IS ours, so it
-//            is linear in rows per second: a control called "Rate" should move
-//            in proportion to rate. Reusing the Flex curve here was the first
-//            cut of #4606 and it wasted 70% of the slider — measured on the HL2,
-//            rate 50 gave 1.5 rows/s and nothing moved usefully until ~70.
+// What the "WtrFall Rate" control means: 1..100, LOW = SLOW, HIGH = FAST, as
+// measured on Flex hardware (#3104) and assumed by the slider, time-scale drag
+// and SpectrumWidget's time-axis seed. Flex names it `line_duration` (ms in
+// FlexLib), but a backend must not pace rows at `value` ms, which runs the
+// control backwards (#4606). Two laws, deliberately different:
+//   flex*  — the Flex display engine's measured, steeply non-linear law; used
+//            to ask a Flex for a cadence and to seed the time axis.
+//   local* — our own law for raw-spectrum backends (HL2, demo): linear in rows
+//            per second (the Flex curve wastes ~70% of the slider there).
 
 namespace AetherSDR::WaterfallRate {
 
