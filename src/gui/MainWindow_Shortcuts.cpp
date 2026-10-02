@@ -1292,6 +1292,7 @@ void MainWindow::registerShortcutActions()
                 double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
                 m_splitActive = true;
                 m_splitRxSliceId = s->sliceId();
+                m_splitRxFrequencyMhz = s->reportedFrequency();
                 m_radioModel.sendCommand(
                     QString("slice create pan=%1 freq=%2").arg(panId).arg(txFreq, 0, 'f', 6));
             } else {

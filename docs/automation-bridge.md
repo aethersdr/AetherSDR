@@ -78,6 +78,25 @@ sets the station label shown to other Multi-Flex clients; the legacy
 `AETHER_AUTOMATION_STATION` and then `AETHER_AUTOMATION_LABEL` are fallbacks,
 followed by the neutral default `Automation`. The agent name is display-only
 and is never used as the UUID because several worktrees may use the same LLM.
+
+The identity also decides what the radio gives back. A FlexRadio restores
+per-client panadapter state (WNB on/off and level, for one) keyed by the GUI
+client UUID, so a run under an automation identity gets that identity's last
+state, not the operator's. To check that a radio-owned setting survives an
+AetherSDR restart *for the operator*, first close any other AetherSDR instance
+using the same settings store, then launch without `AETHER_AUTOMATION` and
+enable the bridge from Radio Setup → Network instead. The app uses the
+persistent `GUIClientID` when it can acquire the identity lock; otherwise it
+falls back to a transient UUID, which would invalidate this comparison. The
+same token works. If you do not normally run the bridge, disable it again
+afterwards: the Radio Setup setting is saved across launches, unlike the
+process-only `AETHER_AUTOMATION` override.
+
+Seen on a FLEX-8600 (firmware 4.2.20.41343) while proving #6070: the same
+radio restored WNB on (level 50) for the operator's identity and off (level
+90) for the automation identity, with no client WNB command sent in either
+fix-build run.
+
 Automation identities never overwrite the user's persistent `GUIClientID`.
 
 KiwiSDR compression can be forced for diagnostic runs by adding

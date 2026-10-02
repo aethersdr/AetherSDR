@@ -169,10 +169,12 @@ public:
     [[nodiscard]] int lnaEffectiveDb() const noexcept;
     [[nodiscard]] bool autoRfGainEnabled() const noexcept { return m_autoRfGainEnabled; }
 
-    // Max attenuation the loop may apply, in dB below the operator's baseline.
-    // Default 26 dB. It was sized from #5354's sweep, whose gain labels read 32 dB
-    // low (one unit's defect, #5943), so it is not a measured bound. Everything else
-    // in Hl2AutoGainPolicy.h is deliberately not operator-settable.
+    // Max attenuation the loop may apply, in dB below the operator's baseline. The
+    // floor belongs to the law: 24 dB for "bandscope" (what a backend starts with)
+    // and "probe", 26 for "ramp" and "binary". The 26 was sized from #5354's sweep,
+    // whose gain labels read 32 dB low (one unit's defect, #5943), so it is not a
+    // measured bound. Everything else in Hl2AutoGainPolicy.h is deliberately not
+    // operator-settable.
     void setAutoRfGainFloorDb(int floorDb);
     [[nodiscard]] int autoRfGainFloorDb() const noexcept
     {
@@ -180,7 +182,7 @@ public:
     }
     // The deepest floor the operator may configure: the whole native span, so
     // from any armable baseline the loop can be allowed to dig to the register
-    // floor. The default floor (Hl2AutoGainPolicy.h maxOffsetDb) is separate.
+    // floor. The default floor belongs to the installed law (above).
     static constexpr int kAutoRfGainFloorMaxDb = hl2::kLnaGainMaxDb - hl2::kLnaGainMinDb;
 
     // Which Hl2AutoGainPolicy.h configuration the loop runs:
@@ -191,6 +193,8 @@ public:
     //             interval. What "bandscope" degenerates to without the measurement.
     // "binary"    binaryHighLowConfig(): two-state per-band switch.
     // Same state machine, different numbers; selecting a mode installs its floor.
+    // "default" names the law a backend starts with. Neither law nor floor is
+    // persisted: every connect reinstalls the default (applyRestoredState).
     // Returns false, changing nothing, on an unknown name.
     bool setAutoRfGainMode(const QString& mode);
 
@@ -262,6 +266,9 @@ private:
     // so converter-row expiry is testable without a radio.
     friend struct Hl2HealthBlockTestAccess;
     friend struct Hl2Cl1ReferenceTestAccess;
+    // Fires link edges through MetisClient's signals and seeds the connect
+    // baseline, so hl2_auto_gain_law_test reads the installed law without a radio.
+    friend struct Hl2AutoGainLawTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
@@ -759,9 +766,19 @@ private:
     void publishFrontEndOverload();
     AetherSDR::FrontEndOverload m_lastFrontEndOverload;
     // The configuration's name, for the health row and reset path (the config struct
-    // is just numbers). Set in the constructor: bandscopeReleaseConfig() uses a
-    // logarithm and cannot be a constant initialiser.
-    QString m_autoGainMode = QStringLiteral("bandscope");
+    // is just numbers). No initialiser: installDefaultAutoGainLaw() sets name and
+    // config together, so there is one copy of the default.
+    QString m_autoGainMode;
+    // A law is a name and its numbers, kept as one value so neither is installed
+    // without the other.
+    struct AutoGainLaw {
+        QString name;
+        AetherSDR::hl2::AutoGainConfig config;
+    };
+    // The law a backend starts with: the one source for the constructor,
+    // applyRestoredState() and the name "default".
+    [[nodiscard]] static AutoGainLaw defaultAutoGainLaw();
+    void installDefaultAutoGainLaw();
     // Band and baseline as the loop last saw them, so changes reach the policy as
     // inputs.
     QString m_autoGainBandKey;
