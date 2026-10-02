@@ -1,14 +1,7 @@
-// MainWindow_Workspace.cpp — the workspace canvas mount (RFC #4887 phase 3).
-//
-// Everything MainWindow contributes to canvas mode lives here: creating the
-// canvas + controller, the View-menu toggle, and the one structural move —
-// swapping the canvas into the splitter slot the PanadapterStack normally
-// occupies, with the stack riding along as a canvas item.  Placement policy
-// (what a drop means, which applets belong on the canvas, what the document
-// says) is WorkspaceController's business, deliberately not this file's.
-//
-// Sibling TU per docs/architecture/mainwindow-decomposition.md — methods are
-// MainWindow:: members declared in MainWindow.h.
+// MainWindow_Workspace.cpp — the workspace canvas mount (RFC #4887): creating
+// canvas + controller, the View-menu toggle, and swapping the canvas into the
+// PanadapterStack's splitter slot. Placement policy belongs to
+// WorkspaceController (docs/architecture/mainwindow-decomposition.md).
 
 #include "MainWindow.h"
 
@@ -294,17 +287,10 @@ void MainWindow::wireWorkspaceCanvas()
                 });
     }
 
-    // The stored document decides whether the mode comes back up.  boot()
-    // never migrates — a fresh install that has never enabled the canvas
-    // must not gain a Workspaces key just by launching.
-    //
-    // The mount itself is DEFERRED one event-loop turn: this runs in the
-    // MainWindow constructor, before show() and the first layout pass, and
-    // replaying the document onto a canvas with no real geometry is exactly
-    // how the phase 3 field report broke — every item displayed full-canvas
-    // for the whole session.  The model is bounds-only now so a degenerate
-    // size can no longer corrupt anything, but mounting after layout means
-    // the first frame the operator sees is the right one.
+    // The stored document decides whether canvas mode comes back; boot() never
+    // migrates, so a fresh install gains no Workspaces key. The mount is
+    // deferred one turn: this runs in the constructor before the first layout,
+    // and mounting after layout makes the first visible frame correct.
     if (m_workspaceController->boot()) {
         QTimer::singleShot(0, this, [this] { toggleWorkspaceCanvas(true); });
     }
@@ -358,19 +344,12 @@ void MainWindow::toggleWorkspaceCanvas(bool on, bool preserveEnabledPreference)
             m_panStack->bandStackPanel()
             && m_panStack->bandStackPanel()->isVisibleTo(m_panStack);
 
-        // EVERY move below is a ONE-STEP, SAME-TOP-LEVEL reparent — the
-        // #2495-safe pattern for the QRhiWidget children riding inside the
-        // stack.  No widget ever passes through setParent(nullptr): a
-        // parentless QWidget IS a transient top-level, and taking the
-        // stack's live QRhi children through one without float/dock's
-        // prepare/reset dance is the #1344/#4091 hazard (red-team B1 —
-        // the previous shape did exactly that, twice per toggle).  The
-        // canvas is a child of this window from construction, so
-        // stack→canvas and canvas→splitter both stay inside one top-level.
-        //
-        // Since phase 4 the stack is not an item — its applets are.  It
-        // rides hidden as the pans' owner (creation, wiring, float/dock,
-        // render scheduling); enable() borrows each applet onto the canvas.
+        // Every move below is a one-step, same-top-level reparent (#2495-safe
+        // for the QRhiWidget children); never via setParent(nullptr), which
+        // makes a transient top-level (#1344/#4091 hazard). The canvas is a
+        // child of this window, so both moves stay in one top-level. The stack
+        // rides hidden as the pans' owner; enable() borrows each applet onto
+        // the canvas.
         m_panStack->setParent(m_workspaceCanvas);
         m_panStack->hide();
         m_splitter->insertWidget(panIdx, m_workspaceCanvas);

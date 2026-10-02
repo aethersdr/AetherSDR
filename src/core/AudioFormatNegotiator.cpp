@@ -67,20 +67,10 @@ QList<SampleFmt> formatOrder(TargetOs os, Direction dir, FormatPreference pref)
     if (dir == Direction::Output)
         return {SampleFmt::Float32, SampleFmt::Int16};
 
-    // Input. Same inversion the 48 kHz strip forced on the RATE ladder, applied
-    // to the FORMAT ladder. Int16-first was right while the DSP island was
-    // Int16: the mic's own samples are integer, so asking for Int16 meant no
-    // conversion anywhere. TxVoiceProcessor is float now, and every host engine
-    // we open through already mixes in float — WASAPI's shared mix is float32 by
-    // construction, and converts to integer only at the app boundary
-    // (learn.microsoft.com/windows/win32/coreaudio/device-formats); PipeWire and
-    // PulseAudio likewise. So Int16 capture buys a quantization on the way in
-    // and processCapturedFloat32() would widen it straight back — a round trip
-    // at the ENTRANCE of a chain whose stated design is "become float once,
-    // quantize once at the 24 kHz transport boundary".
-    //
-    // Int16 stays the next rung, so an Int16-only endpoint negotiates exactly as
-    // it did before.
+    // Input leads with Float32: TxVoiceProcessor is float and WASAPI shared mode,
+    // PipeWire and PulseAudio all mix in float, so Int16 capture would only add a
+    // quantize/widen round trip at the chain's entrance. Int16 remains the next rung
+    // for Int16-only endpoints.
     switch (os) {
     case TargetOs::Windows:
     case TargetOs::Linux:
@@ -133,17 +123,9 @@ QList<TxOpenAttempt> txOpenLadder(int initialChannels)
         ladder.append(candidate);
     };
 
-    // Rate outermost, then format, then channels. Within 48 kHz that reads
-    // Float32/clamped, Float32/mono, Int16/clamped, Int16/mono — the exact
-    // order the #2929 recovery had, so a merely mono-only mic still recovers
-    // in ONE reopen and the format dimension only costs extra reopens on
-    // devices that actually need it.
-    //
-    // The lower rates are the rungs the null-open path used to own as a
-    // separate loop. They are here rather than there because a rung reached by
-    // a null open and a rung reached by a silent open are the same rung, and
-    // the bug that produced this restructure was two sequences disagreeing
-    // about which one they were on.
+    // Rate outermost, then format, then channels. At 48 kHz: Float32/clamped,
+    // Float32/mono, Int16/clamped, Int16/mono, so a mono-only mic recovers in one
+    // reopen (#2929). Null-open and silent-open failures share these rungs.
     for (int rate : {48000, 44100, 24000, 16000}) {
         for (SampleFmt fmt : {SampleFmt::Float32, SampleFmt::Int16}) {
             add(rate, fmt, initial);
@@ -207,20 +189,11 @@ QList<FormatCandidate> buildLadder(TargetOs os,
         ladder.append(c);
     };
 
-    // macOS / preferred-first inputs: the device's own preferred rate leads the
-    // ladder so we never force a 16k-native or BT-HFP mic up to 48k (#2930 /
-    // #2615).
-    //
-    // This rung exists for the RATE. Taking caps.preferredFormat with it would
-    // quietly hand macOS a different FORMAT policy than formatOrder() states,
-    // because CoreAudio inputs report Float as their preferred format — so
-    // every Mac mic advertising a preferred rate would capture Float32 while
-    // formatOrder() below still says macOS leads with Int16. That contradiction
-    // was invisible while AudioEngine discarded every non-Int16 rung itself;
-    // once the engine honours the rung, it decides macOS behaviour (review of
-    // PR #5017). Lead with the per-OS format order instead, and let the
-    // preferredFormat catch-all rung at the bottom keep Float32-only endpoints
-    // working — strictly more capable than the engine-side filter it replaces.
+    // macOS inputs: the device's preferred rate leads so a 16k-native or BT-HFP mic
+    // is never forced to 48k (#2930/#2615). Only the RATE is taken from caps:
+    // CoreAudio reports Float as preferred, and formatOrder() is the format policy.
+    // The preferredFormat catch-all rung at the bottom keeps Float32-only endpoints
+    // working.
     const bool preferredFirst =
         (dir == Direction::Input && os == TargetOs::MacOS && caps.preferredRate > 0);
     if (preferredFirst) {

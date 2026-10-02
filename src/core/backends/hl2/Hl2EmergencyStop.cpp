@@ -103,19 +103,9 @@ void fireEmergencyStop() noexcept
 
 void installEmergencyStopSignalHandlers() noexcept
 {
-    // SIGTERM  — plain `kill`, and what a service manager or the OS sends.
-    // SIGINT   — Ctrl-C from a terminal-launched run.
-    // SIGHUP   — the controlling terminal went away.
-    // SIGQUIT  — Ctrl-backslash.
-    //
-    // NOT SIGKILL: it cannot be caught, so `kill -9` still wedges the radio.
-    //
-    // TERMINATION SIGNALS ONLY — deliberately not SIGSEGV/SIGABRT/SIGBUS. A
-    // crash leaves the radio in the same state and it is tempting to cover it
-    // here, but those signals belong to whatever crash reporting the platform
-    // and the app already have (on macOS the reporter uses Mach exception
-    // ports, and MacStartupAbortGuard owns SIGABRT during startup). Quietly
-    // taking them over to save a power cycle is not a trade worth making.
+    // Termination signals only. SIGSEGV/SIGABRT/SIGBUS belong to the platform
+    // crash reporting (Mach exception ports on macOS; MacStartupAbortGuard owns
+    // SIGABRT during startup).
     static const int kSignals[] = {
         SIGTERM, SIGINT,
 #ifndef Q_OS_WIN
@@ -123,14 +113,8 @@ void installEmergencyStopSignalHandlers() noexcept
 #endif
     };
     for (const int sig : kSignals) {
-        // NEVER override an inherited SIG_IGN.
-        //
-        // POSIX is explicit that a process which inherits a signal as ignored
-        // should leave it that way, and this is not a theoretical rule: nohup
-        // works by ignoring SIGHUP, so installing a handler over it converts a
-        // signal the parent deliberately neutralised back into a fatal one.
-        // Caught in testing — a nohup'd run died the moment its launching shell
-        // exited, which is the exact opposite of what nohup is for.
+        // Never override an inherited SIG_IGN (POSIX): nohup ignores SIGHUP,
+        // and a handler here would make it fatal again.
         const auto previous = std::signal(sig, terminatingSignalHandler);
         if (previous == SIG_IGN)
             std::signal(sig, SIG_IGN);

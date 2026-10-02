@@ -5,23 +5,12 @@
 
 namespace AetherSDR {
 
-// Incremental reduction core for the WAVE waveform scope.
-//
-// The scope used to rescan every raw sample in the visible window on every
-// repaint — three O(window) passes (copy, stats, per-pixel columns) per
-// frame, which at long windows and high refresh rates dominated the main
-// thread (#3283). This model folds samples into fixed-duration bins once,
-// as they arrive (O(samples/s) regardless of window length), and each
-// repaint only merges bins into pixel columns (O(bins + width)).
-//
-// The raw ring is kept alongside the bins: re-binning on window/rate
-// changes, pause snapshots, and the Bands-mode Goertzel analyzer all read
-// it. The model is a value type — pausing the scope is a plain copy.
-//
-// Phase-2 GPU hook: mergeColumns() fills a contiguous POD ColumnStats
-// array a QRhi renderer can upload directly as a 1-D texture, and
-// generation() gives it a dirty counter so unchanged frames skip the
-// upload.
+// Incremental reduction for the WAVE scope (#3283): samples fold into
+// fixed-duration bins on arrival, and a repaint only merges bins into pixel
+// columns (O(bins + width)). The raw ring is kept for re-binning, pause
+// snapshots and the Bands-mode Goertzel analyzer. Value type: pausing is a copy.
+// mergeColumns() yields a POD ColumnStats array uploadable as a 1-D texture;
+// generation() is its dirty counter.
 class WaveformScopeModel {
 public:
     // Per-pixel-column reduction — the shape the render paths consume.

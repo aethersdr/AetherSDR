@@ -9,17 +9,9 @@ class QWidget;
 
 namespace AetherSDR {
 
-// Layout ID encoding:
-//   "1"    — single pan (full)
-//   "2v"   — 2 pans vertical (A / B)
-//   "2h"   — 2 pans horizontal (A | B)
-//   "2h1"  — 2 top + 1 bottom (A|B / C)
-//   "12h"  — 1 top + 2 bottom (A / B|C)
-//   "2x2"  — 2×2 grid (A|B / C|D)
-//   "3h2"  — 3 top + 2 bottom (A|B|C / D|E)
-//   "2x3"  — 3 rows of 2 (A|B / C|D / E|F)
-//   "4h3"  — 4 top + 3 bottom (A|B|C|D / E|F|G)
-//   "2x4"  — 4 rows of 2 (A|B / C|D / E|F / G|H)
+// Layout IDs: "1" single; "2v" A/B; "2h" A|B; "2h1" A|B / C; "12h" A / B|C;
+// "2x2" A|B / C|D; "3h2" A|B|C / D|E; "2x3" A|B / C|D / E|F;
+// "4h3" A|B|C|D / E|F|G; "2x4" A|B / C|D / E|F / G|H.
 
 struct PanLayout {
     QString id;

@@ -16,58 +16,23 @@ namespace AetherSDR {
 class RadioModel;
 class AudioEngine;
 
-// Transmit bring-up instrument: drive the whole transmit chain against the
-// radio itself and report what every stage actually did.
-//
-// THIS IS A DIAGNOSTIC, NOT A CERTIFICATION. It deliberately does not return
-// pass/fail. Thresholds that are meaningful for one radio are guesses for the
-// next, and a tool that says PASS on a radio nobody has characterised is worse
-// than one that says "forward power 3846 counts, mic peak -32 dBFS, sideband
-// consistent". Judgement stays with the operator or the agent reading it; this
-// gathers the evidence they would otherwise gather by hand over several days.
-//
-// It assumes NO simulator and no second receiver — everything here runs against
-// one radio, because that is the situation a new backend starts in.
-//
-// WHAT IT IS BUILT FROM. Every stage exists because something in the
-// Hermes-Lite 2 bring-up failed silently at exactly that point. The stage list
-// is a transcription of docs/HERMES.md section 14, and each result carries the
-// reference so a future agent lands on the write-up rather than re-deriving it:
-//
-//   - four separate defects each produced a correct-looking keyed transmission
-//     with ZERO forward power (14.1)
-//   - a modulator with 85 dB opposite-sideband suppression radiated double
-//     sideband, because the quadrature filter was all-pass in magnitude (14.2)
-//   - keying reached the radio from the automation bridge and not from the MOX
-//     button, because they drive different models (14.5)
-//   - transmit ran on the WRONG SIDEBAND while every internal instrument agreed
-//     it was right (14.6)
-//
-// The last one shapes the design. A convention error is invisible to any check
-// that shares the convention, so the sideband stage demodulates our own
-// transmission rather than looking at the panadapter: the panadapter reads raw
-// wire order and agrees with the transmitter by construction, while the
-// demodulator applies the receive conjugation and WDSP's sideband selection
-// independently. That is a genuinely different path — though still not as
-// strong as an unrelated receiver, which is why the report ends with the manual
-// checks a human must still perform.
+// Transmit bring-up instrument: drives the whole TX chain against one radio
+// (no simulator, no second receiver) and reports what every stage did.
+// A diagnostic, not a certification: no pass/fail, because thresholds for one
+// radio are guesses for the next. Stages follow docs/HERMES.md section 14 and
+// each result carries its reference. The sideband stage demodulates our own
+// TX rather than reading the panadapter, which shares the transmitter's
+// convention and so can't detect an inversion (14.6); it is still weaker than
+// an unrelated receiver, hence the manual checks at the end of the report.
 class RadioCertification {
 public:
-    // Bring-up order, and it is deliberate: each phase depends only on the ones
-    // before it.
-    //
+    // Bring-up order; each phase depends only on earlier ones:
     //   Tune    control plane only — no DSP, no audio, no meters
     //   Rx      demodulation and handedness — audio evidence, still no meters
     //   Tx      keying and modulation — audio evidence where it exists
     //   Meters  the instruments themselves, LAST, against known stimuli
-    //
-    // Meters come last because they are not trustworthy until something has
-    // checked them, and the earlier phases must therefore not lean on them. A
-    // transmit stage that concludes "no RF" from a missing SWR reading is really
-    // reporting "no SWR reading", and the two are only the same thing once the
-    // meters have been validated. Where a stage does use a meter, it labels the
-    // conclusion meterDependent so a failure can be attributed to the right
-    // subsystem instead of the nearest one.
+    // Earlier phases must not lean on meters; where they do, the result is
+    // marked meterDependent.
     enum class Phase { Tune, Rx, Tx, Meters, All };
 
     struct Options {
@@ -121,19 +86,11 @@ public:
 
 private:
     friend class RadioCertificationTestAccess;
-    // One measurement, recorded whether or not it looked healthy.
-    //
-    // `concern` is the closest thing to a verdict: it is set when a value falls
-    // outside what this radio has previously been observed to do, and it names
-    // the suspicion rather than declaring failure. `reference` points at the
-    // docs/HERMES.md section that explains the failure mode, so the next agent gets
-    // the history rather than a bare number.
-    //
-    // `meterDependent` marks a conclusion that was drawn from meterSnapshot(),
-    // and therefore cannot be stronger than the meters themselves — which the
-    // Meters phase has not validated yet when the transmit stages run. It is
-    // emitted into the report so a reader can attribute a failure to the right
-    // subsystem instead of the nearest one.
+    // One measurement, recorded whether healthy or not. `concern` names a
+    // suspicion when a value falls outside previously observed behaviour (never a
+    // verdict); `reference` points at the docs/HERMES.md section. `meterDependent`
+    // marks a conclusion drawn from meterSnapshot(), which the Meters phase has
+    // not yet validated when TX stages run.
     void record(const QString& id, const QString& title,
                 const QJsonObject& measured, const QString& observation,
                 const QString& concern = QString(),
@@ -168,17 +125,10 @@ private:
     void stageCarrierSuppression(const Options& o);
     void stageLifecycle(const Options& o);
 
-    // Key through TransmitModel, NOT RadioModel::setTransmit.
-    //
-    // The automation bridge drives RadioModel and the MOX button drives
-    // TransmitModel, and three separate bugs reached the operator through that
-    // gap (docs/HERMES.md 14.5). A transmit diagnostic that keyed the way only the
-    // bridge can would inherit exactly the blindness it exists to remove.
-    //
-    // Returns whether the radio reached the requested state. Keying can be
-    // REFUSED by TransmitModel::runPttPreflight (band limits, interlocks) and
-    // requestPttOn returns void, so an unnoticed refusal made every stage below
-    // measure an unkeyed radio and blame its own subject for the silence.
+    // Key through TransmitModel (the MOX button's path), not
+    // RadioModel::setTransmit (the bridge's), which differ (docs/HERMES.md 14.5).
+    // Returns whether the radio reached the requested state: runPttPreflight can
+    // refuse keying (band limits, interlocks) and requestPttOn returns void.
     bool keyViaOperatorPath(bool on);
     bool keyedNow() const;
 
@@ -200,16 +150,10 @@ private:
     void spin(int ms);
     QJsonObject meterSnapshot() const;
 
-    // WHAT THE OPERATOR'S GAUGE WILL SHOW, read the way the gauge reads it.
-    //
-    // meterSnapshot() above measures the SEAM — the value that crossed from the
-    // backend, by meter index. This measures the CONSUMER: the typed accessors
-    // the applets bind to, each behind the liveness gate its real consumer
-    // applies. The two answer different questions and a probe that mixes them
-    // becomes a third convention that agrees with neither (CERTIFICATION.md
-    // 1.34): reading MeterModel::swr() raw reported a confident 1.0:1 in the
-    // same stage that reported TX:SWR had never been fed, because an unfed SWR
-    // and a perfect match are the same float.
+    // What the operator's gauge shows: the typed MeterModel accessors applets
+    // bind to, each behind its consumer's liveness gate. meterSnapshot() instead
+    // measures the seam by meter index. Don't mix them: raw MeterModel::swr()
+    // reads 1.0 when unfed (CERTIFICATION.md 1.34).
     QJsonObject renderedSnapshot() const;
 
     // Record forward power seen INSIDE a keyed window. Called from every stage

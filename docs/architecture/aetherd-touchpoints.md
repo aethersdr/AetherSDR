@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 230 touchpoint headers (193 core, 37 models) — 230/230 tagged, 0/230 converted.
+**Totals:** 231 touchpoint headers (194 core, 37 models) — 231/231 tagged, 0/231 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -113,6 +113,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/PskReporterClient.h` | 1 | ui-support — pskreporter.info HTTP/MQTT fetcher for reception reports of our call; external service feed for a map dialog, no radio state | unconverted |
 | `core/QrzLookupSettings.h` | 1 | ui-support — QRZ credential/settings holder (keychain-backed); client-side settings plumbing, not radio state. | unconverted |
 | `core/QsoRecorder.h` | 1 | universal — QSO WAV recorder gated by MOX using canonical slice freq/mode + audio streams; no vendor protocol ties. | unconverted |
+| `core/QtAudioBackendGuard.h` | 1 | ui-support — Pre-QApplication probe that keeps Qt 6.12's QtMultimedia off a PipeWire backend that would crash; client startup plumbing, not radio state. | unconverted |
 | `core/RADEEngine.h` | 4 | universal — Engine-side RADE/FreeDV digital-voice codec (PCM in/out, EOO, sync/SNR); DAX mentions are just audio plumbing | unconverted |
 | `core/RadioDiscovery.h` | 3 | mixed(flex) — Device-discovery list/events are core-profile; SmartSDR UDP:4992 parsing + Multi-Flex/license fields are flex | unconverted |
 | `core/RadioMessageTypes.h` | 2 | universal — Generic radio-message classification enums (MessageType/MessageSeverity) — no vendor ties. Extracted from vendor(flex) core/backends/flex/CommandParser.h so above-seam consumers of just the enums decouple from the SmartSDR wire parser (EB3 decouple, #4087). MessageSeverity values are load-bearing wire values (see the header). | unconverted |
@@ -173,7 +174,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/backends/HealthSnapshotMerge.h` | 1 | universal — The snapshot merge rule, family-neutral by construction: a key the winner declares but omits from `values` means "not reported" and must not erase a base value. Moved out of backends/hl2/Hl2TelemetrySource.h (which keeps hl2MergeHealth as a forwarder) because AutomationServer::doHealth() and RadioHealthDialog both need it, and neither may include a family header to get it. Names no family. | unconverted |
 | `core/backends/IRadioBackend.h` | 2 | universal — THE radio seam (RFC §5.5) — the canonical intent verbs, typed deltas and normalized signals every family implements. Universal by definition: the UI reaching this header is the seam working as designed, not coupling. Everything below it in core/backends/<family>/ is family-private. | unconverted |
 | `core/backends/NoiseFloorAutoAdjustGate.h` | 2 | universal — The ONE predicate deciding whether the noise-floor auto-adjust may move the display reference level, as an OR over two backend-neutral properties (a real dBm-range echo, or absolute spectrum bins). Deliberately free of Qt and of RadioCapabilities so the widget and its test read the same function rather than two copies; the UI reaching it is the seam working, not coupling. Family backends populate the capability it is called with. | unconverted |
-| `core/backends/RadioCapabilities.h` | 8 | universal — Backend-neutral capability descriptor consumed above the radio seam. Universal by definition; family implementations populate it. | unconverted |
+| `core/backends/RadioCapabilities.h` | 9 | universal — Backend-neutral capability descriptor consumed above the radio seam. Universal by definition; family implementations populate it. | unconverted |
 | `core/backends/anan/AnanDiscovery.h` | 2 | vendor(anan) — openHPSDR Protocol 2 discovery and ANAN-G2 identity handling. Family-specific discovery belongs below the ANAN backend seam. | unconverted |
 | `core/backends/anan/AnanSettings.h` | 1 | ui-support — Client-side connection and ADC configuration for the ANAN backend. Persisted setup plumbing, not live radio state. | unconverted |
 | `core/backends/anan/P2Protocol.h` | 1 | vendor(anan) — openHPSDR Ethernet Protocol 2 wire primitives for the ANAN-G2 backend. Family protocol code belongs below the radio seam. | unconverted |

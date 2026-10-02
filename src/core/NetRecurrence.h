@@ -9,19 +9,13 @@ namespace AetherSDR {
 
 struct NetEntry;
 
-// Recurrence math for scheduled nets. Pure and headless (QtCore only) so it can
-// be exhaustively unit-tested without a radio or a GUI.
-//
-// Supported RFC 5545 RRULE subset (what the UI exposes):
+// Recurrence math for scheduled nets; QtCore only, exhaustively unit-tested.
+// RFC 5545 RRULE subset:
 //   FREQ=DAILY[;INTERVAL=n]
-//   FREQ=WEEKLY[;INTERVAL=n];BYDAY=MO,TU,...      (BYDAY optional; defaults to
-//                                                  the weekday of startDate)
-//   FREQ=MONTHLY[;INTERVAL=n];BYDAY=nXX           (single ordinal weekday,
-//                                                  n in -1..5, -1 = last)
-//
-// INTERVAL>1 ("every other week") needs an anchor to know which periods are
-// "on"; that anchor is the entry's startDate (DTSTART). When startDate is
-// absent INTERVAL phase is not enforced (treated as INTERVAL=1).
+//   FREQ=WEEKLY[;INTERVAL=n];BYDAY=MO,TU,...  (BYDAY defaults to startDate's day)
+//   FREQ=MONTHLY[;INTERVAL=n];BYDAY=nXX       (one ordinal weekday, n in -1..5,
+//                                              -1 = last)
+// INTERVAL > 1 is phased from startDate (DTSTART); without one, treated as 1.
 namespace NetRecurrence {
 
 struct ParsedRule {

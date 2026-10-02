@@ -24,17 +24,11 @@ class QUdpSocket;
 
 namespace AetherSDR::icom {
 
-// ONE RS-BA1 UDP stream: the session handshake, the three keepalive clocks, and
-// the retransmission layer.
-//
-// Three of these exist per connection — control, serial and audio — each with
-// its OWN session handshake, its own sequence space and its own retransmission
-// state. That looks like triplication and it is what the protocol actually is;
-// collapsing them would mean inventing a multiplexing layer the radio does not
-// speak.
-//
-// Lives on IcomSession's I/O thread, not the GUI thread. A QUdpSocket takes the
-// affinity of the thread that creates it, so start() must run there.
+// ONE RS-BA1 UDP stream: session handshake, the three keepalive clocks, and
+// retransmission. Three exist per connection (control, serial, audio), each
+// with its own handshake, sequence space and retransmit state — that is the
+// protocol, not duplication. Lives on IcomSession's I/O thread; a QUdpSocket
+// takes its creator's thread affinity, so start() must run there.
 class IcomStream : public QObject {
     Q_OBJECT
 

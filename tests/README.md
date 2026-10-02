@@ -1,9 +1,9 @@
 # tests/
 
-Automated unit tests — `*_test.cpp` files compiled by CMake and run
-in CI, except the retired fixtures listed under "Network-fixture
-boundary" below, which stay in source for history but are not
-configured or compiled. To run the suite locally:
+Automated unit tests — `*_test.cpp` files declared in `tests.cmake`,
+compiled by CMake and run in CI. A few targets are opt-in (an `option()`
+defaulting OFF) or manual (`EXCLUDE_FROM_ALL`); "Network-fixture boundary"
+below lists them and how to enable each. To run the suite locally:
 
 ```sh
 cmake -B build -S .
@@ -44,28 +44,25 @@ injected transport/state-machine tests rather than socket fixtures; and
 positive convergence against real firmware is proven through the automation
 bridge and `radiocert`, which certify by effect and cannot prove a non-event.
 
-The following 12 positive-convergence fixtures remain in source and as bracket
-comments in `tests.cmake` for history, but are not configured, compiled, or
-registered with CTest:
-
-- Icom: `icom_session_test` and `icom_backend_test`.
-- HL2: `hl2_signal_stop_test` and its helper, `hl2_metis_client_test`,
-  `hl2_backend_test`, `hl2_link_stats_test`, and
-  `hl2_link_stats_model_test`.
-- Automation server: `automation_json_id_test`,
-  `automation_connect_wait_phase_test`, `automation_double_click_test`,
-  `automation_fm_repeater_verbs_test`, and `automation_drag_at_test`.
+Their deterministic checks run socket-free: `icom_session_lease_test`,
+`icom_backend_seam_test`, `icom_civ_stall_test`, `icom_power_clamp_model_test`,
+the `hl2_backend_*_seam`/`hl2_link_stats_*_seam`/`hl2_metis_link_counters`
+tests, and `automation_boundary_core_test`/`automation_boundary_widgets_test`.
 
 Three socket fixtures remain registered until their negative assertions have
 socket-free replacements: `vkamp_connection_test` (bypass/antenna interlocks),
 `automation_server_gesture_test` (TX-keying refusals and cleanup), and
-`hl2_receiver_count_restart_test` (dropped Metis-start retry). The IC-9700
-capability-table assertion that used to carry this lived in
-`radio_capability_gating_test`, which was removed for intermittency — so
-RadioModel's application of that band ceiling to the transmit model now has no
-registered test at all, alongside its socket-free replacement in #5254.
+`hl2_receiver_count_restart_test` (dropped Metis-start retry). RadioModel's
+application of the IC-9700 band power ceiling is pinned by
+`icom_power_clamp_model_test`.
 
-Two HL2 tests are explicit rather than part of the default graph:
+Three HL2 tests are explicit rather than part of the default graph:
+
+- A killed client must still release the radio: enable `hl2_signal_stop_test`
+  with `-DAETHER_ENABLE_HL2_SIGNAL_STOP_TEST=ON`. Its Python driver binds an
+  ephemeral loopback UDP port and runs a real `MetisClient` in a child
+  process, so it is absent from the default graph and from every CI lane; it
+  exits 77 if it cannot bind.
 
 - Both weekly sanitizer lanes enable `hl2_receiver_churn_test` with
   `-DAETHER_ENABLE_HL2_RECEIVER_CHURN_TEST=ON` — TSan for the receiver-vector
@@ -76,6 +73,16 @@ Two HL2 tests are explicit rather than part of the default graph:
   The test fingerprints the simulator before it can key. The weekly sanitizer
   lanes build it for compile coverage; without a simulator it skips honestly
   (exit 77, reported by ctest as Skipped).
+
+Other targets outside the default graph:
+
+- `weather_radar_texture_gl_test` needs a real OpenGL 3.2 context, which no CI
+  lane has: enable it with `-DAETHER_ENABLE_RADAR_GL_TEST=ON` on a machine
+  with a GPU.
+- `rigctld_test`, `CAT_TS-2000_test` and `CAT_Flex_test` are manual clients
+  for a running AetherSDR (CAT ports enabled for the CAT ones). They are
+  `EXCLUDE_FROM_ALL` and never registered; build one by name, e.g.
+  `cmake --build build --target rigctld_test`.
 
 **Not to be confused with [`/docs/qa/`](../docs/qa/)**, which holds
 *manual* QA checklists and test plans — human procedures for features

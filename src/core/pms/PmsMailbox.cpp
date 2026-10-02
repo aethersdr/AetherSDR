@@ -64,16 +64,10 @@ PmsMailbox::PmsMailbox(QObject* parent)
 {
     m_link = new Ax25Connection(this);
     m_link->setMaxRetries(8);
-    // Derived, not hardcoded — see TncTerminal's constructor and
-    // docs/HFMODEM.md §1. The mailbox is the more important of the two to get
-    // right, because until now the GUI never called any of these setters at all:
-    // the PMS was permanently pinned to a VHF-sized T1 with no way for an
-    // operator to change it, which made it unusable on HF by construction.
-    //
-    // Set the fields directly rather than through setLinkProfile(): that setter
-    // announces itself on activity(), and nothing is connected to us yet during
-    // construction, so the line would only ever be dropped on the floor. The
-    // announcing path is for later calls, where somebody is listening.
+    // Link timing derived from baud, not hardcoded (see TncTerminal's constructor,
+    // docs/HFMODEM.md §1). Configures m_link directly rather than via our own
+    // setLinkProfile(), whose activity() announcement has no listener yet during
+    // construction.
     m_link->setLinkProfile(ax25::LinkTimingProfile::forBaud(1200));
     m_link->setPaclen(ax25::recommendedPaclen(1200));
     m_link->applyRecommendedTimers();

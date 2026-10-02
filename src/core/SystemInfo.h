@@ -8,32 +8,13 @@
 
 namespace AetherSDR {
 
-// Per-thread CPU accounting for the System Info dialog (#2554).
+// Per-thread CPU accounting for System Info (#2554). The typical failure is
+// one thread saturating one core (#2545), so percentages are "of one core".
+// All values are cumulative microseconds (Linux/Windows offer nothing
+// instantaneous); cpuPercentBetween() derives percentages.
 //
-// The diagnostic this exists for: AetherSDR's characteristic performance
-// failure is ONE thread saturating ONE core while the others idle, which the
-// status bar's single system-wide percentage hides completely (#2545). Seeing
-// which thread is hot is the whole point, so the unit here is per-thread, and
-// the percentage is "of one core" rather than "of the machine".
-//
-// Cumulative counters, not instantaneous readings. macOS exposes an
-// instantaneous `cpu_usage` field, but Linux and Windows only offer cumulative
-// user/system time, and mixing the two would make the three platforms disagree
-// about what the same number means. Everything here reports cumulative
-// microseconds; percentages are derived by cpuPercentBetween().
-// A thread's run state, as the kernel reports it.
-//
-// An enum handed up from the platform layer, with the display wording owned by
-// the GUI, because the two platforms that can answer use different vocabularies
-// — mach's TH_STATE_* constants against the single character in
-// /proc/<tid>/stat — and letting each hand back its own words would make one
-// column mean different things on different machines.
-//
-// Windows reports Unknown. THREADENTRY32 carries no state field and
-// GetThreadTimes returns times only, so there is nothing documented to read.
-// Deriving one from "the counter did not advance this interval" was considered
-// and rejected: that is a computed guess wearing a kernel state's name, and it
-// would make the column mean a third thing on a third platform.
+// Thread run state as a platform-neutral enum; the GUI owns the wording.
+// Windows reports Unknown: THREADENTRY32/GetThreadTimes expose no state.
 enum class ThreadRunState {
     Unknown = 0,      // the platform cannot say
     Running,          // on a core now
@@ -62,20 +43,13 @@ struct ThreadCpuSample {
 
 class SystemInfo {
 public:
-    // Every thread in THIS process with its cumulative CPU time and kernel
-    // name. Empty on failure rather than partially populated — a half-read
-    // thread table is worse than none for a diagnostic.
-    //
-    // macOS: task_threads() + thread_info(THREAD_EXTENDED_INFO), which carries
-    //   pth_name alongside the times. Every returned port is deallocated and
-    //   the array vm_deallocate()d — see the RAII wrapper in the .cpp; leaking
-    //   mach ports from a function that runs every 1.5 s would exhaust the
-    //   port table.
-    // Linux: /proc/self/task/<tid>/stat fields 14/15, converted with
-    //   sysconf(_SC_CLK_TCK) — never a hard-coded 100, which is merely the
-    //   common value. Name from /proc/self/task/<tid>/comm.
-    // Windows: CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD) filtered to this
-    //   process, GetThreadTimes(), name from GetThreadDescription().
+    // Every thread in this process with cumulative CPU time and kernel name;
+    // empty on any failure (never partial).
+    // macOS: task_threads() + THREAD_EXTENDED_INFO; every port is deallocated
+    //   (RAII in the .cpp) — this runs every 1.5 s and would exhaust the table.
+    // Linux: /proc/self/task/<tid>/stat fields 14/15 via sysconf(_SC_CLK_TCK)
+    //   (not a hard-coded 100); name from .../comm.
+    // Windows: Toolhelp32 TH32CS_SNAPTHREAD, GetThreadTimes, GetThreadDescription.
     static QVector<ThreadTimes> enumerateThreads();
 
     // Name the CALLING thread, for both the kernel (ps -L, Instruments, perf,
@@ -129,18 +103,10 @@ public:
                                                       const QVector<ThreadTimes>& current,
                                                       quint64 elapsedUsecs);
 
-    // Cumulative CPU time (user + system) consumed by the WHOLE process since it
-    // started, in microseconds, or nullopt when the platform refused to say.
-    // This is the kernel's own running total, and it keeps the time of every
-    // thread that has already exited — which the per-thread table cannot: a
-    // worker that starts and finishes between two snapshots is on neither
-    // list, one that exits mid-interval is only on the old one, and summing
-    // per-thread deltas loses both (#5427 review, reproduced: twelve short
-    // workers burning 5.4 s of CPU in 0.6 s read 0.003 % by the sum against
-    // 74 % by this counter). The same source the status bar's CPU label reads.
-    //
-    // POSIX: getrusage(RUSAGE_SELF) ru_utime + ru_stime.
-    // Windows: GetProcessTimes() kernel + user, 100 ns units scaled to µs.
+    // Whole-process cumulative CPU (user + system) in µs, or nullopt. Includes
+    // exited threads, which summing per-thread deltas misses (short-lived workers
+    // vanish between snapshots). Same source as the status bar's CPU label.
+    // POSIX: getrusage(RUSAGE_SELF); Windows: GetProcessTimes (100 ns → µs).
     static std::optional<quint64> processCpuUsecs();
 
     // The process's share of the WHOLE machine over an interval, 0..100, from

@@ -31,17 +31,11 @@ struct MemorySample {
 };
 
 // One process-level CPU reading per tick for the Overview tab (#2554).
-// processPercentOfCapacity comes from the kernel's whole-process CPU counter
-// (SystemInfo::processCpuUsecs) over the measured interval — NOT from summing
-// the per-thread samples sampleReady carries: a thread that exits between two
-// snapshots is on neither list and its time would vanish from the sum (#5427
-// review). The per-thread fields (busiest*, busyThreads) still come from the
-// same samples the table gets, since "which thread" is their whole point.
-// busyThreads holds every thread with a non-zero share of a core this tick:
-// exact, and compact (most of the process's threads are idle on most ticks),
-// which is what lets the Overview's history ring keep an hour of them and
-// choose its Top Threads chart's members over the whole window rather than
-// the newest tick.
+// processPercentOfCapacity comes from SystemInfo::processCpuUsecs over the
+// interval, not from summing per-thread samples (exited threads vanish from
+// the sum). busiest*/busyThreads come from the per-thread samples; busyThreads
+// lists every thread with a non-zero share this tick, which stays compact so
+// the history ring can hold an hour and pick Top Threads over the window.
 struct CpuSample {
     qint64  wallMs{0};                       // QDateTime::currentMSecsSinceEpoch() at capture
     int     coreCount{0};                    // QThread::idealThreadCount() — the footer's divisor
@@ -55,20 +49,11 @@ struct CpuSample {
     QVector<ThreadCpuSample> busyThreads;    // cpuPercentOfCore > 0 only
 };
 
-// Samples per-thread CPU (and, since the Memory tab, process memory) on a
-// worker thread and publishes the result to the GUI (#2554).
-//
-// Shaped like the other workers in this codebase rather than as a self-owning
-// thread: the object is parentless, moved onto a QThread by its owner, and
-// init() is connected to QThread::started — the same wiring FlexBackend uses for
-// PanadapterStream and RadioConnection. That keeps the lifetime decision at the
-// call site, which matters while it is still open whether sampling should run
-// only while the dialog is visible.
-//
-// Sampling off the GUI thread is the point: enumerating every thread is the
-// kind of work that would otherwise be measured by the very metric it is
-// gathering, and a stall in the collector would be indistinguishable from the
-// stall an operator opened the dialog to investigate.
+// Samples per-thread CPU and process memory on a worker thread for the GUI
+// (#2554), off the GUI thread so the collector isn't measuring or causing the
+// stall being investigated. Parentless, moved onto a QThread by its owner with
+// init() connected to QThread::started (like FlexBackend's workers), so the
+// owner decides its lifetime.
 class SystemInfoCollector : public QObject {
     Q_OBJECT
 

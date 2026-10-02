@@ -65,7 +65,9 @@ ENV QT_GIT=https://code.qt.io/qt
 # some GCC versions. Examples/tests off. The build is single-shot and the
 # sources are removed afterwards; nothing is cached because the image is the
 # cache.
-RUN git clone --depth 1 --branch "v${QT_VERSION}" "${QT_GIT}/qtbase.git" /tmp/qtbase-src \
+# Build the same final release as the binary SDK, including every add-on.
+ENV QT_GIT_TAG=v${QT_VERSION}
+RUN git clone --depth 1 --branch "${QT_GIT_TAG}" "${QT_GIT}/qtbase.git" /tmp/qtbase-src \
     && cmake -S /tmp/qtbase-src -B /tmp/qtbase-build -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DCMAKE_INSTALL_PREFIX="${QT_TSAN_ROOT}" \
@@ -89,7 +91,7 @@ RUN git clone --depth 1 --branch "v${QT_VERSION}" "${QT_GIT}/qtbase.git" /tmp/qt
 # configured through the installed qtbase (qt-configure-module), which
 # carries the sanitizer feature over.
 RUN for m in qtshadertools qtwebsockets qtserialport qtmultimedia; do \
-        git clone --depth 1 --branch "v${QT_VERSION}" "${QT_GIT}/${m}.git" "/tmp/${m}-src" \
+        git clone --depth 1 --branch "${QT_GIT_TAG}" "${QT_GIT}/${m}.git" "/tmp/${m}-src" \
         && "${QT_TSAN_ROOT}/bin/qt-configure-module" "/tmp/${m}-src" -- \
             -B "/tmp/${m}-build" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \

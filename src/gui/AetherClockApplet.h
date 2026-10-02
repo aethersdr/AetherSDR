@@ -1,15 +1,10 @@
 #pragma once
 
-// AetherClock strip applet: alignment scope (dominant) + status row +
-// collapsed settings drawer, visually modeled on WaveApplet. The applet
-// reads/writes the AetherClock MODEL + engine ACTION surface only — no DSP,
-// no radio access, no DAX registration of any kind; engine/model
-// construction and the DAX-provider wiring live in
-// MainWindow_AetherClock.cpp.
-//
-// Slice binding: the applet listens on AppletPanel::setSlice forwarding —
-// the user picks the listening slice by strip selection; the applet never
-// creates or grabs a slice.
+// AetherClock strip applet: alignment scope + status row + collapsed settings
+// drawer. Uses only the AetherClock model and engine action surface (no DSP,
+// radio access or DAX registration); construction and DAX wiring live in
+// MainWindow_AetherClock.cpp. Listens to AppletPanel::setSlice; never creates
+// or grabs a slice.
 
 #include <QDateTime>
 #include <QPointer>

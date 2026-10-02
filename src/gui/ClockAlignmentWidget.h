@@ -1,15 +1,9 @@
 #pragma once
 
-// AetherClock alignment display — the differentiator (PRD reference: the
-// received-envelope-vs-expected-template view). A scrolling per-second
-// oscillogram of the received envelope with the matched-filter template of
-// the DECODED symbol overlaid, plus per-second AM-drop edge markers, a
-// classification-confidence lane, and a decoded-symbol glyph lane.
-//
-// Fed exclusively by ClockAlignmentFrame payloads (one per classified
-// second) — no decoder, engine, or radio access. Repaints are driven by
-// appendFrame (1 Hz signal → inherently ≤ a few Hz; no timers, no
-// per-sample painting).
+// AetherClock alignment display: scrolling per-second received envelope with
+// the decoded symbol's matched-filter template overlaid, AM-drop edge markers,
+// confidence and glyph lanes. Fed only by ClockAlignmentFrame payloads (one per
+// second via appendFrame); no decoder/engine/radio access, no timers.
 
 #include "core/ClockAlignmentFrame.h"
 
