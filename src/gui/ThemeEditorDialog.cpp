@@ -481,7 +481,9 @@ void ThemeEditorDialog::populateRow(QTreeWidgetItem* item)
         } else {
             item->setText(col, QStringLiteral("inherited"));
             item->setFont(col, inheritedFont);
-            item->setForeground(col, QBrush(QColor(0x60, 0x70, 0x80)));
+            // Themed, not hardcoded: a fixed slate ignores the active
+            // theme and is unreadable on light backgrounds (#5934).
+            item->setForeground(col, QBrush(tm.color(QStringLiteral("color.text.secondary"))));
         }
     }
 
