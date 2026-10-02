@@ -2023,6 +2023,18 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // audio slot may hold anything at all.
     m_hw = Hl2HardwareOptions::load(
         RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial));
+    // AND RECONCILE THE TWO DOCUMENTS BEFORE ANYTHING IS COMPUTED FROM THEM.
+    // The calibration and the hardware options are separate rows, loaded by the
+    // two independent calls above and written by two independent operations, so
+    // "CL1 on with a manual ppb standing" is a state that can exist on disk —
+    // an interruption between the two writes leaves exactly it. Nothing later in
+    // connectRadio() would notice: mp is filled from m_hw a few lines down and
+    // the initial NCO and DSP frequencies are computed from m_freqCalScale, so
+    // the session would come up correcting a disciplined clock by the error of
+    // the crystal it no longer runs on, with the UI's ppb control disabled and
+    // therefore unable to show or repair it (#5923 review).
+    normalizeCl1Calibration("restored settings disagree");
+
     // The codec's resampler carries state across blocks; a new radio is a new
     // stream and must not be interpolated out of the last one's final sample.
     m_codecHavePrev = false;
@@ -2032,6 +2044,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
                       << "random=" << m_hw.randomBit
                       << "filterBoard=" << static_cast<int>(m_hw.filterBoard)
                       << "n2adrHpf=" << m_hw.n2adrHpf
+                      << "cl1=" << m_hw.cl1RefClock
                       << "atuGateware=" << m_hw.atuGateware;
 
     // Notches are SESSION state, and the same call is true on both sides of the
@@ -2208,6 +2221,9 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.ditherBit   = m_hw.ditherBitOnWire();
     mp.randomBit   = m_hw.randomBit;
     mp.hasCodec    = m_hw.hasLocalCodec();
+    mp.cl1RefClock = m_hw.cl1RefClock;
+    // Identity for the CL1 latch, which is per-radio while MetisClient is not.
+    mp.radioSerial = m_radioSerial;
     qCInfo(lcHl2).nospace()
         << "HL2 band filter: " << QString::asprintf("0x%02X", m_ocFilterByte)
         << " (" << ocFilterName(mp.ocFilterByte) << ") for "
@@ -4318,8 +4334,8 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
     // EACH FIELD PUSHED ONLY IF IT MOVED, and through the setter that owns it
     // rather than by rebuilding the session. Every one of these is live-
     // changeable on a running stream: the config register rides every EP2
-    // frame, the drive bank is a one-shot, and the codec gate is a flag the
-    // packet builder reads.
+    // frame, the drive bank is a one-shot, the VersaClock sequence is a queue
+    // of one-shots, and the codec gate is a flag the packet builder reads.
     // Reconnecting to apply them would drop the operator's audio to change a
     // checkbox.
     if (m_hw.ditherBitOnWire() != before.ditherBitOnWire()
@@ -4341,6 +4357,16 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
         // samples already queued would keep the speaker audible for up to 250 ms.
         QMetaObject::invokeMethod(m_metis, "clearSpeakerAudio", Qt::QueuedConnection);
     }
+    if (m_hw.cl1RefClock != before.cl1RefClock) {
+        QMetaObject::invokeMethod(m_metis, "setCl1RefClock", Qt::QueuedConnection,
+                                  Q_ARG(bool, m_hw.cl1RefClock));
+        // AND ZERO THE MANUAL CORRECTION — through the one rule that owns it,
+        // because the checkbox is not the only way the two documents can end up
+        // disagreeing. See normalizeCl1Calibration().
+        if (normalizeCl1Calibration("CL1 external reference engaged")) {
+            repushAllFrequencies();
+        }
+    }
     if (m_hw.atuGateware != before.atuGateware) {
         // Turning the option OFF mid-tune has to clear a request that is
         // already standing, which applyAtuTuneRequest() does because it
@@ -4354,6 +4380,52 @@ void Hl2Backend::applyHardwareOptions(const Hl2HardwareOptions& next, bool persi
         applyBandFilter("hardware options");
         publishWideState();
     }
+}
+
+bool Hl2Backend::normalizeCl1Calibration(const char* why)
+{
+    // THE INVARIANT: an external 10 MHz reference at CL1 and a non-zero manual
+    // correction cannot both stand. docs/architecture/hl2-frequency-calibration.md
+    // §4: "When CL1 is locked, the manual ppb from this feature must be forced to
+    // zero and the control disabled — otherwise we would correct an
+    // already-correct clock."
+    //
+    // The two describe the same error in the same units and compose by
+    // multiplication, so leaving a ppb standing under a disciplined reference
+    // does not half-correct anything: it INTRODUCES exactly the error the
+    // operator measured off the old crystal, permanently, against a clock that
+    // no longer has it.
+    //
+    // ONE RULE, TWO CALLERS, and that is the point of the function. It ran only
+    // inside applyHardwareOptions()' change-of-checkbox branch, which covers the
+    // operator ticking the box and nothing else — not a connect that restores an
+    // inconsistent pair, which is the case the review found.
+    if (!m_hw.cl1RefClock || m_freqCalPpb == 0) {
+        return false;
+    }
+    qCWarning(lcHl2) << "HL2:" << why << "— CL1 external reference is enabled with"
+                     << "a manual frequency calibration of" << m_freqCalPpb
+                     << "ppb standing; forcing it to 0"
+                     << "(hl2-frequency-calibration.md §4)";
+    m_freqCalPpb = 0;
+    m_freqCalScale = Hl2FreqCal::scaleForPpb(0);
+    // PERSISTED, not merely applied. The ppb lives in this radio's settings
+    // document and a session-only zero would come back on the next connect,
+    // which is the one place nobody would think to look for it. savePpb()
+    // reports its own failure — it removes the row for a zero and warns if the
+    // store refused — so a write that does not land is on the record rather than
+    // silently repaired again next session.
+    //
+    // The empty-serial guard is applyFreqCalPpb()'s, restated because this does
+    // not go through it: a row written with no identity becomes the family-wide
+    // default that every HL2 without one of its own adopts (AGENTS.md).
+    if (m_radioSerial.isEmpty()) {
+        qCWarning(lcHl2) << "HL2: not persisting the forced zero —"
+                         << "no radio identity yet; applying for this session only";
+    } else {
+        Hl2FreqCal::savePpb(RadioSettingsScope(QStringLiteral("hl2"), m_radioSerial), 0);
+    }
+    return true;
 }
 
 void Hl2Backend::applyFreqCalPpb(int ppb, bool persist)
@@ -4884,6 +4956,22 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         // radio is never asked about it. So the reply is emitted synchronously
         // rather than fabricated later.
         if (verb == QLatin1String("freqcal.set")) {
+            // REFUSED UNDER A LOCKED REFERENCE, not silently clamped to zero.
+            // §4 asks for the control to be disabled; a caller that reaches the
+            // verb anyway — the bridge, a client that missed the state — gets
+            // told why rather than getting a success it did not receive. The
+            // dialog dims the control for the same reason, but the dialog is
+            // not the authority on this and must not be the only guard.
+            if (m_hw.cl1RefClock && Hl2FreqCal::clampPpb(arg.toInt()) != 0) {
+                if (requestId != 0) {
+                    emit extensionError(requestId,
+                        QStringLiteral("freqcal: the radio is locked to an external 10 MHz "
+                                       "reference at CL1, which already removes the crystal's "
+                                       "error — a manual correction would reintroduce it. "
+                                       "Clear the CL1 setting on the HL2 Hardware page first."));
+                }
+                return;
+            }
             applyFreqCalPpb(arg.toInt(), /*persist=*/true);
             if (requestId != 0)
                 emit extensionResult(requestId, QVariant(m_freqCalPpb));
@@ -4894,6 +4982,15 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         // non-atomic file write, so persisting every repeat would hammer the
         // store eight times a second. The UI commits once on button release.
         if (verb == QLatin1String("freqcal.set_live")) {
+            // Same gate as freqcal.set. A live trim under a locked reference is
+            // the same error arriving 120 ms at a time.
+            if (m_hw.cl1RefClock && Hl2FreqCal::clampPpb(arg.toInt()) != 0) {
+                if (requestId != 0) {
+                    emit extensionError(requestId,
+                        QStringLiteral("freqcal: locked to the external reference at CL1"));
+                }
+                return;
+            }
             applyFreqCalPpb(arg.toInt(), /*persist=*/false);
             if (requestId != 0)
                 emit extensionResult(requestId, QVariant(m_freqCalPpb));
@@ -4919,6 +5016,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("randomBit"), m_hw.randomBit},
                     {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},
                     {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
+                    {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
                     {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
                 });
@@ -4955,6 +5053,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             next.ditherBit   = boolOr("ditherBit", next.ditherBit);
             next.randomBit   = boolOr("randomBit", next.randomBit);
             next.n2adrHpf    = boolOr("n2adrHpf", next.n2adrHpf);
+            next.cl1RefClock = boolOr("cl1RefClock", next.cl1RefClock);
             next.atuGateware = boolOr("atuGateware", next.atuGateware);
             if (in.contains(QStringLiteral("speakerLevelPercent")))
                 next.speakerLevelPercent = Hl2HardwareOptions::clampSpeakerLevel(
@@ -4968,6 +5067,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("randomBit"), m_hw.randomBit},
                     {QStringLiteral("filterBoard"), static_cast<int>(m_hw.filterBoard)},
                     {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
+                    {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
                     {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
                 });
@@ -4981,6 +5081,12 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("effectiveClockHz"),
                      Hl2FreqCal::effectiveClockHz(m_freqCalPpb)},
                     {QStringLiteral("scale"), m_freqCalScale},
+                    // Whether a manual correction is allowed at all right now.
+                    // Reported HERE rather than left for the caller to derive
+                    // from hw.get, so that a client reading the calibration
+                    // state gets the reason it is refused in the same answer as
+                    // the value — see §4 and freqcal.set below.
+                    {QStringLiteral("externalReference"), m_hw.cl1RefClock},
                 });
             }
             return;

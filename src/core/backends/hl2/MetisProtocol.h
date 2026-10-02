@@ -278,6 +278,24 @@ inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
 inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1
 inline constexpr std::uint8_t kI2cCookieWrite = 0x06;  // C1
 inline constexpr std::uint8_t kI2cStopAtEnd   = 0x80;  // C2 bit 7
+// AND 0x07 IS THE READ COOKIE, on both buses. Named here without an encoder,
+// because the distinction between "the protocol cannot" and "this client does
+// not" is worth keeping straight. i2c_bus2.v accepts either address on
+// `cmd_data[31:25] == 7'h03` — i.e. C1 of 0x06 or 0x07 — and then branches on
+// the low bit:
+//
+//     state_next = cmd_data[24] ? STATE_READ_CMDADDR : STATE_CMDADDR;
+//
+// A read walks STATE_READ_DATA0..4, assembles four bytes into `resp_data`, and
+// control.v's RESP_READ returns them as `cmd_resp_data_i2c`. So a VersaClock
+// register CAN be read back over Protocol 1; nothing here implements it.
+//
+// WHAT A READBACK WOULD AND WOULD NOT BE WORTH. It reads the register we wrote,
+// so it proves the write arrived — which is more than we have today. It does NOT
+// prove the PLL has locked to anything: no status bit is routed out of the part
+// to the command plane, so "locked to CL1" and "programmed for CL1 with no cable
+// attached" still look identical from here. Do not build a lock indicator on it.
+inline constexpr std::uint8_t kI2cCookieRead  = 0x07;  // C1; no encoder, see above
 
 // HL2 IO Board (N2ADR), I2C2 chip 0x1D: switches amplifiers, relays and
 // transverters from the TX frequency, which only the host supplies. Registers
@@ -292,6 +310,42 @@ inline constexpr std::uint8_t kIoBoardRegTxFreqLsb = 4;   // DATA bits  7:0, COM
 // `chip` is the device's 7-bit address; the stop bit is always set, as the
 // wiki advises for forward compatibility.
 Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept;
+
+// The same, on the INTERNAL bus (I2C1, addr 0x3c). Different bus, different
+// hazard: I2C2 reaches a companion board that can be absent, while I2C1
+// reaches the board's own VersaClock — the part that clocks the AD9866. A
+// wrong write here does not fail to switch a relay, it stops the radio
+// sampling. There is exactly one caller, versaClockCl1Banks() below.
+Cc ccI2c1Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept;
+
+// ---- CL1 external 10 MHz reference (VersaClock 5P49V5923, I2C1 chip 0x6A) ----
+//
+// WHAT THIS IS. The HL2 runs from a 38.4 MHz crystal multiplied to 76.8 MHz by
+// an on-board VersaClock. Feeding a GPSDO into the CL1 jack does not switch
+// anything by itself: the VersaClock has to be REPROGRAMMED to take its
+// reference from that input instead of the crystal, and going back means
+// reprogramming it again. There is no single "external reference" bit.
+//
+// THE TABLES ARE NOT DERIVED AND CANNOT BE. They are the register/value pairs
+// piHPSDR and deskHPSDR both carry verbatim, which in turn came from the
+// Hermes-Lite 2 project; the 5P49V5923's PLL dividers, input mux and
+// feedback configuration are a solved layout for this one board and nothing
+// in the datasheet would let a reader re-derive these twenty-four pairs
+// without the board's schematic and its loop filter. They are reproduced
+// rather than re-computed for exactly that reason, and they are the reason
+// this is a fixed table rather than a function of anything.
+//
+// SENT ON CHANGE AND ON CONNECT, never re-asserted. The radio boots on its
+// crystal every time, so connecting is a change; and twenty-four banks in the
+// one-shot queue at every rotation would starve the NCO refresh.
+//
+// ORDER MATTERS. The pairs configure the input mux before the PLL that locks
+// to it; sending them out of order can leave the part running from a reference
+// that is not there yet. They go out in the order given, one bank per EP2
+// frame, which is ~63 ms for the whole sequence at 48 kHz.
+inline constexpr std::uint8_t kVersaClockI2cAddr = 0x6A;
+inline constexpr std::size_t kVersaClockCl1Banks = 24;
+std::array<Cc, kVersaClockCl1Banks> versaClockCl1Banks(bool externalRef) noexcept;
 
 // The five C&C banks that write `hz` into the IO board's TX-frequency
 // registers, already in send order (MSB first, committing LSB last).

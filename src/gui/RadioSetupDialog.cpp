@@ -856,7 +856,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // the Calibration page.
     QTreeWidgetItem* hwItem = addPage(radioCategory, QStringLiteral("HL2 Hardware"),
         QStringLiteral("hermes lite hl2 squaresdr square sdr codec ak4951 dither band volts "
-                       "speaker random filter board n2adr hpf atu tuner"),
+                       "speaker random filter board n2adr hpf cl1 reference clock gpsdo atu tuner"),
         [this] { return buildHl2HardwareTab(); });
     m_hl2HardwarePageIndex = m_pageIndexes.value(QStringLiteral("HL2 Hardware"));
     setNavigationItemHidden(hwItem, !declaresHl2Extension());
@@ -3511,17 +3511,68 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
 
     // persist=false applies live without writing the settings store — used by
     // the auto-repeating Trim buttons, which commit once on release.
-    auto apply = [this, ppbSpin, refreshReadout](int ppb, bool persist = true) {
+    //
+    // WITH A REQUEST ID, NOT ZERO. The backend refuses a non-zero correction
+    // under a locked CL1 reference and states why — through extensionError,
+    // which it emits only for a caller that gave it an id. This page used to
+    // write with id 0, so the refusal went nowhere and the spin box went on
+    // showing a correction the radio had never taken (@on8st, #5923 review).
+    // The controls are disabled under CL1 now, so this is the second line of
+    // defence rather than the first: it is what still covers CL1 being switched
+    // on by the bridge while this page is open, which no reseed has seen yet.
+    //
+    // refreshReadout() runs BEFORE the write, so the refusal handler below is
+    // free to have the last word on the label whether the reply is synchronous
+    // (it is today) or not.
+    auto apply = [this, ppbSpin, readout, refreshReadout](int ppb, bool persist = true) {
         QSignalBlocker blocker(ppbSpin);
         ppbSpin->setValue(Hl2FreqCal::clampPpb(ppb));
+        refreshReadout();
+        // ARMED ONLY WHERE AN ANSWER IS GUARANTEED. Hl2Backend replies to every
+        // non-zero request id — result or error — on every path including its
+        // unknown-verb fallback, so the guard below is always reclaimed. A
+        // backend that made no such promise would leak one small QObject per
+        // trim tick, so the id stays 0 for anything that does not declare the
+        // namespace, which is exactly the behaviour this page had before.
+        constexpr quint64 kCalSetRequestIdBase = 0x0500000000000000ull;
+        static quint64 nextCalSetId = kCalSetRequestIdBase;
+        IRadioBackend* backend = m_model ? m_model->backend() : nullptr;
+        const bool canAnswer =
+            backend && m_model->backendDeclaresExtension(QStringLiteral("hl2"));
+        const quint64 requestId = canAnswer ? nextCalSetId++ : 0;
+        if (canAnswer) {
+            auto* guard = new QObject(this);
+            connect(backend, &IRadioBackend::extensionResult, guard,
+                    [guard, requestId](quint64 id, const QVariant&) {
+                if (id == requestId) {
+                    guard->deleteLater();
+                }
+            });
+            connect(backend, &IRadioBackend::extensionError, guard,
+                    [this, guard, requestId, readout](quint64 id, const QString& reason) {
+                if (id != requestId) {
+                    return;
+                }
+                guard->deleteLater();
+                // Nothing was applied and nothing was stored. Put the radio's
+                // own number back — the reseed also re-reads whether the
+                // reference is locked, so the controls end up dimmed with the
+                // reason on the spin box — and then say why, because a value
+                // that quietly reverts is the "reports success while nothing
+                // persists" failure this page's own note warns about.
+                if (m_calibrationReseed) {
+                    m_calibrationReseed();
+                }
+                readout->setText(readout->text() + QStringLiteral("\n") + reason);
+            });
+        }
         // The backend owns clamping, persistence and the re-push. Going through
         // it rather than writing settings here is what keeps a mid-session
         // change audible immediately instead of at the next tune.
         m_model->invokeBackendExtension(QStringLiteral("hl2"),
                                         persist ? QStringLiteral("freqcal.set")
                                                 : QStringLiteral("freqcal.set_live"),
-                                        0, QVariant(ppbSpin->value()));
-        refreshReadout();
+                                        requestId, QVariant(ppbSpin->value()));
     };
 
     // Commit on editing-finished rather than on every intermediate keystroke:
@@ -3669,7 +3720,49 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     QPointer<QLabel> noRadioGuard(noRadioLbl);
     const QList<QPointer<QWidget>> calControls{
         refCombo, customEdit, ppbSpin, resetBtn, downBtn, upBtn, stepCombo, calBtn};
-    m_calibrationReseed = [this, spinGuard, noRadioGuard, calControls, refreshReadout] {
+    // Ask the backend whether this radio is on an external reference, and fold
+    // the answer into m_hl2ExternalRefLocked. THROUGH THE SEAM, not through the
+    // vendor header: the extension reply is the only thing this file may read,
+    // the same rule the HL2 Hardware page follows (EB3, see its note).
+    //
+    // Synchronous in practice — freqcal.get completes inside the backend and
+    // emits its reply before invokeBackendExtension() returns, which is why the
+    // handler is armed first and why the caller can read the member on the next
+    // line. If that ever stops being true the page is one reseed stale rather
+    // than wrong, and the live writer below still corrects it.
+    auto askExternalReference = [this] {
+        IRadioBackend* backend = m_model ? m_model->backend() : nullptr;
+        if (!backend || !m_model->backendDeclaresExtension(QStringLiteral("hl2"))) {
+            return;
+        }
+        constexpr quint64 kCalRequestIdBase = 0x0400000000000000ull;
+        static quint64 nextCalId = kCalRequestIdBase;
+        const quint64 requestId = nextCalId++;
+        auto* guard = new QObject(this);
+        connect(backend, &IRadioBackend::extensionResult, guard,
+                [this, guard, requestId](quint64 id, const QVariant& result) {
+            if (id != requestId) {
+                return;
+            }
+            guard->deleteLater();
+            const QVariantMap m = result.toMap();
+            if (m.contains(QStringLiteral("externalReference"))) {
+                m_hl2ExternalRefLocked =
+                    m.value(QStringLiteral("externalReference")).toBool();
+            }
+        });
+        connect(backend, &IRadioBackend::extensionError, guard,
+                [guard, requestId](quint64 id, const QString&) {
+            if (id == requestId) {
+                guard->deleteLater();   // leave the page as it stands
+            }
+        });
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+                                        QStringLiteral("freqcal.get"), requestId);
+    };
+
+    m_calibrationReseed = [this, spinGuard, noRadioGuard, calControls, refreshReadout,
+                           askExternalReference] {
         if (!spinGuard)
             return;
         {
@@ -3680,9 +3773,54 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
         // this state, so leaving the controls live would be a UI that reports
         // success while nothing persists.
         const bool haveRadio = !m_model->settingsScope().radioId().isEmpty();
+        // AND NOT WHILE THE RADIO IS LOCKED TO CL1. A disciplined 10 MHz
+        // reference has already removed the crystal error this page exists to
+        // model, so a manual ppb on top of it does not refine the correction —
+        // it reintroduces exactly the error that was measured off the old
+        // crystal. docs/architecture/hl2-frequency-calibration.md §4 requires
+        // the control to be disabled, and the backend refuses the verb as well;
+        // this is the half the operator can see.
+        //
+        // THIS PAGE ASKS FOR ITSELF. It used to read m_hl2ExternalRefLocked and
+        // nothing else, and that member has only two writers — both on the HL2
+        // Hardware page. Pages are built lazily (addPage() defers every builder
+        // but Radio's into m_deferredBuilders), so with CL1 persisted from an
+        // earlier session an operator who opens Radio Setup and goes straight to
+        // Calibration found every control here ENABLED, and moving one sent
+        // freqcal.set with requestId 0 — a request the backend correctly refuses
+        // and whose refusal, emitted only `if (requestId != 0)`, went nowhere.
+        // The spin box then showed a correction that was never applied or
+        // stored, until the next showEvent() put 0 back. This file already names
+        // that shape as the thing to avoid: "a UI that reports success while
+        // nothing persists" (#5923 review, @on8st).
+        //
+        // freqcal.get reports externalReference for exactly this reason — its
+        // own comment says the answer carries "the reason it is refused in the
+        // same answer as the value" — so the page reads it here and stops
+        // depending on which page the operator happened to visit first. The
+        // member stays as the LIVE path: the HL2 Hardware page's checkbox
+        // updates it directly so a mid-session toggle is reflected without a
+        // round trip, and this reseed reconciles it on every open.
+        askExternalReference();
+        const bool locked = m_hl2ExternalRefLocked;
         for (const QPointer<QWidget>& w : calControls) {
-            if (w)
-                w->setEnabled(haveRadio);
+            if (w) {
+                w->setEnabled(haveRadio && !locked);
+            }
+        }
+        if (spinGuard) {
+            spinGuard->setAccessibleDescription(
+                locked ? QStringLiteral(
+                             "Unavailable: this radio is locked to an external 10 MHz "
+                             "reference at CL1, which already removes the crystal's error.")
+                       : QString());
+            spinGuard->setToolTip(
+                locked ? QStringLiteral(
+                             "Disabled while the HL2 Hardware page has this radio locked to "
+                             "an external 10 MHz reference at CL1 — the reference already "
+                             "removes the crystal's error, so a manual correction would "
+                             "reintroduce it.")
+                       : QString());
         }
         if (noRadioGuard)
             noRadioGuard->setVisible(!haveRadio);
@@ -3981,11 +4119,124 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
                          "high-pass already rides the per-band filter selection."));
     };
 
-    // ── Antenna tuner ────────────────────────────────────────────────────────
-    auto* miscGroup = new QGroupBox("Antenna Tuner");
+    // ── Reference clock and tuner ────────────────────────────────────────────
+    auto* miscGroup = new QGroupBox("Reference Clock and Tuner");
     themed(miscGroup, kGroup);
     auto* mvb = new QVBoxLayout(miscGroup);
     mvb->setSpacing(6);
+
+    auto* cl1Chk = new QCheckBox("External 10 MHz reference at CL1");
+    cl1Chk->setObjectName(QStringLiteral("hl2HwCl1"));
+    themed(cl1Chk, QStringLiteral(
+        "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }"));
+    cl1Chk->setToolTip(QStringLiteral(
+        "Reprograms the on-board VersaClock to lock to a 10 MHz reference fed into\n"
+        "the CL1 jack — a GPSDO, typically — instead of the radio's own crystal.\n\n"
+        "The CL1 input runs through a divider scaled for a 3.3 V logic-level\n"
+        "clock, so a hotter source wants padding: a typical GPSDO's 5 V output\n"
+        "needs at least 6 dB of 50 Ω attenuation in line. A sine is fine — the\n"
+        "part locks to what arrives, it does not need a square wave.\n\n"
+        "This is the CLOCK input, not the antenna. Feeding a GPSDO into the RF\n"
+        "input to calibrate by ear is a different thing with a different figure —\n"
+        "that one needs ≥30 dB, because it reaches the AD9866.\n\n"
+        "The register sequence is the Hermes-Lite 2's. It was exercised on an\n"
+        "HL2, not on a SQUARE SDR 2 — that board carries the same VersaClock\n"
+        "(5P49V5923) and its own CL1 divider, so the same tables should apply,\n"
+        "but nobody here has run them on one.\n\n"
+        "The radio boots on its crystal every time, so this is re-sent on connect\n"
+        "while it is enabled. It also forces the manual frequency calibration to\n"
+        "zero — a disciplined reference has no crystal error left to correct."));
+    mvb->addWidget(cl1Chk);
+    controls->append(cl1Chk);
+
+    // THE ATTENUATOR WARNING IS ON THE PAGE, NOT IN THE TOOLTIP, and that is a
+    // requirement rather than a preference: docs/architecture/
+    // hl2-frequency-calibration.md §4 says "Any UI that offers this must say
+    // so, in the UI, not just the release notes." A tooltip is not in the UI
+    // for this purpose — it needs a hover the operator has no reason to make,
+    // and the reader who most needs this is the one connecting the cable
+    // without hesitating. It is also NOT hidden behind the checkbox's state:
+    // by the time the box is ticked the cable is already on.
+    //
+    // TWO DIFFERENT CAUTIONS LIVE IN THAT SECTION AND THEY MUST NOT BE MERGED.
+    // §4 warns about the ANTENNA input — a GPSDO's +7…+13 dBm reaching the
+    // AD9866, which has no attenuator ahead of it, needing >=30 dB — and that
+    // one already has its home on the Calibration page's reference combo.
+    // THIS one is the CL1 jack, a clock input, where the hazard is a 5 V sine
+    // against a part expecting 3.3 V square and the figure is >=6 dB. A first
+    // draft of this label welded them ("…>=6 dB… or it overloads the AD9866"),
+    // which names the wrong port and under-specs the antenna case by ~24 dB.
+    // Do not reintroduce the AD9866 here: nothing on CL1 reaches it.
+    // EVERY CLAUSE HERE IS THE PROJECT WIKI'S, and the HL2 being open hardware
+    // is what makes that checkable rather than a matter of belief
+    // (softerhardware/Hermes-Lite2 wiki, External-Clocks):
+    //
+    //   "Many GPSDOs provide 5V sine wave output whereas HL2 requires a 3.3V
+    //    square wave input; a 50 ohm SMA attenuator of at least 6 dB will
+    //    reduce the voltage from a 5V source to a level that will not damage
+    //    the chip."
+    //   "Care must be used to not overdrive the CL1 input to the VersaClock
+    //    chip otherwise it may be damaged."
+    //
+    // 3.3 V IS THE DIVIDER'S DESIGN POINT, NOT A REQUIREMENT, and the wiki's
+    // "HL2 requires a 3.3V square wave input" is a simplification worth not
+    // reproducing. CL1 goes through B58, an AC coupling cap, then an R39/R40
+    // divider scaled so that a 3.3 V LVCMOS clock lands at about 1 Vpp, which
+    // is what CLKIN wants. Production boards carry that divider.
+    //
+    // Two things follow. The part does not "expect 3.3 V" — it needs a usable
+    // amplitude at CLKIN, and a source below the design point still works as
+    // long as enough arrives. And it does not need a SQUARE wave: a 10 MHz sine
+    // fed straight into CL1 with no attenuator lands at roughly a third of its
+    // amplitude and the VersaClock locks to it.
+    //
+    // WHOSE MEASUREMENT: this PR's author (@jcmerg), on a Hermes-Lite 2 beta2
+    // board, reported on aethersdr/AetherSDR#5923. Named because "measured on
+    // this bench" has no referent to a reader of this file, and because an
+    // earlier draft credited it to someone else (@on8st, #5923 review). It is
+    // one bench and one board: the divider ratio below is the part of this that
+    // a document backs.
+    //
+    // The divider that does the dividing is R39 = 130 Ω over R40 = 75 Ω in the
+    // reference design (hardware/hl/Clock.sch), i.e. 0.366, and the SQUARE
+    // SDR 2 uses R75 = 150 Ω over R77 = 75 Ω for 0.333. Those are the values the
+    // SCHEMATICS specify; neither says the parts are populated in any given
+    // assembly build, which is the next paragraph's point.
+    //
+    // NEITHER RATIO IS A GUARANTEE. This is open hardware: a board built from
+    // the published design may have those parts changed, absent or jumpered,
+    // and nothing on the wire says which. So the label pads a hot source
+    // unconditionally rather than quoting a figure that only holds for the two
+    // designs anybody here has read.
+    //
+    // A 5 V sine does NOT arrive at the chip as 5 V — roughly 1.5 Vpp.
+    //
+    // Whether that exceeds the part's limit or merely its recommendation is a
+    // number nobody here has: the 5P49V5923 datasheet's CLKIN absolute maximum
+    // could not be obtained, and the one figure findable (1.2 Vpp) belongs to
+    // the 5P49V6965, a different part. The wiki does say overdriving CL1 can
+    // damage the VersaClock, and its authors designed the board the divider is
+    // on — but reproducing a damage mechanism we cannot check is how the last
+    // three drafts of this label went wrong, each in a different way (the
+    // AD9866, an unnamed "rating", a direct feed to the chip).
+    //
+    // So: state the requirement and the pad, both of which are the wiki's own
+    // and both of which are actionable, and let "mind the level" carry the
+    // caution. §4 asks for the attenuator guidance to be in the UI; it is.
+    //
+    // Nothing on this jack reaches the AD9866. That is the antenna path, a
+    // different hazard with a different figure (>=30 dB), already warned about
+    // on the Calibration page's reference combo. Do not merge the two again.
+    auto* cl1Warn = new QLabel(
+        "⚠ CL1's input divider is scaled for a 3.3 V logic-level clock. A "
+        "hotter source — a typical GPSDO's 5 V output — wants at least 6 dB "
+        "of 50 Ω attenuation in line.");
+    cl1Warn->setObjectName(QStringLiteral("hl2HwCl1Warning"));
+    cl1Warn->setWordWrap(true);
+    cl1Warn->setAccessibleName(QStringLiteral("CL1 input level warning"));
+    themed(cl1Warn, QStringLiteral(
+        "QLabel { color: {{color.accent.warning}}; font-size: 11px; }"));
+    mvb->addWidget(cl1Warn);
 
     auto* atuChk = new QCheckBox("Antenna tuner driven by the HL2 gateware");
     atuChk->setObjectName(QStringLiteral("hl2HwAtu"));
@@ -4007,7 +4258,7 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     // because this runs from showEvent() and connectionStateChanged.
     const QPointer<QComboBox> codecGuard(codecCombo);
     m_hl2HardwareReseed = [this, codecGuard, codecCombo, ditherChk, randomChk,
-                           filterCombo, hpfChk, atuChk, spkSlider,
+                           filterCombo, hpfChk, cl1Chk, atuChk, spkSlider,
                            noRadioLbl, controls, refreshDither, refreshHpf,
                            refreshSpeaker] {
         if (!codecGuard)
@@ -4046,7 +4297,8 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             const QSignalBlocker b3(randomChk);
             const QSignalBlocker b4(filterCombo);
             const QSignalBlocker b5(hpfChk);
-            const QSignalBlocker b6(atuChk);
+            const QSignalBlocker b6(cl1Chk);
+            const QSignalBlocker b7(atuChk);
             codecCombo->setCurrentIndex(
                 codecCombo->findData(m.value(QStringLiteral("codec")).toInt()));
             ditherChk->setChecked(m.value(QStringLiteral("ditherBit")).toBool());
@@ -4054,6 +4306,17 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             filterCombo->setCurrentIndex(
                 filterCombo->findData(m.value(QStringLiteral("filterBoard")).toInt()));
             hpfChk->setChecked(m.value(QStringLiteral("n2adrHpf")).toBool());
+            cl1Chk->setChecked(m.value(QStringLiteral("cl1RefClock")).toBool());
+            // THE CALIBRATION PAGE HAS TO LEARN THIS, because §4 requires the
+            // manual ppb control to be DISABLED under a locked reference and
+            // that control lives on another page. Cached rather than fetched
+            // there: the Calibration page would otherwise need its own hw.get
+            // round trip, and it reads its value straight out of the settings
+            // scope. Refreshed below once this reply has landed, which is what
+            // makes the ordering safe — showEvent() runs both reseeds and this
+            // one is asynchronous, so the calibration page can render before
+            // the answer arrives and must be corrected when it does.
+            m_hl2ExternalRefLocked = m.value(QStringLiteral("cl1RefClock")).toBool();
             atuChk->setChecked(m.value(QStringLiteral("atuGateware")).toBool());
             // Clamped here too, not only in the backend: this arrives as a
             // QVariant off a generic seam, and a slider given a value outside
@@ -4066,6 +4329,9 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             refreshDither();
             refreshHpf();
             refreshSpeaker();
+            if (m_calibrationReseed) {
+                m_calibrationReseed();
+            }
             // No radio identity, no write (the backend refuses to write the
             // family-wide row), so disable the controls. One-way: the refresh
             // calls above already set each control's availability; this only
@@ -4129,6 +4395,17 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     });
     connect(hpfChk, &QCheckBox::toggled, this, [apply](bool on) {
         apply(QVariantMap{{QStringLiteral("n2adrHpf"), on}});
+    });
+    connect(cl1Chk, &QCheckBox::toggled, this, [this, apply](bool on) {
+        apply(QVariantMap{{QStringLiteral("cl1RefClock"), on}});
+        // Immediately, not on the next reseed. The backend zeroes the manual
+        // ppb as part of this write, so the Calibration page is stale the
+        // instant the box is ticked — and a spin box still showing -178 ppb
+        // next to a disabled control is worse than either state alone.
+        m_hl2ExternalRefLocked = on;
+        if (m_calibrationReseed) {
+            m_calibrationReseed();
+        }
     });
     connect(atuChk, &QCheckBox::toggled, this, [apply](bool on) {
         apply(QVariantMap{{QStringLiteral("atuGateware"), on}});
