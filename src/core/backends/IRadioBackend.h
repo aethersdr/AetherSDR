@@ -630,6 +630,14 @@ public:
     // SliceDelta only after the receiver adopts the requested configuration.
     virtual void setSliceWfmForceMono(int sliceId, bool forceMono)
     { Q_UNUSED(sliceId); Q_UNUSED(forceMono); }
+    virtual void setSliceWfmAudioMode(int sliceId, WfmAudioMode mode)
+    {
+        if (mode == WfmAudioMode::Mono || mode == WfmAudioMode::Stereo) {
+            setSliceWfmForceMono(sliceId, mode == WfmAudioMode::Mono);
+        }
+    }
+    virtual void setSliceHdProgram(int sliceId, int program)
+    { Q_UNUSED(sliceId); Q_UNUSED(program); }
     virtual void setSliceWfmDeemphasis(int sliceId, int microseconds)
     {
         Q_UNUSED(sliceId); Q_UNUSED(microseconds);

@@ -4,7 +4,7 @@
 #include "GuardedSlider.h"
 #include "ModeFilterPresets.h"
 #include "WfmLockScope.h"
-#include "core/AppSettings.h"
+#include "WfmPresentationSettings.h"
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/PanadapterModel.h"
@@ -16,20 +16,73 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QLabel>
 #include <QPushButton>
+#include <QPainter>
+#include <QTimer>
+#include <QHideEvent>
+#include <QShowEvent>
+#include <QResizeEvent>
+#include <cmath>
+#include <algorithm>
+#include <QStringList>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
+// QLabel retains the full plain-text value for accessibility while painting
+// a bounded horizontal marquee. Hidden or short content does no timer work.
+class WfmMetadataTicker final : public QLabel {
+public:
+    explicit WfmMetadataTicker(QWidget* parent) : QLabel(parent)
+    {
+        setTextFormat(Qt::PlainText);
+        setMinimumHeight(fontMetrics().height() + 8);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_timer.setInterval(40);
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, qOverload<>(&QLabel::update));
+        connect(&m_timer, &QTimer::timeout, this, [this] {
+            m_offset = (m_offset + 1) % std::max(1, fontMetrics().horizontalAdvance(text()) + 32);
+            update();
+        });
+    }
+    void setContent(const QString& content)
+    {
+        if (text() == content) { return; }
+        setText(content);
+        setAccessibleName(tr("Broadcast metadata: %1").arg(content));
+        m_offset = 0;
+        refreshTimer();
+        QAccessibleEvent event(this, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setClipRect(rect());
+        painter.setPen(ThemeManager::instance().color(this, "color.text.primary"));
+        const int span = fontMetrics().horizontalAdvance(text()) + 32;
+        painter.drawText(QRect(-m_offset, 0, std::max(width(), span), height()), Qt::AlignVCenter, text());
+        if (m_offset > 0) {
+            painter.drawText(QRect(span - m_offset, 0, span, height()), Qt::AlignVCenter, text());
+        }
+    }
+    void hideEvent(QHideEvent* event) override { m_timer.stop(); m_offset = 0; QLabel::hideEvent(event); }
+    void showEvent(QShowEvent* event) override { QLabel::showEvent(event); refreshTimer(); }
+    void resizeEvent(QResizeEvent* event) override { QLabel::resizeEvent(event); refreshTimer(); }
+private:
+    void refreshTimer()
+    {
+        if (isVisible() && fontMetrics().horizontalAdvance(text()) > width()) { m_timer.start(); }
+        else { m_timer.stop(); m_offset = 0; }
+        update();
+    }
+    QTimer m_timer;
+    int m_offset{0};
+};
 namespace {
-QJsonObject preferences()
-{
-    return QJsonDocument::fromJson(AppSettings::instance()
-        .value(QStringLiteral("WfmApplet"), QString{}).toString().toUtf8()).object();
-}
 
 void setReadout(QLabel* label, const QString& text, const QString& name)
 {
@@ -115,7 +168,25 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
     settings->addWidget(bandwidthLabel, 1, 0);
     settings->addWidget(m_bandwidth, 1, 1);
     settings->setColumnStretch(1, 1);
+    m_hdProgram = new GuardedComboBox(this);
+    m_hdProgram->setObjectName(QStringLiteral("wfmHdProgram"));
+    m_hdProgram->setAccessibleName(tr("Digital program"));
+    m_hdProgram->setFocusPolicy(Qt::StrongFocus);
+    m_hdProgram->setPlaceholderText(tr("Unavailable"));
+    applyComboStyle(m_hdProgram);
+    auto* programLabel = new QLabel(tr("Digital program"), this);
+    programLabel->setBuddy(m_hdProgram);
+    ThemeManager::instance().applyStyleSheet(programLabel,
+        "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    settings->addWidget(programLabel, 2, 0);
+    settings->addWidget(m_hdProgram, 2, 1);
     root->addLayout(settings);
+
+    m_metadata = new WfmMetadataTicker(this);
+    m_metadata->setObjectName(QStringLiteral("wfmBroadcastMetadata"));
+    m_metadata->setAccessibleDescription(tr("Current Digital station and now-playing text. "
+        "Independent of the SpotHub WFM RDS overlay toggle. No analog RDS decoder is implied."));
+    root->addWidget(m_metadata);
 
     m_settingsToggle = new QPushButton(tr("▸ Settings"), this);
     m_settingsToggle->setObjectName(QStringLiteral("wfmSettingsToggle"));
@@ -135,9 +206,8 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
     m_showDiagnostics = new QCheckBox(tr("Show Diagnostics"), m_settingsDrawer);
     m_showDiagnostics->setObjectName(QStringLiteral("wfmShowDiagnostics"));
     m_showDiagnostics->setAccessibleName(tr("Show Broadcast FM diagnostics"));
-    const QJsonObject ui = preferences().value(QStringLiteral("ui")).toObject();
-    m_showScope->setChecked(ui.value(QStringLiteral("showLockScope")).toBool(true));
-    m_showDiagnostics->setChecked(ui.value(QStringLiteral("showDiagnostics")).toBool(false));
+    m_showScope->setChecked(WfmPresentationSettings::instance().showLockScope());
+    m_showDiagnostics->setChecked(WfmPresentationSettings::instance().showDiagnostics());
     drawer->addWidget(m_showScope);
     drawer->addWidget(m_showDiagnostics);
     root->addWidget(m_settingsDrawer);
@@ -153,7 +223,19 @@ WfmApplet::WfmApplet(QWidget* parent) : QWidget(parent)
 
     connect(m_audioMode, &QPushButton::clicked, this, [this] {
         if (m_available && m_slice && m_audioMode->isEnabled()) {
-            m_slice->setWfmForceMono(!m_slice->wfmForceMono());
+            if (m_caps.broadcastFmReceive->hdStereo) {
+                const WfmAudioMode current = m_slice->wfmAudioMode();
+                m_slice->setWfmAudioMode(current == WfmAudioMode::Mono ? WfmAudioMode::Stereo
+                    : current == WfmAudioMode::Stereo ? WfmAudioMode::HdStereo : WfmAudioMode::Mono);
+            } else {
+                m_slice->setWfmForceMono(!m_slice->wfmForceMono());
+            }
+        }
+        refresh();
+    });
+    connect(m_hdProgram, &QComboBox::activated, this, [this](int index) {
+        if (m_available && m_slice && m_hdProgram->isEnabled()) {
+            m_slice->setHdProgram(m_hdProgram->itemData(index).toInt());
         }
         refresh();
     });
@@ -240,12 +322,28 @@ void WfmApplet::setSlice(SliceModel* slice)
     for (const auto& connection : m_sliceConnections) { disconnect(connection); }
     m_sliceConnections.clear();
     m_scope->clear();
+    m_hdSession = m_hdEpoch = m_hdRevision = m_hdSequence = 0;
+    m_hdSelectedProgram = -1;
     m_slice = slice;
     if (slice) {
         m_sliceConnections.append(connect(slice, &SliceModel::modeChanged, this, &WfmApplet::refresh));
         m_sliceConnections.append(connect(slice, &SliceModel::filterChanged, this, &WfmApplet::refresh));
         m_sliceConnections.append(connect(slice, &SliceModel::wfmDeemphasisChanged, this, &WfmApplet::refresh));
         m_sliceConnections.append(connect(slice, &SliceModel::wfmForceMonoChanged, this, &WfmApplet::refresh));
+        m_sliceConnections.append(connect(slice, &SliceModel::wfmAudioModeChanged, this, [this] {
+            m_hdSequence = 0;
+            m_scope->clear();
+            refresh();
+        }));
+        m_sliceConnections.append(connect(slice, &SliceModel::hdProgramChanged, this, [this] {
+            m_hdSequence = 0;
+            m_scope->clear();
+            refresh();
+        }));
+        m_sliceConnections.append(connect(slice, &SliceModel::hdFmReceptionChanged, this, [this] {
+            refresh();
+            appendHdScopeSample();
+        }));
         m_sliceConnections.append(connect(slice, &SliceModel::wfmStereoStatusChanged, this, &WfmApplet::refresh));
         m_sliceConnections.append(connect(slice, &SliceModel::wfmReceptionDiagnosticsChanged, this, [this] {
             refreshDiagnostics();
@@ -253,7 +351,7 @@ void WfmApplet::setSlice(SliceModel* slice)
         }));
         m_sliceConnections.append(connect(slice, &SliceModel::frequencyChanged, this, [this] {
             m_scope->clear();
-            refreshDiagnostics();
+            refresh();
         }));
         m_sliceConnections.append(connect(slice, &SliceModel::inCaptureChanged, this, &WfmApplet::refresh));
         m_sliceConnections.append(connect(slice, &SliceModel::externalReceiveReplacementChanged, this, &WfmApplet::refresh));
@@ -275,7 +373,17 @@ void WfmApplet::registerControls()
     m_availability->registerWidget(m_audioMode,
         tr("Mono selection is unavailable for this receiver or replacement audio source"),
         [supported](bool connected, const RadioCapabilities& caps) {
-            return supported(connected, caps) && caps.broadcastFmReceive->forceMonoControl;
+            return supported(connected, caps) && (caps.broadcastFmReceive->forceMonoControl || caps.broadcastFmReceive->hdStereo);
+        }, [] { return true; }, false);
+    m_availability->registerWidget(m_hdProgram,
+        tr("Select Digital on a supported receiver to choose a discovered audio program"),
+        [this, supported](bool connected, const RadioCapabilities& caps) {
+            if (!supported(connected, caps) || !caps.broadcastFmReceive->hdStereo
+                || m_slice->wfmAudioMode() != WfmAudioMode::HdStereo || !hasCurrentHdReception()) { return false; }
+            for (const HdFmService& service : m_slice->hdFmReception().services) {
+                if (service.audioAvailable) { return true; }
+            }
+            return false;
         }, [] { return true; }, false);
     m_availability->registerWidget(m_deemphasis,
         tr("De-emphasis is unavailable for this receiver or replacement audio source"),
@@ -291,7 +399,7 @@ void WfmApplet::registerControls()
     for (QCheckBox* control : {m_showScope, m_showDiagnostics}) {
         m_availability->registerWidget(control, tr("This receiver does not provide pilot measurements"),
             [this](bool connected, const RadioCapabilities& caps) {
-                return connected && caps.broadcastFmReceive && caps.broadcastFmReceive->receptionDiagnostics
+                return connected && caps.broadcastFmReceive && (caps.broadcastFmReceive->receptionDiagnostics || caps.broadcastFmReceive->hdStereo)
                     && ownsWfmSlice();
             }, [] { return true; }, false);
     }
@@ -309,14 +417,17 @@ void WfmApplet::refresh()
         m_availability->refreshEngaged();
     } else {
         for (QWidget* control : {static_cast<QWidget*>(m_audioMode), static_cast<QWidget*>(m_deemphasis),
-                                static_cast<QWidget*>(m_bandwidth), static_cast<QWidget*>(m_showScope),
+                                static_cast<QWidget*>(m_bandwidth), static_cast<QWidget*>(m_hdProgram), static_cast<QWidget*>(m_showScope),
                                 static_cast<QWidget*>(m_showDiagnostics)}) {
             control->setEnabled(false);
             control->setAccessibleDescription(tr("Connect a broadcast FM receiver and select WFM"));
         }
     }
-    const bool forceMono = m_available && m_slice->wfmForceMono();
-    const QString modeText = forceMono ? tr("Mono") : tr("Auto Stereo");
+    refreshHd();
+    const bool forceMono = m_available && m_slice->wfmAudioMode() == WfmAudioMode::Mono;
+    const bool hdSelected = m_available && m_slice->wfmAudioMode() == WfmAudioMode::HdStereo;
+    m_scope->setHdMode(hdSelected);
+    const QString modeText = hdSelected ? tr("Digital") : forceMono ? tr("Mono") : tr("Auto Stereo");
     if (m_audioMode->text() != modeText) {
         m_audioMode->setText(modeText);
         m_audioMode->setAccessibleName(tr("Broadcast FM audio mode: %1").arg(modeText));
@@ -324,7 +435,9 @@ void WfmApplet::refresh()
         QAccessible::updateAccessibility(&event);
     }
     if (m_audioMode->isEnabled()) {
-        m_audioMode->setAccessibleDescription(tr("Cycle between forced Mono and Auto Stereo. Auto Stereo falls back to mono when no stereo pilot is detected."));
+        m_audioMode->setAccessibleDescription(m_caps.broadcastFmReceive->hdStereo
+            ? tr("Cycle Mono, Auto Stereo and Digital. Digital program selection uses discovered audio services.")
+            : tr("Cycle between forced Mono and Auto Stereo. Auto Stereo falls back to mono when no stereo pilot is detected."));
         m_audioMode->setToolTip(m_audioMode->accessibleDescription());
     }
     const QString oldDeemphasis = m_deemphasis->currentText();
@@ -369,9 +482,41 @@ void WfmApplet::refreshDiagnostics()
 {
     const bool receiving = m_available && m_slice->inCapture()
         && !m_slice->externalReceiveReplacementActive();
+    if (m_available && m_slice->wfmAudioMode() == WfmAudioMode::HdStereo) {
+        const bool current = receiving && hasCurrentHdReception();
+        const HdFmReception value = current ? m_slice->hdFmReception() : HdFmReception{};
+        const bool unstable = value.synced && value.syncLossCount > 0 && value.syncDurationMs < 5000;
+        QString status = !receiving ? tr("Unavailable")
+            : !value.valid || !value.synced ? tr("Digital acquiring")
+            : value.audioValid ? tr("Digital audio valid") : tr("Digital synced · awaiting audio");
+        if (unstable) { status += tr(" · Unstable"); }
+        setReadout(m_status, status, tr("Digital observed reception: %1").arg(status));
+        m_status->setAccessibleDescription(tr("Actual digital sync and valid selected-program audio, independent of the requested mode."));
+        ThemeManager::instance().setWidgetForegroundToken(m_status,
+            !receiving ? QStringLiteral("color.text.secondary")
+            : value.valid && value.synced && value.audioValid && !unstable ? QStringLiteral("color.accent.success")
+                                                           : QStringLiteral("color.accent.warning"));
+        const auto metric = [this](const std::optional<double>& number, const QString& unit) {
+            return number ? QString::number(*number, 'g', 5) + unit : tr("Unavailable");
+        };
+        QString details = tr("Source: Digital\nSync: %1 · Audio: %2\nProgram: %3\nMER lower / upper: %4 / %5\nCBER: %6\nFrequency offset: %7\nSync duration: %8 s\nSync losses: %9 · Reacquisitions: %10")
+            .arg(value.synced ? tr("Yes") : tr("No"), value.audioValid ? tr("Valid") : tr("Unavailable"))
+            .arg(m_slice->hdProgram() + 1)
+            .arg(metric(value.merLowerDb, QStringLiteral(" dB")), metric(value.merUpperDb, QStringLiteral(" dB")),
+                 metric(value.cber, {}), metric(value.frequencyOffsetHz, QStringLiteral(" Hz")))
+            .arg(value.syncDurationMs / 1000.0, 0, 'f', 1).arg(value.syncLossCount).arg(value.reacquisitionCount);
+        if (m_slice->frequencyReportedKnown()) {
+            details += tr("\nFrequency: %1 MHz").arg(m_slice->reportedFrequency(), 0, 'f', 6);
+        }
+        setReadout(m_diagnostics, details, tr("Digital diagnostics: %1").arg(details));
+        m_diagnostics->setAccessibleDescription(tr("Measured NRSC-5 decoder telemetry. Lower and upper MER use the decoder's spectral convention, inverted relative to RF sidebands. Unavailable metrics are not estimated."));
+        m_diagnostics->setToolTip(m_diagnostics->accessibleDescription());
+        if (!current) { m_scope->clear(); }
+        return;
+    }
     const WfmReceptionDiagnostics diagnostics = receiving && m_caps.broadcastFmReceive->receptionDiagnostics
         ? m_slice->wfmReceptionDiagnostics() : WfmReceptionDiagnostics{};
-    const bool forceMono = m_available && m_slice->wfmForceMono();
+    const bool forceMono = m_available && m_slice->wfmAudioMode() == WfmAudioMode::Mono;
     const WfmStereoStatus status = receiving ? m_slice->wfmStereoStatus() : WfmStereoStatus::Unavailable;
     QString text = tr("Unavailable");
     QString token = QStringLiteral("color.text.secondary");
@@ -430,8 +575,68 @@ void WfmApplet::refreshDiagnostics()
     m_diagnostics->setToolTip(m_diagnostics->accessibleDescription());
 }
 
+bool WfmApplet::hasCurrentHdReception() const
+{
+    if (!m_available || !m_slice || !m_caps.broadcastFmReceive->hdStereo
+        || !m_slice->inCapture() || m_slice->externalReceiveReplacementActive()
+        || m_slice->wfmAudioMode() != WfmAudioMode::HdStereo || !m_slice->frequencyReportedKnown()) { return false; }
+    const HdFmReception& value = m_slice->hdFmReception();
+    return value.valid && value.frequencyHz == std::llround(m_slice->reportedFrequency() * 1.0e6)
+        && value.selectedProgram == m_slice->hdProgram();
+}
+
+void WfmApplet::refreshHd()
+{
+    const QString previous = m_hdProgram->currentText();
+    const QSignalBlocker blocker(m_hdProgram);
+    m_hdProgram->clear();
+    const bool current = hasCurrentHdReception();
+    if (current) {
+        for (const HdFmService& service : m_slice->hdFmReception().services) {
+            if (!service.audioAvailable) { continue; }
+            const QString label = service.name.isEmpty() ? tr("P%1").arg(service.program + 1)
+                : tr("P%1 · %2").arg(service.program + 1).arg(service.name);
+            m_hdProgram->addItem(label, service.program);
+        }
+    }
+    m_hdProgram->setCurrentIndex(m_available ? m_hdProgram->findData(m_slice->hdProgram()) : -1);
+    announceCombo(m_hdProgram, previous);
+    if (m_availability) { m_availability->refreshEngaged(); }
+    QString metadata = tr("Digital metadata unavailable");
+    if (current && m_slice->hdFmReception().synced) {
+        const HdFmReception& value = m_slice->hdFmReception();
+        QStringList parts{tr("Digital · P%1").arg(value.selectedProgram + 1)};
+        if (!value.stationName.isEmpty()) { parts.append(value.stationName); }
+        if (!value.title.isEmpty()) { parts.append(value.title); }
+        if (!value.artist.isEmpty()) { parts.append(value.artist); }
+        metadata = parts.join(QStringLiteral(" · "));
+    }
+    m_metadata->setContent(metadata);
+}
+
+void WfmApplet::appendHdScopeSample()
+{
+    if (!hasCurrentHdReception()) { m_scope->clear(); m_hdSequence = 0; return; }
+    const HdFmReception& value = m_slice->hdFmReception();
+    if (m_hdSession != value.sessionId || m_hdEpoch != value.receiverEpoch
+        || m_hdRevision != value.revision || m_hdSelectedProgram != value.selectedProgram) {
+        m_scope->clear();
+        m_hdSequence = 0;
+    }
+    m_hdSession = value.sessionId;
+    m_hdEpoch = value.receiverEpoch;
+    m_hdRevision = value.revision;
+    m_hdSelectedProgram = value.selectedProgram;
+    if (m_hdSequence == value.observationSequence) { return; }
+    m_hdSequence = value.observationSequence;
+    if (!m_showScope->isChecked() || !m_scope->isVisible()) { return; }
+    m_scope->appendHdSample(value.merLowerDb, value.merUpperDb, value.synced, value.audioValid,
+        value.synced && value.syncLossCount > 0 && value.syncDurationMs < 5000);
+}
+
 void WfmApplet::appendScopeSample()
 {
+    if (m_available && m_slice->wfmAudioMode() == WfmAudioMode::HdStereo) { return; }
     if (!m_available || !m_slice || !m_slice->inCapture() || m_slice->externalReceiveReplacementActive()
         || !m_caps.broadcastFmReceive->receptionDiagnostics || !m_slice->wfmReceptionDiagnostics().valid) {
         m_scope->clear();
@@ -440,7 +645,7 @@ void WfmApplet::appendScopeSample()
     if (!m_showScope->isChecked() || !m_scope->isVisible()) { return; }
     const WfmReceptionDiagnostics& diagnostics = m_slice->wfmReceptionDiagnostics();
     m_scope->appendSample(diagnostics.pilotMagnitude, diagnostics.pilotEngageThreshold,
-        diagnostics.pilotReleaseThreshold, m_slice->wfmStereoStatus(), m_slice->wfmForceMono());
+        diagnostics.pilotReleaseThreshold, m_slice->wfmStereoStatus(), m_slice->wfmAudioMode() == WfmAudioMode::Mono);
 }
 
 void WfmApplet::setSettingsExpanded(bool expanded)
@@ -465,15 +670,7 @@ void WfmApplet::applyUiPreferences()
 
 void WfmApplet::saveUiPreferences()
 {
-    // Client presentation only. Accepted receiver controls persist through
-    // their model/backend path, never through this UI preference object.
-    QJsonObject document = preferences();
-    QJsonObject ui = document.value(QStringLiteral("ui")).toObject();
-    ui.insert(QStringLiteral("showLockScope"), m_showScope->isChecked());
-    ui.insert(QStringLiteral("showDiagnostics"), m_showDiagnostics->isChecked());
-    document.insert(QStringLiteral("ui"), ui);
-    AppSettings::instance().setValue(QStringLiteral("WfmApplet"),
-        QString::fromUtf8(QJsonDocument(document).toJson(QJsonDocument::Compact)));
-    AppSettings::instance().save();
+    WfmPresentationSettings::instance().setAppletOptions(
+        m_showScope->isChecked(), m_showDiagnostics->isChecked());
 }
 } // namespace AetherSDR

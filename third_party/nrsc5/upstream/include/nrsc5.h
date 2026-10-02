@@ -1,0 +1,914 @@
+#ifndef NRSC5_H_
+#define NRSC5_H_
+
+/** \file nrsc5.h
+ * External API for the nrsc5 library.
+ */
+
+/*! \mainpage Quick API Reference
+ *
+ * The library API is documented in nrsc5.h -- see the *Functions* section.
+ *
+ * Useful information about the protocol is provided in standards
+ * documents available from https://www.nrscstandards.org/
+ *
+ * Note: this documentation was *not* written by the authors of **nrsc5**;
+ * its accuracy cannot be guaranteed.
+ */
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
+
+/*
+ * Definitions.
+ */
+#define NRSC5_SCAN_BEGIN  87.9e6
+#define NRSC5_SCAN_END   107.9e6
+#define NRSC5_SCAN_SKIP    0.2e6
+
+#define NRSC5_MIME_PRIMARY_IMAGE    0xBE4B7536 /**< MIME type for album art */
+#define NRSC5_MIME_STATION_LOGO     0xD9C72536 /**< MIME type for station logo */
+#define NRSC5_MIME_NAVTEQ           0x2D42AC3E
+#define NRSC5_MIME_HERE_TPEG        0x82F03DFC
+#define NRSC5_MIME_HERE_IMAGE       0xB7F03DFC
+#define NRSC5_MIME_HD_TMC           0xEECB55B6
+#define NRSC5_MIME_HDC              0x4DC66C5A /**< MIME type for HD Codec audio */
+#define NRSC5_MIME_TEXT             0xBB492AAC /**< MIME type for text file */
+#define NRSC5_MIME_JPEG             0x1E653E9C /**< MIME type for JPEG image */
+#define NRSC5_MIME_PNG              0x4F328CA0 /**< MIME type for PNG image */
+#define NRSC5_MIME_TTN_TPEG_1       0xB39EBEB2
+#define NRSC5_MIME_TTN_TPEG_2       0x4EB03469
+#define NRSC5_MIME_TTN_TPEG_3       0x52103469
+#define NRSC5_MIME_TTN_STM_TRAFFIC  0xFF8422D7
+#define NRSC5_MIME_TTN_STM_WEATHER  0xEF042E96
+#define NRSC5_MIME_UNKNOWN_00000000 0x00000000
+#define NRSC5_MIME_UNKNOWN_1C7D0E29 0x1C7D0E29
+#define NRSC5_MIME_UNKNOWN_B81FFAA8 0xB81FFAA8
+#define NRSC5_MIME_UNKNOWN_FFFFFFFF 0xFFFFFFFF
+
+#define NRSC5_AUDIO_FRAME_SAMPLES  2048        /**< Number of audio samples per HDC frame */
+
+#define NRSC5_SAMPLE_RATE_CU8      1488375            /**< Sample rate at which nrsc5_pipe_samples_cu8() expects samples (FM or AM) */
+#define NRSC5_SAMPLE_RATE_NATIVE_FM  744187.5         /**< Sample rate at which nrsc5_pipe_samples_cs16() & nrsc5_pipe_samples_cf32() expects samples (FM only) */
+#define NRSC5_SAMPLE_RATE_NATIVE_AM  46511.71875      /**< Sample rate at which nrsc5_pipe_samples_cs16() & nrsc5_pipe_samples_cf32() expects samples (AM only) */
+#define NRSC5_SAMPLE_RATE_CS16_FM  NRSC5_SAMPLE_RATE_NATIVE_FM    /**< DEPRECATED: use `NRSC5_SAMPLE_RATE_NATIVE_FM` instead */
+#define NRSC5_SAMPLE_RATE_CS16_AM  NRSC5_SAMPLE_RATE_NATIVE_AM      /**< DEPRECATED: use `NRSC5_SAMPLE_RATE_NATIVE_AM` instead */
+#define NRSC5_SAMPLE_RATE_AUDIO    44100              /**< Sample rate of outgoing audio */
+
+#define NRSC5_DEVICE_VERSION_LENGTH 4          /**< Length of Core Version & Manufacturer Version in SIS Parameter messages. */
+
+#ifdef NRSC5_EXPORTS
+#ifdef __MINGW32__
+#define NRSC5_API __declspec(dllexport)
+#else
+#define NRSC5_API
+#endif
+#else
+#define NRSC5_API
+#endif
+
+enum
+{
+    NRSC5_MODE_FM,
+    NRSC5_MODE_AM
+};
+
+/*
+ * Data types.
+ */
+enum
+{
+    NRSC5_SIG_COMPONENT_AUDIO,
+    NRSC5_SIG_COMPONENT_DATA
+};
+
+enum
+{
+    NRSC5_AAS_TYPE_STREAM = 0,
+    NRSC5_AAS_TYPE_PACKET = 1,
+    NRSC5_AAS_TYPE_LOT = 3
+};
+
+/**  Represents a service component.
+ *
+ * An element of a linked list that accompanies a nrsc5_sig_service_t
+ * describing a component of a SIG record. This provides further
+ * information about the audio or data in the channel.
+ */
+struct nrsc5_sig_component_t
+{
+    struct nrsc5_sig_component_t *next;  /**< Pointer to next element or NULL */
+    uint8_t type; /**< NRSC5_SIG_SERVICE_AUDIO or NRSC5_SIG_SERVICE_DATA */
+    uint8_t id;   /**< Component identifier, 0, 1, 2,... */
+    union
+    {
+        /*! Data service information
+         */
+        struct {
+            uint16_t port;  /**< distinguishes packets for this service */
+            /** e.g. NRSC5_SERVICE_DATA_TYPE_AUDIO_RELATED_DATA */
+            uint16_t service_data_type;
+            uint8_t type;   /**< NRSC5_AAS_TYPE_STREAM, NRSC5_AAS_TYPE_PACKET, or NRSC5_AAS_TYPE_LOT */
+            uint32_t mime;  /**< content, e.g. NRSC5_MIME_STATION_LOGO */
+        } data;
+        /*! Audio service information
+         */
+        struct {
+            uint8_t port;   /**< distinguishes packets for this service */
+            uint8_t type;   /**< program type, e.g. NRSC5_PROGRAM_TYPE_JAZZ */
+            uint32_t mime;  /**< content, e.g. NRSC5_MIME_HDC */
+        } audio;
+    };
+};
+/**
+ * Defines a typename for struct nrsc5_sig_component_t
+ */
+typedef struct nrsc5_sig_component_t nrsc5_sig_component_t;
+
+enum
+{
+    NRSC5_SIG_SERVICE_AUDIO,
+    NRSC5_SIG_SERVICE_DATA
+};
+
+/**  Represents Station Information Guide (SIG) records
+ *
+ * Element of a linked list that will accompany an NRSC5_EVENT_SIG type event.
+ * Each element describes a channel (audio or data), with a name, e.g. "MPS"
+ * is used to indicate main program service, "SPS1" to indicate
+ * supplemental program service 1.  Each service may include a linked
+ * list of type nrsc5_sig_component_t describing its components, which
+ * may include both audio and other data.
+ *
+ * Note: Stations which have only a single audio program and no data services
+ * may not broadcast a SIG table. Applications should not assume that a SIG
+ * table will be present. Information about audio services can be obtained
+ * from PDU headers (reported in NRSC5_EVENT_AUDIO_SERVICE events) instead.
+ */
+struct nrsc5_sig_service_t
+{
+    struct nrsc5_sig_service_t *next; /**< Pointer to next element or NULL */
+    uint8_t type;      /**< NRSC5_SIG_SERVICE_AUDIO or NRSC5_SIG_SERVICE_DATA */
+    uint16_t number;   /**< Channel number: 1,2,3,4 */
+    const char *name;  /**< Channel name, e.g. "MPS" or "SPS1" */
+    nrsc5_sig_component_t *components; /**< Head of linked list of components */
+    nrsc5_sig_component_t *audio_component; /**< Direct link to the audio component of an audio service, or NULL for a data service */
+};
+/**
+ * Defines a typename for struct nrsc5_sig_service_t
+ */
+typedef struct nrsc5_sig_service_t nrsc5_sig_service_t;
+
+enum
+{
+    NRSC5_EVENT_LOST_DEVICE,
+    NRSC5_EVENT_IQ,
+    NRSC5_EVENT_SYNC,
+    NRSC5_EVENT_LOST_SYNC,
+    NRSC5_EVENT_MER,
+    NRSC5_EVENT_BER,
+    NRSC5_EVENT_HDC,
+    NRSC5_EVENT_AUDIO,
+    NRSC5_EVENT_ID3,
+    NRSC5_EVENT_SIG,
+    NRSC5_EVENT_LOT,
+    NRSC5_EVENT_SIS,
+    NRSC5_EVENT_STREAM,
+    NRSC5_EVENT_PACKET,
+    NRSC5_EVENT_AUDIO_SERVICE,
+    NRSC5_EVENT_STATION_ID,
+    NRSC5_EVENT_STATION_NAME,
+    NRSC5_EVENT_STATION_SLOGAN,
+    NRSC5_EVENT_STATION_MESSAGE,
+    NRSC5_EVENT_STATION_LOCATION,
+    NRSC5_EVENT_AUDIO_SERVICE_DESCRIPTOR,
+    NRSC5_EVENT_DATA_SERVICE_DESCRIPTOR,
+    NRSC5_EVENT_EMERGENCY_ALERT,
+    NRSC5_EVENT_HERE_IMAGE,
+    NRSC5_EVENT_LOT_HEADER,
+    NRSC5_EVENT_LOT_FRAGMENT,
+    NRSC5_EVENT_AGC,
+    NRSC5_EVENT_EXCITER_INFO,
+    NRSC5_EVENT_IMPORTER_INFO,
+    NRSC5_EVENT_LEAP_SECOND_OFFSET,
+    NRSC5_EVENT_LOCAL_TIME,
+};
+
+enum
+{
+    NRSC5_ACCESS_PUBLIC,
+    NRSC5_ACCESS_RESTRICTED
+};
+
+enum
+{
+    NRSC5_PROGRAM_TYPE_UNDEFINED = 0,
+    NRSC5_PROGRAM_TYPE_NEWS = 1,
+    NRSC5_PROGRAM_TYPE_INFORMATION = 2,
+    NRSC5_PROGRAM_TYPE_SPORTS = 3,
+    NRSC5_PROGRAM_TYPE_TALK = 4,
+    NRSC5_PROGRAM_TYPE_ROCK = 5,
+    NRSC5_PROGRAM_TYPE_CLASSIC_ROCK = 6,
+    NRSC5_PROGRAM_TYPE_ADULT_HITS = 7,
+    NRSC5_PROGRAM_TYPE_SOFT_ROCK = 8,
+    NRSC5_PROGRAM_TYPE_TOP_40 = 9,
+    NRSC5_PROGRAM_TYPE_COUNTRY = 10,
+    NRSC5_PROGRAM_TYPE_OLDIES = 11,
+    NRSC5_PROGRAM_TYPE_SOFT = 12,
+    NRSC5_PROGRAM_TYPE_NOSTALGIA = 13,
+    NRSC5_PROGRAM_TYPE_JAZZ = 14,
+    NRSC5_PROGRAM_TYPE_CLASSICAL = 15,
+    NRSC5_PROGRAM_TYPE_RHYTHM_AND_BLUES = 16,
+    NRSC5_PROGRAM_TYPE_SOFT_RHYTHM_AND_BLUES = 17,
+    NRSC5_PROGRAM_TYPE_FOREIGN_LANGUAGE = 18,
+    NRSC5_PROGRAM_TYPE_RELIGIOUS_MUSIC = 19,
+    NRSC5_PROGRAM_TYPE_RELIGIOUS_TALK = 20,
+    NRSC5_PROGRAM_TYPE_PERSONALITY = 21,
+    NRSC5_PROGRAM_TYPE_PUBLIC = 22,
+    NRSC5_PROGRAM_TYPE_COLLEGE = 23,
+    NRSC5_PROGRAM_TYPE_SPANISH_TALK = 24,
+    NRSC5_PROGRAM_TYPE_SPANISH_MUSIC = 25,
+    NRSC5_PROGRAM_TYPE_HIP_HOP = 26,
+    NRSC5_PROGRAM_TYPE_WEATHER = 29,
+    NRSC5_PROGRAM_TYPE_EMERGENCY_TEST = 30,
+    NRSC5_PROGRAM_TYPE_EMERGENCY = 31,
+    NRSC5_PROGRAM_TYPE_TRAFFIC = 65,
+    NRSC5_PROGRAM_TYPE_SPECIAL_READING_SERVICES = 76
+};
+
+enum
+{
+    NRSC5_BLEND_DISABLE,
+    NRSC5_BLEND_SELECT,
+    NRSC5_BLEND_ENABLE
+};
+
+enum
+{
+    NRSC5_LOCATION_FORMAT_SAME,
+    NRSC5_LOCATION_FORMAT_FIPS,
+    NRSC5_LOCATION_FORMAT_ZIP
+};
+
+enum
+{
+    NRSC5_ALERT_CATEGORY_NON_SPECIFIC = 1,
+    NRSC5_ALERT_CATEGORY_GEOPHYSICAL = 2,
+    NRSC5_ALERT_CATEGORY_WEATHER = 3,
+    NRSC5_ALERT_CATEGORY_SAFETY = 4,
+    NRSC5_ALERT_CATEGORY_SECURITY = 5,
+    NRSC5_ALERT_CATEGORY_RESCUE = 6,
+    NRSC5_ALERT_CATEGORY_FIRE = 7,
+    NRSC5_ALERT_CATEGORY_HEALTH = 8,
+    NRSC5_ALERT_CATEGORY_ENVIRONMENTAL = 9,
+    NRSC5_ALERT_CATEGORY_TRANSPORTATION = 10,
+    NRSC5_ALERT_CATEGORY_UTILITIES = 11,
+    NRSC5_ALERT_CATEGORY_HAZMAT = 12,
+    NRSC5_ALERT_CATEGORY_TEST = 30
+};
+
+enum
+{
+    NRSC5_HERE_IMAGE_TRAFFIC = 8,
+    NRSC5_HERE_IMAGE_WEATHER = 13
+};
+
+/**
+ * Station Information Service *Audio* service descriptor. This is a
+ * linked list element that may point to further audio service
+ * descriptor elements.  Refer to NRSC-5 document SY_IDD_1020s.
+ *
+ * Note: Not all stations broadcast SIS audio service descriptors, so
+ * applications should not assume that they will be present. Audio service
+ * data from PDU headers (reported in NRSC5_EVENT_AUDIO_SERVICE events) can
+ * be used instead.
+ */
+struct nrsc5_sis_asd_t
+{
+    struct nrsc5_sis_asd_t *next; /**< Pointer to next element or NULL */
+    unsigned int program;     /**< program number 0, 1, ..., 7 */
+    unsigned int access;      /**< NRSC5_ACCESS_PUBLIC or NRSC5_ACCESS_RESTRICTED */
+    unsigned int type;        /**< program type, e.g. NRSC5_PROGRAM_TYPE_JAZZ */
+    unsigned int sound_exp;   /**< 0 is none, 2 is Dolby Pro Logic II Surround */
+};
+/**
+ * Defines a typename for struct nrsc5_sis_asd_t
+ */
+typedef struct nrsc5_sis_asd_t nrsc5_sis_asd_t;
+
+enum
+{
+    NRSC5_SERVICE_DATA_TYPE_NON_SPECIFIC = 0,
+    NRSC5_SERVICE_DATA_TYPE_NEWS = 1,
+    NRSC5_SERVICE_DATA_TYPE_SPORTS = 3,
+    NRSC5_SERVICE_DATA_TYPE_WEATHER = 29,
+    NRSC5_SERVICE_DATA_TYPE_EMERGENCY = 31,
+    NRSC5_SERVICE_DATA_TYPE_TRAFFIC = 65,
+    NRSC5_SERVICE_DATA_TYPE_IMAGE_MAPS = 66,
+    NRSC5_SERVICE_DATA_TYPE_TEXT = 80,
+    NRSC5_SERVICE_DATA_TYPE_ADVERTISING = 256,
+    NRSC5_SERVICE_DATA_TYPE_FINANCIAL = 257,
+    NRSC5_SERVICE_DATA_TYPE_STOCK_TICKER = 258,
+    NRSC5_SERVICE_DATA_TYPE_NAVIGATION = 259,
+    NRSC5_SERVICE_DATA_TYPE_ELECTRONIC_PROGRAM_GUIDE = 260,
+    NRSC5_SERVICE_DATA_TYPE_AUDIO = 261,
+    NRSC5_SERVICE_DATA_TYPE_PRIVATE_DATA_NETWORK = 262,
+    NRSC5_SERVICE_DATA_TYPE_SERVICE_MAINTENANCE = 263,
+    NRSC5_SERVICE_DATA_TYPE_HD_RADIO_SYSTEM_SERVICES = 264,
+    NRSC5_SERVICE_DATA_TYPE_AUDIO_RELATED_DATA = 265,
+    NRSC5_SERVICE_DATA_TYPE_RESERVED_FOR_SPECIAL_TESTS = 511
+};
+
+/**
+ * Station Information Service *Data* service descriptor. This is a
+ * linked list element that may point to further data service descriptors
+ * via `next` member if not `NULL`.  See
+ * nrsc5_service_data_type_name() for named types of data.
+ * Refer to NRSC-5 document SY_IDD_1020s.
+ */
+struct nrsc5_sis_dsd_t
+{
+    struct nrsc5_sis_dsd_t *next; /**< Pointer to next element or NULL */
+    unsigned int access;  /**< NRSC5_ACCESS_PUBLIC or NRSC5_ACCESS_RESTRICTED */
+    unsigned int type;    /**< data service type, e.g. NRSC5_SERVICE_DATA_TYPE_TEXT */
+    uint32_t mime_type;   /**< MIME type, e.g. `NRSC5_MIME_TEXT` */
+};
+/**
+ * Defines a typename for struct nrsc5_sis_dsd_t
+ */
+typedef struct nrsc5_sis_dsd_t nrsc5_sis_dsd_t;
+
+/**
+* ID3 comment descriptor. This is a linked list element that may point to further
+* comments via `next` member if not `NULL`.
+* Refer to HD-Radio document SY_IDD_1028s.
+*/
+struct nrsc5_id3_comment_t {
+    struct nrsc5_id3_comment_t *next; /**< Pointer to next element or NULL */
+    char *lang; /**< language code, e.g. "eng" */
+    char *short_content_desc; /**< short content description */
+    char *full_text; /**< full text */
+};
+/**
+ * Defines a typename for struct nrsc5_id3_comment_t
+ */
+typedef struct nrsc5_id3_comment_t nrsc5_id3_comment_t;
+
+enum
+{
+    NRSC5_PKT_FLAGS_NONE = 0,
+    NRSC5_PKT_FLAGS_CRC_ERROR = 1 << 0, /** Failed the CRC check. Could be corrupted packet. */
+};
+
+enum
+{
+    NRSC5_AUDIO_FLAGS_NONE = 0,
+    NRSC5_AUDIO_FLAGS_UNAVAILABLE = 1 << 0 /** Digital audio was currently unavailable. */,
+    NRSC5_AUDIO_FLAGS_DECODING_ERROR = 1 << 1, /** Failed audio decoding. */
+};
+
+/**  Incoming event from receiver.
+ *
+ * This event structure is passed to your application supplied
+ * callback function--see nrsc5_set_callback().  It is a union of
+ * various structs, keyed by member `event`.
+ */
+struct nrsc5_event_t
+{
+/*! Type of event.
+ * The member `event` determines which sort of event occurred:
+ * - `NRSC5_EVENT_LOST_DEVICE` : RTL-SDR device was disconnected
+ * - `NRSC5_EVENT_IQ` : IQ data, see the `iq` union member
+ * - `NRSC5_EVENT_SYNC` : indicates synchronization achieved, see the `sync` union member
+ * - `NRSC5_EVENT_LOST_SYNC` : indicates synchronization lost
+ * - `NRSC5_EVENT_MER` : modulation error ratio, see the `mer` union member, and NRSC5 document SY_TN_2646s
+ * - `NRSC5_EVENT_BER` : Bit Error Ratio data, see the `ber` union member
+ * - `NRSC5_EVENT_HDC` : HDC audio packet, see the `hdc` union member
+ * - `NRSC5_EVENT_AUDIO` : audio buffer, see the `audio` union member
+ * - `NRSC5_EVENT_ID3` : ID3 information packet arrived, see `id3` member and information in HD-Radio document SY_IDD_1028s.
+ * - `NRSC5_EVENT_SIG` : service information arrived, see `sig` member
+ * - `NRSC5_EVENT_LOT` : LOT file data available, see `lot` member
+ * - `NRSC5_EVENT_LOT_HEADER` : LOT file header metadata available, see `lot` member
+ * - `NRSC5_EVENT_LOT_FRAGMENT` : fragment of a LOT file received, see `lot_fragment` member
+ * - `NRSC5_EVENT_SIS` : DEPRECATED. Use `NRSC5_EVENT_STATION_ID`, `NRSC5_EVENT_STATION_NAME`, `NRSC5_EVENT_STATION_SLOGAN`, `NRSC5_EVENT_STATION_MESSAGE`, `NRSC5_EVENT_STATION_LOCATION`, `NRSC5_EVENT_AUDIO_SERVICE_DESCRIPTOR`, `NRSC5_EVENT_DATA_SERVICE_DESCRIPTOR`, and `NRSC5_EVENT_EMERGENCY_ALERT` instead.
+ * - `NRSC5_EVENT_STREAM` : stream data available, see `stream` member
+ * - `NRSC5_EVENT_PACKET` : packet data available, see `packet` member
+ * - `NRSC5_EVENT_AUDIO_SERVICE` : audio service available, see `audio_service` member
+ * - `NRSC5_EVENT_STATION_ID` : station ID number, see `station_id` member
+ * - `NRSC5_EVENT_STATION_NAME` : station name, see `station_name` member
+ * - `NRSC5_EVENT_STATION_SLOGAN` : station slogan, see `station_slogan` member
+ * - `NRSC5_EVENT_STATION_MESSAGE` : station message, see `station_message` member
+ * - `NRSC5_EVENT_STATION_LOCATION` : station location, see `station_location` member
+ * - `NRSC5_EVENT_AUDIO_SERVICE_DESCRIPTOR` : SIS audio service descriptor, see `asd` member
+ * - `NRSC5_EVENT_DATA_SERVICE_DESCRIPTOR` : SIS data service descriptor, see `dsd` member
+ * - `NRSC5_EVENT_EMERGENCY_ALERT` : emergency alert, see `emergency_alert` member
+ * - `NRSC5_EVENT_HERE_IMAGE` : HERE Images traffic/weather map, see `here_image` member
+ * - `NRSC5_EVENT_AGC` : automatic gain control status, see `agc` member
+ * - `NRSC5_EVENT_EXCITER_INFO` : exciter data, see `exciter_info` member
+ * - `NRSC5_EVENT_IMPORTER_INFO` : importer data, see `importer_info` member
+ * - `NRSC5_EVENT_LEAP_SECOND_OFFSET` : leap second offset, see `leap_second_offset` member
+ * - `NRSC5_EVENT_LOCAL_TIME` : local time data, see `local_time` member
+ */
+    unsigned int event;
+    union
+    {
+        struct {
+            const void *data;
+            size_t count;
+        } iq;
+        struct {
+            float freq_offset; /**< Frequency offset in Hz */
+            int psmi;          /**< Primary Service Mode Indicator (1, 2, 3, 5, 6, or 11 for FM; 1 or 2 for AM) */
+            int pli;           /**< Power Level Indicator (AM only; set to -1 for FM) */
+            int hppi;          /**< High-Power PIDS Indicator (AM only; set to -1 for FM) */
+            int aabi;          /**< Analog Audio Bandwidth Indicator (AM only; set to -1 for FM) */
+            int rdbi;          /**< Reduced Digital Bandwidth Indicator (AM only; set to -1 for FM) */
+        } sync;
+        struct {
+            float cber;
+        } ber;
+        struct {
+            float lower;  /**< Modulation error ratio of the lower sideband in dB. Note that the NRSC-5 standard defines FM signals to be spectrally inverted, so the lower sideband is the one that is higher in frequency. AM signals are not inverted. */
+            float upper;  /**< Modulation error ratio of the upper sideband in dB. Note that the NRSC-5 standard defines FM signals to be spectrally inverted, so the upper sideband is the one that is lower in frequency. AM signals are not inverted. */
+        } mer;
+        struct {
+            unsigned int program;
+            const uint8_t *data;
+            size_t count;
+            unsigned int flags; /** The specific status of the hdc packet. Example `NRSC5_PKT_FLAGS_CRC_ERROR` **/
+        } hdc;
+        struct {
+            unsigned int program;
+            const int16_t *data;
+            size_t count;
+            unsigned int flags; /** The specific status of the audio sample. Example `NRSC5_AUDIO_FLAGS_DECODING_ERROR` **/
+        } audio;
+        struct {
+            unsigned int program;
+            const char *title;
+            const char *artist;
+            const char *album;
+            const char *genre;
+            struct {
+                const char *owner;
+                const char *id;
+            } ufid;
+            struct {
+                uint32_t mime;
+                int param;
+                int lot;
+            } xhdr;
+            nrsc5_id3_comment_t *comments;
+            struct
+            {
+                char *price;            /** price of the product */
+                char *contact_url;      /** URL for contacting the seller */
+                char *seller;           /** Name of the seller */
+                char *description;      /** Short description of the product */
+                uint8_t received_as;    /** How audio is delivered when bought */
+                struct tm *valid_until; /** Date when the price expires. Note that only the `tm_year`, `tm_mon`, and `tm_mday` fields are set. */
+            } commercial;
+        } id3;
+        struct {
+            uint16_t port;  /**< DEPRECATED: Use `component->data.port` instead */
+            uint16_t seq;
+            unsigned int size;
+            uint32_t mime;  /**< DEPRECATED: Use `component->data.mime` instead */
+            const uint8_t *data;
+            nrsc5_sig_service_t *service;
+            nrsc5_sig_component_t *component;
+        } stream;
+        struct {
+            uint16_t port;  /**< DEPRECATED: Use `component->data.port` instead */
+            uint16_t seq;
+            unsigned int size;
+            uint32_t mime;  /**< DEPRECATED: Use `component->data.mime` instead */
+            const uint8_t *data;
+            nrsc5_sig_service_t *service;
+            nrsc5_sig_component_t *component;
+        } packet;
+        struct {
+            uint16_t port;                    /**< DEPRECATED: Use `component->data.port` instead */
+            unsigned int lot;                 /**< LOT id of the file */
+            unsigned int size;                /**< number of bytes in the file */
+            uint32_t mime;                    /**< MIME type of the file, e.g. NRSC5_MIME_PNG */
+            const char *name;                 /**< filename */
+            const uint8_t *data;              /**< contents of the file (if the event type is NRSC5_EVENT_LOT), or NULL (if the event type is NRSC5_EVENT_LOT_HEADER) */
+            struct tm *expiry_utc;            /**< time after which the file should be deleted */
+            nrsc5_sig_service_t *service;     /**< pointer to the associated SIG service */
+            nrsc5_sig_component_t *component; /**< pointer to the associated SIG component */
+        } lot;
+        struct {
+            unsigned int lot;                 /**< LOT id of the file this fragment belongs to */
+            unsigned int seq;                 /**< sequence number of this fragment within the LOT file */
+            unsigned int repeat;              /**< number of repetitions remaining */
+            unsigned int size;                /**< number of bytes in this fragment */
+            unsigned int bytes_so_far;        /**< total number of bytes received for this LOT file, across all received fragments */
+            int is_duplicate;                 /**< 1 if this fragment was previously received, otherwise 0 */
+            const uint8_t *data;              /**< pointer to the data bytes of this fragment */
+            nrsc5_sig_service_t *service;     /**< pointer to the associated SIG service */
+            nrsc5_sig_component_t *component; /**< pointer to the associated SIG component */
+        } lot_fragment;
+        struct {
+            unsigned int program;       /**< program number 0, 1, ..., 7 */
+            unsigned int access;        /**< NRSC5_ACCESS_PUBLIC or NRSC5_ACCESS_RESTRICTED */
+            unsigned int type;          /**< program type, e.g. NRSC5_PROGRAM_TYPE_JAZZ */
+            unsigned int codec_mode;    /**< audio codec mode. See SY_IDD_1017s Table 5-2. */
+            unsigned int blend_control; /**< blend control (NRSC5_BLEND_DISABLE, NRSC5_BLEND_SELECT, or NRSC5_BLEND_ENABLE). See SY_IDD_1017s section 5.2.1.2. */
+            int digital_audio_gain;     /**< TX digital audio gain, in dB. See SY_IDD_1017s section 5.2.1.3. */
+            unsigned int common_delay;  /**< post-decoded common delay, in audio frame periods. See SY_IDD_1017s Table 5-1. */
+            unsigned int latency;       /**< audio codec latency, in audio frame periods. See SY_IDD_1017s Table 5-1. */
+        } audio_service;
+        struct {
+            nrsc5_sig_service_t *services;
+        } sig;
+        struct {
+            const char *country_code;
+            int fcc_facility_id;
+            const char *name;
+            const char *slogan;
+            const char *message;
+            const char *alert;
+            float latitude;
+            float longitude;
+            int altitude;
+            nrsc5_sis_asd_t *audio_services;
+            nrsc5_sis_dsd_t *data_services;
+            const uint8_t *alert_cnt;
+            int alert_cnt_length;
+            int alert_category1;
+            int alert_category2;
+            int alert_location_format;
+            int alert_num_locations;
+            const int *alert_locations;
+        } sis;
+        struct {
+            const char *country_code;
+            int fcc_facility_id;
+        } station_id;
+        struct {
+            const char *name;
+        } station_name;
+        struct {
+            const char *slogan;
+        } station_slogan;
+        struct {
+            const char *message;
+        } station_message;
+        struct {
+            float latitude;
+            float longitude;
+            int altitude;
+        } station_location;
+        struct {
+            unsigned int program;     /**< program number 0, 1, ..., 7 */
+            unsigned int access;      /**< NRSC5_ACCESS_PUBLIC or NRSC5_ACCESS_RESTRICTED */
+            unsigned int type;        /**< program type, e.g. NRSC5_PROGRAM_TYPE_JAZZ */
+            unsigned int sound_exp;   /**< 0 is none, 2 is Dolby Pro Logic II Surround */        
+        } asd;
+        struct {
+            unsigned int access;  /**< NRSC5_ACCESS_PUBLIC or NRSC5_ACCESS_RESTRICTED */
+            unsigned int type;    /**< data service type, e.g. NRSC5_SERVICE_DATA_TYPE_TEXT */
+            uint32_t mime_type;   /**< MIME type, e.g. `NRSC5_MIME_TEXT` */        
+        } dsd;
+        struct {
+            const char *message;
+            const uint8_t *control_data;
+            int control_data_length;
+            int category1;
+            int category2;
+            int location_format;
+            int num_locations;
+            const int *locations;
+        } emergency_alert;
+        struct {
+            int image_type;      /**< NRSC5_HERE_IMAGE_TRAFFIC or NRSC5_HERE_IMAGE_WEATHER */
+            int seq;             /**< sequence number (1-15); increments when traffic/weather image changes */
+            int n1;              /**< part number (1-9) for traffic, or incrementing sequence number for weather */
+            int n2;              /**< number of parts (9) for traffic, or incrementing sequence number for weather */
+            struct tm *time_utc; /**< UTC time of traffic or weather image */
+            float latitude1;     /**< latitude of north map edge */
+            float longitude1;    /**< longitude of west map edge */
+            float latitude2;     /**< latitude of south map edge */
+            float longitude2;    /**< longitude of east map edge */
+            const char *name;    /**< filename, e.g. "trafficMap_1_2_rdhs.png" or "WeatherImage_0_0_rdhs.png" */
+            unsigned int size;   /**< size of image file, in bytes */
+            const uint8_t *data; /**< contents of image file */
+        } here_image;
+        struct {
+            float gain_db;       /**< SDR gain value in dB */
+            float peak_dbfs;     /**< peak signal amplitude in dB, relative to full scale */
+            int is_final;        /**< 1 if this is the final (best) gain value, otherwise 0 */
+        } agc;
+        struct {
+            const char *manufacturer_id;                           /**< Manufacturer ID, e.g. "GG" or "L7" */
+            int core_version[NRSC5_DEVICE_VERSION_LENGTH];         /**< Core Version number. */
+            int core_status;                                       /**< Core Version status. 0 (Commercial Release), 1 (Engineering Release), 2 (Patch). */
+            int manufacturer_version[NRSC5_DEVICE_VERSION_LENGTH]; /**< Manufacturer-assigned Version number. */
+            int manufacturer_status;                               /**< Manufacturer Version status. 0 (Commercial Release), 1 (Engineering Release), 2 (Patch). */
+            int importer_connected;                                /**< 1 if an importer is connected, otherwise 0. */
+        } exciter_info;
+        struct {
+            const char *manufacturer_id;                           /**< Manufacturer ID, e.g. "GG" or "L7" */
+            int core_version[NRSC5_DEVICE_VERSION_LENGTH];         /**< Core Version number. */
+            int core_status;                                       /**< Core Version status. 0 (Commercial Release), 1 (Engineering Release), 2 (Patch). */
+            int manufacturer_version[NRSC5_DEVICE_VERSION_LENGTH]; /**< Manufacturer-assigned Version number. */
+            int manufacturer_status;                               /**< Manufacturer Version status. 0 (Commercial Release), 1 (Engineering Release), 2 (Patch). */
+        } importer_info;
+        struct {
+            int pending_offset;           /**< Future GPS-UTC offset in seconds. Meant to be broadcasted months before the leap seconds and a few hours afterward. */
+            int current_offset;           /**< Current GPS-UTC offset in seconds. */
+            unsigned int pending_alfn;    /**< ALFN representing the GPS time of a pending leap second adjustment, or 0 if a leap second is not pending.*/
+        } leap_second_offset;
+        struct {
+            int utc_offset;    /**< Local Time Zone UTC Offset in minutes. */
+            int dst_regional;  /**< 1 if DST is currently in effect regionally, otherwise 0. */
+            int dst_local;     /**< 1 if DST is practiced locally, otherwise 0. */
+            int dst_schedule;  /**< DST Schedule. 0 means Daylight Saving Time is not practiced. 1 means U.S./Canada schedule. 2 means EU schedule. */
+        } local_time;
+    };
+};
+/**
+ * Defines a typename for struct nrsc5_event_t
+ */
+typedef struct nrsc5_event_t nrsc5_event_t;
+
+/**
+ * Prototype for a user event handling callback function.
+ * The function will be invoked with a pointer to the nrsc5_event_t
+ * and a pointer to a second contextual argument, established by
+ * nrsc5_set_callback().
+ */
+typedef void (*nrsc5_callback_t)(const nrsc5_event_t *evt, void *opaque);
+
+/**
+ * An opaque data type used by API functions to represent session information.
+ * Applications should acquire a pointer to one via the `open_` functions:
+ * nrsc5_open(), nrsc5_open_file(), nrsc5_open_pipe(), or nrsc5_open_rtltcp().
+ */
+typedef struct nrsc5_t nrsc5_t;
+
+
+/* ============================================================================
+ * Public functions. All functions return void or an error code (0 == success).
+ */
+
+/**
+ * Retrieves the version string of the library.
+ * @param[out] version character pointer that will reference the version string.
+ */
+NRSC5_API void nrsc5_get_version(const char **version);
+
+/**
+ * Retrieves a string corresponding to a service data type.
+ * @param[in]  type  a service data type integer.
+ * @param[out] name  character pointer to a string naming the service type
+ *
+ * This name will be quite short, e.g. "News" or "Weather". If the type is
+ * not recognized, it will be the string "Unknown".
+ */
+NRSC5_API void nrsc5_service_data_type_name(unsigned int type, const char **name);
+
+/**
+ * Retrieves a string corresponding to a program type.
+ * @param[in]  type  a program data type integer.
+ * @param[out] name  character pointer to a string naming the service type
+ *
+ * This name will be quite short, e.g. "News" or "Rock". If the type is
+ * not recognized, it will be the string "Unknown".
+ */
+NRSC5_API void nrsc5_program_type_name(unsigned int type, const char **name);
+
+/**
+ * Retrieves a string corresponding to an alert category.
+ * @param[in]  type  an alert category integer.
+ * @param[out] name  character pointer to a string naming the alert category
+ *
+ * This name will be quite short, e.g. "Weather" or "Safety". If the type is
+ * not recognized, it will be the string "Unknown".
+ */
+ NRSC5_API void nrsc5_alert_category_name(unsigned int category, const char **name);
+ 
+ /**
+ * Initializes a session for a particular RTLSDR radio dongle.
+ * @param[out] st  handle for an nrsc5_t
+ * @param[in]  device_index  the RTLSDR device index
+ * @return 0 on success, nonzero on error
+ *
+ * The `device_index` is commonly 0 on systems with a single radio dongle.
+ * This, or another `open_` command should be issued before using the other API
+ * functions that need an `nrsc5_t` session handle.
+ * This function will allocate and initialize an opaque `nsrc5_t` struct and set
+ * the pointer `result` to it on success. It uses librtlsdr to:
+ *
+ * - open the RTLSDR device indicated by `device_index`
+ * - set the sample rate to constant SAMPLE_RATE
+ * - set the tuner gain mode to 1 (auto)
+ * - set offset tuning to 1
+ *
+ * Other session options are initialized to defaults, e.g. mode to FM.
+ * It creates (but does not start) a worker thread.
+ */
+NRSC5_API int nrsc5_open(nrsc5_t **st, int device_index);
+
+/**
+ * Initializes a session given an open `FILE` pointer.
+ * @param[out] st  handle for an `nrsc5_t`
+ * @param[in]  fp  FILE pointer handle with nrsc5 data
+ * @return 0 on success, nonzero on error
+ *
+ */
+NRSC5_API int nrsc5_open_file(nrsc5_t **st, FILE *fp);
+
+/**
+ * Initializes a session for use with a pipe.
+ * @param[out] st  handle for an `nrsc5_t`
+ * @return 0 on success, nonzero on error
+ *
+ */
+NRSC5_API int nrsc5_open_pipe(nrsc5_t **st);
+
+/**
+ * Initializes a session given a TCP socket file descriptor.
+ * @param[out] st  handle for an `nrsc5_t`
+ * @param[in]  socket  the TCP socket with nrsc5 data
+ * @return 0 on success, nonzero on error
+ *
+ */
+NRSC5_API int nrsc5_open_rtltcp(nrsc5_t **st, int socket);
+
+/**
+ * Closes an nrsc5 session.
+ * @param[in] st  pointer to an `nrsc5_t`
+ *
+ * Any worker thread is signalled to exit, files and sockets are closed,
+ * and I/O buffers are freed.
+ */
+NRSC5_API void nrsc5_close(nrsc5_t *st);
+
+/**
+ * Signals the worker to *start* demodulation.
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ *
+ */
+NRSC5_API void nrsc5_start(nrsc5_t *st);
+
+/**
+ * Signals the worker to *stop* demodulation.
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ *
+ * This function will block until the worker is stopped.
+ */
+NRSC5_API void nrsc5_stop(nrsc5_t *st);
+
+/**
+ * Set the session mode to AM or FM.
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] mode  either `NRSC5_MODE_FM` or `NRSC5_MODE_AM`
+ * @return 0 on success or nonzero on error.
+ *
+ */
+NRSC5_API int nrsc5_set_mode(nrsc5_t *st, int mode);
+
+/**
+ * Enable or disable the bias-T for the radio.
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] on  1 indicates enabled, and 0 indicates disabled
+ * @return Return 0 on success or nonzero on error.
+ *
+ * This works with both a local SDR and over a TCP connection.
+ * A Bias-T is often used to power a low noise amplifier by injecting
+ * DC on the antenna cable. Do not enable this unless you know you
+ * have an LNA and compatible antenna.
+ */
+NRSC5_API int nrsc5_set_bias_tee(nrsc5_t *st, int on);
+
+/**
+ * Enable or disable direct sampling.
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] on  1 indicates enabled, and 0 indicates disabled
+ * @return 0 on success or nonzero on error.
+ *
+ * This works with both a local SDR and over a TCP connection.
+ */
+NRSC5_API int nrsc5_set_direct_sampling(nrsc5_t *st, int on);
+
+/**
+ * Adjust the radio frequency correction.
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] ppm_error correction offset in parts-per-million
+ * @return Return 0 on success or nonzero on error.
+ *
+ * This works with both a local SDR and over a TCP connection.
+ */
+NRSC5_API int nrsc5_set_freq_correction(nrsc5_t *st, int ppm_error);
+
+/**
+ * Retrieve the frequency to which the device is currently tuned
+ * if initialized to a local dongle, otherwise the cached frequency.
+ *
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[out] freq  frequency in Hz
+ */
+NRSC5_API void nrsc5_get_frequency(nrsc5_t *st, float *freq);
+
+/**
+ * Sets the frequency to which the receiver is tuned.
+ *
+ * @param[in]  st  pointer to an `nrsc5_t` session object
+ * @param[out] freq  frequency in Hz
+ * @return 0 on success or nonzero on error
+ *
+ * This function may only be called when the device is **stopped**.
+ * Input, output are reset. Gain is reset if auto-gain is enabled.
+ * Works with both a local SDR and over a TCP connection.
+ */
+NRSC5_API int nrsc5_set_frequency(nrsc5_t *st, float freq);
+
+/**
+ * Retrieve the actual receiver gain.
+ *
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[out] gain in dB
+ *
+ */
+NRSC5_API void nrsc5_get_gain(nrsc5_t *st, float *gain);
+
+/**
+ * Set the receiver gain.
+ *
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] gain in dB
+ * @return 0 on success or nonzero on error
+ *
+ */
+NRSC5_API int nrsc5_set_gain(nrsc5_t *st, float gain);
+
+/**
+ * Enable or disable receiver auto-gain control.
+ *
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] enabled  set to 1 to enable auto gain, 0 to disable
+ *
+ */
+NRSC5_API void nrsc5_set_auto_gain(nrsc5_t *st, int enabled);
+
+/**
+ * Establish a callback function.
+ *
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] callback  pointer to an event handling function of two arguments
+ * @param[in] opaque    pointer to the function's intended 2nd argument
+ *
+ */
+NRSC5_API void nrsc5_set_callback(nrsc5_t *st, nrsc5_callback_t callback, void *opaque);
+
+/**
+ * Push an IQ array of 8-bit unsigned samples into the demodulator.
+ *
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] samples  pointer to an array 8-bit unsigned samples
+ * @param[in] length   the number of samples in the array
+ * @see NRSC5_SAMPLE_RATE_CU8 for required sample rate
+ * @return 0 on success, nonzero on error
+ *
+ */
+NRSC5_API int nrsc5_pipe_samples_cu8(nrsc5_t *st, const uint8_t *samples, unsigned int length);
+
+/**
+ * Push an IQ input array of 16-bit signed samples into the demodulator.
+ *
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] samples  pointer to an array 16-bit signed samples
+ * @param[in] length   the number of samples in the array
+ * @see NRSC5_SAMPLE_RATE_NATIVE_FM & NRSC5_SAMPLE_RATE_NATIVE_AM for required sample rate
+ * @return 0 on success, nonzero on error
+ *
+ */
+NRSC5_API int nrsc5_pipe_samples_cs16(nrsc5_t *st, const int16_t *samples, unsigned int length);
+
+/**
+ * Push an IQ input array of complex float samples into the demodulator.
+ *
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @param[in] samples  pointer to an array of complex float samples
+ * @param[in] length   the number of samples in the array. Must be a multiple of two.
+ * @see NRSC5_SAMPLE_RATE_NATIVE_FM & NRSC5_SAMPLE_RATE_NATIVE_AM for required sample rate
+ * @return 0 on success, nonzero on error
+ *
+ */
+NRSC5_API int nrsc5_pipe_samples_cf32(nrsc5_t *st, const float *samples, unsigned int length);
+
+/**
+ * Resets the current session.
+ * Gain is reset if auto-gain is enabled
+ *
+ * @param[in] st  pointer to an `nrsc5_t` session object
+ * @return 0 on success, nonzero on error
+ *
+ */
+NRSC5_API int nrsc5_reset(nrsc5_t *st);
+
+#endif /* NRSC5_H_ */

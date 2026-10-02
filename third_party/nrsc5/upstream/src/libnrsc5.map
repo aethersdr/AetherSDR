@@ -1,0 +1,31 @@
+LIBNRSC5_1.0 {
+    global:
+        nrsc5_get_version;
+        nrsc5_service_data_type_name;
+        nrsc5_program_type_name;
+        nrsc5_alert_category_name;
+        nrsc5_open;
+        nrsc5_open_file;
+        nrsc5_open_pipe;
+        nrsc5_open_rtltcp;
+        nrsc5_close;
+        nrsc5_start;
+        nrsc5_stop;
+        nrsc5_set_mode;
+        nrsc5_set_bias_tee;
+        nrsc5_set_direct_sampling;
+        nrsc5_set_freq_correction;
+        nrsc5_get_frequency;
+        nrsc5_set_frequency;
+        nrsc5_get_gain;
+        nrsc5_set_gain;
+        nrsc5_set_auto_gain;
+        nrsc5_set_callback;
+        nrsc5_pipe_samples_cu8;
+        nrsc5_pipe_samples_cs16;
+        nrsc5_pipe_samples_cf32;
+        nrsc5_reset;
+
+    local:
+        *;
+};

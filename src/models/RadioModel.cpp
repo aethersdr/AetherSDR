@@ -1940,6 +1940,8 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<WfmStereoStatus>();
     qRegisterMetaType<WfmReceptionDiagnostics>();
+    qRegisterMetaType<WfmAudioMode>();
+    qRegisterMetaType<HdFmReception>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
@@ -6723,6 +6725,7 @@ void RadioModel::stageSessionModelsForReconnect()
             SliceDelta unavailableWfm;
             unavailableWfm.wfmStereoStatus = WfmStereoStatus::Unavailable;
             unavailableWfm.wfmReceptionDiagnostics = WfmReceptionDiagnostics{};
+            unavailableWfm.hdFmReception = HdFmReception{};
             slice->applyChanges(unavailableWfm);
             m_staleSlices.insert(slice->sliceId(), slice);
         }
@@ -9643,6 +9646,29 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s, bool geometryThro
         if (canDispatch() && (geometryThroughBackend || s->confirmsControls())) {
             m_backend->setSliceSquelch(s->sliceId(), on, level);
         }
+    }, Qt::DirectConnection);
+    connect(s, &SliceModel::wfmAudioModeRequested, this,
+            [this, s, canDispatch](WfmAudioMode mode) {
+        if (!validWfmAudioMode(mode) || !canDispatch() || !m_backend->isConnected()
+            || slice(s->sliceId()) != s || s->mode() != QLatin1String("WFM")
+            || s->externalReceiveReplacementActive()) { return; }
+        const auto feature = m_backend->capabilities().broadcastFmReceive;
+        if (!feature || (!feature->forceMonoControl && !feature->hdStereo)
+            || (mode == WfmAudioMode::HdStereo && !feature->hdStereo)) { return; }
+        m_backend->setSliceWfmAudioMode(s->sliceId(), mode);
+    }, Qt::DirectConnection);
+    connect(s, &SliceModel::hdProgramRequested, this,
+            [this, s, canDispatch](int program) {
+        if (!canDispatch() || !m_backend->isConnected() || slice(s->sliceId()) != s
+            || s->mode() != QLatin1String("WFM") || s->wfmAudioMode() != WfmAudioMode::HdStereo
+            || s->externalReceiveReplacementActive()) { return; }
+        const auto feature = m_backend->capabilities().broadcastFmReceive;
+        const HdFmReception& reception = s->hdFmReception();
+        if (!feature || !feature->hdStereo || !reception.valid || !reception.synced
+            || std::ranges::none_of(reception.services, [program](const HdFmService& service) {
+                return service.program == program && service.audioAvailable;
+            })) { return; }
+        m_backend->setSliceHdProgram(s->sliceId(), program);
     }, Qt::DirectConnection);
     connect(s, &SliceModel::wfmForceMonoRequested, this,
             [this, s, canDispatch](bool forceMono) {

@@ -33,6 +33,8 @@ public:
         int squelchLevel = 20;
         int wfmDeemphasisUs = 75; // broadcast standard; validated 50 or 75 only
         bool wfmForceMono = false; // selected decoder matrix policy, not observed pilot
+        bool wfmHdStereo = false;
+        int hdProgram = 0; // decoder program 0..7, persisted only after adoption
         bool operator==(const Receiver&) const = default;
     };
     struct Desired {
@@ -117,6 +119,10 @@ public:
     // converter's DC. This is capture placement, not an IQ/DC subtraction.
     static constexpr double kDcSeparationHz = 48'000;
     static bool dcClear(const State& state);
+    // HD carries digital sidebands outside the saved analog passband. Its
+    // outer 198.402 kHz carriers, CFO search and transition need 225 kHz
+    // plus guard each side. Never overwrite the operator's analog edges.
+    static SharedCapturePolicy::SliceDescriptor effectivePassband(const Receiver& receiver);
 
 private:
     SharedCapturePolicy::ReceiverLimits m_limits;

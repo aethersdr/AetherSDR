@@ -45,6 +45,7 @@ public:
     std::optional<Transaction::Result> takeResult();
     void serviceCancellation();
     bool takeAudio(RtlReceivePipeline::Packet& packet) { return m_pipeline->takePacket(packet); }
+    bool takeHdObservation(RtlReceivePipeline::HdFmObservation& value) { return m_pipeline->takeHdObservation(value); }
     RtlReceivePipeline::Diagnostics diagnostics() const { return m_pipeline->diagnostics(); }
     bool takeTraceEvent(RtlReceivePipeline::TraceEvent& event) { return m_pipeline->takeTraceEvent(event); }
     bool needsRepair() const { return m_pipeline->needsRepair(); }
