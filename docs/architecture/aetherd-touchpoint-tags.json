@@ -893,6 +893,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/DaxReceiveModel.h": {
+  "tag": "universal",
+  "note": "Owner-thread adapter from typed native receive PCM and stable TCI receiver bindings to the existing 24 kHz virtual audio bridges; no radio wire protocol.",
+  "split": "",
+  "confidence": "high"
+ },
  "models/MeterModel.h": {
   "tag": "mixed(flex)",
   "note": "Meter registry+values are core-profile; VITA-49 raw scaling, TGXL/PGXL amp routing, COMPPEAK quirks are Flex",
