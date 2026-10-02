@@ -2,12 +2,16 @@
 // owner pushes in, and every unusable case keeps Start disabled with the
 // pushed reason. Socket-free: nothing is started or bound.
 
+#include "core/Ctr2HidFraming.h"
+#include "core/Ctr2HidPort.h"
 #include "models/Ctr2ProxyModel.h"
 
 #include <QCoreApplication>
 #include <QHostAddress>
 
 #include <cstdio>
+#include <memory>
+#include <vector>
 
 using AetherSDR::Ctr2ProxyModel;
 
@@ -21,6 +25,74 @@ void check(bool condition, const char* message)
         std::fprintf(stderr, "FAIL: %s\n", message);
         ++g_failures;
     }
+}
+
+struct PortLog {
+    int opened{0};
+    bool closedWithClosed{false};
+};
+
+// Injected HID port: records whether the relay told the CTR2 CLOSED on close.
+class FakePort : public AetherSDR::Ctr2HidPort {
+public:
+    explicit FakePort(std::shared_ptr<PortLog> log) : m_log(std::move(log)) { ++m_log->opened; }
+    bool isOpen() const override { return m_open; }
+    void send(const std::vector<AetherSDR::ctr2hid::Report>&) override {}
+    void close() override { m_open = false; }
+    void closeAfter(const std::vector<AetherSDR::ctr2hid::Report>& final) override
+    {
+        m_log->closedWithClosed = final.size() == 1
+            && final[0][3] == static_cast<std::uint8_t>(AetherSDR::ctr2hid::MessageType::Closed);
+        m_open = false;
+    }
+    QString description() const override { return QStringLiteral("Fake CTR2"); }
+
+private:
+    std::shared_ptr<PortLog> m_log;
+    bool m_open{true};
+};
+
+void testRelayFollowsAetherSdrsRadio()
+{
+    Ctr2ProxyModel model;
+    auto log = std::make_shared<PortLog>();
+    AetherSDR::Ctr2HidPort::DeviceInfo ctr2{QStringLiteral("fake-path"), 0x303A, 0x1001,
+                                            {}, QStringLiteral("ESP32S3_DEV"), {}};
+    model.setUsbBackend([ctr2] { return QList<AetherSDR::Ctr2HidPort::DeviceInfo>{ctr2}; },
+                        [log](const AetherSDR::Ctr2HidPort::DeviceInfo&, QString*) {
+                            return static_cast<AetherSDR::Ctr2HidPort*>(new FakePort(log));
+                        });
+    model.setTransport(Ctr2ProxyModel::Transport::Usb);
+    model.setUsbDevicePath(ctr2.path);
+    const QHostAddress radioA(QStringLiteral("192.0.2.10"));
+    const QHostAddress radioB(QStringLiteral("192.0.2.11"));
+    model.setAetherRadio(radioA, QStringLiteral("FLEX-8600 \"Shack\"  192.0.2.10"), {});
+    check(model.configurationProblem().isEmpty(), "USB relay is ready with a radio and a device");
+    check(model.start() && model.isRunning() && log->opened == 1, "relay starts on the pushed radio");
+    check(model.radioEndpoint() == QStringLiteral("192.0.2.10:4992"), "it targets that radio on 4992");
+
+    model.setAetherRadio(radioA, QStringLiteral("FLEX-8600 \"Renamed\"  192.0.2.10"), {});
+    check(model.isRunning(), "an info update about the same radio keeps the relay running");
+
+    model.setAetherRadio(radioB, QStringLiteral("FLEX-6600  192.0.2.11"), {});
+    check(!model.isRunning(), "switching radios in AetherSDR stops the relay");
+    check(log->closedWithClosed, "the CTR2 is told CLOSED when the relay is torn down");
+    check(model.lastError().contains(QStringLiteral("switched from")), "the reason is shown");
+    check(model.configurationProblem().isEmpty(), "the operator may start again on the new radio");
+
+    log->closedWithClosed = false;
+    check(model.start() && model.radioEndpoint() == QStringLiteral("192.0.2.11:4992"),
+          "a new Start captures the new radio");
+    check(model.lastError().isEmpty(), "starting clears the old stop reason");
+    model.setAetherRadio({}, {}, {});
+    check(!model.isRunning() && log->closedWithClosed, "disconnecting AetherSDR stops the relay");
+    check(model.lastError().contains(QStringLiteral("no longer connected")), "the disconnect reason is shown");
+
+    model.setAetherRadio(radioA, QStringLiteral("FLEX-8600  192.0.2.10"), {});
+    check(model.start(), "restart after reconnect");
+    model.stop();
+    check(!model.isRunning() && model.lastError().isEmpty(), "a manual Stop leaves no error behind");
+    QCoreApplication::processEvents();
 }
 
 } // namespace
@@ -38,7 +110,7 @@ int main(int argc, char** argv)
     model.setAetherRadio({}, {}, smartLink);
     check(model.configurationProblem() == smartLink, "the pushed reason is shown as-is");
     model.setTransport(Ctr2ProxyModel::Transport::Usb);
-    check(model.configurationProblem() == smartLink || !Ctr2ProxyModel::usbSupported(),
+    check(model.configurationProblem() == smartLink || !model.usbAvailable(),
           "USB mode also needs the radio");
     model.setTransport(Ctr2ProxyModel::Transport::Wifi);
 
@@ -69,6 +141,8 @@ int main(int argc, char** argv)
     model.setTransport(Ctr2ProxyModel::Transport::Wifi);
     check(model.configurationProblem() == QStringLiteral("Connect AetherSDR to a radio first"),
           "losing the radio falls back to the default reason");
+
+    testRelayFollowsAetherSdrsRadio();
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

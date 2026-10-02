@@ -1,6 +1,7 @@
 #include "Ctr2ProxyModel.h"
 
 #include "core/Ctr2UsbRelay.h"
+#include "core/LogManager.h"
 #ifdef HAVE_HIDAPI
 #include "core/Ctr2HidapiPort.h"
 #endif
@@ -9,6 +10,8 @@
 #include <QNetworkInterface>
 #include <QRegularExpression>
 #include <QTimer>
+
+#include <utility>
 
 namespace AetherSDR {
 
@@ -45,6 +48,12 @@ Ctr2ProxyModel::Ctr2ProxyModel(QObject* parent)
     connect(m_usb, &Ctr2UsbRelay::stateChanged, this, stateMoved);
     connect(m_usb, &Ctr2UsbRelay::endpointsChanged, this, &Ctr2ProxyModel::endpointsChanged);
     connect(m_usb, &Ctr2UsbRelay::lastErrorChanged, this, &Ctr2ProxyModel::lastErrorChanged);
+#ifdef HAVE_HIDAPI
+    m_usbDevices = [] { return Ctr2HidapiPort::enumerate(); };
+    m_usbOpener = [](const Ctr2HidPort::DeviceInfo& device, QString* error) -> Ctr2HidPort* {
+        return Ctr2HidapiPort::open(device, error);
+    };
+#endif
     refreshDevices();
 }
 
@@ -53,13 +62,13 @@ Ctr2ProxyModel::~Ctr2ProxyModel()
     stop();
 }
 
-bool Ctr2ProxyModel::usbSupported()
+void Ctr2ProxyModel::setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener)
 {
-#ifdef HAVE_HIDAPI
-    return true;
-#else
-    return false;
-#endif
+    m_usbDevices = std::move(devices);
+    m_usbOpener = std::move(opener);
+    m_usbChoices.clear();
+    refreshDevices();
+    emit configurationChanged();
 }
 
 void Ctr2ProxyModel::refreshDevices()
@@ -81,10 +90,8 @@ void Ctr2ProxyModel::refreshDevices()
     }
     choices.removeDuplicates();
 
-    QList<Ctr2HidPort::DeviceInfo> usb;
-#ifdef HAVE_HIDAPI
-    usb = Ctr2HidapiPort::enumerate();
-#endif
+    const QList<Ctr2HidPort::DeviceInfo> usb = m_usbDevices ? m_usbDevices()
+                                                            : QList<Ctr2HidPort::DeviceInfo>();
     bool usbChanged = usb.size() != m_usbChoices.size();
     for (int i = 0; !usbChanged && i < usb.size(); ++i) {
         usbChanged = usb[i].path != m_usbChoices[i].path;
@@ -107,6 +114,7 @@ bool Ctr2ProxyModel::setTransport(Transport transport)
         m_transport = transport;
         m_activeTransport = transport;
         m_usbStartError.clear();
+        m_stopReason.clear();
         emit configurationChanged();
         emit stateChanged();
         emit endpointsChanged();
@@ -163,6 +171,17 @@ void Ctr2ProxyModel::setAetherRadio(const QHostAddress& address, const QString& 
     }
     const QString reason = ipv4.isNull() && unavailableReason.isEmpty()
         ? tr("Connect AetherSDR to a radio first") : unavailableReason;
+    if (isRunning() && ipv4 != m_runningRadioAddress) {
+        const QString was = m_runningRadioLabel.isEmpty() ? m_runningRadioAddress.toString()
+                                                          : m_runningRadioLabel;
+        const QString why = ipv4.isNull()
+            ? tr("Stopped: AetherSDR is no longer connected to %1").arg(was)
+            : tr("Stopped: AetherSDR switched from %1 to another radio").arg(was);
+        qCInfo(lcDevices) << "CTR2 relay:" << why;
+        stop();
+        m_stopReason = why;
+        emit lastErrorChanged();
+    }
     if (ipv4 == m_aetherRadioAddress && label == m_aetherRadioLabel
         && reason == m_aetherRadioReason) {
         return;
@@ -251,7 +270,7 @@ QString Ctr2ProxyModel::configurationProblem() const
 {
     QString problem;
     if (m_transport == Transport::Usb) {
-        if (!usbSupported()) {
+        if (!usbAvailable()) {
             return tr("This build has no USB HID support (hidapi)");
         }
         if (radioProblem(&problem)) {
@@ -283,11 +302,13 @@ bool Ctr2ProxyModel::start()
     }
     m_activeTransport = m_transport;
     m_usbStartError.clear();
+    m_stopReason.clear();
+    m_runningRadioAddress = m_aetherRadioAddress;
+    m_runningRadioLabel = m_aetherRadioLabel;
     bool ok = false;
     if (m_transport == Transport::Usb) {
-#ifdef HAVE_HIDAPI
         QString error;
-        Ctr2HidapiPort* hid = Ctr2HidapiPort::open(*selectedUsbDevice(), &error);
+        Ctr2HidPort* hid = m_usbOpener(*selectedUsbDevice(), &error);
         if (!hid) {
             m_usbStartError = error;
             emit lastErrorChanged();
@@ -298,7 +319,6 @@ bool Ctr2ProxyModel::start()
                 delete hid;
             }
         }
-#endif
     } else {
         TcpByteProxy::Config config;
         QString problem;
@@ -318,7 +338,10 @@ void Ctr2ProxyModel::stop()
         m_usb->stop();
     }
     m_usbStartError.clear();
+    m_stopReason.clear();
+    m_runningRadioAddress = QHostAddress();
     emit configurationChanged();
+    emit lastErrorChanged();
 }
 
 TcpByteProxy::State Ctr2ProxyModel::state() const
@@ -340,6 +363,9 @@ QString Ctr2ProxyModel::stateText() const
 
 QString Ctr2ProxyModel::lastError() const
 {
+    if (!m_stopReason.isEmpty()) {
+        return m_stopReason;
+    }
     if (usbActive()) {
         return m_usbStartError.isEmpty() ? m_usb->lastError() : m_usbStartError;
     }

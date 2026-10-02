@@ -125,8 +125,10 @@ Suggested responsibilities, with names adjustable to repository conventions:
   owning window is destroyed. Hiding the applet does not imply Stop.
 
 The destination is captured from AetherSDR's connected radio when the
-operator presses Start and stays fixed until Stop. Changing the selected
-AetherSDR radio must not retarget a live proxy. The model never reads
+operator presses Start. The relay never retargets: if AetherSDR disconnects
+or switches to another radio, the relay stops (closing the CTR2's
+connection) and says why, because AetherSDR's transmit indicator is the
+operator's only view of the radio the CTR2 can key. The model never reads
 RadioModel: MainWindow pushes the radio in, and withholds it (with a reason)
 when AetherSDR is disconnected, on SmartLink, or on a radio without
 multi-client sessions. No RadioSession ownership

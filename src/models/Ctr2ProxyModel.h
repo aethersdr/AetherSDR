@@ -9,6 +9,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 class QTimer;
 
 namespace AetherSDR {
@@ -34,8 +36,13 @@ public:
     explicit Ctr2ProxyModel(QObject* parent = nullptr);
     ~Ctr2ProxyModel() override;
 
-    // True when this build includes USB HID support (hidapi).
-    static bool usbSupported();
+    // USB HID access. Defaults to hidapi (absent when the build has none);
+    // tests inject a device list and a port opener.
+    using UsbDeviceSource = std::function<QList<Ctr2HidPort::DeviceInfo>()>;
+    using UsbPortOpener =
+        std::function<Ctr2HidPort*(const Ctr2HidPort::DeviceInfo&, QString* error)>;
+    void setUsbBackend(UsbDeviceSource devices, UsbPortOpener opener);
+    bool usbAvailable() const { return static_cast<bool>(m_usbOpener); }
 
     // Rescans local IPv4 addresses and CTR2-class USB HID devices.
     void refreshDevices();
@@ -57,7 +64,9 @@ public:
     bool setUsbDevicePath(const QString& path);
 
     // The radio AetherSDR is connected to. A null address means the relay
-    // has no usable destination, and unavailableReason says why.
+    // has no usable destination, and unavailableReason says why. A running
+    // relay stops as soon as this is no longer the radio it started with:
+    // AetherSDR's TX indicator is the operator's only view of that radio.
     void setAetherRadio(const QHostAddress& address, const QString& label,
                         const QString& unavailableReason);
     QString aetherRadioLabel() const { return m_aetherRadioLabel; }
@@ -107,6 +116,11 @@ private:
     QHostAddress m_aetherRadioAddress;
     QString m_aetherRadioLabel;
     QString m_aetherRadioReason;
+    QHostAddress m_runningRadioAddress;  // captured at start()
+    QString m_runningRadioLabel;
+    QString m_stopReason;                // why the relay stopped on its own
+    UsbDeviceSource m_usbDevices;
+    UsbPortOpener m_usbOpener;
 };
 
 } // namespace AetherSDR

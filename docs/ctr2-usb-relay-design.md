@@ -198,6 +198,10 @@ Host behavior:
   CLOSED, and wait for HELLO.
 - **USB device removed, or Stop pressed:** close the radio connection (and
   send CLOSED if the device is still there).
+- **AetherSDR disconnects from the radio or switches radios:** stop the
+  relay as for Stop. The relay always targets the radio AetherSDR is
+  connected to, and AetherSDR's transmit indicator must keep showing that
+  radio while the CTR2 can key it.
 
 Device behavior:
 
@@ -295,8 +299,9 @@ on usage page `0xFF00`, usage `0x01`, and the operator picks one explicitly;
 the CTR2's USB vendor and product IDs will narrow it once known.
 
 RFC #6091 (approved) covers this design and the independent-client transmit
-boundary: the relay runs only after the operator enables it, and AetherSDR's
-existing transmit indicator covers on-air visibility. Its amendment for the
+boundary: the relay runs only after the operator enables it, it relays only
+to the radio AetherSDR is connected to, and it stops if that changes, so
+AetherSDR's existing transmit indicator always covers on-air visibility. Its amendment for the
 HID I/O thread is recorded on the issue. This design does not change
 AetherSDR's existing transmit policy or its own radio command paths.
 

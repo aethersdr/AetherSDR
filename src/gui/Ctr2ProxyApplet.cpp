@@ -270,10 +270,11 @@ void Ctr2ProxyApplet::syncConfiguration()
     const QString wifiOnly = tr("Used in Wi-Fi mode only");
     setAvailability(m_listenCombo, editable && !usb, editable ? wifiOnly : frozen);
     setAvailability(m_listenPortEdit, editable && !usb, editable ? wifiOnly : frozen);
-    const QString usbReason = !Ctr2ProxyModel::usbSupported()
+    const bool usbAvailable = haveModel && m_model->usbAvailable();
+    const QString usbReason = !usbAvailable
         ? tr("This build has no USB HID support (hidapi)")
         : tr("Used in USB mode only");
-    const bool usbEditable = editable && usb && Ctr2ProxyModel::usbSupported();
+    const bool usbEditable = editable && usb && usbAvailable;
     setAvailability(m_usbCombo, usbEditable, editable ? usbReason : frozen);
 
     if (haveModel) {
