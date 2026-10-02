@@ -78,6 +78,25 @@ sets the station label shown to other Multi-Flex clients; the legacy
 `AETHER_AUTOMATION_STATION` and then `AETHER_AUTOMATION_LABEL` are fallbacks,
 followed by the neutral default `Automation`. The agent name is display-only
 and is never used as the UUID because several worktrees may use the same LLM.
+
+The identity also decides what the radio gives back. A FlexRadio restores
+per-client panadapter state (WNB on/off and level, for one) keyed by the GUI
+client UUID, so a run under an automation identity gets that identity's last
+state, not the operator's. To check that a radio-owned setting survives an
+AetherSDR restart *for the operator*, first close any other AetherSDR instance
+using the same settings store, then launch without `AETHER_AUTOMATION` and
+enable the bridge from Radio Setup → Network instead. The app uses the
+persistent `GUIClientID` when it can acquire the identity lock; otherwise it
+falls back to a transient UUID, which would invalidate this comparison. The
+same token works. If you do not normally run the bridge, disable it again
+afterwards: the Radio Setup setting is saved across launches, unlike the
+process-only `AETHER_AUTOMATION` override.
+
+Seen on a FLEX-8600 (firmware 4.2.20.41343) while proving #6070: the same
+radio restored WNB on (level 50) for the operator's identity and off (level
+90) for the automation identity, with no client WNB command sent in either
+fix-build run.
+
 Automation identities never overwrite the user's persistent `GUIClientID`.
 
 KiwiSDR compression can be forced for diagnostic runs by adding
@@ -3606,14 +3625,20 @@ no stream-free source aimed, or a family that publishes no health rows. Check
 `connected` to tell those apart.
 
 **Where a row can expire, a companion age row tells you which silence it is.**
-The HL2's four converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcCrestDb` and
-`adcClippedPerBlock` — come from a gated sensor, and they go `null` once the
-newest block has stopped describing now, which includes the whole of any
-transmission longer than about three seconds. `adcObservedAgoMs` is deliberately
-**not** expired with them: a `null` beside an age of `46810` means *reported,
-then expired*, while a `null` beside a `null` age means *never reported*. A
-script that reads these must treat `null` as a refusal to answer rather than as
-a number it can coerce.
+The HL2's six converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcDcDbfs`,
+`adcDcCodes`, `adcCrestDb` and `adcClippedPerBlock` — come from a gated sensor,
+and they go `null` once the newest block has stopped describing now, which
+includes the whole of any transmission longer than about three seconds. They
+are not all in one unit: `adcDcCodes` is the block's mean in signed converter
+codes, not dB, and `adcClippedPerBlock` is a count. `adcDcDbfs` is the same
+mean as a magnitude in dBFS, and it reads `-72.25` (`kEp4FloorDbfs`) for a mean
+of exactly zero, while a tiny non-zero mean computes *below* that rather than
+being clamped to it. Because a mean of about half a code also prints `-72.25`,
+read `adcDcCodes` (`0.00` against `0.50`) to tell a zero mean from a sub-code
+one. `adcObservedAgoMs` is deliberately **not** expired with them: a `null`
+beside an age of `46810` means *reported, then expired*, while a `null` beside a
+`null` age means *never reported*. A script that reads these must treat `null`
+as a refusal to answer rather than as a number it can coerce.
 
 **Reading `health` is itself a demand signal.** A stream-free source polls only
 while something is watching, so each read renews a 5 s demand window and keeps
@@ -3742,8 +3767,11 @@ record:
    "detail":"Client-Side recording requires PC Audio; no RX audio stream exists."}
 ```
 
-`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio`, so the radio
-is the recorder and this verb has nothing local to drive:
+`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio` and the radio
+can record on its own side, so the radio is the recorder and this verb has
+nothing local to drive. A radio with no command plane (HL2, ANAN, Icom, RTL) has
+no radio-side recorder, so there Radio Side falls back to this recorder and the
+start proceeds:
 
 ```json
 ← {"ok":false,"record":"start","recording":false,"path":"",

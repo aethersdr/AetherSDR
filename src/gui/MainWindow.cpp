@@ -51,6 +51,7 @@
 #include "models/RadioStatusOwnership.h"
 #include "models/Nr2SettingsModel.h"
 #include "PanZoomModeGate.h"
+#include "ClientFftSmoothingGate.h"
 #include "SpectrumWidget.h"
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -1109,6 +1110,8 @@ MainWindow::MainWindow(QWidget* parent)
     , m_session(m_sessions.front().get())
     , m_radioModel(m_session->radioModel())
 {
+    m_splitQsySettings = AetherSDR::SplitQsySettings::load();
+
     // Status bar is the only top-level shell besides the spectrum / applet
     // rail / titlebar that the operator can directly retheme.  Declare its
     // container here — statusBar() lazy-creates the QStatusBar on first
@@ -1289,6 +1292,13 @@ MainWindow::MainWindow(QWidget* parent)
         auto* backend = m_radioModel.backend();
         return backend && backend->ownsRxAudio();
     });
+    // Radio-Side recording needs a radio-side recorder to reach; where there is
+    // none, this recorder records instead (recordsOnClient(),
+    // QsoRecordStartPolicy.h). Read live, like the provider above. Radio Setup
+    // dims Radio Side there and shows Client Side in effect.
+    m_qsoRecorder->setRadioSideRecordingReachableProvider([this]() {
+        return m_radioModel.radioSideRecordingReachable();
+    });
 
     // A refused start (#4629). The recorder lives below the UI seam and can only
     // report the REASON — the wording is ours. Informational only, deliberately:
@@ -1297,12 +1307,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_qsoRecorder, &QsoRecorder::recordingBlocked, this,
             [this](AetherSDR::RecordStartDecision reason) {
         if (reason == AetherSDR::RecordStartDecision::BlockedRecordingModeIsRadio) {
-            // Unreachable from the GUI — every operator-facing path tests
-            // RecordingMode and sends radio-side to SliceModel without ever
-            // touching this recorder. Handled rather than swallowed because a
-            // silently discarded refusal is the failure mode this whole change
-            // exists to remove; if a future caller forgets to route, this says
-            // so instead of leaving a stray header-only WAV.
+            // Unreachable from the GUI: every operator-facing path asks
+            // QsoRecorder::recordsOnClientNow() and sends radio-side to
+            // SliceModel without touching this recorder. Handled, not
+            // swallowed, so a future caller that forgets to route is told
+            // instead of leaving a stray header-only WAV.
             showRecorderNotice(QStringLiteral("recording-mode-is-radio"),
                 tr("Radio Side Recording Is Selected"),
                 tr("The radio is doing the recording, so the client recorder was "
@@ -3275,9 +3284,8 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
         // not pinned to one slice, so radio-side goes to whichever slice is
         // active. The recorder can refuse to start (#4629), so the button is
         // set from what it actually did, never from the click.
-        const auto clientSide = [] {
-            return AppSettings::instance().value("RecordingMode", "Client")
-                       .toString() == "Client";
+        const auto clientSide = [this] {
+            return m_qsoRecorder->recordsOnClientNow();
         };
         connect(m_rxDialog, &AetherRxDialog::recordToggled,
                 this, [this, clientSide](bool on) {
@@ -3409,8 +3417,7 @@ void MainWindow::toggleRxPlaybackTransmit(const TxCoordinator::Request& input)
 void MainWindow::syncAetherRxRecordButtons()
 {
     if (!m_rxDialog) return;
-    const bool clientSide =
-        AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+    const bool clientSide = m_qsoRecorder && m_qsoRecorder->recordsOnClientNow();
     if (clientSide) {
         m_rxDialog->setRecordOn(m_qsoRecorder && m_qsoRecorder->isRecording());
         m_rxDialog->setPlayOn(m_qsoRecorder && m_qsoRecorder->isPlaying());
@@ -3638,19 +3645,12 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
 #endif
         // External-device enable evaluation. start()/loadSettings() are
         // idempotent (each guards against re-open), so re-firing them when
-        // unrelated settings change is harmless. Toggling the user-facing
-        // checkbox from off → on is the moment the OS TCC prompt fires —
-        // with user context — instead of every launch (#3257).
-        auto& s = AppSettings::instance();
-        if (m_dialBackend &&
-            s.value("UlanziDialEnabled", "False").toString() == "True") {
-            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
-                                      Qt::QueuedConnection);
-        } else if (m_dialBackend) {
-            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
-                                      Qt::QueuedConnection);
-        }
+        // unrelated settings change is harmless. Toggling the HID checkbox
+        // from off → on is the moment the OS TCC prompt fires — with user
+        // context — instead of every launch (#3257).
+        applyUlanziDialEnabled();
 #ifdef HAVE_HIDAPI
+        auto& s = AppSettings::instance();
         if (m_hidEncoder &&
             s.value("HidEncoderEnabled", "False").toString() == "True") {
             QMetaObject::invokeMethod(m_hidEncoder, [this] {
@@ -5230,7 +5230,8 @@ void MainWindow::buildUI()
         applet->spectrumWidget()->setPanEdgeTaperEnabled(
             connected && caps.hasDdcPanEdgeRolloff);
         applet->spectrumWidget()->setClientFftSmoothingEnabled(
-            !(connected && caps.backendPanAveraging.has_value()));
+            AetherSDR::clientFftSmoothingEnabled(
+                connected, caps.backendPanAveraging.has_value()));
         // A new pane changes WHICH pane carries a radio-wide span control,
         // not only this one's (#5750), so the whole stack is re-derived.
         syncPanSpanControlPlacement();
@@ -6297,13 +6298,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
-            connected && m_radioModel.backendCapabilities().backendPanAveraging.has_value();
+            m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
                 applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
-                    !backendAverages);
+                    AetherSDR::clientFftSmoothingEnabled(connected, backendAverages));
             }
         }
         // The span declaration belongs to the radio just (dis)connected, so
@@ -8742,6 +8743,7 @@ void MainWindow::disableSplit()
 {
     if (!m_splitActive) return;
 
+    m_pendingSliceFrequencyEchoes.clear();
     m_splitActive = false;
 
     // Learn this split's audio arrangement and put the RX pan back, BEFORE the
@@ -8759,6 +8761,7 @@ void MainWindow::disableSplit()
 
     m_splitRxSliceId = -1;
     m_splitTxSliceId = -1;
+    m_splitRxFrequencyMhz = 0.0;
     if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
 
     updateSplitState();

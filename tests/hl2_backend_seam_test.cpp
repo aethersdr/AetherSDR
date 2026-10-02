@@ -5,9 +5,11 @@
 // packet MetisClient would send.
 
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2Settings.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
+#include "gui/ClientFftSmoothingGate.h"
 #include "core/AppSettings.h"
 
 #include "TestSettingsProfile.h"
@@ -20,6 +22,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 namespace AetherSDR::hl2 {
 struct MetisClientTestAccess {
@@ -45,6 +48,29 @@ struct Hl2TxGateTestAccess {
         QMetaObject::invokeMethod(b.m_metis, [] {}, Qt::BlockingQueuedConnection);
         QCoreApplication::sendPostedEvents(&b, QEvent::MetaCall);
     }
+    // Receiver 0 gets a configured chain on this thread, owned by the backend
+    // (its destructor deletes m_rx[].dsp), so pushed verbs land in a real spectrum.
+    static Hl2RxDsp* attachSpectrumDsp(Hl2Backend& b)
+    {
+        if (b.m_rx.empty())
+            return nullptr;
+        auto* dsp = new Hl2RxDsp(nullptr);
+        Hl2RxDsp::Config cfg;
+        cfg.inputSampleRateHz = 48000;
+        cfg.audioSampleRateHz = 48000;
+        cfg.dspBlockSize = 1024;
+        cfg.fftSize = 256;
+        cfg.blockForOutput = true;
+        std::string err;
+        if (!dsp->configure(cfg, &err)) {
+            delete dsp;
+            return nullptr;
+        }
+        b.m_rx[0].dsp = dsp;
+        return dsp;
+    }
+    static int panAverage(const Hl2Backend& b) { return b.m_rx[0].panAverage; }
+    static bool panWeighted(const Hl2Backend& b) { return b.m_rx[0].panWeightedAverage; }
     static int receiverCeiling(const Hl2Backend& b) { return b.receiverCeiling(); }
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
@@ -127,6 +153,17 @@ static void capabilitiesSeam()
     // Disconnected, the slice capacity is the receivers held; connected, it is
     // the receiver ceiling (board count capped by the link budget at the span).
     check(caps.maxSlices == 1, "disconnected: maxSlices is the one receiver held");
+    // The HL2 averages its own panadapter (Hl2Spectrum, per FFT AVG), so it
+    // engages the record that turns SpectrumWidget's EMA off (RFC #5782 §8).
+    check(caps.backendPanAveraging.has_value()
+              && caps.backendPanAveraging->msPerAverageStep == Hl2Backend::kMsPerAverageStep
+              && Hl2Backend::kMsPerAverageStep == 10,
+          "backendPanAveraging engaged at 10 ms per FFT AVG step");
+    check(!AetherSDR::clientFftSmoothingEnabled(true, caps.backendPanAveraging.has_value()),
+          "connected to an HL2, the widget's own EMA is skipped");
+    check(AetherSDR::clientFftSmoothingEnabled(false, caps.backendPanAveraging.has_value())
+              && AetherSDR::clientFftSmoothingEnabled(true, false),
+          "control: disconnected, or a backend that does not average, keeps the EMA");
     Access::metisEdge(b, "linkUp");
     const RadioCapabilities live = b.capabilities();
     check(live.maxSlices == Access::receiverCeiling(b)
@@ -364,6 +401,36 @@ static void notchIdsAreNeverReused()
     check(changed.isEmpty() && removed.isEmpty(), "#4780: a retired id addresses nothing");
 }
 
+static void panAveragingSeam()
+{
+    // FFT AVG through the seam verbs RadioModel calls (RFC #5782 q2): stored
+    // on the receiver for rebuilds, and pushed into the live spectrum.
+    Hl2Backend b;
+    hl2::Hl2RxDsp* dsp = Access::attachSpectrumDsp(b);
+    check(dsp != nullptr, "receiver 0 holds a configured chain");
+    if (!dsp)
+        return;
+    check(dsp->spectrumAverageMsApplied() == 0.0 && !dsp->spectrumLogAverageApplied(),
+          "control: a fresh chain does not average, in power");
+    b.setPanAverage(QString(), 30);
+    b.setPanWeightedAverage(QString(), true);
+    QCoreApplication::sendPostedEvents(dsp, QEvent::MetaCall);
+    check(Access::panAverage(b) == 30 && Access::panWeighted(b),
+          "FFT AVG and weighted are held on the receiver for a rebuilt chain");
+    check(dsp->spectrumAverageMsApplied() == 300.0, "FFT AVG 30 reaches the spectrum as 300 ms");
+    check(dsp->spectrumLogAverageApplied(), "weighted on reaches the spectrum as log-recursive");
+    b.setPanAverage(QString(), 250);
+    b.setPanWeightedAverage(QString(), false);
+    QCoreApplication::sendPostedEvents(dsp, QEvent::MetaCall);
+    check(Access::panAverage(b) == 100 && dsp->spectrumAverageMsApplied() == 1000.0,
+          "FFT AVG above range clamps to 100 (1 s)");
+    check(!dsp->spectrumLogAverageApplied(), "weighted off returns the spectrum to power");
+    b.setPanAverage(QStringLiteral("no-such-pan"), 5);
+    QCoreApplication::sendPostedEvents(dsp, QEvent::MetaCall);
+    check(Access::panAverage(b) == 100 && dsp->spectrumAverageMsApplied() == 1000.0,
+          "an unknown pan id changes nothing");
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("hl2-backend-seam-test"));
@@ -386,6 +453,7 @@ int main(int argc, char** argv)
     tunePowerAndRestore();
     driveGateHealthRows();
     notchIdsAreNeverReused();
+    panAveragingSeam();
 
     std::fprintf(stderr, "hl2_backend_seam_test: %s\n",
                  g_failures == 0 ? "all checks passed" : "FAILED");

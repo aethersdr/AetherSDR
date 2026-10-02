@@ -56,11 +56,11 @@ public:
                   "RX filter taps no longer allow a 50 Hz notch; the width "
                   "presets in the TNF menu assume one.");
 
-    // RX filter phase per mode (#5498). Linear phase at kRxFilterTaps delays by
-    // half the length (4096 samples, ~85 ms); minimum phase keeps the magnitude
-    // response and notch floor and cut post-unmute return from 128 -> 44 ms
-    // (AGC off). CW stays linear phase: through a 300 Hz filter minimum phase
-    // measured overshoot 5.8 -> 19.6 % and more post-edge ringing (#5578).
+    // RX filter phase per mode (#5498): minimum phase preserves the notch
+    // floor and cuts post-unmute return from 128 to 44 ms (AGC off). CW stays
+    // linear by the ruling linked in the WDSP patch ledger. Minimum
+    // phase costs ~14 ms per filter edit on hl2-io; patch 14 frees its design
+    // scratch. See third_party/wdsp/AETHERSDR-PATCHES.md for the measurements.
     [[nodiscard]] static constexpr bool rxMinimumPhaseFor(WdspChannel::Mode mode) noexcept
     {
         return mode != WdspChannel::Mode::Cwl && mode != WdspChannel::Mode::Cwu;
@@ -178,6 +178,26 @@ public:
     // sample-rate change.
     Q_INVOKABLE void setSpectrumRateFps(int fps);
 
+    // Panadapter averaging: the operator's FFT AVG as a time constant in ms
+    // (0 = none) and the weighted toggle as the averaging domain (true =
+    // log-recursive, false = power); see Hl2Spectrum. Held here, not in Config,
+    // and re-applied in installChannel(): every zoom builds a fresh Hl2Spectrum.
+    Q_INVOKABLE void setSpectrumAverageMs(int ms);
+    Q_INVOKABLE void setSpectrumLogAverage(bool on);
+    // The NCO moved: forget the running average and the held partial window, so
+    // old-axis IQ does not ghost across the new axis. Not a transport gap, which
+    // keeps the average (see Hl2Spectrum::reset()).
+    Q_INVOKABLE void dropSpectrumAverage();
+    // What the installed spectrum is actually running, for tests. DSP thread.
+    [[nodiscard]] double spectrumAverageMsApplied() const noexcept
+    {
+        return m_spectrum ? m_spectrum->averageTimeMs() : -1.0;
+    }
+    [[nodiscard]] bool spectrumLogAverageApplied() const noexcept
+    {
+        return m_spectrum && m_spectrum->logAverage();
+    }
+
     // Impulse noise blanker, the HL2's only one (no firmware DSP), so NB is shown
     // even with hasRadioSideDsp = false. Runs in WdspChannel::processIq() on the
     // wire samples ahead of fexchange2, before the bandpass smears the impulse.
@@ -185,6 +205,27 @@ public:
     // `level` 0..100, larger is more aggressive. Held outside Config because
     // configure() replaces m_config; it is re-applied after every rebuild.
     Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    // Receive squelch; `level` is the slice model's 0..100. WdspChannel owns the
+    // per-mode routing and re-applies it on setMode(). Held outside Config, like
+    // the blanker, and re-applied by installChannel(). A change the channel
+    // refuses (a control operation in flight) is marked pending and retried at
+    // the top of each processIqBlock() until it is taken; see squelchPending().
+    Q_INVOKABLE void setSquelch(bool on, int level);
+    [[nodiscard]] bool squelchPending() const noexcept { return m_squelchPending; }
+    [[nodiscard]] bool squelchEnabled() const noexcept { return m_squelchOn; }
+    [[nodiscard]] int squelchLevel() const noexcept { return m_squelchLevel; }
+    // What the channel last WROTE to WDSP (stage, run flags, threshold), or
+    // nullopt before configure(). Forwarded, not mirrored, for the reason
+    // channelConfig() gives below. The record itself is a by-value snapshot
+    // safe from any thread; m_channel is not, so call this on this object's
+    // thread.
+    [[nodiscard]] std::optional<WdspChannel::AppliedSquelch> appliedSquelch() const
+    {
+        if (!m_channel)
+            return std::nullopt;
+        return m_channel->appliedSquelch();
+    }
+
     // What the operator ASKED for. Survives configure() and is what a rebuild
     // re-applies.
     [[nodiscard]] bool noiseBlankerEnabled() const { return m_nbOn; }
@@ -297,6 +338,13 @@ public:
     {
         return m_channel ? &m_channel->config() : nullptr;
     }
+    // Test only: forwards WdspChannel::refuseControlOperationsForTest() to the
+    // current channel, so the squelch retry path can be driven offline.
+    void refuseChannelControlForTest(unsigned count) noexcept
+    {
+        if (m_channel)
+            m_channel->refuseControlOperationsForTest(count);
+    }
     [[nodiscard]] std::size_t channelOutputBlockSize() const noexcept
     {
         return m_channel ? m_channel->outputBlockSize() : 0;
@@ -382,16 +430,18 @@ private:
     // Pushes rxMinimumPhaseFor(m_config.mode) to the live channel. Only
     // called where the control verbs may reach it (setMode, installChannel).
     void applyMinimumPhaseForMode();
+    // One attempt to put the squelch request on the channel; marks it pending
+    // on refusal. Caller has checked canPushToChannel().
+    void pushSquelchToChannel();
     // True when the next panadapter frame may be computed. Stays true until one
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
 
     // The shared install step: resize the scratch buffers, recompute the DC
     // blocker, re-apply everything Config does not carry (shift, the notch set,
-    // the noise blanker, the blanker hold) and take ownership of the new
-    // channel/spectrum. configure() and installRebuiltChannel() both end here so
-    // their results cannot drift apart — this class re-applies SIX things across
-    // a rebuild and a second copy of that list would lose one of them.
+    // the noise blanker, the blanker hold, the squelch) and take ownership of the
+    // new channel/spectrum. configure() and installRebuiltChannel() both end here
+    // so a second copy of that list cannot drift and lose one of them.
     void installChannel(RebuildResult result);
     // Arm m_meterTap from the current geometry. One site for the arithmetic,
     // called on the mute's release edge and on a channel install so the two
@@ -411,12 +461,20 @@ private:
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
+    // The operator's panadapter averaging; see setSpectrumAverageMs().
+    int m_spectrumAverageMs = 0;
+    bool m_spectrumLogAverage = false;
     // Noise-blanker state, kept out of m_config so configure() cannot clear it.
     // m_nbOn/m_nbLevel are the REQUEST; m_nbApplied* are what the WDSP stage
     // took. They diverge exactly when something went wrong, which is the whole
     // reason the bridge readback reports the applied pair.
     bool m_nbOn = false;
     int  m_nbLevel = 50;      // 0..100, the slice model's units
+    // Squelch request — see setSquelch(). Defaults mirror SliceModel's.
+    bool m_squelchOn = false;
+    int  m_squelchLevel = 20;
+    // True while the channel has refused the current request; see setSquelch().
+    bool m_squelchPending = false;
     std::atomic<bool> m_nbAppliedOn {false};
     std::atomic<int>  m_nbAppliedLevel {50};
     // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and

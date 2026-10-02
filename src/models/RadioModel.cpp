@@ -5921,7 +5921,8 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     // command below would fail and skip the model write. The model write
     // (m_fftAverage) feeds the rebuild restore, automation readback and
     // RadioResourceAdapter; actual averaging comes only from setPanAverage() (ANAN:
-    // WDSP analyzer averaging time). HL2 and RTL do no averaging yet (#5678).
+    // WDSP analyzer averaging time; HL2: Hl2Spectrum's time-constant average). RTL
+    // does no averaging yet (#5678).
     if (shapesDisplayRatesLocally()) {
         if (!pan) {
             return false;

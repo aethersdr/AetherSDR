@@ -100,7 +100,6 @@ public:
     // Use the active regional plan when mapping the slice frequency to a
     // native band button. The manager is owned by MainWindow.
     void setBandPlanManager(BandPlanManager* manager);
-    void setWnbState(bool on, int level);
     // Show/hide the whole WNB row (button + level slider + readout) based on
     // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
     void setRadioSideDspAvailable(bool available);
@@ -139,6 +138,8 @@ private:
     // The RF Gain slider is a readout while the loop owns the gain. See the
     // definition for why leaving it live is not a cosmetic question.
     void applyAutoRfGainToSlider(bool autoOn);
+    // The range text, from the slider's published range and unit.
+    void applyRfGainRangeText();
 
 public:
     // Whether this radio has DAX audio/IQ channels at all

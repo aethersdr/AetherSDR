@@ -6,6 +6,8 @@
 #include "MainWindow.h"
 #include "core/TxKeyingMarker.h"
 #include "TxInputKeyEvent.h"
+#include "TxKeyActivationGuard.h"
+#include "PttHoldKeyStep.h"
 #include "core/IambicKeyer.h"
 
 #include <QApplication>
@@ -295,32 +297,34 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
         return true;
     }
 
-    // Mirror the prior Space behavior: only key while connected and not typing
-    // into a text field. When those gates fail, do not consume the key — let it
-    // fall through (matching the old `&& m_radioModel.isConnected()` guard).
-    // Use textEntryCaptured() (not textInputCaptured()) so a focused
-    // non-editable combo — which keeps focus after its popup closes (#3908) —
-    // doesn't swallow the first Space/PTT press.
-    if (textEntryCaptured() || !m_radioModel.isConnected())
+    // The gates (connected, not typing, shortcuts on) apply to a new press
+    // only; the release of a live hold always un-keys. Use
+    // textEntryCaptured() (not textInputCaptured()) so a focused non-editable
+    // combo -- which keeps focus after its popup closes (#3908) -- doesn't
+    // swallow the first Space/PTT press. See PttHoldKeyStep.h.
+    switch (pttHoldKeyStep(eventType, m_pttHoldActive, m_keyboardShortcutsEnabled,
+                           textEntryCaptured(), m_radioModel.isConnected())) {
+    case PttHoldKeyStep::PassThrough:
         return false;
-
-    if (m_keyboardShortcutsEnabled) {
+    case PttHoldKeyStep::Consume:
+        return true;
+    case PttHoldKeyStep::KeyTx:
         // Route through the PTT coordinator (not the raw setTransmit() path) so
         // the Quindar intro/outro runs for keyboard PTT just like the GUI MOX
         // button. requestPttOn/Off still terminate in an `xmit` command, so the
         // interlock/gating in RadioModel's xmit handler is preserved; the
         // coordinator's preflight applies the same local interlock check.
         // (#3610)
-        if (eventType == QEvent::KeyPress && !m_pttHoldActive) {
-            m_pttHoldActive = true;
-            m_pttHoldInput = m_radioModel.localTxController()->capture(TxController::Activity::Mox);
-            (void)m_pttHoldInput.start();
-        } else if (eventType == QEvent::KeyRelease && m_pttHoldActive) {
-            m_pttHoldActive = false;
-            m_pttHoldInput.stop();
-        }
+        m_pttHoldActive = true;
+        m_pttHoldInput = m_radioModel.localTxController()->capture(TxController::Activity::Mox);
+        (void)m_pttHoldInput.start();
+        return true;
+    case PttHoldKeyStep::UnkeyTx:
+        m_pttHoldActive = false;
+        m_pttHoldInput.stop();
+        return true;
     }
-    return true;  // consume the bound key so it can't also activate a button
+    return true;
 }
 
 
@@ -551,6 +555,12 @@ void MainWindow::renewSliderShortcutLease()
     m_sliderShortcutLeaseTimer.start(kSliderShortcutLeaseMs);
 }
 
+void MainWindow::syncOperatingShortcutsEnabled()
+{
+    m_shortcutManager.setShortcutsEnabled(m_keyboardShortcutsEnabled
+                                          && !s_sliderShortcutLeaseActive);
+}
+
 void MainWindow::releaseSliderShortcutLease(bool clearFocus)
 {
     auto* slider = m_sliderShortcutLease.data();
@@ -563,7 +573,9 @@ void MainWindow::releaseSliderShortcutLease(bool clearFocus)
     m_sliderShortcutLeaseTimer.stop();
     m_sliderShortcutLease.clear();
     s_sliderShortcutLeaseActive = false;
-    m_shortcutManager.setShortcutsEnabled(true);
+    // Back to the master switch, not unconditionally on: with keyboard
+    // shortcuts off, the lease ending must not re-arm every bound key (#5483).
+    syncOperatingShortcutsEnabled();
 
     if (clearFocus && slider && QApplication::focusWidget() == slider)
         slider->clearFocus();
@@ -670,6 +682,12 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
         // same missing-released-signal reason.
         if (handleSplitMonitorShortcut(ke, event->type()))
+            return true;
+
+        // After every hold handler, so a hold's release always ends it. With
+        // shortcuts off a bound key reaches the focused widget, but never a
+        // TX-keying button: a clicked MOX keeps focus (#5483).
+        if (refuseTxKeyActivation(obj, ke, m_keyboardShortcutsEnabled, m_shortcutManager))
             return true;
 
         // MeterSlider (TCI/DAX gain) handles its own arrow stepping, badge,
@@ -1274,6 +1292,7 @@ void MainWindow::registerShortcutActions()
                 double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
                 m_splitActive = true;
                 m_splitRxSliceId = s->sliceId();
+                m_splitRxFrequencyMhz = s->reportedFrequency();
                 m_radioModel.sendCommand(
                     QString("slice create pan=%1 freq=%2").arg(panId).arg(txFreq, 0, 'f', 6));
             } else {
@@ -1588,6 +1607,7 @@ void MainWindow::registerShortcutActions()
     // ── Load user bindings and create QShortcuts ────────────────────────
     m_shortcutManager.loadBindings();
     s_keyboardShortcutsEnabled = m_keyboardShortcutsEnabled;
+    syncOperatingShortcutsEnabled();
     m_shortcutManager.rebuildShortcuts(this, shortcutGuard);
 
     m_sliderShortcutLeaseTimer.setSingleShot(true);

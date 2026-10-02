@@ -591,6 +591,12 @@ public:
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
 
+    // Radio-side recording is `slice set <n> record=/play=` on the slice's
+    // command plane. Without one there is no radio-side recorder to reach, so
+    // "Radio Side" falls back to the client recorder instead of a button that
+    // latches and records nothing.
+    bool radioSideRecordingReachable() const { return hasCommandPlane(); }
+
     // ── Memory command routing ──────────────────────────────────────────────
     //
     // Answer a `memory …` command from the local bank or a native writable
@@ -1711,9 +1717,10 @@ private:
     // Waterfall pacing for raw-spectrum (non-Flex) backends: drops pan frames
     // to one row per WaterfallRate::localRowIntervalMs(rate) (0 at rate 100 =
     // gate lifted). A plain drop, not a coalesce: it fixes cadence only, and a
-    // row is the single frame that hit the gate (HL2/RTL: one unaveraged FFT,
-    // #5833; ANAN: WDSP-averaged; Icom: a CI-V sweep). Where rows get integrated
-    // is open in RFC #5782 — do not add an accumulator here until it lands.
+    // row is the single frame that hit the gate (HL2: one FFT, time-averaged
+    // over FFT AVG x 10 ms when FFT AVG > 0; RTL: one unaveraged FFT; ANAN:
+    // WDSP-averaged; Icom: a CI-V sweep). Where rows get integrated is open in
+    // RFC #5782 — do not add an accumulator here until it lands.
     QHash<int, qint64> m_backendWfLastRowNs;
     // Pre-seed default only; 100 is the top of the 1..100 rate control and
     // matches SpectrumWidget's m_wfLineDuration default (#4606).

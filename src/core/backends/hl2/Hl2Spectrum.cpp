@@ -12,7 +12,9 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 }
 
-Hl2Spectrum::Hl2Spectrum(int fftSize) : m_fftSize(fftSize < 2 ? 2 : fftSize)
+Hl2Spectrum::Hl2Spectrum(int fftSize, double sampleRateHz)
+    : m_fftSize(fftSize < 2 ? 2 : fftSize),
+      m_sampleRateHz(sampleRateHz > 0.0 ? sampleRateHz : 0.0)
 {
     m_acc.reserve(static_cast<std::size_t>(m_fftSize));
     m_window.resize(static_cast<std::size_t>(m_fftSize));
@@ -70,6 +72,7 @@ int Hl2Spectrum::process(std::span<const std::complex<float>> iq, std::vector<fl
     int frames = 0;
     for (const auto& s : iq) {
         m_acc.push_back(s);
+        ++m_samplesSinceFrame;
         if (static_cast<int>(m_acc.size()) == m_fftSize) {
             computeFrame(binsDbfs);
             m_acc.clear();
@@ -85,21 +88,69 @@ void Hl2Spectrum::setAverageFrames(int frames) noexcept
         frames = 1;
     }
     // A re-applied identical depth (settings replay) must not clear the
-    // accumulator. A zoom rebuilds this object at depth 1, so the depth does not
-    // survive a zoom today.
-    if (frames == m_averageFrames) {
+    // accumulator. The operator's averaging survives a zoom through
+    // setAverageTimeMs(), which Hl2RxDsp re-applies in installChannel(), not
+    // through this.
+    if (frames == m_averageFrames && m_averageTimeMs == 0.0) {
         return;
     }
     m_averageFrames = frames;
+    m_averageTimeMs = 0.0;
     // An exponential state built at one alpha is not a state at the next one.
+    dropAverage();
+}
+
+void Hl2Spectrum::setAverageTimeMs(double tauMs) noexcept
+{
+    if (!(tauMs > 0.0)) {   // also catches NaN
+        tauMs = 0.0;
+    }
+    // Same no-op rule as setAverageFrames(): a replay of the value already in
+    // force must not throw the average away.
+    if (tauMs == m_averageTimeMs && m_averageFrames == 1) {
+        return;
+    }
+    m_averageTimeMs = tauMs;
+    m_averageFrames = 1;
+    dropAverage();
+}
+
+void Hl2Spectrum::setLogAverage(bool on) noexcept
+{
+    if (on == m_logAverage) {
+        return;
+    }
+    m_logAverage = on;
+    // The state is in the OTHER domain now; blending into it would mix dB and
+    // power in one number.
+    dropAverage();
+}
+
+void Hl2Spectrum::dropAverage() noexcept
+{
     // Assign rather than resize — the vector was sized at construction, so
     // this touches no allocator.
     m_avgPower.assign(static_cast<std::size_t>(m_fftSize), 0.0);
     m_haveAverage = false;
 }
 
+double Hl2Spectrum::blendAlpha(double dtSeconds, double tauSeconds) noexcept
+{
+    if (!(tauSeconds > 0.0)) {
+        return 1.0;
+    }
+    if (!(dtSeconds > 0.0)) {
+        return 0.0;
+    }
+    // -expm1(-x) is 1 - exp(-x) without the cancellation at small x, which is
+    // exactly the regime of a long average at a high frame rate.
+    return -std::expm1(-dtSeconds / tauSeconds);
+}
+
 void Hl2Spectrum::accumulate(std::span<const std::complex<float>> iq)
 {
+    // Time passes whether or not these samples survive the cap below.
+    m_samplesSinceFrame += iq.size();
     m_acc.insert(m_acc.end(), iq.begin(), iq.end());
     // Hold at most fftSize - 1: see the header for why exactly-full would wedge
     // process()'s boundary check.
@@ -131,10 +182,20 @@ void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
     const auto* out = static_cast<fftw_complex*>(m_out);
     binsDbfs.resize(static_cast<std::size_t>(m_fftSize));
     const int half = m_fftSize / 2;
-    const bool blending = m_averageFrames > 1;
-    // alpha = 1/N. Only read when blending, so the division is never by the
-    // 1 that means "no averaging".
-    const double alpha = blending ? 1.0 / static_cast<double>(m_averageFrames) : 1.0;
+    // Two ways to be averaging: a time constant (the operator's control,
+    // alpha from the elapsed IQ time) or a fixed frame depth (alpha = 1/N,
+    // fixtures). Only one is ever set; see the setters.
+    const bool timed = m_averageTimeMs > 0.0 && m_sampleRateHz > 0.0;
+    const bool blending = timed || m_averageFrames > 1;
+    double alpha = 1.0;
+    if (timed) {
+        const double dt = static_cast<double>(m_samplesSinceFrame) / m_sampleRateHz;
+        alpha = blendAlpha(dt, m_averageTimeMs / 1000.0);
+    } else if (blending) {
+        alpha = 1.0 / static_cast<double>(m_averageFrames);
+    }
+    m_samplesSinceFrame = 0;
+    const bool logDomain = blending && m_logAverage;
     for (int k = 0; k < m_fftSize; ++k) {
         const int src = (k + half) % m_fftSize;                       // fftshift: DC -> centre
         const double re = out[src][0];
@@ -147,6 +208,15 @@ void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
         // reads it to mean; see setAverageFrames() in the header for what an
         // average of logarithms actually computes.
         double power = (re * re + im * im) / m_coherentGainSq;
+        if (logDomain) {
+            // Log-recursive, by the operator's choice (setLogAverage): the
+            // state is dBFS and the blend is of logarithms. Emitted as-is.
+            const double db = 10.0 * std::log10(power + 1e-24);
+            double& state = m_avgPower[static_cast<std::size_t>(k)];
+            state = m_haveAverage ? state + alpha * (db - state) : db;
+            binsDbfs[static_cast<std::size_t>(k)] = static_cast<float>(state);
+            continue;
+        }
         if (blending) {
             double& state = m_avgPower[static_cast<std::size_t>(k)];
             // Take the first frame whole rather than blending it into a zero

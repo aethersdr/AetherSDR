@@ -40,6 +40,7 @@
 #include "core/backends/flex/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
+#include "core/UlanziDialMappings.h"
 #include "models/AntennaGeniusModel.h"
 
 #include <QCloseEvent>
@@ -5177,14 +5178,39 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
         auto* radioSideBtn = new QPushButton("Radio Side");
         radioSideBtn->setCheckable(true);
-        radioSideBtn->setStyleSheet(modeBtnStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(radioSideBtn,
+            modeBtnStyle
+            + "QPushButton:disabled { background: {{color.button.background.disabled}}; "
+              "color: {{color.control.unavailable}}; "
+              "border-color: {{color.button.border.disabled}}; }");
         auto* clientSideBtn = new QPushButton("Client Side");
         clientSideBtn->setCheckable(true);
         clientSideBtn->setStyleSheet(modeBtnStyle);
 
-        bool clientSide = settings.value("RecordingMode", "Client").toString() == "Client";
-        radioSideBtn->setChecked(!clientSide);
-        clientSideBtn->setChecked(clientSide);
+        // A connected radio with no command plane has no radio-side recorder, so
+        // Client Side is in effect there (recordsOnClient()). Shown, never
+        // written: the saved choice returns on the next radio that has one.
+        // By hand, not ControlAvailabilityRegistry: command-plane reachability
+        // is not in RadioCapabilities.
+        const auto applyRecordingModeAvailability = [this, radioSideBtn, clientSideBtn]() {
+            const bool radioSideAvailable =
+                !m_model->isConnected() || m_model->radioSideRecordingReachable();
+            const bool clientSide = !radioSideAvailable
+                || AppSettings::instance().value("RecordingMode", "Client").toString()
+                       == "Client";
+            radioSideBtn->setEnabled(radioSideAvailable);
+            radioSideBtn->setChecked(!clientSide);
+            clientSideBtn->setChecked(clientSide);
+            const QString why = radioSideAvailable
+                ? QString()
+                : tr("Unavailable: this radio can't record on its own side. "
+                     "Recordings go to this computer.");
+            radioSideBtn->setToolTip(why);
+            radioSideBtn->setAccessibleDescription(why);
+        };
+        applyRecordingModeAvailability();
+        connect(m_model, &RadioModel::connectionStateChanged, radioSideBtn,
+                applyRecordingModeAvailability);
 
         connect(radioSideBtn, &QPushButton::clicked, this, [radioSideBtn, clientSideBtn]() {
             QSignalBlocker b(clientSideBtn);
@@ -5198,6 +5224,10 @@ QWidget* RadioSetupDialog::buildAudioTab()
             QSignalBlocker b(radioSideBtn);
             clientSideBtn->setChecked(true);
             radioSideBtn->setChecked(false);
+            // Already in effect while Radio Side is dimmed; saving would erase
+            // the Radio Side choice the next capable radio restores.
+            if (!radioSideBtn->isEnabled())
+                return;
             auto& s = AppSettings::instance();
             s.setValue("RecordingMode", "Client");
             s.save();
@@ -7811,8 +7841,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
     auto& settings = AppSettings::instance();
 
     // ── USB control surfaces (Ulanzi Dial, StreamDeck+) (#3257) ──────────
-    // These are opt-in because the first call into each backend triggers the
-    // macOS Input Monitoring permission prompt (kIOHIDOptionsTypeSeizeDevice
+    // The Ulanzi Dial is on by default: every backend detects the dial before
+    // claiming it, so only a present dial reaches the macOS Input Monitoring
+    // prompt. HID encoders stay opt-in because the first call into the HID
+    // encoder backend triggers that prompt (kIOHIDOptionsTypeSeizeDevice
     // in the IOKit-direct backend, hid_open() in HIDAPI). Defaulting them off
     // means the prompt only ever fires for users who actually own and want to
     // use the hardware.
@@ -7823,23 +7855,22 @@ QWidget* RadioSetupDialog::buildSerialTab()
         gvbox->setSpacing(6);
 
         auto* note = new QLabel(
-            "Enable only if you connect a Ulanzi Dial or Elgato Stream Deck+. "
-            "On macOS, enabling will trigger an Input Monitoring permission "
-            "prompt the first time AetherSDR scans for the device.");
+            "A connected Ulanzi Dial is detected and used automatically; turn "
+            "it off to leave the dial's media keys to the operating system. "
+            "Enable HID encoders only if you connect one. On macOS, AetherSDR "
+            "asks for Input Monitoring permission the first time it claims "
+            "one of these devices.");
         note->setWordWrap(true);
         note->setStyleSheet(kLabelStyle);
         gvbox->addWidget(note);
 
-        auto* ulanziEnable = new QCheckBox("Enable Ulanzi Dial");
+        auto* ulanziEnable = new QCheckBox("Use a Ulanzi Dial when detected");
         AetherSDR::ThemeManager::instance().applyStyleSheet(
             ulanziEnable, "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
             + kCheckBoxIndicator);
-        ulanziEnable->setChecked(
-            settings.value("UlanziDialEnabled", "False").toString() == "True");
+        ulanziEnable->setChecked(UlanziDialMappings::enabled());
         connect(ulanziEnable, &QCheckBox::toggled, this, [this](bool on) {
-            auto& s = AppSettings::instance();
-            s.setValue("UlanziDialEnabled", on ? "True" : "False");
-            s.save();
+            UlanziDialMappings::setEnabled(on);
             emit serialSettingsChanged();
         });
         gvbox->addWidget(ulanziEnable);
