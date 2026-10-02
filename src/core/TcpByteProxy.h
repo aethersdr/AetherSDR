@@ -43,6 +43,11 @@ public:
         qint64 queuedToUpstream{0};
         qint64 queuedToDownstream{0};
         quint64 rejectedClients{0};
+        // USB mode only: UDP datagrams relayed whole, and those dropped
+        // because the link toward the CTR2 was backed up.
+        quint64 datagramsToRadio{0};
+        quint64 datagramsToDevice{0};
+        quint64 datagramsDropped{0};
     };
 
     // Upstream sockets come from here so tests can substitute a socket whose

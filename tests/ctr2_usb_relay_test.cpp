@@ -9,7 +9,9 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QTcpServer>
+#include <QNetworkDatagram>
 #include <QTcpSocket>
+#include <QUdpSocket>
 #include <QThread>
 #include <QTimer>
 
@@ -125,6 +127,7 @@ struct Device {
     size_t decoded{0};
     std::vector<Message> messages;
     QByteArray data;
+    std::vector<Message> datagrams;
     bool rxError{false};
 
     void pump()
@@ -139,6 +142,8 @@ struct Device {
                 messages.push_back(msg);
                 if (msg.type == MessageType::Data) {
                     data += msg.payload;
+                } else if (msg.type == MessageType::Datagram) {
+                    datagrams.push_back(msg);
                 }
             }
         }
@@ -170,6 +175,13 @@ struct Device {
         tx.encodeControl(MessageType::Closed, &r);
         port->deliver(r);
     }
+    void datagram(quint16 port, const QByteArray& bytes)
+    {
+        std::vector<Report> r;
+        tx.encodeDatagram(port, bytes, &r);
+        port_deliver(r);
+    }
+    void port_deliver(const std::vector<Report>& r) { port->deliver(r); }
     // Sends bytes as DATA messages, delivering reports in irregular batches.
     void send(const QByteArray& bytes, unsigned seed = 1)
     {
@@ -489,6 +501,115 @@ void testBackpressureTowardDevice()
     check(rig.dev.data == flood, "throttled stream arrives complete and in order");
 }
 
+// Generic radio-side UDP endpoint.
+struct RadioUdp {
+    QUdpSocket socket;
+    std::vector<QNetworkDatagram> received;
+
+    bool bind()
+    {
+        QObject::connect(&socket, &QUdpSocket::readyRead, &socket, [this] {
+            while (socket.hasPendingDatagrams()) {
+                received.push_back(socket.receiveDatagram());
+            }
+        });
+        return socket.bind(QHostAddress::LocalHost, 0);
+    }
+    quint16 port() const { return socket.localPort(); }
+};
+
+void testDatagramsBothWays()
+{
+    Rig rig;
+    RadioUdp udp;
+    if (!udp.bind()) {
+        std::exit(kSkip);
+    }
+    rig.start();
+    check(rig.linkUp(), "link up");
+    const QByteArray reg(1, '\0');
+    const QByteArray big = randomBytes(kMaxDatagramBytes, 21);
+    rig.dev.datagram(udp.port(), reg);
+    rig.dev.send(QByteArray("tcp in between\n"));
+    rig.dev.datagram(udp.port(), big);
+    check(waitUntil([&] { return udp.received.size() == 2; }), "both CTR2 datagrams reach the radio");
+    check(udp.received.size() == 2 && udp.received[0].data() == reg && udp.received[1].data() == big,
+          "datagram boundaries and bytes are exact");
+    check(waitUntil([&] { return rig.radio.conns[0]->received == "tcp in between\n"; }),
+          "TCP interleaved with datagrams is intact");
+    const QHostAddress hostAddr = udp.received[0].senderAddress();
+    const quint16 hostPort = static_cast<quint16>(udp.received[0].senderPort());
+    check(udp.received[1].senderPort() == hostPort, "one host UDP socket per link");
+
+    const QByteArray meter1 = randomBytes(300, 22);
+    const QByteArray meter2("\x00\xff\x0a", 3);
+    udp.socket.writeDatagram(meter1, hostAddr, hostPort);
+    udp.socket.writeDatagram(meter2, hostAddr, hostPort);
+    check(waitUntil([&] { rig.dev.pump(); return rig.dev.datagrams.size() == 2; }),
+          "radio datagrams reach the CTR2");
+    check(rig.dev.datagrams.size() == 2 && rig.dev.datagrams[0].payload == meter1
+              && rig.dev.datagrams[1].payload == meter2
+              && rig.dev.datagrams[0].port == udp.port(),
+          "radio datagrams arrive whole, with the radio's source port");
+
+    QUdpSocket stranger;
+    if (stranger.bind(QHostAddress(QStringLiteral("127.0.0.2")), 0)) {
+        stranger.writeDatagram(QByteArray("spoof"), hostAddr, hostPort);
+        spin(100);
+        rig.dev.pump();
+        check(rig.dev.datagrams.size() == 2, "datagrams from anyone but the radio are ignored");
+    }
+    const Ctr2UsbRelay::Stats s = rig.relay.stats();
+    check(s.datagramsToRadio == 2 && s.datagramsToDevice == 2 && s.datagramsDropped == 0,
+          "datagram counters match");
+}
+
+void testDatagramFloodIsDropped()
+{
+    Rig rig;
+    RadioUdp udp;
+    if (!udp.bind()) {
+        std::exit(kSkip);
+    }
+    rig.port->autoAck = false;
+    rig.start();
+    rig.dev.hello();
+    check(waitUntil([&] { return rig.relay.state() == State::Relaying; }), "relaying");
+    rig.port->ack(rig.port->unacked);
+    rig.dev.datagram(udp.port(), QByteArray(1, '\0'));
+    check(waitUntil([&] { return udp.received.size() == 1; }), "registration datagram arrives");
+    const QHostAddress host = udp.received[0].senderAddress();
+    const quint16 hostPort = static_cast<quint16>(udp.received[0].senderPort());
+    for (int i = 0; i < 50; ++i) {
+        udp.socket.writeDatagram(randomBytes(1000, static_cast<unsigned>(i)), host, hostPort);
+    }
+    rig.radio.conns[0]->socket->write("after the flood\n");
+    check(waitUntil([&] { const auto st = rig.relay.stats(); return st.datagramsToDevice + st.datagramsDropped == 50; }),
+          "every flood datagram is either queued or dropped");
+    check(rig.relay.stats().datagramsDropped > 0, "a backed-up link drops datagrams instead of growing");
+    QElapsedTimer deadline;
+    deadline.start();
+    while (!rig.dev.data.contains("after the flood\n") && deadline.elapsed() < 20000) {
+        rig.port->ack(20);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        rig.dev.pump();
+    }
+    check(rig.dev.data == "after the flood\n", "TCP still arrives intact after a UDP flood");
+    check(static_cast<quint64>(rig.dev.datagrams.size()) == rig.relay.stats().datagramsToDevice,
+          "every datagram counted as sent reaches the CTR2 whole");
+}
+
+void testDatagramBeforeReady()
+{
+    Rig rig;
+    rig.relay.setRadioSocketFactory([] { return new HangingSocket; });
+    rig.start();
+    rig.dev.hello();
+    check(waitUntil([&] { return rig.relay.state() == State::Connecting; }), "connecting");
+    rig.dev.datagram(4992, QByteArray(1, '\0'));
+    check(waitUntil([&] { return rig.dev.count(MessageType::Closed) == 1; }), "a datagram before READY is a fault");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -504,6 +625,9 @@ int main(int argc, char** argv)
     testIncompleteMessageTimeout();
     testPortFailure();
     testBackpressureTowardDevice();
+    testDatagramsBothWays();
+    testDatagramFloodIsDropped();
+    testDatagramBeforeReady();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

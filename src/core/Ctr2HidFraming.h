@@ -26,7 +26,9 @@ constexpr std::uint8_t kReportId = 0x01;
 constexpr std::uint8_t kMarker = 0xFF;
 constexpr std::uint8_t kVersion = 0x00;
 constexpr std::uint8_t kCounterMask = 0x7F;
-constexpr int kMaxPayloadBytes = 512;
+constexpr int kMaxPayloadBytes = 512;      // DATA
+constexpr int kMaxDatagramBytes = 1472;    // one UDP datagram, excluding the port
+constexpr int kMaxMessageBytes = 2 + kMaxDatagramBytes;
 
 using Report = std::array<std::uint8_t, kReportBytes>;
 
@@ -35,12 +37,13 @@ enum class MessageType : std::uint8_t {
     Hello = 0x01,   // device -> host: start or restart the link
     Ready = 0x02,   // host -> device: radio connection open
     Closed = 0x03,  // either direction: link ended; device restarts with Hello
-    // 0x04 is reserved for UDP datagrams; not sent in version 0.
+    Datagram = 0x04,  // one UDP datagram: [radio port hi][radio port lo][bytes]
 };
 
 struct Message {
     MessageType type{MessageType::Data};
-    QByteArray payload;
+    QByteArray payload;     // Data bytes, or the datagram without its port
+    std::uint16_t port{0};  // Datagram only: the radio's UDP port
 };
 
 constexpr int packetsFor(int payloadBytes)
@@ -59,6 +62,9 @@ class FrameEncoder {
 public:
     void encodeData(const QByteArray& payload, std::vector<Report>* out);
     void encodeControl(MessageType type, std::vector<Report>* out);
+    // One datagram of 1..kMaxDatagramBytes; returns false (and emits
+    // nothing) when it does not fit.
+    bool encodeDatagram(std::uint16_t port, const QByteArray& datagram, std::vector<Report>* out);
     // Hello (device) and Ready (host) start a link with counter 0.
     void reset() { m_counter = 0; }
     std::uint8_t counter() const { return m_counter; }
@@ -110,6 +116,7 @@ private:
     bool m_started{false};
     std::uint8_t m_expected{0};
     std::uint8_t m_messageCounter{0};
+    MessageType m_messageType{MessageType::Data};
     int m_packetsLeft{0};
     int m_bytesLeft{0};
     QByteArray m_partial;

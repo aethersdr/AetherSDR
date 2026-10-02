@@ -5,7 +5,9 @@
 #include "TcpSocketEndpoint.h"
 
 #include <QAbstractSocket>
+#include <QNetworkDatagram>
 #include <QTcpSocket>
+#include <QUdpSocket>
 #include <QTimer>
 
 #include <algorithm>
@@ -101,6 +103,10 @@ public:
     ~Session() override
     {
         QObject::disconnect(m_radio, nullptr, this, nullptr);
+        if (m_udp) {
+            QObject::disconnect(m_udp, nullptr, this, nullptr);
+            m_udp->close();
+        }
         m_radio->abort();
         delete m_relay;
         m_relay = nullptr;
@@ -122,6 +128,16 @@ public:
             return;
         }
         m_relay->notifyReadable(ByteRelay::Side::A);
+    }
+
+    void deviceDatagram(quint16 port, const QByteArray& datagram)
+    {
+        if (!m_udp) {
+            return;
+        }
+        if (m_udp->writeDatagram(datagram, m_owner->m_radioAddress, port) == datagram.size()) {
+            ++m_datagramsToRadio;
+        }
     }
 
     void deviceClosed()
@@ -171,6 +187,9 @@ public:
             s.queuedToUpstream = r.queued[0];
             s.queuedToDownstream = r.queued[1];
         }
+        s.datagramsToRadio = m_datagramsToRadio;
+        s.datagramsToDevice = m_datagramsToDevice;
+        s.datagramsDropped = m_datagramsDropped;
         return s;
     }
 
@@ -244,10 +263,44 @@ private:
             end(text, error, error);
         });
 
+        // One UDP socket per link: the radio learns this endpoint from the
+        // CTR2's own registration datagram, so its UDP never reaches
+        // AetherSDR's sockets and no port needs negotiating.
+        m_udp = new QUdpSocket(this);
+        if (!m_udp->bind(QHostAddress::AnyIPv4, 0)) {
+            qCWarning(lcDevices) << "CTR2 USB: UDP socket unavailable:" << m_udp->errorString();
+            delete m_udp;
+            m_udp = nullptr;
+        } else {
+            connect(m_udp, &QUdpSocket::readyRead, this, [this] { onRadioDatagrams(); });
+        }
+
         m_owner->sessionConnected(m_generation);
         if (!m_ended) {
             m_relay->start();
         }
+    }
+
+    void onRadioDatagrams()
+    {
+        const quint32 radio = m_owner->m_radioAddress.toIPv4Address();
+        while (m_udp && m_udp->hasPendingDatagrams()) {
+            const QNetworkDatagram d = m_udp->receiveDatagram(ctr2hid::kMaxDatagramBytes + 1);
+            bool ok = false;
+            if (d.senderAddress().toIPv4Address(&ok) != radio || !ok || m_ended) {
+                continue;  // only the radio's own datagrams are relayed
+            }
+            const QByteArray bytes = d.data();
+            if (bytes.isEmpty() || bytes.size() > ctr2hid::kMaxDatagramBytes
+                || m_owner->m_unsentDatagramBytes + bytes.size()
+                       > m_owner->m_tuning.datagramBacklogBytes
+                || !m_owner->sendDatagram(static_cast<quint16>(d.senderPort()), bytes)) {
+                ++m_datagramsDropped;
+                continue;
+            }
+            ++m_datagramsToDevice;
+        }
+        emit m_owner->statsChanged();
     }
 
     void end(const QString& message, bool error, bool sendClosed)
@@ -271,6 +324,10 @@ private:
     DeviceEndpoint m_deviceEp;
     ByteRelay* m_relay{nullptr};
     QTimer* m_connectTimer{nullptr};
+    QUdpSocket* m_udp{nullptr};
+    quint64 m_datagramsToRadio{0};
+    quint64 m_datagramsToDevice{0};
+    quint64 m_datagramsDropped{0};
     QString m_stopMessage;
     bool m_ended{false};
 
@@ -335,8 +392,9 @@ bool Ctr2UsbRelay::start(Ctr2HidPort* port, const QHostAddress& radioAddress, qu
     m_radioPort = radioPort;
     m_rx.reset();
     m_tx.reset();
-    m_payloadPerReport.clear();
+    m_reportCosts.clear();
     m_unsentPayload = 0;
+    m_unsentDatagramBytes = 0;
     m_awaitingHello = true;
     m_lastSessionStats = {};
     ++m_generation;
@@ -382,8 +440,9 @@ void Ctr2UsbRelay::releasePort()
     QObject::disconnect(port, nullptr, this, nullptr);
     port->close();
     port->deleteLater();
-    m_payloadPerReport.clear();
+    m_reportCosts.clear();
     m_unsentPayload = 0;
+    m_unsentDatagramBytes = 0;
 }
 
 void Ctr2UsbRelay::onReportsReceived(const QByteArray& reports)
@@ -436,6 +495,16 @@ void Ctr2UsbRelay::onMessage(const Message& message)
         }
         m_session->deviceData(message.payload);
         return;
+    case MessageType::Datagram:
+        if (m_awaitingHello) {
+            return;
+        }
+        if (!m_session || !m_session->relaying()) {
+            linkFault(QStringLiteral("CTR2 sent a datagram before READY"));
+            return;
+        }
+        m_session->deviceDatagram(message.port, message.payload);
+        return;
     case MessageType::Closed:
         m_awaitingHello = true;
         if (m_session) {
@@ -486,12 +555,15 @@ void Ctr2UsbRelay::linkFault(const QString& message)
 
 void Ctr2UsbRelay::onReportsSent(int count)
 {
-    qint64 payload = 0;
-    for (int i = 0; i < count && !m_payloadPerReport.empty(); ++i) {
-        payload += m_payloadPerReport.front();
-        m_payloadPerReport.pop_front();
+    qint64 tcp = 0;
+    qint64 datagram = 0;
+    for (int i = 0; i < count && !m_reportCosts.empty(); ++i) {
+        tcp += m_reportCosts.front().tcpBytes;
+        datagram += m_reportCosts.front().datagramBytes;
+        m_reportCosts.pop_front();
     }
-    m_unsentPayload = std::max<qint64>(0, m_unsentPayload - payload);
+    m_unsentPayload = std::max<qint64>(0, m_unsentPayload - tcp);
+    m_unsentDatagramBytes = std::max<qint64>(0, m_unsentDatagramBytes - datagram);
     if (m_session) {
         m_session->deviceBytesWritten();
     }
@@ -518,7 +590,7 @@ void Ctr2UsbRelay::sendControl(MessageType type)
     }
     std::vector<ctr2hid::Report> reports;
     m_tx.encodeControl(type, &reports);
-    m_payloadPerReport.push_back(0);
+    m_reportCosts.push_back({});
     m_port->send(reports);
 }
 
@@ -535,16 +607,35 @@ void Ctr2UsbRelay::sendData(const QByteArray& payload)
     for (const ctr2hid::Report& r : reports) {
         if (remainingInMessage == 0) {
             remainingInMessage = (r[6] << 8) | r[7];
-            m_payloadPerReport.push_back(0);
+            m_reportCosts.push_back({});
             continue;
         }
         const int n = std::min(ctr2hid::kDataBytesPerReport, remainingInMessage);
         remainingInMessage -= n;
         consumed += n;
-        m_payloadPerReport.push_back(n);
+        m_reportCosts.push_back({n, 0});
     }
     m_unsentPayload += consumed;
     m_port->send(reports);
+}
+
+bool Ctr2UsbRelay::sendDatagram(quint16 port, const QByteArray& datagram)
+{
+    if (!m_port) {
+        return false;
+    }
+    std::vector<ctr2hid::Report> reports;
+    if (!m_tx.encodeDatagram(port, datagram, &reports)) {
+        return false;
+    }
+    // The datagram's cost is released when its last report is sent.
+    for (size_t i = 0; i + 1 < reports.size(); ++i) {
+        m_reportCosts.push_back({});
+    }
+    m_reportCosts.push_back({0, static_cast<int>(datagram.size())});
+    m_unsentDatagramBytes += datagram.size();
+    m_port->send(reports);
+    return true;
 }
 
 void Ctr2UsbRelay::sessionConnected(quint64 generation)

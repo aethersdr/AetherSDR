@@ -56,7 +56,9 @@ void testConstantsAgree()
               && CTR2_TYPE_DATA == static_cast<int>(MessageType::Data)
               && CTR2_TYPE_HELLO == static_cast<int>(MessageType::Hello)
               && CTR2_TYPE_READY == static_cast<int>(MessageType::Ready)
-              && CTR2_TYPE_CLOSED == static_cast<int>(MessageType::Closed),
+              && CTR2_TYPE_CLOSED == static_cast<int>(MessageType::Closed)
+              && CTR2_TYPE_DATAGRAM == static_cast<int>(MessageType::Datagram)
+              && CTR2_MAX_DATAGRAM == kMaxDatagramBytes && CTR2_MAX_MESSAGE == kMaxMessageBytes,
           "reference constants match the application codec");
 }
 
@@ -67,8 +69,11 @@ void testVectors()
         ctr2_tx_reset(&tx);
         tx.counter = v.counter;
         std::vector<Report> got;
-        const size_t n = ctr2_tx_send(&tx, static_cast<std::uint8_t>(v.type), v.payload,
-                                      static_cast<std::uint16_t>(v.payloadLength), collect, &got);
+        const size_t n = v.type == CTR2_TYPE_DATAGRAM
+            ? ctr2_tx_send_datagram(&tx, v.port, v.payload,
+                                    static_cast<std::uint16_t>(v.payloadLength), collect, &got)
+            : ctr2_tx_send(&tx, static_cast<std::uint8_t>(v.type), v.payload,
+                           static_cast<std::uint16_t>(v.payloadLength), collect, &got);
         bool same = n == static_cast<size_t>(v.reportCount) && got.size() == n;
         for (size_t i = 0; same && i < n; ++i) {
             same = std::equal(got[i].begin(), got[i].end(), v.reports[i]);
@@ -79,7 +84,7 @@ void testVectors()
 
         ctr2_rx rx;
         ctr2_rx_reset(&rx);
-        if (v.type == CTR2_TYPE_DATA) {
+        if (v.type == CTR2_TYPE_DATA || v.type == CTR2_TYPE_DATAGRAM) {
             const std::uint8_t ready[8] = {0xFF, 0x00,
                                            static_cast<std::uint8_t>((v.counter - 1) & 0x7F),
                                            CTR2_TYPE_READY, 0x00, 0x01, 0x00, 0x00};
@@ -96,8 +101,13 @@ void testVectors()
             std::uint16_t l = 0;
             if (ctr2_rx_feed(&rx, v.reports[i], &t, &p, &l) == CTR2_RX_MESSAGE) {
                 ++messages;
-                match = t == v.type && l == v.payloadLength
-                    && (l == 0 || std::equal(p, p + l, v.payload));
+                if (t == CTR2_TYPE_DATAGRAM) {
+                    match = l == v.payloadLength + 2 && ((p[0] << 8) | p[1]) == v.port
+                        && std::equal(p + 2, p + l, v.payload);
+                } else {
+                    match = t == v.type && l == v.payloadLength
+                        && (l == 0 || std::equal(p, p + l, v.payload));
+                }
             }
         }
         std::snprintf(msg, sizeof msg, "reference decodes vector '%s'", v.name);
@@ -115,7 +125,14 @@ void testCrossInterop()
     std::vector<Report> wire;
     ctr2_tx_send(&tx, CTR2_TYPE_HELLO, nullptr, 0, collect, &wire);
     QByteArray sent;
+    std::vector<QByteArray> sentDatagrams;
     for (int i = 0; i < 400; ++i) {  // wraps the 7-bit counter
+        if (i % 7 == 0) {
+            const QByteArray dg = randomBytes(1 + static_cast<int>(rng() % CTR2_MAX_DATAGRAM), rng);
+            ctr2_tx_send_datagram(&tx, 4992, reinterpret_cast<const std::uint8_t*>(dg.constData()),
+                                  static_cast<std::uint16_t>(dg.size()), collect, &wire);
+            sentDatagrams.push_back(dg);
+        }
         const QByteArray cmd = randomBytes(1 + static_cast<int>(rng() % CTR2_MAX_PAYLOAD), rng);
         ctr2_tx_send(&tx, CTR2_TYPE_DATA, reinterpret_cast<const std::uint8_t*>(cmd.constData()),
                      static_cast<std::uint16_t>(cmd.size()), collect, &wire);
@@ -128,26 +145,41 @@ void testCrossInterop()
         ok = host.feed(r, &msgs) && ok;
     }
     QByteArray got;
+    std::vector<QByteArray> gotDatagrams;
+    bool ports = true;
     for (const Message& m : msgs) {
-        got += m.payload;
+        if (m.type == MessageType::Data) {
+            got += m.payload;
+        } else if (m.type == MessageType::Datagram) {
+            gotDatagrams.push_back(m.payload);
+            ports = ports && m.port == 4992;
+        }
     }
     check(ok && msgs.front().type == MessageType::Hello && got == sent,
           "application decodes the reference encoder's stream exactly");
+    check(ports && gotDatagrams == sentDatagrams,
+          "application decodes the reference encoder's datagrams exactly");
 
     // Host -> device: READY then an arbitrary radio stream.
     FrameEncoder enc;
     std::vector<Report> down;
     enc.encodeControl(MessageType::Ready, &down);
     const QByteArray radio = randomBytes(60000, rng);
+    std::vector<QByteArray> downDatagrams;
     for (int pos = 0; pos < radio.size();) {
         const int n = std::min<int>(1 + static_cast<int>(rng() % 3000), radio.size() - pos);
         enc.encodeData(radio.mid(pos, n), &down);
         pos += n;
+        const QByteArray dg = randomBytes(1 + static_cast<int>(rng() % CTR2_MAX_DATAGRAM), rng);
+        enc.encodeDatagram(4991, dg, &down);
+        downDatagrams.push_back(dg);
     }
     enc.encodeControl(MessageType::Closed, &down);
     ctr2_rx rx;
     ctr2_rx_reset(&rx);
     QByteArray rebuilt;
+    std::vector<QByteArray> rebuiltDatagrams;
+    bool dgPorts = true;
     int readies = 0;
     int closeds = 0;
     bool rxOk = true;
@@ -162,11 +194,16 @@ void testCrossInterop()
             closeds += t == CTR2_TYPE_CLOSED;
             if (t == CTR2_TYPE_DATA) {
                 rebuilt.append(reinterpret_cast<const char*>(p), l);
+            } else if (t == CTR2_TYPE_DATAGRAM) {
+                dgPorts = dgPorts && ((p[0] << 8) | p[1]) == 4991;
+                rebuiltDatagrams.emplace_back(reinterpret_cast<const char*>(p + 2), l - 2);
             }
         }
     }
     check(rxOk && readies == 1 && closeds == 1 && rebuilt == radio,
           "reference decodes the application encoder's stream exactly");
+    check(dgPorts && rebuiltDatagrams == downDatagrams,
+          "reference decodes the application encoder's datagrams exactly");
 }
 
 void testRejectSameInput()
@@ -175,7 +212,9 @@ void testRejectSameInput()
         {Report{0x00, 1, 2, 3, 4, 5, 6, 7}},
         {Report{0xFF, 0x01, 0, 0, 0, 2, 0, 1}},
         {Report{0xFF, 0x00, 0x80, 0, 0, 2, 0, 1}},
-        {Report{0xFF, 0x00, 0, 4, 0, 1, 0, 0}},
+        {Report{0xFF, 0x00, 0, 5, 0, 1, 0, 0}},
+        {Report{0xFF, 0x00, 0, 4, 0, 2, 0, 2}},
+        {Report{0xFF, 0x00, 0, 4, 0x00, 0xD4, 0x05, 0xC3}},
         {Report{0xFF, 0x00, 0, 0, 0, 1, 0, 0}},
         {Report{0xFF, 0x00, 0, 1, 0, 2, 0, 1}},
         {Report{0xFF, 0x00, 0, 0, 0, 75, 0x02, 0x01}},
@@ -215,6 +254,9 @@ void testRejectSameInput()
     check(ctr2_tx_send(&tx, CTR2_TYPE_DATA, &byte, 0, collect, &none) == 0
               && ctr2_tx_send(&tx, CTR2_TYPE_HELLO, &byte, 1, collect, &none) == 0
               && ctr2_tx_send(&tx, CTR2_TYPE_DATA, &byte, CTR2_MAX_PAYLOAD + 1, collect, &none) == 0
+              && ctr2_tx_send(&tx, CTR2_TYPE_DATAGRAM, &byte, 1, collect, &none) == 0
+              && ctr2_tx_send_datagram(&tx, 4992, &byte, 0, collect, &none) == 0
+              && ctr2_tx_send_datagram(&tx, 4992, &byte, CTR2_MAX_DATAGRAM + 1, collect, &none) == 0
               && none.empty() && tx.counter == 0,
           "reference sender refuses invalid messages without emitting reports");
 }

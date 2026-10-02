@@ -60,6 +60,8 @@ void testKnownAnswerVectors()
         const QByteArray payload(reinterpret_cast<const char*>(v.payload), v.payloadLength);
         if (v.type == 0) {
             enc.encodeData(payload, &got);
+        } else if (v.type == 4) {
+            enc.encodeDatagram(v.port, payload, &got);
         } else {
             enc.encodeControl(static_cast<MessageType>(v.type), &got);
         }
@@ -69,7 +71,7 @@ void testKnownAnswerVectors()
 
         FrameReassembler dec;
         std::vector<Message> msgs;
-        if (v.type == 0) {
+        if (v.type == 0 || v.type == 4) {
             const Report start{kMarker, kVersion,
                                static_cast<std::uint8_t>((v.counter - 1) & kCounterMask),
                                static_cast<std::uint8_t>(MessageType::Ready), 0, 1, 0, 0};
@@ -82,7 +84,7 @@ void testKnownAnswerVectors()
         }
         std::snprintf(msg, sizeof msg, "vector '%s' decodes to its message", v.name);
         check(ok && msgs.size() == 1 && static_cast<int>(msgs[0].type) == v.type
-                  && msgs[0].payload == payload,
+                  && msgs[0].payload == payload && msgs[0].port == v.port,
               msg);
     }
 }
@@ -178,6 +180,36 @@ void testControlMessagesResync()
           "a new HELLO resynchronizes the counter");
 }
 
+void testDatagrams()
+{
+    FrameEncoder enc;
+    FrameReassembler dec;
+    std::vector<Report> r;
+    enc.encodeControl(MessageType::Ready, &r);
+    const QByteArray big = randomBytes(kMaxDatagramBytes, 77);
+    const QByteArray small("\x00\xff", 2);
+    check(enc.encodeDatagram(4992, big, &r), "a 1472-byte datagram is accepted");
+    enc.encodeData(QByteArray("between\n"), &r);
+    check(enc.encodeDatagram(4991, small, &r), "a 2-byte datagram is accepted");
+    std::vector<Report> none;
+    check(!enc.encodeDatagram(4992, randomBytes(kMaxDatagramBytes + 1, 1), &none)
+              && !enc.encodeDatagram(4992, QByteArray(), &none) && none.empty(),
+          "oversize and empty datagrams are refused without emitting reports");
+    std::vector<Message> msgs;
+    bool ok = true;
+    for (const Report& rep : r) {
+        ok = dec.feed(rep, &msgs) && ok;
+    }
+    check(ok && msgs.size() == 4, "datagrams share the counter sequence with DATA");
+    check(msgs.size() == 4 && msgs[1].type == MessageType::Datagram && msgs[1].port == 4992
+              && msgs[1].payload == big,
+          "datagram boundary, port and bytes survive");
+    check(msgs.size() == 4 && msgs[2].type == MessageType::Data && msgs[2].payload == "between\n",
+          "DATA and DATAGRAM interleave by whole message");
+    check(msgs.size() == 4 && msgs[3].port == 4991 && msgs[3].payload == small,
+          "a datagram with 0x00/0xFF bytes is exact");
+}
+
 void expectFailure(const char* what, const std::vector<Report>& reports,
                    FrameReassembler::Error expected, bool startFirst = true)
 {
@@ -222,7 +254,13 @@ void testFailClosed()
     expectFailure("data report where a header belongs", {Report{0, 1, 2, 3, 4, 5, 6, 7}}, E::BadMarker);
     expectFailure("wrong version", {Report{kMarker, 1, 0, 0, 0, 2, 0, 1}}, E::BadVersion);
     expectFailure("counter above 0x7F", {Report{kMarker, kVersion, 0x80, 0, 0, 2, 0, 1}}, E::BadCounter);
-    expectFailure("unknown type", {Report{kMarker, kVersion, 0, 4, 0, 1, 0, 0}}, E::BadType);
+    expectFailure("unknown type", {Report{kMarker, kVersion, 0, 5, 0, 1, 0, 0}}, E::BadType);
+    expectFailure("DATAGRAM without a datagram byte", {Report{kMarker, kVersion, 0, 4, 0, 2, 0, 2}},
+                  E::BadLength);
+    expectFailure("DATAGRAM over 1472 bytes",
+                  {Report{kMarker, kVersion, 0, 4, 0x00, 0xD4, 0x05, 0xC3}}, E::BadLength);
+    expectFailure("DATAGRAM before any control message",
+                  {Report{kMarker, kVersion, 0, 4, 0, 2, 0, 3}}, E::NotStarted, false);
     expectFailure("empty DATA", {Report{kMarker, kVersion, 0, 0, 0, 1, 0, 0}}, E::BadLength);
     expectFailure("control with payload", {Report{kMarker, kVersion, 0, 1, 0, 2, 0, 1}}, E::BadLength);
     expectFailure("DATA over 512 bytes", {Report{kMarker, kVersion, 0, 0, 0, 75, 0x02, 0x01}}, E::BadLength);
@@ -268,6 +306,7 @@ int main()
     testRoundTrips();
     testCounterWrapAndChunking();
     testControlMessagesResync();
+    testDatagrams();
     testFailClosed();
     testMidMessageHeld();
     if (g_failures) {

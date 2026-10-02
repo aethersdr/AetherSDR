@@ -361,6 +361,10 @@ void Ctr2ProxyApplet::syncStats()
     if (s.rejectedClients > 0) {
         text += tr("\nRejected extra clients: %1").arg(s.rejectedClients);
     }
+    if (m_model->transport() == Ctr2ProxyModel::Transport::Usb) {
+        text += tr("\nUDP: %1 to radio, %2 to CTR2, %3 dropped")
+                    .arg(s.datagramsToRadio).arg(s.datagramsToDevice).arg(s.datagramsDropped);
+    }
     m_trafficLabel->setText(text);
     m_trafficLabel->setAccessibleName(QString(text).replace(QLatin1Char('\n'), QStringLiteral(", ")));
 }

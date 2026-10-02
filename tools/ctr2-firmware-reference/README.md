@@ -43,6 +43,8 @@ void on_hid_report(const uint8_t r[CTR2_REPORT_BYTES])  /* after report ID */
         if (type == CTR2_TYPE_READY)  radio_connected();       /* = Wi-Fi TCP connect */
         if (type == CTR2_TYPE_CLOSED) radio_disconnected();    /* = Wi-Fi TCP close   */
         if (type == CTR2_TYPE_DATA)   radio_bytes(data, len);  /* same parser as TCP  */
+        if (type == CTR2_TYPE_DATAGRAM)                        /* one UDP datagram    */
+            radio_udp((uint16_t)((data[0] << 8) | data[1]), data + 2, (uint16_t)(len - 2));
         break;
     case CTR2_RX_ERROR:
         radio_disconnected();
@@ -53,8 +55,14 @@ void on_hid_report(const uint8_t r[CTR2_REPORT_BYTES])  /* after report ID */
     }
 }
 
-void send_to_radio(const uint8_t *cmd, uint16_t len)  /* only after READY */
+void send_to_radio(const uint8_t *cmd, uint16_t len)  /* only after READY; <= 512 */
 {
     ctr2_tx_send(&tx, CTR2_TYPE_DATA, cmd, len, send_report, NULL);
+}
+
+void send_udp_to_radio(uint16_t port, const uint8_t *d, uint16_t len)  /* <= 1472 */
+{
+    /* e.g. the UDP registration datagram to port 4992 */
+    ctr2_tx_send_datagram(&tx, port, d, len, send_report, NULL);
 }
 ```

@@ -129,8 +129,10 @@ Rules:
 - Each DATA message carries the previous message's counter + 1.
 - A message's reports are sent back to back; messages in one direction are
   never interleaved.
-- Maximum payload per message is **512 bytes**. Longer data is sent as
-  several messages. The receiver buffers one whole message before using it.
+- Maximum DATA payload per message is **512 bytes**; longer data is sent as
+  several messages. A DATAGRAM carries up to 1474 bytes (port plus 1472).
+  The receiver buffers one whole message before using it, so its buffer
+  needs 1474 bytes.
 - There is no checksum in version 0. The version byte leaves room to add one.
 
 Message types:
@@ -141,12 +143,15 @@ Message types:
 | `0x01` | HELLO | device -> host | none | Start or restart the link |
 | `0x02` | READY | host -> device | none | Radio connection is open; DATA may flow |
 | `0x03` | CLOSED | both | none | The radio connection has ended |
-| `0x04` | DATAGRAM | reserved | | Reserved for UDP datagrams; not sent in version 0 |
+| `0x04` | DATAGRAM | both | 3-1474 bytes | One UDP datagram: radio UDP port (2 bytes, MSB first), then 1-1472 datagram bytes |
 
 Every header starts with `0xFF`, whatever it carries; the type byte, not a
-second start byte, distinguishes TCP data, control messages, and (later) UDP.
-A version-0 receiver treats an unknown type, including `0x04`, as a framing
-error.
+second start byte, distinguishes TCP data, UDP datagrams and control
+messages. A receiver treats an unknown type as a framing error.
+
+DATA and DATAGRAM share the same counter sequence in each direction. A
+DATAGRAM always carries exactly one whole UDP datagram, so its boundaries
+are preserved; datagrams over 1472 bytes are not carried.
 
 Control messages (HELLO, READY, CLOSED) are always a single header report
 with packet count 1 and payload count 0. A receiver accepts a control
@@ -179,6 +184,12 @@ Host behavior:
   and start forwarding, including any radio output that arrived first. On
   failure send CLOSED.
 - **DATA received:** forward the payload to the radio.
+- **DATAGRAM received:** send the datagram bytes to the radio's IP on the
+  given UDP port, from one UDP socket the host opens for this link.
+- **UDP datagram from the radio** (to that socket, from the radio's IP):
+  forward it whole as a DATAGRAM carrying the radio's source port. UDP never
+  delays the TCP stream: if more than about 3 KB of datagrams are already
+  waiting on the USB link, newer ones are dropped and counted, as UDP allows.
 - **CLOSED received:** forward any DATA that came before it, then close the
   radio connection. No reply is sent.
 - **Radio connection closes:** forward the radio's remaining bytes, then send
@@ -198,6 +209,13 @@ Device behavior:
   messages. Feed received payload into the same parser the Wi-Fi TCP path
   uses. Commands the CTR2 sends may be one per message or batched; either
   works.
+- **UDP:** send each datagram for the radio as a DATAGRAM with the radio's
+  UDP port, exactly as the Wi-Fi path would send it. Register for the
+  radio's UDP by sending a datagram to radio port 4992 this way (the radio
+  learns the return address from it) rather than with the TCP
+  `client udpport` command: the host cannot see that command, and the
+  port it names would be on the PC, possibly AetherSDR's own. Datagrams
+  from the radio arrive as DATAGRAM messages, one per datagram.
 - On CLOSED, behave as when the Wi-Fi socket drops; send HELLO to reconnect.
 - On a framing error in what it receives, send HELLO to restart the link.
 
@@ -213,13 +231,15 @@ Each line is one 8-byte report (after the report ID), in hex.
 | DATA `C1\|ping\n` (8 bytes), counter 0x01 | `FF 00 01 00 00 03 00 08` / `01 43 31 7C 70 69 6E 67` / `01 0A 00 00 00 00 00 00` |
 | DATA `abcdef\n` (exactly 7 bytes), counter 0x02 | `FF 00 02 00 00 02 00 07` / `02 61 62 63 64 65 66 0A` |
 | DATA `00 FF 0A`, counter 0x7E | `FF 00 7E 00 00 02 00 03` / `7E 00 FF 0A 00 00 00 00` |
+| DATAGRAM to port 4992 (`0x1380`), bytes `01 02 03`, counter 0x03 | `FF 00 03 04 00 02 00 05` / `03 13 80 01 02 03 00 00` |
 
 ### Reference implementation for the firmware
 
 `tools/ctr2-firmware-reference/ctr2_link.{h,c}` implements both directions in
 portable C99 with no heap: `ctr2_tx_send()` emits one message as reports
-through a callback, and `ctr2_rx_feed()` takes one received report at a time
-and returns a complete message or an error. Those two files are
+through a callback, `ctr2_tx_send_datagram()` emits one UDP datagram, and
+`ctr2_rx_feed()` takes one received report at a time and returns a complete
+message or an error. Those two files are
 **MIT-licensed** so they can go straight into the firmware. AetherSDR's test
 suite compiles them, checks them against the vectors above, and
 cross-checks them against the application's codec in both directions.
@@ -244,16 +264,18 @@ itself prove the radio is idle.
 The goal remains replacement of all radio traffic used by Wi-Fi mode, not
 only CW. The first HID milestone carries the entire TCP byte stream.
 
-UDP discovery and streams are separate from TCP. Lynn to confirm which of
-these, if any, the CTR2 requires for full Wi-Fi-mode functionality. If
-required, message type `0x04` (reserved) carries them: a later version
-defines how it identifies each flow's endpoint and carries opaque datagrams
-while preserving datagram boundaries. Radio payloads still remain unchanged; TCP commands are not
-parsed to infer UDP routing and embedded addresses are not rewritten.
+UDP between the CTR2 and the radio travels as DATAGRAM messages through one
+host UDP socket per link. The radio learns that socket from the CTR2's own
+registration datagram, so nothing is negotiated, no TCP command is parsed,
+no embedded address is rewritten, and AetherSDR's own UDP sockets are never
+involved. Datagram bytes and boundaries are unchanged.
 
-A successful TCP-over-HID test does not establish full UDP-dependent feature
-parity. Account for every required channel before calling USB a complete
-replacement. This follow-up must not introduce radio-command mediation.
+The HID link carries about 7 KB/s each way, so small UDP traffic (meters,
+status) fits but panadapter, waterfall or audio streams do not; excess
+datagrams toward the CTR2 are dropped and counted rather than delaying TCP.
+UDP discovery broadcasts are not relayed: the radio is configured by
+address. Verify each UDP-dependent CTR2 feature on hardware before calling
+USB a complete replacement for Wi-Fi.
 
 ## Host implementation
 
@@ -262,7 +284,7 @@ replacement. This follow-up must not introduce radio-command mediation.
 | Opaque byte pump, both directions, bounded | `src/core/ByteRelay.{h,cpp}` |
 | Link codec (v0) | `src/core/Ctr2HidFraming.{h,cpp}` |
 | HID device access on its own I/O thread (hidapi) | `src/core/Ctr2HidPort.{h,cpp}` |
-| Link state machine and radio connection | `src/core/Ctr2UsbRelay.{h,cpp}` |
+| Link state machine, radio TCP connection and per-link UDP socket | `src/core/Ctr2UsbRelay.{h,cpp}` |
 | Applet: Wi-Fi or USB, device list, radio endpoint | `src/models/Ctr2ProxyModel`, `src/gui/Ctr2ProxyApplet` |
 
 HID I/O runs on one dedicated worker thread because hidapi reads and writes
@@ -282,16 +304,13 @@ AetherSDR's existing transmit policy or its own radio command paths.
 ## Open items with Lynn
 
 - Confirm the version-0 additions: message type in byte 3, the Output
-  report, packet count in reports, counter wrap `0x7F` -> `0x00`, 512-byte
-  maximum payload (does it fit the CTR2's RAM?).
-- USB vendor and product IDs and the product string.
-- What the CTR2 should do if CLOSED arrives while it is keying; its local
-  keyer and sidetone are its own.
-- Which UDP flows the CTR2 relies on in Wi-Fi mode: ports, direction,
-  typical datagram size and rate. Type `0x04` is reserved for them; the
-  datagram format (stream identifier, boundaries, sizes above 512 bytes)
-  is defined once those are known. At ~7 KB/s per direction, small status or
-  meter traffic can fit; panadapter or audio streams cannot.
+  report, packet count in reports, counter wrap `0x7F` -> `0x00`, and the
+  512-byte DATA / 1474-byte DATAGRAM maximums (RAM).
+- UDP registration through a DATAGRAM to port 4992 rather than
+  `client udpport`.
+- Later, nice to have: USB vendor and product IDs so AetherSDR can find the
+  CTR2 without the operator picking it; and, for CW testing, what the CTR2
+  does if CLOSED arrives while it is keying.
 
 ## Next steps and acceptance
 
@@ -303,8 +322,8 @@ AetherSDR's existing transmit policy or its own radio command paths.
 3. With the operator's transmit authorization and test setup, verify paddle
    keying, local sidetone, latency under load, and what the radio does when
    the link drops mid-transmission.
-4. Confirm required UDP coverage with Lynn and test those features before
-   declaring full Wi-Fi/USB parity. Repeat on the intended VPN/tailnet route
+4. Test each UDP-dependent CTR2 feature over USB before declaring full
+   Wi-Fi/USB parity. Repeat on the intended VPN/tailnet route
    and record the host platforms actually verified.
 
 No packet capture or API-parser implementation is a prerequisite for the

@@ -35,6 +35,9 @@ public:
         int incompleteMessageTimeoutMs{1000};
         qint64 deviceInboxLimitBytes{256 * 1024};
         qint64 socketReadBufferBytes{256 * 1024};
+        // UDP waiting for the HID link; beyond this, radio datagrams are
+        // dropped rather than delaying the TCP stream.
+        qint64 datagramBacklogBytes{3 * 1024};
         // USB moves ~7 KB/s each way, so the per-direction budget is small
         // enough to drain well inside the relay's drain timeout.
         ByteRelay::Limits relay{16 * 1024};
@@ -78,6 +81,7 @@ private:
 
     void sendControl(ctr2hid::MessageType type);
     void sendData(const QByteArray& payload);
+    bool sendDatagram(quint16 port, const QByteArray& datagram);
     void sessionConnected(quint64 generation);
     void sessionDraining(quint64 generation);
     void sessionEnded(quint64 generation, const QString& message, bool error, bool sendClosed);
@@ -93,8 +97,13 @@ private:
     quint16 m_radioPort{0};
     ctr2hid::FrameReassembler m_rx;
     ctr2hid::FrameEncoder m_tx;
-    std::deque<int> m_payloadPerReport;  // reports queued on the port
-    qint64 m_unsentPayload{0};
+    struct ReportCost {
+        int tcpBytes{0};
+        int datagramBytes{0};
+    };
+    std::deque<ReportCost> m_reportCosts;  // one per report queued on the port
+    qint64 m_unsentPayload{0};             // TCP bytes queued on the port
+    qint64 m_unsentDatagramBytes{0};
     Session* m_session{nullptr};
     QTimer* m_incompleteTimer{nullptr};
     bool m_awaitingHello{true};

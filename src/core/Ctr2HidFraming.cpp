@@ -19,6 +19,21 @@ void FrameEncoder::encodeControl(MessageType type, std::vector<Report>* out)
     encodeMessage(type, nullptr, 0, out);
 }
 
+bool FrameEncoder::encodeDatagram(std::uint16_t port, const QByteArray& datagram,
+                                  std::vector<Report>* out)
+{
+    if (datagram.isEmpty() || datagram.size() > kMaxDatagramBytes) {
+        return false;
+    }
+    QByteArray payload;
+    payload.reserve(2 + datagram.size());
+    payload.append(static_cast<char>(port >> 8));
+    payload.append(static_cast<char>(port & 0xFF));
+    payload.append(datagram);
+    encodeMessage(MessageType::Datagram, payload.constData(), static_cast<int>(payload.size()), out);
+    return true;
+}
+
 void FrameEncoder::encodeMessage(MessageType type, const char* data, int size,
                                  std::vector<Report>* out)
 {
@@ -93,14 +108,18 @@ bool FrameReassembler::feedHeader(const Report& r, std::vector<Message>* out)
     if (r[2] > kCounterMask) {
         return fail(Error::BadCounter);
     }
-    if (r[3] > static_cast<std::uint8_t>(MessageType::Closed)) {
+    if (r[3] > static_cast<std::uint8_t>(MessageType::Datagram)) {
         return fail(Error::BadType);
     }
     const auto type = static_cast<MessageType>(r[3]);
     const int packets = (r[4] << 8) | r[5];
     const int length = (r[6] << 8) | r[7];
-    const bool control = type != MessageType::Data;
-    if (length > kMaxPayloadBytes || (control && length != 0) || (!control && length == 0)) {
+    const bool control = type == MessageType::Hello || type == MessageType::Ready
+        || type == MessageType::Closed;
+    const bool lengthOk = control ? length == 0
+        : type == MessageType::Data ? (length >= 1 && length <= kMaxPayloadBytes)
+                                    : (length >= 3 && length <= kMaxMessageBytes);
+    if (!lengthOk) {
         return fail(Error::BadLength);
     }
     if (packets != packetsFor(length)) {
@@ -109,7 +128,7 @@ bool FrameReassembler::feedHeader(const Report& r, std::vector<Message>* out)
     if (control) {
         m_started = true;
         m_expected = nextCounter(r[2]);
-        out->push_back(Message{type, {}});
+        out->push_back(Message{type, {}, 0});
         return true;
     }
     if (!m_started) {
@@ -118,6 +137,7 @@ bool FrameReassembler::feedHeader(const Report& r, std::vector<Message>* out)
     if (r[2] != m_expected) {
         return fail(Error::CounterMismatch);
     }
+    m_messageType = type;
     m_messageCounter = r[2];
     m_packetsLeft = packets - 1;
     m_bytesLeft = length;
@@ -135,7 +155,14 @@ bool FrameReassembler::feedData(const Report& r, std::vector<Message>* out)
     m_partial.append(reinterpret_cast<const char*>(r.data() + 1), n);
     m_bytesLeft -= n;
     if (--m_packetsLeft == 0) {
-        out->push_back(Message{MessageType::Data, m_partial});
+        if (m_messageType == MessageType::Datagram) {
+            const auto hi = static_cast<std::uint8_t>(m_partial[0]);
+            const auto lo = static_cast<std::uint8_t>(m_partial[1]);
+            out->push_back(Message{MessageType::Datagram, m_partial.mid(2),
+                                   static_cast<std::uint16_t>((hi << 8) | lo)});
+        } else {
+            out->push_back(Message{MessageType::Data, m_partial, 0});
+        }
         m_partial.clear();
         m_expected = nextCounter(m_messageCounter);
     }
