@@ -152,19 +152,21 @@ public:
         // The noise-blanker request the channel was OPENED with, so
         // installRebuiltChannel() can tell whether the operator moved it
         // mid-build and needs a live push after the swap.
-        bool builtNbOn = false;
+        WdspChannel::NoiseBlanker builtNbKind = WdspChannel::NoiseBlanker::Off;
         int builtNbLevel = 50;
+        WdspChannel::NoiseBlankerFill builtNbFill =
+            WdspChannel::NoiseBlankerFill::Zero;
         std::string error;   // set iff channel == nullptr
     };
 
     // The slow half of configure() (OpenChannel, FFTW planning) with nothing of
     // `this` in it, so it may run on another thread while the installed channel
-    // keeps producing audio. The noise-blanker state is passed in because the
-    // channel is opened with it; the caller snapshots it on this object's thread
-    // inside beginRebuild()'s turn.
-    [[nodiscard]] static RebuildResult buildChannel(const Config& config,
-                                                   bool noiseBlankerEnabled,
-                                                   int noiseBlankerLevel);
+    // keeps producing audio. The blanker triple is passed in because the channel
+    // is opened with it; the caller snapshots it on this object's thread inside
+    // beginRebuild()'s turn.
+    [[nodiscard]] static RebuildResult buildChannel(
+        const Config& config, WdspChannel::NoiseBlanker noiseBlanker,
+        int noiseBlankerLevel, WdspChannel::NoiseBlankerFill noiseBlankerFill);
 
     // Marks a rebuild in flight and seeds the operator-facing half of m_config
     // from the build's snapshot. Call on this object's thread BEFORE the build.
@@ -226,13 +228,15 @@ public:
         return m_spectrum && m_spectrum->logAverage();
     }
 
-    // Impulse noise blanker, the HL2's only one (no firmware DSP), so NB is shown
-    // even with hasRadioSideDsp = false. Runs in WdspChannel::processIq() on the
-    // wire samples ahead of fexchange2, before the bandpass smears the impulse.
-    // Audio path only: the panadapter shows unblanked IQ (a Flex blanks both).
-    // `level` 0..100, larger is more aggressive. Held outside Config because
-    // configure() replaces m_config; it is re-applied after every rebuild.
-    Q_INVOKABLE void setNoiseBlanker(bool on, int level);
+    // Impulse noise blankers, the HL2's only ones (no firmware DSP), so NB is
+    // shown even with hasRadioSideDsp = false; at most one of the two runs. Runs
+    // in WdspChannel::processIq() on the wire samples ahead of fexchange2, before
+    // the bandpass smears the impulse. Audio path only: the panadapter shows
+    // unblanked IQ (a Flex blanks both). `level` 0..100, larger is more
+    // aggressive. Held outside Config because configure() replaces m_config; it
+    // is re-applied after every rebuild.
+    Q_INVOKABLE void setNoiseBlanker(WdspChannel::NoiseBlanker kind, int level,
+                                     WdspChannel::NoiseBlankerFill fill);
     // Receive squelch; `level` is the slice model's 0..100. WdspChannel owns the
     // per-mode routing and re-applies it on setMode(). Held outside Config, like
     // the blanker, and re-applied by installChannel(). A change the channel
@@ -259,18 +263,34 @@ public:
 
     // What the operator ASKED for. Survives configure() and is what a rebuild
     // re-applies.
-    [[nodiscard]] bool noiseBlankerEnabled() const { return m_nbOn; }
+    [[nodiscard]] bool noiseBlankerEnabled() const
+    {
+        return m_nbKind != WdspChannel::NoiseBlanker::Off;
+    }
+    [[nodiscard]] WdspChannel::NoiseBlanker noiseBlankerKind() const { return m_nbKind; }
     [[nodiscard]] int noiseBlankerLevel() const { return m_nbLevel; }
+    [[nodiscard]] WdspChannel::NoiseBlankerFill noiseBlankerFill() const
+    {
+        return m_nbFill;
+    }
     // What the WDSP stage actually applied: the request crosses a queued
     // connection and WdspChannel can refuse it. Atomic (relaxed) because
     // Hl2Backend reads these from the GUI thread for `hl2 nb.get`.
     [[nodiscard]] bool appliedNoiseBlankerEnabled() const
     {
-        return m_nbAppliedOn.load(std::memory_order_relaxed);
+        return appliedNoiseBlankerKind() != WdspChannel::NoiseBlanker::Off;
+    }
+    [[nodiscard]] WdspChannel::NoiseBlanker appliedNoiseBlankerKind() const
+    {
+        return m_nbAppliedKind.load(std::memory_order_relaxed);
     }
     [[nodiscard]] int appliedNoiseBlankerLevel() const
     {
         return m_nbAppliedLevel.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] WdspChannel::NoiseBlankerFill appliedNoiseBlankerFill() const
+    {
+        return m_nbAppliedFill.load(std::memory_order_relaxed);
     }
 
     // AGC-off level and CW APF: held outside Config (configure() replaces it)
@@ -566,10 +586,10 @@ private:
     int m_spectrumAverageMs = 0;
     bool m_spectrumLogAverage = false;
     // Noise-blanker state, kept out of m_config so configure() cannot clear it.
-    // m_nbOn/m_nbLevel are the REQUEST; m_nbApplied* are what the WDSP stage
-    // took. They diverge exactly when something went wrong, which is the whole
-    // reason the bridge readback reports the applied pair.
-    bool m_nbOn = false;
+    // m_nbKind/m_nbLevel/m_nbFill are the REQUEST; m_nbApplied* are what the
+    // WDSP stage took. They diverge exactly when something went wrong, which is
+    // the whole reason the bridge readback reports the applied set.
+    WdspChannel::NoiseBlanker m_nbKind = WdspChannel::NoiseBlanker::Off;
     int  m_nbLevel = 50;      // 0..100, the slice model's units
     // Squelch request — see setSquelch(). Defaults mirror SliceModel's.
     bool m_squelchOn = false;
@@ -577,8 +597,12 @@ private:
     double m_squelchOffsetDb = 0.0;
     // True while the channel has refused the current request; see setSquelch().
     bool m_squelchPending = false;
-    std::atomic<bool> m_nbAppliedOn {false};
+    WdspChannel::NoiseBlankerFill m_nbFill = WdspChannel::NoiseBlankerFill::Zero;
+    std::atomic<WdspChannel::NoiseBlanker> m_nbAppliedKind
+        {WdspChannel::NoiseBlanker::Off};
     std::atomic<int>  m_nbAppliedLevel {50};
+    std::atomic<WdspChannel::NoiseBlankerFill> m_nbAppliedFill
+        {WdspChannel::NoiseBlankerFill::Zero};
     // AGC-off level and APF, kept out of m_config for the same reason; see
     // setAgcOffLevel()/setApf(). Requests, in the slice model's units.
     int m_agcOffLevel = kDefaultAgcOffLevel;

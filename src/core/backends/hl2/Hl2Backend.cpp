@@ -1,4 +1,5 @@
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/WdspNoiseBlanker.h"
 #include "core/backends/hl2/Hl2Bands.h"
 #include "core/backends/hl2/Hl2ModeVocabulary.h"
 
@@ -1088,15 +1089,16 @@ void Hl2Backend::startReceiverDspBuild(int uiNumber)
     QMetaObject::invokeMethod(dsp, [this, metis, dsp, config, uiNumber, generation] {
         // Mirror control changes during the build; installation replays them.
         dsp->beginRebuild(config);
-        const bool nbOn = dsp->noiseBlankerEnabled();
+        const WdspChannel::NoiseBlanker nbKind = dsp->noiseBlankerKind();
         const int nbLevel = dsp->noiseBlankerLevel();
+        const WdspChannel::NoiseBlankerFill nbFill = dsp->noiseBlankerFill();
         QPointer<Hl2RxDsp> guard(dsp);
 
         QMetaObject::invokeMethod(m_dspBuildContext, [this, metis, guard, config,
                                                       uiNumber, generation,
-                                                      nbOn, nbLevel] {
+                                                      nbKind, nbLevel, nbFill] {
             Hl2RxDsp::RebuildResult built =
-                Hl2RxDsp::buildChannel(config, nbOn, nbLevel);
+                Hl2RxDsp::buildChannel(config, nbKind, nbLevel, nbFill);
 
             QMetaObject::invokeMethod(metis, [this, guard, config, uiNumber,
                                               generation,
@@ -3088,7 +3090,8 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     notifyOperatingStateChanged();
 }
 
-void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
+void Hl2Backend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                                      int level, AetherSDR::NoiseBlankerFill fill)
 {
     const int ddc = ddcForSlice(sliceId);
     Receiver* r = rx(ddc);
@@ -3100,11 +3103,10 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
     // bands can legitimately disagree. The slice model already holds it
     // per-slice, so honouring that is also what stops the second receiver's
     // toggle from moving the first one's.
-    r->nbOn = on;
+    r->nbKind = kind;
     r->nbLevel = qBound(0, level, 100);
-    if (r->dsp)
-        QMetaObject::invokeMethod(r->dsp, "setNoiseBlanker", Qt::QueuedConnection,
-            Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
+    r->nbFill = fill;
+    pushNoiseBlanker(*r);
 }
 
 ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
@@ -3114,7 +3116,7 @@ ReceiveDispatch Hl2Backend::requestSliceDsp(int sliceId, const SliceDspRequest& 
     }
     switch (request.feature) {
     case SliceDspRequest::Feature::Nb:
-        setSliceNoiseBlanker(sliceId, request.enabled, request.level);
+        setSliceNoiseBlanker(sliceId, request.requestedBlanker(), request.level, request.fill);
         break;
     case SliceDspRequest::Feature::Apf:
         setSliceApf(sliceId, request.enabled, request.level);
@@ -3365,7 +3367,9 @@ void Hl2Backend::pushNoiseBlanker(const Receiver& r)
     // they turned it off during a previous connect is not necessarily, and an
     // unconditional push is the only version with no such case to reason about.
     QMetaObject::invokeMethod(r.dsp, "setNoiseBlanker", Qt::QueuedConnection,
-        Q_ARG(bool, r.nbOn), Q_ARG(int, r.nbLevel));
+        Q_ARG(WdspChannel::NoiseBlanker, AetherSDR::toWdsp(r.nbKind)),
+        Q_ARG(int, r.nbLevel),
+        Q_ARG(WdspChannel::NoiseBlankerFill, AetherSDR::toWdsp(r.nbFill)));
 }
 
 void Hl2Backend::pushApf(const Receiver& r)
@@ -3800,12 +3804,13 @@ void Hl2Backend::applyPanBandwidth(double hz)
         // I/O thread, turn 1. beginRebuild() first, so control calls arriving
         // during the build update the chain's mirrors instead of blocking on
         // WDSP's setup mutex; installRebuiltChannel() re-applies them at the
-        // swap. The NB pair is snapshotted because the channel opens with it
+        // swap. The NB triple is snapshotted because the channel opens with it
         // and it is not part of Config.
         struct BuildInput {
             Hl2RxDsp::Config cfg;
-            bool nbOn = false;
+            WdspChannel::NoiseBlanker nbKind = WdspChannel::NoiseBlanker::Off;
             int nbLevel = 50;
+            WdspChannel::NoiseBlankerFill nbFill = WdspChannel::NoiseBlankerFill::Zero;
         };
         std::vector<BuildInput> inputs;
         inputs.reserve(steps.size());
@@ -3814,8 +3819,9 @@ void Hl2Backend::applyPanBandwidth(double hz)
             in.cfg = st.next;
             if (st.dsp) {
                 st.dsp->beginRebuild(st.next);
-                in.nbOn = st.dsp->noiseBlankerEnabled();
+                in.nbKind = st.dsp->noiseBlankerKind();
                 in.nbLevel = st.dsp->noiseBlankerLevel();
+                in.nbFill = st.dsp->noiseBlankerFill();
             }
             inputs.push_back(in);
         }
@@ -3839,7 +3845,8 @@ void Hl2Backend::applyPanBandwidth(double hz)
             std::string err;
             for (std::size_t n = 0; n < inputs.size(); ++n) {
                 Hl2RxDsp::RebuildResult r = Hl2RxDsp::buildChannel(
-                    inputs[n].cfg, inputs[n].nbOn, inputs[n].nbLevel);
+                    inputs[n].cfg, inputs[n].nbKind, inputs[n].nbLevel,
+                    inputs[n].nbFill);
                 if (!r.channel) {
                     ok = false;
                     failedAt = n;
@@ -5711,19 +5718,32 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     const Receiver& r = m_rx[i];
                     const auto* ids = m_ids.byDdc(static_cast<int>(i));
                     // `on`/`level` are what the DSP has applied (Hl2RxDsp's
-                    // atomics), not the request in r.nbOn; requestedOn/
+                    // atomics), not the request in r.nbKind; requestedOn/
                     // requestedLevel are reported alongside so a mismatch shows.
                     // No chain means `on` is false.
-                    const bool appliedOn = r.dsp && r.dsp->appliedNoiseBlankerEnabled();
+                    const WdspChannel::NoiseBlanker appliedKind =
+                        r.dsp ? r.dsp->appliedNoiseBlankerKind()
+                              : WdspChannel::NoiseBlanker::Off;
+                    const bool appliedOn = appliedKind != WdspChannel::NoiseBlanker::Off;
                     const int appliedLevel =
                         r.dsp ? r.dsp->appliedNoiseBlankerLevel() : 0;
+                    const WdspChannel::NoiseBlankerFill appliedFill =
+                        r.dsp ? r.dsp->appliedNoiseBlankerFill()
+                              : WdspChannel::NoiseBlankerFill::Zero;
                     rxList.append(QVariantMap{
                         {QStringLiteral("ddc"), static_cast<int>(i)},
                         {QStringLiteral("panId"), ids ? ids->panId : QString()},
+                        // `on` first and unchanged: it is what existing scripts
+                        // read. `kind` is the same fact with NB2 in it.
                         {QStringLiteral("on"), appliedOn},
+                        {QStringLiteral("kind"), static_cast<int>(appliedKind)},
                         {QStringLiteral("level"), appliedLevel},
-                        {QStringLiteral("requestedOn"), r.nbOn},
+                        {QStringLiteral("fill"), static_cast<int>(appliedFill)},
+                        {QStringLiteral("requestedOn"),
+                         r.nbKind != AetherSDR::NoiseBlankerKind::Off},
+                        {QStringLiteral("requestedKind"), static_cast<int>(r.nbKind)},
                         {QStringLiteral("requestedLevel"), r.nbLevel},
+                        {QStringLiteral("requestedFill"), static_cast<int>(r.nbFill)},
                         {QStringLiteral("hasChain"), r.dsp != nullptr},
                         // The value the APPLIED level became inside WDSP. Now a
                         // real assertion rather than f(x) == f(x): it is

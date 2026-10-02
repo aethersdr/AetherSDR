@@ -442,7 +442,8 @@ SliceDspRequest SliceModel::currentDspRequest(SliceDspRequest::Feature feature,
     SliceDspRequest request{feature, field, false, 0};
     switch (feature) {
     case SliceDspRequest::Feature::Nb:
-        request.enabled = m_nb; request.level = m_nbLevel; break;
+        request.enabled = nbOn(); request.level = m_nbLevel;
+        request.kind = m_nbKind; request.fill = m_nbFill; break;
     case SliceDspRequest::Feature::Nr:
         request.enabled = m_nr; request.level = m_nrLevel; break;
     case SliceDspRequest::Feature::Anf:
@@ -469,9 +470,34 @@ SliceDspRequest SliceModel::currentDspRequest(SliceDspRequest::Feature feature,
 
 void SliceModel::setNb(bool on)
 {
-    m_nb = on;
+    m_nbKind = on ? AetherSDR::NoiseBlankerKind::Impulse
+                  : AetherSDR::NoiseBlankerKind::Off;
     notifyReceiveDspIntent(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled,
-                           [this, on] { emit nbChanged(on); });
+                           [this, on] {
+        emit nbChanged(on);
+        emit nbKindChanged(m_nbKind);
+    });
+}
+
+void SliceModel::setNbKind(AetherSDR::NoiseBlankerKind kind)
+{
+    m_nbKind = kind;
+    // Off is not a separate verb: the kind carries it, and nbOn() follows.
+    notifyReceiveDspIntent(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled,
+                           [this, kind] {
+        emit nbChanged(kind != AetherSDR::NoiseBlankerKind::Off);
+        emit nbKindChanged(kind);
+    });
+}
+
+void SliceModel::setNbFill(AetherSDR::NoiseBlankerFill fill)
+{
+    if (m_nbFill == fill) return;
+    m_nbFill = fill;
+    // No wire text: there is no Flex command for it. This is a parameter of a
+    // blanker that only exists on this host.
+    notifyReceiveDspIntent(SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Fill,
+                           [this, fill] { emit nbFillChanged(fill); });
 }
 
 void SliceModel::setNr(bool on)
@@ -1658,9 +1684,25 @@ void SliceModel::applyChanges(const SliceDelta& d)
         m_qsk = *d.qsk;
         emit qskChanged(m_qsk);
     }
-    if (d.nb.has_value()) {
-        m_nb = *d.nb;
-        emit nbChanged(m_nb);
+    if (d.nbFill.has_value()) {
+        m_nbFill = *d.nbFill;
+        emit nbFillChanged(m_nbFill);
+    }
+    if (d.nbKind.has_value() || d.nb.has_value()) {
+        // The KIND wins where a backend sent one: it knows which blanker is
+        // running. A bare `nb` is a radio's echo, and a bool is all a radio-side
+        // blanker has to say — so it must not clobber a host kind with a
+        // downgrade. "Blanker on" is still true of a slice running Advanced, so
+        // only the Off<->on transitions are taken from it.
+        if (d.nbKind.has_value()) {
+            m_nbKind = *d.nbKind;
+        } else if (!*d.nb) {
+            m_nbKind = AetherSDR::NoiseBlankerKind::Off;
+        } else if (m_nbKind == AetherSDR::NoiseBlankerKind::Off) {
+            m_nbKind = AetherSDR::NoiseBlankerKind::Impulse;
+        }
+        emit nbChanged(nbOn());
+        emit nbKindChanged(m_nbKind);
     }
     if (d.nr.has_value()) {
         m_nr = *d.nr;

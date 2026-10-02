@@ -58,7 +58,8 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
-    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                              int level, AetherSDR::NoiseBlankerFill fill) override;
     ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
     ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
 
@@ -132,10 +133,21 @@ public:
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
     [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
-    [[nodiscard]] bool noiseBlankerOnForTest() const noexcept { return m_nbOn; }
+    [[nodiscard]] bool noiseBlankerOnForTest() const noexcept
+    {
+        return m_nbKind != AetherSDR::NoiseBlankerKind::Off;
+    }
+    [[nodiscard]] AetherSDR::NoiseBlankerKind noiseBlankerKindForTest() const noexcept
+    {
+        return m_nbKind;
+    }
     [[nodiscard]] int noiseBlankerLevelForTest() const noexcept { return m_nbLevel; }
+    [[nodiscard]] AetherSDR::NoiseBlankerFill noiseBlankerFillForTest() const noexcept
+    {
+        return m_nbFill;
+    }
     // The radio's own output level/mute as the lineout seam last set them. Same
-    // *ForTest convention as the four above: read-only, not part of the seam.
+    // *ForTest convention as the accessors above: read-only, not part of the seam.
     [[nodiscard]] int lineoutGainPercentForTest() const noexcept { return m_lineoutGainPercent; }
     [[nodiscard]] bool lineoutMutedForTest() const noexcept { return m_lineoutMuted; }
     // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
@@ -313,8 +325,9 @@ private:
     // reconnect. emitSliceState() also publishes the pair when a different
     // radio gets a fresh slice, keeping its NB button in agreement with the
     // retained setting. Defaults match AnanRxDsp::Config's.
-    bool m_nbOn = false;
+    AetherSDR::NoiseBlankerKind m_nbKind = AetherSDR::NoiseBlankerKind::Off;
     int m_nbLevel = 50;
+    AetherSDR::NoiseBlankerFill m_nbFill = AetherSDR::kDefaultNoiseBlankerFill;
 
     // The receiver audio stage as last set; emitSliceState() publishes these.
     // Retained across rate changes and reconnects (like the blanker, unlike AGC).

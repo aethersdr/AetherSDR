@@ -13045,7 +13045,13 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
         QJsonObject dsp;
         dsp["agc_mode"] = sliceModel->agcMode();
         dsp["agc_threshold"] = sliceModel->agcThreshold();
-        dsp["nb"] = QJsonObject{{"enabled", sliceModel->nbOn()}, {"level", sliceModel->nbLevel()}};
+        // "kind" and "fill" alongside "enabled", not instead of it: this
+        // snapshot is read by scripts and by the resource dump, and the bool is
+        // the field they already read.
+        dsp["nb"] = QJsonObject{{"enabled", sliceModel->nbOn()},
+                                {"kind", static_cast<int>(sliceModel->nbKind())},
+                                {"fill", static_cast<int>(sliceModel->nbFill())},
+                                {"level", sliceModel->nbLevel()}};
         dsp["nr"] = QJsonObject{{"enabled", sliceModel->nrOn()}, {"level", sliceModel->nrLevel()}};
         dsp["anf"] = QJsonObject{{"enabled", sliceModel->anfOn()}, {"level", sliceModel->anfLevel()}};
         dsp["lms_nr"] = QJsonObject{{"enabled", sliceModel->nrlOn()}, {"level", sliceModel->nrlLevel()}};
