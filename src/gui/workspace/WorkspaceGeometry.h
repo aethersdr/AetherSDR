@@ -1,16 +1,8 @@
 #pragma once
 
-// Normalized canvas geometry — the pure half of the workspace canvas
-// (RFC #4887, phase 1).
-//
-// Canvas items store their placement as fractions of the surface they sit on,
-// never as pixels.  A layout built on a 3840x1600 display therefore restores
-// correctly on a 1920x1080 laptop: only the cell pitch changes.  Pixel
-// geometry cannot do that, and is half of why pop-out window restore feels
-// random today (see the RFC's Problem section).
-//
-// Nothing here knows what a QWidget is, so all of it is unit-tested headless
-// on every platform — see tests/workspace_geometry_test.cpp.
+// Normalized canvas geometry (RFC #4887): items store placement as fractions of
+// their surface, never pixels, so a layout restores across display sizes.
+// Widget-free; see tests/workspace_geometry_test.cpp.
 
 #include <QMetaType>
 #include <QRect>
@@ -45,18 +37,10 @@ struct NormRect {
     bool operator!=(const NormRect& o) const { return !(*this == o); }
 };
 
-// Map a normalized rect onto a pixel canvas.
-//
-// Each EDGE is rounded independently rather than rounding the origin and the
-// size: two items that share a normalized edge then land on the same pixel
-// column at every canvas size, so a tiled arrangement neither gaps nor
-// overlaps by a pixel.  Rounding origin+size instead lets the shared edge fall
-// on two different pixels, which shows up as a hairline seam that moves as the
-// window is resized.
-//
-// Sub-pixel rects can round to a zero-width or zero-height QRect; this
-// function does not silently inflate them.  Callers keep items measurable by
-// clamping through clampToCanvas() with a minimum pixel size.
+// Map a normalized rect onto a pixel canvas. Each edge is rounded
+// independently so items sharing a normalized edge share a pixel column at every
+// size (no hairline seams). Sub-pixel rects may yield zero size; callers clamp
+// through clampToCanvas() with a minimum.
 QRect toPixels(const NormRect& r, const QSize& canvas);
 
 // Map a floating window's GLOBAL rect into canvas fractions (phase 6's
@@ -76,38 +60,16 @@ NormRect fromPixels(const QRect& px, const QSize& canvas);
 // outcome than one that overflows a tiny window.
 QSizeF minimumNormSize(const QSize& minPx, const QSize& canvas);
 
-// Bring `r` inside the UNIT SQUARE, preserving its size wherever possible —
-// the canvas-independent half of clamping, and the only clamp the MODEL is
-// allowed to apply.
-//
-// Deliberately knows nothing about pixels: a stored rect must never depend
-// on how big the canvas happened to be when it was written.  The failure
-// this exists to prevent is real and was hit in the field: placing items at
-// startup, before the window is laid out, ran the pixel clamp against a
-// degenerate canvas, grew every item to full-surface to satisfy minimum
-// sizes, and wrecked the whole arrangement for the session (RFC #4887
-// phase 3 field report).  Minimum-size enforcement belongs to the DISPLAY
-// clamp below, applied at render time and never written back.
-//
-// Size is bounded to (0,1] with no growth; position slides inside.
+// Bring `r` inside the unit square, size bounded to (0,1] with no growth; the
+// only clamp the model may apply. Pixel-free so stored rects never depend on
+// the canvas size at write time (a pixel clamp before layout would inflate every
+// item). Minimum size is enforced only by clampToCanvas() at display time.
 NormRect clampToBounds(const NormRect& r);
 
-// Bring `r` inside the canvas, preserving its size wherever possible.
-//
-// Order matters, and is chosen so a drag that overshoots an edge slides the
-// item back rather than resizing it under the operator's cursor:
-//   1. grow to the minimum size, then cap at the canvas — the cap is also the
-//      shrink case, for an item bigger than the surface,
-//   2. translate back inside.
-//
-// A degenerate canvas returns `r` untouched: with no surface to clamp against
-// there is no correct answer, and mangling the stored layout because a widget
-// has not been shown yet would lose real state.
-//
-// DISPLAY ONLY.  This result is what gets mapped to pixels; it is never
-// stored.  Feeding it back into the model bakes one window size's
-// compromises into the operator's arrangement — shrink the window once and
-// the layout would never recover.
+// Display-only clamp into the canvas: grow to minimum, cap at the canvas, then
+// translate inside (so an overshooting drag slides rather than resizes). A
+// degenerate canvas returns `r` untouched. Never store the result: it would bake
+// one window size's compromises into the arrangement.
 NormRect clampToCanvas(const NormRect& r, const QSize& minPx, const QSize& canvas);
 
 }  // namespace AetherSDR

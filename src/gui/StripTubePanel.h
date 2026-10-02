@@ -15,17 +15,9 @@ class ClientCompKnob;         // reused — generic rotary knob
 class ClientLevelMeter;
 class ClientTubeCurveWidget;
 
-// Floating editor for the client-side dynamic tube saturator.
-// Laid out like the gate and compressor editors: a toolbar of switches
-// along the top, the display filling everything under it, and every knob
-// in one row at the foot.
-//
-//   ┌─ Model: [A][B][C] ─────────── Dry/Wet: ──●── 100 % ─┐
-//   │                                              │ OUT │
-//   │              transfer curve                  │     │
-//   ├──────────────────────────────────────────────┴─────┤
-//   │ (Drive)(Tone)(Bias)(Envelope)(Attack)(Release)(Out) │
-//   └────────────────────────────────────────────────────┘
+// Floating editor for the client-side dynamic tube saturator. Same layout as
+// the gate/compressor editors: switches (Model A/B/C, Dry/Wet) on top, transfer
+// curve + OUT meter filling the middle, all knobs in one row at the foot.
 class StripTubePanel : public QWidget {
     Q_OBJECT
 

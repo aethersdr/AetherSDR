@@ -215,16 +215,10 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
         emit commandReady(QStringLiteral("stream set 0x%1 daxiq_rate=%2")
             .arg(s.streamId, 0, 16).arg(m_desiredRate[idx]));
     }
-    // The stream is "rate-settling" until its actual sampleRate reaches the
-    // user's desired rate; the applet holds its rate combo at the user's
-    // selection until then. Track the rate GAP itself — not reapplyPending/isNew
-    // — so an interleaved non-rate status (e.g. a pan bind arriving between the
-    // create-status at 48k and the rate echo) can't prematurely clear the flag
-    // and flicker the combo to 48k. Self-clears on the status that actually
-    // carries the rate (s.sampleRate is updated by the pipe-rebuild block above
-    // before this point). If the radio never echoes the rate, it stays set and
-    // the combo simply keeps showing the user's selection — cosmetic, and the
-    // On/Off button + meter are already correct via their own gates.
+    // "Rate-settling" until the actual sampleRate reaches the desired rate (the
+    // applet holds its combo meanwhile). Tracks the rate gap itself, not
+    // reapplyPending/isNew, so an interleaved non-rate status can't clear it early.
+    // If the radio never echoes the rate it stays set; cosmetic only.
     s.rateSettling = (m_desiredRate[idx] != s.sampleRate);
 
     if (kvs.contains("pan"))

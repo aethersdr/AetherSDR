@@ -21,6 +21,7 @@
 #include "SliceColors.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include "SpotLabelPolicy.h"
 #include "core/EibiClient.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include "NoiseFloorEstimator.h"
@@ -623,16 +624,10 @@ static_assert(clampWaterfallRate(100) == 100);
 static_assert(clampWaterfallRate(0) == 1);
 static_assert(clampWaterfallRate(101) == 100);
 
-// The rate-to-cadence laws live in core/WaterfallRate.h, because RadioModel's
-// row pacer has to agree with this axis exactly — a backend that shapes its own
-// display rate reads the same number and must land on the same cadence.
-//
-// `shapedLocally` picks WHICH law, and it matters: the two disagree by more than
-// an order of magnitude in the middle of the slider. Seeding a locally-paced
-// waterfall from the Flex curve would claim 677 ms/row where the pacer is
-// actually producing 79. Only a seed — real row timestamps take over within a
-// second (see the measured-cadence cache below) — but a wrong seed is a visible
-// jump in the time axis on every rate change.
+// The rate-to-cadence laws live in core/WaterfallRate.h so RadioModel's row
+// pacer lands on the same cadence. `shapedLocally` picks the law; the two
+// differ by >10x mid-slider, and a wrong seed (before measured row timestamps
+// take over) is a visible time-axis jump on every rate change.
 static float lineDurationToVisualMsPerRow(int lineDurationMs, bool shapedLocally)
 {
     return shapedLocally
@@ -774,20 +769,10 @@ static QString formatFreqScaleLabel(double freqMhz, int decimals)
     return label;
 }
 
-// ─── Waterfall color scheme gradient cache ────────────────────────────────────
-//
-// The preset schemes (Default, Grayscale, Blue-Green, Fire, Plasma, Purple,
-// Glacier) used to live as compile-time const tables.  They now resolve through
-// ThemeManager against
-// `color.waterfall.colormap.{default,grayscale,blueGreen,fire,plasma,purple,glacier}`
-// gradient tokens so a theme switch (or user theme override) reshapes any of
-// them.  Cached once per theme load — `intensityToRgb` and `fftDbmToRgb` hit
-// this hundreds of times per second per row, so we can't afford a token
-// lookup on every pixel.
-//
-// Invalidated by ThemeManager::themeChanged via a SpectrumWidget connection
-// in the constructor; first call lazily populates if the cache hasn't been
-// initialized yet.
+// Waterfall colour scheme gradient cache. Presets resolve through ThemeManager
+// `color.waterfall.colormap.*` gradient tokens, cached per theme load because
+// intensityToRgb/fftDbmToRgb run per pixel. Invalidated on
+// ThemeManager::themeChanged (connected in the constructor); lazily populated.
 
 namespace {
 
@@ -1971,16 +1956,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // Explicitly request Metal on macOS.
 #  ifdef Q_OS_MAC
     setApi(QRhiWidget::Api::Metal);
-    // WA_NativeWindow forces Qt to create a dedicated native NSView for this widget.
-    // Without it, QRhiWidget embedded in a QWidget hierarchy (especially one whose
-    // backing store was created before this widget was added) fails to obtain a QRhi
-    // context because the parent window's surface type is RasterSurface, not MetalSurface
-    // (#714, Qt 6.6 era). The native view is expensive, though: every present forces
-    // a raster flushSubWindow blend of the pan region on the GUI thread.
-    // AETHER_PAN_NO_NATIVE_WINDOW=1 skips it to validate the composited path on
-    // newer Qt, where the whole window flushes through one rhi swapchain.
-    // WA_NativeWindow is set together with WA_DontCreateNativeAncestors so the
-    // native leaf never promotes its QWidget ancestors (#4339); see the helper.
+    // WA_NativeWindow gives this widget its own NSView; without it QRhiWidget
+    // can't get a Metal QRhi when the parent's surface is RasterSurface (#714).
+    // It costs a raster flushSubWindow blend per present;
+    // AETHER_PAN_NO_NATIVE_WINDOW=1 skips it. Paired with
+    // WA_DontCreateNativeAncestors so ancestors stay non-native (#4339).
     applyNativeWindowIsolationPolicy();
 #  else
     // AETHER_NO_GPU / QT_OPENGL=software: force the OpenGL QRhi backend so the
@@ -2198,22 +2178,10 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         "QPushButton:hover { background: rgba(30,50,70,200); color: #c8d8e8; }"
         "QPushButton:checked { background: rgba(0,180,216,210); color: #000; }"
         "QPushButton:pressed { background: #00b4d8; color: #000; }"
-        // Its own role rather than the shared {{color.text.disabled}} /
-        // {{color.border.subtle}}: this button always paints its own dark
-        // rgba(15,15,26,*) backdrop first, regardless of app theme, so a
-        // theme-relative "dimmed text" token is the wrong reference point --
-        // color.text.disabled resolves to #a0b0c0 in the light theme (WCAG
-        // luminance 0.42), BRIGHTER than the enabled state's #90a0b0 (0.34),
-        // inverting the intended hierarchy (ten9876, #5166 review). The
-        // values are the enabled colours' own RGB at reduced alpha, which
-        // dims them against this widget's own backdrop by construction.
-        // A new token role rather than the literals this shipped with first
-        // (theme-style-guide.md section 4; Ozy311, #5166 review) -- and the
-        // reason both bundled themes carry the same value is that the alpha
-        // IS the mechanism here, so there is nothing theme-relative left to
-        // vary. Tokens store canonical ARGB so the Theme Editor can read and
-        // reset them; ThemeManager converts translucent token values to rgba()
-        // when resolving this QSS template.
+        // Own token role, not {{color.text.disabled}}: this button always paints its
+        // own dark backdrop regardless of theme, so disabled colours are the enabled
+        // RGB at reduced alpha (the alpha is the dimming; identical in both themes).
+        // ThemeManager converts translucent ARGB token values to rgba() here.
         "QPushButton:disabled { background: {{color.spectrum.zoomButton.disabled.background}};"
         " border-color: {{color.spectrum.zoomButton.disabled.border}};"
         " color: {{color.spectrum.zoomButton.disabled.text}}; }";
@@ -2382,20 +2350,10 @@ SpectrumWidget::~SpectrumWidget()
 void SpectrumWidget::prepareForTopLevelChange()
 {
 #ifdef AETHER_GPU_SPECTRUM
-    // QRhiWidget registers a cleanup callback with the current top-level
-    // backing-store QRhi. Direct splitter/floating-window reparenting can miss
-    // Qt's internal notification, leaving the old QRhi with a stale callback;
-    // when that QRhi is later torn down, runCleanup() fires against a stale
-    // QRhiWidgetPrivate and crashes during deferred event delivery (#2495).
-    //
-    // QEvent::WindowAboutToChangeInternal is cross-platform Qt machinery —
-    // QRhiWidgetPrivate deregisters the callback the same way on Metal,
-    // D3D/Vulkan and OpenGL — so this must fire on every GPU platform, not
-    // just macOS. It was originally gated to Q_OS_MAC because #2495 was first
-    // reproduced there; leaving Windows ungated let the identical crash slip
-    // through on connect-time multi-panadapter restore (#3714). The send must
-    // happen exactly once, before the reparent (refreshAfterReparent must not
-    // re-send it — see PanadapterStack.cpp).
+    // Deregister QRhiWidget's cleanup callback from the old top-level QRhi before
+    // a reparent; a missed notification leaves a stale callback that crashes when
+    // that QRhi is torn down (#2495, #3714). Needed on every GPU platform. Sent
+    // exactly once, here; refreshAfterReparent must not re-send (PanadapterStack.cpp).
     QEvent event(QEvent::WindowAboutToChangeInternal);
     QCoreApplication::sendEvent(this, &event);
 #endif
@@ -3758,16 +3716,9 @@ void SpectrumWidget::syncDssRangeFromFreshZoomFrame(const QVector<float>& bins)
         return;
     }
 
-    // Reject frames whose dBm encoding cannot be trusted yet — without
-    // consuming the arm, so the gate keeps waiting for a usable one:
-    //   • the radio has not finished switching bandwidth;
-    //   • the receiver AGC is still recovering from TX (#2117 blanks the
-    //     waterfall over the same window further down updateSpectrum());
-    //   • a y_pixels change is still settling, so bins decode against the old
-    //     height (the guard appendDssWaterfallRow() and
-    //     pushDssRowForWaterfallStream() already apply);
-    //   • a dBm-range rebase may be handing us reprojected preview bins;
-    //   • the operator is dragging the scale this would fight.
+    // Reject untrusted frames without consuming the arm: bandwidth switch in
+    // progress; AGC recovering from TX (#2117); y_pixels change settling; a
+    // dBm-range rebase serving reprojected preview bins; operator dragging scale.
     DssZoomFloorFrameGuards guards;
     guards.nowMs = QDateTime::currentMSecsSinceEpoch();
     guards.notBeforeMs = m_dssZoomFloorSyncNotBeforeMs;
@@ -4065,30 +4016,11 @@ bool SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
 
 void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
 {
-    // THE GATE. The loop needs something that makes it terminate, and there are
-    // two such things — a real echo from the radio, or bins that stay put while
-    // m_refLevel moves. Either alone is enough, so this is an OR and the early
-    // return fires only when NEITHER holds.
-    //
-    // With neither, m_refLevel ratchets forever: it is local, so the outbound
-    // command guards stop the traffic but not the march. That is the 24 dB/s
-    // runaway measured on an IC-9700.
-    //
-    // It is NOT enough to ask "does the radio own the scale". A Hermes-Lite 2
-    // owns nothing of the kind and its auto-floor still settles, because its
-    // bins are computed on this host: bench run d101 measured 0.307 dB of drift
-    // over 74 s quiescent and 0.0000 dB/s over the second half, and a re-settle
-    // within ~30 s after a 12 dB LNA step.
-    //
-    // WHY A MEASUREMENT ON AN HL2 SPEAKS FOR THE ANAN, which is the radio whose
-    // behaviour this change actually alters. The HL2's gate was ALREADY open
-    // before this — it leaves radioOwnsDbmScale at the permissive default — so
-    // d101 did not measure this change. What it measured is a loop running
-    // echo-free against absolute bins: RadioModel::sendCmd drops the range at
-    // hasCommandPlane() for the HL2 too, so no echo has ever come back there.
-    // That is exactly the ANAN's configuration once this merges, and it is the
-    // only reason a bench run on one radio carries to another. Raised by
-    // aethersdr-agent on #5726; the analogy was load-bearing and unstated.
+    // The loop terminates only on a real radio echo or on bins that stay put while
+    // m_refLevel moves (absolute, host-computed bins); with neither, the local
+    // m_refLevel ratchets forever (~24 dB/s seen on an IC-9700). Echo-free radios
+    // with absolute bins (HL2, ANAN: sendCmd drops the range at hasCommandPlane())
+    // settle via the second condition.
     if (!noiseFloorAutoAdjustAllowed(m_radioOwnsDbmScale, m_panBinsAbsolute)) {
         return;
     }
@@ -4233,19 +4165,10 @@ void SpectrumWidget::setShowTuneGuides(bool on) {
                                      }
                                  });
 }
-// Push a global pan-display toggle onto every other open panadapter.
-//
-// The walk has to be over topLevelWidgets(), not window()->findChildren():
-// a panadapter popped out into its own top-level window is NOT a descendant
-// of this widget's window(), so the narrower walk silently skips it and the
-// floating pan keeps the old value until the next loadSettings(). Three
-// adjacent items in the same context menu each carried their own copy of this
-// loop and two of them had the narrow one, which is exactly how they drifted
-// apart -- hence one shared helper rather than a fifth copy.
-//
-// `onApplied` runs on each sibling that actually changed, between the flag
-// write and the repaint, for toggles that own more than a flag (Show Tune
-// Guides also has to stop the sibling's timeout timer).
+// Push a global pan-display toggle onto every other open panadapter. Walks
+// topLevelWidgets(), not window()->findChildren(), so popped-out pans are
+// reached. `onApplied` runs on each sibling that changed, between the flag
+// write and the repaint, for toggles that own more than a flag.
 void SpectrumWidget::propagateGlobalDisplayToggle(
     bool SpectrumWidget::*flag,
     bool on,
@@ -5969,16 +5892,11 @@ void SpectrumWidget::paintWaterfallRowsFromHistory(
     int writeRowOrigin,
     WaterfallPipelineMode pipelineMode)
 {
-    // The single loop behind every "repaint the visible rows from retained
-    // intensity" caller. The two axes callers vary on:
-    //   • writeRowOrigin — which scanline holds the newest row. A pan/resize
-    //     rebuild re-lays the ring out from 0; a palette recolour passes the
-    //     live m_wfWriteRow so the waterfall cannot jump under the operator.
-    //   • pipelineMode — Legacy flattens every row into the destination frame;
-    //     RowFrequencyFrames keeps native pixels and per-row frames so the
-    //     shader reprojects each texture exactly once.
-    // Keeping them one function means the frame bookkeeping (#3578, #3668,
-    // #4081) can only ever be fixed in one place.
+    // The single loop that repaints visible rows from retained intensity, so the
+    // frame bookkeeping (#3578, #3668, #4081) lives in one place. writeRowOrigin:
+    // 0 for a pan/resize rebuild, live m_wfWriteRow for a palette recolour.
+    // pipelineMode: Legacy flattens rows into the destination frame;
+    // RowFrequencyFrames keeps native pixels and per-row frames for the shader.
     const int height = m_waterfall.height();
     if (height <= 0 || !m_waterfallHistory.isConfigured()) {
         return;
@@ -6331,20 +6249,12 @@ void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
         resetDssUploadState();
     };
 
-    // #3668 (KiwiSDR integration) replaced #3578's single per-pan reproject with
-    // an unconditional native + kiwi double reproject. The inactive stream is not
-    // on screen, so reprojecting it on every pan step is wasted work -- and the
-    // stream-state save/restore around it leaves m_waterfall COW-shared, so the
-    // next fill() in rebuildWaterfallViewportForFrame deep-copies the whole
-    // (potentially very large) waterfall image on every pan step. On high-res
-    // displays that cost 60-80 ms of UI-thread stall per pan step -- a visible
-    // regression (measured: wfUpdateP95 0.1 ms -> 68 ms with the second pass).
-    //
-    // Reproject only the active stream. The inactive stream is remapped to the
-    // current frequency frame when it next becomes visible (see
-    // setKiwiSdrWaterfallActive); each history row carries its own capture frame
-    // (#3578), so toggling streams stays seamless. AETHER_WF_KIWI_ALWAYS=1
-    // restores the old unconditional double pass for A/B verification.
+    // Reproject only the active stream: the inactive one is off screen, and the
+    // stream-state save/restore leaves m_waterfall COW-shared, costing a full
+    // image deep copy (60-80 ms on high-res displays) per pan step. The inactive
+    // stream is remapped when it next becomes visible (setKiwiSdrWaterfallActive);
+    // rows carry their own capture frame (#3578). AETHER_WF_KIWI_ALWAYS=1 forces
+    // the double pass for A/B checks.
     static const bool kiwiAlways = qEnvironmentVariableIsSet("AETHER_WF_KIWI_ALWAYS");
     if (kiwiAlways) {
         reprojectStream(false);
@@ -7061,22 +6971,11 @@ void SpectrumWidget::setKiwiSdrConnectionOverlay(bool visible,
         ? QStringLiteral("Disconnected")
         : trimmedDetail;
     message.timeoutMs = 0;
-    // Owner-managed status: syncKiwiSdrPanadapterUiState re-asserts this card
-    // on every state/slice/waterfall event, so a user *dismissal* either lies
-    // (the card resurrects seconds later, even mid-fade) or — in a quiet
-    // Waiting state that never re-syncs — permanently hides the only
-    // disconnected-pan indicator while the pan looks healthy: the widget has
-    // reverted to the local Flex FFT and TX is still inhibited, with nothing
-    // on screen saying why. So it stays non-dismissible;
-    // setKiwiSdrConnectionOverlay(false) remains the sole owner of its
-    // lifecycle. (#3999 review)
-    //
-    // It is *collapsible* instead, which is what #4387 actually needs: the
-    // operator can shrink it to a one-line pill so it stops covering the
-    // spectrum, while an indicator stays on screen. The overlay keys that
-    // choice by message id, so the re-assertions above preserve it, and
-    // removeMessage() clears it — a later reconnect-then-drop is a new
-    // occurrence and gets a full card again. (#4387)
+    // Non-dismissible: syncKiwiSdrPanadapterUiState re-asserts this card on every
+    // event, and it is the only indicator that the pan has reverted to local FFT
+    // with TX inhibited; setKiwiSdrConnectionOverlay(false) owns its lifecycle.
+    // Collapsible to a pill instead (#4387); the overlay keys that by message id,
+    // and removeMessage() resets it so the next drop gets a full card.
     message.dismissible = false;
     message.collapsible = true;
     upsertOverlayMessage(std::move(message));
@@ -9094,18 +8993,10 @@ const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>&
         return bins;
     }
 
-    // Display-only spatial smoothing: m_smoothed is temporal, so it reduces
-    // frame shimmer but leaves adjacent-bin stair steps intact.
-    //
-    // #3932/#3967: the 5-tap blend exists to melt the radio's RBW stair-steps
-    // when zoomed IN (bins repeat as plateaus once the span drops below the
-    // FFT's resolution). Applied unconditionally (#3836) it low-passes every
-    // trace — rounding off narrow carriers and defocusing the noise floor at
-    // wide spans ("out of focus", 26.6.5). Gate the blend on the measured
-    // plateau fraction so it only engages when stair-steps actually exist:
-    // zoomed-in plateaus (long equal runs, frac >~0.65) get the full blend,
-    // a busy wide span (frac <~0.35, adjacent noise bins rarely equal) gets
-    // none, and the ramp between avoids a visible mode flip while zooming.
+    // Display-only spatial smoothing (m_smoothed is only temporal). The 5-tap
+    // blend melts RBW stair-steps when zoomed in (#3932/#3967) but blurs carriers
+    // and the floor at wide spans, so it is gated on the measured plateau fraction:
+    // full blend above ~0.65, none below ~0.35, ramped between.
     int plateauPairs = 0;
     for (int i = 1; i < srcCount; ++i) {
         if (std::abs(bins[i] - bins[i - 1]) < 0.01f) {
@@ -10118,49 +10009,32 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         const double freqMhz = xToMhz(mx);
         const int hitTnf = tnfAtPixel(mx);
 
-        // Check if right-click is on an existing spot label
-        int hitSpotIdx = -1;
-        QString hitSpotCall;
-        double hitSpotFreq = 0;
-        QString hitSpotSource;
-        for (const auto& hr : m_spotClickRects) {
-            if (hr.rect.contains(mx, static_cast<int>(ev->position().y()))) {
-                if (hr.markerIndex >= 0 && hr.markerIndex < m_spotMarkers.size()) {
-                    const auto& sm = m_spotMarkers[hr.markerIndex];
-                    hitSpotIdx = sm.index;
-                    hitSpotCall = sm.callsign;
-                    hitSpotFreq = sm.freqMhz;
-                    hitSpotSource = sm.source;
-                }
-                break;
-            }
-        }
+        // Check if right-click is on an existing spot label. Presence comes
+        // from the rect hit, never from the spot ID: client-side IDs (memory,
+        // passive-local — DX/RBN/WSJT-X/POTA/manual on HL2, Icom, Passive
+        // mode) are negative by construction, TCI-injected ones positive, so
+        // the sign says nothing about presence (#6037).
+        const SpotLabelPolicy::LabelHit hit = SpotLabelPolicy::resolveLabelHit(
+            m_spotClickRects, m_spotMarkers,
+            QPoint(mx, static_cast<int>(ev->position().y())));
 
         ScopedChildWidget<QMenu> menuOwner(this);
         QMenu& menu = *menuOwner.get();
 
         // Spot-on-label context menu
-        if (hitSpotIdx >= 0) {
-            if (hitSpotSource == "Memory") {
-                const QString title = hitSpotCall.isEmpty()
-                    ? QStringLiteral("Apply Memory")
-                    : QString("Apply %1").arg(hitSpotCall);
-                menu.addAction(title, this, [this, hitSpotIdx]{
-                    emit spotTriggered(hitSpotIdx);
-                });
-            } else {
-                menu.addAction(QString("Tune to %1").arg(hitSpotCall), this,
-                    [this, hitSpotFreq]{ emit frequencyClicked(hitSpotFreq); });
-                menu.addAction("Copy Callsign", this, [hitSpotCall]{
-                    QApplication::clipboard()->setText(hitSpotCall);
-                });
-                menu.addAction("Lookup on QRZ", this, [hitSpotCall]{
-                    QDesktopServices::openUrl(QUrl("https://www.qrz.com/db/" + hitSpotCall));
-                });
-                menu.addSeparator();
-                menu.addAction("Remove Spot", this,
-                    [this, hitSpotIdx]{ emit spotRemoveRequested(hitSpotIdx); });
-            }
+        if (hit.menu != SpotLabelPolicy::Menu::General) {
+            SpotLabelPolicy::SpotLabelActions actions;
+            actions.applyMemory = [this](int id) { emit spotTriggered(id); };
+            actions.tune = [this](double mhz) { emit frequencyClicked(mhz); };
+            actions.copyCallsign = [](const QString& call) {
+                QApplication::clipboard()->setText(call);
+            };
+            actions.lookupQrz = [](const QString& call) {
+                QDesktopServices::openUrl(QUrl("https://www.qrz.com/db/" + call));
+            };
+            actions.remove = [this](int id) { emit spotRemoveRequested(id); };
+            SpotLabelPolicy::addSpotLabelActions(menu, this, hit.menu, hit.spotId,
+                                                 hit.callsign, hit.freqMhz, actions);
         }
         // TNF context menu (when clicking on a TNF marker)
         else if (hitTnf >= 0) {
@@ -10488,16 +10362,10 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 
 static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm);
 
-// Compute the slice target frequency under cursor X (offset-anchored, snapped)
-// Tune the slice for the live, in-window drag path (cursor not at the edge).
-// Deliberately routed through edgePanTuneRequested with the center UNCHANGED so
-// the whole drag bypasses pan-follow/reveal: reveal is a position controller
-// whose flag-extended trigger (#2761) fires asymmetrically a little inside the
-// edge — inside our velocity zone on the flag side — and fights the edge-pan,
-// producing a one-sided "rubber band" stutter.  With reveal out of the drag
-// path, in-window moves only tune; the velocity zone owns all panning.  The
-// MainWindow handler skips the redundant pan command when the center is
-// unchanged.  (user-reported)
+// Tune for the in-window drag path. Routed through edgePanTuneRequested with
+// the center unchanged so the drag bypasses pan-follow/reveal, whose
+// flag-extended trigger (#2761) would fight the edge-pan velocity zone; that
+// zone owns all panning. MainWindow skips the pan command when center is equal.
 void SpectrumWidget::driveVfoDragTune(int mx, const char* phase)
 {
     const double mhz = snapToStep(xToMhz(mx) - m_vfoDragOffsetHz / 1.0e6, m_stepHz);
@@ -12980,16 +12848,10 @@ void SpectrumWidget::initOverlayPipeline()
     m_ovPipeline->setShaderResourceBindings(m_ovSrb);
     m_ovPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
 
-    // Enable alpha blending for overlay compositing.
-    // The overlay textures (m_overlayStatic / m_overlayBg) are painted into
-    // QImage::Format_RGBA8888_Premultiplied and the overlay.frag shader emits
-    // the texel as-is, so the source is PREMULTIPLIED. Premultiplied
-    // compositing wants srcColor = One (the RGB already carries × alpha);
-    // using SrcAlpha here double-multiplies the texel by alpha (color × α²),
-    // which crushed the passband fill (α=35/255 → 1.9% instead of 13.7%) below
-    // the visible floor while the brighter edge lines (α=130/255) survived.
-    // See issue #3294. NOTE: keep SrcAlpha on the FFT fill/line pipelines —
-    // those source from non-premultiplied baked vertex colors.
+    // Overlay textures are Format_RGBA8888_Premultiplied and overlay.frag emits
+    // texels as-is, so srcColor must be One; SrcAlpha would apply alpha twice and
+    // crush faint fills (#3294). The FFT fill/line pipelines keep SrcAlpha: their
+    // baked vertex colours are not premultiplied.
     QRhiGraphicsPipeline::TargetBlend blend;
     blend.enable = true;
     blend.srcColor = QRhiGraphicsPipeline::One;   // premultiplied source
@@ -13207,20 +13069,10 @@ float SpectrumWidget::dssRowSpanTarget(double targetBandwidthMhz) const
         return kForcedSpan;
     }
 
-    // Age 0 is NOT authoritative. pushWaterfallRow() -- the FFT-derived producer
-    // that paces rows during TX and during the RX stale-native fallback --
-    // appends with no supplemental at all, so keying up drops age 0's overhang
-    // to zero and would walk the whole surface back to the clipped trapezoid
-    // over ~30 frames, then back out on unkey, on every single over.
-    //
-    // Take the newest row that actually carries a tile instead. dss_mesh.vert
-    // already feathers the rows that genuinely have none, so the host does not
-    // need the front row to be the one with data -- that split is the whole
-    // point of the per-vertex coverage test. Once the last such row scrolls out
-    // of the visible ring there really is no overhang left on screen, and
-    // relaxing to the trapezoid is then the correct answer rather than a
-    // flicker. Also covers Kiwi and anything rebuilt from retained history,
-    // which drop supplemental the same way.
+    // Use the newest row that carries a supplemental tile, not age 0:
+    // pushWaterfallRow() (TX, RX stale-native fallback), Kiwi and retained-history
+    // rebuilds append rows with none, which would collapse the surface to the
+    // trapezoid on every over. dss_mesh.vert feathers tile-less rows per vertex.
     return DssRenderer::rowSpanFactorFor(
         m_dss.newestSupplementalBandwidthMhz(targetBandwidthMhz),
         targetBandwidthMhz,

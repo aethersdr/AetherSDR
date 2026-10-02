@@ -44,17 +44,13 @@ public:
     std::uint64_t targetOutputFrames() const noexcept;
     bool finished() const noexcept { return m_finished; }
 
-    // Accept one complete, nonempty block, at most kMaxInputFrames. Every
-    // sample must be finite. Rejected input preserves output and the cursor.
-    // Native samples are read with memcpy: no pointer-alignment requirement.
-    // Mono is duplicated before independent L/R conversion; mono output is
-    // the arithmetic mean of converted L/R. Float input saturates to [-1,1]
-    // before filtering, as legacy recording does before quantization. Output
-    // packing clips filter overshoot too (including Float32Native output).
-    // Float input uses legacy *32767, truncate-to-zero PCM16 quantization;
-    // PCM16 input uses /32768 and *32768, preserving equal-rate PCM16 bits.
-    // Unequal rates stage fixed 256-frame chunks (at most 255 pending source
-    // frames) so even coprime ratios produce the same bits for any partition.
+    // Accept one complete, nonempty, all-finite block of at most kMaxInputFrames;
+    // rejected input preserves output and the cursor. Native samples are memcpy'd
+    // (no alignment requirement). Mono is duplicated to L/R; mono output is the
+    // L/R mean. Float input saturates to [-1,1] and quantizes as *32767 truncate;
+    // PCM16 input uses /32768 and *32768 (equal-rate PCM16 is bit-exact). Output
+    // packing clips filter overshoot. Unequal rates stage fixed 256-frame chunks
+    // so any input partition produces the same bits.
     bool process(QByteArrayView input, QByteArray& output);
 
     // Finish accepted history, return only its delayed real duration, and

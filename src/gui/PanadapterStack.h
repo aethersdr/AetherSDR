@@ -86,16 +86,11 @@ public:
     Q_INVOKABLE QVariantMap automationFloatDock(const QString& action,
                                                 const QString& panId);
 
-    // Workspace-canvas seam (RFC #4887 phase 4).  The stack stays the pans'
-    // OWNER — creation, wiring, render scheduling, float/dock — and lends
-    // applets to the canvas.  detachForCanvas() only decides WHETHER (a
-    // floating pan stays out; pop-out is its own state and dockPanadapter()
-    // is its way back); the canvas reparents the applet itself, a plain
-    // same-top-level move exactly like applyLayout()'s splitter shuffles —
-    // no GPU dance, which is reserved for real top-level changes (#2495).
-    // returnFromCanvas() re-homes ONE applet into the docked splitter
-    // (addWidget's one-step reparent — never through nullptr, #1344);
-    // callers rebuild the arrangement afterwards via rearrangeLayout().
+    // Workspace-canvas seam (RFC #4887). The stack stays the pans' owner and
+    // lends applets. detachForCanvas() decides WHETHER (floating pans stay
+    // out); the canvas reparents same-top-level, no GPU dance (#2495).
+    // returnFromCanvas() re-homes one applet into the docked splitter (never
+    // via nullptr, #1344); callers then rearrangeLayout().
     PanadapterApplet* detachForCanvas(const QString& panId);
     void returnFromCanvas(const QString& panId, PanadapterApplet* applet);
 
@@ -172,17 +167,10 @@ private:
     QMap<QString, PanFloatingWindow*> m_floatingWindows;
     // Preserve floating state for restored pans that were unavailable this run.
     QSet<QString> m_seenPanIds;
-    // Applets currently ON LOAN to the workspace canvas (RFC #4887 phase 4).
-    // THE INVARIANT EVERY REBUILD PATH MUST HONOR: an applet in this set is
-    // not the stack's to arrange.  rebuildDockedSplitter() and
-    // rearrangeLayout() both enumerate m_pans and reparent what they find —
-    // five call sites reach them (float, dock, the connect-time layout
-    // restore, pan close, the layout dialog), and before this set existed
-    // every one of them silently reclaimed canvas-hosted applets into the
-    // hidden stack: the canvas kept a healthy model while the widget on
-    // screen answered to a splitter, which surfaced as "the pan won't snap,
-    // won't stack, won't restore" (the 8600 field report).  detachForCanvas
-    // lends, returnFromCanvas/floatPanadapter/removePanadapter collect.
+    // Applets on loan to the workspace canvas. Invariant: every rebuild path
+    // (rebuildDockedSplitter(), rearrangeLayout()) must skip these, or it
+    // reclaims canvas-hosted applets into the hidden stack. detachForCanvas
+    // lends; returnFromCanvas/floatPanadapter/removePanadapter collect.
     QSet<QString> m_lentToCanvas;
     QString m_activePanId;
     bool m_shutdownPrepared{false};

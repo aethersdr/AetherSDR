@@ -3,46 +3,19 @@
 #include <cstdint>
 #include <cstdlib>
 
-// Slice Link (cross-panadapter VFO link) decision logic.
+// Slice Link (cross-panadapter VFO link) decision logic. Pure policy: the
+// MainWindow_Wiring adapter feeds it a link-state snapshot on each
+// frequencyChanged from a linked member and applies the Decision.
+// Frequencies are integer Hz so echo matching is exact equality.
 //
-// Pure policy: no QObject, no I/O, no model access — the MainWindow_Wiring
-// adapter feeds it a snapshot of the link state on every frequencyChanged
-// event from a linked member and applies the returned Decision. Frequencies
-// are integer Hz so echo classification is exact equality, immune to the
-// double-epsilon subtleties the models handle upstream (SliceModel keeps its
-// own 1e-9 MHz change gate; by the time an event reaches this policy it is a
-// real value change).
-//
-// Echo model. When the adapter propagates a value onto the peer, the peer's
-// SliceModel is set optimistically, so the radio's equal-value status echo is
-// usually SILENT (the model's change gate suppresses it) — an armed
-// expectation may simply never be consumed. What does surface is the echo
-// train during rapid motion: each in-flight echo of write N arrives after
-// write N+1 landed optimistically, differs from the model value, and emits.
-// Status arrives in order (TCP), so classification is by value against a
-// TTL-bounded ring of the frequencies we recently wrote TO that member:
-//
-//  - event value matches an unexpired pending write → it is an echo of our
-//    own propagation; consume that entry and everything older (in-order
-//    delivery means older writes can no longer echo after it) and stay
-//    quiet. This is what keeps a fast origin spin from propagating the
-//    peer's stale echo train backwards (the #1524 problem class).
-//  - no match → a genuine move (operator, bridge, CAT, or a radio-side
-//    adjustment of a value we wrote — the radio is authoritative, so that
-//    too propagates); forward it to the peer through the shared tune path.
-//  - a locked peer suspends propagation entirely instead of hammering the
-//    tune path (which would flash LOCKED feedback on every wheel click);
-//    the adapter re-converges when the lock clears.
-//  - while an SWR sweep drives frequencies programmatically the link stays
-//    passive (stateless ignore): the sweep restores the original frequency
-//    itself, so there is nothing to re-converge afterwards.
-//
-// Residual misclassification is possible in exactly one shape: a genuine
-// move that lands exactly on a still-pending written value within the TTL
-// (returning to where the writer just was — usually already convergence).
-// The adapter closes that hole with a trailing settle check (kSettleMs after
-// the last link event): if the pair is still diverged, the last genuine
-// mover's current frequency is re-asserted through the same guarded path.
+// Peers are set optimistically, so equal-value echoes are usually silent; what
+// surfaces is the stale echo train during rapid motion. Status is in-order
+// (TCP), so an event matching an unexpired pending write is our echo: consume
+// it and everything older, stay quiet (#1524). Anything else is a genuine move
+// (radio is authoritative) and propagates. A locked peer suspends propagation;
+// an SWR sweep makes the link passive (the sweep restores frequency itself).
+// A genuine move onto a still-pending value is misread as an echo; the
+// adapter's kSettleMs trailing check re-asserts the last mover if diverged.
 
 namespace AetherSDR::SliceLinkPolicy {
 

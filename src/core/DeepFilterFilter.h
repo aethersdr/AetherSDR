@@ -14,16 +14,11 @@ namespace AetherSDR {
 
 class Resampler;
 
-// Client-side neural noise reduction using DeepFilterNet3.
-// The immutable input/output domain is 24 or 48 kHz stereo float32. Legacy24
-// retains the existing SRC pairs; native48 reaches the model without SRC.
-// Each channel runs its own DeepFilterNet state, as RN2 runs one RNNoise
-// state per channel, so the two sides of a diversity pair are denoised
-// against their own noise and a pan change is heard immediately.
-//
-// DeepFilterNet expects 48kHz mono float [-1.0, 1.0] input.
-// Frame size determined at runtime via df_get_frame_length().
-// Thread-safe parameter setters (main thread writes, audio thread reads).
+// Client-side neural NR (DeepFilterNet3). I/O domain is 24 or 48 kHz stereo
+// float32: Legacy24 uses SRC pairs, native48 reaches the model without SRC (it
+// expects 48 kHz mono [-1, 1]). One DeepFilterNet state per channel, so diversity
+// pairs are denoised independently. Frame size from df_get_frame_length().
+// Setters: main thread writes, audio thread reads.
 
 class DeepFilterFilter {
 public:

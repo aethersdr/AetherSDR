@@ -18,25 +18,11 @@ namespace AetherSDR {
 class ThemeInspector;
 class TokenEditorWidget;
 
-// Modeless dialog for live-editing the active theme's color tokens.
-//
-// Phase 5 PR 1 — minimum viable surface:
-//   * List every color token discovered via ThemeManager::allTokenKeys()
-//   * Click a row → QColorDialog opens with the current value seeded
-//   * Accepting the dialog calls ThemeManager::setColor(), which emits
-//     themeChanged() and live-repaints every widget registered through
-//     applyStyleSheet().
-//   * "Save As…" prompts for a name and writes m_tokens to
-//     <GenericConfigLocation>/AetherSDR/themes/<name>.json via
-//     saveCurrentThemeAs() — `~/.config` on Linux, `%LOCALAPPDATA%` on
-//     Windows, `~/Library/Preferences` on macOS.  The new theme is
-//     registered + made active immediately.
-//
-// Deferred to follow-on PRs:
-//   * Inspector mode (click-on-widget to find tokens that paint it)
-//   * Gradient editing (waterfall colormap stops, slice.dim block)
-//   * Font / sizing token editing
-//   * Import (drag-and-drop / file picker for arbitrary theme JSON)
+// Modeless editor for the active theme's tokens (ThemeManager::allTokenKeys()),
+// edited inline via TokenEditorWidget, with an Inspect mode (ThemeInspector)
+// and theme import. Committed edits go through ThemeManager and live-repaint
+// every applyStyleSheet() widget. "Save As..." writes
+// <GenericConfigLocation>/AetherSDR/themes/<name>.json and activates it.
 class ThemeEditorDialog : public PersistentDialog {
     Q_OBJECT
 public:

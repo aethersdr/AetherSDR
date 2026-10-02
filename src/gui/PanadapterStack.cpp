@@ -487,36 +487,22 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     }
     if (applets.isEmpty()) return;
 
-    // Build the new splitter first, then move applets straight into it below.
-    // addWidget() reparents splitter→splitter within the same top-level window
-    // in one step — the same pattern rebuildDockedSplitter() and
-    // dockPanadapter() already use — so the QRhiWidget's backing-store QRhi
-    // and cleanup-callback registration never change and no GPU teardown is
-    // needed for pans that stay docked. The old code detoured every applet
-    // through setParent(nullptr), which puts the QRhiWidget in a transient
-    // top-level state and forces the full hide/prepare/reset/rebuild dance;
-    // that destroy→recreate→resize storm is what the 2016-era Intel D3D11
-    // UMD (igd10iumd64.dll) null-derefed on when adding a 2nd pan (#4091).
-    // Only pans returning from floating windows (handled above) change
-    // top-level windows and need the reset.
+    // Build the new splitter first and move applets straight in: addWidget()
+    // is a one-step reparent within the same top level, so the QRhiWidget's QRhi
+    // and cleanup registration do not change and docked pans need no GPU
+    // teardown. Never via setParent(nullptr), whose teardown/rebuild storm
+    // crashes old Intel D3D11 drivers (#4091). Only pans returning from floating
+    // windows need the reset.
     QSplitter* oldSplitter = m_splitter;
     m_splitter = new QSplitter(Qt::Vertical, this);
     m_splitter->setHandleWidth(3);
     m_splitter->setChildrenCollapsible(false);
     layout()->addWidget(m_splitter);
 
-    // Create a horizontal sub-splitter already attached to the (in-window)
-    // m_splitter, so pans reparented into it never transit a parentless,
-    // transient top-level window. A *live* QRhiWidget that changes top-level
-    // window mid-rearrange changes its backing-store QRhi; since this path
-    // deliberately skips the teardown dance (docked pans keep their QRhi —
-    // see above), that would leave a stale cleanup callback / reconfigure the
-    // swapchain mid-render → Intel D3D11 null-deref. This only bit the nested
-    // layouts (3+ pans): the flat 2v/2h/3v/4v cases reparent straight into the
-    // already-in-window m_splitter and were fixed already; the sub-splitters
-    // were still built parentless-then-filled, so the 3rd-pan add kept
-    // crashing (#4091, follow-up). Sub-splitter must join the window BEFORE it
-    // is filled — hence addWidget(sub) here, addWidget(pan) at the call site.
+    // Sub-splitters join the window BEFORE being filled (addWidget(sub) here,
+    // addWidget(pan) at the call site), so pans never pass through a
+    // parentless top-level; a live QRhiWidget changing top level here would
+    // leave a stale QRhi cleanup callback → Intel D3D11 null-deref (#4091).
     auto addRow = [this]() {
         auto* s = new QSplitter(Qt::Horizontal);
         s->setHandleWidth(3);
@@ -1022,18 +1008,11 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     PanadapterApplet* applet = m_pans.value(panId, nullptr);
     if (!applet || m_floatingWindows.contains(panId)) return;
 
-    // Everything below — the GPU teardown, the reparent into a new top-level
-    // window, the rebuildDockedSplitter() that resizes every remaining sibling
-    // QRhiWidget, fw->show(), and the deferred reset/first frame — is the code
-    // that has taken the process down on marginal D3D11 drivers (#4319/#4091).
-    // Arm *and persist* the marker before any of it: on the replay path the
-    // pan ID is already on disk (restoreFloatingState() read it from there), so
-    // a marker committed after this work would leave a crash here looking
-    // exactly like a clean session, and the next launch would replay straight
-    // back into it — the #4617 boot loop. Arming before saveFloatingState()
-    // also means the marker can never reach disk *later* than the ID it
-    // protects; the cost is that a crash in between drops the previously saved
-    // IDs too, which is the single-use price this guard already accepts.
+    // Arm and persist the crash marker before the GPU teardown, reparent,
+    // sibling resize and show below, which can crash marginal D3D11 drivers
+    // (#4319/#4091). The pan ID may already be on disk (replay path), so a later
+    // marker would let a crash replay into a boot loop (#4617). A crash in
+    // between drops previously saved IDs too, the accepted single-use cost.
     armFloatingRestoreMarker();
 
     // Hide the SpectrumWidget and release GPU resources *before* reparenting.

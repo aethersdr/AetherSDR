@@ -6,17 +6,10 @@ class QLineEdit;
 
 namespace AetherSDR {
 
-// Combined input-level meter + threshold fader for the compressor
-// editor.  Visual + interaction pattern mirrors ClientEqOutputFader —
-// one custom-painted strip with a peak-level gradient fill plus a
-// horizontal handle overhanging both sides of the bar.  Dragging the
-// handle emits thresholdChanged(db); that same value is what the
-// threshold chevron on the curve canvas represents, so the two
-// controls stay in lockstep via the shared ClientComp state.
-//
-// Level scale is absolute dBFS [-60, 0], matching ClientCompMeter's
-// Level mode.  Handle range is the same: you can pull the threshold
-// anywhere the input meter can display.
+// Input-level meter + threshold fader for the compressor editor, styled like
+// ClientEqOutputFader. Dragging the handle emits thresholdChanged(db), the same
+// value as the curve canvas's threshold chevron (kept in step via ClientComp).
+// Meter and handle both span absolute dBFS [-60, 0], like ClientCompMeter Level.
 class ClientCompThresholdFader : public QWidget {
     Q_OBJECT
 

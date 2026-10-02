@@ -13,17 +13,10 @@ class QWheelEvent;
 
 namespace AetherSDR {
 
-// Vertical peak + peak-hold meter for the compressor editor.  Two
-// visual modes are supported via setMode():
-//   - Level: fills from the bottom upwards (input / output).  Colour
-//     grades green→amber→red as the level approaches 0 dBFS.
-//   - GainReduction: fills from the TOP downwards (amber).  A larger
-//     negative gainReductionDb pulls the fill further down.
-//
-// Range is fixed to dBFS [-60, 0] for Level and [-40, 0] for GR.  Bar
-// fill is smoothed with the same asymmetric attack/release ballistics
-// as HGauge (30ms attack, 180ms release, polled at 120 Hz) so the
-// motion reads smoothly instead of twitching on every audio block.
+// Vertical peak + peak-hold meter for the compressor editor. setMode():
+//   - Level: fills upward, green→amber→red towards 0 dBFS; range [-60, 0].
+//   - GainReduction: fills DOWN from the top (amber); range [-40, 0].
+// Fill uses HGauge's ballistics (30 ms attack, 180 ms release, 120 Hz poll).
 class ClientCompMeter : public QWidget {
     Q_OBJECT
 

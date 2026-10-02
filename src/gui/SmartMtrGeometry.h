@@ -10,32 +10,11 @@
 
 namespace AetherSDR {
 
-// ============================================================================
-// UNITS vs. PIXELS  —  the SmartMTR coordinate system
-// ============================================================================
-//
-// All SmartMTR geometry (bar lengths, tick positions, gaps, line thickness,
-// margins, ...) is expressed in *UNITS*, never in raw pixels (see
-// SmartMtrStyle.h for the unit constants).
-//
-// UNITS are abstract, resolution-independent design units that define only the
-// *proportions* of the control. They have no fixed pixel size of their own.
-//
-// At paint time UNITS are converted to pixels with a single scale factor:
-//
-//       pxPerUnit = actualPixelExtent / totalUnitExtent
-//       pixels    = units * pxPerUnit
-//
-// The design area is SmartMtrUnits::kControlW x kControlH. Because the widget's
-// real pixel rect may not share that aspect ratio, we fit-and-center: one
-// uniform scale factor for both axes (aspect ratio preserved, UNITS square),
-// with the design centered and the leftover margin left as transparent
-// letterbox.
-//
-// This struct is the single authority for that mapping. Every element draws
-// through it (g.rect(...) / g.len(...)); no drawing code computes pxPerUnit
-// itself.
-// ============================================================================
+// SmartMTR geometry is expressed in abstract UNITS (constants in
+// SmartMtrStyle.h), never pixels. The kControlW x kControlH design area is
+// fit-and-centered with one uniform scale (pxPerUnit = pixelExtent / unitExtent),
+// leftover space transparent letterbox. This struct is the only place pxPerUnit
+// is computed; all drawing goes through g.rect(...) / g.len(...).
 struct SmartMtrGeometry {
     double pxPerUnit{1.0};
     double originX{0.0}; // pixel offset of the design's top-left (letterbox)

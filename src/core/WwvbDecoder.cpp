@@ -11,24 +11,16 @@
 #include <utility>
 #include <vector>
 
-// WWVB 60 kHz legacy-AM/PWM decoder. All format facts per the NIST WWVB
-// time-code description (NIST SP 250-67): one bit per second; carrier power
-// reduced 17 dB at each second start for 0.2 s (binary 0), 0.5 s (binary 1)
-// or 0.8 s (marker); markers at seconds 0, 9, 19, 29, 39, 49, 59; two
-// consecutive markers (s59 -> s0) mark the minute boundary. BCD field weights
-// are MSB-first (opposite of WWV). Amplitude-only by design: the post-2012
-// BPSK phase layer (a 180 deg flip +100 ms after each second) leaves the AM
-// envelope unchanged in steady state (|-z| == |z|), and the flip TRANSIENT --
-// the discontinuity briefly rings the I/Q low-pass into a ~1-sample magnitude
-// notch -- is rejected by the ~10 ms boxcar decimation averaging it flat plus
-// the sustained-low edge gate (several consecutive low samples required), so
-// this decoder ignores the BPSK layer entirely; no edge is phase-derived.
-//
-// Chain: one-shot tone search 800-1200 Hz -> complex mix to baseband ->
-// biquad LPF on I/Q -> magnitude -> boxcar-decimate to a 100 Hz envelope ->
-// AM-drop second-edge tracking -> per-second zero-mean matched-filter
-// classify (0.2/0.5/0.8 s low durations; confidence = correlation margin) ->
-// double-marker minute sync -> NIST WWVB BCD map -> TimeFrameVoter.
+// WWVB 60 kHz legacy AM/PWM decoder (NIST SP 250-67): one bit per second,
+// carrier -17 dB at each second start for 0.2 s (0), 0.5 s (1) or 0.8 s
+// (marker); markers at 0, 9, 19, 29, 39, 49, 59; s59 -> s0 double marker =
+// minute. BCD weights are MSB-first (unlike WWV). The 2012 BPSK layer is
+// ignored: |-z| == |z| in steady state, and the flip's ~1-sample magnitude
+// notch is averaged out by ~10 ms boxcar decimation plus the sustained-low
+// edge gate. Chain: one-shot tone search 800-1200 Hz -> complex mix -> I/Q
+// biquad LPF -> magnitude -> 100 Hz envelope -> AM-drop edge tracking ->
+// matched-filter classify (margin = confidence) -> double-marker sync -> BCD
+// map -> TimeFrameVoter.
 
 namespace AetherSDR {
 

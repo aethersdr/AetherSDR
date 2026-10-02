@@ -17,8 +17,6 @@ RtlSdrWorker::RtlSdrWorker(struct rtlsdr_dev* dev, QObject* parent)
     // Relay DDC signals across thread boundary to main thread
     connect(&m_ddc, &RtlSdrDdc::spectrumFrameReady,
             this, &RtlSdrWorker::spectrumFrameReady);
-    connect(&m_ddc, &RtlSdrDdc::waterfallRowReady,
-            this, &RtlSdrWorker::waterfallRowReady);
     connect(&m_ddc, &RtlSdrDdc::audioFrameReady,
             this, &RtlSdrWorker::audioFrameReady);
 }
