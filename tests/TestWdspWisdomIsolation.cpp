@@ -2,7 +2,7 @@
 // tests/tests.cmake) unless it sets AETHER_TEST_NO_WISDOM_ISOLATION. Runs before
 // main() so a test binary run directly, outside ctest's ENVIRONMENT, still caps
 // the FFTW planner and redirects the wisdom cache away from the operator's real
-// ~/.cache/aethersdr/wdsp-fftw-wisdom (docs/HERMES.md). setenv(..., 0): an
+// ~/.cache/aethersdr/wdsp-fftw-wisdom (docs/HERMES.md §22.3). setenv(..., 0): an
 // explicit value from ctest, CI, or a developer still wins.
 
 #include <cstdlib>

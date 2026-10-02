@@ -460,7 +460,7 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
             const float q = lsb ? -bq : bq;
 
             // Conjugate for the wire: HPSDR wire order has the opposite
-            // handedness to the analytic convention (RX conjugates too).
+            // handedness to the analytic convention (RX conjugates its spectrum).
             // Without it TX goes out on the wrong sideband, invisibly to our
             // own panadapter. A TXA channel must NOT do this.
             m_iq.emplace_back(bi, -q);

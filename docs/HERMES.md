@@ -11,10 +11,10 @@ the DDC so the panadapter holds still while tuning.
 Section 11 audits the receive bring-up against the independent correctness
 oracles at `/Users/patj/oracles/hl2/`.
 
-**Start here for a new backend:** §15 (receive handedness and tuning) and §5's
+**Start here for a new backend:** §16 (receive handedness and tuning) and §5's
 sideband-selection rules. Those two describe the most expensive bug of the
 project — one that survived a full session of correct-looking measurements —
-and §15.6 is the checklist that would have caught it on day one.
+and §16.6 is the checklist that would have caught it on day one.
 
 ### For coding agents — keep bring-up inside the family backend
 
@@ -511,7 +511,7 @@ in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
 - **RX: WDSP's RXA selects the OPPOSITE sign to its passband bounds.** USB
   configured `[+150, +3000]` passes *negative* analytic frequencies. Confirmed
   independently by `hl2_rxdsp_test` and `hl2_shift_test`. This is the single
-  least intuitive fact in the whole backend and everything in §15 follows from
+  least intuitive fact in the whole backend and everything in §16 follows from
   it.
 - **TX — in `Hl2TxDsp` — is the mirror image: the MODE selects the sideband and
   the bandpass is an audio-domain magnitude.** `Hl2TxDsp` filters with one real
@@ -711,8 +711,8 @@ it does not work: the app's own 38 KB cache made no measurable difference to
 `wdsp_channel_test` (22.8 s warm vs 22.4 s cold on macOS/arm64), because the
 app's plan set and the tests' plan set are different FFTW problems. Only a cache
 the tests themselves wrote helped — which a fresh container never has. Instead
-every test now runs with `AETHER_WDSP_FFTW_TIMELIMIT` set (see "How the
-retrofit is applied" below), which bounds the planner through
+every test now runs with `AETHER_WDSP_FFTW_TIMELIMIT` set (§22.3 describes
+how `tests/tests.cmake` applies it), which bounds the planner through
 `fftw_set_timelimit()` and, because rushed plans must never reach the cache the
 app imports, **skips the wisdom export entirely while it is set**. One knob, so
 it is not possible to bound the planner and forget to isolate the cache.
@@ -720,7 +720,8 @@ it is not possible to bound the planner and forget to isolate the cache.
 Two independent layers, because one was not enough. The planner bound stops the
 export; separately, `AETHER_WDSP_WISDOM_DIR` **redirects the cache path** to
 `<build>/test-fftw-wisdom`. Both are set by `tests/TestWdspWisdomIsolation.cpp`,
-a TU linked into every test target whose static initializer runs **before
+a TU linked into every executable `tests/tests.cmake` declares (registered as a
+test or not, unless it opts out), whose static initializer runs **before
 main()** — because a ctest `ENVIRONMENT` property only covers `ctest`, and
 running a test binary directly (`./build/hl2_rxdsp_test`, the normal way to
 debug one) inherits nothing and would export straight over the operator's real
@@ -735,18 +736,6 @@ and `transmit_model_test` drive HL2 DSP without an `hl2_` name, ran unbounded, a
 were observed replacing a developer's real 38 KB cache with an 11 KB test-only one.
 Naming is not a proxy for what a test opens, and the failure is silent — the suite
 still passes, it just degrades the next real connect.
-
-**How the retrofit is applied.** `tests/tests.cmake` defines
-`aether_retrofit_tests()` and schedules it with `cmake_language(DEFER CALL)`, so
-it runs after the last line of the root `CMakeLists.txt` and sees every test,
-wherever it is declared. It links the `aether_test_wisdom_isolation` OBJECT
-library into every executable the file declares, and appends
-`AETHER_WDSP_FFTW_TIMELIMIT` and `AETHER_WDSP_WISDOM_DIR` to every registered
-test's ctest `ENVIRONMENT`. `aether_assert_tests_retrofitted()` then reads both
-back and fails the configure step, naming each miss. An executable that must
-plan uncapped opts out of the isolation object with the target property
-`AETHER_TEST_NO_WISDOM_ISOLATION`, whose value is the required reason; there is
-no opt-out from the ctest `ENVIRONMENT` cap.
 
 Measured cold, `ctest -R '^(hl2|wdsp)_' -j8`, macOS/arm64: **100.5 s wall /
 632.0 s CPU before, 21.6 s wall / 9.3 s CPU after.** The CPU figure is the one
@@ -1766,12 +1755,12 @@ receive path appeared to compensate (conjugating with `-imag()` before WDSP, the
 fix filed as "USB and LSB are swapped"), and transmit never got the same
 correction.
 
-> **Correction (see §15).** That receive-side `-imag()` was itself wrong. It
+> **Correction (see §16).** That receive-side `-imag()` was itself wrong. It
 > inverted every demodulated sideband, and a second error — feeding the
 > panadapter the raw wire — hid it. The reasoning recorded here ("RX already
 > compensates, TX needs the same") was right about the wire's handedness and
 > wrong about which stage should carry the correction. **Do not use this
-> paragraph as the model for a new backend; use §15.**
+> paragraph as the model for a new backend; use §16.**
 
 **Every internal check agreed with the bug**, because the panadapter reads the
 same wire order as the transmitter. Our display and our transmission were
