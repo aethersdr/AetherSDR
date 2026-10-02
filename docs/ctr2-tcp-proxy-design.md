@@ -168,22 +168,14 @@ AetherSDR's TX arbitration protects this connection. The proxy never creates
 a key-down, retries a command, or sends an invented key-up on disconnect.
 Closing a TCP socket is not proof that the transmitter is idle.
 
-Jeremy explicitly requested unchanged forwarding, including whatever the
-CTR2 sends. Keep that requirement visible during architectural review;
-do not silently implement a command filter or bypass an existing guard in
-AetherSDR's own command path. Review how this independent-client service fits
-the project's transmit policy before production inclusion. Initial hardware
-testing is receive-only; CW/PTT tests require an operator-controlled test
-setup and explicit transmit authorization.
-
-GOVERNANCE.md requires an approved RFC for new architecture/signal routing.
-This document supplies the proposal, cross-platform impact, and alternatives
-for that review. The current request authorizes preparation of this design;
-the supplied implementation prompt explicitly authorizes the scoped local
-prototype when Jeremy submits it. Do not infer approval to publish, merge,
-change governance, or expand the prototype from that prompt. Record the
-maintainer's prototype direction and resolve any remaining RFC requirement
-before a production PR.
+Forwarding is unchanged by design, including whatever the CTR2 sends; do not
+add a command filter, and do not bypass any guard in AetherSDR's own command
+path. RFC #6091 (approved) settles how this fits Principle VI: the relay
+carries traffic only after the operator explicitly enables it, it is off on
+every launch, and AetherSDR's existing transmit indicator shows when the radio
+is on the air. No separate relay TX indicator, confirm-on-Start notice, or
+LAN-only restriction is required. CW/PTT tests through the relay still need an
+operator-controlled test setup and explicit transmit authorization.
 
 ## Validation and acceptance
 
@@ -235,14 +227,10 @@ Local references: [governance](../GOVERNANCE.md),
 
 ## Prototype implementation record
 
-Status (2026-10-02): prototype on branch `ctr2-tcp-proxy-prototype`, opened
-as a draft PR for review; not merged. Jeremy reports the relay working with a
-stock CTR2 (recorded in [the USB relay design](ctr2-usb-relay-design.md));
-that hardware result was not observed by this branch's validation. Jeremy
-explicitly directed this scoped prototype (unchanged forwarding of everything
-the CTR2 sends, additive applet) via the implementation prompt. That direction
-does not settle the RFC requirement in GOVERNANCE.md; RFC #6091 covers the
-items below and must be approved before this merges.
+Status (2026-10-02): implemented on branch `ctr2-tcp-proxy-prototype` (PR
+#6090) under approved RFC #6091; not merged. Jeremy reports the relay working
+with a stock CTR2 (recorded in [the USB relay design](ctr2-usb-relay-design.md));
+that hardware result was not observed by this branch's validation.
 
 Architectural distinction for review:
 
@@ -253,7 +241,8 @@ Architectural distinction for review:
   without passing `TxCoordinator` or any AetherSDR transmit guard. AetherSDR's
   own transmit paths are unchanged and not bypassed. The proxy never keys,
   retries, replays or sends an invented key-up; closing a socket is not proof
-  the transmitter is idle. How this fits Principle VI is an open review item.
+  the transmitter is idle. RFC #6091 approved this under Principle VI on
+  the basis of explicit operator enable plus the existing TX indicator.
 - TCP only. UDP discovery, meters, panadapter/audio streams and SmartLink are
   not forwarded; MultiFlex binding is whatever the CTR2's own traffic does.
 

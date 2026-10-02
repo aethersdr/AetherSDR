@@ -176,10 +176,11 @@ Verify enumeration, device access, report sizing, and teardown on Linux,
 macOS, and Windows. Do not assume identical report-ID handling across host
 APIs. No additional thread or dependency is selected by this document.
 
-Document the independent-client transmit boundary and resolve applicable
-architecture/dependency RFC requirements before production inclusion under
-GOVERNANCE.md. This design does not change AetherSDR's existing transmit
-policy or its own radio command paths.
+RFC #6091 (approved) covers this design and the independent-client transmit
+boundary: the relay runs only after the operator enables it, and AetherSDR's
+existing transmit indicator covers on-air visibility. The host HID API choice
+is confirmed once the descriptor is known. This design does not change
+AetherSDR's existing transmit policy or its own radio command paths.
 
 ## Next steps and acceptance
 
