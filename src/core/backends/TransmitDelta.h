@@ -8,17 +8,11 @@
 
 namespace AetherSDR {
 
-// Normalized, vendor-neutral transmit-status delta (aetherd RFC 2.3 —
-// TransmitModel touchpoint). Same typed, compiler-checked, present-only contract
-// as SliceDelta: a backend populates only the fields the wire reported, and
-// TransmitModel::applyChanges applies exactly those. Covers the five Flex
-// transmit-family status planes (core transmit, interlock, ATU, APD, APD
-// sampler) — the FlexBackend decode owns the SmartSDR wire translation (key
-// names, "1"→bool, ok-guarded + clamped numeric parses, uppercase, list split).
-//
-// The ATU status is carried as its raw wire token (`atuStatusRaw`); the model
-// owns the ATUStatus enum + parse. The APD sampler is per-TX-antenna: a single
-// delta carries one antenna's (txAnt, available, selected) triple.
+// Normalized transmit-status delta (aetherd RFC 2.3), present-only like SliceDelta.
+// Covers the five Flex transmit status planes (core, interlock, ATU, APD, APD
+// sampler); the FlexBackend decode owns the wire translation. ATU status rides as
+// its raw token (the model owns the enum). One delta carries one TX antenna's APD
+// sampler (txAnt, available, selected) triple.
 struct TransmitDelta {
     // ── Core transmit ──
     std::optional<int>     rfPower;          // clamped 0..100

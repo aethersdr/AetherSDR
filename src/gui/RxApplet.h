@@ -32,18 +32,8 @@ class RadioModel;
 class ControlAvailabilityRegistry;
 class KiwiSdrManager;
 
-// RX Applet — controls for a single receive slice.
-//
-// Layout (top to bottom):
-//  • RX antenna selector (ANT1 / ANT2)
-//  • Filter width presets (1.8 / 2.1 / 2.4 / 2.7 / 3.3 / 6.0 kHz)
-//  • AGC mode (OFF / SLOW / MED / FAST)
-//  • AF gain slider (audio output level)
-//  • RF gain slider (IF gain)
-//  • Squelch on/off + level slider
-//  • DSP toggles: NB, NR, ANF
-//  • RIT on/off + Hz offset with < > step buttons
-//  • XIT on/off + Hz offset with < > step buttons
+// RX Applet: controls for one receive slice (antenna, filter presets, AGC,
+// AF/RF gain, squelch, NB/NR/ANF, RIT/XIT).
 class RxApplet : public QWidget {
     Q_OBJECT
 

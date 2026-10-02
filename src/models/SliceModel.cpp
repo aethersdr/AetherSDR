@@ -75,19 +75,12 @@ bool SliceModel::filterCarrierStraddlingFamily(const QString& mode)
 
 bool SliceModel::normalizeFilterPolarity()
 {
-    // Mirror across the carrier, preserving BOTH edges (asymmetric-safe):
-    // (lo,hi) → (-hi,-lo). For symmetric SSB this matches the historical
-    // flip (0,2700 → -2700,0); for asymmetric FDVL it keeps the low cut
-    // (95,2000 → -2000,-95) instead of collapsing it to (-2000,0), which is
-    // the discarded-edge regression #3092 worked around by excluding FDV.
-    // Sign-guarded and idempotent: values already in canonical form (and
-    // carrier-straddling passbands) are left untouched.
-    // Carrier-straddling modes: a passband inherited from a sideband mode sits
-    // entirely to one side of the carrier and must be mirrored out to span it.
-    // 150..3000 (a USB passband) becomes -3000..3000 — 6 kHz of AM, with the
-    // carrier back inside the filter. Sign-guarded and idempotent: a passband
-    // that already straddles zero is left exactly as the operator set it, so
-    // narrow AM and a deliberately asymmetric passband both survive.
+    // Carrier-straddling modes: a one-sided passband inherited from a sideband
+    // mode is widened to straddle the carrier (150..3000 -> -3000..3000).
+    // Sideband modes: a wrong-side passband is mirrored preserving both edges,
+    // (lo,hi) -> (-hi,-lo), so asymmetric FDVL keeps its low cut (#3092).
+    // Sign-guarded and idempotent: a passband already in canonical form (or one
+    // that already straddles zero) is left as the operator set it.
     if (filterCarrierStraddlingFamily(m_mode)) {
         const bool straddlesCarrier = m_filterLow < 0 && m_filterHigh > 0;
         if (straddlesCarrier)
@@ -209,20 +202,11 @@ void SliceModel::setMode(const QString& mode)
     emit modeChangeRequested(mode);
     emit modeChanged(mode);
 
-    // The passband belongs to the mode. Changing mode without re-checking it
-    // leaves the previous mode's filter in place — switching USB -> AM kept
-    // 150..3000, an upper-sideband passband that EXCLUDES the carrier the AM
-    // detector needs. A radio that owns its own DSP heals this by echoing a
-    // mode-appropriate filter back; a backend that owns an engine-side chain
-    // gets no such echo and simply keeps demodulating through the wrong filter.
-    //
-    // So normalize the model here and hand the corrected passband to the
-    // engine-side backend via filterCommandIssued (RadioModel only wires that
-    // signal for a non-Flex backend). The Flex path is deliberately NOT sent a
-    // proactive `filt`: the Flex radio heals the passband on the mode echo (as
-    // above), so pushing our mirror to the wire would only race — and override —
-    // the radio's own per-mode filter memory. Keeping the Flex wire path
-    // untouched is why the model normalize is decoupled from the wire send.
+    // The passband belongs to the mode (USB -> AM must not keep 150..3000, which
+    // excludes the carrier). Normalize the model and hand the result to an
+    // engine-side backend via filterCommandIssued (wired only for non-Flex).
+    // Flex gets no proactive `filt`: the radio heals the passband on the mode echo,
+    // and pushing ours would race its per-mode filter memory.
     if (normalizeFilterPolarity()) {
         emit filterChanged(m_filterLow, m_filterHigh);
         emit filterCommandIssued(m_filterLow, m_filterHigh);
@@ -1622,21 +1606,10 @@ void SliceModel::applyChanges(const SliceDelta& d)
         int v = *d.mnLevel;
         if (m_mnLevel != v) { m_mnLevel = v; emit mnLevelChanged(v); }
     }
-    // GUARDED, like nrfLevel/anflLevel/mnLevel immediately above. These two
-    // were the only assign-and-emit pair in this block without an equality
-    // check, which was harmless while no backend published them from anything
-    // but a real change (Flex carry()s them only when the status carries the
-    // key; Sim sets them only inside setSliceAgc). HL2 publishes the pair on
-    // EVERY emitSliceState() — tune step, mode, filter, mute, TX-slice
-    // reassignment — so an unguarded emit turns a VFO drag into a stream of
-    // agcThresholdChanged at an unchanged value.
-    //
-    // That is not only churn. AgcCalibrationDialog wires agcThresholdChanged to
-    // AgcTCalibrator::onValueChanged, which in manual mode starts a settle timer
-    // that calls recordPoint() — and recordPoint() REPLACES an existing sample
-    // at the same value with a fresh currentRmsDb() reading. With the AGC
-    // Calibration dialog open on an HL2, tuning the VFO would overwrite a good
-    // calibration point with an RMS reading taken mid-tune, silently.
+    // Equality-guarded like the levels above: HL2 publishes the AGC pair on every
+    // emitSliceState(), and an unchanged-value agcThresholdChanged drives
+    // AgcTCalibrator::onValueChanged, whose settle timer would overwrite a
+    // calibration point with a mid-tune RMS reading.
     if (d.agcMode.has_value()) {
         const QString v = *d.agcMode;
         if (m_agcMode != v) { m_agcMode = v; emit agcModeChanged(v); }

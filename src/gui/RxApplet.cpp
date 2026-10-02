@@ -74,16 +74,10 @@ private:
     int m_resetVal;
 };
 
-// ResetSlider whose fill anchors from the centre outward — for L/R pan
-// and L/R balance controls where the meaningful zero is the midpoint,
-// not the left edge.  Also paints a small centre-mark dot on the groove
-// so the operator can see the neutral position at a glance.
-//
-// The default Qt stylesheet sub-page rule paints (0 → handle) which
-// reads wrong for centre-anchored controls.  We over-paint that region
-// here: erase the unwanted half of the sub-page with groove colour, then
-// add the desired (centre → handle) fill in accent colour.  Clipping
-// excludes the handle pixel disc so the overpaint never bleeds into it.
+// ResetSlider filled from the centre outward with a centre-mark dot, for
+// pan/balance controls whose zero is the midpoint. Overpaints the stylesheet's
+// 0→handle sub-page with groove colour, then fills centre→handle in accent,
+// clipped to exclude the handle disc.
 class CenterMarkSlider : public ResetSlider {
 public:
     explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
@@ -417,6 +411,11 @@ void RxApplet::buildUI()
                     ? m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId())
                     : QString();
             QMenu* menu = new QMenu(m_rxAntBtn);
+            // The label is antennaMenuLabel() — an alias or KiwiSDR profile
+            // name — so the per-action tooltip is the only place the raw
+            // ANT1/RX_A token is legible.  Qt discards it unless the menu opts
+            // in (#5546).
+            menu->setToolTipsVisible(true);
             connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
             for (const QString& ant : menuOptions) {
                 QAction* act = menu->addAction(antennaMenuLabel(ant, menuOptions));
@@ -463,6 +462,7 @@ void RxApplet::buildUI()
             const QPointer<QPushButton> button(m_txAntBtn);
             ScopedChildWidget<QMenu> menuOwner(this);
             QMenu& menu = *menuOwner.get();
+            menu.setToolTipsVisible(true);  // raw token behind the alias (#5546)
             const QString cur = m_slice ? m_slice->txAntenna() : "";
             const QStringList options = txAntennaOptions();
             for (const QString& ant : options) {
@@ -932,17 +932,11 @@ void RxApplet::buildUI()
         m_muteBtn->setFixedSize(18, 18);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_muteBtn, "QPushButton { background: transparent; border: none; font-size: 12px; padding: 0px; }"
             "QPushButton:hover { background: {{color.background.1}}; border-radius: 3px; }");
-        // Single click toggles this slice; double click toggles all owned
-        // slices.  Defer the single-click action by the platform double-
-        // click interval so the second click can override it; the visual
-        // 🔊/🔇 update is driven by SliceModel::audioMuteChanged so the
-        // icon flips when the radio acks, not on click.
-        //
-        // No suppress flag is needed for the trailing clicked() of a
-        // double-click sequence: the eventFilter returns true on
-        // MouseButtonDblClick, so QAbstractButton::mouseDoubleClickEvent
-        // is never called, the button never enters pressed-state on the
-        // second press, and the second release does not emit clicked().
+        // Single click toggles this slice, double click all owned slices; the
+        // single-click action is deferred by the double-click interval. The
+        // icon flips on SliceModel::audioMuteChanged (radio ack), not on click.
+        // eventFilter consumes MouseButtonDblClick, so the second release emits
+        // no clicked().
         m_muteClickTimer = new QTimer(this);
         m_muteClickTimer->setSingleShot(true);
         connect(m_muteClickTimer, &QTimer::timeout, this, [this]() {
@@ -1796,20 +1790,10 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
     const auto mode = SliceLabel::currentMode();
     const bool radioIdx = (mode == SliceLabel::Mode::RadioIndexed);
 
-    // In RadioIndexed mode the row is laid out as three groups, left to
-    // right:
-    //   1. Owned slices, in global-sliceId order, rendered with their
-    //      per-client letter + 1-based global-slot subscript (e.g. "A₂").
-    //   2. Empty slots — available for the user to claim.  Labelled with
-    //      sequential letters continuing after the user's owned set
-    //      ("B", "C", … if the user owns one "A" slice already), so the
-    //      letter previews what the radio would call the slice once
-    //      claimed.
-    //   3. Foreign slots — in use by another Multi-Flex client.  Rendered
-    //      as "—" so they read as "taken, unavailable" without colliding
-    //      with the user's per-client letters.
-    //
-    // In Global mode the layout is unchanged from today: position == slot.
+    // RadioIndexed layout, left to right: (1) owned slices in global-sliceId
+    // order, per-client letter + 1-based slot subscript ("A₂"); (2) empty slots,
+    // lettered sequentially after the owned set (the letter the radio would
+    // assign); (3) foreign slots, shown as "—". Global mode: position == slot.
     QList<int> ownedSlots;
     for (auto it = slotToSlice.constBegin(); it != slotToSlice.constEnd(); ++it)
         ownedSlots.append(it.key());
@@ -1842,16 +1826,10 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
             .arg(color);
     };
 
-    // Cache the last applied colour index per button so we skip the
-    // stylesheet rebuild + setStyleSheet() on every refresh when nothing
-    // colour-relevant changed (the loop runs on slot occupancy + letter
-    // signals, both of which fire often).
-    //
-    // Cache key is intentionally colour-index-only.  State transitions
-    // (ours / foreign / empty) at the same colour index are handled by
-    // the `slotState` dynamic property + QSS attribute selectors via the
-    // unpolish/polish call at the bottom of the loop — so the stylesheet
-    // string itself doesn't need to change for those.
+    // Skip the stylesheet rebuild when a button's colour index is unchanged
+    // (this loop runs often). Ours/foreign/empty transitions at the same index
+    // are handled by the `slotState` property + QSS selectors via the
+    // unpolish/polish at the end of the loop.
     auto applyStyleIfChanged = [](QToolButton* btn, int colourIdx,
                                    const QString& stylesheet) {
         btn->setProperty("normalStyleSheet", stylesheet);
@@ -2244,22 +2222,10 @@ void RxApplet::configureRepeaterReverseControl()
     m_revBtn->setCheckable(!xfc);
     m_revBtn->setChecked(false);
     m_revBtn->setDown(xfc && m_radioModel->transmitFrequencyCheck());
-    // REV IS GATED HERE AND NOT IN configureFmToneControls(), BECAUSE THIS
-    // BUTTON IS TWO CONTROLS. Its three neighbours in the same row -- the
-    // offset spin and -/Simplex/+ -- are repeater duplex and nothing else, so
-    // they take hasFmRepeaterOffset directly. This one wears XFC when the
-    // backend declares hasTransmitFrequencyCheck and REV otherwise, and only
-    // the REV personality moves the repeater offset: its toggled handler writes
-    // SliceModel::setTxOffsetFreq, while the XFC personality is momentary and
-    // drives RadioModel::setTransmitFrequencyCheck from pressed/released.
-    //
-    // Those two capabilities are INDEPENDENT, so hasFmRepeaterOffset alone is
-    // the wrong gate. IcomCivBackend derives hasFmRepeaterOffset from
-    // FmRepeaterProfile::hasDuplex and hasTransmitFrequencyCheck from
-    // FmRepeaterProfile::hasXfc, and the IC-7300MK2 declares hasXfc true with
-    // hasDuplex false -- a shipping radio whose XFC button would go dark.
-    // The honest test is whether the personality the button is CURRENTLY
-    // wearing has a verb behind it.
+    // REV is gated here, not in configureFmToneControls(): the button is XFC
+    // when hasTransmitFrequencyCheck, else REV, and only REV moves the
+    // repeater offset. The capabilities are independent (IC-7300MK2: XFC
+    // without duplex), so gate on the personality the button is wearing.
     const bool connected = m_radioModel && m_radioModel->isConnected();
     const bool repeaterAvailable = !connected
         || m_radioModel->backendCapabilities().hasFmRepeaterOffset;
@@ -3356,19 +3322,10 @@ void RxApplet::rebuildFilterButtons()
             }
         });
 
-        // Right-click to customize this preset — ONLY when the presets are the
-        // OPERATOR'S. The click handler above got this guard; this menu did not,
-        // and it indexes all three operator arrays with `i` from the radio list:
-        // m_filterCustomLo/Hi are read and then WRITTEN, and m_filterWidths is
-        // written and persisted. m_filterWidths is built from the saved
-        // FilterPresets_<mode> string, which legitimately parses to 1-6 entries,
-        // so with two saved presets and a radio declaring three widths the third
-        // button is an out-of-range read and an out-of-range write on accept.
-        // Even in range it edits the wrong preset silently.
-        //
-        // Not installed rather than guarded inside, which is also what the
-        // customisable comment already argues: a radio-declared set is fixed
-        // hardware and has no edge to customise.
+        // Customise menu only for the operator's presets: with a
+        // radio-declared set, `i` indexes the radio list while
+        // m_filterCustomLo/Hi and m_filterWidths (1-6 saved entries) are
+        // operator arrays, so it would read/write out of range.
         if (customisable) {
             btn->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(btn, &QPushButton::customContextMenuRequested, this, [this, i, btn](const QPoint& pos) {

@@ -24,17 +24,10 @@ static constexpr int kMaxReadBuffer = 16 * 1024 * 1024;
 
 namespace {
 
-// TOFU cert-pin cache.  Stored as a JSON object in AppSettings under
-// the key "SmartLinkCertFingerprintCache".  See GHSA-wfx7-w6p8-4jr2.
-//
-// Phase 1 shape (warn-only): { "<host>": "<sha256-hex>", ... }
-// Phase 2 shape (#2951, enforcement): {
-//     "<host>": { "fp": "<sha256-hex>", "pinnedAt": "<iso8601>" },
-//     ...
-// }
-//
-// Cache reader handles both shapes so upgrades don't lose existing
-// pins; the writer always emits Phase 2 shape.
+// TOFU cert-pin cache: JSON in AppSettings "SmartLinkCertFingerprintCache"
+// (GHSA-wfx7-w6p8-4jr2). The reader accepts both shapes; the writer emits phase 2.
+//   phase 1: { "<host>": "<sha256-hex>" }
+//   phase 2 (#2951): { "<host>": { "fp": "<sha256-hex>", "pinnedAt": "<iso8601>" } }
 constexpr const char* kCertCacheKey = "SmartLinkCertFingerprintCache";
 
 struct PinEntry {
@@ -139,18 +132,12 @@ WanConnection::~WanConnection()
 
 void WanConnection::resetSessionState()
 {
-    // The SmartLink twin of #5649. This object is a by-value member of
-    // MainWindow (m_wanConnection), so it outlives every TLS session: without
-    // an explicit reset, bytes the radio wrote without a trailing '\n' when the
-    // link died become the prefix of the NEXT session's first line, and the
-    // handle/sequence/callback state of a dead session answers into a live one.
-    // Same fix and same reason as RadioConnection::resetSessionState(); FlexLib
-    // clears its own line buffer in TcpCommandCommunication.Disconnect()
-    // (reference/FlexLib_API_v4.1.5.39794/FlexLib/TcpCommandCommunication.cs:249).
-    //
-    // Callbacks are dropped rather than answered, which is what
-    // disconnectFromRadio() already did before this helper existed; changing
-    // WAN callback semantics is deliberately out of scope here. (#5653 review)
+    // This object outlives every TLS session (a by-value MainWindow member), so
+    // reset per session: otherwise a partial line from the dead link prefixes the
+    // next session's first line and stale handle/sequence/callbacks answer into the
+    // live one. Mirrors RadioConnection::resetSessionState() and FlexLib's
+    // TcpCommandCommunication.Disconnect() (FlexLib_API_v4.1.5.39794
+    // TcpCommandCommunication.cs:249). Pending callbacks are dropped, not answered.
     m_readBuffer.clear();
     m_pendingCallbacks.clear();
     m_seqCounter = 1;

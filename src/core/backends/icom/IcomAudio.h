@@ -24,16 +24,10 @@ namespace AetherSDR::icom {
 // Codecs
 // ---------------------------------------------------------------------------
 
-// We negotiate LPCM 1ch 16-bit (codec 4) and that needs no decoder at all —
-// it is already the shape AetherSDR's audio path wants. The 8-bit and μ-law
-// forms are here because the negotiation is ours to make and a constrained WAN
-// link is a real reason to pick one; Opus (64) and ADPCM (128) are deliberately
-// NOT implemented, because each pulls in a dependency and neither is needed on
-// a LAN.
-//
-// A codec we did not implement must be REFUSED at negotiation rather than
-// requested and then mis-decoded — the failure mode of the latter is full-scale
-// noise into the operator's headphones.
+// We negotiate LPCM 1ch 16-bit (codec 4), which needs no decoder. The 8-bit and
+// μ-law forms exist for constrained WAN links; Opus (64) and ADPCM (128) are not
+// implemented. An unimplemented codec must be REFUSED at negotiation — requesting
+// it and mis-decoding puts full-scale noise in the operator's headphones.
 [[nodiscard]] bool codecSupported(AudioCodec c) noexcept;
 [[nodiscard]] int  codecChannels(AudioCodec c) noexcept;
 
@@ -49,19 +43,11 @@ namespace AetherSDR::icom {
 // Transmit packetisation
 // ---------------------------------------------------------------------------
 
-// A 20 ms frame at 48 kHz mono s16 is 1920 bytes, which does not fit one
-// comfortable datagram alongside the 24-byte header — so the protocol SPLITS it
-// across two packets of unequal size, 1364 + 556. Both directions use the pair.
-//
-// This class owns that split, plus the buffering that makes it possible: audio
-// arrives from AudioEngine in whatever block size the host device uses, which
-// is essentially never 1920 bytes.
-//
-// UNDERFLOW IS SILENCE, not a stall — the same rule MetisClient applies to the
-// HL2's TX queue, and for the same reason. Repeating the last frame puts a
-// periodic artefact on the air; blocking starves the stream's keepalives.
-// OVERFLOW DROPS THE OLDEST, because on transmit the freshest audio is the one
-// that matters.
+// A 20 ms frame at 48 kHz mono s16 is 1920 bytes, which the protocol splits
+// across two packets of 1364 + 556 bytes (both directions). This class owns that
+// split plus the buffering from AudioEngine's arbitrary block sizes.
+// Underflow sends SILENCE (repeating a frame puts an artefact on air; blocking
+// starves the stream keepalives). Overflow drops the OLDEST audio.
 class TxPacketizer {
 public:
     struct Chunk {

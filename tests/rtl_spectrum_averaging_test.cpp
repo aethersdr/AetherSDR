@@ -30,7 +30,7 @@ void check(bool value, const char* message)
 struct Probe {
     rtl::RtlSdrBackend backend;
     rtl::RtlSdrDdc& ddc = rtl::RtlCaptureBackendTestAccess::attach(backend);
-    QByteArray last, waterfall;
+    QByteArray last;
     int frames = 0;
     Probe(int average, bool weighted, int fps = 25)
     {
@@ -39,8 +39,6 @@ struct Probe {
         backend.setPanWeightedAverage("0xe1000000", weighted);
         QObject::connect(&ddc, &rtl::RtlSdrDdc::spectrumFrameReady,
             [&](int, const QByteArray& frame) { last = frame; ++frames; });
-        QObject::connect(&ddc, &rtl::RtlSdrDdc::waterfallRowReady,
-            [&](int, const QByteArray& frame) { waterfall = frame; });
     }
     float feed(float amplitude, int count)
     {
@@ -340,9 +338,8 @@ int main(int argc, char** argv)
         "disabled, low and high are measurably distinct");
     check(std::abs(logValue-(std::exp(-.04)*first+(1-std::exp(-.04))*last))<.002,
         "weighted toggle selects documented log-recursive mode");
-    check(raw.frames==2 && low.frames==2 && high.frames==2
-        && high.last==high.waterfall && log.last==log.waterfall,
-        "averaging preserves cadence and supplies the same samples to spectrum and waterfall history");
+    check(raw.frames==2 && low.frames==2 && high.frames==2,
+        "averaging preserves spectrum cadence");
     check(high.backend.capabilities().backendPanAveraging.has_value(),
         "backend averaging disables the widget's second EMA through its existing capability");
     high.backend.setPanAverage("0xe1000000",0);

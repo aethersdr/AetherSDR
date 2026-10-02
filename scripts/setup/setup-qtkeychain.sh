@@ -12,7 +12,7 @@
 #
 # Building from source — rather than apt-installing qtkeychain-qt6-dev —
 # guarantees the library matches the exact Qt the AppImage links (aqt Qt
-# 6.8.3 on x86_64), avoiding an ABI mismatch with the distro's Qt.
+# 6.12.0 on x86_64), avoiding an ABI mismatch with the distro's Qt.
 #
 # LIBSECRET_SUPPORT is OFF on purpose: that selects qtkeychain's pure
 # Qt-D-Bus Secret Service backend, which talks to KDE Wallet (kwalletd) and
@@ -42,18 +42,6 @@ QTKEYCHAIN_REPO="https://github.com/frankosterfeld/qtkeychain.git"
 QTKEYCHAIN_COMMIT="aa6da344e1a20b9194e12bace3665caeea6b6304"
 OUT_DIR="third_party/qtkeychain"
 
-# ── Already set up? (lets CI cache third_party/qtkeychain) ───────────────
-# The stamp carries the deployment target as well, so switching targets rebuilds
-# instead of reusing a dylib built for a different floor — the reuse would be
-# invisible until the DMG failed to launch on the older OS.
-STAMP="$OUT_DIR/.build-stamp"
-STAMP_CONTENT="version=$QTKEYCHAIN_VERSION target=${MACOS_DEPLOYMENT_TARGET:-host}"
-if [ -f "$OUT_DIR/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" ] &&
-   [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$STAMP_CONTENT" ]; then
-    echo "qtkeychain already set up in $OUT_DIR ($STAMP_CONTENT)"
-    exit 0
-fi
-
 # ── Locate Qt6 ───────────────────────────────────────────────────────────
 # CI sets CMAKE_PREFIX_PATH to the aqt Qt; fall back to Qt6_DIR or qmake.
 QT_PREFIX="${CMAKE_PREFIX_PATH:-}"
@@ -72,6 +60,21 @@ if [ -z "$QT_PREFIX" ]; then
     exit 1
 fi
 echo "Using Qt from: $QT_PREFIX"
+
+# ── Already set up? (lets CI cache third_party/qtkeychain) ───────────────
+# The stamp carries the deployment target as well, so switching targets rebuilds
+# instead of reusing a dylib built for a different floor — the reuse would be
+# invisible until the DMG failed to launch on the older OS. It carries the Qt
+# too, for the same reason: switching Qt (a distro Qt → setup-qt.sh's pinned
+# one) must rebuild, or the library left behind is an ABI mismatch against the
+# new Qt. Only the first prefix entry is the Qt; the rest are search paths.
+STAMP="$OUT_DIR/.build-stamp"
+STAMP_CONTENT="version=$QTKEYCHAIN_VERSION target=${MACOS_DEPLOYMENT_TARGET:-host} qt=${QT_PREFIX%%[:;]*}"
+if [ -f "$OUT_DIR/lib/cmake/Qt6Keychain/Qt6KeychainConfig.cmake" ] &&
+   [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$STAMP_CONTENT" ]; then
+    echo "qtkeychain already set up in $OUT_DIR ($STAMP_CONTENT)"
+    exit 0
+fi
 
 OUT_DIR_ABS="$(mkdir -p "$OUT_DIR" && cd "$OUT_DIR" && pwd)"
 BUILD_DIR="$(dirname "$OUT_DIR_ABS")/qtkeychain-build"

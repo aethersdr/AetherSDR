@@ -53,7 +53,6 @@ signals:
     void readError(const QString& message);
     // Stamp at production, never infer identity on delivery to the backend.
     void spectrumFrameReady(quint64 session, quint64 revision, int panId, const QByteArray& frame);
-    void waterfallRowReady(quint64 session, quint64 revision, int panId, const QByteArray& row);
     void audioFrameReady(quint64 session, quint64 revision, const QByteArray& pcm, const QByteArray& preMonitor);
 
 protected:

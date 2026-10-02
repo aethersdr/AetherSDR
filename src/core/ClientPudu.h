@@ -5,40 +5,20 @@
 
 namespace AetherSDR {
 
-// Client-side TX exciter — TX DSP chain Phase 5 (#1661).  The
-// centrepiece of the PooDoo Audio™ chain.  Two parallel bands ("Poo"
-// on the low end and "Doo" on the high end), each with a mode-
-// selectable algorithm:
-//
+// Client-side TX exciter (#1661), two parallel bands, mode-selectable:
 //   Mode A (Aphex):
-//     Doo = classic Aural Exciter — HPF → VGA → asymmetric diode
-//           soft-clip → DC block → attenuation.  Produces both odd
-//           and even harmonics.  Warm, "3-D" character.
-//     Poo = Big Bottom topology — LPF → envelope-follower dynamic
-//           EQ → soft saturation → attenuation.  Adds harmonic
-//           content to the low band, enhances perceived weight.
-//
+//     Doo = Aural Exciter: HPF -> VGA -> asymmetric diode soft-clip -> DC block
+//           -> attenuation (odd + even harmonics).
+//     Poo = Big Bottom: LPF -> envelope dynamic EQ -> soft saturation -> atten.
 //   Mode B (Behringer SX3040):
-//     Doo = symmetric soft-saturation HPF → drive → tanh → mix.
-//           Odd harmonics only, tighter and brighter.
-//     Poo = frequency-selective compressor + 2nd-order all-pass
-//           phase rotator.  No harmonic content; dynamic transient
-//           emphasis with phase-aligned re-injection into dry.
-//
-// Both modes expose the same six user knobs — only the DSP blocks
-// under the hood swap when Mode toggles:
-//
-//   Poo: Drive (0..24 dB)       -- saturation depth (A) / compressor intensity (B)
-//        Tune  (50..160 Hz)     -- LPF corner
-//        Mix   (0..1)           -- wet blend into dry sum
-//   Doo: Tune      (1..10 kHz)  -- HPF corner
-//        Harmonics (0..24 dB)   -- drive into the nonlinearity
-//        Mix       (0..1)       -- wet blend into dry sum
-//
-// Thread model mirrors the other DSP modules: UI thread writes
-// atomics + bumps a version counter; audio thread reads the version
-// once per block and recaches derived values.  No locks, no
-// allocations in process(), no exceptions.
+//     Doo = HPF -> drive -> tanh -> mix (odd harmonics only).
+//     Poo = frequency-selective compressor + 2nd-order all-pass rotator; no
+//           harmonics, transient emphasis.
+// Same six knobs in both modes:
+//   Poo: Drive (0..24 dB), Tune (50..160 Hz LPF), Mix (0..1)
+//   Doo: Tune (1..10 kHz HPF), Harmonics (0..24 dB), Mix (0..1)
+// UI thread writes atomics + bumps a version; the audio thread recaches per
+// block. No locks, allocations or exceptions in process().
 class ClientPudu {
 public:
     enum class Mode : uint8_t {

@@ -217,7 +217,7 @@ int main(int argc, char** argv)
     }
 
     // ---- nearestDdc0RateKsps: nearest by RATIO, not linear distance ----
-    // Mirrors hl2_backend_test's own span-snap table -- HERMES.md §15.1:
+    // Mirrors hl2_backend_seam_test's span-snap table -- HERMES.md §15.1:
     // these rates are octave-spaced and zoom is multiplicative, so a plain
     // linear "closest wins" search is provably wrong for a request between
     // the geometric and arithmetic mean of two adjacent rates. ANAN's first
@@ -236,7 +236,7 @@ int main(int argc, char** argv)
             {384, 384, "an exact rate is taken exactly"},
             {100, 96, "100 ksps snaps DOWN to 96 ksps, not up to 192 ksps"},
             // THE case that pins ratio-nearest rather than linear-nearest --
-            // see hl2_backend_test's own identical row for the exact math
+            // see hl2_backend_seam_test's identical row for the exact math
             // (geometric mean 135.8, arithmetic mean 144, so 140 falls on
             // opposite sides of the two rules). Without this row the log()
             // could be deleted and the suite would stay green.
@@ -421,6 +421,89 @@ int main(int argc, char** argv)
               "malformed attenuation restores both zero defaults");
         backend.applyRestoredState({});
         check(backend.attenuationDbForTest() == 0, "empty restore clears live attenuation");
+    }
+
+    // ---- the radio's own output level is NOT the per-slice stage ----
+    //
+    // Three levels exist and they must stay three: per-slice ("how loud is this
+    // receiver"), the client master ("how loud is this computer"), and lineout
+    // ("how loud is the radio"). The bug that made this necessary was reaching for
+    // the master slider and hearing the radio blast, because only the first of the
+    // three reached the radio at all.
+    {
+        AnanBackend backend;
+        std::optional<SliceDelta> last;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&last](int, const SliceDelta& d) { last = d; });
+
+        // Lineout is the RADIO's level, so it must not appear in the slice's
+        // published observation -- that field is the per-slice gain, and a lineout
+        // change writing it would make the receiver's own fader lie.
+        backend.setSliceAudioGain(0, 80);
+        last.reset();
+        backend.setLineoutGain(30);
+        check(!last.has_value(),
+              "a lineout change publishes no slice state, being a different level");
+        backend.setSliceAudioGain(0, 80);
+        check(!last.has_value(), "and it did not disturb the slice's own gain");
+
+        backend.setLineoutMute(true);
+        check(!last.has_value(), "a lineout mute is not the slice's mute either");
+        check(backend.lineoutMutedForTest(), "the lineout mute is stored");
+
+        // Clamped at this seam, like the per-slice gain. An earlier revision
+        // asserted this with check(true, ...) -- a test that could not fail, which
+        // is worse than no test because it reads as coverage.
+        check(backend.lineoutGainPercentForTest() == 30, "the lineout gain is stored");
+        backend.setLineoutGain(400);
+        check(backend.lineoutGainPercentForTest() == 100, "lineout gain above 100 clamps");
+        backend.setLineoutGain(-9);
+        check(backend.lineoutGainPercentForTest() == 0, "lineout gain below 0 clamps");
+    }
+
+    // ---- the receiver's audio stage: applied AND published ----
+    //
+    // Publishing is not cosmetic here. ModelReceiveControlTarget refuses an audio
+    // operation unless the capability is declared AND the slice carries an
+    // observation, so a backend that applied gain without echoing it would offer
+    // the control and then reject every use of it with "capability.unavailable".
+    {
+        AnanBackend backend;
+        std::optional<SliceDelta> last;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged,
+                         [&last](int, const SliceDelta& d) { last = d; });
+
+        backend.setSliceAudioGain(0, 70);
+        check(last.has_value() && last->audioGain.value_or(-1) == 70,
+              "a gain change publishes the applied gain");
+        backend.setSliceAudioMute(0, true);
+        check(last->audioMute.value_or(false), "a mute publishes the applied mute");
+        backend.setSliceAudioMute(0, false);
+        check(last->audioMute.has_value() && !last->audioMute.value(),
+              "an unmute publishes false, rather than dropping the observation");
+
+        // Out of range is clamped at the seam, not passed through to the audio.
+        backend.setSliceAudioGain(0, 500);
+        check(last->audioGain.value_or(-1) == 100, "gain above 100 clamps to 100");
+        backend.setSliceAudioGain(0, -20);
+        check(last->audioGain.value_or(-1) == 0, "gain below 0 clamps to 0");
+
+        // An idempotent set must not republish -- emitSliceState() is how the NB
+        // and mode fields reach the model too, so a setter that fired on every
+        // repeat would churn the whole slice on a slider the operator is holding
+        // still.
+        backend.setSliceAudioGain(0, 55);
+        last.reset();
+        backend.setSliceAudioGain(0, 55);
+        check(!last.has_value(), "re-setting the same gain publishes nothing");
+        backend.setSliceAudioMute(0, false);
+        check(!last.has_value(), "re-setting the same mute publishes nothing");
+
+        // Balance is applied but deliberately NOT published: SliceDelta carries no
+        // field for it, so there is no observation to echo. Pinning it here means a
+        // future field cannot be added without this test being revisited.
+        backend.setSliceAudioPan(0, 0);
+        check(!last.has_value(), "balance publishes nothing, having no delta field");
     }
 
     if (g_failures == 0)

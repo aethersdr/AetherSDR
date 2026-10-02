@@ -303,10 +303,16 @@ int main(int argc, char** argv)
     // still describe how the port is set up.
     CHECK(rowShows(portA, QStringLiteral("40")));
     CHECK(rowShows(portA, QStringLiteral("AAB")));
-    CHECK(rowShows(portA, QStringLiteral("FLEX-8600")));
     CHECK(rowShows(portB, QStringLiteral("N/A")));
     CHECK(rowShows(portB, QStringLiteral("AB")));
-    CHECK(rowShows(portB, QStringLiteral("FLEX-8600")));
+    // The source radio is configuration, so it is on the panel — visibly, and
+    // in the spoken sentence — on both ports. The strip widget is shared with
+    // the tuner, which hides this cell when it cannot say what is on a port;
+    // that must not leak into the amplifier's strips.
+    for (const AccessoryPortRow* row : {portA, portB}) {
+        CHECK(rowShowsVisible(row, QStringLiteral("FLEX-8600")));
+        CHECK(row->accessibleDescription().contains(QStringLiteral("FLEX-8600")));
+    }
 
     // The frequency cell is not on an amplifier's strip at all. The PGXL
     // reports no frequency per port, and a cell standing at N/A forever would

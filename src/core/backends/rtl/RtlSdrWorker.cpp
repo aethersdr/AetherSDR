@@ -29,10 +29,6 @@ RtlSdrWorker::RtlSdrWorker(std::unique_ptr<Device> device, QObject* parent, std:
         [this](int panId, const QByteArray& frame) {
             emit spectrumFrameReady(m_applied.session, m_applied.revision, panId, frame);
         }, Qt::DirectConnection);
-    connect(&m_ddc, &RtlSdrDdc::waterfallRowReady, this,
-        [this](int panId, const QByteArray& frame) {
-            emit waterfallRowReady(m_applied.session, m_applied.revision, panId, frame);
-        }, Qt::DirectConnection);
     connect(&m_ddc, &RtlSdrDdc::audioFrameReady, this,
         [this](const QByteArray& pcm, const QByteArray& preMonitor) {
             emit audioFrameReady(m_applied.session, m_applied.revision, pcm, preMonitor);

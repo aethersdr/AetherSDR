@@ -2,9 +2,7 @@
 //
 // WHY THIS TEST EXISTS AND WHAT IT CANNOT COVER. The end-to-end seam here is
 // Hl2Backend::applyPanBandwidth() driving three threads, and exercising that
-// needs a MetisClient and a localhost peer — the fixture class tests/tests.cmake
-// deliberately retired. An assertion written against hl2_backend_test would sit
-// inside that retired block and be green forever.
+// needs a MetisClient and a localhost peer, which the default graph excludes.
 //
 // So what is pinned here is the rule that was actually broken: a crossing that
 // has not written the register has not changed the rate, no matter what the

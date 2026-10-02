@@ -7,16 +7,10 @@ namespace AetherSDR { struct ReceiveFilterControl; }
 
 namespace AetherSDR::ModeFilters {
 
-// The per-mode filter ladders and the width -> passband-edges rule, lifted out
-// of VfoWidget so a second surface can offer the same filter widths without a
-// second copy of the arithmetic. Two things ask for them now: the VFO's filter
-// grid, and the width row under AetherRX's EQ.
-//
-// The edge rule is not uniform across modes -- SSB pins its low cut and derives
-// the high, CW centres on the carrier, DIGU/DIGL centre on a stored offset,
-// RTTY straddles mark and space -- and every one of those clauses was written
-// against a specific radio behaviour. They are moved here unchanged, comments
-// and issue numbers included; this header adds no rule of its own.
+// Per-mode filter ladders and the width → passband-edges rule, shared by the
+// VFO filter grid and AetherRX's width row. The rule differs per mode (SSB pins
+// the low cut, CW centres on the carrier, DIGU/DIGL on a stored offset, RTTY
+// straddles mark and space); each clause matches a specific radio behaviour.
 
 // What the slice contributes to the edge calculation. Everything else the rule
 // needs is the mode and the width.

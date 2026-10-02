@@ -90,17 +90,11 @@ public:
     // Sample rate validation & clamping against hardware / capabilities constraints
     static uint32_t clampSampleRate(uint32_t requestedHz);
 
-    // Tuner gain an unconfigured dongle comes up at.
-    //
-    // NOT ZERO, and the distinction is the whole point: rtlsdr_set_tuner_gain_mode(dev, 1)
-    // hands the operator manual control of the tuner, and nearestGainTenths() then snaps
-    // the request onto the tuner's own discrete table. Both the R820T and the R828D start
-    // that table at exactly 0.0 dB, so a 0 default did not mean "unset" -- it programmed
-    // the LOWEST gain the hardware offers, and the receiver came up deaf on a strong local
-    // signal. Measured on an RTL-SDR Blog V4 (R828D): 24 snaps to the table's 22.9 dB entry
-    // and a nearby WFM broadcast is clearly audible; at 0.0 dB the same station is
-    // inaudible. Mid-table rather than max: the top of the R828D table (49.6 dB) overloads
-    // the front end on the same signal.
+    // Tuner gain an unconfigured dongle comes up at. Not 0: with manual gain mode,
+    // nearestGainTenths() snaps onto the tuner table, which starts at 0.0 dB on both
+    // R820T and R828D, so 0 programs the lowest gain (deaf receiver). Measured on an
+    // RTL-SDR Blog V4 (R828D): 24 snaps to 22.9 dB and a nearby WFM station is
+    // audible; the table top (49.6 dB) overloads the front end on the same signal.
     static constexpr int kDefaultRfGainDb = 24;
     // Increase only with the integrated architecture evidence described in
     // docs/rtl-m1-runtime.md. This is independent of the eight stable slots.

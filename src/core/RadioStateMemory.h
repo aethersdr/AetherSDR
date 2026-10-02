@@ -6,29 +6,13 @@
 
 namespace AetherSDR {
 
-// The client-side memory for radios that have none of their own (RFC #4603
-// proposal B). Engagement is decided by ONE rule and it is capability-shaped,
-// never family-shaped: a radio's declared ClientSettingsDomains says which
-// domains the client persists and restores. Empty (Flex, Sim) ⇒ this class is
-// inert and the radio-authoritative policy (Constitution II/III) is untouched.
-//
-// PR 2 scope (this file): the store/load round-trip of the operating-state
-// feature document and the domain gating. The live capture wiring (model
-// deltas → debounced store) and the per-domain field application — including
-// the per-band drive/LNA maps from nigelfenton's RFC review — land in PR 3
-// together with the HL2 restore path.
-//
-// Two deliberate contract points (PR #4614 review):
-// - store() is READ-ONLY TOWARD NEWER DOCUMENTS: it refuses to overwrite a
-//   document whose schema_version exceeds kSchemaVersion, because a rebuild
-//   at this version would drop unknown fields and downgrade the version.
-// - store() writes the whole document filtered to the DECLARED domains — so a
-//   session under a NARROWER declaration doesn't just skip the undeclared
-//   domains, it erases them from the stored document. Harmless while
-//   declarations are static per family; revisit if they ever become dynamic.
-// The Memories domain is deliberately absent from the extension gate: the
-// host-side memory bank (#4590) gets its own feature documents (PR 6) —
-// one domain, one document.
+// Client-side memory for radios with none of their own (RFC #4603). Engagement
+// is capability-shaped: the radio's ClientSettingsDomains says which domains the
+// client persists and restores; empty (Flex, Sim) leaves this inert.
+// store() refuses to overwrite a document whose schema_version exceeds
+// kSchemaVersion (a rebuild would drop unknown fields), and writes only the
+// DECLARED domains, so a narrower declaration erases the others. Memories is
+// not gated here; the host memory bank (#4590) has its own documents.
 namespace RadioStateMemory {
 
 // The feature document name in radio_settings, and its current schema.

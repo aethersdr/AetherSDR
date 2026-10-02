@@ -39,8 +39,6 @@ struct RtlCaptureBackendTestAccess {
     static T::State state(const RtlSdrBackend& backend) { return *backend.m_capture.confirmed(); }
     static void spectrum(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
     { emit backend.m_worker->spectrumFrameReady(token.session, token.revision, 0, frame); }
-    static void waterfall(RtlSdrBackend& backend, const QByteArray& frame, T::Token token)
-    { emit backend.m_worker->waterfallRowReady(token.session, token.revision, 0, frame); }
 };
 }
 static int failures = 0;
@@ -483,14 +481,13 @@ int main(int argc, char** argv)
         rtl::RtlSdrBackend multiple;
         QSet<int> live;
         QMap<int, PcmFrame> frames;
-        int sliceAudioPackets = 0, spectra = 0, waterfalls = 0;
+        int sliceAudioPackets = 0, spectra = 0;
         QObject::connect(&multiple, &IRadioBackend::sliceChanged, [&](int id, const SliceDelta&) { live.insert(id); });
         QObject::connect(&multiple, &IRadioBackend::sliceRemoved, [&](int id) { live.remove(id); });
         QObject::connect(&multiple, &IRadioBackend::sliceAudioFrameReady, [&](int id, const PcmFrame& frame) {
             frames[id] = frame; ++sliceAudioPackets;
         });
         QObject::connect(&multiple, &IRadioBackend::spectrumFrameReady, [&](int, const QByteArray&) { ++spectra; });
-        QObject::connect(&multiple, &IRadioBackend::waterfallRowReady, [&](int, const QByteArray&) { ++waterfalls; });
         rtl::RtlCaptureBackendTestAccess::start(multiple, std::make_unique<InjectedDevice>(device), 4);
         device->releaseReadback();
         check(waitFor([&] { return multiple.isConnected(); }), "multi-receiver backend starts on accepted capture");
@@ -527,23 +524,21 @@ int main(int argc, char** argv)
             "parked slices preserve configured RF, IDs and settings across capture retune");
         check(!activeFrame.current(), "park revokes the previously published native PCM stream");
         const int audioAtPark = sliceAudioPackets;
-        const int iqSpectraAtPark = spectra, iqWaterfallsAtPark = waterfalls;
+        const int iqSpectraAtPark = spectra;
         for (int i = 0; i < 64; ++i) { pump(); QCoreApplication::processEvents(); }
         QThread::msleep(20); QCoreApplication::processEvents();
         check(sliceAudioPackets == audioAtPark,
             "IQ callbacks with every slice parked publish no slice PCM");
-        check(spectra > iqSpectraAtPark && waterfalls > iqWaterfallsAtPark,
-            "parked IQ callbacks continue producing spectrum and waterfall rows");
+        check(spectra > iqSpectraAtPark,
+            "parked IQ callbacks continue producing spectrum frames");
         const QByteArray raw(rtl::RtlSdrDdc::kSpectrumBinCount * static_cast<int>(sizeof(float)), '\0');
-        const int spectraAtPark = spectra, waterfallsAtPark = waterfalls;
+        const int spectraAtPark = spectra;
         rtl::RtlCaptureBackendTestAccess::spectrum(multiple, raw, parked.token);
-        rtl::RtlCaptureBackendTestAccess::waterfall(multiple, raw, parked.token);
-        check(spectra == spectraAtPark + 1 && waterfalls == waterfallsAtPark + 1,
-            "current parked-capture token admits spectrum and waterfall frames");
+        check(spectra == spectraAtPark + 1,
+            "current parked-capture token admits spectrum frames");
         rtl::RtlCaptureBackendTestAccess::spectrum(multiple, raw, beforePark.token);
-        rtl::RtlCaptureBackendTestAccess::waterfall(multiple, raw, beforePark.token);
-        check(spectra == spectraAtPark + 1 && waterfalls == waterfallsAtPark + 1,
-            "pre-park FFT and waterfall revisions cannot leak into the parked view");
+        check(spectra == spectraAtPark + 1,
+            "pre-park FFT revisions cannot leak into the parked view");
         multiple.setPanCenter(QStringLiteral("0xe1000000"), 100'000'000,
             IRadioBackend::PanCenterIntent::Drag);
         check(waitFor([&] { return !rtl::RtlCaptureBackendTestAccess::busy(multiple)
@@ -554,10 +549,9 @@ int main(int argc, char** argv)
             "resume preserves RF settings and publishes a new capture revision");
         check(waitFor([&] { pump(); return sliceAudioPackets > audioAtPark && frames[0].current(); }),
             "resumed receiver produces fresh native PCM");
-        const int spectraAtResume = spectra, waterfallsAtResume = waterfalls;
+        const int spectraAtResume = spectra;
         rtl::RtlCaptureBackendTestAccess::spectrum(multiple, raw, parked.token);
-        rtl::RtlCaptureBackendTestAccess::waterfall(multiple, raw, parked.token);
-        check(spectra == spectraAtResume && waterfalls == waterfallsAtResume,
+        check(spectra == spectraAtResume,
             "parked-capture frames cannot leak after automatic resume");
         // Deliberately stop servicing the owner while the injected acquisition
         // produces real FM packets. This is queue saturation, not a fake counter.

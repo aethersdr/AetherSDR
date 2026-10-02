@@ -2,10 +2,9 @@
 
 #ifdef HAVE_NVIDIA_AFX
 
-#include "MonoDspStereoAdapter.h"
-
 #include <QByteArray>
 #include <QString>
+#include <array>
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -14,19 +13,13 @@ namespace AetherSDR {
 
 class Resampler;
 
-// Optional GPU noise removal using the NVIDIA Maxine Audio Effects SDK
-// (the "denoiser"/BNR effect). The AFX runtime (libnv_audiofx + the bundled
-// CUDA/TensorRT libs) is NOT linked at build time — it is dlopen'd at runtime
-// from a downloaded/cached "pack" so the shipped app carries none of the
-// ~2 GB GPU runtime. Requires an NVIDIA RTX/GeForce GPU (Turing+).
-//
-// The immutable input/output domain is 24 or 48 kHz stereo float32. Legacy24
-// retains its SRC pair; native48 reaches the model without SRC. Both keep
-// the existing mono analysis/stereo level-balance policy and byte count.
-//
-// Thread-safe parameter setters (GUI thread writes atomics, audio thread reads).
-// dlopen + TensorRT engine build happen in the constructor (call OFF the audio
-// thread); process() is the only audio-thread entry point.
+// Optional GPU noise removal via the NVIDIA Maxine Audio Effects SDK (BNR). The
+// AFX runtime (libnv_audiofx + CUDA/TensorRT) is not linked: it is dlopen'd from
+// a downloaded "pack", so the app ships none of the ~2 GB. Needs an RTX/GeForce
+// GPU (Turing+). I/O is 24 or 48 kHz stereo float32 (Legacy24 via SRC, native48
+// direct), one effect per channel. Setters: GUI writes atomics, audio thread
+// reads. dlopen and the TensorRT build run in the constructor (call OFF the audio
+// thread); process() is the only audio-thread entry.
 
 class NvidiaAfxFilter {
 public:
@@ -46,9 +39,8 @@ public:
     // (same format, same byte count). No-op passthrough until the engine is ready.
     QByteArray process(const QByteArray& pcmStereo);
 
-    // Flush wrapper jitter accumulators, stereo balance and resamplers.
-    // This does not reset SDK recurrent state. Recreate the complete filter
-    // for a new source or discontinuity that requires a clean algorithm epoch.
+    // Flush wrapper jitter accumulators and resamplers, and reset the SDK
+    // effects' recurrent state (NvAFX_Reset).
     void reset();
 
     // True once the effect is created, model loaded, and the engine is ready.
@@ -64,26 +56,30 @@ public:
 private:
     const int m_sampleRate;
     bool loadRuntime(const QString& packDir);   // dlopen the pack libs + dlsym API
-    bool createDenoiser(const QString& packDir); // CreateEffect..Load
+    bool createDenoiser(const QString& packDir, void** handle); // CreateEffect..Load
+    void createResamplers();
+    void resetEffect(void* handle);
     void teardown();
 
     struct Api;                                 // dlsym'd NvAFX_* function pointers
     std::unique_ptr<Api> m_api;
-    void* m_handle{nullptr};                    // NvAFX_Handle (opaque)
+    std::array<void*, 2> m_handles{};           // NvAFX_Handle per channel (opaque)
     std::vector<void*> m_dlHandles;             // dlopen handles, closed in dtor
 
     int m_afxFrame{0};                          // AFX samples/frame @ 48 kHz (e.g. 480)
     bool m_ready{false};
     QString m_lastError;
 
-    std::unique_ptr<Resampler> m_up;            // 24 kHz stereo → 48 kHz mono
-    std::unique_ptr<Resampler> m_down;          // 48 kHz mono → 24 kHz stereo
-    QByteArray m_inAccum;                        // 48 kHz mono float input
-    QByteArray m_outAccum;                       // 24 kHz stereo float output
+    // Per channel, indexed 0 = left, 1 = right.
+    std::array<std::unique_ptr<Resampler>, 2> m_up;    // 24 kHz → 48 kHz
+    std::array<std::unique_ptr<Resampler>, 2> m_down;  // 48 kHz → 24 kHz
+    std::array<QByteArray, 2> m_inAccum;               // 48 kHz float input
+    std::array<std::vector<float>, 2> m_channelInput;
+    std::array<std::vector<float>, 2> m_runScratch;    // reused NvAFX_Run output buffer
+    std::array<QByteArray, 2> m_channelOutput;         // configured-rate float output
+    bool m_lockstepWarned{false};                      // L/R output length mismatch logged
+    QByteArray m_outAccum;                       // configured-rate stereo float output
     int        m_outReadPos{0};                 // read cursor into m_outAccum
-    MonoDspStereoAdapter m_stereoAdapter;
-    std::vector<float> m_monoInput;
-    std::vector<float> m_runScratch;            // reused NvAFX_Run output buffer
 
     std::atomic<float> m_intensity{1.0f};
     std::atomic<bool>  m_paramsDirty{false};

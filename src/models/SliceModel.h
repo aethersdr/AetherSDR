@@ -139,17 +139,12 @@ public:
     // here so callers above the radio seam need no vendor header (#5384).
     int     receiveAgcThresholdMinimum() const;
     int     receiveAgcThresholdMaximum() const;
-    // The AGC-T knob on the controller surfaces (the MIDI/StreamDeck/Ulanzi
-    // parameter registry, the FlexControl/TMate2 wheel funnel, the keyboard
-    // steps) is ONE knob backed by TWO properties, selected by the receive-side
-    // AGC mode: agc_off_level while AGC is off, agc_threshold otherwise
-    // (FlexLib Slice.cs AGCOffLevel / AGCThreshold; docs/agc-t-calibration-
-    // design.md). The GUI slider has honoured that split since #1183; these
-    // members give the controller surfaces the same decision in one place
-    // (#5384). The calibrator, CAT, TCI, the bridge verb and band-snapshot
-    // restore address the two properties by name and do not route through
-    // here. Ranges: agc_off_level is 0..100 on every backend; the threshold
-    // keeps the span receiveAgcThresholdMinimum()/Maximum() report.
+    // The controller-surface AGC-T knob (MIDI/StreamDeck/Ulanzi registry,
+    // FlexControl/TMate2 wheel, keyboard) is one knob over two properties:
+    // agc_off_level while AGC is off, agc_threshold otherwise (FlexLib Slice.cs
+    // AGCOffLevel/AGCThreshold; docs/agc-t-calibration-design.md, #5384). Calibrator,
+    // CAT, TCI, bridge and band restore address the properties by name instead.
+    // agc_off_level is 0..100; the threshold spans receiveAgcThresholdMinimum/Maximum.
     bool    agcTKnobUsesOffLevel() const;
     int     agcTKnobMinimum() const;
     int     agcTKnobMaximum() const;
@@ -188,22 +183,11 @@ public:
     // the active slice doesn't pull in another slice's threshold (#3326).
     int     manualSquelchLevel() const { return m_manualSquelchLevel; }
     void    setManualSquelchLevel(int level) { m_manualSquelchLevel = qBound(0, level, 100); }
-    // Whether a radio-echoed squelch_level for this slice should be taken as
-    // the operator's manual choice.  Driven by whichever surface owns the
-    // slice's SQL mode (RxApplet), and true only while that mode is Manual:
-    //   Manual — the echo is a genuine manual level (the operator's own
-    //            edit, another Multi-Flex client, or session restore) and
-    //            must update the manual memory.
-    //   Auto   — the level is algorithm-computed and re-pushed every tick.
-    //   Off    — the mode push sends sqlManualLevel(), but nothing keeps a
-    //            disabled squelch's level pinned, so an echo here is not a
-    //            threshold the operator chose either.
-    // Adopting the last two would silently overwrite the threshold the
-    // operator actually chose (#4592) — the same silent-overwrite class
-    // #3326 fixed, reached via the status-echo path rather than a direct
-    // client write.  Defaults true so a slice with no surface attached (a
-    // non-active VFO flag, a slice reclaimed from a previous session) still
-    // tracks genuine manual changes — the leak #4592 part 1 set out to close.
+    // Whether a radio-echoed squelch_level is the operator's manual choice. Set by
+    // the surface owning the SQL mode (RxApplet); true only in Manual. In Auto the
+    // level is algorithm-computed, and in Off nothing pins it, so adopting either
+    // would overwrite the operator's threshold (#4592). Defaults true so a slice
+    // with no surface attached still tracks genuine manual changes.
     void    setSquelchEchoIsManual(bool isManual) { m_squelchEchoIsManual = isManual; }
     bool    ritOn()       const { return m_ritOn; }
     int     ritFreq()     const { return m_ritFreq; }
@@ -412,19 +396,10 @@ signals:
     // configuring a DSP AGC needs the pair to act on either.
     void agcCommandIssued(const QString& mode, int thresholdDb);
 
-    // RECEIVE DSP THE RADIO RUNS. Same contract as the signals above: emitted
-    // only by the operator-facing setters, never by status application, so a
-    // radio's own echo can never come back as a fresh command (Principle II).
-    //
-    // These exist because every one of these controls used to emit FlexRadio
-    // wire text and nothing else. On a Flex that string IS the command; on any
-    // other backend it was discarded, and there was no seam verb for a backend
-    // to implement instead — so declaring hasRadioSideDsp bought nothing and
-    // the control moved while the radio never heard about it.
-    //
-    // Enable and level travel TOGETHER because a radio that has a level
-    // register generally needs both to make either meaningful, and because the
-    // two arriving separately is how a toggle lands before the level it implies.
+    // Receive DSP the radio runs. Emitted only by operator-facing setters, never
+    // by status application, so a radio echo never returns as a command. These are
+    // the seam for non-Flex backends (Flex sends wire text). Enable and level travel
+    // together so a toggle never lands before the level it implies.
     void noiseReductionCommandIssued(bool on, int level);
     void noiseBlankerCommandIssued(bool on, int level);
     void autoNotchCommandIssued(bool on);
@@ -435,16 +410,9 @@ signals:
     // Receive and transmit incremental tuning.
     void ritCommandIssued(bool on, int hz);
     void xitCommandIssued(bool on, int hz);
-    // Operator-issued per-slice AUDIO changes, same discipline as the three
-    // above: audioMuteChanged/audioGainChanged/audioPanChanged also fire when
-    // radio status is applied, so driving a command off those would echo the
-    // radio's own state back as a request (Principle II).
-    //
-    // These exist because a Flex mixes its slices ON THE RADIO and these
-    // controls are wire commands to it, while a host-mixing backend (HL2)
-    // demodulates every receiver here and has to apply them in its own mixer.
-    // Without them the operator's mute moved the model and the fader, and the
-    // audio kept playing.
+    // Operator-issued per-slice audio changes. audioMute/Gain/PanChanged also fire
+    // on status apply, so commands must not be driven off them. A Flex mixes on the
+    // radio; a host-mixing backend (HL2) applies these in its own mixer.
     void audioMuteCommandIssued(bool mute);
     void audioGainCommandIssued(int gainPercent);
     void audioPanCommandIssued(int panPercent);      // 0=left, 50=centre, 100=right

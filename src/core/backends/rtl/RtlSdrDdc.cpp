@@ -348,7 +348,6 @@ void RtlSdrDdc::processDisplaySpectrum(std::span<const std::complex<float>> samp
         const QByteArray frame(reinterpret_cast<const char*>(m_displayBins.data()),
                                kSpectrumBinCount * int(sizeof(float)));
         emit spectrumFrameReady(0, frame);
-        emit waterfallRowReady(0, frame);
     }
 }
 

@@ -712,16 +712,10 @@ void AtuPreTuneDialog::beginNextPoint()
     const QPointer<AtuPreTuneDialog> self(this);
     const TxCoordinator::Request original = m_programInput.request();
 
-    // On first point of each band, zoom the panadapter out to the full-band
-    // view so the operator sees the whole band being swept rather than the
-    // slice-local zoom from before the sweep started. (#2624)
-    //
-    // Mirror MainWindow::applyPanRangeRequest's optimistic-update pattern:
-    // push center+bandwidth together onto the PanadapterModel BEFORE sending
-    // the radio command so SpectrumWidget reprojects both FFT and waterfall
-    // in one shot.  Skipping the optimistic update produced the same
-    // FFT-changes-but-waterfall-doesn't bug the canonical path was written
-    // to avoid.
+    // On each band's first point, zoom the pan to the full band (#2624). Update
+    // PanadapterModel centre+bandwidth together before the radio command, like
+    // MainWindow::applyPanRangeRequest, so SpectrumWidget reprojects FFT and
+    // waterfall in one shot.
     const bool firstOfBand = (m_currentIndex == 0)
         || (m_points[m_currentIndex - 1].bandName != p.bandName);
     if (firstOfBand && !m_originalPanId.isEmpty() && p.bandHighMhz > p.bandLowMhz) {
