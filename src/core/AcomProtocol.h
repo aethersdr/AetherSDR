@@ -11,20 +11,12 @@
 
 namespace AetherSDR {
 
-// ACOM S-series (500S/600S/700S/1200S/1400S/2020S) RS-232 amplifier protocol.
-//
-// Protocol authority: "RF Amplifier ACOM 600S Serial Port Communication
-// Protocol", v1.1 (2014-12-04), eng. Nikolay Nenov — the manufacturer's own
-// published spec (see docs/architecture/acom-600s-amplifier-design.md and
-// THIRD_PARTY_LICENSES for the full provenance record). Framing is identical
-// across the whole S-series; only power-scaling constants and PAM2-field
-// presence differ per model (see AcomModelSpec below).
-//
-// Wire framing (both directions):
-//   | 0x55 | Address | Length | ...Data... | Checksum |
-// Length counts every byte in the frame including the start byte and the
-// checksum itself. Checksum = 256 - (sum of all prior bytes & 0xFF); a
-// valid frame's full byte sum is 0 mod 256.
+// ACOM S-series (500S..2020S) RS-232 amplifier protocol. Authority: "RF Amplifier
+// ACOM 600S Serial Port Communication Protocol" v1.1 (2014-12-04); provenance in
+// docs/architecture/acom-600s-amplifier-design.md. Framing is identical across
+// the series; only scaling and PAM2 fields differ (AcomModelSpec).
+// Frame: | 0x55 | Address | Length | ...Data... | Checksum |. Length counts every
+// byte incl. start and checksum; Checksum = 256 - (sum of prior bytes & 0xFF).
 namespace Acom {
 
 constexpr quint8 kStartByte = 0x55;
@@ -159,16 +151,9 @@ std::optional<Telemetry> decodeTelemetry(const QByteArray& payload);
 // ("?m" in the amp's own display convention).
 QString bandName(int index);
 
-// Human-readable name for Telemetry::errorCode (Byte 66 of 0x2F — the
-// single currently-displayed alarm condition). This is a small, verified
-// subset (cross-checked against both the spec's bit-name table in message
-// 0x21 and a working open-source reference client — see
-// docs/architecture/acom-600s-amplifier-design.md and THIRD_PARTY_LICENSES)
-// covering the faults an operator is actually likely to see. The full 0x21
-// message carries ~80 independently-named bits across 10 words for a
-// complete fault dashboard; that full table is a documented follow-up, not
-// transcribed here yet — see the design doc's provenance notes on why a
-// partial, verified table beats a large, unverified one.
+// Name for Telemetry::errorCode (byte 66 of 0x2F, the currently displayed alarm).
+// A verified subset (spec 0x21 bit table + reference client) of the faults an
+// operator is likely to see; the full ~80-bit 0x21 table is not transcribed.
 QString errorCodeName(quint8 code);
 
 // ── System config decode (address 0x11, one-shot on request) ────────────

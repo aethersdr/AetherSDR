@@ -4,21 +4,12 @@
 
 namespace AetherSDR {
 
-// Pure-math helper: generates evenly-spaced sweep center frequencies (MHz)
-// for an ATU pre-tune across [lowMhz, highMhz] using segmentKhz-wide
-// segments.  Header-only so the unit test can include this directly
-// without dragging in the dialog (#2648).
-//
-// Centers are evenly-spaced starting at lowMhz + seg/2.  Each segment of
-// width segMhz fits inside the band when center + seg/2 <= highMhz; we
-// keep adding centers while this holds.  If room remains at the top
-// after the regular loop, an extra clamped center is appended at
-// highMhz - seg/2 so the band end isn't left uncovered.  This matches
-// the per-band counts in the IARU R1 reference table in issue #2624.
-//
-// Edge cases:
-//   * segmentKhz <= 0 or highMhz <= lowMhz → empty result.
-//   * (highMhz - lowMhz) < segMhz → empty (single segment cannot fit).
+// Evenly spaced ATU pre-tune sweep centres (MHz) across [lowMhz, highMhz] in
+// segmentKhz segments, header-only for the unit test (#2648). Centres start at
+// lowMhz + seg/2 and continue while center + seg/2 <= highMhz; if room remains,
+// a clamped centre at highMhz - seg/2 covers the band top. Matches the IARU R1
+// per-band counts in #2624. Empty if segmentKhz <= 0, highMhz <= lowMhz, or the
+// span is narrower than one segment.
 inline QVector<double> computeCenters(double lowMhz, double highMhz, int segmentKhz)
 {
     QVector<double> out;

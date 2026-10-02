@@ -9,25 +9,10 @@
 
 namespace AetherSDR {
 
-// Persistence helper for display-related UI toggles (the SmartMTR meter view
-// and its options; future display-feature toggles land here as additional
-// fields).
-//
-// Stored as a nested JSON blob under AppSettings["Display"], per the
-// nested-JSON-per-feature convention (constitution Principle V).
-//
-// RETIRED KEYS — do not reuse. Pre-removal installs still carry these values,
-// so a new feature reusing the name would inherit stale state (e.g. a
-// leftover "True" force-enabling itself):
-//   - "leanMode" (nested, this blob) — Lean Mode, removed with #3283's
-//     mitigation retirement; ex-lean users have "True" persisted.
-//   - "LeanMode" (legacy flat AppSettings key) — pre-blob spelling, was
-//     migrated by the now-removed migrateLegacy().
-//   - "TitleBar" (legacy flat AppSettings JSON blob) — held the removed
-//     title-bar Pan Lock control state.
-//   - "panLockEnabled" (nested in "TitleBar") — removed title-bar Pan Lock.
-//   - "PanLockEnabled" (legacy flat AppSettings key) — pre-blob Pan Lock
-//     spelling migrated by the now-removed TitleBarSettings helper.
+// Display UI toggles (SmartMTR view and options), stored as nested JSON under
+// AppSettings["Display"]. Retired keys, never reuse (old installs still carry
+// values, e.g. "True"): "leanMode" (nested), "LeanMode" (flat), "TitleBar"
+// (flat blob), "panLockEnabled" (nested in TitleBar), "PanLockEnabled" (flat).
 class DisplaySettings {
 public:
     static int waterfallTimeMarkerSeconds(int slot)

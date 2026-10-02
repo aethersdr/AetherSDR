@@ -2,9 +2,10 @@
 
 Pre-drafted `AGENTS.md` blocks for the aetherd migration
 ([`aetherd-headless-engine-design.md`](aetherd-headless-engine-design.md)).
-`AGENTS.md` is executable law for this repo's AI contributors: it must
+Blocks land in `docs/agents/backends.md`, the backends sub-doc of
+`AGENTS.md`. The agent guide is executable law for this repo's AI contributors: it must
 describe the tree as it **is**, never as the RFC hopes it will be. So each
-block below lands in `AGENTS.md` **in the same PR** as the milestone it
+block below lands in `docs/agents/backends.md` **in the same PR** as the milestone it
 describes — never earlier, never later.
 
 **Landing rules:**
@@ -14,9 +15,9 @@ describes — never earlier, never later.
 2. **Reconcile before landing.** File names, script names, and CI check
    names below are proposals. If the implementation chose different names,
    fix the block, not the code.
-3. **Burn down.** When a block lands in `AGENTS.md`, delete it from this
+3. **Burn down.** When a block lands in `docs/agents/backends.md`, delete it from this
    file. When this file is empty, delete it and drop the pointer to it
-   from `AGENTS.md` and the RFC.
+   from `docs/agents/backends.md` and the RFC.
 4. **Track the RFC.** If a §10 step changes shape during sign-off or
    implementation, update its block here in the same PR that changes
    the RFC.

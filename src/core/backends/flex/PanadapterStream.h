@@ -25,21 +25,13 @@ namespace AetherSDR {
 class RadioConnection;
 class OpusCodec;
 
-// Receives all VITA-49 UDP datagrams from the radio on the single "client udpport"
-// and routes them by PacketClassCode (bytes 14-15 of the VITA-49 class ID):
-//   • PCC 0x03E3 → narrow audio, float32 stereo big-endian  → pcmFrameReady()
-//   • PCC 0x0123 → narrow audio reduced-BW, int16 mono BE   → pcmFrameReady()
-//   • PCC 0x8003 → panadapter FFT bins                      → spectrumReady()
-//   • PCC 0x8004 → waterfall tiles (Width×Height uint16)    → waterfallRowReady()
-//   • PCC 0x8002 → meter data (id/value pairs)             → meterDataReady()
-//   • everything else → silently dropped
-//
-// All packets from the radio use ExtDataWithStream (VITA-49 type 3), not IFDataWithStream.
-//
-// Protocol:
-//   1. Call start(conn) - binds a unique local LAN VITA UDP port.
-//   2. Register the port with the radio via "client udpport <port>" (done by RadioModel).
-//   3. The radio streams panadapter and audio to that port.
+// Receives all VITA-49 (ExtDataWithStream, type 3) datagrams on the single
+// "client udpport" and routes them by PacketClassCode (class ID bytes 14-15):
+//   0x03E3 float32 stereo / 0x0123 int16 mono / 0x8005 Opus → pcmFrameReady()
+//   0x8003 FFT → spectrumReady()   0x8004 waterfall tiles → waterfallRowReady()
+//   0x8002 meters → meterDataReady()   DAX audio/IQ by stream id; others dropped.
+// start(conn) binds a local UDP port; RadioModel registers it with
+// "client udpport <port>".
 
 class PanadapterStream : public QObject {
     Q_OBJECT
@@ -95,17 +87,11 @@ public:
     void unregisterWfStream(quint32 streamId);
     void clearRegisteredStreams();
 
-    // ── Layer A: radio-side UDP-orphan leak detector (#3856) ────────────────
-    // The client view always looks clean after a close because the "removed"
-    // echo unregisters both streams locally. But if the radio was never told to
-    // free a stream (e.g. a panafall closed without "display panafall remove")
-    // it KEEPS transmitting tiles for an id we no longer own. processDatagram()
-    // records any FFT/waterfall packet whose stream id was EVER registered this
-    // session AND is no longer registered — a stream we once owned and let go of
-    // that the radio still streams. (A never-yet-registered id in its
-    // registration-lag window is deliberately ignored.) A growing orphan packet
-    // count with a small age is direct, radio-authoritative proof of a leaked,
-    // still-streaming display stream — the kind seen on older firmware (#268).
+    // Layer A radio-side orphan detector (#3856): processDatagram() records any
+    // FFT/waterfall packet whose stream id was registered earlier this session but
+    // no longer is, i.e. a stream the radio was never told to free and still sends
+    // (seen on older firmware, #268). Never-yet-registered ids are ignored
+    // (registration lag).
     struct OrphanStream {
         quint32 streamId{0};
         bool    waterfall{false};  // true = waterfall tile stream, false = FFT
@@ -123,26 +109,14 @@ public:
     QList<quint32> daxStreamIds() const;
     quint32 daxStreamIdForChannel(int channel) const;
 
-    // ---- Centralized DAX RX channel ownership (#3305) ----
-    //
-    // Every in-process consumer of a dax_rx channel (the virtual-audio bridge,
-    // TCI, RADE) acquires/releases the channel here instead of tracking stream
-    // ids and peeking at each other's state. PanadapterStream keeps the
-    // channel → (streamId, holders) table and is the ONLY place that decides
-    // when a radio-side stream must exist:
-    //
-    //   acquire, first holder  → emit daxStreamCreateNeeded(ch)
-    //   release, last holder   → deferred (grace + revalidate) →
-    //                            emit daxStreamRemoveNeeded(id, ch)
-    //   radio removed a stream we still hold (profile load, slice teardown)
-    //                           → deferred → re-emit daxStreamCreateNeeded(ch)
-    //
-    // The actual `stream create` / `stream remove` commands are sent by
-    // RadioModel (the command plane), wired to these signals. Decisions are
-    // NEVER made on status-echo edges (the #4009 storm class): acquire/release
-    // are idempotent per holder, and the grace window absorbs the radio's
-    // transient unbind/rebind dax=0/dax=<ch> pairs (#3626) — see
-    // docs/architecture/flex-protocol/state-machines.md §7.
+    // Centralized DAX RX channel ownership (#3305). Every in-process dax_rx consumer
+    // acquires/releases here; this table alone decides when a radio stream exists:
+    //   acquire, first holder → daxStreamCreateNeeded(ch)
+    //   release, last holder  → deferred (grace + revalidate) → daxStreamRemoveNeeded(id, ch)
+    //   radio removed a held stream → deferred → daxStreamCreateNeeded(ch)
+    // RadioModel sends the actual `stream create/remove`. Never decide on
+    // status-echo edges (#4009); the grace window absorbs dax=0/dax=<ch> rebind
+    // pairs (#3626). See docs/architecture/flex-protocol/state-machines.md §7.
     enum class DaxConsumer : quint8 {
         Bridge = 0,   // DAX virtual-audio bridge (macOS CoreAudio / PipeWire)
         Tci    = 1,   // TCI server audio clients (WSJT-X etc.)

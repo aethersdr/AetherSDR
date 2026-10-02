@@ -24,17 +24,13 @@
 
 namespace AetherSDR {
 
-// ─── Platform layout ─────────────────────────────────────────────────────────
-// Linux and Windows ship different AFX runtimes but the SAME split-sourcing
-// strategy (host almost nothing; pull CUDA from NVIDIA's PyPI wheels):
-//   • Linux: core nvafx/lib/libnv_audiofx.so. AFX/TRT/model from our small
-//     .tar.zst; CUDA from PyPI wheels (→ external/cuda/lib); feature lib
-//     symlinked onto the core's RPATH.
-//   • Windows: core bin/NVAudioEffects.dll. A small .zip ships only the AFX bits
-//     (core + denoiser feature DLL + OpenSSL + model); CUDA from PyPI wheels and
-//     the TensorRT inference DLL from a separate hosted .zip — all flattened into
-//     bin/, which the loader searches via LOAD_WITH_ALTERED_SEARCH_PATH (so no
-//     symlink step). Hosting the slim AFX zip keeps it a ~33 MB release asset.
+// Platform layout; both host almost nothing and pull CUDA from NVIDIA's PyPI
+// wheels:
+//   - Linux: core nvafx/lib/libnv_audiofx.so; AFX/TRT/model from our .tar.zst,
+//     CUDA into external/cuda/lib, feature lib symlinked onto the core's RPATH.
+//   - Windows: core bin/NVAudioEffects.dll; a ~33 MB .zip of AFX bits (core,
+//     denoiser DLL, OpenSSL, model), CUDA wheels and a hosted TensorRT .zip, all
+//     flattened into bin/ (found via LOAD_WITH_ALTERED_SEARCH_PATH).
 namespace {
 // Stall timeout for the AFX pack manifest and archive downloads (#4688 §6).
 // 30 s rather than 15: the archive is large and this clock resets on every
@@ -143,19 +139,12 @@ QString NvidiaAfxPack::detectArch()
     return cached;
 }
 
-// AFX-bits archives actually published on our releases, keyed by GPU compute
-// capability, with the pinned sha256 of the per-arch archive for THIS platform.
-// detectArch() can report a newer NVIDIA card — e.g. sm_120 (consumer Blackwell
-// / RTX 50-series) — that clears the Ada+ bar but has no published pack yet, so
-// it must not dead-end at a Download that 404s (#3933). An arch appears here
-// ONLY once its archive is built, verified to NvAFX_Load on that GPU, and
-// uploaded to the afx-bits-2.1.0 release — presence here is what lights up
-// hasSupportedGpu() and the Download button, and the sha is what validates the
-// download, so the two can never drift apart.
-//
-// To add a GPU (e.g. sm_120 / RTX 50-series, tracked in #4206): build the pack
-// (build-afx-bits-*.ps1 -Arch sm_120), test it, upload it, then add a row with
-// the archive's sha256. Keep in sync with the build-afx-bits ValidateSet.
+// Published AFX-bits archives by GPU compute capability, with each archive's
+// pinned sha256 for this platform. A row exists only once its archive is built,
+// verified to NvAFX_Load on that GPU and uploaded to the afx-bits-2.1.0 release;
+// presence enables hasSupportedGpu() and Download, so newer cards (e.g. sm_120,
+// #4206) never dead-end at a 404 (#3933). To add one: build-afx-bits-*.ps1 -Arch
+// <sm>, test, upload, add the row; keep in sync with the script's ValidateSet.
 struct PublishedAfxPack {
     int         computeCap;   // 89 for "sm_89"
     const char* sha256;       // sha256 of the afx-bits archive for kPlatformTag

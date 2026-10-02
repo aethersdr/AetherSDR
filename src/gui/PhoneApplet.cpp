@@ -338,17 +338,10 @@ void PhoneApplet::buildUI()
         m_lowCutLabel->setAlignment(Qt::AlignCenter);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_lowCutLabel, "QLabel { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
             "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; }");
-        // Direct numeric entry (#3627): double-click to type an exact Hz
-        // value instead of stepping to it 50 Hz at a time. The validator
-        // bounds the field at whatever range the MODEL reports (never a
-        // literal here — see TransmitModel::txFilterMaxHz); the commit
-        // below applies the same cross-bound rule as the step buttons.
-        //
-        // No explicit re-sync after a commit: the editor is a separate
-        // QLineEdit laid over the label, so keystrokes never touch the
-        // label's own text. Whenever the clamped value does change the
-        // model, phoneStateChanged -> syncFromModel() repaints it; when it
-        // clamps onto the value already set, the label is already right.
+        // Direct numeric entry (#3627). The validator range comes from the
+        // model (TransmitModel::txFilterMaxHz), never a literal. No re-sync
+        // after commit: the editor overlays the label, and a real model change
+        // repaints it via phoneStateChanged → syncFromModel().
         m_lowCutLabel->setEditable(m_model ? m_model->txFilterMinHz() : TransmitModel::kTxFilterMinHz,
                                    m_model ? m_model->txFilterMaxHz() : TransmitModel::kTxFilterMaxHz);
         m_lowCutLabel->setEditorStyler([](QWidget* editor) {
@@ -358,22 +351,11 @@ void PhoneApplet::buildUI()
         });
         connect(m_lowCutLabel, &ScrollableLabel::editCommitted, this, [this](int hz) {
             if (!m_model) return;
-            // Enforce the cross-bound HERE, because the model cannot:
-            // TransmitModel::setTxFilter() resolves a crossed pair by keeping
-            // the low it was given and pushing HIGH up to low + 50 — so
-            // typing 9000 into low cut would drag the high cut from 3300 to
-            // 9050, moving a passband edge the operator never touched.
-            //
-            // Out of range is REJECTED, not clamped (#3627: "Invalid values
-            // are rejected with validation and the previous value is
-            // restored"; #5064 review). Rejecting is simply returning: the
-            // label still shows model truth, because the editor is a separate
-            // widget laid over it and never wrote to the label's text.
-            //
-            // The STEP buttons still clamp, and that asymmetry is deliberate —
-            // a step is a request to move by one increment and stopping at the
-            // bound is the only sensible answer, while a typed number is a
-            // request for that exact value.
+            // Enforce the cross-bound here: TransmitModel::setTxFilter() keeps
+            // the given low and pushes high to low + 50, moving an edge the
+            // operator never touched. Out of range is rejected (the previous
+            // value stands, #3627), unlike the step buttons, which clamp because
+            // a step is a request to move one increment.
             if (hz < m_model->txFilterMinHz()
                 || hz > m_model->txFilterHigh() - m_model->txFilterMinWidthHz()
                 || (!m_txLowEdgesHz.isEmpty() && !m_txLowEdgesHz.contains(hz))) {

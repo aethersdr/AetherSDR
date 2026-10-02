@@ -3,19 +3,11 @@
 #include <algorithm>
 #include <cmath>
 
-// The AX.25 airtime model: the single source of truth for "how long does this
-// frame take on the air", and for the link timers derived from that answer.
-//
-// Why this exists: every millisecond constant in the connected-mode stack was
-// originally sized for 1200-baud VHF FM. At 300 baud those numbers are not
-// merely conservative, they are physically impossible — the shipped T1 of 6 s
-// expired roughly 0.8 s BEFORE we finished transmitting a paclen-128 I-frame,
-// so every frame timed out and every HF link died at N2. See docs/HFMODEM.md §1.
-//
-// The rule this header enforces: any timer that interacts with the air
-// interface is DERIVED from baud rate and framing, never hardcoded. It is pure
-// arithmetic (no Qt, no DSP) so it can be unit-tested standalone and reused by
-// the terminal, the mailbox, and the future digipeater.
+// AX.25 airtime model: the single source of truth for a frame's time on air
+// and the link timers derived from it. Every timer that interacts with the air
+// interface is DERIVED from baud and framing, never hardcoded (a VHF-sized T1
+// expires before a 300-baud frame finishes; docs/HFMODEM.md §1). Pure
+// arithmetic, testable standalone.
 
 namespace AetherSDR::ax25 {
 
@@ -23,16 +15,10 @@ namespace AetherSDR::ax25 {
 // Framing constants
 // ---------------------------------------------------------------------------
 
-// TX preamble (TXDELAY): the run of leading HDLC flags that lets the far
-// receiver's PLL/AGC settle before frame data. Profile-specific, and owned here
-// rather than in the modem because the airtime model must read the same value
-// the modulator uses — if these ever drift apart, T1 silently stops matching
-// reality. AetherAx25LibmodemShim includes this header and modulates from these.
-//
-// HF 300 keeps a long preamble (~2.13 s). That is the single largest term in
-// the HF airtime budget and is a roadmap item (docs/HFMODEM.md §6, item 11), but it
-// protects the *far* end's AGC and PLL, so it cannot be shortened on our own
-// authority. When it does drop, T1 tracks it automatically.
+// TX preamble (TXDELAY) flags, owned here so the airtime model reads the same
+// values AetherAx25LibmodemShim modulates (T1 tracks them). HF 300's ~2.13 s
+// is the largest HF airtime term (docs/HFMODEM.md §6 item 11) but protects the
+// far end's AGC/PLL, so don't shorten it unilaterally.
 inline constexpr int kAx25Hf300PreambleFlags = 80;   // ~2.13 s at 300 baud
 inline constexpr int kAx25Vhf1200PreambleFlags = 64; // ~0.43 s at 1200 baud
 inline constexpr int kAx25TxPostambleFlags = 8;

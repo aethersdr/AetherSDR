@@ -3,32 +3,14 @@
 #include <array>
 #include <type_traits>
 
-// Operator-facing ranges and default markers for WDSP Neural Noise Reduction.
-//
-// Three of NNR's controls are meant for operators and documented as such in the
-// WDSP Guide: on/off, mask floor and model. The rest are tuning parameters
-// Warren left out of the guide. Exposing them is this project's decision, so
-// picking their ranges -- and marking the value WDSP itself starts from,
-// plainly enough that an operator can see it without hunting -- is this
-// project's job too.
-//
-// EVERY NUMBER BELOW IS READ OUT OF WDSP 2.10, not chosen. The tuning defaults
-// come from create_dfhead() and create_nnet_slot() (nnet.c), and the min and
-// max of each of their ranges is the clamp the corresponding setter already
-// enforces, so a control cannot ask for something WDSP will silently refuse.
-//
-// kMaskFloor is the one exception on both counts, and is annotated as such at
-// its definition: its default is set at the create_nnr() call site
-// (third_party/wdsp/upstream/RXA.c), not in nnet.c, and setFloor_nnet() clamps
-// nothing at all -- its range is the WDSP Guide's recommendation, which makes
-// it the only range here that is our policy rather than WDSP's arithmetic.
-//
-// Re-check all of it on a WDSP refresh: a marker in the wrong place is worse
-// than no marker, because it tells the operator a lie about where home is.
-//
-// This header deliberately has no WDSP dependency. The GUI may not include WDSP
-// headers (docs/architecture/wdsp-integration.md), and the NNR tab needs these
-// numbers as much as the filter does.
+// Operator ranges and default markers for WDSP Neural Noise Reduction. Every
+// number is read out of WDSP 2.10: tuning defaults from create_dfhead() and
+// create_nnet_slot() (nnet.c), range limits from the setters' clamps. Exception:
+// kMaskFloor's default comes from the create_nnr() call in
+// third_party/wdsp/upstream/RXA.c and setFloor_nnet() clamps nothing, so its
+// range is the WDSP Guide's recommendation. Re-check all of it on a WDSP refresh.
+// No WDSP dependency: the GUI may not include WDSP headers
+// (docs/architecture/wdsp-integration.md).
 
 namespace AetherSDR::Nnr {
 

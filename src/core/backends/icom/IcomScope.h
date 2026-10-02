@@ -83,21 +83,11 @@ struct ScopeFrame {
 // Calibration
 // ---------------------------------------------------------------------------
 
-// THE SCOPE IS NOT CALIBRATED. Its 0..160 are display units relative to the
-// radio's own reference-level setting (0x27 0x19), and Icom publishes no
-// mapping to absolute power. Anything that presents this as dBm is inventing a
-// measurement.
-//
-// This struct is that invention, made explicit and adjustable rather than
-// scattered as magic numbers — the same shape as the HL2's Hl2DbReference. The
-// defaults put a nominal IC-705 sweep in a plausible place so the waterfall's
-// auto-contrast has something sane to work with; they are ESTIMATES and are
-// flagged as such wherever they surface.
-//
-// The way to make them real is the S-meter, which IS calibrated (0 = S0,
-// 120 = S9, 241 = S9+60 dB): put a known signal in the passband, read 0x15 0x02,
-// and compare. Until someone does that on a bench, the UI must not label this
-// axis as an absolute measurement.
+// THE SCOPE IS NOT CALIBRATED: 0..160 are display units relative to the
+// reference level (0x27 0x19), with no published mapping to absolute power.
+// These defaults are ESTIMATES to give auto-contrast a sane range (cf. HL2's
+// Hl2DbReference); the UI must not label the axis as absolute. Calibrate
+// against the S-meter (0 = S0, 120 = S9, 241 = S9+60 dB, via 0x15 0x02).
 struct ScopeCalibration {
     // Display value 0 maps here.
     double floorDbm = -140.0;

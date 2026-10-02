@@ -6,41 +6,11 @@
 #include <optional>
 
 // When to poll the HL2's alternate control port for telemetry, as a pure
-// function of what the IQ path is doing.
-//
-// This is a header rather than a member of the poller for the reason
-// Hl2TxLevelPolicy.h gives about its own arithmetic: the suite must exercise the
-// SAME expression the poller runs, because a test against a re-typed copy of a
-// table proves only that two copies agree. It also means the rule can be tested
-// without a socket, a radio, or a Qt event loop — the rule is the part with
-// judgement in it; the plumbing around it is not.
-//
-// The full derivation is docs/architecture/hl2-stream-free-telemetry.md §3.
-// The short version, because a cadence that looks arbitrary invites someone to
-// "tune" it later:
-//
-//   * Discovery PREEMPTS the IQ path. In the gateware's transmit state machine
-//     the discovery branch is tested before the EP6 branch (usopenhpsdr1.v:234
-//     ahead of :238), so every poll inserts a datagram ahead of a queued IQ
-//     packet. Polling is not free, and it is least free exactly when a stream
-//     is running.
-//   * The radio's own refresh rate for these fields is NOT ESTABLISHED. The
-//     bench could only bound it as "consistent with anything from ~10 Hz
-//     upward" — with no RF the ADC fields dither across 3-4 codes, so timing
-//     their changes measures the dither rather than the refresh. Above that
-//     rate a poll returns the same reading: cost with no information.
-//   * The in-band EP6 path already publishes every one of these fields at
-//     10 Hz, for free, whenever it is running.
-//
-// So the rule is not "how fast can we poll" (answered: ~86 Hz, measured, and
-// irrelevant). It is: poll only when the in-band path is NOT delivering, and
-// poll slowly.
-//
-// Note which case is fastest below. The highest cadence is the FAILURE case,
-// not the healthy one. That inversion is the whole point of the feature — the
-// telemetry rides the very packets whose absence is the fault being diagnosed,
-// so an instrument that reads fastest when things are fine is reading fastest
-// when it is needed least.
+// function of the IQ path's state (derivation:
+// docs/architecture/hl2-stream-free-telemetry.md §3). Discovery preempts EP6 in
+// the gateware (usopenhpsdr1.v:234 before :238), so every poll delays IQ; EP6
+// already carries these fields at 10 Hz. Poll only when EP6 is not delivering,
+// and slowly. The fastest cadence is deliberately the stalled-stream case.
 
 namespace AetherSDR::hl2 {
 
@@ -58,12 +28,8 @@ enum class Hl2LinkState {
 //
 // `surfaceVisible` is whether anything is actually reading the telemetry.
 //
-// It gates the two DISPLAY states and neither of the fault states. Polling a
-// radio nobody is looking at is pure wire cost, and in HeldByOther those
-// packets land in another operator's session, which makes an unwatched poll
-// there worse than merely wasteful. A stalled stream is the opposite case: it
-// is diagnosed whether or not a panel is open, because the reason to poll then
-// is the fault and not the panel.
+// It gates the display states only: a stalled stream is polled regardless,
+// and an unwatched HeldByOther poll is traffic into another operator's session.
 [[nodiscard]] constexpr int hl2PollIntervalMs(Hl2LinkState state,
                                               bool surfaceVisible) noexcept
 {
@@ -77,15 +43,8 @@ enum class Hl2LinkState {
         // silent and cannot report its own silence.
         return 500;
     case Hl2LinkState::HeldByOther:
-        // 1 Hz while something is reading, silent otherwise. A status display,
-        // not a meter — and every one of these packets lands in somebody
-        // else's session, so an unwatched poll here is not just wasted, it is
-        // traffic aimed at an operator who did not ask for it.
-        //
-        // This was unconditional when the rule was first written, and wiring it
-        // up showed why that was wrong: the state latches on as soon as any
-        // in-use radio answers, so the app would have polled a stranger's
-        // session forever with nothing on screen.
+        // 1 Hz only while watched: these packets land in someone else's
+        // session, and the state latches as soon as any in-use radio answers.
         return surfaceVisible ? 1000 : 0;
     case Hl2LinkState::NotConnected:
         return surfaceVisible ? 1000 : 0;
@@ -97,28 +56,11 @@ enum class Hl2LinkState {
 // How long the packet counter must sit still before the stream is called
 // stalled.
 //
-// WHY A DURATION AND NOT A TICK-TO-TICK COMPARISON. The obvious rule -- "did
-// rxPackets change since the last tick?" -- was the rule, and it was wrong. The
-// counter it reads is mirrored from the I/O thread by linkCountersUpdated at
-// 1 Hz, and the tick that read it also ran at 1 Hz. Two clocks sampling each
-// other: whenever two ticks fell between two publishes, the second saw an
-// unchanged counter and declared StreamStalled on a perfectly healthy stream,
-// so the app polled port 1025 through its own live session. That was observed
-// on hardware on 2026-09-04 and is reproduced in hl2_link_state_alias_test.
-//
-// It was not a tuning error, it was a category error: a tick-to-tick delta
-// measures the TICK as much as the stream. Elapsed time since the counter last
-// advanced measures only the stream, and gives the same answer at any tick rate
-// -- including a tick rate somebody changes later without reading this comment.
-//
-// 2500 ms is two publish intervals plus margin. The publish period is bounded
-// below by kLinkPublishIntervalMs = 1000 and runs a little over, so a healthy
-// stream never reaches 2500; two consecutive missed publishes do.
-//
-// THE COST, stated rather than buried: a real stall is now declared 2.5-3.5 s
-// after it starts instead of ~1 s. The old ~1 s was not real. It was a coin
-// flip that happened to land right in the runs that were looked at, and it paid
-// for its speed with false stalls on healthy streams.
+// A duration since the counter last advanced, not a tick-to-tick delta: the
+// counter is mirrored at 1 Hz (linkCountersUpdated), so a 1 Hz tick aliases
+// against it and sees false stalls (hl2_link_state_alias_test). 2500 ms is two
+// kLinkPublishIntervalMs (1000) periods plus margin; a real stall is declared
+// 2.5-3.5 s after it starts.
 inline constexpr long long kStreamStallDeclareMs = 2500;
 
 // The link state, from what the backend can actually observe.
@@ -136,20 +78,9 @@ inline constexpr long long kStreamStallDeclareMs = 2500;
                                                       : Hl2LinkState::Streaming;
 }
 
-// ---- Which replies this poller may believe --------------------------------
-//
-// Lifted out of Hl2TelemetryPoller::onReadyRead() so the decision can be tested
-// without a socket. The transport stays in the poller; the RULE lives here,
-// beside the cadence rule, for the same reason: both are policy that a test
-// must be able to reach directly rather than by putting datagrams on a wire.
-//
-// `latched` is the MAC remembered from the first accepted answer, and it is the
-// ONLY MAC concept here. An earlier version also took a caller-supplied
-// `expected` MAC, but nothing could supply one: an aim names an IP and the MAC
-// is not knowable until something replies, so `setExpectedMac()` never had a
-// production caller and the branch existed only for its own test. Two MAC
-// concepts where one can be armed is how the address policy came to rest on a
-// filter that was never on (#5642 review).
+// Which replies Hl2TelemetryPoller::onReadyRead() may believe (socket-free).
+// `latched` is the MAC of the first accepted answer; an aim names only an IP,
+// so there is no caller-supplied expected MAC.
 struct ReplyAcceptance {
     bool accept = false;
     // The MAC to remember for next time. Unset means "leave the latch alone".

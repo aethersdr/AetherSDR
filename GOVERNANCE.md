@@ -53,7 +53,7 @@ Current domain areas:
 
 | Area | Path(s) | Notes |
 |------|---------|-------|
-| Documentation | `resources/help/`, `docs/`, `*.md` | Help text, wiki, guides. Spans two CODEOWNERS tiers: `docs/` and `resources/help/` are Tier 3, bare `*.md` is Tier 2 |
+| Documentation | `resources/help/`, `docs/`, `*.md` | Help text, wiki, guides. Spans two CODEOWNERS tiers: `docs/` and `resources/help/` are Tier 3 except `docs/agents/`, which is Tier 2 with the rest of the agent guide; bare `*.md` is Tier 2 |
 | Build / CI | `CMakeLists.txt`, `.github/` | Build system, CI pipelines |
 | Platform: macOS | `src/platform/macos/` | macOS-specific code only |
 | Platform: Windows | `src/platform/windows/` | Windows-specific code only |
@@ -144,15 +144,17 @@ three tiers, broadest → most restrictive:
   too), plus anything not enumerated below. The broad reviewer roster;
   routine review of source, its tests, and its documentation all benefit from
   more eyes. `tests/` is here because it *is* source — ~90k lines of C++ —
-  and because most code changes touch `src/` and `tests/` together. Two files
-  under `docs/` are carved back to Tier 1 below, so "all of `docs/`" is the
-  rule and not quite the whole story.
+  and because most code changes touch `src/` and `tests/` together. Two
+  exceptions under `docs/`: `docs/agents/` is carved out to Tier 2, and two
+  files are carved back to Tier 1 below, so "all of `docs/`" is the rule and
+  not quite the whole story.
 - **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `*.md` outside
   those directories (`README.md`, `CHANGELOG.md`, `ROADMAP.md`, …),
   `CMakeLists.txt`, the routine CI
   workflows under `.github/workflows/`, and the AI-instruction files
-  (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
-  `.github/copilot-instructions.md`, `.claude/commands/`).
+  (`AGENTS.md` and its path-scoped sub-docs under `docs/agents/`,
+  `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`,
+  `.claude/commands/`).
 - **Tier 1 — governance / security** (`@aethersdr/maintainers`): the governance
   docs (the Constitution — **both** its canonical copy at
   `.specify/memory/constitution.md` and the root `CONSTITUTION.md` mirror —

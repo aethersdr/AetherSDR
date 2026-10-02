@@ -44,16 +44,9 @@ namespace {
 
 constexpr int kLogPollMs = 500;
 
-// The categories the issue names for this tab: "Live tail of perf-related
-// logging categories: lcPerf, lcRender, lcAudio."
-//
-// Three, and not the whole registry. The two tabs are deliberately scoped
-// differently: Threads enumerates EVERY thread in the process because the
-// failure it exists to catch is one of them saturating a core (#2545), while
-// the log answers what the perf subsystem was doing. Widening this to all
-// twenty-eight categories would make the tab a duplicate of the log viewer in
-// NetworkDiagnosticsDialog, which is the doubt the issue's own analysis raised
-// about it.
+// Perf categories only (lcPerf, lcRender, lcAudio), not the whole registry:
+// the full log already lives in NetworkDiagnosticsDialog. The Threads tab, by
+// contrast, lists every thread to catch one saturating a core (#2545).
 const char* const kPerfCategories[] = {"aether.perf", "aether.render", "aether.audio"};
 
 // The tab's own notices — currently just "the log was reset" — ride the same
@@ -65,16 +58,11 @@ const char* const kNoticeCategory = "systeminfo";
 constexpr qint64 kInitialTailBytes = 64 * 1024;
 constexpr qsizetype kMaxStoredLines = 5000;
 
-// Overview card bands, verbatim from the issue body's card table (#2554:
-// "CPU Total … yellow ≥50%, red ≥80%", "Max Thread … yellow ≥70%, red ≥90%",
-// "Memory … yellow ≥1 GB, red ≥2 GB"). Starting values, not findings: nobody
-// has measured a normal session against them, which each card's tooltip says.
-// The CPU pair is also what the status bar's own label uses (MainWindow.cpp).
-// The issue's fourth card, "GUI Frame Rate" with yellow <25 Hz / red <15 Hz,
-// is not built: the perf heartbeat it would be sourced from is a 20 Hz timer,
-// so a healthy app would sit in the yellow band by construction. That card
-// reads the heartbeat's tick lag instead, uncoloured, until a maintainer sets
-// bands for it (plan §12.2, D1).
+// Overview card bands from #2554 (CPU 50/80 %, max thread 70/90 %, memory
+// 1/2 GB). Starting values, unmeasured, as each card's tooltip says; the CPU
+// pair matches the status bar label (MainWindow.cpp). The frame-rate card shows
+// heartbeat tick lag uncoloured: the heartbeat is a 20 Hz timer, so FPS bands
+// would sit in yellow by construction.
 constexpr double kCpuWarnPercent = 50.0;
 constexpr double kCpuDangerPercent = 80.0;
 constexpr double kMaxThreadWarnPercent = 70.0;
@@ -141,19 +129,10 @@ QString threadLabel(const CpuHistoryRing::ThreadSeries& series, bool nameShared)
     return nameShared ? QStringLiteral("%1 (%2)").arg(base).arg(series.tid) : base;
 }
 
-// A trailing spacer column soaks up slack on a wide window. Without it the
-// stretch has to land on a real column, and the thread name — the only one
-// that varies — ends up several hundred pixels wider than the longest name.
-// One decimal on every numeric column, always.
-//
-// The items store real doubles, because that is what makes the table sort
-// numerically — 9 % must not sort above 80 %, which it would as text. But a
-// double displays through its own default formatting, so a value that rounds to
-// 16.0 renders as "16" while 3.2 renders as "3.2", and a right-aligned column
-// ends up with ragged decimals.
-//
-// displayText() is the hook for exactly this: it changes what is drawn without
-// touching the value underneath, so sorting still compares numbers.
+// One decimal on every numeric column. Items hold real doubles so sorting is
+// numeric; displayText() fixes only the drawn text (a double would otherwise
+// render "16" next to "3.2"). A trailing spacer column absorbs slack so the
+// thread-name column doesn't stretch.
 class OneDecimalDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
