@@ -253,15 +253,11 @@ int main(int argc, char** argv)
                   .arg(m, restored));
     }
 
-    // THE RUN-TIME SETTER HOLDS THE SAME BOUNDARY AS THE RESTORE (#5580, #5678
-    // row 1.3). setSliceMode() is where every path that bypasses the combo
-    // ends -- rigctl set_mode, SmartCAT ZZMD, TCI modulation, memory recall,
-    // the Mode shortcuts, MIDI, the VFO quick-mode buttons, the net scheduler,
-    // a Kiwi spot click -- because SliceModel::setMode checks nothing and
-    // forwards through modeChangeRequested. It stored an unknown string
-    // verbatim: the slice then READ "RTTY" while modeFromString() demodulated
-    // USB. A mode this radio cannot demodulate is now refused here, and the
-    // slice is re-published as it really is, so the indicator snaps back.
+    // The run-time setter holds the same boundary as the restore (#5580).
+    // Every mode route (rigctl, SmartCAT, TCI, memory recall, shortcuts, MIDI)
+    // ends at setSliceMode(); a mode modeFromString() does not map is refused
+    // and the slice re-published unchanged, so it never reads RTTY while
+    // demodulating USB.
     {
         hl2::Hl2Backend backend;
         QString lastMode;
@@ -305,19 +301,11 @@ int main(int argc, char** argv)
         }
     }
 
-    // WHAT THE OPERATOR SEES, with a SliceModel in the loop (#6007 review). The
-    // block above watches the raw SliceDelta and cannot see the signal a
-    // widget paints from. Wired as RadioModel wires it -- modeChangeRequested
-    // to setSliceMode, sliceChanged to applyChanges, both direct -- the
-    // backend's correction runs INSIDE SliceModel::setMode(), so anything
-    // setMode() emits after its request must not re-announce the refused
-    // mode. VfoWidget paints the mode tab from modeChanged's ARGUMENT.
-    //
-    // FDV is the case that decides HOW this may be fixed: it is refused here
-    // but is USB-family in SliceModel::filterPolarityUsbFamily(), and
-    // setMode() normalises the filter polarity against m_mode after its emits.
-    // A correction deferred past setMode() would leave m_mode == "FDV" at that
-    // point and flip the LSB passband to USB polarity, on the wire.
+    // What the operator sees: wired as RadioModel wires it (both connections
+    // direct), the correction lands inside SliceModel::setMode(), and the LAST
+    // modeChanged, which VfoWidget paints the mode tab from, must not be the
+    // refused mode. FDV is refused here but USB-family for filter polarity, so
+    // it also pins that the LSB passband is not flipped.
     {
         hl2::Hl2Backend backend;
         SliceModel slice(0);

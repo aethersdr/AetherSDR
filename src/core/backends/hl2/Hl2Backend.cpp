@@ -2823,16 +2823,11 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
     if (!r)
         return;
 
-    // Canonicalise aliases here too, as applyRestoredState() does, so the mode
-    // combo (which moves only on a findText() hit) can show the slice's mode
-    // (#5580); receiveModeControl admits CWU/FM/NFM requests. Cannot weaken
-    // the key refusal: receiveOnlyModes lists each alias pair both ways or
-    // neither (pinned by hl2_mode_vocabulary_test).
-    //
-    // An unknown string is refused, not stored: modeFromString() would fall
-    // through to USB while the slice read the requested mode. The re-publish
-    // moves SliceModel's optimistic mode back. Kept in this backend: a
-    // SliceModel-level guard would change every family's behaviour.
+    // Same gate as applyRestoredState(): aliases canonicalise so the combo can
+    // show them (#5580), and a mode modeFromString() does not map is refused,
+    // since it would demodulate as USB; the re-publish puts SliceModel's
+    // optimistic mode back. Cannot weaken the key refusal: receiveOnlyModes
+    // lists each alias pair both ways or neither (hl2_mode_vocabulary_test).
     if (!isKnownModeString(requested)) {
         qCWarning(lcHl2) << "HL2: refusing mode" << requested
                          << "- this radio demodulates only" << publishedModeStrings();
