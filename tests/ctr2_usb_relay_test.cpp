@@ -614,8 +614,10 @@ void testDeviceLabels()
 {
     Ctr2HidPort::DeviceInfo max{QStringLiteral("p"), 0x303A, 0x1001,
                                 QStringLiteral("Espressif Systems"), QStringLiteral("ESP32S3_DEV"), {}};
-    Ctr2HidPort::DeviceInfo dial{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("STAMP-S3"), {}};
-    Ctr2HidPort::DeviceInfo midi{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("XIAO_ESP32S3"), {}};
+    Ctr2HidPort::DeviceInfo dial{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("M5STACK_DIAL"), {}};
+    Ctr2HidPort::DeviceInfo midi{QStringLiteral("p"), 0x2886, 0x0056, {}, QStringLiteral("XIAO_ESP32S3"), {}};
+    Ctr2HidPort::DeviceInfo devBoard{QStringLiteral("p"), 0x303A, 0x1001, {}, QStringLiteral("Some_S3_Gadget"), {}};
+    Ctr2HidPort::DeviceInfo wrongVid{QStringLiteral("p"), 0x1234, 0x1001, {}, QStringLiteral("ESP32S3_DEV"), {}};
     Ctr2HidPort::DeviceInfo other{QStringLiteral("p"), 0x04F3, 0x32BC, {}, QStringLiteral("Touchpad"), {}};
     check(max.label() == QStringLiteral("CTR2-Max / Nano: Espressif Systems ESP32S3_DEV (303a:1001)"),
           "CTR2-Max/Nano product string is named");
@@ -623,6 +625,8 @@ void testDeviceLabels()
           "M5Dial and MIDI product strings are named");
     check(other.ctr2Model().isEmpty() && other.label() == QStringLiteral("Touchpad (04f3:32bc)"),
           "other devices keep their plain label");
+    check(devBoard.ctr2Model().isEmpty() && wrongVid.ctr2Model().isEmpty(),
+          "a CTR2 needs both its USB IDs and its product string");
 }
 
 } // namespace

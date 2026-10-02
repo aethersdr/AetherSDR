@@ -311,16 +311,16 @@ Lynn has confirmed version 0 as specified here (one start byte, type in
 byte 3, exact payload count, no checksum, 512-byte DATA buffering) and is
 implementing it, Output report included.
 
-The CTR2 runs on three ESP32-S3 boards, each enumerating with the board's
-own product string. AetherSDR names these in its device list and sorts them
-first; the operator still picks the device, since other ESP32-S3 boards can
-share the strings:
+The CTR2 runs on three ESP32-S3 boards, each enumerating with its board's
+own USB IDs. AetherSDR names these in its device list and sorts them first;
+the operator still picks the device, since `303A:1001` is Espressif's
+default for any ESP32-S3 and only the product string tells them apart:
 
-| Product string | CTR2 model |
-| --- | --- |
-| `ESP32S3_DEV` | CTR2-Max, and the CTR2-Nano in development |
-| `STAMP-S3` | CTR2 units based on the M5Stack M5Dial |
-| `XIAO_ESP32S3` | CTR2-MIDI (Seeed XIAO) |
+| VID:PID | Product string | CTR2 model |
+| --- | --- | --- |
+| `303A:1001` (Espressif) | `ESP32S3_DEV` | CTR2-Max, and the CTR2-Nano in development |
+| `303A:1001` (Espressif) | `M5STACK_DIAL` | CTR2 units based on the M5Stack M5Dial |
+| `2886:0056` (Seeed) | `XIAO_ESP32S3` | CTR2-MIDI (Seeed XIAO) |
 
 Still open: UDP registration through a DATAGRAM to port 4992 rather than
 `client udpport`, and, for CW testing, what the CTR2 does if CLOSED arrives
