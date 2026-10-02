@@ -938,6 +938,8 @@ set(CORE_SOURCES
     src/core/PerfTelemetry.cpp
     src/core/MemoryTelemetry.cpp
     src/core/RigctlProtocol.cpp
+    src/core/ByteRelay.cpp
+    src/core/TcpByteProxy.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
@@ -1123,6 +1125,7 @@ set(MODEL_SOURCES
     src/models/AntennaGeniusModel.cpp
     src/models/GreenHeronModel.cpp
     src/models/AetherClockModel.cpp
+    src/models/Ctr2ProxyModel.cpp
 )
 
 # Vendored QGeoView (LGPL-3.0) — slippy-map widget for the common
@@ -1246,6 +1249,7 @@ set(GUI_SOURCES
     src/gui/SpeLcdWidget.cpp
     src/gui/VkampApplet.cpp
     src/gui/LpMeterApplet.cpp
+    src/gui/Ctr2ProxyApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp

@@ -14,6 +14,7 @@
 #include "MainWindowHelpers.h"
 #include "WindowGeometryRestore.h"
 
+#include "models/Ctr2ProxyModel.h"
 #include "models/CwDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
@@ -4120,6 +4121,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // connected through a shared ser2net proxy. Close it explicitly while
     // the event loop is still live instead of relying on member destruction.
     m_lpMeterConn.disconnect();
+    // The CTR2 proxy's sockets likewise close while the event loop is live.
+    if (m_ctr2ProxyModel) {
+        m_ctr2ProxyModel->stop();
+    }
 
     // Same event-loop reasoning: the operating-state capture flush normally
     // rides the queued backend disconnected() signal, which never lands

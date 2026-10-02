@@ -130,6 +130,7 @@ class AetherClockEngine;
 class AetherClockModel;
 class AutomationServer;
 class ConnectionPanel;
+class Ctr2ProxyModel;
 class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
@@ -642,6 +643,7 @@ private:
     // TX or RX instance.
     void applyGraphicEqToClientEq(bool transmit);
     void wireExternalControllers(); // MainWindow_Controllers.cpp
+    void setupCtr2Proxy();          // MainWindow_Controllers.cpp
     void wireKiwiSdr();             // MainWindow_KiwiSdr.cpp
     void refreshKiwiSdrAppletReceivers();
     void refreshKiwiSdrSlices();
@@ -1994,6 +1996,9 @@ private:
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
+
+// CTR2 TCP proxy prototype (MainWindow_Controllers.cpp); never persisted, off at launch
+    Ctr2ProxyModel* m_ctr2ProxyModel{nullptr};
 
 // AetherClock (MainWindow_AetherClock.cpp)
     AetherClockEngine* m_clockEngine{nullptr};

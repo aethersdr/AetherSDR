@@ -31,6 +31,8 @@
 #include "PanadapterMessageOverlay.h"
 #include "TitleBar.h"
 #include "models/SliceModel.h"
+#include "Ctr2ProxyApplet.h"
+#include "models/Ctr2ProxyModel.h"
 
 #include <QColor>
 #include <QPainter>
@@ -2540,8 +2542,22 @@ void MainWindow::registerMidiParams()
 // thread (#502), FlexControl / MIDI / HID manager construction and signal
 // routing, and the RC-28 deferred press/hold logic (#3323).
 
+void MainWindow::setupCtr2Proxy()
+{
+    // Independent of RadioModel by design: the CTR2 is its own radio client,
+    // so selecting another radio in AetherSDR never retargets a live proxy.
+    m_ctr2ProxyModel = new Ctr2ProxyModel(this);
+    if (m_appletPanel) {
+        if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
+            applet->setModel(m_ctr2ProxyModel);
+        }
+    }
+}
+
 void MainWindow::wireExternalControllers()
 {
+    setupCtr2Proxy();
+
     // ── External controllers run on a dedicated worker thread (#502) ────
     // FlexControl, SerialPort, and MIDI controllers are created on the
     // worker thread so their I/O (serial port, RtMidi callbacks, poll timers)
