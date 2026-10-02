@@ -419,10 +419,9 @@ private:
 
     // The shared install step: resize the scratch buffers, recompute the DC
     // blocker, re-apply everything Config does not carry (shift, the notch set,
-    // the noise blanker, the blanker hold) and take ownership of the new
-    // channel/spectrum. configure() and installRebuiltChannel() both end here so
-    // their results cannot drift apart — this class re-applies SIX things across
-    // a rebuild and a second copy of that list would lose one of them.
+    // the noise blanker, the blanker hold, the squelch) and take ownership of the
+    // new channel/spectrum. configure() and installRebuiltChannel() both end here
+    // so a second copy of that list cannot drift and lose one of them.
     void installChannel(RebuildResult result);
     // Arm m_meterTap from the current geometry. One site for the arithmetic,
     // called on the mute's release edge and on a channel install so the two

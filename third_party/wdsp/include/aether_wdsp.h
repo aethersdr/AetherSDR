@@ -239,16 +239,12 @@ void SetRXAFMDeviation(int channel, double deviationHz);
 
 // ── Receive squelch: fmsq and amsq ────────────────────────────────────────
 //
-// No vendored patch: `upstream/wdsp.h` declares these. RXA.c creates both
-// stages with run = 0.
-//   fmsq — after xfmd; triggers on noise in the FM detector's output above
-//          5 kHz, so it is meaningful only in FM. Mutes when the averaged noise
-//          exceeds the threshold: a LARGER threshold is a MORE OPEN squelch.
-//   amsq — trigger captured (xamsqcap) after the notched bandpass, before the
-//          AGC; compares a 10 ms average of |IQ| with 10^(thresholdDb/20) in
-//          wire-full-scale units. A level squelch in any mode.
-// ssql is not declared: it does not open at this chain's audio levels (see
-// WdspChannel::setSquelch()). Each Set* takes ch[channel].csDSP: control path.
+// Declared by upstream/wdsp.h (no patch); RXA.c creates both with run = 0, and
+// each Set* takes csDSP, so control path only.
+//   fmsq — FM detector noise above 5 kHz; mutes when it exceeds the threshold,
+//          so a LARGER threshold is a MORE OPEN squelch. FM only.
+//   amsq — 10 ms average of |IQ| after the notched bandpass, before the AGC,
+//          against 10^(thresholdDb/20) of wire full scale. Any mode.
 void SetRXAFMSQRun(int channel, int run);
 void SetRXAFMSQThreshold(int channel, double threshold);
 void SetRXAAMSQRun(int channel, int run);

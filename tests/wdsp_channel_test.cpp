@@ -3517,7 +3517,7 @@ bool runFmDeviationTest()
 // ── Receive squelch (#5678 row 1.5) ──────────────────────────────────────
 //
 // Two halves. The ROUTING half pins what WdspChannel writes to WDSP — which of
-// fmsq/amsq/ssql runs, with what threshold — per mode, across mode changes and
+// fmsq/amsq runs, with what threshold — per mode, across mode changes and
 // across a rebuild; it reads the record the channel makes at the call site.
 // The BEHAVIOUR half is what that record cannot show: that the stage it names
 // really gates the audio. Noise alone must come out muted with the squelch
@@ -3545,9 +3545,9 @@ bool runSquelchRoutingTest()
                  nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(100), -70.0) &&
                  nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(-5), -140.0),
                  "level squelch map is not -140 + 0.7*level dBFS") && ok;
-    // The d155 defect, as arithmetic: the measured 9.420 MHz broadcast carrier
-    // (-96 .. -88 dBFS at amsq's capture point, hl2-lab d156) must clear the
-    // midpoint, and the measured no-signal floor (-120 .. -112) must not.
+    // HL2-measured (#5982): a strong broadcast carrier (-96 .. -88 dBFS at
+    // amsq's capture point) must clear the midpoint; the no-signal floor
+    // (-120 .. -112) must not.
     ok = require(WdspChannel::levelSquelchThresholdDbfsForLevel(50) < -96.0 &&
                  WdspChannel::levelSquelchThresholdDbfsForLevel(50) > -112.0,
                  "the level map's midpoint does not sit between the measured "
@@ -3612,8 +3612,7 @@ bool runSquelchRoutingTest()
     ok = require(channel->config().squelchEnabled && channel->config().squelchLevel == 80,
                  "the squelch pair is not in the channel's Config") && ok;
 
-    // LEVEL 0 RUNS NOTHING, in every family. The d155 defect was ssql held
-    // shut at threshold 0; "0 = open" is now structural, and pinned here.
+    // LEVEL 0 RUNS NOTHING, in every family: "0 = open" is structural.
     for (const auto mode : {WdspChannel::Mode::Fm, WdspChannel::Mode::Am,
                             WdspChannel::Mode::Usb, WdspChannel::Mode::Lsb}) {
         ok = require(channel->setMode(mode) && channel->setSquelch(true, 0),
@@ -3654,24 +3653,11 @@ bool runSquelchRoutingTest()
 
 bool runSquelchGateTest()
 {
-    // What the routing record cannot show: that the stage really gates the
-    // audio, at the levels an HL2 actually delivers. Per case, three fresh
-    // channels — squelch off, on at the case's level, on at 0 — each fed
-    // noise alone, then signal plus the same noise.
-    //
-    // THE SSB AND AM CASES USE HL2 LEVELS, NOT CONVENIENT ONES, because the
-    // two d155 defects both lived in the gap between the two. hl2-lab d156
-    // put the no-signal floor at -120 .. -112 dBFS in +-4 kHz and a strong
-    // broadcast carrier at -96 .. -88 dBFS at amsq's capture point; the noise
-    // here is sized for ~-116 and the signal is -92. And they run the
-    // Hl2RxDsp AGC (medium, 39 dB ceiling), so the audio is as QUIET as it is
-    // on the radio — which is what held pihpsdr's ssql shut at level 0: its
-    // zero-crossing counter ignores steps under 0.01, and quiet audio has none.
-    // With loud audio that defect would pass here unseen.
-    //
-    // Each case also READS the S-meter (RXA_S_AV), which xrxa computes on the
-    // same buffer amsq captures its trigger from, one call earlier — so the
-    // harness's claimed dBFS levels are measured at that point, not assumed.
+    // What the routing record cannot show: that the stage really gates audio.
+    // Per case, three fresh channels (off, on at the case's level, on at 0) are
+    // fed noise, then signal plus noise, at HL2-measured levels (#5982): noise
+    // at ~-116 dBFS, signal at -92, with Hl2RxDsp's AGC so the audio is as quiet
+    // as on the radio. RXA_S_AV, read on amsq's trigger buffer, checks the levels.
     constexpr int kRate = 48000;
     constexpr std::size_t kBlock = 256;
     // Opening needs ~80 ms; a fresh channel's mute ramp and fmsq's 100 ms arm
@@ -3739,7 +3725,7 @@ bool runSquelchGateTest()
         float noiseRms;
         Input signal;
         double signalDbfs;
-        bool hl2Levels;   // assert the S-meter agrees with the d156 figures
+        bool hl2Levels;   // assert the S-meter agrees with the HL2-measured levels
     };
     // Noise per rail: 3.3e-6 rms is 2*sigma^2 = 2.2e-11 over 48 kHz, of which
     // 8/48 falls in +-4 kHz: -116 dBFS. The FM case keeps its own scale: a
@@ -3790,9 +3776,9 @@ bool runSquelchGateTest()
             // S_AV is power-averaged: noise reads ~1 dB above amsq's
             // magnitude average, and 50% AM adds 0.5 dB to the carrier.
             ok = require(noiseOpen.sAvDb > -119.0 && noiseOpen.sAvDb < -113.0,
-                         "the harness noise is not at the HL2 floor d156 measured") && ok;
+                         "the harness noise is not at the measured HL2 floor") && ok;
             ok = require(sigOpen.sAvDb > -93.5 && sigOpen.sAvDb < -89.5,
-                         "the harness carrier is not at the d156 broadcast level") && ok;
+                         "the harness carrier is not at the measured broadcast level") && ok;
         }
         // Muted means muted: both stages apply a gain of exactly 0 in MUTED.
         ok = require(noiseClosed.audio < 1.0e-9,

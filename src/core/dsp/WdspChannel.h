@@ -252,19 +252,15 @@ public:
     // flight. Guarded like setMode(); never from processIq().
     bool setFmDeviation(double deviationHz) noexcept;
 
-    // Receive squelch: one control, two WDSP stages, chosen by the mode, the
-    // other forced off. Level 100 is tightest.
+    // Receive squelch: the mode picks one WDSP stage, the other is forced off;
+    // level 100 is tightest, and setMode() re-applies it.
     //   level 0                  nothing runs, in every mode ("0 = open")
     //   FM                       fmsq, threshold 10^(-2 * level / 100)
     //   AM, SAM, DSB, LSB, USB   amsq, threshold -140 + 0.7 * level dBFS
     //   CW, DIG, WBFM, other     none
-    // The amsq map is sized on HL2-measured levels (no signal opened at
-    // -120..-112 dBFS, a busy 40 m band at -80..-72), so it moves with RF gain.
-    // SSB uses amsq, not ssql: ssql's zero-crossing step (0.01, ssql.c
-    // create_ftov) is never reached at this chain's audio level. Closing takes
-    // up to ~1.6 s (amsq 1.5 s tail, fmsq 1.2 s). setMode() re-applies it.
-    // Receive only; false while a control operation is in flight; not callable
-    // from processIq(). `level` is clamped to 0..100.
+    // amsq's map is fitted to HL2-measured dBFS levels, so it moves with RF gain;
+    // SSB is on amsq because ssql never opens at this chain's audio level (#5982).
+    // Receive only; false while a control operation is in flight; not from processIq().
     bool setSquelch(bool on, int level) noexcept;
     [[nodiscard]] static SquelchStage squelchStageFor(Mode mode) noexcept;
     // The two maps above, each clamping level to 0..100, so tests can pin them.

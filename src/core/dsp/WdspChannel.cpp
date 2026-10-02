@@ -631,7 +631,8 @@ double WdspChannel::fmSquelchThresholdForLevel(int level) noexcept
 
 double WdspChannel::levelSquelchThresholdDbfsForLevel(int level) noexcept
 {
-    // Derived from the HL2 measurements quoted in the header (hl2-lab d156).
+    // Fitted to HL2 measurements (#5982): level 50 sits between the no-signal
+    // floor (-120..-112 dBFS) and a strong broadcast carrier (-96..-88).
     const double clamped = std::clamp(static_cast<double>(level), 0.0, 100.0);
     return -140.0 + 0.7 * clamped;
 }
