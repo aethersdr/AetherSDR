@@ -514,7 +514,9 @@ public:
     // Tune carrier on/off at the operator's TUNE power (percent, 0..100). Flex takes
     // "transmit tune N" as text, so FlexBackend ignores this. A backend generating
     // its own carrier needs tunePowerPercent: otherwise it can only key at the RF
-    // Power level setTxPower() last pushed.
+    // Power level setTxPower() last pushed. Without a command plane, declaring
+    // canTransmit and transmitDriveControl promises tunePowerPercent is honoured:
+    // RadioModel then withholds the "transmit set tunepower=" drop notice.
     virtual void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(on);
@@ -527,7 +529,9 @@ public:
     //
     // Flex takes this as a text command from TransmitModel, so FlexBackend has
     // nothing to do here. A backend that owns its own drive register (HL2)
-    // implements it.
+    // implements it, and must if it has no command plane and declares
+    // canTransmit and transmitDriveControl: RadioModel then withholds the
+    // rfpower drop notice.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
 
     // The operator's CW pitch, in Hz (TransmitModel's range: 100..6000). A
@@ -692,6 +696,8 @@ public:
     // sidebands: the modulator picks the sideband, so reflecting for LSB would
     // transmit on the wrong one. Once called, the operator's passband owns the
     // modulator; a per-mode default must not overwrite it on a mode change.
+    // Without a command plane, declaring hasTxFilterControls promises this is
+    // implemented: RadioModel then withholds the filter_low/high drop notice.
     virtual void setTxFilter(int lowHz, int highHz)
     {
         Q_UNUSED(lowHz);
@@ -700,7 +706,9 @@ public:
 
     // Microphone gain, 0..100 (Phone applet MIC). Flex takes `transmit set miclevel=`
     // from TransmitModel. A host-modulating backend that takes this owns the gain:
-    // nothing else scales the mic on its behalf.
+    // nothing else scales the mic on its behalf. A backend with no command plane
+    // that declares canTransmit must implement it: RadioModel then withholds the
+    // miclevel drop notice.
     virtual void setMicGain(int level)
     {
         Q_UNUSED(level);

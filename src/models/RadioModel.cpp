@@ -1737,6 +1737,7 @@ void RadioModel::teardownBackend()
     // is ~RadioModel(), and resetState() emits TX signals.
     m_transmitModel.resetPowerProvenance();
     m_backend.reset();
+    m_cwPitchHandedToBackend = -1;  // the next backend has been handed nothing
     acknowledgeTxTransportTeardown(m_txOperation);
     m_connection = nullptr;
     m_panStream = nullptr;
@@ -1878,6 +1879,65 @@ void RadioModel::evaluateTxFilterAudioLoss(float scFilt1, float scFilt2)
             .arg(qRound(scFilt1 - scFilt2)),
         tx ? tx->panId() : QString());
 }
+
+namespace {
+// Whether TransmitModel's Flex text duplicates a typed intent that a backend
+// with no command plane really applied, so dropping it loses nothing (#5637).
+// Every key must be routed, and each only under the capability that says its
+// setter is real (setters default to no-ops):
+//   rfpower, tunepower    canTransmit + transmitDriveControl (setTxPower;
+//                         tunepower rides setTune()'s tunePowerPercent, so
+//                         only while TUNE is not keyed: the next key-down
+//                         carries it, and nothing re-applies it mid-carrier)
+//   miclevel              canTransmit (setMicGain)
+//   filter_low/_high      hasTxFilterControls (setTxFilter)
+//   cw pitch N            N is the pitch last handed to THIS backend, because
+//                         the host-modulating connection is change-gated
+// vox, mon, speech_processor, cw wpm and cw break_in are not routed: no
+// capability proves their setters real, so they keep the notice even where one
+// is (an Icom implements setVox, setSpeechProcessor, setCwSpeed, setCwBreakIn).
+bool transmitCommandDeliveredThroughSeam(const QString& command,
+                                         const RadioCapabilities& caps,
+                                         int cwPitchHandedToBackend,
+                                         bool tuneKeyed)
+{
+    static const QString kCwPitch = QStringLiteral("cw pitch ");
+    if (command.startsWith(kCwPitch)) {
+        bool ok = false;
+        const int hz = command.mid(kCwPitch.size()).trimmed().toInt(&ok);
+        return ok && cwPitchHandedToBackend >= 0 && hz == cwPitchHandedToBackend;
+    }
+
+    static const QString kTransmitSet = QStringLiteral("transmit set ");
+    if (!command.startsWith(kTransmitSet)) {
+        return false;
+    }
+    const QMap<QString, QString> kvs =
+        CommandParser::parseKVs(command.mid(kTransmitSet.size()));
+    if (kvs.isEmpty()) {
+        return false;
+    }
+    for (auto it = kvs.cbegin(); it != kvs.cend(); ++it) {
+        const QString& key = it.key();
+        bool routed = false;
+        if (key == QLatin1String("rfpower")) {
+            routed = caps.canTransmit && caps.transmitDriveControl.has_value();
+        } else if (key == QLatin1String("tunepower")) {
+            routed = caps.canTransmit && caps.transmitDriveControl.has_value()
+                && !tuneKeyed;
+        } else if (key == QLatin1String("miclevel")) {
+            routed = caps.canTransmit;
+        } else if (key == QLatin1String("filter_low")
+                   || key == QLatin1String("filter_high")) {
+            routed = caps.hasTxFilterControls;
+        }
+        if (!routed) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
 
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
@@ -2066,13 +2126,17 @@ RadioModel::RadioModel(QObject* parent)
     // passband. Not for Flex, which applies `cw pitch` on-radio.
     connect(&m_transmitModel, &TransmitModel::cwPitchChanged, this,
             [this](int hz) {
-        if (m_backend && backendCapabilities().hostModulates)
+        if (m_backend && backendCapabilities().hostModulates) {
             m_backend->setCwPitch(hz);
+            m_cwPitchHandedToBackend = hz;
+        }
     });
     connect(&m_transmitModel, &TransmitModel::cwPitchCommandIssued, this,
             [this](int hz) {
-        if (m_backend && backendCapabilities().hasRadioSideCwKeyer)
+        if (m_backend && backendCapabilities().hasRadioSideCwKeyer) {
             m_backend->setCwPitch(hz);
+            m_cwPitchHandedToBackend = hz;
+        }
     });
     connect(&m_transmitModel, &TransmitModel::cwSpeedCommandIssued, this,
             [this](int wpm) {
@@ -2107,8 +2171,10 @@ RadioModel::RadioModel(QObject* parent)
     // disagreement would be invisible the first time either one moves.
     connect(this, &RadioModel::connectionStateChanged, this,
             [this](bool connected) {
-        if (connected && m_backend && backendCapabilities().hostModulates)
+        if (connected && m_backend && backendCapabilities().hostModulates) {
             m_backend->setCwPitch(m_transmitModel.cwPitch());
+            m_cwPitchHandedToBackend = m_transmitModel.cwPitch();
+        }
     });
 
     // The speech processor to a backend that owns its own compressor. Here, not in
@@ -2272,6 +2338,18 @@ RadioModel::RadioModel(QObject* parent)
                                  kvs.value(QStringLiteral("filter_high"))));
                 }
             }
+        }
+
+        // A verb the backend already applied as a typed intent is not a drop
+        // (#5637); every other verb still reaches sendCmd()'s notice (#5263).
+        if (!hasCommandPlane() && m_backend
+            && transmitCommandDeliveredThroughSeam(trimmed, m_backend->capabilities(),
+                                                   m_cwPitchHandedToBackend,
+                                                   m_transmitModel.isTuning())) {
+            qCDebug(lcProtocol).noquote()
+                << "RadioModel: no command plane; value already delivered through the seam:"
+                << cmd;
+            return;
         }
 
         sendCmd(cmd);
