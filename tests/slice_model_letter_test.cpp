@@ -209,6 +209,7 @@ int main(int argc, char** argv)
     {
         SliceModel s(5);
         QStringList commands;
+        QSignalSpy agcRequests(&s, &SliceModel::receiveAgcRequested);
         QObject::connect(&s, &SliceModel::commandReady,
                          [&commands](const QString& cmd) { commands.append(cmd); });
         s.applyChanges(delta([](SliceDelta& d){
@@ -365,15 +366,25 @@ int main(int argc, char** argv)
         commands.clear();
 
         s.setAgcMode(QStringLiteral("med"));
+        EXPECT_EQ(agcRequests.size(), 1); // External replacement and status sent none.
         s.setAgcThreshold(20);
         s.setAgcOffLevel(30);
         s.setSquelch(false, 22);
         EXPECT_EQ(commands.join(QStringLiteral("|")),
-                  QStringLiteral("slice set 5 agc_mode=med|"
-                                 "slice set 5 agc_threshold=20|"
-                                 "slice set 5 agc_off_level=30|"
-                                 "slice set 5 squelch=0|"
+                  QStringLiteral("slice set 5 squelch=0|"
                                  "slice set 5 squelch_level=22"));
+        EXPECT_EQ(agcRequests.size(), 3);
+        if (agcRequests.size() == 3) {
+            const SliceAgcRequest mode = qvariant_cast<SliceAgcRequest>(agcRequests.at(0).at(0));
+            const SliceAgcRequest threshold = qvariant_cast<SliceAgcRequest>(agcRequests.at(1).at(0));
+            const SliceAgcRequest off = qvariant_cast<SliceAgcRequest>(agcRequests.at(2).at(0));
+            EXPECT_EQ(mode.field == SliceAgcRequest::Field::Mode, true);
+            EXPECT_EQ(mode.mode, QStringLiteral("med"));
+            EXPECT_EQ(threshold.field == SliceAgcRequest::Field::Threshold, true);
+            EXPECT_EQ(threshold.threshold, 20);
+            EXPECT_EQ(off.field == SliceAgcRequest::Field::OffLevel, true);
+            EXPECT_EQ(off.offLevel, 30);
+        }
     }
 
     // ── step_list: a malformed token is dropped (fail-closed), not admitted as

@@ -192,17 +192,9 @@ void ClientPuduMonitor::startPlayback()
     if (m_playing) return;
     if (m_recordedBytes <= 0) { bail(); return; }
 
-    // ── Pick an output device + format ─────────────────────────────
-    // int16 stereo at the sink's native rate.  Try 24 kHz first (zero-
-    // resample fast path — typical on Linux); fall back to 48 kHz
-    // (typical on macOS and Windows) with a one-shot r8brain upsample
-    // of the whole captured buffer up-front.
-    //
-    // Prefer the device the user picked in Radio Settings > Audio
-    // (m_outputDevice, seeded by MainWindow from AudioEngine).  Only
-    // accept it if it is still present in the live audioOutputs() list
-    // — a hotplug/unplug between selection and now would otherwise
-    // strand us on a stale handle.  Mirrors AudioEngine::startSidetoneStream().
+    // Output device: the user's Radio Settings > Audio choice (m_outputDevice) only
+    // if still present in audioOutputs() (hotplug), else the system default. Mirrors
+    // AudioEngine::startSidetoneStream().
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
     if (!m_outputDevice.isNull()) {
         const auto outputs = QMediaDevices::audioOutputs();
@@ -221,24 +213,12 @@ void ClientPuduMonitor::startPlayback()
         bail(); return;
     }
 
-    // Negotiate the playback format via the shared factory (#3306, Phase 6b).
-    // The monitor holds recorded Int16, so prefer Int16 (no conversion on a
-    // normal device) and fall back to Float for Float-only WASAPI mixers — the
-    // Int16->Float conversion below handles that case (#3231). The factory
-    // supplies, in one place, the per-OS preferred rate (Win/Mac 48k to dodge
-    // the WASAPI 24k resampler artifacts #2120 — same policy as the RX sink;
-    // Linux native 24k) plus the 44.1k and preferredFormat fallbacks the old
-    // hand-rolled ladder enumerated by hand.
-    //
-    // Each rung is tried with a real QAudioSink::start(), not
-    // isFormatSupported() (#4641): on Windows/WASAPI that query answers
-    // against the shared-mode mix format and false-negatives on class-
-    // compliant multichannel USB interfaces (Scarlett, Focusrite, Akai EIE)
-    // that accept the format fine once actually opened — see AudioEngine's
-    // RX sink (AudioEngine.cpp) and AudioDeviceNegotiator::probe()'s
-    // isFormatSupportedReliable comment for the same finding. Trusting the
-    // query here meant every rung failed on affected hardware and playback
-    // silently never started.
+    // Negotiate via the shared factory (#3306): prefer Int16 (the buffer is Int16),
+    // fall back to Float for Float-only WASAPI mixers (#3231); per-OS preferred rate
+    // (Win/Mac 48k to avoid WASAPI 24k resampler artifacts #2120, Linux 24k) plus
+    // 44.1k and preferredFormat fallbacks. Each rung is tried with a real
+    // QAudioSink::start(): isFormatSupported() false-negatives on WASAPI
+    // multichannel USB interfaces (#4641; see AudioDeviceNegotiator::probe()).
     QAudioFormat fmt;
     int sinkRate = kSampleRate;
     bool fallbackOccurred = false;

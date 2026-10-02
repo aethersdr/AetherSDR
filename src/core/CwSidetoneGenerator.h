@@ -7,19 +7,11 @@
 
 namespace AetherSDR {
 
-// Client-side CW sidetone generator.  Produces a clean sine tone in the
-// AudioEngine's RX output stream while the operator's CW key is held,
-// driven by RadioModel::sendCwKey() / sendCwPaddle() events.
-//
-// Why client-side?  The radio's own sidetone (audio_mute=1 + DAX feed)
-// has 30–100 ms of round-trip latency — fine for slow CW, brutal at
-// 25+ WPM.  This generator runs in the audio thread alongside the
-// existing buffer mix in AudioEngine, so the operator hears the tone
-// within one audio callback (~10 ms) of pressing the key.
-//
-// All parameter setters use std::atomic so the UI thread can update
-// pitch / volume / enable live without locking the audio thread.
-// process() is the only method called on the audio thread.
+// Client-side CW sidetone: a sine in AudioEngine's RX output while the key is
+// held. The radio's sidetone path has 30-100 ms round trip; this runs on the
+// audio thread, within one callback (~10 ms) of the key. Setters are atomics
+// (pitch/volume/enable live from the UI); process() is the only audio-thread
+// method.
 class CwSidetoneGenerator {
 public:
     explicit CwSidetoneGenerator(int sampleRateHz = 48000);
@@ -38,25 +30,14 @@ public:
     void setSampleRateHz(int hz) noexcept;
     int  sampleRateHz() const noexcept { return m_sampleRateHz; }
 
-    // Key state — called from any thread, and concurrently from several
-    // in practice (iambic worker, CWX worker, the GUI-thread handler of
-    // RadioModel::cwKeyDownChanged for straight-key sources); producers
-    // serialize on a short spinlock the audio thread never touches.  Each
-    // call is timestamped inside the lock and queued; process() applies
-    // the transition at the exact sample offset the timestamp maps to, so
-    // key edges are no longer quantized to audio block boundaries (#4809
-    // — up to one whole block of jitter per edge, and far more on the
-    // push-model QAudioSink sink).  On queue overflow the last-known state
-    // still lands at the next block start (the pre-#4809 behavior) via
-    // m_keyDown.
-    // `when` (#4890): producers with an exact element schedule (the iambic
-    // keyer's grid) pass the edge's scheduled instant so the rendered
-    // rhythm is the intended rhythm, not the worker's thread-wake rhythm;
-    // producers without one take the wall-clock default.  Timestamps are
-    // clamped monotonic inside the lock — a scheduled instant lies a few
-    // ms in the past, so a wall-clock edge from another producer (the GUI
-    // echo) could otherwise land in the queue ahead of it with a later
-    // stamp, and process() requires queue order == time order.
+    // Key state, callable concurrently from any thread (iambic worker, CWX worker,
+    // GUI-thread straight key); producers serialize on a spinlock the audio thread
+    // never touches. Each edge is timestamped and queued, and process() applies it
+    // at the exact sample offset its stamp maps to (#4809). On queue overflow the
+    // last state lands at the next block start via m_keyDown. `when` (#4890): the
+    // scheduled instant for producers with an exact grid, else now(). Stamps are
+    // clamped monotonic inside the lock because process() needs queue order ==
+    // time order.
     void setKeyDown(bool down,
                     std::chrono::steady_clock::time_point when =
                         std::chrono::steady_clock::now()) noexcept;
@@ -118,55 +99,24 @@ private:
     // scheduled instants (see setKeyDown).  Guarded by m_edgeLock.
     std::chrono::steady_clock::time_point m_lastQueuedStamp{};
 
-    // Release the timestamp→sample anchor only after this much continuous
-    // idle: longer than any inter-element or inter-character gap at
-    // typical paddle speeds (180 ms inter-character at 20 WPM), short
-    // enough to bound steady_clock vs audio-clock drift between keying
-    // sequences.  Below 15 WPM an inter-character gap (3 units of
-    // 1200/wpm ms) exceeds this and the anchor is released between
-    // characters — harmless, since at those speeds a unit is >=85 ms and
-    // block quantization of the next onset is inaudible; element lengths
-    // stay exact either way, because they come from the keyer's grid,
-    // not the anchor.
-    //
-    // process() reuses this same threshold for the two guards that keep the
-    // mapping honest when it is NOT pumped in real time: how far the anchor
-    // may drift from wall clock before it is dropped, and how old a queued
-    // edge may be before a fresh anchor discards it instead of replaying it.
+    // Release the timestamp->sample anchor after this much continuous idle: longer
+    // than element/character gaps at typical speeds (180 ms at 20 WPM), short enough
+    // to bound steady_clock vs audio-clock drift. Below 15 WPM the anchor releases
+    // between characters (harmless; element lengths come from the keyer grid).
+    // process() reuses it for the staleness and stale-edge guards.
     static constexpr int kReanchorIdleMs = 250;
 
-    // Upper bound on m_anchorSlack (#4890) — the headroom a NEW anchor starts
-    // with, and the only offset that is carried rather than corrective.  It
-    // sits inside the staleness guard's margin (a fresh anchor is placed at
-    // blockStart + slack, so the mapping starts that far ahead of the head),
-    // hence the relationship the assert pins.
-    //
-    // The per-edge forward shift is deliberately NOT bounded by this or any
-    // constant.  A shift is a re-alignment, not drift: it moves the mapping to
-    // the render head, so afterwards the guard quantity is the wall time since
-    // that edge, not a running total.  Measured over a sustained racing burst
-    // (119 shifts) the quantity peaked at 2.4 ms against this 250 ms threshold
-    // and never re-anchored.  Capping the shift was tried and is actively
-    // harmful: it strands the mapping behind the head, so every later edge in
-    // that anchor clamps and element durations collapse to block multiples
-    // (measured: 5.0 ms elements rendering as 2.8 ms) — the exact defect this
-    // change exists to remove.
+    // Upper bound on m_anchorSlack (#4890): the headroom a NEW anchor starts with. A
+    // fresh anchor sits at blockStart + slack, hence the assert. The per-edge forward
+    // shift is deliberately unbounded (a re-alignment, not drift; capping it
+    // collapses elements to block multiples).
     static constexpr int kAnchorSlackCapMs = 40;
     static_assert(kAnchorSlackCapMs < kReanchorIdleMs,
                   "carried slack must leave the staleness guard margin");
-    // The assert pins the SAFETY relationship, but it is not the binding
-    // constraint on this value: slack IS onset latency, so the ceiling that
-    // matters is the 30-100 ms radio round trip this generator exists to beat
-    // (see m_anchorSlack).  A cap at the top of that range would let the
-    // client tone silently become no better than the radio's.  40 ms keeps it
-    // clearly ahead while leaving room for several refills' worth of learning:
-    // a 22 s hand-keyed session measured 5.5 ms of total learned slack, and
-    // the deliberate 800 ms pump stall in the decay test needs only enough to
-    // clear one refill.
-    // The cap also SPENDS the staleness guard's stall tolerance rather than
-    // merely staying under it: a fresh anchor starts at blockStart + slack,
-    // so at the cap a genuine pump stall has kReanchorIdleMs - 40 ms of
-    // margin left, not the full 250 ms.
+    // The binding constraint is latency, not the assert: slack IS onset latency, and
+    // this generator exists to beat the radio's 30-100 ms round trip. 40 ms stays
+    // clearly ahead (a 22 s hand-keyed session learned 5.5 ms). At the cap a pump
+    // stall has kReanchorIdleMs - 40 ms of staleness margin left.
 
     void applyKeyEdge(bool down) noexcept;  // state-machine transition
 
@@ -206,24 +156,12 @@ private:
     int64_t  m_anchorPos{0};
     int64_t  m_idleSamples{0};      // contiguous idle samples since the last edge
 
-    // Learned anchor headroom, in samples (#4890).  A push-model sink keeps
-    // its device buffer full, so m_streamPos advances at wall-clock pace and
-    // every edge target races the render head: an edge whose exact position
-    // was already rendered used to be clamped to the current block start,
-    // quantizing BOTH edges of an element to block boundaries (measured on
-    // Linux: dit SD 0.2 ms at emission -> 6-8 ms rendered, in whole-block
-    // steps).  When an edge arrives late, process() now shifts the whole
-    // anchor forward instead — relative spacing (the rhythm) survives, only
-    // absolute onset latency grows — and the deficit accumulates here so the
-    // NEXT burst anchors with enough headroom to stop racing at all.
-    // Bounded by kAnchorSlackCapMs; reset with the mapping.
-    //
-    // It decays as well as grows, and must: this generator exists because the
-    // radio's own sidetone costs 30-100 ms round trip, so a slack that only
-    // ratcheted upward would let one transient stall park the client tone
-    // inside the very range it is meant to avoid, for the rest of the
-    // session.  An anchor that completed without ever running late is
-    // evidence the sink has headroom to spare, and halves it.
+    // Learned anchor headroom in samples (#4890). A push-model sink keeps its buffer
+    // full, so edge targets race the render head; a late edge shifts the whole anchor
+    // forward and the deficit accumulates here so the next burst anchors ahead.
+    // Capped at kAnchorSlackCapMs, reset with the mapping, and halved when an anchor
+    // completes without running late, so one stall can't park latency in the radio's
+    // 30-100 ms range.
     int64_t  m_anchorSlack{0};
 
     // Whether the current anchor has ever had to shift for a late edge.  An

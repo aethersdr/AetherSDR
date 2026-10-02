@@ -227,16 +227,9 @@ void WsjtxClient::parseDecode(QDataStream& ds)
 
 QString WsjtxClient::extractCallsign(const QString& message) const
 {
-    // WSJT-X message formats:
-    //   "CQ W1AW FN42"           — CQ call, extract W1AW
-    //   "CQ DX JA1ABC PM95"      — CQ DX, extract JA1ABC
-    //   "CQ POTA K1ABC FN42"     — CQ directed, extract K1ABC
-    //   "CQ NA W1AW FN42"        — CQ continent, extract W1AW
-    //   "W1AW K1ABC +05"         — directed call, extract W1AW (first callsign)
-    //   "W1AW K1ABC R-10"        — report, extract W1AW
-    //   "W1AW K1ABC RR73"        — confirmation
-    // We want to spot the OTHER station (not us). For CQ messages, that's the
-    // caller. For directed messages, that's the first callsign.
+    // Spot the OTHER station: the caller of a CQ (skipping DX/POTA/continent
+    // qualifiers), or the first callsign of a directed message, e.g.
+    //   "CQ DX JA1ABC PM95" → JA1ABC,  "W1AW K1ABC R-10" → W1AW
 
     static const QRegularExpression callRx(R"(\b([A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z])\b)");
     QStringList parts = message.trimmed().split(' ', Qt::SkipEmptyParts);

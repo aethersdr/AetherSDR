@@ -180,21 +180,11 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
 
     auto* osmLayer = new DarkBasemapLayer();
     m_basemapLayer = osmLayer;
-    // Deliberately tighter than QGVLayerTiles' upstream defaults, in both
-    // dimensions — the decoded-image cache in QGVLayerTilesOnline is what pays
-    // for it, since re-entering an area now costs a memcpy rather than a fetch
-    // and a PNG decode.
-    //
-    //   * preload ring, no zoom change: 3 -> 1. One tile beyond the viewport
-    //     hides network latency without making every drag boundary enqueue a
-    //     7x7 block. (The with-zoom-change margin is already 1 upstream; it is
-    //     set here only so both are stated in one place.)
-    //   * retained fallback layers: 10 below / 10 above -> 2 below / 1 above.
-    //     This is a REDUCTION in how much coarse imagery is kept behind the
-    //     current zoom. Two levels is enough to cover a zoom transition; past
-    //     that the tiles are never drawn and only cost memory, which matters
-    //     more now that horizontal wrap lets the camera visit unboundedly many
-    //     world copies.
+    // Tighter than QGVLayerTiles' defaults; the decoded-image cache in
+    // QGVLayerTilesOnline makes re-entry a memcpy. Preload ring 1 (upstream 3 with no
+    // zoom change) hides latency without enqueuing 7x7 blocks per drag. Fallback
+    // layers 2 below / 1 above (upstream 10/10) cover a zoom transition; more only
+    // costs memory, which horizontal wrap makes unbounded.
     osmLayer->setTilesMarginWithZoomChange(1);
     osmLayer->setTilesMarginNoZoomChange(1);
     osmLayer->setVisibleZoomLayersBelowCurrent(2);

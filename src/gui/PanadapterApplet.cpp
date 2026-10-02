@@ -1031,17 +1031,10 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
                 m_canvasPressed  = true;
                 m_canvasDragging = false;
                 m_canvasPressPos = me->globalPosition().toPoint();
-                // CONSUME the press.  The strip is a plain QWidget whose
-                // default handler IGNORES presses; an ignored press
-                // propagates to the applet and leaves the implicit mouse
-                // grab there, so every subsequent MouseMove bypasses this
-                // filter and the drag can never start (the 8600 "can't
-                // drag the pan" report — the selection that DID happen came
-                // from the canvas's press-raise filter on the propagated
-                // event, which masked the break).  ContainerTitleBar never
-                // had the problem: its reimplemented handler accepts.  The
-                // press's side effect is re-created here since the tail of
-                // this filter is no longer reached:
+                // Consume the press: the strip's default handler ignores it,
+                // and an ignored press leaves the implicit grab on the applet,
+                // so later moves never reach this filter. Re-emit the press's
+                // side effect here since the filter tail is skipped.
                 emit activated(m_panId);
                 return true;
             }

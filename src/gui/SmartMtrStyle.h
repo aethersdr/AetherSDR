@@ -4,18 +4,9 @@
 
 namespace AetherSDR {
 
-// ============================================================================
-// SmartMTR design tokens
-// ============================================================================
-//
-// Single source of truth for the SmartMTR control's look. To re-tune the
-// control's proportions or palette, edit THIS file only — no drawing code
-// references magic numbers; every element reads from these constants.
-//
-// Geometry is expressed in UNITS (see SmartMtrGeometry.h for the UNITS->pixel
-// mapping). UNITS are abstract, resolution-independent design units that fix
-// only the proportions of the control, never its pixel size.
-// ============================================================================
+// SmartMTR design tokens: the single source for the control's proportions and
+// palette; drawing code uses no magic numbers. Geometry is in UNITS (see
+// SmartMtrGeometry.h).
 
 // Palette for the SmartMTR meter control.
 namespace SmartMtrColors {
@@ -82,17 +73,9 @@ inline constexpr double kLabelHeightNormal = 11.0; // normal (slightly smaller)
 inline constexpr double kLabelGap = 1.0;
 } // namespace SmartMtrUnits
 
-// ============================================================================
-// Extremes (min/max peak-hold markers) tuning
-// ============================================================================
-//
-// The min/max "extremes" markers ride the same scale band as the indicator bar.
-// Unlike the bar (asymmetric exponential ballistics in MeterSmoother), the
-// markers glide at a constant linear slew over a sliding-window envelope of the
-// signal, so they read as a separate UI element. Window length is bound to the
-// user's "Extremes speed" setting; fades and slew are constant.
-//
-// All values are tuning constants — geometry in UNITS, fade thresholds in dB.
+// Extremes (min/max) markers: constant linear slew over a sliding-window
+// envelope, unlike the bar's exponential ballistics (MeterSmoother). Window
+// length follows the "Extremes speed" setting; geometry in UNITS, fades in dB.
 namespace SmartMtrExtremes {
 // Sliding-window length per "Extremes speed" setting (seconds).
 inline constexpr double kWindowFastSec = 1.0;

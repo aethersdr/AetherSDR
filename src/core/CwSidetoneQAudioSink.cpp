@@ -40,19 +40,11 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
     }
     m_deviceDescription = dev.description();
 
-    // Negotiate the output format via the shared factory (#3306, Phase 6c). The
-    // sidetone generator retunes to the negotiated rate (RegenerateAtRate) and
-    // the tick handles both Float and Int16, so we walk the default Float-first
-    // ladder — Int16 is the VB-Audio / Int16-only-WASAPI fallback (#2629). The
-    // factory supplies the per-OS preferred rate plus the 44.1k and
-    // preferredFormat fallbacks in one place.
-    //
-    // Each rung is tried with a real QAudioSink::start(), not
-    // isFormatSupported() (#4641): on Windows/WASAPI that query answers
-    // against the shared-mode mix format and false-negatives on class-
-    // compliant multichannel USB interfaces (Akai EIE and similar) that
-    // accept the format fine once actually opened — matches AudioEngine's
-    // RX sink, which never trusted the query to begin with.
+    // Negotiate via the shared factory (#3306): the generator retunes to the chosen
+    // rate and the tick handles Float and Int16, so walk the default Float-first
+    // ladder (Int16 for VB-Audio / Int16-only WASAPI, #2629). Each rung is tried
+    // with a real QAudioSink::start(): isFormatSupported() false-negatives on WASAPI
+    // multichannel USB interfaces (#4641).
     int chosenRate = 0;
     QAudioFormat::SampleFormat chosenFmt = QAudioFormat::Unknown;
     const QList<QAudioFormat> ladder = AudioDeviceNegotiator::formatLadder(

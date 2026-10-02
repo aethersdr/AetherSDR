@@ -28,18 +28,10 @@ class StripReverbPanel;
 class StripWaveformPanel;
 class StripFinalOutputPanel;
 
-// AetherTX — the transmit chain in one window.
-//
-// First-iteration plumbing for issue #2301.  Toplevel `Qt::Window`
-// that embeds all 7 client-side TX DSP stage panels in a single
-// view, with a horizontal `ClientChainWidget` at the top for chain
-// ordering / bypass.  Per-stage editors and applets continue to
-// work alongside this window during iteration; step 6 of the plan
-// removes them.
-//
-// Geometry persists via AppSettings("AetherialStripGeometry").
-// Visibility persists via AppSettings("AetherialStripVisible") so
-// the strip reopens at last position on startup.
+// AetherTX — the transmit chain in one window (#2301): a top-level Qt::Window
+// embedding the client-side TX DSP stage panels, one per page, selected from a
+// tab column on the left. Geometry persists in "AetherialStripGeometry" and
+// visibility in "AetherialStripVisible", so it reopens where it was.
 class AetherialAudioStrip : public QWidget {
     Q_OBJECT
 
@@ -53,6 +45,8 @@ public:
     ~AetherialAudioStrip() override;
 
     void setFramelessMode(bool on);
+    void setAudioPathNotice(const QString& text, bool warning);
+    void closeSettingsIfOpen();
 
     // Forward radio TX filter cutoffs to the embedded EQ canvas so the
     // dashed yellow filter-edge guide lines render here too.  MainWindow
@@ -124,6 +118,7 @@ private:
     QPushButton* m_monPlayBtn{nullptr};
 
     QLabel* m_micDot{nullptr};
+    QLabel* m_pcAudioNotice{nullptr};
     QLabel* m_micLabel{nullptr};
     QLabel* m_txDot{nullptr};
     QLabel* m_txLabel{nullptr};

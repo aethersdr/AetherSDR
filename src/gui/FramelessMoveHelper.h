@@ -8,34 +8,13 @@
 
 namespace AetherSDR::FramelessMoveHelper {
 
-// QWindow::startSystemMove()/startSystemResize() report success on the xcb
-// platform, but the WM-driven interactive move/resize grab they hand off to
-// is unreliable there (upstream QTBUG-69716) — under at least Mutter/XWayland
-// (the common case for `QT_QPA_PLATFORM=xcb` on a Wayland desktop — the
-// workaround for the native-Wayland panadapter stall, #4725) the request is
-// silently dropped: the press is consumed, but the window never
-// actually tracks the pointer (#4827). Qt's own QSizeGrip hits the same wall
-// and works around it in usePlatformSizeGrip() (qsizegrip.cpp) by refusing
-// the platform path on xcb and dragging the geometry manually instead — the
-// Windows clause below matches that precedent clause for clause (Windows +
-// Qt::WA_TranslucentBackground, QTBUG-90628, flicker combining native resize
-// with a translucent top-level there — which AetherSDR's own MainWindow sets
-// whenever frameless mode is on). The xcb clause does not: Qt's own guard is
-// resize-only, with no equivalent for startSystemMove() anywhere in qtbase.
-// This helper applies its xcb refusal to *both*, which is evidence-backed
-// for #4827's own reported Mutter/XWayland environment (`_NET_WM_MOVERESIZE`
-// demonstrably does nothing there) but also takes the WM-driven move path —
-// and with it edge-snap/tiling gestures, and the _NET_WM_SYNC_REQUEST
-// handshake the FramelessResizer header credits for the absence of its
-// resize-shimmer artifact — away from a plain X11 session (KWin/X11, Xfwm,
-// i3, …) where that grab may work fine and was never tested against this
-// change. Narrowing to XWayland specifically
-// (`qEnvironmentVariableIsSet("WAYLAND_DISPLAY")` alongside the xcb check)
-// is possible without a new dependency if this is ever revisited; left as
-// the broader xcb-wide refusal for now rather than changing move behavior
-// for an environment nobody here could test against.
-// `window` may be null for a caller with no widget handy; the Windows
-// clause then simply doesn't apply, same as if the attribute were unset.
+// On xcb, startSystemMove()/startSystemResize() report success but the WM grab
+// is silently dropped under Mutter/XWayland (QTBUG-69716, #4827), the common
+// `QT_QPA_PLATFORM=xcb` setup (#4725). QSizeGrip's usePlatformSizeGrip() refuses
+// xcb for resize; this refuses it for both, which also forgoes edge-snap and
+// _NET_WM_SYNC_REQUEST on plain X11 (untested there; narrowing with
+// WAYLAND_DISPLAY is possible). The Windows clause matches QSizeGrip:
+// WA_TranslucentBackground (QTBUG-90628). A null `window` skips that clause.
 inline bool systemMoveResizeUnreliable(const QWidget* window)
 {
     const QString platform = QGuiApplication::platformName();

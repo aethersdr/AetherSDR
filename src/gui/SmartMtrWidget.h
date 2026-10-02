@@ -16,18 +16,10 @@ class QPainter;
 
 namespace AetherSDR {
 
-// Alternative meter view shown in the VFO flag in place of the standard
-// S-meter when the operator selects "SmartMTR" from the meter menu.
-//
-// It renders the meter end-to-end: the static control body and recessed "hole"
-// (cached as pixmaps), an indicator bar driven by analog-needle ballistics, and
-// optional peak/trough extremes markers with value labels.
-//
-// Organization: design tokens (colors + UNIT proportions) live in
-// SmartMtrStyle.h; the UNITS->pixel mapping lives in SmartMtrGeometry.h; this
-// class only orchestrates drawing. Each visual element is one small draw method
-// taking the geometry, so future elements slot in as new methods + one call in
-// paintEvent, in z-order.
+// SmartMTR view shown in the VFO flag in place of the S-meter. Design tokens
+// live in SmartMtrStyle.h and the UNITS->pixel mapping in SmartMtrGeometry.h;
+// this class only orchestrates drawing, one draw method per element called from
+// paintEvent in z-order. Static body and hole are cached as pixmaps.
 class SmartMtrWidget : public QWidget {
     Q_OBJECT
 public:

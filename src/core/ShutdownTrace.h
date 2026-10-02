@@ -8,29 +8,12 @@
 
 namespace AetherSDR {
 
-// A deliberately small shutdown breadcrumb. If teardown blocks inside a scope,
-// the support log ends with its begin record; successful scopes add elapsed time
-// and an explicit outcome.
-//
-// THE OUTCOME IS NOT OPTIONAL, because "end" alone lies about a timeout. A join
-// that never completes still leaves its scope when wait(3000) gives up, so
-// without fail() the record reads `event=end elapsed_ms=3000` — indistinguishable
-// from a clean join to every reader except one who happens to know the timeout is
-// 3000. That is exactly the case this instrumentation exists to catch on a
-// Windows force-quit log, so every bounded wait must report which way it went.
-//
-// NOT A Q_LOGGING_CATEGORY, and deliberately absent from LogManager's registry
-// table. QMessageLogger(..., "aether.shutdown").info() bypasses category
-// filtering entirely — unlike the qCInfo(cat) macro it never consults the
-// category's enabled state, so the string only ends up in the message context.
-// These records are therefore in EVERY support log, which is the one property
-// they need: a hang cannot be reproduced on request with logging turned up, and
-// a breadcrumb you can accidentally switch off is useless in a force-quit log.
-// Registering it would put a toggle in the Log Settings UI that either does
-// nothing or, worse, works. Cf. the aether.hl2.tx note in LogManager.cpp, which
-// documents the OPPOSITE failure (a category invisible because it was missing
-// from that table) — the lesson there does not apply here, and someone applying
-// it anyway would silently make these suppressible.
+// Small shutdown breadcrumb: a scope that blocks leaves its begin record last
+// in the log. Every bounded wait must report its outcome via fail(), or a
+// timed-out wait(3000) reads like a clean end at elapsed_ms=3000.
+// Deliberately not a Q_LOGGING_CATEGORY nor in LogManager's registry:
+// QMessageLogger(..., "aether.shutdown").info() bypasses category filtering,
+// so these records are in every support log and can't be switched off.
 class ShutdownTrace final
 {
 public:

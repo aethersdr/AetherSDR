@@ -8,21 +8,12 @@
 
 namespace AetherSDR {
 
-// SpectrumPatternGenerator — the demo-mode signal engine (RFC #4288, Phase 2).
-//
-// Produces one panadapter FFT line as a QVector<float> of per-bin dBm values —
-// exactly the payload SpectrumWidget::updateSpectrum() consumes — so a synthetic
-// radio can make the waterfall churn with recognizable test patterns and no
-// hardware. It is a pure, deterministic function of (pattern, time, geometry):
-// same inputs → same bins, so golden captures repeat and it is CI-testable in
-// isolation, with zero coupling to the widget/model wiring (that inject point is
-// a separate step).
-//
-// Ported from nigelfenton/flex-sim (GPL-3.0) pat_* generators against
-// flex-sim/PROTOCOL.md — a clean-room reimplementation of our own GPL code, no
-// verbatim copy (Constitution Principle IV). Randomness uses flex-sim's exact
-// integer hash (_hash01) keyed on (frame, bin) so "noisy" patterns stay
-// reproducible, unlike a live RNG.
+// SpectrumPatternGenerator — the demo-mode spectrum engine (RFC #4288 Phase 2).
+// Produces one FFT line of per-bin dBm (the SpectrumWidget::updateSpectrum()
+// payload) as a pure, deterministic function of (pattern, time, geometry), so
+// golden captures repeat. Clean-room port of nigelfenton/flex-sim (GPL-3.0)
+// pat_* generators against flex-sim/PROTOCOL.md; "noisy" patterns use
+// flex-sim's integer hash (_hash01) keyed on (frame, bin), not a live RNG.
 class SpectrumPatternGenerator {
 public:
     enum class Pattern {

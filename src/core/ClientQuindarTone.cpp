@@ -247,23 +247,9 @@ void ClientQuindarTone::recacheIfDirty() noexcept
 
 void ClientQuindarTone::rebuildMorseTables() noexcept
 {
-    // K  = dah dit dah                  ( - · - )
-    // BK = dah dit dit dit  +  dah dit dah   ( -··· -·- with inter-letter gap )
-    //
-    // Element timing (units of 1 dot = morseDotFrames):
-    //   dot   = 1u tone
-    //   dash  = 3u tone
-    //   intra-element gap = 1u silence
-    //   inter-letter gap  = 3u silence (only between B and K in BK)
-    //
-    // K timeline (9 units total):
-    //   [3u tone] [1u silence] [1u tone] [1u silence] [3u tone]
-    //
-    // BK timeline (21 units total):
-    //   B = [3u tone] [1u silence] [1u tone] [1u silence] [1u tone]
-    //       [1u silence] [1u tone]                              = 9u
-    //   inter-letter gap                                         = 3u
-    //   K = [3u tone] [1u silence] [1u tone] [1u silence] [3u tone] = 9u
+    // K  = dah dit dah (9 units); BK = dah dit dit dit, 3u gap, dah dit dah (21 units).
+    // Units of morseDotFrames: dot 1u, dash 3u, intra-element gap 1u, inter-letter
+    // gap 3u (only between B and K).
 
     const int u = m_cached.morseDotFrames;
     if (u <= 0) {

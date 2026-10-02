@@ -14,32 +14,14 @@
 
 namespace AetherSDR {
 
-// SimSignalSource — the demo radio's synthetic RX engine, on a worker thread
-// (#4878).
+// SimSignalSource — the demo radio's synthetic RX engine (NoiseMixer, frame
+// pacing, audio + spectrum emission) on a worker thread, so generation never
+// competes with the GUI thread's painting (#4878, #502).
 //
-// This is everything that used to tick inside SimBackend on the GUI thread:
-// the NoiseMixer, the frame-pacing timer, and the audio + spectrum emission.
-// It was the ONLY RX producer in AetherSDR living on the GUI thread — every
-// real backend runs its producers on workers precisely so signal generation
-// never competes with paintEvent (#502, AudioEngine; PanadapterStream
-// likewise) — and it is also the one producer that GENERATES its data rather
-// than merely decoding it. On a software-GL machine the combination (a 3 ms
-// Qt::PreciseTimer pinning the event dispatcher plus ~200 allocating signal
-// emissions a second) is exactly the multi-second input backlog #4878
-// reports.
-//
-// Threading contract: construct on any thread, moveToThread(worker), then
-// touch it ONLY through queued calls — every public slot below assumes it
-// runs on the worker. The member QTimer moves with its parent, and start()/
-// stop() are slots so the timer is always started from its own thread.
-// Signals are emitted from the worker and cross back queued, exactly like
-// FlexBackend's wire objects.
-//
-// The timer is 10 ms COARSE where the GUI-thread version was 3 ms PRECISE:
-// on a dedicated worker there is nothing to contend with, the debt-pacing in
-// onTick() already absorbs interval jitter (the long-run rate is exactly
-// kSampleRate regardless), and a coarse timer lets the kernel batch wakeups
-// instead of pinning the poll timeout app-wide.
+// Threading contract: construct anywhere, moveToThread(worker), then touch it
+// ONLY through queued calls; every public slot assumes it runs on the worker.
+// start()/stop() are slots so the member QTimer starts on its own thread.
+// Signals are emitted on the worker and cross back queued.
 class SimSignalSource : public QObject {
     Q_OBJECT
 
