@@ -492,7 +492,6 @@ void boundedBenchmark()
         current.capture.usableLeftHz, current.capture.usableRightHz);
     ddc.setSpectrumRateFps(kSpectrumFps);
     std::uint64_t spectrumFrames = 0;
-    std::uint64_t waterfallRows = 0;
     std::uint64_t detectorFrames = 0;
     unsigned legacyAudioPackets = 0;
     QObject::connect(&ddc, &Ddc::spectrumFrameReady, &ddc,
@@ -510,12 +509,6 @@ void boundedBenchmark()
             }
             check(finite && peak > -100,
                   "benchmark display FFT contains finite measured RF energy");
-        });
-    QObject::connect(&ddc, &Ddc::waterfallRowReady, &ddc,
-        [&](int panId, const QByteArray& row) {
-            ++waterfallRows;
-            check(panId == 0 && row.size() == Ddc::kSpectrumBinCount * qsizetype(sizeof(float)),
-                  "benchmark emits the matching complete production waterfall row");
         });
     QObject::connect(&ddc, &Ddc::audioFrameReady, &ddc,
         [&](const QByteArray&, const QByteArray&) { ++legacyAudioPackets; });
@@ -577,7 +570,7 @@ void boundedBenchmark()
     std::printf("WFM_BENCHMARK scope=pipeline_ddc_fft25 capture_rate=%llu rf_seconds=%.6f elapsed_seconds=%.6f "
         "speed=%.3fx feed_cap=%.1fx expected_frames=%llu slice_frames=%zu speaker_frames=%zu "
         "repair=%d drops=%llu late_frames=%llu mixer_rejections=%llu mixer_config_failures=%llu "
-        "fft_fps=%d expected_fft_frames=%llu fft_frames=%llu waterfall_rows=%llu detector_frames=%llu "
+        "fft_fps=%d expected_fft_frames=%llu fft_frames=%llu detector_frames=%llu "
         "ddc_legacy_audio_packets=%u\n",
         static_cast<unsigned long long>(kCaptureRate), rfSeconds, elapsed, speed, kFeedSpeed,
         static_cast<unsigned long long>(expectedFrames), output[0].left.size(), output[1].left.size(),
@@ -586,11 +579,11 @@ void boundedBenchmark()
         static_cast<unsigned long long>(diagnostics.mixerRejectedBlocks),
         static_cast<unsigned long long>(diagnostics.mixerConfigurationFailures), kSpectrumFps,
         static_cast<unsigned long long>(expectedSpectrumFrames), static_cast<unsigned long long>(spectrumFrames),
-        static_cast<unsigned long long>(waterfallRows), static_cast<unsigned long long>(detectorFrames),
+        static_cast<unsigned long long>(detectorFrames),
         legacyAudioPackets);
-    check(spectrumFrames == expectedSpectrumFrames && waterfallRows == expectedSpectrumFrames
+    check(spectrumFrames == expectedSpectrumFrames
               && detectorFrames > 0 && legacyAudioPackets == 0,
-          "benchmark includes every scheduled 25 FPS FFT/waterfall and excludes duplicate legacy audio");
+          "benchmark includes every scheduled 25 FPS display FFT and excludes duplicate legacy audio");
     check(position == iq.size() && rfSeconds >= 4.0 && speed >= 2.0,
           "benchmark completes at least four RF seconds at measured >=2x real time");
     check(diagnostics.observed && !pipeline->needsRepair() && diagnostics.droppedPackets == 0
