@@ -450,9 +450,10 @@ public:
             inTip = tr("Zoom in. The span is shared: this changes every panadapter on this radio.");
             desc = tr("This radio has one span for all panadapters, so this control changes every panadapter.");
         } else if (radioWide) {
-            desc = tr("Unavailable on this panadapter: this radio has one span for all "
-                      "panadapters, so it is set from one pane only: the one holding "
-                      "the transmit slice, or the first panadapter when none transmits.");
+            desc = tr("Span buttons unavailable here: this radio has one span for all "
+                      "panadapters, so its −/+ buttons are on one pane only (the one "
+                      "holding the transmit slice, or the first panadapter). A span "
+                      "change from any pane changes them all.");
             outTip = desc;
             inTip = desc;
         }
