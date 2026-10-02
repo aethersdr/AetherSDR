@@ -429,6 +429,13 @@ void testTunePowerAppliesLive()
     backend.setTxPower(37);
     Access::settle(backend);
     Access::forget(backend);
+    {
+        QSignalSpy transmit(&backend, &IRadioBackend::transmitChanged);
+        const auto raw = encodeLevel(percentToLevelRaw(37));
+        Access::deliver(backend, frame(cmd::kLevel, level::kRfPower, {raw[0], raw[1]}));
+        check(transmit.count() == 1 && transmit.first().at(0).value<TransmitDelta>().rfPower,
+              "premise: an RF power readback outside TUNE is published");
+    }
 
     backend.setTunePower(20);
     check(powerWrites(Access::issued(backend)).empty(),
@@ -437,6 +444,19 @@ void testTunePowerAppliesLive()
     backend.setTune(true, 10, authority.operation);
     Access::settle(backend);
     Access::forget(backend);
+    // The radio reads the tune drive back as RF power while TUNE is up.
+    const auto publishesRfPower = [&backend](int percent) {
+        QSignalSpy transmit(&backend, &IRadioBackend::transmitChanged);
+        const auto raw = encodeLevel(percentToLevelRaw(percent));
+        Access::deliver(backend, frame(cmd::kLevel, level::kRfPower, {raw[0], raw[1]}));
+        bool published = false;
+        for (const QList<QVariant>& args : transmit) {
+            published |= args.at(0).value<TransmitDelta>().rfPower.has_value();
+        }
+        return published;
+    };
+    check(!publishesRfPower(10),
+          "the tune drive read back during TUNE is not published as the RF power");
     backend.setTunePower(25);
     const auto live = Access::issued(backend);
     check(powerWrites(live) == std::vector<int>{percentToLevelRaw(25)},

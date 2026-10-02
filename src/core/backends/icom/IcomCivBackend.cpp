@@ -2062,6 +2062,12 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         case level::kRfPower: {
             confirmState(QStringLiteral("civ.20.10"), pct);
             m_txPowerPercent = pct;
+            // During TUNE the register holds the tune drive, not the operator's
+            // RF power; publishing it would make a relative step (wheel, CAT)
+            // start from the tune level and become the value the unkey restores.
+            if (m_tuning) {
+                return;
+            }
             TransmitDelta t; t.rfPower = pct;
             emit transmitChanged(t);
             return;
