@@ -74,25 +74,12 @@ inline bool asrStageOpen()
     return detail::asrOpenStageCount().load() > 0;
 }
 
-// Begin/end record around an ASR stage that can take the process down below
-// anything a caller can catch: ggml device discovery and the whisper model load
-// (#5190). The begin record is flushed BEFORE the stage runs, so a support log
-// from a session that died there ends by naming the stage and what it was
-// attempting. Without it that log holds no ASR line at all: the writer batches
-// on a 250 ms timer and flushes synchronously only on QtFatalMsg, and a SIGSEGV
-// or an illegal instruction is neither.
-//
-// Same doctrine as core/ShutdownTrace.h — read that header for why this is an
-// uncategorized QMessageLogger and deliberately absent from LogManager's
-// registry: a record a user can switch off is useless in the log of a crash
-// nobody can reproduce on request. It is a sibling rather than a reuse because
-// a hang leaves the process alive for the writer's timer, so ShutdownTrace needs
-// no flush; a crash does not. These records also carry the attempt's details,
-// and must not file a model load under "aether.shutdown".
-//
-// One-shot by construction: discovery and load happen a handful of times per
-// session. Never wrap a per-segment or per-decode path in one — each record is
-// a blocking handshake with the log writer thread.
+// Begin/end record around an ASR stage that can crash the process uncatchably
+// (ggml discovery, whisper load; #5190). The begin record is flushed before the
+// stage runs, since the 250 ms log batch is lost on SIGSEGV/SIGILL. Like
+// core/ShutdownTrace.h it is an uncategorized QMessageLogger that cannot be
+// switched off; separate because a crash, unlike a hang, needs the flush. Each
+// record is a blocking writer handshake: never use on a per-segment path.
 class AsrStageTrace final
 {
 public:

@@ -15,16 +15,10 @@ class QTimer;
 
 namespace AetherSDR {
 
-// A KISS-over-TCP TNC server. Host applications (APRS clients, terminal/packet
-// programs, Dire Wolf-style tools) connect over TCP and exchange raw AX.25
-// frames in KISS framing; AetherModem provides the AFSK modem underneath.
-//
-// - Cross-platform (Qt QTcpServer/QTcpSocket).
-// - Multiple simultaneous clients; each gets its own resync-safe KISS decoder.
-// - TCP keepalive plus slow-consumer and optional idle timeouts so dead or
-//   stuck clients are reaped rather than leaking sockets/memory.
-// - All lifecycle and per-frame activity is logged on the aether.ax25 category
-//   (prefixed "KISS") so issues can be triaged as client-side vs RF-side.
+// KISS-over-TCP TNC server: host apps exchange raw AX.25 frames in KISS
+// framing over AetherModem's AFSK. Multiple clients, each with a resync-safe
+// KISS decoder; TCP keepalive plus slow-consumer and optional idle timeouts
+// reap stuck clients. Activity logs on aether.ax25 with a "KISS" prefix.
 class KissTncServer : public QObject {
     Q_OBJECT
 

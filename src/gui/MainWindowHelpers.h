@@ -1,18 +1,9 @@
 #pragma once
 
-// Pure helper functions extracted from MainWindow.cpp (#3351 Phase 0).
-//
-// Everything here is a stateless formatter or value transform with no
-// MainWindow dependency: tooltip builders, spot-ID math, client-list
-// parsing, small pixmap painters. They were file-scope statics inside
-// MainWindow.cpp; they live here so the monolith decomposition can move
-// method bodies into per-subsystem translation units without dragging a
-// 400-line block of file-locals along to every new TU.
-//
-// Rule for additions: if a function needs MainWindow state (members,
-// mutable file-scope statics like the shortcut-lease flags), it does NOT
-// belong here — put it on the class, or leave it file-scope next to the
-// state it reads.
+// Pure helpers from MainWindow (#3351): stateless formatters and value
+// transforms with no MainWindow dependency (tooltips, spot-ID math, client-list
+// parsing, small pixmaps). Anything that needs MainWindow state or mutable
+// file-scope statics does not belong here.
 
 #include <QKeySequence>
 #include <QList>
@@ -26,6 +17,7 @@
 #include "models/XvtrPolicy.h"
 
 #include "ClientDisconnectDialog.h"  // QList<ClientDisconnectDialog::Client> returns
+#include "SpotLabelPolicy.h"        // spot ID bases, isPassiveLocalSpotId()
 
 class QKeyEvent;
 
@@ -80,15 +72,13 @@ QString buildTnfTooltip(const TnfModel& tnfModel);
 // ─── Memory / passive spot ID math ───────────────────────────────────────────
 //
 // Memory spots and passive local spots are folded into the spot model with
-// negative indices offset by these bases so they can't collide with radio
-// spot indices.
-
-inline constexpr int kMemorySpotIdBase = 1000000;
-inline constexpr int kPassiveSpotIdBase = 2000000;
+// negative indices offset by kMemorySpotIdBase / kPassiveSpotIdBase so they
+// can't collide with radio spot indices. The bases and isPassiveLocalSpotId()
+// live in SpotLabelPolicy.h, header-only, so the right-click menu and its
+// test share the one definition (#6037).
 
 int memorySpotId(int memoryIndex);
 int memoryIndexFromSpotId(int spotIndex);
-bool isPassiveLocalSpotId(int spotIndex);
 QString memorySpotLabel(const MemoryEntry& memory);
 QString memorySpotComment(const MemoryEntry& memory);
 
@@ -183,7 +173,6 @@ bool panPixelDimensionsReady(const SpectrumWidget* spectrum);
 // ─── Misc UI ─────────────────────────────────────────────────────────────────
 
 QPixmap buildBandStackIndicatorPixmap(bool active);
-QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev);
 
 // ─── Client connection parsing (discovery / multiFLEX) ──────────────────────
 

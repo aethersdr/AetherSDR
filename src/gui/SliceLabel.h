@@ -7,20 +7,10 @@
 
 namespace AetherSDR::SliceLabel {
 
-// Two display modes for slice letters, selected by AppSettings key
-// "SliceLetterDisplay":
-//
-//   "Global"       (default) — show 'A' + globalSliceId.  This is how
-//                  AetherSDR has always rendered slice letters and gives
-//                  Multi-Flex users immediate awareness of which global
-//                  slot they're on.
-//   "RadioIndexed" — show the radio-provided per-client letter (from the
-//                  slice's `index_letter` status field), with the global
-//                  slice id as a subscript so slot awareness survives the
-//                  SmartSDR-style per-client lettering.  See #2606.
-//
-// All helpers below consult this setting on every call so the
-// runtime view follows the user flipping it without restart.
+// Slice letter display, AppSettings "SliceLetterDisplay" (read on every call):
+//   "Global" (default) - 'A' + globalSliceId.
+//   "RadioIndexed"     - the radio's per-client `index_letter`, with the global
+//                        slice id as a subscript (#2606).
 
 enum class Mode {
     Global,

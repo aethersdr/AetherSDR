@@ -15,21 +15,12 @@ class QTreeWidgetItem;
 
 namespace AetherSDR {
 
-// Settings Browser (RFC #4603 proposal D, PR 5) — a scope-grouped view over
-// the whole settings store: app keys, the station section, and every
-// radio-scoped feature document, mirrored as a tree of the scopes the store
-// actually contains. All edits go through the AppSettings API — never raw
-// SQL — so the running app's cache and the database stay coherent, and the
-// credential seam / newer-schema refusals apply to browser edits exactly as
-// they do to feature code.
-//
-// Guardrails (RFC-ratified):
-//   * meta is not shown (AppSettings does not expose it).
-//   * Credential-shaped rows render redacted and are read-only here.
-//   * Feature documents open pretty-printed read-only; editing raw JSON is
-//     an explicit second step and the document must parse as a JSON object.
-//   * A newer-schema (read-only) store disables every edit affordance.
-//   * Export reuses the sanitizer dump — diagnostic text, not a backup.
+// Settings Browser (RFC #4603 proposal D): a tree of the scopes the settings
+// store contains (app keys, station section, radio-scoped feature documents).
+// All edits go through the AppSettings API, never raw SQL, so the cache stays
+// coherent and credential / newer-schema refusals apply. Credential rows are
+// redacted read-only; raw JSON edits must parse as an object; a newer-schema
+// store disables all edits; meta is not shown; Export is diagnostic, not a backup.
 class SettingsBrowserDialog : public PersistentDialog {
     Q_OBJECT
 

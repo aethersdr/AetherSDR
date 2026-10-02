@@ -251,48 +251,47 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Qt6 components
-# Qt 6.8 minimum, matching the Qt every shipped artifact is built against:
-# the AppImage (both arches, .github/workflows/appimage.yml), the Windows
-# installer (check-windows pins 6.8.3 in ci.yml), and the Linux CI image
-# (.github/docker/Dockerfile installs 6.8.3 via aqt). One number, so a Qt API
-# that compiles in CI also compiles for a release build.
+# Qt 6.12 minimum: the same Qt every release artifact and every CI leg builds
+# against (#5487). A source build no longer depends on what a distro happens to
+# package — scripts/setup/setup-qt.{sh,ps1} install exactly this Qt in one
+# command, and cmake/AetherQtPin.cmake finds it with no flags. A distro or
+# Qt-installer Qt that is 6.12 or newer still works. The floor is
+# QT_SOURCE_FLOOR in cmake/qt-pin.env; tools/check_qt_pin.py fails Static
+# Checks if this file disagrees with it.
 #
-# Raised from 6.2 deliberately. The old floor was nominal — nothing tested it
-# after Ubuntu 22.04 left the matrix, and the only leg anywhere near it was the
-# CI image on Ubuntu 24.04's Qt 6.4.2, a release EOL upstream since the 6.4
-# series ended at 6.4.3. That gap rejected valid code (PR #4646, QList::assign)
-# while testing a Qt no artifact shipped.
-#
-# Consequence for source builds: Ubuntu 24.04's distro Qt (6.4.2) no longer
-# satisfies this — build against 6.8+ from aqt/Qt online installer, or use a
-# distro carrying it (Debian Trixie, Ubuntu 25.10+, Fedora 41+, Arch).
-# 6.8 also clears QRhiWidget (6.7+), so the GPU spectrum path is no longer
-# conditionally compiled out on Linux CI.
+# One version, so no API needs a QT_VERSION guard for an older Qt, and no CI
+# job has to compile the tree against a second Qt to keep such guards honest.
 #
 # Probe QUIET first so a below-floor Qt gets an actionable error instead of
 # CMake's bare "the version found is not compatible", which names neither the
-# floor as a project decision nor the way out. Ubuntu 24.04 LTS (Qt 6.4.2) is
-# the common case, it has the largest install base of any supported distro, and
-# it was a documented apt line here until this floor moved — so the people most
-# likely to hit this have the least context for it, and the README they need is
-# a document they have already scrolled past.
-#
-# Falls through untouched when Qt is absent entirely (the REQUIRED call below
-# emits the normal not-found error) or already satisfies the floor.
+# floor as a project decision nor the way out. A distro Qt below 6.12 is the
+# common case (Debian Trixie 6.8, Ubuntu 24.04 6.4, Arch and Debian sid 6.11 at
+# the time of writing), and those builders have the least context for it, so
+# both failure modes name the one command that fixes them.
+include(cmake/AetherQtPin.cmake)
 find_package(Qt6 QUIET COMPONENTS Core)
-if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
+if(WIN32)
+    set(_aether_qt_setup "powershell -File scripts\\setup\\setup-qt.ps1")
+else()
+    set(_aether_qt_setup "scripts/setup/setup-qt.sh")
+endif()
+set(_aether_qt_way_out
+    "Install the release Qt (${AETHER_QT_PIN_VERSION}) with one command, then re-run cmake:\n"
+    "    ${_aether_qt_setup}\n"
+    "(or configure with -DAETHER_FETCH_QT=ON to have cmake run it). "
+    "See docs/BUILDING.md for what it checks and where it installs.")
+if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.12)
     message(FATAL_ERROR
-        "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.8 or newer.\n"
-        "This is the Qt every AetherSDR release binary is built against.\n"
-        "Ubuntu 24.04 LTS ships 6.4.2; Debian Trixie, Ubuntu 25.10+, "
-        "Fedora 41+ and Arch all ship 6.8 or newer.\n"
-        "To build on a distro below the floor, install Qt 6.8+ with aqtinstall "
-        "or the Qt online installer and re-run with "
-        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 — see the README's "
-        "\"Building from Source\" dependency section.")
+        "Qt ${Qt6_VERSION} found, but AetherSDR requires Qt 6.12 or newer — "
+        "the Qt every release is built against.\n"
+        ${_aether_qt_way_out})
+elseif(NOT Qt6_FOUND)
+    message(FATAL_ERROR
+        "No Qt 6 found. AetherSDR requires Qt 6.12 or newer.\n"
+        ${_aether_qt_way_out})
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS
+find_package(Qt6 6.12 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
@@ -563,17 +562,17 @@ endif()
 
 # GPU-accelerated spectrum/waterfall rendering via QRhi (#391)
 # Requires: Qt 6.7+ (QRhiWidget), Qt6::ShaderTools (build-time shader compilation)
-# The version guard below is unreachable now that find_package demands 6.8 — it
+# The version guard below is unreachable now that find_package demands 6.12 — it
 # is kept as a cheap backstop so lowering the floor again can't silently produce
 # a build that references QRhiWidget on a Qt that lacks it.
 if(AETHER_GPU_SPECTRUM)
     if(Qt6_VERSION VERSION_LESS "6.7")
         set(AETHER_GPU_SPECTRUM OFF)
-        # 6.8.3, not 6.7.x, in the suggested path: this guard is unreachable
-        # while the floor is 6.8, so if it ever fires the floor has been
+        # 6.12.0, not 6.7.x, in the suggested path: this guard is unreachable
+        # while the floor is 6.12, so if it ever fires the floor has been
         # lowered — and pointing that reader at a 6.7 install would send them
         # to a Qt find_package still rejects.
-        message(STATUS "GPU spectrum rendering disabled (QRhiWidget requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 to use a newer Qt installation)")
+        message(STATUS "GPU spectrum rendering disabled (QRhiWidget requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/gcc_64 to use a newer Qt installation)")
     else()
         find_package(Qt6 REQUIRED COMPONENTS ShaderTools)
         # Qt6GuiPrivate provides QRhi headers needed for GPU rendering.
@@ -623,7 +622,7 @@ if(AETHER_GPU_SPECTRUM)
             # Qt6GuiPrivate CMake package at all, so nothing above finds them.
             #
             # This is not a hypothetical layout: pinning the Apple Silicon DMG
-            # to aqt Qt 6.8.3 (#4688 §1) moved that leg off Homebrew's Qt, which
+            # to aqt Qt (#4688 §1, #5487) moved that leg off Homebrew's Qt, which
             # *does* provide Qt6GuiPrivate — and AETHER_GPU_SPECTRUM promptly
             # turned itself OFF, with the CPU QPainter fallback compiled in and
             # the workflow green. Only the #4690 assertion caught it. Probe the
@@ -788,8 +787,8 @@ endif()
 # The settings store (RFC #4603): AppSettings' implementation spans the SQLite
 # wrapper, path helpers, pre-QApplication bootstrap reader, and the sanitizer.
 # Every target that compiles AppSettings.cpp needs the whole group — and the
-# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop near the end
-# of this file.
+# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop in
+# tests/tests.cmake.
 set(AETHER_SETTINGS_SOURCES
     src/core/AppSettings.cpp
     src/core/SettingsDatabase.cpp
@@ -849,7 +848,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2TelemetryService.cpp # owns the poller ABOVE the backend (#15)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
-    src/core/backends/hl2/Hl2HardwareOptions.cpp # which HL2 variant: codec, dither bit, filter board, ATU
+    src/core/backends/hl2/Hl2HardwareOptions.cpp # which HL2 variant: codec, dither bit, filter board, CL1, ATU
     src/core/backends/anan/P2Protocol.cpp    # aetherd ANAN P2 Phase 1b (openHPSDR Protocol 2 wire codec)
     src/core/backends/anan/P2Client.cpp      # aetherd ANAN P2 Phase 1b (UDP wire + DDC0 ingest)
     src/core/backends/anan/AnanDiscovery.cpp # aetherd ANAN P2 Phase 1b (P2 discovery -> picker)
@@ -881,6 +880,7 @@ set(CORE_SOURCES
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
     src/core/GpuSelector.cpp
+    src/core/QtAudioBackendGuard.cpp  # pre-QApplication: keeps Qt 6.12 off a crashing PipeWire backend
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
     src/core/OccupiedRegion.cpp
@@ -2034,11 +2034,12 @@ configure_file(
     @ONLY
 )
 
-# Capture the git short SHA at configure time and surface it in the About
-# dialog so dev/test builds are identifiable.  Falls back to "unknown" for
-# source-tarball builds where .git is absent.
+# The short SHA at configure time, for the configure LOG only. It is not
+# compiled into anything: a configure-time value goes stale on the next
+# `cmake --build` after a commit, so every consumer in the binary reads the
+# build-time header below instead (#5804).
 find_package(Git QUIET)
-set(AETHER_GIT_SHA "unknown")
+set(_aether_configure_sha "unknown")
 if(Git_FOUND)
     execute_process(
         COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
@@ -2049,15 +2050,43 @@ if(Git_FOUND)
         RESULT_VARIABLE _aether_git_sha_rv
     )
     if(_aether_git_sha_rv EQUAL 0 AND NOT "${_aether_git_sha_out}" STREQUAL "")
-        set(AETHER_GIT_SHA "${_aether_git_sha_out}")
+        set(_aether_configure_sha "${_aether_git_sha_out}")
     endif()
 endif()
-target_compile_definitions(AetherSDR PRIVATE AETHER_GIT_SHA="${AETHER_GIT_SHA}")
+
 if(Git_FOUND AND _aether_git_sha_rv EQUAL 0 AND NOT "${_aether_git_sha_out}" STREQUAL "")
-    message(STATUS "Build SHA: ${AETHER_GIT_SHA}")
+    message(STATUS "Build SHA: ${_aether_configure_sha}")
 else()
-    message(STATUS "Build SHA: ${AETHER_GIT_SHA} (git unavailable or not a git checkout)")
+    message(STATUS "Build SHA: ${_aether_configure_sha} (git unavailable or not a git checkout)")
 endif()
+
+# ---- Build identity, captured at BUILD time (#5804) -----------------------
+# The ONE build identity in the binary. A configure-time capture keeps the
+# previous value when `cmake --build` runs after a new commit; this target
+# re-evaluates on every build and writes a generated header. configure_file()
+# only rewrites it when the content changes, so an unchanged HEAD recompiles
+# nothing.
+#
+# `git describe --tags --always --dirty` carries the release baseline AND the
+# hash in one token ("v26.9.3-68-g7e841682"). The automation bridge's `ping`
+# reports it, so a harness can tell which build it is talking to.
+set(AETHER_BUILD_ID_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/build-identity")
+set(AETHER_BUILD_ID_HEADER "${AETHER_BUILD_ID_DIR}/AetherBuildIdentity.h")
+add_custom_target(aether_build_identity ALL
+    BYPRODUCTS "${AETHER_BUILD_ID_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        -DAETHER_SRC_DIR=${CMAKE_SOURCE_DIR}
+        -DAETHER_IN_FILE=${CMAKE_SOURCE_DIR}/src/core/AetherBuildIdentity.h.in
+        -DAETHER_OUT_FILE=${AETHER_BUILD_ID_HEADER}
+        -P ${CMAKE_SOURCE_DIR}/cmake/AetherBuildIdentity.cmake
+    COMMENT "Capturing build identity (git describe)"
+    VERBATIM)
+# AutomationServer.cpp (ping) lives in aetherdesktop_support; the About dialog
+# and Copy Assist's ASR fault stamp are in the executable.
+foreach(_aether_build_id_consumer aetherdesktop_support AetherSDR)
+    add_dependencies(${_aether_build_id_consumer} aether_build_identity)
+    target_include_directories(${_aether_build_id_consumer} PRIVATE "${AETHER_BUILD_ID_DIR}")
+endforeach()
 
 # Reproducible-builds.org SOURCE_DATE_EPOCH support.  When a distro
 # packager (Debian, Arch, NixOS, openSUSE, Fedora, etc.) sets
@@ -3042,6 +3071,14 @@ if(ENABLE_SPECBLEACH)
         # Suppress warnings from third-party C code
         set_source_files_properties(${SPECBLEACH_SOURCES} PROPERTIES COMPILE_FLAGS "-w")
     endif()
+endif()
+
+# QtAudioBackendGuard loads libpipewire at runtime (dlopen), the way Qt itself
+# does, so it has no build-time PipeWire dependency. libdl is part of libc on
+# every glibc this tree supports; linked explicitly so the guard does not ride
+# on the DFNR or AFX blocks below happening to pull it in.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(aethercore PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 if(ENABLE_DFNR)

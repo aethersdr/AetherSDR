@@ -1,30 +1,13 @@
 #pragma once
 
-// Persistence for the workspace document (RFC #4887, phase 2).
+// Persistence for the workspace document (RFC #4887): one key, one writer, one
+// atomic whole-document write. Station-scoped, not radio-scoped; per-rig layouts
+// are workspace bindings.
 //
-// One key, one writer, one atomic whole-document write — Principle V and
-// Principle XIV.  The document is station-scoped rather than radio-scoped: a
-// workspace profile is the operator's arrangement, not a property of a radio.
-// An operator who wants a different layout per rig makes a workspace per rig
-// and binds it, which is a choice they get to make instead of one the storage
-// layer makes for them.
-//
-// ── The auto-commit contract (RFC decision 7) ────────────────────────────
-//
-// There is no "save layout" step: placement changes commit as they happen, so
-// an automatic workspace switch can never discard unsaved work, because there
-// is none.  The cost is write volume — one drag is hundreds of geometry
-// changes and every commit is a whole-document write by construction — so:
-//
-//   * touch() marks the document dirty and (re)starts a debounce timer;
-//   * flush() writes immediately, and is called at the END of a gesture
-//     (drag/resize release, add/remove/raise, workspace switch, shutdown);
-//   * flushes are SUPPRESSED while restoring, because replaying saved state
-//     would otherwise re-write exactly what it is reading.
-//
-// That is the contract ContainerManager already established for the same
-// reason (ContainerManager.h:142-144, #4427); this follows it rather than
-// inventing a second discipline for the same problem.
+// The auto-commit contract (RFC decision 7): no "save layout" step, so a workspace
+// switch never discards work. touch() marks dirty and debounces; flush() writes
+// now and runs at the end of each gesture, switch and shutdown; flushes are
+// suppressed while restoring. Same contract as ContainerManager (#4427).
 
 #include "gui/workspace/WorkspaceDocument.h"
 
@@ -70,18 +53,9 @@ public:
     // Convenience wrapper: true only for LoadResult::Loaded.
     bool load() { return loadWithStatus() == LoadResult::Loaded; }
 
-    // Reads the stored document, and ONLY IF THE KEY IS ABSENT builds
-    // "Classic" from the legacy keys and writes it.
-    //
-    // A present-but-unusable document is left exactly as it is: this returns
-    // false with lastError() set and writes nothing, so the newer document
-    // survives for the build that understands it.  Phase 3 surfaces that
-    // rather than silently starting from Classic.
-    //
-    // NOTE: nothing calls this yet.  Phase 2 ships the migration tested but
-    // not wired — the first caller is phase 3, when there is a canvas to
-    // consume the result.  Running it earlier would write a new key on every
-    // install for a document nothing reads.
+    // Reads the stored document; only if the key is absent, builds "Classic" from
+    // the legacy keys and writes it. A present-but-unusable document is left
+    // untouched: returns false with lastError() set so a newer build's data survives.
     bool loadOrMigrate(const QStringList& knownAppletIds,
                        const QStringList& panIds,
                        bool* migrated = nullptr);
@@ -98,21 +72,10 @@ public:
     // the caller ends the gesture with flush(), or lets the debounce fire.
     void setDocument(const WorkspaceDocument& doc);
 
-    // ── Overwrite protection ─────────────────────────────────────────────
-    //
-    // Refusing to PARSE a newer document is only half a guard: something has
-    // to refuse to WRITE over it too.  Without this, one setDocument() or
-    // touch() from phase 3 — a canvas resize while the error is still on
-    // screen is enough — would commit an empty default document over the row
-    // this build could not read, which is the exact loss the read-side guard
-    // exists to prevent (PR #4900 review, H1).
-    //
-    // So a LoadResult::Unusable arms a write block, and only an explicit
-    // caller decision clears it.  This mirrors the contract on
-    // AppSettings::setRadioFeature(), whose write-side guard must judge the
-    // row it is about to overwrite (AppSettings.h:71-74, from the #4614
-    // review) — this store implemented the read side of that and owed the
-    // other half.
+    // Overwrite protection: a LoadResult::Unusable (e.g. newer-schema) document arms
+    // a write block so no setDocument()/touch() can commit a default over the row
+    // this build couldn't read. Only allowOverwrite() clears it. Mirrors the
+    // write-side guard on AppSettings::setRadioFeature() (#4614).
     bool isWriteBlocked() const { return m_writeBlocked; }
 
     // Deliberately discard the unreadable stored document and allow writes
@@ -120,16 +83,9 @@ public:
     // and had it confirmed — never a default, and never automatic.
     void allowOverwrite();
 
-    // ── Auto-commit ──────────────────────────────────────────────────────
-    //
-    // Write volume, concretely: a drag emits a placement change per mouse
-    // move — order 100/s — and every commit is a whole-document write by
-    // construction (Principle XIV).  The debounce is what makes that
-    // sustainable against a SQLite store: at kDefaultDebounceMs a continuous
-    // drag costs at most ~1.3 writes/s regardless of how long it lasts, and a
-    // gesture that ends costs exactly one.  A document with 8 pans and 26
-    // applets serialises to a few KB, so the worst case is a few KB/s during
-    // sustained dragging and nothing at rest.
+    // Dirty + (re)start the debounce. A drag emits ~100 placement changes/s and
+    // each commit is a whole-document write, so at kDefaultDebounceMs a continuous
+    // drag costs ~1.3 writes/s and a finished gesture exactly one (a few KB each).
     void touch();                 // dirty + (re)start the debounce
 
     enum class FlushResult {

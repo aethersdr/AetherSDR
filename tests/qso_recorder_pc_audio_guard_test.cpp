@@ -243,6 +243,88 @@ int main(int argc, char** argv)
         EXPECT_EQ_INT(fileCount(tmp.path()), 0);
     }
 
+    // Radio-Side on a radio with no command plane (HL2, ANAN, Icom, RTL) has no
+    // radio-side recorder, so this recorder records; the file on disk is the
+    // assertion. The provider is read live: attach a radio that records and
+    // the same recorder refuses again.
+    {
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        setMode("Radio", "False");
+
+        bool radioCanRecord = false;
+        QsoRecorder rec;
+        rec.setRecordingDir(tmp.path());
+        rec.setBackendOwnsRxAudioProvider([]() { return true; });   // HL2 shape
+        rec.setRadioSideRecordingReachableProvider([&]() { return radioCanRecord; });
+
+        EXPECT_TRUE(recordsOnClient(false, false));
+        EXPECT_TRUE(!recordsOnClient(false, true));
+        EXPECT_TRUE(recordsOnClient(true, true));
+        EXPECT_TRUE(recordsOnClient(true, false));
+
+        EXPECT_TRUE(rec.recordsOnClientNow());
+        EXPECT_TRUE(rec.evaluateStart() == RecordStartDecision::Allow);
+        rec.startRecording();
+        EXPECT_TRUE(rec.isRecording());
+        EXPECT_EQ_INT(fileCount(tmp.path()), 1);
+        rec.stopRecording();
+
+        radioCanRecord = true;   // a radio that records is attached
+        EXPECT_TRUE(!rec.recordsOnClientNow());
+        EXPECT_TRUE(rec.evaluateStart()
+                    == RecordStartDecision::BlockedRecordingModeIsRadio);
+    }
+
+    // Routing is latched for the life of a recording: a reachability flip
+    // (connect/disconnect) or a RecordingMode change mid-recording must still
+    // send REC-off to this recorder, not the slice. routeRecordOff() has the
+    // routing surfaces' shape (VFO, AetherRX, MIDI), with no radio behind it.
+    {
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        setMode("Radio", "False");
+
+        bool radioCanRecord = false;
+        QsoRecorder rec;
+        rec.setRecordingDir(tmp.path());
+        rec.setBackendOwnsRxAudioProvider([]() { return true; });   // HL2 shape
+        rec.setRadioSideRecordingReachableProvider([&]() { return radioCanRecord; });
+
+        bool wentToSlice = false;
+        const auto routeRecordOff = [&]() {
+            if (rec.recordsOnClientNow())
+                rec.stopRecording();
+            else
+                wentToSlice = true;
+        };
+
+        rec.startRecording();
+        EXPECT_TRUE(rec.isRecording());
+
+        radioCanRecord = true;   // a Flex connects mid-recording
+        EXPECT_TRUE(rec.recordsOnClientNow());   // latched: still this recorder
+        routeRecordOff();
+        EXPECT_TRUE(!rec.isRecording());
+        EXPECT_TRUE(!wentToSlice);
+        EXPECT_EQ_INT(fileCount(tmp.path()), 1);
+
+        // Latched for ONE recording only: idle again, the live answer returns.
+        EXPECT_TRUE(!rec.recordsOnClientNow());
+
+        // The setting side: Client-mode recording, Radio Side picked in Radio
+        // Setup with a radio that records, then REC off.
+        setMode("Client", "True");
+        rec.startRecording();
+        EXPECT_TRUE(rec.isRecording());
+        setMode("Radio", "True");
+        EXPECT_TRUE(rec.recordsOnClientNow());
+        routeRecordOff();
+        EXPECT_TRUE(!rec.isRecording());
+        EXPECT_TRUE(!wentToSlice);
+        EXPECT_TRUE(!rec.recordsOnClientNow());
+    }
+
     // ── Auto-record must not report the same refusal on every key-down ──────
     // onMoxChanged() retries the start on EVERY MOX rising edge. Wired to a
     // dialog, an unchanged refusal would raise one per transmission and stack

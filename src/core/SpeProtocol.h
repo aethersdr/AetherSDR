@@ -11,32 +11,18 @@
 
 namespace AetherSDR {
 
-// SPE Expert linear amplifier serial protocol (1.3K-FA / 1.5K-FA / 2K-FA).
-//
-// Protocol authority: "Application Programmer's Guide — Expert 1.3K-FA,
-// Expert 1.5K-FA, Expert 2K-FA", Rev 1.1 (2015-10-15), published by SPE
-// s.r.l. (linear-amplifier.com) — the manufacturer's own spec (see
-// docs/architecture/spe-expert-amplifier-design.md and THIRD_PARTY_LICENSES
-// for the provenance record).
-//
-// Wire framing is asymmetric by direction (unlike ACOM's, which is
-// symmetric — see AcomProtocol.h for that family):
+// SPE Expert amplifier serial protocol (1.3K-FA / 1.5K-FA / 2K-FA).
+// Authority: SPE "Application Programmer's Guide", Rev 1.1 (2015-10-15); see
+// docs/architecture/spe-expert-amplifier-design.md.
 //
 //   host -> amp:  | 0x55 0x55 0x55 | CNT | DATA... | CHK |
 //   amp  -> host: | 0xAA 0xAA 0xAA | CNT | DATA... | CHK... |
 //
-// CNT counts the DATA bytes only (checksum excluded). CHK is the modulo-256
-// sum of the DATA bytes — for the single-byte commands this protocol
-// actually uses, the checksum is simply the command byte repeated. The
-// amplifier's replies use two different checksum shapes (spec §3/§5):
-// the single-byte ACK echoes the received command with a 1-byte checksum,
-// while the 67-byte Status string carries a 16-bit checksum (low byte =
-// sum % 256, high byte = sum / 256) followed by CR LF.
-//
-// Every command is the equivalent of a front-panel keystroke; there is no
-// richer command envelope. Complex operations (settings, antenna presets,
-// firmware updates) are explicitly reserved by SPE for their own KTerm
-// application and are out of scope here by design.
+// CNT counts DATA bytes; CHK = sum(DATA) mod 256 (single-byte commands repeat
+// the command byte). Replies: the ACK echoes the command with a 1-byte
+// checksum; the 67-byte Status has a 16-bit checksum (lo = sum%256, hi =
+// sum/256) then CR LF. Every command is a front-panel keystroke; settings and
+// firmware updates are reserved for SPE's KTerm and out of scope.
 namespace Spe {
 
 constexpr quint8 kHostSync = 0x55;  // host -> amplifier sync byte (x3)
@@ -183,22 +169,15 @@ QString alarmText(QChar code);
 
 QString powerLevelName(QChar code);  // L/M/H -> LOW/MID/HIGH
 
-// ── Remote LCD display (KTerm-style frame, request code 0x80) ────────────
-// The spec's foreword promises "a perfect copy of the display ... in less
-// than 400 bytes" but documents none of it; this decode is carried from
-// the contributing author's field-proven v2 control application against a
-// real 1.5K-FA. Host sends the standard keystroke-style packet with code
-// 0x80; the amplifier answers a display frame:
+// Remote LCD display (request code 0x80). Undocumented by the spec; decode
+// from a field-proven 1.5K-FA control application. Reply frame (371 bytes):
 //   AA AA AA | 6A 01 (payload length, LE) | 95 FE |
 //   2-byte inverted flag word | 320 character bytes (8 rows x 40 cols) |
 //   40 attribute bytes (one per column, bit N = inverse video on row N) |
 //   2-byte little-endian payload checksum
-// = 371 bytes total. The 362-byte payload starts at the flag word and runs
-// through the attributes; the character data starts at offset 9. These
-// offsets and the checksum shape are pinned to a captured real frame in
-// spe_protocol_test. Character bytes map to the
-// amplifier's own font ROM: 0x00 -> blank, 0x01..0x7E and 0x80..0xDF pass
-// through, everything else blanks.
+// The 362-byte payload runs flag word..attributes; characters start at offset
+// 9 (pinned to a captured frame in spe_protocol_test). Font ROM: 0x00 blank,
+// 0x01..0x7E and 0x80..0xDF pass through, all else blanks.
 namespace Lcd {
 
 constexpr int kRows = 8;
@@ -296,17 +275,10 @@ QStringList modelIds();
 // H (or an unknown letter) is the model's full nominalPowerW.
 float levelNominalW(const ModelSpec& spec, QChar level);
 
-// The complete power-gauge axis for that level, so the bar rescales as the
-// operator cycles LOW/MID/HIGH exactly like the amplifier's own display.
-//
-// At HIGH this returns the model row's own three figures verbatim — the
-// table is the single source of truth, so correcting a row (the design note
-// §5 invites an owner to verify the 1.3K-FA/2K-FA numbers against real
-// hardware) actually moves the bar instead of being silently overridden by
-// a duplicate derivation in the GUI wiring. LOW/MID have no tabulated
-// warn/max, so they take the hardware-validated 1.5K-FA shape: yellow from
-// nominal−50 W, red from nominal, ceiling at nominal+100 W — which is
-// exactly what the tabulated HIGH rows encode too.
+// Power-gauge axis for a level, so the bar rescales on LOW/MID/HIGH like the
+// amp's display. HIGH returns the model row verbatim (the table is the single
+// source of truth). LOW/MID use the 1.5K-FA shape: yellow from nominal−50 W,
+// red from nominal, ceiling nominal+100 W.
 struct GaugeRange {
     float nominalW{0};  // gauge red threshold
     float warnW{0};     // gauge yellow zone start

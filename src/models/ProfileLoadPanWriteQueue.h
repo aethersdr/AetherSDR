@@ -23,26 +23,16 @@ struct PanWrites {
     }
 };
 
-// Deferred pan-write store for the profile-load hold (#4142).
-//
-// sendCmd() suppresses profile-owned pan writes while the hold is armed (see
-// isProfileOwnedRadioStateWrite); this queue is where the user-intent portion
-// of those writes waits instead of dying. Semantics:
-//
-//  - Coalescing is FIELD-WISE per pan, last write wins per field. A later
-//    center defer must never erase a queued bandwidth: whole-struct
-//    replacement would lose a user's zoom — the exact class of silent drop
-//    #4142 exists to fix.
-//  - supersede*() erases a field group because a write for it just reached
-//    the wire through the immediate path — replaying the stale pending value
-//    afterwards would override the newer state.
-//  - cancel() voids a whole pan entry (the pan died); it returns the voided
-//    fields so the caller can log exactly what was destroyed. Entries whose
-//    last field is superseded are erased, so cancel() on such a pan
-//    truthfully reports nothing pending.
-//
-// Owned by RadioModel; kept Qt6::Core-only so profile_load_command_test can
-// link it without the GUI stack.
+// Deferred pan-write store for the profile-load hold (#4142): sendCmd()
+// suppresses profile-owned pan writes while the hold is armed
+// (isProfileOwnedRadioStateWrite) and the user-intent part waits here.
+//  - Coalescing is field-wise per pan, last write wins per field; a later
+//    center defer must never erase a queued bandwidth.
+//  - supersede*() erases a field group that just reached the wire directly, so
+//    a stale pending value cannot override it.
+//  - cancel() voids a pan entry (pan died) and returns the voided fields for
+//    logging; entries with every field superseded are already erased.
+// Owned by RadioModel; Qt6::Core-only so profile_load_command_test links it.
 class ProfileLoadPanWriteQueue {
 public:
     void deferBand(const QString& panId, const QString& bandKey)

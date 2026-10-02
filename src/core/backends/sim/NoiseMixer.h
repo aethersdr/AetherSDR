@@ -11,29 +11,15 @@
 
 namespace AetherSDR {
 
-// NoiseMixer — the demo-mode AUDIO engine (RFC #4288, Phase 2b), the audio
-// sibling of SpectrumPatternGenerator. Where that class draws the panadapter,
-// this one synthesizes the RX AUDIO a demo radio delivers, so AE's noise
-// reduction (NR2/RN2/NR4/BNR/LMS-NR) can run against realistic HF noise with no
-// hardware. SimBackend emits mixFrame() over audioFrameReady().
-//
-// It is an ADDITIVE mixer: N independently-enabled channels sum in linear sample
-// space, then soft-clip. Signal channels (voice/cw) are the wanted signal NR
-// must PRESERVE; noise channels (white/pink/qrn/…) are what it must REMOVE. All
-// noise is generated on the spot — the whole point is non-repeating randomness.
-//
-// Notches (spectrumNotches()/audio): a Tracking Notch Filter (TNF, manual) or an
-// Auto-Notch Filter (ANF, which auto-detects the tonal channels) removes a
-// carrier from both the audio (biquad) and the matching spectrum render — one
-// notch list drives both, so ear and eye agree.
-//
-// Ported from nigelfenton/flex-sim (GPL-3.0) NoiseMixer against
-// flex-sim/PROTOCOL.md — a clean-room C++ reimplementation of our own GPL code,
-// no verbatim copy (Constitution Principle IV). Audio is 24 kHz mono float in
-// [-1,1]; the caller stereo-duplicates for AE's remote-audio format.
-//
-// TX safety (Principle VI): this only synthesizes RX audio. It never keys or
-// implies transmit; SimBackend gates it to silence while keyed.
+// NoiseMixer — the demo radio's RX AUDIO engine (RFC #4288 Phase 2b), the audio
+// sibling of SpectrumPatternGenerator, so AE's NR (NR2/RN2/NR4/BNR/LMS-NR) can
+// run against realistic HF noise with no hardware. Additive: enabled channels
+// sum linearly then soft-clip; signal channels (voice/cw) are what NR must keep,
+// noise channels (white/pink/qrn/…) what it must remove. Noise is non-repeating.
+// One notch list (TNF manual, ANF auto-detecting tones) drives both the audio
+// biquads and spectrumNotches(). Clean-room port of nigelfenton/flex-sim
+// (GPL-3.0) against flex-sim/PROTOCOL.md. Output is 24 kHz mono float in
+// [-1, 1]. RX only: SimBackend gates it to silence while keyed.
 class NoiseMixer {
 public:
     static constexpr int    kSampleRate = 24000;   // AE remote-audio RX rate

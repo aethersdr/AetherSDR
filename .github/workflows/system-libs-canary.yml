@@ -2,7 +2,10 @@ name: System Libraries Canary
 
 # Builds AetherSDR against Debian sid's system packages instead of the vendored
 # third_party snapshots, to catch upstream API/ABI drift before it reaches a
-# distro packager.
+# distro packager. Qt (and the qtkeychain built against it) is the exception:
+# the source floor is the pinned Qt 6.12 (cmake/qt-pin.env QT_SOURCE_FLOOR),
+# which sid does not necessarily package, so it comes from setup-qt.sh exactly
+# as it does for any source builder. Every other library is sid's.
 #
 # NOT a per-PR job (#4655). It was the single most expensive thing in ci.yml at
 # a 31 min mean, and it is `continue-on-error` by design — a rolling-release
@@ -80,23 +83,55 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install main dependencies
+        # No qt6-*-dev or qtkeychain-qt6-dev: Qt comes from setup-qt.sh below.
+        # The X11/xcb/GL/PulseAudio -dev packages are the ones the distro Qt
+        # used to pull in and the release Qt's CMake config and libraries
+        # still need — the same set .github/docker/Dockerfile installs.
+        # python3-venv, curl and git are setup-qt.sh's; ninja-build is
+        # setup-qtkeychain.sh's.
         run: |
           apt -U install -y --no-install-recommends \
             build-essential \
             cmake \
+            ninja-build \
             pkgconf \
-            qt6-base-dev \
-            qt6-multimedia-dev \
-            qt6-serialbus-dev \
-            qt6-websockets-dev \
-            qtkeychain-qt6-dev \
+            python3 \
+            python3-venv \
+            curl \
+            ca-certificates \
+            git \
             libfftw3-dev \
             libopus-dev \
-            qt6-shadertools-dev \
-            qt6-base-private-dev \
             libhidapi-dev \
             libonnxruntime-dev \
-            libpipewire-0.3-dev
+            libpipewire-0.3-dev \
+            libgl1-mesa-dev \
+            libpulse-dev \
+            libdbus-1-dev \
+            libglib2.0-dev \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxcb-cursor0 \
+            libxcb-glx0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-sync1 \
+            libxcb-util1 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1
+
+      - name: Install the release Qt and qtkeychain
+        run: bash scripts/setup/setup-qt.sh
 
       - name: Install system library replacements
         run: |
@@ -112,7 +147,7 @@ jobs:
       # ccache IS safe here, despite the intuition that a canary wants a
       # from-scratch build. ccache is content-addressed: direct mode hashes the
       # source plus a manifest of every included header's contents, so the
-      # moment sid ships a new Qt or glibc header the affected entries stop
+      # moment sid ships a new glibc or library header the affected entries stop
       # matching and those TUs recompile. It cannot serve a stale object for
       # changed input — that is the whole basis of the tool.
       #
@@ -124,7 +159,7 @@ jobs:
       # since apt reinstalls it from sid each run — hence
       # CCACHE_COMPILERCHECK=content above rather than the default mtime check.
       #
-      # Expect lumpy hit rates: a toolchain or Qt6 bump in sid invalidates
+      # Expect lumpy hit rates: a toolchain or library bump in sid invalidates
       # broadly, which is correct behaviour rather than a cache failure.
       - name: Install ccache
         run: apt -U install -y --no-install-recommends ccache
