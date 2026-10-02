@@ -431,10 +431,15 @@ bool FlexBackend::isConnected() const
 
 void FlexBackend::setSliceFrequency(int sliceId, double hz)
 {
-    requestSliceTune(sliceId, {hz, SliceTuneRequest::PanIntent::PreservePan});
+    sendSliceTune(sliceId, {hz, SliceTuneRequest::PanIntent::PreservePan});
 }
 
 void FlexBackend::requestSliceTune(int sliceId, const SliceTuneRequest& request)
+{
+    sendSliceTune(sliceId, request);
+}
+
+void FlexBackend::sendSliceTune(int sliceId, const SliceTuneRequest& request)
 {
     // FlexLib 4.2.18 Slice.Freq: MHz/f6, with autopan=0 only when the caller
     // wants to retain the pan. Every variant uses the guarded slice sink.

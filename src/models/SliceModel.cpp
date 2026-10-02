@@ -192,15 +192,15 @@ void SliceModel::setMode(const QString& mode)
 
     m_mode = mode;
     const QPointer<SliceModel> alive(this);
-    const quint64 filterRevision = m_filterIntentRevision;
+    const quint64 modeRevision = ++m_modeIntentRevision;
     // aetherd RFC 2.3: express intent; FlexBackend builds "slice set N mode=…"
     // and routes it through the TX-inhibit-guarded slice sink.
     emit modeChangeRequested(mode);
-    if (!alive || filterRevision != m_filterIntentRevision) {
+    if (!alive || modeRevision != m_modeIntentRevision) {
         return;
     }
     emit modeChanged(m_mode);
-    if (!alive || filterRevision != m_filterIntentRevision) {
+    if (!alive || modeRevision != m_modeIntentRevision) {
         return;
     }
 
@@ -1784,6 +1784,7 @@ void SliceModel::applyChanges(const SliceDelta& d)
 void SliceModel::invalidateFrequencyObservation()
 {
     ++m_tuneIntentRevision;
+    ++m_modeIntentRevision;
     ++m_filterIntentRevision;
     ++m_agcModeIntentRevision;
     ++m_agcThresholdIntentRevision;

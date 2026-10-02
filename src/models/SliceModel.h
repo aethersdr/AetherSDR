@@ -542,6 +542,7 @@ private:
     // Do not dispatch the superseded intent when that notification returns.
     // AGC fields are independent: a threshold edit must not cancel a mode edit.
     quint64 m_tuneIntentRevision{0};
+    quint64 m_modeIntentRevision{0};
     quint64 m_filterIntentRevision{0};
     quint64 m_agcModeIntentRevision{0};
     quint64 m_agcThresholdIntentRevision{0};

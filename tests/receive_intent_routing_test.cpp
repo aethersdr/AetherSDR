@@ -195,6 +195,38 @@ void synchronousObservations()
           "synchronous AGC observation wins without an echo request");
 }
 
+void modeReentrancy()
+{
+    Fixture f;
+    SliceModel* s = f.slice();
+    QSignalSpy modes(s, &SliceModel::modeChanged);
+    auto connection = QObject::connect(s, &SliceModel::modeChangeRequested, s,
+        [s](const QString& mode) {
+            if (mode == QStringLiteral("LSB")) {
+                s->setFilterWidth(-2700, -150);
+            }
+        });
+    s->setMode(QStringLiteral("LSB"));
+    check(modes.size() == 1 && modes.last().at(0).toString() == QStringLiteral("LSB")
+              && f.backend->filters.size() == 1 && s->filterLow() == -2700,
+          "a synchronous filter edit cannot suppress the independent mode notification");
+    QObject::disconnect(connection);
+
+    s->setMode(QStringLiteral("USB"));
+    modes.clear();
+    connection = QObject::connect(s, &SliceModel::modeChangeRequested, s,
+        [s](const QString& mode) {
+            if (mode == QStringLiteral("LSB")) {
+                s->setMode(QStringLiteral("DIGU"));
+            }
+        });
+    s->setMode(QStringLiteral("LSB"));
+    check(modes.size() == 1 && modes.last().at(0).toString() == QStringLiteral("DIGU")
+              && s->mode() == QStringLiteral("DIGU"),
+          "a reentrant mode edit supersedes the outer notification and normalization");
+    QObject::disconnect(connection);
+}
+
 void lifetimeAndReentrancy()
 {
     Fixture f;
@@ -289,6 +321,7 @@ int main(int argc, char** argv)
     if (!profile.isValid()) { return 1; }
     creationPaths();
     synchronousObservations();
+    modeReentrancy();
     lifetimeAndReentrancy();
     return failures == 0 ? 0 : 1;
 }

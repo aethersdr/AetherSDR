@@ -8736,8 +8736,8 @@ bool RadioModel::recallCachedMemory(int index)
     }
 
     // These are the operator-issue setters, the same ones the panel controls
-    // call, so each emits its *CommandIssued signal and reaches the radio
-    // through the backend seam. Mode goes first because it resets the filter
+    // call, so each emits a typed intent through the backend seam. Mode goes
+    // first because it resets the filter
     // to the mode default; the stored filter follows, and tuning precedes the
     // grouped FM repeater state for the IC-705 quirk documented below.
     if (!memory.mode.isEmpty())
