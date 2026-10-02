@@ -2,23 +2,10 @@
 
 #include <QtGlobal>
 
-// VITA-49 waterfall-tile frequency decoding.
-//
-// A tile sub-header carries FrameLowFreq and BinBandwidth as 64-bit integers.
-// FlexLib defines both fields as "VitaFrequency" (Hz × 2^20). Decode that
-// protocol type directly rather than guessing an encoding from magnitude.
-//
-// History: the original decoder assumed VitaFrequency, divided, then rejected
-// the result as "unreasonable" if it exceeded 1000 MHz — silently re-reading it
-// as plain Hz.  That 1 GHz ceiling corrupted every legitimate transverter tile
-// above 1 GHz (1296 MHz, 2.3/2.4 GHz, …): a real ~1 GHz VitaFrequency value got
-// divided by 1e6 instead of 2^20·1e6, inflating it by 2^20, which pushed every
-// waterfall bin outside the panadapter range and rendered the row entirely
-// black while the FFT trace stayed correct.  See issues #3449, #1843, #1928,
-// #2835 and the failed remap-layer fixes #1845 / #2709 / #2853. A later
-// magnitude heuristic removed that upper ceiling but introduced a new one near
-// DC: a valid negative tile overhang below about 95 kHz looked like plain Hz,
-// inflating its bin bandwidth by 2^20 and mapping the row off-screen (#4412).
+// VITA-49 waterfall-tile frequency decoding. FrameLowFreq and BinBandwidth are
+// 64-bit FlexLib "VitaFrequency" (Hz × 2^20); decode that type directly, never
+// guess the encoding from magnitude, which breaks transverter tiles above 1 GHz
+// (#3449) and negative overhang near DC (#4412).
 
 namespace AetherSDR::Vita {
 

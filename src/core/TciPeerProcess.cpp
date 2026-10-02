@@ -349,20 +349,11 @@ QString fileVersionString(const QString& exePath)
     std::vector<char> buf(size);
     if (!GetFileVersionInfoW(w.c_str(), 0, size, buf.data())) return {};
 
-    // The authored StringFileInfo strings first — the version the user sees,
-    // same semantics as the macOS backend's CFBundleShortVersionString.
-    // ProductVersion before FileVersion because that is where build metadata
-    // lives (WSJT-X: "3.0.1 c04dd8"). The numeric VS_FIXEDFILEINFO quad is
-    // only a fallback for exes with no string table.  (Any 4-part form,
-    // authored or numeric, survives the log sanitizer because the identity
-    // line spells the field version="…", which its IPv4 rule exempts.)
-    // Candidate string-table blocks: the declared Translation pairs, then the
-    // standard en-US and language-neutral Unicode blocks.  The fallbacks are
-    // load-bearing: real exes ship a Translation entry that does not match
-    // their actual block — measured live, WSJT-X 3.0.1 declares 0409004b but
-    // stores its strings under 040904B0 (the block lookup itself is
-    // case-insensitive, also measured).  .NET's FileVersionInfo carries the
-    // same fallback list for the same reason.
+    // Prefer the StringFileInfo strings (ProductVersion, which carries build
+    // metadata like WSJT-X "3.0.1 c04dd8", then FileVersion); the numeric
+    // VS_FIXEDFILEINFO quad is a fallback. Try the declared Translation blocks, then
+    // en-US and neutral Unicode blocks: real exes mismatch (WSJT-X 3.0.1 declares
+    // 0409004b but stores 040904B0), as .NET's FileVersionInfo also handles.
     QStringList blocks;
     struct LangCodePage { WORD lang; WORD codePage; };
     LangCodePage* translations = nullptr;

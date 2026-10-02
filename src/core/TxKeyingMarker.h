@@ -10,21 +10,11 @@
 
 namespace AetherSDR {
 
-// Authoritative marker for controls that *key the transmitter* when activated —
-// MOX/PTT, TUNE, ATU tune, CWX CW send, AX.25 packet send, and any future
-// keying control. The #3646 automation bridge refuses invoke() on any widget
-// carrying this marker unless AETHER_AUTOMATION_ALLOW_TX is set, so an agent can
-// never key a live radio by accident during hardware-in-the-loop tests.
-//
-// This is a *positive* signal set at the keying control's creation site, which
-// is far more robust than matching control names: a TX-capable control is
-// guarded because it was explicitly declared keying, not because its label
-// happened to contain a magic word. Name matching remains only as a
-// belt-and-suspenders fallback for controls that predate or forget the marker;
-// see transmitControlMatch() at the end of this file, which the bridge and the
-// keyboard TX activation guard share.
-//
-// Usage at the call site, right after creating the button:
+// Marker for controls that key the transmitter (MOX/PTT, TUNE, ATU tune, CWX
+// send, AX.25 send, ...). The automation bridge (#3646) refuses invoke() on a
+// marked widget unless AETHER_AUTOMATION_ALLOW_TX is set. Set it at the
+// control's creation site; name matching (transmitControlMatch() below, shared
+// by the bridge and the keyboard TX activation guard) is only a fallback. Usage:
 //     m_moxBtn = new QPushButton("MOX");
 //     markTxKeying(m_moxBtn);
 inline constexpr char kTxKeyingProperty[] = "aetherTxKeying";
@@ -201,11 +191,9 @@ enum class TransmitControlMatch {
     NameFallback,  // unmarked button whose name/label reads as a TX keyer
 };
 
-// Authoritative: the positive marker. Fallback: a BUTTON-scoped name
-// heuristic, retained only to catch a keying control that predates or forgot
-// the marker. Button scoped because only a discrete button action can key
-// (setpoint sliders like "Tune power"/"RF power" never transmit by being
-// moved). A NameFallback result means that control should get an explicit
+// Authoritative: the positive marker. Fallback: a button-scoped name
+// heuristic for a keying control that lacks the marker (button-scoped because
+// sliders never key). A NameFallback result means the control should get
 // markTxKeying(); callers that can log, should.
 inline TransmitControlMatch transmitControlMatch(const QWidget* w)
 {

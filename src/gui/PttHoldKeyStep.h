@@ -14,12 +14,10 @@ enum class PttHoldKeyStep {
     UnkeyTx,      // end the hold (un-key the transmitter)
 };
 
-// Principle VI: the release of a live hold always un-keys, and it is checked
-// FIRST, before any gate. Keyboard shortcuts switched off mid-hold, focus moved
-// into a text field mid-hold, the connection dropped mid-hold -- none of that
-// may leave the transmitter keyed after the key that keyed it has come up.
-// Only a NEW press is gated. handleSplitMonitorShortcut() makes the same
-// choice for the Monitor TX (Hold) key.
+// The release of a live hold always un-keys, and is checked first, before any
+// gate: shortcuts switched off, focus moved into a text field or the connection
+// dropped mid-hold must not leave the transmitter keyed. Only a new press is
+// gated, as in handleSplitMonitorShortcut().
 inline PttHoldKeyStep pttHoldKeyStep(QEvent::Type type, bool holdActive,
                                      bool shortcutsEnabled, bool textEntryCaptured,
                                      bool connected)

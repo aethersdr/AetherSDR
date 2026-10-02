@@ -7,30 +7,15 @@
 
 namespace AetherSDR {
 
-// The Icom network password, and the ONLY place it is persisted.
-//
-// RFC #4603 proposal E: no credential is ever stored in the settings database.
-// QtKeychain is the persistent store; `IcomSettings` deliberately has no
-// password field, and ("Icom", "Password") is registered in
-// SettingsCredentialPolicy so that a future caller writing one into the
-// document has it stripped at the AppSettings seam and redacted from exports.
-//
-// WHY THIS MATTERS MORE THAN USUAL. The Icom protocol does not encrypt the
-// password — it passes it through a fixed 95-entry substitution table
-// (icom-oracle §2.5) that is trivially reversible. Anyone with a packet capture
-// on the same LAN already has the operator's radio password. That is the
-// radio's design and we cannot change it; what we CAN avoid is compounding it
-// by writing the same secret into a settings file that ends up attached to bug
-// reports. Hence the keychain, and hence this being a named component rather
-// than a QString on a settings object.
-//
-// ASYNC READ, SYNC USE. Keychain reads are asynchronous, and the connect path
-// is not — RadioModel builds a RadioConnectRequest and calls connectRadio()
-// synchronously, including on the auto-reconnect timer. So the password is
-// loaded into a process-lifetime session cache (the connect dialog does this
-// when the operator selects Icom, and again when they type one), and the
-// connect path reads the cache. A reconnect therefore works without a second
-// keychain prompt, and nothing on the connect path can block on the keyring.
+// The Icom network password, and the ONLY place it is persisted (RFC #4603 E):
+// QtKeychain, never the settings database. IcomSettings has no password field
+// and ("Icom", "Password") is registered in SettingsCredentialPolicy so it is
+// stripped and redacted if ever written. The protocol only obfuscates it with a
+// reversible 95-entry substitution table, so it must not also land in settings
+// files attached to bug reports.
+// Async read, sync use: the connect dialog loads it into a process-lifetime
+// cache, and the synchronous connect path (including auto-reconnect) reads only
+// the cache, so nothing on that path blocks on the keyring.
 class IcomCredentials {
 public:
     // Read the stored password. Concurrent callers share one keychain read so

@@ -9,19 +9,11 @@
 
 namespace AetherSDR {
 
-// Message types in the SmartSDR TCP protocol:
-//   V<version>             – version announcement
-//   H<handle>              – client handle assignment
-//   C<seq>|<command>       – command (client → radio)
-//   R<seq>|<code>|<msg>    – response (radio → client)
-//   S<handle>|<status>     – status update (radio → client)
-//   M<8-hex-digits>|<text> – informational/warning/error/fatal message
-//                            (high 2 bits of the hex number encode severity —
-//                             see MessageSeverity in core/RadioMessageTypes.h)
-//
-// MessageType / MessageSeverity live in core/RadioMessageTypes.h (included
-// above); see there for the vendor-free-split rationale. Re-included here so
-// ParsedMessage and existing includers are unchanged.
+// SmartSDR TCP message types:
+//   V<version>  H<handle>  C<seq>|<command> (client → radio)
+//   R<seq>|<code>|<msg>  S<handle>|<status>
+//   M<8-hex-digits>|<text>  (high 2 bits of the hex = severity, see
+//                            MessageSeverity in core/RadioMessageTypes.h)
 
 struct ParsedMessage {
     MessageType type{MessageType::Unknown};

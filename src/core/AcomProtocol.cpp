@@ -26,32 +26,14 @@ const QStringList& bandTable()
     return table;
 }
 
-// 600S is the only row verified against real hardware. The others are
-// derived, not measured — methodology (design doc §6):
-//   - Nominal (rated output): ACOM's own current published spec sheets
-//     (acom-bg.com product pages), NOT the model name and NOT the public
-//     reference client's constants. Both of those turned out to be wrong
-//     for the higher-power models: the model name is not the rated wattage
-//     (1200S is rated 1000W, 2020S is rated 1500W), and the reference
-//     client's embedded constants (1200S=1200W, 2020S=1800W) don't match
-//     ACOM's current official specs either.
-//   - Max (gauge red-zone ceiling): where the model name is exactly
-//     "rated + 200W" (1200S, 1400S), the name itself is used as a round-
-//     number ceiling. Where it isn't (500S/600S/700S have name == rated;
-//     2020S's name doesn't fit the +200W pattern at all), the ceiling is
-//     the 600S's own confirmed max/nominal ratio (700/600, rounded) applied
-//     to that model's rated wattage instead.
-//   - Reflected power (nominal/max): no public source exists at all: derived
-//     proportionally from the 600S's confirmed reflected/forward ratios
-//     (114/600 nominal, 150/700 max) applied to each model's forward figures.
-//   - Temperature offset / hasPam2: carried from the reference client where
-//     no better source exists; defaulted to the majority value (282 / no
-//     PAM2 assumption based on power class) for 1400S, which the reference
-//     client doesn't cover at all.
-// None of this is a substitute for real confirmation. See AcomConnection's
-// auto-ranging (tierForForwardPower) for how the UI stays correct even when
-// these constants are wrong, and modelNameForAmplifierType for how little of
-// the identification problem the wire protocol itself actually solves.
+// Only the 600S row is hardware-verified; the rest are derived (design doc §6):
+//   - Nominal: ACOM's published spec sheets (1200S = 1000 W, 2020S = 1500 W),
+//     not the model name or the reference client's constants.
+//   - Max: model name where it is rated + 200 W (1200S, 1400S); otherwise the
+//     600S's 700/600 ratio applied to rated power.
+//   - Reflected: the 600S's ratios (114/600 nominal, 150/700 max).
+//   - Temp offset / hasPam2: reference client; 1400S defaults to 282 / no PAM2.
+// AcomConnection's tierForForwardPower keeps the UI correct if these are wrong.
 const QMap<QString, ModelSpec>& modelTable()
 {
     static const QMap<QString, ModelSpec> table = {

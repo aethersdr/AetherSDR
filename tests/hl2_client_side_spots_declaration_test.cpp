@@ -9,12 +9,6 @@
 // connected, fetched and drew nothing. True sends them down the passive-local
 // SpotModel route instead — the one Icom already takes for the same reason.
 //
-// WHY A SEPARATE TARGET. Same reason tests.cmake gives beside
-// hl2_pan_limits_declaration_test: the fake-radio fixture that would naturally
-// carry an HL2 seam assertion — hl2_backend_test — is retired inside a
-// commented block, and a declaration must not be pinned only inside something
-// that does not build.
-//
 // SOCKET-FREE. Constructs a backend and reads capabilities(); binds nothing,
 // connects nothing, pumps no event loop, and reaches no radio.
 //

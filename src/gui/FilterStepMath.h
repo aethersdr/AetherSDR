@@ -6,19 +6,10 @@
 #include <cstdlib>
 #include <limits>
 
-// The filter-preset index arithmetic, lifted out of RxApplet so it can be
-// tested without constructing a GUI.
-//
-// It is here because it got this wrong twice in one diff, both times by mixing
-// two parallel arrays. The applet holds the OPERATOR'S configurable preset list
-// and, on a radio that declares a fixed set (an IC-705 has exactly three IF
-// filters), a second list belonging to the radio. Any site that searches one
-// and indexes the other produces a width from the wrong container — and where
-// the two differ in LENGTH, an out-of-range access.
-//
-// Keeping the arithmetic in one pure function is what makes "search, clamp and
-// apply all walk the same list" checkable rather than a property you have to
-// re-audit at every call site.
+// Filter-preset index arithmetic, pure for testing. The applet holds the
+// operator's preset list and, on a radio with a fixed set (IC-705: three IF
+// filters), the radio's list; search, clamp and apply must walk the same one,
+// or widths come from the wrong container and differing lengths overrun.
 
 namespace AetherSDR {
 

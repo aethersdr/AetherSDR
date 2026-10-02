@@ -9,14 +9,10 @@
 
 namespace AetherSDR {
 
-// Portable, versioned JSON persistence for the net schedule. This is the
-// canonical backup/share format — pretty-printed, self-describing, and evolved
-// additively (new fields optional with defaults; unknown fields ignored) so
-// files stay forward/backward compatible. Recurrence lives as an RRULE string
-// rather than enumerated dates, and every entry carries a stable UUID so
-// re-import and user-to-user sharing can merge deterministically.
-//
-// Envelope:
+// Versioned JSON persistence for the net schedule, the backup/share format.
+// Evolved additively (new fields optional, unknown ignored); recurrence is an
+// RRULE string; every entry has a stable UUID so imports merge
+// deterministically. Envelope:
 //   {
 //     "format": "aether.netschedule",
 //     "version": 1,

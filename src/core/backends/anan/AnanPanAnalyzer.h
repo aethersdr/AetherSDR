@@ -9,50 +9,22 @@
 
 namespace AetherSDR::anan {
 
-// The ANAN-G2 panadapter spectrum, computed by WDSP's display analyzer
-// (third_party/wdsp/upstream/analyzer.c) rather than a hand-rolled FFT.
-//
-// The analyzer is the engine the openHPSDR desktop clients drive for this
-// radio family, and the settings below follow deskHPSDR's defaults:
-//
-//   - FFT size: the next power of two at or above the output point count,
-//     never below 16384. At 192 ksps that is ~12 Hz per bin, so each output
-//     point averages many bins.
-//   - Kaiser window (PiAlpha 14).
-//   - Per-point AVERAGE detector: each output point is the mean of the FFT
-//     bins it covers. This, not time averaging, is what takes the grain out
-//     of a single FFT: at 1024 points from a 16k FFT every point averages 16
-//     bins.
-//   - Overlap sized so that one full-length FFT completes per display frame,
-//     sliding over fresh samples, so no sample is thrown away between frames.
-//   - Time averaging set by the operator, as an averaging TIME in ms -- the
-//     control deskHPSDR exposes: 0 = none (each frame is one FFT), t > 0 =
-//     log-recursive (WDSP average mode 3, deskHPSDR's default mode) weighting
-//     history by exp(-1 / (F * t)) with F the analyzer's FFT rate -- fps
-//     while one FFT fits per display frame, more once the overlap saturates
-//     (see derive()). deskHPSDR's default is 250 ms. The
-//     operator can switch the recursive mode to linear (an average of power)
-//     as deskHPSDR's averaging-mode choice allows.
-//   - Levels normalised to the bandwidth of one output point.
-//
-// One addition of our own: the running average is SEEDED from the first frame
-// -- after creation, and again whenever averaging is switched back on --
-// instead of rising from WDSP's -160 dB starting value. AetherSDR rebuilds the
-// analyzer on every DDC rate change (every zoom), so an unseeded average would
-// fade the panadapter in from black after each one, and a droop calibration
-// sweep's post-rate-change settle would measure the ramp.
-//
-// Input is RAW WIRE IQ, not a conjugate: Spectrum0() swaps I and Q, which
-// mirrors the spectrum, and that swap is what turns the HPSDR wire's
-// convention into the right way round -- the same arrangement the desktop
-// clients use. Output points run from the lowest frequency to the highest.
-//
-// Threading. create() plans FFTs (FFTW_PATIENT) and must run off any
-// real-time thread; it takes WdspChannel::fftwSetupLock() itself. Everything
-// else -- feed(), takeFrame(), setFramesPerSecond(), setNumPoints(), the
-// destructor -- must run on ONE thread, the one that feeds samples:
-// SetAnalyzer() resets the input ring and cannot race Spectrum0(). The FFTs
-// themselves run on WDSP-owned worker threads.
+// ANAN-G2 panadapter spectrum via WDSP's display analyzer
+// (third_party/wdsp/upstream/analyzer.c), configured to deskHPSDR's defaults:
+// FFT = next power of two >= output points, min 16384; Kaiser window (PiAlpha
+// 14); per-point AVERAGE detector (the main de-graining); overlap sized for one
+// full FFT per display frame; operator time average in ms (0 = none, else WDSP
+// mode 3 log-recursive, weight exp(-1 / (F * t)) at FFT rate F, or linear);
+// levels normalised to one output point's bandwidth.
+// Our addition: the running average is SEEDED from the first frame (after
+// create and when averaging is re-enabled), because the analyzer is rebuilt on
+// every rate change and an unseeded average fades in from -160 dB.
+// Input is RAW wire IQ: Spectrum0() swaps I/Q, which is what orients the HPSDR
+// convention correctly. Output runs lowest to highest frequency.
+// Threading: create() plans FFTs (FFTW_PATIENT) off any real-time thread and
+// takes WdspChannel::fftwSetupLock() itself; everything else, destructor
+// included, runs on the one feeding thread (SetAnalyzer() resets the input ring
+// and cannot race Spectrum0()).
 class AnanPanAnalyzer {
 public:
     struct Settings {

@@ -1,16 +1,9 @@
 #pragma once
 
-// THE VISIBLE HALF OF RFC #5535's CONDITION.
-//
-// A lamp and a line, sitting beside the RF Gain slider where the operator
-// already looks. It draws what FrontEndOverloadPresentation.h decides and holds
-// no rules of its own beyond the red latch, which needs a clock and therefore
-// cannot live in a pure header.
-//
-// BORN HIDDEN. A family whose backend never emits frontEndOverloadChanged never
-// shows this, for the same reason the Auto checkbox beside it is hidden rather
-// than disabled: a control wired to nothing is the HERMES 17 failure the
-// capability comments keep warning about.
+// Front-end overload lamp and text beside the RF Gain slider (RFC #5535). Draws
+// what FrontEndOverloadPresentation.h decides; its only rule is the red latch,
+// which needs a clock. Starts hidden and is shown only for a backend that emits
+// frontEndOverloadChanged, like the Auto checkbox beside it.
 
 #include "core/backends/FrontEndOverload.h"
 #include "gui/FrontEndOverloadPresentation.h"

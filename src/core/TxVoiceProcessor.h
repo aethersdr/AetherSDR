@@ -104,16 +104,11 @@ public:
     // that this processor will write on the next callback.
     bool processCapturedInt16(QByteArray& canonicalInputOutput);
 
-    // Float32 sibling of processCapturedInt16(). Input is canonical duplicated
-    // mono stereo float32 at the negotiated device rate (what
-    // TxMicChannelNormalizer::canonicalizeFloat32ToMonoStereo produces); output
-    // is the same transport Int16 the Int16 route returns, so nothing
-    // downstream of this call has to know which one ran.
-    //
-    // Non-finite input samples are replaced with silence on the way in — unlike
-    // the Int16 route, this one CAN carry NaN/Inf, and the ingress resampler it
-    // feeds is stateful. No caller precondition: sanitizing here is what keeps
-    // that guarantee from depending on a different file's invariant.
+    // Float32 sibling of processCapturedInt16(): input is canonical duplicated-mono
+    // stereo float32 at the device rate (canonicalizeFloat32ToMonoStereo output);
+    // output is the same transport Int16 as the Int16 route. Non-finite samples
+    // are replaced with silence on entry (the ingress resampler is stateful); no
+    // caller precondition.
     bool processCapturedFloat32(QByteArray& canonicalInputOutput);
 
     // Offline/test entry point for audio already in the canonical DSP domain.
