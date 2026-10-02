@@ -1,49 +1,13 @@
-// The arm / disarm / fire path of the signal-handler emergency stop.
-// (aethersdr/AetherSDR#4581)
-//
-// TWO PARTS, and they prove different things.
-//
-// PART 1 is a guard on the data structure. A target published by
-// armEmergencyStop() is the one fireEmergencyStop() sends to, a RE-ARM moves
-// the descriptor, the address and the packet together, and a disarm — explicit,
-// or by arming with an fd or an address that cannot be used — silences it.
-// Nothing in it is concurrent, so it passes on the tree before #4581's fix as
-// well. Its mutation is an off-by-one in the published slot index.
-//
-// PART 2 is the falsifier for #4581 itself. One thread re-arms while another
-// fires, which is what a terminating signal delivered to a second thread during
-// a reconnect does. Exactly ONE re-arm overlaps each fire, and the two targets
-// are told apart by the datagram alone: every byte of a target's packet is the
-// same value, and its low bit names the socket it was armed with. A datagram on
-// the wrong socket, or one with mixed bytes, is a packet paired with an address
-// it was never armed with. Before the fix arm() rewrote the one payload in
-// place and this section counts such datagrams; after it, a handler reads a
-// slot arm() does not write, and the count is zero.
-//
-// WHAT PART 2 IS NOT.
-//
-//   - It is not deterministic on the unfixed tree. The mismatch needs the
-//     re-arm to land between sendto()'s copy of the address and its copy of
-//     the payload. On a host with one core the threads never overlap and it
-//     passes vacuously. It cannot go red on a correct tree for that reason:
-//     the assertion is "no mismatched datagram", not "the overlap happened".
-//   - It holds the fix to its stated bound and no further: one re-arm per
-//     fire. Two slots do not survive two re-arms inside one fire, and the
-//     source says so.
-//   - No signal is raised. fireEmergencyStop() is called from a plain thread.
-//     The fixture that killed a real process (hl2_signal_stop_test) is retired;
-//     see tests.cmake.
-//   - It does not exercise the Win64 SOCKET narrowing. That needs a descriptor
-//     above INT_MAX, which this platform does not hand out.
-//
-// Under ThreadSanitizer part 2 is clean on the fixed tree (macOS, clang). On
-// the unfixed tree the sanitizer itself stayed silent there, because the racing
-// reads happen inside sendto(); the datagram check is what went red.
-//
-// SOCKETS: three UDP sockets on 127.0.0.1, ports chosen by the kernel. Two are
-// sinks for our own sendto() and one is the descriptor that gets armed. None
-// stands in for a radio. A failed bind, or a bound socket that exposes no
-// descriptor, exits 77 (skipped).
+// The arm / disarm / fire path of the signal-handler emergency stop (#4581).
+// PART 1: a published target is the one fired at; a re-arm moves descriptor,
+// address and packet together; disarm (explicit, bad fd, non-IPv4) silences it.
+// PART 2: one thread re-arms while another fires, one re-arm per fire (the
+// two-slot bound); every packet byte names the socket it was armed for, so a
+// torn or misaddressed datagram is counted. Timing-dependent: it can only pass
+// vacuously, never fail, on a correct tree. No signal is raised here (that is
+// the opt-in hl2_signal_stop_test) and the Win64 handle width is not exercised.
+// SOCKETS: three UDP sockets on 127.0.0.1, kernel-chosen ports: two sinks and
+// the armed sender. No fake radio. A failed bind or no descriptor exits 77.
 
 #include "core/backends/hl2/Hl2EmergencyStop.h"
 
@@ -221,12 +185,11 @@ int main(int argc, char** argv)
 
     disarmEmergencyStop();
 
-    // ---- PART 2: one re-arm overlapping one fire (#4581) ----
+    // ---- PART 2: one re-arm overlapping one fire ----
     //
     // Round r arms target (r & 1): that socket's port, and a packet whose every
-    // byte is (2r | (r & 1)). The worker does the arming and this thread does
-    // the firing; the round counter and the acknowledgement are the only
-    // coordination, so each fire overlaps at most the one re-arm of its round.
+    // byte is (2r | (r & 1)). The go/armed handshake keeps each fire overlapping
+    // at most the one re-arm of its round.
     {
         constexpr int kRounds = 20000;
         const quint16 ports[2] = {firstPort, secondPort};

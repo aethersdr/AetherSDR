@@ -5072,14 +5072,9 @@ target_include_directories(wideband_converter_view_test PRIVATE src)
 target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
 
-# HL2 emergency stop (#4581): the arm/disarm/fire data structure, and one
-# re-arm overlapping one fire from a second thread. The second part is the
-# falsifier for the issue; it is timing-dependent on the unfixed tree and cannot
-# fail on a correct one. Does not raise a signal and does not exercise the Win64
-# narrowing; see the file header.
-# SOCKETS: binds three UDP sockets on 127.0.0.1 (kernel-chosen ports): two sinks
-# for our own sendto() and the descriptor that is armed. No fake radio. A failed
-# bind, or a bound socket with no descriptor, exits 77.
+# HL2 emergency stop (#4581): arm/disarm/fire, and a re-arm racing a fire.
+# SOCKETS: three UDP sockets on 127.0.0.1 (kernel-chosen ports): two sinks for
+# our own sendto() and the armed sender. No fake radio. No bind/descriptor: 77.
 add_executable(hl2_emergency_stop_test tests/hl2_emergency_stop_test.cpp)
 target_include_directories(hl2_emergency_stop_test PRIVATE src)
 target_link_libraries(hl2_emergency_stop_test PRIVATE aethercore Qt6::Core Qt6::Network)
