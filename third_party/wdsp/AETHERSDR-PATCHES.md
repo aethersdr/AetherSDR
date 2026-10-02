@@ -2,9 +2,8 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries ten local changes in the otherwise exact `Source/*.[ch]`
-snapshot — four teardown corrections, two null/lifetime fixes, one added
-accessor set, two channel-state fixes, and one performance change:
+AetherSDR carries the local changes documented below in the otherwise exact
+`Source/*.[ch]` snapshot:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -751,3 +750,101 @@ no release, so nothing moves relative to it.
 When updating WDSP, keep this unless upstream's `dexchange()` reads `r1` before
 it releases `Sem_OutReady`. Keep the pause call (and its declaration at the top
 of `iobuffs.c`) regardless: it is AetherSDR's own test surface.
+
+
+## Patch 14 — opt-in WFM reception and live decoder controls (RFC #5468)
+
+`upstream/wbfm.c` and `upstream/wbfm.h`, against the pinned 2.10 revision above.
+
+`SetRXAWBFMdmph()` previously changed only the parent fields used during
+construction. Existing `dmphL` and `dmphR` kept their original run flag, time
+constant and coefficients. A generated 1kHz/15kHz vector measured identical
+15kHz amplitude after requesting75us then50us (`0.0413053`, ratio1.0) on
+Nobara before this patch. The expected analog ratio at15kHz is approximately
+1.482. The setter now updates both active filters under the existing DSP
+critical section. It resets their history when the setting changes; no
+allocation, FIR planning or third-party dependency is introduced.
+
+The existing stereo-indicator getter acquired the DSP mutex. The RTL sample
+path must observe decoder state without waiting on that worker. A separate
+interlocked `stereoPublished` value is published after `xwbfm()` completes its
+L/R output and read with the port's existing atomic-load idiom. This is a
+latest completed decoder-block observation, not an exact timestamp for audio
+already buffered in the output ring. The caller still owns channel lifetime.
+
+`flush_wbfm()` previously cleared the nested pilot detector but retained its
+parent stereo/magnitude fields and internal squelch noise/gain histories. It
+now resets those histories and publishes no stereo immediately, so a new
+station cannot inherit the old station's pilot observation or squelch state.
+The decoder's existing automatic-squelch thresholds and50ms gain slew are
+unchanged; no new user threshold mapping is added.
+
+The optional `WdspChannel::WbfmReceive` recipe fixes its geometry at 384 kHz
+input (2048 complex frames), 192 kHz DSP (1024 frames), and paired 48 kHz audio
+(256 frames). It applies an existing 2049-tap Blackman-Harris overlap-save
+`BPS` FIR before WDSP's input conversion. WBFM disables RXA's normal RF
+bandpass, so configuring that dormant filter did not provide selectivity.
+The facade only exposes the existing BPS functions; vendor filter code is
+unchanged. The preallocated FFT output holds twice the input frame count.
+Filter setup, changes, and destruction use the existing planner/control fence;
+processing adds no acquisition allocation or mutex. Mathematical complex-IQ
+edges are negated/swapped to match WDSP's filter convention. A 3 kHz transition
+allowance is tested on both sides and on an asymmetric passband.
+
+`WbfmReceive::outputGain`, default 0.25, scales both output channels before
+receiver taps. WBFM bypasses RXA's output panel, so the usual panel-gain API
+could not supply this normalization. The pre-fix 90% mono fixture peaked at
+3.25825 with 76000 clipped frames; with normalization it peaked at 0.814467
+and no frames reached unity. This is scalar normalization, not a hidden clipper.
+
+`SetRXAWBFMDiscriminatorCompensation()` defaults off and is called only by
+this recipe. Adjacent phase differences average the continuous instantaneous
+frequency over one sample, producing sinc(omega/2) droop. At 38 kHz in the
+192 kHz decoder, that attenuated L-R enough to give 29.218/29.385 dB separation
+on analytically integrated 1/2 kHz stereo. A rectangular phase-sum fixture
+at the DSP rate accidentally cancels this error and must not be used as proof.
+
+The opt-in correction is a 13-tap linear-phase inverse-sinc approximation.
+Its coefficients are the polynomial sum for k=0..6 of
+`C(2k,k)/(4^k*(2k+1)) * ((2-z-z^-1)/4)^k`. It has unity DC gain, six samples
+of common delay, and less than 0.0047 dB residual response error through the
+53 kHz multiplex band. Its maximum gain is 1.356417, so it also raises
+high-frequency noise by up to 2.65 dB; this is the bounded noise tradeoff,
+not additional recovered information. The implementation uses only fixed
+history and arithmetic. Before the subsequent DC correction, measured 1/2 kHz
+separation increased to 42.23/47.95 dB and 14/15 kHz reached 51.16/47.87 dB.
+
+The same opt-in flag moves the existing DC blocker after the L/R matrix,
+with independent identical histories and the original 0.9995 pole. Leaving it
+before the split rotated low-frequency L+R while barely rotating L-R near
+38 kHz. The generated 300/500 Hz vector measured 31.8839/36.3027 dB before
+this change, matching the calculated phase error. Legacy owners retain the
+original MPX placement. Both paired histories reset on calculation, flush,
+and recipe selection.
+
+The 192 kHz pre-discriminator IQ conversion still limits the effective RF
+passband. A requested +/-100 kHz FIR does not mean a flat 200 kHz signal path:
+the generated carrier response was flat through +/-90 kHz, approximately
+-0.195 dB at 93 kHz and -6.02 dB at 96 kHz. Near-full stereo modulation loses
+some sidebands beyond that range. Its measured separation is reported by the
+test as a limitation; the RFC's >=40 dB requirement remains pinned on the
+explicit reference vectors. Moving discrimination before IQ conversion would
+address a different, broader change and is not part of this patch.
+
+The socket-free `wdsp_wbfm_test` exercises RF selection and envelope, normalized
+headroom, live regional response, reference separation at low/mid/high audio
+frequencies, pilot acquisition/loss, mono fallback, restart, per-channel
+isolation, and allocation-free processing. Additional diagnostic vectors cover
+near-full modulation, +/-100 ppm signal clock, coherent pilot/subcarrier
+offsets, seeded weak/marginal noise, and pilot-absent reception. They are
+synthetic DSP evidence, not hardware, on-air, or universal reception claims.
+The old WFM mode and other channel owners keep their existing configuration,
+gain, and discriminator/DC behavior.
+
+On refresh, retain the active-filter update until upstream applies both live
+filters, retain the complete flush, and retain atomic stereo publication unless
+upstream supplies an equivalent nonblocking observation. Do not restore a DSP
+mutex to the acquisition-side getter. Keep the discriminator/DC changes
+explicitly opt-in unless a separately reviewed upstream equivalent preserves
+both continuous-waveform response and low-frequency stereo phase. Regenerate
+the FIR from its polynomial and rerun analytic fixtures if its geometry changes.

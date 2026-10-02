@@ -20,12 +20,12 @@ therefore retains its upstream fallback behavior.
 
 ## Local boundary
 
-`upstream/` matches that source snapshot except for the ten changes recorded
-in `AETHERSDR-PATCHES.md` — four teardown corrections, two null/lifetime
-fixes, one additive accessor set that lets Neural Noise Reduction be
-controlled outside an RXA channel, two channel-state fixes, and one
-performance change that builds the minimum-phase workspace only when minimum
-phase is on. All portability
+`upstream/` matches that source snapshot except for the local changes
+recorded in `AETHERSDR-PATCHES.md`. The WFM integration adds patch 14: live
+paired deemphasis, lock-free stereo observation, complete decoder reset, and
+opt-in phase-difference/DC corrections that preserve stereo separation.
+Existing WDSP overlap-save RF filtering is exposed
+through the narrow C facade without changing the vendor filter. All portability
 changes live outside it:
 
 - `port/` implements the narrow Windows compatibility surface WDSP uses on
