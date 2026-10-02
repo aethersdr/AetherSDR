@@ -1,11 +1,25 @@
 #include "RtlReceivePipeline.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <numeric>
 
 namespace AetherSDR::rtl {
 namespace {
+unsigned packetSlots(std::size_t capacity)
+{
+    // Native WFM is the highest analog packet rate: one 256-frame tap per
+    // receiver plus two 128-frame speaker packets, all at 48 kHz. The old
+    // 127 usable packets cover ~225 ms for one receiver but only ~113 ms for
+    // four. Startup UI publication measured 151 ms with no owner drain.
+    // Scale the same nominal headroom, rounded up, once before acquisition;
+    // the qualified singleton remains exactly 128 allocated slots. This is
+    // finite jitter tolerance, not permission to block the owner indefinitely.
+    constexpr unsigned kSingleReceiverUsablePackets = 127;
+    const unsigned receivers = static_cast<unsigned>(std::clamp<std::size_t>(capacity, 1, 8));
+    return 1 + (kSingleReceiverUsablePackets * (receivers + 2) + 2) / 3;
+}
 std::optional<std::uint64_t> mixerOrigin(std::uint64_t firstSample, double rateHz) noexcept
 {
     // The extractor accepts only integral, bounded achieved rates. Validate
@@ -40,7 +54,8 @@ WdspChannel::Mode dspMode(RtlCaptureTransaction::Mode mode)
 }
 }
 RtlReceivePipeline::RtlReceivePipeline(std::size_t capacity, bool enableWfm)
-    : m_enableWfm(enableWfm), m_registry({8, capacity, std::min<std::size_t>(32, capacity * 2)})
+    : m_enableWfm(enableWfm), m_registry({8, capacity, std::min<std::size_t>(32, capacity * 2)}),
+      m_packetSlots(packetSlots(capacity)), m_packets(std::make_unique<Packet[]>(m_packetSlots))
 {
     for (auto& monitor : m_monitor) { monitor.store(100 | (50 << 8)); }
 }
@@ -59,8 +74,17 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
             || receiver.audioGain < 0
             || receiver.audioGain > 100 || receiver.audioPan < 0 || receiver.audioPan > 100
             || receiver.squelchLevel < 0 || receiver.squelchLevel > 100
+            || receiver.automaticSquelchMarginDb < 5 || receiver.automaticSquelchMarginDb > 20
+            || (receiver.automaticSquelch && !receiver.squelchEnabled)
             || (receiver.wfmDeemphasisUs != 50 && receiver.wfmDeemphasisUs != 75)
             || (receiver.mode == Transaction::Mode::Wfm && receiver.squelchEnabled)) { return Submission::Failed; }
+        // Parking changes reception membership, not the configured graph's
+        // admission contract. A legacy recipe cannot hide outside the capture
+        // and then resume alongside a native 48 kHz receiver.
+        const bool native = receiver.mode == Transaction::Mode::Fm
+            || receiver.mode == Transaction::Mode::Fmn
+            || (m_enableWfm && receiver.mode == Transaction::Mode::Wfm);
+        if (!native && state.receivers.size() != 1) { return Submission::Failed; }
         if (receiver.mode == Transaction::Mode::Wfm && receiver.wfmHdStereo) {
             if (!m_enableWfm) { return Submission::Failed; }
 #ifndef AETHER_ENABLE_NRSC5
@@ -183,7 +207,9 @@ RtlReceivePipeline::Submission RtlReceivePipeline::prepareDetailed(
     m_specs = specs;
     m_prepared = m_registry.service().requested;
     for (const auto& receiver : state.receivers) {
-        m_nextSquelch[receiver.passband.stableId] = {receiver.squelchEnabled, receiver.squelchLevel};
+        m_nextMeterPassbands[receiver.passband.stableId] = receiver.passband;
+        m_nextSquelch[receiver.passband.stableId] = {receiver.squelchEnabled, receiver.squelchLevel,
+            receiver.automaticSquelch, receiver.automaticSquelchMarginDb};
         m_nextMonitor[receiver.passband.stableId] = static_cast<unsigned>(receiver.audioGain
             | (receiver.audioPan << 8) | (receiver.audioMute ? 1 << 16 : 0));
     }
@@ -209,12 +235,14 @@ bool RtlReceivePipeline::adopt() noexcept
     for (std::size_t slot = 0; slot < m_monitor.size(); ++slot) {
         m_monitor[slot].store(m_nextMonitor[slot], std::memory_order_relaxed);
         m_squelchConfig[slot] = m_nextSquelch[slot];
-        m_squelch[slot].configure(m_nextSquelch[slot].enabled, m_nextSquelch[slot].level, resetSquelch);
+        m_squelch[slot].configure(m_nextSquelch[slot].enabled, m_nextSquelch[slot].level, resetSquelch,
+            m_nextSquelch[slot].automatic, m_nextSquelch[slot].marginDb);
     }
     if (resetSquelch) { m_spectrumFresh = false; m_squelchEpoch.fill(0); }
     m_token = m_nextToken; m_capture = m_nextCapture;
     m_captureEpoch = m_nextEpoch; m_legacy = m_nextLegacy;
     m_receivingMask = m_nextReceivingMask;
+    m_meterPassbands = m_nextMeterPassbands;
     m_faults.store(0, std::memory_order_release); // old bank faults cannot request a second reset
     return true;
 }
@@ -231,6 +259,54 @@ void RtlReceivePipeline::observeSpectrum(std::span<const float> bins, std::uint6
     if (bins.size() != m_spectrum.size()) { return; }
     std::copy(bins.begin(), bins.end(), m_spectrum.begin());
     m_spectrumFirstSample = firstSample; m_spectrumFresh = true;
+    const std::uint64_t generation = m_rfGeneration.load(std::memory_order_acquire);
+    if (!(generation & 1)) { return; } // Keep the independent SQL spectrum above.
+    if (!m_token.session || m_capture.achievedSampleRateHz <= 0) { return; }
+    RfObservation observation;
+    observation.token = m_token;
+    observation.generation = generation;
+    observation.producedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const double binHz = m_capture.achievedSampleRateHz / bins.size();
+    for (int id = 0; id < 8; ++id) {
+        if (!(m_receivingMask & (1u << id))) { continue; }
+        const auto& band = m_meterPassbands[id];
+        const double offset = band.carrierHz - m_capture.centerHz;
+        const int low = std::clamp(int(std::floor((offset + band.filterLowHz) / binHz + 1024)), 0, 2047);
+        const int high = std::clamp(int(std::ceil((offset + band.filterHighHz) / binHz + 1024)), low, 2047);
+        float peak = -120.0f;
+        bool valid = true;
+        for (int bin = low; bin <= high; ++bin) {
+            if (!std::isfinite(bins[bin])) { valid = false; break; }
+            peak = std::max(peak, bins[bin]);
+        }
+        if (valid) { observation.mask |= 1u << id; observation.dbfs[id] = peak; }
+    }
+    const unsigned write = m_rfWrite.load(std::memory_order_relaxed);
+    const unsigned next = (write + 1) % m_rfObservations.size();
+    if (next != m_rfRead.load(std::memory_order_acquire)) {
+        m_rfObservations[write] = observation;
+        m_rfWrite.store(next, std::memory_order_release);
+    }
+}
+bool RtlReceivePipeline::takeRfObservation(RfObservation& output) noexcept
+{
+    for (unsigned count = 0; count < m_rfObservations.size(); ++count) {
+        const unsigned read = m_rfRead.load(std::memory_order_relaxed);
+        if (read == m_rfWrite.load(std::memory_order_acquire)) { return false; }
+        output = m_rfObservations[read];
+        m_rfRead.store((read + 1) % m_rfObservations.size(), std::memory_order_release);
+        const std::uint64_t generation = m_rfGeneration.load(std::memory_order_acquire);
+        if ((generation & 1) && output.generation == generation) { return true; }
+    }
+    return false;
+}
+void RtlReceivePipeline::setReceiveMetersEnabled(bool enabled) noexcept
+{
+    const std::uint64_t generation = m_rfGeneration.load(std::memory_order_relaxed);
+    if (bool(generation & 1) != enabled) {
+        m_rfGeneration.store(generation + 1, std::memory_order_release);
+    }
 }
 void RtlReceivePipeline::setMonitor(int slot, int gain, int pan, bool mute) noexcept
 {
@@ -242,6 +318,10 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
     std::span<const RtlReceiverRegistry::ReceiverView> views) noexcept
 {
     if (m_legacy) { return; }
+    if (m_startupTrace && !m_startupTrace->nativeFirstNs) {
+        m_startupTrace->markProducer(RtlStartupTrace::FirstNativeBlock, m_token.session,
+            m_token.revision, block.firstSample, -1, 0, block.samples.size());
+    }
     std::array<RtlAudioMixer::Input, 8> inputs;
     for (std::size_t i = 0; i < views.size(); ++i) {
         const auto& spec = *views[i].spec;
@@ -273,7 +353,8 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
         const int slot = view.spec->handle.slot;
         auto& gate = m_squelch[slot];
         if (m_squelchEpoch[slot] != view.spec->epoch) {
-            gate.configure(m_squelchConfig[slot].enabled, m_squelchConfig[slot].level, true);
+            gate.configure(m_squelchConfig[slot].enabled, m_squelchConfig[slot].level, true,
+                m_squelchConfig[slot].automatic, m_squelchConfig[slot].marginDb);
             m_squelchEpoch[slot] = view.spec->epoch;
         }
         if (m_spectrumFresh && !view.spec->dsp.wbfmReceive) {
@@ -286,16 +367,12 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
                 (offset + passband.filterLowHz) / binHz + 1024)), 0, 2047);
             const int high = std::clamp(static_cast<int>(std::ceil(
                 (offset + passband.filterHighHz) / binHz + 1024)), low, 2047);
-            float peak = -120.0f;
-            for (int bin = low; bin <= high; ++bin) {
-                if (!std::isfinite(m_spectrum[bin])) { peak = std::numeric_limits<float>::quiet_NaN(); break; }
-                peak = std::max(peak, m_spectrum[bin]);
-            }
-            gate.observe(peak, clock(m_spectrumFirstSample));
+            gate.observeSpectrum(m_spectrum, low, high, clock(m_spectrumFirstSample));
         }
         if (!view.receiver->processCapture(block, *this)) {
             const unsigned bit = 1u << slot;
             if (!(m_faults.fetch_or(bit, std::memory_order_release) & bit)) {
+                m_receiverWithdrawals[slot].fetch_add(1, std::memory_order_relaxed);
                 TraceEvent event = traceContext();
                 event.slot = slot; event.stableId = view.spec->passband.stableId;
                 event.instance = view.spec->handle.instance;
@@ -313,11 +390,19 @@ void RtlReceivePipeline::process(const RtlReceiverRegistry::SampleBlock& block,
 }
 RtlReceivePipeline::Diagnostics RtlReceivePipeline::diagnostics() const noexcept
 {
-    return {m_observed.load(std::memory_order_acquire),
+    Diagnostics result{m_observed.load(std::memory_order_acquire),
         m_drops.load(std::memory_order_relaxed), m_mixerLate.load(std::memory_order_relaxed),
         m_mixerRejected.load(std::memory_order_relaxed),
         m_mixerConfigurationFailures.load(std::memory_order_relaxed),
         m_traceDrops.load(std::memory_order_relaxed)};
+    result.queuedPackets = (m_write.load(std::memory_order_acquire) + m_packetSlots
+        - m_read.load(std::memory_order_acquire)) % m_packetSlots;
+    result.packetQueueHighWater = m_packetQueueHighWater.load(std::memory_order_relaxed);
+    result.packetQueueCapacity = m_packetSlots - 1;
+    for (std::size_t slot = 0; slot < m_receiverWithdrawals.size(); ++slot) {
+        result.receiverWithdrawals[slot] = m_receiverWithdrawals[slot].load(std::memory_order_relaxed);
+    }
+    return result;
 }
 void RtlReceivePipeline::audioBlock(const RtlReceiverRegistry::ReceiverSpec& spec, std::uint64_t first,
     std::span<const float> left, std::span<const float> right, bool discontinuity) noexcept
@@ -348,6 +433,18 @@ void RtlReceivePipeline::audioBlockWithStatus(const RtlReceiverRegistry::Receive
         packet.samples[2 * i] = gatedLeft[i]; packet.samples[2 * i + 1] = gatedRight[i];
     }
     enqueue(packet); // independent tap, before gain/mute/pan
+    // A retained receiver can finish buffered PCM from before a new speaker
+    // epoch. Keep its tap continuous, but do not offer that retired prefix to
+    // the new mix. Use the fixed origin, never the advancing playback cursor:
+    // genuinely late current-epoch blocks must still fail mixer validation.
+    if (m_mixerOrigin && first < *m_mixerOrigin && !left.empty()
+        && left.size() <= *m_mixerOrigin - first
+        && std::ranges::all_of(std::span(gatedLeft).first(left.size()),
+            [](float value) { return std::isfinite(value); })
+        && std::ranges::all_of(std::span(gatedRight).first(right.size()),
+            [](float value) { return std::isfinite(value); })) {
+        return;
+    }
     m_mixer.push(packet.slot, packet.instance, packet.receiverEpoch, first,
         std::span(gatedLeft).first(left.size()), std::span(gatedRight).first(right.size()));
 }
@@ -481,9 +578,43 @@ bool RtlReceivePipeline::takeTraceEvent(TraceEvent& output) noexcept
 bool RtlReceivePipeline::enqueue(const Packet& packet) noexcept
 {
     const unsigned write = m_write.load(std::memory_order_relaxed);
-    const unsigned next = (write + 1) % kPackets;
-    if (next == m_read.load(std::memory_order_acquire)) { m_drops.fetch_add(1, std::memory_order_relaxed); return false; }
+    const unsigned next = (write + 1) % m_packetSlots;
+    const unsigned read = m_read.load(std::memory_order_acquire);
+    if (m_startupTrace) { ++m_startupTrace->packetAttempts; }
+    if (next == read) {
+        m_drops.fetch_add(1, std::memory_order_relaxed);
+        if (m_startupTrace) {
+            ++m_startupTrace->packetDrops;
+            if (!m_startupTrace->firstDrop) {
+                m_startupTrace->firstDrop = true;
+                m_startupTrace->markProducer(RtlStartupTrace::FirstDrop, packet.token.session,
+                    packet.token.revision, m_traceCaptureFirst, packet.slot, packet.firstSample,
+                    packet.frames, m_packetSlots - 1);
+            }
+        }
+        return false;
+    }
+    if (m_startupTrace && m_startupTrace->firstDrop && !m_startupTrace->firstRecovery) {
+        m_startupTrace->firstRecovery = true;
+        m_startupTrace->markProducer(RtlStartupTrace::FirstRecovery, packet.token.session,
+            packet.token.revision, m_traceCaptureFirst, packet.slot, packet.firstSample,
+            packet.frames, (write + m_packetSlots - read) % m_packetSlots);
+    }
     m_packets[write] = packet;
+    m_packets[write].enqueuedMonotonicNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    const std::uint64_t queued = (next + m_packetSlots - read) % m_packetSlots;
+    if (m_startupTrace && queued == m_packetSlots - 1 && !m_startupTrace->firstFull) {
+        m_startupTrace->firstFull = true;
+        m_startupTrace->markProducer(RtlStartupTrace::FirstQueueFull, packet.token.session,
+            packet.token.revision, m_traceCaptureFirst, packet.slot, packet.firstSample,
+            packet.frames, queued);
+    }
+    // Sole producer: no compare/exchange loop or callback contention needed.
+    if (queued > m_packetQueueHighWater.load(std::memory_order_relaxed)) {
+        m_packetQueueHighWater.store(queued, std::memory_order_relaxed);
+    }
     m_write.store(next, std::memory_order_release);
     return true;
 }
@@ -492,7 +623,7 @@ bool RtlReceivePipeline::takePacket(Packet& output) noexcept
     const unsigned read = m_read.load(std::memory_order_relaxed);
     if (read == m_write.load(std::memory_order_acquire)) { return false; }
     output = m_packets[read];
-    m_read.store((read + 1) % kPackets, std::memory_order_release);
+    m_read.store((read + 1) % m_packetSlots, std::memory_order_release);
     return true;
 }
 } // namespace AetherSDR::rtl

@@ -1,6 +1,7 @@
 // Opt-in real-widget test: no sockets, radio, USB, or synthetic firmware peer.
 #include "TestSettingsProfile.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/VfoWidget.h"
 #include "gui/SpectrumOverlayMenu.h"
 #include "gui/MainWindowHelpers.h"
 #include "RtlInjectedDevice.h"
@@ -28,7 +29,7 @@ using namespace AetherSDR;
 namespace AetherSDR {
 struct SpectrumOffscreenTestAccess {
     static QImage broadcast(SpectrumWidget& widget, const QColor& field, const QBrush& inherited,
-                            bool& brushRestored, QPoint& backgroundSample) {
+                            bool& brushRestored, QPoint& backgroundSample, QRect* paintedBounds = nullptr) {
         widget.updateBroadcastOverlayTicker(QRect(0, 0, widget.width(), widget.height()));
         QImage image(widget.size(), QImage::Format_ARGB32_Premultiplied);
         image.fill(field);
@@ -36,12 +37,17 @@ struct SpectrumOffscreenTestAccess {
         painter.setBrush(inherited); // Same state left by the real slice marker.
         widget.drawBroadcastOverlays(painter, QRect(0, 0, widget.width(), widget.height()));
         brushRestored = painter.brush() == inherited;
-        const int width = widget.m_broadcastTickers.front().labelWidth() + 12;
-        const int x = widget.mhzToX(widget.m_broadcastOverlays.front().frequencyHz / 1.0e6);
-        const int left = std::clamp(x - width / 2, 6, widget.width() - width - 6);
-        QFont font = widget.font(); font.setPixelSize(12);
-        backgroundSample = QPoint(left + 2, 52 + (QFontMetrics(font).height() + 6) / 2);
         painter.end();
+        QRect bounds;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                if (image.pixelColor(x, y) != field) {
+                    bounds = bounds.united(QRect(x, y, 1, 1));
+                }
+            }
+        }
+        backgroundSample = QPoint(bounds.left() + 2, bounds.center().y());
+        if (paintedBounds) { *paintedBounds = bounds; }
         return image;
     }
 
@@ -149,6 +155,38 @@ int main(int argc, char** argv)
                 }
             }
         }
+        // Real expanded/collapsed flags must never cover the station label.
+        broadcast.resize(800, 600);
+        broadcast.setSpotStartPct(10);
+        broadcast.show();
+        VfoWidget* flag = broadcast.addVfoWidget(3);
+        flag->setCollapsed(true);
+        flag->setCollapsed(false);
+        flag->move(250, 20);
+        QApplication::processEvents();
+        bool restored = false; QPoint sample; QRect bounds;
+        const QColor field = theme.color(QStringLiteral("color.text.primary"));
+        QImage expanded = SpectrumOffscreenTestAccess::broadcast(
+            broadcast, field, Qt::NoBrush, restored, sample, &bounds);
+        check(!bounds.isEmpty() && !bounds.intersects(flag->geometry())
+                  && bounds.top() > flag->geometry().bottom(),
+              "Digital station label clears the real expanded slice flag");
+        const QString output = qEnvironmentVariable("AETHER_WFM_APPLET_SCREENSHOT_DIR");
+        if (!output.isEmpty()) {
+            QPainter painter(&expanded);
+            flag->render(&painter, flag->pos());
+            painter.end();
+            check(expanded.save(QDir(output).filePath(QStringLiteral("broadcast-expanded-flag.png"))),
+                  "expanded flag placement fixture image saved");
+        }
+        flag->setCollapsed(true);
+        broadcast.setSpotStartPct(25);
+        SpectrumOffscreenTestAccess::broadcast(broadcast, field, Qt::NoBrush, restored, sample, &bounds);
+        check(bounds.top() == 150, "Digital label follows the ordinary spot start percentage");
+        broadcast.setSpotStartPct(70);
+        SpectrumOffscreenTestAccess::broadcast(broadcast, field, Qt::NoBrush, restored, sample, &bounds);
+        check(bounds.top() == 420, "Digital label follows spot placement changes");
+        broadcast.hide();
         check(theme.setActiveTheme(originalTheme), "original isolated theme restored after broadcast fixture");
         broadcast.setBroadcastOverlays({});
         check(!broadcast.accessibleDescription().contains(record.displayText()),

@@ -13,8 +13,8 @@ namespace AetherSDR {
 // value plus a registry entry in SmartMtrConfig.cpp; no widget changes.
 
 // The measurement the control currently shows. Extend here for new kinds.
-// Signal is the RX scale; the rest are TX scales (see DisplaySettings::TxMeter).
-enum class MeterKind { Signal, MicLevel, SWR, Power, Compression };
+// Signal (dBm) and RelativeSignal (dBFS) are RX scales; the rest are TX scales.
+enum class MeterKind { RelativeSignal, Signal, MicLevel, SWR, Power, Compression };
 
 // Forward-power scale headroom: the scale top sits this far above the radio's
 // rated power so a rig pushing slightly past rated doesn't peg the bar, and the

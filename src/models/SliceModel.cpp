@@ -727,6 +727,12 @@ void SliceModel::setSquelch(bool on, int level)
     emit squelchChanged(on, level);
 }
 
+void SliceModel::setAutomaticSquelch(bool enabled, int marginDb)
+{
+    if (marginDb < 5 || marginDb > 20 || externalReceiveReplacementActive()) { return; }
+    emit automaticSquelchRequested(enabled, marginDb);
+}
+
 void SliceModel::setManualSquelch(bool on, int level)
 {
     setSquelch(on, level);
@@ -823,6 +829,13 @@ void SliceModel::setTxSlice(bool on)
 
 void SliceModel::setActive(bool on)
 {
+    if (confirmsControls()) {
+        // Selection must follow the same live-object admission as tuning.
+        // An optimistic activeChanged edge can make the UI select a reused
+        // numeric slot before the owner refuses this retired object's intent.
+        if (on && QThread::currentThread() == thread()) { emit activeSliceCommandIssued(); }
+        return;
+    }
     if (on) {
         // Optimistic (#3854 review): activeSlice() prefers the radio's active
         // flag, so waiting for the echo leaves a one-round-trip window where
@@ -1705,7 +1718,13 @@ void SliceModel::applyChanges(const SliceDelta& d)
             emit wfmReceptionDiagnosticsChanged(value);
         }
     }
-    if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
+    if (d.automaticSquelch) { m_automaticSquelch = *d.automaticSquelch; }
+    if (d.automaticSquelchMarginDb && *d.automaticSquelchMarginDb >= 5
+        && *d.automaticSquelchMarginDb <= 20) {
+        m_automaticSquelchMarginDb = *d.automaticSquelchMarginDb;
+    }
+    if (d.squelchOn.has_value() || d.squelchLevel.has_value()
+        || d.automaticSquelch || d.automaticSquelchMarginDb) {
         m_squelchOnKnown |= d.squelchOn.has_value();
         m_squelchLevelKnown |= d.squelchLevel.has_value();
         if (d.squelchOn.has_value())
@@ -1720,8 +1739,13 @@ void SliceModel::applyChanges(const SliceDelta& d)
             // External-receive (Kiwi) slices keep their level in
             // m_externalReceiveSquelchLevel and never read the Flex manual
             // memory, so exclude them here exactly as setManualSquelch does.
-            if (m_squelchEchoIsManual && !m_externalReceiveAudioReplacement)
+            // Engine-owned Auto publishes its retained manual threshold,
+            // not a computed Auto level. Restore that memory even if the
+            // attached applet already marked its echo surface Off/Auto.
+            if ((m_squelchEchoIsManual || d.automaticSquelch.has_value())
+                && !m_externalReceiveAudioReplacement) {
                 setManualSquelchLevel(*d.squelchLevel);
+            }
         }
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }

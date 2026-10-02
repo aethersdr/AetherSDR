@@ -4,7 +4,7 @@
 #include "models/RadioModel.h"
 #include "models/TxController.h"
 #include <array>
-#include "core/tnc/AetherAx25LibmodemShim.h"
+#include "models/Ax25ReceiveModel.h"
 
 #include <QByteArray>
 #include <QElapsedTimer>
@@ -15,7 +15,7 @@
 #include <QQueue>
 #include <QSet>
 #include <QStringList>
-#include <QThread>
+#include <memory>
 
 class QAbstractButton;
 class QCheckBox;
@@ -200,7 +200,9 @@ private:
     // without this a backend that drops the command leaves the TX — and every
     // frame queued behind it — hung until the window closes.
     void armTxStreamWaitTimeout();
-    void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
+    void handleDecodedFrame(const Ax25DecodedFrame& frame, const Ax25ReceiveContext& context);
+    void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate,
+                       const Ax25ReceiveContext& context);
     void startAudioCapture();
     void finishAudioCapture(bool save);
     void captureGeneratedTxAudio(const Ax25TransmitResult& tx);
@@ -279,8 +281,9 @@ private:
                                   const TxCoordinator::Request& input);
     void maybeStartNextKissTx();
     void refreshTncStatus();
-    void appendFrame(const Ax25DecodedFrame& frame);
-    void updateDiagnostics(const Ax25DecoderDiagnostics& diagnostics);
+    void appendFrame(const Ax25DecodedFrame& frame, const Ax25ReceiveContext& context);
+    void updateDiagnostics(const Ax25DecoderDiagnostics& diagnostics,
+                           const Ax25ReceiveContext& context);
     void updateHeartbeat();
     void refreshStatus();
     void refreshTransmitControls();
@@ -288,7 +291,8 @@ private:
     void logAttachedSliceState(const QString& reason);
     void appendSystemLine(const QString& text);
     void appendTransmitLine(const Ax25TransmitFrame& frame);
-    void appendDiagnosticsLine(const Ax25DecoderDiagnostics& diagnostics);
+    void appendDiagnosticsLine(const Ax25DecoderDiagnostics& diagnostics,
+                               const Ax25ReceiveContext& context);
     QString formatTerminalLine(const Ax25DecodedFrame& frame) const;
     QString defaultTransmitSource() const;
     QString transmitSliceSummary() const;
@@ -299,8 +303,7 @@ private:
 
     AudioEngine* m_audio{nullptr};
     RadioModel* m_radio{nullptr};
-    AetherAx25LibmodemShim* m_shim{nullptr};
-    QThread m_shimThread;
+    std::unique_ptr<Ax25ReceiveModel> m_receive;
     Ax25DemodConfig m_shimConfig;
     QStackedWidget* m_tabStack{nullptr};
     QAbstractButton* m_ax25Tab{nullptr};

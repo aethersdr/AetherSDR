@@ -1,7 +1,8 @@
 # Embedded nrsc5 in AetherSDR
 
 This is the bounded source subset of [nrsc5](https://github.com/theori-io/nrsc5)
-at commit `0225922b6f68109df39d07391f4d855464598ab8`. `upstream/` is unchanged.
+at commit `0225922b6f68109df39d07391f4d855464598ab8`, with the bounded
+`patches/windows-msvc.patch` platform-header changes described below.
 `SOURCE-MANIFEST.json` lists every included path, upstream and vendored SHA-256,
 and every omitted upstream path. The sample IQ recording, Python/CLI support
 tools, CI files and generated documentation are excluded. The retained C CLI
@@ -25,8 +26,10 @@ if(TARGET aether_nrsc5)
 endif()
 ```
 
-`ENABLE_HD_FM` defaults OFF. Opting in currently requires Linux, GNU C, an
-enabled RTL backend, and its existing `RTLSDR_TARGET` / `RTL_FFTW3F_TARGET`.
+`ENABLE_HD_FM` defaults OFF. Qualification builds accept Linux/GNU C,
+macOS/AppleClang, or Windows x64/MSVC with installed clang-cl and its compiler-rt
+builtins. All require an enabled RTL backend and its existing `RTLSDR_TARGET` /
+`RTL_FFTW3F_TARGET`.
 The module creates static `aether_nrsc5` and `aether_faad_hdc` only. Linking
 `aether_nrsc5` supplies `nrsc5.h`, `AETHER_ENABLE_NRSC5=1`, and the transitive
 link dependencies. Test targets that compile the wrapper directly must link
@@ -36,17 +39,37 @@ The upstream build systems are not executed. CLI is OFF by construction;
 there is no CLI runtime, downloader, libao dependency, shared decoder library,
 configure-time patch, install hook, or architecture-specific SIMD flag.
 Configuration writes the private generated header to the build directory.
-Library stderr logging remains at upstream level 5 (disabled). Normal Aether
-builds on other platforms remain available with the default OFF setting.
-Linux/GNU is the initial qualification scope, not evidence that a build or
-reception test has passed. macOS, MSVC, MinGW and Clang remain unqualified.
+Library stderr logging remains at upstream level 5 (disabled). Other platforms
+retain the default OFF setting. These compiler gates are qualification scope;
+a successful configure is not evidence of decoding or radio reception.
+
+On Windows, only nrsc5 C objects use clang-cl, preserving C11 complex arithmetic
+and VLAs while matching the application's MSVC ABI and shared CRT. The main
+C++ application and HDC library retain the configured MSVC compiler. The private
+`compat/msvc/complex.h` maps the six used complex math operations to UCRT,
+retains native Clang complex arithmetic, and avoids UCRT's conflicting `normf`
+name. LLVM compiler-rt supplies native complex multiplication/division helpers;
+it is statically linked, has no runtime DLL, and must be installed already.
+The private `pthread.h` maps the pinned subset to Windows SRW locks, condition
+variables and `_beginthreadex`; it is not a general POSIX thread implementation.
+Pipe mode still creates no nrsc5 thread. The header patch recognizes native
+Windows for the retained WinSock path and excludes an unused POSIX time header.
+No DSP, frame parsing, resampling, audio, or metadata algorithm is changed.
+
+The selected Windows build requires x64 and `/MD` (`/MDd` for Debug). No MinGW,
+Windows ARM, Intel Mac or Linux ARM qualification follows from x64 Windows and
+Apple Silicon test evidence. Per-configuration object directories preserve
+Debug/Release separation. Build dependencies include the generated config and
+vendored/adapter/dependency headers. `nrsc5_windows_compat_test` exercises actual
+complex math (including signed zero), locking, contention and condition wakeups;
+it is registered only when Windows HD is enabled.
 
 ## Required owner and lifetime contract
 
 Aether alone owns the USB device. Its core wrapper uses `nrsc5_open_pipe`,
 `nrsc5_set_mode(NRSC5_MODE_FM)`, `nrsc5_set_callback`,
 `nrsc5_pipe_samples_cf32`, and `nrsc5_close`; device/file/TCP entrypoints must
-never be called. Their unchanged upstream symbols remain compiled, not exposed
+never be called. Their retained upstream symbols remain compiled, not exposed
 as an Aether feature. Pipe mode creates no nrsc5 worker; input processing and
 callbacks are synchronous on the caller, with internal allocations and HDC work.
 They belong on the bounded decoder owner, never the capture or GUI thread.
@@ -73,7 +96,9 @@ coverage and lifecycle validation belong to the integration and its tests.
 ## Reproducing the import
 
 Use the exact source revision above, then copy only the paths listed in
-`SOURCE-MANIFEST.json`. All upstream and vendored hashes must match. No
-nrsc5 source patch is applied. The included
+`SOURCE-MANIFEST.json`. Pristine files must match `upstreamSha256`. Apply the recorded Windows portability patch with `git apply` inside the
+upstream subset; verify `vendoredSha256` afterward. The separate `localAdapters`
+manifest entries are AetherSDR-authored compatibility headers, not upstream
+files. The included
 `upstream/support/faad2-hdc-support.patch` is applied to the separately pinned
 FAAD subset as documented in `../faad_hdc/README.aethersdr.md`.

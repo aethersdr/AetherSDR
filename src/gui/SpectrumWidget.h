@@ -319,7 +319,7 @@ public:
     // (0-100), mapped to absolute dBm via the radio's fixed scale:
     // dBm = -160 + level. (Empirically verified on FLEX-8600 fw 4.1.5.)
     void setSquelchLine(bool visible, int level);
-    void setSquelchScale(double referenceDb, double stepDb, const QString& unit);
+    void setSquelchScale(double referenceDb, double stepDb, const QString& unit, bool spectrumComparable = true);
     // KiwiSDR SQL is a dB margin above Kiwi's median noise-floor estimate.
     // marginDb is the server margin, not the UI slider value.
     void setKiwiSdrSquelchLine(bool visible, int marginDb, bool floorRelative);
@@ -1036,6 +1036,7 @@ private:
     void drawTnfMarkers(QPainter& p, const QRect& specRect,
                         const QRect& wfRect = QRect());
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
+    int broadcastOverlayStartY(const QRect& specRect) const;
     void drawBroadcastOverlays(QPainter& p, const QRect& specRect);
     void updateBroadcastOverlayTicker(const QRect& specRect, bool presentPages = true);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
@@ -1584,6 +1585,7 @@ private:
     double m_squelchReferenceDb{-160.0};
     double m_squelchStepDb{1.0};
     QString m_squelchUnit;
+    bool m_squelchSpectrumComparable = true;
     bool  m_kiwiSdrSquelchLineVisible{false};
     int   m_kiwiSdrSquelchLevel{0};
     bool  m_kiwiSdrSquelchLineFloorRelative{false};
@@ -2071,6 +2073,7 @@ private:
     QVector<SpotMarker> m_spotMarkers;
     QVector<WfmBroadcastOverlayRecord> m_broadcastOverlays;
     QVector<WfmBroadcastTicker> m_broadcastTickers;
+    int m_broadcastStartY{-1};
     QElapsedTimer m_broadcastClock;
     QVector<SwrSweepPoint> m_swrSweepPoints;
     bool   m_swrSweepRunning{false};

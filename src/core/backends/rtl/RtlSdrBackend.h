@@ -61,6 +61,7 @@ public:
 
     bool createSlice(const QString& panId, double frequencyHz) override;
     bool removeSlice(int sliceId) override;
+    void setActiveSlice(int sliceId) override;
     void setSliceFrequency(int sliceId, double hz) override;
     bool requestReceiveTune(int sliceId, double hz, ReceiveTuneView view) override;
     bool recenterReceiveCapture(const QString& panId) override;
@@ -77,6 +78,7 @@ public:
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
     void setSliceSquelch(int sliceId, bool enabled, int level) override;
+    void setSliceAutoSquelch(int sliceId, bool enabled, int marginDb) override;
     void setSliceWfmDeemphasis(int sliceId, int microseconds) override;
     void setSliceWfmForceMono(int sliceId, bool forceMono) override;
     void setSliceWfmAudioMode(int sliceId, WfmAudioMode mode) override;
@@ -136,6 +138,7 @@ private:
     QVector<RtlSliceSettings::Slice> acceptedSettings() const;
     void finishExtensions(bool success, RtlCaptureTransaction::Token token = {});
     QVariantMap deviceSettingsStatus() const;
+    void publishRfMeterDefinitions(bool retireValues = false);
     void saveAcceptedDeviceSettings();
     void verifyDeviceSettingsIdentity(const QString& serial);
     bool acceptsFrame(quint64 session, quint64 revision) const;
@@ -177,6 +180,7 @@ private:
     int m_panRfGainDb{kDefaultRfGainDb};
     int m_ppmCorrection{0};
     bool m_dcSuppression = false;
+    bool m_receiveMetersEnabled = true;
     RtlDeviceSettings::ReadResult m_savedDeviceSettings;
     bool m_deviceSettingsAllowed = false;
     bool m_deviceSettingsSaved = false;
@@ -193,6 +197,9 @@ private:
     int m_receiverCapacity = kQualifiedReceiverCapacity;
     RtlCaptureTransaction m_capture{{8, kQualifiedReceiverCapacity}};
     std::optional<RtlCaptureTransaction::State> m_lastPublished;
+    // Focus belongs to a configured stable identity, including parked receivers.
+    // It does not change the capture or demodulator bank.
+    int m_activeSliceId = -1;
     struct Monitor { int gain = 100; int pan = 50; bool mute = false; };
     std::array<Monitor, 8> m_monitors;
     struct NativeAudio {
@@ -226,6 +233,8 @@ private:
 
     // Worker thread (owns async USB reader & RtlSdrDdc engine)
     std::unique_ptr<RtlSdrWorker> m_worker;
+    std::shared_ptr<RtlStartupTrace> m_startupTrace;
+    void markStartup(RtlStartupTrace::Kind kind, int slot = -1);
     std::array<WfmStereoStatus, 8> m_wfmStatus{};
     std::array<QElapsedTimer, 8> m_wfmObservationAge;
     std::array<QElapsedTimer, 8> m_wfmPublicationAge;
@@ -250,6 +259,14 @@ private:
     };
     std::array<std::optional<WfmObservationIdentity>, 8> m_wfmLastObservation;
     RtlReceivePipeline::Diagnostics m_diagnostics; // owner-thread health cache
+    struct PcmDiagnostics {
+        quint64 packets = 0, frames = 0, nonzeroSamples = 0, nonfiniteSamples = 0;
+        quint64 discontinuities = 0, queueAgeTotalNs = 0, queueAgeMaxNs = 0;
+        quint64 lastDeliveryMs = 0, maxDeliveryGapMs = 0;
+        double peak = 0, sumSquaresLeft = 0, sumSquaresRight = 0;
+    };
+    // Slots 0..7 are independent pre-monitor taps; slot 8 is the speaker mix.
+    std::array<PcmDiagnostics, 9> m_pcmDiagnostics{};
     RtlSdrDdc* ddc();
 };
 

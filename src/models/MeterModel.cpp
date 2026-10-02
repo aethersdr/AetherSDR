@@ -55,6 +55,7 @@ QJsonObject meterToJson(const MeterDef& def, bool hasValue, float value, qint64 
     obj["low"] = def.low;
     obj["high"] = def.high;
     obj["description"] = def.description;
+    obj["unavailable_reason"] = def.unavailableReason;
     obj["has_value"] = hasValue;
     obj["value"] = hasValue ? QJsonValue(value) : QJsonValue();
     // Milliseconds since this meter's value last updated (-1 = never). Lets a
@@ -129,6 +130,11 @@ void MeterModel::defineMeter(const MeterDef& def)
         const int sliceContext = m_manifestSliceContext;
         removeMeter(def.index);
         m_manifestSliceContext = sliceContext;
+    }
+    if (redefinition && def.source == QStringLiteral("SLC")
+        && def.name == QStringLiteral("LEVEL") && previous->unit != def.unit) {
+        m_values.remove(def.index);
+        m_valueUpdatedMs.remove(def.index);
     }
     const bool nativeUnitChanged = redefinition && def.index == m_nativeAlcIndex
         && previous->unit != def.unit;
@@ -839,6 +845,16 @@ std::optional<float> MeterModel::swrIfLive() const
                                                : std::nullopt;
 }
 
+std::optional<float> MeterModel::relativeLevelForSlice(int sliceIndex) const
+{
+    if (sliceIndex < 0) { return std::nullopt; }
+    const int index = findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"), sliceIndex);
+    const MeterDef* def = meterDef(index);
+    if (!def || !def->unavailableReason.isEmpty() || def->unit != QStringLiteral("dBFS")
+        || !vitalIsFresh(true, valueAgeMs(index))) { return std::nullopt; }
+    return m_values.value(index);
+}
+
 std::optional<float> MeterModel::sLevelForSlice(int sliceIndex) const
 {
     const auto it = m_sLevelIdxBySlice.constFind(sliceIndex);
@@ -846,6 +862,7 @@ std::optional<float> MeterModel::sLevelForSlice(int sliceIndex) const
         return std::nullopt;      // this receiver declares no LEVEL meter
     }
     const int index = it.value();
+    if (m_defs.value(index).unit != QStringLiteral("dBm")) { return std::nullopt; }
     // Declared is not fed, and fed is not current: m_sLevelIdxBySlice is populated
     // by the definition, so the index alone would publish a default no packet set.
     // vitalIsFresh is the same window `get radio` uses for PATEMP (#5516); at the
@@ -948,7 +965,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
         bool isSliceLevel = false;
         for (auto sit = m_sLevelIdxBySlice.constBegin(); sit != m_sLevelIdxBySlice.constEnd(); ++sit) {
             if (sit.value() == idx) {
-                emit sLevelChanged(sit.key(), v);
+                if (it->unit == QStringLiteral("dBm")) { emit sLevelChanged(sit.key(), v); }
                 isSliceLevel = true;
                 break;
             }

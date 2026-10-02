@@ -99,6 +99,8 @@ struct SliceDelta {
     std::optional<int>         agcOffLevel;
     std::optional<bool>        squelchOn;
     std::optional<int>         squelchLevel;
+    std::optional<bool>        automaticSquelch;
+    std::optional<int>         automaticSquelchMarginDb;
     std::optional<int>         wfmDeemphasisUs;
     std::optional<bool>        wfmForceMono;
     std::optional<WfmAudioMode> wfmAudioMode;

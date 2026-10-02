@@ -24,6 +24,54 @@ namespace AetherSDR::rtl {
 struct RtlReceivePipelineTestAccess {
     // Observation seam only: the receiver supplies a fixed failure; this does
     // not claim to reproduce the underlying WDSP underrun.
+    static bool rfObservation(RtlReceivePipeline& pipeline)
+    {
+        pipeline.m_token = {19, 23};
+        pipeline.m_capture.achievedSampleRateHz = 2048000;
+        pipeline.m_capture.centerHz = 100000000;
+        pipeline.m_receivingMask = 0xff;
+        std::array<float, 2048> bins; bins.fill(-120);
+        for (int id = 0; id < 8; ++id) {
+            auto& band = pipeline.m_meterPassbands[id];
+            band.stableId = id; band.carrierHz = 100000000 + (id - 4) * 100000;
+            band.filterLowHz = -1000; band.filterHighHz = 1000;
+            bins[1024 + (id - 4) * 100] = -20 - 7 * id;
+        }
+        pipeline.observeSpectrum(bins, 0);
+        RtlReceivePipeline::RfObservation observation;
+        if (!pipeline.takeRfObservation(observation) || observation.mask != 0xff
+            || observation.token != pipeline.m_token || !observation.producedMs) { return false; }
+        for (int id = 0; id < 8; ++id) {
+            if (observation.dbfs[id] != -20 - 7 * id) { return false; }
+        }
+        // Sparse membership never renumbers receivers. Removed/parked IDs have
+        // no observation; invalid input invalidates only its own passband.
+        pipeline.m_receivingMask = 0x89;
+        bins[1024 + 300] = std::numeric_limits<float>::quiet_NaN();
+        pipeline.m_token.revision++;
+        pipeline.observeSpectrum(bins, 4096);
+        if (!pipeline.takeRfObservation(observation) || observation.mask != 0x09
+            || observation.token != pipeline.m_token || observation.dbfs[3] != -41) { return false; }
+        pipeline.m_receivingMask = 0xff;
+        bins[1324] = -33;
+        pipeline.observeSpectrum(bins, 8192);
+        if (!pipeline.takeRfObservation(observation) || observation.mask != 0xff
+            || observation.dbfs[7] != -33 || pipeline.takeRfObservation(observation)) { return false; }
+        pipeline.observeSpectrum(bins, 9000); // leave an old sample queued
+        pipeline.setReceiveMetersEnabled(false);
+        const auto write = pipeline.m_rfWrite.load();
+        pipeline.observeSpectrum(bins, 10000);
+        if (pipeline.m_rfWrite.load() != write || pipeline.takeRfObservation(observation)
+            || !pipeline.m_spectrumFresh || pipeline.m_spectrumFirstSample != 10000) { return false; }
+        pipeline.setReceiveMetersEnabled(true);
+        if (pipeline.takeRfObservation(observation)) { return false; }
+        pipeline.observeSpectrum(bins, 11000);
+        pipeline.setReceiveMetersEnabled(false);
+        pipeline.setReceiveMetersEnabled(true);
+        if (pipeline.takeRfObservation(observation)) { return false; } // rapid off/on rejects queued sample
+        pipeline.observeSpectrum(bins, 12000);
+        return pipeline.takeRfObservation(observation) && observation.mask == 0xff;
+    }
     static bool traceObservation(RtlReceivePipeline& pipeline)
     {
         struct FailingReceiver final : RtlReceiverRegistry::Receiver {
@@ -83,7 +131,8 @@ struct RtlReceivePipelineTestAccess {
         RtlReceivePipeline::Packet packet;
         if (!pipeline.takePacket(packet) || packet.slot != -1 || packet.firstSample != 100 || packet.frames != 128
             || packet.samples[0] != 0 || packet.samples[2] != 0.25f || packet.samples[254] != 0
-            || pipeline.takePacket(packet) || pipeline.diagnostics().mixerLateFrames != 2) { return false; }
+            || pipeline.takePacket(packet) || pipeline.diagnostics().mixerLateFrames != 2
+            || pipeline.diagnostics().receiverWithdrawals[3] != 1) { return false; }
 
         // Fill the independent trace ring, then partially drain and wrap it.
         // Every accepted event must survive in FIFO order; only new ones drop.
@@ -210,12 +259,178 @@ struct RtlReceivePipelineTestAccess {
             && diagnostic.mixerRejectedBlocks == 0 && diagnostic.droppedPackets == 0
             && diagnostic.mixerConfigurationFailures == 0 && !pipeline.needsRepair();
     }
+    struct MixerEpochPrefixResult {
+        bool configured = false;
+        bool retainedTap = false;
+        bool retiredPrefix = false;
+        bool crossingTap = false;
+        bool crossingSpeaker = false;
+        bool currentTap = false;
+        bool currentSpeaker = false;
+        bool lateRejected = false;
+        bool emptyRejected = false;
+        bool nonFiniteRejected = false;
+        bool bounded = false;
+    };
+    // Reproduce the retained WFM block [383745, 384001) at the speaker
+    // epoch boundary observed when adding two narrow receivers. Inject only
+    // decoded PCM; publication, mixer validation and both queues remain real.
+    // The generated-RF integration separately exercises actual bank adoption.
+    static MixerEpochPrefixResult mixerEpochPrefix(RtlReceivePipeline& pipeline)
+    {
+        MixerEpochPrefixResult result;
+        pipeline.m_legacy = false; pipeline.m_token = {47, 4}; pipeline.m_captureEpoch = 18;
+        pipeline.m_capture = {47, 1, 100000000, 2400000, 1080000, 1080000};
+        pipeline.m_mixerOrigin = 384001;
+        RtlReceiverRegistry::ReceiverSpec spec;
+        spec.handle = {47, 93, 3}; spec.epoch = 11; spec.passband.stableId = 3;
+        spec.dsp.wbfmReceive.emplace(); // already-decoded stereo bypasses narrow-FM squelch
+        const std::array<RtlAudioMixer::Input, 1> inputs{{{3, 93, 11}}};
+        result.configured = pipeline.m_mixer.configure(47, 18, inputs, 384001);
+        if (!result.configured) { return result; }
+        const auto takeAudio = [&](int slot, std::uint64_t first,
+                                   std::span<const float> left, std::span<const float> right,
+                                   bool discontinuity) {
+            RtlReceivePipeline::Packet packet;
+            if (!pipeline.takePacket(packet) || packet.slot != slot || packet.firstSample != first
+                || packet.frames != left.size() || packet.token != RtlCaptureTransaction::Token{47, 4}
+                || packet.captureEpoch != 18 || packet.discontinuity != discontinuity
+                || (slot >= 0 && (packet.instance != 93 || packet.receiverEpoch != 11))) { return false; }
+            for (std::size_t i = 0; i < left.size(); ++i) {
+                if (packet.samples[2 * i] != left[i] || packet.samples[2 * i + 1] != right[i]) { return false; }
+            }
+            return true;
+        };
+        RtlReceivePipeline::Packet extra;
+        std::array<float, 256> left{}, right{};
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            left[i] = 0.125f + static_cast<float>(i) / 2048;
+            right[i] = -0.375f - static_cast<float>(i) / 2048;
+        }
+        pipeline.audioBlock(spec, 383745, left, right, false);
+        pipeline.m_mixer.drain(384129, pipeline);
+        result.retainedTap = takeAudio(3, 383745, left, right, false);
+        result.retiredPrefix = pipeline.m_mixer.rejectedBlocks() == 0
+            && pipeline.m_mixer.nextSample() == 384001 && !pipeline.takePacket(extra);
+
+        // The first half predates the new epoch; only the second half belongs
+        // in its first speaker quantum. The independent tap keeps both halves.
+        pipeline.audioBlock(spec, 383873, left, right, false);
+        pipeline.m_mixer.drain(384129, pipeline);
+        result.crossingTap = takeAudio(3, 383873, left, right, false);
+        result.crossingSpeaker = takeAudio(-1, 384001, std::span(left).subspan(128),
+            std::span(right).subspan(128), true) && !pipeline.takePacket(extra);
+
+        std::array<float, 128> currentLeft{}, currentRight{};
+        currentLeft.fill(0.5f); currentRight.fill(-0.25f);
+        pipeline.audioBlock(spec, 384129, currentLeft, currentRight, false);
+        pipeline.m_mixer.drain(384257, pipeline);
+        result.currentTap = takeAudio(3, 384129, currentLeft, currentRight, false);
+        result.currentSpeaker = takeAudio(-1, 384129, currentLeft, currentRight, false)
+            && pipeline.m_mixer.nextSample() == 384257 && !pipeline.takePacket(extra);
+
+        // This block belongs to the current epoch but its quantum has already
+        // played. Comparing against the moving mixer cursor would conceal it.
+        const std::uint64_t beforeLate = pipeline.m_mixer.rejectedBlocks();
+        pipeline.audioBlock(spec, 384129, currentLeft, currentRight, false);
+        pipeline.m_mixer.drain(384257, pipeline);
+        result.lateRejected = pipeline.m_mixer.rejectedBlocks() == beforeLate + 1
+            && takeAudio(3, 384129, currentLeft, currentRight, false) && !pipeline.takePacket(extra);
+
+        const std::uint64_t beforeEmpty = pipeline.m_mixer.rejectedBlocks();
+        pipeline.audioBlock(spec, 383745, {}, {}, false);
+        result.emptyRejected = pipeline.m_mixer.rejectedBlocks() == beforeEmpty + 1;
+        while (pipeline.takePacket(extra)) {} // malformed taps are outside this mixer regression
+
+        // Invalid samples must still fail validation even when all their
+        // coordinates predate the epoch. Check each stereo side separately.
+        result.nonFiniteRejected = true;
+        for (int side = 0; side < 2; ++side) {
+            const std::uint64_t beforeInvalid = pipeline.m_mixer.rejectedBlocks();
+            if (side == 0) { left[17] = std::numeric_limits<float>::quiet_NaN(); }
+            else { right[29] = std::numeric_limits<float>::infinity(); }
+            pipeline.audioBlock(spec, 383745, left, right, false);
+            result.nonFiniteRejected &= pipeline.m_mixer.rejectedBlocks() == beforeInvalid + 1;
+            left[17] = 0.125f + 17.0f / 2048;
+            while (pipeline.takePacket(extra)) {}
+        }
+        pipeline.m_mixer.drain(384257, pipeline);
+        result.bounded = pipeline.m_mixer.lateFrames() == 0 && pipeline.droppedPackets() == 0
+            && !pipeline.takePacket(extra) && !pipeline.needsRepair();
+        return result;
+    }
     static void exhaustEpoch(RtlReceivePipeline& pipeline)
     { pipeline.m_nextEpoch = std::numeric_limits<std::uint64_t>::max(); }
     static std::uint64_t requested(RtlReceivePipeline& pipeline)
     { return pipeline.m_registry.service().requested; }
     static std::uint64_t receiverEpoch(RtlReceivePipeline& pipeline, int slot)
     { return pipeline.m_specs[slot].epoch; }
+    static bool packetQueueAccounting(RtlReceivePipeline& pipeline, unsigned expectedCapacity)
+    {
+        RtlReceivePipeline::Packet packet;
+        packet.token = {7, 11}; packet.slot = 3; packet.captureEpoch = 19;
+        packet.receiverEpoch = 23; packet.frames = 256; packet.samples[0] = .375f;
+        packet.producedMonotonicMs = 1234; // decoded time must not become mailbox time
+        if (pipeline.diagnostics().packetQueueCapacity != expectedCapacity) { return false; }
+        // Repeated fills cross the physical wrap. Drop-new must retain every
+        // accepted packet and preserve a genuine position gap on resumption.
+        for (unsigned cycle = 0; cycle < 3; ++cycle) {
+            const std::uint64_t first = cycle * (expectedCapacity + 1);
+            for (unsigned i = 0; i < expectedCapacity; ++i) {
+                packet.firstSample = first + i;
+                if (!pipeline.enqueue(packet)) { return false; }
+            }
+            const auto full = pipeline.diagnostics();
+            packet.firstSample = first + expectedCapacity;
+            if (full.queuedPackets != expectedCapacity || full.packetQueueHighWater != expectedCapacity
+                || full.droppedPackets != cycle || pipeline.enqueue(packet)) { return false; }
+            for (unsigned i = 0; i < expectedCapacity; ++i) {
+                if (!pipeline.takePacket(packet) || packet.firstSample != first + i
+                    || packet.token != RtlReceivePipeline::Transaction::Token{7, 11}
+                    || packet.slot != 3 || packet.captureEpoch != 19 || packet.receiverEpoch != 23
+                    || packet.frames != 256 || packet.samples[0] != .375f || packet.discontinuity
+                    || packet.enqueuedMonotonicNs == 0 || packet.producedMonotonicMs != 1234) { return false; }
+            }
+            if (pipeline.takePacket(packet)) { return false; }
+        }
+        const auto empty = pipeline.diagnostics();
+        return empty.queuedPackets == 0 && empty.packetQueueHighWater == expectedCapacity
+            && empty.droppedPackets == 3;
+    }
+    static bool publicationHeadroom(RtlReceivePipeline& pipeline, unsigned receivers)
+    {
+        // 192 ms without an owner drain, below the original singleton's
+        // nominal 225 ms headroom. Four UI publications measured 151 ms.
+        // Replay the real analog packet cadence: each receiver's 256-frame
+        // tap plus the shared speaker's two 128-frame quanta, at 48 kHz.
+        RtlReceivePipeline::Packet packet;
+        packet.token = {1, 3};
+        bool accepted = true;
+        for (std::uint64_t first = 0; first < 9216; first += 256) {
+            for (unsigned slot = 0; slot < receivers; ++slot) {
+                packet.slot = static_cast<int>(slot); packet.firstSample = first; packet.frames = 256;
+                accepted = pipeline.enqueue(packet) && accepted;
+            }
+            for (unsigned half = 0; half < 2; ++half) {
+                packet.slot = -1; packet.firstSample = first + half * 128; packet.frames = 128;
+                accepted = pipeline.enqueue(packet) && accepted;
+            }
+        }
+        if (!accepted || pipeline.droppedPackets() != 0) { return false; }
+        for (std::uint64_t first = 0; first < 9216; first += 256) {
+            for (unsigned slot = 0; slot < receivers; ++slot) {
+                if (!pipeline.takePacket(packet) || packet.token != RtlReceivePipeline::Transaction::Token{1, 3}
+                    || packet.slot != static_cast<int>(slot) || packet.firstSample != first
+                    || packet.frames != 256) { return false; }
+            }
+            for (unsigned half = 0; half < 2; ++half) {
+                if (!pipeline.takePacket(packet) || packet.token != RtlReceivePipeline::Transaction::Token{1, 3}
+                    || packet.slot != -1 || packet.firstSample != first + half * 128
+                    || packet.frames != 128) { return false; }
+            }
+        }
+        return !pipeline.takePacket(packet);
+    }
     static bool rejectMalformedMixer(RtlReceivePipeline& pipeline)
     {
         pipeline.m_legacy = false; pipeline.m_token = {1, 1}; pipeline.m_captureEpoch = 1;
@@ -332,17 +547,18 @@ static void measureSquelchPipeline()
     ddc.setSpectrumRateFps(1); // display throttling must not chatter the gate
     std::uint64_t first = 0;
     QVector<std::complex<float>> iq(8192);
-    std::array<double, 4> tapPeak{}, speakerPeak{};
-    std::array<std::size_t, 4> counts{};
+    std::array<double, 6> tapPeak{}, speakerPeak{};
+    std::array<std::size_t, 6> counts{};
     const auto start = std::chrono::steady_clock::now();
     int phase = 0;
     constexpr std::uint64_t kPhaseSamples = 1920000; // 0.8 seconds per state
-    while (first < 4 * kPhaseSamples) {
+    while (first < 6 * kPhaseSamples) {
         const int wanted = first / kPhaseSamples;
         if (wanted != phase) {
             phase = wanted;
             state.token.revision++;
             state.receivers[0].squelchEnabled = phase != 3;
+            state.receivers[0].automaticSquelch = phase >= 4;
             state.receivers[0].squelchLevel = phase == 1 ? 25 : 100;
             check(pipeline->prepare(state) && ready(*pipeline) && pipeline->adopt(),
                 "squelch edit adopts without rebuilding the demodulator");
@@ -351,7 +567,8 @@ static void measureSquelchPipeline()
         }
         for (int i = 0; i < iq.size(); ++i) {
             const double angle = 2.5 * std::sin(2 * std::numbers::pi * 1000 * (first + i) / 2400000.0);
-            iq[i] = {float(0.3 * std::cos(angle)), float(0.3 * std::sin(angle))};
+            const double amplitude = phase == 4 ? 0.0 : 0.3;
+            iq[i] = {float(amplitude * std::cos(angle)), float(amplitude * std::sin(angle))};
         }
         ddc.processIqData(iq, false); // real FFT, no legacy audio or USB
         const auto spectrum = ddc.takeSquelchSpectrum();
@@ -366,7 +583,7 @@ static void measureSquelchPipeline()
             for (std::size_t i = 0; i < packet.frames; ++i) {
                 const std::uint64_t frame = packet.firstSample + i;
                 const int window = frame / 38400;
-                if (window >= 4 || frame % 38400 < 24000 || frame % 38400 > 33600) { continue; }
+                if (window >= 6 || frame % 38400 < 24000 || frame % 38400 > 33600) { continue; }
                 const double value = std::abs(packet.samples[2 * i]);
                 if (packet.slot == 3) { tapPeak[window] = std::max(tapPeak[window], value); ++counts[window]; }
                 else if (packet.slot == -1) { speakerPeak[window] = std::max(speakerPeak[window], value); }
@@ -374,13 +591,13 @@ static void measureSquelchPipeline()
         }
         std::this_thread::sleep_until(start + std::chrono::microseconds(first * 1000000 / 2400000));
     }
-    for (int window = 0; window < 4; ++window) {
+    for (int window = 0; window < 6; ++window) {
         check(counts[window] > 8000, "squelch phase contains settled tap samples");
-        const bool open = window == 1 || window == 3;
+        const bool open = window == 1 || window == 3 || window == 5;
         std::printf("SQL window=%d tap_peak=%.6f speaker_peak=%.6f\n", window, tapPeak[window], speakerPeak[window]);
         check(open ? tapPeak[window] > 0.4 && speakerPeak[window] > 0.4
                    : tapPeak[window] == 0 && speakerPeak[window] == 0,
-            "real FFT threshold gates both sparse receiver tap and speaker; Off passes audio");
+            "real FFT manual/Auto gates sparse receiver tap and speaker; Off passes audio");
     }
     pipeline->stop();
 }
@@ -395,7 +612,28 @@ static void measureParkAndResume()
     state.capture = {111, 1, 100'000'000, 2'400'000, 1'080'000, 1'080'000};
     state.receivers = {{{0, 100'000'000, -8000, 8000, 0, 3000, 3000}, T::Mode::Fm}};
     state.receivingIds = {0};
-    check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
+    const auto prepareAndAdopt = [&] {
+        const auto end = std::chrono::steady_clock::now() + 15s;
+        bool submitted = false;
+        while (std::chrono::steady_clock::now() < end) {
+            // Match the owner's control-side service: adoption only marks the
+            // old bank retired; slot reuse waits for off-thread destruction.
+            (void)pipeline->service();
+            if (!submitted) {
+                const auto result = pipeline->prepareDetailed(state, true);
+                if (result == Pipeline::Submission::Failed) { return false; }
+                submitted = result == Pipeline::Submission::Accepted;
+            }
+            if (submitted) {
+                const auto status = pipeline->service();
+                if (status == Pipeline::Preparation::Ready) { return pipeline->adopt(); }
+                if (status == Pipeline::Preparation::Failed) { return false; }
+            }
+            std::this_thread::sleep_for(1ms);
+        }
+        return false;
+    };
+    check(prepareAndAdopt(),
           "captured receiver prepares before parking");
     std::array<std::complex<float>, 8192> iq;
     iq.fill({0.25f, 0.0f});
@@ -409,6 +647,7 @@ static void measureParkAndResume()
                       "audio keeps the adopted capture revision");
                 observed = true;
             }
+            (void)pipeline->service(); // owner timer reaps banks outside the sample callback
             std::this_thread::sleep_for(3ms);
         }
         check(observed == expectAudio,
@@ -421,7 +660,7 @@ static void measureParkAndResume()
     state.capture.centerHz = 103'000'000;
     state.hardware.centerHz = 103'000'000;
     state.receivingIds.clear();
-    check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
+    check(prepareAndAdopt(),
           "all-parked capture retains a valid empty receiver bank");
     consume(2, false);
 
@@ -430,7 +669,7 @@ static void measureParkAndResume()
     state.capture.centerHz = 100'000'000;
     state.hardware.centerHz = 100'000'000;
     state.receivingIds = {0};
-    check(pipeline->prepare(state, true) && ready(*pipeline) && pipeline->adopt(),
+    check(prepareAndAdopt(),
           "returning capture rebuilds the preserved receiver");
     consume(3, true);
     pipeline->stop();
@@ -439,6 +678,59 @@ static void measureParkAndResume()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    {
+        auto rf = std::make_unique<Pipeline>();
+        check(AetherSDR::rtl::RtlReceivePipelineTestAccess::rfObservation(*rf),
+            "relative RF measurements preserve all eight IDs, sparse membership and revisions");
+    }
+    {
+        auto epoch = std::make_unique<Pipeline>();
+        const std::size_t allocationsBefore = callbackAllocations;
+        inCallback = true;
+        const auto result = AetherSDR::rtl::RtlReceivePipelineTestAccess::mixerEpochPrefix(*epoch);
+        inCallback = false;
+        check(result.configured, "retained-receiver fixture configures a new speaker epoch");
+        check(result.retainedTap, "retained pre-epoch PCM keeps its exact independent stereo tap and receiver identity");
+        check(result.retiredPrefix, "retained PCM ending at the speaker epoch origin causes no rejection or speaker output");
+        check(result.crossingTap, "epoch-crossing PCM keeps the complete independent stereo tap");
+        check(result.crossingSpeaker, "epoch-crossing PCM contributes only its exact stereo suffix to the discontinuous speaker quantum");
+        check(result.currentTap && result.currentSpeaker, "current-epoch stereo PCM continues both tap and speaker without an extra discontinuity");
+        check(result.lateRejected, "genuinely late current-epoch PCM remains a counted mixer rejection");
+        check(result.emptyRejected, "empty pre-epoch PCM remains a counted mixer rejection");
+        check(result.nonFiniteRejected, "nonfinite pre-epoch PCM on either stereo side remains a counted mixer rejection");
+        check(result.bounded, "epoch-prefix handling creates no missing frames, queue loss or receiver repair");
+        check(callbackAllocations == allocationsBefore, "epoch-prefix publication and mixer validation allocate no callback memory");
+    }
+    for (const auto [receivers, usable] : std::array<std::pair<unsigned, unsigned>, 4>{{
+             {1, 127}, {2, 170}, {4, 254}, {8, 424}}}) {
+        auto queued = std::make_unique<Pipeline>(receivers);
+        const auto allocationsBefore = callbackAllocations;
+        inCallback = true;
+        const bool observed = AetherSDR::rtl::RtlReceivePipelineTestAccess::packetQueueAccounting(*queued, usable);
+        inCallback = false;
+        check(observed, "bounded packet queue retains exact capacity, FIFO identity and drop-new gaps across wraps");
+        check(callbackAllocations == allocationsBefore, "packet queue observations allocate no callback memory");
+    }
+    for (std::size_t invalidCapacity : {std::size_t{0}, std::size_t{9},
+                                       std::numeric_limits<std::size_t>::max()}) {
+        auto invalid = std::make_unique<Pipeline>(invalidCapacity);
+        T::State requested;
+        requested.token = {42, 1}; requested.hardware.centerHz = 100000000;
+        requested.capture = {42, 1, 100000000, 2400000, 1080000, 1080000};
+        requested.receivers.push_back({{0, 100400000, -15000, 15000, 0, 3000, 3000}, T::Mode::Fm});
+        requested.receivingIds.push_back(0);
+        check(invalid->diagnostics().packetQueueCapacity <= 424 && !invalid->prepare(requested, true),
+              "invalid receiver capacity remains refused and cannot allocate an unbounded packet ring");
+    }
+    for (unsigned receivers : {1U, 2U, 4U, 8U}) {
+        auto queued = std::make_unique<Pipeline>(receivers);
+        const auto allocationsBefore = callbackAllocations;
+        inCallback = true;
+        const bool retained = AetherSDR::rtl::RtlReceivePipelineTestAccess::publicationHeadroom(*queued, receivers);
+        inCallback = false;
+        check(retained, "each admitted analog bank retains the singleton publication headroom with exact FIFO tap/speaker data");
+        check(callbackAllocations == allocationsBefore, "publication headroom allocates no acquisition or delivery memory");
+    }
     {
         auto traced = std::make_unique<Pipeline>();
         inCallback = true;

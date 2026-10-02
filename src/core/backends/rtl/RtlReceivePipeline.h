@@ -3,10 +3,12 @@
 #include "RtlCaptureTransaction.h"
 #include "RtlReceiverRegistry.h"
 #include "RtlSquelchGate.h"
+#include "RtlStartupTrace.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <optional>
+#include <memory>
 
 namespace AetherSDR::rtl {
 // One acquisition context and one serialized control owner. Preparation,
@@ -24,6 +26,21 @@ public:
         std::uint64_t mixerRejectedBlocks = 0;
         std::uint64_t mixerConfigurationFailures = 0;
         std::uint64_t droppedTraceEvents = 0;
+        std::uint64_t queuedPackets = 0;
+        std::uint64_t packetQueueHighWater = 0;
+        std::uint64_t packetQueueCapacity = 0; // usable packets, excluding the SPSC sentinel
+        std::array<std::uint64_t, 8> receiverWithdrawals{};
+        // The worker fills these acquisition-lifetime observations in its
+        // snapshot. A pipeline-only fixture truthfully leaves them at zero.
+        std::uint64_t callbackCount = 0;
+        std::uint64_t callbackIqSamples = 0;
+        std::uint64_t malformedCallbacks = 0;
+        std::uint64_t callbackTotalNs = 0;
+        std::uint64_t callbackMaxNs = 0;
+        std::uint64_t callbackDeadlineMisses = 0;
+        std::uint64_t usbReadStarts = 0;
+        std::uint64_t usbCancelRequests = 0;
+        std::array<std::uint64_t, 16> callbackDurationBuckets{};
     };
     // Independently sampled lifetime counters, not one atomic point-in-time
     // transaction. The control owner caches these for healthSnapshot().
@@ -35,6 +52,9 @@ public:
         std::uint64_t receiverEpoch = 0;
         std::uint64_t audioEpoch = 0; // nonzero for HD, separately retired on sync/audio loss
         std::uint64_t producedMonotonicMs = 0; // oldest decoded contribution; zero for intentional HD silence
+        // Mailbox residence instrumentation. Separate from the HD producer's
+        // causal timestamp and never used to assert decoded-audio freshness.
+        std::uint64_t enqueuedMonotonicNs = 0;
         std::uint64_t firstSample = 0;
         int slot = -1;
         std::size_t frames = 0;
@@ -47,6 +67,22 @@ public:
         std::optional<AetherSDR::WfmReceptionDiagnostics> wfmReception;
         std::array<float, 2048> samples{};
     };
+    // Windowed peak FFT bin in each accepted passband, relative to ADC full
+    // scale. This is neither calibrated dBm nor integrated channel power.
+    struct RfObservation {
+        Transaction::Token token;
+        std::uint64_t producedMs = 0;
+        std::uint64_t generation = 0;
+        std::uint8_t mask = 0;
+        std::array<float, 8> dbfs{};
+    };
+    bool takeRfObservation(RfObservation& output) noexcept;
+    void setReceiveMetersEnabled(bool enabled) noexcept;
+    bool rfObservationIsCurrent(const RfObservation& observation) const noexcept
+    {
+        const auto generation = m_rfGeneration.load(std::memory_order_acquire);
+        return (generation & 1) && observation.generation == generation;
+    }
     struct HdFmObservation {
         Transaction::Token token;
         std::uint64_t captureEpoch = 0;
@@ -95,7 +131,7 @@ public:
     bool adopt() noexcept;
     bool process(std::uint64_t firstSample, std::span<const std::complex<float>> samples) noexcept;
     // Acquisition only, before process() for this capture block. Shares the
-    // display's existing FFT; the caller supplies capture-sample identity.
+    // fixed 2048-bin detector FFT; caller supplies capture-sample identity.
     void observeSpectrum(std::span<const float> bins, std::uint64_t firstSample) noexcept;
     void stop(); // after acquisition joined
     bool takePacket(Packet& output) noexcept;
@@ -103,6 +139,9 @@ public:
     bool needsRepair() const noexcept { return m_faults.load(std::memory_order_acquire) != 0; }
     std::uint64_t droppedPackets() const noexcept { return m_drops.load(std::memory_order_relaxed); }
     bool legacy() const noexcept { return m_legacy; }
+    void setStartupTrace(RtlStartupTrace* trace) noexcept { m_startupTrace = trace; }
+    std::uint64_t startupQueuedPackets() const noexcept
+    { return (m_write.load(std::memory_order_acquire) + m_packetSlots - m_read.load(std::memory_order_acquire)) % m_packetSlots; }
 private:
     friend struct RtlReceivePipelineTestAccess;
     void process(const RtlReceiverRegistry::SampleBlock&, std::span<const RtlReceiverRegistry::ReceiverView>) noexcept override;
@@ -116,6 +155,7 @@ private:
                        const RtlAudioMixer::MissingMask&) noexcept override;
     void enqueueTrace(const TraceEvent&) noexcept;
     TraceEvent traceContext() const noexcept;
+    RtlStartupTrace* m_startupTrace = nullptr; // fixed before acquisition; worker retains ownership
     const bool m_enableWfm;
     RtlReceiverRegistry m_registry;
     RtlReceiverRegistry::SampleReader m_reader;
@@ -163,21 +203,35 @@ private:
     std::atomic<unsigned> m_faults{0};
     std::array<std::atomic<unsigned>, 8> m_monitor;
     std::array<unsigned, 8> m_nextMonitor{};
-    struct SquelchConfig { bool enabled = false; int level = 20; };
+    struct SquelchConfig {
+        bool enabled = false; int level = 20;
+        bool automatic = false; int marginDb = 10;
+    };
     std::array<SquelchConfig, 8> m_nextSquelch{};
     std::array<SquelchConfig, 8> m_squelchConfig{};
     std::array<RtlSquelchGate, 8> m_squelch;
     std::array<std::uint64_t, 8> m_squelchEpoch{};
+    std::array<SharedCapturePolicy::SliceDescriptor, 8> m_nextMeterPassbands{}, m_meterPassbands{};
+    std::array<RfObservation, 4> m_rfObservations{};
+    // Main-thread writer; callback snapshots the epoch. Odd means enabled.
+    // Epoch tagging rejects queued/in-flight samples across disable/re-enable.
+    std::atomic<std::uint64_t> m_rfGeneration{1};
+    alignas(64) std::atomic<unsigned> m_rfWrite{0};
+    alignas(64) std::atomic<unsigned> m_rfRead{0};
     std::array<float, 2048> m_spectrum{};
     std::uint64_t m_spectrumFirstSample = 0;
     bool m_spectrumFresh = false;
     // SPSC queue. Overflow drops the new packet; the consumer observes the
     // sample-position gap and marks its next typed frame discontinuous.
-    static constexpr unsigned kPackets = 128;
-    std::array<Packet, kPackets> m_packets;
+    // Fixed before acquisition. Preserve the singleton's nominal buffering
+    // time as independent analog taps share the existing speaker queue.
+    const unsigned m_packetSlots;
+    std::unique_ptr<Packet[]> m_packets;
     alignas(64) std::atomic<unsigned> m_write{0};
     alignas(64) std::atomic<unsigned> m_read{0};
     std::atomic<std::uint64_t> m_drops{0};
+    std::atomic<std::uint64_t> m_packetQueueHighWater{0};
+    std::array<std::atomic<std::uint64_t>, 8> m_receiverWithdrawals{};
     std::atomic<std::uint64_t> m_mixerLate{0};
     std::atomic<std::uint64_t> m_mixerRejected{0};
     std::atomic<std::uint64_t> m_mixerConfigurationFailures{0};

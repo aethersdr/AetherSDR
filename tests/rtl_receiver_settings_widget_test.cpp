@@ -59,11 +59,11 @@ public:
     QVariant requested;
     QString verb;
     QVariantMap accepted{{"serial", "widget-device"}, {"applied", true},
-        {"ppm", 7}, {"requestedPpm", 7}, {"dcSuppression", false}, {"pending", false}, {"saved", true}};
+        {"ppm", 7}, {"requestedPpm", 7}, {"dcSuppression", false}, {"receiveMetersEnabled", true}, {"pending", false}, {"saved", true}};
     ExtensionBackend()
     {
         caps.extensionNamespaces = {QStringLiteral("rtl")};
-        caps.extensions["rtl"] = QVariantMap{{"settingsVersion", 1}};
+        caps.extensions["rtl"] = QVariantMap{{"settingsVersion", 1}, {"receiveMetersControl", true}};
     }
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return connectedState; }
@@ -91,7 +91,8 @@ public:
         // Copy before emitting: a result may synchronously reenter settings.get.
         const quint64 id = pendingId;
         const QVariant value = requested;
-        accepted[verb == QLatin1String("ppm.set") ? "ppm" : "dcSuppression"] = value;
+        accepted[verb == QLatin1String("ppm.set") ? "ppm"
+            : verb == QLatin1String("receive_meters.set") ? "receiveMetersEnabled" : "dcSuppression"] = value;
         accepted["pending"] = false;
         emit extensionStatus("rtl", "settings", accepted);
         emit extensionResult(id, value);
@@ -124,6 +125,9 @@ int main(int argc, char** argv)
     auto* ppm = widget.findChild<QSpinBox*>(QStringLiteral("rtlPpmRequest"));
     auto* apply = widget.findChild<QPushButton*>(QStringLiteral("rtlPpmApply"));
     auto* dc = widget.findChild<QCheckBox*>(QStringLiteral("rtlDcSuppression"));
+    auto* meters = widget.findChild<QCheckBox*>(QStringLiteral("rtlReceiveMeters"));
+    check(meters != nullptr, "RTL receiver settings expose the receive-meter switch");
+    if (!meters) { return 1; }
     auto* applied = widget.findChild<QLabel*>(QStringLiteral("rtlCorrectionsApplied"));
     auto* status = widget.findChild<QLabel*>(QStringLiteral("rtlCorrectionsStatus"));
     if (!ppm || !apply || !dc || !applied || !status) { return 1; }
@@ -311,6 +315,16 @@ int main(int argc, char** argv)
     ppm->setValue(10); apply->click(); pumpFor(260);
     check(source->controlRequests == 2 && applied->text().contains("10 ppm") && !status->text().contains("Applying"),
         "synchronous immediate Apply cancels debounce before invoking the extension");
+    check(meters->isChecked() && meters->isEnabled(), "receive meters default to confirmed enabled state");
+    meters->click();
+    check(source->verb == QLatin1String("receive_meters.set") && source->requested.metaType().id() == QMetaType::Bool
+        && !source->requested.toBool() && meters->isChecked(), "meter toggle waits for accepted readback");
+    source->confirm();
+    check(!meters->isChecked() && !status->text().contains("Applying"), "confirmed meter disable clears pending state");
+    meters->click(); source->refuse("test refusal");
+    check(!meters->isChecked(), "refused enable cannot masquerade as enabled");
+    meters->click(); source->confirm();
+    check(meters->isChecked(), "confirmed re-enable restores the switch");
     const int beforeDestroy = source->controlRequests;
     {
         auto closing = std::make_unique<RtlReceiverSettingsWidget>(model);
