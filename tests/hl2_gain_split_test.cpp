@@ -308,16 +308,12 @@ int main(int argc, char** argv)
         check(!s.backend.autoRfGainEnabled(),
               "and it is OFF on a fresh session, with no setting to say otherwise");
 
-        // ---- THE CEILING IS THE TOP OF THE NATIVE RANGE.
-        //
-        // It was +19, from #5354's "+48 dB measures like +18 dB". That was one
-        // unit's hardware defect (RX gain bit 5 stuck high by a bad joint);
-        // repaired, the same radio steps monotonically through -12..+48 dB
-        // (#5943). So every baseline the setter can produce arms.
+        // ---- THE CEILING IS THE TOP OF THE NATIVE RANGE, so every baseline
+        // the setter can produce arms (#5943).
         check(hl2::Hl2Backend::kAutoRfGainMaxBaselineDb == hl2::kLnaGainMaxDb,
               "the arming ceiling IS the top of the native gain range");
 
-        // From the shipped default, which the old ceiling refused.
+        // From the shipped default.
         s.backend.setPanRfGain(s.panId, hl2::kLnaDefaultGainDb);
         s.backend.setAutoRfGain(true);
         check(s.backend.autoRfGainEnabled(),
@@ -376,6 +372,9 @@ int main(int argc, char** argv)
         s.backend.setAutoRfGainFloorDb(500);
         check(s.backend.autoRfGainFloorDb() == hl2::Hl2Backend::kAutoRfGainFloorMaxDb,
               "an absurd floor clamps rather than being taken literally");
+        check(hl2::Hl2Backend::kAutoRfGainMaxBaselineDb - s.backend.autoRfGainFloorDb()
+                  == hl2::kLnaGainMinDb,
+              "and the deepest floor reaches the register floor from the top armable baseline");
         s.backend.setAutoRfGainFloorDb(-4);
         check(s.backend.autoRfGainFloorDb() == 0,
               "and a negative one resolves to zero — 'may take no gain at all'");
@@ -421,10 +420,9 @@ int main(int argc, char** argv)
               "the one thing that must be honoured next launch");
     }
 
-    // ---- ABSENT MEANS OFF. RFC #5535 asked for armed-by-default. The
-    // arithmetic obstacle -- a +20 dB default above a +19 dB ceiling -- is
-    // gone now that the ceiling is the top of the native range; flipping the
-    // default is a separate change, so a document with no key still reads false.
+    // ---- ABSENT MEANS OFF. RFC #5535 asked for armed-by-default; the shipped
+    // default is armable, but flipping the default is a separate change, so a
+    // document with no key still reads false.
     {
         RestoredRadioState st;
         st.rfFrequencyHz = 14'200'000.0;

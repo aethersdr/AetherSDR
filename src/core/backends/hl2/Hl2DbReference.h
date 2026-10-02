@@ -9,9 +9,8 @@ namespace AetherSDR::hl2 {
 // Owns everything relating raw dBFS to dBm, plus the AGC setpoint that must
 // move with it, so the LNA gain and its display offset cannot drift apart.
 //
-//   * LNA gain: exact while the commanded code is the applied gain. The fold
-//     above code 31 reported on one board (Hermes-Lite2 #177) was that unit's
-//     hardware defect (#5943); ad9866.v at 883a338 passes all six bits natively.
+//   * LNA gain: exact while the commanded code is the applied gain; ad9866.v
+//     at 883a338 passes all six bits natively, so no fold above code 31 (#5943).
 //   * fullScaleDbm: derived from the AD9866 datasheet (kFullScaleDbmAtZeroGain),
 //     not a per-unit calibration; hl2_dbref_test asserts the step.
 //   * AGC ceiling: AGC-T (0..100) -> WDSP max gain, referred to the LNA so a

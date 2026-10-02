@@ -66,8 +66,6 @@ int main()
     // instead of adding it, and then quoted DL1YCF's "-34 dBm clipping at
     // +33 dB" as agreeing with the result to the digit. The agreement was the
     // tell, not the evidence: that figure also assumes +33 dB was delivered.
-    // (The one unit seen to fold above code 31 had a hardware defect, since
-    // repaired -- #5354, #5943.)
     //
     // If this block ever fails again, the question to ask is not "has the
     // arithmetic drifted" but "has the DERIVATION been falsified" -- and the

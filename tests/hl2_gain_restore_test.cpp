@@ -531,8 +531,8 @@ int main(int argc, char** argv)
             // document and the false ones would pass for nothing.
             check(baselineDb != aRealMove && mirror.saves() > 0 && !mirror.storedAutoGain(),
                   "push: a gain move does reach the profile, and nothing is wanted yet");
-            // AND NOW THE SHIPPED DEFAULT, which the old +19 ceiling refused.
-            // Also a move: aRealMove is the ceiling or one below it, never +20.
+            // AND NOW THE SHIPPED DEFAULT. Also a move: aRealMove is the
+            // ceiling or one below it, never +20.
             session.backend.setPanRfGain(session.panId, kShippedDefault);
             session.backend.setAutoRfGain(true);
             check(session.backend.autoRfGainEnabled(),
