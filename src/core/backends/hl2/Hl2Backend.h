@@ -90,9 +90,11 @@ public:
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setCwPitch(int hz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
-    // Impulse noise blanker, run in host WDSP (the HL2 has no firmware DSP). NR and
-    // ANF are deliberately not implemented and stay hidden.
-    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    // Impulse noise blankers, run in host WDSP (the HL2 has no firmware DSP); at
+    // most one of the two runs. NR and ANF are deliberately not implemented and
+    // stay hidden.
+    void setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind kind,
+                              int level, AetherSDR::NoiseBlankerFill fill) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;
@@ -507,9 +509,10 @@ private:
         int agcThresholdDb = 65;
 
         // Authoritative noise-blanker state: nothing echoes it, and a rebuilt receiver
-        // must be told again. Defaults mirror SliceModel's (off, level 50).
-        bool nbOn = false;
+        // must be told again. Defaults mirror SliceModel's (off, level 50, zero fill).
+        AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
+        AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
 
         // APF request and AGC-off level, held like the blanker: nothing echoes
         // them and a fresh chain must be told again. Literal defaults match

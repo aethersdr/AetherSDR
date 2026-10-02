@@ -72,7 +72,8 @@ int main(int argc, char** argv)
     dsp.setNotchTuneFrequency(14'200'000.0);
     dsp.addNotch(0, 14'201'000.0, 100.0, true);
     dsp.addNotch(1, 14'202'000.0, 100.0, true);
-    dsp.setNoiseBlanker(true, 42);
+    dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, 42,
+                        WdspChannel::NoiseBlankerFill::Zero);
     dsp.setShift(1200.0);
     check(dsp.notchCount() == 2, "two notches in the mirror before the rebuild");
     check(dsp.wdspNotchCount() == 2, "and WDSP holds the same two");
@@ -82,7 +83,7 @@ int main(int argc, char** argv)
     // ── A rebuild in flight defers, it does not lose ──────────────────────
     const Hl2RxDsp::Config wide = configAt(384000);
     dsp.beginRebuild(wide);
-    const bool nbOn = dsp.noiseBlankerEnabled();
+    const WdspChannel::NoiseBlanker nbKind = dsp.noiseBlankerKind();
     const int nbLevel = dsp.noiseBlankerLevel();
 
     // Everything below arrives while the build is notionally running.
@@ -90,7 +91,8 @@ int main(int argc, char** argv)
     dsp.setFilter(-4000.0, 4000.0);
     dsp.setAgc(2, 51.0);
     dsp.addNotch(2, 14'203'000.0, 100.0, true);
-    dsp.setNoiseBlanker(true, 77);
+    dsp.setNoiseBlanker(WdspChannel::NoiseBlanker::Impulse, 77,
+                        WdspChannel::NoiseBlankerFill::Zero);
     dsp.setShift(0.0);
 
     const WdspChannel::Config* live = dsp.channelConfig();
@@ -111,7 +113,9 @@ int main(int argc, char** argv)
 
     // ── The build itself, on a thread that is not this object's ───────────
     Hl2RxDsp::RebuildResult result;
-    std::thread builder([&] { result = Hl2RxDsp::buildChannel(wide, nbOn, nbLevel); });
+    std::thread builder([&] {
+        result = Hl2RxDsp::buildChannel(wide, nbKind, nbLevel, dsp.noiseBlankerFill());
+    });
     builder.join();
     check(result.channel != nullptr,
           result.error.empty() ? "buildChannel() works off the owning thread"
@@ -150,7 +154,8 @@ int main(int argc, char** argv)
     dsp.beginRebuild(bad);
     const Hl2RxDsp::RebuildResult failed = [&] {
         Hl2RxDsp::RebuildResult r;
-        std::thread t([&] { r = Hl2RxDsp::buildChannel(bad, false, 0); });
+        std::thread t([&] { r = Hl2RxDsp::buildChannel(bad, WdspChannel::NoiseBlanker::Off, 0,
+                                   WdspChannel::NoiseBlankerFill::Zero); });
         t.join();
         return r;
     }();

@@ -14,6 +14,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <utility>
+
 #include <cstdio>
 #include <functional>
 #include <memory>
@@ -136,7 +138,8 @@ void testReadback()
     QJsonObject state = receiver(server);
     check(!state.value("hasChain").toBool() && !state.value("on").toBool(),
           "a cold DSP object does not claim an installed blanker");
-    backend->setSliceNoiseBlanker(0, true, 80);
+    backend->setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Impulse, 80,
+                                  AetherSDR::NoiseBlankerFill::Zero);
     check(AnanNoiseBlankerTestAccess::onDsp(*backend, [](AnanRxDsp&) {}), "drain the queued request");
     state = receiver(server);
     check(state.value("requestedOn").toBool() && state.value("requestedLevel").toInt() == 80
@@ -144,7 +147,7 @@ void testReadback()
           "a request without a channel is not certified as applied");
 
     AnanRxDsp::Config config;
-    config.noiseBlankerEnabled = true;
+    config.noiseBlanker = WdspChannel::NoiseBlanker::Impulse;
     config.noiseBlankerLevel = 80;
     config.blockForOutput = true;
     bool configured = false;
@@ -166,13 +169,35 @@ void testReadback()
 
     check(AnanNoiseBlankerTestAccess::onDsp(*backend, [](AnanRxDsp& dsp) { dsp.beginRebuild(); }),
           "mark a background rebuild in flight");
-    backend->setSliceNoiseBlanker(0, false, 20);
+    backend->setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Advanced, 20,
+                                  AetherSDR::NoiseBlankerFill::Interpolate);
     check(AnanNoiseBlankerTestAccess::onDsp(*backend, [](AnanRxDsp&) {}), "drain the deferred request");
     state = receiver(server);
     check(state.value("hasChain").toBool() && state.value("on").toBool()
               && state.value("level").toInt() == 80
-              && !state.value("requestedOn").toBool() && state.value("requestedLevel").toInt() == 20,
+              && state.value("requestedLevel").toInt() == 20,
           "in-flight readback preserves applied state separately from the deferred request");
+    // THE KIND AND THE FILL ARE READ FROM THE CHANNEL, not echoed from the
+    // request — and a deferred request is the only place the two can be told
+    // apart. A payload that reported m_nbKind as the applied kind would pass
+    // every other assertion in this file and fail these three.
+    check(state.value("kind").toInt()
+              == static_cast<int>(AetherSDR::NoiseBlankerKind::Impulse),
+          "the APPLIED kind is still the installed channel's, not the deferred "
+          "request's");
+    check(state.value("fill").toInt()
+              == static_cast<int>(AetherSDR::NoiseBlankerFill::Zero),
+          "and so is the applied fill");
+    check(state.value("requestedKind").toInt()
+              == static_cast<int>(AetherSDR::NoiseBlankerKind::Advanced)
+              && state.value("requestedFill").toInt()
+                     == static_cast<int>(AetherSDR::NoiseBlankerFill::Interpolate),
+          "while the deferred request is reported as requested");
+    // Back to Off for the swap case below, which asserts the post-install state.
+    backend->setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Off, 20,
+                                  AetherSDR::NoiseBlankerFill::Zero);
+    check(AnanNoiseBlankerTestAccess::onDsp(*backend, [](AnanRxDsp&) {}),
+          "drain the second deferred request");
     bool installed = false;
     check(AnanNoiseBlankerTestAccess::onDsp(*backend, [&](AnanRxDsp& dsp) {
         installed = dsp.installRebuiltChannel(AnanRxDsp::buildChannel(config));
@@ -181,7 +206,8 @@ void testReadback()
     check(installed && !state.value("on").toBool() && state.value("level").toInt() == 20,
           "readback follows current NB at the channel swap, not the stale build");
     for (const int requested : {-5, 120}) {
-        backend->setSliceNoiseBlanker(0, true, requested);
+        backend->setSliceNoiseBlanker(0, AetherSDR::NoiseBlankerKind::Impulse,
+                                      requested, AetherSDR::NoiseBlankerFill::Zero);
         check(AnanNoiseBlankerTestAccess::onDsp(*backend, [](AnanRxDsp&) {}), "drain the live request");
         state = receiver(server);
         const int expected = requested < 0 ? 0 : 100;
@@ -191,6 +217,41 @@ void testReadback()
         check(state.value("threshold").toDouble()
                   == WdspChannel::noiseBlankerThresholdForLevel(expected),
               "threshold describes the applied level");
+    }
+    // ---- the KIND and the FILL travel the same path as `on` and `level` ----
+    //
+    // The bug this closes is not "NB2 does not work": it is NB2 appearing to
+    // work while the readback still answers about the first blanker. `on` is
+    // true either way, so only `kind` can tell them apart — and `kind` is read
+    // from the INSTALLED channel, not from the request, which is what makes it
+    // evidence rather than an echo.
+    for (const auto& want : {
+             std::make_pair(AetherSDR::NoiseBlankerKind::Advanced,
+                            AetherSDR::NoiseBlankerFill::Interpolate),
+             std::make_pair(AetherSDR::NoiseBlankerKind::Impulse,
+                            AetherSDR::NoiseBlankerFill::MeanHold),
+             std::make_pair(AetherSDR::NoiseBlankerKind::Off,
+                            AetherSDR::NoiseBlankerFill::Zero),
+         }) {
+        backend->setSliceNoiseBlanker(0, want.first, 60, want.second);
+        check(AnanNoiseBlankerTestAccess::onDsp(*backend, [](AnanRxDsp&) {}),
+              "drain the kind/fill request");
+        state = receiver(server);
+        check(state.value("kind").toInt() == static_cast<int>(want.first)
+                  && state.value("requestedKind").toInt() == static_cast<int>(want.first),
+              "the applied readback reports WHICH blanker is installed");
+        check(state.value("on").toBool()
+                  == (want.first != AetherSDR::NoiseBlankerKind::Off),
+              "`on` stays the bool an existing script reads, for every kind");
+        // The fill is carried whatever the kind, including Off and Impulse:
+        // it is Advanced's parameter, and losing it on the way through another
+        // kind is how a control forgets the operator's choice.
+        check(state.value("fill").toInt() == static_cast<int>(want.second)
+                  && state.value("requestedFill").toInt() == static_cast<int>(want.second),
+              "the fill survives every kind, so switching blankers does not "
+              "reset it");
+        check(state.value("level").toInt() == 60,
+              "and the level is unchanged by a kind switch");
     }
     check(probe.violations().isEmpty() && probe.count(QStringLiteral("extensionResult")) > 0,
           "readback emits results on the backend's owning thread");
