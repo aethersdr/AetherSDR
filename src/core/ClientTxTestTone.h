@@ -5,16 +5,9 @@
 
 namespace AetherSDR {
 
-// 1 kHz sine test-tone generator, injected at the head of the TX
-// audio path so users can verify the strip's processing chain
-// without yelling into a mic.  Lock-free atomics on enable / freq /
-// level so the UI can twiddle without ever touching audio-thread
-// state outside of `process()`.
-//
-// When enabled, `process()` REPLACES the input buffer with a generated
-// sine — not summed with mic input — so the user hears a clean tone
-// running through the rest of the chain (Gate / EQ / Comp / DeEss /
-// Tube / PUDU / Reverb / final-limiter / VITA-49).
+// 1 kHz sine test tone at the head of the TX path. When enabled, process()
+// REPLACES the input (no mic sum) so the tone runs through the whole chain to
+// VITA-49. Enable/freq/level are lock-free atomics.
 class ClientTxTestTone {
 public:
     ClientTxTestTone();

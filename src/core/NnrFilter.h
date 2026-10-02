@@ -12,31 +12,17 @@ namespace AetherSDR {
 
 class Resampler;
 
-// Client-side neural noise reduction using WDSP 2.10's NNR, as a seventh
-// method in the ADSP suite beside DFNR and RN2 (RFC #5684).
-//
-// Shaped after DeepFilterFilter deliberately: same input/output domain of
-// 24 or 48 kHz stereo float32, same one-instance-per-channel processing (as
-// RN2 does it, so each side of a diversity pair is denoised against its own
-// noise), same "recreate for a new rate" contract. The differences are
-// WDSP's, not ours:
-//
-//   - NNR's rate must be an integer multiple of 16 kHz, so the 24 kHz path
-//     resamples to 48 and back exactly as processBnr() already does, while a
-//     48 kHz source reaches it untouched.
-//   - its buffers are interleaved DOUBLES with the signal in I, so there is a
-//     float->double staging step DeepFilterNet does not need.
-//   - its block size is fixed at construction: setSize_nnr() rebuilds the
-//     block, FFTW plans and both models, so blocks are accumulated to a fixed
-//     size instead.
-//
-// It is a SPEECH model — a steady carrier is attenuated ~28 dB — so the caller
-// must keep it away from CW, the digital modes and the data path.
-//
-// Thread-safety matches the siblings: main thread writes the atomics, the
-// audio thread applies them at the top of process(). WDSP's own setters take
-// no lock (AETHERSDR-PATCHES.md patch 5), which is why they are called only
-// from process() and never directly from a setter.
+// Client-side neural NR using WDSP 2.10's NNR (RFC #5684), shaped like
+// DeepFilterFilter: 24 or 48 kHz stereo float32, one instance per channel,
+// recreate for a new rate. WDSP differences:
+//   - NNR runs at a multiple of 16 kHz, so 24 kHz resamples to 48 and back (as
+//     processBnr() does); 48 kHz passes untouched.
+//   - buffers are interleaved doubles with the signal in I (float->double stage).
+//   - block size is fixed (setSize_nnr() rebuilds everything), so input is
+//     accumulated to it.
+// A SPEECH model (a steady carrier drops ~28 dB): keep it off CW, digital and
+// data paths. Main thread writes atomics; process() applies them, because WDSP's
+// setters take no lock (AETHERSDR-PATCHES.md patch 5).
 class NnrFilter {
 public:
     // Unsupported rates leave isValid() false. Recreate for a new rate/source.

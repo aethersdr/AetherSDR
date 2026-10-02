@@ -214,18 +214,14 @@ void NvidiaAfxFilter::teardown()
 // lib's symbols/soname visible to satisfy the next.
 bool NvidiaAfxFilter::loadRuntime(const QString& packDir)
 {
-    // Load only the core library; let the OS loader resolve its CUDA/TensorRT
-    // deps and the denoiser FEATURE lib from the pack's runtime dir — mirroring
-    // how the SDK's own sample links only against the core. (Pre-loading the
-    // whole tree ourselves corrupts CUDA init, so we deliberately do not.)
-    //
-    //  • Linux: core is nvafx/lib/libnv_audiofx.so; its DT_RPATH
-    //    ($ORIGIN/../../external/cuda/lib, $ORIGIN/../../nvafx/lib) resolves the
-    //    CUDA/TRT runtime and the feature lib (libnv_audiofx_denoiser.so*).
-    //  • Windows: core is bin/NVAudioEffects.dll; the CUDA/TRT DLLs and the
-    //    feature DLL sit alongside it in bin/, and LOAD_WITH_ALTERED_SEARCH_PATH
-    //    makes that directory the head of the dependency search — the RPATH
-    //    analogue. We also pin it on the process default search dirs below.
+    // Load only the core library and let the OS loader resolve its CUDA/TensorRT deps
+    // and the denoiser feature lib, as the SDK sample does (pre-loading the tree
+    // corrupts CUDA init).
+    //   - Linux: nvafx/lib/libnv_audiofx.so; its DT_RPATH
+    //     ($ORIGIN/../../external/cuda/lib, $ORIGIN/../../nvafx/lib) finds the rest.
+    //   - Windows: bin/NVAudioEffects.dll with deps alongside in bin/;
+    //     LOAD_WITH_ALTERED_SEARCH_PATH puts bin/ first, and it is also pinned on
+    //     the process default search dirs below.
 #if defined(_WIN32)
     const QString coreLib =
         QDir(packDir).filePath(QStringLiteral("bin/NVAudioEffects.dll"));

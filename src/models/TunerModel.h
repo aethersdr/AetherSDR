@@ -10,16 +10,10 @@ namespace AetherSDR {
 
 class TgxlConnection;
 
-// One RF port as the tuner itself reports it, from the direct port-9010
-// status. The Flex-relayed "amplifier" status carries none of this, so it is
-// available only while the direct connection is up — see hasPortInfo().
-//
-// `live` is the tuner's own validity flag for the port ("modeX" on the wire).
-// It tracks the reading exactly: across a capture, modeX=1 always accompanied
-// a real band and frequency and modeX=0 always accompanied zeroes. It does
-// NOT say what kind of source the port has — the tuner reports its `flexX`
-// radio name on both ports regardless, so a port that is not live is simply
-// one nothing is being heard on.
+// One RF port as reported by the tuner's direct port-9010 status (the relayed
+// "amplifier" status lacks it; see hasPortInfo()). `live` is the tuner's
+// "modeX" validity flag: 1 always came with a real band/frequency, 0 with
+// zeroes. It does not identify the source; `flexX` is reported on both ports.
 struct TunerPortInfo {
     bool    live{false};
     QString source;        // "flexX" — the networked radio's name
@@ -33,16 +27,11 @@ struct TunerPortInfo {
     bool operator!=(const TunerPortInfo& o) const { return !(*this == o); }
 };
 
-// State model for a 4o3a Tuner Genius XL (TGXL) connected via the FlexRadio.
-//
-// Status arrives via TCP as "atu <handle> key=val ..." after "sub atu all".
-// Commands use the "tgxl" prefix:
-//   tgxl set handle=<H> mode=<0|1>       — operate/standby
-//   tgxl set handle=<H> bypass=<0|1>     — bypass on/off
-//   tgxl autotune handle=<H>             — initiate auto-tune
-//
-// Direct TGXL connection (port 9010) enables manual Pi network relay control:
-//   tune relay=<0|1|2> move=<+1|-1>      — adjust C1/L/C2 one step
+// State model for a 4O3A Tuner Genius XL relayed via the FlexRadio. Status:
+// "atu <handle> key=val ..." after "sub atu all". Commands:
+//   tgxl set handle=<H> mode=<0|1> / bypass=<0|1>; tgxl autotune handle=<H>
+// A direct connection (port 9010) adds Pi-network relay stepping:
+//   tune relay=<0|1|2> move=<+1|-1>   (C1/L/C2)
 class TunerModel : public QObject {
     Q_OBJECT
 

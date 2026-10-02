@@ -4,17 +4,10 @@
 #include <string>
 #include <vector>
 
-// Energy-based voice-activity segmenter for the ASR pipeline (RFC #4333).
-//
-// Whisper is a chunk model, not a streaming one, and running it on dead-carrier
-// noise wastes cycles. This class turns a continuous 16 kHz mono stream into
-// discrete speech utterances ("overs"): it opens a segment when short-term
-// energy rises above a threshold and closes it after a hangover of silence (or
-// at a hard maximum length), dropping segments too short to be speech. The
-// closed segment's samples are then handed to the ASR backend.
-//
-// Deliberately whisper-free and allocation-simple so it can be unit-tested
-// offline with synthetic audio and reused regardless of backend.
+// Energy-based voice-activity segmenter (RFC #4333). Turns a 16 kHz mono stream
+// into utterances: opens on short-term energy above threshold, closes after a
+// silence hangover or a hard max length, and drops segments too short to be
+// speech. Whisper-free so it is unit-testable with synthetic audio.
 
 namespace AetherSDR {
 

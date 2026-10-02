@@ -39,16 +39,10 @@ public:
     // the matching factory to rematerialize the content widget.
     void registerContent(const QString& typeId, ContentFactory factory);
 
-    // ── Container lifecycle ──────────────────────────────────────
-    //
-    // Creates a new ContainerWidget, registers it under `id`, and
-    // returns it.  `contentType` (optional) is persisted so the
-    // matching factory can rebuild content on restore.  `parentId`
-    // (optional) nests this container inside another: the new
-    // container is inserted as a child of `parentId`'s body layout
-    // at `index` (-1 = append).  Top-level containers pass empty
-    // parentId and place themselves into an external layout
-    // manually.
+    // Creates and registers a ContainerWidget under `id`. `contentType` is
+    // persisted so its factory can rebuild content on restore. A non-empty
+    // `parentId` inserts it into that container's body at `index` (-1 = append);
+    // top-level containers are placed into an external layout by the caller.
     ContainerWidget* createContainer(const QString& id,
                                      const QString& title,
                                      const QString& contentType = {},
@@ -86,23 +80,12 @@ public:
     void floatContainer(const QString& id);
     void dockContainer(const QString& id);
 
-    // ── Canvas transitions (RFC #4887 phase 3) ───────────────────
-    //
-    // The third placement: the container becomes a child of a
-    // WorkspaceCanvas, which owns its geometry from then on.
-    //
-    // These mirror float/dock deliberately — same detach-and-remember
-    // step, same #2495 RHI guard, same restore-to-the-original-slot on
-    // the way back.  The failure modes are identical, and a second,
-    // subtly different reparent path is how the float/dock crash
-    // lineage (#2495, #4319, #4617) got as long as it did.
-    //
-    // detachForCanvas() takes the container out of its panel slot and
-    // hands it back for the caller to place — the canvas needs a rect,
-    // which is workspace state this class does not own.  Returns
-    // nullptr for an unknown id or one already on a canvas.  A
-    // FLOATING container is docked first, so "float, then canvas" is
-    // not a special case anyone has to remember.
+    // Canvas placement (RFC #4887): the container becomes a WorkspaceCanvas child
+    // and the canvas owns its geometry. Mirrors float/dock on purpose (same
+    // detach-and-remember step, #2495 RHI guard, restore to the original slot); a
+    // second reparent path is how the float/dock crashes (#2495, #4319, #4617) grew.
+    // detachForCanvas() returns the container for the caller to place (nullptr if
+    // unknown or already on a canvas); a floating container is docked first.
     ContainerWidget* detachForCanvas(const QString& id);
 
     // Put it back in the slot it left, exactly as dockContainer() does
@@ -127,23 +110,12 @@ public:
     // dock-back behaviour.  Call from MainWindow::closeEvent().
     void prepareShutdown();
 
-    // ── Persistence ──────────────────────────────────────────────
-    //
-    // State is stored as JSON under the AppSettings key
-    // `ContainerTree`.  Schema (Phase 2 — flat):
-    //   {
-    //     "version": 1,
-    //     "containers": {
-    //       "<id>": {
-    //         "mode": "panel" | "floating",
-    //         "visible": true | false,
-    //         "contentType": "<factory key>",
-    //         "geometry": "<base64>"     // only when floating
-    //       }
-    //     }
-    //   }
-    //
-    // Phase 3 adds "parent" and "children" fields for nesting.
+    // Persistence: JSON under AppSettings `ContainerTree`, version 1:
+    //   { "version": 1, "containers": { "<id>": { "mode": "panel"|"floating"|"canvas",
+    //     "visible": bool, "contentType": "<factory key>", "parent": "<id>",
+    //     "children": ["<id>", ...] } } }
+    // A version mismatch skips restore. Floating geometry is stored separately under
+    // geometryKeyFor(id).
     void saveState() const;
     void restoreState();
 

@@ -1,17 +1,7 @@
-// MainWindow_Shortcuts.cpp — keyboard-shortcut system of MainWindow.
-//
-// Part of the #3351 monolith decomposition (Phase 1c). Holds:
-//
-//   • The shortcut-state definitions (s_keyboardShortcutsEnabled,
-//     s_sliderShortcutLeaseActive) and their accessors — declared in
-//     MainWindowShortcutState.h, owned here as of this phase.
-//   • registerShortcutActions(): the full keyboard-shortcut action table.
-//   • The slider shortcut lease (#745): begin/renew/release + the
-//     MainWindow::eventFilter() that drives it (and app-quit interception).
-//   • handleCwMomentaryShortcut() + the trivial keyPress/keyRelease
-//     overrides.
-//
-// Pure code motion from MainWindow.cpp — same class, no header changes.
+// MainWindow_Shortcuts.cpp — keyboard-shortcut system: the shortcut-state
+// definitions (declared in MainWindowShortcutState.h), registerShortcutActions(),
+// the slider shortcut lease (#745) with eventFilter() (and app-quit
+// interception), handleCwMomentaryShortcut() and keyPress/keyRelease overrides.
 
 #include "MainWindow.h"
 #include "core/TxKeyingMarker.h"
@@ -86,16 +76,11 @@ bool textInputCaptured()
         || qobject_cast<QComboBox*>(w);
 }
 
-// Like textInputCaptured(), but for TX *keying* (Space PTT / CW keys),
-// which must fire regardless of a focused **non-editable** combo —
-// matching the app-level Space filter's stated intent that "buttons,
-// combos, etc. won't steal Space".  A non-editable QComboBox keeps
-// keyboard focus after its popup closes (#3908) but consumes no typed
-// text, so it must not swallow a keying press.  It is still treated as
-// capturing by textInputCaptured() above, so arrow shortcuts stay
-// suppressed and Up/Down/Left/Right navigate the list as usual.  An
-// editable QComboBox exposes its internal QLineEdit as the focus widget,
-// so it is caught by the QLineEdit branch and still captures text.
+// Like textInputCaptured(), but for TX keying (Space PTT / CW keys): a
+// focused NON-editable QComboBox keeps focus after its popup closes (#3908)
+// but takes no text, so it must not swallow a keying press (it still blocks
+// arrow shortcuts via textInputCaptured()). An editable combo's QLineEdit is
+// the focus widget, so it still captures.
 bool textEntryCaptured()
 {
     auto* w = QApplication::focusWidget();
@@ -389,17 +374,11 @@ bool MainWindow::handleSplitMonitorShortcut(QKeyEvent* keyEvent,
 }
 
 
-// ─── Momentary Monitor TX (#2242) ───────────────────────────────────────────
-//
-// The Icom XFC / Kenwood TF-SET / Yaesu TXW control: hold to hear where you are
-// about to transmit. On a single-receiver rig that means the receiver MOVES,
-// which is what Solo reproduces (mute RX, unmute TX). Both makes the RX slice
-// audible too — the sub-receiver convention, for operators who have already
-// arranged the two slices across the stereo field.
-//
-// SplitMonitorHold records which native mute the press actually changed, and
-// the release restores exactly that — never a slice whose audio DAX/TCI/Kiwi
-// has replaced, where setAudioMute() writes a different domain.
+// Momentary Monitor TX (#2242), like Icom XFC / Kenwood TF-SET / Yaesu TXW:
+// hold to hear the TX frequency. Solo mutes RX and unmutes TX; Both makes both
+// audible. SplitMonitorHold records which native mute the press changed and the
+// release restores exactly that, never a slice whose audio DAX/TCI/Kiwi has
+// replaced.
 
 void MainWindow::beginSplitMonitor(bool keyHeld)
 {
@@ -1727,18 +1706,11 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
     TxInputKeyEvent ev(press ? QEvent::KeyPress : QEvent::KeyRelease,
                        kc.key(), kc.keyboardModifiers(), controller);
 
-    // Send (not post) to the main window itself, never to the focus widget.
-    // Filters installed on qApp run for events delivered to any object, so
-    // this still walks the same eventFilter path a real key takes —
-    // synchronously, so isAccepted() is meaningful on return — and the
-    // momentary handlers do not look at the receiver. Delivering to the
-    // focus widget instead would let an unbound key reach a widget that keys
-    // TX on its own (a focused ATU/CWX/APRS button clicks on Space; a
-    // dialog's default button on Return), bypassing the action-level gate
-    // above — the widget-marker guard `invoke` honours (aetherTxKeying) would
-    // be skipped. A synthesized edge that only the filter can see cannot
-    // click anything. Nothing goes through the window manager, so
-    // focus-stealing prevention cannot defeat it. (Constitution VI)
+    // Send (not post) to the main window, never the focus widget: app-level
+    // filters still run the real key path synchronously (isAccepted() is
+    // meaningful), and a focused widget could key TX itself (Space on an
+    // ATU/CWX button, Return on a default button), bypassing the action gate
+    // and aetherTxKeying. No window-manager involvement.
     QApplication::sendEvent(this, &ev);
     if (!ev.isAccepted())
         return KeyInjectNotConsumed;
@@ -1747,35 +1719,13 @@ int MainWindow::injectKeyEventForAutomation(const QString& spec, bool press, boo
 
 void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
 {
-    // Radio-authoritative toggle (#4057). band_zoom/segment_zoom are per-pan,
-    // radio-owned flags broadcast in pan status (FlexLib Panadapter.cs:933) and
-    // decoded into PanadapterModel. Reading the model instead of a client-side
-    // bool keeps every entry point — the B/S buttons, the shortcut actions,
-    // MIDI, FlexControl, the RC28/Stream Deck/T-Mate2 chain, the wheel and the
-    // automation bridge — in sync with the radio: a manual pan/zoom clears the
-    // flag on the radio, the status echo clears the model, and the next press
-    // correctly sends =1 again instead of a dead =0. Band/segment mutual
-    // exclusion is likewise the radio's own (it clears the other flag and
-    // broadcasts both), per-pan state is naturally per-pan, and a failed send
-    // can't invert anything because nothing is latched client-side.
-    // THE CAPABILITY GATE THE BUTTONS HONOUR, honoured here too. Reaching this
-    // function by keyboard shortcut, MIDI, FlexControl, RC28 or the automation
-    // bridge used to skip it entirely, because only SpectrumWidget's "B"/"S"
-    // buttons were ever disabled -- so a grayed-out button and a live keystroke
-    // did opposite things on a radio that answers neither. One predicate now
-    // decides both; see PanZoomModeGate.h, including why refusing this cannot
-    // withhold anything that transmits.
-    //
-    // AND THE REFUSAL SAYS SO, on the capability rung. A gate refuses BEFORE
-    // the send, so sendCmd is never reached and commandDropped() never fires:
-    // without this the six surfaces would go from the #5263 loud drop to
-    // silence, which is the dead-control shape this function is closing. Same
-    // qCWarning + notice pairing as the split_toggle gate above and the
-    // VfoWidget::splitToggled gate in MainWindow_Wiring.cpp; see
-    // MainWindow::showUnsupportedControlNotice()'s own comment for the rule
-    // and for the shared one-per-session latch. Only this rung announces --
-    // NotConnected and NoPan were silent early returns before and stay silent,
-    // so this restores exactly what the gate took away and nothing more.
+    // Radio-authoritative toggle (#4057): band_zoom/segment_zoom are per-pan
+    // radio flags in pan status (FlexLib Panadapter.cs), so read the model, not
+    // a client bool; the radio clears them on manual pan/zoom and enforces
+    // mutual exclusion. Every entry point honours the same capability gate as
+    // the B/S buttons (PanZoomModeGate.h). A capability refusal warns and calls
+    // showUnsupportedControlNotice() (sendCmd never runs); NotConnected/NoPan
+    // stay silent.
     auto* pan = panId.isEmpty() ? nullptr : m_radioModel.panadapter(panId);
     const auto refusal = panZoomModeRefusal(
         m_radioModel.isConnected(),

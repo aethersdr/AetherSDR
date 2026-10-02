@@ -26,34 +26,14 @@ class StripPuduPanel;
 class StripRxOutputPanel;
 class StripTubePanel;
 class StripWaveformPanel;
-// AetherRX — the receive chain in one window.
-//
-// Every client-side RX stage lives here, one per tab down the left-hand side
-// in signal order: noise reduction, gate, EQ, compressor, tube, exciter, and
-// the final output meter with its waveform. The tabs are the same
-// ModemChrome strip the AetherDSP body uses along its top, stood on end.
-//
-// This is the only RX surface: the Aetherial strip is AetherTX now and no
-// longer carries a receive page, so these panel instances are not competing
-// with a second copy.
-//
-// The AetherNR tab holds AetherDspWidget whole, including its own horizontal
-// method strip — the seven noise-reduction methods stay one click apart
-// rather than becoming seven more entries in this bar.
-//
-// Each tab carries a checkbox at its right-hand end that enables or bypasses
-// that stage, the same flag the RX chain strip's click-to-bypass toggles —
-// this window is where you set a stage up, so it is where you should be able
-// to switch it off. Out is the exception: a meter and a waveform are not a
-// stage and have nothing to bypass, so that row is indented to the others'
-// labels and carries no box.
-//
-// The five rows that are chain stages also carry a grip on the left, and
-// dragging one up or down rewrites AudioEngine's RX chain order — the bar is
-// the signal path, so moving a row moves the stage. AetherNR and Out have no
-// grip: client noise reduction runs ahead of the chain rather than inside it,
-// and Out is the meter at the end of it, so neither appears in RxChainStage
-// and neither can be anywhere but first and last.
+// AetherRX — the receive chain in one window, and the only RX surface. One tab
+// per client-side RX stage down the left in signal order (NR, gate, EQ,
+// compressor, tube, exciter, output meter), using the ModemChrome strip stood
+// on end. The AetherNR tab holds AetherDspWidget whole, with its own method
+// strip. Each stage tab has a bypass checkbox (the same flag as the RX chain
+// strip's click-to-bypass); Out has none. The five chain-stage rows have drag
+// grips that reorder AudioEngine's RX chain; AetherNR (runs ahead of the chain)
+// and Out (the end meter) aren't in RxChainStage and stay first and last.
 class AetherRxDialog : public PersistentDialog {
     Q_OBJECT
 

@@ -17,21 +17,12 @@ class AudioEngine;
 class RadioModel;
 class SliceModel;
 
-// Transmits a Client-Side QSO recording over the radio: AetherRX's PLAY button
-// carries "TX Playback" on its context menu, and this is what that entry runs.
-//
-// The audio takes the path the AX.25 modem and RADE already use -- the
-// recording arrives already decoded to wireFormat(), the engine's 24 kHz
-// stereo float (QsoRecorder::lastRecordingPcm), and is paced onto the modem TX route
-// (AudioEngine::sendModemTxAudio) with local DAX TX mode holding the
-// microphone off the wire, and the transmitter is keyed and released through
-// the producer PTT API under the operator's own captured input. Nothing here
-// keys on its own: start() needs a TxCoordinator::Request captured at the
-// menu click, and every refusal, disconnect, PTT block or external unkey
-// ends the session with the transmitter released (Principle VI).
-//
-// One session at a time. Calling start() while active is refused; abort()
-// stops the one running.
+// Transmits a Client-Side QSO recording (AetherRX PLAY → "TX Playback"). The
+// decoded recording (QsoRecorder::lastRecordingPcm, 24 kHz stereo float) is
+// paced onto AudioEngine::sendModemTxAudio with DAX TX mode keeping the mic
+// off air, keyed via the producer PTT API under the TxCoordinator::Request
+// captured at the click. Any refusal, disconnect, PTT block or external unkey
+// ends the session with TX released. One session at a time.
 class RxPlaybackTransmitter : public QObject {
     Q_OBJECT
 

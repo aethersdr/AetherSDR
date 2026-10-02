@@ -22,27 +22,12 @@ namespace AetherSDR {
 
 namespace {
 
-// The expanded panel's design size — the size at which every metric below is
-// its literal value. Actual metrics are that value times a single scale
-// derived from how much room the panel actually has, so growing the window
-// grows the contents rather than the padding around them.
-//
-// Same idea as CrossNeedleMeterWidget, which fits a fixed design canvas into
-// its widget and scales the painter onto it. That works because the meter is
-// one painted face; this panel is a widget tree, so the scale is applied to
-// each metric instead of to a QPainter. The limiting dimension wins, so the
-// panel keeps its proportions instead of stretching.
-// What the widest row costs at scale 1.0: three dials at 46 plus three keys
-// at 16:9 off 95% of that, their spacings, and the column's side margins.
-//
-// Measured rather than assumed would be better, and is what the height term
-// below does — but width cannot be measured the same way. The height budget
-// is stable because every contribution to it scales; the width's does not,
-// so dividing a measured width by the scale leaves a constant term behind
-// that grows as the scale falls, and the next scale reads larger, and it
-// runs away. Observed: a 686px panel drew its contents half again larger
-// than an 802px one. So this is a constant, and it has to be kept in step
-// with the metrics above it.
+// Expanded panel design size: metrics are their literal values at scale 1.0
+// and scale uniformly by the limiting dimension (like CrossNeedleMeterWidget,
+// but per metric since this is a widget tree). kDesignWidth is the widest row
+// at scale 1.0 (three 46 dials, three 16:9 keys, spacing, margins). It must be a
+// constant kept in step with the metrics: a measured width feeds back through
+// the scale and runs away.
 constexpr qreal kDesignWidth  = 420.0;
 // Only a first guess at the contents' height: applyDensity replaces it with
 // the measured value as soon as there is a laid-out column to measure.
@@ -1204,16 +1189,8 @@ void TunerApplet::cycleOperateState()
 
 void TunerApplet::setRadioMeters(float fwdPower, float swr)
 {
-    // Yields to the tuner's own status while that is arriving. Which source
-    // wins used to be the other way round, and was right when it was written:
-    // both ran at about 1 Hz, and the relay was the steadier of the two.
-    //
-    // The direct path is now 60 Hz while keyed and carries the device's peak
-    // field, which the relay does not have at all -- so the relay became the
-    // stale one. It still suppressed the direct path for 1500 ms per sample,
-    // which meant the gauge ran at the relay's rate on any station whose
-    // radio relays TGXL meters, and none of the faster polling reached the
-    // screen there.
+    // The relay yields while the tuner's own status is fresh: the direct path runs
+    // at 60 Hz keyed and carries the device peak field, which the relay lacks.
     if (m_deviceMeters.isValid()
             && m_deviceMeters.elapsed() < kRelayMeterFreshnessMs) {
         return;
@@ -1250,16 +1227,10 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
     } else {
         static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
     }
-    // Peak the device's own reading when we have one. `fwd` is a single
-    // instant sampled well below the envelope rate, so peaking it holds the
-    // loudest silence rather than the loudest syllable: on a measured voice
-    // transmission `fwd` sat at 0.14 W in roughly three samples out of four
-    // while the TGXL's `peak` read up to 82 W. The radio-relayed path has no
-    // peak field and keeps the old behaviour.
-    // The device's own peak is a separately measured statistic, so it owns
-    // the external-peak mode while direct telemetry is present. The relay
-    // path above switches back to a window over fwdPower when no device peak
-    // is available.
+    // Use the device's own peak when present: `fwd` is a sparse instant sample
+    // (on voice it mostly reads near zero while `peak` reads the envelope). The
+    // device peak owns the external-peak mode while direct telemetry is present;
+    // the relay path has no peak and windows over fwdPower.
     if (fwdPeak >= 0.0f) {
         powerGauge->setExternalPeak(fwdPeak);
     }

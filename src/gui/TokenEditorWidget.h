@@ -26,22 +26,11 @@ namespace AetherSDR {
 class CompactColorPicker;
 class GradientStrip;
 
-// Inline token editor used by ThemeEditorDialog.  Shows every control
-// group at all times (single vertical layout, no stacked-widget swap)
-// and enables/disables each group based on the current token's
-// namespace + value shape:
-//
-//   * color.* (scalar)   — CompactColorPicker bound to the scalar buffer
-//   * color.* (gradient) — GradientStrip + stop list + angle; the
-//     CompactColorPicker is bound to the currently-selected stop
-//   * font.family.*      — Font toolbar (family + size + style buttons)
-//   * font.size.* / sizing.* — pixel-value spin box
-//
-// All edits write to local buffers only.  ThemeManager isn't touched
-// until the operator clicks OK; Cancel discards back to the last
-// committed value.  This keeps drag interactions (SV crosshair,
-// gradient stop drag) cheap — only the picker's own widgets repaint
-// at mouse-event rate, never the rest of the app.
+// Inline token editor for ThemeEditorDialog. All control groups stay visible,
+// enabled by the token's namespace/shape: color.* scalar (CompactColorPicker),
+// color.* gradient (GradientStrip + stops + angle, picker bound to the selected
+// stop), font.family.* (font toolbar), font.size.* / sizing.* (pixel spin box).
+// Edits stay in local buffers until OK, so drags never repaint the whole app.
 class TokenEditorWidget : public QWidget {
     Q_OBJECT
 

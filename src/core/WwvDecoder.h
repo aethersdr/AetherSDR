@@ -1,25 +1,13 @@
 #pragma once
 
-// WWV/WWVH 100 Hz-subcarrier BCD time-code decoder — streaming port of the
-// gate-passed AetherClock reference chain (research/wwv_decode_proto.py).
-// Format facts per the NIST WWV/WWVH time-code table (NIST SP 432).
-//
-// Input contract: 24 kHz mono float32 from a slice tuned USB at
-// (carrier - 1 kHz). In that spectrum the RF carrier is a 1000 Hz audio tone,
-// the 100 Hz BCD subcarrier appears as 900/1100 Hz sidebands, and the WWV
-// 1000 Hz seconds tick images at 2000 Hz (WWVH's 1200 Hz tick at 2200 Hz —
-// which tick band carries energy tags the station).
-//
-// Chain: analytic bandpass 700-1300 Hz -> envelope -> coherent 100 Hz demod
-// (25 Hz LPF) -> 200 Hz amplitude series -> tick-phase sync (2000/2200 Hz
-// band) -> per-second matched-filter classify (170/470/770 ms templates at
-// +30 ms; margin = confidence) -> marker frame sync (P markers at seconds
-// 9/19/29/39/49/59; marker-only anchoring is DEGENERATE mod 10 s —
-// disambiguated via the s0 minute-mark subcarrier hole and minute-increment
-// scoring) -> NIST BCD field map -> TimeFrameVoter.
-//
-// Pure DSP — no Qt (EB1/EB2). Streaming: process() accumulates internally,
-// no whole-file transforms.
+// WWV/WWVH 100 Hz-subcarrier BCD time-code decoder (NIST SP 432), streaming
+// port of the AetherClock reference chain (research/wwv_decode_proto.py).
+// Input: 24 kHz mono float32 from a slice tuned USB at carrier - 1 kHz, so the
+// carrier is a 1000 Hz tone, the BCD subcarrier 900/1100 Hz sidebands, and the
+// seconds tick images at 2000 Hz (WWV) or 2200 Hz (WWVH), which tags the
+// station. Marker-only anchoring is degenerate mod 10 s; the s0 subcarrier hole
+// and minute-increment scoring disambiguate. Chain detail in the .cpp. Pure
+// DSP, no Qt (EB1/EB2); process() streams.
 
 #include "TimeFrameVoter.h"
 

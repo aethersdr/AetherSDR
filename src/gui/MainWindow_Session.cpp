@@ -1,23 +1,9 @@
-// MainWindow_Session.cpp — radio-session wiring for MainWindow.
-//
-// Part of the #3351 monolith decomposition (Phase 2c). Holds the three
-// constructor wiring blocks that constitute "a connected radio":
-//
-//   • wireDiscovery(): LAN discovery, heartbeat / TCP-ping disconnect
-//     detection, SmartLink (WAN)
-//   • wireRadioModel(): RadioModel connection-state + status routing,
-//     TX audio stream IDs for the DAX TX path
-//   • wirePanLifecycle(): panadapter stream → spectrum widgets, S-history
-//     markers, multi-pan create/destroy/rearrange lifecycle
-//
-// THIS FILE IS THE SEED OF RadioSession. The #3351 / #3445 (multi-radio)
-// plan extracts a RadioSession aggregate owning {RadioModel, TciServer,
-// CatPort[], connection lifecycle}; the methods here are the wiring that
-// moves onto that class. Keep additions session-scoped — window-chrome
-// wiring belongs elsewhere.
-//
-// Extracted verbatim from the constructor; each method is called at its
-// original constructor position, so construction order is unchanged.
+// MainWindow_Session.cpp — radio-session wiring: wireDiscovery() (LAN,
+// heartbeat/TCP-ping disconnect detection, SmartLink), wireRadioModel()
+// (connection state, status routing, DAX TX stream IDs), wirePanLifecycle()
+// (pan stream → spectrum widgets, multi-pan lifecycle). Seed of the planned
+// RadioSession (#3351 / #3445): keep additions session-scoped. Each method runs
+// at its original constructor position.
 
 #include "MainWindow.h"
 #include "MeterApplet.h"
@@ -205,18 +191,11 @@ void MainWindow::wireDiscovery()
     connect(&m_radioModel, &RadioModel::backendRebuilt,
             this, &MainWindow::rewirePanStreamAfterBackendSwap);
 
-    // RX audio from a backend that demodulates in-process (HL2). Flex audio
-    // arrives on the PanadapterStream path instead and never reaches here, so
-    // there is no double-feed. Bound to m_radioModel rather than the backend, so
-    // it survives a backend swap without re-wiring.
-    //
-    // ⚠ The demo (SimBackend) ALSO emits IRadioBackend::audioFrameReady, and
-    // wireBackendSeam() already connects that signal straight to the AudioEngine.
-    // Without this gate the demo's frames arrive TWICE — once direct, once relayed
-    // via RadioModel::backendAudioFrameReady — and the engine consumes at double
-    // rate: an audible ~187.5 Hz (24 kHz / 128-sample frame) scratchy buzz.
-    // Qt::UniqueConnection cannot catch it: these are two DIFFERENT signals
-    // arriving at the same slot, so nothing looks duplicate to Qt.
+    // RX audio from in-process demodulating backends (HL2); Flex audio uses
+    // PanadapterStream. Bound to m_radioModel so it survives backend swaps.
+    // The sim also emits audioFrameReady and wireBackendSeam() feeds it to the
+    // engine directly, hence the backendFeedsEngineDirectly() gate (two
+    // different signals, so Qt::UniqueConnection cannot dedupe).
     connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
             m_audio, [this](const PcmFrame& pcm) {
         if (backendFeedsEngineDirectly()) return;   // demo feeds the engine directly
@@ -536,22 +515,11 @@ void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
     if (!m_autoConnectSerial.isEmpty() && info.serial == m_autoConnectSerial)
         return;
 
-    // BOUNDED RETRY — this slot now has a signal that repeats behind it.
-    //
-    // radioUpdated fires on every status CHANGE, and our own attempt is what
-    // produces those changes: starting the stream flips the radio to In_Use,
-    // tearing it down flips it back to Available. So a radio that never completes
-    // a handshake re-triggers this slot indefinitely — roughly every two
-    // discovery sweeps — and each pass overwrites the real error with
-    // "Auto-connecting…", so the operator never gets to read why it failed.
-    //
-    // The Flex path could not do this: radioDiscovered fires once per appearance.
-    // Adding radioUpdated is what made a latch necessary.
-    //
-    // Counted per serial and reset on a successful connect or when the radio
-    // leaves discovery entirely (radioLost) — a radio that was power-cycled
-    // deserves a fresh set of attempts, and that is also the operator's way of
-    // clearing this without restarting the app.
+    // Bounded retry: radioUpdated fires on every status change, and our own
+    // attempt causes those (In_Use ↔ Available), so a radio that never completes
+    // a handshake would retrigger forever and hide the real error. Counted per
+    // serial; reset on a successful connect or radioLost (power-cycling the
+    // radio clears it).
     if (m_autoConnectAttempts.value(info.serial) >= kMaxAutoConnectAttempts)
         return;
 
@@ -1127,6 +1095,7 @@ void MainWindow::wireRadioModel()
                 m_aetherialStrip->setMicInputReady(ready);
                 m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
             }
+            updateTxAudioPathNotice();
 
             // If the user pulls the plug on readiness mid-recording
             // (mic source away from PC, or DAX back on), stop the
@@ -1143,31 +1112,12 @@ void MainWindow::wireRadioModel()
         m_audio->setAllowBluetoothTelephonyOutput(allowBluetoothTelephonyOutput);
     }, Qt::QueuedConnection);
 #endif
-    // Sync PC mic gain directly from slider. In RADE mode, the radio's mic input
-    // is unused — the slider controls client-side gain regardless of mic_selection.
-    //
-    // EXCEPT on a backend that modulates on this host, where the SAME slider
-    // already reaches Hl2TxDsp's pre-ALC gain through TransmitModel::setMicLevel
-    // and the seam bridge in RadioModel. Letting both run would apply the
-    // operator's gain TWICE, in series, which is not what a slider labelled once
-    // can mean. The modulator's is the one to keep: setPcMicGain only ever
-    // attenuates (0..100 maps to 0.0..1.0, and AudioEngine skips it entirely at
-    // unity), while the modulator's slider reaches +40 dB and is now the only
-    // thing that lifts a quiet mic at all — the ALC behind it only reduces.
-    // See Hl2Backend::setMicGain.
-    //
-    // This gate is also why the control was dead rather than doubled before now:
-    // micSelection() is "MIC" until a radio reports otherwise, and an HL2 has no
-    // command plane to report it, so neither branch of the old condition ever
-    // ran and neither did the modulator's — the slider reached nothing at all.
-    //
-    // Through hostModulatesTxAudio() rather than reading caps.hostModulates
-    // bare: that helper is `hostModulates && canTransmit`, which is the form
-    // every other site in this file uses (see the connection-edge handler
-    // above) and the one QsoRecordStartPolicy.h names as canonical. A backend
-    // declaring hostModulates without canTransmit would otherwise lose the PC
-    // path here and get nothing back, since RadioModel's seam would be pushing
-    // gain into a modulator that can never key.
+    // PC mic gain from the slider (in RADE mode the radio's mic input is
+    // unused). Not on a host-modulating backend: the same slider already reaches
+    // the modulator's pre-ALC gain (up to +40 dB, see Hl2Backend::setMicGain)
+    // via TransmitModel::setMicLevel, and applying both would double it. Uses
+    // hostModulatesTxAudio() (`hostModulates && canTransmit`), the canonical
+    // form (QsoRecordStartPolicy.h).
     connect(m_appletPanel->phoneCwApplet(), &PhoneCwApplet::micLevelChanged,
             this, [this](int level) {
         if (hostModulatesTxAudio())
@@ -1235,16 +1185,10 @@ void MainWindow::wireRadioModel()
                 this, syncLocalSidetoneToRadio);
         syncLocalSidetoneToRadio();
 
-        // CWX local keyer — when the user fires text/macros via CWX, this
-        // generates a matching dit-dah pattern locally and routes it
-        // through the same sidetone generator.  Keeps in sync with the
-        // radio's keyer because both run at the configured WPM.  Drift
-        // tolerance is high — we're not transmitting, just providing the
-        // operator with audible feedback of what they sent.
-        // The keyer runs its element schedule on its own worker thread, timed
-        // against steady_clock rather than a QTimer, so panadapter paint /
-        // VITA-49 burst pressure on the GUI event loop can't gap CW elements
-        // (#3623) — same reason the iambic keyer below avoids QTimer.
+        // CWX local keyer: plays the CWX text/macros as local sidetone at the
+        // configured WPM (feedback only, drift tolerated). Elements are timed on
+        // its own worker thread against steady_clock, not QTimer, so GUI-loop
+        // load cannot gap them (#3623).
         m_cwxLocalKeyer = std::make_unique<CwxLocalKeyer>();
         m_cwxLocalKeyer->setOnKeyDownChange([this](bool down,
                                                    std::chrono::steady_clock::time_point when) {
@@ -1770,25 +1714,11 @@ void MainWindow::wirePanLifecycle()
             auto& s = AppSettings::instance();
             bool wnbOn = s.value(sw->settingsKey("DisplayWnbEnabled"), "False").toString() == "True";
             int wnbLevel = s.value(sw->settingsKey("DisplayWnbLevel"), "50").toInt();
-            // RF gain: push ONLY a value the operator actually saved.
-            //
-            // With no saved value there is nothing to restore, and the radio's
-            // own gain is the right answer — so leave it alone and mirror it
-            // into the widgets instead.
-            //
-            // Writing a default here is what made this subtle. On a Flex,
-            // rfgain 0 is the neutral middle of a -8..+32 range, so pushing a
-            // hardcoded 0 was invisible. On a backend that owns its gain in a
-            // register it is not: the HL2 comes up at 20 dB of AD9866 LNA gain,
-            // and a never-saved "0" pushed it 20 dB down — a receiver that is
-            // simply deaf, with nothing in the UI saying anything was applied.
-            //
-            // Seeding the default from the pan model instead does NOT fix it.
-            // This restore runs off panadapterInfoChanged, which can land
-            // before the backend has published its gain, so the model still
-            // reads its own 0 and the same 0 goes back to the hardware.
-            // Measured: Radio Health showed "LNA gain 0 dB" on a fresh HL2
-            // profile. The only correct rule is not to write at all.
+            // RF gain: push only a value the operator saved; otherwise leave the
+            // radio's gain and mirror it into the widgets. A default is not
+            // neutral everywhere (HL2 boots at 20 dB LNA, so "0" deafens it), and
+            // seeding from the pan model does not help: this can run before the
+            // backend publishes its gain.
             const QString rfGainKey = rfGainSettingsKey(sw);
             const bool haveSavedRfGain = s.contains(rfGainKey);
             const bool clientOwnsRfGain =
@@ -2061,19 +1991,11 @@ void MainWindow::wirePanLifecycle()
                     });
                 }
 
-                // Restore floating-pan state saved from the previous session.
-                // Runs for any pan count so a single floated pan is also restored.
-                //
-                // NOT while the workspace canvas is on (RFC #4887, maintainer
-                // ruling 2026-08-12): canvas mode owns placement, and replaying
-                // window-persistence floats under it hands the operator an
-                // uncontrollable always-above window that looks exactly like a
-                // broken canvas pan — stale FloatingPanIds from the pre-canvas
-                // era cost a full day of field debugging to identify. The
-                // restored pans have already arrived as canvas items at their
-                // slots by this point; popping out MANUALLY is untouched
-                // (decision 1 — pop-out stays), and the saved key is left
-                // alone so a canvas-off session still restores it.
+                // Restore floating pans from the previous session (any pan
+                // count), except while the workspace canvas is on (RFC #4887):
+                // the canvas owns placement and replayed floats become
+                // uncontrollable always-on-top windows. Manual pop-out is
+                // unaffected, and the saved key is kept for canvas-off sessions.
                 if (!(m_workspaceController && m_workspaceController->isEnabled())) {
                     m_panStack->restoreFloatingState();
                 }
@@ -2341,32 +2263,14 @@ void MainWindow::wireCatPorts()
 
 }
 
-// The RX-audio sinks fed by PanadapterStream::pcmFrameReady, in one place so
-// buildUI() and rewirePanStreamAfterBackendSwap() bind an identical set. The
-// stream is owned by the Flex backend and is destroyed/rebuilt on a family
-// swap (RadioModel::teardownBackend/setupBackend), which drops these — and Flex
-// RX audio itself rides pcmFrameReady, so a missed one is silence, not a
-// degraded feature. Keeping the list here (not open-coded in two places) is why
-// a new sink added to buildUI cannot silently go un-rebound after a swap.
-// Deliberately NOT IRadioBackend::ownsRxAudio(), despite the near-identical
-// English. The two ask different questions and disagree about the HL2:
-//
-//   IRadioBackend::ownsRxAudio()      "audio arrives over the seam"
-//                                       HL2 TRUE, sim true, Flex false
-//   MainWindow::backendFeedsEngineDirectly()
-//                                     "the backend already feeds AudioEngine
-//                                      itself, so no relay"
-//                                       HL2 FALSE, sim true, Flex false
-//
-// An HL2 owns its RX audio AND needs the relay: wireBackendSeam() connects
-// audioFrameReady -> feedAudioData for the sim ONLY, so HL2 audio reaches the
-// engine through RadioModel::backendAudioFrameReady instead.
-//
-// So the tempting cleanup — delegating this to backend()->ownsRxAudio() —
-// makes the relay's `if (…) return;` swallow every HL2 frame and SILENCES the
-// speaker on the radio this all exists to support. Renamed away from the
-// collision precisely so nobody makes that substitution on the strength of the
-// names matching. (PR #4537 review.)
+// The RX-audio sinks fed by PanadapterStream::pcmFrameReady, listed once so
+// buildUI() and rewirePanStreamAfterBackendSwap() bind the same set (the
+// stream is rebuilt on a family swap, and a missed sink is silence).
+// Not IRadioBackend::ownsRxAudio(), which differs for HL2:
+//   ownsRxAudio()                "audio arrives over the seam": HL2 true, sim true, Flex false
+//   backendFeedsEngineDirectly() "no relay needed":            HL2 false, sim true, Flex false
+// HL2 audio reaches the engine via RadioModel::backendAudioFrameReady, so
+// substituting ownsRxAudio() would silence the HL2.
 bool MainWindow::backendFeedsEngineDirectly()
 {
     // The demo (RFC #4288 Route A) is the one backend that BOTH vends a
@@ -2399,18 +2303,9 @@ void MainWindow::wirePanStreamRxAudioSinks()
                 Qt::UniqueConnection);
     }
 
-    // The QSO recorder's RX tap and the CW/RTTY decoder feeds used to be wired
-    // HERE, to this stream. They now ride RadioModel::rxDemodAudioReady — see
-    // wireRxDemodAudioSinks(), called once from buildUI. Two reasons:
-    //
-    //   1. A radio without a PanadapterStream (HL2) never reached this function
-    //      at all — the early return above — so all three were silently dead.
-    //   2. Even for a Flex they had to be re-bound on every family swap, which
-    //      is the fragility the comment above this function warns about. Bound
-    //      to RadioModel they simply outlive the swap.
-    //
-    // The primary RX audio → QAudioSink connection above stays exactly where it
-    // was, deliberately: nothing audible changes on any family.
+    // The QSO recorder and CW/RTTY decoder feeds ride
+    // RadioModel::rxDemodAudioReady (wireRxDemodAudioSinks()), not this stream,
+    // so they work without a PanadapterStream and survive family swaps.
 }
 
 // The RX-audio taps that listen ALONGSIDE the speaker: the QSO recorder and the
@@ -2538,18 +2433,10 @@ void MainWindow::rewirePanStreamAfterBackendSwap()
 
 void MainWindow::wireDaxIq()
 {
-    // ── DAX IQ wiring (all platforms, established once at construction) ──
-    //
-    // The DAX-IQ data path is independent of the DAX *audio* bridge: it needs
-    // only PanadapterStream (VITA-49 IQ routing) and the applet, both of which
-    // exist at construction on every platform. Wiring it here — instead of
-    // lazily inside startDax() on Mac/PipeWire — means a DAX-IQ channel works
-    // without first enabling DAX audio, and the enable/disable/rate connections
-    // survive a DAX-audio stop (they were never tied to the bridge's lifetime,
-    // so stopDax() can't tear them down and leave a half-wired path that
-    // double-creates streams). This is the single source of IQ-side wiring;
-    // startDax() wires only the audio-bridge connections. (Same stream-status
-    // registration need as #1820 / RADE RX on Windows.)
+    // DAX IQ wiring, once at construction on all platforms. Independent of the
+    // DAX audio bridge (needs only PanadapterStream and the applet), so IQ
+    // works without DAX audio and stopDax() cannot half-tear it down. The only
+    // place IQ-side wiring happens; startDax() wires only the audio bridge.
     if (m_appletPanel && m_appletPanel->daxIqApplet() && m_radioModel.panStream()) {
         connect(&m_radioModel, &RadioModel::statusReceived,
                 this, [this](const QString& obj, const QMap<QString,QString>& kvs) {
@@ -2827,17 +2714,10 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         snapshot[QStringLiteral("queued")] = queued;
         return snapshot;
 #else
-        // No diagnostics() on the Linux/Windows backends yet, so a bare
-        // `devices ulanzi` query still cannot be answered here. Report that as
-        // a REFUSAL rather than ok:true — a caller checking ok (the obvious
-        // field) previously read success from a call that did nothing at all,
-        // and only the separate supported:false said otherwise.
-        //
-        // A lifecycle call is different: dispatch was accepted, so it reports
-        // ok:true and carries what these backends can honestly answer. It
-        // does NOT carry supported:false -- no snapshot was asked for, and a
-        // script that reads `supported` as "did this work" would abort on a
-        // start that actually ran. That field belongs only on the refusal.
+        // No diagnostics() on the Linux/Windows backends, so a bare `devices
+        // ulanzi` query is a refusal (ok:false, supported:false). A lifecycle
+        // call was dispatched, so it reports ok:true without `supported`,
+        // which scripts would misread as failure.
         if (diagnostic == QLatin1String("ulanzi")) {
             return QJsonObject{
                 {QStringLiteral("ok"), false},
@@ -2995,7 +2875,11 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
     if (connected && pcAudioRequired && !savedPcAudio) {
         settings.setValue("PcAudioEnabled", "True");
         settings.save();
+        if (m_appletPanel && m_appletPanel->clientChainApplet()) {
+            m_appletPanel->clientChainApplet()->setRxPcAudioEnabled(true);
+        }
     }
+    updateTxAudioPathNotice();
     // Evaluate stream state on the audio thread, after any preceding update.
     // Repeated capabilities must not enqueue duplicate capture starts.
     AudioEngine* audio = m_audio;
@@ -3022,25 +2906,11 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
     }
 }
 
-// One notice per connect session, latch reset on the connect edge (M0, #5263).
-//
-// Held here rather than inline in the commandDropped lambda because a
-// capability gate REFUSES BEFORE THE SEND: `sendCmd` is never reached, so
-// `commandDropped` never fires, and a control converted from "drops silently"
-// to "refuses" would otherwise have taken the operator's only feedback away
-// with it. #5266 landed its four gates on 2026-08-26 and #5265 made the drop
-// loud on 2026-08-27, so that trade was invisible at the time; it is not
-// invisible now. A gate calls this so a refused control says exactly what a
-// dropped one says.
-//
-// The latch is now SHARED between two producers: this helper's gate callers and
-// the commandDropped path. One refusal per connect session therefore consumes
-// the notice for both, so an operator who trips a capability gate first sees
-// nothing for a genuinely dropped command later in the same session. That is
-// the pre-existing one-shot semantics extended to a second producer rather than
-// a new rule, and the message is deliberately generic enough to stand for
-// either cause — but it is a real consequence and is recorded here rather than
-// left to be rediscovered.
+// One notice per connect session, latch reset on the connect edge (#5263).
+// Capability gates refuse before sendCmd, so commandDropped never fires; gates
+// call this so a refusal reads like a drop. The latch is shared with the
+// commandDropped path: a gate refusal consumes the notice for a later real
+// drop in the same session too.
 void MainWindow::showUnsupportedControlNotice()
 {
     if (m_commandDroppedNoticeShown)
