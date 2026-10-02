@@ -13706,6 +13706,20 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 QRhiTexture* oldSupplementalTexture =
                     m_wfSupplementalGpuTex;
                 QRhiShaderResourceBindings* oldFrameSrb = m_wfFrameSrb;
+                // The replaced resources may be the target of uploads already
+                // queued on this frame's command buffer: initialize() runs in
+                // the same render() call and uploads into them. The D3D11
+                // backend keeps raw pointers in its command list and releases
+                // on destroy, so they must outlive the frame (#6078).
+                const auto releaseAfterFrame = [](QRhiResource* resource) {
+                    if (resource) {
+                        resource->deleteLater();
+                    }
+                };
+                qDebug() << "SpectrumWidget: waterfall texture resized"
+                         << m_wfGpuTexW << "x" << m_wfGpuTexH << "->"
+                         << desiredWidth << "x" << desiredHeight
+                         << "(old resources released after the frame)";
                 m_wfGpuTex = colorTexture.release();
                 m_wfSrb = legacySrb.release();
                 m_wfGpuTexW = desiredWidth;
@@ -13717,9 +13731,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     m_wfSupplementalGpuTex =
                         supplementalTexture.release();
                     m_wfFrameSrb = frameSrb.release();
-                    delete oldFrameSrb;
-                    delete oldFrameTexture;
-                    delete oldSupplementalTexture;
+                    releaseAfterFrame(oldFrameSrb);
+                    releaseAfterFrame(oldFrameTexture);
+                    releaseAfterFrame(oldSupplementalTexture);
                     m_wfFrameTexDirty = true;
                 } else if (rowPipelineWasActive) {
                     releaseWaterfallFramePipelineResources();
@@ -13729,8 +13743,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                         << "SpectrumWidget: using legacy waterfall pipeline:"
                         << m_wfPipelineFallbackReason;
                 }
-                delete oldLegacySrb;
-                delete oldColorTexture;
+                releaseAfterFrame(oldLegacySrb);
+                releaseAfterFrame(oldColorTexture);
             }
         }
 
