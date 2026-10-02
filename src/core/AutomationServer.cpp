@@ -1437,8 +1437,7 @@ bool parseBool(const QString& v)
 // control; it logs a warning so the control gets markTxKeying().
 bool isTransmitControl(const QWidget* w)
 {
-    // One predicate, shared with the keyboard TX activation guard
-    // (transmitControlMatch() in core/TxKeyingMarker.h) so they cannot drift.
+    // Shared with the keyboard TX activation guard.
     const TransmitControlMatch match = transmitControlMatch(w);
     if (match == TransmitControlMatch::NameFallback) {
         qCWarning(lcAutomation).noquote()

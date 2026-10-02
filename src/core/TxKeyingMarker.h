@@ -123,20 +123,9 @@ private:
     bool m_started{false};
 };
 
-
-// ── Is this widget a transmit control? One answer for every guard ──────────
-// Shared by the automation bridge (AutomationServer.cpp isTransmitControl /
-// hasTransmitControlInChain) and the keyboard activation guard
-// (gui/TxKeyActivationGuard.h), so the two cannot drift apart.
-
-// Tokenize an identifier or label into lowercased words, splitting on
-// non-alphanumeric separators AND camelCase humps (tuneButton -> [tune, button],
-// aprsSvcWXBOT -> [aprs, svc, wxbot], "Auto-Tune" -> [auto, tune]). The TX-guard
-// fallback matches a deny-word against a WHOLE token, so a cross-token trigram
-// like "cwx" formed by the c in "svc" + "wx" in "wxbot" no longer false-positives
-// as the CWX keyer, while genuine keyers (moxButton, pttSend, "Auto-Tune") still
-// match. This is the anchored replacement for the old bare contains() blocklist
-// that flagged the RX-only APRS weather entry (#3646).
+// Lowercased words of an identifier or label, split on separators and camelCase
+// humps (aprsSvcWXBOT -> [aprs, svc, wxbot]). The TX-guard fallback matches a
+// deny-word against a WHOLE token, so "svc"+"wxbot" never reads as "cwx" (#3646).
 inline QStringList identifierTokens(const QString& s)
 {
     QString spaced;
@@ -169,13 +158,9 @@ inline bool matchesTxDenyToken(const QStringList& haystacks, const QStringList& 
     return false;
 }
 
-// The fallback deny-list, kept narrow: only words that unambiguously mean
-// "keys TX". "tune"/"atu"/"vox" were dropped because they false-positive on
-// RX-only controls — the "Tune Now" button (net/spot retune) and "Tune to
-// <spot>" only move the VFO, and a VOX toggle arms TX rather than keying it.
-// The genuine keying TUNE/ATU buttons (TxApplet, AtuPreTuneDialog) all carry
-// the authoritative markTxKeying() marker, so removing them here loses no real
-// protection. (#3918 — "Tune Now" false-positive)
+// The fallback deny-list: only words that unambiguously mean "keys TX".
+// "tune"/"atu"/"vox" also name RX-only controls ("Tune Now", a VOX arm toggle);
+// the keying TUNE/ATU buttons carry markTxKeying() instead (#3918).
 inline const QStringList& txDenyTokens()
 {
     static const QStringList kDeny = {
@@ -191,10 +176,9 @@ enum class TransmitControlMatch {
     NameFallback,  // unmarked button whose name/label reads as a TX keyer
 };
 
-// Authoritative: the positive marker. Fallback: a button-scoped name
-// heuristic for a keying control that lacks the marker (button-scoped because
-// sliders never key). A NameFallback result means the control should get
-// markTxKeying(); callers that can log, should.
+// Is this widget a transmit control? One answer for the automation bridge and
+// the keyboard activation guard. The marker is authoritative; the name match is
+// a button-only fallback, and a NameFallback control should get markTxKeying().
 inline TransmitControlMatch transmitControlMatch(const QWidget* w)
 {
     if (!w)

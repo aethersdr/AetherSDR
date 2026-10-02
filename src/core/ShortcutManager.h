@@ -33,9 +33,7 @@ struct ShortcutExportResult {
 };
 
 // The key sequence a key event resolves to for binding lookup: the key plus
-// Shift/Ctrl/Alt/Meta, nothing else (keypad and other flags masked off). Inline
-// here so every resolver -- the PTT (Hold) filter and the TX activation guard
-// -- matches a binding the same way and cannot drift.
+// Shift/Ctrl/Alt/Meta only. Shared by every resolver so they match alike.
 inline QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev)
 {
     if (!ev || ev->key() == Qt::Key_unknown)
@@ -113,13 +111,10 @@ public:
     void rebuildShortcuts(QWidget* parent,
                           std::function<bool()> guardFn = nullptr);
 
-    // Enable or disable operating QShortcut objects. Used to yield key
-    // events to focused child widgets (e.g. sliders) that would otherwise
-    // have their arrow keys stolen by window-level shortcuts, and to let
-    // every bound key through when keyboard shortcuts are switched off
-    // (#5483). The state is remembered: rebuildShortcuts() applies it to
-    // the shortcuts it creates, so a rebuild cannot silently re-arm keys
-    // that were yielded.
+    // Enable or disable the operating QShortcuts, so their keys reach the
+    // focused widget (a slider's arrows, or every bound key with keyboard
+    // shortcuts off, #5483). Remembered: rebuildShortcuts() applies it, so a
+    // rebuild cannot re-arm yielded keys.
     void setShortcutsEnabled(bool enabled);
     bool shortcutsEnabled() const { return m_shortcutsEnabled; }
 

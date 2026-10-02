@@ -10,21 +10,14 @@
 
 namespace AetherSDR {
 
-// Keyboard activation of a transmit-keying button while keyboard shortcuts are
-// off (#5483). A bound key then reaches the focused widget, and a clicked
-// button keeps focus, so Space would latch MOX. MainWindow::eventFilter()
-// refuses an activation key (Space, Select, Enter, Return) that is bound to a
-// shortcut action and delivered to a TX-keying button while shortcuts are off,
-// whether or not a radio is connected.
-//
-// "Keys the transmitter" is transmitControlMatch() (core/TxKeyingMarker.h), the
-// predicate the automation bridge uses, walked up the parent chain. Untouched:
-// mouse clicks, an activation key bound to no shortcut, a screen reader's
-// press action (no key event), and receive-only marked controls.
+// With keyboard shortcuts off a bound key reaches the focused widget, and a
+// clicked button keeps focus (#5483). Refuse a bound activation key (Space,
+// Select, Enter, Return) on a button that transmitControlMatch() — the bridge's
+// predicate, walked up the parent chain — says keys TX. Mouse clicks, unbound
+// keys, a screen reader's press action and receive-only controls are untouched.
 inline bool isTxKeyingButton(const QObject* receiver)
 {
-    // Only a button is activated by these keys; what it belongs to is judged
-    // up its parent chain, as the bridge does.
+    // Only a button is activated by these keys; judge its whole parent chain.
     const auto* button = qobject_cast<const QAbstractButton*>(receiver);
     if (!button)
         return false;
@@ -55,8 +48,7 @@ inline bool refuseTxKeyActivation(const QObject* receiver, const QKeyEvent* ev,
     }
     if (!isTxKeyingButton(receiver))
         return false;
-    // Resolve the binding exactly as MainWindow resolves PTT (Hold): the same
-    // function, not a copy of it.
+    // The same resolver MainWindow uses for PTT (Hold).
     return shortcuts.actionForKey(shortcutSequenceFromKeyEvent(ev)) != nullptr;
 }
 

@@ -679,16 +679,15 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         if (handlePttHoldShortcut(ke, event->type()))
             return true;
 
-        // With shortcuts off the bound key now reaches the focused widget
-        // (#5483) -- but never a transmit-keying button: a mouse click on MOX
-        // gives it focus, and the next Space must not latch TX. See
-        // TxKeyActivationGuard.h for the keyboard / screen-reader paths.
-        if (refuseTxKeyActivation(obj, ke, m_keyboardShortcutsEnabled, m_shortcutManager))
-            return true;
-
         // Monitor TX (Hold) — same event-filter treatment as PTT-hold, for the
         // same missing-released-signal reason.
         if (handleSplitMonitorShortcut(ke, event->type()))
+            return true;
+
+        // After every hold handler, so a hold's release always ends it. With
+        // shortcuts off a bound key reaches the focused widget, but never a
+        // TX-keying button: a clicked MOX keeps focus (#5483).
+        if (refuseTxKeyActivation(obj, ke, m_keyboardShortcutsEnabled, m_shortcutManager))
             return true;
 
         // MeterSlider (TCI/DAX gain) handles its own arrow stepping, badge,
