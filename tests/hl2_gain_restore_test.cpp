@@ -467,10 +467,22 @@ int main(int argc, char** argv)
             check(!autoGainWanted(session.backend.currentOperatingState()),
                   "positive control: the withdrawal reaches the profile by this path");
         }
+        // WANTED BUT NOT RUNNING, reached by restore. A saved `autoEnabled: true`
+        // sets the wish; the loop arms only on linkUp, which GainSession never
+        // fires. An off in that window must still clear the wish (#5828).
+        {
+            GainSession session(autoGainProfile(true));
+            check(!session.backend.autoRfGainEnabled()
+                      && autoGainWanted(session.backend.currentOperatingState()),
+                  "precondition: a restored wish with the loop not yet running");
+            session.backend.setAutoRfGain(false);
+            check(!autoGainWanted(session.backend.currentOperatingState()),
+                  "an off before the connect-time arm reaches the profile");
+        }
         // WHY THE FIRST LEG IS A DEFECT AND NOT BOOKKEEPING. A stranded `true`
         // is what the next connect reads, and the linkUp handler arms on it.
         // Arming from a restored preference is correct in itself; it is the
-        // harm only when leg one is what put the `true` there.
+        // harm only when an off the operator gave failed to remove the `true`.
         //
         // ILLUSTRATIVE, NOT DISCRIMINATING, AND SAYING SO IS THE POINT. This leg
         // does NOT exercise that connect-time arm and cannot. The handler is a
