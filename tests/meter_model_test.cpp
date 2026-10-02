@@ -8,9 +8,12 @@
 #include <QStringList>
 #include <QVector>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <utility>
+#include <vector>
 
 using namespace AetherSDR;
 
@@ -59,6 +62,227 @@ MeterDef slcMeter(int index, int sliceIndex)
     def.low = -150.0;
     def.high = 20.0;
     return def;
+}
+
+// ---------------------------------------------------------------------------
+// #5852: the second receiver's S-meter.
+//
+// Hl2Backend::sliceMeterName publishes receiver N>0 as "SLC<N>:LEVEL", and
+// IRadioBackend::meterUpdate carries no sourceIndex field, so the index has to
+// survive the trip inside the id. Two joints, and the bug is that BOTH were
+// open: the name had no definition, and nothing carried the index even if it
+// had. Fixing either alone is worse than fixing neither —
+//
+//   * a definition whose SOURCE is the string "SLC1" is accepted and appears in
+//     allMeters(), but defineMeter() keys its per-slice cache on
+//     `source == "SLC"` exactly, so the cache gains no key and nothing fires.
+//     It looks fixed and changes nothing (testSlc1SourceNeverKeysTheSliceCache).
+//   * corrected definitions with the index left unsent resolve through
+//     findMeter()'s sourceIndex<0 match-any, which returns the FIRST matching
+//     definition — so every receiver's reading lands on the lowest one. That is
+//     a plausible wrong number replacing an honest absence, which is why the
+//     "must not reach receiver 0" half below is the assertion that matters.
+
+using SliceLevel = std::pair<int, float>;
+
+// The tests below record every sLevelChanged the model emits, so they can
+// assert on what did NOT arrive as well as on what did.
+bool sawSlice(const std::vector<SliceLevel>& seen, int slice)
+{
+    return std::any_of(seen.begin(), seen.end(),
+                       [slice](const SliceLevel& s) { return s.first == slice; });
+}
+
+void testSuffixedSliceMeterIdReachesItsOwnReceiver()
+{
+    MeterModel model;
+    // Exactly what Hl2Backend declares: receiver 0 keeps meter index 1 and
+    // sourceIndex 0; receiver 1 takes an index from the per-receiver band.
+    model.defineMeter(slcMeter(1, 0));
+    model.defineMeter(slcMeter(101, 1));
+
+    QObject ctx;
+    std::vector<SliceLevel> seen;
+    QObject::connect(&model, &MeterModel::sLevelChanged, &ctx,
+                     [&seen](int slice, float dbm) { seen.emplace_back(slice, dbm); });
+
+    QString source;
+    QString name;
+    int sourceIndex = -1;
+    const bool split = MeterModel::splitMeterId(QStringLiteral("SLC1:LEVEL"),
+                                                &source, &name, &sourceIndex);
+    report("SLC1:LEVEL splits into source SLC, name LEVEL and index 1",
+           split && source == QStringLiteral("SLC")
+               && name == QStringLiteral("LEVEL") && sourceIndex == 1);
+
+    const bool accepted = model.updateValueByName(source, name, -73.0f, sourceIndex);
+    report("the second receiver's level is accepted at all", accepted);
+    report("the second receiver's level reaches the second receiver",
+           seen.size() == 1 && seen.front().first == 1
+               && nearlyEqual(seen.front().second, -73.0f));
+    // The half that a "receiver 1 got something" test would pass without.
+    report("the second receiver's level never reaches the first",
+           !sawSlice(seen, 0));
+    report("the first receiver's meter holds no value from the second",
+           model.valueAgeMs(1) < 0);
+}
+
+void testBareSliceMeterIdStillReachesTheFirstReceiver()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(1, 0));
+    model.defineMeter(slcMeter(101, 1));
+
+    QObject ctx;
+    std::vector<SliceLevel> seen;
+    QObject::connect(&model, &MeterModel::sLevelChanged, &ctx,
+                     [&seen](int slice, float dbm) { seen.emplace_back(slice, dbm); });
+
+    QString source;
+    QString name;
+    int sourceIndex = 99;
+    const bool split = MeterModel::splitMeterId(QStringLiteral("SLC:LEVEL"),
+                                                &source, &name, &sourceIndex);
+    report("SLC:LEVEL keeps its bare source and asks for match-any",
+           split && source == QStringLiteral("SLC")
+               && name == QStringLiteral("LEVEL") && sourceIndex == -1);
+
+    model.updateValueByName(source, name, -101.0f, sourceIndex);
+    report("the bare name still reaches the first receiver",
+           seen.size() == 1 && seen.front().first == 0
+               && nearlyEqual(seen.front().second, -101.0f));
+    report("the bare name does not reach the second receiver",
+           !sawSlice(seen, 1));
+}
+
+void testUnsuffixedSourcesKeepMatchAnyResolution()
+{
+    // The regression this fix could have caused. Every single-instance meter
+    // sends a source with no digits and relies on match-any to find a
+    // definition whose sourceIndex is whatever the backend chose — 8 here,
+    // which is what a TX waveform meter carries. Stripping or defaulting that
+    // to 0 would strand it.
+    MeterModel model;
+    // Source "TX", not the helper's "TX-": this is the plain transmit meter
+    // Hl2Backend and IcomCivBackend publish, and its sourceIndex is 8 here so
+    // that match-any is doing real work rather than agreeing with a default.
+    MeterDef fwd = txMeter(2, QStringLiteral("FWDPWR"), QStringLiteral("Watts"), 8);
+    fwd.source = QStringLiteral("TX");
+    model.defineMeter(fwd);
+
+    QString source;
+    QString name;
+    int sourceIndex = 0;
+    const bool split = MeterModel::splitMeterId(QStringLiteral("TX:FWDPWR"),
+                                                &source, &name, &sourceIndex);
+    report("TX:FWDPWR is unchanged by the split and stays match-any",
+           split && source == QStringLiteral("TX")
+               && name == QStringLiteral("FWDPWR") && sourceIndex == -1);
+    // updateValueByName returns false for an undefined meter, so a true here IS
+    // the resolution: findMeter matched sourceIndex 8 from an id carrying none.
+    report("an indexless id still resolves a definition with a nonzero index",
+           model.updateValueByName(source, name, 5.0f, sourceIndex));
+    report("and the same id with a wrong explicit index would not",
+           !model.updateValueByName(source, name, 5.0f, 0));
+}
+
+void testSlc1SourceNeverKeysTheSliceCache()
+{
+    // Why "add a def for SLC1" is not the fix. The definition is accepted, the
+    // value is accepted, and the receiver is still not reachable.
+    MeterModel model;
+    MeterDef bad = slcMeter(101, 0);
+    bad.source = QStringLiteral("SLC1");
+    model.defineMeter(bad);
+
+    QObject ctx;
+    std::vector<SliceLevel> seen;
+    QObject::connect(&model, &MeterModel::sLevelChanged, &ctx,
+                     [&seen](int slice, float dbm) { seen.emplace_back(slice, dbm); });
+
+    report("a definition whose source is SLC1 is accepted",
+           model.findMeter(QStringLiteral("SLC1"), QStringLiteral("LEVEL")) == 101);
+    report("and its value is accepted",
+           model.updateValueByName(QStringLiteral("SLC1"), QStringLiteral("LEVEL"), -73.0f));
+    report("but no receiver ever hears it",
+           seen.empty());
+}
+
+void testMeterIdSplitEdges()
+{
+    QString source;
+    QString name;
+    int sourceIndex = -1;
+
+    report("a multi-digit suffix parses whole",
+           MeterModel::splitMeterId(QStringLiteral("SLC12:LEVEL"), &source, &name, &sourceIndex)
+               && source == QStringLiteral("SLC") && sourceIndex == 12);
+
+    sourceIndex = -1;
+    report("digits in the NAME are left alone",
+           MeterModel::splitMeterId(QStringLiteral("RAD:+13.8A"), &source, &name, &sourceIndex)
+               && source == QStringLiteral("RAD")
+               && name == QStringLiteral("+13.8A") && sourceIndex == -1);
+
+    sourceIndex = -1;
+    report("an all-digit source is not a source with an index",
+           MeterModel::splitMeterId(QStringLiteral("12:LEVEL"), &source, &name, &sourceIndex)
+               && source == QStringLiteral("12") && sourceIndex == -1);
+
+    report("an id with no colon is refused",
+           !MeterModel::splitMeterId(QStringLiteral("SWR"), &source, &name, &sourceIndex));
+    report("an id with an empty source is refused",
+           !MeterModel::splitMeterId(QStringLiteral(":LEVEL"), &source, &name, &sourceIndex));
+    report("an id with an empty name is refused",
+           !MeterModel::splitMeterId(QStringLiteral("SLC:"), &source, &name, &sourceIndex));
+}
+
+// WITHDRAWING A METER THAT WAS NEVER DEFINED MUST DO NOTHING AT ALL.
+//
+// Backends withdraw defensively, over a set of receivers rather than over a set
+// of declarations: Hl2Backend's trim loop withdraws for every receiver at or
+// past the failure without knowing which of their chains got far enough to
+// declare anything. So removeMeter() is reached with indices nothing defines,
+// and it is reached that way on the ordinary paths, not only in error handling.
+//
+// Both halves below are consequences a consumer can see, not internal state.
+// The signal is the one the amplifier panel, the telemetry adapter and the DSP
+// applets hear; the manifest context is what decides which slice the NEXT TX
+// waveform definition belongs to, and removeMeter() resets it unconditionally,
+// so a stray withdrawal landing between an SLC block and its TX block moved
+// that block to the source-index fallback.
+void testWithdrawingAnUndeclaredMeterChangesNothing()
+{
+    MeterModel model;
+    int removals = 0;
+    QObject::connect(&model, &MeterModel::meterRemoved, &model,
+                     [&removals](int) { ++removals; });
+
+    model.defineMeter(slcMeter(12, 0));
+    model.removeMeter(4242);   // never declared, by any backend, ever
+    report("withdrawing an undeclared meter announces nothing", removals == 0);
+    report("withdrawing an undeclared meter leaves the declared ones alone",
+           model.findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"), 0) == 12);
+
+    // The context half. Same shape as testMixedSourceTxWaveformMetersUseManifest
+    // SliceContext: slice 1's TX block declares itself with source index 9, which
+    // no arithmetic maps to slice 1 -- only the SLC block in front of it does.
+    // The stray withdrawal sits exactly where a defensive teardown would put it.
+    model.defineMeter(txMeter(20, "COMPPEAK", "dB", 0));
+    model.defineMeter(slcMeter(30, 1));
+    model.removeMeter(4242);
+    model.defineMeter(txMeter(38, "COMPPEAK", "dB", 9));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({38}, {rawDb(8.0f)});
+    report("a stray withdrawal does not break the SLC -> TX manifest context",
+           model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 8.0f));
+
+    // And the guard has not made removeMeter() deaf to real withdrawals.
+    model.removeMeter(30);
+    report("a declared meter is still withdrawn, and still announced",
+           removals == 1
+               && model.findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"), 1) < 0);
 }
 
 // These tests keep active-slice routing and direct COMPPEAK coverage. They
@@ -1643,6 +1867,13 @@ void testMeterObservationWindow()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+
+    testSuffixedSliceMeterIdReachesItsOwnReceiver();
+    testBareSliceMeterIdStillReachesTheFirstReceiver();
+    testUnsuffixedSourcesKeepMatchAnyResolution();
+    testSlc1SourceNeverKeysTheSliceCache();
+    testMeterIdSplitEdges();
+    testWithdrawingAnUndeclaredMeterChangesNothing();
 
     testAdjacentMetersDoNotSynthesizeCompression();
     testCompPeakDirectlyExposesCompression();

@@ -13,16 +13,12 @@
 
 namespace AetherSDR::icom {
 
-// The single ordinary writer for Icom CI-V traffic.
-//
-// An Icom has no meter stream: meters, front-panel reconciliation, startup
-// snapshots and operator commands all share one serial command plane.  Sending
-// each producer directly creates bursts, unbounded stale reads and, for PTT, a
-// causal inversion where an old RX answer can arrive after a newer TX request.
-//
-// This class owns policy but not a timer or socket.  The backend supplies a
-// monotonic clock, takes dispatches, and writes them through IcomSession.  That
-// makes pacing, coalescing and lost/late replies deterministic unit tests.
+// The single ordinary writer for Icom CI-V traffic. Meters, front-panel
+// reconciliation, startup snapshots and operator commands share one serial
+// command plane; direct sends cause bursts, stale reads and, for PTT, an old RX
+// answer arriving after a newer TX request. Owns policy only — the backend
+// supplies the monotonic clock and writes dispatches through IcomSession — so
+// pacing, coalescing and lost/late replies are deterministic unit tests.
 class IcomCivScheduler {
 public:
     enum class Priority : std::uint8_t {
@@ -166,18 +162,11 @@ public:
     static constexpr int kReadTimeoutMs = 350;
     static constexpr int kPriorityAgingMs = 1000;
     static constexpr int kMeterQueueBudgetMs = 100;
-    // The ceiling on how long overdue meters may hold background work off.
-    // Without it, meters that replenish faster than the link drains them keep
-    // kMeterQueueBudgetMs satisfied forever and background aging never fires
-    // again — which is starvation, not pacing.
-    //
-    // 1500 ms is where the two pressures stop trading against each other.
-    // Measured on the production scheduler and poller over 60 s of sustained
-    // TX with every meter visible, worst-case forward-power age is 620/710/1190
-    // ms at 63/75/100 ms round trip — matching an unbounded hold to the
-    // millisecond at 63 and 75 ms — while control reconciliation still lands
-    // ~39-45 times a minute instead of never. Raising it further buys no
-    // freshness at all (the ages plateau) and only costs background progress.
+    // Ceiling on how long overdue meters may hold background work off; without it
+    // fast-replenishing meters starve background aging forever. 1500 ms measured
+    // over 60 s of TX with every meter visible: worst forward-power age 620/710/1190
+    // ms at 63/75/100 ms RTT (same as an unbounded hold at 63/75 ms), with control
+    // reconciliation landing ~39-45 times a minute. Higher values gain no freshness.
     static constexpr int kBackgroundStarvationCeilingMs = 1500;
     // How long a timed-out or displaced transaction stays recognisable, so a
     // late answer is still generation-checked rather than adopted as fresh

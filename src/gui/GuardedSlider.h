@@ -198,24 +198,10 @@ public:
     }
 };
 
-// The editor's validator, pinned to the C locale.
-//
-// QIntValidator validates in ITS locale while QString::toInt() always parses
-// in the C locale, so by default the two disagree: the validator accepts
-// locale digits and correctly-placed group separators ("3,000" under en_US,
-// Arabic-Indic digits under ar_*) that toInt() then refuses, and the edit
-// closes without ever reaching the model — an accepted keystroke that does
-// nothing (#5064 review). Pinning the validator to C, with the group
-// separator explicitly rejected rather than merely omitted, makes the two
-// halves agree on exactly one grammar: optional sign, ASCII digits.
-//
-// There is deliberately no clamping fixup() here. QIntValidator calls an
-// out-of-range number Intermediate, and QLineEdit will not emit
-// returnPressed/editingFinished on Intermediate input — the earlier version
-// of this class clamped in fixup() to keep Enter from being a dead keypress.
-// Return is now handled explicitly on the editor (see eventFilter below), so
-// an out-of-range entry closes the editor and RESTORES the previous value,
-// which is what issue #3627 asks for.
+// Validator pinned to the C locale with group separators rejected, so it
+// accepts exactly what QString::toInt() parses (optional sign, ASCII digits).
+// No clamping fixup(): Return is handled on the editor (eventFilter), so an
+// out-of-range entry closes the editor and restores the previous value (#3627).
 inline QIntValidator* makeCLocaleIntValidator(int minimum, int maximum, QObject* parent)
 {
     auto* validator = new QIntValidator(minimum, maximum, parent);
@@ -231,19 +217,11 @@ class ScrollableLabel;
 inline QAccessibleInterface* scrollableLabelAccessibleFactory(const QString& key,
                                                               QObject* object);
 
-// QLabel subclass that emits scrolled(int steps) on wheel events and
-// always consumes them. Used for RIT/XIT/pitch numeric displays. (#619)
-// When controls are locked (#745), ignores wheel events.
-//
-// The label can also be typed into (#3627): call setEditable() with the
-// accepted range and a double-click swaps a QLineEdit over the label.
-// Editing is OFF by default, so every existing user — RIT/XIT, step size,
-// RTTY mark/shift — keeps its display-only behaviour unchanged.
-//
-// A committed value is only ever a REQUEST. The owner clamps it against
-// whatever relationship its own controls carry (e.g. TX low <= high - 50)
-// and then re-syncs the text from the model, so the label can never show a
-// number the model did not accept.
+// QLabel that emits scrolled(int steps) on wheel events and always consumes
+// them; ignores wheel when controls are locked (#619, #745). setEditable()
+// enables double-click typed entry over the label (#3627); off by default. A
+// committed value is a request: the owner clamps it and re-syncs the text from
+// the model.
 class ScrollableLabel : public QLabel {
     Q_OBJECT
 public:
@@ -384,18 +362,10 @@ signals:
     void editCommitted(int value);
 
 protected:
-    // Cancel the edit on Esc.
-    //
-    // This MUST filter the editor and MUST answer ShortcutOverride, not just
-    // KeyPress. The main window carries `QShortcut(Qt::Key_Escape, window())`
-    // (CwxPanel, DvkPanel), and Qt dispatches a shortcut by first offering a
-    // ShortcutOverride event: if nothing accepts it, the shortcut fires and
-    // the focused widget is never sent a KeyPress at all. A keyPressEvent
-    // override on this label therefore never runs, which is exactly how this
-    // shipped broken — Esc did nothing in the app while passing a unit test
-    // that delivered the key straight to the widget with no shortcut present.
-    //
-    // Same shape as VfoWidget::eventFilter for its frequency direct-entry.
+    // Cancel on Esc. Must filter the editor and accept ShortcutOverride, not
+    // just KeyPress: the window has QShortcut(Qt::Key_Escape) (CwxPanel,
+    // DvkPanel), which would otherwise fire and the editor never sees the key.
+    // Same shape as VfoWidget::eventFilter.
     bool eventFilter(QObject* obj, QEvent* ev) override {
         if (obj == m_editor) {
             if (ev->type() == QEvent::ShortcutOverride
@@ -411,19 +381,10 @@ protected:
                     return true;
                 }
 
-                // Return/Enter must be handled HERE rather than left to
-                // QLineEdit's own signal (#5064 review). QLineEdit emits
-                // returnPressed/editingFinished on Return only once the
-                // validator reports Acceptable — an EMPTY field is
-                // Intermediate and nothing repairs it, so Enter emitted
-                // nothing at all and left the editor sitting open on top of
-                // the label, eating every wheel event aimed at the numerals
-                // underneath. The same held for any out-of-range entry once
-                // the clamping fixup() was removed.
-                //
-                // Committing explicitly makes Enter terminal for EVERY input:
-                // a legal value commits, anything else cancels and the
-                // previous value stands.
+                // Return/Enter handled here: QLineEdit emits returnPressed only
+                // for Acceptable input, so empty or out-of-range entries would
+                // leave the editor open. Enter commits a legal value, else
+                // cancels.
                 if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
                     if (ev->type() == QEvent::KeyPress)
                         commitEdit(RestoreFocus::Yes);
@@ -529,33 +490,12 @@ private:
     QLineEdit* m_editor{nullptr};
 };
 
-// An editable ScrollableLabel is an interactive control, and QLabel's default
-// StaticText role tells a screen reader the opposite — the same
-// interactive-QLabel anti-pattern docs/a11y.md names. Same lazy-factory shape
-// as CrossNeedleMeterWidget's.
-//
-// The role is Button, with a `press` action that opens the editor, exactly as
-// docs/a11y.md prescribes. An earlier version of this claimed EditableText on
-// the argument that activating it exposes a value rather than performing an
-// action — and shipped neither contract: runtime inspection found
-// textInterface() and editableTextInterface() both null and SetFocus as the
-// only action, so VoiceOver/NVDA/switch-control could focus the readout but
-// never open the editor (#5064 review). A role is a promise about which
-// interfaces exist; claiming one and implementing none is worse than the
-// StaticText it replaced, because an AT stops looking.
-//
-// Button is also the honest description of the RESTING state. This is a
-// two-stage control: the label is the thing you activate, and the QLineEdit
-// that appears carries Qt's own complete editable-text semantics. Nothing is
-// editable until the press happens.
-//
-// Keyboard users reach the same beginEdit() through keyPressEvent; AT users
-// reach it here. Both go through one entry point, and both honour the #745
-// lock — an AT press on a locked panel is the no-op the double-click is.
-//
-// Display-only ScrollableLabels — RIT/XIT, step size, RTTY mark/shift —
-// return nullptr from the factory and keep QLabel's StaticText, which is
-// correct for them.
+// Editable ScrollableLabel accessibility: role Button with a `press` action
+// that opens the editor, per docs/a11y.md (QLabel's StaticText would hide that
+// it is interactive). Not EditableText: no text interfaces exist on the label;
+// the QLineEdit that appears carries Qt's editable-text semantics. AT press
+// and keyboard both go through beginEdit() and honour the #745 lock.
+// Display-only labels get nullptr from the factory and keep StaticText.
 class ScrollableLabelAccessible : public QAccessibleWidget {
 public:
     explicit ScrollableLabelAccessible(QWidget* widget)

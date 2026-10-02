@@ -291,16 +291,10 @@ void ClientPudu::process(float* interleaved, int frames, int channels) noexcept
         const float alpha = (lpAbs > m_lfEnvLin) ? envAttack : envRelease;
         m_lfEnvLin += alpha * (lpAbs - m_lfEnvLin);
 
-        // ── LF wet per mode ─────────────────────────────────────
-        // Aphex Big Bottom: LPF → soft saturation scaled by drive,
-        // with envelope-tracked dynamic EQ boost so quiet lows get
-        // more harmonics than loud ones (keeps it from muddying
-        // loud passages).  The envelope inverts: low envelope →
-        // more boost.
-        //
-        // Behringer SX3040: LPF → feed-forward compressor using
-        // the envelope as sidechain → all-pass phase rotator →
-        // mix.  No harmonic content; transient emphasis only.
+        // LF wet per mode. Aphex Big Bottom: LPF -> drive-scaled soft saturation with an
+        // inverted-envelope dynamic boost (quiet lows get more harmonics). Behringer
+        // SX3040: LPF -> feed-forward compressor keyed by the envelope -> all-pass phase
+        // rotator -> mix; no harmonics, transient emphasis only.
         float lfWetL = 0.0f;
         float lfWetR = 0.0f;
         if (isAphex) {

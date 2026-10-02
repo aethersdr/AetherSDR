@@ -261,6 +261,10 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         m_txPlaybackAction->setEnabled(m_playEnabled || m_txPlaybackActive);
         QMenu menu(m_playBtn);
         menu.setObjectName(QStringLiteral("aetherRxPlayMenu"));
+        // The single entry keys the transmitter, and its tooltip is the only
+        // statement of that anywhere in this dialog; Qt discards per-action
+        // tooltips unless the menu opts in (#5546).
+        menu.setToolTipsVisible(true);
         menu.addAction(m_txPlaybackAction);
         menu.exec(m_playBtn->mapToGlobal(pos));
     });

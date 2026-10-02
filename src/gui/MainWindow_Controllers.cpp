@@ -1,26 +1,15 @@
-// MainWindow_Controllers.cpp — external-controller methods of MainWindow.
-//
-// Part of the #3351 monolith decomposition (Phase 1a). This translation
-// unit holds the method bodies for every physical-controller subsystem:
-//
-//   • FlexControl (serial knob): dialog, indicator sync, tune/button/wheel
-//     handlers
-//   • USB HID encoders (Icom RC-28, TMate 2, Ulanzi Dial, PowerMate,
-//     Contour Shuttle): defaults, LED/display/overlay state, action dispatch
-//   • StreamDeck+ label refresh
-//   • MIDI parameter registry (registerMidiParams, HAVE_MIDI)
-//   • The control-devices support-bundle snapshot
-//
-// Pure code motion from MainWindow.cpp — same class, no header changes; a
-// C++ class may define its members across any number of TUs. Constructor
-// wiring for these subsystems still lives in MainWindow.cpp and moves in a
-// later phase.
+// MainWindow_Controllers.cpp — external-controller methods of MainWindow:
+// FlexControl, USB HID encoders (RC-28, TMate 2, Ulanzi Dial, PowerMate,
+// Contour Shuttle), StreamDeck+ labels, MIDI parameter registry (HAVE_MIDI),
+// and the control-devices support-bundle snapshot. Constructor wiring for these
+// is in MainWindow.cpp.
 
 #include "MainWindow.h"
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
 #include "MidiTxDispatch.h"
+#include "MixerControlAvailability.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SpectrumOverlayMenu.h"
 #include "core/AppSettings.h"
@@ -200,6 +189,13 @@ QString tmate2PushDefaultAction(int encoderIndex)
     case 2:  return QStringLiteral("ToggleXit");
     default: return QStringLiteral("None");
     }
+}
+
+// PC Audio as the title bar persists it -- the same read applyMasterVolume()
+// makes to decide whether the master level is this computer's output.
+static bool pcAudioEnabledSetting()
+{
+    return AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
 }
 
 static bool isCwMomentaryActionId(const QString& id)
@@ -590,6 +586,10 @@ void MainWindow::handleFlexControlButton(int button, int action,
             if (!m_radioModel.hasCommandPlane()) {
                 qCDebug(lcDevices) << "SplitActiveSlice ignored:"
                                    << "this backend takes no Flex slice-create command";
+                // A log line alone is a hardware button that silently does
+                // nothing. Say so the way the keyboard split_toggle refusal
+                // does (MainWindow_Shortcuts.cpp); one notice per session.
+                showUnsupportedControlNotice();
                 return;
             }
             if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
@@ -602,6 +602,7 @@ void MainWindow::handleFlexControlButton(int button, int action,
             const double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
             m_splitActive = true;
             m_splitRxSliceId = s->sliceId();
+            m_splitRxFrequencyMhz = s->reportedFrequency();
             m_radioModel.sendCommand(
                 QString("slice create pan=%1 freq=%2").arg(panId).arg(txFreq, 0, 'f', 6));
         } else {
@@ -617,6 +618,7 @@ void MainWindow::handleFlexControlButton(int button, int action,
             || !m_radioModel.hasCwTextStoredMacros()) {
             qCDebug(lcCw) << "CWX macro action" << actionName
                           << "ignored: radio has no stored text-keyer macros";
+            showUnsupportedControlNotice();
         } else {
             bool ok = false;
             const int idx = actionName.mid(4).toInt(&ok);
@@ -822,16 +824,9 @@ void MainWindow::triggerTMate2TextOverlay(const QString& text)
     restartTMate2IdleTimer();
 }
 
-// Push the current frequency and S-meter/power reading to the TMate 2 LCD.
-// Called whenever the active-slice frequency, S-meter level, or device
-// connection state changes.  Frequency comes from activeSlice(); S-meter uses
-// the last value cached in m_tmate2SmeterDbm.
-//
-// small_val mapping:
-//   RX: linear dBm offset from S9, clamped 0-999.
-//       S9 (-73 dBm) → 90; each dB above S9 adds 1 (S9+10 dB → 100);
-//       each dB below S9 subtracts 1 (S8 → 84, S5 → 66, S1 → 42).
-//   TX: forward power in watts from the last txMetersChanged sample.
+// Push frequency and S-meter/power to the TMate 2 LCD. small_val: RX is a
+// linear dB offset from S9 (-73 dBm → 90, ±1 per dB, so S9+10 → 100, S5 → 66),
+// clamped 0-999; TX is forward watts from the last txMetersChanged sample.
 void MainWindow::updateTMate2Display()
 {
     if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
@@ -1127,6 +1122,7 @@ void MainWindow::dispatchHidAction(const QString& actionName,
             if (!m_radioModel.hasCommandPlane()) {
                 qCDebug(lcDevices) << "SplitActiveSlice (HID) ignored:"
                                    << "this backend takes no Flex slice-create command";
+                showUnsupportedControlNotice();
                 return;
             }
             auto* s = activeSlice();
@@ -1137,6 +1133,7 @@ void MainWindow::dispatchHidAction(const QString& actionName,
                 const bool isCw = isCwMode(s->mode());
                 m_splitActive    = true;
                 m_splitRxSliceId = s->sliceId();
+                m_splitRxFrequencyMhz = s->reportedFrequency();
                 m_radioModel.sendCommand(
                     QString("slice create pan=%1 freq=%2")
                     .arg(panId).arg(s->frequency() + (isCw ? 0.001 : 0.005), 0, 'f', 6));
@@ -1537,6 +1534,16 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 #endif
         }
     } else if (actionId == "WheelHeadphoneVolume") {
+        // A radio with no headphone output: the title-bar pair is dimmed with
+        // its reason, and the wheel refuses the same way rather than moving a
+        // dimmed slider (MixerControlAvailability.h).
+        if (!headphoneControlsAvailable(m_radioModel.isConnected(),
+                                        m_radioModel.hasCommandPlane())) {
+            qCWarning(lcDevices) << "WheelHeadphoneVolume refused:"
+                                 << "this radio has no headphone output";
+            showUnsupportedControlNotice();
+            return;
+        }
         const int next = std::clamp(m_radioModel.headphoneGain() + steps * 2, 0, 100);
         if (m_titleBar)
             m_titleBar->setHeadphoneVolume(next);
@@ -1559,25 +1566,12 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         }
     } else if (actionId == "WheelApf") {
         if (auto* s = activeSlice()) {
-            // #4658: the level only reaches audio while the APF filter is in
-            // circuit. Writing apf_level into a disengaged filter — and showing
-            // an "APF 42" overlay that reads as the radio acknowledging it — is
-            // the controller-side twin of the GUI slider defect (#4658, fixed
-            // for the slider by #4660). No-op here and tell the operator why,
-            // mirroring the slider's greyed-with-reason treatment. The notice
-            // goes on the slice's panadapter as a transient card, NOT the
-            // status bar (#4649: a QStatusBar temporary message hides every
-            // permanent widget — TX indicator, PA temperature — for its whole
-            // duration, and a spinning dead knob would retrigger it
-            // continuously); the status bar is only the no-panadapter
-            // (null-pan) fallback. That reaches every controller family (FlexControl,
-            // RC-28, Ulanzi, the virtual wheel); a TMate 2 additionally gets
-            // it on its own display. Minimal mode shows neither surface —
-            // a slice-level signal consumed by the applet panel is the
-            // follow-up for that layout. ToggleApf remains the way in.
-            // APF is CW-only: the DSP grid does not even mount the button in
-            // other modes (VfoWidget hides m_apfBtn unless isCw), so a hint
-            // to "turn APF on" there would point at nothing. Stay silent.
+            // APF level only reaches audio with APF engaged (#4658), so with it
+            // off this is a no-op plus a notice explaining why, shown as a
+            // transient card on the slice's pan (status bar only if there is no
+            // pan; its temporary messages hide the permanent widgets, #4649).
+            // TMate 2 also shows it on its display. APF is CW-only, so stay
+            // silent in other modes.
             if (!isCwMode(s->mode()))
                 return;
             if (!s->apfOn()) {
@@ -2135,8 +2129,18 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.transmitModel().setSpeechProcessorEnable(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().speechProcessorEnable() ? 1 : 0; });
 
+    // Same refusal as the dax_toggle shortcut (MainWindow_Shortcuts.cpp): on a
+    // radio with no DAX plane the optimistic daxOn() flip would mark the client
+    // TX chain not-ready while the wire text is dropped.
     reg("phone.daxEnable", "DAX", "Phone/CW", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.transmitModel().setDax(v > 0.5f); },
+        [this](float v) {
+            if (!m_radioModel.hasDaxStreams()) {
+                qCWarning(lcDevices) << "phone.daxEnable refused: this radio has no DAX plane";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setDax(v > 0.5f);
+        },
         [this]() -> float { return m_radioModel.transmitModel().daxOn() ? 1 : 0; });
 
     reg("phone.monEnable", "Monitor", "Phone/CW", P::Toggle, 0, 1,
@@ -2179,8 +2183,21 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.transmitModel().setCwSwapPaddles(v > 0.5f); },
         [this]() -> float { return m_radioModel.transmitModel().cwSwapPaddles() ? 1 : 0; });
 
+    // `cw cwl_enabled` is Flex wire text; a radio without a command plane
+    // expresses CWL as the slice MODE instead (HL2, Icom, sim). There the
+    // optimistic cwlEnabled() flip is not merely dead: zero-beat reads it and
+    // mirrors its correction (MainWindow_Wiring.cpp, #5213), so a MIDI press
+    // would tune CWU the wrong way. Refuse before the flip, and say so.
     reg("cw.cwlEnable", "CWL Frequency Offset", "Phone/CW", P::Toggle, 0, 1,
-        [this](float v) { m_radioModel.transmitModel().setCwlEnabled(v > 0.5f); },
+        [this](float v) {
+            if (m_radioModel.isConnected() && !m_radioModel.hasCommandPlane()) {
+                qCWarning(lcDevices) << "cw.cwlEnable refused: this radio takes CWL"
+                                     << "as a slice mode, not an offset flag";
+                showUnsupportedControlNotice();
+                return;
+            }
+            m_radioModel.transmitModel().setCwlEnabled(v > 0.5f);
+        },
         [this]() -> float { return m_radioModel.transmitModel().cwlEnabled() ? 1 : 0; });
 
     reg("cw.breakInEnable", "CW Break-In (QSK)", "Phone/CW", P::Toggle, 0, 1,
@@ -2255,24 +2272,54 @@ void MainWindow::registerMidiParams()
 
     // ── Global ──────────────────────────────────────────────────────────
     // The mixer verbs drive the RADIO's lineout/headphone hardware outputs, a
-    // Flex command-plane feature — on a backend without one the command is
-    // dropped, which made a mapped MIDI volume knob silently dead. Refuse and
-    // log instead (M0, #5263). Rerouting these to the client-side master
-    // volume would change what the knob MEANS on Flex, so that stays an M4
-    // conversion decision, not a gate.
+    // Flex command-plane feature, and on a Flex that is what these knobs keep
+    // meaning. A connected radio with no command plane has no such mixer
+    // (MixerControlAvailability.h): the Master knob takes the title bar's own
+    // master-slider path when that radio's audio plays on this computer, and
+    // otherwise -- and always for Headphone, a jack the radio does not have --
+    // the knob refuses visibly through the one-shot notice, not with a debug
+    // line only (M0, #5263). Disconnected, nothing is sent and nothing is said.
     reg("global.masterVolume", "Master Volume", "Global", P::Slider, 0, 100,
         [this](float v) {
-            if (!m_radioModel.hasCommandPlane()) {
-                qCDebug(lcDevices) << "global.masterVolume ignored:"
-                                   << "radio mixer verbs need a Flex command plane";
+            if (m_radioModel.hasCommandPlane()) {
+                m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v)));
                 return;
             }
-            m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v)));
+            if (!m_radioModel.isConnected()) {
+                qCDebug(lcDevices) << "global.masterVolume ignored: no radio connected";
+                return;
+            }
+            if (masterKnobDrivesLocalOutput(m_radioModel.isConnected(),
+                                            m_radioModel.hasCommandPlane(),
+                                            pcAudioEnabledSetting())) {
+                const int pct = std::clamp(static_cast<int>(v), 0, 100);
+                if (m_titleBar) m_titleBar->setMasterVolume(pct);
+                applyMasterVolume(pct);
+                return;
+            }
+            qCWarning(lcDevices) << "global.masterVolume refused: no radio mixer"
+                                 << "and PC Audio is off";
+            showUnsupportedControlNotice();
         },
-        [this]() -> float { return m_radioModel.lineoutGain(); });
+        [this]() -> float {
+            if (masterKnobDrivesLocalOutput(m_radioModel.isConnected(),
+                                            m_radioModel.hasCommandPlane(),
+                                            pcAudioEnabledSetting())) {
+                return std::clamp(
+                    AppSettings::instance().value("MasterVolume", "100").toInt(), 0, 100);
+            }
+            return m_radioModel.lineoutGain();
+        });
 
     reg("global.hpVolume", "Headphone Volume", "Global", P::Slider, 0, 100,
         [this](float v) {
+            if (!headphoneControlsAvailable(m_radioModel.isConnected(),
+                                            m_radioModel.hasCommandPlane())) {
+                qCWarning(lcDevices) << "global.hpVolume refused:"
+                                     << "this radio has no headphone output";
+                showUnsupportedControlNotice();
+                return;
+            }
             if (!m_radioModel.hasCommandPlane()) {
                 qCDebug(lcDevices) << "global.hpVolume ignored:"
                                    << "radio mixer verbs need a Flex command plane";
@@ -2376,19 +2423,12 @@ void MainWindow::registerMidiParams()
 
     // ── Mode Up / Down (cycle through the mode list above) ───────────
     auto cycleMode = [this, fireShortcut, modes](int direction) {
-        // Find current mode index from the active slice; if no match, start at 0.
-        int currentIdx = 0;
-        if (auto* s = activeSlice()) {
-            const QString curMode = s->mode().toUpper();
-            for (int i = 0; i < modes.size(); ++i) {
-                if (curMode == modes[i]) {
-                    currentIdx = i;
-                    break;
-                }
-            }
+        auto* s = activeSlice();
+        const QString next = nextCycledMode(modes, s ? s->mode() : QString(), direction);
+        if (next.isEmpty()) {
+            return;
         }
-        const int next = (currentIdx + direction + modes.size()) % modes.size();
-        const QString idShort = QString("mode_%1").arg(modes[next].toLower());
+        const QString idShort = QString("mode_%1").arg(next.toLower());
         fireShortcut(idShort.toUtf8().constData());
     };
     reg("global.modeUp", "Mode Up", "Global", P::Trigger, 0, 1,
@@ -2450,14 +2490,14 @@ void MainWindow::registerMidiParams()
         });
 
     // ── QSO Recorder ────────────────────────────────────────────────────
-    // Mirror the exact dual routing used by the VFO ⏺/▶ buttons
-    // (MainWindow.cpp:11413-11443): RecordingMode=="Client" → QsoRecorder,
-    // otherwise → SliceModel::setRecordOn / setPlayOn (radio-side).
+    // Mirror the exact dual routing used by the VFO ⏺/▶ buttons: the client
+    // QsoRecorder when it is the recorder (recordsOnClient() — "Client" mode,
+    // or "Radio" on a radio with no radio-side recorder), otherwise
+    // SliceModel::setRecordOn / setPlayOn (radio-side).
     reg("global.qsoRecord", "QSO Record", "Global", P::Toggle, 0, 1,
         [this](float v) {
             const bool on = v > 0.5f;
-            const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+            const bool clientSide = !m_qsoRecorder || m_qsoRecorder->recordsOnClientNow();
             if (clientSide) {
                 if (on) m_qsoRecorder->startRecording();
                 else    m_qsoRecorder->stopRecording();
@@ -2466,8 +2506,7 @@ void MainWindow::registerMidiParams()
             }
         },
         [this]() -> float {
-            const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+            const bool clientSide = !m_qsoRecorder || m_qsoRecorder->recordsOnClientNow();
             if (clientSide)
                 return (m_qsoRecorder && m_qsoRecorder->isRecording()) ? 1.0f : 0.0f;
             auto* s = activeSlice();
@@ -2477,8 +2516,7 @@ void MainWindow::registerMidiParams()
     reg("global.qsoPlay", "QSO Playback", "Global", P::Toggle, 0, 1,
         [this](float v) {
             const bool on = v > 0.5f;
-            const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+            const bool clientSide = !m_qsoRecorder || m_qsoRecorder->recordsOnClientNow();
             if (clientSide) {
                 if (on) m_qsoRecorder->startPlayback();
                 else    m_qsoRecorder->stopPlayback();
@@ -2487,8 +2525,7 @@ void MainWindow::registerMidiParams()
             }
         },
         [this]() -> float {
-            const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+            const bool clientSide = !m_qsoRecorder || m_qsoRecorder->recordsOnClientNow();
             if (clientSide)
                 return (m_qsoRecorder && m_qsoRecorder->isPlaying()) ? 1.0f : 0.0f;
             auto* s = activeSlice();
@@ -3051,16 +3088,11 @@ void MainWindow::wireExternalControllers()
         if (actionId.startsWith(QLatin1String("shortcut:"))) {
             const QString id = actionId.mid(QStringLiteral("shortcut:").size());
 
-            // Momentary / hold actions (PTT hold, CW keying) have null QShortcut
-            // handlers because keyboard shortcuts drive them via press + release
-            // event filters. Handle press (action == 1) and release (action == 0)
-            // explicitly here.
-            //
-            // Deliberately WITHOUT handlePttHoldShortcut()'s textEntryCaptured()
-            // and m_keyboardShortcutsEnabled gates: those exist so a keystroke
-            // being typed into a field can't key the radio.  A dedicated dial
-            // button carries no such ambiguity, and gating it would make the
-            // hardware PTT stop working whenever a text field had focus.
+            // Momentary/hold actions (PTT hold, CW keying) have null QShortcut
+            // handlers; handle press (1) and release (0) here. No
+            // textEntryCaptured()/m_keyboardShortcutsEnabled gates: a dedicated
+            // dial button is not ambiguous with typing, and hardware PTT must
+            // work while a text field has focus.
             if (id == QLatin1String(kPttHoldActionId)) {
                 if (!m_radioModel.isConnected() || !controller) return;
                 const auto input = action == 1 ? controller->capture(TxController::Activity::Mox)
@@ -3209,18 +3241,10 @@ void MainWindow::wireExternalControllers()
             s.setValue("HidEncoderEnabledMigrationV2", "True");
         }
     }
-    // Same TCC concern as the Ulanzi gate above (#3257). HidEncoderManager::
-    // loadSettings() iterates the supported VID/PID list calling hid_open()
-    // for autodetect; HIDAPI's macOS backend opens with
-    // kIOHIDOptionsTypeSeizeDevice internally, so on every launch this
-    // would prompt for Input Monitoring even on machines without any
-    // supported encoder hardware. Default off; user enables in
-    // Preferences → Serial when they connect a StreamDeck+ / RC-28 / etc.
-    // One-time migration: before RC28Mapping was introduced, F1/F2 actions
-    // were stored under the generic HidKeyAction0/1 keys. Run unconditionally
-    // so users who had HID disabled at the time of this upgrade still get their
-    // old actions migrated when they later enable HID via Preferences. The
-    // inner guard (!s.contains("RC28Mapping")) makes it a true one-shot. (#3323)
+    // HID autodetect is off by default (#3257): hid_open() on macOS seizes the
+    // device and prompts for Input Monitoring even with no encoder attached.
+    // One-shot migration of F1/F2 from HidKeyAction0/1 to RC28Mapping (#3323),
+    // run regardless of HID enable so a later enable finds them.
     {
         auto& s = AppSettings::instance();
         if (!s.contains("RC28Mapping")) {

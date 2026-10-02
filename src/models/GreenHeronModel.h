@@ -1,40 +1,12 @@
 #pragma once
 
-// GreenHeronModel — connection and state tracking for a Green Heron
-// "Everyware" antenna-switch server (TCP, default port 10000).
-//
-// This is a PERIPHERAL accessory model, in the same class as
-// AntennaGeniusModel / TgxlConnection / AcomConnection: it speaks a
-// standalone device's own transport, knows nothing about any radio family,
-// and works with whatever radio the operator has connected (or none). It is
-// NOT behind the IRadioBackend radio seam and must never be put there.
-//
-// The wire format, its provenance, and the caps this model relies on all live
-// in core/GreenHeronProtocol.h, which is pure and testable. This file adds
-// only the socket, the timers, and the state they produce.
-//
-// THREADING: none. The Python implementation this is ported from used a
-// reader thread plus a keepalive thread and a mutex-guarded snapshot; a
-// QTcpSocket with readyRead plus two QTimers covers the same ground on the
-// main thread with no locking at all, and adding threads is not a change to
-// make in passing (AGENTS.md, Autonomous Agent Boundaries).
-//
-// STATE IS NEVER INFERRED FROM COMMANDS WE SEND. selectPort() transmits and
-// returns; the device is the sole authority on where the relays actually are
-// and republishes within ~123 ms. A relay that fails to move must show up as
-// a button that does not light, not as a UI that lies. turnTo() holds the
-// same line and it matters more there: a commanded 64.3 settled at a mean
-// 62.9, so writing the commanded heading into the model would put a number on
-// screen that no antenna is pointing at.
-//
-// ONE SOCKET, TWO HALVES. The Everyware server carries its antenna switches
-// and any rotator it has a controller for down the same connection, so this
-// model owns both. They are not symmetric, and the asymmetry is the whole of
-// the rotator design here: the switch roster is announced once and retained
-// across a blip, while a rotator is announced ONLY while its controller is
-// powered on and disappears by going quiet. Silence is the only signal there
-// is — powering the controller off is not a socket event, and SWITCHUPDATE
-// and SWITCHLOCKS carry on regardless.
+// Green Heron "Everyware" antenna-switch server (TCP, default port 10000). A
+// radio-agnostic peripheral like AntennaGeniusModel, never behind IRadioBackend.
+// Wire format: core/GreenHeronProtocol.h. Main-thread only (QTcpSocket + QTimers).
+// State is never inferred from commands sent; the device is the sole authority
+// and republishes within ~123 ms (rotators settle off the commanded heading).
+// Switch roster is announced once and survives a blip; a rotator is announced
+// only while its controller is powered and vanishes by going quiet.
 
 #include "core/GreenHeronProtocol.h"
 
@@ -163,16 +135,11 @@ public:
     // happily aim a controller that is off.
     bool isRotorLive(const QString& name) const;
 
-    // Ask `rotorName` to turn to `degrees`. Fire-and-forget; the local model
-    // is deliberately not updated, because the commanded heading is not where
-    // the antenna ends up. Returns false when the rotator is not live on THIS
-    // connection or the command could not be encoded.
-    //
-    // THERE IS NO STOP OR PARK VERB IN THIS PROTOCOL. A rotation that starts
-    // cannot be recalled in software — the only way to stop it is to walk to
-    // the controller. Every caller must therefore make choosing a heading and
-    // sending it two separate gestures; nothing may transmit on a single
-    // click, hover, or drag.
+    // Ask `rotorName` to turn to `degrees`. Fire-and-forget; the model is not
+    // updated (the commanded heading is not where the antenna settles). Returns
+    // false if the rotator is not live on this connection or encoding failed.
+    // The protocol has no stop/park verb, so callers must make choosing a heading
+    // and sending it two separate gestures; never transmit on a click/hover/drag.
     bool turnTo(const QString& rotorName, double degrees);
 
 signals:

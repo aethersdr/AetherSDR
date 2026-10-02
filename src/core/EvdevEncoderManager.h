@@ -15,27 +15,15 @@ class QTimer;
 
 namespace AetherSDR {
 
-// Linux evdev encoder manager — opens a /dev/input/event* node belonging
-// to a recognized BT-HID encoder (Ulanzi Dial first), claims it
-// exclusively via EVIOCGRAB so its keystrokes don't leak to the focused
-// window, and decodes input_events into semantic signals.
-//
-// Signal contract is similar to HidEncoderManager (#3232):
-//   - tuneSteps(int)            — rotary delta, +1 = CW, -1 = CCW
-//   - buttonEvent(sig, action)  — raw event "signature" string for the
-//                                 dialog's Learn mode + action dispatch.
-//                                 action: 1 = press, 0 = release.
+// Linux evdev manager for recognized BT-HID encoders (Ulanzi Dial first): grabs
+// the /dev/input/event* node with EVIOCGRAB so keys don't leak to the focused
+// window. Signals (as HidEncoderManager, #3232):
+//   - tuneSteps(int)           rotary delta, +1 = CW
+//   - buttonEvent(sig, action) signature string; action 1 = press, 0 = release
 //   - connectionChanged(bool, name)
-//
-// Signatures are normalized human-readable strings derived from kernel
-// key codes:
-//   "KEY_PLAYPAUSE", "KEY_MUTE", "KEY_PREVIOUSSONG", "KEY_NEXTSONG",
-//   "Ctrl+V", "Ctrl+C", "Ctrl+Y", "Ctrl+Z",
-//   "Ctrl+Y+KEY_PREVIOUSSONG"   (compound chord — Mode Cycle on Ulanzi Dial)
-//
-// The decoder doesn't pre-bake action semantics — the UI maps signatures
-// to AetherSDR actions, so adding a new dial firmware or remapping
-// requires no manager changes.
+// Signatures are key-code names: "KEY_PLAYPAUSE", "KEY_MUTE", "Ctrl+V", ...,
+// "Ctrl+Y+KEY_PREVIOUSSONG" (chord: Mode Cycle on Ulanzi Dial). The UI maps them
+// to actions, so new firmware needs no manager change.
 class EvdevEncoderManager : public QObject {
     Q_OBJECT
 

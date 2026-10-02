@@ -41,17 +41,11 @@ std::unique_ptr<HidDeviceParser> HidDeviceParser::create(uint16_t vid, uint16_t 
     return nullptr;
 }
 
-// ── Icom RC-28 ──────────────────────────────────────────────────────────────
-// 32-byte reports, no report ID prefix on any platform (hidraw returns 32 bytes).
-// Verified layout (cross-referenced against FlexRC-28 driver and wfview source):
-//   [0] = 0x01 constant — guard byte, discard report if != 0x01
-//   [1] = rotation speed (encoder pulse count since last report; higher = faster turn)
-//         NOT a monotonic counter — stays at 1 during slow continuous rotation
-//   [2] = 0x00 (unused)
-//   [3] = direction: 0x01 = CW, 0x02 = CCW; stays set while rotating, 0x00 when idle
-//   [4] = 0x00 (unused)
-//   [5] = button state bitmask (active-low): 0x07 = all idle,
-//         bit0=TX/PTT, bit1=F1, bit2=F2
+// Icom RC-28: 32-byte reports, no report ID (verified vs FlexRC-28 and wfview):
+//   [0] 0x01 guard; discard otherwise
+//   [1] pulses since last report (speed, not a monotonic counter)
+//   [3] direction: 0x01 CW, 0x02 CCW, 0x00 idle
+//   [5] buttons, active-low (0x07 idle): bit0 TX/PTT, bit1 F1, bit2 F2
 
 HidEvent IcomRC28Parser::parse(const uint8_t* buf, size_t len)
 {
@@ -114,14 +108,19 @@ HidEvent GriffinPowerMateParser::parse(const uint8_t* buf, size_t len)
 
 // ── Contour ShuttleXpress ───────────────────────────────────────────────────
 // 5-byte reports. Byte 0 = shuttle position (signed, -7..+7).
-// Byte 1 = jog counter (wrapping uint8). Bytes 2-3 = button bitmask (5 btns).
+// Byte 1 = jog counter (wrapping uint8). Byte 2 unused.
+// The 5 buttons sit at the ShuttlePro v2 button 5-9 positions: byte 3
+// bits 4-7 = buttons 1-4, byte 4 bit 0 = button 5 (verified by capture, #5927).
 
 HidEvent ShuttleXpressParser::parse(const uint8_t* buf, size_t len)
 {
-    if (len < 4) return {};
+    // Need all 5 bytes: m_buf is reused across reads, so a short report
+    // would otherwise leave a stale buf[4] from the previous one.
+    if (len < 5) return {};
 
     uint8_t jog = buf[1];
-    uint8_t btns = buf[3];
+    // Pack into bits 0-4 so the scan below reports buttons 1-5.
+    uint8_t btns = static_cast<uint8_t>((buf[3] >> 4) | ((buf[4] & 0x01) << 4));
 
     // Buttons
     if (btns != m_prevButtons) {
@@ -154,14 +153,16 @@ HidEvent ShuttleXpressParser::parse(const uint8_t* buf, size_t len)
 }
 
 // ── Contour ShuttlePro v2 ──────────────────────────────────────────────────
-// Same layout as ShuttleXpress but 15 buttons across bytes 2-3.
+// Same layout as ShuttleXpress, 15 buttons: byte 3 = buttons 1-8,
+// byte 4 bits 0-6 = buttons 9-15 (inferred from the ShuttleXpress capture
+// in #5927, which uses the button 5-9 positions of this layout).
 
 HidEvent ShuttleProV2Parser::parse(const uint8_t* buf, size_t len)
 {
-    if (len < 4) return {};
+    if (len < 5) return {};
 
     uint8_t jog = buf[1];
-    uint16_t btns = static_cast<uint16_t>(buf[3] << 8 | buf[2]);
+    uint16_t btns = static_cast<uint16_t>(buf[3] | (buf[4] << 8));
 
     // Buttons
     if (btns != m_prevButtons) {
@@ -193,18 +194,8 @@ HidEvent ShuttleProV2Parser::parse(const uint8_t* buf, size_t len)
     return {};
 }
 
-// ── Elgato StreamDeck+ ─────────────────────────────────────────────────────
-// 14-byte reports. hidapi always includes the report ID as buf[0] = 0x01.
-// Protocol verified against python-elgato-streamdeck v0.9.8 source:
-//   buf[0]  = 0x01 (report ID — strip it)
-//   buf[1]  = event type: 0x00=key, 0x02=touchscreen, 0x03=dial
-//   buf[2..3] = reserved
-//   Dial event (buf[1]==0x03):
-//     buf[4] = sub-type: 0x01=turn, 0x00=push
-//     buf[5..8] = 4 encoder values (signed int8 delta for turn, bool for push)
-//   Key event (buf[1]==0x00):
-//     buf[4..11] = 8 LCD key states (0=up, 1=down)
-// Button numbering: LCD keys 1-8, encoder press buttons 9-12.
+// Elgato StreamDeck+: layout documented on StreamDeckPlusParser
+// (HidDeviceParser.h), verified against python-elgato-streamdeck v0.9.8.
 
 HidEvent StreamDeckPlusParser::parse(const uint8_t* buf, size_t len)
 {

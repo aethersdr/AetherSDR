@@ -5,19 +5,11 @@
 
 namespace AetherSDR {
 
-// Owner of the Ulanzi Dial's pill→action bindings — Constitution Principle V:
-// one feature-owned document, one owner, one migration point.  The bindings
-// live in a single JSON object under the app-global `UlanziDialMappings` key
-// (they belong to the peripheral, not to any radio, so this is correctly a
-// flat key rather than a `radio_settings` feature document).
-//
-// The document is the sole authority once `migrateLegacyKeys()` has run: a
-// pill with no entry means "use the built-in default", including after the
-// operator deliberately clears one.  Nothing consults the pre-#4611 flat keys
-// on the read path, so a cleared binding cannot be resurrected by them.
-//
-// Kept out of the mapper dialog so it is testable without a GUI stack
-// (ulanzi_mapping_migration_test).
+// Owner of the Ulanzi Dial's pill→action bindings: one JSON document under the
+// app-global `UlanziDialMappings` key (peripheral, not per-radio). After
+// migrateLegacyKeys() it is the sole authority: a missing pill means the
+// built-in default (also after the operator clears one), and the pre-#4611 flat
+// keys are never read. GUI-free for ulanzi_mapping_migration_test.
 class UlanziDialMappings {
 public:
     // AppSettings key holding the whole JSON document.

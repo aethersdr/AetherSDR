@@ -66,42 +66,16 @@ constexpr float kInputCalA = 0.0008018661524991072f;
 constexpr float kInputCalB = 0.1595133745143524f;
 constexpr float kInputCalC = 1.004316538777762f;
 
-// One rule for every quadratic power curve above, replacing the per-curve
-// floors this shipped with (PR #4919 review).
-//
-// A least-squares quadratic is only meaningful where it is monotonically
-// INCREASING. Below its own vertex it turns decreasing -- more raw counts
-// reporting less power -- which is unphysical for any of these sensors and
-// is the fit telling you it has run out of the data it was built from. So:
-//
+// One rule for every quadratic power curve: a least-squares fit is only
+// meaningful where increasing, so
 //   raw >= vertex : evaluate the quadratic directly.
-//   raw <  vertex : linear taper from 0W at 0 counts up to the curve's own
-//                   value at the vertex. Continuous, monotonic, and -- the
-//                   part that matters -- exactly 0 at 0 raw counts.
-//
-// Why this replaces what was here before, on both curves:
-//
-//  - Output shipped a hard floor at kOutputLowestConfirmedRaw with a
-//    3-count linear ramp beneath it. Sitting one count under the confirmed
-//    157-166 steady-state cluster, that ramp turned an ordinary 1-count ADC
-//    dip to raw 156 into a 109W -> 72W jump: the same "flicker on a steady
-//    carrier" the anchor had already been moved once to cure, relocated 8
-//    counts down rather than removed. The quadratic is well-conditioned
-//    that far down (~1.3W of true slope per raw count at raw~160), so
-//    following it is both smoother and closer to the truth. Multiplying a
-//    real reading by a fraction never made it more trustworthy -- it only
-//    made it wrong in a new direction.
-//
-//  - Reflected shipped no floor at all, so its intercept never let it read
-//    zero: the curve bottoms out at ~2.0W (vertex raw~9.2) and returns
-//    ~2.43W at raw 0. A perfectly matched load therefore reported ~2W
-//    reflected and an inflated SWR -- 1.35:1 at 109W forward -- and made
-//    swr()'s own "reflected <= 0" guard unreachable. The taper fixes that
-//    at the source, which is why swr() below needs no special case.
-//
-// Input keeps its existing behaviour: kInputCalB is positive, so that
-// curve's vertex is at a negative raw count and it is already increasing
-// across the whole domain -- the taper branch never runs for it.
+//   raw <  vertex : linear taper from 0 W at 0 counts to the curve's value at
+//                   the vertex (continuous, monotonic, exactly 0 at raw 0).
+// Output follows the quadratic down to its vertex (~1.3 W/count near raw 160)
+// rather than a hard floor, so a 1-count ADC dip doesn't jump the reading.
+// Reflected's curve bottoms at ~2.0 W (vertex raw ~9.2), so the taper is what
+// lets a matched load read 0 W, and swr() needs no special case. Input's
+// vertex is at negative raw (kInputCalB > 0), so the taper never runs for it.
 float calibratedPower(float raw, float a, float b, float c)
 {
     const auto curve = [&](float r) { return std::max(0.0f, a * r * r + b * r + c); };

@@ -309,7 +309,7 @@ time:
   README "Roadmap" section, which mirrors ROADMAP "In flight" in five lines.
   Check the claims against the tree, not against the previous README:
   - the backend count against the family directories in `src/core/backends/`
-    and the row count of the backend table in `AGENTS.md` § "In-flight: aetherd
+    and the row count of the backend table in `docs/agents/backends.md` § "In-flight: aetherd
     engine/UI decoupling";
   - the NR engine list against the method names `src/core/AetherRxProfiles.cpp`
     maps (`NR2`, `RN2`, `NR4`, `NNR`, `DFNR`, `BNR`, `MNR` at the time of

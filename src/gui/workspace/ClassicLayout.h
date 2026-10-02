@@ -1,17 +1,10 @@
 #pragma once
 
-// "Classic" — today's two-region shell, expressed as canvas placement
-// (RFC #4887, phase 2).
-//
-// The default workspace has to reproduce the application as it ships now: a
-// panadapter region subdivided by one of the twelve hard-coded layout ids,
-// and the applet column beside it.  An operator who never opens the workspace
-// editor must see exactly what they see today, so this is the preset that
-// migration produces and the one phase 6 offers as "reset to Classic".
-//
-// Pure: layout id in, normalized rects out.  No settings, no widgets, no
-// radio — so every id's geometry is pinned headless, which matters because
-// there are twelve of them and nobody is going to eyeball all twelve.
+// "Classic": the shipping two-region shell (pan region split by one of the
+// twelve layout ids, applet column beside it) as canvas placement (RFC #4887).
+// It is what migration produces and what "reset to Classic" restores, so it must
+// match the non-workspace UI exactly. Pure, so every id's geometry is pinned
+// headless.
 
 #include "gui/workspace/CanvasItem.h"
 #include "gui/workspace/WorkspaceGeometry.h"
@@ -51,18 +44,10 @@ QStringList knownPanLayoutIds();
 // How many pans a layout id describes (0 for an unknown id).
 int panCountForLayout(const QString& layoutId);
 
-// Compose the Classic arrangement.
-//
-//   panIds      pans to place, in stack order; extras beyond the layout's
-//               cell count are dropped (the layout is what the operator
-//               chose, and inventing a thirteenth cell is worse than
-//               honouring it).
-//   appletIds   open applets, top to bottom, sharing the column.
-//   layoutId    pan layout id; an unknown or empty id falls back to "1".
-//   appletsLeft the column on the left instead of the right.
-//
-// Item ids are namespaced by kind ("pan:" / "applet:") so a pan and an applet
-// can never collide in one CanvasLayout.
+// Compose the Classic arrangement. Pans beyond the layout's cell count are
+// dropped; applets stack top to bottom in the column; an unknown/empty layoutId
+// falls back to "1"; appletsLeft puts the column on the left. Ids are
+// namespaced "pan:" / "applet:" so kinds never collide.
 QList<CanvasItem> composeClassic(const QStringList& panIds,
                                  const QStringList& appletIds,
                                  const QString& layoutId,

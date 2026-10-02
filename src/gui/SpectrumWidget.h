@@ -99,20 +99,9 @@ enum class SpectrumRenderMode : int {
     Count          // sentinel
 };
 
-// Panadapter / spectrum display widget.
-//
-// Layout (top to bottom):
-//   ~40% — spectrum line plot (current FFT frame, smoothed)
-//   ~60% — waterfall (scrolling heat-map history)
-//   20px — absolute frequency scale bar
-//
-// Overlays (drawn on top of spectrum + waterfall):
-//   - Filter passband: semi-transparent band from filterLow to filterHigh Hz
-//   - VFO marker: vertical orange line at the tuned VFO frequency
-//
-// Click anywhere in the spectrum/waterfall area to emit frequencyClicked().
-// When AETHER_GPU_SPECTRUM is enabled, inherits QRhiWidget for GPU-accelerated
-// waterfall rendering. Otherwise falls back to QPainter (QWidget).
+// Panadapter / spectrum display widget: spectrum trace over waterfall over
+// frequency scale, with passband and VFO overlays. Inherits QRhiWidget when
+// AETHER_GPU_SPECTRUM is enabled, otherwise QWidget with QPainter.
 class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_OBJECT
     // Expose the measured FFT noise floor (and the pan index that identifies
@@ -392,19 +381,10 @@ public:
     void setBandwidthLimits(double minMhz, double maxMhz) { m_minBwMhz = minMhz; m_maxBwMhz = maxMhz; }
 
     // Crop the outer kEdgeTaperFraction of each side of the spectrum trace,
-    // waterfall and 3D surface, and narrow the displayed coordinate mapping
-    // to match (croppedBinsForDisplay(), effectiveBandwidthMhz()), so the
-    // kept span fills the panel. DISPLAY-only: NOT a change to the reported
-    // bandwidth. An earlier attempt hid the DDC's always-present edge
-    // roll-off by dropping bins in the BACKEND and under-reporting the
-    // bandwidth to match -- that coupling was the actual bug (#zoom-out
-    // regression): the widget's own zoom math used the under-reported value
-    // as its baseline and a zoom-out request could no longer cross into
-    // "closer to the next rate up." Cropping here instead means the
-    // bandwidth this widget requests and reports is always the real one;
-    // only what is drawn is narrowed. Called per-radio model -- only a
-    // DDC-based backend like ANAN has this roll-off; Flex/HL2/Icom/Kiwi
-    // don't.
+    // waterfall and 3D surface, and narrow the displayed coordinate mapping to
+    // match (croppedBinsForDisplay(), effectiveBandwidthMhz()). Display-only: the
+    // bandwidth this widget requests and reports stays the real one, so zoom math
+    // is unaffected. Enabled only for DDC backends with edge roll-off (ANAN).
     void setPanEdgeTaperEnabled(bool enabled)
     {
         if (m_edgeTaperEnabled == enabled)
@@ -412,6 +392,9 @@ public:
         m_edgeTaperEnabled = enabled;
         markOverlayDirty();
     }
+    // True when the crop above is applied to what this widget is showing now
+    // (off for a Kiwi overlay, which brings its own uncropped span).
+    bool panEdgeCropActive() const;
 
     // Skip the fixed client-side EMA (SMOOTH_ALPHA) on the spectrum trace
     // when the backend already averages per the operator's FFT AVG
@@ -444,6 +427,45 @@ public:
         if (m_zoomSegBtn) {
             m_zoomSegBtn->setEnabled(available);
             m_zoomSegBtn->setToolTip(tip);
+        }
+    }
+
+    // Say whether this pane's -/+ span pair is live, and why not (#5750).
+    // On a radio whose span is one register for the whole board
+    // (RadioCapabilities::panSpanModel->radioWide), MainWindow keeps the pair
+    // LIVE on one pane only -- see PanSpanControlGate.h -- and DIMS it on the
+    // others, never hides it (AGENTS.md: "Dim it, never hide it"). A dimmed
+    // pair states its reason in the tooltip (shown on a disabled button by
+    // eventFilter()) and in the accessible description, which is what a
+    // screen reader announces; the live pair says the span is shared.
+    // `live = true, radioWide = false` is the per-pan default and restores
+    // exactly what the constructor built: enabled, no tooltip, no description.
+    void setSpanControlPlacement(bool live, bool radioWide)
+    {
+        QString outTip;
+        QString inTip;
+        QString desc;
+        if (radioWide && live) {
+            outTip = tr("Zoom out. The span is shared: this changes every panadapter on this radio.");
+            inTip = tr("Zoom in. The span is shared: this changes every panadapter on this radio.");
+            desc = tr("This radio has one span for all panadapters, so this control changes every panadapter.");
+        } else if (radioWide) {
+            desc = tr("Span buttons unavailable here: this radio has one span for all "
+                      "panadapters, so its −/+ buttons are on one pane only (the one "
+                      "holding the transmit slice, or the first panadapter). A span "
+                      "change from any pane changes them all.");
+            outTip = desc;
+            inTip = desc;
+        }
+        if (m_zoomOutBtn) {
+            m_zoomOutBtn->setEnabled(live);
+            m_zoomOutBtn->setToolTip(outTip);
+            m_zoomOutBtn->setAccessibleDescription(desc);
+        }
+        if (m_zoomInBtn) {
+            m_zoomInBtn->setEnabled(live);
+            m_zoomInBtn->setToolTip(inTip);
+            m_zoomInBtn->setAccessibleDescription(desc);
         }
     }
 
@@ -1177,20 +1199,10 @@ private:
         double kiwiLastWaterfallCenterMhz{0.0};
         double kiwiLastWaterfallBandwidthMhz{0.0};
         bool kiwiLastWaterfallFrameValid{false};
-        // Heap-indirected (#4595): DssRenderer embeds four fixed-size
-        // std::array<std::array<...>> row buffers (~800KB total). Storing it
-        // by value here meant every stack-local WaterfallStreamState — e.g.
-        // restoreCurrentWaterfallStreamState()'s `restored` / `updated` —
-        // materialized a full ~800KB copy on the stack just to move-construct
-        // it, which could exhaust a thread's stack on its own. DeepCopyDssPtr
-        // (not a bare shared_ptr) because m_kiwiProfileWaterfallStates is a
-        // QHash<QString, WaterfallStreamState>, and QHash's internal
-        // rehash/detach needs the value type to stay copy-constructible; every
-        // real use in this file is std::move(), so the only implicit copy is
-        // QHash relocating entries on rehash, which now deep-copies the
-        // renderer exactly as a by-value DssRenderer member would have —
-        // no aliasing between profile states. Always non-null: default-
-        // constructed here and on every reset via `= WaterfallStreamState{}`.
+        // Heap-indirected (#4595): DssRenderer holds ~800KB of row buffers, too big
+        // for stack-local WaterfallStreamState copies. DeepCopyDssPtr (not shared_ptr)
+        // keeps the type copy-constructible for QHash rehash/detach without aliasing
+        // between profile states. Always non-null.
         DeepCopyDssPtr dss;
         float kiwiDisplayFloorDbm{-110.0f};
         float kiwiDisplayCeilDbm{-10.0f};
@@ -1451,7 +1463,6 @@ private:
     // so it must never feed a setPanBandwidth() call or similar (that
     // coupling caused a documented zoom-out regression). Center is
     // unaffected: the crop is symmetric.
-    bool panEdgeCropActive() const;
     double effectiveBandwidthMhz() const;
     // Central (1 - 2*kEdgeTaperFraction) fraction of bins, or bins unchanged
     // when m_edgeTaperEnabled is false. Pairs with effectiveBandwidthMhz():
@@ -1855,16 +1866,10 @@ private:
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)
-    // Continuous edge auto-pan during VFO drag (user-reported).  The edge-follow
-    // pan (revealFrequencyIfNeeded) is a *position* controller — it nudges the
-    // slice a little past the trigger margin — not a *velocity* controller, so
-    // holding the cursor at the border produced a tiny, self-limiting creep
-    // (~0.1×span/s, the "rubber band" feel): the overshoot can't grow because
-    // the cursor can't move past the physical border.  Instead, while the
-    // cursor sits in the edge zone a timer drives a real pan *velocity* that
-    // scales with edge depth and ramps up with hold time, panning the view and
-    // keeping the slice pinned under the cursor via edgePanTuneRequested (a
-    // pan-without-reveal path, so it doesn't fight the follow logic).
+    // Edge auto-pan during VFO drag: while the cursor sits in the edge zone this
+    // timer drives a pan *velocity* (scaled by edge depth, ramping with hold time)
+    // and keeps the slice under the cursor via edgePanTuneRequested, a
+    // pan-without-reveal path that doesn't fight revealFrequencyIfNeeded().
     QTimer* m_vfoDragEdgePanTimer{nullptr};
     int  m_vfoDragLastX{0};                 // last cursor X during VFO drag (px)
     int  m_vfoDragEdgeHoldTicks{0};         // ticks held in edge zone (ramp)

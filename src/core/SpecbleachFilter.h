@@ -2,9 +2,8 @@
 
 #ifdef HAVE_SPECBLEACH
 
-#include "MonoDspStereoAdapter.h"
-
 #include <QByteArray>
+#include <array>
 #include <atomic>
 #include <vector>
 
@@ -14,6 +13,9 @@ namespace AetherSDR {
 
 // SpecbleachFilter - wrapper around libspecbleach for NR4 noise reduction.
 // Processes stereo float32 audio at an immutable 24 or 48 kHz sample rate.
+// Each channel has its own libspecbleach instance and so its own noise
+// profile, as RN2 runs one RNNoise state per channel: the two sides of a
+// diversity pair are different antennas with different noise.
 // Thread-safe parameter setters (main thread writes, audio thread reads).
 class SpecbleachFilter {
 public:
@@ -26,9 +28,9 @@ public:
     // Process stereo float32 PCM at the configured sample rate. Returns processed audio.
     QByteArray process(const QByteArray& pcmStereo);
 
-    bool isValid() const { return m_handle != nullptr; }
-    // Reset the noise profile and stereo adapter. Recreate on a new source
-    // or discontinuity to also discard libspecbleach's internal overlap state.
+    bool isValid() const { return m_handles[0] != nullptr && m_handles[1] != nullptr; }
+    // Reset both noise profiles. Recreate on a new source or discontinuity to
+    // also discard libspecbleach's internal overlap state.
     void reset();
 
     // User-adjustable parameters (thread-safe)
@@ -54,7 +56,7 @@ private:
     const int m_sampleRate;
     void applyParams();
 
-    SpectralBleachHandle m_handle{nullptr};
+    std::array<SpectralBleachHandle, 2> m_handles{};
 
     // Param atomics
     std::atomic<float> m_reduction{10.0f};
@@ -71,10 +73,9 @@ private:
     int m_frameCount{0};
     static constexpr int kLearningFrames = 25;  // ~1 sec at 40ms/frame
 
-    // Buffers
-    std::vector<float> m_monoIn;
-    std::vector<float> m_monoOut;
-    MonoDspStereoAdapter m_stereoAdapter;
+    // De-interleaved per-channel buffers
+    std::array<std::vector<float>, 2> m_channelIn;
+    std::array<std::vector<float>, 2> m_channelOut;
 };
 
 } // namespace AetherSDR

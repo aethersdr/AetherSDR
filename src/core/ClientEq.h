@@ -6,20 +6,11 @@
 
 namespace AetherSDR {
 
-// Client-side parametric EQ. Runs inside AudioEngine for both the RX and
-// TX audio paths — independent of the radio-side EQ applet, which sends
-// commands to the radio's own DSP. Supports up to 16 simultaneous bands
-// of peak, low/high shelf, low/high pass filters.
-//
-// Thread model: the UI thread writes parameters via set*() / setBand();
-// the audio thread reads them via process(). Cross-thread synchronisation
-// is via std::atomic — there are no locks. Coefficient recompute happens
-// once per block on the audio thread; a per-band version counter lets the
-// audio thread skip recompute when nothing has changed.
-//
-// Parameters are smoothed with a one-pole smoother per-block so slider
-// motion during playback doesn't produce zipper noise. Smoothing time
-// constant is fixed at ~15ms.
+// Client-side parametric EQ for the RX and TX audio paths (independent of the
+// radio-side EQ). Up to 16 bands: peak, low/high shelf, low/high pass. UI thread
+// writes atomics via set*()/setBand(); the audio thread recomputes coefficients
+// once per block, skipped via per-band version counters. Parameters use a
+// one-pole per-block smoother (~15 ms) to avoid zipper noise.
 class ClientEq {
 public:
     enum class FilterType : int {

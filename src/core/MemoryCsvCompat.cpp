@@ -391,23 +391,18 @@ bool parseRecord(const QStringList& fields,
     return true;
 }
 
-// ── CHIRP-next generic CSV import ───────────────────────────────────────────
-//
-// CHIRP (chirp_common.Memory.CSV_FORMAT) writes a header whose first column is
-// "Location". The columns AetherSDR consumes, with CHIRP's units:
-//   Frequency  MHz      ("146.520000")   -> MemoryEntry::freq      (MHz, same)
-//   Duplex     +/-/split/off/""          -> offsetDir  up/down/simplex
-//   Offset     MHz      ("0.600000")     -> repeaterOffset          (MHz, same)
-//   Tone       Tone/TSQL/DTCS/Cross/""   -> toneMode   off/ctcss_tx
-//   rToneFreq  CTCSS Hz (TX tone)        -> toneValue               (Hz)
-//   cToneFreq  CTCSS Hz (RX tone, TSQL)  -> toneValue               (Hz)
+// CHIRP-next CSV import (chirp_common.Memory.CSV_FORMAT; first header column
+// "Location"). Columns consumed, with CHIRP's units:
+//   Frequency  MHz                       -> freq (MHz)
+//   Duplex     +/-/split/off/""          -> offsetDir up/down/simplex
+//   Offset     MHz                       -> repeaterOffset (MHz)
+//   Tone       Tone/TSQL/DTCS/Cross/""   -> toneMode off/ctcss_tx
+//   rToneFreq  CTCSS Hz (TX)             -> toneValue (Hz)
+//   cToneFreq  CTCSS Hz (RX, TSQL)       -> toneValue (Hz)
 //   Mode       FM/NFM/AM/USB/LSB/CW/...  -> mode (mapped to Flex modes)
-//   TStep      kHz      ("5.00")         -> step  (Hz — scaled ×1000)
+//   TStep      kHz                       -> step (Hz, x1000)
 //   Name                                 -> name
-// CHIRP-only columns (Location, DtcsCode, CrossMode, Skip, Power, Comment,
-// URCALL/RPT*/DVCODE) have no MemoryEntry home and are dropped; the DTCS and
-// D-STAR/DV tone systems the FlexRadio can't reproduce degrade to a plain
-// (tone-off) memory rather than failing the row.
+// Other columns are dropped; DTCS and D-STAR tone systems degrade to tone-off.
 
 bool looksLikeChirpHeader(const QStringList& fields)
 {
