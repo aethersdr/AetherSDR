@@ -308,51 +308,38 @@ int main(int argc, char** argv)
         check(!s.backend.autoRfGainEnabled(),
               "and it is OFF on a fresh session, with no setting to say otherwise");
 
-        // ---- THE REFUSAL, and whether the region it guards is REACHABLE.
-        //
-        // Above kAutoRfGainMaxBaselineDb this radio's gain axis is not
-        // trustworthy: #5354 measured +48 dB reading identically to +18 dB, and
-        // nothing in the gateware decode or the AD9866's stated geometry
-        // accounts for it. The control declines and says why; it does NOT
-        // quietly move the operator's number to somewhere it would work.
-        //
-        // WRITTEN AGAINST BOTH CONSTANTS RATHER THAN THE LITERAL 20, because
-        // #5752 moves the axis ceiling to +19 -- the SAME hardware fact,
-        // reached independently -- and once the ceiling equals the control's
-        // own threshold, no baseline in the untrusted region can be set at all.
-        // The case then flips from "refuses" to "there is nothing to refuse",
-        // and a hand-typed 20 would report that as a failure. Found by building
-        // the integration branch, where this PR and #5752 sit together; neither
-        // branch can see it alone.
-        const int untrusted = hl2::Hl2Backend::kAutoRfGainMaxBaselineDb + 1;
-        s.backend.setPanRfGain(s.panId, untrusted);
-        const bool reachable = s.backend.lnaBaselineDb() > 
-                               hl2::Hl2Backend::kAutoRfGainMaxBaselineDb;
-        s.backend.setAutoRfGain(true);
-        if (reachable) {
-            check(!s.backend.autoRfGainEnabled(),
-                  "arming is REFUSED from a baseline in the fold region");
-            check(s.backend.lnaBaselineDb() == untrusted,
-                  "and the operator's number is not moved to make the feature work");
-            check(s.healthLive() == untrusted,
-                  "nor is the wire quietly attenuated in its place");
-        } else {
-            // The axis ceiling has been brought down onto the threshold, so the
-            // setter clamped and the baseline is trustworthy by construction.
-            check(s.backend.autoRfGainEnabled(),
-                  "with the axis clamped AT the threshold, no untrusted baseline "
-                  "is reachable and arming succeeds");
-            check(s.backend.lnaBaselineDb()
-                      == hl2::Hl2Backend::kAutoRfGainMaxBaselineDb,
-                  "and the request came up at the ceiling rather than past it");
-            s.backend.setAutoRfGain(false);
-        }
+        // ---- THE CEILING IS THE TOP OF THE NATIVE RANGE, so every baseline
+        // the setter can produce arms (#5943).
+        check(hl2::Hl2Backend::kAutoRfGainMaxBaselineDb == hl2::kLnaGainMaxDb,
+              "the arming ceiling IS the top of the native gain range");
 
-        // At the boundary it arms: the limit is where the measurement puts it.
+        // From the shipped default.
+        s.backend.setPanRfGain(s.panId, hl2::kLnaDefaultGainDb);
+        s.backend.setAutoRfGain(true);
+        check(s.backend.autoRfGainEnabled(),
+              "arming succeeds from the shipped +20 dB default");
+        check(s.healthLive() == hl2::kLnaDefaultGainDb,
+              "and the wire is not moved by arming");
+        s.backend.setAutoRfGain(false);
+
+        // From the top of the range. A request past it CLAMPS in the setter
+        // (setPanRfGain qBounds to the native range), so no baseline above the
+        // ceiling is reachable and the refusal branch has nothing to refuse.
+        s.backend.setPanRfGain(s.panId, hl2::Hl2Backend::kAutoRfGainMaxBaselineDb + 1);
+        check(s.backend.lnaBaselineDb() == hl2::kLnaGainMaxDb,
+              "a request past the native maximum is clamped by the setter");
+        s.backend.setAutoRfGain(true);
+        check(s.backend.autoRfGainEnabled(),
+              "arming succeeds from +48 dB, the top of the native range");
+        check(s.backend.lnaBaselineDb() == hl2::kLnaGainMaxDb
+                  && s.healthLive() == hl2::kLnaGainMaxDb,
+              "and neither the baseline nor the wire is moved to make it work");
+        s.backend.setAutoRfGain(false);
+
         s.backend.setPanRfGain(s.panId, 19);
         s.backend.setAutoRfGain(true);
         check(s.backend.autoRfGainEnabled(),
-              "+19 dB is inside the trusted range and arming succeeds");
+              "+19 dB arms, as every baseline in the native range does");
         check(s.backend.lnaAutoOffsetDb() == 0,
               "arming alone takes no gain — it acts on evidence, not on being armed");
         check(s.healthLive() == 19 && s.backend.lnaBaselineDb() == 19,
@@ -374,9 +361,10 @@ int main(int argc, char** argv)
               "and what is stored for the band is +19 throughout — never the 8");
 
         // ---- THE OPERATOR'S FLOOR. The second, and last, of the two numbers
-        // they own. 26 dB is a CHOSEN default inside a MEASURED bound: from
-        // the stock +20 dB baseline it reaches -6 dB, which is the first gain
-        // #5354's own sweep measures as clean on this station.
+        // they own. 26 dB reaches -6 dB from the stock +20 dB baseline, which
+        // #5354's sweep labelled first clean -- but that sweep's labels were
+        // 32 dB low (a true +26), so the value is pinned here unchanged and is
+        // to be re-derived from a sweep on a healthy radio.
         check(s.backend.autoRfGainFloorDb() == 26,
               "the floor defaults to 26 dB below the operator's setting");
         s.backend.setAutoRfGainFloorDb(9);
@@ -384,6 +372,9 @@ int main(int argc, char** argv)
         s.backend.setAutoRfGainFloorDb(500);
         check(s.backend.autoRfGainFloorDb() == hl2::Hl2Backend::kAutoRfGainFloorMaxDb,
               "an absurd floor clamps rather than being taken literally");
+        check(hl2::Hl2Backend::kAutoRfGainMaxBaselineDb - s.backend.autoRfGainFloorDb()
+                  == hl2::kLnaGainMinDb,
+              "and the deepest floor reaches the register floor from the top armable baseline");
         s.backend.setAutoRfGainFloorDb(-4);
         check(s.backend.autoRfGainFloorDb() == 0,
               "and a negative one resolves to zero — 'may take no gain at all'");
@@ -392,9 +383,11 @@ int main(int argc, char** argv)
     // ---- WHAT `autoEnabled` MEANS ON DISK: THE WISH, NOT THE RUNNING FLAG.
     //
     // The two are the same number until the backend DECLINES to arm, which it
-    // does from any baseline above kAutoRfGainMaxBaselineDb because the gain
-    // axis is not trustworthy there. At that moment "the operator wants this"
-    // and "the loop is running" diverge, and only the first belongs on disk:
+    // would from a baseline above kAutoRfGainMaxBaselineDb -- now the top of
+    // the native range, so no such baseline is reachable through the setter
+    // and only the arm/disarm half is exercised here. At a decline, "the
+    // operator wants this" and "the loop is running" diverge, and only the
+    // first belongs on disk:
     // an explicit `false` is honoured forever, so persisting the running flag
     // would silently and permanently withdraw a preference the operator never
     // withdrew -- and would keep doing so after they lowered RF Gain into the
@@ -407,23 +400,10 @@ int main(int argc, char** argv)
         st.rfFrequencyHz = 14'200'000.0;
         Session s(st);
 
-        // A baseline the loop refuses: above the trusted ceiling.
-        s.backend.setPanRfGain(s.panId, hl2::Hl2Backend::kAutoRfGainMaxBaselineDb + 1);
-        s.backend.setAutoRfGain(true);
-        check(!s.backend.isArmed(),
-              "the loop declines to arm from an untrusted baseline");
-
-        const QJsonObject declined =
-            s.backend.currentOperatingState().extension
-                .value(QStringLiteral("rfGain")).toObject();
-        check(declined.value(QStringLiteral("autoEnabled")).toBool() == true,
-              "a DECLINED arm still persists the wish as true — the operator "
-              "asked, the radio refused, and the asking is what survives");
-
-        // Now a baseline it trusts: the same wish arms, and still reads true.
+        // At the ceiling, which is the top of the native range: it arms.
         s.backend.setPanRfGain(s.panId, hl2::Hl2Backend::kAutoRfGainMaxBaselineDb);
         s.backend.setAutoRfGain(true);
-        check(s.backend.isArmed(), "and arms from a trusted one");
+        check(s.backend.isArmed(), "the loop arms from the top of the native range");
         const QJsonObject armed =
             s.backend.currentOperatingState().extension
                 .value(QStringLiteral("rfGain")).toObject();
@@ -441,77 +421,37 @@ int main(int argc, char** argv)
     }
 
     // ---- ABSENT MEANS OFF. RFC #5535 asked for armed-by-default; the shipped
-    // LNA default of +20 dB sits one dB above the baseline the loop will arm
-    // from, so default-on would refuse on every fresh connect. Until the gain
-    // axis is trustworthy at that default, a document with no key reads false.
+    // default is armable, but flipping the default is a separate change, so a
+    // document with no key still reads false.
     {
         RestoredRadioState st;
         st.rfFrequencyHz = 14'200'000.0;
         Session s(st);
         check(!s.backend.isArmed(),
               "a fresh profile does not arm the loop");
-        check(hl2::kLnaDefaultGainDb > hl2::Hl2Backend::kAutoRfGainMaxBaselineDb,
-              "and the reason is arithmetic: the shipped LNA default is above "
-              "the baseline the loop will arm from, so default-on would only "
-              "ever warn");
+        check(hl2::kLnaDefaultGainDb <= hl2::Hl2Backend::kAutoRfGainMaxBaselineDb,
+              "and the shipped LNA default is armable: default-on is no longer "
+              "blocked by arithmetic, only by a decision not taken here");
     }
 
-    // ---- A DECLINED ARM MUST BE ABLE TO EXPLAIN ITSELF (#5817) ----
+    // ---- THE FIRST TICK ON A FRESH INSTALL ARMS (#5817) ----
     //
-    // Reading isArmed() back tells a caller THAT the request failed. Until now
-    // the only account of WHY went to a qWarning, so the operator saw a
-    // checkbox spring back to unticked in silence -- and on a fresh install
-    // that is what the very first tick of Auto does, because no stored gain for
-    // the band leaves the constructed baseline above the ceiling that gates
-    // arming.
+    // The constructed +20 dB baseline is inside the arming range, so the first
+    // tick arms and there is no refusal sentence to give. The refusal mechanism
+    // (reason kept, cleared on success and on a radio swap) is not reachable
+    // through the public API, so it is not exercised here.
     {
         hl2::Hl2Backend fresh;
         check(fresh.lastArmRefusalReason().isEmpty(),
               "a backend that has not been asked to arm has no refusal to give");
 
         fresh.setAutoRfGain(true);
-        const QString why = fresh.lastArmRefusalReason();
-        check(!fresh.autoRfGainEnabled(),
-              "arming from the constructed baseline is declined, as #5817 found");
-        check(!why.isEmpty(),
-              "and the refusal now carries a reason rather than only a log line");
-        // The sentence has to name the two numbers the operator needs, or it is
-        // not actionable: what their baseline is, and what it has to be below.
-        check(why.contains(QString::number(AetherSDR::hl2::kLnaDefaultGainDb)),
-              "the reason names the baseline that was refused");
-        check(why.contains(QString::number(hl2::Hl2Backend::kAutoRfGainMaxBaselineDb)),
-              "and the ceiling it has to be at or below");
-        // AND NOTHING THE OPERATOR CANNOT USE. This sentence stopped being a
-        // log line when it started being shown on the panadapter and read out
-        // by a screen reader; an issue number is provenance for us and noise to
-        // them. The citation stays on the qWarning, where it is still useful.
-        check(!why.contains(QLatin1Char('#')),
-              "and cites no issue number at the operator");
-
-        // AND IT MUST NOT OUTLIVE THE REFUSAL IT DESCRIBES. Lower the baseline
-        // under the ceiling, arm for real, and the reason has to go -- otherwise
-        // a later unrelated failure would be shown this text.
-        fresh.setPanRfGain(QString(), hl2::Hl2Backend::kAutoRfGainMaxBaselineDb - 1);
-        fresh.setAutoRfGain(true);
         // ASSERTED, NOT SKIPPED. A guarded "[skip]" here would let a later
-        // change that stops an unconnected backend from arming turn the
-        // clear-on-success half green without ever running it.
+        // change that stops an unconnected backend from arming go unnoticed.
         check(fresh.autoRfGainEnabled(),
-              "lowering the baseline under the ceiling arms for real");
+              "arming from the constructed +20 dB baseline succeeds");
         check(fresh.lastArmRefusalReason().isEmpty(),
-              "a successful arm clears the reason");
-
-        // AND A RADIO SWAP TAKES IT WITH IT. applyRestoredState() is the reset
-        // every new radio's document runs through; a reason composed about
-        // radio A's baseline must not be what radio B's control reports before
-        // it has been asked anything.
-        hl2::Hl2Backend swapped;
-        swapped.setAutoRfGain(true);
-        check(!swapped.lastArmRefusalReason().isEmpty(),
-              "precondition: the previous radio declined and said why");
-        swapped.applyRestoredState(RestoredRadioState{});
-        check(swapped.lastArmRefusalReason().isEmpty(),
-              "a radio swap clears a reason composed about the previous radio");
+              "and leaves no refusal reason behind");
 
         // AND EVERY OUTCOME IS ANNOUNCED. A view that only reads isArmed() back
         // after its own click never hears about the connect-time restore or a
@@ -525,16 +465,13 @@ int main(int argc, char** argv)
         QObject::connect(&spoken, &IRadioBackend::autoRfGainArmSettled,
                          [&](bool armed) { ++settled; lastArmed = armed; });
         spoken.setAutoRfGain(true);
-        check(settled == 1 && !lastArmed,
-              "a refusal settles the request as not armed, so a view hears it");
-        spoken.setPanRfGain(QString(), hl2::Hl2Backend::kAutoRfGainMaxBaselineDb - 1);
-        spoken.setAutoRfGain(true);
-        check(settled == 2 && lastArmed, "an arm settles as armed");
+        check(settled == 1 && lastArmed,
+              "an arm from the constructed baseline settles as armed");
         spoken.setAutoRfGain(false);
-        check(settled == 3 && !lastArmed, "a disarm settles as not armed");
+        check(settled == 2 && !lastArmed, "a disarm settles as not armed");
         spoken.setAutoRfGain(false);
-        check(settled == 3, "a request that changes nothing settles nothing");
-        check(seam.count(QStringLiteral("autoRfGainArmSettled")) == 3,
+        check(settled == 2, "a request that changes nothing settles nothing");
+        check(seam.count(QStringLiteral("autoRfGainArmSettled")) == 2,
               "the probe saw every emission the direct handler counted");
         checkSeam(seam, "spoken");
     }

@@ -11,24 +11,11 @@ namespace AetherSDR {
 
 class ThemeInspectorOverlay;
 
-// Browser-devtools-style "click to find the token painting this region".
-//
-// Lifecycle is driven by ThemeEditorDialog.  When the operator clicks the
-// "Inspect" toggle:
-//   1. start() installs a QApplication-level event filter and shows a
-//      transparent always-on-top overlay sized to the widget under the
-//      cursor.
-//   2. As the cursor moves, the overlay tracks the deepest widget at the
-//      global position (skipping the editor dialog itself + the overlay).
-//   3. Left-click captures (widget, local position), eats the event so it
-//      never reaches the underlying widget, deactivates, and emits
-//      widgetPicked() so the dialog can run tokensForWidget() and surface
-//      the matches.
-//   4. ESC cancels without picking.
-//
-// The overlay uses Qt::WindowTransparentForInput + WA_TransparentForMouseEvents
-// so it never intercepts events itself — the global event filter is the
-// authoritative event source.
+// "Click to find the token painting this region", driven by ThemeEditorDialog.
+// start() installs an app-level event filter and an overlay that tracks the
+// deepest widget under the cursor (skipping the editor and overlay). Left-click
+// is eaten, deactivates and emits widgetPicked(); ESC cancels. The overlay is
+// transparent for input; the global filter is the only event source.
 class ThemeInspector : public QObject {
     Q_OBJECT
 public:

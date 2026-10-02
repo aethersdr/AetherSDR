@@ -43,20 +43,11 @@ constexpr int kMaxFieldWidth[FieldCount] = {
     4,  // SWR      1.00
 };
 
-// Strict lexical form for a numeric field: optional single leading sign,
-// then digits with at most one decimal point, and at least one digit. No
-// exponent, no hex, no embedded whitespace, no second sign.
-//
-// This exists because QString::toDouble() is far more permissive than this
-// protocol is. It accepts exponent notation, so a corrupted or foreign
-// 7-character field reading "01e+100" -- which fits the canonical Power width
-// EXACTLY and therefore also passes the separator-offset check -- decoded to
-// 1e100 W, propagated into RangeTracker's ceiling, and reached the applet as
-// a float infinity, where evenTicks()'s static_cast<int> is undefined
-// behaviour. Reported by @rfoust on #5320 and reproduced before fixing.
-//
-// This protocol has no checksum, so this function and looksLikeRecord() are
-// the whole of the boundary validation (Constitution VII).
+// Strict numeric field form: optional single leading sign, digits, at most one
+// decimal point, at least one digit; no exponent, hex or whitespace.
+// QString::toDouble() accepts "01e+100", which fits the 7-char Power width and
+// would reach the gauges as infinity (#5320). With no checksum, this and
+// looksLikeRecord() are the whole boundary validation.
 bool hasCanonicalNumericForm(const QByteArray& field, bool signAllowed)
 {
     if (field.isEmpty()) {
@@ -357,19 +348,9 @@ void ResponseParser::feed(const QByteArray& bytes)
             body = m_buf.mid(1, kRecordLength);
             consume = 1 + kRecordLength;
         } else {
-            // Incomplete; wait for more bytes -- but not without limit. The
-            // cap on the no-marker path above does not cover this one: once
-            // m_buf starts with ';' that indexOf always succeeds, so a stream
-            // that delivers one marker and then never another (and never a
-            // body that validates) would append here forever. Needs a device
-            // that goes malformed AFTER talking properly, which is exactly
-            // the case the other cap was written for.
-            //
-            // A body longer than kMaxBodyLength cannot become a record, so
-            // drop the marker and resync at the next one. Bounded at four
-            // records' worth for the same reason as above: wide enough that
-            // no plausible firmware variant is truncated, narrow enough that
-            // the buffer cannot grow.
+            // Incomplete; wait, but not forever: once m_buf starts with ';' the no-marker cap
+            // above never applies. A body longer than kMaxBodyLength can't become a record,
+            // so drop the marker and resync at the next one (bounded at four records' worth).
             if (m_buf.size() - 1 > kMaxBodyLength) {
                 m_buf.remove(0, 1);       // discard this marker
                 const int resync = m_buf.indexOf(kRecordMarker);
@@ -543,17 +524,10 @@ void RangeTracker::setCeilings(const RangeCeilings& ceilings, CeilingSource sour
     m_ceilings = ceilings;
     const double configured = m_ceilings.forRange(m_displayedRange);
 
-    // An operator edit is authoritative by definition -- it is a person
-    // telling us what their meter is actually set to, which is the one thing
-    // this protocol never puts on the wire. Take it even when it lowers an
-    // auto-expanded ceiling; if observed power really does exceed it, the
-    // kCeilingExpandRecords run re-expands within two records anyway, so the
-    // worst case is self-correcting and visible.
-    //
-    // But only when the operator acted on THIS range (or reset all ranges).
-    // Comparing old and new numeric values cannot represent re-entering the
-    // configured value to clear an automatic expansion, so the caller passes
-    // the edited range explicitly.
+    // An operator edit is authoritative (the protocol never reports the meter's
+    // range setting), even when it lowers an auto-expanded ceiling; real overpower
+    // re-expands within kCeilingExpandRecords. Applied only to the range the
+    // operator edited (or all), passed explicitly by the caller.
     if (source == CeilingSource::OperatorEdit) {
         if (!editedRange.has_value() || *editedRange == m_displayedRange) {
             m_ceilingW = configured;

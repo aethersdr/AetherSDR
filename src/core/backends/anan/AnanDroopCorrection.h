@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -7,26 +8,14 @@
 
 namespace AetherSDR::anan {
 
-// The Saturn FPGA's DDC0 decimation chain imposes a REAL amplitude roll-off
-// near the edges of the displayed span, baked into the raw IQ samples
-// themselves. The chain is a 6-stage CIC decimator (differential delay 1,
-// R = 10..320) followed by a 1024-tap decimate-by-8 anti-alias FIR, and
-// across the DDC OUTPUT band the roll-off is almost entirely that FIR's
-// transition band: the CIC term contributes at most 0.34 dB and varies by
-// 0.003 dB between the fastest and slowest rate. It is NOT the CIC's
-// sin(x)/x droop, which earlier revisions of this comment claimed -- that
-// mattered, because a sin(x)/x story implies a per-rate curve while the real
-// cause gives one curve for all six rates (see AnanDroopDefaults.h).
-//
-// This is not a rendering artifact and not fixable by touching bin count or
-// reported bandwidth -- an earlier attempt at exactly that broke zoom-out
-// (see AnanBackend::emitPanState()'s own comment). This header applies a
-// per-bin dB correction to the actual FFT magnitude before display. Two
-// sources feed it: the derived defaults seeded at connect
-// (AnanDroopDefaults.h) and, on top, whatever the in-app AnanDroopCalibrator
-// sweep (AnanDroopCalibrator.h) measured for that specific radio. AnanRxDsp
-// holds the live table set; this header only owns the data shape and the
-// pure apply math, not table selection or storage.
+// Saturn DDC0 (6-stage CIC, R = 10..320, then a 1024-tap decimate-by-8 FIR)
+// rolls off amplitude near the span edges in the raw IQ itself. Across the DDC
+// output band that is the FIR's transition band, not CIC sin(x)/x droop (CIC adds
+// <= 0.34 dB, varying 0.003 dB across rates), so one curve fits all six rates
+// (AnanDroopDefaults.h). Changing bin count or reported bandwidth breaks zoom-out
+// (AnanBackend::emitPanState()), so the fix is a per-bin dB correction to the FFT
+// magnitude. This header owns the data shape and apply math; AnanRxDsp holds the
+// live tables (derived defaults overlaid by AnanDroopCalibrator measurements).
 
 inline constexpr int kDroopCorrectionFftSize = 1024;
 
@@ -50,32 +39,95 @@ inline void applyDroopCorrectionDb(std::vector<float>& binsDbfs,
         binsDbfs[i] += table[i];
 }
 
-// Cosmetic fade for the outermost `tailFraction` of bins on each side,
-// applied AFTER applyDroopCorrectionDb() -- for the true edge of the span,
-// not for the recoverable bulk of it.
-//
-// The measured droop at the true edge is deep enough, and noisy enough bin
-// to bin, that no per-bin dB correction produces a clean result: raising
-// AnanDroopCalibrator's capDb from 70 to 90 dB left those bins unchanged or
-// worse from one calibration sweep to the next, because the limiting
-// factor there is measurement noise near the ADC's effective floor, not
-// correction headroom. Chasing more gain just amplifies that noise instead
-// of recovering real signal.
-//
-// This function does not try. It overwrites the tail zone with a
-// deterministic raised-cosine fade from the corrected value at the tail
-// boundary down to (boundary - fadeDb), replacing whatever noisy value the
-// real droop + correction produced there -- so the display always shows a
-// smooth, repeatable roll-off at the true edge instead of an unpredictable
-// one that sometimes drops below the panadapter's black level and reads as
-// a broken/glitchy dark band. This is the same judgment call WDSP's own
-// Display/Analyzer API makes: SetAnalyzer's `clp` parameter exists to clip
-// a decimation filter's roll-off rather than display it ("It is generally
-// not desirable to display the roll-off area... A primary use of this
-// capability is to clip off those bins", WDSP_Guide Rev 2.00 Section 7.2).
-// We fade instead of literally clipping bins because changing bin
-// count/reported bandwidth already broke zoom-out once -- see
-// AnanBackend::emitPanState()'s own comment.
+// Value of a kDroopCorrectionFftSize-point curve at output point `i` of
+// `points`, by linear interpolation. Both grids run edge to edge over the
+// same span with their end points on the span's edges -- the analyzer's
+// point grid is laid out that way for any count -- so point i sits at
+// fraction i / (points - 1) of the span on either grid.
+inline float droopCurveAt(const DroopCorrectionTable& table, std::size_t i,
+                          std::size_t points) noexcept
+{
+    if (points < 2)
+        return table[kDroopCorrectionFftSize / 2];
+    const double x = static_cast<double>(i) * (kDroopCorrectionFftSize - 1)
+        / static_cast<double>(points - 1);
+    const auto j = std::min(static_cast<std::size_t>(x),
+                            static_cast<std::size_t>(kDroopCorrectionFftSize - 2));
+    const float frac = static_cast<float>(x - static_cast<double>(j));
+    return table[j] + frac * (table[j + 1] - table[j]);
+}
+
+// applyDroopCorrectionDb() for a point count that follows the panel width.
+// The tables stay at kDroopCorrectionFftSize points so stored calibrations
+// and the derived defaults need no re-sweep; the correction is a smooth
+// gain-versus-frequency curve, so reading it between its points is sound.
+// At exactly kDroopCorrectionFftSize points this is applyDroopCorrectionDb().
+inline void applyDroopCorrectionDbResampled(std::vector<float>& pointsDb,
+                                            const DroopCorrectionTable& table) noexcept
+{
+    const std::size_t n = pointsDb.size();
+    if (n == table.size()) {
+        applyDroopCorrectionDb(pointsDb, table);
+        return;
+    }
+    if (n < 2)
+        return;
+    for (std::size_t i = 0; i < n; ++i)
+        pointsDb[i] += droopCurveAt(table, i, n);
+}
+
+// The mean of the straight line through `v`'s points over [a, b], with
+// 0 <= a <= b <= v.size() - 1 and v.size() >= 2. Exact per segment (the
+// trapezoid of a straight line is its integral), so a straight-line input
+// comes back as its value at the window's centre. a == b gives that point.
+inline double lineMeanOver(const std::vector<float>& v, double a, double b) noexcept
+{
+    const std::size_t n = v.size();
+    const auto at = [&](double x) {
+        const auto j = std::min(static_cast<std::size_t>(x), n - 2);
+        const double t = x - static_cast<double>(j);
+        return static_cast<double>(v[j]) + t * (static_cast<double>(v[j + 1]) - v[j]);
+    };
+    if (b <= a)
+        return at(a);
+    double sum = 0.0;
+    for (double x0 = a; x0 < b;) {
+        const double x1 = std::min(b, std::floor(x0) + 1.0);
+        sum += 0.5 * (at(x0) + at(x1)) * (x1 - x0);
+        x0 = x1;
+    }
+    return sum / (b - a);
+}
+
+// The reverse direction, for the calibrator: a frame of any point count read
+// onto the kDroopCorrectionFftSize grid. Returns false, leaving `out` untouched,
+// for fewer than two points. A wider frame is averaged over each table point's
+// cell (narrowed symmetrically at the span ends) so the stored calibration keeps
+// the FFT averaging; a narrower or equal frame is linearly interpolated.
+inline bool resampleToDroopGrid(const std::vector<float>& pointsDb,
+                                DroopCorrectionTable& out) noexcept
+{
+    const std::size_t n = pointsDb.size();
+    if (n < 2)
+        return false;
+    const double last = static_cast<double>(n - 1);
+    const double step = last / (kDroopCorrectionFftSize - 1);
+    const double half = n > kDroopCorrectionFftSize ? step / 2.0 : 0.0;
+    for (std::size_t k = 0; k < kDroopCorrectionFftSize; ++k) {
+        const double x = static_cast<double>(k) * step;
+        const double h = std::min({half, x, last - x});
+        out[k] = static_cast<float>(lineMeanOver(pointsDb, x - h, x + h));
+    }
+    return true;
+}
+
+// Cosmetic raised-cosine fade over the outermost `tailFraction` of bins each
+// side, applied AFTER applyDroopCorrectionDb(): from the boundary value down to
+// (boundary - fadeDb). At the true edge the droop is near the ADC floor and too
+// noisy for any per-bin correction (a 90 dB cap is no better than 70), so the
+// display gets a repeatable roll-off instead of a dark glitch band. WDSP makes
+// the same call (SetAnalyzer `clp`, WDSP_Guide Rev 2.00 §7.2); we fade rather
+// than clip bins because bin count/bandwidth changes break zoom-out.
 inline void applyEdgeFade(std::vector<float>& binsDbfs,
                            float tailFraction = 0.03f,
                            float fadeDb = 12.0f) noexcept

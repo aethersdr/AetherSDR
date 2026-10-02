@@ -10,10 +10,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 LABEL org.opencontainers.image.source=https://github.com/aethersdr/AetherSDR
 
 # Qt comes from aqtinstall, NOT from the distro — see the Qt layer below.
-# Ubuntu 24.04 ships Qt 6.4.2, which is seven minor versions behind current and
+# Ubuntu 24.04 ships Qt 6.4.2, which is eight minor versions behind current and
 # has been EOL upstream since the 6.4 series ended at 6.4.3. It is also BELOW
-# what AetherSDR ships: release binaries are built against Qt 6.8.3 LTS
-# (.github/workflows/appimage.yml, and check-windows pins the same 6.8.3). A CI
+# what AetherSDR ships: release binaries are built against Qt 6.12.0 LTS
+# (.github/workflows/appimage.yml, and check-windows pins the same 6.12.0). A CI
 # image on 6.4.2 therefore tested a Qt nobody runs, and rejected code that is
 # valid on every shipped configuration — PR #4646 hit exactly that with
 # QList::assign(), a Qt 6.6 addition.
@@ -38,6 +38,14 @@ RUN apt-get update && apt-get install -y \
     libhidapi-dev \
     portaudio19-dev \
     libpipewire-0.3-dev \
+    # Qt 6.12's QtMultimedia defaults to its PipeWire audio backend whenever
+    # libpipewire is present, and it segfaults in QPlatformAudioDevices::create()
+    # if it cannot create a PipeWire client context — which it cannot without
+    # /usr/share/pipewire/client.conf. That file ships in pipewire-bin, not in
+    # libpipewire. Without it every test that touches QMediaDevices crashed in
+    # the 6.12 image (18 in Full Suite). No daemon is needed: with the config
+    # present and nothing listening, Qt finds no devices and carries on.
+    pipewire-bin \
     autoconf \
     automake \
     libtool \
@@ -72,10 +80,11 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon-x11-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Qt 6.8.3 LTS ─────────────────────────────────────────────────────────
+# ── Qt 6.12.0 LTS (binary pin, and the source floor — #5487, #6055) ─────
 # Version and module list deliberately match appimage.yml and the Windows leg
 # in ci.yml, so every artifact and every CI check compiles against one Qt.
-# Bumping it means bumping all three together.
+# Bumping it means bumping all three together. Linux/mac still use nested
+# aqt metadata; do not copy the Windows git-aqt pin here.
 #
 # The xcb/xkb/fontconfig -dev packages above are named explicitly because the
 # distro qt6-*-dev packages used to pull them in transitively; without them,
@@ -83,8 +92,10 @@ RUN apt-get update && apt-get install -y \
 #
 # Ubuntu 24.04's pip is PEP 668 externally-managed, so aqt goes in a venv
 # rather than --break-system-packages; the venv is removed in the same layer.
-ENV QT_VERSION=6.8.3
-ENV QT_ROOT=/opt/Qt/6.8.3/gcc_64
+ENV QT_VERSION=6.12.0
+# RC and final both report 6.12.0. Invalidate the SDK layer at final release.
+ENV QT_PACKAGE_REVISION=202609280346
+ENV QT_ROOT=/opt/Qt/6.12.0/gcc_64
 # aqtinstall is pinned. It is the tool that decides what Qt lands in this image,
 # so leaving it floating means a cache-miss rebuild months from now silently
 # fetches a different installer than the one this image was validated with.
@@ -108,7 +119,7 @@ RUN python3 -m venv /tmp/aqt-venv \
 
 # ── qtkeychain, built against THAT Qt ────────────────────────────────────
 # Not the distro's qtkeychain-qt6-dev: that is compiled against Ubuntu's Qt
-# 6.4.2, and mixing it with an aqt 6.8.3 build is the ABI mismatch
+# 6.4.2, and mixing it with an aqt 6.12.0 build is the ABI mismatch
 # scripts/setup/setup-qtkeychain.sh exists to avoid (see its header, and
 # #3639 for what a missing keychain costs — SmartLink credential persistence
 # silently compiles out via find_package(Qt6Keychain QUIET)).

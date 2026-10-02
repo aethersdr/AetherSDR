@@ -9,25 +9,12 @@
 
 #include "core/backends/icom/CivCodec.h"
 
-// Phase 4 — metering.
-//
-// This is the first backend where METERING POLICY is a real engineering
-// constraint rather than a subscription. A Flex streams meters over VITA-49 and
-// an HL2 embeds them in the IQ header; an Icom returns a meter value only when
-// asked, one at a time, over the SAME CI-V stream that carries tuning. On WiFi
-// each poll costs a 5-30 ms round trip.
-//
-// So there are two halves here and they are deliberately separate:
-//
-//   * CALIBRATION — raw 0..255 to real units. Non-linear, per-model, and the
-//     published breakpoints are the only truth. Fitting a line through the
-//     endpoints reads several S-units wrong mid-scale.
-//   * SCHEDULING  — what to ask for, how often, and when to shut up so the
-//     operator's tuning does not queue behind a meter poll.
-//
-// Qt-free; icom_meters_test drives both halves with a synthetic clock.
-//
-// See ~/oracles/icom/icom-oracle.md §6.
+// Icom metering. An Icom returns a meter only when polled, one at a time, over
+// the same CI-V stream that carries tuning (5-30 ms per poll on WiFi). Two halves:
+//   * CALIBRATION — raw 0..255 to real units: non-linear, per-model,
+//     piecewise-linear between published breakpoints.
+//   * SCHEDULING  — what to poll, how often, and when to yield to tuning.
+// Qt-free; icom_meters_test drives both with a synthetic clock.
 
 namespace AetherSDR::icom {
 
@@ -43,19 +30,10 @@ struct CurvePoint {
     double value = 0.0;
 };
 
-// Piecewise-linear interpolation, clamped at both ends.
-//
-// LINEAR BETWEEN THE PUBLISHED POINTS, never a single fit through the
-// endpoints.
-//
-// The POWER curve is where this matters most: it is badly non-linear, and a
-// straight line from 0 to full scale reads 6.7 W where the radio means 5 W, and
-// 1.0 W where it means 0.5 W. The S-meter is milder — its two segments diverge
-// from a straight line by at most 2.76 dB, about half an S-unit — but that
-// error peaks exactly AT S9, which is the reading operators quote.
-//
-// Both errors are zero at the endpoints, so a check of only the first and last
-// breakpoints passes against a wrong implementation.
+// Piecewise-linear interpolation between the published points, clamped at both
+// ends; never a single endpoint fit. A straight line reads POWER as 6.7 W for
+// 5 W and 1.0 W for 0.5 W, and the S-meter up to 2.76 dB off at S9. Both errors
+// are zero at the endpoints, so tests must check interior points.
 [[nodiscard]] double interpolateCurve(std::span<const CurvePoint> curve, int raw);
 
 // The IC-705's published curves. Each is documented at its definition with the
@@ -154,22 +132,12 @@ powerCurveForCalibration(MeterCalibration calibration);
 // The poll scheduler
 // ---------------------------------------------------------------------------
 
-// Decides which meters to ask for, and when to stay quiet.
-//
-// Four rules, each of which exists because breaking it has a specific cost:
-//
-//   1. Poll only what is VISIBLE. An invisible meter's round trip is pure
-//      contention on the stream that carries tuning.
-//   2. Respect the TX/RX split. Polling SWR while receiving returns zero, which
-//      renders as a meter pinned at the bottom rather than as "not applicable".
-//   3. One request in flight per meter. Without this, a slow link accumulates
-//      duplicate requests and the backlog never drains.
-//   4. Yield to user commands. A frequency change that queues behind three
-//      meter polls is a VFO knob that feels broken.
-//
-// Deliberately clock-injected rather than owning a QTimer: the whole policy is
-// then testable in microseconds against a synthetic clock, which is the only
-// practical way to prove rule 3 and rule 4.
+// Decides which meters to poll, and when to stay quiet:
+//   1. Poll only what is VISIBLE.
+//   2. Respect the TX/RX split (SWR reads zero while receiving).
+//   3. One request in flight per meter, or a slow link builds a backlog.
+//   4. Yield to user commands so tuning never queues behind meter polls.
+// Clock-injected rather than owning a QTimer, so the policy is unit-testable.
 class MeterPoller {
 public:
     // A meter nobody is looking at is not polled at all.

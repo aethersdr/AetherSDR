@@ -11,16 +11,10 @@ class QLabel;
 
 namespace AetherSDR {
 
-// ── Panel scaling ───────────────────────────────────────────────────────────
-//
-// Both front-panel presentations — the tuner's and the amplifier's — size
-// every metric from one scale derived from the room the panel actually has,
-// so growing the window grows the contents rather than the padding around
-// them. Same idea as CrossNeedleMeterWidget, which fits a fixed design canvas
-// into its widget and scales the painter onto it; a panel is a widget tree
-// rather than one painted face, so the scale is applied to each metric
-// instead. The parts that are not device-specific live here, so the two
-// panels cannot drift apart on them.
+// Panel scaling shared by the tuner and amplifier front panels: every metric
+// scales from one factor derived from the available room, so a bigger window
+// grows the contents, not the padding (like CrossNeedleMeterWidget, but applied
+// per metric to a widget tree).
 
 // Below this the type stops being legible; above it the panel is being
 // stretched rather than filled.
@@ -33,19 +27,12 @@ constexpr qreal kPanelMaxScale = 3.0;
 // scaling did not use.
 constexpr int kPanelBottomGap = 8;
 
-// How long a radio-relayed meter sample stays authoritative before an
-// accessory's own connection is allowed to drive the gauges instead.
-//
-// The PGXL and the TGXL each publish forward power and SWR twice: once as
-// radio-relayed AMP meters, and once on their own management socket. They are
-// the same measurement — on a steady carrier the relayed FWD meter and the
-// device's `fwd` field agree to within 0.05 dB — so the choice is about rate.
-// The relay rides the radio's meter packets (~20 fps); the sockets are polled
-// at 1–5 Hz. The relay therefore wins while it is fresh.
-//
-// 1500 ms is comfortably longer than the slowest relay gap yet short enough
-// that losing the relay hands over within about a second. Both accessory
-// applets read this one constant so the rule cannot drift apart between them.
+// How long a radio-relayed meter sample stays authoritative over the
+// accessory's own socket. PGXL and TGXL publish fwd power/SWR both as relayed
+// AMP meters (~20 fps) and on their management socket (polled 1–5 Hz); the
+// values agree within 0.05 dB, so the faster relay wins while fresh. 1500 ms
+// exceeds the slowest relay gap yet hands over within ~1 s. Shared by both
+// accessory applets.
 constexpr qint64 kRelayMeterFreshnessMs = 1500;
 
 // Panel keys are letterbox-shaped rather than square. Their height is tied to
@@ -53,28 +40,13 @@ constexpr qint64 kRelayMeterFreshnessMs = 1500;
 // the width follows from it at this aspect.
 constexpr qreal kPanelKeyAspect = 16.0 / 9.0;
 
-// The scale for a panel `available` pixels across, whose contents cost
-// `naturalHeight` at scale 1.0 and whose widest row costs `designWidth`.
-//
-// The height term budgets for the contents ONLY — the pad's minimum is taken
-// off first. Those two together are what make the pad drain before anything
-// above it moves: while the width is the limiting term the contents hold
-// their size and the surplus is all pad, and the moment height becomes
-// limiting the arithmetic lands the contents at exactly height - the gap, so
-// the pad is at its minimum rather than still holding space the contents just
-// gave up.
-//
-// `naturalHeight` must be measured ONCE, at scale 1.0, and never revised.
-// Re-deriving it from a scaled layout feeds the scale back into its own
-// input: rounding and the widgets' own minimums stop the contents being
-// exactly proportional to the scale, the leftover lands in the divisor, and
-// the next scale reads larger. It does not settle.
-//
-// `designWidth`, by contrast, is a constant rather than a measurement, for
-// the same reason: dividing a measured width by the scale leaves a constant
-// term behind that grows as the scale falls, and it runs away. Observed on
-// the tuner panel before this was fixed — a 686px panel drew its contents
-// half again larger than an 802px one.
+// Scale for a panel `available` px wide whose contents cost `naturalHeight` at
+// scale 1.0 and whose widest row costs `designWidth`. The height term excludes
+// the pad's minimum, so the pad drains first before contents shrink.
+// `naturalHeight` must be measured once at scale 1.0, never re-derived from a
+// scaled layout (rounding and widget minimums feed back and it never
+// settles). `designWidth` is a constant for the same reason: a measured width
+// divided by the scale runs away.
 qreal panelContentScale(const QSize& available, qreal designWidth, qreal naturalHeight);
 
 // The floor a panel may be shrunk to: what it needs at kPanelMinScale, not
@@ -101,18 +73,12 @@ QSize panelKeySize(int heightPx, int seedWidthPx, qreal scale);
 // Colours resolve through ThemeManager tokens, so the panel follows the active
 // theme instead of hardcoding the hardware's palette.
 
-// ── RelayDial ───────────────────────────────────────────────────────────────
-//
-// One relay bank (C1 / L / C2) as a round moving-needle dial — the same 0–255
-// datum RelayBar draws as a horizontal bar, and the same interaction contract:
-// scroll or Up/Down to step the relay when the direct TGXL connection is up
-// (#469), with the accessibility announcement debounced because an ATU sweep
-// pushes positions faster than a screen reader can speak them.
-//
-// The needle sweeps a conventional 270° meter arc — 0 at lower-left, 255 at
-// lower-right, increasing clockwise. The hardware's own needle mapping is not
-// reproduced: the panel photo shows three low values (48/16/64) whose needles
-// do not order consistently, so there is nothing there to copy faithfully.
+// RelayDial: one relay bank (C1 / L / C2) as a needle dial over the same
+// 0–255 datum RelayBar draws. Scroll or Up/Down steps the relay when the
+// direct TGXL connection is up (#469); the accessibility announcement is
+// debounced because ATU sweeps outpace screen readers. The needle sweeps a
+// 270° arc, 0 lower-left to 255 lower-right clockwise (the hardware's own
+// mapping isn't consistent enough to copy).
 class RelayDial : public QWidget {
     Q_OBJECT
 
@@ -156,18 +122,10 @@ private:
     int  m_lastAccessibleValue{std::numeric_limits<int>::min()};
 };
 
-// ── PanelKey ────────────────────────────────────────────────────────────────
-//
-// A control-row key (STBY / BYP / TUNE). Its size comes from the panel's
-// scale rather than from its caption, so the three keys are identical whatever
-// they say.
-//
-// It reports a small, scale-independent minimum. Giving a key a fixed size
-// instead makes the layout's minimum track whatever size the key currently
-// has, and that ratchets: the panel's own minimum grows with it, so it can be
-// made larger and then never made small again. Observed before this existed —
-// an 802px panel reported a 710px minimum, which then reported 631px, each
-// resize down blocked by a floor the previous size had raised.
+// PanelKey: a control-row key (STBY / BYP / TUNE) sized from the panel scale,
+// not its caption, so all keys match. It reports a small scale-independent
+// minimum; a fixed size would ratchet the layout's minimum up so the panel
+// could never shrink again.
 class PanelKey : public QPushButton {
     Q_OBJECT
 
@@ -184,16 +142,10 @@ private:
     QSize m_target{0, 0};
 };
 
-// ── AccessoryPortRow ────────────────────────────────────────────────────────
-//
-// One RF port's status strip: port letter, PTT lamp, band chip, signal source,
-// frequency, and the tuner's operate state — the two-row block the front panel
-// puts between the meters and the relay dials.
-//
-// Only the PTT lamp and the state text come from the tuner itself. The source,
-// band and frequency describe what is feeding the port, which the Flex-relayed
-// ATU status does not carry; TunerApplet fills them from the radio it is
-// connected to (see TunerApplet::setPortASource / setPortAFrequency).
+// AccessoryPortRow: one RF port's status strip (letter, PTT lamp, band chip,
+// source, frequency, tuner state). Only PTT and state come from the tuner;
+// source, band and frequency aren't in the Flex-relayed ATU status, so
+// TunerApplet fills them from the radio (setPortASource / setPortAFrequency).
 class AccessoryPortRow : public QWidget {
     Q_OBJECT
 
@@ -221,6 +173,10 @@ public:
     // report one per port, so its strips leave the cell out rather than
     // standing an N/A in it forever.
     void setFrequencyVisible(bool visible);
+    // The tuner only knows what is on a port while it is hearing it, so its
+    // strips leave the source cell out rather than guess at one. The
+    // amplifier's source is configuration and stays shown — the default.
+    void setSourceVisible(bool visible);
     // The port carrying the radio's transmit path, outlined to match the
     // panel's highlight of the port in use.
     void setActive(bool active);

@@ -6,25 +6,11 @@ namespace AetherSDR {
 
 namespace {
 
-// The pan layout table, mirroring kAllLayouts in PanLayoutDialog.cpp: each
-// entry is rows of equal-width cells, rows of equal height.  Kept as data
-// rather than as the dialog's widget code so the geometry is testable without
-// a GUI — and so a thirteenth layout id is one line here, not a new branch.
-//
-// DRIFT WARNING: this is a third copy of the same knowledge.  The other two —
-// PanLayoutDialog::kAllLayouts and PanadapterStack's kLayoutPanCounts — live
-// in the GUI target, which the headless migration test does not link, so
-// nothing compares them automatically.  What the test does do is duplicate the
-// expected id/cell-count pairs, so a change HERE fails immediately; a change
-// to either of the other two still has to be mirrored by hand.  Phase 3 puts
-// this in reach of a GUI-linked test and should close the gap properly.
-//
-// AND NOTE THE SHAPE IS NOT IDENTICAL.  kAllLayouts stores per-cell WEIGHTS
-// (`{{1,1},{1}}`); this stores per-row CELL COUNTS.  Today every weight is 1,
-// so the two agree exactly — but a future non-uniform layout, say a 2:1 split
-// written `{{2,1}}`, is not representable here at all and would silently come
-// out as equal halves rather than failing.  Adding one means changing this
-// vector to carry weights, not just adding a row (PR #4900 review, L1).
+// Pan layout table: rows of equal-width cells, rows of equal height. Must match
+// PanLayoutDialog::kAllLayouts and PanadapterStack's kLayoutPanCounts by hand;
+// the headless test pins only this copy. This stores per-row cell COUNTS while
+// kAllLayouts stores per-cell weights (all 1 today): a non-uniform layout like
+// {{2,1}} needs this changed to carry weights, or it renders as equal halves.
 struct LayoutRows {
     const char* id;
     QVector<int> rows;   // cells per row, top to bottom
@@ -143,16 +129,10 @@ QList<CanvasItem> composeClassic(const QStringList& panIds,
         items.append(item);
     }
 
-    // ── Applets, stacked down the column(s) ──────────────────────────────
-    //
-    // Up to ~11 applets share one column (slots stay above the 90 px display
-    // floor on a 1080 px canvas).  Beyond that the column WRAPS instead of
-    // letting slots collapse into an overlap — the L3 answer from PR #4900:
-    // the real panel scrolls, the canvas cannot, so Classic trades spectrum
-    // width for a second (at most third) column.  Applets beyond three full
-    // columns compress within the last one; at that point the operator has
-    // more applets open than any arrangement can show, and the canvas is the
-    // tool for choosing which ones matter.
+    // Up to kClassicMaxAppletsPerColumn applets per column (slots stay above the
+    // 90 px floor on a 1080 px canvas). Beyond that the column wraps, up to three
+    // columns, since the canvas cannot scroll like the real panel; further applets
+    // compress within the last column.
     if (haveApplets) {
         const int n = static_cast<int>(appletIds.size());
         const int colCount = qMin(3, (n + kClassicMaxAppletsPerColumn - 1)

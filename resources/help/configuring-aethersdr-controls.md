@@ -91,9 +91,15 @@ The shortcut editor also includes many actions that ship **unassigned** until yo
 
 ### Other built-in application shortcuts
 
+The Window menu manages the active AetherSDR window. Full Screen uses `F11`
+on Windows/Linux and `Command+Control+F` on macOS; Minimize uses `Command+M`
+on macOS and is unassigned elsewhere. Both bindings can be changed in
+Configure Shortcuts. They work in secondary windows, with Keyboard Shortcuts
+turned off, and while a text field or slider has focus.
+
 AetherSDR also has a few ordinary menu shortcuts that are separate from the operating-shortcut system:
 
-- `Ctrl+M` — toggle Minimal Mode
+- `Ctrl+Shift+M` — toggle Minimal Mode
 - `Ctrl+=` — increase UI scale
 - `Ctrl+-` — decrease UI scale
 - `Ctrl+0` — reset UI scale to 100%

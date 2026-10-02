@@ -4,39 +4,20 @@
 
 namespace AetherSDR {
 
-// THE single source of truth for "which log fields get scrubbed", mirroring
-// how SettingsCredentialPolicy backs SettingsSanitizer (#5480). redactPii()
-// in AsyncLogWriter.cpp generates its patterns from these tables, so adding a
-// field is one row here plus one case in async_log_writer_test.
-//
-// WHY A TABLE AND NOT MORE REGEX LITERALS. The redactor grew one hand-written
-// pattern at a time as log sites were added, and the patterns drifted apart:
-// the name and coordinate rules learned to match quoted and JSON-shaped values
-// while the token rule never did, so the same value was scrubbed in one
-// spelling and survived in another. Generating every field rule from one
-// shared value grammar removes that class of gap by construction.
-//
-// WHAT THIS DOES NOT COVER is as important as what it does; see
-// docs/log-redaction.md for the limitations reviewers must check a new log
-// site against. In particular a keyword table cannot recognise a value that
-// carries no keyword — raw binary or hex packet dumps are outside it.
+// The single source of truth for which log fields are scrubbed, as
+// SettingsCredentialPolicy backs SettingsSanitizer (#5480). redactPii()
+// (AsyncLogWriter.cpp) generates every field rule from these tables and one
+// shared value grammar, so quoted/JSON/plain spellings are all covered; adding a
+// field is one row here plus a case in async_log_writer_test. Limits (e.g. values
+// with no keyword, hex dumps) are in docs/log-redaction.md.
 namespace LogRedactionPolicy {
 
-// A keyword whose VALUE is scrubbed wherever it appears as `keyword=value`,
-// `keyword: value`, `"keyword": value`, or their Qt-escaped (\"keyword\")
-// spellings.
-//
-// keepPrefixChars: how many leading characters of the value survive, so a
-// reader can still correlate the same value across lines without recovering
-// it. The prefix is emitted ONLY when the value is strictly longer than it
-// (see redactValue in AsyncLogWriter.cpp) — otherwise a short value would be
-// "redacted" to itself, which is how a 4-character value used to pass through
-// intact.
-//
-// KEYWORD MUST USE NON-CAPTURING GROUPS ONLY. redactField() assembles
-// `\b(keyword)<sep><scheme>(value)` and reads fixed group numbers; a stray
-// capturing "(...)" in a keyword shifts them, and the failure is silent —
-// the rule still matches, it just redacts the wrong span. Write "(?:...)".
+// A keyword whose VALUE is scrubbed in `keyword=value`, `keyword: value`,
+// `"keyword": value` and Qt-escaped (\"keyword\") spellings. keepPrefixChars
+// survive for correlation, emitted only when the value is strictly longer (see
+// redactValue). KEYWORD MUST USE NON-CAPTURING GROUPS ONLY: redactField() reads
+// fixed group numbers from `\b(keyword)<sep><scheme>(value)`, and a capturing
+// group silently shifts them. Write "(?:...)".
 struct ValueField {
     const char* keyword;          // regex alternation, matched case-insensitively
     int         keepPrefixChars;

@@ -207,17 +207,9 @@ bool hasCurrentCalibration(MeterCalibration calibration) noexcept
 
 double sMeterDbm(int raw, double s9Dbm)
 {
-    // Icom's published breakpoints: 0 = S0, 120 = S9, 241 = S9 + 60 dB.
-    // An S-unit is 6 dB, so S0 sits 54 dB below S9.
-    //
-    // Built as a curve rather than one line because the two segments have
-    // genuinely different slopes: 54 dB over 120 counts below S9, and 60 dB
-    // over 121 counts above it.
-    //
-    // The error from collapsing them to one line peaks at 2.76 dB — about half
-    // an S-unit — and it peaks AT S9, which is the reading operators actually
-    // quote. It is zero at both endpoints, so a test that only checks S0 and
-    // S9+60 would pass against the wrong implementation.
+    // Icom's published breakpoints: 0 = S0, 120 = S9, 241 = S9 + 60 dB (S0 is 54 dB
+    // below S9 at 6 dB/S-unit). Two segments with different slopes; a single line
+    // errs by up to 2.76 dB, peaking at S9.
     const std::array<CurvePoint, 3> curve{{
         {0, s9Dbm - 54.0},
         {120, s9Dbm},

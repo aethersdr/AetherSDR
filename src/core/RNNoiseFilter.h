@@ -12,18 +12,11 @@ namespace AetherSDR {
 
 class Resampler;
 
-// Client-side RNN noise suppression using Mozilla/Xiph RNNoise.
-// Processes 24kHz stereo FLOAT32 audio with one matched RNNoise/resampler path
-// per RX channel, preserving radio pan, diversity, and binaural phase. The TX
-// ProcessedMono mode keeps a single downmixed path and duplicates its output.
-//
-// RNNoise requires 48kHz mono float input in 480-sample (10ms) frames.
-//
-// Why per-channel rather than one mono analysis: deriving a gain envelope from
-// an L/R downmix and re-applying it to channels that are NOT proportional to
-// that downmix (binaural, diversity) makes the noise floor breathe with
-// speech — the sum has comb-filter nulls the individual channels do not
-// (#4689).
+// Client-side RNNoise on 24 kHz stereo float. One RNNoise/resampler path per
+// RX channel preserves pan, diversity and binaural phase: a gain envelope from
+// an L/R downmix makes the noise floor breathe on non-proportional channels
+// (#4689). TX ProcessedMono uses one downmixed path, duplicated to L/R.
+// RNNoise itself needs 48 kHz mono float in 480-sample (10 ms) frames.
 
 class RNNoiseFilter {
 public:

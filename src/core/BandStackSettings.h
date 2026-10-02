@@ -28,22 +28,14 @@ struct BandStackEntry {
     bool autoSaved{false};  // true if added by auto-save dwell; false = manual
 };
 
-// User frequency bookmarks, stored per radio as ONE feature document —
-// (family, serial, "BandStack") in radio_settings (RFC #4603 PR 4). Explicit
-// anonymous model scopes use their family row; unknown empty identities refuse.
-// Every
-// mutation writes the whole document through immediately (atomic, Principle
-// V), so there is no separate save() step anymore and a crash can't lose a
-// bookmark the operator just made.
-//
-// The legacy side file (~/.config/AetherSDR/BandStack.settings) is imported
-// LAZILY, one radio at a time, on that radio's first access — because the
-// document needs the radio's FAMILY, which only the live scope knows (the
-// legacy file keyed sections by serial alone). A migrated section is removed
-// from the side file; the file itself is deleted when its last radio section
-// has been claimed. Sections for radios that never connect again simply wait
-// there, harmlessly. The three panel-wide preferences move to AppSettings
-// keys (they were never per-radio) via a one-shot in load().
+// User frequency bookmarks, stored per radio as ONE feature document
+// (family, serial, "BandStack") in radio_settings (RFC #4603). Anonymous model
+// scopes use their family row; unknown empty identities refuse. Every mutation
+// writes the whole document immediately (no save() step). The legacy
+// ~/.config/AetherSDR/BandStack.settings is imported lazily per radio on first
+// access (the document needs the family, which only the live scope knows); a
+// migrated section is removed and the file deleted once empty. The three
+// panel-wide preferences move to AppSettings via a one-shot in load().
 class BandStackSettings {
 public:
     static constexpr int kSchemaVersion = 1;

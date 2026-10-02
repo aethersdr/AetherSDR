@@ -46,13 +46,8 @@ AnanDroopCalibrator::Curve AnanDroopCalibrator::medianPowerCurve(const QVector<C
     Curve result{};
     if (captures.isEmpty())
         return result;
-    // Floor is a log10(0) guard only, not a plausible-signal floor -- real
-    // edge-droop measurements on this radio run as low as -160 to -180 dBm
-    // (bench-confirmed), whose linear power (1e-16 to 1e-18) is smaller than
-    // a naively "tiny" 1e-12 floor. That floor previously clamped every
-    // deep-droop bin up to exactly -120 dB, destroying the very signal this
-    // function exists to measure. 1e-30 (-300 dB) is far below anything this
-    // radio's ADC can produce, so it only ever guards the literal-zero case.
+    // Guards log10(0) only: real edge-droop bins reach -160..-180 dBm (1e-16..1e-18
+    // linear), so the floor must sit far below that (-300 dB).
     static constexpr float kLog10Floor = 1.0e-30f;
     std::vector<float> powers(static_cast<std::size_t>(captures.size()));
     for (std::size_t k = 0; k < result.size(); ++k) {
@@ -95,14 +90,9 @@ QMap<int, anan::DroopCorrectionTable> AnanDroopCalibrator::loadTables(
     int storedSchema = 0;
     const QJsonObject doc = scope.feature(QLatin1String(kFeature), &storedSchema);
     if (storedSchema > kSchemaVersion) {
-        // Symmetric with saveTables()'s own refusal, which was already here --
-        // the asymmetry was accidental, not a decision. A v2 row's numbers
-        // need not mean what v1's mean (a different reference level, cap, or
-        // length convention), so reading one back as v1 pushes a WRONG
-        // correction into the DSP, silently: nothing ever reads a table back
-        // off the radio to notice. Better uncorrected than wrongly corrected,
-        // and AnanRxDsp's per-rate kDroopCorrectionZero fallback already
-        // covers a rate with no table at all.
+        // Same refusal as saveTables(): a newer schema's numbers need not mean what
+        // v1's do, and a wrong correction is silent. Uncorrected (the per-rate
+        // kDroopCorrectionZero fallback) beats wrongly corrected.
         qCWarning(lcAnanDroopCal)
             << "stored droop calibration is schema v" << storedSchema
             << "-- newer than this build understands (v" << kSchemaVersion
@@ -132,10 +122,8 @@ QString AnanDroopCalibrator::saveTables(const RadioSettingsScope& scope,
         return QStringLiteral("no settings scope for this radio");
 
     int storedSchema = 0;
-    // featureExact(), not feature(): this is a WRITER judging the row it is
-    // about to replace, and feature()'s exact-radio -> family-wide fallback
-    // would silently fold a shared default into this radio's own row
-    // (PR #4614 review). An absent row reads back as schema 0.
+    // featureExact(), not feature(): a writer must not fold the family-wide
+    // fallback into this radio's own row. An absent row reads as schema 0.
     QJsonObject doc = scope.featureExact(QLatin1String(kFeature), &storedSchema);
     if (storedSchema > kSchemaVersion) {
         return QStringLiteral("stored calibration is schema v%1, newer than this "
@@ -322,17 +310,9 @@ void AnanDroopCalibrator::advance()
         break;
 
     case Phase::Sampling: {
-        // The rate can change out from under an ALREADY-RUNNING Sampling
-        // phase -- a mouse-wheel zoom on the panadapter, or a `zoom`/`panbw`
-        // bridge call. WaitingForRateLanded's own target-match test cannot
-        // catch that; it has already passed. Without this the loop keeps
-        // capturing and files the new rate's frames under the old rate's key,
-        // persisting a table measured at the wrong rate -- the same
-        // cross-rate corruption the per-rate keying and finishRateChange()'s
-        // m_preRateChangeKsps rollback exist to prevent, reached through a
-        // different door. The sweep drives the rate itself, so anything else
-        // moving it mid-measurement is a genuine conflict, not a race to
-        // absorb: abort loudly and keep the rates already measured.
+        // The rate changed mid-Sampling (wheel zoom, `zoom`/`panbw` bridge call):
+        // continuing would file another rate's frames under this key. The sweep owns the
+        // rate, so abort and keep the rates already measured.
         if (m_landedRateKsps != currentTargetRateKsps()) {
             abortSweep(QStringLiteral("the panadapter rate changed to %1 ksps while "
                                       "measuring %2 ksps -- nothing else may drive the "
@@ -342,7 +322,6 @@ void AnanDroopCalibrator::advance()
             break;
         }
         if (!m_haveLatestFrame) {
-            // The only unbounded wait in the machine used to be right here.
             if (now - m_phaseStartedAtMs >= kSampleStallTimeoutMs) {
                 abortSweep(QStringLiteral("no spectrum frame at %1 ksps for %2 s "
                                           "-- is the panadapter running?")
@@ -394,10 +373,11 @@ void AnanDroopCalibrator::onSpectrumFrame(const std::vector<float>& binsDbm)
 {
     if (m_phase == Phase::Idle)
         return;
-    if (binsDbm.size() != static_cast<int>(anan::kDroopCorrectionFftSize))
+    // The panadapter's point count follows the panel width; the tables are
+    // stored on the fixed kDroopCorrectionFftSize grid, so read each frame
+    // onto that grid. At exactly that count this is a straight copy.
+    if (!anan::resampleToDroopGrid(binsDbm, m_latestFrame))
         return;
-    for (int i = 0; i < binsDbm.size(); ++i)
-        m_latestFrame[static_cast<std::size_t>(i)] = binsDbm[i];
     m_haveLatestFrame = true;
 }
 

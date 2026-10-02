@@ -5,23 +5,27 @@ AetherSDR — Claude Code, OpenAI Codex, Cursor, GitHub Copilot, Gemini
 Code Assist, Aider, AetherClaude (our orchestrator bot), or any other
 tool. Several of those tools look for their own well-known file at a
 different path (`CLAUDE.md`, `.github/copilot-instructions.md`,
-`GEMINI.md`); those are thin pointers back here, and a tool without one
-reads this file directly. Everything project-wide lives in
-**this** file.
+`GEMINI.md`); those are thin pointers back here.
 
-If you are an AI assistant: read this file end-to-end before writing
-code or recommending merges. The file is ~1150 lines; that is the cost
-of doing the job right on this codebase.
+**How to read it.** Read this core file in full. Then read the sub-doc for
+each area your change touches — they are part of this guide, split out so
+nobody loads rules for code they are not changing:
 
-**This file is documentation, not policy.** It describes how to build
-AetherSDR — architecture, conventions, build steps, protocol notes. The
-rules that bind you live in [`CONSTITUTION.md`](CONSTITUTION.md) and
-[`GOVERNANCE.md`](GOVERNANCE.md), and they outrank everything here. Where
-this file appears to contradict either, they win, and the contradiction is
-a defect in this file — fix it or open an issue. That separation is what
-puts this file at CODEOWNERS Tier 2 (infrastructure) while the Constitution
-and GOVERNANCE.md stay Tier 1 (maintainer-only): editing build conventions
-is not a governance act and should not need a maintainer's approval.
+| If your change touches… | Also read |
+|---|---|
+| `src/core/backends/`, `RadioModel`, `RadioSession`, `TransmitModel`, `ConnectionPanel`, discovery, `RadioCapabilities`, `src/aetherd/`, `src/core/control/`, a vendor wire header, or a `gui/`↔`core/` include | [`docs/agents/backends.md`](docs/agents/backends.md) — aetherd, the seam, engine-boundary ratchets, conformance checklist |
+| The Flex wire path, slices/pans/status, Multi-Flex, KiwiSDR | [`docs/agents/flex-protocol.md`](docs/agents/flex-protocol.md) |
+| `AppSettings`, `radio_settings`, `RadioStateMemory`, migrations, credentials, any setter that persists | [`docs/agents/settings.md`](docs/agents/settings.md) |
+| `tests/`, `tests/tests.cmake`, `.github/workflows/`, the CI image | [`docs/agents/tests-ci.md`](docs/agents/tests-ci.md) |
+| `src/gui/` — MainWindow, dialogs, applets, meters, theme, a11y; or you want to verify UI behavior | [`docs/agents/gui.md`](docs/agents/gui.md) |
+
+**This file is documentation, not policy.** The rules that bind you live in
+[`CONSTITUTION.md`](CONSTITUTION.md) and [`GOVERNANCE.md`](GOVERNANCE.md), and
+they outrank everything here. Where this file appears to contradict either,
+they win, and the contradiction is a defect here — fix it or open an issue.
+That separation is what puts this file and `docs/agents/` at CODEOWNERS Tier 2
+(infrastructure) while the Constitution and GOVERNANCE.md stay Tier 1
+(maintainer-only).
 
 One passage restates policy rather than describing practice:
 §"Autonomous Agent Boundaries" below elaborates the autonomy limits that
@@ -35,42 +39,40 @@ Replicate the **Windows-only FlexRadio SmartSDR client** (written in C#) as a
 **native, cross-platform C++ application** using Qt6 and C++20. The aim is to mirror the
 look, feel, and every function SmartSDR is capable of. The reference radio is a
 **FLEX-8600 running firmware 4.2.18**, which speaks **SmartSDR protocol v1.4.0.0**.
+Other radio families plug in behind `IRadioBackend` (see
+[`docs/agents/backends.md`](docs/agents/backends.md)).
 
 ## AI Agent Guidelines
 
-> **TEMPORARY — read before opening any PR that touches `src/core/backends/`,
-> `RadioModel`, `RadioSession`, `TransmitModel`, `ConnectionPanel`, discovery,
-> or `RadioCapabilities`.** The 2026-09-10 backend architecture review is
-> tracked in **#5554** (meta: every open seam/multi-radio issue plus the new
-> findings). Before you submit, check that your change does not add to any
-> item listed there — no new `usesFlexCommandPlane()` / family-string
-> branches, no new raw Flex wire text above the seam, no new `dynamic_cast`
-> to a concrete backend, no new capability declared without a verb behind
-> it, no copy of HL2 scaffolding into another host-DSP family, and no new
-> keying-class verb that skips the TX gate in `RadioModel`. If your PR
-> resolves one of those items, link it. This notice is removed when #5554's
-> §2 items each have their own issue and #5262 M1 has landed.
+> **TEMPORARY — #5554.** Before opening any PR that touches
+> `src/core/backends/`, `RadioModel`, `RadioSession`, `TransmitModel`,
+> `ConnectionPanel`, discovery, or `RadioCapabilities`, read the #5554 notice
+> in [`docs/agents/backends.md`](docs/agents/backends.md#standing-notice--5554):
+> your change must not add to any item that review lists (family-string
+> branches, raw Flex wire text above the seam, `dynamic_cast` to a concrete
+> backend, a capability without a verb, copied HL2 scaffolding, a keying verb
+> that skips the TX gate). This notice is removed when #5554's §2 items each
+> have their own issue and #5262 M1 has landed.
 
 When helping with AetherSDR:
 - Prefer C++20 / Qt6 idioms (std::ranges, concepts if clean, Qt signals/slots over lambdas when possible)
 - Keep classes small and single-responsibility
 - Use RAII everywhere (no naked new/delete)
-- Comment non-obvious protocol decisions with firmware version
 - When suggesting code: show **diff-style** changes or full function/class if small
 - Test suggestions locally if possible — the build must work on Linux, macOS and Windows
 - Never suggest Wine/Crossover workarounds — goal is native
 - Flag any proposal that would break slice 0 RX flow
 - If unsure about protocol behavior → ask for logs/wireshark captures first
-- **Use `AppSettings`, never `QSettings`** — see "Settings Persistence" below
+- **Use `AppSettings`, never `QSettings`** — see [`docs/agents/settings.md`](docs/agents/settings.md)
 - **New engine code goes in `libaethercore`** (`src/core/` or `src/models/`),
   exposed to the UI through models — never via a new gui→core header include.
-  See "Build targets" and "In-flight: aetherd" under Architecture Overview.
+- **Adding or changing UI?** Every colour is a ThemeManager token, and a
+  control the radio lacks is dimmed with a stated reason, never hidden — see
+  [`docs/agents/gui.md`](docs/agents/gui.md).
 - **Read `CONTRIBUTING.md`** for contribution policy (what we accept, who
   reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
   coding conventions and the AI-to-AI debugging protocol (open a GitHub issue
   for cross-agent coordination)
-- **Gating a control on a radio capability? Dim it, never hide it.** Individual controls render in one of three states — unavailable (the radio lacks it, dimmed **with a stated reason**), inactive (supported, not engaged), active. Hiding survives only at applet granularity for a cohesive radio-specific cluster. Register with `ControlAvailabilityRegistry` rather than writing another `setVisible()`; the reason must reach a screen reader via `accessibleDescription` (widgets) or `statusTip` (`QAction`s), because a tooltip is a mouse affordance that is never announced. `tools/check_a11y.py` warns on a disabled control whose reason lives only in a tooltip. Doctrine: [`docs/style/theme-style-guide.md`](docs/style/theme-style-guide.md) §"Three-state controls" (#5262 M3a, #4896).
-- **Adding or changing UI? Read [`docs/style/theme-style-guide.md`](docs/style/theme-style-guide.md) first** — every colour resolves through a ThemeManager token (error/warning/success/notification/TX all have one); never hardcode a colour literal. CI's hardcoded-colour ratchet fails a PR that raises the count above its base branch.
 - **Sign every commit you author.** `main` enforces `required_signatures`, so a
   PR with unsigned commits cannot merge without an admin override. If the
   contributor has not set up commit signing yet, walk them through
@@ -79,90 +81,49 @@ When helping with AetherSDR:
   Raspberry Pi. Default to SSH signing; GPG is the fallback for existing GPG
   workflows. Verify with `git log --show-signature -1` after the first commit.
 - **Read the AetherSDR Constitution before writing or reviewing code.**
-  Canonical source: `.specify/memory/constitution.md`. Byte-identical
-  mirror at `CONSTITUTION.md` in repo root for discoverability. 14
-  principles total (constitution v2.0.0): 7 AetherSDR-domain governance
-  principles (FlexLib authority, radio-authoritative live state,
-  radio-persistable settings, clean-room contributions, per-feature
-  config ownership, transmit-on-intent, boundary input validation) + 7
-  defensive engineering principles adopted from Cisco's
+  Canonical source: `.specify/memory/constitution.md`; byte-identical mirror at
+  `CONSTITUTION.md`. AetherSDR-domain principles (FlexLib authority,
+  radio-authoritative live state, radio-persistable settings, clean-room
+  contributions, per-feature config ownership, transmit-on-intent, boundary
+  input validation) plus defensive engineering principles adopted from Cisco's
   [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
-  (Evidence Over Assertion, Surface Only What Survives, Claims Are
-  Atomic And Mortal, Fixes Are Demonstrated, Sandbox By Infrastructure,
-  Operator Outranks Every Agent, Persist Atomically). The defensive
-  set codifies how AetherSDR's multi-agent contribution model (≥6
-  distinct AI tools touching the codebase) avoids the failure modes
-  of confident-but-wrong AI changes, stale-snapshot reverts, and
-  prompt-injection escalation. Commit messages cite the most-load-bearing
+  (Evidence Over Assertion, Surface Only What Survives, Claims Are Atomic And
+  Mortal, Fixes Are Demonstrated, Sandbox By Infrastructure, Operator Outranks
+  Every Agent, Persist Atomically). Commit messages cite the most-load-bearing
   principle as `Principle <N>.` at the end of the subject line.
 
 ### Issue / PR Claim Protocol — Assign Yourself
 
-When an AI agent is **actively reviewing an issue or PR — for comment,
-for merge recommendation, or to implement a fix** — the agent MUST
-assign itself to the issue or PR using GitHub's `assignees` feature
-**before** posting the review, comment, or merge action.
+When an AI agent is **actively reviewing an issue or PR — for comment, for
+merge recommendation, or to implement a fix** — the agent MUST assign itself
+using GitHub's `assignees` feature **before** posting the review, comment, or
+merge action. This is the visible claim mechanism for multi-agent
+coordination (Principle X: Claims Are Atomic And Mortal); it stops two agents
+spending tokens on the same PR and posting conflicting recommendations.
 
-This is the visible claim mechanism for multi-agent contribution
-coordination (Principle X: Claims Are Atomic And Mortal). The
-`aetherclaude-eligible` label gates implementation work; the
-assignees list signals "an agent is actively engaged on this right
-now" to every other agent and to the maintainer.
-
-**Concrete rules**:
-
-1. **Before** posting a review, comment, or merge action: check the
-   current assignees. Then:
-   - **Unassigned, or assigned ONLY to AetherClaude
-     (`@aethersdr-agent`)**: add yourself alongside.
-     **AetherClaude auto-triages every new issue and every new
-     PR**, so its assignment is the persistent triage-engagement
-     signal, NOT a claim on active merge work. Adding yourself
-     alongside AetherClaude is expected and correct.
-   - **Already assigned to another human agent or AI agent**
-     (not AetherClaude): leave a coordination comment instead of
-     double-assigning, and do not proceed with overlapping work.
-2. **While** working: stay assigned. Other agents will see the
-   non-AetherClaude assignment and route around you.
-3. **After** posting the comment / completing the review / merging:
-   the assignment can stay. GitHub auto-clears assignees when an
-   issue closes or a PR merges. Manual unassign is optional but
-   appropriate when you've concluded but the issue/PR remains open
-   (e.g., you reviewed and recommended merge but didn't merge
-   yourself).
-4. **If your work is interrupted** (token limit, context loss,
-   model failure): leave a brief comment ("Stepping away;
-   unassigning so another agent can pick up") and unassign. The
-   claim is mortal — it dies with the agent that held it
-   (Principle X). AetherClaude's assignment is separate and stays.
-5. **Quick read-only actions don't require assignment**: pulling an
-   issue's title to summarize, listing PRs in a status report,
-   counting open issues. Assignment is for engagement that produces
-   a comment, review, or merge.
-
-**GitHub CLI command**:
+1. **Before** posting a review, comment, or merge action, check the current
+   assignees:
+   - **Unassigned, or assigned ONLY to AetherClaude (`@aethersdr-agent`)**:
+     add yourself alongside. AetherClaude auto-triages every new issue and PR,
+     so its assignment is a triage signal, NOT a claim on active work.
+   - **Already assigned to another human or AI agent** (not AetherClaude):
+     leave a coordination comment instead of double-assigning, and do not
+     proceed with overlapping work.
+2. **While** working: stay assigned.
+3. **After** finishing: the assignment can stay (GitHub clears it on
+   close/merge). Unassign if you concluded but the issue/PR remains open.
+4. **If your work is interrupted** (token limit, context loss, model failure):
+   leave a brief comment ("Stepping away; unassigning so another agent can
+   pick up") and unassign. The claim dies with the agent that held it.
+5. **Quick read-only actions don't require assignment** (summarizing,
+   listing, counting). Assignment is for engagement that produces a comment,
+   review, or merge.
 
 ```bash
-# Assign yourself to issue NNNN or PR NNNN
-gh issue edit NNNN --add-assignee @me
-gh pr edit NNNN --add-assignee @me
-
-# Unassign yourself
-gh issue edit NNNN --remove-assignee @me
-gh pr edit NNNN --remove-assignee @me
-
-# Check current assignees
-gh issue view NNNN --json assignees
-gh pr view NNNN --json assignees
+gh issue edit NNNN --add-assignee @me      # or: gh pr edit NNNN --add-assignee @me
+gh issue edit NNNN --remove-assignee @me   # or: gh pr edit NNNN --remove-assignee @me
+gh pr view NNNN --json assignees           # check current assignees
 ```
-
-**Why this exists**: without a visible claim signal, two agents
-working from different orchestrators or contributor IDEs can both
-spend tokens reviewing the same PR, post conflicting recommendations
-within minutes of each other, and waste the maintainer's review time
-reconciling them. The assignees list is the cheap, persistent,
-multi-agent-visible claim mechanism that prevents this. It is the
-operational implementation of Principle X.
 
 ### Autonomous Agent Boundaries
 
@@ -201,6 +162,26 @@ is the sole authority on visual design and UX direction.
 - **Don't remove code you didn't add** — if rebasing, ensure upstream changes are preserved. Review the diff before submitting.
 - **Atomic parameters for cross-thread DSP** — main thread writes via `std::atomic`, audio thread reads. Never hold a mutex in the audio callback for parameter updates.
 - **Error handling**: log with `qCWarning(lcCategory)`, don't throw exceptions
+- **Includes**: carry them explicitly; never rely on a transitive include (Qt reshuffles transitive includes between releases, and a distro Qt newer than the 6.12 pin is a supported build).
+
+### Comments
+
+A comment states what is true **now** and why the code has this shape: the
+invariant, the constraint, the non-obvious protocol fact (with firmware
+version). Aim for five lines or fewer; a design that needs more goes in a
+`docs/` file the comment links to.
+
+History does not go in code. How the bug was found, what the code used to do,
+which review caught it, who reported it, and the incident narrative belong in
+the commit message and PR body, where `git blame` finds them. A bare `(#NNNN)`
+tag is fine; retelling the issue is not.
+
+Don't restate the code, don't add banner dividers, and don't cite
+Constitution principles in code — that tag belongs in the commit subject.
+
+Deleting or shortening a historical comment is welcome cleanup, as long as
+the guard or test it describes stays. The guard and its test are the
+protection; the prose is not.
 
 ## Build
 
@@ -211,119 +192,23 @@ cmake --build build --parallel
 ```
 
 **Optional — DFNR (DeepFilterNet3) noise reduction.** Run
-`scripts/setup/setup-deepfilter.sh` (Windows: `setup-deepfilter.ps1`)
-*once before* `cmake` to fetch the prebuilt `libdeepfilter` for your
-platform; configure will otherwise report `DFNR ... disabled — library
-not found` and gate the feature off. CI runs this step automatically
-(cached) in the release-build workflows, so shipped binaries always
-include DFNR; it is a manual prereq only for local dev builds. NR still
-works without it — RN2 (RNNoise) is bundled and always built, needing no
-setup.
+`scripts/setup/setup-deepfilter.sh` (Windows: `setup-deepfilter.ps1`) *once
+before* `cmake` to fetch the prebuilt `libdeepfilter`; otherwise configure
+reports `DFNR ... disabled — library not found` and gates the feature off.
+Release workflows run this step automatically. NR still works without it —
+RN2 (RNNoise) is bundled and always built.
 
 **RNNoise architecture check.** The `third_party/rnnoise/src/x86` sources and
 include directory belong only in x86 build graphs. After configuring any ARM
 build, `rg 'rnnoise/src/x86' <build-dir>/build.ninja` must find no matches.
 
-Full dependency list is in `README.md` — don't duplicate it here.
-
-### Adding a test — declare it in `tests/tests.cmake`, not `CMakeLists.txt`
-
-Drop `<feature>_test.cpp` into `tests/`, then declare its `add_executable` +
-`add_test` in **`tests/tests.cmake`**. There is no glob; every test is declared
-explicitly, so copy a neighbouring target's block.
-
-These all lived in the root `CMakeLists.txt` before the split, so a stale doc,
-an old PR, or pattern-matching on the surrounding code will all point you at
-the wrong file. Two guards catch that: `tests.cmake`
-aborts the CMake configure step, and `tools/check_test_registration.py --strict`
-fails the PR in CI.
-
-Paths in `tests.cmake` are relative to the **repository root**
-(`tests/foo_test.cpp`, `src/gui/Bar.cpp`) because it is pulled in with
-`include()`, not `add_subdirectory()`. Do not convert it to a subdirectory to
-"tidy it up": `include()` keeps the root's directory scope, which is what keeps
-those paths — and ten `${CMAKE_CURRENT_SOURCE_DIR}` references pointing at
-`tools/` and `docs/` — resolving correctly. Under `add_subdirectory` the source
-paths fail loudly and those ten fail *silently*. The file's header says all of
-this at the point of use.
-
-A test that touches `AppSettings` also needs its target name in the
-`AETHER_SETTINGS_CONSUMERS` list at the bottom of `tests.cmake`.
-
-**Do not add a `ctest -R` step for it to `.github/workflows/ci.yml`.** The
-per-PR gate there is a frozen allow-list (`.github/ci-test-gate.txt`) of
-tests kept on the macOS and Windows jobs because the claim each pins is about
-that platform's toolchain (Apple Metal, MSVC portability); the Linux job runs
-no tests at all, and the list does not grow. Every test declared in
-`tests.cmake` that the default configure builds runs unfiltered in two places
-from the moment it is declared: on every push to `main` (`full-suite.yml`,
-minutes after the merge) and again weekly under the sanitizers
-(`sanitizers.yml`). That is where a new test runs. (A test behind a
-default-OFF option runs in neither unless that lane passes the option; say so
-in the PR.) `tools/check_ci_test_gate.py` runs in `Static checks` and fails
-the PR if a `-R` pattern in a pull-request workflow resolves to a name the
-frozen list does not carry. Removing a test from the gate is fine:
-run the script with `--update` and commit the shorter list. The script only
-ever shrinks the list; growing it is a hand edit to the maintainer-owned
-file, with the reason in the PR body. See "Gate integrity" below.
-
-Every unconditional `add_executable(<name>_test …)` must have a matching
-`add_test`, or carry a `# not registered: <reason>` marker the registration
-checker recognizes (option-gated and manual targets qualify). A test that
-compiles but is never registered reads as coverage while running in no job —
-`issue_report_test`, the GHSA-ccrg-j8cp-qhc4 regression guard, has run in no
-job from its creation to this day (#5101, still open, registers it). This
-becomes checked once the `check_test_registration.py` extension from #5254
-lands; until then it is convention.
-
-A test for a fixed bug should be mutation-checked before the PR goes up:
-break the guard on purpose, watch the test fail, restore it, and say so in
-the PR body.
-
-### Test-layer boundary — where an assertion lives
-
-Decide the layer before writing the test (#5232):
-
-| The assertion proves | It lives in |
-|---|---|
-| Wire encoding, parser bounds, model tables, scheduling, DSP, capability/safety policy | a socket-free CTest in `tests/`, grounded in the official guide or gateware |
-| A refusal, a non-event, a dropped/malformed/disconnected input, a TX guard | a socket-free test that **injects the transport** — feed the frame handler or state machine directly; no `QTcpServer`/`QUdpSocket`, no peer process |
-| A race or lifetime bug under churn | the sanitizer lane (`sanitizers.yml`) — the sanitizer is the point |
-| The app converges with real firmware (session, RX, controls, meter liveness) | the automation bridge + `radiocert` on live hardware. Positive effects only: radiocert is a diagnostic, not pass/fail, and cannot prove an isolated non-event |
-| A closed loop that needs a simulator peer (hpsdrsim TX) | an explicit opt-in target, never registered by default |
-
-**No new synthetic peer standing in for third-party radio or amplifier
-firmware enters the default graph.** A fake radio proves the client agrees
-with our model of the radio, not with the radio; the model freezes while
-firmware moves, so the test fails on correct changes or stays green on real
-divergence (#5232). Four legacy exceptions remain in
-the default graph, all tracked for socket-free extraction in #5254:
-`vkamp_connection_test` (fake VKAMP amplifier), `hl2_receiver_count_restart_test`
-(fake Metis radio), `gui_client_registration_recovery_test` (fake FLEX-6700
-handshake peer), and `thumbdv_queue_test` (a pty-backed fake DV3000 dongle —
-not a socket, which is why it went unenumerated; #5405 review). Mining a retired fake peer's frame tables as
-*input data* for injected-transport tests is encouraged; running the fake as
-a live socket peer is not. Loopback mocks of documented HTTP APIs are a
-different trade — that contract is versioned and published; radio firmware
-behavior is not.
-
-Socket tests where **our own server is the subject** (rigctld, CAT, the TCI
-server, the automation bridge's transport) remain legitimate: the code under
-test is real, the socket is how you reach it. The carve-out exempts a test
-from the fake-firmware ban, not from visibility: any new socket-owning test
-is disclosed in the PR body, its `tests.cmake` block names the socket it
-binds, reviewers notify the operator before continuing, and the test fails
-fast (or skips, exit 77) when it cannot bind rather than consuming its
-timeout.
-
-Prefer behavioral seams over source-text assertions: a test that greps a
-source file for an expression breaks on behavior-preserving refactors and
-gets deleted by whoever it fires on. Applets already link into unit tests,
-so the seam is a `tests.cmake` entry, not a missing capability.
+Full dependency list is in `README.md`. Adding a test: declare it in
+`tests/tests.cmake` and do **not** add it to `ci.yml` — see
+[`docs/agents/tests-ci.md`](docs/agents/tests-ci.md).
 
 ### Version and release files
 
-Current version: **26.9.4**.
+Current version: **26.9.5**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
@@ -350,104 +235,43 @@ find-and-replace across a version bump silently corrupts them.
 The table above is the **only** reason to edit `CHANGELOG.md`: a new version
 section, at release prep. An ordinary PR — a fix, a feature, a refactor —
 **must not add an entry**, however user-visible the change is. Describe it in
-the PR body and the commit message instead; those are where the reasoning
-belongs and neither one conflicts with anything. At release prep, the section
-is written *from* those PR bodies — `gh pr list --state merged --search
+the PR body and the commit message instead. At release prep, the section is
+written *from* those PR bodies — `gh pr list --state merged --search
 'merged:>=<last-tag-date>'` is the source of truth for what shipped.
 
-This is a mechanical rule, not a stylistic preference. Every entry is prepended
-to the top of the same `## [Unreleased]` list, so **any two PRs that both add
-one conflict with each other**, and every PR still open when one of them merges
-goes stale and needs a manual resolution. With a queue of concurrent agent PRs
-that is not an occasional annoyance — it is a conflict on essentially every
-pair. The file is append-mostly by nature and merges terribly by construction,
-so the fix is to stop writing to it outside the one moment that needs it.
+Every entry is prepended to the same `## [Unreleased]` list, so any two PRs
+that both add one conflict with each other. Reviewers: do not ask for a
+`CHANGELOG.md` entry, and flag one as a change to remove if a PR adds it.
 
-Reviewers: do not ask for a `CHANGELOG.md` entry, and flag one as a change to
-remove if a PR adds it. There has never been a written rule requiring per-PR
-entries — `CONTRIBUTING.md` has never mentioned the file at all — but the habit
-propagated anyway, by agents reading `git log` and copying what they saw. When
-this rule landed it sat at 45% of recent merges (18 of the last 40, measured
-2026-08-02), which is the worst of both worlds: not a convention anyone can
-rely on, and enough churn to conflict constantly.
+## CI and branch protection
 
----
-
-## CI/CD Workflow
-
-CI runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest` (~5 min builds).
-**If you add a new `find_package(...)` to CMakeLists.txt, also add the
-corresponding `-dev` package to `.github/docker/Dockerfile` and push.** The
-`docker-ci-image.yml` workflow rebuilds the image automatically (~3 min); wait
-for that before the next CI run can use it.
-
-Branch protection: signed commits required on main, CI must pass, CODEOWNERS
-review required, branches auto-delete after merge.
-
-**Helping a contributor set up commit signing?** Read
-`docs/COMMIT-SIGNING.md` — the top of that file has explicit
-AI-assistant instructions (algorithm, anti-patterns, completion
-message). Works for Windows / macOS / Linux / WSL / Raspberry Pi
-contributors. Default to SSH signing; GPG is the fallback for
-contributors with existing GPG workflows.
-
-### Gate integrity
-
-- The per-PR gate in `ci.yml` is frozen (see "Adding a test" above). A test
-  does not join it. If a maintainer decides one must — the claim it pins is
-  about a platform toolchain the weekly Linux lane cannot exercise — the
-  name goes into `.github/ci-test-gate.txt` by hand, in the same PR, with
-  the reason in the PR body; the step comment in `ci.yml` says what it
-  guards. `--update` will not add a name.
-- Every `ctest` invocation in a workflow carries `--no-tests=error`: a `-R`
-  filter that matches nothing exits 0, so a deregistered or renamed test
-  silently shrinks the gate while the job stays green — #5232 demonstrated
-  this live. The unfiltered sanitizer sweep carries it too, so an empty
-  test tree fails rather than passing vacuously.
-- Erosion inside a pattern is caught two ways, and they cover different
-  halves. The frozen list catches it in the SOURCE: the checker requires
-  the names a PR workflow selects to EQUAL the list, so a renamed or
-  deregistered `add_test` fails `Static checks` on the missing name. It
-  cannot catch erosion at CONFIGURE time — it reads `tests.cmake` as text
-  and does not evaluate the conditions around an `add_test`, so a test
-  that stops being registered on a platform leaves the text unchanged and
-  the list still matching. That is what the `Total Tests: N` pin on a
-  multi-name step is for, and why the ThumbDV step still carries one
-  (#5232, #5405 review). A single-name anchored step needs no pin:
-  `--no-tests=error` already distinguishes one from zero.
-- Deregistering or renaming a test requires grepping `.github/workflows/`
-  for its name in the same PR, and running `--update` if it was on the
-  frozen list. The gate regexes are part of the test's surface.
-- The weekly lane's sticky failure issues (`[sanitizer] … weekly run
-  failure`) carry ctest's own failed-test list first, then the sanitizer
-  blocks. A test failing there on a plain assertion is a regression on
-  `main` with no PR that went red for it; treat it as one.
-- A flaky test gets an issue naming the root cause — never empty retrigger
-  commits, which cost every contributor and record nothing.
-
----
+Required checks on `main`: `build`, `check-windows`, `check-macos`, and
+`Static checks` (each job runs ~10 min; a PR run is ~15 min wall-clock). Signed
+commits required, CODEOWNERS review required, conversations must be resolved,
+stale approvals are dismissed on push, branches auto-delete after merge. CI
+runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest`; a new
+`find_package(...)` needs its `-dev` package in `.github/docker/Dockerfile`.
+Test registration, the frozen per-PR test gate, and gate integrity:
+[`docs/agents/tests-ci.md`](docs/agents/tests-ci.md).
 
 ## Architecture Overview
 
 Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
-(RadioModel, SliceModel, etc.), `src/gui/` (MainWindow, SpectrumWidget, applets).
+(RadioModel, SliceModel, etc.), `src/gui/` (MainWindow, SpectrumWidget,
+applets), `src/core/backends/` (one directory per radio family).
 
 **Key classes:**
 - `RadioModel` — central state, owns connection + all sub-models
 - `RadioSession` — per-radio aggregate that owns `RadioModel` + `TciServer` +
-  `CatPorts`, giving teardown a structural order (#3351 / #3445)
+  `CatPorts`, giving teardown a structural order
 - `AudioEngine` — RX/TX audio, NR2/RN2/NR4/BNR/DFNR DSP pipeline
 - `SpectrumWidget` — GPU-accelerated FFT spectrum + waterfall (QRhiWidget)
-- `MainWindow` — wires everything together, signal routing hub. **Decomposed
-  (#3351)** into one class across `MainWindow.cpp` + `MainWindow_*.cpp` sibling
-  TUs; new feature code goes in a sibling, NOT `MainWindow.cpp` — see
-  [Adding code to MainWindow](#adding-code-to-mainwindow)
+- `MainWindow` — wires everything together; one class across `MainWindow.cpp`
+  + `MainWindow_*.cpp` sibling TUs. New feature code goes in a sibling, NOT
+  `MainWindow.cpp` ([`docs/agents/gui.md`](docs/agents/gui.md))
 - `PanadapterStream` — VITA-49 UDP parsing, routes FFT/waterfall/audio/meters
-- `CrossNeedleMeterGeometry` — PWR applet's cross-needle power/SWR face math.
-  **Before touching the response model, SWR-contour construction, or label
-  placement, read [`docs/cross-needle-meter-math.md`](docs/cross-needle-meter-math.md)** —
-  the authoritative model + decision record (it exists because these formulas
-  have churned when edited without a shared spec).
+- `IRadioBackend` — the radio seam; six implementors (flex, hl2, icom, sim,
+  anan, rtl) ([`docs/agents/backends.md`](docs/agents/backends.md))
 
 **Threading:** up to 13 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
@@ -456,821 +280,21 @@ full thread diagram, data flow, cross-thread signal map, and GPU rendering notes
 Worker threads communicate exclusively via auto-queued signals. Never hold
 a mutex in the audio callback.
 
-### In-flight: aetherd engine/UI decoupling (RFC accepted 2026-07-04)
+**Build targets:** `libaethercore` (`src/core/` + `src/models/`, never `gui/`
+or QtWidgets), `AetherSDR` (the desktop app), `aetherd` (headless daemon,
+never QtWidgets). The dependency direction is CI-enforced; details in
+[`docs/agents/backends.md`](docs/agents/backends.md).
 
-The accepted RFC at
-[`docs/aetherd-headless-engine-design.md`](docs/aetherd-headless-engine-design.md)
-(tracking issue #3849) splits this codebase into an engine library
-(`libaethercore`), a headless engine daemon (`aetherd`), and thin UI
-clients, with pluggable radio backends (`IRadioBackend`). Implementation
-follows the RFC's §10 staged order; **step 1 (`libaethercore`) and the
-step-2 seam have landed** — the engine is a static library, and
-`IRadioBackend` (`src/core/backends/`) now has **six** implementors,
-selected at connect time by a `family` string through `makeBackend()`.
-The seam's known gaps and the multi-radio migration order are tracked in
-#5262 (M0–M6) and the review meta-issue #5554 — read both before changing
-anything in this table's territory (see the temporary notice at the top of
-"AI Agent Guidelines"). **Every implementor honours the THREADING AND
-LIFETIME CONTRACT at the top of `IRadioBackend.h`** (backend lives on its
-owner's thread, every seam signal is emitted from it, workers are private,
-payloads declared and registered in one place, teardown bounded and
-ordered). What is pinned versus surveyed: `backend_seam_affinity_test`
-pins rules 1, 2 and 6 for the simulator and rule 1 plus a cold
-construct/teardown for every other family; `hl2_connect_reentrancy_test`
-pins rule 2 for HL2 while its DSP build runs on the I/O thread;
-`backend_family_switch_test` pins rule 5 across the production switch with
-a deterministic stale-delivery injection. Live-emission affinity for flex,
-anan, icom and rtl is a survey result until
-`tests/SeamThreadAffinityProbe.h` — which drops the same tripwire into any
-test that drives a backend — is carried by a test that drives one:
+## Where moved sections live
 
-| Family | Backend | Notes |
-|---|---|---|
-| `flex` | `FlexBackend` (`src/core/backends/flex/`) | SmartSDR wire stack; the Panadapter / Slice / Meter / Transmit / Amp / Tuner status+command paths decode behind it (2.2b–2.4) |
-| `hl2` | `Hl2Backend` (`src/core/backends/hl2/`) | Hermes-Lite 2, shipped v26.7.4 — Metis/HPSDR transport, raw-IQ RX/TX DSP done in-client |
-| `icom` | `IcomCivBackend` (`src/core/backends/icom/`) | Networked Icom, shipped v26.8.2 — CI-V command plane inside the RS-BA1 UDP transport; the radio owns its own state, so `clientSettingsDomains` is empty |
-| `sim` | `SimBackend` (`src/core/backends/sim/`) | Synthetic demo backend, shipped v26.7.4 — generates its own audio + spectrum, RX-only by construction (Principle VI) |
-| `anan` | `AnanBackend` (`src/core/backends/anan/`) | ANAN-G2 receive support over openHPSDR Ethernet Protocol 2; raw-IQ RX DSP runs in-client and TX remains absent by construction |
-| `rtl` | `RtlSdrBackend` (`src/core/backends/rtl/`) | RTL-SDR USB receive backend; raw-IQ RX DSP runs in-client and the backend is RX-only by construction |
+Older code comments and docs cite sections of this file by name. They now
+live here:
 
-Step 3 is in progress: the normative v1 envelope contract, bounded codec,
-observe-only local handshake/capability service, and a QtWidgets-free
-`aetherd` skeleton have landed. The typed observe-only `server`,
-`radioSession`, `slice`, and `panadapter` resources now publish through
-`RadioResourceAdapter`; `resource.get` plus atomic snapshot/event
-`resource.subscribe`/`resource.unsubscribe`, per-resource revisions, bounded
-coalescing/session resync, and an independent local-socket hard disconnect cap
-are live over the current-user local transport.
-The headless daemon also owns a bounded, observe-only `radioCatalogue` through
-the normalized `RadioDiscoverySource` seam. Native discovery adapters stay under
-`src/core/backends/`; desktop discovery/autoconnect is unchanged. Discovery is
-passive by default: `--discover-local` opts into Flex/HL2/ANAN LAN discovery and
-available RTL-SDR USB enumeration; `--discover-sim` publishes only demo metadata.
-Neither option connects a radio. Icom manual setup, SmartLink and external
-directories are excluded. Catalogue fields and lifecycle are specified in
-`docs/aetherd-control-resource-v1-catalogue.md`.
-Sessions require explicit trusted authorization; the local transport defaults
-to observe permission, and reads/subscriptions enforce it. The daemon's explicit
-`--allow-local-control` flag additionally grants non-TX control to current-user
-local clients. Typed catalogue-selected `radio.connect` / `radio.disconnect`
-are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
-revision checks and limits. Clients cannot supply arbitrary endpoints or
-credentials. Every negotiated session, observer or controller, now shares a
-per-client request budget (100/s, burst 200, advertised in `limits`); exceeding
-it is terminal for that connection. Terminal session cleanup discards pending
-observations and synchronously retires bound authority before deferred socket
-cleanup; unrecoverable output failure also revokes the session. Local input
-processing yields after a bounded batch so a busy client cannot monopolize the
-engine thread. There is no wire credential-provisioning or revocation method.
-Explicit offline OS-vault setup and optional `--credential-authority` verification
-are implemented; credential roles do not arm or key a radio. Provisioning and
-serving share an authority reservation, and unavailable secure storage has no
-plaintext fallback. See `docs/aetherd-stage4-client-grants.md` for the current
-credential/lifetime contract. `--allow-local-tx` explicitly composes independent
-grants, private TX/admin methods and operation-bound stop proof; it requires the
-credential authority and local control, and starts disarmed. Initial backend
-support covers compatible Flex LAN software PTT on SmartSDR TCP API 1.4 with
-complete live interlock evidence, not a model/firmware-build allowlist. Hardware
-coverage is FLEX-6700 firmware 4.2.18.41174; do not claim other models were tested.
-See `docs/aetherd-flex-ptt-stop-evidence.md` for the shared protocol contract and
-the separate hardware evidence record. Unsupported backends and
-activities cannot issue a grant. Receive mutations also refuse retained TX
-ownership, including acquired-but-not-keyed leases and unconfirmed cleanup.
-`slice.setFrequency` now dispatches a bounded, revision-checked intent for an
-existing owned slice, with explicit backend observation provenance and fail-closed
-TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
-not optimistically update the model. Unknown coverage/readback remains unavailable.
-The receive-control milestone adds typed mode/filter/gain/mute and pan
-center/bandwidth intents for qualified existing owned resources, separate
-backend receive observations, bounded latest-value `meter` resources and a
-read-only `transmitState`; see `docs/aetherd-local-receive-control.md` for the
-per-backend support matrix and remaining no-op, geometry and TX-idle limits.
-This is not all-backend feature parity: unavailable operations remain absent.
-The desktop adapter has not landed; UI code still consumes models directly, and that
-remains correct. New resource fields belong in the adapter and the versioned
-catalogue, never in a transport or via QObject reflection. No protocol TX
-method is advertised before the step-4 arbiter exists.
-
-Step 4 has one engine-owned `TxCoordinator`, independent grant-bound actors,
-and a transitional desktop actor. Flex primary keying and CWX text
-carry operation/batch fences to the original TCP writer. A queue-consumed
-callback ends local handoff only, never proves radio idle. Preserve normal
-operator reengagement, but use `finishLocalIntent()` rather than asserting a
-qualified stop: the coordinator retains that actor until matching stop evidence
-arrives. Uncorrelated RX status must not clear this handoff barrier. Preserve
-short key-down/key-up sequences, Quindar/RADE release tails, and held MOX when
-cancelling a CWX batch. Do not enable independent-client handoff or daemon TX
-until independent trusted grants and the qualified stop/recovery contract
-are complete. See `docs/aetherd-stage4-tx-coordinator.md`. This work does not
-widen `welcome`/capability serialization or replace #5598's RX PCM seam work.
-The bridge watchdog tracks its authorization-lifetime producer's original
-contributions with a monotonic, non-renewable deadline. A boolean keyed sample alone cannot establish ownership
-(CWX has QSK gaps); repeated commands must not renew that deadline. Deferred
-TX widget invocations retain the original input before queueing and
-claim only after admission. These are producer-isolation safeguards, not
-per-socket actor grants or qualified radio-idle evidence.
-
-Local producer contributions now use opaque `TxCoordinator::Intent` handles,
-not activity bits as ownership. Repeat admission reuses a producer's live
-handle. Mark release before callbacks/queueing, retain the captured handle
-until its normal tail is consumed, and end that handle only. Reengagement gets
-a distinct handle so an earlier completion cannot release it. The coordinator
-refuses local operation completion while any contribution remains. The six
-legacy desktop entry points retain compatibility slots, while `TxController`
-binds converted UI, device and bridge inputs to their actual producer. Capture
-before the first queued hop; derive scheduled elements from the original root,
-never from callback-time authority. Device close, authorization changes and
-reconnect fence stale work. Keep TX audio context through backend queues and
-retries. Producer identity still does not confer an independent actor grant.
-
-**Backends that demodulate in-process double-feed the sink if you let
-them.** `IRadioBackend::audioFrameReady` has two possible routes to
-`AudioEngine::feedPcmFrame` — the `RadioModel::backendAudioFrameReady`
-relay, and a direct connect in `wireBackendSeam()`. `FlexBackend` is
-structurally immune because it never emits `audioFrameReady` at all (audio
-rides `PanadapterStream`/VITA-49), so the "no double-feed" reasoning that
-holds for Flex stops holding for any in-process backend.
-
-**The two gates have opposite senses and are deliberately named apart — do
-not merge them.** The relay's gate is `MainWindow::backendFeedsEngineDirectly()`
-(`dynamic_cast<SimBackend*>`, `MainWindow_Session.cpp`): sim feeds the engine
-itself, so the relay returns early for sim and for nobody else. The direct
-connect in `wireBackendSeam()` is sim-only for the same reason, and *that* is
-the site whose gate belongs on "does this backend own its RX audio"
-(`MainWindow.cpp`). An HL2 is `ownsRxAudio() == true` **and** needs the relay,
-so delegating the relay to `backend()->ownsRxAudio()` swallows every HL2 frame
-and silences the speaker — the code says so at the function, citing the #4537
-review. `Qt::UniqueConnection` does **not** protect you at either site: at the
-relay they are two different signals arriving at the same slot, so nothing
-looks duplicate to Qt, and at `wireBackendSeam()` it cannot catch a lambda
-connect at all.
-
-The spectrum side had the same shape and was resolved differently — not with a
-gate but with one producer and one path: `spectrumFrameReady` is consumed by
-`RadioModel::onBackendSpectrumFrame` and re-emitted on the neutral `panFeed`
-path every backend already renders (`MainWindow.cpp`, "One producer, one
-path"). Drawing it a second time at the seam is what that comment exists to
-prevent.
-
-**Build targets (post-RFC step 1):**
-
-| Target | Contents | May link |
-|---|---|---|
-| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Gui/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it is a burndown target. **Never `gui/` or QtWidgets**; the remaining EB2 warnings are source-location debt compiled only by the desktop target |
-| `AetherSDR` | `src/gui/` + `main.cpp` — the desktop app | `aethercore` + Qt Widgets + qgeoview + QRhi private |
-| `aetherd` | `src/aetherd/main.cpp` — headless service shell | `aethercore` + direct Qt Core/Network links. It currently inherits the engine's public/private runtime surface, including Qt Concurrent, Gui, Multimedia, SerialPort, WebSockets, DBus, and qtkeychain when those optional dependencies are enabled. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it and narrowing the other transitive edges are burndown targets. **Never QtWidgets** |
-
-The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
-`static-checks.yml`, `--strict`) by three ratchets:
-- **EB1** — no `core/`/`models/` file may include a `gui/` header (now
-  zero; any finding is an error).
-- **EB2** — no `core/`/`models/` file may use QtWidgets (a shrinking
-  tracked-legacy set warns, new usage errors).
-- **EB3** — no file **above the radio seam** (all of `src/gui/`,
-  `src/core/`, `src/models/`, plus the root app-shell files `src/main.cpp`
-  and `src/MacStartupAbortGuard.{h,cpp}`, **except** the backend tree
-  `src/core/backends/`) may include a **vendor header** — any radio-family-
-  specific wire class the RFC keeps behind `IRadioBackend` (currently Flex,
-  Kiwi, HL2, Sim, Icom, ANAN, and RTL; the headers tagged `vendor(...)` in
-  `docs/architecture/aetherd-touchpoint-tags.json`). Only `vendor(...)` is
-  EB3-gated: a standalone *accessory* device's own transport (the 4O3A
-  antenna switch, the Tgxl/Pgxl direct sockets) is `peripheral(...)`, a
-  USB input surface is `ui-support`, and a generic device model fused with
-  vendor relay (e.g. `TunerModel`) is `mixed(flex)` — none of those are
-  `vendor`, so none are EB3-gated. Today's coupling is
-  frozen as a per-file, shrink-only baseline; a **new** above-seam vendor
-  include, or an **increase** in a tracked file, errors. (RFC step 2.4;
-  see "Engine boundary ratchet — EB3" below.)
-
-If your change trips any of these, restructure the change — do not move
-the file, weaken the check, or add an exemption. Engine code that needs a
-UI callback defines a gui-free interface in `core/` (e.g.
-`IConnectionAutomation`) that the gui implements — never a `gui/` include.
-
-**Until migration rules appear in this file, nothing changes for you.**
-Do not pre-emptively restructure code toward the RFC — no new engine/UI
-seams, no backend interfaces, no speculative library targets. Each
-migration step lands together with an update to this file stating the new
-rules (pre-drafted in
-[`docs/aetherd-agents-md-staging.md`](docs/aetherd-agents-md-staging.md));
-if a rule isn't in this file, its step hasn't landed. Architecture changes
-ahead of the RFC steps remain maintainer-only (see Autonomous Agent
-Boundaries above). The CI-enforced rules so far — all three run in the
-`Static checks` job, which became a **required status check on 2026-09-12**, so
-a red run blocks the merge rather than merely reporting. Note what that does
-*not* change: a finding against a TRACKED EB2/EB3 baseline still warns, and only
-a new violation or a grown baseline errors:
-
-- **EB1/EB2/EB3** above (`tools/check_engine_boundary.py`, warning for
-  tracked baselines, error for new violations).
-- **The capability-boolean freeze** (#5262 M2,
-  `tools/check_capability_records.py`). `RadioCapabilities`' boolean
-  population is frozen and may only shrink. **A new capability lands as a
-  per-feature record** — `std::optional<FeatureRecord>`, engaged =
-  present, fields = shape, the `cwText*` pattern generalized — not as
-  another loose bool. Two reasons, both of which have already cost us:
-  a bool encodes a yes/no that turns out to have shape and then fissions
-  when the second radio family arrives (`hasRadioSideDsp` became four
-  tiers, `hostModulates` became two fields), and a bool a backend simply
-  forgot to set reports a definite "no" indistinguishable from a
-  considered one. Converting one to a record means lowering
-  `FROZEN_BOOL_COUNT` in the same commit.
-- **The command-plane freeze** (#5262 M4,
-  `tools/check_command_plane.py`). Raw Flex wire text above the seam is
-  frozen per file and may only shrink; **a file not already in the
-  baseline must stay at zero.** This is why the GUI↔Radio Sync note below
-  describes the plane being migrated away from rather than a pattern to
-  copy: on HL2/Icom/ANAN/RTL that text is silently dropped, so a new
-  control written this way looks live and does nothing. New controls use
-  a typed intent through `IRadioBackend`. Growth under
-  `src/core/backends/flex/` is deliberately not counted — that is where
-  the encode is moving to.
-
-**Engine boundary ratchet — EB3 (vendor includes).** As of RFC step 2.4,
-`check_engine_boundary.py` also enforces that nothing above the radio seam
-reaches around `IRadioBackend` to a vendor wire class. What this means for
-you:
-
-- **Relocation does not convert a touchpoint.** Step 2.4 established the
-  ratchet in place. The five Flex wire classes (`RadioConnection`,
-  `PanadapterStream`, `SmartLinkClient`, `WanConnection`, `CommandParser`)
-  now live under `src/core/backends/flex/` (#5554 §2.6 slice 1). Existing
-  callers use those explicit paths and remain tracked by EB3; no forwarding
-  headers or new include-directory shortcuts bypass the boundary. Demo-only
-  compatibility data lives in `core/backends/DemoRadioConstants.h`, so the
-  synthetic Flex connection does not include the concrete `SimBackend`.
-- **The rule.** Each tracked file's baseline row is the exact **set** of
-  vendor headers it may include. Adding a vendor `#include` (e.g.
-  `KiwiSdrManager.h`, `RadioConnection.h`, `StreamStatus.h`) to a `gui/`,
-  `core/`, or `models/` file that isn't tracked — or adding a header not
-  in a tracked file's set, *including a lateral swap that keeps the count
-  flat* (drop `RadioConnection.h`, add `KiwiSdrManager.h`) — fails the
-  check. The per-file baseline (`KNOWN_VENDOR_INCLUDE_BASELINE`) lives at
-  the top of `tools/check_engine_boundary.py`; the vendor vocabulary is
-  **derived at runtime from the touchpoint audit**
-  (`docs/architecture/aetherd-touchpoint-tags.json`, the single source of
-  truth), so a header newly tagged `vendor` there is enforced without
-  editing the checker. **De-classification is pinned, and only that
-  direction.** `VENDOR_STEMS_PINNED` freezes today's 33 vendor stems: a stem
-  the audit no longer tags `vendor(...)` is a blocking `EB3-load` error naming
-  it, because that single edit would otherwise un-gate the header for every
-  file above the seam on a green run. Tagging a *new* header `vendor(...)`
-  arms more enforcement and needs no checker edit — arming must never cost a
-  second diff. The only permitted rebaseline is an intentional
-  vocabulary-classification change: every newly tracked include must be proven
-  to predate that classification against the merge base, the evidence must be
-  documented, and a maintainer must explicitly review the rebaseline — and the
-  same evidence is what releases a stem from `VENDOR_STEMS_PINNED`, dropped in
-  that same commit. The expanded set is shrink-only after classification.
-- **Adding a radio feature?** Don't include the vendor class above the
-  seam. Put the wire code in the family backend
-  (`src/core/backends/<family>/`) and surface it through `IRadioBackend`
-  (a canonical verb/signal, or the namespaced
-  `invokeExtension`/`extensionStatus` channel for vendor-specifics), then
-  consume *that* from the model/UI. Backend code (under
-  `src/core/backends/`) and the vendor translation units themselves may
-  include vendor headers freely — they're below the seam.
-- **Removing coupling (the goal).** When you convert a file's radio access
-  to the seam and drop a vendor include, **remove that stem from the
-  file's row** in `KNOWN_VENDOR_INCLUDE_BASELINE` (delete the row when it
-  empties). Outside the documented vocabulary-classification carveout above,
-  the set only shrinks — never add a stem or a row to make a build pass. If EB3
-  blocks you and the include is genuinely unavoidable, that's a design
-  conversation for a maintainer, not a baseline edit.
-- **`src/gui/**` is in the CI trigger** for `static-checks.yml` now
-  (EB3 guards gui files), so a gui-only PR that adds vendor coupling is
-  still caught.
-
-**Where radio-facing code goes now that the seam exists.** Route by kind:
-
-| Your change | Goes |
+| Section | Now in |
 |---|---|
-| Code speaking a vendor wire protocol (commands, discovery, stream parsing) | that family's backend under `src/core/backends/<family>/`, behind `IRadioBackend` — never in `gui/`, and increasingly not in the models (they're being decoupled from the wire over 2.2b–2.4) |
-| A new radio family | a new `IRadioBackend` implementation under `src/core/backends/<family>/` — requires an approved design doc naming its open protocol authority (Constitution Principles I & IV apply per backend) |
-| A new engine feature | `libaethercore`, exposed through models — never via a new gui→core header |
-
-Do **not** reroute existing model↔wire code through `FlexBackend`
-wholesale — the per-touchpoint conversion is staged work
-(`docs/architecture/aetherd-touchpoints.md`). The five `mixed` models
-(Radio/Slice/Transmit/Panadapter/Meter) have been split (2.3): their
-SmartSDR status decode now lives in `FlexBackend` behind typed deltas, and
-the models apply normalized signals. The amp (PGXL) and tuner (TGXL)
-accessory models followed in 2.4 — `AmpModel` was extracted from
-`RadioModel`, and their status decode and command encode now route through
-`FlexBackend` too (#4099, #4101, #4113, #4192, #4200). The five Flex wire
-classes are physically relocated, but their existing model/UI consumers are
-not converted by that move. The EB3 ratchet (above) still freezes that
-coupling while it is decoupled subsystem-by-subsystem. Other vendor headers
-outside the backend tree remain staged work. Converting a touchpoint follows the claim
-protocol + before/after `tools/verify_slice0_rx.py` recipe; a converted
-file drops its vendor include and lowers its EB3 baseline.
-
-**Before you merge — the aetherd conformance checklist.** Every item below has
-a green CI run behind it, so a passing `Static checks` answers none of them.
-Whoever lands a PR in this territory — agent or human, author or reviewer —
-walks the list:
-
-1. **Run the four gates on the merge base *and* on the head, and diff the
-   findings per file** — not the exit codes. `check_engine_boundary.py
-   --strict`, `gen_touchpoint_manifest.py --check`,
-   `check_capability_records.py --strict`, `check_command_plane.py --strict`,
-   all stdlib Python and seconds each. Findings against tracked EB2/EB3
-   baselines *warn*; only a new violation or a grown baseline errors. EB2 is a
-   per-file **count**, so a lateral swap inside a tracked file — one QtWidgets
-   usage out, another in — passes flat.
-2. **A new `gui/`→engine include stops at "regenerate", not at "justify".**
-   `gen_touchpoint_manifest.py --check` *does* go red — the manifest records
-   per-header includer counts, so the table goes stale and the required
-   context fails. But regenerating clears it: commit the regenerated table and
-   the grown burndown is green, with nothing anywhere flagging that a
-   touchpoint was added. Diff the manifest between merge base and head. A new
-   row, or a row whose includer count went up, needs a justification in the PR
-   body, or it is a finding.
-3. **Regenerate the manifest; never hand-edit it.** Run
-   `python tools/gen_touchpoint_manifest.py` and commit the result. Editing the
-   generated table, or adding a tag so the table matches, falsifies the
-   burndown instead of fixing it.
-4. **A baseline edit is never how a check goes green — but a reduction is
-   required maintenance, not a finding.** Dropping a stem whose coupling the
-   PR actually removed (and deleting the row when it empties), lowering
-   `FROZEN_BOOL_COUNT` when a bool became a record, lowering a converted
-   file's command-plane count: all of those are demanded above, and a
-   conversion PR that does them is conforming, not weakening. What is
-   forbidden is the other direction — growing a baseline, adding a stem or a
-   row, or retagging a `vendor(...)` header. That last one un-gates the header
-   for every file above the seam, since EB3 derives its vocabulary from
-   `aetherd-touchpoint-tags.json` at runtime; it now fails as a blocking
-   `EB3-load` naming the stem rather than passing quietly, and the failure is
-   a design conversation, not a `VENDOR_STEMS_PINNED` edit. There, restructure
-   the change.
-   The two carveouts above (an EB3 vocabulary reclassification with merge-base
-   proof and explicit maintainer review; a `FROZEN_BOOL_COUNT` raise on a
-   maintainer ruling) are maintainer rulings carrying that evidence, never a
-   route to a passing check.
-5. **Touching a backend?** Read the THREADING AND LIFETIME CONTRACT in
-   `IRadioBackend.h` against the diff, and re-read the #5554 notice at the top
-   of "AI Agent Guidelines". What is pinned versus surveyed, and the probe to
-   carry into a test that drives a backend, are stated at the head of this
-   section — the point here is only that a survey result means reading is the
-   check, because no test will fail.
-
----
-
-## SmartSDR Protocol (v1.4.0.0)
-
-### Message Types
-
-| Prefix | Dir | Meaning |
-|--------|-----|---------|
-| `V` | Radio→Client | Firmware version |
-| `H` | Radio→Client | Hex client handle |
-| `C` | Client→Radio | Command: `C<seq>\|<cmd>\n` |
-| `R` | Radio→Client | Response: `R<seq>\|<hex_code>\|<body>` |
-| `S` | Radio→Client | Status: `S<handle>\|<object> key=val ...` |
-| `M` | Radio→Client | Informational message |
-
-Status object names are **multi-word** (`slice 0`, `display pan 0x40000000`,
-`interlock band 9`). The parser finds the split between object name and
-key=value pairs by locating the last space before the first `=` sign.
-
-### Connection Sequence
-
-1. TCP connect → radio sends `V<version>` then `H<handle>`
-2. `sub <topic> all` for each of: `slice`, `pan`, `tx`, `amplifier`, `atu`,
-   `meter`, `audio`, `gps`, `apd`, `client`, `xvtr`
-3. `client gui` + `client program AetherSDR` + `client station AetherSDR`
-4. Bind UDP socket, send `\x00` to radio:4992 (port registration)
-5. `client udpport <port>` (returns error 0x50001000 on v1.4.0.0 — expected)
-6. `slice list` → if empty, create default slice (14.225 MHz USB ANT1)
-7. `stream create type=remote_audio_rx compression=none` → radio starts sending
-   VITA-49 audio to our UDP port
-
-### Protocol / Firmware Quirks (v1.4.0.0 protocol on fw 4.x)
-
-- `client set udpport` returns `0x50001000` — use the one-byte UDP packet method
-- `client set enforce_local_ptt=1` returns `0x50001000` — correct command is `client set local_ptt=1`; the radio echoes a full `connected` status to ALL clients updating their `local_ptt` field when ownership changes
-- Slice frequency is `RF_frequency` (not `freq`) in status messages
-- Streams are discriminated by **PacketClassCode** (PCC), NOT by packet type
-- `audio_level` is the status key for AF gain (not `audio_gain`)
-- The radio **never sends `mox=` in transmit status messages**. Use
-  `isTransmitting()` (interlock state machine), NOT `isMox()`
-- Three separate tune command paths all need interlock inhibit:
-  `transmit tune 1`, `tgxl autotune`, `atu start`
-- `cw key immediate` not supported — use netcw UDP stream for CW keying
-- `transmit set break_in=1` wrong — correct: `cw break_in 1`
-
-VITA-49 packet format, PCC codes, FFT bin conversion, waterfall tile format,
-audio payload, meter data — see `docs/architecture/vita49-format.md`.
-
----
-
-## Key Implementation Patterns
-
-### Adding code to MainWindow
-
-`MainWindow` was a ~19,500-line monolith; **#3351 split it into one class across
-`MainWindow.cpp` + a family of `MainWindow_*.cpp` sibling TUs.** It is still one
-`MainWindow` class — every sibling-TU function is a `MainWindow::` member
-declared in `MainWindow.h`. The split is about *which file* a body lives in.
-
-**Do not add new feature code to `MainWindow.cpp`.** Route it by subsystem:
-
-| Your change | Goes in |
-|---|---|
-| Feature lifecycle/handler fitting an existing subsystem | that subsystem's TU — demods (RADE/FreeDV/DAX/RTTY/WFM) → `MainWindow_DigitalModes.cpp`; physical controllers → `MainWindow_Controllers.cpp`; SWR sweep → `MainWindow_SwrSweep.cpp`; spot clients → `MainWindow_Spots.cpp`; discovery/connection/pan-lifecycle → `MainWindow_Session.cpp`; client-DSP applets → `MainWindow_DspApplets.cpp` |
-| Wiring a newly-created radio object (slice/pan/VFO/DSP) to the UI | `MainWindow_Wiring.cpp` |
-| A menu item / action | `MainWindow_Menus.cpp` |
-| A keyboard shortcut | `MainWindow_Shortcuts.cpp` |
-| A stateless helper with no `MainWindow` dependency | `MainWindowHelpers.{h,cpp}` |
-| A whole new subsystem with no TU home | a **new** `MainWindow_<Subsystem>.cpp` sibling — only if it's a cohesive subsystem ~500+ lines; smaller waits in the closest sibling |
-| A member field, or a guard inside a function that can't move | stays in `MainWindow.{h,cpp}` (keep minimal) |
-
-A new TU is not free — every sibling re-parses the ~1,000-line `MainWindow.h`,
-and any header edit rebuilds all of them. Split only to a cohesive, reviewable
-granularity, then **stop**: if tempted to subdivide one subsystem into several
-thin TUs, extract a real class instead (the #3557 direction) — that's the only
-move that actually decouples.
-
-Sibling TUs must **carry their includes explicitly** — the Linux CI image is on
-Qt 6.8.3 while macOS runs 6.11.x, so a header that resolves transitively on the
-newer Qt need not on 6.8.3; don't rely on transitive includes (this broke
-#3532). When you move the last user of a header out of `MainWindow.cpp`, drop
-that `#include` too.
-
-Full map + decision guide:
-**[`docs/architecture/mainwindow-decomposition.md`](docs/architecture/mainwindow-decomposition.md)**.
-
-### Adding or converting a dialog
-
-See **[`docs/style/dialog-patterns.md`](docs/style/dialog-patterns.md)** before writing
-or modifying a `QDialog`. It documents the canonical
-lazy-construct + non-modal + geometry-persist + frameless-chrome pattern,
-the common pitfalls that have hit real PRs, and the existing dialogs to
-use as reference. Tracked for cleanup in #2605 (`PersistentDialog` base
-class).
-
-Any new popout window, floating tool window, or `QDialog` must respect the
-global `FramelessWindow` setting unless there is a specific reason not to.
-Use the existing frameless helpers instead of custom window chrome:
-
-- Add a `FramelessWindowTitleBar` at the top of the dialog/window layout.
-- Install `FramelessResizer::install(this)` for resizable popouts.
-- Add `setFramelessMode(bool on)` using the same pattern as
-  `NetworkDiagnosticsDialog`: capture geometry, toggle
-  `Qt::FramelessWindowHint`, restore geometry only if the window was already
-  visible, show again only if it was already visible, and hide/show the custom
-  title bar based on the setting.
-- Initialize from `AppSettings::instance().value("FramelessWindow", "True")`.
-- Do not use `QSettings`.
-
-Do not manually move first-show dialogs to `(0,0)` or restore constructor-time
-geometry. For first show, either let Qt/window-manager placement handle it, or
-use the same placement behavior as the closest existing dialog. If centering is
-explicitly required, do it deliberately after the dialog has a valid size and
-document why.
-
-### Settings Persistence (AppSettings — NOT QSettings)
-
-**IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
-settings are stored via `AppSettings` (`src/core/AppSettings.h`), which
-persists to a **SQLite database** named `AetherSDR.db` in
-`SettingsPaths::configDir()` — `QStandardPaths::GenericConfigLocation` +
-`/AetherSDR`, i.e. `~/.config/AetherSDR/` on Linux,
-`~/Library/Preferences/AetherSDR/` on macOS and `%LOCALAPPDATA%\AetherSDR\`
-on Windows. Always route store paths through `SettingsPaths`, never through
-`QStandardPaths` directly (RFC #4603; design doc:
-`docs/settings-store-sqlite-design.md`).
-Key names use PascalCase (e.g. `LastConnectedRadioSerial`,
-`DisplayFftFillColor`). Boolean values are stored as `"True"` / `"False"`
-strings.
-
-```cpp
-auto& s = AppSettings::instance();
-s.setValue("MyFeatureEnabled", "True");
-bool on = s.value("MyFeatureEnabled", "False").toString() == "True";
-s.save();   // commits the dirty rows in one transaction (cheap; still required)
-```
-
-Rules that come with the store:
-
-- **Never include `sqlite3.h` outside `src/core/SettingsDatabase.cpp`** — the
-  engine is a single-point seam (see `third_party/sqlite/README.md`).
-- **Credentials never go in the settings store.** QtKeychain (service
-  `"AetherSDR"`) is the only persistent credential store; without keychain
-  support a credential is session-only via
-  `AppSettings::setSessionCredential()`. The known credential names live in
-  ONE table — `src/core/SettingsCredentialPolicy.h` — shared by the import
-  exodus, the export sanitizer, the `setValue()` seam guard, and the CLI, so
-  add new credentials THERE (the seam then enforces the policy for you).
-  Follow the patterns in
-  `MqttSettings`/`AutomationBridgeSettings`/`CopyAssistSettings`.
-- The legacy XML file (`AetherSDR.settings`) is a **frozen snapshot** from the
-  one-time import — never write to it, never delete it outside Reset Settings.
-- Pre-`QApplication` code reads via `SettingsBootstrap::readValue()` and paths
-  come from `SettingsPaths` — never hand-build a config path.
-- The `AetherSDR --config <list|get|set|unset|export|features|path>` CLI inspects and
-  repairs the store without starting the GUI (the recovery path when a stored
-  value breaks startup).
-
-### Radio-Scoped Feature Documents (`radio_settings`)
-
-Radio-scoped configuration — state that belongs to one physical radio or one
-backend family — does NOT go in flat `AppSettings` keys. It goes in the
-`radio_settings` table as **one versioned JSON document per feature per scope**
-(Constitution Principle V, realized in the store):
-
-```cpp
-const RadioSettingsScope scope = m_radioModel.settingsScope();  // (family, serial)
-// Read-modify-write uses the EXACT row (no family-wide fallback — you must
-// not clone the family default into a per-radio row), and the write result
-// is checked: a refused write that the UI repaints over is the worst
-// failure shape.
-QJsonObject doc = scope.featureExact("MyFeature");
-doc.insert("field", newValue);
-if (!scope.setFeature("MyFeature", kMySchemaVersion, doc)) {
-    qWarning() << "MyFeature: settings write did not persist";
-}
-// (scope.feature() — exact → family-wide → {} — is for CONSUMERS reading
-// effective config, not for writers.)
-```
-
-- Identity comes from `RadioModel::settingsScope()` (Flex serial / HL2 MAC /
-  Kiwi UUID) — never re-derive it yourself. An empty `radio_id` row is the
-  family-wide default; guard against writing one by accident when the serial
-  isn't known yet (see `BandStackSettings` for the pattern).
-- **Check the write result.** `setFeature()` can refuse (read-only store,
-  reset in progress); a mutation that silently doesn't persist while the UI
-  repaints from the store is the worst failure shape (PR #4621 review). Log
-  loudly at minimum.
-- Writers judging the row they're about to replace use the **exact** read
-  (`featureExact()`), not the fallback-composed one; and never overwrite a
-  document whose `schema_version` is newer than yours — refuse and log
-  (see `RadioStateMemory::store()` for the canonical shape).
-- Shipped precedents: the HL2 `OperatingState` document (per-band drive/LNA
-  maps in its extension), the `Identity` nickname document, and `BandStack`
-  (#4621), and the shared memory bank at `(local, '', MemoryBank)` (#4623).
-
-### Client-Side Radio State Memory (capture/restore)
-
-For radios that persist nothing themselves, the client is the radio's memory —
-but only through the one sanctioned pipeline:
-
-- A backend declares WHICH state the client owns via
-  `RadioCapabilities::clientSettingsDomains` (typed per-domain flags; empty =
-  restore nothing). **Flex and Sim declare explicitly empty** — a CI test
-  guards this, because a non-empty Flex declaration would re-introduce the
-  #2465/#4126/#4261 re-assert-stale-state bug class.
-- `RadioStateMemory` is the ONLY reader/writer of the `OperatingState`
-  document; engagement is `shouldEngage(caps)` — capability-shaped, **never a
-  family-name check**. `RadioModel` hands restored state to the backend
-  unconditionally before `connectRadio()` (an empty state is the reset that
-  prevents same-family radio-swap bleed), and debounces capture (2 s trailing
-  + 10 s max-wait) with an explicit flush on disconnect AND in
-  `MainWindow::closeEvent()` (quit doesn't pump the queued path).
-- The backend validates everything it restores at its own boundary
-  (Principle VII) and **restore never keys transmit** (Principle VI) —
-  restored values are setpoints; the TX gate is untouched.
-- The extension document's top level is domain-named sub-objects gated
-  per-domain by the engine; the CONTENTS of each sub-object are the backend's
-  own (opaque above the seam).
-
-### Settings Migration
-
-One-time migrations when renaming or restructuring keys (e.g. `Applet_DIGI` →
-`Applet_CAT`, `DaxTxGain` → `TciTxGain`):
-
-```cpp
-auto& s = AppSettings::instance();
-if (s.contains("OldKey") && !s.contains("NewKey")) {
-    s.setValue("NewKey", s.value("OldKey", "default").toString());
-    s.remove("OldKey");
-    s.save();
-}
-```
-
-Run once at app or feature startup, not on every access. (The XML→SQLite store
-migration itself is automatic inside `AppSettings::load()` — feature code never
-touches it.)
-
-**Migrating a legacy side file into scoped documents** follows the
-claim-and-freeze pattern (precedents: `Hl2Discovery` nicknames and
-`BandStackSettings`, `LocalMemoryBank`):
-
-- Claim lazily, per scope, on first access — the document needs the radio's
-  FAMILY, which only the live scope knows.
-- The document's existence is the migration marker; a **present-but-empty**
-  document blocks re-import (an operator who emptied a store must not have it
-  resurrected by a restored backup).
-- The legacy source stays **frozen** (or per-section-pruned, for multi-radio
-  files) as the downgrade snapshot — never rewritten with new data.
-- Memoize only *settled* states (document exists, claim succeeded, section
-  confirmed absent); every retryable condition (file missing, unparseable,
-  write refused) must retry on the next access, not be latched away.
-
-### Settings Authority Policy (radio-authoritative vs client-owned)
-
-**The radio is always authoritative for any setting it can store** (Constitution
-Principles II & III) — and the deciding test is Constitution III's own:
-*whether THIS radio can save and restore the value*, which since RFC #4603 is a
-**declared capability, not a family assumption**:
-
-- **On a radio that persists its own state (Flex)**: never save, recall, or
-  override radio-side settings from client-side persistence. The lists below
-  apply verbatim, and `clientSettingsDomains` is declared EMPTY.
-- **On a radio that persists nothing and declares so (HL2 today)**: the
-  client IS the radio's memory — for exactly the domains the backend declares
-  in `RadioCapabilities::clientSettingsDomains` (Sim deliberately declares
-  none: a synthetic scene has nothing worth remembering), persisted ONLY through
-  `RadioStateMemory`'s `OperatingState` document (see "Client-Side Radio State
-  Memory" above). Never in flat `AppSettings` keys, and never via ad-hoc code
-  paths — the one pipeline is what keeps the Flex guarantees provable.
-
-**Radio-authoritative on Flex (do NOT persist client-side):** frequency, mode,
-filter, step size, AGC, squelch, DSP flags, antennas, TX power, panadapter
-*count* and per-pan state (center, bandwidth, min/max dBm, FFT
-average/FPS/weighted-average, and waterfall line duration).
-
-**Client-authoritative everywhere (persist in AppSettings):** window geometry,
-layout arrangement (`PanadapterLayout`, applet order/visibility), client-side
-DSP (NR2/RN2/NR4/DFNR), UI preferences, client-only display appearance
-preferences, spot settings.
-
-**Why (the Flex half):** when both the client and a self-persisting radio
-store the same setting, they fight on reconnect — the radio's GUIClientID
-session restore is always more current than our saved copy. On a declared-
-domain radio there is no second store to fight with, which is exactly why the
-client may hold the state there and only there.
-
-**Anti-pattern (recurring — see #4261):** Do not write a radio-echoed status
-value into a setter that *also* persists it to `AppSettings`. That makes the
-client re-assert stale state on reconnect / profile load and fight the radio —
-the exact class of bug behind #2465, #4126, #4081, #4083, and #4261. For a
-radio-authoritative field, route status straight to the display (a plain member
-+ signal) and never call `AppSettings::setValue()` in its setter. When a display
-setter genuinely persists (e.g. waterfall *appearance*: color gain, black
-level), that value must be client-only — never a value the radio also echoes.
-
-### GUI↔Radio Sync (No Feedback Loops)
-
-> **The `commandReady` plane is FROZEN and is being removed** (#5262 M4).
-> It is described here because most of the tree still uses it, not as the
-> pattern for new work: the wire text below is Flex-only and is silently
-> dropped on HL2/Icom/ANAN/RTL, so a new control written this way is a
-> live-looking dead control on four of six radio families. A new control
-> emits a **typed intent** through `IRadioBackend` instead, and
-> `tools/check_command_plane.py` fails a file that grows its raw-command
-> count (or any file that gains one from zero).
-
-- Model setters emit `commandReady(cmd)` → `RadioModel` sends to radio
-- Radio status pushes update models via `applyStatus(kvs)`
-- Use `m_updatingFromModel` guard or `QSignalBlocker` to prevent echo loops
-
-### Auto-Reconnect
-
-`RadioModel` has a 3-second `m_reconnectTimer` for unexpected disconnects.
-Disabled by `m_intentionalDisconnect` flag on user-initiated disconnect.
-
-### Optimistic Updates Policy
-
-Some radio commands lack status echo (e.g. `tnf remove`). Update the local
-model optimistically. **File a GitHub issue** tagged `protocol` + `upstream`
-for each missing status echo — optimistic updates break Multi-Flex.
-
-### Meter Smoothing — use MeterSmoother
-
-Every meter / level-bar / GR readout in the GUI must drive its display
-value through `MeterSmoother` (`src/gui/MeterSmoother.h`). Don't write
-new envelope-follower code or copy smoothing logic from other widgets
-— `MeterSmoother`'s header has the API and a usage example.
-
-### User-facing names match the on-screen UI labels
-
-In prose (issue comments, README, What's-New strings, error toasts, support
-requests) call a control by the label the user sees, not the C++ class name —
-e.g. the **DIGI applet** (class `CatApplet`), and the Help → Support logging
-toggles **Discovery / Commands / Status** (not backend names like
-`radio.connection`). The on-screen label wins for prose, so users can find the
-control you're naming.
-
-### Region-aware band data — read from BandPlanManager, not BandDefs.h
-
-Anything needing band edges, segment sizes, or per-band metadata reads the
-active plan via `BandPlanManager` (`AppSettings["BandPlanName"]` + the JSON in
-`resources/bandplans/`). `src/models/BandDefs.h::kBands[]` is ARRL/US-only and
-not region-aware — don't source new features from it; AetherSDR's users span
-IARU regions 1/2/3.
-
-### TX DSP stages integrate with the CHAIN widget
-
-The TX DSP chain is stage-per-applet and the visual **CHAIN** widget is the
-primary entry point. New TX DSP stages must be ordered, toggleable, and
-inspectable through the CHAIN widget rather than adding a parallel UI entry —
-it's the user's mental model for the TX signal path.
-
-### The About-dialog Contributors list is auto-generated
-
-The Contributors list in the About dialog is built at runtime from the GitHub
-API; manual edits are overwritten on the next build. If someone is missing, fix
-the GitHub-side attribution (commit authorship / `Co-Authored-By` trailer),
-don't patch the dialog string.
-
----
-
-## Multi-Panadapter Support
-
-**Architecture:** PanadapterModel (per-pan state), PanadapterStream (VITA-49
-routing by stream ID), PanadapterStack (QSplitter), wirePanadapter() (per-pan
-signal wiring), spectrumForSlice() (overlay routing).
-
-**Key protocol facts:**
-- Click-to-tune: `slice m <freq> pan=<panId>` — NOT `slice tune`
-- Never send `slice set <id> active=1` — managed client-side only
-- Push `xpixels`/`ypixels` on pan creation (radio defaults to 50×20)
-- FFT stream ID = pan ID (0x40xx), waterfall stream ID = waterfall ID (0x42xx)
-
-See `docs/architecture/multi-pan-pitfalls.md` for 20 numbered lessons learned.
-
----
-
-## Multi-Client (Multi-Flex) Support
-
-Filter all status and VITA-49 packets by `client_handle` — three layers:
-1. **Slice ownership**: track `m_ownedSliceIds` from `client_handle` field
-2. **Panadapter status**: only claim `display pan`/`display waterfall` matching our handle
-3. **VITA-49 UDP**: `setOwnedStreamIds(panId, wfId)` drops non-matching packets
-
-Early status messages arrive WITHOUT `client_handle`. Create SliceModels for
-all initially, remove other clients' when handle arrives.
-
----
-
-## KiwiSDR Public-Receiver Browser
-
-The KiwiSDR browser is a clean-room, API-policy-aware public-receiver directory
-(#3679) — find and connect to public KiwiSDR receivers, independent of the
-FlexRadio protocol path. Kiwi panadapters are receive-only (TX is inhibited).
-See `docs/kiwisdr-public-directory.md` (directory / API-policy behaviour) and
-`docs/kiwisdr-cleanroom-design.md` (clean-room design notes, Principle IV).
-
-The Kiwi path also serves the Web-888 (a KiwiSDR server fork) as a receiver
-family: profiles carry a receiver type, and the client applies the small wire
-deltas. See `docs/web888-cleanroom-design.md`.
-
----
-
-## Accessibility — `src/gui/` Rules
-
-Touching any file under `src/gui/`? Read [`docs/a11y.md`](docs/a11y.md)
-**before** adding or modifying a widget. Canonical Qt patterns:
-`setAccessibleName` / `setAccessibleDescription`, `QAccessibleValueChangeEvent`
-on every value-change method, `QAccessibleInterface` subclass for any
-`paintEvent` override, and the interactive-`QLabel` anti-pattern (replace
-with `QPushButton` or add keyboard activation).
-
-CI enforcement: [`tools/check_a11y.py`](tools/check_a11y.py) runs on every
-PR via [`.github/workflows/static-checks.yml`](.github/workflows/static-checks.yml)
-and emits inline diff annotations for the patterns above. Warning-only
-(`exit 0`); never blocks a build.
-
-## Agent Automation Bridge — verify the GUI without pixels
-
-Need to assert on UI state, drive a control, confirm a widget rendered, or
-capture the panadapter while verifying a change? AetherSDR ships an in-process,
-agent-drivable bridge (off in production). Launch with `AETHER_AUTOMATION=1`
-and drive a `QLocalServer` that speaks newline-delimited JSON:
-
-- `dumpTree` → semantic snapshot of the whole widget tree (objectName,
-  accessibleName, enabled, geometry, live `value`) — your "DOM" for controls.
-- `grab <widget>` → PNG of any widget, including a correct GPU-framebuffer
-  readback of the panadapter (`SpectrumWidget`).
-- `invoke <target> <action> [value]` → click/toggle/setValue/setText/… a
-  control. **Refuses any control marked transmit-keying (`markTxKeying()` /
-  `aetherTxKeying` property — MOX/PTT, TUNE, ATU, CWX send, packet/APRS send)
-  unless `AETHER_AUTOMATION_ALLOW_TX=1`** — the bridge can never key a live
-  radio by accident; setpoint sliders ("Tune power", "RF power") stay drivable.
-  Marked controls show `"keying": true` in `dumpTree`. Also **refuses disabled
-  controls** (no silent no-op). Disambiguate duplicate names with a scoped
-  target: `"RxApplet/AF gain"` vs `"PanadapterApplet/AF gain"`.
-- `get radio|transmit|equalizer|slice|slices|pan|pans [selector] [property]` →
-  live JSON model snapshot (frequency, mode, filter, NB/NR, squelch/AGC/APF,
-  center MHz, min/max dBm, RF/mic/CW TX-chain, EQ bands, …). Assert on truth
-  without screenshots. Sliders/spinboxes also report `range` in `dumpTree`.
-
-Quick start: `python3 tools/automation_probe.py demo` (no Qt dependency); also
-`get radio`, `invoke 'Master volume' setValue 35`. Full reference — protocol,
-JSON schemas, targeting rules, recipes, gotchas — in
-**[`docs/automation-bridge.md`](docs/automation-bridge.md)**. This is the
-deterministic, cross-OS way to do "snapshot → act → assert" on the native UI
-(issue [#3646](https://github.com/aethersdr/AetherSDR/issues/3646)).
-
-**MCP server (for AI assistants).** The same bridge is also exposed over the
-**Model Context Protocol**, so an MCP-capable assistant can drive AetherSDR
-through schema-validated tools instead of raw JSON. It's enabled from a Radio
-Setup toggle and guarded by token auth; the common verbs (tune, slice, pan,
-connect, record, mark, menu, floors, streams, capture_audio, …) are surfaced as
-first-class typed tools, alongside robustness helpers (`wait_for`,
-`assert_state`, fuzzy `did_you_mean` target resolution), a guided
-`validate_ui_change` prompt, and read-only live-state resources. The same TX
-gate applies — keying verbs stay behind `AETHER_AUTOMATION_ALLOW_TX`. Regenerate
-the verb→tool tables with `tools/gen_bridge_docs.py` (a CI check fails on drift).
-See `docs/automation-bridge.md` for setup and the tool catalog.
+| "Adding a test", "Test-layer boundary", "Gate integrity", socket-test carve-out | [`docs/agents/tests-ci.md`](docs/agents/tests-ci.md) |
+| "In-flight: aetherd engine/UI decoupling", "Engine boundary ratchet — EB3", the conformance checklist, build-target table, seam routing | [`docs/agents/backends.md`](docs/agents/backends.md) |
+| "Settings Persistence", "Radio-Scoped Feature Documents", "Client-Side Radio State Memory", "Settings Migration", "Settings Authority Policy" ("do NOT persist") | [`docs/agents/settings.md`](docs/agents/settings.md) |
+| "SmartSDR Protocol", "GUI↔Radio Sync", "Auto-Reconnect", "Optimistic Updates Policy", "Multi-Panadapter", "Multi-Client", "KiwiSDR" | [`docs/agents/flex-protocol.md`](docs/agents/flex-protocol.md) |
+| "Key Implementation Patterns" | split by topic: settings rules → `docs/agents/settings.md`; widget, MainWindow and band-data rules → `docs/agents/gui.md`; sync/reconnect/optimistic updates → `docs/agents/flex-protocol.md` |
+| "Adding code to MainWindow", "Adding or converting a dialog", "Accessibility", three-state controls, "Meter Smoothing", "User-facing names", "Region-aware band data", "CHAIN widget", "Contributors list", "Agent Automation Bridge" | [`docs/agents/gui.md`](docs/agents/gui.md) |

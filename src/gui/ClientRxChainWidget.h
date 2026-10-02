@@ -7,19 +7,10 @@
 
 namespace AetherSDR {
 
-// Visual RX DSP signal chain.  Paints a horizontal strip:
-//
-//   [RADIO]→[DSP]→[RX EQ]→[GATE]→[COMP]→[TUBE]→[PUDU]→[SPEAK]
-//
-// Three of the eight tiles are status-only (non-interactive):
-//   - RADIO  — green when PC Audio (standard SSB stream) is enabled
-//   - DSP    — green when any client-side NR (NR4 / DFNR / BNR) is on
-//   - SPEAK  — green when AetherSDR's audio output is unmuted
-//
-// The remaining five (RX EQ / GATE / COMP / TUBE / PUDU) are user-
-// controllable DSP stages.  Phase 0 ships them as greyed "coming
-// soon" placeholders with no interactivity; later phases enable
-// click-to-bypass, double-click-to-edit, and drag-to-reorder.
+// Visual RX DSP chain: [RADIO]→[DSP]→[RX EQ]→[GATE]→[COMP]→[TUBE]→[PUDU]→[SPEAK].
+// RADIO (green when PC Audio is on), DSP (green when any client NR is on) and
+// SPEAK (green when output is unmuted) are status-only. The other five are the
+// user-controllable stages.
 class ClientRxChainWidget : public QWidget {
     Q_OBJECT
 

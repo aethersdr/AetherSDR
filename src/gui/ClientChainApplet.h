@@ -12,18 +12,11 @@ namespace AetherSDR {
 class ClientChainWidget;
 class ClientRxChainWidget;
 
-// Docked chain tile — header with [TX] [RX] [BYPASS] buttons, the
-// chain strip, and an interaction hint at the bottom.
-//
-// TX and RX buttons form an exclusive pair that selects which chain
-// the widget displays.  TX is the working client-side DSP chain
-// (six stages, all implemented).  RX is reserved for the future
-// client-side RX DSP chain — until then, switching to RX shows a
-// placeholder.
-//
-// BYPASS is a one-click action that disables every stage in the
-// currently-selected chain.  Users re-enable individual stages via
-// the chain widget's right-click menu or the per-stage applet tiles.
+// Docked chain tile: [TX] [RX] [BYPASS] header, the chain strip, and a hint.
+// TX/RX are an exclusive pair selecting which chain is shown (TX:
+// ClientChainWidget, RX: ClientRxChainWidget). BYPASS disables every stage in
+// the selected chain; stages are re-enabled individually from the strip's
+// context menu or the per-stage tiles.
 class ClientChainApplet : public QWidget {
     Q_OBJECT
 
@@ -31,6 +24,7 @@ public:
     enum class ChainMode { Tx, Rx };
 
     explicit ClientChainApplet(QWidget* parent = nullptr);
+    ChainMode activeTab() const { return m_mode; }
 
     void setAudioEngine(AudioEngine* engine);
     void refreshFromEngine();
@@ -41,6 +35,7 @@ public:
     // on/off).  Also drives the record button's enable state — no
     // audio to capture when the chain isn't in the signal path.
     void setMicInputReady(bool ready);
+    void setTxAudioPathNotice(const QString& text, bool warning);
 
     // Forwarded — pulses the TX endpoint red when we're actively
     // transmitting on our own slice.  Driven by TransmitModel::
@@ -102,6 +97,7 @@ signals:
 
 private:
     void setMode(ChainMode m);
+    void updateContentVisibility();
     // Click handler for the BYPASS toggle.  On check: records which
     // TX stages are currently enabled, disables them all.  On uncheck:
     // re-enables just the stages that were on before.  Manual changes
@@ -119,6 +115,7 @@ private:
     ClientChainWidget*   m_chain{nullptr};
     ClientRxChainWidget* m_rxChain{nullptr};
     QLabel*            m_hint{nullptr};
+    QLabel*            m_pcAudioNotice{nullptr};
     QPushButton*       m_txBtn{nullptr};
     QPushButton*       m_rxBtn{nullptr};
     QPushButton*       m_bypassBtn{nullptr};
@@ -132,6 +129,8 @@ private:
     bool               m_monPlaying{false};
     bool               m_monHasRecording{false};
     bool               m_micReady{false};
+    bool               m_audioPathNoticeVisible{false};
+    bool               m_txAudioPathBlocked{false};
     ChainMode          m_mode{ChainMode::Tx};
 };
 

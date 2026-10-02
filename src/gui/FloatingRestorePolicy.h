@@ -26,19 +26,10 @@ inline constexpr char kSettingsFalse[] = "False";
 enum class FloatingRestoreAction {
     // No evidence of a previous failure — replay the saved IDs as before.
     Replay,
-    // The previous process armed the marker and never cleared it, and it left
-    // pan IDs behind. One of those IDs is what it was floating when it died,
-    // so replaying the list reproduces the crash. Forget them and come up
-    // docked.
-    //
-    // The drop is deliberately coarse: the marker is a bare flag, so *all*
-    // saved IDs go, not just the one in flight. Floating a second pan inside
-    // the settle window therefore puts the first one at risk too, and a crash
-    // from an unrelated cause within that window costs the whole pop-out
-    // layout. Both are one pop-out's worth of loss on a guard that is
-    // single-use by construction, and narrowing it would mean persisting the
-    // in-flight ID — more state to keep consistent across the exact code path
-    // that is known to die mid-write.
+    // The previous process armed the marker and never cleared it, leaving pan
+    // IDs; one of them crashed it, so drop them all and come up docked. Coarse
+    // on purpose (the marker is a bare flag): persisting the in-flight ID would
+    // add state on the path known to die mid-write.
     DropSavedIds,
     // Marker armed but nothing saved to replay (the previous process died
     // after the float had already been undone, or the IDs were cleared by
@@ -46,21 +37,12 @@ enum class FloatingRestoreAction {
     ClearStaleMarker,
 };
 
-// Decide what a starting session should do with the persisted float state.
-//
-// This exists because a crash inside floatPanadapter() used to be terminal
-// rather than merely annoying: saveFloatingState() commits the pan ID *before*
-// the reparent + GPU re-initialize that historically took the process down on
-// marginal D3D11 drivers (#4319, #4091, #4617), and restoreFloatingState()
-// replayed the saved list unconditionally on every connect. The result was a
-// boot loop with no in-app escape — the user had to hand-edit the settings
-// store to get their radio back. One armed-across-the-crash marker turns that
-// into a single lost pop-out.
-//
-// Deliberately conservative: it only discards state when a *previous* process
-// left the marker armed. A session that is merely slow to settle keeps its
-// layout, because the marker is evaluated once at construction, before this
-// session's own floats can arm it.
+// Decide what a starting session does with persisted float state.
+// saveFloatingState() commits the pan ID before the reparent + GPU re-init
+// that can crash on marginal D3D11 drivers (#4319, #4091, #4617); without this
+// the replay would boot-loop. Discards only when a previous process left the
+// marker armed — it is evaluated once at construction, before this session's
+// floats can arm it.
 constexpr FloatingRestoreAction evaluateFloatingRestore(bool haveSavedIds,
                                                         bool restorePending)
 {

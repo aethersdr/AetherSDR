@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QByteArray>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QShortcut>
 #include <QString>
@@ -31,9 +32,26 @@ struct ShortcutExportResult {
     bool ok() const { return error.isEmpty(); }
 };
 
+// The key sequence a key event resolves to for binding lookup: the key plus
+// Shift/Ctrl/Alt/Meta only. Shared by every resolver so they match alike.
+inline QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev)
+{
+    if (!ev || ev->key() == Qt::Key_unknown)
+        return {};
+
+    const Qt::KeyboardModifiers modifiers =
+        ev->modifiers() & (Qt::ShiftModifier
+                           | Qt::ControlModifier
+                           | Qt::AltModifier
+                           | Qt::MetaModifier);
+    return QKeySequence(static_cast<int>(modifiers) | ev->key());
+}
+
 class ShortcutManager : public QObject {
     Q_OBJECT
 public:
+    enum class ShortcutPolicy { Operating, WindowManagement };
+
     struct Action {
         QString id;
         QString displayName;
@@ -50,6 +68,7 @@ public:
                                   // drifts (#4057 review: atu_start was missed).
         TxController::Activity txActivity{TxController::Activity::Mox};
         std::function<void(const TxController::Input&)> txHandler;
+        ShortcutPolicy policy{ShortcutPolicy::Operating};
     };
 
     explicit ShortcutManager(QObject* parent = nullptr);
@@ -61,7 +80,8 @@ public:
                         const QString& category, const QKeySequence& defaultKey,
                         std::function<void()> handler,
                         bool autoRepeat = false,
-                        bool keysTx = false);
+                        bool keysTx = false,
+                        ShortcutPolicy policy = ShortcutPolicy::Operating);
 
     // Binding management
     void setBinding(const QString& actionId, const QKeySequence& key);
@@ -85,14 +105,18 @@ public:
     ShortcutImportResult importFromFile(const QString& path);
 
     // Create/destroy QShortcuts on the target widget.
-    // guardFn is called before each handler — return false to suppress.
+    // Operating actions are window-scoped and consult guardFn. WindowManagement
+    // actions are application-scoped and remain available while operating input
+    // is disabled/captured. TX actions always retain the operating policy.
     void rebuildShortcuts(QWidget* parent,
                           std::function<bool()> guardFn = nullptr);
 
-    // Enable or disable all active QShortcut objects. Used to yield key
-    // events to focused child widgets (e.g. sliders) that would otherwise
-    // have their arrow keys stolen by window-level shortcuts.
+    // Enable or disable the operating QShortcuts, so their keys reach the
+    // focused widget (a slider's arrows, or every bound key with keyboard
+    // shortcuts off, #5483). Remembered: rebuildShortcuts() applies it, so a
+    // rebuild cannot re-arm yielded keys.
     void setShortcutsEnabled(bool enabled);
+    bool shortcutsEnabled() const { return m_shortcutsEnabled; }
 
     // Query
     const QVector<Action>& actions() const { return m_actions; }
@@ -112,6 +136,8 @@ private:
 
     QVector<Action> m_actions;
     QVector<QShortcut*> m_shortcuts;
+    QVector<QShortcut*> m_windowShortcuts;
+    bool m_shortcutsEnabled{true};
 };
 
 } // namespace AetherSDR

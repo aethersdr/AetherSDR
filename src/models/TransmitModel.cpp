@@ -25,16 +25,10 @@ void TransmitModel::resetState()
     m_apdEqActive = false;
     m_apdSamplers.clear();
     m_rfPower = 100;
-    // The 100 above is a DEFAULT again, not a reported value: the session that
-    // could confirm it is over (#5518). Clearing this is what stops the MQTT
-    // radio-state topic republishing a dead session's drive as live on the next
-    // connect. Deliberately NOT emitting rfPowerChanged here — that signal drives
-    // a TCI `drive:` broadcast and the TX power-meter scale, and neither should be
-    // told the radio moved its power to 100 as it went away.
-    //
-    // Delegated so the disconnect path and RadioModel::teardownBackend()'s
-    // family-switch path can never disagree about what "nobody has reported this"
-    // means (#5733 review).
+    // 100 is a default again, not a reported value (#5518): clearing provenance
+    // stops MQTT republishing a dead session's drive as live. No rfPowerChanged:
+    // it drives a TCI `drive:` broadcast and the TX meter scale. Shared with
+    // RadioModel::teardownBackend() so both paths agree on "unreported" (#5733).
     resetPowerProvenance();
     m_tunePower = 10;
     m_tune = false;
@@ -47,24 +41,18 @@ void TransmitModel::resetState()
     m_memoriesEnabled = false;
     m_usingMemory = false;
     m_showTxInWaterfall = false;
+    // Radio-reported; a new session re-reports it. A radio with no Flex command
+    // plane never echoes dax=, so a Flex session's DAX=on must not survive into
+    // it and hold the client TX chain's MIC-ready indicator off (#5871).
+    m_daxOn = false;
     m_txSliceMode.clear();
     setTuneAvailable(true);
 
-    // The committed break-in delay belonged to the session that just ended; drop
-    // it so setCwSpeed() does not re-assert a delay the operator never set in
-    // this one (#5288 review — cross-session leak). RadioModel::onDisconnected()
-    // is the only caller, so this fires on EVERY disconnect — a transient drop
-    // and reconnect to the same radio, not just a radio swap.
-    //
-    // The m_holdBreakInDelay opt-in is a client preference, not radio state, and
-    // is left untouched — PhoneCwApplet re-applies it from AppSettings. That
-    // asymmetry is deliberate but it leaves the feature on-but-unarmed, so say
-    // so out loud: the applet renders that state distinctly rather than showing
-    // one checked button for both (#5288 review, blocker 1).
-    // Clear BEFORE emitting: the applet's slot reads holdBreakInDelayArmed()
-    // synchronously, so emitting first hands it the state we are in the middle
-    // of leaving and the button keeps showing "holding 48 ms" after the delay is
-    // gone. (Caught driving the GUI, not in review.)
+    // The held break-in delay belonged to the ending session; drop it so
+    // setCwSpeed() never re-asserts it in the next one (#5288). Runs on every
+    // disconnect, including a transient reconnect. m_holdBreakInDelay is a client
+    // preference and survives; the applet renders on-but-unarmed distinctly.
+    // Clear before emitting: the slot reads holdBreakInDelayArmed() synchronously.
     const bool wasArmed = (m_cwDelayHeld > 0);
     m_cwDelayHeld = -1;   // also covers the 0 (deliberate QSK) case
     if (wasArmed) {
@@ -202,16 +190,11 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
 
     // ── Misc TX (max_power_level / tx_slice_mode emit inline, like the old code) ──
     if (assign(d.maxPowerLevel, m_maxPowerLevel)) { changed = true; emit maxPowerLevelChanged(m_maxPowerLevel); }
-    // AFTER both power assigns, not beside the rfPower one (#5733 review).
-    // m_haveMaxPowerLevel latches at the top of this function but m_maxPowerLevel
-    // is not written until the line above, so emitting earlier handed a
-    // synchronous consumer haveMaxPowerLevel()==true with the ceiling still at
-    // the compiled-in 100 — the exact phantom the latch exists to prevent.
-    //
-    // Emitted even when rfPowerChanged/maxPowerLevelChanged already fired. Both
-    // ends of the only consumer feed one coalescing timer, so the duplicate costs
-    // nothing, and suppressing it would make the guarantee ("provenance moves are
-    // always announced") conditional on a value comparison.
+    // After both power assigns: m_haveMaxPowerLevel latches earlier but
+    // m_maxPowerLevel is written on the line above, so an earlier emit would show a
+    // synchronous consumer the compiled-in 100 as confirmed (#5733). Emitted even
+    // alongside rfPower/maxPowerLevelChanged; the consumer coalesces, so provenance
+    // moves are always announced.
     if (provenanceMoved) emit powerProvenanceChanged();
     changed |= assign(d.tuneMode, m_tuneMode);
     changed |= assign(d.showTxInWaterfall, m_showTxInWaterfall);
@@ -851,20 +834,11 @@ void TransmitModel::setDexpLevel(int level)
     emit commandReady(QString("transmit set compander_level=%1").arg(level));
 }
 
-// The TX passband setters all take the same shape: bound, adopt OPTIMISTICALLY,
-// announce the intent, and emit the Flex verb.
-//
-// The optimistic adoption is what makes these work on a radio that modulates on
-// this host. A Flex echoes `transmit` status and applyStatus() writes the state
-// back, so the local fields could be left alone; a host-modulating backend never
-// echoes anything, so without this the operator drags the low-cut slider, the
-// verb goes nowhere, no status returns, and the control springs back — while the
-// modulator keeps whatever passband its mode default gave it. Same pattern, and
-// the same reason, as setSpeechProcessorEnable() above.
-//
-// txFilterCommandIssued is OPERATOR INTENT only — applyStatus() must never emit
-// it — so a backend can bind to it without echoing radio state back as a fresh
-// command (Principle II).
+// TX passband setters: bound, adopt optimistically, announce intent, emit the
+// Flex verb. Optimistic adoption is needed for a host-modulating backend,
+// which echoes no status (Flex's echo would otherwise spring the control back
+// via applyStatus()). txFilterCommandIssued is operator intent only and is
+// never emitted by applyStatus(), so backends can bind it without echo loops.
 void TransmitModel::setTxFilterLow(int hz)
 {
     setTxFilter(qBound(kTxFilterMinHz, hz, kTxFilterMaxHz), m_txFilterHigh);
@@ -905,32 +879,13 @@ void TransmitModel::setCwSpeed(int wpm)
     emit commandReady(QString("cw wpm %1").arg(wpm));
 
     // Hold break-in delay (#5288, opt-in): SmartSDR re-pins break_in_delay to a
-    // WPM-derived QSK floor on a speed change and walks it down as WPM rises —
-    // on an inline amplifier that can't tolerate QSK that is silent
-    // hot-switching. This is the operator's own speed command, so re-asserting
-    // the delay they set is a request on the command path like any other setter
-    // — not the client overriding radio truth (which is why it is here and not
-    // in applyChanges). Ride it out right behind the `cw wpm` so the floor never
-    // takes lasting effect. If the radio rejects it as below the new floor it
-    // keeps its own larger value, the next status echo is adopted normally, and
-    // the amp still sees more delay than the operator asked for — safe. A set
-    // delay of 0 is deliberate QSK: m_cwDelayHeld is not > 0, nothing fires.
-    //
-    // Gated on a REAL speed change, not on the setter being called: the floor
-    // only moves when the speed does, and the knob paths clamp
-    // (MainWindow_Controllers.cpp's WheelCwSpeed, MainWindow_Shortcuts' +/-5)
-    // so a detent held against 5 or 100 would otherwise re-send on every tick.
-    //
-    // Note what this deliberately does NOT do: it does not write m_cwDelay. An
-    // earlier revision adopted the held value locally "so the slider does not
-    // dip between the two echoes", but it never achieved that — the radio's
-    // floor echo still arrives and applyChanges still adopts it, so the dip
-    // happens either way. What the local write did do was display a value the
-    // radio had refused: the floor is enforced on the write side too
-    // (`Parameter out of range`, #5519), and when a speed change does not move
-    // the floor the radio sends no break_in_delay status at all, so nothing
-    // ever corrected the model. m_cwDelay stays radio truth, full stop
-    // (#5288 review, blocker 2).
+    // WPM-derived QSK floor on speed change, which hot-switches an inline amp.
+    // Re-assert the operator's delay right after `cw wpm`, on a real speed change
+    // only (knob paths clamp and would re-send every tick). A delay of 0 is
+    // deliberate QSK and nothing fires. If the radio refuses (below floor,
+    // `Parameter out of range`, #5519) the amp still sees at least the floor.
+    // Never write m_cwDelay here: it stays radio truth, and a refused or
+    // unechoed value would never be corrected.
     if (speedChanged && m_holdBreakInDelay && m_cwDelayHeld > 0) {
         emit commandReady(QString("cw break_in_delay %1").arg(m_cwDelayHeld));
         // Log only the real divergence — the radio's delay having actually moved

@@ -9,10 +9,15 @@
 #include <QtGlobal>
 
 #include <QDebug>
+#include <QLoggingCategory>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <mutex>
 #include <span>
+#include <vector>
 
 #ifdef Q_OS_WIN
 // winsock2.h pulls in windows.h, whose min/max function-like macros otherwise
@@ -27,7 +32,25 @@
 
 namespace AetherSDR::hl2 {
 
+// Starvation lines log on the shared lcHl2Tx ("aether.hl2.tx", high-rate, off by
+// default), which also carries the radio's DSIQ FIFO lines. Reported here, not
+// from Hl2Backend's telemetry handler, because the EP2 pacer increments these
+// counters on the I/O thread.
+
 namespace {
+
+// A family switch destroys the transport without power-cycling the radio.
+// Keep unresolved clock recovery until a complete OFF sequence is sent.
+struct Cl1RecoveryRegistry {
+    std::mutex mutex;
+    QSet<QString> serials;
+};
+
+Cl1RecoveryRegistry& cl1RecoveryRegistry()
+{
+    static Cl1RecoveryRegistry registry;
+    return registry;
+}
 
 // View a QByteArray as a byte span for the protocol decoders.
 std::span<const std::uint8_t> asBytes(const QByteArray& d) noexcept
@@ -99,22 +122,11 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     m_bandscopeGuard->setSingleShot(true);
     connect(m_bandscopeGuard, &QTimer::timeout, this, &MetisClient::onBandscopeGuardTimeout);
 
-    // Seed the C&C banks from the Params defaults rather than leaving them
-    // zero-initialised until start().
-    //
-    // A default-constructed Cc is five zero bytes, which is not "no bank" -- it
-    // is a WRITE OF ZERO TO REGISTER 0x00, the config register (48 kHz, one
-    // receiver) with C0 = 0x00. Before start() the rotation was handing those
-    // out, so any caller that built a packet without starting emitted banks that
-    // looked like deliberate commands. Nothing shipped depended on it because
-    // Hl2Backend always starts first, but it made the un-started object's output
-    // meaningless, and it is what made hl2_tx_gate_test's "register address
-    // intact" check depend on the rotation's phase rather than on its content.
-    //
-    // At least one frequency bank ALWAYS exists, so the rotation length is
-    // never zero and buildNextControlPacket() has something real to send from
-    // the first call.
-    m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte);
+    // Seed the C&C banks from Params defaults: a zero Cc is a write of zero to the
+    // config register, not "no bank". At least one frequency bank always exists, so
+    // the rotation is never empty.
+    m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte,
+                          m_params.ditherBit, m_params.randomBit);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
     m_ccRxFreq.assign(1, ccRxFreq(0, m_params.rxFrequencyHz));
     m_ccTxFreq = ccTxFreq(m_params.rxFrequencyHz);
@@ -131,24 +143,19 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     m_watchdogTimer->setInterval(kWatchdogTickMs);
     connect(m_watchdogTimer, &QTimer::timeout, this, &MetisClient::onWatchdogTick);
 
-    // metis-start is a single UDP datagram and can simply be lost. Re-send it
-    // until EP6 flows or the attempt budget is spent; C&C keeps flowing from the
-    // pacer meanwhile, so a retry only needs to repeat the start itself.
-    //
-    // TWO PATHS ARM THIS: start() at connect, and setReceiverCount() when the
-    // payload layout changes. The restart path is why the gate below is a RECENCY
-    // test rather than "has a packet ever arrived".
-    //
-    // Neither m_linkUp nor m_haveRxSeq can answer for it. A restart deliberately
-    // leaves m_linkUp true — clearing it would make the resumed stream re-emit
-    // linkUp(), and Hl2Backend republishes its entire initial state on that, over
-    // the operator's live panes. And packets the radio put on the wire BEFORE the
-    // stop keep arriving for a round trip afterwards, so m_haveRxSeq goes true
-    // from a straggler while the start is lost and the radio is silent. Both gates
-    // read "the start landed" off evidence that predates the start.
-    //
-    // m_sinceLastEp6 has no such ambiguity and nothing to tune: a stream that is
-    // running reads near zero, one that has stopped reads a full tick or more.
+    // setReceiverCount()'s restart steps. Single-shot and precise: the spacing
+    // is a floor re-checked on every timeout (advanceReceiverCountRestart), so
+    // precision here only keeps the whole restart close to its 40 ms.
+    m_restartTimer = new QTimer(this);
+    m_restartTimer->setSingleShot(true);
+    m_restartTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_restartTimer, &QTimer::timeout, this,
+            &MetisClient::advanceReceiverCountRestart);
+
+    // metis-start is one UDP datagram and can be lost: re-send until EP6 flows or the
+    // budget is spent. Armed by start() and setReceiverCount(). The test is EP6
+    // recency, not m_linkUp (kept true across a restart) or m_haveRxSeq (set by
+    // stragglers sent before the stop).
     m_startRetryTimer = new QTimer(this);
     m_startRetryTimer->setInterval(kStartRetryMs);
     connect(m_startRetryTimer, &QTimer::timeout, this, [this] {
@@ -252,7 +259,8 @@ bool MetisClient::start(const Params& params)
     m_params = params;
     m_host = params.host;
     m_port = params.port;
-    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte);
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte,
+                          m_params.ditherBit, m_params.randomBit);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
     // Every receiver starts on RX1's frequency; Hl2Backend moves the rest as it
     // brings each slice up. The BANK COUNT is fixed here and never re-derived
@@ -282,6 +290,13 @@ bool MetisClient::start(const Params& params)
     m_bsBlocks = 0;
     m_bsTimeouts = 0;
     m_bsConsecutiveTimeouts = 0;
+    // Speaker audio belongs to a session: a block queued before the link went
+    // down describes a moment that has passed, and playing it into the new
+    // session's codec is a quarter-second of the previous connection.
+    m_speakerAudio.clear();
+    // The ATU request cannot survive a connect either. The radio boots with the
+    // bit clear, and re-asserting a tune nobody asked for would start one.
+    m_atuTune = false;
     // A CONNECT is where the gate's standing intent is cleared, and one of only
     // two places: a receiver-count restart CARRIES it (Params::bandscope), a
     // stop ends the session it belonged to. Cleared after `m_params = params`
@@ -318,18 +333,8 @@ bool MetisClient::start(const Params& params)
     m_socket->setReadBufferSize(1 << 21);   // absorb the continuous EP6 torrent
     connect(m_socket, &QUdpSocket::readyRead, this, &MetisClient::onReadyRead);
 
-    // Counters belong to the SESSION, so they are zeroed here rather than in the
-    // constructor: a reconnect must not present the previous link's byte totals
-    // as this one's.
-    //
-    // The port is knowable now; the ADDRESS is not. The bind above is a wildcard,
-    // so localAddress() answers 0.0.0.0 — which names no interface to an operator
-    // debugging a multi-homed host, where the Flex readout shows a real one in the
-    // same field. Which interface actually reaches the radio is a routing decision
-    // the kernel makes per datagram, and receiveDatagram() already asks for that
-    // metadata, so onReadyRead() upgrades this from the first datagram that
-    // carries a destination. "*" states the wildcard in the meantime rather than
-    // dressing it up as an address.
+    // Counters belong to the session. The bind is a wildcard, so the local address
+    // reads "*" until onReadyRead() resolves it from a datagram's destination.
     m_link = LinkCounters{};
     m_link.localEndpoint = QStringLiteral("*:%1").arg(m_socket->localPort());
     m_linkEndpointResolved = false;
@@ -370,24 +375,52 @@ bool MetisClient::start(const Params& params)
     m_sinceLastEp6.restart();
     m_watchdogTimer->start();
     m_connectWatchdog->start(kConnectTimeoutMs);
-    m_startAttempts = 1;
-    m_startRetryTimer->start(kStartRetryMs);
+    armStartRetry();
+
+    // HL2 boots on its crystal. Reapply requested CL1 after priming, or send
+    // OFF only for this serial's unresolved switch earlier in this process.
+    // Ordinary connects and unknown serials must not touch the clock bus.
+    if (m_params.cl1RefClock || cl1RecoveryPending()) {
+        queueCl1Sequence(m_params.cl1RefClock);
+    }
     return true;
 }
 
 void MetisClient::sendPrimingBurst(int countPerBank)
 {
+    sendPrimingBank(countPerBank);
+    QThread::msleep(kPrimingBankSpacingMs);
+    sendPrimingBank(countPerBank);
+    QThread::msleep(kPrimingBankSpacingMs);
+}
+
+void MetisClient::sendPrimingBank(int countPerBank)
+{
     for (int i = 0; i < countPerBank; ++i)
         sendControlPacket();
-    QThread::msleep(10);
-    for (int i = 0; i < countPerBank; ++i)
-        sendControlPacket();
-    QThread::msleep(10);
+}
+
+qint64 MetisClient::sendCommandDatagram(const std::array<std::uint8_t, 64>& cmd)
+{
+    if (m_commandSinkForTest)
+        return m_commandSinkForTest(cmd);
+    if (!m_socket)
+        return -1;
+    return sendTo(*m_socket, cmd, m_host, m_port);
+}
+
+void MetisClient::armStartRetry()
+{
+    // Seed 1: every caller has just sent a run byte, so the timer re-sends on
+    // attempts 2..kMaxStartAttempts, i.e. kStartResendsAfterArm more datagrams.
+    m_startAttempts = 1;
+    if (m_startRetryTimer)
+        m_startRetryTimer->start(kStartRetryMs);
 }
 
 void MetisClient::onEp2PacerTick()
 {
-    if (!m_running || !m_socket || m_ep2IntervalUs <= 0)
+    if (!m_running || (!m_socket && !m_packetSinkForTest) || m_ep2IntervalUs <= 0)
         return;
     // Catch-up: emit however many frames the wall clock says are due, capped so
     // a long stall cannot produce an unbounded burst.
@@ -405,10 +438,62 @@ void MetisClient::onWatchdogTick()
 {
     if (!m_running || !m_linkUp)
         return;
+    // Inside a receiver-count restart's stop-to-start window the silence is
+    // ours, and stage 1's run command (bit 0 set) would be a metis-start ahead
+    // of the priming. The window's spacing is a floor with no ceiling, so this
+    // is a gate, not an argument from kSilenceTimeoutMs.
+    if (restartAwaitingStart())
+        return;
     if (m_sinceLastEp6.isValid() && m_sinceLastEp6.elapsed() > kSilenceTimeoutMs) {
+        const qint64 silentMs = m_sinceLastEp6.elapsed();
+        // Stage 1: re-send the run command before declaring link loss. If the gateware
+        // halted because EP2 stopped (dsopenhpsdr1.v's watchdog drops `run`), resuming
+        // EP2 does not restart it; only a run command does. A duplicate start is safe:
+        // RUNSTOP latches `run_next = eth_data[0]` with no flush or reset, but it also
+        // re-latches wide_spectrum (bit 1) and watchdog_disable (bit 7), so the gate is
+        // reset first (resetBandscopeGate() sends nothing) and this sends
+        // wideSpectrum=false. No metis-stop or priming burst: the layout is unchanged and
+        // the burst msleeps on the EP2 thread. m_linkUp stays true so a recovery does not
+        // republish state; m_params.bandscope and a pending frame request survive.
+        if (!m_silenceRecoveryArmed && m_socket && m_startRetryTimer) {
+            m_silenceRecoveryArmed = true;
+            ++m_link.silenceRecoveryAttempts;
+            // Publish in this turn. linkCountersUpdated otherwise leaves only
+            // from onReadyRead, after a datagram, and this path runs because
+            // none is arriving. Without the emit, stage 2's linkDown is followed
+            // by start(), which replaces m_link, and the failed attempt never
+            // reaches the health rows. The snapshot may still carry the previous
+            // window's gap figures; the counters are the reason it goes out now.
+            emit linkCountersUpdated(m_link);
+            qInfo() << "MetisClient: no EP6 for" << silentMs
+                    << "ms — re-sending the run command before declaring link loss"
+                       " (this one, then up to" << kStartResendsAfterArm
+                    << "re-sends at" << kStartRetryMs << "ms)";
+            // Sequence tracking is left alone, unlike setReceiverCount() (whose metisStop
+            // makes the gateware zero ep6_seq_no on ~run). No path a duplicate start takes
+            // resets the sequence: if the radio never halted the gap is real loss, and if it
+            // restarts at zero the backward-gap guard (`gap < 0x80000000u`) declines to score
+            // it. hl2_receiver_count_restart_test covers both.
+            resetBandscopeGate();
+            countTx(sendTo(*m_socket,
+                           metisRunCommand(/*wideSpectrum=*/false, m_watchdogEnabled),
+                           m_host, m_port));
+            armStartRetry();
+            return;
+        }
+        // Stage 2. The retry disarms once EP6 flows, so an active timer means the budget
+        // is still running; waiting adds at most kMaxStartAttempts * kStartRetryMs
+        // (1500 ms) before link loss, against a 5000 ms full teardown.
+        if (m_startRetryTimer && m_startRetryTimer->isActive())
+            return;
+        // A C&C request caught in a silence fails at ~3.5 s rather than ~2 s: its own
+        // deadline counts EP6 frames and cannot expire meanwhile, and failing it at stage
+        // 1 would turn a successful recovery into a caller-visible failure.
+
         // Socket still open but the radio went quiet — surface it as link loss
         // rather than sitting in a permanently "connected" state.
         m_linkUp = false;
+        m_silenceRecoveryArmed = false;
         // And drop the outstanding request with the link, exactly as stop()
         // does. Hl2ControlRequest::reset()'s own doc says "for a link that went
         // down", and this is that; leaving the machine Awaiting here made the
@@ -416,28 +501,11 @@ void MetisClient::onWatchdogTick()
         // reported TimedOut for a request the radio may well have applied
         // before it went away.
         dropControlRequest();
-        // AND END THE GATE'S INTENT, exactly as stop() does. This path does NOT
-        // call stop(): m_running and m_params.bandscope would both survive, and
-        // if EP6 resumes before RadioModel's reconnect timer fires, handleDatagram
-        // emits linkUp() again with no start() behind it. Hl2Backend's linkUp
-        // handler then clears its mirrors on the premise that a session begins
-        // with wide_spectrum clear — false on this one path — and the health row
-        // reports the bandscope OFF while the gate is still cycling and
-        // publishing fresh ADC levels. It also stops the gate arming against a
-        // radio that has gone quiet, which only manufactures block timeouts.
-        // (PR #5650 review, K5PTB.)
-        // LOWER wide_spectrum ON THE WIRE before dropping the state that
-        // remembers it was raised. stop() gets this for free — metisStop()'s
-        // 0x00 clears both bits — but there is no metis-stop on this path, the
-        // socket is still open, and the radio may simply have gone quiet on
-        // EP6. A bit left set here is never lowered again: if EP6 resumes
-        // before RadioModel's reconnect timer fires, handleDatagram re-emits
-        // linkUp() with no start() behind it and no run byte, so the radio
-        // streams EP4 ungated (~3.3 Mbit/s) for the rest of the session while
-        // the health row reads off. The gate raises the bit at every 1 Hz tick
-        // and the guard lowers it 420 ms later, so during the silence this
-        // watchdog is measuring the bit is up ~42 % of the time.
-        // (PR #5650 review round 3.)
+        // End the gate's intent as stop() does; this path does not call stop(), and if
+        // EP6 resumes before RadioModel reconnects, linkUp() re-fires with no start().
+        // Lower wide_spectrum on the wire first: with no metis-stop here, a bit left set
+        // is never lowered and EP4 streams ungated (~3.3 Mbit/s). Usually a no-op, since
+        // stage 1 already stopped the gate; covers the no-socket/no-retry-timer route.
         if (m_bsState != BandscopeState::Idle)
             bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
         resetBandscopeGate();
@@ -473,6 +541,9 @@ void MetisClient::dropControlRequest()
 
 void MetisClient::stop()
 {
+    // A receiver-count restart in flight ends here: its remaining steps would
+    // put a metis-start on the wire after the stop below.
+    cancelReceiverCountRestart();
     if (m_startRetryTimer) m_startRetryTimer->stop();
     if (m_ep2Timer)        m_ep2Timer->stop();
     if (m_watchdogTimer)   m_watchdogTimer->stop();
@@ -489,18 +560,50 @@ void MetisClient::stop()
         m_socket = nullptr;
     }
     m_running = false;
+    // Any silence recovery in flight ends with the session. The COUNTERS do
+    // not: they live on m_link, which start() replaces and stop() leaves
+    // standing, because a stop is not a reason to forget that a recovery
+    // happened.
+    m_silenceRecoveryArmed = false;
     // metisStop() is 0x00, which clears wide_spectrum as well as run. The gate
     // has nothing left to sample and its intent ends with the session.
     resetBandscopeGate();
     failPendingBandscopeFrame(QStringLiteral("the radio stopped streaming"));
     m_params.bandscope = false;
-    // An interrupted five-bank write must not finish in the next session.
-    // Preserve unrelated one-shot setup; only this board's writes are stale.
+    // An interrupted write must not finish in the next session. Three kinds of
+    // bank: the two below, and the CL1 VersaClock sequence (dropQueuedCl1Banks()):
+    //   - the IO board's five-bank I2C write, which a later session would
+    //     complete against a board that may have been power-cycled since;
+    //   - the 0x09 drive bank. It carries the PA enable and the ATU tune
+    //     request, and the next start()'s priming bursts would put a leftover
+    //     one on the wire before Hl2Backend's drive-0 -- the PA biased on, or a
+    //     tune started, by a session that has already ended (#4579). start()
+    //     clears m_atuTune for the same reason.
+    // Preserve unrelated one-shot setup: the RX and TX NCO banks assert nothing
+    // on the transmit side, and the next session restates both anyway.
     std::erase_if(m_oneShot, [](const Cc& bank) {
-        return bank[0] == kC0I2c2 && bank[1] == kI2cCookieWrite
-            && bank[2] == (kI2cStopAtEnd | kIoBoardI2cAddr);
+        const bool ioBoardWrite = bank[0] == kC0I2c2 && bank[1] == kI2cCookieWrite
+                               && bank[2] == (kI2cStopAtEnd | kIoBoardI2cAddr);
+        return ioBoardWrite || bank[0] == kC0TxDrive;
     });
     m_ioBoardTxFreqSent = false;
+    // Same rule, higher stakes: a half-sent VersaClock sequence finishing in
+    // the NEXT session would configure the part from the middle of a table
+    // whose earlier writes never happened — that is not a wrong band relay,
+    // it is a converter with no usable clock.
+    //
+    // "start() re-queues the whole sequence, so nothing is lost" is what this
+    // comment used to say, and for the OFF table it was NOT TRUE: the record
+    // that the radio might still be on CL1 was cleared when the table was
+    // queued, so start() had nothing left to act on and the radio stayed on the
+    // external reference (#5923 review). The record is now released only on a
+    // confirmed send, and dropQueuedCl1Banks() abandons the countdown along with
+    // the banks — so the claim holds in both directions and an interrupted
+    // recovery resumes on the next connect.
+    dropQueuedCl1Banks();
+    // Whatever was still queued for the speaker describes a session that has
+    // ended, and on a radio with no codec the same bytes would be EADDR writes.
+    m_speakerAudio.clear();
     // The radio's response register does not survive a metis-stop, and neither
     // does the quarantine's reason for existing: nothing the next stream
     // delivers can be a reply to a request from this one.
@@ -536,7 +639,37 @@ void MetisClient::setRxFrequencyHz(int rxIndex, std::uint32_t hz)
     //
     // This used to append a 0x39 filter-pipeline reset behind the frequency.
     // That WEDGED THE RADIO -- see requestPipelineReset() for the full story.
-    m_oneShot.push_back(m_ccRxFreq[static_cast<std::size_t>(rxIndex)]);
+    //
+    // Not while stopped: see queueOneShotIfRunning(). The bank above is still
+    // recorded, and the rotation carries m_ccRxFreq from the first frame of a
+    // session -- start() rebuilds it from Params, which is authoritative there.
+    queueOneShotIfRunning(m_ccRxFreq[static_cast<std::size_t>(rxIndex)]);
+}
+
+void MetisClient::queueOneShotIfRunning(const Cc& bank)
+{
+    // NOTHING IS QUEUED WHILE STOPPED. That is all this guard establishes.
+    // m_oneShot is not cleared by start(), so a bank queued while stopped would
+    // go out in the priming burst of whatever session starts next -- ahead of
+    // the backend's own start-up state, and for the drive bank ahead of the
+    // drive-0 Hl2Backend asserts once start() returns. Guarding the push rather
+    // than clearing the queue leaves stop()'s "preserve unrelated one-shot
+    // setup" meaning what it says (#4579).
+    //
+    // It says nothing about a bank queued WHILE RUNNING and not yet drained
+    // when the session ends. stop() decides those: it drops the IO-board write,
+    // the drive bank and the CL1 sequence, and keeps the RX and TX NCO banks,
+    // which do cross into the next session's first frames. See stop().
+    //
+    // The setting itself is not dropped: every caller records it before this
+    // runs. What reaches the next session is decided by that session's own
+    // start-up -- the RX NCOs by start()'s Params and the rotation, the drive by
+    // the zero Hl2Backend writes after start(), the TX NCO by pushInitialState()
+    // on linkUp -- and not by a bank left over from before it began.
+    if (!m_running) {
+        return;
+    }
+    m_oneShot.push_back(bank);
 }
 
 void MetisClient::setSampleRate(SampleRate rate)
@@ -550,7 +683,8 @@ void MetisClient::setSampleRate(SampleRate rate)
     // register has to be carried through every rebuild of it; anything a
     // rebuild re-defaults gets silently dropped the next time an unrelated
     // control changes — a zoom would have released the band relays.
-    m_ccConfig = ccConfig(rate, effectiveNumRx(), m_params.ocFilterByte);
+    m_ccConfig = ccConfig(rate, effectiveNumRx(), m_params.ocFilterByte,
+                          m_params.ditherBit, m_params.randomBit);
 }
 
 void MetisClient::setReceiverCount(int count)
@@ -574,9 +708,10 @@ void MetisClient::setReceiverCount(int count)
 
     m_params.numRx = count;
 
-    if (!m_running || !m_socket) {
+    if (!m_running || !hasCommandTransport()) {
         // Not streaming: just restate the banks. There is no layout to race.
-        m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte);
+        m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte,
+                              m_params.ditherBit, m_params.randomBit);
         m_ccRxFreq.assign(static_cast<std::size_t>(after),
                           ccRxFreq(0, m_params.rxFrequencyHz));
         for (int i = 0; i < after; ++i) {
@@ -594,9 +729,10 @@ void MetisClient::setReceiverCount(int count)
 
     // STOP first. Past this point the radio sends nothing, so there is no packet
     // that could be decoded against the wrong layout.
-    countTx(sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port));
+    countTx(sendCommandDatagram(metisStop(m_watchdogEnabled)));
 
-    m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte);
+    m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte,
+                          m_params.ditherBit, m_params.randomBit);
     m_ccRxFreq.clear();
     for (int i = 0; i < after; ++i) {
         const std::uint32_t hz = (static_cast<std::size_t>(i) < keptHz.size())
@@ -604,87 +740,148 @@ void MetisClient::setReceiverCount(int count)
                                      : m_params.rxFrequencyHz;
         m_ccRxFreq.push_back(ccRxFreq(i, hz));
     }
+    // Between stop and start the steps are spaced by m_restartTimer, not
+    // msleep, so this thread keeps pacing EP2 (now carrying the new config
+    // bank) and reading EP6 (discarded while restartAwaitingStart()). No run
+    // byte may reach the wire before the Start step: bit 0 would start the
+    // radio unprimed. So the gate, the start retry and the watchdog hold here.
+    cancelReceiverCountRestart();   // a newer restart supersedes an older one
+    if (m_startRetryTimer)
+        m_startRetryTimer->stop();
+    resetBandscopeGate();
+    m_sinceLastEp6.restart();
+    m_silenceRecoveryArmed = false;
+    m_restartStalePackets = 0;
+
     // Re-prime with the new config bank before starting, so the very first
     // packet the radio sends is already in the new layout.
-    sendPrimingBurst(3);
+    sendPrimingBank(kPrimingFramesPerBank);
+    m_restartStep = RestartStep::PrimeBeforeStart;
+    scheduleReceiverCountRestartStep();
+}
 
-    // DISCARD WHAT IS ALREADY IN THE SOCKET.
-    //
-    // The stop above tells the RADIO to stop. It says nothing about the packets the
-    // radio had ALREADY put on the wire, which arrived while sendPrimingBurst sat
-    // in its msleeps with no event loop running to drain them. Those packets are in
-    // the OLD layout, and the comment above — "past this point the radio sends
-    // nothing" — is true of the radio and not of this socket. Decoding them against
-    // the new m_ccRxFreq misreads every round in them, and the payload carries no
-    // receiver-count field, so nothing downstream could report it.
-    //
-    // This is best-effort by nature: it cannot catch a packet still in flight. That
-    // is why the retry below tests how RECENTLY EP6 arrived rather than whether it
-    // ever did — a straggler must not be mistaken for a reply to the start.
-    int stalePackets = 0;
-    while (m_socket->hasPendingDatagrams()) {
-        m_socket->receiveDatagram();
-        ++stalePackets;
+void MetisClient::scheduleReceiverCountRestartStep()
+{
+    m_restartStepClock.restart();
+    if (m_restartTimer)
+        m_restartTimer->start(kPrimingBankSpacingMs);
+}
+
+void MetisClient::cancelReceiverCountRestart() noexcept
+{
+    if (m_restartTimer)
+        m_restartTimer->stop();
+    m_restartStep = RestartStep::Idle;
+}
+
+void MetisClient::advanceReceiverCountRestart()
+{
+    if (m_restartStep == RestartStep::Idle)
+        return;
+    if (!m_running || !hasCommandTransport()) {
+        cancelReceiverCountRestart();
+        return;
     }
-    if (stalePackets > 0)
-        qInfo() << "MetisClient: discarded" << stalePackets
-                << "EP6 packet(s) buffered in the old layout across the restart";
+    // The spacing is a floor: a timer may fire early and elapsed() truncates to
+    // whole milliseconds, so a step runs only once kPrimingBankSpacingMs have
+    // passed; otherwise the timer is re-armed for the remainder.
+    const qint64 remainingMs = kPrimingBankSpacingMs - m_restartStepClock.elapsed();
+    if (remainingMs > 0) {
+        if (m_restartTimer)
+            m_restartTimer->start(static_cast<int>(remainingMs));
+        return;
+    }
 
-    // The decode buffers describe the OLD layout; drop them so the first packet
-    // after the restart sizes them from the new m_ccRxFreq.
-    m_blocks.clear();
+    switch (m_restartStep) {
+    case RestartStep::Idle:
+        return;
 
-    // Sequence tracking restarts with the stream. Without this the first packet
-    // after the restart counts as a gap of tens of thousands of "dropped"
-    // packets and the health panel reports a link fault that never happened.
-    m_haveRxSeq = false;
-    m_expectedRxSeq = 0;
-    // Same for the bandscope, and for the same reason: the restart puts 0x00 and
-    // then 0x01 on the wire, RUNSTOP clears wide_spectrum along with run, and
-    // ep4_seq_no restarts from zero.
-    m_haveEp4Seq = false;
-    m_expectedEp4Seq = 0;
-    // The gate's in-flight cycle does not survive the restart — the run byte
-    // went to 0x00 and back, so whatever block was being accumulated is a
-    // fragment of a stream that no longer exists. Its INTENT does survive, in
-    // m_params.bandscope, which is re-applied below once the stream is up.
-    resetBandscopeGate();
-    // The stream this request would have been answered from is being torn down
-    // and rebuilt. A frame taken across that boundary would be half of each.
-    failPendingBandscopeFrame(QStringLiteral("the receiver count changed"));
-    m_sinceLastEp6.restart();
+    case RestartStep::PrimeBeforeStart:
+        sendPrimingBank(kPrimingFramesPerBank);
+        m_restartStep = RestartStep::Start;
+        scheduleReceiverCountRestartStep();
+        return;
 
-    countTx(sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port));
-    sendPrimingBurst(3);
+    case RestartStep::Start: {
+        // Discard what is still in the socket: packets sent before the stop are in
+        // the old layout and would be misread against the new m_ccRxFreq,
+        // undetectably. handleDatagram() dropped those read since the stop. Best
+        // effort (in-flight packets still arrive), hence the retry's recency test.
+        while (m_socket && m_socket->hasPendingDatagrams()) {
+            m_socket->receiveDatagram();
+            ++m_restartStalePackets;
+        }
+        if (m_restartStalePackets > 0)
+            qInfo() << "MetisClient: discarded" << m_restartStalePackets
+                    << "datagram(s) received between the restart's stop and start"
+                       " (old-layout EP6, plus any EP4 or stray reply)";
 
-    // ARM THE RETRY, exactly as start() does. This start datagram is as losable
-    // as the one at connect, and without a retry a single dropped packet stopped
-    // the stream for good: the radio sends nothing, nothing re-asks it to, and
-    // kSilenceTimeoutMs (2000 ms) later the EP6 watchdog reports link loss. The
-    // operator's session died from having clicked "Add Panadapter".
-    //
-    // The budget fits inside that window on purpose. From here the timer fires at
-    // 300 ms intervals and m_startAttempts reaches kMaxStartAttempts (5) on the
-    // tick at 1500 ms, so the last re-send goes out at 1200 ms — comfortably
-    // before the 2000 ms silence timeout gives up. Raising kStartRetryMs or
-    // kMaxStartAttempts far enough to push 4 * kStartRetryMs past
-    // kSilenceTimeoutMs would make the watchdog fire while a retry was still
-    // pending, and the retry would be dead code.
-    //
-    // NOT the connect watchdog: connectFailed() is a connect-time signal and the
-    // link here is already up. A restart that never recovers surfaces as link
-    // loss through onWatchdogTick(), which is the truthful description of it.
-    m_startAttempts = 1;
-    m_startRetryTimer->start(kStartRetryMs);
+        // The decode buffers describe the OLD layout; drop them so the first packet
+        // after the restart sizes them from the new m_ccRxFreq.
+        m_blocks.clear();
 
-    // RE-ESTABLISH THE GATE ACROSS THE RESTART. This is the path the guard
-    // timer's second term exists for: the run byte has just gone 0x00 -> 0x01,
-    // so the gateware's bs_cnt is re-arming from scratch and the first EP4
-    // datagram is 129 EP6 packets away — 0.339 s at 48 kHz, 0.042 s at 384 kHz.
-    // A guard fixed at 10 block intervals (105 ms) would abandon every cycle at
-    // 48 kHz and none at 384. See bandscopeGuardMs().
-    if (m_params.bandscope)
-        applyBandscopeGate();
+        // Sequence tracking restarts with the stream. Without this the first packet
+        // after the restart counts as a gap of tens of thousands of "dropped"
+        // packets and the health panel reports a link fault that never happened.
+        m_haveRxSeq = false;
+        m_expectedRxSeq = 0;
+        // Same for the bandscope, and for the same reason: the restart puts 0x00 and
+        // then 0x01 on the wire, RUNSTOP clears wide_spectrum along with run, and
+        // ep4_seq_no restarts from zero.
+        m_haveEp4Seq = false;
+        m_expectedEp4Seq = 0;
+        // The gate's in-flight cycle does not survive the restart: the run byte
+        // went to 0x00 and back. Its intent does, in m_params.bandscope, re-applied
+        // at Finish. Reset again here, not only at the stop: a gate enabled or a
+        // frame requested inside the window changed state without reaching the wire.
+        resetBandscopeGate();
+        // The stream this request would have been answered from is being torn down
+        // and rebuilt. A frame taken across that boundary would be half of each.
+        failPendingBandscopeFrame(QStringLiteral("the receiver count changed"));
+        m_sinceLastEp6.restart();
+        // AND END ANY SILENCE RECOVERY IN FLIGHT, or this path steals its result.
+        // A restart sends its own stop + start + priming burst, so the EP6 that
+        // comes back afterwards is THIS path's doing. Left armed, handleDatagram
+        // would credit it to the watchdog's run command and record a completion the
+        // recovery did not earn -- which is exactly the number that has to stay
+        // honest, because "attempts without completions" is the whole diagnostic.
+        // The reverse case needs nothing: the watchdog cannot arm a recovery while
+        // this is running, because m_sinceLastEp6 has just been restarted.
+        m_silenceRecoveryArmed = false;
+
+        // Leave the window BEFORE the start goes out: from here on a datagram in
+        // the socket is a reply to it.
+        m_restartStep = RestartStep::PrimeAfterStart;
+        countTx(sendCommandDatagram(metisStart(m_watchdogEnabled)));
+        sendPrimingBank(kPrimingFramesPerBank);
+        scheduleReceiverCountRestartStep();
+        return;
+    }
+
+    case RestartStep::PrimeAfterStart:
+        sendPrimingBank(kPrimingFramesPerBank);
+        m_restartStep = RestartStep::Finish;
+        scheduleReceiverCountRestartStep();
+        return;
+
+    case RestartStep::Finish:
+        m_restartStep = RestartStep::Idle;
+        // Arm the retry as start() does: this start datagram can be lost too. The
+        // budget expires inside kSilenceTimeoutMs (static_assert in the header), so
+        // the watchdog cannot fire with a retry pending. A restart that never
+        // recovers surfaces as link loss via onWatchdogTick(), not connectFailed().
+        armStartRetry();
+
+        // RE-ESTABLISH THE GATE ACROSS THE RESTART. This is the path the guard
+        // timer's second term exists for: the run byte has just gone 0x00 -> 0x01,
+        // so the gateware's bs_cnt is re-arming from scratch and the first EP4
+        // datagram is 129 EP6 packets away — 0.339 s at 48 kHz, 0.042 s at 384 kHz.
+        // A guard fixed at 10 block intervals (105 ms) would abandon every cycle at
+        // 48 kHz and none at 384. See bandscopeGuardMs().
+        if (m_params.bandscope)
+            applyBandscopeGate();
+        return;
+    }
 }
 
 void MetisClient::setLnaGainDb(int db)
@@ -699,22 +896,157 @@ void MetisClient::setBandFilter(int ocFilterByte)
     if (oc == m_params.ocFilterByte)
         return;                       // relays already where they belong
     m_params.ocFilterByte = oc;
-    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), oc);
-    // NOTHING IS QUEUED HERE, and that is deliberate rather than an omission.
-    //
-    // buildNextControlPacket() puts LIVE m_ccConfig in bank A of EVERY EP2
-    // frame, so the new relay pattern is on the wire on the next frame (~2.6 ms
-    // at 48 kHz) with no help. There is no rotation to get ahead of either: the
-    // round robin is the receiver NCOs, then gain, then the ADC assignment --
-    // the config register was never in it.
-    //
-    // Queuing a COPY was also harmful. A one-shot only ever fills bank B, the
-    // radio applies bank B after bank A, and the copy is a SNAPSHOT -- so a band
-    // change followed by a sample-rate change sent one frame whose bank A held
-    // the new DDC rate and whose bank B held the old one, and the radio ended
-    // that frame on the old one. Bank A re-asserted the truth on the following
-    // frame, so it was ~1 ms of stale rate: small, real, and intended by
-    // nothing. (aethersdr/AetherSDR#4579)
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), oc,
+                          m_params.ditherBit, m_params.randomBit);
+    // Nothing queued: live m_ccConfig rides bank A of every EP2 frame, so the relays
+    // follow on the next frame (~2.6 ms). A one-shot copy would land in bank B, which
+    // the radio applies after A, as a stale snapshot (#4579).
+}
+
+void MetisClient::setDitherRandomBits(bool dither, bool random)
+{
+    if (dither == m_params.ditherBit && random == m_params.randomBit)
+        return;
+    m_params.ditherBit = dither;
+    m_params.randomBit = random;
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(),
+                          m_params.ocFilterByte, dither, random);
+    // NOTHING IS QUEUED, for the reason setBandFilter() spells out at length:
+    // live m_ccConfig rides bank A of every EP2 frame, so this is on the wire
+    // within ~2.6 ms at 48 kHz, and a queued COPY would be a snapshot that
+    // could re-assert a stale sample rate behind a later change.
+}
+
+void MetisClient::setLocalCodec(bool present)
+{
+    if (present == m_params.hasCodec)
+        return;
+    m_params.hasCodec = present;
+    if (!present) {
+        // DROPPED, not left to drain. With no codec declared the audio slot is
+        // EADDR again, so every queued sample would be an extended-address
+        // write rather than sound — see ep2WriteTxAudio().
+        m_speakerAudio.clear();
+    }
+}
+
+void MetisClient::submitSpeakerAudio(const QByteArray& interleavedInt16)
+{
+    if (!m_params.hasCodec)
+        return;                       // the slot is EADDR on this radio
+    const auto n = static_cast<std::size_t>(interleavedInt16.size()) / sizeof(std::int16_t);
+    if (n == 0)
+        return;
+    const char* raw = interleavedInt16.constData();
+    for (std::size_t i = 0; i < n; ++i) {
+        std::int16_t v = 0;
+        std::memcpy(&v, raw + i * sizeof(std::int16_t), sizeof(v));
+        m_speakerAudio.push_back(v);
+    }
+    // Drop the oldest: after a consumer stall, keeping the newest returns the speaker
+    // to real time. The radio-clocked producer and wall-clocked consumer drift; if
+    // the producer is faster the queue pins at the cap (a quarter second of latency)
+    // and nothing corrects that yet. Parity is structural: the front is always a left
+    // sample, and the push, the cap and the consumer's `& ~1` all move even counts.
+    static_assert(kSpeakerAudioCapSamples % 2 == 0,
+                  "the cap counts samples, so it must hold whole L/R frames");
+    while (m_speakerAudio.size() > kSpeakerAudioCapSamples)
+        m_speakerAudio.pop_front();
+}
+
+void MetisClient::clearSpeakerAudio()
+{
+    m_speakerAudio.clear();
+}
+
+void MetisClient::setCl1RefClock(bool externalRef)
+{
+    m_params.cl1RefClock = externalRef;
+    if (!m_running) {
+        return;        // start() re-sends the sequence; see its call site
+    }
+    queueCl1Sequence(externalRef);
+}
+
+bool MetisClient::cl1RecoveryPendingFor(const QString& serial) noexcept
+{
+    if (serial.isEmpty()) {
+        return false;
+    }
+    Cl1RecoveryRegistry& registry = cl1RecoveryRegistry();
+    const std::lock_guard lock(registry.mutex);
+    return registry.serials.contains(serial);
+}
+
+bool MetisClient::isCl1Bank(const Cc& bank) noexcept
+{
+    return bank[0] == kC0I2c1 && bank[1] == kI2cCookieWrite
+        && bank[2] == (kI2cStopAtEnd | kVersaClockI2cAddr);
+}
+
+void MetisClient::queueCl1Sequence(bool externalRef)
+{
+    // Replace rather than append. Two sequences in the queue would apply the
+    // older one LAST — an operator who toggled the setting twice would end on
+    // the state they toggled away from.
+    dropQueuedCl1Banks();
+    // Remember ON before any writes can leave the host. Interrupted sequences
+    // may already have moved the clock; only all 24 completed OFF writes release
+    // this serial's recovery record, including across transport recreation.
+    if (externalRef) {
+        if (m_params.radioSerial.isEmpty()) {
+            // Nothing to key the record on, so nothing could recover it. Worth a
+            // line in the log rather than a silent gap: the radio is going onto
+            // an external reference that no later connect will offer to undo.
+            qCWarning(lcHl2) << "HL2: switching CL1 on for a radio with no serial —"
+                             << "this session cannot offer to switch it back";
+        } else {
+            Cl1RecoveryRegistry& registry = cl1RecoveryRegistry();
+            const std::lock_guard lock(registry.mutex);
+            registry.serials.insert(m_params.radioSerial);
+        }
+    }
+    m_cl1SequenceRadio = m_params.radioSerial;
+    m_cl1SequenceIsOff = !externalRef;
+    m_cl1BanksUnsent = static_cast<int>(kVersaClockCl1Banks);
+    for (const Cc& bank : versaClockCl1Banks(externalRef)) {
+        m_oneShot.push_back(bank);
+    }
+    qCInfo(lcHl2) << "HL2: CL1 reference clock ->"
+                  << (externalRef ? "external 10 MHz" : "onboard crystal")
+                  << "— queued" << kVersaClockCl1Banks << "VersaClock writes";
+}
+
+void MetisClient::dropQueuedCl1Banks()
+{
+    std::erase_if(m_oneShot, isCl1Bank);
+    // Discarded writes cannot complete an OFF sequence or release recovery.
+    m_cl1BanksUnsent = 0;
+    m_cl1BankOnBuiltPacket = false;
+    m_cl1SequenceRadio.clear();
+    m_cl1SequenceIsOff = false;
+}
+
+void MetisClient::setAtuTuneRequest(bool request)
+{
+    // Refused outright while stopped, not merely left unsent: start() clears
+    // m_atuTune because "re-asserting a tune nobody asked for would start one",
+    // and a request with no session behind it is one nobody asked for yet.
+    // Logged, because nothing answers the caller and a tune has no readback:
+    // without the line a dropped request leaves no trace in a support bundle.
+    if (!m_running) {
+        qCDebug(lcHl2) << "HL2: ATU tune request refused — no session is running";
+        return;
+    }
+    if (request == m_atuTune)
+        return;
+    m_atuTune = request;
+    // 0x09 carries the drive level and the PA enable alongside this bit, so the
+    // whole bank is restated. Reading the level back out of m_ccTxDrive keeps
+    // the PA-enable rule in setTxDriveLevel()'s hands — there is exactly one
+    // place that decides whether the amplifier is on, and this is not it.
+    m_ccTxDrive = ccTxDrive(m_ccTxDrive[1], m_ccTxDrive[1] > 0, m_atuTune);
+    queueOneShotIfRunning(m_ccTxDrive);
 }
 
 void MetisClient::setIoBoardTxFrequencyHz(quint64 hz)
@@ -744,112 +1076,28 @@ void MetisClient::setIoBoardTxFrequencyHz(quint64 hz)
 
 void MetisClient::requestPipelineReset()
 {
-    // DELIBERATELY A NO-OP. Do not re-enable without reading this.
-    //
-    // This queued a 0x39 filter-pipeline reset after every NCO move. A pan drag
-    // issues a centre command every 33 ms (SpectrumWidget kPanDragCommandMs),
-    // and Hl2Backend::setPanCenter forwards every one, so dragging fired ~30
-    // resets per SECOND at the gateware. The board halted its stream and then
-    // stopped answering discovery -- alive at the network layer, but requiring
-    // a physical power cycle. Exactly the wedge MetisProtocol.h warns about.
-    //
-    // It was validated at 7 resets spaced ~2 s apart. The drag path, which is
-    // three orders of magnitude more aggressive, was never exercised.
-    //
-    // TWO causes are plausible and were never separated:
-    //   1. The reset rate itself -- resetting the decimation pipeline over and
-    //      over while it is streaming.
-    //   2. The other fields in 0x39. We wrote ZEROS to [27:24] (watchdog
-    //      enable/disable) and [11:8] (master enable/disable) on the ASSUMPTION
-    //      that 0 means "no action", because the documented act encodings
-    //      (0x8/0x9) have bit 3 set. That was reasoning from the pattern, NOT
-    //      verified against the Hermes-Lite 2 gateware RTL.
-    //
-    // Before bringing this back: verify (2) against the RTL, then rate-limit to
-    // genuine large jumps -- never per drag frame -- and test a sustained drag
-    // on hardware, not just discrete tunes.
+    // Deliberately a no-op. 0x39 resets at pan-drag rate (~30/s) wedge the HL2: the
+    // stream halts and the board needs a power cycle. The cause is either the rate or
+    // the zeros written to 0x39's [27:24] watchdog and [11:8] master-enable fields
+    // (assumed "no action", unverified against the RTL). Before re-enabling: verify
+    // those fields in the RTL, rate-limit to large jumps, and test a sustained drag.
 }
 
 bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
 {
-    // ---- THE ALLOW-LIST ----
-    //
-    // These addresses, and nothing else. The SHAPE is the point, and it is a
-    // deliberate inversion of the deny-list this started as: a deny-list FAILS
-    // OPEN — the next person to add a register to the C&C map gets it
-    // RQST-able for free, without having thought about it once — and an
-    // allow-list FAILS CLOSED. Adding an entry is then a reviewable act with a
-    // reason written next to it, which is what the entries below are. There are
-    // zero callers today, so this is the cheapest moment the inversion will
-    // ever have.
-    //
-    // WHAT THIS GUARANTEES, stated narrowly, because the broad version is not
-    // true and a reader who takes it away will be wrong:
-    //
-    //   * neither of these two registers emits RF, and neither reaches anything
-    //     outside the radio's own case. In particular 0x3d (I2C2) is NOT here.
-    //     MetisProtocol.h's IO-board note says what sits on that bus: a
-    //     Raspberry Pi Pico that switches amplifiers, antenna relays and
-    //     transverters. An arbitrary-data RQST there is a direct I2C write to
-    //     that board. It is absent because nothing needs it — not because it
-    //     would be harmless.
-    //
-    //   * THE RULE IS RE-ASSERTED-OR-EXCLUDED. 0x0a and 0x0e are RE-ASSERTED by
-    //     the round robin in buildNextControlPacket (the gain slot and the
-    //     ADC-assign slot), so a wrong value written through here self-corrects
-    //     within one rotation, ~16 ms at four receivers. That property is most
-    //     of why these two are the safe ones, and it is exactly what 0x01 (the
-    //     TX1 NCO) does NOT have: this client sends the transmit frequency once
-    //     per tune and never refreshes it, so a bad write there would persist
-    //     silently until the operator moved the dial, with our own idea of the
-    //     TX frequency now wrong. 0x01 is therefore off the list too.
-    //
-    // 0x3b WAS ON THIS LIST AND IS NOT ANY MORE. It was admitted as "the
-    // subsystem READ path". Read against `ad9866ctrl.v` — which we hold at
-    // /tmp/hl2/gateware/rtl and which is not vendored in this tree — that
-    // description is wrong twice over, and both corrections point the same way:
-    //
-    //   1. IT IS NOT A READ. `control.v`'s RESP_READ has exactly one data
-    //      source, and for the AD9866 branch it is the WRONG one, with the
-    //      gateware's own note saying so:
-    //          end else if (~cmd_ack_ad9866) begin
-    //            resp_cmd_data_next = cmd_resp_data_i2c; // FIXME: suppor read cmd_resp_data_ad9866
-    //      `ad9866ctrl` has no data output at all — control.v instantiates it
-    //      with cmd_addr/cmd_data/cmd_rqst/cmd_ack and nothing more, and inside,
-    //      `assign sdo = 1'b0;` with `//assign dataout` commented out. A 0x3b
-    //      ACK carries our own echo, or the 0x3F refusal. Never a value.
-    //
-    //   2. IT IS A WRITE, AND IT REACHES THE TRANSMIT PATH. ad9866ctrl.v:
-    //          // Generic AD9866 write
-    //          6'h3b: begin
-    //            if (cmd_data[31:24] == 8'h06) begin
-    //              if (rffe_ad9866_sen_n) cmd_state_next = CMD_WRITE;
-    //      and CMD_WRITE puts `{3'b000, cmd_data[20:16], cmd_data[7:0]}` on the
-    //      converter's SPI bus — an ARBITRARY AD9866 register (five bits) with
-    //      an ARBITRARY byte. Among the registers that reaches: 0x0a, which is
-    //      where the gateware's own TX-gain command writes
-    //      (`icmd_data = {5'h0a,4'b0100,tx_gain}`), plus 0x0c (TX interpolation),
-    //      0x0e (IAMP enable) and 0x10/0x11 (TX gain select) from its own
-    //      initarray comments. So "none of these registers emits RF" was
-    //      UNVERIFIED for 0x3b, and against the RTL it is false.
-    //
-    //   3. AND IT PERSISTS HARDER THAN 0x01 DOES. The 0x09 handler issues its
-    //      SPI write only `if (tx_gain != cmd_data[31:28])` against an FPGA-side
-    //      shadow register that a 0x3b write does not touch. So after a 0x3b
-    //      write to AD9866 0x0a the gateware still believes the old gain and
-    //      will NOT re-assert it — the mechanism that would have corrected the
-    //      value is suppressed by its own change detector. By this list's own
-    //      rule that is an exclusion, not a judgement call.
-    //
-    // There are zero callers, so dropping it costs nothing. An item that really
-    // needs converter SPI adds it back deliberately, with the 8'h06 cookie and
-    // the register it means named at the call site.
-    //
-    // 0x09 (TX drive, onboard PA enable, ATU) and 0x39 (sync/reset, which
-    // carries the watchdog enable at [27:24] and the master enable at [11:8],
-    // and which wedged a radio once already — see requestPipelineReset above)
-    // are absent and must not be added unconditionally. A future item that
-    // needs either has to gate it on transmitEnabled() deliberately.
+    // Allow-list (fails closed; add an entry with its reason). Rule: re-asserted or
+    // excluded. 0x0a and 0x0e are re-asserted by buildNextControlPacket's round
+    // robin, so a bad write self-corrects within one rotation (~16 ms at 4 RX), and
+    // neither emits RF. Excluded:
+    //   0x01  TX1 NCO: sent once per tune, never refreshed.
+    //   0x3d  I2C2: the IO board's amplifiers, relays, transverters.
+    //   0x3b  a generic AD9866 SPI write (cookie 8'h06), not a read: control.v's
+    //         RESP_READ returns no AD9866 data. It can hit TX gain registers that the
+    //         0x09 handler's shadow register would not re-assert.
+    //   0x09  TX drive, PA enable, ATU.
+    //   0x39  sync/reset; carries the watchdog and master enables.
+    // Adding 0x09/0x39 needs a transmitEnabled() gate; 0x3b needs its cookie and
+    // target register named at the call site.
     static constexpr int kRequestableAddresses[] = {
         kC0AdcGain >> 1,            // 0x0a  AD9866 RX LNA gain (ccRxGain)
         kC0AdcAssignOrTxGain >> 1,  // 0x0e  ADC assign / TX LNA gain (ccAdcAssign)
@@ -984,7 +1232,7 @@ void MetisClient::setTxFrequencyHz(std::uint32_t hz)
     // keying up and listening.
     qCDebug(lcHl2) << "HL2: TX NCO <-" << hz << "Hz (commanded)";
     m_ccTxFreq = ccTxFreq(hz);
-    m_oneShot.push_back(m_ccTxFreq);
+    queueOneShotIfRunning(m_ccTxFreq);
 }
 
 void MetisClient::setTxDriveLevel(int level)
@@ -999,8 +1247,10 @@ void MetisClient::setTxDriveLevel(int level)
     // transmit-blocked session. (#4449 review — complements the Hl2Backend guard)
     if (!m_txAllowed)
         level = 0;
-    m_ccTxDrive = ccTxDrive(level, level > 0);
-    m_oneShot.push_back(m_ccTxDrive);
+    // The ATU request is re-asserted, not re-decided: it shares this register,
+    // so rebuilding the bank without it would clear a tune in progress.
+    m_ccTxDrive = ccTxDrive(level, level > 0, m_atuTune);
+    queueOneShotIfRunning(m_ccTxDrive);
 }
 
 void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation)
@@ -1019,9 +1269,13 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
     }
     if (down && !m_cwMode) {
         // CW owns the IQ stream until PTT drops. Voice already queued behind a
-        // manual MOX must not leak into the spaces between elements.
+        // manual MOX must not leak into the spaces between elements. Abandoned,
+        // not dropped -- uncounted for the same reason as clearCwKeying().
         m_txIq.clear();
         m_cwEnvelope = 0.0;
+        // ...but a starvation in progress ended at this instant, not at the
+        // unkey that eventually follows.
+        reportTxUnderflowRun();
     }
     m_cwMode = true;
     m_cwKeyDown = down;
@@ -1035,10 +1289,11 @@ void MetisClient::clearCwKeying()
     m_cwMode = false;
     m_cwKeyDown = false;
     m_cwEnvelope = 0.0;
-    // Anything captured while CW owned the stream is stale by definition.
-    // Dropping it here prevents an explicit CW-mode exit under a still-keyed
-    // manual PTT from releasing old microphone audio onto the wire.
+    // Audio captured while CW owned the stream is stale; dropping it keeps a CW exit
+    // under held PTT from transmitting old mic audio. Not counted as overflow (that
+    // counts carry-loss, not a deliberate abandon), but the underflow run ends here.
     m_txIq.clear();
+    reportTxUnderflowRun();
 }
 
 void MetisClient::queueTxIq(std::span<const std::complex<float>> iq, const TxCoordinator::Context& context)
@@ -1047,14 +1302,23 @@ void MetisClient::queueTxIq(std::span<const std::complex<float>> iq, const TxCoo
         return;
     }
     if (!m_txIqContext.sameContext(context)) {
+        // NOT COUNTED AS OVERFLOW: a context change means the queued samples
+        // belong to a transmission that is no longer the current one, so this
+        // is an abandon of stale audio rather than a FIFO dropping audio it was
+        // asked to carry -- see clearCwKeying() for the same distinction.
         m_txIq.clear();
         m_txIqContext = context;
     }
     for (const auto& s : iq)
         m_txIq.push_back(s);
     // Drop the OLDEST on overflow: stale transmit audio is worse than a gap.
-    while (m_txIq.size() > kTxQueueMax)
+    // COUNTED, because the drop is a discontinuity in the middle of an
+    // envelope and nothing else on the wire or in the telemetry records that
+    // it happened -- see txOverflowSamples().
+    while (m_txIq.size() > kTxQueueMax) {
         m_txIq.pop_front();
+        ++m_txOverflowSamples;
+    }
 }
 
 void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation)
@@ -1072,6 +1336,32 @@ void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoord
 void MetisClient::flushTxIq()
 {
     m_txIq.clear();
+    // A flush is how an over ends, so it is also where a starvation that ran
+    // to the end of that over stops. Without this the run would sit unreported
+    // until the NEXT transmission happened to emit a full packet, and would
+    // then be attributed to it.
+    reportTxUnderflowRun();
+}
+
+void MetisClient::reportTxUnderflowRun()
+{
+    m_txUnderflowRunQuietPackets = 0;
+    if (m_txUnderflowRunPackets == 0)
+        return;
+    qCDebug(lcHl2Tx) << "HL2 tx fifo: HOST queue starved for"
+                     << m_txUnderflowRunPackets << "EP2 packet(s),"
+                     << m_txUnderflowRunSamples
+                     << "sample(s) of substituted silence on the air"
+                     << "(totals SINCE PROCESS START, not since this link came"
+                     << "up and not per radio: underflow" << m_txUnderflowPackets
+                     << "packets /" << m_txUnderflowSamples << "samples, overflow"
+                     << m_txOverflowSamples << "samples)."
+                     << "This is the CLIENT's queue, not the radio's DSIQ FIFO:"
+                     << "the EP2 frame went out full size on schedule, so the"
+                     << "gateware's fill and pacingFault readings are unaffected"
+                     << "by it and cannot be used to rule it out.";
+    m_txUnderflowRunPackets = 0;
+    m_txUnderflowRunSamples = 0;
 }
 
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
@@ -1097,10 +1387,16 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     // thrown away (a test, or a caller that inspects the bytes) must not leave
     // a stale claim that some later packet carried the request.
     m_requestOnBuiltPacket = false;
+    m_cl1BankOnBuiltPacket = false;
     Cc b;
     if (!m_oneShot.empty()) {
         b = m_oneShot.front();
         m_oneShot.pop_front();
+        // Claimed, not yet counted: onControlPacketSent() decides whether this
+        // bank actually reached the wire. Same shape as m_requestOnBuiltPacket
+        // above and for the same reason — a packet built and then discarded must
+        // not retire one of the twenty-four writes.
+        m_cl1BankOnBuiltPacket = isCl1Bank(b);
     } else if (const auto rqst = m_ccRequest.wireBank()) {
         // AFTER the one-shots, ahead of the round robin. After, because a
         // one-shot is a write the operator asked for and a read-back that
@@ -1112,16 +1408,9 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         // per armed request — the RQST bit never reaches a bank the round robin
         // re-asserts, which would re-request three times a rotation for ever.
         b = *rqst;
-        // NOT onRequestSent() here: this packet has not been handed to the
-        // socket yet, and Hl2ControlRequest::onRequestSent()'s own contract says
-        // "when the bank has actually been handed to the socket". Starting the
-        // deadline at build time makes a FAILED send indistinguishable from a
-        // radio that did not answer — the request would have left Queued, so it
-        // could never go out on a later frame, and the caller would be told
-        // "timed out" after 32 frames plus 32 more of quarantine for a command
-        // the radio never saw. onControlPacketSent() does it instead, after
-        // sendTo() reports a write; a failed send leaves the request Queued and
-        // it goes out on the next EP2 frame.
+        // Not onRequestSent() here: the deadline starts when onControlPacketSent() sees
+        // the socket accept the bank, so a failed send leaves the request Queued for the
+        // next EP2 frame instead of timing out unseen.
         m_requestOnBuiltPacket = true;
     } else {
         // The rotation is every receiver's NCO, then gain, then ADC assignment:
@@ -1155,6 +1444,11 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     // transmit silence, which is what ep2Packet's zero fill already gives us --
     // and which also keeps EADDR zero (see ep2WriteTxIq).
     if (keyed && m_cwMode) {
+        // EVERY EXIT FROM THE QUEUED-IQ PATH REPORTS, and taking CW mid-over is
+        // one of them. Without this a starvation still running when the
+        // operator switches to CW sits until the NEXT full queued packet or the
+        // unkey, and is then timestamped there instead of where it happened.
+        reportTxUnderflowRun();
         // piHPSDR's local/PC keyer likewise transmits host-generated IQ under
         // MOX. Five milliseconds is long enough to suppress key clicks while
         // staying short against a 40 ms dit at 30 WPM. A raised cosine has zero
@@ -1175,6 +1469,9 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         }
         ep2WriteTxIq(pkt, block);
     } else if (keyed && m_toneAmp > 0.0) {
+        // Same reason as the CW arm above: TUNE pressed while keyed takes the
+        // stream away from the queue, so any run in progress ends HERE.
+        reportTxUnderflowRun();
         // EP2 is clocked at a fixed 48 kHz regardless of the RX sample rate.
         std::vector<std::complex<float>> block(kTxSamplesPerPacket);
         const double dphi = 2.0 * 3.14159265358979323846 * m_toneHz / kEp2AudioRateHz;
@@ -1194,7 +1491,11 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         while (m_tonePhase > 2.0 * 3.14159265358979323846)
             m_tonePhase -= 2.0 * 3.14159265358979323846;
         ep2WriteTxIq(pkt, block);
-    } else if (keyed && !m_txIq.empty()) {
+    } else if (keyed) {
+        // Just `keyed`: the arms above take CW and positive tone amplitude, and a NaN
+        // m_toneAmp (setTxTestTone's clamp passes NaN) fails both `> 0.0` and `<= 0.0`,
+        // so a narrower condition would send uncounted silence. The queued-IQ path is the
+        // only one that can starve; an empty queue is counted here as a full underflow.
         std::vector<std::complex<float>> block;
         const std::size_t n = std::min<std::size_t>(kTxSamplesPerPacket, m_txIq.size());
         block.reserve(n);
@@ -1202,7 +1503,56 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
             block.push_back(m_txIq.front());
             m_txIq.pop_front();
         }
-        ep2WriteTxIq(pkt, block);   // a short block leaves the rest as silence
+        if (n < static_cast<std::size_t>(kTxSamplesPerPacket)) {
+            // Count the SILENCE, not the samples: the figure that matters is
+            // how much of this envelope the radio was handed as zeros.
+            const auto shortBy = static_cast<std::uint64_t>(kTxSamplesPerPacket) - n;
+            ++m_txUnderflowPackets;
+            m_txUnderflowSamples += shortBy;
+            ++m_txUnderflowRunPackets;
+            m_txUnderflowRunSamples += shortBy;
+            // Still starving: whatever gap was accumulating was not a recovery.
+            m_txUnderflowRunQuietPackets = 0;
+        } else if (m_txUnderflowRunPackets > 0) {
+            // A full packet does NOT end the run on its own -- see
+            // kUnderflowRunQuietPackets. It only starts the clock on the gap
+            // that will.
+            if (++m_txUnderflowRunQuietPackets >= kUnderflowRunQuietPackets)
+                reportTxUnderflowRun();
+        }
+        if (n > 0)
+            ep2WriteTxIq(pkt, block);   // a short block leaves the rest as silence
+        // n == 0 needs no write at all: ep2Packet already zero-filled the
+        // payload, which is the same bytes ep2WriteTxIq would produce for an
+        // empty span. Skipping it keeps the wire identical to before this
+        // change -- the counters observe, they do not alter.
+    } else {
+        // UNKEYED. Silence here is the design, not a fault, so nothing is
+        // counted -- but the key having gone up is also the end of any
+        // starvation that was still running when it did, and the pacer reaches
+        // this branch within one EP2 interval of the unkey. That makes this
+        // the backstop for every way an over can end, including the paths that
+        // clear m_txIq without going through flushTxIq().
+        reportTxUnderflowRun();
+    }
+
+    // Audio slot. Outside the IQ branches because speaker audio plays on receive.
+    // Gated on a declared codec, never on queued audio: on a bare HL2 these four
+    // bytes are EADDR, so a sample there is a register command.
+    if (m_params.hasCodec && !m_speakerAudio.empty()) {
+        // Whole stereo frames only. An odd count would swap the channels of
+        // everything after it, and the swap would carry into the next packet.
+        const std::size_t want = static_cast<std::size_t>(kTxSamplesPerPacket) * 2;
+        const std::size_t take = std::min(want, m_speakerAudio.size()) & ~std::size_t{1};
+        if (take > 0) {
+            std::vector<std::int16_t> block(m_speakerAudio.begin(),
+                                            m_speakerAudio.begin()
+                                                + static_cast<std::ptrdiff_t>(take));
+            m_speakerAudio.erase(m_speakerAudio.begin(),
+                                 m_speakerAudio.begin()
+                                     + static_cast<std::ptrdiff_t>(take));
+            ep2WriteTxAudio(pkt, block);
+        }
     }
     return pkt;
 }
@@ -1215,6 +1565,19 @@ void MetisClient::onControlPacketSent(qint64 bytesWritten, qint64 nowMs) noexcep
     m_requestOnBuiltPacket = false;
     if (carriedRequest && bytesWritten > 0)
         m_ccRequest.onRequestSent(nowMs);
+    // Only a complete OFF sequence releases recovery. A session interrupted
+    // earlier leaves the record for the next transport to resend the whole table.
+    const bool carriedCl1 = m_cl1BankOnBuiltPacket;
+    m_cl1BankOnBuiltPacket = false;
+    if (carriedCl1 && bytesWritten > 0 && m_cl1BanksUnsent > 0) {
+        if (--m_cl1BanksUnsent == 0 && m_cl1SequenceIsOff) {
+            Cl1RecoveryRegistry& registry = cl1RecoveryRegistry();
+            const std::lock_guard lock(registry.mutex);
+            registry.serials.remove(m_cl1SequenceRadio);
+            qCInfo(lcHl2) << "HL2: CL1 off sequence complete —"
+                          << m_cl1SequenceRadio << "is back on its crystal";
+        }
+    }
 }
 
 void MetisClient::sendControlPacket()
@@ -1317,6 +1680,14 @@ void MetisClient::publishLinkCountersIfDue()
 // address it latches the local endpoint from.
 void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
 {
+    // Between a receiver-count restart's stop and its start, everything that
+    // arrives was sent in the old payload layout. Discard it undecoded and
+    // uncounted, as the drain at the restart's Start step does.
+    if (restartAwaitingStart()) {
+        ++m_restartStalePackets;
+        return;
+    }
+
     // Counted before the EP6 test: these bytes crossed the wire and were
     // read off this socket whatever they turned out to be, and a receive
     // total that silently omits traffic is worse than one that includes a
@@ -1325,17 +1696,9 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
 
     const auto seq = ep6Seq(bytes);
     if (!seq) {
-        // Not EP6 — but this socket carries TWO radio->host streams. The
-        // wideband bandscope (EP4) is delivered to the same address and
-        // port (usopenhpsdr1.v's WIDE1 and UDP1 both request
-        // run_destination_port), interleaved with the IQ, and until now it
-        // fell through this line: counted into rxBytes and then discarded
-        // with no counter and no log.
-        //
-        // Tested SECOND so the EP6 hot path is unchanged. At 384 kHz with
-        // four receivers EP6 arrives ~10,000 times a second and this
-        // branch is not reached at all; only a datagram that is already
-        // known not to be EP6 pays for the extra header test.
+        // Not EP6. The bandscope (EP4) shares this address and port (usopenhpsdr1.v's
+        // WIDE1 and UDP1 both use run_destination_port). Tested second so the EP6 hot
+        // path is unchanged.
         if (const auto bsSeq = ep4Seq(bytes))
             handleEp4(*bsSeq, bytes);
         return;     // not an EP6 packet (e.g. a stray discovery reply)
@@ -1346,6 +1709,29 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
     // recently the stream produced anything, which both the silence watchdog
     // and the start-retry read.
     m_sinceLastEp6.restart();
+    if (m_silenceRecoveryArmed) {
+        // The stream is back and m_linkUp never dropped, so nothing downstream
+        // saw this happen. The counters are the only record that it did, which
+        // is the point: a recovery that is invisible to the operator must not
+        // also be invisible to whoever asks later why the audio had a hole in
+        // it. They ride LinkCounters. Hl2Backend mirrors linkCountersUpdated
+        // onto the health rows; the support bundle does not carry those rows.
+        // The attempt itself was published when it was armed — onReadyRead is
+        // not what delivers a recovery that never gets another datagram.
+        m_silenceRecoveryArmed = false;
+        ++m_link.silenceRecoveriesCompleted;
+        qInfo() << "MetisClient: EP6 resumed after a silence recovery ("
+                << m_link.silenceRecoveriesCompleted << "of"
+                << m_link.silenceRecoveryAttempts
+                << "attempts recovered) — no teardown was needed";
+        // GIVE THE BANDSCOPE BACK. Stage 1 stopped the gate so that its run
+        // command was the only one on the wire; the operator's intent survived
+        // in m_params.bandscope, and this is where it is honoured again. Same
+        // call setReceiverCount() makes after its own restart, and for the same
+        // reason -- the run byte has been through a known state and the gate
+        // has to re-arm from scratch. A no-op when the bandscope was never on.
+        applyBandscopeGate();
+    }
     if (!m_linkUp) {
         m_linkUp = true;
         if (m_connectWatchdog)
@@ -1396,17 +1782,9 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
                 if (m_telemetry.ptt != wasRadioPtt)
                     onRadioPttEdge(m_telemetry.ptt);
                 telemetryChanged = true;
-                // AFTER apply(), and read back off the struct rather than
-                // re-decoding the bit here: one decode of DATA[24] in one
-                // place (Hl2Telemetry::apply) is what stops a second copy of
-                // the layout drifting from the first. apply() writes
-                // adcOverload only for response address 0, so on that address
-                // it holds exactly this response's bit.
-                //
-                // Inside the non-ACK branch, because an ACK's raddr is a
-                // COMMAND address: 0x00 there is a C&C bank, not the status
-                // response, and counting it would put our own echoes in the
-                // denominator.
+                // Read back from apply() rather than re-decoding DATA[24], so the layout has one
+                // decoder; apply() writes adcOverload only for response address 0. Non-ACK only:
+                // an ACK's raddr is a command address.
                 if (resp->raddr == 0x00 && m_telemetry.adcOverload) {
                     ++m_adcWindowSamples;
                     if (*m_telemetry.adcOverload)
@@ -1500,17 +1878,9 @@ void MetisClient::handleEp4(std::uint32_t seq, std::span<const std::uint8_t> byt
     // `seq % 4` unchanged, so the phase test alone cannot see it.
     std::uint32_t stepDrops = 0;
     if (m_haveEp4Seq) {
-        // The classification lives in MetisProtocol (ep4SeqStep) so it can be
-        // proved against recorded arrivals without a client, a socket or Qt.
-        // What matters here is that a BACKWARD jump is a reset and not a loss —
-        // the same rule the EP6 branch above applies with `gap < 0x80000000u`,
-        // at the 20-bit scale ep4_seq_no actually has.
-        //
-        // It is not a rare case. The gateware forces ep4_seq_no's low two bits
-        // to zero while the capture FIFO is still filling, so every stream
-        // starts 0, 1, 2 and then rewinds to 0 exactly once. Counted as a
-        // forward gap that reads as 1,048,573 lost packets, in the first second
-        // of every session the bandscope is used.
+        // ep4SeqStep (MetisProtocol) scores a backward jump as a reset, not a loss. The
+        // gateware forces ep4_seq_no's low two bits to zero while the capture FIFO fills,
+        // so every stream starts 0, 1, 2, 0; a forward gap there reads as ~1M lost.
         const Ep4SeqStep step = ep4SeqStep(m_expectedEp4Seq, seq);
         stepDrops = step.drops;
         m_ep4Drops += step.drops;
@@ -1538,17 +1908,9 @@ void MetisClient::handleEp4(std::uint32_t seq, std::span<const std::uint8_t> byt
 void MetisClient::bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
                                     std::span<const std::uint8_t> bytes)
 {
-    // THE TRAILING PACKET, FIRST AND UNCONDITIONALLY.
-    //
-    // Lowering wide_spectrum does not stop the packet already inside
-    // usopenhpsdr1.v's WIDE1..WIDE4 states — START cannot interrupt them — so
-    // exactly one more datagram arrives after every disable, measured at
-    // 24-61 us in four of four cycles. It belongs to the block just emitted.
-    //
-    // Discarded here rather than counted as a drop, and taken before any state
-    // test so that it can never seed the next cycle's block even if the gate
-    // has already re-armed around it. It is NOT counted as a loss because
-    // nothing was lost: ep4_seq_no is continuous straight through the toggle.
+    // The trailing packet first and unconditionally: one datagram arrives 24-61 us
+    // after every disable (usopenhpsdr1.v's WIDE1..WIDE4 cannot be interrupted) and
+    // belongs to the block already emitted. Not a drop: ep4_seq_no is continuous.
     if (m_bsTrailingPending) {
         m_bsTrailingPending = false;
         return;
@@ -1563,18 +1925,9 @@ void MetisClient::bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
         return;
 
     case BandscopeState::Arming:
-        // WAITING FOR PHASE 0 IS LOAD-BEARING, NOT PRUDENT.
-        //
-        // A mid-stream re-enable does NOT re-align ep4_seq_no: the counter is
-        // only zeroed by `~run`, so it resumes on whatever phase the previous
-        // disable left behind. Two of four measured cycles resumed at
-        // `seq % 4 == 2` — the tail of a block the previous disable interrupted,
-        // seconds earlier.
-        //
-        // A gate that accepted the first packet it saw would have merged two
-        // half-blocks from different captures into one Ep4Stats, AND THE
-        // SEQUENCE NUMBERS WOULD HAVE LOOKED PERFECTLY CONTINUOUS WHILE IT DID.
-        // Sequence continuity is not evidence of temporal continuity.
+        // Wait for phase 0: a mid-stream re-enable does not re-align ep4_seq_no (only
+        // `~run` zeroes it), so the first packet may be the tail of a block from seconds
+        // earlier. Sequence continuity is not temporal continuity.
         if (phase != 0)
             return;
         m_bsState = BandscopeState::Flushing;
@@ -1714,21 +2067,18 @@ void MetisClient::onRadioPttEdge(bool keyed)
 
 void MetisClient::sendBandscopeRunByte(bool wideSpectrum)
 {
-    // COMPOSED AND RECORDED BEFORE THE SOCKET TEST, so a socket-free test can
-    // see what this call site would have put on the wire.
-    //
-    // metisRunCommand()'s BITS are asserted in tests/hl2_metis_protocol_test.cpp
-    // for all four combinations; what the record pins is the other half — that
-    // the gate passes it the right ARGUMENTS. Without it the tests reach here
-    // with m_socket == nullptr and return above the only observable, so
-    // `metisCommand(kRunWideSpectrum)` (run dropped, the IQ stops every time the
-    // gate toggles) and `metisRunCommand(true, ...)` (never lowered, the ungated
-    // ~3.3 Mbit/s stream this gate exists to prevent) both passed every target.
-    // That hole was disclosed on PR #5650 as one we could not close without a
-    // send seam; this is the seam, and both mutants now fail hl2_ep4_gate_test.
+    // Composed and recorded before the socket test so socket-free tests
+    // (hl2_ep4_gate_test) can assert the gate's arguments; metisRunCommand()'s bits
+    // are pinned in hl2_metis_protocol_test.
     const auto cmd = metisRunCommand(wideSpectrum, m_watchdogEnabled);
+    // Every run byte has bit 0 set. Inside a receiver-count restart's
+    // stop-to-start window that is a metis-start ahead of the priming, so it
+    // is held back, and not recorded: the record means "what went on the
+    // wire". The restart's Start step resets the gate, Finish re-applies it.
+    if (restartAwaitingStart())
+        return;
     m_lastBandscopeRunByte = cmd[3];
-    if (!m_socket)
+    if (!hasCommandTransport())
         return;
     // The run byte is a bit field and `run` must STAY set: this goes out while
     // already streaming, where re-asserting bit 0 is a no-op in the gateware's
@@ -1737,7 +2087,7 @@ void MetisClient::sendBandscopeRunByte(bool wideSpectrum)
     // precisely because of that: expressed inline it was unreachable by any
     // socket-free test, and the only assertion possible was one that re-derived
     // the expression and agreed with itself.
-    countTx(sendTo(*m_socket, cmd, m_host, m_port));
+    countTx(sendCommandDatagram(cmd));
 }
 
 int MetisClient::bandscopeGuardIntervalMs() const noexcept

@@ -8,6 +8,7 @@
 #include <QDebug>
 
 #include <algorithm>
+#include <limits>
 
 namespace AetherSDR {
 
@@ -34,85 +35,77 @@ constexpr int kProcessingRate = 48000;
 
 NnrFilter::NnrFilter(int sampleRate)
     : m_sampleRate(sampleRate)
-    , m_stereoAdapter(0, sampleRate)
 {
-    if (!m_stereoAdapter.isValid()) {
+    if (sampleRate != 24000 && sampleRate != 48000) {
         qWarning() << "NnrFilter: unsupported sample rate" << sampleRate;
         return;
     }
-    if (sampleRate == 24000) {
-        m_up = std::make_unique<Resampler>(24000, kProcessingRate);
-        m_down = std::make_unique<Resampler>(kProcessingRate, 24000);
-    }
 
     m_blockFrames = kBlockFrames;
-    m_blockIn.assign(static_cast<std::size_t>(m_blockFrames) * 2, 0.0);
-    m_blockOut.assign(static_cast<std::size_t>(m_blockFrames) * 2, 0.0);
+    for (int channel = 0; channel < 2; ++channel) {
+        if (sampleRate == 24000) {
+            m_up[channel] = std::make_unique<Resampler>(24000, kProcessingRate);
+            m_down[channel] = std::make_unique<Resampler>(kProcessingRate, 24000);
+        }
+        m_blockIn[channel].assign(static_cast<std::size_t>(m_blockFrames) * 2, 0.0);
+        m_blockOut[channel].assign(static_cast<std::size_t>(m_blockFrames) * 2, 0.0);
 
-    // run=1: this object's existence IS the enable, so WDSP's own run flag
-    // stays set and AudioEngine simply stops calling process(). position=0
-    // to match the xnnr() call below; there is only one call site here.
-    // cmode=1 zeroes Q, which we discard anyway.
-    m_nnr = create_nnr(1, 0, m_blockFrames, m_blockIn.data(), m_blockOut.data(),
-                       kProcessingRate, kNetworkRate, kFftSize, kOverlap,
-                       kLookahead, Nnr::maskFloorForStrength(m_strength.load()), 1);
-    if (!m_nnr) {
-        qWarning() << "NnrFilter: create_nnr() failed";
-        return;
+        // run=1: this object's existence IS the enable, so WDSP's own run flag
+        // stays set and AudioEngine simply stops calling process(). position=0
+        // to match the xnnr() call below; there is only one call site here.
+        // cmode=1 zeroes Q, which we discard anyway.
+        m_nnr[channel] = create_nnr(1, 0, m_blockFrames, m_blockIn[channel].data(),
+                                    m_blockOut[channel].data(), kProcessingRate,
+                                    kNetworkRate, kFftSize, kOverlap, kLookahead,
+                                    Nnr::maskFloorForStrength(m_strength.load()), 1);
+        if (!m_nnr[channel]) {
+            qWarning() << "NnrFilter: create_nnr() failed";
+            return;
+        }
     }
 
-    // The adapter pairs each processed block with the dry stereo from the same
-    // moment, so it needs the TOTAL latency of this filter -- not NNR's alone.
-    //
-    // On the 24 kHz path the resamplers dominate: each contributes ~70 ms of
-    // linear-phase group delay against NNR's own 51 ms, so declaring only
-    // NNR's left the balance reading dry audio ~131 ms stale. At a 3 Hz
-    // syllable rate that is a third of a cycle, which applies the gain
-    // computed for a gap to a syllable and vice versa -- measured as voice
-    // 12 dB down and the gaps 10 dB UP, the exact inverse of what the stage
-    // is for. The 48 kHz path has no resamplers and was always correct, which
-    // is what made this look like a model problem rather than a wiring one.
-    m_stereoAdapter.setProcessingLatencyFrames(totalLatencyFrames());
-
-    m_appliedModel.store(getModel_nnr(static_cast<NNR>(m_nnr)));
+    m_appliedModel.store(getModel_nnr(static_cast<NNR>(m_nnr[0])));
     qDebug() << "NnrFilter: initialized at" << sampleRate << "Hz, model slot"
              << m_appliedModel.load() << ", total delay"
              << totalLatencyFrames() * 1000.0 / m_sampleRate << "ms"
-             << "(NNR" << getDelay_nnr(static_cast<NNR>(m_nnr)) * 1000.0 / kProcessingRate
+             << "(NNR" << getDelay_nnr(static_cast<NNR>(m_nnr[0])) * 1000.0 / kProcessingRate
              << "ms + resampling)";
 }
 
 NnrFilter::~NnrFilter()
 {
-    if (m_nnr) {
-        destroy_nnr(static_cast<NNR>(m_nnr));
+    for (void* nnr : m_nnr) {
+        if (nnr) {
+            destroy_nnr(static_cast<NNR>(nnr));
+        }
     }
 }
 
 void NnrFilter::reset()
 {
-    if (m_nnr) {
-        flush_nnr(static_cast<NNR>(m_nnr));
+    for (int channel = 0; channel < 2; ++channel) {
+        if (m_nnr[channel]) {
+            flush_nnr(static_cast<NNR>(m_nnr[channel]));
+        }
+        m_inAccum[channel].clear();
     }
-    m_inAccum.clear();
-    m_stereoAdapter.reset();
 }
 
 int NnrFilter::totalLatencyFrames() const
 {
-    if (!m_nnr) {
+    if (!m_nnr[0]) {
         return 0;
     }
     // NNR's own, converted from the processing rate to the configured one.
-    int frames = getDelay_nnr(static_cast<NNR>(m_nnr)) * m_sampleRate / kProcessingRate;
+    int frames = getDelay_nnr(static_cast<NNR>(m_nnr[0])) * m_sampleRate / kProcessingRate;
     // Each resampler reports its group delay in ITS OWN source-rate samples:
     // the upsampler's are already the configured rate, the downsampler's are
     // at the processing rate and need converting.
-    if (m_up) {
-        frames += m_up->groupDelayInputFrames();
+    if (m_up[0]) {
+        frames += m_up[0]->groupDelayInputFrames();
     }
-    if (m_down) {
-        frames += m_down->groupDelayInputFrames() * m_sampleRate / kProcessingRate;
+    if (m_down[0]) {
+        frames += m_down[0]->groupDelayInputFrames() * m_sampleRate / kProcessingRate;
     }
     return frames;
 }
@@ -172,25 +165,28 @@ void NnrFilter::applyPendingParameters()
     if (!m_paramsDirty.exchange(false)) {
         return;
     }
-    auto nnr = static_cast<NNR>(m_nnr);
-    setMaskFloor_nnr(nnr, Nnr::maskFloorForStrength(m_strength.load()));
-    setAlpha_nnr(nnr, m_alpha.load());
-    setAlphaKnee_nnr(nnr, m_alphaKnee.load());
-    setTau_nnr(nnr, m_tau.load());
-    setMaxGain_nnr(nnr, m_maxGain.load());
-    setSmooth_nnr(nnr, m_smoothAttackMs.load(), m_smoothReleaseMs.load());
-
     const int requested = m_requestedModel.load();
-    if (requested != m_appliedModel.load()) {
-        // Reports the slot actually in use, which differs from the request
-        // when this build has no model there.
-        m_appliedModel.store(setModel_nnr(nnr, requested));
+    const bool switchModel = requested != m_appliedModel.load();
+    for (void* instance : m_nnr) {
+        auto nnr = static_cast<NNR>(instance);
+        setMaskFloor_nnr(nnr, Nnr::maskFloorForStrength(m_strength.load()));
+        setAlpha_nnr(nnr, m_alpha.load());
+        setAlphaKnee_nnr(nnr, m_alphaKnee.load());
+        setTau_nnr(nnr, m_tau.load());
+        setMaxGain_nnr(nnr, m_maxGain.load());
+        setSmooth_nnr(nnr, m_smoothAttackMs.load(), m_smoothReleaseMs.load());
+        if (switchModel) {
+            // Reports the slot actually in use, which differs from the
+            // request when this build has no model there. Both channels load
+            // from the same build, so they land on the same slot.
+            m_appliedModel.store(setModel_nnr(nnr, requested));
+        }
     }
 }
 
 QByteArray NnrFilter::process(const QByteArray& pcmStereo)
 {
-    if (!m_nnr || m_blockFrames <= 0 || pcmStereo.isEmpty()) {
+    if (!isValid() || m_blockFrames <= 0 || pcmStereo.isEmpty()) {
         return pcmStereo;
     }
 
@@ -198,75 +194,92 @@ QByteArray NnrFilter::process(const QByteArray& pcmStereo)
 
     const auto* src = reinterpret_cast<const float*>(pcmStereo.constData());
     const int stereoFrames = pcmStereo.size() / (2 * static_cast<int>(sizeof(float)));
-    m_stereoAdapter.pushDryStereo(pcmStereo);
 
-    // 1. Downmix, then resample up for the 24 kHz path only.
-    m_monoInput.resize(stereoFrames);
-    for (int i = 0; i < stereoFrames; ++i) {
-        m_monoInput[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
-    }
-    QByteArray mono48k = m_up
-        ? m_up->process(m_monoInput.data(), stereoFrames)
-        : QByteArray(reinterpret_cast<const char*>(m_monoInput.data()),
-                     stereoFrames * static_cast<int>(sizeof(float)));
-
-    const auto* mono48kSamples = reinterpret_cast<const float*>(mono48k.constData());
-    const int monoSamples48k = mono48k.size() / static_cast<int>(sizeof(float));
-
-    // 2. Accumulate to whole blocks — WDSP's block size cannot change without
-    //    rebuilding the block, its FFTW plans and both models.
-    const int prevAccumSamples = m_inAccum.size() / static_cast<int>(sizeof(float));
-    m_inAccum.resize((prevAccumSamples + monoSamples48k) * sizeof(float));
-    {
-        auto* floatBuf = reinterpret_cast<float*>(m_inAccum.data());
-        for (int i = 0; i < monoSamples48k; ++i) {
-            floatBuf[prevAccumSamples + i] = mono48kSamples[i];
+    // Both channels see the same sample counts through identically configured
+    // resamplers, so they reach the same whole-block count and the two NNR
+    // instances advance in lockstep.
+    int completeBlocks = std::numeric_limits<int>::max();
+    std::array<int, 2> totalAccumSamples{0, 0};
+    for (int channel = 0; channel < 2; ++channel) {
+        // 1. Split out this channel, then resample up for the 24 kHz path only.
+        auto& channelInput = m_channelInput[channel];
+        channelInput.resize(stereoFrames);
+        for (int i = 0; i < stereoFrames; ++i) {
+            channelInput[i] = src[i * 2 + channel];
         }
-    }
+        QByteArray input48k = m_up[channel]
+            ? m_up[channel]->process(channelInput.data(), stereoFrames)
+            : QByteArray(reinterpret_cast<const char*>(channelInput.data()),
+                         stereoFrames * static_cast<int>(sizeof(float)));
 
-    const int totalAccumSamples = prevAccumSamples + monoSamples48k;
-    const int completeBlocks = totalAccumSamples / m_blockFrames;
+        // 2. Accumulate to whole blocks — WDSP's block size cannot change
+        //    without rebuilding the block, its FFTW plans and both models.
+        const int samples48k = input48k.size() / static_cast<int>(sizeof(float));
+        const int prevAccumSamples =
+            m_inAccum[channel].size() / static_cast<int>(sizeof(float));
+        m_inAccum[channel].append(input48k);
+        totalAccumSamples[channel] = prevAccumSamples + samples48k;
+        completeBlocks = std::min(completeBlocks,
+                                  totalAccumSamples[channel] / m_blockFrames);
+    }
     if (completeBlocks <= 0) {
-        return m_stereoAdapter.takeProcessedMono(nullptr, 0);
-    }
-
-    auto* accumData = reinterpret_cast<float*>(m_inAccum.data());
-    m_processed48k.resize(static_cast<std::size_t>(completeBlocks)
-                          * static_cast<std::size_t>(m_blockFrames));
-
-    for (int b = 0; b < completeBlocks; ++b) {
-        const float* blockStart = &accumData[b * m_blockFrames];
-        // Interleave into I with a silent Q — NNR reads only I.
-        for (int i = 0; i < m_blockFrames; ++i) {
-            m_blockIn[i * 2] = static_cast<double>(blockStart[i]);
-            m_blockIn[i * 2 + 1] = 0.0;
-        }
-        xnnr(static_cast<NNR>(m_nnr), 0);
-        float* out = &m_processed48k[static_cast<std::size_t>(b) * m_blockFrames];
-        for (int i = 0; i < m_blockFrames; ++i) {
-            out[i] = static_cast<float>(m_blockOut[i * 2]);
-        }
+        return {};
     }
 
     const int consumedSamples = completeBlocks * m_blockFrames;
-    const int leftoverSamples = totalAccumSamples - consumedSamples;
-    if (leftoverSamples > 0) {
-        m_inAccum = QByteArray(reinterpret_cast<const char*>(&accumData[consumedSamples]),
-                               leftoverSamples * sizeof(float));
-    } else {
-        m_inAccum.clear();
+    int outputFrames = std::numeric_limits<int>::max();
+    for (int channel = 0; channel < 2; ++channel) {
+        const auto* accumData = reinterpret_cast<const float*>(m_inAccum[channel].constData());
+        auto& processed = m_processed48k[channel];
+        processed.resize(static_cast<std::size_t>(consumedSamples));
+        auto& blockIn = m_blockIn[channel];
+        const auto& blockOut = m_blockOut[channel];
+
+        for (int b = 0; b < completeBlocks; ++b) {
+            const float* blockStart = &accumData[b * m_blockFrames];
+            // Interleave into I with a silent Q — NNR reads only I.
+            for (int i = 0; i < m_blockFrames; ++i) {
+                blockIn[i * 2] = static_cast<double>(blockStart[i]);
+                blockIn[i * 2 + 1] = 0.0;
+            }
+            xnnr(static_cast<NNR>(m_nnr[channel]), 0);
+            float* out = &processed[static_cast<std::size_t>(b) * m_blockFrames];
+            for (int i = 0; i < m_blockFrames; ++i) {
+                out[i] = static_cast<float>(blockOut[i * 2]);
+            }
+        }
+
+        m_inAccum[channel].remove(0, consumedSamples * static_cast<int>(sizeof(float)));
+
+        // 3. Back down for the 24 kHz path.
+        m_channelOutput[channel] = m_down[channel]
+            ? m_down[channel]->process(processed.data(), consumedSamples)
+            : QByteArray(reinterpret_cast<const char*>(processed.data()),
+                         consumedSamples * static_cast<int>(sizeof(float)));
+        outputFrames = std::min(
+            outputFrames,
+            static_cast<int>(m_channelOutput[channel].size() / sizeof(float)));
     }
+    // Identical resamplers fed identical counts stay in lockstep, so the min
+    // above never drops a sample. A mismatch would be a silent, cumulative L/R
+    // skew: log it once in release, abort in debug.
+    if (m_channelOutput[0].size() != m_channelOutput[1].size() && !m_lockstepWarned) {
+        m_lockstepWarned = true;
+        qWarning() << "NnrFilter: L/R output lengths diverged"
+               << m_channelOutput[0].size() << m_channelOutput[1].size();
+    }
+    Q_ASSERT(m_channelOutput[0].size() == m_channelOutput[1].size());
 
-    // 3. Back down for the 24 kHz path, then restore the dry stereo balance.
-    const int outputMonoSamples = consumedSamples;
-    QByteArray downsampled = m_down
-        ? m_down->process(m_processed48k.data(), outputMonoSamples)
-        : QByteArray(reinterpret_cast<const char*>(m_processed48k.data()),
-                     outputMonoSamples * static_cast<int>(sizeof(float)));
-
-    const auto* monoOut = reinterpret_cast<const float*>(downsampled.constData());
-    const int monoOutFrames = downsampled.size() / static_cast<int>(sizeof(float));
-    return m_stereoAdapter.takeProcessedMono(monoOut, monoOutFrames);
+    QByteArray output(outputFrames * 2 * static_cast<int>(sizeof(float)),
+                      Qt::Uninitialized);
+    auto* stereo = reinterpret_cast<float*>(output.data());
+    const auto* left = reinterpret_cast<const float*>(m_channelOutput[0].constData());
+    const auto* right = reinterpret_cast<const float*>(m_channelOutput[1].constData());
+    for (int i = 0; i < outputFrames; ++i) {
+        stereo[i * 2] = std::clamp(left[i], -1.0f, 1.0f);
+        stereo[i * 2 + 1] = std::clamp(right[i], -1.0f, 1.0f);
+    }
+    return output;
 }
 
 }  // namespace AetherSDR

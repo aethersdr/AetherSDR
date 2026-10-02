@@ -357,11 +357,6 @@ int memoryIndexFromSpotId(int spotIndex)
     return -spotIndex - kMemorySpotIdBase;
 }
 
-bool isPassiveLocalSpotId(int spotIndex)
-{
-    return spotIndex <= -kPassiveSpotIdBase;
-}
-
 QString memorySpotLabel(const MemoryEntry& memory)
 {
     if (!memory.name.trimmed().isEmpty())
@@ -456,6 +451,9 @@ constexpr int kMinPanYpixels = 20;
 // 4.2.18/4.2.20, so stay one bin below it.
 constexpr int kMaxRadioPanXPixels = 4095;
 constexpr int kMaxRadioPanYPixels = 8192;
+// A sanity bound on a device-pixel width, not a backend limit: each backend
+// clamps to the point count it can produce.
+constexpr int kMaxLocalPanPixels = 16384;
 
 int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels, int maximumPixels)
 {
@@ -473,6 +471,15 @@ int panXpixelsFor(const SpectrumWidget* spectrum)
         return kDefaultPanXpixels;
     }
     return radioPixelsFor(spectrum, spectrum->width(), kMaxRadioPanXPixels);
+}
+
+int panLocalSpectrumPointsFor(const SpectrumWidget* spectrum)
+{
+    if (!spectrum || spectrum->width() < kMinPanXpixels) {
+        return kDefaultPanXpixels;
+    }
+    const int pixels = radioPixelsFor(spectrum, spectrum->width(), kMaxLocalPanPixels);
+    return panPointsForPixelWidth(pixels, spectrum->panEdgeCropActive());
 }
 
 int panYpixelsFor(const SpectrumWidget* spectrum)
@@ -514,19 +521,6 @@ QPixmap buildBandStackIndicatorPixmap(bool active)
     painter.drawEllipse(2, 8, 6, 6);
     painter.drawEllipse(2, 15, 6, 6);
     return pixmap;
-}
-
-QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev)
-{
-    if (!ev || ev->key() == Qt::Key_unknown)
-        return {};
-
-    const Qt::KeyboardModifiers modifiers =
-        ev->modifiers() & (Qt::ShiftModifier
-                           | Qt::ControlModifier
-                           | Qt::AltModifier
-                           | Qt::MetaModifier);
-    return QKeySequence(static_cast<int>(modifiers) | ev->key());
 }
 
 // ─── Client connection parsing (discovery / multiFLEX) ──────────────────────

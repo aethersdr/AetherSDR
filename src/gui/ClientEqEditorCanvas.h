@@ -6,20 +6,11 @@ namespace AetherSDR {
 
 class AudioEngine;
 
-// Interactive version of the curve widget used inside the floating editor.
-// Adds mouse handling on top of ClientEqCurveWidget's rendering:
-//
-//   - L-drag on a band handle: freq + gain
-//   - Shift + L-drag on a handle: Q (vertical axis maps to Q)
-//   - Double-click empty area: create a new band; filter type is chosen
-//     by position (HP at left edge, LP at right edge, shelves near top/
-//     bottom extremes, peak everywhere else)
-//   - Right-click on a handle: context menu (cycle type, toggle enable,
-//     delete)
-//
-// Each mutation writes through to the ClientEq instance and calls
-// AudioEngine::saveClientEqSettings() so the change persists across
-// restarts.
+// Interactive curve for the floating editor. L-drag a handle: freq + gain;
+// Shift+L-drag: Q. Double-click empty area: new band, type chosen by position
+// (HP left edge, LP right edge, shelves near top/bottom, else peak).
+// Right-click a handle: cycle type / toggle enable / delete. Every mutation
+// writes to ClientEq and calls AudioEngine::saveClientEqSettings().
 class ClientEqEditorCanvas : public ClientEqCurveWidget {
     Q_OBJECT
 

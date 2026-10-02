@@ -1,26 +1,10 @@
 #pragma once
 
-// GUI event-loop tick lag for the Overview tab (#2554): how late each 50 ms
-// perf-heartbeat tick fired, accumulated between reads.
-//
-// Fed by MainWindow's existing heartbeat lambda (one call per tick) and read
-// by SystemInfoDialog on the GUI thread whenever a CPU sample arrives, so it
-// needs no lock: producer and consumer are the same thread. It lives here, not
-// in PerfTelemetry, because PerfTelemetry records nothing unless aether.perf
-// debug logging is switched on (PerfTelemetry::enabled() is
-// lcPerf().isDebugEnabled(); the category defaults to warnings) — a card that
-// read "—" for every user who had not enabled a log category would be a
-// diagnostic of the log settings, not of the event loop.
-//
-// The reading is the issue's own definition for the Overview's fourth chart:
-// "actual_interval - nominal_interval for the perf heartbeat timer". Nothing
-// here claims to be a frame rate; the heartbeat is a 20 Hz timer, and calling
-// its cadence a frame rate would put a healthy app in the issue's "yellow"
-// band by construction (see the plan, §12.2).
-//
-// Header-only and Qt-Core-only so the arithmetic is testable with constructed
-// timestamps and no timer: tickAt(nowNs) is the seam, tick() the production
-// wrapper around a steady clock.
+// GUI event-loop tick lag for the Overview tab (#2554): actual minus nominal
+// interval of the 50 ms perf heartbeat, accumulated between reads. Fed by
+// MainWindow's heartbeat and read by SystemInfoDialog, both on the GUI thread
+// (no lock). Not in PerfTelemetry, which records nothing unless aether.perf
+// debug is on. Not a frame rate. tickAt(nowNs) is the test seam.
 
 #include <QElapsedTimer>
 #include <QtGlobal>

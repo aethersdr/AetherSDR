@@ -1,26 +1,13 @@
 #pragma once
 
-// AetherClock engine: binds a user-chosen RX slice, owns the DAX-hold
-// LIFECYCLE for that slice's channel (acquire on start, follow live
-// reassignment, release on stop/slice loss), feeds the WWV/WWVB decoders,
-// and emits decode + alignment signals.
-//
-// Radio-seam discipline (EB3): this file never touches the vendor stream
-// classes. The wiring layer (GUI applet, tests, any future host) injects a
-// DAX-hold provider wrapping the CENTRAL
-// PanadapterStream::acquireDaxChannel/releaseDaxChannel(ch,
-// DaxConsumer::Clock) registry, and connects the stream's daxPcmReady to
-// typed feedRxAudio(). Native slice PCM enters through feedRxSliceAudio().
-// Both retain immutable producer identity/rate metadata through queued delivery;
-// the engine's private mono adapter keeps the detectors at fixed 24 kHz.
-//
-// RX-only by design: no TX path, nothing radio-authoritative persisted, and
-// the OS clock is never modified — the engine only READS the host clock
-// (through an injectable hook so tests control time).
-//
-// Threading: thread-agnostic QObject. The creator may move it to a worker
-// thread; all cross-object wiring is queued. Decode work runs inside
-// feedRxAudio() — the signals carry 1 bit/s, so this is trivially cheap.
+// AetherClock engine: binds an RX slice, owns that slice's DAX-hold lifecycle
+// (acquire on start, follow reassignment, release on stop/slice loss), feeds the
+// WWV/WWVB decoders and emits decode + alignment signals. Never touches vendor
+// stream classes: the host injects a DAX-hold provider wrapping
+// PanadapterStream::acquireDaxChannel/releaseDaxChannel(ch, DaxConsumer::Clock)
+// and connects daxPcmReady to feedRxAudio(); native slice PCM uses
+// feedRxSliceAudio(). Detectors run at a fixed 24 kHz. RX-only; only READS the
+// host clock (injectable hook). Thread-agnostic QObject; wiring is queued.
 
 #include "ClockAlignmentFrame.h"
 #include "ClockDiagnostics.h"

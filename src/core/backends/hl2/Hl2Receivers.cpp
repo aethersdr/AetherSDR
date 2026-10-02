@@ -107,19 +107,9 @@ int Hl2ReceiverMap::append()
     Hl2ReceiverIds ids;
     ids.ddcIndex = static_cast<int>(m_rx.size());   // contiguous, as the gateware needs
 
-    // LOWEST FREE UI number, not a monotonic counter.
-    //
-    // This was monotonic, on the reasoning that reusing a retired number would
-    // give two panes the same identity. That reasoning was wrong: the retired
-    // pane does not exist, so there is nothing to collide with — and the cost of
-    // being wrong was real. The UI number IS the seam's slice id, and the slice
-    // id space is bounded by the radio's slice capacity. On a 4-receiver board,
-    // opening four and closing three left the counter at 4, so the next receiver
-    // asked for slice id 4 on a radio whose ids run 0..3 and the client refused
-    // it as over capacity.
-    //
-    // Reuse is also what a Flex does with its own slice ids, so this matches the
-    // behaviour every consumer above the seam was written against.
+    // Lowest free UI number, not a monotonic counter: the UI number is the
+    // seam's slice id, bounded by slice capacity (ids 0..N-1), and a Flex
+    // reuses slice ids the same way.
     int candidate = 0;
     while (std::any_of(m_rx.cbegin(), m_rx.cend(),
                        [candidate](const Hl2ReceiverIds& r) {

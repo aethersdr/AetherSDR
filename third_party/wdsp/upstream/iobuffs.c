@@ -26,6 +26,11 @@ warren@wpratt.com
 
 #include "comm.h"
 
+// AetherSDR patch 13: the port's test-only pause, called from dexchange().
+// Declared here rather than in a port header so the same line serves the POSIX
+// port and the native Windows build alike.
+void wdspPortHandoffPauseForTest (void);
+
 /********************************************************************************************************
 *																										*
 *										    Begin Slew Code												*
@@ -565,6 +570,21 @@ void fexchange0 (int channel, double* in, double* out, int* error)
 	}
 }
 
+// AetherSDR patch 15: would the next fexchange* find a whole output block?
+// Read-only. A non-blocking host (bfo = 0) asks before each exchange: an
+// underrun advances r2_outidx without consuming, and the two-slot ring is read
+// out of step from then on. See AETHERSDR-PATCHES.md patch 15.
+PORT
+int GetChannelOutputReady (int channel)
+{
+	int ready;
+	IOB a = ch[channel].iob.pe;
+	EnterCriticalSection (&a->r2_ControlSection);
+	ready = a->r2_havesamps >= a->out_size;
+	LeaveCriticalSection (&a->r2_ControlSection);
+	return ready;
+}
+
 PORT	//separate I/Q buffers
 void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *Qout, int* error)
 {
@@ -653,20 +673,47 @@ int dexchange (int channel, double* in, double* out)
 		return 1;
 	}
 
-	EnterCriticalSection (&a->r2_ControlSection);
-	a->r2_havesamps += a->r2_insize;
-	LeaveCriticalSection (&a->r2_ControlSection);
+	// AetherSDR patch 13: TAKE THE INPUT BEFORE RELEASING THE HOST (#5734).
+	//
+	// Upstream copies this r1 slot out AFTER releasing Sem_OutReady below. With
+	// bfo set, that release is what lets the host's blocked fexchange* return,
+	// and the host's NEXT call writes the next input block into r1 before it
+	// waits again. When in_size == dsp_insize the ring holds DSP_MULT (2) slots,
+	// so host call w+2 writes the very slot worker iteration w has not read yet:
+	// a worker preempted between the release and this copy processes block w+2
+	// (or a torn mix of w and w+2) in place of block w, and reports nothing.
+	// Idle, the window is a few instructions wide and never loses; under CPU
+	// load on Linux it lost in 33 of 600 trials. Only bfo channels release
+	// here, so this is the blocking (offline/test) mode, not live audio. See
+	// AETHERSDR-PATCHES.md patch 13.
+	//
+	// The copy is all that moves. r1_outidx is touched only by this thread and
+	// by flush_iobuffs() (which holds csDSP, as our caller does), and `out`
+	// (the chain's inbuff) is a different allocation from `in` (its outbuff) in
+	// both RXA.c and TXA.c, so the reorder changes no value -- only when the
+	// host is told it may proceed.
+	memcpy (out, a->r1_baseptr + 2 * a->r1_outidx, a->r1_outsize * sizeof (complex));
+	if ((a->r1_outidx += a->r1_outsize) == a->r1_active_buffsize)
+		a->r1_outidx = 0;
+
+	// AetherSDR patch 15: PUBLISH AFTER THE COPY. Upstream counts the block
+	// into r2_havesamps before it is in r2, so a host that exchanges the moment
+	// GetChannelOutputReady() says 1 could read a slot still being written.
+	// See AETHERSDR-PATCHES.md patch 15.
 	memcpy (a->r2_baseptr + 2 * a->r2_inidx, in, a->r2_insize * sizeof (complex));
 	if ((a->r2_inidx += a->r2_insize) == a->r2_active_buffsize)
 		a->r2_inidx = 0;
+	EnterCriticalSection (&a->r2_ControlSection);
+	a->r2_havesamps += a->r2_insize;
+	LeaveCriticalSection (&a->r2_ControlSection);
 	if (a->bfo && (a->r2_unqueuedsamps += a->r2_insize) >= a->out_size)
 	{
 		n = a->r2_unqueuedsamps / a->out_size;
 		ReleaseSemaphore(a->Sem_OutReady, n, 0);	
 		a->r2_unqueuedsamps -= n * a->out_size;
 	}
-	memcpy (out, a->r1_baseptr + 2 * a->r1_outidx, a->r1_outsize * sizeof (complex));
-	if ((a->r1_outidx += a->r1_outsize) == a->r1_active_buffsize)
-		a->r1_outidx = 0;
+	// AetherSDR patch 13: test-only; a no-op unless wdsp_channel_test sets it.
+	// Sits immediately after the release on purpose -- see wdsp_port.c.
+	wdspPortHandoffPauseForTest ();
 	return 0;
 }
