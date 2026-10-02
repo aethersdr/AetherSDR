@@ -3934,6 +3934,7 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     // requested tone is the operator's to key.
     if (key && !m_tuning && m_toneFromTune)
         setTxTestTone(0.0, 0.0, operation);
+    bool wasTuning = false;
     if (!key) {
         if (m_cwHangTimer) {
             m_cwHangTimer->stop();
@@ -3943,7 +3944,7 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // Every unkey ends tune, so drive is restored here rather than in
         // setTune(): the TX watchdog, key verb, MOX/PTT coordinator and
         // disconnect reset all call setKeying(false) directly.
-        const bool wasTuning = m_tuning;
+        wasTuning = m_tuning;
         m_tuning = false;
         // Cleared on EVERY unkey, not only a tuning one, and unconditionally
         // rather than behind `wasTuning`: this is the single point every unkey
@@ -3952,7 +3953,6 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // a tuner that starts on the operator's next voice transmission.
         applyAtuTuneRequest(false);
         if (wasTuning) {
-            setTxPower(m_rfPowerPercent);
             // Re-decide the filter: the earlier call ran with m_tuning still
             // set and so forced the TX receiver's filter, and the
             // `oc == m_ocFilterByte` early-out would keep it until a retune.
@@ -3967,6 +3967,12 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 metis->setMox(key, operation);
             }
         }, Qt::QueuedConnection);
+    }
+    // RF drive comes back only behind the MOX-off. Each invoke is its own post,
+    // so an EP2 tick can fall between two of them; restored first, a keyed frame
+    // could carry the full-scale tune tone at RF drive.
+    if (wasTuning) {
+        setTxPower(m_rfPowerPercent);
     }
     // Release only now, after the MOX-off is queued, so even a zero hold
     // posts behind it; the hold covers the control-packet wait, network hop,

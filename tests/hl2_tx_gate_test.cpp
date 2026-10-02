@@ -16,6 +16,7 @@
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QLoggingCategory>
 #include <QString>
 #include <QStringList>
@@ -415,6 +416,74 @@ static void testTunePowerAppliesLiveWhileTuning(TxTestAuthority& authority)
     }
 }
 
+// Runs on the transport thread before each queued call reaches MetisClient and
+// builds the packet a pacer tick would send at that point. Each cross-thread
+// invoke is posted separately, so a tick can fall between any two of them.
+class InterleaveProbe final : public QObject {
+public:
+    explicit InterleaveProbe(MetisClient* metis) : m_metis(metis) {}
+    std::vector<std::array<std::uint8_t, kUsbPacketSize>> packets;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == m_metis && event->type() == QEvent::MetaCall) {
+            packets.push_back(m_metis->buildNextControlPacket());
+        }
+        return false;
+    }
+
+private:
+    MetisClient* m_metis;
+};
+
+// TUNE release must take MOX off before the RF drive comes back. Restoring
+// first leaves a window where a keyed frame carries the full-scale tune tone at
+// the operator's RF drive. Walks every packet the unkey's queued calls allow.
+static void testTuneReleaseUnkeysBeforeRestoringDrive(TxTestAuthority& authority)
+{
+    Hl2Backend backend;
+    Hl2TxGateTestAccess::prepare(backend);
+    backend.setSliceMode(0, QStringLiteral("USB"));
+    backend.setTxPower(80);                       // RF drive 204
+    backend.setTune(true, 10, authority.operation, {});
+    const Drained keyed = drain(backend);
+    check(keyed.anyKeyed && keyed.lastDrive && keyed.lastDrive->level == 25,
+          "premise: TUNE keyed at the tune drive (25)");
+
+    MetisClient* metis = Hl2TxGateTestAccess::metis(backend);
+    InterleaveProbe probe(metis);
+    probe.moveToThread(metis->thread());
+    QMetaObject::invokeMethod(metis, [metis, &probe] { metis->installEventFilter(&probe); },
+                              Qt::BlockingQueuedConnection);
+    backend.setTune(false, 10, authority.operation, {});
+    QMetaObject::invokeMethod(metis, [metis, &probe] {
+        metis->removeEventFilter(&probe);
+        probe.moveToThread(QCoreApplication::instance()->thread());
+    }, Qt::BlockingQueuedConnection);
+
+    int driveOnRadio = 25;
+    bool sawRestore = false;
+    bool keyedAtRfDrive = false;
+    for (std::size_t i = 0; i < probe.packets.size(); ++i) {
+        const auto& pkt = probe.packets[i];
+        if (const auto bank = driveBankIn(pkt)) {
+            driveOnRadio = bank->level;
+            sawRestore = sawRestore || bank->level == 204;
+        }
+        if (anyFrameKeyed(pkt) && payloadNonZero(pkt) && driveOnRadio == 204) {
+            keyedAtRfDrive = true;
+            std::fprintf(stderr, "  unkey packet %zu of %zu: MOX set, tune tone on, drive %d\n",
+                         i + 1, probe.packets.size(), driveOnRadio);
+        }
+    }
+    check(probe.packets.size() >= 2, "premise: the unkey posted queued calls to the transport");
+    check(sawRestore, "premise: the unkey restores the 80% RF drive (204)");
+    check(!keyedAtRfDrive,
+          "TUNE release: no keyed tune-tone frame is ever built at the restored RF drive");
+    check(!anyFrameKeyed(Hl2TxGateTestAccess::packet(backend)), "premise: TUNE released");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -423,6 +492,7 @@ int main(int argc, char** argv)
 
     testAtuTuneHonoursTheTransmitGate(authority);
     testTunePowerAppliesLiveWhileTuning(authority);
+    testTuneReleaseUnkeysBeforeRestoringDrive(authority);
 
     {
         MetisClient board;
