@@ -1938,6 +1938,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     theme::setContainer(this, QStringLiteral("spectrum"));
 
     m_panStats.clock.start();  // panstats rates are meaningless without an epoch
+    m_broadcastClock.start();
 
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -8274,6 +8275,9 @@ void SpectrumWidget::updateAccessibleStateDescription()
                            "VFO-locked").arg(aName, bName)
                       : tr("Slice Link %1 to %2 active").arg(aName, bName));
     }
+    for (const WfmBroadcastOverlayRecord& record : m_broadcastOverlays) {
+        parts << tr("Broadcast metadata for Slice %1: %2").arg(record.sliceId).arg(record.displayText());
+    }
     setAccessibleDescription(parts.join(QStringLiteral("; ")));
 }
 
@@ -11644,6 +11648,11 @@ void SpectrumWidget::setBackgroundFillColor(const QColor& c)
 
 bool SpectrumWidget::event(QEvent* ev)
 {
+    if (ev->type() == QEvent::Hide) {
+        for (WfmBroadcastTicker& ticker : m_broadcastTickers) {
+            ticker.advance(m_broadcastClock.elapsed(), false);
+        }
+    }
     // Re-assert mouse tracking after native window changes (reparenting into
     // QSplitter, window recreation). Without this, QRhiWidget's native Metal
     // surface loses mouse tracking and mouseMoveEvent stops firing.
@@ -13728,6 +13737,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
     const int wfH = h - wfY;
     const QRect specRect(0, 0, w, specH);
     const QRect wfRect(0, wfY, w, wfH);
+    updateBroadcastOverlayTicker(specRect, !resizePreview);
     // The FFT trace, 3DSS surface, and waterfall render into the frequency
     // canvas only (width minus the right dBm / time strip) so they end at the
     // tape, matching the contentWidth() mapping used by every marker (#3482).
@@ -14280,6 +14290,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
             drawSwrSweep(frequencyPainter, specRect);
             drawSliceMarkers(frequencyPainter, specRect, wfRect);
+            drawBroadcastOverlays(frequencyPainter, specRect);
             drawOffScreenSlices(frequencyPainter, specRect);
 
             m_overlayStatic.fill(Qt::transparent);
@@ -15388,6 +15399,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     const int wfY      = scaleY + freqScaleH();
 
     const QRect specRect (0, 0,       width(), specH);
+    updateBroadcastOverlayTicker(specRect);
     const QRect divRect  (0, divY,    width(), DIVIDER_H);
     const QRect scaleRect(0, scaleY,  width(), freqScaleH());
     const QRect wfRect   (0, wfY,     width(), wfH);
@@ -15465,6 +15477,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
     drawSwrSweep(p, specRect);
     drawSliceMarkers(p, specRect, wfRect);
+    drawBroadcastOverlays(p, specRect);
     drawSmartMtrValueLabels(p);
     drawOffScreenSlices(p, specRect);
 
@@ -16336,6 +16349,117 @@ static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm)
         tip += QString("<br>Spotted: %1 UTC").arg(
             QDateTime::fromMSecsSinceEpoch(sm.timestampMs, QTimeZone::utc()).toString("yyyy-MM-dd HH:mm:ss"));
     return tip;
+}
+
+void SpectrumWidget::setBroadcastOverlays(const QVector<WfmBroadcastOverlayRecord>& records)
+{
+    const QVector<WfmBroadcastOverlayRecord> bounded = records.mid(0, 8);
+    if (bounded == m_broadcastOverlays) { return; }
+    QVector<WfmBroadcastTicker> next;
+    next.reserve(bounded.size());
+    for (const WfmBroadcastOverlayRecord& record : bounded) {
+        WfmBroadcastTicker ticker;
+        for (qsizetype i = 0; i < m_broadcastOverlays.size(); ++i) {
+            if (m_broadcastOverlays.at(i).sliceId == record.sliceId) {
+                ticker = m_broadcastTickers.at(i);
+                break;
+            }
+        }
+        ticker.setContent(record);
+        next.append(std::move(ticker));
+    }
+    m_broadcastOverlays = bounded;
+    m_broadcastTickers = std::move(next);
+    const QString previousDescription = accessibleDescription();
+    updateAccessibleStateDescription();
+    if (accessibleDescription() != previousDescription) {
+        QAccessibleEvent accessibleEvent(this, QAccessible::DescriptionChanged);
+        QAccessible::updateAccessibility(&accessibleEvent);
+    }
+    markOverlayDirty();
+    update();
+}
+
+int SpectrumWidget::broadcastOverlayStartY(const QRect& specRect) const
+{
+    // Match ordinary spots' configured position, while clearing expanded flags.
+    // The full flag geometry includes whichever control panel is currently open.
+    int top = specRect.top() + specRect.height() * m_spotStartPct / 100;
+    for (const VfoWidget* flag : m_vfoWidgets) {
+        if (flag && flag->isVisible()) {
+            top = std::max(top, flag->geometry().bottom() + 8);
+        }
+    }
+    return top;
+}
+
+void SpectrumWidget::updateBroadcastOverlayTicker(const QRect& specRect, bool presentPages)
+{
+    if (m_broadcastTickers.isEmpty()) { return; }
+    QFont labelFont = font();
+    labelFont.setPixelSize(12);
+    const int textWidth = std::min(420, specRect.width() - 12) - 12;
+    const int rowHeight = QFontMetrics(labelFont).height() + 6;
+    const qint64 nowMs = m_broadcastClock.elapsed();
+    const int startY = broadcastOverlayStartY(specRect);
+    bool changed = m_broadcastStartY != startY;
+    m_broadcastStartY = startY;
+    int row = 0;
+    for (qsizetype i = 0; i < m_broadcastTickers.size(); ++i) {
+        WfmBroadcastTicker& ticker = m_broadcastTickers[i];
+        changed = ticker.layout(labelFont, textWidth) || changed;
+        const int x = mhzToX(m_broadcastOverlays.at(i).frequencyHz / 1.0e6);
+        const bool inView = x >= specRect.left() && x <= specRect.right();
+        const int y = startY + row * (rowHeight + 2);
+        const bool visible = presentPages && isVisible() && !m_frequencyPreviewActive
+            && specRect.width() >= 40 && inView && y + rowHeight <= specRect.bottom();
+        changed = ticker.advance(nowMs, visible) || changed;
+        if (inView) { ++row; }
+    }
+    // The existing receive/display cadence paints this frame. Page/placement
+    // changes invalidate the cached overlay; no timer, spot update, or radio write.
+    if (changed) { markOverlayDirty("broadcastPage", false); }
+}
+
+void SpectrumWidget::drawBroadcastOverlays(QPainter& p, const QRect& specRect)
+{
+    if (m_broadcastOverlays.isEmpty() || specRect.width() < 40) { return; }
+    p.save();
+    p.setClipRect(specRect, Qt::IntersectClip);
+    QFont labelFont = font();
+    labelFont.setPixelSize(12);
+    p.setFont(labelFont);
+    const QFontMetrics metrics(labelFont);
+    const int rowHeight = metrics.height() + 6;
+    const int maxWidth = std::min(420, specRect.width() - 12);
+    ThemeManager& theme = ThemeManager::instance();
+    const int startY = broadcastOverlayStartY(specRect);
+    int row = 0;
+    for (qsizetype i = 0; i < m_broadcastOverlays.size(); ++i) {
+        const WfmBroadcastOverlayRecord& record = m_broadcastOverlays.at(i);
+        const WfmBroadcastTicker& ticker = m_broadcastTickers.at(i);
+        const int x = mhzToX(record.frequencyHz / 1.0e6);
+        if (x < specRect.left() || x > specRect.right()) { continue; }
+        // Below slice flags, in a bounded independent row. Never enters spot
+        // clustering, hit testing, trigger/remove commands or smart filters.
+        const int y = startY + row * (rowHeight + 2);
+        if (y + rowHeight > specRect.bottom()) { break; }
+        const QString label = ticker.pageText();
+        // Size from the whole label so advancing a page never moves its RF anchor.
+        const int width = std::min(maxWidth, ticker.labelWidth() + 12);
+        const int left = std::clamp(x - width / 2, specRect.left() + 6, specRect.right() - width - 5);
+        const QRect box(left, y, width, rowHeight);
+        p.fillRect(box, theme.brush(this, "color.background.0", box));
+        // Slice markers leave their fill brush selected. Draw only the border
+        // here so that brush cannot repaint the themed label background.
+        p.setBrush(Qt::NoBrush);
+        p.setPen(theme.color(this, "color.border.subtle"));
+        p.drawRect(box.adjusted(0, 0, -1, -1));
+        p.setPen(theme.color(this, "color.text.primary"));
+        p.drawText(box.adjusted(6, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft, label);
+        ++row;
+    }
+    p.restore();
 }
 
 void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)

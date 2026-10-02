@@ -56,7 +56,7 @@ void formatsAndOwnership()
     check(!producer.produce({0.0f, std::numeric_limits<float>::infinity()}), "infinity rejected");
     const auto next = producer.produce({0.25f, -0.25f});
     check(next->firstSample() == 6, "malformed input never advances the cursor");
-    check(!producer.setFormat({44100, PcmLayout::Stereo}), "unsupported producer rate refused");
+    check(!producer.setFormat({44100, PcmLayout::Stereo}), "unsupported speaker rate refused");
     check(!producer.setFormat({24000, static_cast<PcmLayout>(9)}), "unknown layout refused");
     check(next->current(), "refused format change preserves valid stream");
     check(producer.setFormat({48000, PcmLayout::Stereo}), "48 kHz contract supported");
@@ -220,6 +220,19 @@ int main(int argc, char** argv)
     qRegisterMetaType<PcmFrame>();
     check(QMetaType::fromName("AetherSDR::PcmFrame").isValid(), "name-based metatype registered");
     formatsAndOwnership();
+    PcmProducer hd;
+    check(hd.start(PcmPurpose::Slice, 0, {44100, PcmLayout::Stereo}), "native HD slice keeps actual 44100 stereo format");
+    const auto hdFrame = hd.produce({0.25f, -0.5f, 0.75f, -0.125f});
+    check(hdFrame && hdFrame->frameCount() == 2 && hdFrame->samples()[1] == -0.5f
+          && hdFrame->stream().format.sampleRateHz == 44100 && hdFrame->legacyStereo24().isEmpty(),
+          "HD tap preserves independent LR and never masquerades as legacy24");
+    PcmFrameGate hdGate;
+    check(hdFrame && hdGate.accept(*hdFrame), "HD native slice reaches typed consumer gate");
+    check(hd.setFormat({48000, PcmLayout::Stereo}) && !hdFrame->current(), "HD format transition revokes queued tap");
+    PcmProducer wrongDomain;
+    check(!wrongDomain.start(PcmPurpose::Speaker, -1, {44100, PcmLayout::Stereo})
+          && !wrongDomain.start(PcmPurpose::Auxiliary, -1, {44100, PcmLayout::Stereo}),
+          "HD tap support cannot silently expand speaker or auxiliary DSP domains");
     identityContinuityAndQueueing(app);
     boundedIndependentStreams();
     concurrentRevocation();

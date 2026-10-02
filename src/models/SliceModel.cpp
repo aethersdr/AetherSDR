@@ -659,6 +659,16 @@ void SliceModel::setAgcOffLevel(int value)
     emit agcOffLevelChanged(value);
 }
 
+void SliceModel::setWfmAudioMode(WfmAudioMode mode)
+{
+    if (validWfmAudioMode(mode)) { emit wfmAudioModeRequested(mode); }
+}
+
+void SliceModel::setHdProgram(int program)
+{
+    if (program >= 0 && program < 8) { emit hdProgramRequested(program); }
+}
+
 void SliceModel::setWfmForceMono(bool forceMono)
 {
     // Selection is intent until the prepared decoder revision is accepted.
@@ -1660,6 +1670,22 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.wfmForceMono && m_wfmForceMono != *d.wfmForceMono) {
         m_wfmForceMono = *d.wfmForceMono;
         emit wfmForceMonoChanged(m_wfmForceMono);
+    }
+    const WfmAudioMode nextWfmMode = d.wfmAudioMode.value_or(
+        d.wfmForceMono && m_wfmAudioMode != WfmAudioMode::HdStereo
+            ? (*d.wfmForceMono ? WfmAudioMode::Mono : WfmAudioMode::Stereo) : m_wfmAudioMode);
+    if (validWfmAudioMode(nextWfmMode) && m_wfmAudioMode != nextWfmMode) {
+        m_wfmAudioMode = nextWfmMode; emit wfmAudioModeChanged(nextWfmMode);
+    }
+    if (d.hdProgram && *d.hdProgram >= 0 && *d.hdProgram < 8 && m_hdProgram != *d.hdProgram) {
+        m_hdProgram = *d.hdProgram; emit hdProgramChanged(m_hdProgram);
+    }
+    HdFmReception hdValue = d.hdFmReception ? normalizedHdFmReception(*d.hdFmReception) : m_hdFmReception;
+    if (m_mode != QLatin1String("WFM") || m_wfmAudioMode != WfmAudioMode::HdStereo
+        || !std::isfinite(m_frequency) || std::abs(m_frequency * 1e6 - hdValue.frequencyHz) > 0.5
+        || hdValue.selectedProgram != m_hdProgram) { hdValue = {}; }
+    if (hdValue != m_hdFmReception) {
+        m_hdFmReception = hdValue; emit hdFmReceptionChanged(m_hdFmReception);
     }
     if (d.wfmStereoStatus) {
         const WfmStereoStatus status = *d.wfmStereoStatus;

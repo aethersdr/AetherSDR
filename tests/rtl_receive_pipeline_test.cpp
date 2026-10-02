@@ -370,6 +370,7 @@ struct RtlReceivePipelineTestAccess {
         RtlReceivePipeline::Packet packet;
         packet.token = {7, 11}; packet.slot = 3; packet.captureEpoch = 19;
         packet.receiverEpoch = 23; packet.frames = 256; packet.samples[0] = .375f;
+        packet.producedMonotonicMs = 1234; // decoded time must not become mailbox time
         if (pipeline.diagnostics().packetQueueCapacity != expectedCapacity) { return false; }
         // Repeated fills cross the physical wrap. Drop-new must retain every
         // accepted packet and preserve a genuine position gap on resumption.
@@ -388,7 +389,7 @@ struct RtlReceivePipelineTestAccess {
                     || packet.token != RtlReceivePipeline::Transaction::Token{7, 11}
                     || packet.slot != 3 || packet.captureEpoch != 19 || packet.receiverEpoch != 23
                     || packet.frames != 256 || packet.samples[0] != .375f || packet.discontinuity
-                    || packet.enqueuedMonotonicNs == 0) { return false; }
+                    || packet.enqueuedMonotonicNs == 0 || packet.producedMonotonicMs != 1234) { return false; }
             }
             if (pipeline.takePacket(packet)) { return false; }
         }
