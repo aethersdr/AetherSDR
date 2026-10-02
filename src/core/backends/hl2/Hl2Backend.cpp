@@ -5956,11 +5956,22 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // (#5802.)
     put("adcRmsDbfs", QStringLiteral("ADC RMS, AC (uncalibrated pre-DDC dBFS)"),
         dbfs(rms));
+    // The mean the RMS row removed, on the same scale and gate as its
+    // neighbours (#5856). Named for where it is measured, not for a cause. A
+    // non-zero mean under half a code reports below kEp4FloorDbfs, as
+    // adcRmsDbfs does (see Ep4Stats::dcDbfs()).
+    put("adcDcDbfs", QStringLiteral("ADC DC level (uncalibrated pre-DDC dBFS)"),
+        dbfs(haveBlock ? m_bandscopeBlock.dcDbfs() : 0.0));
+    // The same mean, signed, in raw codes: the sign says which rail it sits
+    // toward, and it separates a zero mean from a half-code one.
+    put("adcDcCodes", QStringLiteral("ADC DC level (signed codes)"),
+        haveBlock ? QVariant(QString::number(m_bandscopeBlock.meanCodes(), 'f', 2))
+                  : QVariant());
     // Crest factor is scale-free (the calibration offset cancels): ~11-12 dB
     // for a broadband floor over 2048 samples, ~3 dB for a sinusoid. With AC
-    // RMS and absolute peak, a large crest can also mean a large DC offset
-    // (#5856). Not reported when either term is at the floor sentinel (see
-    // Ep4Stats::crestDb()); the invalid variant keeps the row in place.
+    // RMS and absolute peak, a large crest can also mean a large DC level;
+    // adcDcDbfs above says which (#5856). Not reported when either term is at
+    // the floor sentinel (Ep4Stats::crestDb()); the row stays in place.
     const std::optional<double> crest =
         haveBlock ? m_bandscopeBlock.crestDb() : std::nullopt;
     put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"),
@@ -5976,9 +5987,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // snapshot with no age on it invites being read as current.
     //
     // GATED ON haveObservation, NOT ON haveBlock, and that is the whole reason
-    // the two names exist. This row is what EXPLAINS the four above going
-    // absent: an operator who sees four dashes and an age of 46 810 ms knows
-    // the gate stopped, where four dashes and a fifth dash says only that
+    // the two names exist. This row is what EXPLAINS the six above going
+    // absent: an operator who sees six dashes and an age of 46 810 ms knows
+    // the gate stopped, where six dashes and a seventh dash says only that
     // something is missing. Expiring the age along with the values would
     // delete the evidence for the expiry.
     put("adcObservedAgoMs", QStringLiteral("ADC level observed (ms ago)"),

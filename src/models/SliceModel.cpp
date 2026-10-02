@@ -1771,6 +1771,9 @@ void SliceModel::applyChanges(const SliceDelta& d)
     }
     if (freqChanged)
         emit frequencyChanged(m_frequency);
+    if (d.frequency.has_value() && m_frequencyReportedKnown) {
+        emit frequencyStatusReported(m_reportedFrequency);
+    }
     if (modeChanged_)   emit modeChanged(m_mode);
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
     if (previousObservation != m_receiveObservation) {
