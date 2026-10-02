@@ -182,8 +182,9 @@ jobs:
           # No qtwayland entry, deliberately: it rides in the BASE package.
           # qt.qt6.<ver>.<arch>'s DownloadableArchives lists qtwayland-Linux-...7z
           # next to qtbase, so this install already lays down
-          # plugins/platforms/libqwayland-generic.so, libqwayland-egl.so and the
-          # three wayland-* integration dirs. There is no "qtwayland" module in
+          # plugins/platforms/libqwayland.so — Qt 6.12's single Wayland platform
+          # plugin (keys wayland, wayland-egl, wayland-brcm) — and the three
+          # wayland-* integration dirs. There is no "qtwayland" module in
           # the desktop repository — only qtwaylandcompositor — and aqt
           # hard-errors on an unknown module ("The packages ['qtwayland'] were
           # not found"), so naming one here fails the whole release build.
@@ -321,11 +322,9 @@ jobs:
           cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/
 
           # Bundle the Wayland client buffer integration. QT_QPA_PLATFORM=wayland
-          # resolves to platforms/libqwayland-generic.so (qwayland-generic.json
-          # declares Keys: ["wayland"]; the EGL *platform* plugin's key is
-          # "wayland-egl", so that name never selects it), and the generic plugin
-          # obtains OpenGL only through a client buffer integration plugin loaded
-          # from this directory — libqt-plugin-wayland-egl.so. Without it native
+          # resolves to platforms/libqwayland.so, which obtains OpenGL only
+          # through a client buffer integration plugin loaded from this
+          # directory — libqt-plugin-wayland-egl.so. Without it native
           # Wayland comes up with no GL at all, which matters because both legs
           # ship AETHER_GPU_SPECTRUM=ON.
           #
@@ -389,7 +388,7 @@ jobs:
           # wayland-decoration-client and wayland-shell-integration on its own —
           # only wayland-graphics-integration-client has to be staged by hand,
           # which the "Install to AppDir" step above does.
-          EXTRA_PLATFORM_PLUGINS: libqwayland-generic.so;libqwayland-egl.so
+          EXTRA_PLATFORM_PLUGINS: libqwayland.so
         run: |
           # Sanitize the ref for the output filename: a workflow_dispatch on a
           # branch like "ci/appimage-qtkeychain" puts a '/' in github.ref_name,
