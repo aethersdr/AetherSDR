@@ -787,8 +787,8 @@ endif()
 # The settings store (RFC #4603): AppSettings' implementation spans the SQLite
 # wrapper, path helpers, pre-QApplication bootstrap reader, and the sanitizer.
 # Every target that compiles AppSettings.cpp needs the whole group — and the
-# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop near the end
-# of this file.
+# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop in
+# tests/tests.cmake.
 set(AETHER_SETTINGS_SOURCES
     src/core/AppSettings.cpp
     src/core/SettingsDatabase.cpp

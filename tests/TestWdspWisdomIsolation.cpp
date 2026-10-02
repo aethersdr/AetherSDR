@@ -1,18 +1,9 @@
-// Linked into every registered test target (see the loop at the end of
-// tests/tests.cmake). Its whole job is to run BEFORE main() and make it
-// impossible for a test process to write the operator's real FFTW wisdom cache.
-//
-// Why a static initializer and not just a ctest ENVIRONMENT property: the
-// property only covers `ctest`. Running a test binary directly —
-// `QT_QPA_PLATFORM=offscreen ./build/hl2_rxdsp_test`, which is the normal way
-// to debug one — inherits nothing, and WdspChannel::open() would then export
-// over ~/.cache/aethersdr/wdsp-fftw-wisdom. That is a silent 20-60 s tax on the
-// operator's NEXT REAL CONNECT, paid every time they build a PR, with nothing
-// on screen connecting cause to effect. The ctest properties are kept as well,
-// so the values are visible in CTestTestfile.cmake rather than only implied.
-//
-// setenv(..., 0) — do NOT overwrite. An explicit value from ctest, from CI, or
-// from a developer investigating plan quality still wins.
+// Linked into every test executable by aether_retrofit_tests() (deferred, in
+// tests/tests.cmake) unless it sets AETHER_TEST_NO_WISDOM_ISOLATION. Runs before
+// main() so a test binary run directly, outside ctest's ENVIRONMENT, still caps
+// the FFTW planner and redirects the wisdom cache away from the operator's real
+// ~/.cache/aethersdr/wdsp-fftw-wisdom (docs/HERMES.md). setenv(..., 0): an
+// explicit value from ctest, CI, or a developer still wins.
 
 #include <cstdlib>
 

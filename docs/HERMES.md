@@ -709,8 +709,8 @@ it does not work: the app's own 38 KB cache made no measurable difference to
 `wdsp_channel_test` (22.8 s warm vs 22.4 s cold on macOS/arm64), because the
 app's plan set and the tests' plan set are different FFTW problems. Only a cache
 the tests themselves wrote helped — which a fresh container never has. Instead
-every test now runs with `AETHER_WDSP_FFTW_TIMELIMIT` set (see the block at the
-end of `tests/tests.cmake`), which bounds the planner through
+every test now runs with `AETHER_WDSP_FFTW_TIMELIMIT` set (see "How the
+retrofit is applied" below), which bounds the planner through
 `fftw_set_timelimit()` and, because rushed plans must never reach the cache the
 app imports, **skips the wisdom export entirely while it is set**. One knob, so
 it is not possible to bound the planner and forget to isolate the cache.
@@ -733,6 +733,18 @@ and `transmit_model_test` drive HL2 DSP without an `hl2_` name, ran unbounded, a
 were observed replacing a developer's real 38 KB cache with an 11 KB test-only one.
 Naming is not a proxy for what a test opens, and the failure is silent — the suite
 still passes, it just degrades the next real connect.
+
+**How the retrofit is applied.** `tests/tests.cmake` defines
+`aether_retrofit_tests()` and schedules it with `cmake_language(DEFER CALL)`, so
+it runs after the last line of the root `CMakeLists.txt` and sees every test,
+wherever it is declared. It links the `aether_test_wisdom_isolation` OBJECT
+library into every executable the file declares, and appends
+`AETHER_WDSP_FFTW_TIMELIMIT` and `AETHER_WDSP_WISDOM_DIR` to every registered
+test's ctest `ENVIRONMENT`. `aether_assert_tests_retrofitted()` then reads both
+back and fails the configure step, naming each miss. An executable that must
+plan uncapped opts out of the isolation object with the target property
+`AETHER_TEST_NO_WISDOM_ISOLATION`, whose value is the required reason; there is
+no opt-out from the ctest `ENVIRONMENT` cap.
 
 Measured cold, `ctest -R '^(hl2|wdsp)_' -j8`, macOS/arm64: **100.5 s wall /
 632.0 s CPU before, 21.6 s wall / 9.3 s CPU after.** The CPU figure is the one
@@ -1643,7 +1655,7 @@ from 6 dB to 100 dB; opposite-sideband suppression is 85 dB.
 | EP6 response C0 | `ACK` (bit 7) **changes how the rest of C0 decodes**: ACK=0 → RADDR in `[6:3]` (4 bits) + Dot/Dash/PTT; ACK=1 → RADDR in `[6:1]` (6 bits) |
 | TX inhibit | **Active low** — the bit is SET when transmit is permitted |
 | SWR | Counts are **voltage**-proportional → `(Vf+Vr)/(Vf−Vr)`, **no square root**. Validated by reading 1.0:1 into a dummy load |
-| **Wire handedness** | The wire is the **conjugate** of the standard analytic convention. RX compensates with `-imag()` before WDSP; **TX must conjugate too**. Omitting it transmits every signal on the wrong sideband — see §14.6 |
+| **Wire handedness** | The wire is the **conjugate** of the standard analytic convention. RX: the **spectrum** takes the conjugate (`std::conj` in `Hl2RxDsp::processIqBlock`) and WDSP takes the **raw wire**, because RXA selects the opposite sign to its passband bounds — see §16.1. TX: the default WDSP TXA modulator does **not** conjugate, its signed passband already gives the wire's handedness; the phasing modulator (`AETHER_HL2_TX_TXA=OFF`) and the TUNE/tone generator conjugate. Getting TX wrong transmits every signal on the wrong sideband — see §14.6 |
 | PA enable vs handedness | A tune carrier sits at **zero offset**, where handedness has no effect. TUNE therefore works even when the sideband convention is wrong, and is useless as evidence for it |
 
 ### 14.4 Seam gaps this phase exposed
