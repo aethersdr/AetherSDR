@@ -51,6 +51,7 @@ void SimSignalSource::startSession(quint64 session)
         qWarning() << "SimSignalSource: producer refused session" << session
                    << "(speaker =" << speakerOk << ", slice =" << sliceOk << ")";
     }
+    m_session = session;
     m_clock.invalidate();   // fresh pacing baseline; first frames next tick
     m_debtNs = 0;
     m_timer.start();
@@ -152,7 +153,7 @@ void SimSignalSource::onTick()
             // gets its own emission, so the seam carries real multi-pan load
             // and RadioModel routes rows to the right pane (#4887 phase 4).
             for (const int pan : m_panIndices)
-                emit spectrumFrameReady(pan, bytes);
+                emit spectrumFrameReady(pan, m_session, bytes);
         }
     }
 }

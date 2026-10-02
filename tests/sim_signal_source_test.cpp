@@ -89,7 +89,7 @@ public:
                     lastSliceId = id;
                 });
         connect(src, &AetherSDR::SimSignalSource::spectrumFrameReady, this,
-                [this](int pan, const QByteArray&) {
+                [this](int pan, quint64, const QByteArray&) {
                     ++spectrum;
                     panIdsSeen.insert(pan);
                 });

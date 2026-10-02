@@ -42,9 +42,14 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
                     publishLegacySliceAudio(sliceId, frame.legacyStereo24());
                 }
             });
+    // Spectrum carries the session too (#6084): m_connected closes the window
+    // after disconnected(), the session drops a row the previous session's
+    // worker queued that lands after a reconnect.
     connect(m_signalSource, &SimSignalSource::spectrumFrameReady,
-            this, [this](int panId, const QByteArray& bins) {
-                if (m_connected) emit spectrumFrameReady(panId, bins);
+            this, [this](int panId, quint64 session, const QByteArray& bins) {
+                if (m_connected && session == pcmSession()) {
+                    emit spectrumFrameReady(panId, bins);
+                }
             });
 
     // ---- Path B (RFC #4288): own a RadioConnection + PanadapterStream in
@@ -73,8 +78,7 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // Re-emit wire lifecycle as the interface's own signals (as FlexBackend does).
     connect(m_connection, &RadioConnection::connected,
             this, &IRadioBackend::connected);
-    connect(m_connection, &RadioConnection::disconnected,
-            this, &IRadioBackend::disconnected);
+    // disconnected is re-emitted by the ordered handler below, not here.
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
 
@@ -113,12 +117,16 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
             if (m_connected) emitInitialState();
         });
     });
+    // ONE handler closes the gate and THEN announces (#6084). As two queued
+    // slots the order hung on connect order, and a worker frame could be
+    // delivered between them: forwarded after the seam said disconnected().
     connect(m_connection, &RadioConnection::disconnected, this, [this]() {
         m_connected = false;
         m_wirePanIds.clear();
         m_pansAwaitingGeometry.clear();
         QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::stop,
                                   Qt::QueuedConnection);
+        emit disconnected();
     });
 
     // Seam geometry for dynamically created pans (#4887 phase 4): each needs the
@@ -402,7 +410,8 @@ void SimBackend::disconnectRadio()
     // Tear the synthetic connection down too: RadioModel treats the vended
     // RadioConnection as the live link (Route A hybrid), so it must not stay
     // Connected after `sim disconnect`. Its synthetic branch emits disconnected(),
-    // reaching RadioModel::onDisconnected, our ctor lambda and our seam re-emit.
+    // reaching RadioModel::onDisconnected and our ctor handler, which re-emits it
+    // on the seam.
     // Only that branch reports the disconnect, so delegate only when we were dialled
     // through it; a bare connectRadio() (unit test) disconnects here. Queued.
     if (m_connection && m_connection->isSyntheticDemo()) {
