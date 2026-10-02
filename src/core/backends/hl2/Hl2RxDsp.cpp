@@ -261,6 +261,11 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     applyMinimumPhaseForMode();
     m_channel->setFilter(m_config.filterLowHz, m_config.filterHighHz);
     m_channel->setAgc(m_config.agcMode, m_config.maximumAgcGainDb);
+    // The squelch, AFTER setMode above so WdspChannel routes it to the stage
+    // for the mode actually in force. A fresh channel opens with every
+    // squelch stage off; without this a rate change would open the squelch
+    // under a lit SQL button.
+    pushSquelchToChannel();
     // A rebuild (rate change) creates a fresh channel; restore the operator's
     // current slice offset rather than silently snapping the slice to centre.
     if (m_shiftHz != 0.0)
@@ -347,6 +352,31 @@ void Hl2RxDsp::setNoiseBlanker(bool on, int level)
     }
     m_nbAppliedOn.store(m_nbOn, std::memory_order_relaxed);
     m_nbAppliedLevel.store(m_nbLevel, std::memory_order_relaxed);
+}
+
+void Hl2RxDsp::setSquelch(bool on, int level)
+{
+    m_squelchOn = on;
+    m_squelchLevel = std::clamp(level, 0, 100);
+    if (!canPushToChannel())
+        return;   // held; installChannel() applies it at the swap
+    pushSquelchToChannel();
+}
+
+void Hl2RxDsp::pushSquelchToChannel()
+{
+    if (m_channel->setSquelch(m_squelchOn, m_squelchLevel)) {
+        m_squelchPending = false;
+        return;
+    }
+    // Logged on the EDGE into pending only: the retry runs once per block, and
+    // a refusal that persisted would otherwise log at the block rate.
+    if (!m_squelchPending) {
+        qCWarning(lcHl2RxDsp) << "squelch" << (m_squelchOn ? "on" : "off") << "level"
+                              << m_squelchLevel << "refused by the channel; retrying "
+                                 "on the next IQ block";
+    }
+    m_squelchPending = true;
 }
 
 void Hl2RxDsp::setMode(WdspChannel::Mode mode)
@@ -566,6 +596,12 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
 {
     if (!m_channel)
         return;
+
+    // A squelch change the channel refused, retried here: this thread is the
+    // one that calls processIq(), and this block's call has not started, so
+    // no callback of ours is in flight. See setSquelch().
+    if (m_squelchPending && canPushToChannel())
+        pushSquelchToChannel();
 
     // The two consumers need opposite handedness (measured; hl2_rxdsp_test,
     // hl2_shift_test): the HPSDR wire puts signals above the NCO at negative

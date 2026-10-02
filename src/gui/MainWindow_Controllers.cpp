@@ -2455,14 +2455,14 @@ void MainWindow::registerMidiParams()
         });
 
     // ── QSO Recorder ────────────────────────────────────────────────────
-    // Mirror the exact dual routing used by the VFO ⏺/▶ buttons
-    // (MainWindow.cpp:11413-11443): RecordingMode=="Client" → QsoRecorder,
-    // otherwise → SliceModel::setRecordOn / setPlayOn (radio-side).
+    // Mirror the exact dual routing used by the VFO ⏺/▶ buttons: the client
+    // QsoRecorder when it is the recorder (recordsOnClient() — "Client" mode,
+    // or "Radio" on a radio with no radio-side recorder), otherwise
+    // SliceModel::setRecordOn / setPlayOn (radio-side).
     reg("global.qsoRecord", "QSO Record", "Global", P::Toggle, 0, 1,
         [this](float v) {
             const bool on = v > 0.5f;
-            const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+            const bool clientSide = !m_qsoRecorder || m_qsoRecorder->recordsOnClientNow();
             if (clientSide) {
                 if (on) m_qsoRecorder->startRecording();
                 else    m_qsoRecorder->stopRecording();
@@ -2471,8 +2471,7 @@ void MainWindow::registerMidiParams()
             }
         },
         [this]() -> float {
-            const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+            const bool clientSide = !m_qsoRecorder || m_qsoRecorder->recordsOnClientNow();
             if (clientSide)
                 return (m_qsoRecorder && m_qsoRecorder->isRecording()) ? 1.0f : 0.0f;
             auto* s = activeSlice();
@@ -2482,8 +2481,7 @@ void MainWindow::registerMidiParams()
     reg("global.qsoPlay", "QSO Playback", "Global", P::Toggle, 0, 1,
         [this](float v) {
             const bool on = v > 0.5f;
-            const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+            const bool clientSide = !m_qsoRecorder || m_qsoRecorder->recordsOnClientNow();
             if (clientSide) {
                 if (on) m_qsoRecorder->startPlayback();
                 else    m_qsoRecorder->stopPlayback();
@@ -2492,8 +2490,7 @@ void MainWindow::registerMidiParams()
             }
         },
         [this]() -> float {
-            const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+            const bool clientSide = !m_qsoRecorder || m_qsoRecorder->recordsOnClientNow();
             if (clientSide)
                 return (m_qsoRecorder && m_qsoRecorder->isPlaying()) ? 1.0f : 0.0f;
             auto* s = activeSlice();
