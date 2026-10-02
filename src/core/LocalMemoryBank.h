@@ -13,28 +13,14 @@
 
 namespace AetherSDR {
 
-// The client-side memory bank: what a radio's memory slots would be, for a
-// radio that has none. Standing in for the radio is deliberate — it is what
-// lets every existing memory path keep working untouched.
-//
-// The whole memory UX (the dialog, the browse panel, CSV import/export, the
-// panadapter memory-spot feed, the automation `memory activate` verb) is built
-// on two things: RadioModel's memory cache, and the four commands the client
-// issues to change it — `memory create`, `memory set <idx> <kv…>`,
-// `memory remove <idx>`, `memory apply <idx>`. On a Flex those go to the radio
-// and come back as memory status. Here they are answered locally, in the same
-// shape, with the same kv-set decode (MemoryWire::decodeStatus), so nothing
-// upstream needs to know which kind of radio it is talking to.
-//
-// Ownership split with RadioModel is one-way and worth keeping straight:
-//   * The bank answers commands and hands back a MemoryDelta.
-//   * RadioModel applies that delta — it owns the 0x7f→' ' decode and the
-//     control-byte sanitisation, and it emits the memoryChanged/memoryRemoved
-//     signals the UI listens to.
-//   * RadioModel then calls record() with its post-decode MemoryEntry, which is
-//     what gets persisted.
-// So the JSON on disk is byte-for-byte what the UI and a CSV export see, rather
-// than a second, wire-encoded interpretation of it that could drift.
+// Client-side memory bank standing in for a radio that has no memory slots, so
+// every memory path (dialog, browse panel, CSV, pan spots, `memory activate`)
+// works unchanged. It answers the four commands (`memory create`, `memory set
+// <idx> <kv...>`, `memory remove <idx>`, `memory apply <idx>`) locally in the
+// same shape, decoded with MemoryWire::decodeStatus. One-way ownership: the bank
+// returns a MemoryDelta; RadioModel applies it (0x7f -> ' ' decode,
+// sanitisation, memoryChanged/memoryRemoved) and calls record() with the decoded
+// MemoryEntry, which is persisted, so the JSON matches what the UI and CSV see.
 class LocalMemoryBank : public QObject {
     Q_OBJECT
 

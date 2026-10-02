@@ -28,21 +28,11 @@ class QPaintEvent;
 
 namespace AetherSDR {
 
-// Audio scope shared by the sidebar WAVE applet and the Aetherial strip's
-// waveform panels. The strip used to be a near-identical fork
-// (StripWaveform); Profile carries the few real differences so both
-// surfaces share one implementation and one perf story.
-//
-// Reduction is incremental (WaveformScopeModel): samples fold into bins as
-// they arrive, and a repaint only merges bins into pixel columns — the
-// per-frame cost no longer scales with the time window (#3283).
-//
-// Rendering follows the SpectrumWidget dual-path pattern: with
-// AETHER_GPU_SPECTRUM the widget is a QRhiWidget and the waveform (all four
-// view modes, grid lines, clip ticks) is evaluated per-pixel in a fragment
-// shader from a 1-D column texture; text (dB labels, readout, footer,
-// badges) rides a QPainter-drawn overlay texture refreshed only when it
-// changes. Without the flag it stays the QPainter paintEvent path.
+// Audio scope shared by the WAVE applet and the Aetherial strip (Profile holds
+// their differences). Reduction is incremental via WaveformScopeModel (#3283).
+// With AETHER_GPU_SPECTRUM it is a QRhiWidget: the waveform is shaded per-pixel
+// from a 1-D column texture and text rides a QPainter overlay texture refreshed
+// on change; otherwise it uses the QPainter paintEvent path.
 class WaveformWidget : public WAVEFORM_BASE_CLASS {
     Q_OBJECT
 

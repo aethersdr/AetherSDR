@@ -1,14 +1,7 @@
-// MainWindow_Spots.cpp — spot-subsystem wiring for MainWindow.
-//
-// Part of the #3351 monolith decomposition (Phase 2b). Holds
-// wireSpotSubsystem(), extracted verbatim from the constructor:
-//
-//   • DX Cluster / RBN / WSJT-X / SpotCollector / POTA clients on the
-//     dedicated spot worker thread
-//   • HF propagation forecast client
-//   • Spot forwarding to the radio: dedup + batch queue + 1/sec flush
-//
-// Runs once at construction, at the original constructor position.
+// MainWindow_Spots.cpp — wireSpotSubsystem(): DX Cluster / RBN / WSJT-X /
+// SpotCollector / POTA clients on the spot worker thread, the HF propagation
+// client, and spot forwarding to the radio (dedup + batch queue + 1/s flush).
+// Runs once at construction.
 
 #include "MainWindow.h"
 
@@ -574,16 +567,11 @@ void MainWindow::wireSpotSubsystem()
     connect(&m_radioModel.spotModel(), &SpotModel::spotsCleared,
             this, [this] { m_passiveSpotExpiryMs.clear(); m_n1mmSpotIdByKey.clear(); });
 
-    // ── N1MM/DXLog contest logger spots (#2906) ───────────────────────────
-    // Unlike the other feeds, N1MM tells us explicitly when a spot is added,
-    // updated (re-"add" for a callsign already on this band), or removed
-    // ("delete", e.g. when the station moves within the band), so this
-    // bypasses queueSpotCmd's freq-based dedup and keys spots by
-    // N1MMSpotParser::spotKey() (callsign+band) instead. A generous lifetime
-    // still backstops the model in case the logger exits without sending
-    // deletes for its open spots.
-    // Per-flag colour: the operator's stored override if they picked one,
-    // otherwise the flag's theme token so contest spots follow the theme.
+    // N1MM/DXLog spots (#2906): the logger sends explicit add/update/delete, so
+    // these bypass queueSpotCmd's freq dedup and key on
+    // N1MMSpotParser::spotKey() (callsign+band); a long lifetime backstops a
+    // logger that exits without deletes.
+    // Per-flag colour: the operator's override if set, else the theme token.
     auto n1mmColorForStatus = [](const QString& statusFlag) {
         for (const auto& spec : N1MMSpotParser::kStatusColorSpecs) {
             if (statusFlag != QLatin1String(spec.flag))

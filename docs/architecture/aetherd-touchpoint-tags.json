@@ -281,6 +281,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/QtAudioBackendGuard.h": {
+  "tag": "ui-support",
+  "note": "Pre-QApplication probe that keeps Qt 6.12's QtMultimedia off a PipeWire backend that would crash; client startup plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/GreenHeronProtocol.h": {
   "tag": "peripheral(greenheron)",
   "note": "Pure framing/parsing/encoding for the Green Heron Everyware wire protocol — the antenna switches and the rotator both, which share one TCP connection. No sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md.",

@@ -14,20 +14,13 @@ namespace AetherSDR {
 class RadioConnection;
 class PanadapterStream;
 
-// FlexBackend — the first IRadioBackend implementor (aetherd RFC step 2),
-// wrapping the SmartSDR / FlexRadio wire stack.
-//
-// As of 2.2b it OWNS the wire objects: the RadioConnection and PanadapterStream
-// plus their two worker threads, created here in the exact order RadioModel
-// used (panStream thread first, connection thread second) and torn down here in
-// the exact #502 order (BlockingQueued stop → deleteLater → thread quit/wait).
-// RadioModel holds non-owning pointers it obtains via connection()/panStream()
-// and keeps its command/WAN orchestration and its sub-models — so the move is
-// ownership-only and behavior-neutral.
-//
-// The canonical core verbs build the exact SmartSDR command strings and emit
-// them through the model-provided command sink; they grow onto the live path as
-// the touchpoint burndown converts each model (2.3).
+// FlexBackend — the IRadioBackend for the SmartSDR / FlexRadio wire stack.
+// Owns the RadioConnection and PanadapterStream and their two worker threads:
+// created panStream thread first, connection thread second, and torn down in
+// the #502 order (BlockingQueued stop → deleteLater → thread quit/wait).
+// RadioModel holds non-owning pointers via connection()/panStream() and keeps
+// the command/WAN orchestration and sub-models. Core verbs build SmartSDR
+// command strings and emit them through the model-provided command sink.
 class FlexBackend : public IRadioBackend {
     Q_OBJECT
 
@@ -63,17 +56,11 @@ public:
     void stopIndependentTx(const TxCoordinator::Operation& operation,
                            const TxCoordinator::StopRequest& request) override;
 
-    // The capacity THIS radio declared, as opposed to what the model table
-    // estimates for radios of its kind (#5594 item 3).
-    //
-    // Pushed down rather than read here because it arrives in the discovery
-    // packet, which RadioModel owns; #5554 §2.7 moves desktop discovery onto the
-    // unified source, and this becomes a backend-side read at that point.
-    //
-    // Either value may be <= 0, meaning "the radio did not say", which leaves
-    // capabilities() on the model-table estimate. Announces a revision when a
-    // value actually changes — the descriptor is what the control protocol
-    // serializes, so a silent change is a client holding a stale limit.
+    // The capacity THIS radio declared in its discovery packet, as opposed to the
+    // model-table estimate (#5594 item 3). Pushed from RadioModel, which owns
+    // discovery. A value <= 0 means "not reported" and keeps the model-table
+    // estimate. Emits capabilitiesChanged() when a value changes, since the
+    // descriptor is what the control protocol serializes.
     void setRadioReportedCapacity(int maxSlices, int maxPanadapters);
 
     // ---- IRadioBackend ----
@@ -206,6 +193,7 @@ private:
     void send(const QString& cmd);
     void sendTx(const QString& cmd, const TxCoordinator::Command& command);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
+    void sendSliceTune(int sliceId, const SliceTuneRequest& request);
 
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)

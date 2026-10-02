@@ -8,27 +8,13 @@
 
 namespace AetherSDR {
 
-// ---------------------------------------------------------------------------
-// FIR low-pass coefficients  — buildFirLP()
-//
-// Specification
-//   fs            = 48 000 Hz
-//   fc            = 20 000 Hz  (midpoint of 18 kHz passband / 22 kHz stopband)
-//   order         = 94  →  95 taps  (kFirTaps = kFirOrder + 1)
-//   window        = Hamming  → stopband attenuation ≥ 53 dB, stopband edge ≈ 22 kHz
-//   phase         = linear (Type-I: odd taps, symmetric h[n] = h[N-1-n])
-//   DC gain       = 1.0  (Σ h[n] normalised → no DC notch, no high-pass artifact)
-//
-// Formula
-//   t    = n − M/2        (time index centred at M/2, where M = kFirOrder = 94)
+// FIR low-pass (buildFirLP): fs = 48 kHz, fc = 20 kHz (18 kHz pass / 22 kHz
+// stop), order M = 94 → 95 taps, Hamming (≥ 53 dB stopband), Type-I linear
+// phase (h[n] = h[N-1-n]), DC gain normalised to 1.
+//   t    = n − M/2
 //   sinc = sin(π·2·fc·t) / (π·2·fc·t),   sinc(0) = 1
-//   win  = 0.54 − 0.46·cos(2π·n / M)     (Hamming window)
-//   h[n] = sinc · win
-//   normalise so Σ h[n] = 1
-//
-// Symmetry check: t(n) = −t(N−1−n) → sinc and win are both symmetric around n=M/2
-//   ⟹ h[n] = h[N−1−n]  ✓
-// ---------------------------------------------------------------------------
+//   win  = 0.54 − 0.46·cos(2π·n / M)
+//   h[n] = sinc · win, then normalise so Σ h[n] = 1
 static std::array<float, WfmDsp::kFirTaps> buildFirLP()
 {
     constexpr int   M  = WfmDsp::kFirOrder;   // 94

@@ -624,6 +624,17 @@ channel retention, repeated discard, RX/pending-flush refusal, and leaks.
 When updating WDSP, retain this local entry point unless upstream supplies an
 equivalent synchronous discard with the same locking and refusal contract.
 
+## Host portability allocation accounting
+
+The host-owned `port/wdsp_port.c` retains process-wide allocation/resource
+counters and additionally exposes `wdspPortThreadAllocationSequence()`.
+`WdspChannel::processIq()` compares the calling thread's counter: preparing a
+new channel on the registry pool must not falsely report callback allocation
+on a different, already-running receiver. Successful aligned allocations
+advance both counters; failed allocations advance neither. RTL materializes
+platform TLS on its acquisition thread before entering USB callbacks.
+`wdsp_allocation_scope_test` pins local detection and foreign-thread isolation.
+This changes host instrumentation, not the upstream DSP snapshot.
 ## Patch 12 — `create_minphase()` plans with `FFTW_ESTIMATE` (#5498)
 
 `upstream/fir.c::create_minphase()` plans its four transforms with

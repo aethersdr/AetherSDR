@@ -248,33 +248,19 @@ void IambicKeyer::workerLoop()
             const Mode currentMode =
                 static_cast<Mode>(m_mode.load(std::memory_order_relaxed));
 
-            // Mode B: latch the opposite paddle's state at the moment the
-            // element begins.  The live checks in the on/gap wait loops below
-            // only observe paddle state when the condition variable wakes, and
-            // setPaddleState() stores the new values before notifying — so a
-            // simultaneous dual release (routine when the serial poll collapses
-            // both edges into one ~10 ms tick, #4032) wakes the loop with the
-            // held state already gone and the memory never latches, silently
-            // degrading Mode B to Mode A.  Snapshotting up front closes that
-            // race; the live checks stay, they still catch a genuine
-            // mid-element opposite-paddle tap that a start snapshot would miss.
+            // Mode B: latch the opposite paddle at element start. The wait loops only see
+            // paddle state on wake, and a simultaneous dual release (one ~10 ms serial poll,
+            // #4032) is already gone by then, degrading Mode B to Mode A. The live checks
+            // remain for a genuine mid-element tap.
             if (currentMode == Mode::IambicB) {
                 std::lock_guard<std::mutex> lk(m_mu);
                 latchOppositeLocked(next);
             }
 
-            // ── Element on ─────────────────────────────────────────────
-            // Deadline armed BEFORE the key-down callback, so the
-            // callback's cost (sidetone gate flip, per-edge trace log,
-            // queued radio post) cannot push the edge out.
-            // Catch-up limiter: a stall longer than one element leaves every
-            // following deadline already past, so both wait loops fall
-            // straight through and the worker emits zero-length elements —
-            // and zero-length `cw key` edges on air — until the grid catches
-            // up.  Re-anchor instead.  Ordinary wake latency is orders of
-            // magnitude inside one element, so the self-correcting property
-            // this whole change exists for is untouched; only a stall that
-            // already lost an element stops trying to win the time back.
+            // Element on. Deadline armed BEFORE the key-down callback so its cost can't push
+            // the edge. Catch-up limiter: after a stall longer than one element every
+            // deadline is past and the worker would emit zero-length `cw key` edges, so
+            // re-anchor the grid instead.
             const auto markNow = std::chrono::steady_clock::now();
             if (grid + onDuration < markNow) grid = markNow;
             const auto onDeadline = grid + onDuration;

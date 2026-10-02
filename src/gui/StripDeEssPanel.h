@@ -11,19 +11,8 @@ class AudioEngine;
 class ClientCompKnob;             // reused — generic rotary knob
 class ClientDeEssCurveWidget;
 
-// Floating editor for the client-side de-esser.  Three-column layout
-// inspired by Ableton's Compressor (the de-esser preset), using our
-// actual de-esser parameters:
-//
-//   ┌─ bypass ──────────────────── × ┐
-//   │ ┌──────┐ ┌────────────┐ ┌────┐ │
-//   │ │ FREQ │ │            │ │ AMT│ │
-//   │ │      │ │  bandpass  │ │    │ │
-//   │ │  Q   │ │  response  │ │ ATK│ │
-//   │ │      │ │  + live    │ │    │ │
-//   │ │ THR  │ │  ball      │ │ REL│ │
-//   │ └──────┘ └────────────┘ └────┘ │
-//   └────────────────────────────────┘
+// Floating editor for the client-side de-esser, three columns: FREQ/Q/THR
+// knobs, bandpass response with live ball, AMT/ATK/REL knobs.
 class StripDeEssPanel : public QWidget {
     Q_OBJECT
 

@@ -1,20 +1,8 @@
-// MainWindow_Controllers.cpp — external-controller methods of MainWindow.
-//
-// Part of the #3351 monolith decomposition (Phase 1a). This translation
-// unit holds the method bodies for every physical-controller subsystem:
-//
-//   • FlexControl (serial knob): dialog, indicator sync, tune/button/wheel
-//     handlers
-//   • USB HID encoders (Icom RC-28, TMate 2, Ulanzi Dial, PowerMate,
-//     Contour Shuttle): defaults, LED/display/overlay state, action dispatch
-//   • StreamDeck+ label refresh
-//   • MIDI parameter registry (registerMidiParams, HAVE_MIDI)
-//   • The control-devices support-bundle snapshot
-//
-// Pure code motion from MainWindow.cpp — same class, no header changes; a
-// C++ class may define its members across any number of TUs. Constructor
-// wiring for these subsystems still lives in MainWindow.cpp and moves in a
-// later phase.
+// MainWindow_Controllers.cpp — external-controller methods of MainWindow:
+// FlexControl, USB HID encoders (RC-28, TMate 2, Ulanzi Dial, PowerMate,
+// Contour Shuttle), StreamDeck+ labels, MIDI parameter registry (HAVE_MIDI),
+// and the control-devices support-bundle snapshot. Constructor wiring for these
+// is in MainWindow.cpp.
 
 #include "MainWindow.h"
 
@@ -789,16 +777,9 @@ void MainWindow::triggerTMate2TextOverlay(const QString& text)
     restartTMate2IdleTimer();
 }
 
-// Push the current frequency and S-meter/power reading to the TMate 2 LCD.
-// Called whenever the active-slice frequency, S-meter level, or device
-// connection state changes.  Frequency comes from activeSlice(); S-meter uses
-// the last value cached in m_tmate2SmeterDbm.
-//
-// small_val mapping:
-//   RX: linear dBm offset from S9, clamped 0-999.
-//       S9 (-73 dBm) → 90; each dB above S9 adds 1 (S9+10 dB → 100);
-//       each dB below S9 subtracts 1 (S8 → 84, S5 → 66, S1 → 42).
-//   TX: forward power in watts from the last txMetersChanged sample.
+// Push frequency and S-meter/power to the TMate 2 LCD. small_val: RX is a
+// linear dB offset from S9 (-73 dBm → 90, ±1 per dB, so S9+10 → 100, S5 → 66),
+// clamped 0-999; TX is forward watts from the last txMetersChanged sample.
 void MainWindow::updateTMate2Display()
 {
     if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
@@ -1526,25 +1507,12 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         }
     } else if (actionId == "WheelApf") {
         if (auto* s = activeSlice()) {
-            // #4658: the level only reaches audio while the APF filter is in
-            // circuit. Writing apf_level into a disengaged filter — and showing
-            // an "APF 42" overlay that reads as the radio acknowledging it — is
-            // the controller-side twin of the GUI slider defect (#4658, fixed
-            // for the slider by #4660). No-op here and tell the operator why,
-            // mirroring the slider's greyed-with-reason treatment. The notice
-            // goes on the slice's panadapter as a transient card, NOT the
-            // status bar (#4649: a QStatusBar temporary message hides every
-            // permanent widget — TX indicator, PA temperature — for its whole
-            // duration, and a spinning dead knob would retrigger it
-            // continuously); the status bar is only the no-panadapter
-            // (null-pan) fallback. That reaches every controller family (FlexControl,
-            // RC-28, Ulanzi, the virtual wheel); a TMate 2 additionally gets
-            // it on its own display. Minimal mode shows neither surface —
-            // a slice-level signal consumed by the applet panel is the
-            // follow-up for that layout. ToggleApf remains the way in.
-            // APF is CW-only: the DSP grid does not even mount the button in
-            // other modes (VfoWidget hides m_apfBtn unless isCw), so a hint
-            // to "turn APF on" there would point at nothing. Stay silent.
+            // APF level only reaches audio with APF engaged (#4658), so with it
+            // off this is a no-op plus a notice explaining why, shown as a
+            // transient card on the slice's pan (status bar only if there is no
+            // pan; its temporary messages hide the permanent widgets, #4649).
+            // TMate 2 also shows it on its display. APF is CW-only, so stay
+            // silent in other modes.
             if (!isCwMode(s->mode()))
                 return;
             if (!s->apfOn()) {
@@ -3011,16 +2979,11 @@ void MainWindow::wireExternalControllers()
         if (actionId.startsWith(QLatin1String("shortcut:"))) {
             const QString id = actionId.mid(QStringLiteral("shortcut:").size());
 
-            // Momentary / hold actions (PTT hold, CW keying) have null QShortcut
-            // handlers because keyboard shortcuts drive them via press + release
-            // event filters. Handle press (action == 1) and release (action == 0)
-            // explicitly here.
-            //
-            // Deliberately WITHOUT handlePttHoldShortcut()'s textEntryCaptured()
-            // and m_keyboardShortcutsEnabled gates: those exist so a keystroke
-            // being typed into a field can't key the radio.  A dedicated dial
-            // button carries no such ambiguity, and gating it would make the
-            // hardware PTT stop working whenever a text field had focus.
+            // Momentary/hold actions (PTT hold, CW keying) have null QShortcut
+            // handlers; handle press (1) and release (0) here. No
+            // textEntryCaptured()/m_keyboardShortcutsEnabled gates: a dedicated
+            // dial button is not ambiguous with typing, and hardware PTT must
+            // work while a text field has focus.
             if (id == QLatin1String(kPttHoldActionId)) {
                 if (!m_radioModel.isConnected() || !controller) return;
                 const auto input = action == 1 ? controller->capture(TxController::Activity::Mox)
@@ -3175,18 +3138,10 @@ void MainWindow::wireExternalControllers()
             s.setValue("HidEncoderEnabledMigrationV2", "True");
         }
     }
-    // Same TCC concern as the Ulanzi gate above (#3257). HidEncoderManager::
-    // loadSettings() iterates the supported VID/PID list calling hid_open()
-    // for autodetect; HIDAPI's macOS backend opens with
-    // kIOHIDOptionsTypeSeizeDevice internally, so on every launch this
-    // would prompt for Input Monitoring even on machines without any
-    // supported encoder hardware. Default off; user enables in
-    // Preferences → Serial when they connect a StreamDeck+ / RC-28 / etc.
-    // One-time migration: before RC28Mapping was introduced, F1/F2 actions
-    // were stored under the generic HidKeyAction0/1 keys. Run unconditionally
-    // so users who had HID disabled at the time of this upgrade still get their
-    // old actions migrated when they later enable HID via Preferences. The
-    // inner guard (!s.contains("RC28Mapping")) makes it a true one-shot. (#3323)
+    // HID autodetect is off by default (#3257): hid_open() on macOS seizes the
+    // device and prompts for Input Monitoring even with no encoder attached.
+    // One-shot migration of F1/F2 from HidKeyAction0/1 to RC28Mapping (#3323),
+    // run regardless of HID enable so a later enable finds them.
     {
         auto& s = AppSettings::instance();
         if (!s.contains("RC28Mapping")) {

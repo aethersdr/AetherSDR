@@ -4,39 +4,13 @@
 
 #include <atomic>
 
-// THE RATE THE RADIO IS RUNNING AT, kept apart from the rate we are trying to
-// reach.
-//
-// A pan-bandwidth change on this radio is not one step. The DDC rate register is
-// radio-wide, so every receiver's chain has to be rebuilt for the new rate
-// before the register can be written; the build takes 0.6-1.1 s and runs on its
-// own thread while the old chains keep producing audio. Hl2Backend moves its
-// m_sampleRateHz optimistically the moment the zoom is accepted, because the
-// snapshot it takes for the build has to describe the TARGET.
-//
-// That optimism is correct and it is also a trap, because for the length of the
-// build there are two different answers to "what rate is this radio at" and only
-// one of them is on the wire. Two bugs came from reading the wrong one:
-//
-//   1. The rate a FAILED build puts back was captured from the optimistic field.
-//      With two crossings overlapping -- which one drag of a zoom slider
-//      produces -- the second captured the first's uncommitted target, so a
-//      failed second build "restored" a rate that had never been commanded.
-//
-//   2. A receiver opened during the build window was configured from the
-//      optimistic field, so its chain was built to decimate IQ the radio was not
-//      producing yet, and would not produce at all if the build then failed.
-//
-// This class is the one place that answers the question, and it answers it only
-// with what has actually been written to the register. Hl2Backend holds exactly
-// one and reads it for both decisions above, so neither can drift back onto the
-// optimistic field.
-//
-// SOCKET-FREE BY CONSTRUCTION. The backend seam that would exercise this end to
-// end needs a MetisClient and a localhost peer, and that fixture class is
-// retired (tests/tests.cmake). The ordering rule is the part that was wrong, so
-// the ordering rule is what is extracted here and pinned by
-// hl2_rate_commit_test.
+// The DDC rate actually written to the register, kept apart from the target.
+// The rate register is radio-wide, so a span change rebuilds every chain first
+// (0.6-1.1 s, own thread) while Hl2Backend::m_sampleRateHz already holds the
+// target. Two readers must use the committed rate, never the optimistic one:
+// the rollback value for a failed build (overlapping zoom crossings), and the
+// rate a receiver opened mid-build is configured for. Socket-free so
+// hl2_rate_commit_test pins the ordering.
 namespace AetherSDR::hl2 {
 
 class RateCommitLedger {

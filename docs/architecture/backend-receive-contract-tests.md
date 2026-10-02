@@ -79,9 +79,9 @@ retain the newest value, including the paired DSP state and squelch field mask.
 | Flex | Independent DSP enable/level fields, AF gain/mute/balance, separate squelch writes, RX port and per-slice lock through the guarded sink | Slice manual notch (TNF is separate), new daemon audio capability |
 | Icom | Paired NB/NR, ANF enable, manual-notch position, AF gain, squelch threshold, profile-supported RX port and global dial lock | AF mute/balance, Flex extended DSP |
 | HL2 | Existing RX-worker NB and receiver mixer gain/mute/balance | Radio-side NR/ANF/manual notch or squelch |
-| RTL (optional) | Existing DDC gain/mute/balance | DSP or radio antenna controls; tests only cover cold refusal without USB |
+| RTL (optional) | Confirmed gain/mute/balance and FM/FM-N squelch for sparse configured receiver IDs | DSP or radio antenna controls; injected-USB model tests are offline |
 | Demo | NB and ANF affect the existing production signal generator | Independent AF mixer or new advertised DSP capabilities |
-| ANAN | Existing WDSP NB from landed #5824 and client-only tune lock | New mixer or other receive controls |
+| ANAN | Existing WDSP NB, slice mixer gain/mute/balance and client-only tune lock | Additional DSP or transport |
 
 `ReceiveDispatch` distinguishes a dispatched operation, a client-only lock, and
 an unsupported operation. It is not hardware acknowledgement. Unsupported

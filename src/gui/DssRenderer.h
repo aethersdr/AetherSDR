@@ -12,21 +12,12 @@
 #include <cmath>
 #include <functional>
 
-// ─── Stacked-trace spectrum stream surface ──────────────────────────────────
-//
-// Renders a perspective stacked-trace spectrum stream: a rolling history of FFT
-// rows drawn back-to-front (painter's algorithm) as a receding trapezoid. The
-// newest trace spans the full width across the front; older traces recede into
-// a narrower, higher trapezoid. Each ridge is filled down to the plot floor so
-// nearer traces occlude farther ones. Fill colour follows amplitude via an
-// injected palette and dims with depth for atmospheric perspective; a bright
-// per-amplitude line tops each ridge.
-//
-// The rendered surface is cached in a QImage and rebuilt ONLY when a new row
-// arrives, the target size changes, or the amplitude mapping / palette changes.
-// This keeps it cheap enough to paint on the CPU and composite through the
-// existing QRhi overlay pipeline (no new shaders). The renderer is standalone
-// and knows nothing about SpectrumWidget or QRhi.
+// Perspective stacked-trace spectrum stream: FFT history rows drawn
+// back-to-front as a receding trapezoid, newest full-width at the front, each
+// ridge filled to the plot floor so nearer traces occlude. Fill follows an
+// injected palette, dimmed with depth. The QImage is rebuilt only on a new row,
+// size change, or mapping/palette change, so it can be CPU-painted and
+// composited through the QRhi overlay. Knows nothing of SpectrumWidget or QRhi.
 class DssRenderer
 {
 public:
@@ -125,16 +116,11 @@ public:
         return std::min(spanFactor, kMaxRowSpanFactor);
     }
 
-    // Row span for a source whose calibrated overhang spans
-    // supplementalBandwidthMhz against a targetBandwidthMhz viewport, scaled by
-    // a 0-100 operator setting. Anything that cannot be trusted -- a
-    // non-positive or non-finite bandwidth, or an overhang no wider than the
-    // viewport -- yields 1.0, the clipped trapezoid, rather than widening into
-    // spectrum that was never captured.
-    //
-    // The percentage scales the AVAILABLE span, not the absolute maximum:
-    // against a ~1.15x tile an absolute reading would clamp everything above
-    // ~22% to the same picture, leaving most of the control's travel dead.
+    // Row span for a calibrated overhang of supplementalBandwidthMhz against a
+    // targetBandwidthMhz viewport, scaled by a 0-100 setting. Untrustworthy
+    // input (non-positive/non-finite, or no wider than the viewport) yields 1.0.
+    // The percentage scales the AVAILABLE span, so a ~1.15x tile still uses the
+    // whole control travel.
     static float rowSpanFactorFor(double supplementalBandwidthMhz,
                                   double targetBandwidthMhz,
                                   int spanPercent)
@@ -208,7 +194,11 @@ public:
         double bandwidthMhz,
         const QVector<float>& supplementalBinsDbm,
         double supplementalCenterMhz,
-        double supplementalBandwidthMhz);
+        double supplementalBandwidthMhz, bool preserveInput = false);
+    // preserveInput keeps final backend observations through this renderer:
+    // spatial resampling remains, but no median/IIR is applied a second time.
+    // Supplied retained coverage has its own frame and never replaces primary
+    // close-view samples. Existing callers retain their old smoothing/storage.
     void setHistoryCapacityRows(int rows);
     int historyCapacityRows() const { return m_historyCapacityRows; }
     int historyRowCount() const { return m_historyRowCount; }
@@ -218,7 +208,11 @@ public:
     quint64 allocatedBytes() const;
     void appendHistoryRow(const QVector<float>& binsDbm,
                           double centerMhz, double bandwidthMhz,
-                          float fallbackDbm);
+                          float fallbackDbm,
+                          const QVector<float>& supplementalBinsDbm = {},
+                          double supplementalCenterMhz = 0,
+                          double supplementalBandwidthMhz = 0,
+                          bool preserveInput = false);
     void rebuildVisibleFromHistory(int offsetRows,
                                    double centerMhz, double bandwidthMhz,
                                    float fallbackDbm);
@@ -231,20 +225,11 @@ public:
                                  float fallbackDbm,
                                  bool refreshFromRetainedHistory = false);
 
-    // Return the cached surface sized to px. The plot region (everything above
-    // the bottom scaleStripPx) is painted opaque over bgFill; the scale strip
-    // is left transparent so the host can composite a scale on top.
-    //
-    // Ridge HEIGHT is anchored to the noise floor: a column maps to
-    // strength = clamp((dbm - floorDbm) / rangeDb, 0, 1), so floorDbm sits at
-    // the baseline (≈0 height) and floorDbm+rangeDb reaches the full ridge. The
-    // host supplies floorDbm from its measured-noise-floor estimate plus the 3D
-    // floor offset, and rangeDb from the current dBm display span.
-    // Colour comes from palette(dbm), independent of height. paletteToken lets
-    // the host signal palette changes without us inspecting them. Rebuilds only
-    // when something relevant changed.
-    // zCurve (<1) lifts the floor→signal band, matching dss_mesh.vert's
-    // pow(s, zCurve) so the CPU fallback surfaces the noise floor like the GPU.
+    // Cached surface sized to px. The plot region (above the bottom
+    // scaleStripPx) is opaque over bgFill; the strip stays transparent. Height:
+    // strength = clamp((dbm - floorDbm) / rangeDb, 0, 1). Colour is palette(dbm);
+    // paletteToken signals palette changes. zCurve (<1) matches dss_mesh.vert's
+    // pow(s, zCurve) so the CPU fallback matches the GPU path.
     const QImage& image(const QSize& px, int scaleStripPx,
                         float floorDbm, float rangeDb, float zCurve,
                         const PaletteFn& palette, quint64 paletteToken,
@@ -304,6 +289,7 @@ public:
 
 private:
     bool historyStorageMatchesCapacity() const;
+    void restoreHistorySupplemental(int historyRing, int visibleRing);
     void resetHistorySmoothing();
     void rebuild(const QSize& px, int scaleStripPx, float floorDbm,
                  float rangeDb, float zCurve, const PaletteFn& palette,
@@ -333,6 +319,7 @@ private:
     std::array<double, kRows> m_rowBandwidthMhz{};
     std::array<double, kRows> m_rowSupplementalCenterMhz{};
     std::array<double, kRows> m_rowSupplementalBandwidthMhz{};
+    std::array<bool, kRows> m_preserveSupplementalFrame{};
     int     m_head  = 0;         // index of the newest row
     int     m_count = 0;         // number of valid rows (0..kRows)
     bool    m_dirty = true;
@@ -368,6 +355,11 @@ private:
     QVector<qfloat16> m_historyRows;      // flat [history row][kCols]
     QVector<double> m_historyRowCenterMhz;
     QVector<double> m_historyRowBandwidthMhz;
+    // Allocated only when a producer actually supplies retained wider data.
+    // Capacity and lifetime are the same bounded ring as the primary history.
+    QVector<qfloat16> m_historySupplementalRows;
+    QVector<double> m_historySupplementalCenterMhz;
+    QVector<double> m_historySupplementalBandwidthMhz;
     int m_historyCapacityRows = 0;
     int m_historyWriteRow = 0;            // ring index of newest retained row
     int m_historyRowCount = 0;
@@ -385,19 +377,9 @@ private:
     quint64 m_cachePaletteToken = ~0ull;
 };
 
-// Painter's-algorithm occlusion for the CPU depth-shadow overlay drawn on top
-// of this surface.
-//
-// `yFrontToBack` holds the projected screen y of one frequency column at each
-// depth step, nearest row first. rebuild() fills every row's curtain down to
-// the plot floor, so a nearer row hides everything below its ridge: a point is
-// occluded once it sits lower (larger y) than the topmost ridge in front of
-// it. The shadow is painted as a flat overlay after the surface, so segments
-// that fail this test would otherwise be stroked across the face of the nearer
-// curtain and read as floating in front of the surface.
-//
-// Returns one flag per segment (size = N-1, empty for N < 2): true when either
-// endpoint still clears that silhouette, so partial overlaps are kept rather
-// than over-culled. The half-pixel slack keeps a ridge that merely grazes the
-// silhouette from flickering in and out between frames.
+// Occlusion for the CPU depth-shadow overlay. `yFrontToBack` is one column's
+// projected y per depth step, nearest first; a point is hidden once it is
+// lower (larger y) than the topmost ridge in front of it. Returns N-1 segment
+// flags (empty for N < 2), true when either endpoint clears the silhouette;
+// half-pixel slack stops grazing ridges flickering.
 QVector<bool> dssDepthVisibleSegments(const QVector<qreal>& yFrontToBack);

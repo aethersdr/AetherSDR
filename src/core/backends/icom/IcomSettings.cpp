@@ -184,21 +184,10 @@ IcomSettings::CivSelection IcomSettings::civSelection()
     if (sel == QLatin1String(kSelCustom))
         return CivSelection::Custom;
 
-    // MIGRATION — a settings file written before this field existed.
-    //
-    // Back then the connect panel had one free-text hex box, and it wrote
-    // kDefaultCivAddress whenever that box was left BLANK. So a stored 0xA4 is
-    // very nearly always "the operator never touched this", not "the operator
-    // deliberately chose the IC-705": choosing it required typing A4 into a
-    // field whose placeholder already said the default was A4.
-    //
-    // Reading it as Auto is also the safe direction of the two. On an actual
-    // IC-705 auto-detect resolves to 0xA4 and nothing changes; on any other
-    // radio it repairs the exact silent-dead-session this feature exists to
-    // cure. Reading it as a pin would carry that dead session forward.
-    //
-    // Anything OTHER than the default had to be typed, so it migrates to Custom
-    // and keeps pinning the destination.
+    // Migration for files written before this field existed: the old free-text box
+    // stored kDefaultCivAddress when left blank, so a stored 0xA4 almost always
+    // means "untouched" and migrates to Auto (on a real IC-705 auto-detect still
+    // resolves 0xA4). Any other value was typed, so it migrates to Custom.
     if (!obj.contains(QLatin1String(kFieldCivAddress)))
         return CivSelection::Auto;
     return civAddress() == kDefaultCivAddress ? CivSelection::Auto : CivSelection::Custom;

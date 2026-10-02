@@ -631,20 +631,10 @@ int QsoRecorder::finalizeFile(FinalizeReport report)
         return durationSecs;
     }
 
-    // A recording that captured NOTHING is the #4629 symptom, and until now it
-    // was reported to the operator exactly like a good one — the file exists,
-    // it is named correctly, and it holds a 44-byte header and no audio. The
-    // start guard above catches the known cause (PC Audio off), so reaching
-    // here means something else stranded the feed mid-session: the radio
-    // dropped, the stream was torn down by another client, the backend swapped.
-    // Whatever it was, say so rather than let a silent file pass for success.
-    // The >= 1s floor keeps a deliberate instant start/stop from being reported
-    // as a fault: under one second the recorder may legitimately not have seen a
-    // single audio block yet, and an error dialog for "you stopped it
-    // immediately" is noise. The tradeoff is a real blind spot — a sub-second
-    // recording that captured nothing is silently accepted — but that case
-    // yields no usable audio either way, whereas a false alarm on every quick
-    // tap trains the operator to dismiss this dialog unread.
+    // An empty recording means the feed stalled mid-session (the PC Audio cause is
+    // refused at start), so report it (#4629). The >= 1s floor avoids alarming on
+    // an instant start/stop that may not have seen a block yet; a sub-second empty
+    // recording is accepted silently.
     if (dataBytes == 0 && elapsedSecs >= 1 && report == FinalizeReport::Diagnose) {
         qCWarning(lcAudio) << "QsoRecorder: recording captured no audio:" << filePath;
         emit recordingError(
@@ -965,17 +955,10 @@ void QsoRecorder::releasePlaybackSink(bool stop)
             m_playSink->stop();
         }
         m_playSink->disconnect(this);
-        // deleteLater(), NOT a direct delete, and it must stay that way:
-        // onPlaybackSinkState() is a DIRECT connection from
-        // QAudioSink::stateChanged, so a natural end-of-file arrives here with
-        // the sink's own emission still on the stack. Destroying it there frees
-        // the sender mid-emit; disconnect(this) severs the connection but does
-        // not unwind that frame.
-        //
-        // The cost is that ~QsoRecorder cannot run the deferred delete, so the
-        // sink falls to ~QObject instead -- after m_playBuffer and m_playPcm
-        // have gone as members. That is safe because stop() above has already
-        // halted the pull, and it stays safe only while this order holds.
+        // Must be deleteLater(): onPlaybackSinkState() is a direct connection from
+        // QAudioSink::stateChanged, so end-of-file arrives with the sink's emit on the
+        // stack. The sink then outlives m_playBuffer/m_playPcm until ~QObject, which
+        // is safe only because stop() above has already halted the pull.
         m_playSink->deleteLater();
         m_playSink = nullptr;
     }

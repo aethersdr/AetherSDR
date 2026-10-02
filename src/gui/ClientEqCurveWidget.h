@@ -16,16 +16,10 @@ namespace AetherSDR {
 
 class ClientEq;
 
-// Custom QPainter-rendered view of a ClientEq instance — log-freq grid,
-// dB grid, and (in later phases) the summed response curve, per-band
-// filled regions, FFT analyzer overlay, and draggable band handles.
-//
-// This widget is used in two places:
-//   - Compact mode inside the docked ClientEqApplet (analyzer + summed curve)
-//   - Full-size inside the floating ClientEqEditor (all above + interactions)
-//
-// Phase B.1: grid only.  Phases B.2+B.3 add the curve, filled regions,
-// analyzer, and drag interactions.
+// QPainter view of a ClientEq: log-frequency and dB grids, response curve,
+// band regions, FFT analyzer overlay and band handles. Compact in the docked
+// ClientEqApplet (analyzer + summed curve); full size with interactions in
+// the floating ClientEqEditor.
 class ClientEqCurveWidget : public QWidget {
     Q_OBJECT
 
@@ -58,17 +52,9 @@ public:
     // back to false resumes the normal decay.
     void setPeakHoldFrozen(bool frozen);
 
-    // Fractional-octave smoothing for the analyzer trace (display-only;
-    // does not affect EQ math).  Value is N where the smoothing window
-    // is 1/N octave centered on each bin's frequency:
-    //   96 → effectively off (window ≤ 1 bin everywhere)
-    //   24 → gentle, close to raw
-    //   12 → typical default
-    //    6 → shape decisions
-    //    3 → room-correction style, very smooth
-    // Linear-power average across the window — matches FabFilter Pro-Q
-    // and is acoustically more correct than dB averaging.  Peak-hold
-    // continues to track raw bins so transient peaks aren't masked.
+    // Display-only fractional-octave smoothing of the analyzer trace: a 1/N-octave
+    // linear-power average around each bin (96 ≈ off, 24 gentle, 12 default, 6 for
+    // shape decisions, 3 very smooth). Peak-hold still tracks raw bins.
     void setSmoothingOctaveFraction(int n);
     int  smoothingOctaveFraction() const { return m_smoothingFraction; }
 

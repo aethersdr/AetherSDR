@@ -137,6 +137,7 @@ bool PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
         changed = true;
     }
     if (changed) {
+        ++m_geometryRevision;
         emit infoChanged(m_centerMhz, m_bandwidthMhz);
     }
     return changed;
@@ -164,6 +165,7 @@ void PanadapterModel::recordGeometryObservation(double centerMhz, double bandwid
 
 void PanadapterModel::resetCenterKnownForReconnect()
 {
+    ++m_geometryRevision;
     m_centerKnown = false;
     if (m_reportedCenterHz || m_reportedBandwidthHz) {
         m_reportedCenterHz.reset();

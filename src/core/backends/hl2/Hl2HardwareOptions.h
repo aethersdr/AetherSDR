@@ -8,115 +8,41 @@ namespace AetherSDR {
 
 class RadioSettingsScope;
 
-// What hardware is actually bolted to this Hermes-Lite 2.
-//
-// WHY THIS EXISTS. The HL2 is a BOARD, not a product: the same discovery reply
-// comes back from a bare HL2, from an HL2 with the AK4951 companion board
-// ("HL2+"), from a SquareSDR 2 — whose codec and low-pass filters are on the
-// mainboard — and from an HL2 in a box with an N2ADR filter board bolted to
-// J16. Protocol 1 gives the host NO way to tell them apart: there is no board
-// ID, no capability word, and the gateware version is the same across all of
-// them. The operator is the only party who knows, so these are settings.
-//
-// WHY PER RADIO AND NOT GLOBAL. An operator with an HL2 on the bench and a
-// SquareSDR 2 in the shack must not have one's codec choice silently applied to
-// the other — the dither bit means DIFFERENT THINGS on the two (see
-// Codec below), so a shared setting would switch the wrong thing on the wrong
-// radio. Stored as a radio-scoped feature document, the same mechanism
-// Hl2FreqCal uses for the crystal's error, keyed by the radio's MAC.
-//
-// DEFAULTS ARE THE BARE BOARD, always. Every field's zero value is "a plain
-// Hermes-Lite 2 with nothing attached", except the filter board — see
-// FilterBoard. A radio that has never been configured therefore behaves exactly
-// as it did before this document existed.
+// What hardware is attached to this Hermes-Lite 2. Protocol 1 has no board ID
+// or capability word, so a bare HL2, HL2+ (AK4951), SquareSDR 2 and an HL2 with
+// an N2ADR board on J16 look identical; the operator declares it. Stored per
+// radio (feature document keyed by MAC, like Hl2FreqCal) because the dither
+// bit means different things on different boards. Defaults are the bare board,
+// except filterBoard (see FilterBoard).
 struct Hl2HardwareOptions {
-    // ---- local audio codec ----
-    //
-    // WHAT THE THREE VALUES RECORD IS WHICH BOARD IS FITTED, not which policy
-    // applies to the dither bit. That distinction is worth stating up front,
-    // because the bit is the reason this enum was originally three-way and it
-    // no longer is — see ditherBitOnWire() and the note below it.
-    //
-    //   None        bare Hermes-Lite 2. No codec: the EP2 audio slot is the
-    //               extended address register and must stay zero.
-    //   Ak4951      the HL2+ companion board. Codec over I2S.
-    //   SquareSdr2  the SquareSDR 2, codec on the mainboard.
-    //
-    // Ak4951 and SquareSdr2 are behaviourally IDENTICAL today — every consumer
-    // but the UI asks hasLocalCodec(), i.e. `codec != None`. They are kept
-    // apart anyway, for two reasons that are not cosmetic: the document is
-    // already persisted as 0/1/2 at schema version 1, so collapsing them is a
-    // migration; and the boards genuinely differ elsewhere — the EP6 microphone
-    // word runs at a different rate on the SquareSDR 2 (docs/HERMES.md). A
-    // reader adding the first real per-board branch should add it here rather
-    // than re-widening a bool.
-    //
-    // THE DITHER BIT IS NOT ONE OF THOSE DIFFERENCES. Protocol 1's config
-    // register carries a "dither" bit at 0x00[11] which on genuine openHPSDR
-    // hardware turns on the LT2208's dither generator. The HL2 has no LT2208
-    // and hijacked the bit, but it is the OPERATOR'S on all three variants:
-    //
-    //   None        the HL2's BAND VOLTAGE output — a DC level per band on the
-    //               CL2 jack (control.v: `band_volts_enabled <= cmd_data[11]`).
-    //   Ak4951      the AK4951's loudspeaker (i2c_bus2.v under `ifdef AK4951`:
-    //               `ak4951_spon_next = cmd_data[11]`, writing codec register
-    //               0x02 as `8'h2e | (bit ? 8'h80 : 8'h00)`).
-    //   SquareSdr2  the SquareSDR 2's internal loudspeaker, same shape.
-    //
-    // IT IS NOT A "CODEC IS PRESENT" INTERLOCK, and an earlier revision of this
-    // file said it was. deskHPSDR's old_protocol.c forces LT2208_DITHER_ON for
-    // HL2_CODEC_AK4951 with a comment that some firmware abuses the bit that
-    // way, and that comment was the only source. The gateware says otherwise
-    // and this repo ranks the gateware above client code (Principle I):
-    // `localaudio` is instantiated on the bitstream parameter AK4951
-    // (hermeslite_core.v), its power-down pin is tied to the I2C reset
-    // (localaudio.v: `assign i2s_pdn = ~clk_i2c_rst;`), and cmd_data[11] on
-    // address 0x00 has exactly two consumers in the tree — the speaker branch
-    // above and band_volts_enabled. Nothing withholds the codec.
-    //
-    // ONE ASYMMETRY SURVIVES AND THE UI HAS TO KNOW ABOUT IT. The gateware's
-    // own AK4951 init sequence ends by writing register 0x02 = 0xae — which is
-    // 0x2e | 0x80, the speaker ALREADY ON — before the host has said anything
-    // (i2c.v, STATE_AK4951S8). Since ak4951_spon_reg resets to 0 and the write
-    // is guarded on a CHANGE, a host sending the bit low first emits no I2C
-    // write at all and the speaker stays on. So the operator's stored intent
-    // for an AK4951 starts HIGH, seeded when the board is declared, and the
-    // checkbox is honest from the first frame.
+    // Which board is fitted:
+    //   None        bare HL2. The EP2 audio slot is the extended address
+    //               register and must stay zero.
+    //   Ak4951      HL2+ companion board, codec over I2S.
+    //   SquareSdr2  SquareSDR 2, codec on the mainboard.
+    // Ak4951 and SquareSdr2 behave identically today but stay distinct: the
+    // document persists 0/1/2 and the boards differ elsewhere (EP6 mic word
+    // rate, docs/HERMES.md).
+    // The dither bit 0x00[11] is the operator's on every variant: band-voltage
+    // output on a bare HL2 (control.v `band_volts_enabled <= cmd_data[11]`),
+    // loudspeaker on AK4951/SquareSDR 2 (i2c_bus2.v `ak4951_spon_next`).
     enum class Codec : int {
         None       = 0,   // bare HL2: no codec, audio slot stays EADDR-safe zero
         Ak4951     = 1,   // HL2+ companion board, codec over I2S
         SquareSdr2 = 2,   // SquareSDR 2, codec on the mainboard
     };
-    // How many there are. Used by clampCodec() below and by the tests, which
-    // walk the set rather than a hand-written list — a list is how a fourth
-    // variant gets added and never exercised.
+    // Used by clampCodec() and by the tests, which walk 0..kCodecCount-1.
     static constexpr int kCodecCount = 3;
 
-    // ---- companion filter board on J16 ----
-    //
-    // The HL2 has no switchable filters of its own; it has seven
-    // open-collector outputs that the gateware forwards to I2C 0x20. What
-    // decodes them is the board on the other end, and there may not be one.
-    //
-    //   None         nothing attached: release every relay and stop pretending.
-    //   N2adrRxTx    the N2ADR board switching BOTH directions — the low-pass
-    //                for the band plus the AM-broadcast HPF, on receive as well
-    //                as transmit. What a boxed HL2 normally has.
-    //   N2adrTxOnly  the low-pass is in the TRANSMIT path only; receive sees
-    //                the bare front end, optionally through the 3 MHz HPF
-    //                (see n2adrHpf). THIS IS THE SquareSDR 2's arrangement —
-    //                its LPF bank is on the mainboard and wired for transmit —
-    //                and it is also how an HL2 is wired when the filter board
-    //                sits between the PA and the antenna rather than ahead of
-    //                the ADC.
-    //
-    // DEFAULT IS N2adrRxTx, which is the ONE field whose default is not "bare
-    // board". That is deliberate and it is not a new decision: this backend has
-    // driven the N2ADR pattern unconditionally since it could tune, so
-    // defaulting to anything else would silently change the front end of every
-    // HL2 already on the air the moment this document appeared. Writing the
-    // relays is inert when no board is listening, which is why it was safe to
-    // do unconditionally and why it stays the default now.
+    // Board on J16, which decodes the seven open-collector outputs the gateware
+    // forwards to I2C 0x20:
+    //   None         nothing attached: release every relay.
+    //   N2adrRxTx    N2ADR switching LPF + AM-broadcast HPF on RX and TX.
+    //   N2adrTxOnly  LPF in the TX path only; RX sees the bare front end,
+    //                optionally through the 3 MHz HPF (n2adrHpf). The SquareSDR
+    //                2's arrangement, or an N2ADR between PA and antenna.
+    // Default N2adrRxTx: the backend has always driven this pattern, and relay
+    // writes are inert with no board listening.
     enum class FilterBoard : int {
         None        = 0,
         N2adrRxTx   = 1,
@@ -125,46 +51,14 @@ struct Hl2HardwareOptions {
 
     Codec codec = Codec::None;
 
-    // Level of the radio's OWN loudspeaker or headphone jack, 0..100, unity at
-    // 100. Meaningless without a codec.
-    //
-    // WHY THIS EXISTS AT ALL, when the application already has a volume
-    // control: that control is not in the samples. AudioEngine applies it as a
-    // device attenuation on the host's QAudioSink, so the mixed audio this
-    // backend produces has never seen it and no amount of tapping further down
-    // would find it. The codec feed is taken from the mix, so without a level
-    // of its own the radio's speaker would be stuck at whatever the slice
-    // faders happen to sum to.
-    //
-    // AND IT SHOULD BE SEPARATE ANYWAY. deskHPSDR ties the two together — it
-    // scales in WDSP before the buffer that feeds both the sound card and the
-    // codec — but that is a consequence of having one knob, not a decision.
-    // The speaker in the radio and the speakers on the desk are different
-    // transducers in different places, and wanting them at different levels is
-    // the ordinary case, not the exotic one.
-    //
-    // LINEAR, NOT dB, and unity at 100 — the same curve and the same reference
-    // point as the per-slice audio gain (Hl2Backend::setSliceAudioGain), which
-    // in turn matches what a Flex does with audio_level. One kind of fader in
-    // this application, not two.
-    //
-    // NOT COUPLED TO THE APPLICATION'S MUTE. Mute is the same QAudioSink
-    // attenuation as the volume and is equally invisible here; following it
-    // would mean this backend reaching into the audio engine, which is a
-    // dependency the HL2 backend does not have and should not grow for a
-    // fader. Muting the radio's speaker is done with this control.
+    // Level of the radio's own speaker/headphone jack, 0..100 linear, unity at
+    // 100 (same curve as Hl2Backend::setSliceAudioGain). Needed because the app
+    // volume and mute are QAudioSink attenuations, not in the samples the codec
+    // feed is taken from. Independent of app mute; meaningless without a codec.
     int speakerLevelPercent = 100;
 
-    // The operator's dither-bit intent, and — since nothing overrides it any
-    // more — also what goes on the wire. Read it through ditherBitOnWire()
-    // anyway: that is the one named place where this bit's meaning is decided,
-    // and a future variant that does need an override has somewhere to put it.
-    //
-    // DEFAULTS OFF because the bare board's meaning is band volts, which no
-    // radio should start driving on its own. hw.set seeds it ON when the
-    // operator declares an AK4951, because that is the gateware's power-on
-    // state for that board and not a property of this struct — see
-    // the init-sequence note above Codec.
+    // The operator's dither-bit intent; read it via ditherBitOnWire(). Off by
+    // default (band volts on a bare board); ditherBitOnCodecChange() seeds it.
     bool ditherBit = false;
 
     // The RANDOM bit, 0x00[12]. Same lineage as dither — an LT2208 control the
@@ -191,48 +85,22 @@ struct Hl2HardwareOptions {
 
     // ---- pure policy (what the tests pin) ----
 
-    // The dither bit AS IT GOES ON THE WIRE. The operator's choice, on every
-    // variant — see Codec for what the bit does on each board and for why the
-    // "held high for the AK4951" rule that used to live here was wrong.
-    //
-    // AN IDENTITY FUNCTION TODAY, AND KEPT ANYWAY. It is the single named seam
-    // for "what does 0x00[11] carry", the place the header's evidence is
-    // attached to, and the field hw.get reports alongside the raw intent. A
-    // caller reading `ditherBit` directly would be asserting that no variant
-    // ever overrides it; going through here asserts only that none does now.
+    // The dither bit as it goes on the wire: the operator's choice on every
+    // variant (see Codec). Identity today; the single named seam for what
+    // 0x00[11] carries, also reported by hw.get.
     [[nodiscard]] constexpr bool ditherBitOnWire() const noexcept
     {
         return ditherBit;
     }
 
-    // THE BIT TO ADOPT WHEN THE OPERATOR DECLARES A DIFFERENT BOARD — because
-    // 0x00[11] does not mean the same thing on the board they left and the board
-    // they chose, so carrying the old value across is carrying a decision that
-    // was about something else.
-    //
-    // WHY THIS IS A FUNCTION HERE AND NOT THREE LINES IN THE DIALOG. It was in
-    // the dialog, and it was wrong in a way the dialog's own tests could not
-    // see: selecting the AK4951 seeded the bit high, and selecting None
-    // afterwards left it high and persisted it — so a bare Hermes-Lite 2 came up
-    // driving its band-voltage output because the operator had once looked at a
-    // codec (#5867 review, @on8st, twice). The rule belongs where the rest of
-    // this file's policy lives, with the Qt-free test that walks every pair.
-    //
-    //   None        FALSE. The bit is the band-voltage output on the CL2 jack,
-    //               a DC level per band. Nobody should get that by declaring
-    //               what codec they do not have, which is the same reason
-    //               ditherBit's own default is off.
-    //   Ak4951      TRUE. The gateware's init sequence has already turned that
-    //               speaker on before the host speaks (i2c.v, STATE_AK4951S8
-    //               writes register 0x02 = 0xae) and only rewrites the register
-    //               on a CHANGE — so seeding low would emit no I2C write at all
-    //               and leave the checkbox describing a speaker that is playing.
-    //   SquareSdr2  THE OPERATOR'S CURRENT VALUE, deliberately. The bit is that
-    //               board's loudspeaker too, so carrying a speaker setting onto
-    //               a speaker is harmless in the way carrying it onto band volts
-    //               is not. And there is no SquareSDR 2 equivalent of the
-    //               STATE_AK4951S8 citation, so seeding either way would be
-    //               asserting a power-on state nobody here has established.
+    // The dither bit to adopt when the operator declares a different board,
+    // since 0x00[11] changes meaning across boards (#5867):
+    //   None        false: the bit is band volts on CL2; never via a codec pick.
+    //   Ak4951      true: the gateware's init already turned the speaker on
+    //               (i2c.v STATE_AK4951S8 writes 0x02 = 0xae) and only writes on
+    //               a change, so seeding low would leave the checkbox wrong.
+    //   SquareSdr2  current value: the bit is that board's speaker too, and its
+    //               power-on state is not established.
     [[nodiscard]] static constexpr bool ditherBitOnCodecChange(Codec next,
                                                                bool current) noexcept
     {
@@ -274,11 +142,6 @@ struct Hl2HardwareOptions {
     }
 
     // The open-collector byte for RECEIVE at this frequency.
-    //
-    // INLINE, like ditherBitOnWire() above and for the same reason: this is
-    // pure policy over a table that already lives in a header, it has no
-    // dependency on Qt or on the settings store, and keeping it out of the .cpp
-    // is what lets it be exercised without standing an application up.
     [[nodiscard]] std::uint8_t ocReceiveByteForHz(double hz) const noexcept
     {
         switch (filterBoard) {
@@ -289,12 +152,9 @@ struct Hl2HardwareOptions {
         case FilterBoard::N2adrTxOnly:
             if (!n2adrHpf)
                 return hl2::kOcNone;
-            // MASKED OUT OF THE PER-BAND PATTERN rather than decided again
-            // here. ocFilterByteForHz() already knows the two frequencies where
-            // the HPF must stay out — below 1.6 MHz it would remove what is
-            // being listened to, and on 160 m the HL2's own switching supply
-            // couples spurs into it — and restating those edges in a second
-            // place is how the two drift apart.
+            // Masked from the per-band pattern so the HPF exclusions (below
+            // 1.6 MHz, and 160 m where the HL2's switching supply couples
+            // spurs) live only in ocFilterByteForHz().
             return static_cast<std::uint8_t>(hl2::ocFilterByteForHz(hz)
                                              & hl2::kOcHpfAmBc);
         }
@@ -302,13 +162,8 @@ struct Hl2HardwareOptions {
     }
 
     // The open-collector byte for TRANSMIT at this frequency.
-    //
-    // Separate from the receive byte because the two genuinely differ in
-    // N2adrTxOnly, and because they differ for a REASON that is not symmetric:
-    // the receive filter is a convenience the operator may decline, and the
-    // transmit low-pass is what keeps harmonics off the air. Transmit therefore
-    // gets the full per-band pattern in both N2ADR modes, and only a declared
-    // absence of a board (FilterBoard::None) releases it.
+    // TX gets the full per-band LPF pattern in both N2ADR modes (it keeps
+    // harmonics off the air); only FilterBoard::None releases it.
     [[nodiscard]] std::uint8_t ocTransmitByteForHz(double hz) const noexcept
     {
         return filterBoard == FilterBoard::None ? hl2::kOcNone
@@ -317,11 +172,8 @@ struct Hl2HardwareOptions {
 
     [[nodiscard]] bool operator==(const Hl2HardwareOptions&) const = default;
 
-    // ---- per-radio persistence ----
-    //
-    // Same store and same shape as Hl2FreqCal: one feature document per radio,
-    // read-modify-written whole so a field added later is not dropped by an
-    // older field's write (Principle XIV).
+    // Per-radio feature document like Hl2FreqCal, read-modify-written whole so
+    // a later field is not dropped by an older field's write.
     static constexpr const char* kFeature = "Hardware";
     static constexpr int kSchemaVersion = 1;
 
@@ -332,16 +184,9 @@ struct Hl2HardwareOptions {
     static Hl2HardwareOptions load(const RadioSettingsScope& scope);
     static void save(const RadioSettingsScope& scope, const Hl2HardwareOptions& opts);
 
-    // Clamp a round-tripped enum. A hand-edited or truncated settings file must
-    // not command a codec that does not exist (Principle VII — validate at the
-    // boundary rather than trusting the store).
-    //
-    // NOTE THE TWO DIFFERENT FALLBACKS, which is the whole reason these are not
-    // one templated helper: an unrecognised codec falls back to None, the safe
-    // "bare board" answer, while an unrecognised filter board falls back to
-    // N2adrRxTx — because None would RELEASE the relays on a radio that has a
-    // board, and a receiver suddenly hearing the whole HF spectrum through a
-    // bypassed front end is not a safe default. See FilterBoard.
+    // Clamp a round-tripped enum from the settings store. The fallbacks differ:
+    // unknown codec -> None (bare board), unknown filter board -> N2adrRxTx,
+    // because None would release the relays on a radio that has a board.
     static constexpr Codec clampCodec(int raw) noexcept
     {
         switch (raw) {
@@ -360,29 +205,11 @@ struct Hl2HardwareOptions {
     }
 };
 
-// THE SENTINEL THAT MAKES "ADD A VARIANT AND THE TESTS NOTICE" TRUE. Out here
-// rather than inside the class, because a class-scope static_assert cannot call
-// a constexpr member before the class is complete.
-//
-// hl2_hardware_options_test walks 0..kCodecCount-1 through clampCodec(), so a new
-// enumerator is covered the moment clampCodec() maps it — and this assert fires
-// until kCodecCount is bumped to match.
-//
-// WHAT IT ACTUALLY ENFORCES, stated precisely because an earlier version of this
-// comment overstated it (@on8st, #5867 review): the count. Bumping kCodecCount
-// is what silences it, and that is a mechanical edit. What forces the dither
-// DECISION is the switch in ditherBitOnCodecChange(), which has no `default:`
-// — so a new enumerator is a -Wswitch diagnostic there. That is a warning in
-// this build, not an error, and the honest reading is: the assert stops you
-// from adding a variant silently, and the warning tells you which function
-// still owes it an answer.
-//
-// An earlier version of the test iterated a hand-written {None, Ak4951,
-// SquareSdr2} and the PR claimed a fourth variant would fail it. @on8st added
-// `Codec::Fourth = 3`, forced its dither bit high, and the test still reported
-// "all checks passed" (#5867 review). A hand-written list cannot make that
-// claim. This can: add the enumerator, map it in clampCodec(), and the build
-// stops here until the count and the dither rule agree with it.
+// Fires until kCodecCount matches the enumerators clampCodec() maps;
+// hl2_hardware_options_test walks 0..kCodecCount-1. The dither decision for a
+// new enumerator is forced separately by the default-less switch in
+// ditherBitOnCodecChange() (-Wswitch, a warning). Out of the class because a
+// class-scope static_assert cannot call a member before the class is complete.
 static_assert(Hl2HardwareOptions::clampCodec(Hl2HardwareOptions::kCodecCount)
                   == Hl2HardwareOptions::Codec::None,
               "a new Codec enumerator needs a dither-bit decision: add it to "

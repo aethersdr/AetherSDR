@@ -9,12 +9,9 @@
 
 namespace AetherSDR {
 
-// Portable, versioned JSON persistence for the CLIENT-side memory bank — both
-// channels the operator creates here and snapshots explicitly imported from a
-// radio. On a Flex the radio owns and mutates the active slots, so this document
-// is not the session store; see RadioCapabilities::persistsMemories.
-//
-// Envelope:
+// Versioned JSON persistence for the CLIENT-side memory bank (local channels and
+// explicitly imported radio snapshots); on a Flex the radio owns active slots
+// (see RadioCapabilities::persistsMemories). Envelope:
 //   {
 //     "format": "aether.memories",
 //     "version": 1 or 2,
@@ -22,17 +19,9 @@ namespace AetherSDR {
 //     "savedBy": "AetherSDR",
 //     "memories": [ { "index": 0, ...MemoryEntry... } ]
 //   }
-//
-// Evolved additively the same way the net schedule is: new fields are optional
-// with MemoryEntry's defaults, unknown fields are ignored, and a file whose
-// version is NEWER than this build is reported as an error rather than
-// half-read — a downgrade must not silently drop channels it cannot represent
-// and then write the loss back to disk.
-//
-// The slot index is stored, not derived from array position. It is the handle
-// the whole memory UX addresses a channel by (spot ids, `memory apply`, the
-// browse panel), so it has to survive a save/load cycle intact even when the
-// bank is sparse.
+// Additive evolution: new fields optional, unknown ignored; a NEWER version is
+// an error, not half-read, so a downgrade can't drop channels and write that
+// back. The slot index is stored (sparse banks keep their handles).
 class LocalMemoryStore {
 public:
     static constexpr int kFormatVersion = 2;
@@ -56,16 +45,9 @@ public:
         QMap<int, MemoryEntry> memories;
         QStringList errors;
         int version{0};
-        // The file exists but could not be UNDERSTOOD: unparseable JSON, a
-        // non-object root, a foreign format id, or a version newer than this
-        // build. Distinct from `errors`, which also carries recoverable
-        // complaints (a skipped duplicate slot, an entry with no index) where
-        // everything else in the file was read correctly.
-        //
-        // This is the flag that decides whether overwriting is safe. Anything
-        // this build could not read is somebody's data it cannot represent, so
-        // saving over it would destroy channels rather than lose a field —
-        // which is the whole reason the version check exists (see above).
+        // The file exists but could not be UNDERSTOOD (bad JSON, non-object root, foreign
+        // format, newer version), unlike recoverable `errors`. Decides whether
+        // overwriting is safe: never save over data this build can't represent.
         bool unreadable{false};
 
         bool ok() const { return errors.isEmpty(); }

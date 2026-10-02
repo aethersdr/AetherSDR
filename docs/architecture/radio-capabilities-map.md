@@ -68,6 +68,29 @@ are in [local receive control](../aetherd-local-receive-control.md#qualified-bac
 `control_receive_test` pins declarations and action-time admission; the optional
 RTL declaration check runs only when the RTL backend is built.
 
+### Native squelch
+
+`receiveSquelchModel` describes native desktop squelch modes and the threshold's
+reference, step and displayed unit. RTL declares FM/FM-N and dBFS/bin; RxApplet
+and VfoWidget gate unsupported modes with accessible reasons, and MainWindow
+passes the scale to SpectrumWidget's Auto estimator and threshold overlay.
+The native `setSliceSquelch` verb applies through RTL's confirmed transaction.
+Absence preserves the legacy desktop shape for other backends. This record
+grants no headless squelch verb or calibrated-power claim.
+
+### Receive capture placement
+
+`receiveCapturePlacement` is an optional desktop feature record with its minimum
+carrier-to-converter-DC separation in Hz. RTL declares 48 kHz only for accepted
+FM/FM-N receivers. `ReceiveCaptureAction` consumes the live record through the
+availability registry; `RadioModel::requestReceiveCaptureRecenter` rechecks it,
+connection and pan ownership before the neutral `recenterReceiveCapture` verb.
+The backend validates the whole receiver set and preserves every absolute RF.
+Absence leaves the action dimmed on a connected backend. No headless placement
+method or grant is added. Confirmed desktop frequency entry separately uses
+`requestReceiveTune` to admit receiver and display intent together; unsupported
+backends default to refusal. See [the runtime contract](../rtl-m1-runtime.md).
+
 ### Wideband converter view
 
 `widebandConverterView` is the optional record for *"this radio can deliver the
@@ -184,7 +207,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `canWriteMemories` | ✅ | ❌ | ❌ | `RadioModel::memoriesWritable`, memory dialog and panadapter memory panel | Separates native ownership from mutation support. Icom's radio-side store stays read-only, while the shared AetherSDR database remains writable for Add, Import, inline edits, Remove, and Tune on every Icom model. |
 | `canApplyMemories` | ✅ | ❌ | ❌ | `RadioModel::tryMemoryCommand` | True means the backend accepts its native memory-apply command. Initial Icom support is ❌ and applies recallable cached fields through the existing neutral slice setters instead of entering vendor Memory mode; split/RPS/DV/DD records are display-only. |
 | `canRefreshMemories` | ❌ | ❌ | ❌ | Memory Channels dialog → `RadioModel::refreshMemories` | Explicit, button-only radio-memory snapshots. IC-7300MK2 reads 99 channels; IC-9700 reads all 297 or one selected band; IC-705 requires one selected group and reads only its 100 channels. No memory scan runs during connection. |
-| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories\|Agc | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3): `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. `Agc` (#4909) carries the mode + threshold pair as typed universal fields — FLAT, not per-band, and seeded onto EVERY receiver by `Hl2Backend::seedReceiverAgc()`, because the AGC runs in host-side WDSP and no HPSDR register can be asked what it is. Seeding runs from `connectRadio` when the connect SERIAL changes or the receivers were rebuilt from nothing — never on a plain auto-reconnect, because `handRestoredStateToBackend` re-hands the document before every connect and `buildReceivers` preserves live receiver state, so an unconditional seed flattened per-receiver AGC on each dropped link. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
+| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories\|Agc | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3). RTL can transfer overlapping domains to `RtlSlices` after accepted capture and successful feature ownership; see the RTL table below. Consumers re-read current capabilities for persistence and receive runtime changes through `capabilitiesChanged`: `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. `Agc` (#4909) carries the mode + threshold pair as typed universal fields — FLAT, not per-band, and seeded onto EVERY receiver by `Hl2Backend::seedReceiverAgc()`, because the AGC runs in host-side WDSP and no HPSDR register can be asked what it is. Seeding runs from `connectRadio` when the connect SERIAL changes or the receivers were rebuilt from nothing — never on a plain auto-reconnect, because `handRestoredStateToBackend` re-hands the document before every connect and `buildReceivers` preserves live receiver state, so an unconditional seed flattened per-receiver AGC on each dropped link. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
 | `extensionNamespaces` | `["flex"]` | `["hl2"]` | — | `RadioModel::backendDeclaresExtension` (every `invokeExtension` pre-check), `MainWindow::applyCapabilitiesToUi` (the `sim` DemoApplet gate, #5263) | Flex: amp / tuner operate/bypass/autotune verbs. HL2: `freqcal.get` / `.set` / `.set_live`, behind the `freqcal` bridge verb and the Calibration page; `hw.get` / `hw.set`, the declared HL2 variant (codec, dither bit, filter board, gateware ATU) behind the HL2 Hardware page — **no bridge verb yet**, unlike `freqcal`, so these are reachable from the dialog only. `hw.set` is PARTIAL: absent keys keep their current value. One exception is worth knowing before writing a caller — **changing `codec` re-seeds `ditherBit`**, because 0x00[11] means band volts on a bare HL2 and a loudspeaker on the two boards that carry a codec, so carrying the old value across would carry a decision about something else (`Hl2HardwareOptions::ditherBitOnCodecChange`). A caller that names `ditherBit` in the SAME call still wins — that is how you declare a board and its speaker together — which also means a caller can set `{codec: 0, ditherBit: true}` and switch on a bare HL2's band-voltage output deliberately. The dialog never sends that shape; plus `bandscope.enable` (#5650), the wideband bandscope gate (endpoint `0x04`), reached **only** by the bridge's `bandscope` verb — no UI and no setting, on purpose: it is a diagnostic whose readings land in the health dialog's Converter section, uncalibrated and pre-DDC, and nothing in the app makes a decision from it. Icom: `["icom"]`, with PC-audio, scope, control-map, scheduler and diagnostic verbs. **#5262 M1 converted the family-string pre-checks** (PC-audio ×2, `power.wake`, the AX.25 capture dialog) onto `backendDeclaresExtension()` — the gate asks whether the backend *declares the namespace*, not whether it is that family, so a future backend answering the same verbs is not excluded by name. **Still outstanding:** the Flex accessory routes (`RadioModel.cpp:2385/2390/2399/2413`) do not pre-check at all — they gate on `if (m_backend)` and would fire `flex` verbs at whatever backend is connected. |
 | `maxNotchFilters` | 1000 | 1024 | 0 | `MainWindow::applyCapabilitiesToUi`, `SpectrumWidget::setNotchCapabilities` | The sidebar `+TNF` button and the panadapter's add/remove-notch entries. **0 hides them.** Flex's figure is a UI sanity limit (neither FlexLib nor the wire declares one); HL2's is WDSP's real notch-database size |
 | `notchHasDepth` | ✅ | ❌ | ❌ | `SpectrumWidget::setNotchCapabilities` | The depth submenu on a notch's right-click menu. A WDSP notch is a full null with no depth to set |
@@ -256,10 +279,13 @@ experimental family does not duplicate or stale the main cross-family table.
 | `family` / `model` / `manufacturer` | `"rtl"` / USB product / USB vendor (fallback `"Realtek"`) | Identifies the local device in the shared radio model and status bar |
 | `tuningMinHz` / `tuningMaxHz` | 24 kHz / 1.766 GHz | Bounds tune requests; frequencies below 24 MHz select Q-branch direct sampling |
 | `sampleRatesHz` | 225001, 250000, 300000, 1000000, 1536000, 1843200, 2000000, 2400000, 3000000 | Publishes only legal `librtlsdr` detents |
+| `panSpanModel` | false / false | Center and span crop genuine FFT bins inside accepted capture; neither changes hardware rate nor receiver RF |
+| `receivePanCenterControl` / `receivePanBandwidthControl` | engine; capture-clamped center / sixteen-bin floor through usable capture span | Backend reports the actual quantized geometry; existing receive-control authority checks still apply |
+| `receiveCapturePlacement` | 48 kHz when an accepted FM/FM-N receiver exists | Capability-gated explicit whole-set DC placement, keeping absolute receiver RF |
 | `canTransmit` / `txPowerMaxWatts` / `hostModulates` | false / 0 / false | Fails closed on every transmit path and never opens the microphone |
-| `maxSlices` / `maxPanadapters` | 1 / 1 | Matches the single in-process DDC |
+| `maxSlices` / `maxPanadapters` | 1 / 1 | Current qualified admission remains one; FM/FMN use the prepared 48 kHz receiver pipeline, other modes the exclusive legacy DDC |
 | `persistsMemories` / `hasSupplyVoltageTelemetry` / `hasMultiClientSessions` | false / false / false | Avoids fabricating radio-side services or telemetry |
-| `clientSettingsDomains` | Tuning\|Passband\|SpanRate\|RfGain\|Memories | Restores only state the USB receiver cannot persist itself |
+| `clientSettingsDomains` | Before feature claim: Tuning\|Passband\|SpanRate\|RfGain\|Memories; after claim: RtlSlices\|RfGain\|Memories | `RtlSlices` owns accepted capture and stable receiver documents. Successful ownership activation emits `capabilitiesChanged`; generic overlapping writes are suppressed. Before any accepted capture, even disconnect flush refuses speculative persistence. The shared hooks and runtime cutover were ratified as RTL-owned in [the #5924 ruling](https://github.com/aethersdr/AetherSDR/pull/5924#issuecomment-5787852269); a second backend must justify adoption separately. |
 | `extensionNamespaces` | `["rtl"]` | Declares gain, PPM, direct-sampling, offset-tuning, and sample-rate controls |
 
 `MainWindow::applyCapabilitiesToUi()` is the single fan-out for UI visibility. It
@@ -622,8 +648,8 @@ the bin expression quoted in their own `capabilities()`.
 
 | Field | Flex | HL2 | RTL | Question it answers |
 |---|:--:|:--:|:--:|---|
-| `panSpanModel->followsSampleRate` | — (absent) | ✅ | — (absent) | Is `sampleRatesHz` the complete set of spans, floor included? |
-| `panSpanModel->radioWide` | — (absent) | ✅ | — (absent) | Does changing one pan's span change every receiver's? |
+| `panSpanModel->followsSampleRate` | — (absent) | ✅ | ❌ | Is `sampleRatesHz` the complete set of spans, floor included? |
+| `panSpanModel->radioWide` | — (absent) | ✅ | ❌ | Does changing one pan's span change every receiver's? |
 
 Both live in one `std::optional<PanSpanModel> panSpanModel`. Absent is *not* a
 pair of `false`s: it means no backend has been read, and a client that needs the
@@ -633,6 +659,9 @@ Both are declared and nothing reads them yet — the behaviour they describe is
 already implemented, by `Hl2Backend::applyPanBandwidth` snapping through
 `nearestIqSampleRateHz` and by `panBandwidthLimitsChanged` clamping the zoom
 control. What was missing was the **claim**, so a client had no way to ask.
+RTL now explicitly declares both false because its display crops the already
+captured FFT; zooming does not request another sample rate. Its existing
+`panBandwidthLimitsChanged` report carries the actual display limits.
 
 On the HL2 the pan span *is* the DDC sample rate, so `sampleRatesHz` is not a
 list of stream rates that happens to exist alongside a span control: it is every

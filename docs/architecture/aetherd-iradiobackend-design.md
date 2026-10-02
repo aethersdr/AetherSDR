@@ -197,4 +197,4 @@ the interface has no implementor.
   are **not** relocated in this step — EB3 enforces the boundary in place.
   Physical relocation of a header into `src/core/backends/<family>/` happens
   when its last above-seam includer is converted. Adoption guidance lives in
-  `AGENTS.md` ("Engine boundary ratchet — EB3").
+  `docs/agents/backends.md` ("Engine boundary ratchet — EB3").

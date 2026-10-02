@@ -303,6 +303,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_network_timeouts.py --strict
 
+      # Settings go through AppSettings, never QSettings; only the files listed
+      # in the checker's ALLOWED table may use it, and that list only shrinks.
+      - name: QSettings ratchet
+        if: ${{ !cancelled() }}
+        run: python tools/check_qsettings.py --strict
+
       # ── ThemeManager::seedBuiltinDefaults() compiles a copy of the default
       # theme into the binary. It is GENERATED (tools/gen_theme_seed.py emits
       # src/core/ThemeSeedGenerated.cpp from resources/themes/default-dark.json),

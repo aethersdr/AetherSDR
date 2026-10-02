@@ -78,16 +78,10 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
 
-    // The synthetic wire's demo intents route back into THIS backend: ANF/NB
-    // to the audible mixer, and VFO/mode to the seam slice intents (the demo's
-    // SliceModel is materialised by the synthetic `slice 0 …` status, and that
-    // creation path wires frequency/mode intents to m_flexBackend, which is
-    // null in demo mode — so without this forward the birdie never moved and
-    // sideband never changed, in demo mode only). Wired HERE, in the ctor,
-    // because both ends are owned by this backend and die together — this
-    // used to live in MainWindow behind a dynamic_cast<SimBackend*>, rewired
-    // per backend swap (M0, #5263). Cross-thread (m_connection lives on its
-    // worker), so queued.
+    // Route the synthetic wire's demo intents back into this backend: ANF/NB to the
+    // mixer, VFO/mode to the seam slice intents (the demo SliceModel's intent path
+    // targets m_flexBackend, which is null in demo mode). Queued: m_connection lives
+    // on its worker thread.
     connect(m_connection, &RadioConnection::demoAnfChanged, this,
             [this](bool on) { setDemoAnf(on); }, Qt::QueuedConnection);
     connect(m_connection, &RadioConnection::demoNbChanged, this,
@@ -99,19 +93,12 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
             [this](const QString& mode) { setSliceMode(0, mode); },
             Qt::QueuedConnection);
 
-    // RFC #4288 (the VFO=0 fix): on the live hybrid path the synthetic wire
-    // connection delivers Flex-format pan/slice status, but RadioModel decodes
-    // that wire status ONLY through FlexBackend (decodeSliceStatus /
-    // decodePanCenterBandwidth are m_flexBackend-gated), which is null in demo
-    // mode — so the frequency never reaches the models and the VFO reads 0. We
-    // bridge that by emitting the same information as NORMALIZED typed deltas
-    // through the IRadioBackend seam (radioChanged/panCenterBandwidthChanged/
-    // sliceChanged), which RadioModel wires for EVERY backend. Cross-thread
-    // (m_connection is on its worker thread) so this is a queued connection.
-    // Delayed 150ms so it lands AFTER RadioModel has created the SliceModel /
-    // claimed the pan from the wire status (~50ms) — sliceChanged only applies to
-    // an already-existing slice. m_connected gates onAudioTick(); set it here so
-    // the audio/spectrum tick also starts producing on the live path.
+    // RadioModel decodes Flex wire pan/slice status only through FlexBackend, null
+    // in demo mode, so re-emit it as normalized seam deltas (radioChanged /
+    // panCenterBandwidthChanged / sliceChanged; RFC #4288). Queued (worker thread)
+    // and delayed 150 ms so RadioModel has created the SliceModel and claimed the pan
+    // (~50 ms); sliceChanged applies only to an existing slice. m_connected gates
+    // onAudioTick().
     connect(m_connection, &RadioConnection::connected, this, [this]() {
         m_connected = true;
         // The wire script claims pan 0; dynamic creates append (#4887 ph 4).
@@ -134,16 +121,11 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
                                   Qt::QueuedConnection);
     });
 
-    // Seam-geometry trigger for dynamically created pans (#4887 phase 4). A
-    // wire-claimed pan's center/bandwidth fields are never decoded in demo
-    // mode (that decode is m_flexBackend-gated), so each new pan needs the
-    // same normalized panCenterBandwidthChanged bridge pan 0 gets from
-    // emitInitialState() — but only AFTER RadioModel has claimed the pan,
-    // else the geometry is cached by index and the fresh pane starts blank.
-    // The wire status arriving HERE proves the line parsed; the zero-timer
-    // hop below then runs after RadioModel's own queued copy of the same
-    // emission, whichever order the two statusReceived connections were made
-    // in (both events are already in the GUI queue before the timer posts).
+    // Seam geometry for dynamically created pans (#4887 phase 4): each needs the
+    // panCenterBandwidthChanged bridge pan 0 gets in emitInitialState(), but only
+    // after RadioModel has claimed the pan or the geometry is cached by index and
+    // the pane starts blank. The zero-timer hop runs after RadioModel's own queued
+    // copy of this status, regardless of connection order.
     connect(m_connection, &RadioConnection::statusReceived, this,
             [this](const QString& object, const QMap<QString, QString>& kvs) {
         Q_UNUSED(kvs);
@@ -417,24 +399,12 @@ void SimBackend::disconnectRadio()
     m_connected = false;
     emit sliceRemoved(kSliceId);
 
-    // Tear the synthetic connection down too, rather than only emitting our own
-    // disconnected(). This is a Route A hybrid: RadioModel dials the demo through
-    // the vended RadioConnection (see the m_connection branch of
-    // connectToRadio()), so the connection is what the model treats as the live
-    // link — leaving it "Connected" while the backend says otherwise is what made
-    // isConnected() disagree with reality after `sim disconnect`.
-    //
-    // RadioConnection::disconnectFromRadio() has a synthetic branch that drops the
-    // handle, sets Disconnected and emits disconnected() — which reaches
-    // RadioModel::onDisconnected through the ONE wire-lifecycle path, and reaches
-    // our own ctor lambda (which clears m_connected / stops the timers) and our
-    // re-emit of IRadioBackend::disconnected for any seam listener. Queued: the
-    // connection lives on its own thread.
-    // Condition on whether the WIRE will report the disconnect, not merely on
-    // whether a connection object exists. Only RadioConnection's synthetic branch
-    // emits disconnected(); if we were never dialled through it (a bare
-    // connectRadio() seam intent, as in the unit test), delegating would tear down
-    // nothing and NOTHING would report the disconnect at all.
+    // Tear the synthetic connection down too: RadioModel treats the vended
+    // RadioConnection as the live link (Route A hybrid), so it must not stay
+    // Connected after `sim disconnect`. Its synthetic branch emits disconnected(),
+    // reaching RadioModel::onDisconnected, our ctor lambda and our seam re-emit.
+    // Only that branch reports the disconnect, so delegate only when we were dialled
+    // through it; a bare connectRadio() (unit test) disconnects here. Queued.
     if (m_connection && m_connection->isSyntheticDemo()) {
         QMetaObject::invokeMethod(m_connection,
                                   [conn = m_connection] { conn->disconnectFromRadio(); });

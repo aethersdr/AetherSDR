@@ -158,6 +158,7 @@ public:
     // the Black Level button's cycle and moves off it if it was selected —
     // the SW estimate is untouched and stays available on every family.
     void setRadioSideAutoBlackAvailable(bool available);
+    void setFftAverageDescriptions(const QString& average, const QString& weighted);
     void syncWnbState(bool on, int level, bool updating);
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step,

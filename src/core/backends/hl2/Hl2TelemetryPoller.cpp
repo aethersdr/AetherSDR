@@ -156,12 +156,8 @@ void Hl2TelemetryPoller::applyCadence()
         // descriptor, and an unbound QUdpSocket has none yet (socketDescriptor()
         // returns -1 and the call silently does nothing). Hl2Discovery makes the
         // same ordering explicit for the same reason.
-        // THE RETURN IS NOT DECORATIVE. A discarded bind() leaves a socket
-        // with no descriptor, and everything downstream then lies in the same
-        // direction: writeDatagram() fails silently, m_unanswered climbs at
-        // send time for datagrams that structurally cannot leave, and `health`
-        // reports a radio that is not answering about a radio nobody asked.
-        // A sandbox that refuses raw UDP produced exactly that reading.
+        // A failed bind leaves no descriptor: writes fail silently and the
+        // unanswered count would blame the radio, so stay silent instead.
         if (!m_socket->bind(QHostAddress::AnyIPv4, 0, QUdpSocket::ShareAddress)) {
             qWarning()
                 << "HL2 telemetry: cannot bind a local UDP port"
@@ -185,10 +181,7 @@ void Hl2TelemetryPoller::onPollTimer()
     if (!m_socket)
         return;
 
-    // WHERE TO SEND IS DECIDED FIRST, because the answer may be NOWHERE and the
-    // bookkeeping below must not run for a poll that never happened. Decided by
-    // pollDestination(), the same function currentIntervalMs() asks, so what
-    // the health row reports and what leaves the socket cannot diverge.
+    // Destination first: no bookkeeping for a poll that is never sent.
     const QHostAddress dest = pollDestination();
     if (dest.isNull()) {
         // Declining to send also retires any outstanding request: otherwise the
@@ -198,14 +191,8 @@ void Hl2TelemetryPoller::onPollTimer()
         return;
     }
 
-    // A poll that went unanswered is a fact about the radio, and it has to be
-    // counted at SEND time rather than on a timeout, because the absence of a
-    // reply produces no event to hang a counter off. onReadyRead clears it.
-    //
-    // Counted only for polls actually sent. A count rising while nothing left
-    // the socket would say "the radio is not answering" about a radio nobody
-    // asked -- precisely the misreading that let a broadcast to the wrong
-    // segment look like a working no-reply case.
+    // Count the previous poll as unanswered at the next send (a missing reply
+    // raises no event); only polls actually sent count. onReadyRead clears it.
     if (m_sinceRequest.isValid()) {
         ++m_unanswered;
         emit pollUnanswered(m_unanswered);
@@ -234,16 +221,9 @@ void Hl2TelemetryPoller::onReadyRead()
              static_cast<std::size_t>(data.size())});
         if (!reply)
             continue;
-        // THE RULE IS IN Hl2TelemetryCadence.h, acceptReply(), so it can be
-        // tested without a socket. What stays here is the transport.
-        //
-        // The latch is the only MAC filter, and it is narrower than the
-        // caller-supplied one it replaced: the first HL2-speaking answer from
-        // the named address is believed, whoever it is. What it stops is the
-        // responder CHANGING underneath a live aim. The supplied-MAC path was
-        // removed with setExpectedMac() -- nothing could ever call it, because
-        // an aim names an IP and the MAC is unknowable until something replies
-        // (#5642 review).
+        // Rule: acceptReply() in Hl2TelemetryCadence.h. The first HL2 answer
+        // from the target is believed and latched; the latch stops the
+        // responder changing underneath a live aim.
         const auto verdict = acceptReply(reply->isHermesLite2(), reply->mac,
                                          m_latchedMac);
         if (verdict.latch)

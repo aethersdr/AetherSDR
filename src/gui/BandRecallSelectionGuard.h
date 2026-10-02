@@ -9,30 +9,17 @@
 
 namespace AetherSDR {
 
-// Owns the window during which radio-driven active-slice selection is treated
-// as synchronization-only (see BandRecallSliceSelectionPolicy.h for what that
-// decision is; this decides WHEN it applies).
-//
-// Deliberately separate from the Kiwi/Center Lock band-recall markers, which
-// share a fixed grace timer keyed on band-recall *intent*. Two properties this
-// window needs and that one cannot give it:
-//
-//   * It must not open when the band write never reached the wire. The
-//     dispatch signal fires immediately BEFORE sendCommand() so the KiwiSDR
-//     mute handoff can bracket the write, so a dropped write (foreign-owned
-//     pan, dead WAN session, profile-load hold backstop) would otherwise
-//     suppress selection for a reconstruction that is not happening.
-//     arm()/cancelArm() are an exact pair for that.
-//   * A fixed window is a guess at how long the radio takes to rebuild a pan's
-//     slices. Over SmartLink/WAN the rebuild can outrun it, and one late
-//     transient old-band active=1 after expiry is enough to recentre the pan
-//     back onto the old band — the exact failure this guards. refresh() pushes
-//     the window out on each piece of evidence that the rebuild is still
-//     running, bounded by the hard cap the arming recall set so a chatty
-//     session cannot hold the window open indefinitely.
-//
-// Pure policy — no timers, no widgets, no clock. The caller injects nowMs and
-// owns every side effect. Unit-tested in band_recall_selection_guard_test.
+// Owns WHEN radio-driven active-slice selection is synchronization-only (see
+// BandRecallSliceSelectionPolicy.h for WHAT). Separate from the Kiwi/Center
+// Lock fixed grace timer because:
+//   * It must not open if the band write never reached the wire (the dispatch
+//     signal fires before sendCommand(); foreign pan, dead WAN, profile hold
+//     can drop it): arm()/cancelArm() pair exactly.
+//   * A fixed window can be outrun over SmartLink, and one late old-band
+//     active=1 recentres the pan on the old band. refresh() extends the window
+//     on each sign the rebuild is ongoing, up to the arming recall's hard cap.
+// Pure policy, no timers or clock (caller injects nowMs);
+// band_recall_selection_guard_test.
 class BandRecallSelectionGuard {
 public:
     BandRecallSelectionGuard(int windowMs, int maxWindowMs)

@@ -20,26 +20,13 @@ namespace AetherSDR {
 class RadioConnection;
 class PanadapterStream;
 
-// SimBackend — a native, in-process synthetic radio (demo mode). It is the
-// second IRadioBackend implementor after FlexBackend, but unlike FlexBackend it
-// speaks NO vendor wire: there is no socket, no discovery, no VITA-49 framing.
-// Because it sits at the IRadioBackend seam, it emits AE's already-normalized
-// deltas directly (RadioDelta/SliceDelta/…), so the whole transport layer is
-// simply absent. It generates the state a real radio would report.
+// SimBackend — native in-process synthetic radio (demo mode, RFC #4288). Speaks
+// no vendor wire: it emits AE's normalized deltas (RadioDelta/SliceDelta/…)
+// directly at the IRadioBackend seam. Clean-room reimplementation of
+// nigelfenton/flex-sim (GPL-3.0) against flex-sim/PROTOCOL.md.
 //
-// Status: Phase 1 skeleton (RFC #4288, demo mode). This class currently proves
-// the connection lifecycle only — connect → one synthetic radio identity + one
-// slice → disconnect/reconnect — with no spectrum/waterfall yet. The signal
-// engine (test patterns, meters, tunable multi-slice) is Phase 2 and will be
-// ported from flex-sim's generators against flex-sim/PROTOCOL.md.
-//
-// Design source: nigelfenton/flex-sim (GPL-3.0). This is a clean-room C++
-// reimplementation of our own GPL code against our own in-repo spec; no code is
-// copied verbatim (Constitution Principle IV).
-//
-// TX: capabilities().canTransmit is false in this skeleton — a demo radio must
-// never appear to be something that can key a transmitter (Principle VI). The
-// UI is expected to label the connection unmistakably as a simulator.
+// RX only: capabilities().canTransmit is false, so a demo radio never appears
+// able to key a transmitter.
 class SimBackend : public IRadioBackend {
     Q_OBJECT
 
@@ -126,19 +113,13 @@ private:
     // sensible default frequency/mode. Phase 2 grows this into the pan + meters.
     void emitInitialState();
 
-    // ---- Fault-injection harness (RFC #4288 #4 — land in v1) ----
-    // Reached via invokeExtension("sim", <fault>, …) — the IRadioBackend vendor-
-    // extension seam. Each fault drives AE down a fail-closed path so the
-    // regression suite can assert the app degrades safely (Jeremy's CI-testable
-    // angle). RX-only is preserved; nothing here can key TX. Faults:
-    //   swr <ratio>   — report high reflected power (SWR protection / fold-back)
-    //   dropslice     — remove the active slice (slice-gone teardown)
-    //   stallscope    — stop emitting spectrum/waterfall (scope-stall watchdog)
-    //   disconnect    — force a mid-op disconnect (reconnect/session teardown)
-    //   malformed     — emit a garbled status line (parser fail-closed; no retune-to-0)
-    //   clear         — cancel active faults, resume normal operation
-    // Returns true if the verb was a recognized fault (so invokeExtension can
-    // distinguish "handled" from "unknown extension").
+    // Fault injection (RFC #4288 #4) via invokeExtension("sim", <fault>, …). Each
+    // fault drives AE down a fail-closed path; nothing here can key TX.
+    //   swr <ratio>  high reflected power (SWR protection / fold-back)
+    //   dropslice    remove the active slice     stallscope  stop spectrum/waterfall
+    //   disconnect   force a mid-op disconnect   malformed   garbled status line
+    //   clear        cancel active faults
+    // Returns true if the verb was a recognized fault.
     bool applyFault(const QString& fault, const QVariant& arg);
     void injectHighSwr(double ratio);   // define+report a high SWR meter reading
     void injectDropSlice();             // push "slice 0 … removed" wire status
@@ -195,35 +176,18 @@ public:
     // constants below derive from it.
     static constexpr int kSpectrumRowEveryNFrames =
         SimSignalSource::kSpectrumRowEveryNFrames;
-    // The row cadence that follows, in whole ms: 9 × 128 / 24000 s = 48 ms.
-    //
-    // NOTHING READS THIS, and that is the honest state of it rather than an
-    // oversight to be tidied away. It used to be what the synthetic connect put
-    // on the wire as `line_duration`, back when that field was believed to be
-    // milliseconds; #4606 established that the field is a 1..100 rate, so the
-    // wire now carries kWaterfallRate below and this constant is left as the
-    // written-down derivation of what the demo actually produces. Keep it in
-    // step with kSpectrumRowEveryNFrames — the divergence note under
-    // kWaterfallRate is stated against this number.
+    // Row cadence in whole ms: 9 × 128 / 24000 s = 48 ms. Not put on the wire
+    // (`line_duration` is a 1..100 rate, #4606); kept as the derivation of what the
+    // demo produces, and kWaterfallRate's divergence note is stated against it.
     static constexpr int kWaterfallRowIntervalMs =
         (kSpectrumRowEveryNFrames * NoiseMixer::kFrameLen * 1000)
         / NoiseMixer::kSampleRate;
-    // …and the 1..100 waterfall RATE the synthetic connect declares. The demo
-    // already produces rows at its own cadence, so it asks for the top of the
-    // control — "as fast as frames arrive" — and RadioModel's pacer leaves the
-    // stream ungated. Declaring 48 here was declaring a rate of 48, which under
-    // the real semantics (core/WaterfallRate.h) is about 700 ms per row rather
-    // than 48, and would have gated the demo down to 1.4 rows/s (#4606).
-    //
-    // #4425 is why this matters beyond the pacer: the renderer interpolates the
-    // waterfall/3D scroll over one row interval, so a declared value that
-    // disagrees with the real rate makes every animation cut off part-way and
-    // the display jump — until SpectrumWidget's own measurement takes over.
-    // Note the residual divergence that leaves: the top of the control seeds the
-    // axis at kLocalFastestRowsPerSec (40 ms/row) while the demo really emits
-    // every kWaterfallRowIntervalMs (48 ms), so the first ~1 s of scroll is 17%
-    // fast before measurement takes over. Visible only on the demo rig, and
-    // preferable to re-declaring a rate that would re-gate the stream.
+    // The 1..100 waterfall RATE the synthetic connect declares: the top of the
+    // control, so RadioModel's pacer leaves the stream ungated (a rate of 48 would be
+    // ~700 ms/row, core/WaterfallRate.h, #4606). The renderer interpolates scroll
+    // over one row interval (#4425); the top seeds 40 ms/row
+    // (kLocalFastestRowsPerSec) against the real 48 ms, so the first ~1 s scrolls
+    // 17% fast until SpectrumWidget's measurement takes over. Demo only.
     static constexpr int kWaterfallRate = DemoRadio::kWaterfallRate;
 
 private:

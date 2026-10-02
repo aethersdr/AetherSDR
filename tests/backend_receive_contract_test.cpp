@@ -133,9 +133,9 @@ const std::array kFamilies{
     Family{"anan", make<anan::AnanBackend>, false, false, "pre-connect receiver configuration (not DSP completion)"},
     Family{"sim", make<SimBackend>, true, false, "production Demo session state (not hardware/filter DSP)"},
 #ifdef AETHER_BACKEND_RTL
-    Family{"rtl", make<rtl::RtlSdrBackend>, true, false, "cold refusal only; USB/DDC dispatch not covered"},
+    Family{"rtl", make<rtl::RtlSdrBackend>, true, true, "cold refusal only; USB/DDC dispatch not covered"},
 #else
-    Family{"rtl", nullptr, true, false, "NOT BUILT: optional librtlsdr unavailable"},
+    Family{"rtl", nullptr, true, true, "NOT BUILT: optional librtlsdr unavailable"},
 #endif
 };
 
@@ -450,8 +450,7 @@ void receiveControlContracts()
                       == ReceiveDispatch::Unsupported,
                   "non-Flex APF request refuses explicitly without inventing a backend feature");
         }
-        if (QLatin1String(family.name) == QLatin1String("sim")
-            || QLatin1String(family.name) == QLatin1String("anan")) {
+        if (QLatin1String(family.name) == QLatin1String("sim")) {
             check(backend->requestSliceAudio(0, {SliceAudioRequest::Field::Gain, 40}) == ReceiveDispatch::Unsupported
                       && backend->requestSliceLock(0, true) == ReceiveDispatch::LocalOnly,
                   "no independent mixer is invented; client-only slice lock remains available");
@@ -571,6 +570,19 @@ void demoAndColdRefusal()
 void ananNoiseBlankerDispatch()
 {
     anan::AnanBackend backend;
+    QSignalSpy audio(&backend, &IRadioBackend::sliceChanged);
+    check(backend.requestSliceAudio(0, {SliceAudioRequest::Field::Gain, 43})
+              == ReceiveDispatch::Dispatched && last(audio).audioGain == 43,
+          "typed ANAN audio retains the existing slice mixer gain and observation");
+    check(backend.requestSliceAudio(0, {SliceAudioRequest::Field::Mute, 1})
+              == ReceiveDispatch::Dispatched && last(audio).audioMute == true,
+          "typed ANAN audio retains the existing slice mixer mute and observation");
+    check(backend.requestSliceAudio(0, {SliceAudioRequest::Field::Pan, 77})
+              == ReceiveDispatch::Dispatched
+              && backend.requestSliceAudio(1, {SliceAudioRequest::Field::Gain, 23})
+                  == ReceiveDispatch::Unsupported
+              && backend.requestSliceLock(0, true) == ReceiveDispatch::LocalOnly,
+          "ANAN preserves mixer balance, single-slice identity and client-only lock");
     check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
               SliceDspRequest::Field::Enabled, true, 71}) == ReceiveDispatch::Dispatched
               && backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 71,
