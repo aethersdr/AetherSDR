@@ -483,10 +483,9 @@ private:
         // shift, and the NCO moves only when the target would leave the window.
         double sliceFreqHz = 10'000'000.0;   // slice
         double ncoHz       = 10'000'000.0;   // DDC / pan centre
-        // True while the NCO sits where it does ONLY because RIT pushed the
-        // receive frequency out of the window (the dial alone was inside it).
-        // Clearing RIT then brings the NCO back to the dial instead of leaving
-        // the pan centre offset by the old RIT amount (#6012 review).
+        // True while the NCO sits off the dial only because RIT pushed the
+        // receive frequency out of the window (the dial alone fitted), so
+        // clearing RIT re-centres it on the dial. A pan drag clears it.
         bool ncoMovedForRit = false;
 
         QString mode = QStringLiteral("USB");
@@ -559,8 +558,8 @@ private:
     [[nodiscard]] double rxTunedHz(const Receiver& r) const noexcept;
     // Re-run one receiver's tune after its share of RIT changed.
     void retuneReceiver(int ddc);
-    // qCInfo naming the receiver RIT landed on (#6012 review): the seam is
-    // radio-wide, so the VFO turned need not be the receiver that moved.
+    // qCInfo naming the receiver RIT landed on: the seam is radio-wide, so the
+    // VFO turned need not be the receiver that moved.
     void logRitScope() const;
     // SmartCatProtocol's kRitMaxHz. Only SmartCAT clamps to it: SliceModel::
     // setRit() and the VFO's RIT/XIT steppers do not, so an offset past it can

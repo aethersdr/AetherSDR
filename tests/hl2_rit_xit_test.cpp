@@ -1,24 +1,8 @@
-// HL2 RIT / XIT (#5386) — receive and transmit offsets reach the registers.
-//
-// The RIT/XIT controls were wired all the way to IRadioBackend's
-// setRitEnabled/setRitOffset/setXitEnabled/setXitOffset, whose defaults are
-// no-ops, and Hl2Backend overrode none of them: the button toggled, the readout
-// moved, and the radio heard and transmitted exactly where it did before.
-//
-// What this pins, on the HL2's two independent paths:
-//
-//   receive   the transmit-owning receiver's WDSP shift (and, when the offset
-//             leaves the usable window, its NCO register) moves by the RIT
-//             offset; no other receiver moves.
-//   transmit  the TX NCO register (C&C addr 0x01) moves by the XIT offset and
-//             by nothing else — RIT must not reach it, and XIT must not alias
-//             onto RIT (the seam's default setXitOffset forwards to
-//             setRitOffset, which is right only for a one-register radio).
-//   display   the published slice frequency stays the dial frequency.
-//
-// SOCKET-FREE and UNKEYED: a constructed backend with no connectRadio(), no
-// peer and no DSP. The TX register is read back from MetisClient's own C&C
-// bank; oscillator setup keys nothing, and the test asserts MOX stays clear.
+// HL2 RIT / XIT (#5386): RIT moves only the transmit-owning receiver's receive
+// shift (and its NCO when the offset leaves the usable window); XIT moves only
+// the TX NCO register (C&C addr 0x01), never aliased onto RIT; the published
+// slice frequency stays the dial. Socket-free and unkeyed: a constructed backend,
+// no connectRadio(), registers read from MetisClient's C&C banks, MOX asserted clear.
 
 #include "TestSettingsProfile.h"
 #include "core/backends/IRadioBackend.h"

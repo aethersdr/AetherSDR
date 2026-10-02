@@ -4258,12 +4258,9 @@ void Hl2Backend::setTxFrequency(double hz)
     // dial, so the offset reaches the TX register on every path that writes it
     // (tune, TX slice move, reconnect, calibration) and never the receive side.
     double txHz = hz + (m_xitOn ? m_xitHz : 0);
-    // The guard above is on the DIAL; XIT must not walk the commanded frequency
-    // through zero behind it. ncoCommandHz() answers 0 for anything non-
-    // positive, which would key at DC while the dial read a real frequency.
-    // Not a bare return either: the register would then keep its LAST value —
-    // after a jump down from 20 m, 20 m — so keying would radiate on a band the
-    // dial does not show. The dial itself is the one value that is neither.
+    // XIT can take the command through zero behind the dial guard, and
+    // ncoCommandHz() maps that to DC. Skipping the write is no better: the
+    // register keeps its last value, possibly another band. Hold the dial.
     if (txHz <= 0.0) {
         qCWarning(lcHl2) << "HL2: XIT" << m_xitHz << "Hz would put TX at" << txHz
                          << "Hz from a dial of" << hz
