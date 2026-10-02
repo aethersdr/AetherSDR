@@ -1,29 +1,10 @@
-// HL2 — the receiver-count restart must not stall the thread that feeds the radio.
-//
-// setReceiverCount() stops EP6, rebuilds the payload layout, primes the new
-// config and starts EP6 again. The priming banks are spaced 10 ms apart, and that
-// spacing used to be two QThread::msleep(10) per sendPrimingBurst() call, two
-// calls per restart: ~40 ms in which MetisClient's thread -- the one that paces
-// EP2 and drains EP6 -- ran no event loop at all (#5678 row 3.5). It is now
-// driven by a timer on that thread. This test pins what that must and must not
-// change.
-//
-// WHAT MUST NOT CHANGE, asserted on what the client puts on the wire:
-//   - the order: metis-stop, C&C carrying the NEW receiver count, metis-start;
-//   - the spacing: the start goes out >= 20 ms after the stop (two 10 ms banks),
-//     and the post-start banks and the bandscope re-arm >= 20 ms after that;
-//   - every C&C after the stop already carries the new count;
-//   - no run byte of any kind between the stop and the start -- every run byte
-//     has bit 0 set, so a bandscope arm inside the window is an early start;
-//   - EP6 arriving between stop and start (old layout) is never decoded.
-// WHAT MUST CHANGE:
-//   - setReceiverCount() returns without waiting out the spacing;
-//   - EP2 keeps flowing through the restart: no C&C gap anywhere near 10 ms.
-//
-// SOCKET-FREE, per AGENTS.md's test-layer table: this is scheduling policy, so
-// the transport is injected. C&C frames go to m_packetSinkForTest, run/stop
-// datagrams to m_commandSinkForTest, and "arriving" EP6 is handed to
-// handleDatagram() directly. Nothing binds, nothing is sent, no peer exists.
+// HL2: setReceiverCount() restarts the stream (stop, prime the new layout,
+// start, prime) without blocking the thread that paces EP2 and drains EP6
+// (#5678 row 3.5). Asserted on the wire: the stop/start order and >= 10 ms bank
+// spacing, the new receiver count in every C&C after the stop, no run byte and
+// no decoded EP6 between stop and start, the call returning at once, and no
+// C&C gap near 10 ms. Socket-free: C&C, run/stop and EP6 go through injected
+// sinks and handleDatagram().
 
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"

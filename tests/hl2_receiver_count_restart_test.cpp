@@ -45,15 +45,10 @@ static void check(bool cond, const char* what)
     }
 }
 
-// A minimal valid EP6 packet: header plus both frame SYNCs. The samples are zero
-// because what is asserted here is the block GEOMETRY — how many receivers the
-// round decodes into — not any sample value.
-//
-// Except for ONE: a LAST packet carries a non-zero first RX1 I sample, so the
-// test can tell, on the client's side of the socket, which EP6 was the final
-// one the radio sent before it fell silent (see the silence block). It is in
-// sequence and otherwise identical, so the client's loss accounting cannot tell
-// it apart.
+// A minimal valid EP6 packet: header plus both frame SYNCs. Samples are zero,
+// because what is asserted is the block GEOMETRY, except that a `last` packet
+// carries a non-zero first RX1 I sample so the client side can recognise the
+// radio's final EP6 before a wedge. It stays in sequence for the loss accounting.
 static QByteArray fakeEp6(std::uint32_t seq, bool last = false)
 {
     QByteArray p(static_cast<int>(kUsbPacketSize), 0);
@@ -153,9 +148,7 @@ int main(int argc, char** argv)
     int blocksSeen = 0;
     int lastBlockCount = 0;
     // EP6 decoded AFTER the radio's last-marked packet. The radio sends nothing
-    // after that packet, so anything counted here is a real failure to stop --
-    // unlike a count started when the test sets a flag, which also catches EP6
-    // the radio sent BEFORE the flag and the client had not yet read.
+    // after it, so anything counted here is a real failure to stop.
     bool lastSeen = false;
     int blocksAfterLast = 0;
     QObject::connect(&client, &MetisClient::iqBlocksReady, &client,
@@ -187,13 +180,10 @@ int main(int argc, char** argv)
     const int stopsBefore = stopsSeen;
     client.setReceiverCount(2);
 
-    // SETTLE BEFORE ASSERTING ANYTHING. setReceiverCount returns after the stop
-    // and the first priming bank; the start follows >= 20 ms later from the
-    // client's restart timer, and the whole sequence ends >= 40 ms after the
-    // call. Both ends of this test live in one event loop; a real radio and a
-    // real host do not, which is exactly the asymmetry the retry has to survive.
-    // 150 ms, not 60: ~40 ms of this is now the client's own schedule, and the
-    // retry is still 300 ms past the restart's Finish step, so the slack is free.
+    // SETTLE BEFORE ASSERTING ANYTHING. The restart's start goes out >= 20 ms
+    // after the call and its sequence ends >= 40 ms after it, from the client's
+    // own timer. 150 ms leaves slack on a loaded runner and is still well short
+    // of the start retry, 300 ms past the restart's end.
     spin(150);
     check(stopsSeen == stopsBefore + 1, "the restart stopped the stream first");
     check(startsSeen == startsBefore + 1, "and sent one start, which the radio lost");
@@ -279,19 +269,10 @@ int main(int argc, char** argv)
         const std::uint32_t lostAcrossTheSilence = 761;
         seqBumpOnStart = lostAcrossTheSilence;
 
-        // The radio wedges: it stops streaming and never says so.
-        //
-        // NOT `streaming = false; blocksSeen = 0;` -- that was a flake (2 runs
-        // in 50 with eight cores busy, and at ctest -j8). Stopping the fake
-        // radio stops it WRITING; it does not empty the client's socket, and
-        // the pacer's catch-up burst can have several answered EP2 in it. The
-        // later this thread gets to drain them, the more EP6 "arrives during
-        // the silence". MetisClient's restart path documents the same limit
-        // for its own socket ("it cannot catch a packet still in flight").
-        //
-        // So the radio's final EP6 is marked, and the claim is checked from it:
-        // nothing decoded AFTER the radio's last packet. Loopback delivers one
-        // socket pair in order, so this needs no wait and no bound.
+        // The radio wedges: it stops streaming and never says so. Stopping it
+        // does not empty the client's socket, which may still hold answered
+        // EP6, so the radio's final EP6 is marked and the check counts only EP6
+        // decoded after it. Loopback delivers in order: no wait, no bound.
         lastSeen = false;
         blocksAfterLast = 0;
         wedgeAfterNext = true;
