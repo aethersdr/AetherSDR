@@ -755,19 +755,10 @@ void WorkspaceCanvas::cancelGesture()
 
 void WorkspaceCanvas::mousePressEvent(QMouseEvent* ev)
 {
-    // Reached two ways: a genuine bare-canvas press, and a press on a
-    // NON-INTERACTIVE part of an item whose widget ignored it — Qt
-    // propagates ignored presses to the parent.  Deselecting on the second
-    // kind would undo the selection the event filter just made (the click
-    // landed ON the item, from the operator's point of view), so hit-test
-    // rather than assume.
-    //
-    // Edit mode gates the whole select/raise branch (red-team B2): this was
-    // the ONE press handler the Edit Layout commit did not gate, and a
-    // stray click on an applet's dead space while merely operating raised a
-    // pan over the controls, drew the frame, and persisted the z change —
-    // the 8600 field report reintroduced through the back door.  Left
-    // button only (m7): middle/back-button presses are not placement.
+    // Reached for bare-canvas presses and for presses an item's widget ignored
+    // (Qt propagates them), so hit-test rather than deselect blindly. Edit mode and
+    // the left button only: in operating mode a dead-space click must not raise,
+    // frame or persist z.
     if (m_editMode && ev->button() == Qt::LeftButton) {
         const QString hit = hitTest(ev->position().toPoint());
         if (hit.isEmpty()) {
@@ -783,16 +774,10 @@ void WorkspaceCanvas::mousePressEvent(QMouseEvent* ev)
 
 bool WorkspaceCanvas::event(QEvent* ev)
 {
-    // The main window binds the arrow family as application shortcuts —
-    // frequency nudges on Left/Right and Shift+Left/Right — and application
-    // shortcuts consume key events before the focused widget sees them.
-    // Accepting the ShortcutOverride reclaims the key for the widget.
-    //
-    // Scope is deliberate and narrow: only while a canvas item is SELECTED
-    // (or a gesture is live) and only while the canvas itself has focus —
-    // the override is consulted for the focus widget alone, so clicking into
-    // the spectrum or deselecting hands the VFO its keys straight back.
-    // Selecting an item is the operator saying "I'm placing things now."
+    // MainWindow binds the arrow keys as application shortcuts (frequency nudges),
+    // which consume keys before the focus widget. Accept ShortcutOverride to reclaim
+    // them, only in edit mode with an item selected or a gesture live, and only
+    // while the canvas has focus, so the VFO gets its keys back otherwise.
     if (m_editMode && ev->type() == QEvent::ShortcutOverride
         && (!m_selectedId.isEmpty() || gestureActive())) {
         auto* ke = static_cast<QKeyEvent*>(ev);

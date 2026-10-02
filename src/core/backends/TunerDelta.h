@@ -7,19 +7,11 @@
 
 namespace AetherSDR {
 
-// Normalized antenna-tuner status delta (aetherd 2.4 — TunerModel decode split,
-// #4092). FlexBackend::decodeTunerStatus translates the SmartSDR "atu"/"amplifier"
-// (model=TunerGeniusXL) wire into this typed, present-only shape; TunerModel::
-// applyChanges applies exactly the reported fields (change-gated, with the
-// tuning/antenna/ptt edge signals). Same contract as the sub-model deltas.
-//
-// pttA/pttB drive the per-port keying lamps on the expanded front-panel
-// presentation TunerApplet shows once it is popped out or placed on the canvas;
-// they were parsed by FlexLib and dropped here until then.
-//
-// Command/encode (operate/bypass/autotune) is NOT here — TunerModel emits neutral
-// intents, translated back to the wire by FlexBackend::invokeExtension("flex",
-// "tuner.*", …) (#4092). The direct port-9010 relay/antenna fast-path and the
+// Normalized antenna-tuner status delta (aetherd 2.4, #4092), present-only.
+// FlexBackend::decodeTunerStatus translates SmartSDR "atu"/"amplifier"
+// (model=TunerGeniusXL); TunerModel::applyChanges applies it change-gated.
+// pttA/pttB drive TunerApplet's per-port keying lamps. Commands go back via
+// FlexBackend::invokeExtension("flex", "tuner.*", …); the port-9010 fast path and
 // direct-connection fwd-power/SWR meters are set outside this decode.
 struct TunerDelta {
     std::optional<QString> handle;       // normalized tuner identity

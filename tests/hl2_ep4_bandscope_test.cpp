@@ -516,12 +516,7 @@ int main()
     //
     // rmsDbfs() is AC-referred and peakDbfs() is absolute, so a large crest
     // means EITHER a peaky signal OR a large mean under a quiet band. dcDbfs()
-    // is what tells those apart, and meanCodes() keeps the polarity a dBFS
-    // magnitude cannot carry.
-    //
-    // WHERE, NOT WHY. This is the mean of the codes at the converter's output.
-    // Nothing here says the converter produced it — on at least one bench the
-    // level tracks analog gain, so its cause is open.
+    // tells those apart; meanCodes() keeps the polarity a magnitude cannot.
     {
         constexpr int kDc = 1200;
         const double expectedDbfs =

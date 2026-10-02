@@ -156,6 +156,10 @@ void TciApplet::buildUI()
 
             QMenu menu(this);
             menu.setTitle("TX overflow handling");
+            // Every entry below carries the explanation of what its overflow
+            // mode does to the samples; without the opt-in Qt renders none of
+            // them (#5546).
+            menu.setToolTipsVisible(true);
             auto* group = new QActionGroup(&menu);
             group->setExclusive(true);
 

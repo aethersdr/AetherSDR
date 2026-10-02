@@ -322,17 +322,10 @@ void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts,
         return;
     }
 
-    // Narrow the sweep range to the active regional band plan when one is
-    // loaded.  BandDefs.h holds ARRL/US allocations only; without this the
-    // sweep transmits outside the user's region (e.g. past 7.200 MHz on
-    // 40 m for IARU R1) and trips the radio's interlock.  Mirrors the
-    // pattern used by AtuPreTuneDialog::recomputeBands. (#2800)
-    //
-    // Today the SWR sweep treats the band as a single contiguous range —
-    // discrete-channel bands like US 60 m are hard-blocked above. We use
-    // contiguousRegionsForBand() (#2822) and union the regions so a
-    // future enhancement can walk each region individually without
-    // touching the per-region calculation.
+    // Narrow the sweep to the active regional band plan (BandDefs.h is US
+    // only), or the sweep transmits out of region and trips the interlock
+    // (#2800), as AtuPreTuneDialog::recomputeBands does. Regions from
+    // contiguousRegionsForBand() (#2822) are unioned into one range.
     double effectiveLow = band.lowMhz;
     double effectiveHigh = band.highMhz;
     if (m_bandPlanMgr) {

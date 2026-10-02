@@ -10,22 +10,13 @@
 #include <cmath>
 #include <cstring>
 
-// ── TMate 2 display helpers ────────────────────────────────────────────────
-//
-// Digit encoding for the TMate 2 LCD.  Tables and byte layout are derived
-// from OpenTMate2Lib (D:\Code\OpenTMate2Lib), which reverse-engineered the
-// protocol from TMATE2_DLL.dll via USBPcap captures (2026-06-05).
-//
-// Main 9-digit display (freq in Hz):
-//   Each digit d (1=units, 9=100 MHz) occupies two LCDVector bytes:
-//     high = 22 - 2*d   bits: A=0x01 B=0x02 C=0x04
-//     low  = 21 - 2*d   bits: F=0x01 G=0x02 E=0x04 D=0x08
-//
-// Small 3-digit display (S-meter / TX power):
-//   Each digit d (1=units, 3=hundreds) occupies two LCDVector bytes:
-//     high = 21 + 2*d   bits: A=0x80 B=0x40 C=0x20 D=0x10
-//     low  = 22 + 2*d   bits: E=0x20 F=0x80 G=0x40
-//   (bit ordering is reversed vs. main display — hardware quirk)
+// TMate 2 LCD digit encoding, from OpenTMate2Lib (USBPcap of TMATE2_DLL.dll).
+// Main 9-digit display (Hz), digit d (1 = units .. 9 = 100 MHz):
+//   high = 22 - 2*d  bits: A=0x01 B=0x02 C=0x04
+//   low  = 21 - 2*d  bits: F=0x01 G=0x02 E=0x04 D=0x08
+// Small 3-digit display (S-meter / TX power), d (1 = units .. 3 = hundreds):
+//   high = 21 + 2*d  bits: A=0x80 B=0x40 C=0x20 D=0x10
+//   low  = 22 + 2*d  bits: E=0x20 F=0x80 G=0x40   (bit order reversed vs main)
 
 namespace {
 

@@ -7,22 +7,12 @@
 
 namespace AetherSDR {
 
-// One decoder for a memory-slot kv-set, shared by every producer of one.
-//
-// Two callers reach this: FlexBackend::decodeMemoryStatus, decoding what the
-// radio reported, and the local memory bank, decoding the `memory set` a client
-// just issued against a radio that has no memory storage of its own. They MUST
-// agree — a slot written locally and a slot read back from a Flex have to land
-// in MemoryEntry identically or the same CSV export would depend on which radio
-// happened to be connected. Keeping the decode in one place is what makes that
-// structural rather than a thing two copies are trusted to preserve.
-//
-// Contract (unchanged from the Flex decoder this was lifted from): present-only
-// — absent keys leave their optional disengaged so the model keeps the slot's
-// prior value; numerics are ok-guarded, so a malformed *present* value is
-// dropped rather than applied as 0. Text rides raw: the protocol space-encoding
-// (0x7f→' ') and the NUL/control-byte sanitisation are a models/ concern applied
-// in RadioModel::applyMemoryChanges, so this stays free of any models/ include.
+// One decoder for a memory-slot kv-set, shared by FlexBackend::decodeMemoryStatus
+// and the local memory bank (decoding a client's `memory set`), so a slot lands
+// in MemoryEntry identically whichever radio is connected. Present-only: absent
+// keys stay disengaged; numerics are ok-guarded, so a malformed present value is
+// dropped, not applied as 0. Text rides raw: space-decoding (0x7f→' ') and
+// control-byte sanitisation happen in RadioModel::applyMemoryChanges.
 namespace MemoryWire {
 
 // Decode a memory-slot kv-set into a typed delta. `removed` is set when the

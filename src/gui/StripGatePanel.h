@@ -16,24 +16,10 @@ class ClientCompKnob;    // reused — generic rotary knob
 class ClientGateLevelView;
 class ClientGateCurveWidget;
 
-// Floating editor for the client-side TX gate / expander — layout
-// modelled on Ableton Live's Gate device.  One instance lives on
-// MainWindow; calling showForTx() raises the window and binds it to
-// AudioEngine::clientGateTx().  Geometry persists via AppSettings
-// (`StripGatePanelGeometry` key).
-//
-// Layout:
-//   ┌─ bypass ──────────────────── × ┐
-//   │ ┌──────┐  ┌──────────────────┐ │
-//   │ │ THR  │  │                  │ │
-//   │ │      │  │   level view     │ │
-//   │ │ RET  │  │   (Ableton-style)│ │
-//   │ │      │  │                  │ │
-//   │ │ Flip │  │                  │ │
-//   │ │ Look │  │                  │ │
-//   │ └──────┘  └──────────────────┘ │
-//   │   [ATK] [HLD] [REL] [FLR]      │
-//   └────────────────────────────────┘
+// Floating editor for the client-side TX gate / expander (Ableton Gate-style
+// layout: THR/RET/Flip/Look column beside the level view, ATK/HLD/REL/FLR knobs
+// below). One instance on MainWindow; showForTx() binds it to
+// AudioEngine::clientGateTx(). Geometry persists in `StripGatePanelGeometry`.
 class StripGatePanel : public QWidget {
     Q_OBJECT
 

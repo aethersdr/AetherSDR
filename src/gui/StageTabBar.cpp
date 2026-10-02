@@ -21,18 +21,10 @@ namespace AetherSDR {
 
 namespace {
 
-// Carried by a row drag: the stage id, as an int, under a MIME type private
-// to the window that started the drag.
-//
-// The type MUST be per-window. Both bars accept drops, both windows can be
-// open at once, and the payload is a bare id whose meaning depends entirely
-// on which chain it came from: RxChainStage{Eq=1,Gate=2,Comp=3,Tube=4,Pudu=5}
-// against TxChainStage{Gate=1,Eq=2,DeEss=3,Comp=4,Tube=5}. Every RX id is
-// also a valid TX id, so one shared type let a drag out of the AetherRX
-// column silently reorder the transmit chain -- dragging RX "Eq" (1) onto the
-// TX bar moved TX "Gate" (1). Before these two columns were one shared
-// widget they used different types by accident of having been written
-// separately; this keeps that separation on purpose.
+// Row-drag payload: the stage id under a MIME type private to the source
+// window. Must be per-window: both bars accept drops and RX/TX stage ids overlap
+// (RX Eq=1 vs TX Gate=1), so a shared type would let an RX drag reorder the
+// transmit chain.
 QString stageMimeFor(const QString& prefix)
 {
     return QStringLiteral("application/x-aethersdr-stage.") + prefix;
@@ -109,16 +101,10 @@ private:
     QPoint  m_press;
 };
 
-// One tab in the column. Same chrome as the method strip inside the AetherNR
-// page — checkable, property-selected, sized by the layout — but left-aligned,
-// because a column of centred labels of different lengths reads as ragged
-// where a row of them reads as even.
-// The family's accent token for the text; hover shows the border in the
-// same colour, and checked adds a translucent fill of the family so an
-// engaged toggle reads as a state, not a selected page. Tokens, not
-// literals: ThemeManager::applyStyleSheet() resolves them and re-applies on
-// a theme change. Disabled goes to the column's disabled text so a PLAY with
-// nothing to play does not read as "off" in its own colour.
+// Footer toggle: the family's accent token for text and hover border, plus a
+// translucent fill when checked so it reads as a state, not a selected page.
+// Tokens are resolved and re-applied on theme change by
+// ThemeManager::applyStyleSheet(). Disabled uses the column's disabled text.
 QString footerToggleStyle(StageTabBar::Accent accent)
 {
     const char* accentToken = "{{color.accent.warning}}";

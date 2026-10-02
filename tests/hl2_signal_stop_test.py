@@ -54,14 +54,29 @@ def drain(sock, seconds):
             return out
 
 
+SKIP = 77
+
+
+def default_dispositions():
+    """Child starts from default dispositions, so an inherited SIG_IGN (nohup)
+    cannot make the handler decline to install and the kill hang."""
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, signal.SIG_DFL)
+
+
 def run_case(child, sig, extra_args=()):
     """Kill the child with `sig`; return the datagrams seen afterwards."""
     radio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    radio.bind(("127.0.0.1", 0))
+    try:
+        radio.bind(("127.0.0.1", 0))
+    except OSError as e:
+        print(f"SKIP  cannot bind a loopback UDP port: {e}")
+        sys.exit(SKIP)
     port = radio.getsockname()[1]
 
     proc = subprocess.Popen([child, str(port), *extra_args],
-                            stdout=subprocess.PIPE)
+                            stdout=subprocess.PIPE,
+                            preexec_fn=default_dispositions)
     try:
         # Wait for the client to be streaming before killing it -- killing it
         # mid-startup would test nothing.

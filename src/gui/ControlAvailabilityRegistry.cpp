@@ -140,16 +140,10 @@ void ControlAvailabilityRegistry::applyOne(Entry& entry,
     if (QAction* a = entry.action) {
         a->setEnabled(entry.state != ControlAvailability::Unavailable);
         a->setToolTip(tip);
-        // QAction has no accessibleDescription, so the reason rides on the
-        // status tip — that is the channel Qt exposes to accessibility clients
-        // for an action, and the one TX Band Settings was missing.
-        //
-        // ONLY WHEN UNAVAILABLE, unlike a widget's accessibleDescription. A
-        // status tip is also shown in the STATUS BAR on hover, so describing
-        // every merely-inactive entry there would push "Available, not
-        // currently active" into the status bar for most of the menu. A widget
-        // has a private accessible channel and can afford the fuller wording;
-        // an action shares one with the UI and must not.
+        // QAction has no accessibleDescription; the status tip is the channel Qt
+        // exposes to accessibility clients for an action. Set only when
+        // unavailable: the status tip also shows in the status bar on hover, so
+        // describing every inactive entry would flood it.
         a->setStatusTip(entry.state == ControlAvailability::Unavailable ? entry.reason
                                                                         : QString());
     }

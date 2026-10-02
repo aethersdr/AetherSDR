@@ -17,18 +17,10 @@ namespace AetherSDR {
 class RadioModel;
 
 // Transfers DVK recordings between the radio and local WAV files.
-//
-// Download (radio → client):
-//   1. Send "dvk download id=N" → radio responds with TCP port
-//   2. Client opens QTcpServer on that port
-//   3. Radio connects and streams the WAV file
-//
-// Upload (client → radio):
-//   1. Send "dvk upload id=N" → radio responds with TCP port
-//   2. Client connects QTcpSocket to radio:<port>
-//   3. Client streams the WAV file to the radio
-//
-// WAV format: 2-channel, 32-bit float, 48 kHz, max 5 MB.
+// Download: "dvk download id=N" -> radio replies with a TCP port; client listens
+// on it and the radio connects and streams the WAV.
+// Upload: "dvk upload id=N" -> port; client connects to radio:<port> and streams.
+// WAV: 2-channel, 32-bit float, 48 kHz, max 5 MB.
 
 class DvkWavTransferTestAccess;
 

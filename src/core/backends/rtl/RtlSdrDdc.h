@@ -41,9 +41,6 @@ signals:
     // Emits raw spectrum FFT magnitude data for PanadapterWidget (~30 FPS)
     void spectrumFrameReady(int panId, const QByteArray& frame);
 
-    // Emits raw waterfall row FFT magnitude data for WaterfallWidget (~30 FPS)
-    void waterfallRowReady(int panId, const QByteArray& row);
-
     // Emits 24 kHz float32 PCM audio data for AudioEngine
     void audioFrameReady(const QByteArray& pcm);
 

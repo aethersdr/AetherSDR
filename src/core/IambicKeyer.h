@@ -11,45 +11,21 @@
 
 namespace AetherSDR {
 
-// Software iambic keyer state machine — drives the local CW sidetone in
-// real time when an operator's paddle is wired to the PC instead of the
-// radio.  Modes A and B implemented for v1; Ultimatic / Bug / Straight
-// follow in a later phase.
-//
-// Architecture
-// ────────────
-// Paddle timing belongs here so every backend sees the same completed element
-// edges. Flex forwards those edges to NetCW; a host-modulating backend such as
-// HL2 turns them into shaped IQ. The same state machine also drives the local
-// sidetone gate with sub-5 ms latency.
-//
-// Threading
-// ─────────
-// The state machine runs on a dedicated worker thread.  Element timing
-// uses std::this_thread::sleep_until against std::chrono::steady_clock —
-// QTimer's jitter is too high for CW.  Paddle edges are pushed in via
-// setPaddleState() from any thread; the worker wakes via a
-// condition_variable.
-//
-// Output
-// ──────
-// Callbacks set before start():
-//   - onKeyDownChange(bool down, when) — flips the sidetone gate.
-//     `when` is the edge's SCHEDULED instant on the element grid, not
-//     the emission wall-clock: the callback itself runs when the worker
-//     wakes (0–5 ms past the deadline on macOS, #4890), but the grid
-//     deadline is exact and known before the edge fires, so consumers
-//     that place the edge in time (sidetone sample mapping, trace log,
-//     radio timestamps) use `when` and turn wake latency from rhythm
-//     error into plain latency.  Called directly from the worker
-//     thread; the receiver MUST be lock-free
-//     (e.g. CwSidetoneGenerator::setKeyDown which is std::atomic).
-//   - onPaddleEvent(bool dit, bool dah) — reports raw paddle transitions for
-//     diagnostics and any backend-specific observer. Timed RF key edges come
-//     from onKeyDownChange.
-//   - onRoutedKeyDownChange(down, when, request) — carries an element derived
-//     from the original raw input to the engine queue. It is separate from
-//     monitor/recorder timing and never supplies a fresh producer/session.
+// Software iambic keyer (Modes A and B) for a paddle wired to the PC. Paddle
+// timing lives here so every backend sees the same completed element edges: Flex
+// forwards them to NetCW, a host-modulating backend (HL2) shapes IQ, and the
+// local sidetone gate follows with sub-5 ms latency.
+// Threading: a dedicated worker waits on a condition_variable until absolute
+// steady_clock deadlines (QTimer jitter is too high for CW); setPaddleState()
+// may be called from any thread and wakes it.
+// Callbacks, set before start():
+//   - onKeyDownChange(down, when): `when` is the edge's SCHEDULED grid instant,
+//     not wake time (0-5 ms late on macOS, #4890), so consumers placing edges in
+//     time keep the rhythm. Called on the worker: the receiver MUST be lock-free
+//     (e.g. CwSidetoneGenerator::setKeyDown).
+//   - onPaddleEvent(dit, dah): raw paddle transitions, diagnostics only.
+//   - onRoutedKeyDownChange(down, when, request): an element derived from the
+//     raw input for the engine queue; never supplies a new producer/session.
 class IambicKeyer {
 public:
     enum class Mode : int {

@@ -67,18 +67,11 @@ void ClientPhaseRotator::reset() noexcept
 
 void ClientPhaseRotator::designSections() noexcept
 {
-    // Second-order all-pass coefficients per RBJ cookbook, but the
-    // canonical AP form whose magnitude is exactly 1 at every frequency.
-    // For a centre frequency f0 and Q, the pole/zero pair sits on a
-    // common radius with mirrored arguments — the standard analog-to-
-    // digital bilinear-transform derivation gives:
-    //   w0 = 2π f0 / fs
-    //   alpha = sin(w0) / (2 Q)
+    // Second-order all-pass per RBJ cookbook (|H| = 1 at every frequency):
+    //   w0 = 2*pi*f0 / fs,  alpha = sin(w0) / (2 Q)
     //   a0 = 1 + alpha,  a1 = -2 cos(w0),  a2 = 1 - alpha
     //   b0 = a2,         b1 = a1,          b2 = a0
-    // After normalising by a0, the all-pass numerator coefficients equal
-    // the reversed denominator coefficients — which is the standard form
-    // captured in the AllPass struct comment.
+    // i.e. numerator = reversed denominator after normalising by a0.
     const double fs = m_sampleRate > 0.0 ? m_sampleRate : 24000.0;
     for (int i = 0; i < kMaxStages; ++i) {
         const double f0 = kCentreHz[i];

@@ -31,24 +31,13 @@ namespace AetherSDR {
 // scope-aware API needs to reference it indirectly via QString paths.
 struct ThemeScope;
 
-// Token-based theming subsystem (RFC #3076 Phase 1+2).
-//
-// Every visual decision in the GUI — colours, fonts, key spacings —
-// resolves through a named token (e.g. "color.accent", "font.size.normal").
-// Themes are JSON files at ~/.config/AetherSDR/themes/<name>.json plus the
-// built-in default-dark / default-light shipped under :/themes/.
-//
-// Phase 1 shipped: manager singleton, scalar token API, JSON loader,
-// stylesheet template resolver, ActiveTheme persistence, default-dark.json
-// baked into resources.
-//
-// Phase 2 adds (this commit): first-class gradient tokens.  A color token
-// can be a scalar (#rrggbb) or a gradient object describing a linear or
-// radial gradient with N stops.  brush() returns a QBrush wrapping the
-// resolved Qt gradient; cssFragment() emits the matching qlineargradient
-// / qradialgradient stylesheet syntax; resolve() routes through
-// cssFragment() so existing {{token}} templating "just works" for
-// gradient-typed tokens.
+// Token-based theming (RFC #3076). Every visual decision in the GUI resolves
+// through a named token (e.g. "color.accent", "font.size.normal"). Themes are
+// JSON in ~/.config/AetherSDR/themes/<name>.json plus built-in default-dark /
+// default-light under :/themes/. A color token is a scalar (#rrggbb) or a
+// linear/radial gradient with N stops: brush() returns a QBrush, cssFragment()
+// emits qlineargradient/qradialgradient, and resolve() routes through
+// cssFragment() so {{token}} templating works for gradients.
 
 // Gradient definition stored inside m_tokens.  Lives in the public header
 // so the audit/editor tooling can inspect / mutate themes by value.
@@ -72,17 +61,10 @@ struct ThemeGradient {
     QVector<ThemeGradientStop> stops;
 };
 
-// Compound font token — bundles the typeface family, point size, and a
-// recommended foreground color for a typographic role.  Used by the
-// `font.family.*` token namespace (which historically stored a bare
-// family string).  JSON shape: { "family": "Inter", "size": 12,
-// "color": "#c8d8e8" }; the `family` field is required, `size` defaults
-// to 0 (caller uses its role-default), `color` defaults to invalid
-// (caller falls back to color.text.primary).
-//
-// Backward compat: `ThemeManager::value(token)` returns the .family
-// field when called on a ThemeFont so the ~35 sites that just want
-// the family name keep working unchanged.
+// Compound font token for a typographic role (`font.family.*` namespace).
+// JSON: { "family": "Inter", "size": 12, "color": "#c8d8e8" }; family is
+// required, size 0 = caller's role default, invalid color = fall back to
+// color.text.primary. value(token) on a ThemeFont returns .family.
 struct ThemeFont {
     QString family;
     int     size  {0};   // 0 = unset
@@ -94,22 +76,13 @@ class ThemeManager : public QObject {
 public:
     static ThemeManager& instance();
 
-    // Scalar accessors.  Missing tokens log a warning and return the
-    // compiled-in default for the type.  For gradient-typed tokens,
-    // color() returns the gradient's first stop as a graceful fallback;
-    // callers that want the full gradient should use brush() or
-    // cssFragment().
-    //
-    // Two flavours:
-    //   * `color(token)` — root-scope lookup (the historical flat
-    //     namespace).  Every existing call site routes through this
-    //     overload unchanged.
-    //   * `color(widget, token)` — walks the widget's Qt parent chain
-    //     looking for a `themeContainer` property; the first such
-    //     ancestor's container path is used as the lookup origin.  Walks
-    //     the scope tree from there up to root, returning the first
-    //     match.  Falls back to root-scope lookup for widgets with no
-    //     declared container in their ancestry.
+    // Scalar accessors. Missing tokens warn and return the type's compiled-in
+    // default; color() on a gradient returns its first stop (use brush() or
+    // cssFragment() for the gradient).
+    //   * `color(token)` — root-scope lookup.
+    //   * `color(widget, token)` — starts at the first ancestor with a
+    //     `themeContainer` property and walks the scope tree to root; root lookup
+    //     if no ancestor declares one.
     QColor   color(const QString& token) const;
     QColor   color(const QWidget* widget, const QString& token) const;
     QFont    font(const QString& token) const;
@@ -150,20 +123,9 @@ public:
     // depending on whether the token is scalar or gradient.
     QString  resolve(const QString& stylesheetTemplate) const;
 
-    // Apply a stylesheet template to a widget AND record the
-    // (widget → tokens referenced) reverse-map.  Phase 5's inspector
-    // uses this map to answer "which tokens paint this widget?" when
-    // the operator clicks during inspect mode.
-    //
-    // Additionally: widgets registered through applyStyleSheet get free
-    // live theme switching — the manager listens to themeChanged and
-    // re-applies the recorded template (with newly resolved values) so
-    // stylesheet-painted widgets respond to theme changes without any
-    // per-call-site wiring.
-    //
-    // The recorded entry is removed automatically when the widget is
-    // destroyed (via QObject::destroyed signal connection), so no
-    // dangling pointers.
+    // Apply a stylesheet template and record widget → referenced tokens (used by
+    // the inspector). Registered widgets are re-applied with fresh values on
+    // themeChanged; the entry is removed on QObject::destroyed.
     void applyStyleSheet(QWidget* widget, const QString& stylesheetTemplate);
 
     // Temporarily own a standard widget's text foreground without replacing its
@@ -203,20 +165,14 @@ public:
     // themselves to themeChanged and call update().
     void declareWidgetTokens(QWidget* widget, const QStringList& tokens);
 
-    // Sub-region-aware inspector lookup for custom-paint widgets.  Each
-    // ThemeRegion ties a token to a hit-test function evaluated in the
-    // widget's local coordinate system.  Inspector clicks call
-    // tokensAtPoint() to narrow the broad declareWidgetTokens() list down
-    // to just the tokens painting the clicked sub-region.
-    //
-    // Example — a panadapter with separate trace + waterfall areas:
+    // Sub-region inspector lookup for custom-paint widgets: each ThemeRegion ties a
+    // token to a hit test in widget-local coordinates; tokensAtPoint() narrows
+    // declareWidgetTokens() to the clicked region and returns all matches in
+    // declaration order.
     //   tm.declareWidgetRegions(spectrum, {
     //     { "color.spectrum.trace",      [this](QPoint p){ return panRect().contains(p); }, "FFT trace" },
     //     { "color.waterfall.colormap",  [this](QPoint p){ return wfRect().contains(p);  }, "Waterfall" },
     //   });
-    //
-    // Multiple regions may match a single point — caller receives all
-    // matches in declaration order so the editor can disambiguate.
     struct ThemeRegion {
         QString  token;
         std::function<bool(QPoint localPos)> hitTest;
@@ -381,27 +337,15 @@ public:
     // requiring an explicit "Save" gesture.
     bool        saveActiveTheme();
 
-    // Phase 6 — share-friendly file format.  `.aethertheme` is plain JSON
-    // (same shape `saveCurrentThemeAs` writes to the user-dir) with a
-    // `schemaVersion` discriminator.  Missing tokens on import fall back
-    // to the built-in defaults; unknown tokens round-trip unchanged so
-    // a future v2 theme still loads on this v1 build (just with the
-    // unknown tokens unused).
-    //
-    // exportThemeToFile():
-    //   * `themeName` — name registered with ThemeManager.  Pass
-    //     `activeTheme()` to dump the live state.
-    //   * `filePath`  — absolute target path.  Caller picks the dialog;
-    //     this method just writes JSON.
-    //
-    // importThemeFromFile():
-    //   * Validates magic + schema, picks a theme name from the JSON's
-    //     "name" field (fallback: file stem), copies the file into
-    //     `~/.config/AetherSDR/themes/`, registers it in m_themePaths,
-    //     and makes it the active theme.
-    //   * Returns the imported theme's display name on success, empty
-    //     on failure.  Caller surfaces the failure reason via the
-    //     `errorMessage` out-param.
+    // `.aethertheme` is plain JSON (the shape saveCurrentThemeAs writes) with a
+    // `schemaVersion`. On import, missing tokens fall back to built-in defaults and
+    // unknown tokens round-trip unchanged.
+    // exportThemeToFile(): `themeName` as registered (activeTheme() for live
+    //   state); `filePath` absolute; the caller owns the dialog.
+    // importThemeFromFile(): validates magic + schema, names the theme from JSON
+    //   "name" (else file stem), copies it into ~/.config/AetherSDR/themes/,
+    //   registers and activates it. Returns the display name, or empty with
+    //   `errorMessage` set.
     bool    exportThemeToFile(const QString& themeName,
                               const QString& filePath,
                               QString* errorMessage = nullptr) const;
@@ -416,16 +360,9 @@ signals:
     void themeChanged();
 
 protected:
-    // Re-resolve a tracked widget's stylesheet template whenever it gets
-    // reparented.  Widgets that have applyStyleSheet() called before
-    // they're added to a layout (common — many widgets are configured
-    // pre-parenting in helper functions) would otherwise resolve their
-    // tokens against the WRONG scope chain (typically root, because
-    // containerPathFor walks Qt's parent chain).  This filter catches
-    // the subsequent QEvent::ParentChange and re-resolves so the
-    // widget's containing applet / dialog scope finally reaches its
-    // QSS — visible result: e.g. RF Power slider inside TxApplet
-    // takes the applet/tx scope's red foreground instead of root blue.
+    // Re-resolve a tracked widget's template on reparent/polish/show, since
+    // applyStyleSheet() is often called before the widget joins its scoped
+    // container and would otherwise resolve at root (see the .cpp for the cases).
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
@@ -486,17 +423,12 @@ private:
     void seedScopedToken(const QString& containerPath,
                          const QString& token, const QVariant& value);
 
-    // Scope-tree helpers.
-    //   * `scopeForPath(path)`   — returns the scope at `path` (nullptr
-    //     if missing).  "" / "root" both map to the root scope.
-    //   * `scopeOrCreate(path)`  — same, but creates the scope (and any
-    //     missing parents) on demand.  Used by the scope-aware setters.
-    //   * `resolveAlias(v)`      — if `v` is a `{primitive.key}` string,
-    //     look it up in m_primitives and return that.  Otherwise pass
-    //     `v` through unchanged.
-    //   * `lookupRaw(path, key)` — walks the scope chain from `path` up
-    //     to root, returning the first matching token (alias-resolved).
-    //     Returns an invalid QVariant when nothing matches.
+    // Scope-tree helpers:
+    //   * scopeForPath(path)   — scope at `path` or nullptr; "" and "root" = root.
+    //   * scopeOrCreate(path)  — same, creating missing scopes.
+    //   * resolveAlias(v)      — `{primitive.key}` → m_primitives value, else v.
+    //   * lookupRaw(path, key) — first alias-resolved match from `path` up to root;
+    //     invalid QVariant if none.
     ThemeScope* scopeForPath(const QString& path) const;
     ThemeScope* scopeOrCreate(const QString& path);
     QVariant    resolveAlias(const QVariant& v) const;
@@ -615,18 +547,11 @@ inline QColor withAlpha(const QString& token, int alpha)
     return c;
 }
 
-// Declare a widget's container scope.  Stored as a Qt dynamic
-// property ("themeContainer"); ThemeManager::containerPathFor() walks
-// the Qt parent chain looking for the first declared ancestor so any
-// child widget inherits its enclosing container automatically.
-//
+// Declare a widget's container scope (dynamic property "themeContainer");
+// children inherit it via containerPathFor()'s parent walk.
 //   theme::setContainer(spectrumWidget, "spectrum");
 //   theme::setContainer(panadapter,     "spectrum/panadapter");
-//   // A QLabel inside panadapter with no declaration of its own
-//   // resolves to "spectrum/panadapter" via the parent walk.
-//
-// Passing an empty path detaches the widget from any container,
-// reverting it to root-scope lookups (also useful for tests).
+// An empty path detaches the widget (root-scope lookups).
 void setContainer(QWidget* widget, const QString& containerPath);
 QString containerOf(const QWidget* widget);
 } // namespace theme
