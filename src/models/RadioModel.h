@@ -591,6 +591,12 @@ public:
     // there, Flex wire text has nowhere to go and is dropped at the sink.
     bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
 
+    // Radio-side recording is `slice set <n> record=/play=` on the slice's
+    // command plane. Without one there is no radio-side recorder to reach, so
+    // "Radio Side" falls back to the client recorder instead of a button that
+    // latches and records nothing.
+    bool radioSideRecordingReachable() const { return hasCommandPlane(); }
+
     // ── Memory command routing ──────────────────────────────────────────────
     //
     // Answer a `memory …` command from the local bank or a native writable
