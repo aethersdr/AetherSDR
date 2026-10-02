@@ -4140,6 +4140,22 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME seam_probe_table_scanner
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_seam_probe_table.py)
+    # tools/hl2/spectrum.py draws a signal on the side of the tuned frequency
+    # it is on (#4265). Runs the probe's real capture() with the socket replaced
+    # by an object that returns EP6 packets built in the test: nothing is bound,
+    # no radio. Stdlib only, so every check in it always runs, and none of
+    # them depends on how fast it runs: capture() is handed its clock.
+    add_test(NAME hl2_probe_spectrum_handedness
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_hl2_spectrum_handedness.py)
+    # The one check that needs numpy: the row panadapter() prints. Its own
+    # registration, so a runner without numpy shows it as Skipped (exit 77)
+    # and not as a pass that never drew the axis.
+    add_test(NAME hl2_probe_spectrum_panadapter
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_hl2_spectrum_handedness.py
+                     --panadapter)
+    set_tests_properties(hl2_probe_spectrum_panadapter PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # Read-only external-device diagnostic registry and provider dispatch. The
