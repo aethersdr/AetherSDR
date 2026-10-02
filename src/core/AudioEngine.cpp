@@ -4965,7 +4965,7 @@ void AudioEngine::setRxDeviceRate(int rate)
 void AudioEngine::feedPcmFrame(const PcmFrame& frame)
 {
     if (frame.stream().purpose != PcmPurpose::Speaker || !frame.current()
-        || !frame.stream().format.valid()) {
+        || !frame.stream().format.validFor(PcmPurpose::Speaker)) {
         return;
     }
     // A speaker route has one producer. A second live producer must not

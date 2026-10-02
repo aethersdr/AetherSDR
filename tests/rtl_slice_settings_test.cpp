@@ -245,6 +245,57 @@ int main(int argc, char** argv)
             && wfmScope.featureExact(feature) == beforeInvalid,
             "invalid deemphasis cannot overwrite accepted settings");
     }
+    {
+        const RadioSettingsScope hdScope("rtl", "hd-selection");
+        RtlSliceSettings hd(hdScope);
+        auto selected = slice(3);
+        selected.mode = QStringLiteral("WFM");
+        selected.filterLowHz = -90000; selected.filterHighHz = 90000;
+        selected.wfmDeemphasisUs = 50; selected.wfmHdStereo = true;
+        for (int program : {0, 7}) {
+            selected.hdProgram = program;
+            check(hd.patch(100'000'000, 2'400'000, {selected}), "HD program endpoint persists");
+            const auto restored = hd.load().document.slices.value(3);
+            check(restored.wfmHdStereo && restored.hdProgram == program
+                && restored.filterLowHz == -90000 && restored.filterHighHz == 90000
+                && restored.wfmDeemphasisUs == 50 && !restored.wfmForceMono,
+                "HD selection and program preserve the independent analog recipe");
+        }
+        selected.mode = QStringLiteral("FM");
+        check(hd.patch(100'000'000, 2'400'000, {selected})
+            && hd.load().document.slices.value(3).wfmHdStereo
+            && hd.load().document.slices.value(3).hdProgram == 7,
+            "leaving broadcast FM remembers the selected HD policy and program");
+        QJsonObject old = hdScope.featureExact(feature);
+        QJsonObject oldEntries = old.value("slices").toObject();
+        QJsonObject oldEntry = oldEntries.value("3").toObject();
+        oldEntry.remove("wfmHdStereo"); oldEntry.remove("hdProgram");
+        oldEntries.insert("3", oldEntry); old.insert("slices", oldEntries);
+        RtlSliceSettings::Document restored;
+        check(RtlSliceSettings::decode(old, restored, reason)
+            && !restored.slices.value(3).wfmHdStereo && restored.slices.value(3).hdProgram == 0,
+            "older settings default to analog and the first HD program without migration");
+        const auto rejects = [&](const QString& key, const QJsonValue& invalid) {
+            QJsonObject malformed = old, items = oldEntries, item = oldEntry;
+            item.insert(key, invalid); items.insert("3", item); malformed.insert("slices", items);
+            restored.captureCenterHz = 42;
+            check(!RtlSliceSettings::decode(malformed, restored, reason)
+                && restored.captureCenterHz == 42,
+                "malformed HD choice refuses the complete document without partial adoption");
+        };
+        for (const QJsonValue& invalid : {QJsonValue(0), QJsonValue(1), QJsonValue("true"),
+                                        QJsonValue(QJsonValue::Null), QJsonValue(QJsonObject{})}) {
+            rejects(QStringLiteral("wfmHdStereo"), invalid);
+        }
+        for (const QJsonValue& invalid : {QJsonValue(-1), QJsonValue(8), QJsonValue(0.5),
+                                        QJsonValue(true), QJsonValue("1"), QJsonValue(QJsonValue::Null)}) {
+            rejects(QStringLiteral("hdProgram"), invalid);
+        }
+        const auto accepted = hdScope.featureExact(feature);
+        selected.hdProgram = 8;
+        check(!hd.patch(100'000'000, 2'400'000, {selected}) && hdScope.featureExact(feature) == accepted,
+            "invalid program cannot overwrite accepted persistent receiver settings");
+    }
     QJsonObject bad = valid;
     entries = bad.value("slices").toObject();
     entries.insert("00", entries.take("0"));

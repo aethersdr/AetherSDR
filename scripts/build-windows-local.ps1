@@ -113,6 +113,7 @@ Write-Host "  VULKAN_SDK = $env:VULKAN_SDK" -ForegroundColor Green
 Write-Host "== Configure ==" -ForegroundColor Cyan
 cmake -B build -G "Ninja" `
     -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+    -DENABLE_HD_FM=OFF `
     -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON `
     -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON `
     -DCMAKE_PREFIX_PATH="$QtDir;$env:VULKAN_SDK" `

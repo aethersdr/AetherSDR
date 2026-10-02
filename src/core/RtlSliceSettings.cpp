@@ -55,6 +55,8 @@ QJsonObject encodeSlice(const RtlSliceSettings::Slice& slice, QJsonObject previo
     previous.insert(QStringLiteral("audioPan"), slice.audioPan);
     previous.insert(QStringLiteral("wfmDeemphasisUs"), slice.wfmDeemphasisUs);
     previous.insert(QStringLiteral("wfmForceMono"), slice.wfmForceMono);
+    previous.insert(QStringLiteral("wfmHdStereo"), slice.wfmHdStereo);
+    previous.insert(QStringLiteral("hdProgram"), slice.hdProgram);
     return previous;
 }
 
@@ -123,6 +125,15 @@ bool RtlSliceSettings::decode(const QJsonObject& object, Document& output, QStri
         if (entry.contains(QStringLiteral("wfmForceMono"))) {
             if (!entry.value(QStringLiteral("wfmForceMono")).isBool()) { return false; }
             slice.wfmForceMono = entry.value(QStringLiteral("wfmForceMono")).toBool();
+        }
+        if (entry.contains(QStringLiteral("wfmHdStereo"))) {
+            if (!entry.value(QStringLiteral("wfmHdStereo")).isBool()) { return false; }
+            slice.wfmHdStereo = entry.value(QStringLiteral("wfmHdStereo")).toBool();
+        }
+        if (entry.contains(QStringLiteral("hdProgram"))) {
+            double program = 0;
+            if (!number(entry, QStringLiteral("hdProgram"), 0, 7, program, true)) { return false; }
+            slice.hdProgram = static_cast<int>(program);
         }
         const QJsonObject squelch = entry.value(QStringLiteral("squelch")).toObject();
         if (!squelch.value(QStringLiteral("enabled")).isBool()

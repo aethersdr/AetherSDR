@@ -87,6 +87,7 @@ void WfmLockScope::appendSample(double pilotMagnitude, double acquireThreshold,
                               double releaseThreshold, WfmStereoStatus status,
                               bool forceMono)
 {
+    if (m_hdMode) { setHdMode(false); }
     // Hidden scope means no history growth, timer reads or repaint requests.
     // A show starts with fresh telemetry, never a retained green strip.
     if (!isVisible()) {
@@ -121,11 +122,53 @@ void WfmLockScope::appendSample(double pilotMagnitude, double acquireThreshold,
     update();
 }
 
+void WfmLockScope::setHdMode(bool enabled)
+{
+    if (m_hdMode == enabled) { return; }
+    m_hdMode = enabled;
+    setAccessibleName(enabled ? tr("Digital lock scope") : tr("WFM pilot lock scope"));
+    setToolTip(enabled
+        ? tr("Measured Digital MER in dB, using the decoder's lower/upper convention. "
+             "State shows actual digital sync and valid selected-program audio. "
+             "No lock threshold is inferred from MER.")
+        : tr("Measured 19 kHz pilot magnitude and acquire/release thresholds in relative units. "
+             "Threshold crossings require consecutive decoder blocks; this is not SNR or PLL lock."));
+    clear();
+}
+
+void WfmLockScope::appendHdSample(std::optional<double> lowerMerDb,
+    std::optional<double> upperMerDb, bool synced, bool audioValid, bool recentlyRecovered)
+{
+    if (!m_hdMode) { setHdMode(true); }
+    if (!isVisible()) { return; }
+    if ((lowerMerDb && !std::isfinite(*lowerMerDb))
+        || (upperMerDb && !std::isfinite(*upperMerDb)) || (audioValid && !synced)) {
+        clear();
+        return;
+    }
+    if (!m_clock.isValid()) { m_clock.start(); }
+    const qint64 now = m_clock.elapsed();
+    while (!m_hdSamples.isEmpty() && (m_hdSamples.size() >= kCapacity
+        || now - m_hdSamples.first().milliseconds > kWindowMs)) { m_hdSamples.removeFirst(); }
+    m_hdSamples.append({now, lowerMerDb, upperMerDb, synced, audioValid, recentlyRecovered});
+    const auto metric = [](const std::optional<double>& value) {
+        return value ? QString::number(*value, 'f', 1) + QStringLiteral(" dB") : QStringLiteral("unavailable");
+    };
+    QString state = synced ? (audioValid ? tr("Digital audio valid") : tr("Digital synced; awaiting audio"))
+                                 : tr("Digital acquiring");
+    if (recentlyRecovered) { state += tr(" · Unstable (sync recovered within 5 s)"); }
+    publishAccessibleValue(this, tr("Digital MER: decoder lower %1; upper %2. %3. %4 current observations.")
+        .arg(metric(lowerMerDb), metric(upperMerDb), state).arg(m_hdSamples.size()));
+    update();
+}
+
 void WfmLockScope::clear()
 {
     m_samples.clear();
+    m_hdSamples.clear();
     m_clock.invalidate();
-    publishAccessibleValue(this, QStringLiteral("Awaiting current receiver pilot telemetry."));
+    publishAccessibleValue(this, m_hdMode ? tr("Awaiting current receiver Digital telemetry.")
+                                         : tr("Awaiting current receiver pilot telemetry."));
     if (isVisible()) {
         update();
     }
@@ -140,6 +183,7 @@ void WfmLockScope::hideEvent(QHideEvent* event)
 void WfmLockScope::paintEvent(QPaintEvent*)
 {
     QPainter painter(this);
+    if (m_hdMode) { paintHd(painter); return; }
     ThemeManager& theme = ThemeManager::instance();
     const QColor text = theme.color(this, "color.text.secondary");
     const QColor trace = theme.color(this, "color.text.primary");
@@ -219,6 +263,76 @@ void WfmLockScope::paintEvent(QPaintEvent*)
                      Qt::AlignLeft, stateText(latest.status, latest.forceMono));
     painter.drawText(QRect(6, height() - lineHeight - 2, width() - 12, lineHeight),
                      Qt::AlignRight, QStringLiteral("← up to 40 s · now"));
+}
+
+void WfmLockScope::paintHd(QPainter& painter)
+{
+    ThemeManager& theme = ThemeManager::instance();
+    painter.fillRect(rect(), theme.brush(this, "color.background.0", rect()));
+    painter.setPen(theme.color(this, "color.border.subtle"));
+    painter.drawRect(rect().adjusted(0, 0, -1, -1));
+    painter.setPen(theme.color(this, "color.text.secondary"));
+    const int lineHeight = fontMetrics().height();
+    painter.drawText(QRect(5, 3, width() - 10, lineHeight), Qt::AlignLeft,
+                     tr("Digital MER · dB (decoder lower / upper)"));
+    if (m_hdSamples.isEmpty()) {
+        painter.drawText(rect().adjusted(5, lineHeight + 5, -5, -5), Qt::AlignCenter,
+                         tr("Awaiting Digital telemetry"));
+        return;
+    }
+    const QRectF plot(6, lineHeight + 7, width() - 12,
+                      std::max(20, height() - 3 * lineHeight - 28));
+    bool hasMetric = false;
+    double minimum = 0.0;
+    double maximum = 0.0;
+    for (const HdSample& sample : m_hdSamples) {
+        for (const auto& value : {sample.lower, sample.upper}) {
+            if (!value) { continue; }
+            if (!hasMetric) { minimum = maximum = *value; hasMetric = true; }
+            minimum = std::min(minimum, *value);
+            maximum = std::max(maximum, *value);
+        }
+    }
+    const HdSample& latest = m_hdSamples.last();
+    const auto xOf = [&](const HdSample& sample) {
+        return plot.right() - double(latest.milliseconds - sample.milliseconds) / kWindowMs * plot.width();
+    };
+    if (hasMetric) {
+        minimum -= 1.0;
+        maximum += 1.0;
+        painter.drawText(QPointF(plot.left(), plot.top() + lineHeight), QString::number(maximum, 'f', 1));
+        painter.drawText(QPointF(plot.left(), plot.bottom()), QString::number(minimum, 'f', 1));
+        for (bool lower : {true, false}) {
+            painter.setPen(QPen(theme.color(this, lower ? "color.text.primary" : "color.text.secondary"),
+                                1.5, lower ? Qt::SolidLine : Qt::DashLine));
+            QPolygonF points;
+            for (const HdSample& sample : m_hdSamples) {
+                const auto& value = lower ? sample.lower : sample.upper;
+                if (!value) { painter.drawPolyline(points); points.clear(); continue; }
+                points.append(QPointF(xOf(sample), plot.bottom()
+                    - (*value - minimum) / (maximum - minimum) * plot.height()));
+            }
+            painter.drawPolyline(points);
+            if (!points.isEmpty()) { painter.drawEllipse(points.last(), 2.0, 2.0); }
+        }
+    } else {
+        painter.drawText(plot, Qt::AlignCenter, tr("MER unavailable"));
+    }
+    const qreal stripY = plot.bottom() + 4;
+    for (qsizetype i = 0; i < m_hdSamples.size(); ++i) {
+        const HdSample& sample = m_hdSamples[i];
+        const qreal left = xOf(sample);
+        const qreal right = i + 1 < m_hdSamples.size() ? xOf(m_hdSamples[i + 1]) : plot.right();
+        painter.fillRect(QRectF(left, stripY, std::max(2.0, right - left), 4),
+            theme.color(this, sample.synced && sample.audioValid && !sample.recentlyRecovered ? "color.accent.success" : "color.accent.warning"));
+    }
+    painter.setPen(theme.color(this, "color.text.secondary"));
+    QString state = latest.synced ? (latest.audioValid ? tr("Digital audio valid") : tr("Synced · awaiting audio"))
+                                       : tr("Digital acquiring");
+    if (latest.recentlyRecovered) { state += tr(" · Unstable"); }
+    painter.drawText(QRect(6, int(stripY) + 8, width() - 12, lineHeight), Qt::AlignLeft, state);
+    painter.drawText(QRect(6, height() - lineHeight - 2, width() - 12, lineHeight),
+                     Qt::AlignRight, tr("Lower — / Upper - - · up to 40 s"));
 }
 
 } // namespace AetherSDR
