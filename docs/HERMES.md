@@ -4237,6 +4237,11 @@ onto a chain that does not exist yet. The build therefore carries a **monotonic
 generation** stamped when it is posted (`Receiver::dspBuildGeneration`), and a
 completion whose generation has moved returns having touched nothing. The closed
 receiver needs no teardown there: `removePanadapter()` already did it.
+Reconnection also replaces DSP objects while retaining receiver state and UI
+numbers. `releaseReceiverDsps()` clears the in-flight flag and generation before
+`buildReceivers()` copies that state. A completion from the retired DSP therefore
+cannot delete the replacement or publish the retired channel's id.
+
 
 **AND AN ANNOUNCED RECEIVER CAN BE GIVEN A JOB BEFORE IT HAS A CHAIN.** The two
 roles the backend stores as DDC indices — which receiver owns transmit, which
@@ -4260,7 +4265,11 @@ before it was closed while this one built.
 
 **Not measured.** Nothing here has a stopwatch on it. `hl2_pan_create_async_test`
 occupies each thread deliberately and asserts against that interval; it says the
-wait is gone, not how long the build takes. §22.3's ~19 s first open and this
+wait is gone, not how long the build takes. Its receiver setup and link edge are
+injected without discovery, `connectRadio()` or `MetisClient::start()`; no socket
+is opened. It also forces stale success/failure completions across the production
+receiver reconstruction. This is scheduling/lifecycle evidence, not live EP2
+pacing or firmware convergence proof. §22.3's ~19 s first open and this
 section's own disclaimer on the derived 0.6-1.1 s figure both still stand.
 
 #### Landed in #5783: the span change builds off the I/O thread

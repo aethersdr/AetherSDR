@@ -1259,11 +1259,9 @@ target_include_directories(hl2_rxdsp_async_rebuild_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_async_rebuild_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_async_rebuild_test COMMAND hl2_rxdsp_async_rebuild_test)
 
-# "Add Panadapter" used to configure the new receiver's DSP over a
-# Qt::BlockingQueuedConnection, which held the GUI thread AND m_ioThread -- the
-# thread that paces EP2 -- for the length of a WDSP open. This occupies each of
-# those threads in turn and measures, so restoring the blocking call fails it.
-# Needs no radio; see the file header.
+# Socket-free injected receiver setup and link edge; no discovery/start or UDP.
+# Holds I/O/build threads to check scheduling, stale completions across removal
+# and reconstruction, and rollback of roles/meters. Uses isolated settings.
 add_executable(hl2_pan_create_async_test tests/hl2_pan_create_async_test.cpp)
 target_include_directories(hl2_pan_create_async_test PRIVATE src tests)
 target_link_libraries(hl2_pan_create_async_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
@@ -6735,6 +6733,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    hl2_pan_create_async_test
     anan_backend_test
     anan_noise_blanker_readback_test
     tci_rx_audio_test

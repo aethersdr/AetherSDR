@@ -564,48 +564,15 @@ private:
     // and createPanadapter() so both paths wire identically.
     bool openReceiverDsp(int ddc, std::string* error);
 
-    // The asynchronous half of opening a receiver, split out of
-    // createPanadapter() so no WDSP OpenChannel runs on the GUI thread or on the
-    // I/O thread. startReceiverDspBuild() posts the three-hop build (I/O thread
-    // to mark, build thread to build, I/O thread to swap);
-    // finishReceiverDspBuild() is the GUI-thread completion and is everything
-    // createPanadapter() used to do after its blocking configure() returned.
-    //
-    // BOTH TAKE A UI NUMBER, NEVER A DDC INDEX — AND A UI NUMBER IS NOT ENOUGH
-    // ON ITS OWN. A DDC index is renumbered by any close (Hl2ReceiverMap::remove)
-    // and these run an unbounded number of event loop turns after it was taken,
-    // so a DDC index cannot be carried. A UI number survives a close, which is
-    // true and is NOT the same as naming one receiver for ever: append()
-    // allocates the LOWEST FREE UI number, by design, so closing a receiver
-    // hands its number straight back to the next createPanadapter() and a
-    // completion still in flight for the closed one then resolves to the new
-    // one. The pair (uiNumber, generation) is what identifies a build; see
-    // Receiver::dspBuildGeneration for why the generation is a counter and not
-    // the chain pointer.
-    //
-    // startReceiverDspBuild() DERIVES the Config rather than taking one. That is
-    // not only to keep Hl2RxDsp::Config out of this header, which forward-declares
-    // Hl2RxDsp and cannot name a nested type of it — it also puts the derivation
-    // in ONE place, so the initial build and the rebuild that follows a rate
-    // commit cannot drift apart.
+    // Snapshot on GUI, mark/swap on I/O, open on the existing DSP build thread.
+    // Carry UI number (DDC indices move) plus generation (UI numbers are reused).
+    // Derive config here for both initial setup and rate catch-up.
     void startReceiverDspBuild(int uiNumber);
     void finishReceiverDspBuild(int uiNumber, quint64 generation, bool ok,
                                 int channelId, int builtRateHz,
                                 const std::string& error);
-    // Stamped into Receiver::dspBuildGeneration by startReceiverDspBuild() and
-    // carried through the three hops. Monotonic and never reused — unlike the
-    // UI number, which is exactly the point. Same shape as the rate ledger's
-    // own generation, which exists for the same reason a rate crossing can be
-    // superseded while it is in flight.
-    //
-    // BACKEND-LIFETIME, AND NOTHING MAY RESET IT. A per-connect counter would
-    // close the close-and-re-add case and leave a worse one open: a build can
-    // outlive a whole session (§22.3 records ~19 s for a cold-cache first open),
-    // and tearDownReceivers()/buildReceivers() hand out UI numbers from zero
-    // again on the next connect — so a completion crossing a reconnect would
-    // find a freshly built receiver wearing its number with a generation counter
-    // that had been wound back to meet it. Because this only ever increments,
-    // every receiver a later connect builds starts at zero and matches nothing.
+    // Backend-lifetime counter: never reset on reconnect, which also reuses UI ids.
+    // releaseReceiverDsps() clears each retiring receiver's stamp before copying it.
     quint64 m_nextDspBuildGeneration = 0;
     // How many receivers this radio may run right now: the board's reported
     // count, capped by the link budget at the current sample rate.
