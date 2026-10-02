@@ -1610,6 +1610,23 @@ target_link_libraries(split_audio_profile_test PRIVATE Qt6::Core)
 add_test(NAME split_audio_profile_test COMMAND split_audio_profile_test)
 set_tests_properties(split_audio_profile_test PROPERTIES TIMEOUT 30)
 
+# Split QSY settings and observation policy. SliceModel exercises the
+# radio-status-only path and local tune echo matching without a socket.
+# Persistence children share a private disk profile; they are not radio peers.
+# A narrow source pin covers the otherwise unreachable MainWindow SWAP wiring.
+add_executable(split_qsy_settings_test
+    tests/split_qsy_settings_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(split_qsy_settings_test PRIVATE src tests)
+target_compile_definitions(split_qsy_settings_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(split_qsy_settings_test PRIVATE Qt6::Core)
+add_test(NAME split_qsy_settings_test COMMAND split_qsy_settings_test)
+set_tests_properties(split_qsy_settings_test PROPERTIES TIMEOUT 30)
+
 # ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.
@@ -6205,6 +6222,22 @@ target_include_directories(ulanzi_chord_decoder_test PRIVATE src)
 target_link_libraries(ulanzi_chord_decoder_test PRIVATE Qt6::Core)
 add_test(NAME ulanzi_chord_decoder_test COMMAND ulanzi_chord_decoder_test)
 
+if(APPLE)
+    # Socket-free: inject the native arrival callback, then retire the watcher
+    # before Qt delivers it. No HID device is opened; skip if a dial is present.
+    add_executable(ulanzi_macos_presence_lifetime_test
+        tests/ulanzi_macos_presence_lifetime_test.cpp
+        src/core/UlanziDialMacOSManager.cpp
+        src/core/UlanziDialMacOSManager.h
+        src/core/UlanziChordDecoder.cpp
+    )
+    target_include_directories(ulanzi_macos_presence_lifetime_test PRIVATE src)
+    target_link_libraries(ulanzi_macos_presence_lifetime_test PRIVATE
+        Qt6::Core "-framework IOKit" "-framework CoreFoundation")
+    add_test(NAME ulanzi_macos_presence_lifetime_test COMMAND ulanzi_macos_presence_lifetime_test)
+    set_tests_properties(ulanzi_macos_presence_lifetime_test PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 add_executable(ulanzi_mapping_migration_test
     tests/ulanzi_mapping_migration_test.cpp
     src/core/UlanziDialMappings.cpp
@@ -6365,6 +6398,15 @@ add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
 target_include_directories(hl2_gain_restore_test PRIVATE src tests)
 target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
+# Which automatic RF gain law a connect installs: applyRestoredState() and the
+# constructor must install the same one. Socket-free: link edges, telemetry and
+# bandscope blocks go in through MetisClient's own signals on a backend that
+# never calls connectRadio(), so no DSP opens and no UDP starts. It shows the
+# backend ASKS for the bandscope gate, not that a radio answers.
+add_executable(hl2_auto_gain_law_test tests/hl2_auto_gain_law_test.cpp)
+target_include_directories(hl2_auto_gain_law_test PRIVATE src tests)
+target_link_libraries(hl2_auto_gain_law_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_auto_gain_law_test COMMAND hl2_auto_gain_law_test)
 # Socket-free HL2 panadapter-limit DECLARATIONS: the span shape, the four
 # discrete rates and the dBm axis. NOT radioOwnsDbmScale -- the HL2 deliberately
 # leaves that undeclared and this target asserts only its DEFAULT, which is a
@@ -6681,6 +6723,12 @@ target_link_libraries(amp_applet_test PRIVATE
 )
 set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME amp_applet_test COMMAND amp_applet_test)
+
+# Socket-free legacy display-key retirement, including WNB and per-pan isolation.
+add_executable(radio_owned_display_settings_test tests/radio_owned_display_settings_test.cpp)
+target_include_directories(radio_owned_display_settings_test PRIVATE src tests)
+target_link_libraries(radio_owned_display_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME radio_owned_display_settings_test COMMAND radio_owned_display_settings_test)
 
 # Socket-free validation of scoped client display documents.
 add_executable(client_display_settings_test tests/client_display_settings_test.cpp)
@@ -7014,6 +7062,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_mode_vocabulary_test
     hl2_client_side_spots_declaration_test
     hl2_gain_split_test
+    hl2_auto_gain_law_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test
@@ -7023,6 +7072,7 @@ set(AETHER_SETTINGS_CONSUMERS
     aetherd_discovery_startup_test
     automation_bridge_start_outcome_test
     slice_label_test
+    split_qsy_settings_test
     ulanzi_mapping_migration_test
     modem_chrome_test
     comp_makeup_fader_test

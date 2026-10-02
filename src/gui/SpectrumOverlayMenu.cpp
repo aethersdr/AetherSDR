@@ -3071,11 +3071,6 @@ void SpectrumOverlayMenu::setDaxStreamsAvailable(bool available)
     }
 }
 
-void SpectrumOverlayMenu::setWnbState(bool on, int level)
-{
-    syncWnbState(on, level, false);
-}
-
 void SpectrumOverlayMenu::syncWnbState(bool on, int level, bool updating)
 {
     QSignalBlocker b1(m_wnbBtn), b2(m_wnbSlider);

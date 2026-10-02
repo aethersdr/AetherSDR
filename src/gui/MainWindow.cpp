@@ -1109,6 +1109,8 @@ MainWindow::MainWindow(QWidget* parent)
     , m_session(m_sessions.front().get())
     , m_radioModel(m_session->radioModel())
 {
+    m_splitQsySettings = AetherSDR::SplitQsySettings::load();
+
     // Status bar is the only top-level shell besides the spectrum / applet
     // rail / titlebar that the operator can directly retheme.  Declare its
     // container here — statusBar() lazy-creates the QStatusBar on first
@@ -3662,19 +3664,12 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
 #endif
         // External-device enable evaluation. start()/loadSettings() are
         // idempotent (each guards against re-open), so re-firing them when
-        // unrelated settings change is harmless. Toggling the user-facing
-        // checkbox from off → on is the moment the OS TCC prompt fires —
-        // with user context — instead of every launch (#3257).
-        auto& s = AppSettings::instance();
-        if (m_dialBackend &&
-            s.value("UlanziDialEnabled", "False").toString() == "True") {
-            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
-                                      Qt::QueuedConnection);
-        } else if (m_dialBackend) {
-            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
-                                      Qt::QueuedConnection);
-        }
+        // unrelated settings change is harmless. Toggling the HID checkbox
+        // from off → on is the moment the OS TCC prompt fires — with user
+        // context — instead of every launch (#3257).
+        applyUlanziDialEnabled();
 #ifdef HAVE_HIDAPI
+        auto& s = AppSettings::instance();
         if (m_hidEncoder &&
             s.value("HidEncoderEnabled", "False").toString() == "True") {
             QMetaObject::invokeMethod(m_hidEncoder, [this] {
@@ -8766,6 +8761,7 @@ void MainWindow::disableSplit()
 {
     if (!m_splitActive) return;
 
+    m_pendingSliceFrequencyEchoes.clear();
     m_splitActive = false;
 
     // Learn this split's audio arrangement and put the RX pan back, BEFORE the
@@ -8783,6 +8779,7 @@ void MainWindow::disableSplit()
 
     m_splitRxSliceId = -1;
     m_splitTxSliceId = -1;
+    m_splitRxFrequencyMhz = 0.0;
     if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
 
     updateSplitState();

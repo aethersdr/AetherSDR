@@ -269,14 +269,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
 {
     // THE DEFAULT CONTROL LAW, set here rather than as a member initialiser
     // because its sampling-bias budget is a logarithm of the gate period and
-    // therefore not a constant expression. See setAutoRfGainMode.
+    // therefore not a constant expression. See installDefaultAutoGainLaw.
     //
     // Setting a law is not arming one: m_autoRfGainEnabled stays false, no
     // stream starts, and nothing about this installation's behaviour changes
     // until an operator switches the control on.
-    m_autoGainConfig = AetherSDR::hl2::bandscopeReleaseConfig(
-        AetherSDR::hl2::gatedPeakBiasDbForPeriod(
-            MetisClient::bandscopeSamplePeriodMs()));
+    installDefaultAutoGainLaw();
 
     // No parent: moveToThread() refuses an object that has one, and both of
     // these belong on the I/O thread rather than the GUI thread. They are
@@ -442,6 +440,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // clamped to the native range, so it arms; a refusal would be logged.
         if (m_autoRfGainWanted && !m_autoRfGainEnabled) {
             setAutoRfGain(true);
+        } else {
+            // The loop can already be running: MetisClient re-emits linkUp when
+            // EP6 resumes after a silence, with no connect in between. The link
+            // edge ended the bandscope gate and this object's claim on it, so
+            // ask again. A no-op for a loop that is off and for a law that does
+            // not read the bandscope.
+            applyBandscopeForAutoGain();
         }
     });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
@@ -5146,10 +5151,12 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         }
         // Wideband bandscope (EP 0x04): a diagnostic with no UI or setting, off
         // again at next connect; the only caller is the bridge's `bandscope`
-        // verb. This starts MetisClient's duty-cycle gate, not the raw stream:
-        // one 2048-sample block per period, 12 datagrams/s, 0.11 Mbit/s (3.3
-        // Mbit/s ungated; see setBandscopeEnabled in MetisClient.h). Completes
-        // locally: Protocol 1 never reads the run byte back.
+        // verb (the auto RF gain loop starts the gate itself, in
+        // applyBandscopeForAutoGain). This starts MetisClient's duty-cycle gate,
+        // not the raw stream: one 2048-sample block per period, 12 datagrams/s,
+        // 0.11 Mbit/s (3.3 Mbit/s ungated; see setBandscopeEnabled in
+        // MetisClient.h). Completes locally: Protocol 1 never reads the run byte
+        // back.
         if (verb == QLatin1String("bandscope.enable")) {
             // Refused while disconnected, and REPORTED as refused: MetisClient
             // ignores a run byte with no stream behind it, so echoing the
@@ -6021,8 +6028,9 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // lambda would surface radio A's number as radio B's.
     m_autoRfGainRefusal.clear();
     m_autoGainState = AetherSDR::hl2::AutoGainState{};
-    m_autoGainConfig = AetherSDR::hl2::AutoGainConfig{};
-    m_autoGainMode = QStringLiteral("ramp");
+    // The same call the constructor makes. Neither the law nor the floor is
+    // persisted: both are the constructed default after every connect.
+    installDefaultAutoGainLaw();
     m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
     m_autoGainBandKey.clear();
     m_autoGainBaselineDb = 0;
@@ -6489,6 +6497,28 @@ void Hl2Backend::setAutoRfGainFloorDb(int floorDb)
                   << "dB below the operator's baseline";
 }
 
+// The law a backend starts with, and the only place that says so: the
+// constructor, applyRestoredState() and the name "default" all come here. Not a
+// constant: the bias budget is computed from the gate period MetisClient
+// actually runs, never from a literal, so the two cannot drift apart.
+Hl2Backend::AutoGainLaw Hl2Backend::defaultAutoGainLaw()
+{
+    using namespace AetherSDR::hl2;
+    return {QStringLiteral("bandscope"),
+            bandscopeReleaseConfig(
+                gatedPeakBiasDbForPeriod(MetisClient::bandscopeSamplePeriodMs()))};
+}
+
+// The name and the numbers together, so that no caller can install one without
+// the other. Touches nothing else: no state, no gate. The constructor runs it
+// before m_metis exists.
+void Hl2Backend::installDefaultAutoGainLaw()
+{
+    const AutoGainLaw law = defaultAutoGainLaw();
+    m_autoGainConfig = law.config;
+    m_autoGainMode = law.name;
+}
+
 // Which of Hl2AutoGainPolicy.h's configurations the loop runs. Applied live:
 // the state is NOT reset, because the offset the radio is actually holding is
 // real whichever law asked for it, and the policy's own ceiling check gives
@@ -6497,20 +6527,17 @@ bool Hl2Backend::setAutoRfGainMode(const QString& mode)
 {
     using namespace AetherSDR::hl2;
     const QString m = mode.trimmed().toLower();
-    AutoGainConfig cfg;
-    if (m == QLatin1String("ramp") || m == QLatin1String("default")) {
-        cfg = AutoGainConfig{};
+    AutoGainLaw law;
+    if (m == QLatin1String("bandscope") || m == QLatin1String("default")) {
+        // The one law here whose release rests on a measurement. "default" is
+        // whatever defaultAutoGainLaw() returns, not a second name for one law.
+        law = defaultAutoGainLaw();
+    } else if (m == QLatin1String("ramp")) {
+        law = {QStringLiteral("ramp"), AutoGainConfig{}};
     } else if (m == QLatin1String("probe") || m == QLatin1String("probing")) {
-        cfg = probingReleaseConfig();
+        law = {QStringLiteral("probe"), probingReleaseConfig()};
     } else if (m == QLatin1String("binary")) {
-        cfg = binaryHighLowConfig();
-    } else if (m == QLatin1String("bandscope")) {
-        // THE DEFAULT, and the one law here whose release condition rests on a
-        // measurement rather than on a gamble. The bias budget is computed from
-        // the gate period MetisClient actually runs, never from a literal, so
-        // the two cannot drift apart.
-        cfg = bandscopeReleaseConfig(
-            gatedPeakBiasDbForPeriod(MetisClient::bandscopeSamplePeriodMs()));
+        law = {QStringLiteral("binary"), binaryHighLowConfig()};
     } else {
         qWarning().noquote()
             << QStringLiteral("Hl2Backend: auto RF gain mode \"%1\" is not one of "
@@ -6519,9 +6546,8 @@ bool Hl2Backend::setAutoRfGainMode(const QString& mode)
                    .arg(mode);
         return false;
     }
-    m_autoGainConfig = cfg;
-    m_autoGainMode = (m == QLatin1String("default")) ? QStringLiteral("ramp")
-                   : (m == QLatin1String("probing")) ? QStringLiteral("probe") : m;
+    m_autoGainConfig = law.config;
+    m_autoGainMode = law.name;
     // A law that needs the wideband reading needs the stream that carries it.
     // Called unconditionally so that switching AWAY from bandscope mode also
     // releases the gate, rather than leaving it running for a law that ignores

@@ -2482,27 +2482,7 @@ void SpectrumWidget::loadSettings()
 {
     m_wfTimeMarkerSeconds = DisplaySettings::waterfallTimeMarkerSeconds(m_panIndex);
     auto& s = AppSettings::instance();
-    // These four values are stored by the radio (including in profiles). Older
-    // releases persisted a competing client copy and reasserted it after status
-    // updates (#2465, #4126). Remove the stale copies once; the member defaults
-    // are only placeholders until the first PanadapterModel status arrives.
-    bool removedRadioOwnedDisplaySetting = false;
-    const QStringList radioOwnedDisplaySettings = {
-        QStringLiteral("DisplayFftAverage"),
-        QStringLiteral("DisplayFftFps"),
-        QStringLiteral("DisplayFftWeightedAvg"),
-        QStringLiteral("DisplayWfLineDuration"),
-    };
-    for (const QString& base : radioOwnedDisplaySettings) {
-        const QString key = settingsKey(base);
-        if (s.contains(key)) {
-            s.remove(key);
-            removedRadioOwnedDisplaySetting = true;
-        }
-    }
-    if (removedRadioOwnedDisplaySetting) {
-        s.save();
-    }
+    DisplaySettings::retireRadioOwnedPanSettings(m_panIndex);
 
     m_spectrumFrac   = std::clamp(s.value(settingsKey("SpectrumSplitRatio"), "0.40").toFloat(), 0.10f, 0.90f);
     m_fftFillAlpha   = s.value(settingsKey("DisplayFftFillAlpha"), "0.70").toFloat();
@@ -12537,16 +12517,18 @@ static QShader loadShader(const QString& path)
 
 void SpectrumWidget::releaseWaterfallFramePipelineResources()
 {
-    delete m_wfFramePipeline;
-    m_wfFramePipeline = nullptr;
-    delete m_wfFrameSrb;
-    m_wfFrameSrb = nullptr;
-    delete m_wfFrameTex;
-    m_wfFrameTex = nullptr;
-    delete m_wfSupplementalGpuTex;
-    m_wfSupplementalGpuTex = nullptr;
-    delete m_wfFrameSampler;
-    m_wfFrameSampler = nullptr;
+    // A resize fallback can run after uploads were queued for these resources.
+    // QRhi defers deletion during a frame and deletes immediately outside one.
+    const auto releaseAfterFrame = [](QRhiResource* resource) {
+        if (resource) {
+            resource->deleteLater();
+        }
+    };
+    releaseAfterFrame(std::exchange(m_wfFramePipeline, nullptr));
+    releaseAfterFrame(std::exchange(m_wfFrameSrb, nullptr));
+    releaseAfterFrame(std::exchange(m_wfFrameTex, nullptr));
+    releaseAfterFrame(std::exchange(m_wfSupplementalGpuTex, nullptr));
+    releaseAfterFrame(std::exchange(m_wfFrameSampler, nullptr));
     m_wfFrameTexReady = false;
     m_wfFrameTexDirty = true;
     m_wfPipelineMode = WaterfallPipelineMode::Legacy;
@@ -13706,6 +13688,20 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 QRhiTexture* oldSupplementalTexture =
                     m_wfSupplementalGpuTex;
                 QRhiShaderResourceBindings* oldFrameSrb = m_wfFrameSrb;
+                // The replaced resources may be the target of uploads already
+                // queued on this frame's command buffer: initialize() runs in
+                // the same render() call and uploads into them. The D3D11
+                // backend keeps raw pointers in its command list and releases
+                // on destroy, so they must outlive the frame (#6078).
+                const auto releaseAfterFrame = [](QRhiResource* resource) {
+                    if (resource) {
+                        resource->deleteLater();
+                    }
+                };
+                qDebug() << "SpectrumWidget: waterfall texture resized"
+                         << m_wfGpuTexW << "x" << m_wfGpuTexH << "->"
+                         << desiredWidth << "x" << desiredHeight
+                         << "(old resources released after the frame)";
                 m_wfGpuTex = colorTexture.release();
                 m_wfSrb = legacySrb.release();
                 m_wfGpuTexW = desiredWidth;
@@ -13717,9 +13713,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     m_wfSupplementalGpuTex =
                         supplementalTexture.release();
                     m_wfFrameSrb = frameSrb.release();
-                    delete oldFrameSrb;
-                    delete oldFrameTexture;
-                    delete oldSupplementalTexture;
+                    releaseAfterFrame(oldFrameSrb);
+                    releaseAfterFrame(oldFrameTexture);
+                    releaseAfterFrame(oldSupplementalTexture);
                     m_wfFrameTexDirty = true;
                 } else if (rowPipelineWasActive) {
                     releaseWaterfallFramePipelineResources();
@@ -13729,8 +13725,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                         << "SpectrumWidget: using legacy waterfall pipeline:"
                         << m_wfPipelineFallbackReason;
                 }
-                delete oldLegacySrb;
-                delete oldColorTexture;
+                releaseAfterFrame(oldLegacySrb);
+                releaseAfterFrame(oldColorTexture);
             }
         }
 

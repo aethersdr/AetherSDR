@@ -361,12 +361,10 @@ int main(int argc, char** argv)
               "and what is stored for the band is +19 throughout — never the 8");
 
         // ---- THE OPERATOR'S FLOOR. The second, and last, of the two numbers
-        // they own. 26 dB reaches -6 dB from the stock +20 dB baseline, which
-        // #5354's sweep labelled first clean -- but that sweep's labels were
-        // 32 dB low (a true +26), so the value is pinned here unchanged and is
-        // to be re-derived from a sweep on a healthy radio.
-        check(s.backend.autoRfGainFloorDb() == 26,
-              "the floor defaults to 26 dB below the operator's setting");
+        // they own. The floor belongs to the law, and after a connect the law
+        // is the bandscope one: 24 dB, the value RFC #5535's ruling holds.
+        check(s.backend.autoRfGainFloorDb() == 24,
+              "the floor defaults to 24 dB below the operator's setting");
         s.backend.setAutoRfGainFloorDb(9);
         check(s.backend.autoRfGainFloorDb() == 9, "and the operator can pull it in");
         s.backend.setAutoRfGainFloorDb(500);
