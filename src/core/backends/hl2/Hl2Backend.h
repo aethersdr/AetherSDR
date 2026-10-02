@@ -123,6 +123,7 @@ public:
                        TxAudioSource source,
                        const TxCoordinator::Context& context) override;
     void setTxPower(int percent) override;
+    void setTunePower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
     void setMicGain(int level) override;
     // No default argument: defaults on virtuals bind statically and would diverge
@@ -823,6 +824,7 @@ private:
     static constexpr int kAdcMinWindowSamples = 4;
     bool m_keyed = false;
     bool m_tuning = false;
+    TxCoordinator::Operation m_tuneOperation;   // the TUNE carrier's admission
     bool m_cwAutoKeyed = false;
     QTimer* m_cwHangTimer = nullptr;
     TxCoordinator::Operation m_cwHangOperation;

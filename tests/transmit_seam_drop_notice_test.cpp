@@ -2,8 +2,8 @@
 // IRadioBackend seam must not ALSO be reported as dropped.
 //
 // TransmitModel emits two things for RF power, mic level and the TX passband
-// (tune power is the exception: its value reaches the backend as setTune()'s
-// argument at key time, not through a setter of its own):
+// (tune power reaches the backend as setTune()'s argument at key time, and
+// while keyed through setTunePower() where the backend declares it live):
 // a typed intent (rfPowerCommandIssued / micLevelCommandIssued /
 // txFilterCommandIssued) that RadioModel hands to the backend, and the legacy
 // Flex wire text through commandReady. On a backend with no command plane the
@@ -51,6 +51,7 @@ public:
     QList<QPair<int, int>> txFilters;
     QList<int> cwPitches;
     QList<QPair<bool, int>> tunes;  // (on, tunePowerPercent) per setTune()
+    QList<int> tunePowers;          // per setTunePower()
     bool connected{true};
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return connected; }
@@ -67,6 +68,7 @@ public:
     void setMicGain(int level) override { micGains << level; }
     void setTxFilter(int lowHz, int highHz) override { txFilters << qMakePair(lowHz, highHz); }
     void setCwPitch(int hz) override { cwPitches << hz; }
+    void setTunePower(int percent) override { tunePowers << percent; }
     // Honours tunePowerPercent the way Hl2Backend::setTune does (drive set
     // from TUNE power at key time, PR #4551): records it rather than applying.
     void setTune(bool on, int tunePowerPercent, const TxCoordinator::Operation&,
@@ -80,14 +82,14 @@ public:
 
 // The capability set of a host-modulating transmitter with no command plane —
 // the Hermes-Lite 2's answers to the questions the gate asks.
-RadioCapabilities hostModulatingTransmitter()
+RadioCapabilities hostModulatingTransmitter(bool tunePowerAppliesLive = true)
 {
     RadioCapabilities c;
     c.family = QStringLiteral("hl2");
     c.canTransmit = true;
     c.hostModulates = true;
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
-        SliceFrequencyControl::Authority::Engine};
+        SliceFrequencyControl::Authority::Engine, tunePowerAppliesLive};
     c.hasTxFilterControls = true;
     return c;
 }
@@ -189,10 +191,9 @@ static void cwPitchReachesSeamWithoutDropNotice()
           "cw pitch: no commandDropped for a pitch the backend applied");
 }
 
-// Tune power has no setter of its own: RadioModel hands tunePower() to
-// setTune() at key time (#4551), where a backend that owns its drive and can
-// key applies it. So the text is not a drop. The key-time half is asserted:
-// TUNE is keyed on the recording backend and the slider's value arrives.
+// Unkeyed, tune power has nothing to re-apply: setTune() hands tunePower() to
+// the backend at key time (#4551), so the text is not a drop and no
+// setTunePower() is sent.
 static void tunePowerDeliveredAtKeyTimeWithoutDropNotice()
 {
     Fixture f(hostModulatingTransmitter());
@@ -200,17 +201,19 @@ static void tunePowerDeliveredAtKeyTimeWithoutDropNotice()
     f.radio.transmitModel().setTunePower(25);
     check(!f.droppedStartingWith(QStringLiteral("transmit set tunepower=")),
           "tunepower: no commandDropped on a backend that applies it at key time");
+    check(f.backend->tunePowers.isEmpty(),
+          "tunepower while not tuning: no setTunePower() reaches the backend");
     f.radio.transmitModel().startTune();
     check(!f.backend->tunes.isEmpty() && f.backend->tunes.first() == qMakePair(true, 25),
           "tunepower: TUNE keyed with setTune(true, 25), the slider's value");
     f.radio.transmitModel().stopTune();
 }
 
-// The value rides setTune() only at key-down. A change while TUNE is already
-// keyed is not re-applied to the carrier, so its text is a real drop.
-static void tunePowerChangedWhileKeyedKeepsDropNotice()
+// A backend declaring tunePowerAppliesLive takes a mid-carrier change through
+// setTunePower(), without re-keying, so the text is not a drop.
+static void tunePowerChangedWhileKeyedAppliesLive()
 {
-    Fixture f(hostModulatingTransmitter());
+    Fixture f(hostModulatingTransmitter(true));
     check(f.installTxSlice(), "premise: a TX slice is installed");
     f.radio.transmitModel().setTunePower(10);
     f.radio.transmitModel().startTune();
@@ -218,10 +221,47 @@ static void tunePowerChangedWhileKeyedKeepsDropNotice()
     const auto tunesAtKeyDown = f.backend->tunes;
     f.dropped.clear();
     f.radio.transmitModel().setTunePower(30);
+    check(f.backend->tunePowers == QList<int>{30},
+          "live tune power: setTunePower(30) reached the backend exactly once");
     check(f.backend->tunes == tunesAtKeyDown,
-          "premise: a mid-carrier tune power change reaches no seam setter");
+          "live tune power: the change does not re-key TUNE");
+    check(!f.droppedStartingWith(QStringLiteral("transmit set tunepower=")),
+          "live tune power: no commandDropped for a value the backend applied");
+
+    // A decoded status of a different value is the radio's report, not
+    // operator intent (the path RadioModel::applyBackendTransmitDelta takes).
+    TransmitDelta echo;
+    echo.tunePower = 45;
+    f.radio.transmitModel().applyChanges(echo);
+    check(f.radio.transmitModel().tunePower() == 45,
+          "premise: the decoded tune power reached TransmitModel");
+    check(f.backend->tunePowers == QList<int>{30},
+          "a decoded tune power while keyed sends no setTunePower()");
+
+    f.radio.transmitModel().stopTune();
+    f.radio.transmitModel().setTunePower(50);
+    check(f.backend->tunePowers == QList<int>{30},
+          "after TUNE is released: no setTunePower() reaches the backend");
+}
+
+// Without tunePowerAppliesLive, a change while TUNE is keyed reaches no seam
+// setter, so its text is a real drop.
+static void tunePowerChangedWhileKeyedKeepsDropNotice()
+{
+    Fixture f(hostModulatingTransmitter(false));
+    check(f.installTxSlice(), "premise: a TX slice is installed");
+    f.radio.transmitModel().setTunePower(10);
+    f.radio.transmitModel().startTune();
+    check(f.radio.transmitModel().isTuning(), "premise: TUNE is keyed");
+    const auto tunesAtKeyDown = f.backend->tunes;
+    f.dropped.clear();
+    f.radio.transmitModel().setTunePower(30);
+    check(f.backend->tunePowers.isEmpty(),
+          "not live: no setTunePower() reaches a backend that does not declare it");
+    check(f.backend->tunes == tunesAtKeyDown,
+          "not live: a mid-carrier tune power change does not re-key TUNE");
     check(f.droppedStartingWith(QStringLiteral("transmit set tunepower=")),
-          "tunepower changed while TUNE is keyed: the drop notice stands");
+          "tunepower changed while TUNE is keyed, not declared live: the drop notice stands");
     f.radio.transmitModel().stopTune();
 }
 
@@ -353,6 +393,7 @@ int main(int argc, char** argv)
     txFilterReachesSeamWithoutDropNotice();
     cwPitchReachesSeamWithoutDropNotice();
     tunePowerDeliveredAtKeyTimeWithoutDropNotice();
+    tunePowerChangedWhileKeyedAppliesLive();
     tunePowerChangedWhileKeyedKeepsDropNotice();
     cwPitchNeverHandedToBackendKeepsDropNotice();
     cwPitchHandedToPreviousBackendKeepsDropNotice();

@@ -1813,7 +1813,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // 100 with no RF leaving the radio. Consumers that act on drive must see that
     // distinction rather than infer applied power from a request.
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
-        SliceFrequencyControl::Authority::Engine};
+        SliceFrequencyControl::Authority::Engine, /*tunePowerAppliesLive=*/true};
     c.hasRadioDialLock = false;
     c.hasTuner = false;
     c.hasTunerMemories = false;
@@ -4586,6 +4586,7 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     // clears it.
     if (on) {
         m_tuning = true;
+        m_tuneOperation = operation;
         // BEFORE the carrier, not after. The HL2's AH-4 handler samples the
         // request alongside the key, and raising it after the tone is already
         // radiating leaves the first moments of the tune un-requested — which
@@ -4605,9 +4606,20 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     }
 }
 
+// Drive only, straight to the register: m_rfPowerPercent stays the value the
+// unkey restores. A carrier whose admission has lapsed takes no drive change.
+void Hl2Backend::setTunePower(int percent)
+{
+    if (!m_tuning
+        || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    applyDrive(percent);
+}
+
 // Clamp, map to the drive register, and honour the transmit gate. Shared by
-// setTxPower() and setTune() so the mapping — whose coarseness is documented in
-// setTxPower() — exists once and cannot drift between the two.
+// setTxPower(), setTune() and setTunePower() so the mapping — whose coarseness
+// is documented in setTxPower() — exists once and cannot drift between them.
 void Hl2Backend::applyDrive(int percent)
 {
     // Drive is gated exactly like keying. setTxDriveLevel writes the PA-enable

@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <vector>
 
 namespace AetherSDR::hl2 {
@@ -92,6 +93,8 @@ struct Hl2TxGateTestAccess {
         }, Qt::BlockingQueuedConnection);
         return packet;
     }
+
+    static MetisClient* metis(Hl2Backend& backend) { return backend.m_metis; }
 
     static void expireHang(Hl2Backend& backend)
     {
@@ -291,6 +294,127 @@ static void testAtuTuneHonoursTheTransmitGate(TxTestAuthority& authority)
     // request down — and it is a property of the expression, not of a schedule.
 }
 
+// The 0x09 bank rides sub-frame 1 as a one-shot: C1 is the drive level, C2
+// bit 3 the PA enable.
+struct DriveBank {
+    int level = -1;
+    bool paEnabled = false;
+};
+
+static std::optional<DriveBank> driveBankIn(const std::array<std::uint8_t, kUsbPacketSize>& pkt)
+{
+    const std::size_t fs = 8 + kFrameSize;
+    if ((pkt[fs + 3] & ~kC0MoxBit) != kC0TxDrive) {
+        return std::nullopt;
+    }
+    return DriveBank{pkt[fs + 4], (pkt[fs + 5] & 0x08) != 0};
+}
+
+// Let the queued invokes land, then drain the one-shot queue: the last 0x09
+// bank is the drive the radio holds.
+struct Drained {
+    std::optional<DriveBank> lastDrive;
+    bool anyKeyed = false;
+};
+
+static Drained drain(Hl2Backend& backend)
+{
+    QCoreApplication::processEvents();
+    Drained out;
+    for (int i = 0; i < 32; ++i) {
+        const auto pkt = Hl2TxGateTestAccess::packet(backend);
+        if (const auto bank = driveBankIn(pkt)) {
+            out.lastDrive = bank;
+        }
+        out.anyKeyed = out.anyKeyed || anyFrameKeyed(pkt);
+    }
+    return out;
+}
+
+// TUNE power applied while TUNE is keyed. setTunePower() moves only the drive
+// register: it never keys, never rewrites the RF power the unkey restores, and
+// does nothing once the carrier is down.
+static void testTunePowerAppliesLiveWhileTuning(TxTestAuthority& authority)
+{
+    const auto driveIs = [](const Drained& d, int level, bool pa) {
+        return d.lastDrive && d.lastDrive->level == level && d.lastDrive->paEnabled == pa;
+    };
+    {
+        Hl2Backend backend;
+        const AetherSDR::RadioCapabilities caps = backend.capabilities();
+        check(caps.transmitDriveControl && caps.transmitDriveControl->tunePowerAppliesLive,
+              "HL2 declares tune power live");
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTxPower(40);
+        check(driveIs(drain(backend), 102, true), "premise: RF power 40% drives 102");
+        backend.setTune(true, 10, authority.operation, {});
+        const Drained keyed = drain(backend);
+        check(driveIs(keyed, 25, true) && keyed.anyKeyed,
+              "premise: TUNE keys at the 10% tune drive (25)");
+
+        backend.setTunePower(60);
+        const Drained live = drain(backend);
+        check(driveIs(live, 153, true), "tune power 60% while keyed drives 153, PA on");
+        check(live.anyKeyed, "the carrier stays keyed across a live tune power change");
+        backend.setTunePower(150);
+        check(driveIs(drain(backend), 255, true), "tune power above 100% clamps to 255");
+        backend.setTunePower(-5);
+        check(driveIs(drain(backend), 0, false), "tune power below 0% clamps to 0, PA off");
+
+        backend.setTune(false, 10, authority.operation, {});
+        const Drained released = drain(backend);
+        check(driveIs(released, 102, true),
+              "TUNE release restores the operator's 40% RF drive, not the live tune drive");
+        check(!released.anyKeyed, "premise: TUNE released");
+
+        backend.setTunePower(80);
+        const Drained after = drain(backend);
+        check(!after.lastDrive && !after.anyKeyed,
+              "tune power after TUNE is released: no drive bank and no keyed frame");
+    }
+    {
+        // The transmit gate closes mid-tune: drive is asserted off, not applied.
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTune(true, 10, authority.operation, {});
+        (void)drain(backend);
+        Hl2TxGateTestAccess::setTxAllowed(backend, false);
+        backend.setTunePower(70);
+        check(driveIs(drain(backend), 0, false),
+              "gate closed while tuning: tune power writes drive 0 with the PA off");
+        Hl2TxGateTestAccess::setTxAllowed(backend, true);
+        backend.setTune(false, 10, authority.operation, {});
+    }
+    {
+        // A TUNE whose admission was revoked takes no drive change.
+        TxTestAuthority revoked;
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTune(true, 10, revoked.operation, {});
+        (void)drain(backend);
+        revoked.coordinator.emergencyStop();
+        backend.setTunePower(60);
+        check(!drain(backend).lastDrive,
+              "tune power after the TUNE operation was stopped: no drive bank");
+    }
+    {
+        // A stopped client queues nothing (#6014).
+        Hl2Backend backend;
+        Hl2TxGateTestAccess::prepare(backend);
+        backend.setSliceMode(0, QStringLiteral("USB"));
+        backend.setTune(true, 10, authority.operation, {});
+        (void)drain(backend);
+        QMetaObject::invokeMethod(Hl2TxGateTestAccess::metis(backend), "stop",
+                                  Qt::BlockingQueuedConnection);
+        backend.setTunePower(60);
+        check(!drain(backend).lastDrive, "stopped client: tune power queues no 0x09 bank");
+        backend.setTune(false, 10, authority.operation, {});
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -298,6 +422,7 @@ int main(int argc, char** argv)
     MetisClient client;
 
     testAtuTuneHonoursTheTransmitGate(authority);
+    testTunePowerAppliesLiveWhileTuning(authority);
 
     {
         MetisClient board;

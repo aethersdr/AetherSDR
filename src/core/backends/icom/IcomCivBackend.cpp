@@ -360,7 +360,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // rfPower() is filled from a CI-V RF-power level READ (level::kRfPower), not
     // from what this client asked for, so it is confirmed radio state (#5518).
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
-        SliceFrequencyControl::Authority::Radio};
+        SliceFrequencyControl::Authority::Radio, /*tunePowerAppliesLive=*/true};
 
     // Modes this radio receives but cannot transmit in (e.g. IC-705 WFM,
     // #5040), derived from the same functions as the mode list. RadioModel's
@@ -4932,13 +4932,13 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxC
         }
         if (m_tuning) {
             if (tunePowerPercent >= 0) {
-                setTxPower(tunePowerPercent);
+                writeTxPowerLevel(tunePowerPercent);
             }
             return;
         }
         m_preTuneTxPowerPercent = m_txPowerPercent;
         if (tunePowerPercent >= 0) {
-            setTxPower(tunePowerPercent);
+            writeTxPowerLevel(tunePowerPercent);
         }
         // Raise the tone BEFORE keying, so no part of the keyed window is
         // silent — a tuner sampling that edge can otherwise read infinite SWR.
@@ -4960,6 +4960,25 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxC
 }
 
 void IcomCivBackend::setTxPower(int percent)
+{
+    // TUNE borrows the one drive register: RF power set meanwhile is what the
+    // unkey restores, and the carrier keeps its tune drive.
+    if (m_tuning) {
+        m_preTuneTxPowerPercent = std::clamp(percent, 0, 100);
+        return;
+    }
+    writeTxPowerLevel(percent);
+}
+
+void IcomCivBackend::setTunePower(int percent)
+{
+    if (!m_tuning) {
+        return;
+    }
+    writeTxPowerLevel(percent);
+}
+
+void IcomCivBackend::writeTxPowerLevel(int percent)
 {
     m_txPowerPercent = std::clamp(percent, 0, 100);
     sendUserCommand(cmdSetLevel(m_session ? m_session->civAddress() : 0xA4,
@@ -5514,7 +5533,7 @@ bool IcomCivBackend::scrubDrive(const icom::ControlSpec& c)
     }
     if (id == QLatin1String("squelch"))  { setSliceSquelch(slice, m_squelchPercent > 0, m_squelchPercent); return true; }
     if (id == QLatin1String("agc"))      { setSliceAgc(slice, m_agcMode, 0); return true; }
-    if (id == QLatin1String("tx.power")) { setTxPower(m_txPowerPercent); return true; }
+    if (id == QLatin1String("tx.power")) { writeTxPowerLevel(m_txPowerPercent); return true; }
     if (id == QLatin1String("mic.gain")) {
         const auto mod = modulationProfileFor(*m_model);
         const int activeInput = m_dataMode ? m_dataModInput : m_dataOffModInput;

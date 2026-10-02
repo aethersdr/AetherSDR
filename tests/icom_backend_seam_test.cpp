@@ -121,6 +121,10 @@ struct IcomCivBackendTestAccess {
         b.m_rfGainPercent = rfGainPercent;
         b.m_controlsValueKnown.insert(QString::fromLatin1(id));
     }
+    static void markControlKnown(IcomCivBackend& b, const char* id)
+    {
+        b.m_controlsValueKnown.insert(QString::fromLatin1(id));
+    }
     static void authenticateLease(IcomCivBackend& b)
     {
         b.m_session->m_authOk = true;
@@ -400,6 +404,83 @@ void testTuneDriveRestore()
                   && Access::preTunePower(backend) == -1,
               "every unkey path ends TUNE ownership and clears the borrowed drive");
     }
+}
+
+// TUNE power applies live to the carrier, and RF power set during TUNE is what
+// the unkey restores, not a write over the tune drive.
+void testTunePowerAppliesLive()
+{
+    const auto powerWrites = [](const std::vector<CivFrame>& frames) {
+        std::vector<int> out;
+        for (const CivFrame& f : writes(frames, cmd::kLevel, level::kRfPower)) {
+            if (const auto raw = decodeLevel(f.data)) {
+                out.push_back(*raw);
+            }
+        }
+        return out;
+    };
+    TxTestAuthority authority;
+    IcomCivBackend backend;
+    backend.setTransmitContext(authority.context);
+    Access::prepare(backend, "IC-705");
+    const RadioCapabilities caps = backend.capabilities();
+    check(caps.transmitDriveControl && caps.transmitDriveControl->tunePowerAppliesLive,
+          "Icom declares tune power live");
+    backend.setTxPower(37);
+    Access::settle(backend);
+    Access::forget(backend);
+
+    backend.setTunePower(20);
+    check(powerWrites(Access::issued(backend)).empty(),
+          "tune power while not tuning writes nothing");
+
+    backend.setTune(true, 10, authority.operation);
+    Access::settle(backend);
+    Access::forget(backend);
+    backend.setTunePower(25);
+    const auto live = Access::issued(backend);
+    check(powerWrites(live) == std::vector<int>{percentToLevelRaw(25)},
+          "tune power while tuning writes the 25% tune drive");
+    check(!any(live, keysTransmitter) && Access::tuning(backend),
+          "a live tune power change neither re-keys nor ends TUNE");
+    Access::settle(backend);
+    Access::forget(backend);
+
+    backend.setTxPower(50);
+    check(powerWrites(Access::issued(backend)).empty() && Access::preTunePower(backend) == 50,
+          "RF power during TUNE is held for the unkey, not written over the tune drive");
+    backend.setTune(true, 15, authority.operation);
+    check(powerWrites(Access::issued(backend)) == std::vector<int>{percentToLevelRaw(15)}
+              && Access::preTunePower(backend) == 50,
+          "TUNE re-requested while tuning moves the tune drive, not the RF power held");
+    Access::settle(backend);
+    Access::forget(backend);
+
+    const ControlSpec* txPower = nullptr;
+    for (const ControlSpec& spec : controlSpecs()) {
+        if (spec.id == "tx.power") {
+            txPower = &spec;
+        }
+    }
+    check(txPower != nullptr, "the registry has a tx.power row");
+    if (txPower) {
+        Access::markControlKnown(backend, "tx.power");
+        check(backend.scrubDrive(*txPower)
+                  && powerWrites(Access::issued(backend)) == std::vector<int>{percentToLevelRaw(15)}
+                  && Access::preTunePower(backend) == 50,
+              "a tx.power scrub during TUNE re-asserts the live drive and keeps the RF power held");
+        Access::settle(backend);
+        Access::forget(backend);
+    }
+
+    backend.setTune(false, 15, authority.operation);
+    check(powerWrites(Access::issued(backend)) == std::vector<int>{percentToLevelRaw(50)},
+          "TUNE release restores the RF power set during TUNE (50%)");
+    Access::settle(backend);
+    Access::forget(backend);
+    backend.setTunePower(30);
+    check(powerWrites(Access::issued(backend)).empty(),
+          "tune power after TUNE is released writes nothing");
 }
 
 // WFM receives only: no key and no TUNE, but an unkey still goes out.
@@ -768,6 +849,7 @@ int main(int argc, char** argv)
     testWaiterLifetime(app);
     testCapabilityFlags();
     testTuneDriveRestore();
+    testTunePowerAppliesLive();
     testWfmRefusesTransmit();
     testPcAudioRestoresUsb();
     testCompoundModeWrite();
