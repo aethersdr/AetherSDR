@@ -112,7 +112,7 @@ struct MemoryRecallDetails {
 //     backend-owned object returns early on mismatch (RadioModel::setupBackend()).
 //  6. A BACKEND EMITS NOTHING AFTER disconnected(). Frames a worker queued before
 //     stopping are gated on the backend's own connected flag (see SimBackend's
-//     audio forwards). sim_backend_test pins this.
+//     audio and spectrum forwards). sim_backend_test pins this.
 //
 // The interface grows one method at a time per the touchpoint burndown
 // (docs/architecture/aetherd-touchpoints.md).

@@ -779,14 +779,25 @@ struct Ep4Stats {
     // Uncalibrated pre-DDC dBFS, comparable only with the gateware's clip and
     // good-level flags (not an S-meter, the WDSP ADC peak, or antenna level).
     // peakDbfs() is ABSOLUTE (largest |code|); rmsDbfs() is AC-coupled (about
-    // the record's mean). The mixed reference is deliberate (#5802); a signed
-    // pedestal row is tracked at #5856.
+    // the record's mean). The mixed reference is deliberate (#5802); the mean
+    // the RMS removes is published by dcDbfs() and meanCodes() below (#5856).
     [[nodiscard]] double peakDbfs() const noexcept;
     [[nodiscard]] double rmsDbfs()  const noexcept;
     // Peak-to-RMS in dB, or nullopt unless BOTH are above kEp4FloorDbfs, a
     // sentinel rather than a level. A DC pedestal with sub-code AC deviation
     // would otherwise publish 60-90 dB of meaningless "crest" (#5802).
     [[nodiscard]] std::optional<double> crestDb() const noexcept;
+    // The record's mean, the DC level rmsDbfs() removes, as
+    // 20*log10(|mean| / kEp4FullScale) on the same pre-DDC scale (#5856). Named
+    // for where it is measured, not for a cause. kEp4FloorDbfs is returned only
+    // for no samples or a mean of exactly zero; a non-zero mean under half a
+    // code computes BELOW the floor, unclamped, as rmsDbfs() does.
+    [[nodiscard]] double dcDbfs() const noexcept;
+    // The same mean, SIGNED, in raw converter codes. At two decimals a mean
+    // of about half a code prints the same -72.25 as the zero-mean sentinel in
+    // dcDbfs(); this prints 0.50 against 0.00. 0.0 for a record with no
+    // samples, so callers check `samples` first.
+    [[nodiscard]] double meanCodes() const noexcept;
     // Fold another packet's statistics in. Peak takes the max, everything else
     // sums, so a merged block's mean and variance are those of the 2048-sample
     // concatenation.
