@@ -787,6 +787,43 @@ void testDestructionCancelsQueuedFailure()
 
 } // namespace
 
+// A failed write stops m_recording at once, but the file is finalised later on
+// the owner thread. REC/PLAY routing stays on this recorder until then, so a
+// REC-off in that window cannot go to the slice.
+void testFailedWriteKeepsRoutingLatched()
+{
+    QTemporaryDir tmp;
+    EXPECT_TRUE(tmp.isValid());
+    AppSettings::instance().setValue(QStringLiteral("RecordingMode"),
+                                     QStringLiteral("Radio"));
+
+    Events events;
+    bool radioCanRecord = false;
+    QsoRecorder recorder;
+    configure(recorder, tmp.path());
+    connectEvents(recorder, events);
+    recorder.setBackendOwnsRxAudioProvider([]() { return true; });
+    recorder.setRadioSideRecordingReachableProvider([&]() { return radioCanRecord; });
+    int writes = 0;
+    QsoRecorderWriteErrorTestAccess::setWriteHook(
+        recorder, [&writes](QFile& file, const char* data, qint64 size) {
+            return ++writes == 2 ? qint64{-1} : file.write(data, size);
+        });
+
+    recorder.startRecording();
+    EXPECT_TRUE(recorder.isRecording());
+    radioCanRecord = true;
+    feedFromAudioThread(recorder, false);
+    EXPECT_TRUE(!recorder.isRecording());
+    EXPECT_TRUE(recorder.recordsOnClientNow());
+
+    deliverQueuedCalls();
+    EXPECT_EQ(events.errors, 1);
+    EXPECT_EQ(events.stopped, 1);
+    EXPECT_TRUE(!recorder.recordsOnClientNow());
+    allowClientRecording();
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(QStringLiteral("aether-qso-recorder-write-errors"));
@@ -818,6 +855,7 @@ int main(int argc, char** argv)
     testCloseFailureAfterSuccessfulFlush();
     testStaleQueuedFailureCannotTouchRestart();
     testDestructionCancelsQueuedFailure();
+    testFailedWriteKeepsRoutingLatched();
 
     if (g_failures == 0) {
         std::printf("qso_recorder_write_error_test: all checks passed\n");

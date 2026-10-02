@@ -243,14 +243,10 @@ int main(int argc, char** argv)
         EXPECT_EQ_INT(fileCount(tmp.path()), 0);
     }
 
-    // ── RADIO-SIDE ON A RADIO WITH NO RADIO-SIDE RECORDER ───────────────────
-    // The two cases above hold only where the radio CAN record. On a radio
-    // without a command plane (HL2, ANAN, Icom, RTL) `slice set <n> record=1`
-    // has nowhere to go: the REC flag latched and nothing was recorded
-    // anywhere. There this recorder is the only one that exists, so Radio-Side
-    // falls back to it — and the file on disk is the assertion, not the
-    // recorder's account of itself. The provider is live: the same recorder
-    // refuses again the moment a radio that can record is attached.
+    // Radio-Side on a radio with no command plane (HL2, ANAN, Icom, RTL) has no
+    // radio-side recorder, so this recorder records; the file on disk is the
+    // assertion. The provider is read live: attach a radio that records and
+    // the same recorder refuses again.
     {
         QTemporaryDir tmp;
         EXPECT_TRUE(tmp.isValid());
@@ -280,17 +276,10 @@ int main(int argc, char** argv)
                     == RecordStartDecision::BlockedRecordingModeIsRadio);
     }
 
-    // ── A REACHABILITY FLIP MID-RECORDING MUST NOT STRAND THE RECORDING ──────
-    // Review of #6021: every surface re-asks recordsOnClientNow() per click, and
-    // reachability now moves on connect/disconnect. Start on the client with
-    // no radio-side recorder, attach one, press REC off: were the answer
-    // re-derived, the stop would go to the slice, stopRecording() would never
-    // run, and the button would go dark over a WAV that keeps writing. The
-    // routing is latched for the life of the recording instead.
-    //
-    // routeRecordOff() is the surfaces' shape (MainWindow_Wiring.cpp
-    // recordToggled, AetherRX, MIDI global.qsoRecord), with the slice branch
-    // recorded rather than taken -- there is no radio here.
+    // Routing is latched for the life of a recording: a reachability flip
+    // (connect/disconnect) or a RecordingMode change mid-recording must still
+    // send REC-off to this recorder, not the slice. routeRecordOff() has the
+    // routing surfaces' shape (VFO, AetherRX, MIDI), with no radio behind it.
     {
         QTemporaryDir tmp;
         EXPECT_TRUE(tmp.isValid());
@@ -323,9 +312,8 @@ int main(int argc, char** argv)
         // Latched for ONE recording only: idle again, the live answer returns.
         EXPECT_TRUE(!rec.recordsOnClientNow());
 
-        // The same hazard from the setting side (pre-existing, closed by the
-        // same latch): Client-mode recording, operator picks Radio Side in
-        // Radio Setup with a radio that records, then presses REC off.
+        // The setting side: Client-mode recording, Radio Side picked in Radio
+        // Setup with a radio that records, then REC off.
         setMode("Client", "True");
         rec.startRecording();
         EXPECT_TRUE(rec.isRecording());

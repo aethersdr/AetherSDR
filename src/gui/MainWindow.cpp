@@ -1324,12 +1324,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_qsoRecorder, &QsoRecorder::recordingBlocked, this,
             [this](AetherSDR::RecordStartDecision reason) {
         if (reason == AetherSDR::RecordStartDecision::BlockedRecordingModeIsRadio) {
-            // Unreachable from the GUI — every operator-facing path asks
+            // Unreachable from the GUI: every operator-facing path asks
             // QsoRecorder::recordsOnClientNow() and sends radio-side to
-            // SliceModel without ever touching this recorder. Handled rather than swallowed because a
-            // silently discarded refusal is the failure mode this whole change
-            // exists to remove; if a future caller forgets to route, this says
-            // so instead of leaving a stray header-only WAV.
+            // SliceModel without touching this recorder. Handled, not
+            // swallowed, so a future caller that forgets to route is told
+            // instead of leaving a stray header-only WAV.
             showRecorderNotice(QStringLiteral("recording-mode-is-radio"),
                 tr("Radio Side Recording Is Selected"),
                 tr("The radio is doing the recording, so the client recorder was "
