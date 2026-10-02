@@ -927,29 +927,37 @@ void TitleBar::setHeadphoneVolume(int pct)
     m_hpLabel->setText(QString::number(pct));
 }
 
-void TitleBar::setHeadphoneFollowsLocalOutput(bool follows)
+void TitleBar::setHeadphoneAvailable(bool available)
 {
-    m_headphoneFollowsLocal = follows;
-    if (follows) {
-        const QString muteText = tr(
-            "This radio has no headphone output of its own; its audio plays on "
-            "this computer. Mutes or unmutes this computer's audio output, the "
-            "same as the speaker button.");
-        const QString volumeText = tr(
-            "This radio has no headphone output of its own; its audio plays on "
-            "this computer. Sets this computer's output level, 0 to 100 "
-            "percent, the same as the master volume.");
-        m_headphoneBtn->setToolTip(muteText);
-        m_headphoneBtn->setAccessibleDescription(muteText);
-        m_hpSlider->setToolTip(volumeText);
-        m_hpSlider->setAccessibleDescription(volumeText);
+    if (available == m_headphoneAvailable)
+        return;
+    m_headphoneAvailable = available;
+    // Value and checked state are deliberately left alone, both ways: the
+    // pair reports no level while unavailable, and the edge that changes its
+    // availability (connect, disconnect) is not a level the radio reported.
+    m_headphoneBtn->setEnabled(available);
+    m_hpSlider->setEnabled(available);
+    m_hpLabel->setEnabled(available);
+    if (available) {
+        // The constructor's wording, verbatim.
+        m_headphoneBtn->setToolTip(QStringLiteral("Click to mute/unmute headphones"));
+        m_headphoneBtn->setAccessibleDescription(
+            QStringLiteral("Mute or unmute headphone audio"));
+        m_hpSlider->setToolTip(QString());
+        m_hpSlider->setAccessibleDescription(
+            QStringLiteral("Headphone volume level, 0 to 100 percent"));
         return;
     }
-    m_headphoneBtn->setToolTip(tr("Click to mute/unmute headphones"));
-    m_headphoneBtn->setAccessibleDescription(tr("Mute or unmute headphone audio"));
-    m_hpSlider->setToolTip(QString());
-    m_hpSlider->setAccessibleDescription(
-        tr("Headphone volume level, 0 to 100 percent"));
+    const QString muteReason = QStringLiteral(
+        "Unavailable: this radio has no headphone output. Its audio plays on "
+        "this computer; mute it with the speaker button.");
+    const QString volumeReason = QStringLiteral(
+        "Unavailable: this radio has no headphone output. Its audio plays on "
+        "this computer; set its level with the master volume slider.");
+    m_headphoneBtn->setToolTip(muteReason);
+    m_headphoneBtn->setAccessibleDescription(muteReason);
+    m_hpSlider->setToolTip(volumeReason);
+    m_hpSlider->setAccessibleDescription(volumeReason);
 }
 
 void TitleBar::setMultiFlexStatus(int count, const QStringList& names)

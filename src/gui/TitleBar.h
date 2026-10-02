@@ -53,14 +53,15 @@ public:
     void setHeadphoneMuted(bool muted);
     void setMasterVolume(int pct);
     void setHeadphoneVolume(int pct);
-    // Say what the headphone mute and slider act on. True on a radio with no
-    // headphone mixer of its own whose audio plays on this computer (see
-    // HeadphoneOutputPolicy.h): both then drive this computer's output, the
-    // same one the master slider and speaker mute drive, and a screen reader
-    // must hear that rather than "headphone audio" for a jack that is not
-    // there. False restores the radio-headphone wording.
-    void setHeadphoneFollowsLocalOutput(bool follows);
-    bool headphoneFollowsLocalOutput() const { return m_headphoneFollowsLocal; }
+    // Unavailable (false) on a radio with no headphone output of its own
+    // (MixerControlAvailability.h): the mute and slider dim, and their tooltip
+    // and accessibleDescription carry the reason and point at the controls
+    // that do drive this computer's output -- the master slider and the
+    // speaker mute (theme-style-guide.md, Three-state controls). Neither
+    // direction touches the slider value or the mute state. True restores the
+    // constructor's wording.
+    void setHeadphoneAvailable(bool available);
+    bool headphoneAvailable() const { return m_headphoneAvailable; }
     void setOtherClientTx(bool transmitting, const QString& station);
     // Empty hides the marker. A non-empty family name keeps the experimental
     // status visible for the whole connected session, independent of whether
@@ -143,7 +144,7 @@ private:
     QSlider*     m_hpSlider{nullptr};
     QLabel*      m_masterLabel{nullptr};
     QLabel*      m_hpLabel{nullptr};
-    bool         m_headphoneFollowsLocal{false};
+    bool         m_headphoneAvailable{true};
 
     // Window-control trio (frameless mode): minimize, maximize/restore, close.
     // QLabels (not buttons) for a flat look; click is wired via eventFilter.

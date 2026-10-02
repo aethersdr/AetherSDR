@@ -19,13 +19,12 @@
 #include "MainWindow.h"
 
 #include "FlexControlDialog.h"
-#include "HeadphoneOutputPolicy.h"
 #include "MainWindowHelpers.h"
 #include "MidiTxDispatch.h"
+#include "MixerControlAvailability.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SpectrumOverlayMenu.h"
 #include "core/AppSettings.h"
-#include "core/AudioEngine.h"
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceFeature.h"
 #include "core/KiwiSdrProtocol.h"
@@ -202,6 +201,13 @@ QString tmate2PushDefaultAction(int encoderIndex)
     case 2:  return QStringLiteral("ToggleXit");
     default: return QStringLiteral("None");
     }
+}
+
+// PC Audio as the title bar persists it -- the same read applyMasterVolume()
+// makes to decide whether the master level is this computer's output.
+static bool pcAudioEnabledSetting()
+{
+    return AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
 }
 
 static bool isCwMomentaryActionId(const QString& id)
@@ -1512,11 +1518,20 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 #endif
         }
     } else if (actionId == "WheelHeadphoneVolume") {
-        // Through the one headphone entry point, so on a radio whose audio
-        // plays here the wheel turns this computer's output rather than a
-        // mixer the radio does not have (HeadphoneOutputPolicy.h).
-        const int next = std::clamp(headphoneVolumeLevel() + steps * 2, 0, 100);
-        applyHeadphoneVolume(next);
+        // A radio with no headphone output: the title-bar pair is dimmed with
+        // its reason, and the wheel refuses the same way rather than moving a
+        // dimmed slider (MixerControlAvailability.h).
+        if (!headphoneControlsAvailable(m_radioModel.isConnected(),
+                                        m_radioModel.hasCommandPlane())) {
+            qCWarning(lcDevices) << "WheelHeadphoneVolume refused:"
+                                 << "this radio has no headphone output";
+            showUnsupportedControlNotice();
+            return;
+        }
+        const int next = std::clamp(m_radioModel.headphoneGain() + steps * 2, 0, 100);
+        if (m_titleBar)
+            m_titleBar->setHeadphoneVolume(next);
+        m_radioModel.setHeadphoneGain(next);
 #ifdef HAVE_HIDAPI
         triggerTMate2Overlay(TMate2Overlay::Volume, next);
 #endif
@@ -2255,49 +2270,61 @@ void MainWindow::registerMidiParams()
     // ── Global ──────────────────────────────────────────────────────────
     // The mixer verbs drive the RADIO's lineout/headphone hardware outputs, a
     // Flex command-plane feature, and on a Flex that is what these knobs keep
-    // meaning. A radio with no command plane has no such mixer; when its audio
-    // plays on this computer the knobs drive THIS computer's output instead,
-    // through the same entry points as the title bar (HeadphoneOutputPolicy.h),
-    // so a mapped knob works rather than dying. With PC Audio off there is no
-    // output here to follow either, and the knob refuses -- visibly, through
-    // the one-shot notice, not with a debug line only (M0, #5263).
+    // meaning. A connected radio with no command plane has no such mixer
+    // (MixerControlAvailability.h): the Master knob takes the title bar's own
+    // master-slider path when that radio's audio plays on this computer, and
+    // otherwise -- and always for Headphone, a jack the radio does not have --
+    // the knob refuses visibly through the one-shot notice, not with a debug
+    // line only (M0, #5263). Disconnected, nothing is sent and nothing is said.
     reg("global.masterVolume", "Master Volume", "Global", P::Slider, 0, 100,
         [this](float v) {
-            const int pct = std::clamp(static_cast<int>(v), 0, 100);
             if (m_radioModel.hasCommandPlane()) {
-                m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(pct));
+                m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v)));
                 return;
             }
-            if (headphoneFollowsLocalOutput()) {
+            if (!m_radioModel.isConnected()) {
+                qCDebug(lcDevices) << "global.masterVolume ignored: no radio connected";
+                return;
+            }
+            if (masterKnobDrivesLocalOutput(m_radioModel.isConnected(),
+                                            m_radioModel.hasCommandPlane(),
+                                            pcAudioEnabledSetting())) {
+                const int pct = std::clamp(static_cast<int>(v), 0, 100);
                 if (m_titleBar) m_titleBar->setMasterVolume(pct);
                 applyMasterVolume(pct);
                 return;
             }
             qCWarning(lcDevices) << "global.masterVolume refused: no radio mixer"
-                                 << "and no local output to follow";
+                                 << "and PC Audio is off";
             showUnsupportedControlNotice();
         },
         [this]() -> float {
-            return headphoneFollowsLocalOutput() ? headphoneVolumeLevel()
-                                                 : m_radioModel.lineoutGain();
+            if (masterKnobDrivesLocalOutput(m_radioModel.isConnected(),
+                                            m_radioModel.hasCommandPlane(),
+                                            pcAudioEnabledSetting())) {
+                return std::clamp(
+                    AppSettings::instance().value("MasterVolume", "100").toInt(), 0, 100);
+            }
+            return m_radioModel.lineoutGain();
         });
 
     reg("global.hpVolume", "Headphone Volume", "Global", P::Slider, 0, 100,
         [this](float v) {
-            const int pct = std::clamp(static_cast<int>(v), 0, 100);
-            if (m_radioModel.hasCommandPlane()) {
-                m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(pct));
+            if (!headphoneControlsAvailable(m_radioModel.isConnected(),
+                                            m_radioModel.hasCommandPlane())) {
+                qCWarning(lcDevices) << "global.hpVolume refused:"
+                                     << "this radio has no headphone output";
+                showUnsupportedControlNotice();
                 return;
             }
-            if (headphoneFollowsLocalOutput()) {
-                applyHeadphoneVolume(pct);
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "global.hpVolume ignored:"
+                                   << "radio mixer verbs need a Flex command plane";
                 return;
             }
-            qCWarning(lcDevices) << "global.hpVolume refused: no radio mixer"
-                                 << "and no local output to follow";
-            showUnsupportedControlNotice();
+            m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v)));
         },
-        [this]() -> float { return headphoneVolumeLevel(); });
+        [this]() -> float { return m_radioModel.headphoneGain(); });
 
     reg("global.masterMute", "Master Mute", "Global", P::Toggle, 0, 1,
         [this](float v) { m_audio->setMuted(v > 0.5f); },
@@ -3254,83 +3281,6 @@ void MainWindow::wireExternalControllers()
         });
     }
 #endif
-}
-
-// ── Headphone controls: the radio's mixer, or this computer's output ─────────
-// See HeadphoneOutputPolicy.h for why. Held here because three of the four
-// entry points (MIDI slider, controller wheel, and the MIDI master knob that
-// shares the mapping) are controller paths; the title bar is the fourth.
-
-static bool pcAudioEnabledSetting()
-{
-    return AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
-}
-
-bool MainWindow::headphoneFollowsLocalOutput() const
-{
-    return AetherSDR::headphoneFollowsLocalOutput(
-        m_radioModel.isConnected(), m_radioModel.hasCommandPlane(),
-        pcAudioEnabledSetting());
-}
-
-int MainWindow::headphoneVolumeLevel() const
-{
-    if (headphoneFollowsLocalOutput()) {
-        return std::clamp(
-            AppSettings::instance().value("MasterVolume", "100").toInt(), 0, 100);
-    }
-    return m_radioModel.headphoneGain();
-}
-
-void MainWindow::applyHeadphoneVolume(int pct)
-{
-    pct = std::clamp(pct, 0, 100);
-    if (headphoneFollowsLocalOutput()) {
-        // One output, two handles: move both sliders and set the level once.
-        // applyMasterVolume() mirrors onto the headphone slider itself.
-        if (m_titleBar) m_titleBar->setMasterVolume(pct);
-        applyMasterVolume(pct);
-        return;
-    }
-    if (m_titleBar) m_titleBar->setHeadphoneVolume(pct);
-    m_radioModel.setHeadphoneGain(pct);
-}
-
-void MainWindow::applyHeadphoneMute(bool muted)
-{
-    if (headphoneFollowsLocalOutput()) {
-        // AudioEngine::mutedChanged mirrors this onto BOTH glyphs and persists
-        // it as PcAudioMuted, exactly as the speaker button's mute does.
-        m_audio->setMuted(muted);
-        if (m_titleBar) m_titleBar->setHeadphoneMuted(muted);
-        return;
-    }
-    m_radioModel.setHeadphoneMute(muted);
-}
-
-void MainWindow::syncHeadphoneControls()
-{
-    if (!m_titleBar) {
-        return;
-    }
-    const HeadphoneLevelSource source = headphoneLevelSource(
-        m_radioModel.isConnected(), m_radioModel.hasCommandPlane(),
-        pcAudioEnabledSetting());
-    m_titleBar->setHeadphoneFollowsLocalOutput(
-        source == HeadphoneLevelSource::LocalOutput);
-    switch (source) {
-    case HeadphoneLevelSource::LocalOutput:
-        m_titleBar->setHeadphoneVolume(headphoneVolumeLevel());
-        m_titleBar->setHeadphoneMuted(m_audio && m_audio->isMuted());
-        break;
-    case HeadphoneLevelSource::RadioMixer:
-        m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
-        m_titleBar->setHeadphoneMuted(m_radioModel.headphoneMute());
-        break;
-    case HeadphoneLevelSource::Unchanged:
-        // Disconnected: no output to report. Keep what the operator last saw.
-        break;
-    }
 }
 
 } // namespace AetherSDR

@@ -6389,11 +6389,11 @@ add_test(NAME titlebar_headphone_mute_test COMMAND titlebar_headphone_mute_test)
 set_tests_properties(titlebar_headphone_mute_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Where the headphone pair goes on a radio with no headphone mixer of its own:
-# HeadphoneOutputPolicy.h's truth table plus what the title bar announces.
+# Which radio-mixer controls exist on the connected radio:
+# MixerControlAvailability.h's truth table plus the title bar's headphone dim.
 # Same TitleBar link set as titlebar_headphone_mute_test above.
-add_executable(headphone_output_policy_test
-    tests/headphone_output_policy_test.cpp
+add_executable(mixer_control_availability_test
+    tests/mixer_control_availability_test.cpp
     src/gui/TitleBar.cpp
     src/gui/FramelessMessageBox.cpp
     src/gui/PersistentDialog.cpp
@@ -6406,13 +6406,13 @@ add_executable(headphone_output_policy_test
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
-target_include_directories(headphone_output_policy_test PRIVATE src tests)
-target_link_libraries(headphone_output_policy_test PRIVATE
+target_include_directories(mixer_control_availability_test PRIVATE src tests)
+target_link_libraries(mixer_control_availability_test PRIVATE
     Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
 )
-set_target_properties(headphone_output_policy_test PROPERTIES AUTOMOC ON)
-add_test(NAME headphone_output_policy_test COMMAND headphone_output_policy_test)
-set_tests_properties(headphone_output_policy_test PROPERTIES
+set_target_properties(mixer_control_availability_test PROPERTIES AUTOMOC ON)
+add_test(NAME mixer_control_availability_test COMMAND mixer_control_availability_test)
+set_tests_properties(mixer_control_availability_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Pure index arithmetic lifted out of RxApplet — no GUI, no radio.
@@ -6857,7 +6857,7 @@ set(AETHER_SETTINGS_CONSUMERS
     container_widget_test
     hl2_pc_audio_lock_test
     titlebar_headphone_mute_test
-    headphone_output_policy_test
+    mixer_control_availability_test
     amp_applet_test
     container_manager_test
     container_nesting_test

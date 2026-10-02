@@ -2100,9 +2100,6 @@ MainWindow::MainWindow(QWidget* parent)
             });
             m_radioModel.removeRxAudioStream();
         }
-        // PC Audio decides whether this computer's output is what the operator
-        // hears, so it decides what the headphone pair drives.
-        syncHeadphoneControls();
 
         // On Icom this CLICK -- and only a click -- asks the radio to switch
         // DATA OFF MOD: the network source while on, and whatever the operator
@@ -2131,20 +2128,14 @@ MainWindow::MainWindow(QWidget* parent)
     // when tciServer() is created later in this constructor.
     connect(m_titleBar, &TitleBar::masterVolumeChanged,
             this, &MainWindow::applyMasterVolume);
-    // Headphone pair: the radio's headphone mixer on a Flex, this computer's
-    // output on a radio that has none and plays its audio here
-    // (HeadphoneOutputPolicy.h). One entry point for every surface.
     connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
-            this, &MainWindow::applyHeadphoneVolume);
+            &m_radioModel, &RadioModel::setHeadphoneGain);
     connect(m_titleBar, &TitleBar::lineoutMuteChanged, this, [this](bool muted) {
         m_audio->setMuted(muted);
         m_radioModel.sendCommand(QString("mixer lineout mute %1").arg(muted ? 1 : 0));
     });
     connect(m_audio, &AudioEngine::mutedChanged, this, [this](bool muted) {
         m_titleBar->setLineoutMuted(muted);
-        // Same output, second handle: keep the headphone glyph in step.
-        if (headphoneFollowsLocalOutput())
-            m_titleBar->setHeadphoneMuted(muted);
         auto& s = AppSettings::instance();
         s.setValue("PcAudioMuted", muted ? "True" : "False");
         s.save();
@@ -2155,12 +2146,11 @@ MainWindow::MainWindow(QWidget* parent)
     wirePooDooTiles();
 
     connect(m_titleBar, &TitleBar::headphoneMuteChanged,
-            this, &MainWindow::applyHeadphoneMute);
-    // The radio's mixer state only speaks for the headphone pair when the pair
-    // drives that mixer; otherwise it would snap the slider back to a gain no
-    // radio holds. syncHeadphoneControls() picks the right source.
-    connect(&m_radioModel, &RadioModel::audioOutputChanged,
-            this, &MainWindow::syncHeadphoneControls);
+            &m_radioModel, &RadioModel::setHeadphoneMute);
+    connect(&m_radioModel, &RadioModel::audioOutputChanged, this, [this]() {
+        m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
+        m_titleBar->setHeadphoneMuted(m_radioModel.headphoneMute());
+    });
 
     // Multi-Flex: show when another client is transmitting
     connect(&m_radioModel, &RadioModel::txOwnerChanged,
@@ -7624,10 +7614,6 @@ void MainWindow::applyMasterVolume(int pct)
         m_audio->setRxVolume(pct / 100.0f);
     else
         m_radioModel.setLineoutGain(pct);
-    // On a radio whose headphone pair follows this output, the headphone
-    // slider is a second handle on the same level (HeadphoneOutputPolicy.h).
-    if (m_titleBar && headphoneFollowsLocalOutput())
-        m_titleBar->setHeadphoneVolume(pct);
     auto& s = AppSettings::instance();
     s.setValue("MasterVolume", QString::number(pct));
     s.save();

@@ -370,18 +370,6 @@ private slots:
     // See issue #1764.
     void applyMasterVolume(int pct);
 
-    // The headphone controls' entry points -- title bar, MIDI and controller
-    // wheel all come through these. On a radio with no headphone mixer of its
-    // own whose audio plays on this computer they drive this computer's output
-    // (HeadphoneOutputPolicy.h); everywhere else, the radio's headphone mixer.
-    bool headphoneFollowsLocalOutput() const;
-    void applyHeadphoneVolume(int pct);
-    void applyHeadphoneMute(bool muted);
-    int  headphoneVolumeLevel() const;
-    // Re-point the title bar's headphone pair at what it now drives. Called on
-    // the connect/disconnect edge and when PC Audio is toggled.
-    void syncHeadphoneControls();
-
 private:
     enum class TuneIntent {
         IncrementalTune,
