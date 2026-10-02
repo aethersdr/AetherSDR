@@ -115,18 +115,11 @@ void ProfileSwitcherApplet::setRadioModel(RadioModel* model)
     connect(&tx, &TransmitModel::micStateChanged,
             this, &ProfileSwitcherApplet::syncMicCurrent);
 
-    // Apply live whenever the selection changes.  currentTextChanged() fires
-    // for both user picks and programmatic setCurrentText() (e.g. the agent
-    // automation bridge's invoke verb), which is exactly what we want — an
-    // automated "select" should load too.  Every *internal* mutation
-    // (rebuildCombo / syncCombo) is wrapped in a QSignalBlocker, so the only
-    // changes that reach these slots are genuine selections — there is no
-    // select→load→refresh→load feedback loop.
-    //
-    // All three rows delegate to the model load helpers (loadGlobalProfile /
-    // loadProfile / loadMicProfile) rather than hand-rolling command strings,
-    // so the radio command verbs live in exactly one place (the models) — same
-    // source of truth ProfileManagerDialog now relies on.
+    // Apply on any selection change: currentTextChanged fires for user picks and
+    // programmatic setCurrentText() (the bridge's invoke), and internal
+    // rebuildCombo/syncCombo run under QSignalBlocker, so there is no feedback
+    // loop. Rows call the model load helpers so command verbs live only in the
+    // models.
     connect(m_globalCombo, &QComboBox::currentTextChanged, this, [this](const QString& name) {
         if (!name.isEmpty())
             m_model->loadGlobalProfile(name);

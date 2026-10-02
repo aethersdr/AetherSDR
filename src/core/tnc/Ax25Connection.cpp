@@ -410,46 +410,23 @@ void Ax25Connection::onFrameReceived(const Frame& frame)
                  ? QStringLiteral(" NS=%1 NR=%2").arg(frame.ns).arg(frame.nr)
                  : QString()));
 
-    // A *final* (F=1 on a response) answers a poll we sent, which is positive
-    // proof the peer is alive and heard us — AX.25 2.2 resets the retry budget
-    // on it. Note what is deliberately NOT here: the old code reset the retry
-    // counter inside ackUpTo() on ANY acknowledgement, so a peer repeating a
-    // stale N(R) could hold us below N2 indefinitely and we would retransmit
-    // forever. Liveness must be proven, not assumed. The REJ path is bounded
-    // separately by m_rejRecoveries, so this cannot reopen that loop.
-    // ...and only from our actual peer. On a shared channel a third party can
-    // put an F=1 response in front of us — another station calls the mailbox's
-    // listen address mid-session, we answer DM, and its reply arrives addressed
-    // to our callsign. Clearing the budget on that is the same defect as
-    // clearing it on a stale RR, just sourced from someone else's link.
-    // (AX.25 2.2 6.7.1.3 scopes this to the response to our OWN poll; filtering
-    // by peer gets most of the way there without tracking poll state.)
-    // m_remote is set before the SABM in connectTo(), so a UA arriving in the
-    // Connecting state still qualifies.
+    // A final (F=1 response) from our actual peer proves it heard our poll, so
+    // reset the retry budget (AX.25 2.2 6.7.1.3). Only here: resetting on any ack
+    // would let a stale N(R) hold us below N2 forever, and a third party's F=1 on a
+    // shared channel must not count. REJ recovery is bounded separately by
+    // m_rejRecoveries. m_remote is set before SABM, so a UA while Connecting
+    // qualifies.
     if (m_state != State::Disconnected && !frame.command && frame.pollFinal
         && frame.src == m_remote)
         m_retryCount = 0;
 
-    // Lost-UA recovery. We sent a SABM and are still awaiting its UA, but the
-    // peer is already exchanging connected-mode frames with us (I / RR / RNR /
-    // REJ) — proof it accepted our connect and our UA was simply lost on the
-    // air. Adopt the link now and let the frame be handled normally below,
-    // instead of stalling in SABM retransmits. Each duplicate SABM resets the
-    // peer's link state (and its prompt), so on a marginal half-duplex path this
-    // is the difference between a working session and a connect that goes live
-    // but never passes data. (UA and DM are handled explicitly in the switch.)
-    //
-    // Invariant — the fall-through into the switch below is load-bearing:
-    //   * enterConnected() resets V(R)=V(S)=V(A)=0, so a peer's first
-    //     post-connect I-frame at N(S)=0 lines up with the freshly-reset V(R)
-    //     and the normal I-handler accepts it. With MAXFRAME=1 (today's only
-    //     config) this is always the case.
-    //   * The normal RR/RNR/REJ handlers call ackUpTo(frame.nr); with V(A)=
-    //     V(S)=0 every legal N(R) is in-range and the ack walks zero slots.
-    // If enterConnected()'s reset block is ever changed to leave V(R) non-zero
-    // (e.g. a future MAXFRAME>1 path that pre-allocates send slots), this
-    // adoption must re-sync V(R) to frame.ns before the fall-through — or the
-    // first I-frame will be silently dropped as out-of-sequence.
+    // Lost-UA recovery: while awaiting our SABM's UA, a connected-mode frame
+    // (I/RR/RNR/REJ) from the peer proves it accepted; adopt the link and let the
+    // switch below handle the frame, rather than SABM-retransmitting (each resets
+    // the peer's link). The fall-through relies on enterConnected() resetting
+    // V(R)=V(S)=V(A)=0 (with MAXFRAME=1 the peer's first I-frame is N(S)=0 and any
+    // N(R) acks zero slots). If that reset ever leaves V(R) non-zero, re-sync V(R)
+    // to frame.ns here or the first I-frame is dropped as out-of-sequence.
     if (m_state == State::Connecting && frame.src == m_remote
         && (frame.type == FrameType::I || frame.type == FrameType::RR
             || frame.type == FrameType::RNR || frame.type == FrameType::REJ)) {
@@ -554,21 +531,9 @@ void Ax25Connection::onFrameReceived(const Frame& frame)
                 }
             }
         } else if (isDuplicateIFrame(frame.ns)) {
-            // A frame we have ALREADY accepted, sent again. That means our
-            // acknowledgement was lost, not the data — so re-send the ack.
-            //
-            // This case used to fall into the reject-exception branch below and
-            // be answered with silence, which is a guaranteed deadlock: the peer
-            // retransmits on T1, we refuse to answer because N(S) != V(R), it
-            // retransmits again, and the link dies at N2 with both ends
-            // individually behaving "correctly". Observed on the air
-            // 2026-07-31 — one lost RR ended every session at exactly the same
-            // point, with the far end decoding all nine retransmissions
-            // perfectly and deliberately saying nothing.
-            //
-            // Answer immediately rather than deferring via T2: with a
-            // retransmission the peer has finished its burst and is listening
-            // for precisely this.
+            // Duplicate of an accepted frame: our ack was lost, so re-ack immediately
+            // (the peer has finished its burst and is listening). Silence here deadlocks
+            // the link until N2.
             ++m_stats.iDuplicate;
             emit activity(QStringLiteral("Duplicate I NS=%1 (ack lost) — re-acking N(R)=%2")
                 .arg(frame.ns).arg(m_vr));
@@ -586,16 +551,10 @@ void Ax25Connection::onFrameReceived(const Frame& frame)
             if (m_ackPending)
                 sendAck(/*pollFinal=*/frame.pollFinal);
         } else {
-            // Out of sequence. Send REJ exactly ONCE per gap (reject exception),
-            // then discard further out-of-sequence frames SILENTLY — even polled
-            // ones. This is the crucial half-duplex behaviour: answering every
-            // polled retransmit makes the peer retransmit immediately, and on our
-            // slow radio turnaround that retransmission lands while we are still
-            // keyed/switching and we miss the very frame we need (observed live
-            // with SJVBBS-1: a 4-REJ phase-lock that never recovered NS=1). By
-            // staying quiet we let the peer's own T1 retransmit arrive while we
-            // are actually listening. We do echo the poll/final on the single REJ
-            // so the peer still gets one prompt response.
+            // Out of sequence: send REJ once per gap (reject exception, echoing P/F), then
+            // discard further out-of-sequence frames silently, even polled ones. Answering
+            // each poll makes the peer retransmit immediately, while our slow T/R
+            // turnaround is still keyed, so we'd miss the frame we need.
             stopT2();
             m_ackPending = false;
             ++m_stats.iDropped;

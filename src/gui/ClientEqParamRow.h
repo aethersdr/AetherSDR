@@ -7,16 +7,11 @@ class QHBoxLayout;
 
 namespace AetherSDR {
 
-// Bottom-of-editor strip: one column per active band, stacking frequency
-// (Hz), gain (dB), and Q as text labels in the band's palette colour.
-// Selected band gets a boxed outline around the gain value — the
-// Logic-Pro-style "this is what you're tweaking" affordance.
-//
-// Left-click selects the band.  Right-click on a column opens a context
-// menu offering numeric entry for Frequency / Gain / Q (issue #2655).
-// Numeric writes go straight through ClientEq::setBand() — the same
-// path canvas drags use — and emit bandEdited() so the host panel can
-// persist + redraw.
+// Bottom-of-editor strip: one column per active band showing freq (Hz), gain
+// (dB) and Q in the band's colour; the selected band's gain is boxed.
+// Left-click selects; right-click offers numeric entry (#2655). Numeric writes go
+// through ClientEq::setBand() (same path as canvas drags) and emit bandEdited()
+// so the host can persist and redraw.
 class ClientEqParamRow : public QWidget {
     Q_OBJECT
 

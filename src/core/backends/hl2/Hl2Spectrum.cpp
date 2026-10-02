@@ -12,7 +12,9 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 }
 
-Hl2Spectrum::Hl2Spectrum(int fftSize) : m_fftSize(fftSize < 2 ? 2 : fftSize)
+Hl2Spectrum::Hl2Spectrum(int fftSize, double sampleRateHz)
+    : m_fftSize(fftSize < 2 ? 2 : fftSize),
+      m_sampleRateHz(sampleRateHz > 0.0 ? sampleRateHz : 0.0)
 {
     m_acc.reserve(static_cast<std::size_t>(m_fftSize));
     m_window.resize(static_cast<std::size_t>(m_fftSize));
@@ -40,34 +42,11 @@ Hl2Spectrum::Hl2Spectrum(int fftSize) : m_fftSize(fftSize < 2 ? 2 : fftSize)
     m_avgPower.assign(static_cast<std::size_t>(m_fftSize), 0.0);
 
     {
-        // FFTW's planner is process-global and NOT thread-safe. Hl2Backend's
-        // beginDspSetup() constructs this on its worker while WdspChannel::open()
-        // builds a WDSP channel — which plans, allocates and frees through FFTW
-        // too — so the two raced with nothing between them. TSan, once Qt and the
-        // vendored C were both instrumented (#5275 S4/S6):
-        //
-        //   Write of size 8 by thread T9:  free <- create_fircore (firmin.c:360)
-        //                                       <- OpenChannel <- WdspChannel::open()
-        //   Previous write     by thread T4:  memalign <- fftw_malloc_plain
-        //                                       <- make_unique<Hl2Spectrum>
-        //
-        // AnanSpectrum, this class's former ANAN sibling (since replaced by WDSP's
-        // analyzer), took this same lock after hitting the same problem; this
-        // one never did.
-        //
-        // The lock covers the ALLOCATIONS as well as the plan, which is wider
-        // than AnanSpectrum's was — deliberately. Its comment recorded the
-        // mallocs as safe unguarded, but the two frames TSan actually names here
-        // are fftw_malloc_plain and free, not the planner, so a plan-only lock
-        // would leave the reported edge unsynchronised. It costs nothing: this
-        // runs once per spectrum construction, never on the audio path.
-        // execute() below stays unguarded, same as WdspChannel::processIq().
-        //
-        // The evidence came from radiomodel_pan_id_mapping_test, which failed
-        // this way in 4 of 4 sanitizer runs and has since been removed as
-        // intermittent (#5423). The race is not intermittent and is not about
-        // that test: two threads reach a non-thread-safe planner on every HL2
-        // connect, and nothing tests for it now.
+        // FFTW's planner is process-global and not thread-safe, and this runs on
+        // the beginDspSetup() worker while WdspChannel::open() plans and
+        // allocates through FFTW on another thread (#5275). The lock covers the
+        // allocations too: TSan names fftw_malloc_plain vs free (firmin.c), not
+        // only the planner. execute() stays unguarded, as in processIq().
         auto lock = WdspChannel::fftwSetupLock();
         m_in = fftw_malloc(sizeof(fftw_complex) * static_cast<std::size_t>(m_fftSize));
         m_out = fftw_malloc(sizeof(fftw_complex) * static_cast<std::size_t>(m_fftSize));
@@ -93,6 +72,7 @@ int Hl2Spectrum::process(std::span<const std::complex<float>> iq, std::vector<fl
     int frames = 0;
     for (const auto& s : iq) {
         m_acc.push_back(s);
+        ++m_samplesSinceFrame;
         if (static_cast<int>(m_acc.size()) == m_fftSize) {
             computeFrame(binsDbfs);
             m_acc.clear();
@@ -107,31 +87,70 @@ void Hl2Spectrum::setAverageFrames(int frames) noexcept
     if (frames < 1) {
         frames = 1;
     }
-    // A no-op depth change must not drop the state: a settings replay that
-    // re-applies the depth this object is already at would otherwise clear the
-    // accumulator, and a UI that replays on every control touch would average
-    // nothing while the operator worked the spectrum.
-    //
-    // NOT the pan-rebuild path, which an earlier version of this comment
-    // named. A zoom REBUILDS the chain — Hl2RxDsp::buildChannel() constructs a
-    // fresh Hl2Spectrum — so a re-applied depth always lands on an object at
-    // the default 1 and this guard cannot fire there. It would become a no-op
-    // path only if Hl2RxDsp carried the depth as its own member and re-applied
-    // it from installRebuiltChannel(), which it does not: the depth does not
-    // survive a zoom today at all.
-    if (frames == m_averageFrames) {
+    // A re-applied identical depth (settings replay) must not clear the
+    // accumulator. The operator's averaging survives a zoom through
+    // setAverageTimeMs(), which Hl2RxDsp re-applies in installChannel(), not
+    // through this.
+    if (frames == m_averageFrames && m_averageTimeMs == 0.0) {
         return;
     }
     m_averageFrames = frames;
+    m_averageTimeMs = 0.0;
     // An exponential state built at one alpha is not a state at the next one.
+    dropAverage();
+}
+
+void Hl2Spectrum::setAverageTimeMs(double tauMs) noexcept
+{
+    if (!(tauMs > 0.0)) {   // also catches NaN
+        tauMs = 0.0;
+    }
+    // Same no-op rule as setAverageFrames(): a replay of the value already in
+    // force must not throw the average away.
+    if (tauMs == m_averageTimeMs && m_averageFrames == 1) {
+        return;
+    }
+    m_averageTimeMs = tauMs;
+    m_averageFrames = 1;
+    dropAverage();
+}
+
+void Hl2Spectrum::setLogAverage(bool on) noexcept
+{
+    if (on == m_logAverage) {
+        return;
+    }
+    m_logAverage = on;
+    // The state is in the OTHER domain now; blending into it would mix dB and
+    // power in one number.
+    dropAverage();
+}
+
+void Hl2Spectrum::dropAverage() noexcept
+{
     // Assign rather than resize — the vector was sized at construction, so
     // this touches no allocator.
     m_avgPower.assign(static_cast<std::size_t>(m_fftSize), 0.0);
     m_haveAverage = false;
 }
 
+double Hl2Spectrum::blendAlpha(double dtSeconds, double tauSeconds) noexcept
+{
+    if (!(tauSeconds > 0.0)) {
+        return 1.0;
+    }
+    if (!(dtSeconds > 0.0)) {
+        return 0.0;
+    }
+    // -expm1(-x) is 1 - exp(-x) without the cancellation at small x, which is
+    // exactly the regime of a long average at a high frame rate.
+    return -std::expm1(-dtSeconds / tauSeconds);
+}
+
 void Hl2Spectrum::accumulate(std::span<const std::complex<float>> iq)
 {
+    // Time passes whether or not these samples survive the cap below.
+    m_samplesSinceFrame += iq.size();
     m_acc.insert(m_acc.end(), iq.begin(), iq.end());
     // Hold at most fftSize - 1: see the header for why exactly-full would wedge
     // process()'s boundary check.
@@ -163,10 +182,20 @@ void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
     const auto* out = static_cast<fftw_complex*>(m_out);
     binsDbfs.resize(static_cast<std::size_t>(m_fftSize));
     const int half = m_fftSize / 2;
-    const bool blending = m_averageFrames > 1;
-    // alpha = 1/N. Only read when blending, so the division is never by the
-    // 1 that means "no averaging".
-    const double alpha = blending ? 1.0 / static_cast<double>(m_averageFrames) : 1.0;
+    // Two ways to be averaging: a time constant (the operator's control,
+    // alpha from the elapsed IQ time) or a fixed frame depth (alpha = 1/N,
+    // fixtures). Only one is ever set; see the setters.
+    const bool timed = m_averageTimeMs > 0.0 && m_sampleRateHz > 0.0;
+    const bool blending = timed || m_averageFrames > 1;
+    double alpha = 1.0;
+    if (timed) {
+        const double dt = static_cast<double>(m_samplesSinceFrame) / m_sampleRateHz;
+        alpha = blendAlpha(dt, m_averageTimeMs / 1000.0);
+    } else if (blending) {
+        alpha = 1.0 / static_cast<double>(m_averageFrames);
+    }
+    m_samplesSinceFrame = 0;
+    const bool logDomain = blending && m_logAverage;
     for (int k = 0; k < m_fftSize; ++k) {
         const int src = (k + half) % m_fftSize;                       // fftshift: DC -> centre
         const double re = out[src][0];
@@ -179,6 +208,15 @@ void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
         // reads it to mean; see setAverageFrames() in the header for what an
         // average of logarithms actually computes.
         double power = (re * re + im * im) / m_coherentGainSq;
+        if (logDomain) {
+            // Log-recursive, by the operator's choice (setLogAverage): the
+            // state is dBFS and the blend is of logarithms. Emitted as-is.
+            const double db = 10.0 * std::log10(power + 1e-24);
+            double& state = m_avgPower[static_cast<std::size_t>(k)];
+            state = m_haveAverage ? state + alpha * (db - state) : db;
+            binsDbfs[static_cast<std::size_t>(k)] = static_cast<float>(state);
+            continue;
+        }
         if (blending) {
             double& state = m_avgPower[static_cast<std::size_t>(k)];
             // Take the first frame whole rather than blending it into a zero
@@ -187,21 +225,9 @@ void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
             state = m_haveAverage ? state + alpha * (power - state) : power;
             power = state;
         }
-        // IQ is normalized to full scale 1.0, so this is dBFS directly.
-        //
-        // 1e-24 and not 1e-12: this floor is the SQUARE of the magnitude floor
-        // it replaces, so an empty bin still reads -240 dBFS rather than -120.
-        // It exists for the same reason the old one did — log10(0) is -inf and
-        // nothing downstream renders it — and is reached only by a bin that is
-        // exactly zero, which is an all-zero input and not a quiet band.
-        //
-        // NOT AN EXACT TRANSLATION, and the -240 above is the only part that is.
-        // The old `20·log10(mag + 1e-12)` expands to
-        // `10·log10(mag² + 2e-12·mag + 1e-24)`; this drops the cross term. The
-        // two therefore disagree by up to 3 dB — but only for bins below about
-        // -234 dBFS, which is 140 dB beneath anything a converter produces and
-        // is not rendered by anything downstream. Recorded because the sentence
-        // above would otherwise read as an identity, and it is not one.
+        // IQ is normalized to full scale 1.0, so this is dBFS directly. The
+        // 1e-24 power floor (a 1e-12 magnitude floor squared) keeps log10 finite;
+        // an exactly-zero bin reads -240 dBFS.
         binsDbfs[static_cast<std::size_t>(k)] =
             static_cast<float>(10.0 * std::log10(power + 1e-24));
     }

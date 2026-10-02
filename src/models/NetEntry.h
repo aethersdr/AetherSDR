@@ -6,21 +6,12 @@
 
 namespace AetherSDR {
 
-// A scheduled amateur-radio "net": a recurring on-air gathering on a fixed
-// frequency/mode at a regular time. Conceptually a memory channel (the tuning
-// preset) plus a recurrence rule, a reminder lead-time, and descriptive
-// metadata.
-//
-// Unlike MemoryEntry — which is radio-authoritative and lives in the radio's
-// memory slots (Constitution Principles II & III) — a NetEntry is purely
-// operator-scoped client state (Principle XIII): it must work whether or not a
-// radio is connected and never consumes a radio memory slot. It is persisted
-// locally as versioned JSON (see NetScheduleStore).
-//
-// The recurrence is stored as an RFC 5545 RRULE string (portable, the standard
-// every calendar interoperates on) plus the local wall-clock time-of-day and an
-// IANA timezone id. The firing instant is always computed lazily from those so
-// "20:00 local" stays correct across DST transitions (see NetRecurrence).
+// A scheduled on-air net: a tuning preset plus a recurrence rule, reminder
+// lead-time and metadata. Unlike MemoryEntry (radio-authoritative), this is
+// client-owned state: works without a radio, uses no radio memory slot, and
+// persists locally as versioned JSON (NetScheduleStore). Recurrence is an
+// RFC 5545 RRULE plus local time-of-day and IANA zone; the firing instant is
+// computed lazily so local times survive DST (NetRecurrence).
 struct NetEntry {
     QString     id;                      // stable UUID (no braces) — merge/import key
     QString     name;                    // user label, e.g. "Tuesday County ARES Net"

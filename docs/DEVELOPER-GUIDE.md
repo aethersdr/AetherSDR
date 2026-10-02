@@ -58,7 +58,7 @@ changes.
   Booleans are `"True"` / `"False"` strings. The store is SQLite
   (`AetherSDR.db`, RFC #4603) — never include `sqlite3.h` outside
   `SettingsDatabase.cpp`, and **never put a credential in the settings
-  store**: QtKeychain only (see AGENTS.md "Settings Persistence").
+  store**: QtKeychain only (see [`docs/agents/settings.md`](agents/settings.md) "Settings Persistence").
 - **Settings authority is capability-shaped** (RFC #4603): on a radio that
   persists its own state (Flex), never persist or override radio-managed
   settings client-side (frequency, mode, filter, AGC, TX power, per-pan
@@ -67,11 +67,11 @@ changes.
   NOTHING (HL2), the client is its memory — but only for the domains the
   backend declares in `RadioCapabilities::clientSettingsDomains`, and only
   through `RadioStateMemory`'s document, never flat `AppSettings` keys or
-  ad-hoc paths. See AGENTS.md "Settings Authority Policy" for the full rules.
+  ad-hoc paths. See [`docs/agents/settings.md`](agents/settings.md) "Settings Authority Policy" for the full rules.
 - **Radio-scoped config** goes in `radio_settings` feature documents via
   `RadioModel::settingsScope()` — one versioned JSON document per feature
   (Principle V), atomic whole-document writes, write failures surfaced. See
-  AGENTS.md "Radio-Scoped Feature Documents".
+  [`docs/agents/settings.md`](agents/settings.md) "Radio-Scoped Feature Documents".
 
 ### Working in MainWindow
 

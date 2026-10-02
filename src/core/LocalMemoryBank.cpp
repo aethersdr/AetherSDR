@@ -93,19 +93,11 @@ void LocalMemoryBank::load()
     m_entries = parsed.memories;
     m_dirty = false;
 
-    // TWO facts, deliberately separate, because one flag could not carry both:
-    //
-    //   m_loaded   — the read has been ATTEMPTED. Latches true no matter how the
-    //                read went, so nothing re-reads.
-    //   m_writable — the file was UNDERSTOOD, so replacing it is safe.
-    //
-    // Using m_loaded for both was wrong in both directions. Leaving it true on a
-    // failed read made the bank writable, so the next flush() replaced a damaged
-    // file with the empty bank it had just parsed out of it. And clearing it to
-    // withhold write permission also cleared "already read", so handleCommand()'s
-    // load() re-ran on EVERY command and wiped m_entries between `memory create`
-    // and `memory set` — every Add failing with "There is no memory in slot N",
-    // and the reset m_dirty suppressing the warning that would have explained it.
+    // Two separate facts:
+    //   m_loaded   - the read was ATTEMPTED (latches, so nothing re-reads; a
+    //                re-read would wipe m_entries between commands).
+    //   m_writable - the file was UNDERSTOOD, so replacing it is safe (a damaged
+    //                file must not be overwritten by the empty bank).
     m_loaded = true;
     m_writable = parsed.overwritable();
     // Baseline for the concurrent-writer check in flush().

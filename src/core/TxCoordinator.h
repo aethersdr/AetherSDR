@@ -319,22 +319,14 @@ public:
     void expire(qint64 monotonicMs);
     void reset();
     void emergencyStop();
-    // Qualified readback or transport teardown must precede acknowledgment.
-    // Merely requesting unkey or draining a local queue is not proof. A matching
-    // acknowledgment clears either forced-stop recovery or an unconfirmed local
-    // completion. An old completion cannot acknowledge a newer operation.
-    //
-    // INVARIANT: every stop source needs a matching acknowledgment, because an
-    // unacknowledged stop keeps admission closed forever — recovering() stays
-    // true and every later acquire() is refused Recovering. Independent client
-    // release, expiry, revocation and emergency stop use exact stop-attempt
-    // tokens and backend-qualified evidence. An ambiguous or expired proof
-    // deliberately leaves this barrier closed until transport teardown.
-    // teardownBackend()/onDisconnected() acknowledge completed teardown; they
-    // never infer physical idle merely from a queued unkey or a timer.
-    //
-    // RadioModel logs a warning when it hits this refusal outside a
-    // disconnect gap.
+    // Acknowledge a stop only on qualified readback or transport teardown, never on
+    // a requested unkey or drained queue. A matching ack clears forced-stop
+    // recovery or an unconfirmed local completion; an old completion can't ack a
+    // newer operation. INVARIANT: every stop source needs a matching ack, or
+    // recovering() stays true and every acquire() is refused Recovering. Ambiguous
+    // or expired proof keeps the barrier closed until teardown, which
+    // teardownBackend()/onDisconnected() acknowledge. RadioModel warns on this
+    // refusal outside a disconnect gap.
     [[nodiscard]] bool acknowledgeStopped(const Operation& operation);
     [[nodiscard]] StopRequest requestStopConfirmation(const Operation& operation);
     [[nodiscard]] bool confirmStopped(const StopRequest& request);

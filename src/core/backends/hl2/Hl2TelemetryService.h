@@ -1,27 +1,10 @@
 #pragma once
 
-// Stream-free HL2 telemetry, owned ABOVE the backend.
-//
-// THE RULE THIS EXISTS TO OBEY: an instrument for the no-connection case must
-// not be owned by the connection.
-//
-// The poller first lived inside Hl2Backend, which was wrong in a way every test
-// passed through. `RadioModel::backendHealthSnapshot()` is
-// `m_backend ? m_backend->healthSnapshot() : HealthSnapshot{}`, and m_backend is
-// constructed inside connectToRadio(). So with the app not connected there was
-// no backend, therefore no poller, therefore an EMPTY health snapshot — in
-// precisely the state the feature was built for: another client holding the
-// radio, or nothing connected yet. Measured, not reasoned: two prechecks
-// against a disconnected app returned `total rows in snapshot: 0`.
-//
-// The unit tests were green throughout, the symbols were verifiably linked into
-// the binary, and none of that asks whether anything CONSTRUCTS the thing in
-// the state that matters.
-//
-// So this object's lifetime is the application's, not a connection's. It owns
-// the poller, it answers with health rows whether or not a backend exists, and
-// the backend — when there is one — supplies the in-band rows that take
-// precedence over these at the merge point.
+// Stream-free HL2 telemetry, owned above the backend: an instrument for the
+// no-connection case must not be owned by the connection (the backend exists
+// only inside connectToRadio()). Application lifetime; owns the poller and
+// answers health rows with or without a backend, whose in-band rows take
+// precedence at the merge point.
 
 #include "core/backends/IRadioBackend.h"        // HealthSnapshot
 #include "core/backends/OfflineHealthSource.h" // IOfflineHealthSource, the seam it implements
@@ -50,36 +33,20 @@ public:
     explicit Hl2TelemetryService(QObject* parent = nullptr);
     ~Hl2TelemetryService() override;
 
-    // The radio to read. A null address STOPS the poller: with no target and
-    // the broadcast fallback off (its default) there is nowhere to send, so the
-    // poller reports a zero interval and releases its socket. An earlier
-    // revision of this comment said a null address made it broadcast instead,
-    // which was true of neither the default nor the next comment in this file.
-    //
-    // ANY change of target drops whatever was last read. A reading belongs to
-    // the radio it came from, and carrying radio A's temperature into radio B's
-    // rows is the frozen-reading failure this feature exists to expose, wearing
-    // a different address.
+    // The radio to read. A null address stops the poller unless the broadcast
+    // fallback is on (default off). Any target change drops the last reading,
+    // which belongs to the radio it came from.
     void setTarget(const QHostAddress& addr);
-    // Opt in to broadcasting when no target is set. OFF by default -- a
-    // broadcast reaches the local segment, which on this bench is not where
-    // the radio is and is where the station receiver is.
+    // Opt in to broadcasting when no target is set (default off; see
+    // Hl2TelemetryPoller::setTarget).
     void setAllowBroadcastFallback(bool allow);
 
     // What the IQ path is doing. Driven by whoever knows: the backend while one
     // exists, the model's connection state otherwise. The cadence rule turns
     // this into an interval; this class does not restate it.
     void setLinkState(Hl2LinkState state);
-    // How many times a link state has been pushed in. Exists so a test can ask
-    // the question that matters and cannot be asked any other way: is anything
-    // DRIVING this periodically?
-    //
-    // The tick that drives it was deleted once already, by a refactor whose
-    // regex swallowed it along with the code beside it. Nothing noticed: the
-    // cadence rule was still correct, its unit test still passed, and the
-    // poller simply kept polling through a live stream because nobody ever
-    // told it one had started. A counter is a cheap thing to expose; a rule
-    // nobody asks is an expensive thing to ship.
+    // How many times a link state has been pushed in, so a test can assert
+    // that something drives setLinkState() periodically.
     [[nodiscard]] int linkStateUpdateCount() const noexcept;
 
     // Reading the health snapshot IS the demand signal — it is the one thing

@@ -13,16 +13,10 @@ namespace AetherSDR {
 
 class ClientGate;
 
-// Read-only transfer curve for the client-side gate / expander.  Draws
-// the static gain curve — unity above threshold, sloped attenuation
-// below threshold clamped to `floor` — with a glowing ball sliding
-// along the curve at the current input envelope level.  Visual
-// language mirrors ClientCompCurveWidget so the two tiles read as a
-// family.
-//
-// Thread model: ClientGate parameter + meter reads are already atomic
-// internally, so paintEvent + the polling QTimer are both safe on the
-// UI thread without extra locking.
+// Read-only transfer curve for the client gate / expander: unity above
+// threshold, sloped attenuation below clamped to `floor`, with a ball at the
+// current input envelope. Styled like ClientCompCurveWidget. ClientGate params
+// and meters are atomic, so paintEvent and the poll timer need no locking.
 class ClientGateCurveWidget : public QWidget {
     Q_OBJECT
 

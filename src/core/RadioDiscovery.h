@@ -62,16 +62,10 @@ struct RadioInfo {
     QString serial;
     RadioSerialIdentity serialIdentity; // Reported identity, independent of locator.
     QString version;
-    // What the radio calls its version, when a bare number would not be
-    // self-describing. The HL2 reports a gateware revision ("75"), which says
-    // nothing on its own; a Flex reports a software version ("4.2.20.41343"),
-    // which does. Empty means "render the version alone", so every existing
-    // backend is unchanged by omitting it.
-    //
-    // DISPLAY ONLY, and deliberately a separate field rather than a prefix
-    // baked into `version`: that value is also served over rigctl
-    // (RigctlProtocol) and the automation bridge, where clients parse it as a
-    // version token.
+    // Display-only label for the version when a bare number isn't
+    // self-describing (HL2 gateware "75" vs Flex "4.2.20.41343"). Empty renders the
+    // version alone. Kept separate from `version`, which rigctl and the automation
+    // bridge serve as a parseable token.
     QString versionLabel;
     QString nickname;
     QString callsign;
@@ -79,17 +73,11 @@ struct RadioInfo {
     quint16 port{4992};
     QString status;         // "Available" | "In_Use" | etc.
     int maxLicensedVersion{0};
-    // What the radio says it can run, from the discovery keys `max_slices` and
-    // `max_panadapters` (#5594 item 3). 0 means the radio did not say — older
-    // firmware, or a connect by IP where no discovery packet is ever seen — and
-    // the FlexLib model table remains the fallback.
-    //
-    // CAPACITY, not availability. The same packet also carries
-    // `available_slices` / `available_panadapters`, which are the currently FREE
-    // counts and fall as clients open objects; FlexLib keeps all four apart
-    // (Discovery.cs:141/154/247/260, copied separately at API.cs:186-189) and so
-    // do we. Observed on a FLEX-8600 running 4.2.20.41343: max_panadapters=4,
-    // available_panadapters=4, max_slices=4, available_slices=4.
+    // Capacity from discovery keys `max_slices` / `max_panadapters` (#5594); 0 =
+    // not reported (older firmware, connect by IP), fall back to the FlexLib model
+    // table. Not `available_*`, which are the currently free counts (FlexLib keeps
+    // all four apart, Discovery.cs:141/154/247/260). FLEX-8600 4.2.20.41343 reports
+    // max/available 4/4 for both.
     int maxSlices{0};
     int maxPanadapters{0};
     bool inUse{false};
@@ -148,17 +136,11 @@ public:
     void startListening();
     void stopListening();
 
-    // Couple discovery's re-bind loop to the connection lifecycle.  When a
-    // radio is connected we stop the 5-second re-bind churn for the rest of
-    // the session (#3420).  `remote` selects how aggressively to quiesce:
-    //   • local (remote=false): keep the socket bound and the stale sweep
-    //     running so Multi-Flex / other-GUI-client broadcasts still refresh
-    //     the radio list passively; only the re-bind churn stops.
-    //   • routed/VPN/SmartLink (remote=true): local UDP broadcasts cannot
-    //     reach us by design, so passive listening buys nothing — fully
-    //     quiesce by stopping the stale sweep and releasing the socket.
-    // On disconnect, discovery resumes (re-bind with a fresh retry budget) so
-    // the next connection — possibly a different local radio — can be found.
+    // Couple discovery's re-bind loop to the connection (#3420). While connected
+    // the 5 s re-bind churn stops. Local (remote=false): socket and stale sweep
+    // stay so Multi-Flex broadcasts still refresh the list. Remote (VPN/SmartLink):
+    // broadcasts can't reach us, so stop the sweep and release the socket.
+    // Disconnect resumes discovery with a fresh retry budget.
     void setConnected(bool connected, bool remote);
 
     QList<RadioInfo> discoveredRadios() const { return m_radios; }

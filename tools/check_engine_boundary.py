@@ -38,7 +38,7 @@ Guards the dependency direction the aetherd RFC
        from the touchpoint audit (docs/architecture/
        aetherd-touchpoint-tags.json) so the audit is the single source
        of truth — a header newly tagged vendor there is enforced without
-       editing this file. See AGENTS.md ("Engine boundary ratchet — EB3").
+       editing this file. See docs/agents/backends.md ("Engine boundary ratchet — EB3").
 
 Exit 0 always in default mode (annotation/warning stage, like
 check_a11y.py). --strict exits 1 on any non-legacy EB1/EB2/EB3 finding
@@ -119,8 +119,8 @@ VENDOR_TAGS_JSON = REPO / "docs" / "architecture" / "aetherd-touchpoint-tags.jso
 # gated, because that is the direction that removes enforcement. Removing a
 # stem below is therefore the same act as an EB3 baseline re-baseline and takes
 # the same evidence: the classification change proven against the merge base,
-# the reasoning documented, and explicit maintainer review (AGENTS.md, "Engine
-# boundary ratchet — EB3"). Deleting a vendor header outright also lands here —
+# the reasoning documented, and explicit maintainer review (docs/agents/backends.md,
+# "Engine boundary ratchet — EB3"). Deleting a vendor header outright also lands here —
 # drop its stem in that commit.
 VENDOR_STEMS_PINNED = frozenset({
     # anan

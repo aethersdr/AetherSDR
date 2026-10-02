@@ -11,27 +11,12 @@
 
 namespace AetherSDR {
 
-// Surviving an ASR fault nothing in the process can catch (#5190).
-//
-// ggml device discovery and the whisper model load can take the process down
-// with a signal — an illegal instruction on a CPU the ggml build does not
-// support (#4509), a null dereference after a failed GPU allocation (#4972).
-// No catch block sees those, so the only place they can be detected is the next
-// launch: before entering either stage the controller persists an "attempt in
-// flight" marker and clears it when the stage completes. A marker still present
-// at startup means the previous run died inside that stage.
-//
-// A surviving marker becomes a *fault record*, which is what stands the risky
-// configuration down — and keeps doing so on later launches — until the app
-// version changes, the device at that index changes, or the operator asks for
-// another attempt. The record ACCUMULATES: a second GPU that dies keeps the
-// first one retired (asrMergeFault), so a machine whose every GPU faults walks
-// GPU -> GPU -> CPU -> off and stops, instead of alternating between two devices
-// forever. All of it is plain fields inside the one CopyAssist settings document
-// (Principle V), so a support bundle carries it for free.
-//
-// Everything here is pure and whisper-free so the decision is unit testable
-// without staging a crash.
+// Persisted "attempt in flight" markers for ASR stages that can kill the process
+// with an uncatchable signal (ggml discovery, whisper load; #5190). A marker
+// still present at startup becomes a fault record that stands the configuration
+// down until the app version or device changes or the operator retries. Records
+// accumulate (asrMergeFault), so GPU -> GPU -> CPU -> off terminates. Stored in
+// the CopyAssist settings document; pure and whisper-free for unit tests.
 
 inline constexpr const char* kAsrStageDiscovery = "discovery";
 inline constexpr const char* kAsrStageLoad = "load";
@@ -238,18 +223,11 @@ enum class AsrFaultAction {
     DisableAsr, // ggml itself cannot run here: no local speech engine this session
 };
 
-// What a fault record calls for on THIS launch.
-//
-// `currentDeviceName` is the description of the device now at the record's
-// index: nullopt while discovery has not run yet, empty when no device sits at
-// that index any more. The remedies differ in kind because the faults do:
-//  - a GPU load that died condemns that GPU, and CPU is a real fallback;
-//  - a death in discovery, or in a load that was already on CPU, means ggml
-//    cannot run on this machine at all — forcing CPU would only die again, so
-//    the local engine stays off (#4509 shape).
-// A record from another app version is dropped rather than honoured: a new
-// build ships a new whisper/ggml, so the attempt deserves to be made again. So
-// is one whose GPU index now names different hardware.
+// What a fault record calls for on THIS launch. `currentDeviceName` is nullopt
+// before discovery, empty when no device sits at the record's index. A GPU load
+// fault falls back to CPU; a discovery fault or CPU load fault turns the local
+// engine off (CPU would die again). A record from another app version, or whose
+// index now names different hardware, is dropped.
 inline AsrFaultAction asrFaultAction(const AsrAttempt& fault, const QString& currentAppVersion,
                                      const std::optional<QString>& currentDeviceName)
 {

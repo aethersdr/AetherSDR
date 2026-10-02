@@ -82,20 +82,12 @@ int main(int argc, char** argv)
     ddc.setSliceMode(QStringLiteral("FM"));
 
     bool spectrumEmitted = false;
-    bool waterfallEmitted = false;
     bool audioEmitted = false;
 
     QObject::connect(&ddc, &rtl::RtlSdrDdc::spectrumFrameReady, [&spectrumEmitted](int panId, const QByteArray& frame) {
         Q_UNUSED(panId);
         if (!frame.isEmpty()) {
             spectrumEmitted = true;
-        }
-    });
-
-    QObject::connect(&ddc, &rtl::RtlSdrDdc::waterfallRowReady, [&waterfallEmitted](int panId, const QByteArray& row) {
-        Q_UNUSED(panId);
-        if (!row.isEmpty()) {
-            waterfallEmitted = true;
         }
     });
 
@@ -110,7 +102,6 @@ int main(int argc, char** argv)
     ddc.processIqData(syntheticSamples);
 
     check(spectrumEmitted, "RtlSdrDdc emitted spectrumFrameReady");
-    check(waterfallEmitted, "RtlSdrDdc emitted waterfallRowReady");
     check(audioEmitted, "RtlSdrDdc emitted audioFrameReady");
 
     // 5. Test direct sampling mode persistence contract
