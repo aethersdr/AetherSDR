@@ -13,16 +13,10 @@ inline bool isKnownNonWfpPlatform(RadioPlatform platform)
         || platform == RadioPlatform::DeepEddy;
 }
 
-// Why the "Install -> Docker Waveform Image..." action is blocked, or None if
-// it should be enabled.
-//
-// Pure policy (#4210): install availability follows the radio's LIVE WFP
-// runtime state plus the no-WFP-hardware platform check — and deliberately NOT
-// the FlexLib "wfp" license feature. That feature reflects a SmartSDR+/EA-style
-// entitlement that is decoupled from whether the radio will actually accept a
-// file-upload install: a radio with WFP powered + ready (even one already
-// running an installed Docker waveform) can report the feature disabled, so
-// gating on it wrongly blocked further installs (#4186 regression from #3585).
+// Why "Install -> Docker Waveform Image..." is blocked, or None (#4210).
+// Follows live WFP runtime state plus the no-WFP-hardware check, NOT the
+// FlexLib "wfp" license feature: a radio with WFP powered and ready can report
+// that feature disabled and still accept installs (#4186).
 enum class DockerWaveformInstallBlocker {
     None,                   // enabled
     NotConnected,           // no radio connected

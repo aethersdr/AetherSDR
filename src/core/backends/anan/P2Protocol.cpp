@@ -187,6 +187,39 @@ std::array<std::uint8_t, 1444> buildHighPriority(bool run, std::uint32_t ddc0Fre
                              adc0AttenuationDb, adc1AttenuationDb);
 }
 
+std::array<std::uint8_t, kSpeakerPacketBytes> buildSpeakerAudio(
+    std::uint32_t sequence, std::span<const std::int16_t> interleavedLr) noexcept
+{
+    std::array<std::uint8_t, kSpeakerPacketBytes> pkt{};
+    writeU32be(pkt.data(), sequence);
+    // Zero-initialised above, so the short-input case needs no separate fill
+    // path -- everything past `count` is already silence. See the header for why
+    // silence is the right answer here and a refusal is not.
+    constexpr std::size_t kMaxSamples = kSpeakerSampleBytes / sizeof(std::int16_t);
+    const std::size_t count = std::min(interleavedLr.size(), kMaxSamples);
+    for (std::size_t i = 0; i < count; ++i) {
+        // Reinterpreted through the unsigned type, not shifted as signed: a
+        // right shift of a negative value is implementation-defined, and every
+        // sample below -1 dBFS is negative half the time. The two's-complement
+        // bit pattern is what the wire wants and what the cast produces.
+        writeU16be(pkt.data() + 4 + i * sizeof(std::int16_t),
+                   static_cast<std::uint16_t>(interleavedLr[i]));
+    }
+    return pkt;
+}
+
+std::optional<HighPriorityStatus> parseHighPriorityStatus(
+    std::span<const std::uint8_t> data) noexcept
+{
+    if (data.size() != kHighPriorityStatusBytes)
+        return std::nullopt;
+    HighPriorityStatus s;
+    s.seq = readU32be(data.data());
+    s.speakerUnderflow = (data[30] & 0b0000'1000) != 0;
+    s.speakerFifoLevel = readU16be(data.data() + 37);
+    return s;
+}
+
 std::optional<int> ddcIndexForSenderPort(std::uint16_t senderPort, int numDdc,
                                           std::uint16_t basePort) noexcept
 {

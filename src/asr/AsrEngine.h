@@ -150,16 +150,10 @@ public:
     // gated by the worker holding an embedder, which a failed load drops.
     bool isSpeakerLabelingEnabled() const { return m_speakerLabelingEnabled; }
 
-    // Feed mono audio at its native sampleRate (e.g. the 24 kHz RX pipeline).
-    // Ignored unless enabled. Cheap — copies and posts to the worker, which
-    // resamples to 16 kHz. No work happens on the caller/audio thread.
-    //
-    // Bounded (#5730): the worker's transcribe() blocks per segment, so a
-    // model/device slower than real time would otherwise queue audio without
-    // limit. Once the backlog reaches asrBacklogHighWaterMs() incoming chunks
-    // are dropped (counted, see droppedAudioChanged) until it drains to half
-    // that or less, and the worker is told to start a fresh segment at the
-    // resume point.
+    // Feed mono audio at its native rate; ignored unless enabled. Copies and posts to
+    // the worker (which resamples to 16 kHz); no work on the audio thread. Bounded
+    // (#5730): past asrBacklogHighWaterMs() chunks are dropped (droppedAudioChanged)
+    // until the backlog drains to half, then the worker starts a fresh segment.
     void pushAudio(const QVector<float>& monoSamples, int sampleRate);
 
     // Segmentation tuning (applied on the worker thread):

@@ -7,22 +7,12 @@
 
 namespace AetherSDR {
 
-// Final nonlinear processor in the 48 kHz TX audio chain. It runs after every
-// user-configurable stage (Gate, EQ, Comp, DeEss, Tube, PUDU, Reverb) and after
-// PC mic gain, but before the 48-to-24 kHz egress SRC. It bounds its own 48 kHz
-// output samples against the configured ceiling; downstream SRC reconstruction
-// can overshoot that sample ceiling before final Int16 saturation.
-//
-// Topology: feed-forward peak limiter with a per-block smoothed
-// envelope (fast attack, moderately fast release) applied as a single
-// channel-linked gain, so stereo imaging is preserved.  The limiter
-// reads `enabled` and `ceilingDb` lock-free per block; the audio
-// thread publishes `gainReductionDb` and `active` for the UI.
-//
-// Thread model mirrors ClientComp / ClientReverb: UI thread writes
-// atomics + bumps a version counter, audio thread reads the version
-// once per block and recaches derived values.  No locks, no
-// allocations, no exceptions.
+// Final nonlinear stage of the 48 kHz TX chain: after every user stage and PC mic
+// gain, before the 48->24 kHz egress SRC. It bounds its own 48 kHz samples; SRC
+// reconstruction can still overshoot before final Int16 saturation. Feed-forward
+// peak limiter, smoothed per-block envelope, one channel-linked gain. UI thread
+// writes atomics + bumps a version; the audio thread recaches per block and
+// publishes gainReductionDb / active. No locks, allocations or exceptions.
 class ClientFinalLimiter {
 public:
     ClientFinalLimiter();

@@ -533,17 +533,10 @@ MINPHASE create_minphase (int N, int pfactor)
     a->newfreq = (double *) malloc0 (a->size * sizeof (complex));
     a->impulse = (double *) malloc0 (a->size * sizeof (complex));
 
-    // AetherSDR patch 12: FFTW_ESTIMATE, not FFTW_PATIENT. These plans run
-    // only when a filter is (re)designed, never per sample, so a measured plan
-    // buys nothing -- and measuring one cold at nc * pfactor = 131072 points
-    // takes over a minute. See AETHERSDR-PATCHES.md.
-    //
-    // AetherSDR patch 14: | FFTW_UNALIGNED. FFTW_ESTIMATE still USES wisdom
-    // when a matching plan exists, and patch 14 re-plans on every design, so
-    // an aligned request could pick up wisdom another plan recorded in between
-    // and design the same filter with a different FFT algorithm. No other plan
-    // in this process is unaligned, so this key never matches wisdom and every
-    // design gets the same heuristic plan.
+    // AetherSDR patches 12 and 14: design scratch is recreated per filter edit.
+    // ESTIMATE avoids measured planning; UNALIGNED separates these plans from
+    // the aligned DSP plans whose wisdom could change the design's rounding.
+    // These plans may reuse their own heuristic wisdom. See AETHERSDR-PATCHES.md.
     a->p_fir    = fftw_plan_dft_1d (a->size, (fftw_complex *) a->firpad,  (fftw_complex *) a->firfreq, FFTW_FORWARD,  FFTW_ESTIMATE | FFTW_UNALIGNED);
     a->p_anafor = fftw_plan_dft_1d (a->size, (fftw_complex *) a->ana,     (fftw_complex *) a->anax,    FFTW_FORWARD,  FFTW_ESTIMATE | FFTW_UNALIGNED);
     a->p_anainv = fftw_plan_dft_1d (a->size, (fftw_complex *) a->anax,    (fftw_complex *) a->ana,     FFTW_BACKWARD, FFTW_ESTIMATE | FFTW_UNALIGNED);

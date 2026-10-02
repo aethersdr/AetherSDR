@@ -2,6 +2,7 @@
 // local C APIs. No SDK pack, model inference, network, or GPU is used.
 #include "core/DeepFilterFilter.h"
 #include "core/NvidiaAfxFilter.h"
+#include "nr_stereo_independence.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -12,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <numbers>
 
 unsigned aetherTestDfProcessedSamples();
@@ -117,7 +119,11 @@ int main(int argc, char** argv)
     using Samples = unsigned (*)();
     const Samples nvSamples = reinterpret_cast<Samples>(
         library.resolve("aetherTestProcessedSamples"));
-    if (!nvSamples) {
+    const Samples nvResets = reinterpret_cast<Samples>(
+        library.resolve("aetherTestResets"));
+    const Samples nvUnresetRuns = reinterpret_cast<Samples>(
+        library.resolve("aetherTestUnresetRuns"));
+    if (!nvSamples || !nvResets || !nvUnresetRuns) {
         return 1;
     }
 
@@ -146,10 +152,12 @@ int main(int argc, char** argv)
     const unsigned nvBefore = nvSamples();
     const QByteArray df48 = run(nativeDf, 48000);
     const QByteArray nv48 = run(nativeNv, 48000);
-    check(aetherTestDfProcessedSamples() - dfBefore == 96000,
-          "DFNR processes each native input sample exactly once");
-    check(nvSamples() - nvBefore == 96000,
-          "NVIDIA processes each native input sample exactly once");
+    // Two seconds of stereo at 48 kHz: each channel's 96000 samples reach its
+    // own model instance exactly once.
+    check(aetherTestDfProcessedSamples() - dfBefore == 2 * 96000,
+          "DFNR processes each native input sample exactly once per channel");
+    check(nvSamples() - nvBefore == 2 * 96000,
+          "NVIDIA processes each native input sample exactly once per channel");
     check(std::abs(rmsTail(df48, 48000) - 0.0707107) < 0.001,
           "DFNR native48 retains16k carrier with algorithm half-gain");
     check(std::abs(rmsTail(nv48, 48000) - 0.0707107) < 0.001,
@@ -177,6 +185,52 @@ int main(int argc, char** argv)
     }
     check(df24Concurrent == baselineDf, "concurrent48 leaves DFNR24 output unchanged");
     check(nv24Concurrent == baselineNv, "concurrent48 leaves NVIDIA24 output unchanged");
+
+    // Every effect is reset after Load, before its first Run: the real SDK can
+    // otherwise hand a new effect a destroyed one's leftover state.
+    check(nvUnresetRuns() == 0, "NVIDIA effects are reset before their first Run");
+    {
+        NvidiaAfxFilter resettable(pack, 48000);
+        const unsigned before = nvResets();
+        resettable.reset();
+        check(nvResets() - before == 2, "NVIDIA reset() resets both channel effects");
+    }
+
+    // Each channel runs its own instance, as RN2 does: nothing is mixed to
+    // mono, so neither side hears the other and a hard pan is immediate.
+    for (const int rate : {24000, 48000}) {
+        const NrStereoIndependence::MakeProcess makeDf = [rate]() {
+            auto filter = std::make_shared<DeepFilterFilter>(rate);
+            return NrStereoIndependence::Process(
+                [filter](const QByteArray& pcm) { return filter->process(pcm); });
+        };
+        const NrStereoIndependence::MakeProcess makeNv = [&pack, rate]() {
+            auto filter = std::make_shared<NvidiaAfxFilter>(pack, rate);
+            return NrStereoIndependence::Process(
+                [filter](const QByteArray& pcm) { return filter->process(pcm); });
+        };
+        check(NrStereoIndependence::leftIgnoresRight(makeDf, rate)
+                  && NrStereoIndependence::rightIgnoresLeft(makeDf, rate),
+              rate == 24000 ? "DFNR24 channels are independent"
+                            : "DFNR48 channels are independent");
+        check(NrStereoIndependence::panStepSettles(makeDf, rate),
+              rate == 24000 ? "DFNR24 hard pan step settles within 300 ms"
+                            : "DFNR48 hard pan step settles within 300 ms");
+        check(NrStereoIndependence::attenuatesNoise(makeDf, rate),
+              rate == 24000 ? "DFNR24 both channels reach the algorithm"
+                            : "DFNR48 both channels reach the algorithm");
+        check(NrStereoIndependence::leftIgnoresRight(makeNv, rate)
+                  && NrStereoIndependence::rightIgnoresLeft(makeNv, rate),
+              rate == 24000 ? "NVIDIA24 channels are independent"
+                            : "NVIDIA48 channels are independent");
+        check(NrStereoIndependence::panStepSettles(makeNv, rate),
+              rate == 24000 ? "NVIDIA24 hard pan step settles within 300 ms"
+                            : "NVIDIA48 hard pan step settles within 300 ms");
+        check(NrStereoIndependence::attenuatesNoise(makeNv, rate),
+              rate == 24000 ? "NVIDIA24 both channels reach the algorithm"
+                            : "NVIDIA48 both channels reach the algorithm");
+    }
+
     if (createdFixture) {
         QFile::remove(fixture);
     }

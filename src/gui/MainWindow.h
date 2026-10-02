@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DeferredSettingsWrites.h"
+#include "TxAudioPathPolicy.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  MainWindow is DECOMPOSED (#3351). Add member fields/declarations here ONLY
@@ -30,6 +31,8 @@
 #include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "gui/SplitAudioProfile.h"       // #2242 remembered split audio arrangement
+#include "gui/SplitQsyObservationPolicy.h"
+#include "gui/SplitQsySettings.h"
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -428,17 +431,11 @@ private:
     // permanence submenus, and the width clamps on drag-resize.
     void applyNotchCapabilities(SpectrumWidget* sw) const;
 
-    // The one place a declared RadioCapabilities flag turns into UI visibility.
-    //
-    // Bound to RadioModel::capabilitiesChanged, so it runs on every connect and
-    // disconnect edge and on any mid-session revision. Each surface gets exactly
-    // one owning call here rather than its own connect-time lambda: with several
-    // flags in play, scattered lambdas are how two callers end up both driving
-    // one widget's setVisible() and whichever fires last wins.
-    //
-    // Every flag reads `!connected || caps.x`. With no radio attached there is
-    // nothing to be honest about, and a control that stays hidden after
-    // unplugging reads as a fault rather than as an accurate report.
+    // The one place a declared RadioCapabilities flag becomes UI visibility.
+    // Bound to capabilitiesChanged (every connect/disconnect edge and
+    // mid-session revision); each surface gets exactly one owning call here so
+    // no two callers fight over setVisible(). Every flag reads
+    // `!connected || caps.x`.
     void applyCapabilitiesToUi(bool connected, const RadioCapabilities& caps);
     void applyTxAudioCapabilities(bool connected, const RadioCapabilities& caps);
     void wireStatusBarMessages();
@@ -449,16 +446,10 @@ private:
     // value — the same reason applyTuningRangeToOverlayMenu() exists.
     void applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const;
 
-    // AppSettings key for a pan's persisted RF gain, scoped by radio FAMILY.
-    //
-    // RF gain is the one "display" setting that is really a hardware register,
-    // and its range is family-specific: a Flex's is -8..+32 in 8 dB steps, the
-    // HL2's AD9866 LNA is -12..+48 in 1 dB steps. Sharing one key meant a value
-    // last set on a Flex was restored onto an HL2 as an LNA gain the operator
-    // never chose for that radio — harmless while the HL2 ignored it, real now
-    // that the slider reaches the register.
-    //
-    // Flex keeps the unsuffixed key so existing settings survive untouched.
+    // AppSettings key for a pan's persisted RF gain, scoped by radio family:
+    // RF gain is a hardware register with family-specific range (Flex -8..+32
+    // in 8 dB steps, HL2 AD9866 LNA -12..+48 in 1 dB steps). Flex keeps the
+    // unsuffixed key so existing settings survive.
     QString rfGainSettingsKey(SpectrumWidget* sw) const;
     // The Auto RF Gain switch's settings key, family-scoped the same way and
     // for the same reason: an HL2's automatic gain control is not a Flex's.
@@ -468,16 +459,11 @@ private:
                                                        const char* source);
     void applyTuneRequest(SliceModel* slice, double mhz,
                           TuneIntent intent, const char* source);
-    // Shared band-selection implementation, used by both the
-    // SpectrumOverlayMenu band buttons and the band_* shortcut/MIDI actions
-    // so they behave identically (#4543):
-    //   - Flex: freqMhz/mode are hints only. selectBand() sends a
-    //     radio-authoritative band-stack recall (display pan set <panId>
-    //     band=<key>) and the radio restores its own saved frequency/mode/
-    //     filters/antenna; freqMhz/mode are ignored.
-    //   - non-Flex: there is no radio-owned band stack, so freqMhz/mode ARE
-    //     the actual local tune target — selectBand() sets mode (if
-    //     non-empty) then frequency directly on the active slice.
+    // Shared band selection for overlay band buttons and band_* shortcut/MIDI
+    // actions (#4543). Flex: sends a band-stack recall (display pan set <panId>
+    // band=<key>) and the radio restores freq/mode/filters/antenna; freqMhz/mode
+    // are ignored. Non-Flex: sets mode (if non-empty) then freqMhz on the active
+    // slice.
     void selectBand(const QString& panId, const QString& bandName, double freqMhz,
                     const QString& mode, const QString& stackKeyHint = QString());
     // Lock / SWR-sweep guards shared by every tune source.  Returns true if the
@@ -534,6 +520,11 @@ private:
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
     void syncTxWaterfallSliceToSpectrums();
+    // #5750: on a radio whose span is one register for the whole board, keep
+    // the -/+ span pair live on ONE pane (the TX slice's, else the first
+    // docked one) and dim it with the reason on the others; otherwise every
+    // pane keeps its own live pair. PanSpanControlGate.h.
+    void syncPanSpanControlPlacement();
     void updateSplitState();
     void disableSplit();
     // The split pair, derived from model truth (#3726) rather than from the
@@ -587,6 +578,9 @@ private:
     // cannot honor. Shared by the commandDropped path and by the
     // capability gates that refuse BEFORE the send (M0, #5263).
     void showUnsupportedControlNotice();
+    // An antenna button or combo refused a pick because the radio published no
+    // port to choose (AntennaChoiceGate.h). Log it and say so, once a session.
+    void announceAntennaChoiceRefused(bool tx);
     // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
     // from the constructor, in original order, defined in its subject TU.
     void wireModemAudioCompletion(); // MainWindow_Wiring.cpp
@@ -626,6 +620,11 @@ private:
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
+    using TxAudioPathBlock = AetherSDR::TxAudioPathBlock;
+    TxAudioPathBlock txAudioPathBlock() const; // MainWindow_DspApplets.cpp
+    QString txAudioPathBlockMessage(TxAudioPathBlock block) const;
+    bool showTxAudioPathErrorIfBlocked(); // MainWindow_DspApplets.cpp
+    void updateTxAudioPathNotice(); // MainWindow_DspApplets.cpp
     // Binds the Flex-shaped voice controls — PROC and its NOR/DX/DX+ level — to
     // the client-side compressor on a backend that modulates on this host, and
     // publishes that compressor's gain reduction as the TX:COMPPEAK meter.
@@ -1083,6 +1082,9 @@ private:
     void beginSliderShortcutLease(QWidget* slider);
     void renewSliderShortcutLease();
     void releaseSliderShortcutLease(bool clearFocus);
+    // Arm the operating QShortcuts only when keyboard shortcuts are on and no
+    // slider holds the lease; otherwise their keys fall through (#5483).
+    void syncOperatingShortcutsEnabled();
 
     BandSnapshot captureCurrentBandState() const;
     void restoreBandState(const BandSnapshot& snap);
@@ -1734,6 +1736,8 @@ private:
     bool m_splitActive{false};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
+    double m_splitRxFrequencyMhz{0.0};
+    AetherSDR::PendingSliceFrequencyEchoes m_pendingSliceFrequencyEchoes;
     // Split audio memory (#2242). The recorder holds what the operator did to
     // the two slices during this split and outlives the TX slice model, which
     // onSliceRemoved has already destroyed by the time it runs. It is fed ONLY
@@ -1741,6 +1745,7 @@ private:
     // echoes, so a pan moved by another client never becomes a preference
     // (Principle II). See gui/SplitAudioProfile.h.
     AetherSDR::SplitAudioRecorder m_splitAudioRecorder;
+    AetherSDR::SplitQsySettings m_splitQsySettings;
     QVector<QMetaObject::Connection> m_splitAudioConns;
     int m_splitAudioRxSliceId{-1};
     // The RX slice OBJECT the recorder was armed on. The RX-pan restore only

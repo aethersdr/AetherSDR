@@ -246,7 +246,7 @@ public:
         }
         QByteArray out = stereo;
         const int frames = out.size() / (2 * static_cast<int>(sizeof(float)));
-        engine.m_nr2->processStereoSharedMask(
+        engine.m_nr2->processStereo(
             reinterpret_cast<const float*>(stereo.constData()),
             reinterpret_cast<float*>(out.data()), frames);
         return out;

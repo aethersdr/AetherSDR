@@ -15,16 +15,10 @@ class QFile;
 
 namespace AetherSDR {
 
-// Downloads and caches Whisper (ggml) model weights for the on-device ASR
-// engine (RFC #4333). Weights are never shipped: on first enable this fetches
-// the selected tier, trying each catalog source in order (Hugging Face primary,
-// GitHub release-asset fallback) and accepting a file only if its SHA-256
-// matches the pinned value — so a corrupt download or a diverged mirror is
-// rejected and the next source is tried. Downloads stream to a `.part` file and
-// are renamed into place atomically only after verification.
-//
-// Engine-only class (Qt Core/Network); no GUI dependency. One download at a
-// time per instance. Cancel aborts and removes the partial file.
+// Downloads and caches Whisper (ggml) weights (RFC #4333). Tries each catalog
+// source in order and accepts a file only if its SHA-256 matches the pinned
+// value; streams to `.part` and renames atomically after verification.
+// Qt Core/Network only. One download at a time; cancel removes the partial file.
 class AsrModelManager : public QObject {
     Q_OBJECT
 

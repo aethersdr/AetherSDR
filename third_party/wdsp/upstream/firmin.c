@@ -317,19 +317,9 @@ void plan_fircore (FIRCORE a)
 	a->accum = (double *) malloc0 (2 * a->size * sizeof (complex));
 	a->crev = fftw_plan_dft_1d(2 * a->size, (fftw_complex *)a->accum, (fftw_complex *)a->out, FFTW_BACKWARD, FFTW_PATIENT);
 	a->masks_ready = 0;
-	// AetherSDR: the minimum-phase workspace is built lazily -- see
-	// AETHERSDR-PATCHES.md. Build it only when this core is actually in
-	// minimum-phase mode. Upstream built it unconditionally, and its only
-	// consumer is the `if (a->mp)` branch of calc_fircore(), so at mp == 0
-	// the object is built on the channel-open path and never executed: seven
-	// buffers of nc * pfactor elements, and FOUR FFTW_PATIENT plans of that
-	// length, per core. ensure_minphase() below keeps the lazy path honest --
-	// setMp_fircore() can turn mp on at any time, so calc_fircore() builds the
-	// workspace on first use rather than assuming plan_fircore() left one.
-	//
-	// AetherSDR patch 14: and never here at all. calc_fircore() builds it,
-	// designs with it and frees it again, so no core holds it between designs
-	// whatever its mp. See AETHERSDR-PATCHES.md.
+	// AetherSDR patches 10 and 14: minimum-phase scratch exists only inside
+	// calc_fircore(), which creates it at the current nc/pfactor and frees it
+	// after the design. See AETHERSDR-PATCHES.md.
 	a->pminphase = 0;
 }
 
@@ -352,12 +342,9 @@ void calc_fircore (FIRCORE a, int flip)
 	{
 		ensure_minphase (a);								// AetherSDR: lazy minphase build
 		mp_imp_exec (a->pminphase, a->impulse, a->imp);
-		// AetherSDR patch 14: the workspace is DESIGN scratch -- seven buffers
-		// of nc * pfactor elements (13.6 MB at 131072) and four plans -- read
-		// only by the mp_imp_exec() above. Free it now rather than hold it for
-		// the life of the core; the next design rebuilds it (FFTW_ESTIMATE
-		// plans, patch 12). Every caller of calc_fircore() is a control call
-		// made under the host's setup lock, so the re-plan is serialised.
+		// AetherSDR patch 14: mp_imp_exec() is the scratch workspace's only
+		// consumer. Control callers hold the host's FFTW planner lock while
+		// designing and destroying plans. See AETHERSDR-PATCHES.md.
 		destroy_minphase (a->pminphase);
 		a->pminphase = 0;
 	}

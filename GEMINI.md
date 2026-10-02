@@ -1,10 +1,11 @@
 # Gemini Code Assist Instructions for AetherSDR
 
-**Canonical project guide: [`AGENTS.md`](AGENTS.md).** Read it
-end-to-end before writing or recommending code. This file holds only
+**Canonical project guide: [`AGENTS.md`](AGENTS.md).** Read its core,
+plus the `docs/agents/` sub-doc for the paths you touch, before
+writing or recommending code. This file holds only
 the must-knows that fit in Gemini's chat context efficiently.
 
-## Five must-knows before suggesting code
+## Must-knows before suggesting code
 
 1. **Signed commits required on `main`.** Branch protection enforces
    it. See [`docs/COMMIT-SIGNING.md`](docs/COMMIT-SIGNING.md); the
@@ -12,15 +13,18 @@ the must-knows that fit in Gemini's chat context efficiently.
    yourself or the contributor at that doc for setup.
 
 2. **The AetherSDR Constitution governs every contribution.** See
-   [`CONSTITUTION.md`](CONSTITUTION.md). 14 principles, structured
+   [`CONSTITUTION.md`](CONSTITUTION.md), structured
    per Cisco's
    [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
    spec. Commit-message format: `Short description (#NNNN). Principle <N>.`
    when the change is principle-relevant.
 
-3. **`bin/validate-diff.sh` is the infrastructure-enforced merge
-   gate** (Principle XII). Suggested patches that try to work around
-   it will be rejected by the gate regardless of system-prompt intent.
+3. **Enforcement is by infrastructure, not prompt** (Principle XII):
+   branch protection (required CI checks, CODEOWNERS review, signed
+   commits) for every contributor, plus `bin/validate-diff.sh` — a
+   path allow-list in the AetherClaude orchestrator's own repo that
+   gates that bot's PRs. Don't suggest patches that try to work
+   around either.
 
 4. **Use `AppSettings`, NOT `QSettings`.** Persist as nested JSON
    under one root key per feature (Principle V). Example pattern:
@@ -29,7 +33,7 @@ the must-knows that fit in Gemini's chat context efficiently.
    never the settings store.
 
 5. **All meter UI uses `MeterSmoother`** — never roll your own
-   envelope follower. (AGENTS.md → Key Implementation Patterns.)
+   envelope follower. (`docs/agents/gui.md`.)
 
 6. **Assign yourself to an issue or PR before posting a review,
    comment, or merge action** (`gh issue edit NNNN --add-assignee @me`

@@ -1,21 +1,7 @@
-// WDSP patch 14 (#5954): a minimum-phase FIR core holds its design workspace
-// only while designing. create_minphase() builds seven buffers of nc * pfactor
-// elements and four FFTW plans -- 13.6 MB at the 8192-tap, pfactor-16 geometry
-// Hl2RxDsp runs -- and mp_imp_exec() is its only reader. Upstream kept it for
-// the life of the core, which after #5954 made every non-CW HL2 receiver hold
-// ~49 MB more than a linear-phase one. calc_fircore() now frees it after each
-// design, so:
-//
-//   1. an 8192-tap RX channel opened at MINIMUM phase holds exactly as many
-//      live WDSP allocations as the same channel at LINEAR phase;
-//   2. that stays true after a passband change, which re-designs every
-//      minimum-phase core (and so rebuilds and frees the workspace again);
-//   3. repeated designs do not accumulate: allocations after twenty filter
-//      changes equal allocations after one.
-//
-// Counted with WdspChannel::outstandingAllocationsForTest(), the WDSP port's
-// own live-allocation counter, so the test sees exactly WDSP's heap and nothing
-// else in the process. Socket-free; no audio is processed.
+// WDSP patch 14: minimum-phase design scratch is released after each design.
+// Count only WDSP's live allocations at open, after filter/notch edits and
+// after teardown. A minimum-phase 8192-tap RX channel holds the same count as a
+// linear-phase channel. Socket-free; no audio is processed.
 
 #include "core/dsp/WdspChannel.h"
 
@@ -68,7 +54,7 @@ int main()
 {
     std::string err;
 
-    // ---- 1: open ----------------------------------------------------------
+    // Compare live allocations after opening at each phase.
     const std::uint64_t beforeLin = WdspChannel::outstandingAllocationsForTest();
     auto lin = WdspChannel::create(hl2Shaped(false), &err);
     check(lin != nullptr, "the linear-phase channel opens");
@@ -94,23 +80,39 @@ int main()
           "open: a minimum-phase channel holds no more WDSP allocations than a "
           "linear one -- the design workspace was freed");
 
-    // ---- 2: one re-design ---------------------------------------------------
+    // A filter edit rebuilds and releases the design scratch.
     check(mp->setFilter(200.0, 2900.0), "the minimum-phase channel takes a filter change");
     const std::int64_t heldMpOne = allocationsHeldBy(*mp, beforeMp);
     check(heldMpOne == heldLin,
           "after a passband change the re-built workspace is freed again");
 
-    // ---- 3: many re-designs -------------------------------------------------
+    // Repeated designs must not accumulate allocations.
     for (int i = 0; i < 20; ++i) {
-        mp->setFilter(150.0 + 10.0 * (i % 5), 2800.0 + 20.0 * (i % 7));
+        check(mp->setFilter(150.0 + 10.0 * (i % 5), 2800.0 + 20.0 * (i % 7)),
+              "each repeated minimum-phase filter change is accepted");
     }
     const std::int64_t heldMpMany = allocationsHeldBy(*mp, beforeMp);
     std::printf("      MEASURED: after 1 and 21 filter changes: %lld and %lld\n",
                 static_cast<long long>(heldMpOne), static_cast<long long>(heldMpMany));
     check(heldMpMany == heldMpOne, "twenty more designs accumulate nothing");
 
+    // Tuning rebuilds minimum-phase masks when an active notch is in passband.
+    constexpr double kTuneHz = 7100000.0;
+    check(mp->setNotchTuneFrequency(kTuneHz), "the notch tune frequency is accepted");
+    check(mp->addNotch(0, kTuneHz + 1500.0, 100.0, true), "an active notch is accepted");
+    check(mp->setNotchesEnabled(true), "the notch stage is enabled");
+    const std::uint64_t beforeTune = WdspChannel::allocationSequenceForTest();
+    check(mp->setShift(50.0), "a notch shift is accepted");
+    check(mp->setNotchTuneFrequency(kTuneHz + 100.0), "a notch retune is accepted");
+    check(WdspChannel::allocationSequenceForTest() > beforeTune,
+          "tuning through an active notch actually rebuilds the filter");
+    check(allocationsHeldBy(*mp, beforeMp) == heldMpMany,
+          "notch edits and tuning release their minimum-phase scratch");
+
     mp.reset();
     lin.reset();
+    check(WdspChannel::outstandingAllocationsForTest() == beforeLin,
+          "closing both channels releases every WDSP allocation");
     if (g_failures == 0) {
         std::fprintf(stderr, "wdsp_minphase_workspace_test: all checks passed\n");
     }

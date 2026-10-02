@@ -10,16 +10,10 @@ namespace AetherSDR {
 
 class TgxlConnection;
 
-// One RF port as the tuner itself reports it, from the direct port-9010
-// status. The Flex-relayed "amplifier" status carries none of this, so it is
-// available only while the direct connection is up — see hasPortInfo().
-//
-// `live` is the tuner's own validity flag for the port ("modeX" on the wire).
-// It tracks the reading exactly: across a capture, modeX=1 always accompanied
-// a real band and frequency and modeX=0 always accompanied zeroes. It does
-// NOT say what kind of source the port has — the tuner reports its `flexX`
-// radio name on both ports regardless, so a port that is not live is simply
-// one nothing is being heard on.
+// One RF port as reported by the tuner's direct port-9010 status (the relayed
+// "amplifier" status lacks it; see hasPortInfo()). `live` is the tuner's
+// "modeX" validity flag: 1 always came with a real band/frequency, 0 with
+// zeroes. It does not identify the source; `flexX` is reported on both ports.
 struct TunerPortInfo {
     bool    live{false};
     QString source;        // "flexX" — the networked radio's name
@@ -33,16 +27,11 @@ struct TunerPortInfo {
     bool operator!=(const TunerPortInfo& o) const { return !(*this == o); }
 };
 
-// State model for a 4o3a Tuner Genius XL (TGXL) connected via the FlexRadio.
-//
-// Status arrives via TCP as "atu <handle> key=val ..." after "sub atu all".
-// Commands use the "tgxl" prefix:
-//   tgxl set handle=<H> mode=<0|1>       — operate/standby
-//   tgxl set handle=<H> bypass=<0|1>     — bypass on/off
-//   tgxl autotune handle=<H>             — initiate auto-tune
-//
-// Direct TGXL connection (port 9010) enables manual Pi network relay control:
-//   tune relay=<0|1|2> move=<+1|-1>      — adjust C1/L/C2 one step
+// State model for a 4O3A Tuner Genius XL relayed via the FlexRadio. Status:
+// "atu <handle> key=val ..." after "sub atu all". Commands:
+//   tgxl set handle=<H> mode=<0|1> / bypass=<0|1>; tgxl autotune handle=<H>
+// A direct connection (port 9010) adds Pi-network relay stepping:
+//   tune relay=<0|1|2> move=<+1|-1>   (C1/L/C2)
 class TunerModel : public QObject {
     Q_OBJECT
 
@@ -112,6 +101,11 @@ public:
     // antenna/relay methods below) stays local and does not go through the seam.
     void setOperate(bool on);
     void setBypass(bool on);
+    // One operator action that needs BOTH verbs (STBY, BYP, the rail cycle),
+    // commanded in the order given. On a tuner no radio relays for, it is ONE
+    // refusal, not two: relayedCommandRefused fires once, naming the first
+    // verb, and nothing is sent.
+    void setOperateAndBypass(bool operate, bool bypass, bool operateFirst);
     void autoTune();
     // Break a tune already in progress — the same `autotune` the start uses,
     // which the firmware treats as a toggle. No-op when not tuning.
@@ -148,6 +142,14 @@ signals:
     void operateRequested(bool on);
     void bypassRequested(bool on);
     void autotuneRequested();
+    // OPERATE / STANDBY / BYPASS were asked of a tuner this client reaches
+    // ONLY over its direct port-9010 link. Those three are relayed by a Flex
+    // radio (the handle above), and the direct link carries no equivalent that
+    // this client speaks, so nothing was sent. Emitted instead of the silent
+    // debug-line return so the UI can say so; `command` is "operate" or
+    // "bypass". Not emitted with no tuner at all -- that is not a refusal of
+    // anything the operator can see.
+    void relayedCommandRefused(const QString& command);
 
 private:
     QString m_handle;

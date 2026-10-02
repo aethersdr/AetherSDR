@@ -201,6 +201,15 @@ slice.
 - `Split Up 1 / 5 / 10 kHz` — move the transmit slice that far above the
   receive slice. The receive frequency stays where it is. With no split
   running, the same choice starts one at that offset.
+- `Split QSY Option` — opt in to closing an AetherSDR-created split when an
+  external client moves its receive Slice A by more than the threshold
+  (2 kHz by default). The intended workflow is CAT `FA` / `ZZFA` sent through
+  a separate client directly controlling the radio. Matching echoes of
+  AetherSDR's own tunes, including SWAP, keep split open. Other unmatched
+  Slice A changes are indistinguishable from that external CAT workflow.
+  Changes at or below the threshold keep split open and advance the reference.
+  Closing split removes its transmit slice and returns TX selection to Slice A;
+  this option does not defer that cleanup while transmitting.
 - `Monitor TX` — choose what the `Monitor TX (Hold)` key does while you hold
   it: `Solo TX frequency` silences the receive slice so you hear only where you
   are about to transmit, as `XFC`, `TF-SET` or `TXW` does on a conventional

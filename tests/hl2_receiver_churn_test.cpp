@@ -18,13 +18,13 @@
 //
 // Read that as a DIFFERENTIAL, never as a count: QtCore ships uninstrumented, so
 // every Qt::BlockingQueuedConnection in the backend reports as a race whatever the
-// receiver set is doing. hl2_backend_test, which predates this work, reports 57.
+// receiver set is doing.
 // HERMES §20.15.1 has the full account.
 //
 // Under a plain build, treat the checks below as what they are — churn does not
 // corrupt the receiver set or lose a receiver's signals.
 //
-// The fake radio is UNCAPPED, unlike hl2_backend_test's: EP6 has to still be
+// The fake radio is UNCAPPED: EP6 has to still be
 // arriving at the instant the vector is reshaped, or there is no window to test.
 
 #include "core/backends/hl2/Hl2Backend.h"

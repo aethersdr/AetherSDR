@@ -1,38 +1,13 @@
 #pragma once
 
-// The three-state control doctrine, as a mechanism (#5262 M3a).
-//
-// THE RULE, maintainer-ruled and binding: individual controls are never shown
-// or hidden per radio. Every control renders in one of three states —
-//
-//   unavailable  the radio lacks the capability            dimmed, with a reason
-//   inactive     supported by this radio, not engaged now  greyed
-//   active       engaged                                   normal
-//
-// — and hiding exists only at APPLET granularity, where a radio-specific
-// cluster moves to its own applet that hides wholesale. See
-// docs/style/theme-style-guide.md §"Three-state controls".
-//
-// WHY A REGISTRY RATHER THAN MORE setVisible() CALLS. The per-site plumbing it
-// replaces failed in two ways that are properties of the plumbing, not of any
-// one site:
-//
-//   * A WIDGET BUILT AFTER THE SIGNAL never learns its state. MainWindow's
-//     applyCapabilitiesToUi() runs on capabilitiesChanged; a pane added later
-//     (Add Panadapter, a layout change, a lazily-built dialog page) missed it
-//     and rendered in whatever state its constructor left it. The Calibration
-//     page and DemoApplet both carried hand-written second pushes to paper over
-//     this. Registration here APPLIES IMMEDIATELY, so a control is correct from
-//     the moment it exists and the second push is unnecessary.
-//   * ONE SUBSCRIPTION, NOT N. Each site connecting its own lambda to
-//     capabilitiesChanged makes ordering between them undefined and makes "what
-//     does this control depend on?" unanswerable without reading every lambda.
-//     A control declares its predicate once, here.
-//
-// WHAT IT IS NOT. It does not decide whether a control is SAFE to use — that
-// stays with the model-level TX refusal and rollback (Principle VI). UI state is
-// never the safety mechanism; a dimmed control that somehow receives a click
-// must still be refused below the seam.
+// Three-state controls (#5262 M3a). Controls are never shown or hidden per
+// radio; each is unavailable (radio lacks it: dimmed, with a reason), inactive
+// (supported, not engaged: greyed) or active. Hiding happens only per applet.
+// See docs/style/theme-style-guide.md §"Three-state controls".
+// Registration applies state immediately, so widgets built after
+// capabilitiesChanged are correct from birth, and each control declares its
+// predicate once. UI state is never the safety mechanism: TX refusal and
+// rollback stay in the model.
 
 #include "core/backends/RadioCapabilities.h"
 

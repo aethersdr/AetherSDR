@@ -14,6 +14,7 @@
 #include <mutex>
 #include <numbers>
 #include <numeric>
+#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1196,28 +1197,10 @@ bool runCloseAfterStoppedClockingTest()
     return true;
 }
 
-// The minimum-phase path, which nothing else in this tree exercises:
-// WdspChannel::Config::minimumPhase is false everywhere, so RXASetMP() always
-// passes 0 and WDSP's mp == 1 branch is never entered by any other test.
-//
-// Two things are pinned here, and the second is why the first matters.
-//
-// 1. Turning minimum phase ON must still produce audio. The AetherSDR patch
-//    that builds the minimum-phase workspace lazily
-//    (third_party/wdsp/AETHERSDR-PATCHES.md) makes plan_fircore() build the
-//    minimum-phase workspace only when the core's mp flag is set, and
-//    calc_fircore() build it on first use. WdspChannel::open() calls RXASetNC()
-//    BEFORE RXASetMP(), so with minimumPhase = true the six cores RXASetNC()
-//    re-plans are planned at mp == 0 and only then flipped on: this test is the
-//    one that walks the lazy-construction path. Before the patch the workspace
-//    was always there; after it, getting the laziness wrong is a null
-//    dereference inside mp_imp_exec() on the very first mask build.
-//
-// 2. Minimum phase must COST something. If the workspace were still built
-//    unconditionally, a minimum-phase channel and a linear-phase one would hold
-//    the same number of live WDSP allocations, and (1) could pass on a patch
-//    that achieved nothing. The comparison is stated as a relation rather than
-//    a count so it does not re-hardcode WDSP's internal fircore inventory.
+// Minimum phase must produce audio and make more design allocations during
+// open than linear phase. Patch 10 avoids scratch for unused cores; patch 14
+// releases it after use. Counting allocations made, rather than held, keeps
+// this check sensitive to eager construction. runLeakChecked() pins teardown.
 bool runMinimumPhaseWorkspaceTest()
 {
     WdspChannel::Config config;
@@ -1236,20 +1219,17 @@ bool runMinimumPhaseWorkspaceTest()
     // under test is the large one.
     config.filterTaps = 8192;
 
-    // Live WDSP allocations held by one open channel, and the audio it makes.
+    // WDSP allocations made while opening one channel, and the audio it makes.
     // Both are taken while the channel is alive; it is destroyed before return,
     // so runLeakChecked() still sees a clean balance.
     const auto openAndMeasure = [&](bool minimumPhase,
-                                    uint64_t* liveAllocations,
+                                    uint64_t* allocationsMade,
                                     double* toneRms) -> bool {
         WdspChannel::Config channelConfig = config;
         channelConfig.minimumPhase = minimumPhase;
-        // Allocations MADE by the open, not allocations HELD after it: since
-        // WDSP patch 14 a minimum-phase core frees its design workspace right
-        // after designing, so what an open HOLDS is the same at either phase.
-        // What still separates them is that the minimum-phase open BUILDS the
-        // workspace (and frees it) while the linear open never builds it --
-        // which is patch 10's claim.
+        // Patch 14 releases design scratch before open returns. Count the
+        // allocations made so patch 10's lazy construction remains observable:
+        // the minimum-phase open designs more cores than the linear one.
         const uint64_t before = WdspChannel::allocationSequenceForTest();
         std::string error;
         std::unique_ptr<WdspChannel> channel =
@@ -1259,7 +1239,7 @@ bool runMinimumPhaseWorkspaceTest()
                       << minimumPhase << ": " << error << '\n';
             return false;
         }
-        *liveAllocations = WdspChannel::allocationSequenceForTest() - before;
+        *allocationsMade = WdspChannel::allocationSequenceForTest() - before;
 
         std::vector<float> inputI(config.inputBlockSize);
         std::vector<float> inputQ(config.inputBlockSize);
@@ -1982,8 +1962,9 @@ TransmitRun runTransmitChannel(int plane, double toneHz, WdspChannel::Mode mode,
 // at the live 21.33 ms period. Retried, it comes back clean. A transient on a
 // shared machine must not read as a transmit regression.
 //
-// THE PREDICATE IS "NO UNDERRUN", NOT "LONG ENOUGH", and the difference was
-// found the hard way. A capture length guard was tried first and let the defect
+// THE PREDICATE IS "NO CAPTURE FAULT", NOT "LONG ENOUGH", and the difference was
+// found the hard way. Underruns and other non-Ok results both invalidate
+// collection. A capture length guard was tried first and let the defect
 // through: an underrun at block 31 of 104 leaves 72 contiguous blocks, 90% of
 // the full length and a whole number of cycles of every tone -- and the LSB
 // 2000 Hz point still read 81.91 dB where a clean run reads 289.61. The reason
@@ -2016,15 +1997,17 @@ TransmitRun runTransmitChannelSettled(int plane, double toneHz,
         TransmitRun run = runTransmitChannel(plane, toneHz, mode, lowHz, highHz,
                                              blocks, discardBlocks, pace,
                                              amplitude);
-        if (!run.created || run.underrunBlocks == 0) {
+        if (!run.created || (run.underrunBlocks == 0 && run.otherBlocks == 0)) {
             return run;
         }
         const int had = run.underrunBlocks;
+        const int other = run.otherBlocks;
         if (run.iq.size() > best.iq.size()) {
             best = std::move(run);
         }
-        std::cout << "  (starved at " << toneHz << " Hz: " << had
-                  << " underrun(s) at " << pace << " us -- retrying slower)\n";
+        std::cout << "  (capture fault at " << toneHz << " Hz: " << had
+                  << " underrun(s), " << other << " other non-Ok block(s) at "
+                  << pace << " us -- retrying slower)\n";
     }
     return best;
 }
@@ -2422,18 +2405,15 @@ struct SweepPoint
     std::size_t samples = 0;        // after the whole-cycle trim
     std::size_t captured = 0;       // before it
     int underruns = 0;
+    int otherBlocks = 0;
 };
 
-SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz,
-                             bool wireUpper, double toneHz,
-                             std::size_t blocks, std::size_t discardBlocks,
-                             int paceUs, double amplitude)
+SweepPoint sweepPointFromRun(const TransmitRun& run, bool wireUpper,
+                             double toneHz)
 {
     SweepPoint point;
-    const TransmitRun run =
-        runTransmitChannel(0, toneHz, mode, lowHz, highHz, blocks, discardBlocks,
-                           paceUs, amplitude);
     point.underruns = run.underrunBlocks;
+    point.otherBlocks = run.otherBlocks;
     if (!run.created || run.iq.empty()) {
         return point;
     }
@@ -2459,7 +2439,18 @@ SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz
     return point;
 }
 
-// One sweep point, re-run if the modulator was STARVED.
+SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz,
+                             bool wireUpper, double toneHz,
+                             std::size_t blocks, std::size_t discardBlocks,
+                             int paceUs, double amplitude)
+{
+    const TransmitRun run =
+        runTransmitChannel(0, toneHz, mode, lowHz, highHz, blocks, discardBlocks,
+                           paceUs, amplitude);
+    return sweepPointFromRun(run, wireUpper, toneHz);
+}
+
+// One sweep point, re-run if the capture contains any non-Ok block.
 //
 // A starved run does not announce itself. runTransmitChannel restarts
 // collection after any non-Ok block -- correlating across the seam would
@@ -2473,35 +2464,87 @@ SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz
 // true statement about the capture and a false one about the chain, and only
 // the second one is what the assertion is for.
 //
-// THE PREDICATE IS "NO UNDERRUN", NOT "LONG ENOUGH". A length guard was tried
-// first and let the defect through -- see runTransmitChannelSettled.
+// THE PREDICATE IS "NO CAPTURE FAULT", NOT "LONG ENOUGH". A length guard was tried
+// first and let the defect through -- see runTransmitChannelSettled. Other
+// non-Ok results also reset collection, so they are counted and retried too.
 //
 // Retrying is the right place for this and a retry inside Hl2TxDsp would not
 // be: pacing is the CALLER's responsibility, and here the caller is this
 // function. Four attempts, and each retry is PRINTED rather than hidden -- a
 // point that needs retrying on an idle machine is evidence about the chain.
-SweepPoint measureSweepPointSettled(WdspChannel::Mode mode, double lowHz,
-                                    double highHz, bool wireUpper, double toneHz,
-                                    std::size_t blocks, std::size_t discardBlocks,
-                                    int paceUs, double amplitude)
+// The sampler seam exercises retry selection without a scheduler-dependent
+// fault or a synthetic radio peer. The normal caller still measures real WDSP.
+template<typename Measure>
+SweepPoint measureSweepPointSettledBy(double toneHz, int paceUs, Measure&& measure)
 {
     SweepPoint best;
     for (int attempt = 0; attempt < 4; ++attempt) {
         // The pace BACKS OFF on each retry -- see runTransmitChannelSettled.
         const int pace = paceUs * (attempt + 1);
-        const SweepPoint point =
-            measureSweepPoint(mode, lowHz, highHz, wireUpper, toneHz, blocks,
-                              discardBlocks, pace, amplitude);
-        if (point.measured && point.underruns == 0) {
+        const SweepPoint point = measure(pace);
+        if (point.measured && point.underruns == 0 && point.otherBlocks == 0) {
             return point;
         }
         if (point.samples > best.samples) {
             best = point;
         }
-        std::cout << "  (starved at " << toneHz << " Hz: " << point.underruns
-                  << " underrun(s) at " << pace << " us -- retrying slower)\n";
+        std::cout << "  (capture fault at " << toneHz << " Hz: " << point.underruns
+                  << " underrun(s), " << point.otherBlocks
+                  << " other non-Ok block(s) at " << pace
+                  << " us -- retrying slower)\n";
     }
     return best;
+}
+
+SweepPoint measureSweepPointSettled(WdspChannel::Mode mode, double lowHz,
+                                    double highHz, bool wireUpper, double toneHz,
+                                    std::size_t blocks, std::size_t discardBlocks,
+                                    int paceUs, double amplitude)
+{
+    return measureSweepPointSettledBy(toneHz, paceUs, [&](int pace) {
+        return measureSweepPoint(mode, lowHz, highHz, wireUpper, toneHz, blocks,
+                                 discardBlocks, pace, amplitude);
+    });
+}
+
+bool runCaptureFaultRetryTest()
+{
+    // A non-underrun fault also resets collection. Retaining real-sized IQ
+    // must not turn such a capture into a clean point merely because the
+    // underrun counter is zero.
+    TransmitRun run;
+    run.created = true;
+    run.otherBlocks = 1;
+    run.iq.assign(96, std::complex<float> {0.5f, 0.0f});
+    run.index.resize(run.iq.size());
+    std::iota(run.index.begin(), run.index.end(), std::size_t {0});
+    const SweepPoint faulty = sweepPointFromRun(run, false, 1000.0);
+    if (!require(faulty.measured && faulty.underruns == 0 &&
+                     faulty.otherBlocks == 1 && faulty.samples == 96,
+                 "a non-underrun capture fault was lost during measurement")) {
+        return false;
+    }
+    run.otherBlocks = 0;
+    const SweepPoint clean = sweepPointFromRun(run, false, 1000.0);
+    int attempts = 0;
+    const SweepPoint recovered = measureSweepPointSettledBy(1000.0, 2000,
+        [&](int pace) {
+            ++attempts;
+            return (pace == 2000) ? faulty : clean;
+        });
+    if (!require(attempts == 2 && recovered.otherBlocks == 0,
+                 "the settled sweep accepted a non-underrun fault instead of retrying")) {
+        return false;
+    }
+    attempts = 0;
+    const SweepPoint exhausted = measureSweepPointSettledBy(1000.0, 2000,
+        [&](int) {
+            ++attempts;
+            return faulty;
+        });
+    return require(attempts == 4 && exhausted.measured &&
+                       exhausted.otherBlocks == 1,
+                   "exhausted capture retries lost their non-underrun fault");
 }
 
 bool runTransmitSuppressionSweepTest()
@@ -2582,8 +2625,9 @@ bool runTransmitSuppressionSweepTest()
             // alone, and only one of them is about the transmitter.
             what = std::string("sweep ") + band.name + " at " +
                    std::to_string(static_cast<int>(toneHz)) +
-                   " Hz was not starved (no underruns in the measured run)";
-            if (!require(point.underruns == 0, what.c_str())) {
+                   " Hz was fault-free (no non-Ok blocks in the measured run)";
+            if (!require(point.underruns == 0 && point.otherBlocks == 0,
+                         what.c_str())) {
                 return false;
             }
 
@@ -2697,16 +2741,40 @@ bool runTransmitSuppressionSweepTest()
     // averages down as 1/sqrt(N) while a real tone does not. The point of
     // printing it is to be able to say which, rather than quoting 297 dB at
     // anyone.
+    //
+    // BOTH PROBES GO THROUGH THE SETTLED HARNESS, like every sweep point above
+    // (#5962). They were written against measureSweepPoint directly, so under
+    // CPU load they got one roll at kPaceUs -- the FIRST attempt's pace -- and
+    // an underrun either emptied the capture ("produced no IQ") or left one
+    // that opens inside the post-underrun transient. A transient is amplitude
+    // modulation, the two runs caught different amounts of it, and the ratio
+    // walked off 0.5: a scheduler fault reported as an ALC fault. The
+    // predicate is "no non-Ok blocks": every such block restarts collection.
+    // The retry budget can run out, so it is checked here rather than trusted.
+    // Exhaustion reports a capture fault; only a clean capture reaches the
+    // unchanged 1 % ALC bound.
     {
         const SweepPoint full =
-            measureSweepPoint(WdspChannel::Mode::Usb, 300.0, 2700.0, false,
-                              1000.0, kBlocks, kDiscard, kPaceUs, kAmplitude);
+            measureSweepPointSettled(WdspChannel::Mode::Usb, 300.0, 2700.0,
+                                     false, 1000.0, kBlocks, kDiscard, kPaceUs,
+                                     kAmplitude);
         const SweepPoint half =
-            measureSweepPoint(WdspChannel::Mode::Usb, 300.0, 2700.0, false,
-                              1000.0, kBlocks, kDiscard, kPaceUs,
-                              0.5 * kAmplitude);
-        if (!require(full.measured && half.measured,
-                     "the ALC linearity probe produced no IQ")) {
+            measureSweepPointSettled(WdspChannel::Mode::Usb, 300.0, 2700.0,
+                                     false, 1000.0, kBlocks, kDiscard, kPaceUs,
+                                     0.5 * kAmplitude);
+        if (!require(full.measured && half.measured &&
+                         full.underruns == 0 && half.underruns == 0 &&
+                         full.otherBlocks == 0 && half.otherBlocks == 0,
+                     "the ALC linearity probe could not get a fault-free "
+                     "capture")) {
+            return false;
+        }
+        // Comparable, not merely present: the same span of the same stream.
+        // Faults are counted above; retain this independent span invariant.
+        if (!require(full.captured == half.captured &&
+                         full.samples == half.samples,
+                     "the ALC linearity probe's two captures cover different "
+                     "spans")) {
             return false;
         }
         const double ratio = half.wanted / std::max(1.0e-20, full.wanted);
@@ -2720,22 +2788,28 @@ bool runTransmitSuppressionSweepTest()
             return false;
         }
 
-        const std::size_t halfLength =
-            wholeCycleCount(full.samples / 2, 1000.0, 48000.0);
+        // Gated on the probe's OWN run: comparing its length against `full`
+        // failed it for a reason unrelated to the floor whenever the two runs
+        // were starved differently.
         const TransmitRun probe =
             runTransmitChannelSettled(0, 1000.0, WdspChannel::Mode::Usb, 300.0,
                                       2700.0, kBlocks, kDiscard, kPaceUs,
                                       kAmplitude);
-        if (!require(probe.created && probe.iq.size() >= full.samples,
-                     "the floor probe produced no IQ")) {
+        const std::size_t fullLength =
+            wholeCycleCount(probe.iq.size(), 1000.0, 48000.0);
+        if (!require(probe.created && probe.underrunBlocks == 0 &&
+                         probe.otherBlocks == 0 && fullLength > 0,
+                     "the floor probe could not get a fault-free capture")) {
             return false;
         }
+        const std::size_t halfLength =
+            wholeCycleCount(fullLength / 2, 1000.0, 48000.0);
         const double imageFull =
-            binPower(probe.iq, probe.index, 1000.0, 48000.0, full.samples);
+            binPower(probe.iq, probe.index, 1000.0, 48000.0, fullLength);
         const double imageHalf =
             binPower(probe.iq, probe.index, 1000.0, 48000.0, halfLength);
         std::cout << "  instrument floor probe at USB 1 kHz: image over "
-                  << full.samples << " samples " << imageFull << ", over "
+                  << fullLength << " samples " << imageFull << ", over "
                   << halfLength << " samples " << imageHalf << " (ratio "
                   << (imageHalf / std::max(1.0e-30, imageFull))
                   << "; a real tone gives 1, broadband floor gives ~1.41)\n";
@@ -3425,6 +3499,291 @@ bool runFmDeviationTest()
     return ok;
 }
 
+// ── Receive squelch (#5678 row 1.5) ──────────────────────────────────────
+//
+// Two halves. The ROUTING half pins what WdspChannel writes to WDSP — which of
+// fmsq/amsq runs, with what threshold — per mode, across mode changes and
+// across a rebuild; it reads the record the channel makes at the call site.
+// The BEHAVIOUR half is what that record cannot show: that the stage it names
+// really gates the audio. Noise alone must come out muted with the squelch
+// on, audible with it off, and a signal above threshold must open it.
+
+bool nearly(double a, double b, double tol = 1.0e-9)
+{
+    return std::abs(a - b) <= tol;
+}
+
+bool runSquelchRoutingTest()
+{
+    using Stage = WdspChannel::SquelchStage;
+    bool ok = true;
+
+    // FM: pihpsdr's map. Level: -140 + 0.7*level dBFS, derived from the HL2
+    // measurements in WdspChannel.h. Both ends, the middle, and the clamp.
+    ok = require(nearly(WdspChannel::fmSquelchThresholdForLevel(0), 1.0) &&
+                 nearly(WdspChannel::fmSquelchThresholdForLevel(50), 0.1) &&
+                 nearly(WdspChannel::fmSquelchThresholdForLevel(100), 0.01) &&
+                 nearly(WdspChannel::fmSquelchThresholdForLevel(250), 0.01),
+                 "FM squelch map is not 10^(-2*level/100)") && ok;
+    ok = require(nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(1), -139.3) &&
+                 nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(50), -105.0) &&
+                 nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(100), -70.0) &&
+                 nearly(WdspChannel::levelSquelchThresholdDbfsForLevel(-5), -140.0),
+                 "level squelch map is not -140 + 0.7*level dBFS") && ok;
+    // HL2-measured (#5982): a strong broadcast carrier (-96 .. -88 dBFS at
+    // amsq's capture point) must clear the midpoint; the no-signal floor
+    // (-120 .. -112) must not.
+    ok = require(WdspChannel::levelSquelchThresholdDbfsForLevel(50) < -96.0 &&
+                 WdspChannel::levelSquelchThresholdDbfsForLevel(50) > -112.0,
+                 "the level map's midpoint does not sit between the measured "
+                 "HL2 noise floor and a strong broadcast carrier") && ok;
+
+    const std::pair<WdspChannel::Mode, Stage> routes[] = {
+        {WdspChannel::Mode::Fm, Stage::Fm},     {WdspChannel::Mode::Am, Stage::Level},
+        {WdspChannel::Mode::Sam, Stage::Level}, {WdspChannel::Mode::Lsb, Stage::Level},
+        {WdspChannel::Mode::Usb, Stage::Level}, {WdspChannel::Mode::Dsb, Stage::Level},
+        {WdspChannel::Mode::Cwl, Stage::None},  {WdspChannel::Mode::Cwu, Stage::None},
+        {WdspChannel::Mode::Digu, Stage::None}, {WdspChannel::Mode::Digl, Stage::None},
+        {WdspChannel::Mode::Spec, Stage::None}, {WdspChannel::Mode::Drm, Stage::None},
+        {WdspChannel::Mode::Wbfm, Stage::None},
+    };
+    for (const auto& [mode, stage] : routes) {
+        ok = require(WdspChannel::squelchStageFor(mode) == stage,
+                     "a mode routes to the wrong squelch stage") && ok;
+    }
+
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.mode = WdspChannel::Mode::Usb;
+    std::string error;
+    auto channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, "squelch routing test failed to open a channel")) {
+        return false;
+    }
+    // At most one run flag, and only the one for `stage`.
+    const auto expect = [&](Stage stage, bool running, double threshold, const char* what) {
+        const auto& a = channel->appliedSquelch();
+        const bool shape = a.stage == stage &&
+                           a.fmRun == (running && stage == Stage::Fm) &&
+                           a.amRun == (running && stage == Stage::Level) &&
+                           nearly(a.threshold, threshold);
+        if (!shape) {
+            std::cerr << "  squelch applied: stage " << static_cast<int>(a.stage)
+                      << " fm " << a.fmRun << " am " << a.amRun
+                      << " threshold " << a.threshold << '\n';
+        }
+        ok = require(shape, what) && ok;
+    };
+
+    ok = require(channel->appliedSquelch().applications >= 1,
+                 "open() did not apply the squelch at all") && ok;
+    expect(Stage::Level, false, -126.0, "a fresh channel is not squelch-off at the default level");
+
+    ok = require(channel->setSquelch(true, 50), "setSquelch was refused") && ok;
+    expect(Stage::Level, true, -105.0, "USB squelch on did not run amsq alone");
+    ok = require(channel->setMode(WdspChannel::Mode::Am), "setMode(AM) refused") && ok;
+    expect(Stage::Level, true, -105.0, "AM did not keep the squelch on amsq");
+    ok = require(channel->setMode(WdspChannel::Mode::Fm), "setMode(FM) refused") && ok;
+    expect(Stage::Fm, true, 0.1, "FM did not move the squelch to fmsq");
+    ok = require(channel->setMode(WdspChannel::Mode::Cwu), "setMode(CWU) refused") && ok;
+    expect(Stage::None, false, 0.0, "CW left a squelch stage running");
+    ok = require(channel->setMode(WdspChannel::Mode::Digu), "setMode(DIGU) refused") && ok;
+    expect(Stage::None, false, 0.0, "DIGU left a squelch stage running");
+    ok = require(channel->setMode(WdspChannel::Mode::Fm), "setMode(FM) refused") && ok;
+    expect(Stage::Fm, true, 0.1, "returning to FM did not restore fmsq");
+    ok = require(channel->setSquelch(true, 80), "setSquelch level change refused") && ok;
+    expect(Stage::Fm, true, std::pow(10.0, -1.6), "a level change did not reach fmsq");
+    ok = require(channel->config().squelchEnabled && channel->config().squelchLevel == 80,
+                 "the squelch pair is not in the channel's Config") && ok;
+
+    // LEVEL 0 RUNS NOTHING, in every family: "0 = open" is structural.
+    for (const auto mode : {WdspChannel::Mode::Fm, WdspChannel::Mode::Am,
+                            WdspChannel::Mode::Usb, WdspChannel::Mode::Lsb}) {
+        ok = require(channel->setMode(mode) && channel->setSquelch(true, 0),
+                     "level-0 setup refused") && ok;
+        const auto& a = channel->appliedSquelch();
+        ok = require(!a.fmRun && !a.amRun, "squelch on at level 0 ran a stage") && ok;
+    }
+    ok = require(channel->setMode(WdspChannel::Mode::Fm) && channel->setSquelch(true, 80),
+                 "restore FM/80 refused") && ok;
+
+    // Across a rebuild: reconfigure() frees the stages; the Config carries the
+    // pair and open() must put it back on the right stage.
+    WdspChannel::Config rebuilt = channel->config();
+    rebuilt.inputBlockSize = 512;
+    rebuilt.dspBlockSize = 512;
+    if (!require(channel->reconfigure(rebuilt, &error), "squelch channel failed to reconfigure")) {
+        return false;
+    }
+    expect(Stage::Fm, true, std::pow(10.0, -1.6), "reconfigure() lost the squelch");
+
+    ok = require(channel->setSquelch(false, 80), "squelch off refused") && ok;
+    expect(Stage::Fm, false, std::pow(10.0, -1.6), "squelch off left fmsq running");
+    ok = require(channel->setSquelch(true, 400) && channel->config().squelchLevel == 100,
+                 "an out-of-range level was not clamped to 100") && ok;
+
+    WdspChannel::Config tx;
+    tx.direction = WdspChannel::Direction::Transmit;
+    tx.inputBlockSize = 256;
+    tx.dspBlockSize = 256;
+    auto transmit = WdspChannel::create(tx, &error);
+    if (!require(transmit != nullptr, "squelch test failed to open a TX channel")) {
+        return false;
+    }
+    ok = require(!transmit->setSquelch(true, 50),
+                 "a transmit channel accepted a receive squelch") && ok;
+    return ok;
+}
+
+bool runSquelchGateTest()
+{
+    // What the routing record cannot show: that the stage really gates audio.
+    // Per case, three fresh channels (off, on at the case's level, on at 0) are
+    // fed noise, then signal plus noise, at HL2-measured levels (#5982): noise
+    // at ~-116 dBFS, signal at -92, with Hl2RxDsp's AGC so the audio is as quiet
+    // as on the radio. RXA_S_AV, read on amsq's trigger buffer, checks the levels.
+    constexpr int kRate = 48000;
+    constexpr std::size_t kBlock = 256;
+    // Opening needs ~80 ms; a fresh channel's mute ramp and fmsq's 100 ms arm
+    // delay come first. No close edges are measured (every channel starts
+    // fresh, and amsq/fmsq start MUTED), so the 1.2-1.5 s tails never apply.
+    constexpr std::size_t kSettleBlocks = 60;
+    constexpr std::size_t kMeasureBlocks = 80;
+    std::mt19937 rng(5678);
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+
+    enum class Input { Noise, FmTone, AmCarrier, SsbTone };
+    struct Reading { double audio = -1.0; double sAvDb = 0.0; };
+    const auto measure = [&](WdspChannel& ch, Input input, float noiseRms,
+                             double signalDbfs, std::size_t& clock) -> Reading {
+        std::vector<float> i(kBlock), q(kBlock), left(ch.outputBlockSize()),
+            right(ch.outputBlockSize());
+        const double amp = std::pow(10.0, signalDbfs / 20.0);
+        double energy = 0.0;
+        Reading r;
+        for (std::size_t block = 0; block < kSettleBlocks + kMeasureBlocks; ++block) {
+            for (std::size_t n = 0; n < kBlock; ++n) {
+                const double t = static_cast<double>(clock + n) / kRate;
+                double si = 0.0, sq = 0.0;
+                if (input == Input::AmCarrier) {
+                    // Carrier on the tuned frequency, 50% modulated at 1 kHz.
+                    si = amp * (1.0 + 0.5 * std::sin(2.0 * std::numbers::pi * 1000.0 * t));
+                } else if (input == Input::SsbTone) {
+                    // A single tone 1 kHz into the USB passband: what a
+                    // whistle or a steady speech formant looks like. IN WIRE
+                    // ORDER — exp(-j w t), the HPSDR conjugate convention RXA
+                    // is fed in (see Hl2RxDsp::processIqBlock); the analytic
+                    // exp(+j w t) lands in LSB and measured -119 dBFS here.
+                    si = amp * std::cos(2.0 * std::numbers::pi * 1000.0 * t);
+                    sq = -amp * std::sin(2.0 * std::numbers::pi * 1000.0 * t);
+                }
+                i[n] = static_cast<float>(si);
+                q[n] = static_cast<float>(sq);
+            }
+            if (input == Input::FmTone) {
+                fillFmTone(i, q, kRate, 1000.0, 2500.0, clock);
+            }
+            for (std::size_t n = 0; n < kBlock; ++n) {
+                i[n] += noiseRms * gauss(rng);
+                q[n] += noiseRms * gauss(rng);
+            }
+            clock += kBlock;
+            if (ch.processIq(i, q, left, right) != WdspChannel::ProcessResult::Ok) {
+                return r;
+            }
+            if (block >= kSettleBlocks) {
+                energy += rms(left);
+            }
+        }
+        r.audio = energy / static_cast<double>(kMeasureBlocks);
+        r.sAvDb = ch.meter(WdspChannel::Meter::SignalAverage);
+        return r;
+    };
+
+    bool ok = true;
+    struct Case {
+        const char* name;
+        WdspChannel::Mode mode;
+        double low, high;
+        int level;
+        float noiseRms;
+        Input signal;
+        double signalDbfs;
+        bool hl2Levels;   // assert the S-meter agrees with the HL2-measured levels
+    };
+    // Noise per rail: 3.3e-6 rms is 2*sigma^2 = 2.2e-11 over 48 kHz, of which
+    // 8/48 falls in +-4 kHz: -116 dBFS. The FM case keeps its own scale: a
+    // discriminator fed noise alone outputs the noise's random PHASE, not its
+    // size, and 0.01 puts its 0.5 carrier ~31 dB above it — a quieting signal.
+    const Case cases[] = {
+        {"FM", WdspChannel::Mode::Fm, -8000.0, 8000.0, 50, 0.01f, Input::FmTone, 0.0, false},
+        {"AM", WdspChannel::Mode::Am, -4000.0, 4000.0, 50, 3.3e-6f, Input::AmCarrier, -92.0, true},
+        {"USB", WdspChannel::Mode::Usb, 150.0, 2850.0, 50, 3.3e-6f, Input::SsbTone, -92.0, false},
+    };
+    for (const Case& c : cases) {
+        WdspChannel::Config config;
+        config.inputBlockSize = kBlock;
+        config.dspBlockSize = kBlock;
+        config.mode = c.mode;
+        config.filterLowHz = c.low;
+        config.filterHighHz = c.high;
+        config.agcMode = 3;               // Hl2RxDsp::Config's AGC
+        config.maximumAgcGainDb = 39.0;
+        config.blockForOutput = true;
+        std::string error;
+        auto open = WdspChannel::create(config, &error);
+        config.squelchEnabled = true;
+        config.squelchLevel = c.level;
+        auto closed = WdspChannel::create(config, &error);
+        config.squelchLevel = 0;
+        auto zero = WdspChannel::create(config, &error);
+        if (!require(open && closed && zero, "squelch gate test failed to open channels")) {
+            return false;
+        }
+        std::size_t ckOpen = 0, ckClosed = 0, ckZero = 0;
+        const Reading noiseOpen = measure(*open, Input::Noise, c.noiseRms, 0.0, ckOpen);
+        const Reading noiseClosed = measure(*closed, Input::Noise, c.noiseRms, 0.0, ckClosed);
+        const Reading noiseZero = measure(*zero, Input::Noise, c.noiseRms, 0.0, ckZero);
+        const Reading sigOpen = measure(*open, c.signal, c.noiseRms, c.signalDbfs, ckOpen);
+        const Reading sigClosed = measure(*closed, c.signal, c.noiseRms, c.signalDbfs, ckClosed);
+        std::cout << c.name << " squelch level " << c.level << ": noise (S "
+                  << noiseOpen.sAvDb << " dBFS) " << noiseOpen.audio << " off / "
+                  << noiseClosed.audio << " on / " << noiseZero.audio
+                  << " at level 0; signal (S " << sigOpen.sAvDb << " dBFS) "
+                  << sigOpen.audio << " off / " << sigClosed.audio << " on\n";
+        if (!require(noiseOpen.audio > 0.0 && noiseClosed.audio >= 0.0 &&
+                     noiseZero.audio > 0.0 && sigOpen.audio > 0.0 && sigClosed.audio >= 0.0,
+                     "a squelch gate measurement failed to run")) {
+            return false;
+        }
+        if (c.hl2Levels) {
+            // S_AV is power-averaged: noise reads ~1 dB above amsq's
+            // magnitude average, and 50% AM adds 0.5 dB to the carrier.
+            ok = require(noiseOpen.sAvDb > -119.0 && noiseOpen.sAvDb < -113.0,
+                         "the harness noise is not at the measured HL2 floor") && ok;
+            ok = require(sigOpen.sAvDb > -93.5 && sigOpen.sAvDb < -89.5,
+                         "the harness carrier is not at the measured broadcast level") && ok;
+        }
+        // Muted means muted: both stages apply a gain of exactly 0 in MUTED.
+        ok = require(noiseClosed.audio < 1.0e-9,
+                     "noise alone was not muted with the squelch on") && ok;
+        // The reference was audible, or "muted" measured nothing.
+        ok = require(noiseOpen.audio > 1.0e-7,
+                     "noise with the squelch off was not audible -- the muted "
+                     "reading proves nothing") && ok;
+        // Level 0 is open: the same noise comes through as with squelch off.
+        ok = require(noiseZero.audio > 0.5 * noiseOpen.audio,
+                     "squelch on at level 0 did not pass noise -- level 0 must be open") && ok;
+        // A signal above threshold opens it, at the squelch-off level. 10% is
+        // for the noise riding on it being a different draw per channel.
+        ok = require(sigClosed.audio > 0.9 * sigOpen.audio &&
+                     sigClosed.audio < 1.1 * sigOpen.audio,
+                     "a signal above threshold did not open the squelch") && ok;
+    }
+    return ok;
+}
+
 bool runTransmitDiscardTest()
 {
     WdspChannel::Config config = liveTransmitConfig(WdspChannel::Mode::Usb, 300.0, 2700.0);
@@ -3496,6 +3855,7 @@ int main()
     }));
     check(runLeakChecked("TX discard", runTransmitDiscardTest));
     check(runLeakChecked("TX live geometry", runTransmitLiveGeometryTest));
+    check(runLeakChecked("capture fault retry", runCaptureFaultRetryTest));
     check(runLeakChecked("TX suppression sweep", runTransmitSuppressionSweepTest));
     check(runLeakChecked("TX zeros census", runTransmitZerosCensusTest));
     check(runLeakChecked("underrun test", runUnderrunTest));
@@ -3513,6 +3873,8 @@ int main()
     check(runLeakChecked("notch survives tap change test",
                          runNotchSurvivesTapChangeTest));
     check(runLeakChecked("FM deviation test", runFmDeviationTest));
+    check(runLeakChecked("squelch routing test", runSquelchRoutingTest));
+    check(runLeakChecked("squelch gate test", runSquelchGateTest));
     // LAST, and deliberately so: see the ordering note above. Anything added
     // later belongs ABOVE this line, not below it.
     check(runLeakChecked("close-after-stopped-clocking test",
