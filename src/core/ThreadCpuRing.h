@@ -7,25 +7,11 @@
 
 namespace AetherSDR {
 
-// Recent per-thread CPU readings, for the Threads tab's Peak and sparkline
-// columns (#2554).
-//
-// This is NOT SystemInfoHistory. That is the compacting ring the issue specs
-// for charts over a timeframe selector — an hour raw, seven days bucketed —
-// and it stays deferred with the Overview tab, along with the charts that are
-// its only consumer. This holds a fixed, small number of readings per thread
-// and nothing else: no timestamps, no compaction, no timeframe. Two columns is
-// the whole requirement, and a column does not need to know when a sample was
-// taken, only what order they came in.
-//
-// The window resolves an inconsistency in the issue's own column list. It asks
-// for "Peak (last 60 s)" and a "60-sample mini-chart" in adjacent rows, but at
-// the collector's 1.5 s cadence those are different windows — 60 samples is
-// 90 s. kSamples = 40 makes both columns mean the same minute.
-//
-// Pure, header-only and Qt-Core-only by design: the eviction and peak maths is
-// where an off-by-one would silently mislabel a column, and here it is testable
-// without constructing a widget.
+// Recent per-thread CPU readings for the Threads tab's Peak and sparkline
+// columns (#2554): a fixed small count per thread, order only, no timestamps.
+// Not SystemInfoHistory (the timeframe-compacting ring for charts).
+// kSamples = 40 at the 1.5 s cadence = 60 s, so both columns cover the same
+// minute. Header-only, Qt-Core-only so the peak/eviction maths is testable.
 class ThreadCpuRing {
 public:
     // 40 × the collector's 1500 ms cadence = 60 s.

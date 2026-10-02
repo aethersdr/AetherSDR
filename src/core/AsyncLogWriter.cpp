@@ -75,31 +75,12 @@ QString labelForType(QtMsgType type)
 // log lines are scrubbed.  Declared in AsyncLogWriter.h.
 namespace {
 
-// ---------------------------------------------------------------------------
-// The value grammar every keyword rule shares.
-//
-// ESCAPE-AWARE ON PURPOSE, and the two quoted branches escape DIFFERENTLY.
-//
-// In ordinary text a quoted value may contain an escaped quote, so the value
-// runs to its real closing quote: `[^"\\]|\\.` consumes an escaped character
-// as one unit. A grammar that stopped at the first `"` ended the match early
-// and left the tail of the secret standing — worse than not matching, because
-// the line then looks redacted.
-//
-// In QDebug's spelling the DELIMITER is itself `\"`, so the same trick
-// over-consumes: `\\.` happily eats the closing `\"` and runs on into the
-// next field, which swallowed one JSON key and left the value after it
-// unredacted. That branch therefore stops at the first real delimiter — but it
-// must first consume an ENCODED escaped quote as a unit. QDebug doubles the
-// backslash, so a JSON `\"` inside the value arrives as `\\` + `\"`; without
-// that alternative the branch terminated inside it and left the value's tail
-// in the log.
-//
-// The leading negative lookahead keeps redaction IDEMPOTENT: without it a
-// second pass treats the marker `***REDACTED***` as a fresh value and eats its
-// own prefix, so `token=***REDACTED***` became `token=***R***REDACTED***`.
-// Idempotence is load-bearing — SupportBundle re-scrubs already-clean logs on
-// the way into an archive.
+// Value grammar shared by every keyword rule. The two quoted branches escape
+// differently: in plain text `[^"\\]|\\.` consumes an escaped quote so the match
+// reaches the real closing quote; in QDebug spelling the delimiter is itself
+// `\"`, so that branch stops at the first one, after first consuming QDebug's
+// encoded escaped quote (`\\` + `\"`) as a unit. The leading lookahead keeps
+// redaction idempotent (SupportBundle re-scrubs already-clean logs).
 constexpr const char* kSeparator = R"((\\?["']?\s*[:=]\s*))";
 constexpr const char* kValue =
     R"((?!\*\*\*REDACTED\*\*\*)(?!(?:bearer|basic|digest)\s+\*\*\*REDACTED\*\*\*))"
@@ -210,17 +191,10 @@ QString redactPii(const QString& msg)
     // runs before compressed IPv6, and home paths run before anything that
     // could match inside a user name.
 
-    // Home directory prefix -> ~. Both slash styles, and the literal
-    // /home/<user>, /Users/<user> and C:\Users\<user> roots, because the
-    // running process's QDir::homePath() is not always the path's own root: a
-    // Flatpak sandbox, an elevated run, or a log copied off another machine all
-    // produce a home path this process never had.
-    //
-    // THE USER SEGMENT IS BOUNDED. A Windows user name may contain spaces, but
-    // a rule that simply runs to the next separator swallows whatever follows
-    // the path on the line: "home=/home/auditor status=connected" collapsed to
-    // "home=~", deleting the diagnostic. Spaces are therefore accepted only
-    // when a path separator actually follows the run.
+    // Home directory prefix -> ~, both slash styles, plus literal /home/<user>,
+    // /Users/<user> and C:\Users\<user> roots (sandboxed, elevated or copied logs
+    // have other homes). The user segment may contain spaces only when a path
+    // separator follows, so text after the path is not swallowed.
     const QString home = QDir::homePath();
     if (!home.isEmpty()) {
         QString nativeHome = home;
@@ -249,16 +223,9 @@ QString redactPii(const QString& msg)
         R"(([0-9A-Fa-f]{2})([:-])([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2}))");
     out.replace(*macRe, QStringLiteral("**\\2**\\2**\\2**\\2**\\2\\7"));
 
-    // IPv6, compressed form. ANCHORED ON A HEXTET ADJACENT TO "::" — every
-    // group around the "::" used to be optional, so the shortest string the
-    // pattern matched was "::" on its own and any C++ qualified name in a
-    // message was rewritten: "WanConnection::sendCommand" became
-    // "WanConnection[v6-redacted]sendCommand". 48 log sites stream
-    // Class::method as the literal start of their message.
-    //
-    // A hextet is required on at least one side, and the token must not be
-    // flanked by other name characters, so a qualified name cannot match while
-    // "::1", "fe80::1%eth0" and "::ffff:192.0.2.7" still do.
+    // IPv6, compressed form. Requires a hextet adjacent to "::" and no flanking name
+    // characters, so C++ qualified names (Class::method) never match while "::1",
+    // "fe80::1%eth0" and "::ffff:192.0.2.7" do.
     static const QRegularExpression* ipv6CompressedRe = new QRegularExpression(
         R"((?<![0-9A-Za-z_:.\-])\[?(?:)"
         R"((?:[0-9A-Fa-f]{1,4}:(?!:))*[0-9A-Fa-f]{1,4}::(?:[0-9A-Fa-f]{1,4}:)*(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{1,4})?)"

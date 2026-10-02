@@ -188,25 +188,10 @@ static const char* kTextStyle =
 
 int CwxPanel::macroRowMinimumHeight(const QFont& baseFont)
 {
-    // #4945: with 12 Expanding rows in one grid, a short window (the app's
-    // own 400px minimum height leaves this panel ~330px) squeezed every
-    // row well below one line of text -- Qt's layout protects FIXED-size
-    // siblings like m_textEdit under a deficit, but has nowhere else to
-    // take the shortfall from an Expanding one, so it shrunk the widget
-    // itself and clipped the glyph tops rather than just hiding overflow
-    // text. buildSetupView() puts this grid in a QScrollArea, which is
-    // what actually stops the squeeze (verified: removing just this floor
-    // while keeping the scroll area still passed). Kept anyway as an
-    // explicit floor -- readability shouldn't depend on QTextEdit's
-    // incidental natural size hint staying above one line across Qt
-    // versions/themes.
-    //
-    // Derived from font metrics, not a bare pixel count (review on #5125)
-    // -- the widget's own .font() isn't reliable here (styled while still
-    // unpolished/unshown, the same timing trap #4869 documents for
-    // Qt::WA_Hover), so this constructs an explicit QFont matching the
-    // stylesheet's declared "font-size: 11px" rather than trusting .font()
-    // to already reflect it.
+    // Floor for each of the 12 Expanding macro rows (#4945). The QScrollArea in
+    // buildSetupView() is what prevents the squeeze; this keeps rows readable
+    // independent of QTextEdit's size hint. Built from an explicit 11 px QFont
+    // (the stylesheet's size) because .font() is unreliable before polish.
     QFont macroFont = baseFont;
     macroFont.setPixelSize(11);
     const int oneLine = QFontMetrics(macroFont).height();
@@ -323,16 +308,11 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
             this, [this](int v) { if (m_model) m_model->setSpeed(v); });
 
     // Wire model signals
-    // ── F1-F12 hotkeys — active app-wide when the TX slice is in a CW
-    //    mode (CW or CWL).  CWX keys the TX slice, so the guard follows it,
-    //    not the selected RX slice. Guard prevents collisions with the DVK
-    //    macro panel or other function-key users. (#1552, #4173)
-    //
-    //    Created disabled; MainWindow flips enable state based on the
-    //    TX slice's mode (mutually exclusive with DvkPanel's F1-F12
-    //    set) so the keys fire regardless of panel visibility, while
-    //    Qt still sees at most one enabled ApplicationShortcut per key
-    //    and never emits activatedAmbiguously. (#2464, #2582)
+    // F1-F12 hotkeys, app-wide while the TX slice is in CW/CWL (CWX keys the TX
+    // slice) (#1552, #4173). Created disabled; MainWindow enables them by TX
+    // mode, mutually exclusive with DvkPanel's set, so at most one enabled
+    // ApplicationShortcut exists per key and activatedAmbiguously never fires
+    // (#2464, #2582).
     for (int i = 0; i < 12; ++i) {
         auto* sc = new QShortcut(Qt::Key_F1 + i, window());
         sc->setContext(Qt::ApplicationShortcut);

@@ -23,21 +23,10 @@ FramelessResizer::FramelessResizer(QWidget* window, int margin, int topMoveReser
     : QObject(window), m_window(window), m_margin(margin),
       m_topMoveReserve(topMoveReserve)
 {
-    // Application-wide rather than per-QWindow: see quirk 1 in the header.
-    // eventFilter() bails on the first switch for anything that isn't a mouse
-    // event, so the cost to unrelated event traffic is a type comparison — but
-    // every open frameless window installs its own instance, so that
-    // comparison runs once per instance per event: O(live FramelessResizer
-    // instances) per mouse event, application-wide. Ten call sites today
-    // (`grep -rn "FramelessResizer::install" src/`), but one of them is
-    // PersistentDialog's own constructor — `grep -rn "public PersistentDialog"
-    // src/` finds 40 subclasses today, and PersistentDialog sets no
-    // WA_DeleteOnClose, so an instance survives its dialog being closed (just
-    // hidden) and the live count grows with every *distinct dialog type* the
-    // operator has opened at least once this session, not bounded by the ten
-    // call sites. Still cheap per filter — a type compare, then a
-    // qobject_cast and a short parent-chain walk — but watch instance count,
-    // not call sites, if this ever shows up in a profile.
+    // Application-wide: see quirk 1 in the header. Non-mouse events exit on a
+    // type compare, but each frameless window installs its own instance and
+    // PersistentDialog (no WA_DeleteOnClose) keeps instances alive after close,
+    // so per-event cost scales with live instances, not call sites.
     if (QCoreApplication* app = QCoreApplication::instance()) {
         app->installEventFilter(this);
     }
@@ -126,17 +115,11 @@ Qt::Edges FramelessResizer::edgesAt(const QPoint& p) const
                          m_window->isMaximized() || m_window->isFullScreen());
 }
 
-// Known limitation, not fixed here: QGuiApplication::setOverrideCursor()/
-// restoreOverrideCursor() is a single global LIFO stack shared by every
-// FramelessResizer instance (one per open frameless window/dialog — see the
-// constructor). Two places can now pop a turn after the push that logically
-// owns them — the deferred QEvent::Leave check below, and the cross-window
-// pop in eventFilter() when the pointer lands on an unowned window — so if a
-// second instance pushes its own override cursor in between, the deferred
-// pop here restores *that* instance's entry instead of this one's. Push/pop
-// stay balanced (nothing leaks), so the only visible effect is a transiently
-// wrong cursor shape right when the pointer crosses from one frameless
-// window's edge straight onto another's.
+// Known limitation: setOverrideCursor()/restoreOverrideCursor() is one global
+// LIFO shared by all instances. The deferred Leave pop and the cross-window pop
+// in eventFilter() can pop after another instance pushed, restoring its entry.
+// Balanced, so nothing leaks; the cursor shape is briefly wrong when moving
+// straight from one frameless window's edge onto another's.
 void FramelessResizer::enterEdgeZone(Qt::Edges edges)
 {
     if (edges == m_lastEdges && m_cursorOverridden) return;
@@ -306,16 +289,10 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
         return false;
     }
 
-    // Hands off when the window has native decorations — the OS handles resize.
-    // endManualResize() rather than leaveEdgeZone() alone: a frameless toggle
-    // midway through a drag would otherwise leave the grab held and the
-    // active flag set, and that flag bypasses the ownership check above.
-    // The explicit leaveEdgeZone() below is not redundant with the one
-    // endManualResize() ends with: that one is skipped by endManualResize()'s
-    // own early return whenever m_manualResizeActive is already false, which
-    // is exactly the toggle-while-only-hovering case — no drag in progress,
-    // just an edge cursor up from a hover — where this call is the only
-    // thing that clears it.
+    // Native decorations: the OS handles resize. endManualResize() releases a
+    // grab/active flag left by a mid-drag frameless toggle (that flag bypasses
+    // the ownership check). leaveEdgeZone() is still needed: endManualResize()
+    // returns early when no drag is active, the hover-only case.
     if (!(m_window->windowFlags() & Qt::FramelessWindowHint)) {
         endManualResize();
         leaveEdgeZone();
@@ -381,16 +358,9 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
                 // since the WM isn't showing one.
                 beginManualResize(edges, global);
             } else {
-                // startSystemResize() reports success/failure honestly
-                // everywhere except the cases handled above — except macOS:
-                // QCocoaWindow has no override at all and unconditionally
-                // returns false (never implemented, not a QTBUG), so without
-                // checking this the press is consumed below and nothing
-                // happens: the exact xcb failure mode, now on macOS. Fall
-                // back to the same manual drag the branch above uses,
-                // keeping our own cursor up for it exactly as that path
-                // does — only hand cursor control to the OS once its own
-                // grab actually took the resize.
+                // macOS QCocoaWindow::startSystemResize() always returns false,
+                // so fall back to the manual drag (keeping our cursor) and only
+                // hand the cursor to the OS once its grab took the resize.
                 if (m_window->windowHandle()->startSystemResize(edges)) {
                     leaveEdgeZone();
                 } else {
@@ -407,16 +377,10 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
         // way through shouldn't abort the resize (and get swallowed doing it).
         auto* me = static_cast<QMouseEvent*>(ev);
         if (m_manualResizeActive && me->button() == Qt::LeftButton) {
-            // Settle on the release position rather than wherever the last
-            // motion event happened to leave us: under load the final move can
-            // be coalesced away, which would end the drag a few pixels short of
-            // where the pointer actually came up.
-            // QCursor::pos() rather than the event's globalPosition(): while a
-            // left/top drag is moving the window under the pointer, Qt derives
-            // that field from a local coordinate against an origin we have just
-            // changed, so it trails the real pointer by a motion event and the
-            // drag settles a few pixels short.  The live cursor position has no
-            // such dependency.
+            // Settle on the release position, since the final move can be
+            // coalesced away under load. QCursor::pos(), not globalPosition():
+            // during a left/top drag Qt derives that from an origin we just
+            // moved, so it lags a motion event.
             continueManualResize(QCursor::pos());
             endManualResize();
             return true;
@@ -426,43 +390,20 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
 
     case QEvent::Leave:
         if (shouldEndOnUngrabbedLeave(m_manualResizeActive, m_manualResizeGrabbed)) {
-            // Denied grab (beginManualResize() already warned about this):
-            // once the pointer leaves our own window we stop receiving any
-            // events for it at all — including the MouseButtonRelease that
-            // would normally end the drag — because without a real grab,
-            // ownsWindow() is back in effect up in eventFilter() and nothing
-            // outside this window is "ours" any more. Left alone,
-            // m_manualResizeActive stays true (this same guard would also
-            // block the branch below from clearing it), and a *second*
-            // press elsewhere followed by a move back over this window
-            // would resume the drag from the now stale
-            // m_manualResizePressGlobal, snapping the window across
-            // whatever gap the pointer covered in between. End it here
-            // instead — the ungrabbed case was already a best-effort
-            // fallback (see beginManualResize()), not a guarantee.
+            // Denied grab: once the pointer leaves, ownsWindow() filters out
+            // every event for us, including the release. Left active, a later
+            // press-and-return would resume from a stale
+            // m_manualResizePressGlobal and snap the window. The ungrabbed path
+            // is best-effort anyway (see beginManualResize()).
             endManualResize();
             break;
         }
-        // Only drop the cursor once the pointer has really left the window —
-        // crossing between this window's native children raises Leave too, and
-        // resetting on those would make the edge cursor flicker. Checked one
-        // event-loop turn later, not inline: WA_UnderMouse for the widget that
-        // owns this event is updated by that widget's own event() handling,
-        // which — like every receiver's event() — runs *after* the
-        // application-level filters (this one included) during the very same
-        // Leave dispatch. Reading m_window->underMouse() inline would see the
-        // pre-update, stale value and never fire, leaving the resize cursor
-        // stranded whenever the pointer leaves through a corner without a
-        // MouseMove first landing outside the margin. QCursor::pos() would
-        // dodge that timing problem but reintroduces the Wayland global-
-        // cursor-query unreliability the press handler above already moved
-        // away from. Deferring past this turn — including any Enter that
-        // immediately follows when the pointer actually just crossed into a
-        // different native child — lets Qt finish updating the attribute
-        // first, so underMouse() is authoritative by the time the deferred
-        // check runs. this is the QObject context: the connection (and this
-        // lambda) is dropped automatically if the resizer or its window is
-        // destroyed before the timer fires.
+        // Drop the cursor only once the pointer has really left: moving between
+        // native children also raises Leave. Deferred one turn because
+        // WA_UnderMouse is updated by the widget's event() after app-level
+        // filters run, so underMouse() is stale inline (QCursor::pos() is
+        // unreliable on Wayland). `this` as context drops the lambda if the
+        // resizer dies first.
         if (!m_manualResizeActive) {
             QTimer::singleShot(0, this, [this]() {
                 if (!m_manualResizeActive && m_window && !m_window->underMouse()) {

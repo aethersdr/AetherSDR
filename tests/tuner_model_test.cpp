@@ -8,6 +8,7 @@
 
 #include <QCoreApplication>
 #include <QSignalSpy>
+#include <QStringList>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -128,6 +129,77 @@ int main(int argc, char** argv)
         CHECK(t.isBypass() && st.count() == 2);
         t.autoTune();                                      // no direct conn → relay intent
         CHECK(at.count() == 1);
+    }
+
+    // ---- OPERATE / BYPASS on a TGXL reached by manual IP only REFUSE ALOUD ----
+    // A non-Flex radio (Hermes-Lite 2) has no relay for these; the direct
+    // port-9010 link makes the applet visible, so the keys were on screen and
+    // did nothing. They still send nothing -- no relay intent, no optimistic
+    // state -- but now say so, so MainWindow can announce it.
+    {
+        TunerModel t;
+        TgxlConnection direct;
+        t.setDirectConnection(&direct);
+        QSignalSpy refused(&t, &TunerModel::relayedCommandRefused);
+        QSignalSpy op(&t, &TunerModel::operateRequested);
+        QSignalSpy by(&t, &TunerModel::bypassRequested);
+        QSignalSpy st(&t, &TunerModel::stateChanged);
+
+        // No tuner at all: still the silent no-op, nothing to refuse.
+        t.setOperate(true); t.setBypass(true);
+        CHECK(refused.count() == 0 && op.count() == 0 && by.count() == 0);
+
+        CHECK(QMetaObject::invokeMethod(&direct, "connected", Qt::DirectConnection));
+        CHECK(t.isPresent() && t.handle().isEmpty());
+
+        t.setOperate(true);
+        CHECK(refused.count() == 1
+              && refused.takeFirst().at(0).toString() == QLatin1String("operate"));
+        t.setBypass(true);
+        CHECK(refused.count() == 1
+              && refused.takeFirst().at(0).toString() == QLatin1String("bypass"));
+        CHECK(op.count() == 0 && by.count() == 0);          // nothing relayed
+        CHECK(!t.isOperate() && !t.isBypass() && st.count() == 0);  // no lying state
+
+        // Once a Flex relays it (handle present) the verbs go through and
+        // nothing is refused.
+        t.setHandle("0x3000");
+        t.setOperate(true);
+        CHECK(op.count() == 1 && refused.count() == 0);
+    }
+
+    // ---- ONE press that needs both verbs is ONE refusal, not two ----
+    // STBY, BYP and the rail's cycle each command operate AND bypass for a
+    // single click. On a direct-only TGXL that used to log two refusals for
+    // one action; setOperateAndBypass() refuses once and sends nothing. With a
+    // relay it commands both, in the order asked for.
+    {
+        TunerModel t;
+        TgxlConnection direct;
+        t.setDirectConnection(&direct);
+        CHECK(QMetaObject::invokeMethod(&direct, "connected", Qt::DirectConnection));
+        QSignalSpy refused(&t, &TunerModel::relayedCommandRefused);
+        QStringList wire;
+        QObject::connect(&t, &TunerModel::operateRequested, &t,
+                         [&wire](bool on) { wire << QStringLiteral("operate=%1").arg(on ? 1 : 0); });
+        QObject::connect(&t, &TunerModel::bypassRequested, &t,
+                         [&wire](bool on) { wire << QStringLiteral("bypass=%1").arg(on ? 1 : 0); });
+
+        t.setOperateAndBypass(false, false, /*operateFirst=*/true);
+        CHECK(refused.count() == 1
+              && refused.takeFirst().at(0).toString() == QLatin1String("operate"));
+        t.setOperateAndBypass(true, false, /*operateFirst=*/false);
+        CHECK(refused.count() == 1
+              && refused.takeFirst().at(0).toString() == QLatin1String("bypass"));
+        CHECK(wire.isEmpty() && !t.isOperate() && !t.isBypass());
+
+        t.setHandle("0x3000");
+        t.setOperateAndBypass(true, true, /*operateFirst=*/true);
+        CHECK(wire == QStringList({QStringLiteral("operate=1"), QStringLiteral("bypass=1")}));
+        wire.clear();
+        t.setOperateAndBypass(false, false, /*operateFirst=*/false);
+        CHECK(wire == QStringList({QStringLiteral("bypass=0"), QStringLiteral("operate=0")}));
+        CHECK(refused.count() == 0);
     }
 
     // ---- per-port PTT and the pttChanged edge ----

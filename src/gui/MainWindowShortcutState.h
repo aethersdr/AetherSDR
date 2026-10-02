@@ -1,21 +1,10 @@
 #pragma once
 
-// Internal shared state for MainWindow's keyboard-shortcut system
-// (#3351 Phase 1b). NOT a public API — only MainWindow*.cpp TUs may
-// include this.
-//
-// These were file-scope statics in MainWindow.cpp. The monolith split
-// puts their writers in more than one translation unit (the View-menu
-// toggle lives in MainWindow_Menus.cpp; the slider-lease lifecycle and
-// the guard's readers stay in MainWindow.cpp until the Shortcuts TU
-// lands), so they need external linkage. Definitions remain in
-// MainWindow.cpp.
-//
-// Why file-scope state exists at all: ShortcutManager::rebuildShortcuts
-// takes a plain std::function<bool()> guard with no receiver object, so
-// the guard cannot read MainWindow members; it reads these flags
-// instead. MainWindow mirrors m_keyboardShortcutsEnabled into
-// s_keyboardShortcutsEnabled whenever it changes.
+// Shared state for MainWindow's shortcut system (#3351); only MainWindow*.cpp
+// may include this. Definitions live in MainWindow.cpp. These are file-scope
+// because ShortcutManager::rebuildShortcuts takes a receiver-less
+// std::function<bool()> guard; MainWindow mirrors m_keyboardShortcutsEnabled
+// into s_keyboardShortcutsEnabled.
 
 class QWidget;
 

@@ -18,20 +18,11 @@ public:
     static constexpr double kToneSpacingHz = 12000.0 / 8192.0;
     static constexpr int kPreRollFrames = kSampleRate;
 
-    // Amplitude taper at both ends of the frame.
-    //
-    // WSJT-X fades its tail rather than cutting it: 0.017 symbols before the
-    // end it starts multiplying the amplitude by 0.98 per sample at 48 kHz
-    // (Modulator.cpp `if (m_ic > i0) m_amp = 0.98 * m_amp`, with
-    // `i0 = (m_symbolsLength - 0.017) * 4.0 * m_nsps`), reaching about -98 dB
-    // by the final sample. Stopping a full-scale tone dead at an arbitrary
-    // phase is a step discontinuity, and the resulting click is broadband — in
-    // a 200 Hz-wide sub-band shared by every WSPR station on the air, that
-    // lands on everyone's slot, not just ours.
-    //
-    // Same 11.6 ms duration at our 24 kHz rate, which is half as many samples,
-    // so the same total decay needs the per-sample factor squared:
-    // 0.98^2 = 0.9604 over 278 frames ≈ -97.5 dB.
+    // Taper both frame ends: a hard stop is a broadband click across the shared
+    // 200 Hz WSPR sub-band. WSJT-X multiplies amplitude by 0.98 per sample at
+    // 48 kHz over the last 0.017 symbols (Modulator.cpp, i0 = (m_symbolsLength -
+    // 0.017) * 4.0 * m_nsps), ≈ -98 dB. Same 11.6 ms at our 24 kHz is half the
+    // samples, so the factor is squared: 0.98^2 = 0.9604 over 278 frames ≈ -97.5 dB.
     static constexpr int kTaperFrames = kFramesPerSymbol * 17 / 1000;
     static constexpr float kTaperDecayPerFrame = 0.9604f;
     static constexpr int64_t kMessageFrames =
@@ -67,19 +58,12 @@ public:
     static bool isStandardPower(int powerDbm);
 
     void prepare(double sampleRate);
-    // `toneZeroHz` is the frequency of channel symbol 0 — the LOWEST of the
-    // four tones — matching WSJT-X, where the Tx-frequency spin box sets
-    // `m_frequency` and the modulator emits `m_frequency + itone[isym] *
-    // m_toneSpacing` with itone in 0..3 (Modulator.cpp). An earlier revision
-    // centred the constellation on this value instead, which put every tone
-    // 1.5 spacings — 2.197 Hz — below where WSJT-X would have put it and made
-    // every resulting spot report read 2.2 Hz low.
-    //
-    // `messageSkipFrames` starts the frame that far in, for a slot boundary
-    // that was already missed. WSJT-X does the same: when it is late it sets
-    // `m_ic = (mstr - delay_ms) * m_frameRate / 1000` and truncates the HEAD
-    // of the waveform, rather than sliding the whole 111.6 s frame later and
-    // reporting the lateness as DT (Modulator.cpp).
+    // `toneZeroHz` is channel symbol 0, the LOWEST of the four tones, matching
+    // WSJT-X (m_frequency + itone[isym] * m_toneSpacing, itone 0..3,
+    // Modulator.cpp); centring on it would report spots 2.197 Hz low.
+    // `messageSkipFrames` starts that far into the frame for a missed slot
+    // boundary, truncating the head as WSJT-X does (m_ic = (mstr - delay_ms) *
+    // m_frameRate / 1000) rather than sliding the whole frame later.
     void start(const Symbols& symbols, double toneZeroHz, float levelDb,
                int preRollFrames = kPreRollFrames, int messageSkipFrames = 0);
     void stop() noexcept;
