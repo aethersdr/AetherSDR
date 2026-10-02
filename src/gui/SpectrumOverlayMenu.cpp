@@ -2912,24 +2912,40 @@ void SpectrumOverlayMenu::applyAutoRfGainToSlider(bool autoOn)
     }
     const bool armed = autoOn && m_autoRfGainCheck && m_autoRfGainCheck->isVisible();
     m_rfGainSlider->setEnabled(!armed);
-    // THE REASON ON THE ACCESSIBLE CHANNEL FIRST, then the tooltip. A disabled
-    // control is exactly where an operator most needs to be told WHY, and a
-    // tooltip is the one channel a screen-reader user never gets (#5262 M3a
-    // doctrine, #4896). tools/check_a11y.py enforces the pairing within 12
-    // lines, which the two multi-line calls only satisfy in this order.
+    if (!armed) {
+        applyRfGainRangeText();
+        return;
+    }
+    // THE REASON ON THE ACCESSIBLE CHANNEL FIRST, then the tooltip: a tooltip
+    // never reaches a screen reader (#5262 M3a doctrine, #4896), and
+    // tools/check_a11y.py enforces the pairing within 12 lines.
     m_rfGainSlider->setAccessibleDescription(
-        armed ? tr("Read-only while automatic RF gain is on. Shows what the "
-                   "radio is running: your setting minus whatever the "
-                   "automatic loop is holding down. Untick Auto to change it.")
-              : tr("RF gain, minus 8 to plus 32 dB in 8 dB steps."));
+        tr("Read-only while automatic RF gain is on. Shows what the radio is "
+           "running: your setting minus whatever the automatic loop is holding "
+           "down. Untick Auto to change it."));
+    m_rfGainSlider->setToolTip(QStringLiteral(
+        "RF Gain — read-only while Auto is on.\n"
+        "This shows what the radio is running: your setting minus "
+        "whatever Auto is holding down.\n"
+        "Untick Auto to change it."));
+}
+
+// Both channels describe the range the backend published (setRfGainRange), so a
+// radio whose range is not Flex's is not described as Flex's (#5943).
+void SpectrumOverlayMenu::applyRfGainRangeText()
+{
+    const int low = m_rfGainSlider->minimum();
+    const int high = m_rfGainSlider->maximum();
+    const int step = m_rfGainSlider->singleStep();
+    const QString unitWord = m_rfGainUnitSuffix.trimmed().isEmpty()
+        ? QStringLiteral("step") : m_rfGainUnitSuffix.trimmed();
+    m_rfGainSlider->setAccessibleDescription(
+        tr("RF gain, %1 to %2 %3, in steps of %4.")
+            .arg(low).arg(high).arg(unitWord).arg(step));
     m_rfGainSlider->setToolTip(
-        armed ? QStringLiteral(
-                    "RF Gain — read-only while Auto is on.\n"
-                    "This shows what the radio is running: your setting minus "
-                    "whatever Auto is holding down.\n"
-                    "Untick Auto to change it.")
-              : QStringLiteral("RF Gain: −8 to +32 dB (8 dB steps)\n"
-                               "Step size is determined by radio hardware."));
+        QString("RF Gain: %1%2 to %3%4%2 (%5%2 steps)\n"
+                "Range and step are reported by the radio.")
+            .arg(low).arg(unitWord).arg(high > 0 ? "+" : "").arg(high).arg(step));
 }
 
 void SpectrumOverlayMenu::setAutoRfGainAvailable(bool available)
@@ -3087,14 +3103,11 @@ void SpectrumOverlayMenu::setRfGainRange(int low, int high, int step,
     m_rfGainSlider->setSingleStep(step);
     m_rfGainSlider->setPageStep(step);
     m_rfGainSlider->setTickInterval(step);
-    // The unit comes from the backend, so the tooltip cannot hardcode "dB"
-    // either — it said "dB" over a control that was three preamp positions.
-    const QString unitWord = unitSuffix.trimmed().isEmpty()
-        ? QStringLiteral("step") : unitSuffix.trimmed();
-    m_rfGainSlider->setToolTip(
-        QString("RF Gain: %1%2 to %3%4%2 (%5%2 steps)\n"
-                "Range and step are reported by the radio.")
-            .arg(low).arg(unitWord).arg(high > 0 ? "+" : "").arg(high).arg(step));
+    // The unit comes from the backend, so the text cannot hardcode "dB" either.
+    // While Auto is armed the slider carries the read-only reason instead.
+    if (m_rfGainSlider->isEnabled()) {
+        applyRfGainRangeText();
+    }
     // Re-render the readout in the new unit, or the number keeps the previous
     // radio's suffix until the operator next moves the slider.
     if (m_rfGainLabel) {
