@@ -8150,6 +8150,8 @@ QJsonObject AutomationServer::doBandscope(const QString& action)
             // two silences it is looking at.
             {QStringLiteral("adcPeakDbfs"), row("adcPeakDbfs")},
             {QStringLiteral("adcRmsDbfs"), row("adcRmsDbfs")},
+            {QStringLiteral("adcDcDbfs"), row("adcDcDbfs")},
+            {QStringLiteral("adcDcCodes"), row("adcDcCodes")},
             {QStringLiteral("adcCrestDb"), row("adcCrestDb")},
             {QStringLiteral("adcClippedPerBlock"), row("adcClippedPerBlock")},
             {QStringLiteral("adcObservedAgoMs"), row("adcObservedAgoMs")},

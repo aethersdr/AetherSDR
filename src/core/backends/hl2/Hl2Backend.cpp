@@ -438,7 +438,8 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         publishWideState();
         // Restore the auto-gain switch last: setAutoRfGain() checks the
         // baseline against kAutoRfGainMaxBaselineDb, and the restored baseline
-        // reaches m_lnaGainDb only in pushInitialState(). A refusal is logged.
+        // reaches m_lnaGainDb only in pushInitialState(). A restored baseline is
+        // clamped to the native range, so it arms; a refusal would be logged.
         if (m_autoRfGainWanted && !m_autoRfGainEnabled) {
             setAutoRfGain(true);
         }
@@ -1189,6 +1190,7 @@ void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool o
     // inheriting RX1's — which for a receiver that has never been configured is
     // the default of off.
     pushNoiseBlanker(*r);
+    pushSquelch(*r);
 
     // AND ONLY NOW does the sample path learn about it. Last, after the chain is
     // configured, tuned and shifted — so the first block it is ever handed lands
@@ -1757,8 +1759,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Modes the headless receive path accepts. ModelReceiveControlTarget checks
     // both the requested mode and the slice's observed mode against this list,
     // so every mode publishedModeStrings() offers must be here (including DSB,
-    // CWL, and FM, which demodulates but with default 5 kHz deviation, AGC
-    // cleared and no squelch). No alias spellings: slices hold canonical modes
+    // CWL, and FM, which demodulates but with default 5 kHz deviation and AGC
+    // cleared). No alias spellings: slices hold canonical modes
     // and an alias request would wedge "request.conflict" (control_receive_test
     // asserts canonicalOfferedMode(m) == m). WBFM/WFM and DRM stay off.
     c.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
@@ -1837,6 +1839,11 @@ RadioCapabilities Hl2Backend::capabilities() const
     // 3 §B4: the HL2 carries no DSP). NR and ANF are left off because they are
     // not implemented, not because they could not be.
     c.hasHostNoiseBlanker = true;
+    // Squelch is host-side too, per mode family: FM on WDSP's fmsq, AM/SAM/DSB/
+    // LSB/USB on the level squelch amsq (WdspChannel::setSquelch()). CW and the
+    // data modes have no stage, so this is false, stated explicitly: the client
+    // then disables SQL there instead of showing a button wired to nothing.
+    c.hasModeIndependentSquelch = false;
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -2973,6 +2980,22 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, bool on, int level)
             Q_ARG(bool, r->nbOn), Q_ARG(int, r->nbLevel));
 }
 
+void Hl2Backend::setSliceSquelch(int sliceId, bool on, int level)
+{
+    const int ddc = ddcForSlice(sliceId);
+    Receiver* r = rx(ddc);
+    if (!r)
+        return;
+    // Per receiver, like the blanker. Not filtered by mode: the pair is stored
+    // whatever the mode, and WdspChannel decides which stage (if any) carries
+    // it and moves it on every mode change, so the result does not depend on
+    // the order mode and squelch were set in.
+    r->squelchOn = on;
+    r->squelchLevel = qBound(0, level, 100);
+    pushSquelch(*r);
+    emitSliceState(ddc);
+}
+
 void Hl2Backend::setSliceAudioMute(int sliceId, bool mute)
 {
     Receiver* r = rx(ddcForSlice(sliceId));
@@ -3125,6 +3148,15 @@ void Hl2Backend::pushNoiseBlanker(const Receiver& r)
     // unconditional push is the only version with no such case to reason about.
     QMetaObject::invokeMethod(r.dsp, "setNoiseBlanker", Qt::QueuedConnection,
         Q_ARG(bool, r.nbOn), Q_ARG(int, r.nbLevel));
+}
+
+void Hl2Backend::pushSquelch(const Receiver& r)
+{
+    if (!r.dsp)
+        return;
+    // Sent even when OFF — see pushNoiseBlanker().
+    QMetaObject::invokeMethod(r.dsp, "setSquelch", Qt::QueuedConnection,
+        Q_ARG(bool, r.squelchOn), Q_ARG(int, r.squelchLevel));
 }
 
 void Hl2Backend::seedNotches(const Receiver& r)
@@ -5917,11 +5949,22 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // (#5802.)
     put("adcRmsDbfs", QStringLiteral("ADC RMS, AC (uncalibrated pre-DDC dBFS)"),
         dbfs(rms));
+    // The mean the RMS row removed, on the same scale and gate as its
+    // neighbours (#5856). Named for where it is measured, not for a cause. A
+    // non-zero mean under half a code reports below kEp4FloorDbfs, as
+    // adcRmsDbfs does (see Ep4Stats::dcDbfs()).
+    put("adcDcDbfs", QStringLiteral("ADC DC level (uncalibrated pre-DDC dBFS)"),
+        dbfs(haveBlock ? m_bandscopeBlock.dcDbfs() : 0.0));
+    // The same mean, signed, in raw codes: the sign says which rail it sits
+    // toward, and it separates a zero mean from a half-code one.
+    put("adcDcCodes", QStringLiteral("ADC DC level (signed codes)"),
+        haveBlock ? QVariant(QString::number(m_bandscopeBlock.meanCodes(), 'f', 2))
+                  : QVariant());
     // Crest factor is scale-free (the calibration offset cancels): ~11-12 dB
     // for a broadband floor over 2048 samples, ~3 dB for a sinusoid. With AC
-    // RMS and absolute peak, a large crest can also mean a large DC offset
-    // (#5856). Not reported when either term is at the floor sentinel (see
-    // Ep4Stats::crestDb()); the invalid variant keeps the row in place.
+    // RMS and absolute peak, a large crest can also mean a large DC level;
+    // adcDcDbfs above says which (#5856). Not reported when either term is at
+    // the floor sentinel (Ep4Stats::crestDb()); the row stays in place.
     const std::optional<double> crest =
         haveBlock ? m_bandscopeBlock.crestDb() : std::nullopt;
     put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"),
@@ -5937,9 +5980,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // snapshot with no age on it invites being read as current.
     //
     // GATED ON haveObservation, NOT ON haveBlock, and that is the whole reason
-    // the two names exist. This row is what EXPLAINS the four above going
-    // absent: an operator who sees four dashes and an age of 46 810 ms knows
-    // the gate stopped, where four dashes and a fifth dash says only that
+    // the two names exist. This row is what EXPLAINS the six above going
+    // absent: an operator who sees six dashes and an age of 46 810 ms knows
+    // the gate stopped, where six dashes and a seventh dash says only that
     // something is missing. Expiring the age along with the values would
     // delete the evidence for the expiry.
     put("adcObservedAgoMs", QStringLiteral("ADC level observed (ms ago)"),
@@ -6089,9 +6132,9 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     }
 
     // Records the wish only; the connect edge arms it once the restored
-    // baseline is applied. Absent means off: the shipped LNA default
-    // (kLnaDefaultGainDb, +20 dB) exceeds kAutoRfGainMaxBaselineDb (+19), so
-    // arming by default would be refused on every new install.
+    // baseline is applied. Absent means off: default-on for a profile that
+    // never expressed a wish is a separate decision (#5535). A stored
+    // `autoEnabled: true` arms, including one saved while arming was refused.
     m_autoRfGainWanted =
         rfGain.value(QStringLiteral("autoEnabled")).toBool(false);
     const QJsonObject lnaByBand =
@@ -6338,23 +6381,23 @@ void Hl2Backend::setAutoRfGain(bool on)
         // REFUSED, NOT CLAMPED. See kAutoRfGainMaxBaselineDb. Moving the
         // operator's own number so the feature could be switched on would be a
         // UI reporting one value while the wire carried another.
+        // Defensive: every writer of m_lnaGainDb clamps to the native range,
+        // so no baseline above the ceiling exists today.
         if (m_lnaGainDb > kAutoRfGainMaxBaselineDb) {
             // The request survives the refusal and is persisted, so the next
             // connect from a trusted baseline arms without asking twice.
             m_autoRfGainWanted = true;
             // Kept for the GUI (#5817): shown on the panadapter and read by
-            // screen readers, so translated and without the issue number,
-            // which stays on the qWarning.
+            // screen readers, so translated and without an issue number.
             m_autoRfGainRefusal = tr(
                        "Auto RF gain declined — the RF Gain baseline is "
-                       "%1 dB and this radio's gain axis is not trusted above "
-                       "%2 dB. Lower RF Gain to %2 dB or below and try again. "
+                       "%1 dB, above this radio's %2 dB maximum. Lower RF "
+                       "Gain to %2 dB or below and try again. "
                        "Your setting has not been changed.")
                        .arg(m_lnaGainDb)
                        .arg(kAutoRfGainMaxBaselineDb);
             qWarning().noquote()
-                << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal
-                     + QStringLiteral(" (#5354: +48 dB measures like +18 dB)");
+                << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal;
             // SETTLED AS NOT ARMED, and said so. A refusal that only the
             // caller's own readback could discover was invisible on the two
             // routes that have no readback: the restore below and the bridge.
@@ -6804,6 +6847,7 @@ void Hl2Backend::pushInitialState()
         // so a reconnect into a session that had it on would leave the slice's
         // NB button lit over a chain that is not blanking anything.
         pushNoiseBlanker(r);
+        pushSquelch(r);
     }
     if (m_txDsp) {
         const Receiver* txRx = rx(m_txDdc);
@@ -7339,6 +7383,11 @@ void Hl2Backend::emitSliceState(int ddc)
     // agcCommandIssued.
     d.agcMode = r->agcMode;
     d.agcThreshold = r->agcThresholdDb;
+    // The squelch pair the receiver holds and has pushed to its chain, so the
+    // SQL control shows the receiver's state. Safe to echo:
+    // SliceModel::applyChanges() does not emit squelchCommandIssued.
+    d.squelchOn = r->squelchOn;
+    d.squelchLevel = r->squelchLevel;
     // Exactly one slice is the TX slice (the one on m_txDdc). Unset, txSlice()
     // is null and RadioModel's interlock refuses every key; set on all, the
     // operator could key from a receiver the TX NCO is not following.

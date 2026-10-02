@@ -12537,16 +12537,18 @@ static QShader loadShader(const QString& path)
 
 void SpectrumWidget::releaseWaterfallFramePipelineResources()
 {
-    delete m_wfFramePipeline;
-    m_wfFramePipeline = nullptr;
-    delete m_wfFrameSrb;
-    m_wfFrameSrb = nullptr;
-    delete m_wfFrameTex;
-    m_wfFrameTex = nullptr;
-    delete m_wfSupplementalGpuTex;
-    m_wfSupplementalGpuTex = nullptr;
-    delete m_wfFrameSampler;
-    m_wfFrameSampler = nullptr;
+    // A resize fallback can run after uploads were queued for these resources.
+    // QRhi defers deletion during a frame and deletes immediately outside one.
+    const auto releaseAfterFrame = [](QRhiResource* resource) {
+        if (resource) {
+            resource->deleteLater();
+        }
+    };
+    releaseAfterFrame(std::exchange(m_wfFramePipeline, nullptr));
+    releaseAfterFrame(std::exchange(m_wfFrameSrb, nullptr));
+    releaseAfterFrame(std::exchange(m_wfFrameTex, nullptr));
+    releaseAfterFrame(std::exchange(m_wfSupplementalGpuTex, nullptr));
+    releaseAfterFrame(std::exchange(m_wfFrameSampler, nullptr));
     m_wfFrameTexReady = false;
     m_wfFrameTexDirty = true;
     m_wfPipelineMode = WaterfallPipelineMode::Legacy;
@@ -13736,14 +13738,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     releaseAfterFrame(oldSupplementalTexture);
                     m_wfFrameTexDirty = true;
                 } else if (rowPipelineWasActive) {
-                    // Same lifetime rule: hand the row-pipeline resources to
-                    // the end of the frame, then let the helper reset the mode.
-                    releaseAfterFrame(std::exchange(m_wfFramePipeline, nullptr));
-                    releaseAfterFrame(std::exchange(m_wfFrameSrb, nullptr));
-                    releaseAfterFrame(std::exchange(m_wfFrameTex, nullptr));
-                    releaseAfterFrame(
-                        std::exchange(m_wfSupplementalGpuTex, nullptr));
-                    releaseAfterFrame(std::exchange(m_wfFrameSampler, nullptr));
                     releaseWaterfallFramePipelineResources();
                     m_wfPipelineFallbackReason =
                         QStringLiteral("row texture resize transaction failed");

@@ -3606,14 +3606,20 @@ no stream-free source aimed, or a family that publishes no health rows. Check
 `connected` to tell those apart.
 
 **Where a row can expire, a companion age row tells you which silence it is.**
-The HL2's four converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcCrestDb` and
-`adcClippedPerBlock` — come from a gated sensor, and they go `null` once the
-newest block has stopped describing now, which includes the whole of any
-transmission longer than about three seconds. `adcObservedAgoMs` is deliberately
-**not** expired with them: a `null` beside an age of `46810` means *reported,
-then expired*, while a `null` beside a `null` age means *never reported*. A
-script that reads these must treat `null` as a refusal to answer rather than as
-a number it can coerce.
+The HL2's six converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcDcDbfs`,
+`adcDcCodes`, `adcCrestDb` and `adcClippedPerBlock` — come from a gated sensor,
+and they go `null` once the newest block has stopped describing now, which
+includes the whole of any transmission longer than about three seconds. They
+are not all in one unit: `adcDcCodes` is the block's mean in signed converter
+codes, not dB, and `adcClippedPerBlock` is a count. `adcDcDbfs` is the same
+mean as a magnitude in dBFS, and it reads `-72.25` (`kEp4FloorDbfs`) for a mean
+of exactly zero, while a tiny non-zero mean computes *below* that rather than
+being clamped to it. Because a mean of about half a code also prints `-72.25`,
+read `adcDcCodes` (`0.00` against `0.50`) to tell a zero mean from a sub-code
+one. `adcObservedAgoMs` is deliberately **not** expired with them: a `null`
+beside an age of `46810` means *reported, then expired*, while a `null` beside a
+`null` age means *never reported*. A script that reads these must treat `null`
+as a refusal to answer rather than as a number it can coerce.
 
 **Reading `health` is itself a demand signal.** A stream-free source polls only
 while something is watching, so each read renews a 5 s demand window and keeps
