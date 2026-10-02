@@ -75,20 +75,11 @@ private:
     void onTransportDown();
     void onTransportError(const QString& errorString);
     void onStatusReceived(const Vkamp::Status& status);
-    // Fire-and-forget over TCP, gated on connection state,
-    // kMinCommandIntervalMs, and an in-progress reset hold. Returns false
-    // (and logs) if the command was dropped rather than sent -- callers don't
-    // currently act on this, but it mirrors the companion project's own
-    // "never silently swallow a dropped command" stance.
-    //
-    // `isResetHold` is the one exemption from the reset gate, for the hold
-    // stream itself. Everything else -- keepalive polls and user-driven
-    // commands alike -- is held back for the duration: this protocol has no
-    // correlation ID at all (design doc Section 6), so at most one command
-    // may be unconfirmed at a time, and a foreign byte pair landing inside
-    // the "23" stream also risks restarting the amp's own ~9-12s hold
-    // counter, which would make a reset appear to run to completion without
-    // ever taking effect.
+    // Fire-and-forget over TCP, gated on connection state, kMinCommandIntervalMs
+    // and an in-progress reset hold; returns false (and logs) if dropped. Only
+    // `isResetHold` bypasses the reset gate: the protocol has no correlation ID
+    // (design doc §6), so one command may be unconfirmed at a time, and a foreign
+    // byte pair inside the "23" stream can restart the amp's ~9-12 s hold counter.
     bool sendCommand(const QByteArray& code, bool isResetHold = false);
     // Pokes the telemetry port so the amp keeps streaming to this (ip, port)
     // for the life of the connection (design doc Section 3.2). No-op until
@@ -119,28 +110,11 @@ private:
     bool m_autoReconnect{false};
     bool m_deliberateDisconnect{false};
 
-    // Without an explicit watchdog, an unreachable/wrong IP falls back to
-    // the OS's own default TCP connect timeout -- as long as ~21s on
-    // Windows -- before connectionFailed() ever fires, which is what made
-    // Connect feel hung rather than just slow. Same epoch-guarded
-    // QTimer::singleShot pattern as DxClusterClient/WaveformInstaller/
-    // ProfileTransfer's own kConnectTimeoutMs (#2380: a stale timeout from
-    // attempt N must never abort a later attempt that already succeeded).
-    //
-    // 18000ms, not a smaller codebase-convention value -- ported from the
-    // companion vkamp_client.py's own VKAmp.__init__ default (timeout=18.0),
-    // whose own doc comment explains why: this amp's network stack only
-    // answers BROADCAST ARP "who-has" requests, never unicast ones, but
-    // Windows' neighbor-cache reconfirmation tries unicast probes against a
-    // stale ARP entry first and only falls back to broadcast once those go
-    // unanswered -- confirmed via live capture to take anywhere from ~9s to
-    // >12s depending on how stale the cached entry was. A shorter timeout
-    // (this shipped at 5000ms, then 10000ms, before this fix) cuts that
-    // escalation off mid-flight on every cold connect -- it then works fine
-    // on retry only because Windows has since finished the broadcast
-    // resolution and cached it, which is exactly the "works on the second
-    // click" symptom this was chasing. 18s gives the whole dance room to
-    // finish inside a single attempt, with margin.
+    // Connect watchdog (epoch-guarded singleShot so a stale timeout can't abort a
+    // later successful attempt, #2380). 18 s, from vkamp_client.py: the amp only
+    // answers BROADCAST ARP, and Windows tries unicast reconfirmation of a stale
+    // entry first, taking ~9 to >12 s before falling back. Shorter values fail
+    // every cold connect and succeed only on retry.
     static constexpr int kConnectTimeoutMs = 18000;
     int m_connectEpoch{0};
 

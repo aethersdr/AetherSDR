@@ -1,20 +1,10 @@
 #pragma once
 
-// Mini-pan persistence. Per Constitution Principle V the feature's
-// configuration is ONE nested JSON object under the single AppSettings key
-// "MiniPan" (the AetherClockSettings / AutomationBridgeSettings pattern) —
-// never a spray of flat keys across the shared namespace.
-//
-// Only ONE field is genuinely feature-owned: the ±5/±10 kHz span. Everything
-// the standalone window used to persist by hand — geometry, open state,
-// always-on-top — now belongs to the container framework the applet is wrapped
-// in (ContainerManager / FloatingContainerWindow), which already owns that
-// state for every other applet. Duplicating it here would be a second source of
-// truth for the same window.
-//
-// Nothing the radio owns is persisted (Constitution Principle III): the pan's
-// centre, bandwidth and dBm range are re-derived from the followed slice and
-// the radio's own echo on every connect.
+// Mini-pan persistence: one JSON object under AppSettings "MiniPan". Only the
+// +/-5 / +/-10 kHz span is feature-owned; geometry, open state and always-on-top
+// belong to the container framework (ContainerManager /
+// FloatingContainerWindow). Nothing radio-owned is persisted: centre, bandwidth
+// and dBm range are re-derived from the followed slice on every connect.
 
 #include <QJsonObject>
 

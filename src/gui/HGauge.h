@@ -135,16 +135,6 @@ public:
         update();
     }
 
-    // The normalised [0,1] fill fraction, after ballistics. Distinct from
-    // value()/min()/max(): those are the INPUTS, this is the derived state that
-    // gets drawn, and the two can disagree (see setRange). Exposed so that
-    // divergence is assertable without pixel-reading.
-    //
-    // This is what paintEvent multiplies by the bar width for a normal gauge
-    // and for setFillFromRight(). On a setReversed() gauge (PhoneCwApplet's
-    // compression bar) the mapping is inverted at paint time — min means FULL —
-    // so the painted width there is 1.0f - filledFraction(). Assert
-    // accordingly; the fraction itself is always value-normalised.
     // Opt into a sliding-window marker driven by the values passed to
     // setValue(). Ordinary gauges remain marker-free; only readings for which
     // an extremum is meaningful (forward power today) enable this mode.
@@ -177,6 +167,8 @@ public:
     }
 
     float value() const { return m_value; }
+    // Drawn [0,1] fill after ballistics; can differ from value() (see
+    // setRange). A setReversed() gauge paints 1.0f - filledFraction().
     float filledFraction() const { return m_smooth.value(); }
     // The peak-hold marker. peakHeld() is separate from the value because
     // "no peak" and "peak at 0" are different states and the tick is absent
@@ -296,22 +288,11 @@ public:
         applyExtremesScale();
         m_yellowStart = std::isnan(yellowStart) ? redStart : yellowStart;
         m_ticks = ticks;
-        // Re-map the CURRENT value onto the new axis. Without this the fill
-        // keeps the fraction computed under the old bounds, and setValue()'s
-        // unchanged-value early-return means a steady reading never corrects
-        // it — an amplifier holding a constant carrier across a range change
-        // (ACOM auto-range, SPE LOW/MID/HIGH) shows the old fraction against
-        // the new scale indefinitely, misreporting RF output by hundreds of
-        // watts. Snapped, not animated: the axis moved, the signal did not,
-        // so sweeping the needle would show a change that never happened.
-        //
-        // Precondition: m_value is already in the NEW axis's units. A caller
-        // that changes units as well as bounds (MeterApplet's °C/°F toggle)
-        // must still follow with setValueImmediate to convert it — this
-        // re-map fixes the axis, it cannot know the value moved too. That
-        // pairing is now belt-and-braces rather than load-bearing: both
-        // update() calls coalesce into one repaint, so the intermediate
-        // fraction never reaches the screen.
+        // Snap the fill to the CURRENT value on the new axis: setValue() skips
+        // unchanged values, so a steady carrier across an amp auto-range (ACOM,
+        // SPE LOW/MID/HIGH) would keep the old fraction. Not animated, since
+        // the signal did not change. Assumes m_value is already in the new
+        // units; a unit change (°C/°F) must also call setValueImmediate.
         m_smooth.setTarget(fractionFor(m_value));
         m_smooth.snapToTarget();
         // Belt-and-braces: the smoother is at target, so the animation
@@ -322,21 +303,10 @@ public:
         update();
     }
 
-    // ── Hover value readout ───────────────────────────────────────────────
-    // Opt-in floating popup that shows the gauge's current numeric value
-    // while the pointer hovers over the bar, reusing the same DragValuePopup
-    // badge the sliders flash on keyboard/drag adjustment.  Handy on the TX
-    // meters (SWR / forward power / ALC) where the bar scale alone doesn't
-    // give an exact reading.  The badge lingers briefly after the pointer
-    // leaves so a quick glance-and-move still registers. (#3936)
-    //
-    // Only ONE badge is ever on screen app-wide: showHoverPopup() closes the
-    // previously-showing gauge's badge before raising its own. Each gauge owns
-    // its own DragValuePopup (a lifetime choice — a shared static QWidget would
-    // outlive QApplication), so without that hand-off nothing would ever hide
-    // gauge A's badge on entering gauge B, and the linger below would leave two
-    // stacked on screen at once. The stacked meters in TxApplet/PhoneCwApplet
-    // sit two pixels apart, so the two badges land nearly on top of each other.
+    // Opt-in hover popup showing the numeric value, reusing the DragValuePopup
+    // badge; lingers briefly after leave (#3936). Only one badge app-wide:
+    // showHoverPopup() closes the previous gauge's badge, since each gauge owns
+    // its own popup (a shared static QWidget would outlive QApplication).
     using HoverValueFormatter = std::function<QString(float)>;
 
     // How long a badge can outlive a dropped physical leaveEvent before the
@@ -661,30 +631,12 @@ private:
         return isVisible() && rect().contains(mapFromGlobal(QCursor::pos()));
     }
 
-    // Arm the recovery watchdog only while the pointer is REALLY over the bar.
-    //
-    // Qt does not guarantee a leaveEvent (the hideEvent override above exists
-    // for the same reason), and a stuck m_hovered is self-sustaining: every
-    // showValue() cancels the pending hide timer. So a dropped leave used to
-    // pin the badge on screen indefinitely, frozen at the anchor the pointer
-    // left it at.
-    //
-    // The recovery is on a timer rather than on setValue(), because setValue()
-    // early-returns on an unchanged reading — a meter that settles (or stops
-    // reporting entirely, as the TX gauges do on unkey) would never reach it,
-    // and a quiescent meter is the more likely way to end up here than a busy
-    // one.
-    //
-    // Gating on the physical cursor is what keeps the automation bridge's
-    // synthetic hover working. `hover <target>` injects a QEnterEvent and a
-    // no-button QMouseMove at the widget centre WITHOUT moving the real cursor
-    // (AutomationServer::doHover), so an injected hover never arms the
-    // watchdog and holds the badge until the driver sends an explicit
-    // `hover <target> leave`. A validation run on every frame instead would
-    // have torn the badge down under the driver on the first changing value.
-    // The cost is that recovery covers physical hovers only — which is the
-    // only case that can drop a leave, since the injected ones are delivered
-    // by hand.
+    // Arm the recovery watchdog only while the physical cursor is over the bar.
+    // Qt may drop leaveEvent, and a stuck m_hovered keeps cancelling the hide
+    // timer; a timer (not setValue(), which skips unchanged readings) recovers.
+    // Gating on the real cursor keeps bridge `hover <target>` working: it
+    // injects events without moving the cursor, so the badge holds until
+    // `hover <target> leave`.
     void syncHoverWatchdog() {
         // Already armed and still hovered: the next tick re-validates within
         // kHoverWatchdogMs, so asking again in between learns nothing. Worth

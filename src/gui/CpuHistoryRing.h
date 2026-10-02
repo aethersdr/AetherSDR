@@ -1,27 +1,13 @@
 #pragma once
 
-// The Overview tab's CPU history (#2554): a bounded ring of process-level CPU
-// readings and the slicing that turns it into chart points for a chosen
-// timeframe — the CPU counterpart of MemoryHistoryRing, and deliberately shaped
-// like it: gui-side, header-only, free of core includes, storing its own flat
-// record of what SystemInfoDialog receives in a CpuSample. The bucket and gap
-// rules are MemoryHistoryRing's, reused rather than repeated, so the two charts
-// on one tab cannot disagree about where a bucket point sits.
-//
-// What one record carries beyond the process total: every thread that used a
-// non-zero share of a core on that tick (name, tid, per-core percent). That is
-// exact — a thread at 0 % contributes nothing to any chart — and compact, since
-// most of the process's ~50 threads are idle on most ticks. The "top
-// threads" chart picks its members from the whole window (the N threads
-// with the highest MEAN share over it), then emits one point per bucket for
-// each member, zero where the member did not appear, so the series line up
-// bucket for bucket. Ranking by mean rather than by the newest tick keeps the
-// membership from flickering between two threads trading fourth and fifth
-// place every 1.5 s.
-//
-// The UI tick-lag fields ride the same record because they are sampled at the
-// same instant (the dialog reads the meter when the CPU sample arrives); a
-// tick rate of zero means "not measured on this tick" and is not plotted.
+// Overview tab CPU history (#2554): a bounded ring of process CPU readings plus
+// timeframe slicing into chart points. Header-only and shaped like
+// MemoryHistoryRing, reusing its bucket and gap rules so both charts agree.
+// Each record also holds every thread with a non-zero share that tick (name,
+// tid, per-core %). "Top threads" picks the N highest MEAN shares over the
+// window (stable membership), then emits a point per bucket per member, zero
+// where absent. UI tick-lag fields share the record; a tick rate of 0 means
+// "not measured" and is not plotted.
 
 #include "MemoryHistoryRing.h"
 
