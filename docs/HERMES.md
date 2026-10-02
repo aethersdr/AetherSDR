@@ -4196,19 +4196,39 @@ one machine: the tree moved the first open, not the rest. On an Apple M2
 RX channel create on x86_64 after patch 12. So quote a first-open time only
 with its machine and its commit.
 
-**To re-measure, two traps, both silent.** Do not time a registered test.
-`tests/tests.cmake` caps the planner for them twice: a ctest `ENVIRONMENT`
-property on each test registered above its retrofit loop, and
-`tests/TestWdspWisdomIsolation.cpp` linked into each test executable whose
-target carries its test's name. Under either one, cold and warm read the same
-and nothing is exported. Neither half reaches every test: one registered under
-a name that is not its target's (`settings_browser_dialog`, the
-`app_settings_safety_*` set) gets the property without the link, and one
-registered below the loop gets neither. So a test's registration does not say
-whether the binary was capped. And set `AETHER_WDSP_FFTW_TIMELIMIT` to the
-empty string rather than unsetting it: the initializer does not overwrite, and
-`plannerTimeLimitSeconds()` maps empty to unbounded. Then check the export, not
-just the clock — a cold run that wrote no wisdom file was capped.
+**To re-measure, two traps, both silent.** The first is the test cap. Do not
+time a registered test, nor any other binary `tests/tests.cmake` builds unless
+it has opted out.
+`aether_retrofit_tests()`, scheduled with `cmake_language(DEFER CALL)` so it
+runs after the last line of the root `CMakeLists.txt`, caps the planner twice:
+it appends `AETHER_WDSP_FFTW_TIMELIMIT` (the `AETHER_TEST_FFTW_TIMELIMIT` cache
+value, 0.001 s per plan by default) and a build-tree `AETHER_WDSP_WISDOM_DIR` to
+the ctest `ENVIRONMENT` of every registered test, and it links
+`aether_test_wisdom_isolation` (`tests/TestWdspWisdomIsolation.cpp`, which sets
+the same two variables before `main()` unless they are already set) into every
+executable the file declares, registered or not
+(`aether_collect_test_executables()`). `aether_assert_tests_retrofitted()`
+fails the configure step on a test without the `ENVIRONMENT` cap, and on an
+executable with neither the object nor an opt-out. Under the
+cap cold and warm read the same, and nothing is exported: `WdspChannel` writes
+no wisdom from a bounded planner (`plannerIsBounded()`). A measurement program
+declared there therefore opts out of the linked object, with its reason as the
+property value, and has no `add_test`, because the ctest `ENVIRONMENT` cap has
+no opt-out:
+
+```cmake
+set_property(TARGET <program> PROPERTY
+    AETHER_TEST_NO_WISDOM_ISOLATION "<why it must plan uncapped>")
+```
+
+The configure log prints every opt-out. Run the program directly, with
+`AETHER_WDSP_FFTW_TIMELIMIT` empty or unset: `plannerTimeLimitSeconds()` maps
+both to unbounded. The second trap is the wisdom directory. Without the
+object nothing redirects it, so an opted-out program reads and writes the
+developer's real cache, and a run on a cache that already holds the plans is
+warm. Point `AETHER_WDSP_WISDOM_DIR` at an empty scratch directory for every
+cold process. Then check the export, not just the clock: a cold run that wrote
+no wisdom file was capped.
 
 That "once per machine" is what the first-connect dialog tells the operator, and
 saying it is the point: a wait you are told happens once reads very differently
