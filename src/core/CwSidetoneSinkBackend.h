@@ -7,23 +7,13 @@ namespace AetherSDR {
 
 class CwSidetoneGenerator;
 
-// Abstract audio-sink backend for the CW sidetone path.  The same
-// CwSidetoneGenerator drives every backend; what changes is the audio
-// API used to push samples to the device.
-//
-// Two implementations:
-//   - CwSidetoneQAudioSink  — Qt Multimedia QAudioSink + push-mode timer.
-//                             Cross-platform, but pays the OS-mixer
-//                             tax (50 ms buffer required to keep
-//                             Pulse/PipeWire pull-mode happy).
-//   - CwSidetonePortAudioSink — PortAudio direct callback path.  Sub-5 ms
-//                               latency on Linux PipeWire and macOS
-//                               CoreAudio.  Built only when HAVE_PORTAUDIO,
-//                               and not the default on Windows (#5713).
-//
-// AudioEngine owns one of these via std::unique_ptr; the factory picks
-// based on build flag, platform and AppSettings["CwSidetoneBackend"], by
-// the rule in CwSidetoneBackendPolicy.h.
+// Abstract audio-sink backend for the CW sidetone; the same CwSidetoneGenerator
+// drives every backend.
+//   - CwSidetoneQAudioSink: QAudioSink + push timer; cross-platform, needs a
+//     50 ms buffer for Pulse/PipeWire.
+//   - CwSidetonePortAudioSink: direct callback, sub-5 ms on PipeWire/CoreAudio;
+//     HAVE_PORTAUDIO only, not the Windows default (#5713).
+// AudioEngine owns one via unique_ptr, chosen by CwSidetoneBackendPolicy.h.
 class CwSidetoneSinkBackend {
 public:
     virtual ~CwSidetoneSinkBackend() = default;

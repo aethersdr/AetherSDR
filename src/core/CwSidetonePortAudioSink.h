@@ -13,16 +13,10 @@ namespace AetherSDR {
 
 class CwSidetoneGenerator;
 
-// PortAudio-based sidetone backend.  Direct callback path: the audio
-// device's driver calls our paCallback() at native buffer intervals
-// (typically 64–128 frames on Linux PipeWire / macOS CoreAudio,
-// ~1.5–3 ms).  No Qt event loop, no timer, no buffer copy other than
-// the silence-init in the callback.
-//
-// Net perceived latency on Linux PipeWire / macOS CoreAudio:
-// sub-5 ms key-down → audible-onset, vs ~25 ms with QAudioSink.
-//
-// Built only when HAVE_PORTAUDIO.
+// PortAudio sidetone backend: the driver calls paCallback() at native buffer
+// intervals (typically 64-128 frames, ~1.5-3 ms on PipeWire/CoreAudio); no Qt
+// event loop, timer or copy. Sub-5 ms key-down to onset vs ~25 ms with
+// QAudioSink. Built only with HAVE_PORTAUDIO.
 class CwSidetonePortAudioSink : public CwSidetoneSinkBackend {
 public:
     CwSidetonePortAudioSink();

@@ -15,8 +15,7 @@
 //
 // Section 8 carries the same claim one layer up, at the IRadioBackend seam:
 // the rows a health dialog reads, and the verb that is the only way to ask for
-// the stream. It lives here rather than in tests/hl2_backend_test.cpp, which
-// has no build target — see the banner at the top of that file.
+// the stream.
 //
 // The sequences replayed here are recorded arrivals from a real v74.2 board
 // (tests/Hl2Ep4ArrivalsD94.h), not invented ones.

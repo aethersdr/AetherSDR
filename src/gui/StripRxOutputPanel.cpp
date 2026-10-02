@@ -39,17 +39,9 @@ float dbToRatio(float db)
     return (db - kMeterMinDb) / (kMeterMaxDb - kMeterMinDb);
 }
 
-// RX-side gradient meter — visual mirror of the TX HorizMeter (gradient
-// fill, dB tick scale, peak-hold hairline) minus the limiter-specific
-// bits (no ceiling drag handle, no GR overlay, no input-peak backdrop,
-// no LIMIT band).  Single child widget; reads m_rms on the
-// parent through references so it has no internal state of its own.
-//
-// Bar gradient renders RMS (the slow, average-loudness reading), with
-// a thin white hairline drawn at the bar's leading edge so the eye
-// gets a precise level tick where the colour fades.  The cyan hairline
-// holds the highest raw peak in the trailing 1.5 s window — the only
-// visual indicator of instantaneous peaks.
+// RX gradient meter: the TX HorizMeter look without limiter bits. Reads the
+// parent's m_rms by reference (no own state). Bar = RMS with a white leading-
+// edge hairline; cyan hairline = highest raw peak over the trailing 1.5 s.
 class RxGradientMeter : public QWidget {
 public:
     RxGradientMeter(const float& rms, QWidget* parent)

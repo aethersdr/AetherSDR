@@ -1,35 +1,17 @@
 #pragma once
 
-// The brain of canvas mode (RFC #4887 phase 3): the one object that knows the
-// store, the canvas and the container manager at the same time, and therefore
-// the only place placement POLICY lives.  The canvas stays a dumb surface,
-// the manager stays a reparenting mechanism, the store stays persistence —
-// what a drop means, when an applet belongs on the canvas, and what the
-// document says about any of it is decided here and nowhere else.
+// The brain of canvas mode (RFC #4887): the only object that sees the store,
+// the canvas and the container manager, so all placement policy lives here.
+// MainWindow only mounts the canvas and forwards the View-menu toggle (#3557).
 //
-// This is deliberately a real class rather than a fistful of MainWindow
-// members — the #3557 direction: MainWindow mounts the canvas and forwards
-// the View-menu toggle, and everything else lives behind this seam.
-//
-// ── The membership rule ──────────────────────────────────────────────────
-//
-// A document item "applet:<id>" means "this applet BELONGS on the canvas".
-// The applet is actually PLACED when canvas mode is on, the applet is open,
-// and it is not floating (pop-out stays, RFC decision 1).  Consequences:
-//
-//   * closing an applet (bar button) evicts it but KEEPS its item, so
-//     reopening returns it to the spot it had;
-//   * leaving the canvas deliberately — the title-bar "return to panel"
-//     button, dragging it onto the panel, or popping it out — REMOVES the
-//     item: the operator said "not on the canvas", and a home that silently
-//     reasserts itself is how layouts stop being trusted;
-//   * disable() keeps every item, because switching the mode off is not a
-//     statement about any applet.
-//
-// The document is placement truth (Principle V).  ContainerTree's
-// mode:"canvas" string is a dual-write mirror, and ContainerManager::
-// restoreState() deliberately normalises it back to panel at startup — this
-// controller re-places from the document when the mode comes up.
+// The membership rule: item "applet:<id>" means the applet belongs on the
+// canvas; it is placed when canvas mode is on, the applet is open and not
+// floating. Closing an applet keeps its item (reopen returns it home); leaving
+// the canvas on purpose (return-to-panel, drag to panel, pop out) removes the
+// item; disable() keeps every item.
+// The document is placement truth. ContainerTree's mode:"canvas" is a mirror
+// that ContainerManager::restoreState() normalises to panel at startup; this
+// controller re-places from the document.
 
 #include "gui/workspace/WorkspaceStore.h"
 
@@ -225,16 +207,11 @@ public:
     // gesture boundary (a `workspace place` is one discrete edit).
     void commitPlacement() { m_store.flush(); }
 
-    // ── Workspaces (RFC #4887 phase 6) ───────────────────────────────────
-    //
-    // FULL RECALL (maintainer ruling 2026-08-12): a workspace remembers
-    // which applets are OPEN as well as where everything sits.  Switching
-    // opens the target's applets, closes non-members, and places everything
-    // — pans at the target's slot rects, applets at their homes.  The
-    // per-item `closed` flag makes close-keeps-home work WITHIN a
-    // workspace; an operator opening an applet always clears it (the click
-    // outranks the document).  Edit posture is session state and survives
-    // a switch; the single-slot undo does not (whole-surface change).
+    // Workspaces, full recall (RFC #4887): a workspace remembers which applets are
+    // open as well as placement. Switching opens its applets, closes non-members,
+    // places pans at slot rects and applets at their homes. The per-item `closed`
+    // flag gives close-keeps-home within a workspace; opening an applet clears it.
+    // Edit posture survives a switch; the single-slot undo does not.
     enum class NewWorkspaceSource { Current, Classic, Blank };
 
     // Create (and, while enabled, switch to) a new workspace.  Returns its

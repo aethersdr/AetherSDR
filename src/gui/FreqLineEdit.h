@@ -10,21 +10,11 @@
 #include <QString>
 #include <QStringList>
 
-// QLineEdit for direct frequency entry. Typed text renders in the seven-segment
-// frequency font (font.family.freq, e.g. "DSEG7 Modern") to match the VFO
-// readout. A normal prose hint rendered in that segment font, however, paints as
-// garbage -- DSEG7 has no glyphs for letters/parentheses/space, so a placeholder
-// like "MHz (e.g. 14.225)" turns into corrupted segments the moment the field is
-// cleared. (Reported on both the VfoWidget VFO and the RxApplet side applet.)
-//
-// So instead of Qt's setPlaceholderText() -- which paints in the widget's
-// (segment) font -- this widget paints its OWN hint in the UI font
-// (font.family.ui) when the field is empty. The hint family is read widget-scoped
-// (honoring any themeContainer override in the ancestry, like the field's own
-// stylesheet does) at paint time, and the constructor wires ThemeManager's
-// themeChanged signal to update(), so the hint stays in lockstep with live Theme
-// Editor font changes -- mirroring how the field's stylesheet re-themes via
-// font.family.freq.
+// QLineEdit for frequency entry. Text uses the seven-segment font
+// (font.family.freq), which has no glyphs for letters, parentheses or space,
+// so setPlaceholderText() would paint garbage. Instead the empty-field hint is
+// painted here in font.family.ui, resolved widget-scoped at paint time, with
+// themeChanged → update() so it follows live font changes.
 class FreqLineEdit : public QLineEdit {
 public:
     explicit FreqLineEdit(QWidget* parent = nullptr) : QLineEdit(parent) {

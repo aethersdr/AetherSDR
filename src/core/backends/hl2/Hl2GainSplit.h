@@ -1,62 +1,11 @@
 #pragma once
 
-// TWO LNA NUMBERS, NOT ONE: the operator's baseline, and what reaches the wire.
-//
-// WHY THIS EXISTS
-//
-// `Hl2Backend::m_lnaGainDb` is not only the register value. It is also:
-//
-//   * what `Hl2Backend::rememberCurrentBandState` writes into `m_lnaDbByBand`
-//     through `bandMemoryWriteback` on every band change;
-//   * what `Hl2Backend::currentOperatingState` publishes as the `rfGain`
-//     extension object, i.e. what `RadioStateMemory` puts on disk — the backend
-//     declares `RadioCapabilities::ClientSettingsDomain::RfGain` and
-//     `restoreLegacyRfGain` refuses to replay `DisplayRfGain_hl2` for this
-//     family precisely because the backend owns the value;
-//   * what `Hl2Backend::setPanRfGain` compares against to decide `moved`.
-//
-// So ANY automatic writer on that path — an ADC-overload servo being the
-// obvious one — writes its own transients into the operator's per-band memory
-// and into persisted state, where the next band change makes them permanent.
-// That is not hypothetical: it is the shape of an already-open defect in this
-// lab's acceptance table (`D-lna-overwrite`), where 40 m went -6 -> -12 dB on
-// disk with no operator action beyond one band change.
-//
-// The split is therefore a PREREQUISITE and it is also independently correct:
-// with no automatic writer at all, separating "the number the operator chose"
-// from "the number currently on the AD9866" costs nothing and removes a class
-// of silent data loss before anything can trigger it.
-//
-// THE AXIS IS AN ATTENUATION, NOT A GAIN
-//
-// The automatic variable is a NON-NEGATIVE offset in dB BELOW the baseline. It
-// has no representation for a gain above the operator's own setting, so:
-//
-//   * an automatic action can never make the radio louder than the operator
-//     asked for — the only automatic action in that direction is undoing one of
-//     its own;
-//   * there is no "automatic ceiling" to design, document or explain, because
-//     the ceiling IS the operator's number;
-//   * no gain above the operator's own number is reachable automatically.
-//     Nothing here caps or moves their number to achieve that; the axis simply
-//     cannot express it. (An earlier note here cited +48 dB measuring like
-//     +18 dB; that was one unit's hardware defect, RX gain bit 5 stuck high,
-//     since repaired -- aethersdr/AetherSDR#5354, #5943.)
-//
-// WHY THIS RETURNS THE APPLIED OFFSET AS WELL
-//
-// `baseline - offset` can fall below the register's floor, and then the offset
-// that was REQUESTED is not the offset that was APPLIED. A controller that
-// assumed otherwise would keep attacking against a clamp, believing it had
-// taken gain it never took, and would then have to release through phantom
-// decibels before anything moved. So the clamp reports what it actually did and
-// the caller can see it has run out of range — which is a real operator-facing
-// condition ("the front end needs attenuation ahead of the radio"), not an
-// internal detail.
-//
-// No Qt, no clock, no radio: this is arithmetic, and `Hl2Backend` evaluates it
-// rather than keeping a copy, for the reason `Hl2TxLevelPolicy.h` states — a
-// test against a re-typed copy of a mapping proves only that two copies agree.
+// Two LNA numbers: the operator's baseline (Hl2Backend::m_lnaGainDb, also the
+// per-band memory and persisted `rfGain`) and what reaches the wire. Automatic
+// action is a separate non-negative attenuation below the baseline, so it never
+// leaks into persisted state and never makes the radio louder than asked. The
+// applied offset is returned too: `baseline - offset` can hit the register
+// floor, and a controller must see it ran out of range.
 
 namespace AetherSDR::hl2 {
 

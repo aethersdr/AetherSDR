@@ -1,28 +1,11 @@
 #pragma once
 
-// ─── Audio format / sample-rate negotiation policy ───────────────────────────
-//
-// One ladder, one set of per-OS rules — the single home for "what rate and
-// sample format does this device want, and how do I bridge between that rate
-// and the caller's canonical device-boundary rate" (issue #3306).
-//
-// Historically each audio sink/source re-implemented this with its own
-// divergent fallback ladder and per-OS `#ifdef` branches, which is the root of
-// a cluster of platform-specific audio bugs (44.1k-only devices silently
-// failing on some sinks, WASAPI Float32-only devices rejecting Int16, macOS
-// Bluetooth-HFP mics delivering silence, etc.).
-//
-// DESIGN CONSTRAINT (testability): this layer is a PURE function over an
-// *injected* capability snapshot (`DeviceCaps`) with the target OS passed in as
-// a PARAMETER, never an `#ifdef`. That lets a single headless test binary,
-// built once on any CI runner, exercise every OS's ladder against every device
-// shape — the reason the historical bugs escaped CI. The thin live wrapper
-// (see AudioDeviceNegotiator, Qt-Multimedia) is the only platform-specific part.
-//
-// This header deliberately depends on nothing beyond Qt Core (QString/QList) so
-// the policy can be unit-tested by an executable that links only Qt6::Core.
-// QAudioFormat (Qt Multimedia) is intentionally NOT used here; the live wrapper
-// converts SampleFmt <-> QAudioFormat::SampleFormat.
+// Audio format / sample-rate negotiation policy (#3306): the single home for
+// which rate and format a device wants and how to bridge to the caller's
+// canonical rate. A PURE function over an injected DeviceCaps snapshot with the
+// target OS as a parameter (never #ifdef), so one headless test exercises every
+// OS's ladder against every device shape. Depends only on Qt Core; the live
+// wrapper (AudioDeviceNegotiator) converts SampleFmt <-> QAudioFormat.
 
 #include <QList>
 #include <functional>
@@ -49,17 +32,14 @@ enum class Direction { Output, Input };
 // these to/from the Qt enum). Only the formats AetherSDR opens are modelled.
 enum class SampleFmt { Int16, Float32 };
 
-// Which resampler strategy converts between the device rate and kInternalRate.
-//   None         — sink regenerates/consumes natively at the device rate
-//                  (CW sidetone, Quindar tone), or rate already == kInternalRate.
-//   PreservePan  — dual independent L/R r8brain instances; keeps VITA-49 per-
-//                  channel pan intact. REQUIRED for RX speaker and QSO playback
-//                  (collapsing to mono here regressed pan: #2403 / PR #2459).
-//   MonoCollapse — Resampler::processStereoToStereo (downmix→resample→duplicate).
-//                  Correct ONLY where the payload is inherently mono: TCI DAX TX,
-//                  RADE modem. MUST NOT be used for RX/QSO.
-// These two stereo strategies are deliberately distinct and must never be
-// unified (the conflation that caused #2403).
+// Which resampler converts between the device rate and kInternalRate.
+//   None         - sink runs natively at the device rate (CW sidetone, Quindar),
+//                  or rate already == kInternalRate.
+//   PreservePan  - independent L/R r8brain instances; keeps VITA-49 per-channel
+//                  pan. REQUIRED for RX speaker and QSO playback (#2403).
+//   MonoCollapse - Resampler::processStereoToStereo (downmix, resample,
+//                  duplicate). Only for inherently mono payloads (TCI DAX TX,
+//                  RADE modem); never RX/QSO. Never unify the two stereo kinds.
 enum class ResamplerKind { None, PreservePan, MonoCollapse };
 
 // How a particular sink/source treats sample rate — drives ResamplerKind.
@@ -159,24 +139,11 @@ ResamplerKind resamplerKindFor(int deviceRate,
                                ResamplerPolicy policy,
                                int internalRate = kInternalRate);
 
-// ─── WASAPI silent-open recovery ladder (#2929) ──────────────────────────────
-//
-// A separate failure mode from the ladders above, and the reason it needs its
-// own policy: WASAPI can return a NON-NULL QIODevice that then delivers zero
-// bytes for an open the endpoint cannot actually honour. Nothing fails, so the
-// null-open fallback ladder never sees it; a watchdog notices the silence after
-// ~1.5 s and reopens.
-//
-// That recovery used to walk ONE dimension — channel count — because a
-// mono-only USB PnP mic accepting a stereo open was the only known shape. Once
-// capture leads with Float32, the SAMPLE FORMAT becomes a second way to open
-// successfully and receive nothing: an Int16-capable endpoint that accepts a
-// Float open and returns silence would never reach the format it does support
-// (review of PR #5017).
-//
-// The ladder is ordered so the historical behaviour is preserved exactly: mono
-// is still tried before the format changes, because a mono-only mic is the
-// common case and Int16 is the rarer one.
+// WASAPI silent-open recovery (#2929): WASAPI can return a non-null QIODevice
+// that delivers zero bytes for an open the endpoint can't honour; a watchdog
+// reopens after ~1.5 s. Both channel count (mono-only mics) and sample format
+// (Int16 endpoints accepting a Float open) can cause it; mono is tried first as
+// the common case.
 struct TxOpenAttempt {
     int       rate = 48000;
     SampleFmt fmt = SampleFmt::Float32;
@@ -188,27 +155,11 @@ struct TxOpenAttempt {
     }
 };
 
-// The FULL ordered TX capture attempt sequence for an initial open of
-// `initialChannels`. Index 0 is the initial open; everything after it is
-// recovery, whichever failure produced it.
-//
-// This is one ladder because there is one device. It previously WAS two —
-// a (format, channels) silent-open ladder at 48 kHz and, in AudioEngine, a
-// separate rate x channels x format loop entered only on a null open — and
-// they could interleave into a permanently silent mic: at the last stage of
-// the silent ladder a null open dropped into the other loop, which restarted
-// at 48 kHz Float stereo, a tuple already OBSERVED silent, and accepted it
-// with no watchdog budget left to catch it a second time (round-3 review of
-// PR #5017).
-//
-// Order:
-//   rate outermost (48000, 44100, 24000, 16000)
-//     format next   (Float32, then Int16)
-//       channels innermost (the clamped count, then forced mono)
-// which keeps the historical 48 kHz prefix exactly: Float32 clamped, Float32
-// mono (the #2929 one-reopen recovery), Int16 clamped, Int16 mono. Duplicate
-// rungs are collapsed, so a device already clamped to mono gets a shorter
-// ladder rather than reopening an identical format.
+// The full ordered TX capture attempt sequence for an initial open of
+// `initialChannels`: index 0 is the initial open, the rest is recovery for either
+// failure shape (one ladder, so a tuple observed silent is never retried).
+// Order: rate (48000, 44100, 24000, 16000), then format (Float32, Int16), then
+// channels (clamped count, then mono). Duplicate rungs are collapsed.
 QList<TxOpenAttempt> txOpenLadder(int initialChannels);
 
 // What a single open attempt did.
