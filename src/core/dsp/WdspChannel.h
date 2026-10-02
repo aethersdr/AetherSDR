@@ -152,6 +152,12 @@ public:
                             std::span<const float> inputQ,
                             std::span<float> outputLeft,
                             std::span<float> outputRight) noexcept;
+    // True when the next processIq() would find a whole output block, i.e. not
+    // return Underrun. A non-blocking caller handed several blocks at once must
+    // ask first: an underrun leaves the two-slot output ring out of step for
+    // good. Same thread and fence as processIq(); false during a control
+    // operation. Local WDSP patch 15.
+    [[nodiscard]] bool outputReady() noexcept;
 
     // Start/stop — the T/R call, not teardown. Stop runs the mute envelope down and
     // flushes, keeping FFTW plans, masks, notches, AGC/shift and the blanker; no
