@@ -560,6 +560,7 @@ void MainWindow::buildMenuBar()
     connect(kbAct, &QAction::toggled, this, [this](bool on) {
         m_keyboardShortcutsEnabled = on;
         s_keyboardShortcutsEnabled = on;
+        syncOperatingShortcutsEnabled();
         AppSettings::instance().setValue("KeyboardShortcutsEnabled", on ? "True" : "False");
         AppSettings::instance().save();
     });
