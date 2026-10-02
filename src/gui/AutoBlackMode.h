@@ -2,20 +2,12 @@
 
 #include <algorithm>
 
-// The waterfall Black Level control's mode arithmetic, as pure functions.
-//
-// The control has three positions — Off (manual level), SW (this client's
-// noise-floor estimate), HW (the radio's per-tile level) — but HW only exists on
-// a radio that computes one (RadioCapabilities::hasRadioSideWaterfallAutoBlack).
-//
-// The design this encodes (#4606): the stored value is the operator's INTENT and
-// the capability is a MASK over it. Intent is never rewritten by connecting a
-// radio that cannot serve it, so a Flex user who chose HW still has HW after a
-// session on an HL2. Only a deliberate click changes intent.
-//
-// Extracted here because SpectrumOverlayMenu cannot be linked into a test on its
-// own — it drags in SpectrumWidget, KiwiSdrManager, SliceModel and the rest of
-// the GUI. Both bugs this file's tests pin shipped green through a full CI run.
+// Waterfall Black Level mode arithmetic as pure functions. Positions: Off
+// (manual), SW (client noise-floor estimate), HW (radio per-tile level, only if
+// RadioCapabilities::hasRadioSideWaterfallAutoBlack). The stored value is the
+// operator's INTENT and the capability masks it (#4606): connecting a radio
+// without HW never rewrites intent; only a click does. Separate from
+// SpectrumOverlayMenu so it links into a test.
 
 namespace AetherSDR::AutoBlackMode {
 
@@ -67,15 +59,9 @@ inline bool effectiveRadioSide(bool intentRadioSide, bool radioSideAvailable)
 }
 
 // Whether the Off/SW/HW cycle owns the shared Black Level button and slider.
-//
-// It does not while a pan is displaying KiwiSDR: there the button is a one-shot
-// "Auto" and the slider is the Kiwi floor in dBm over a -260..29 range, neither
-// of which has anything to do with this cycle. Writing the cycle's label and its
-// 0..100 offset into them relabels "Auto" as "SW" and jams an out-of-range value
-// into the floor slider.
-//
-// A predicate rather than a check at each call site: until #4606 every caller
-// happened to be kiwi-guarded, and the first one that was not shipped the bug.
+// Not while a pan shows KiwiSDR: there the button is a one-shot "Auto" and the
+// slider is the Kiwi floor (-260..29 dBm). Use this predicate at every call
+// site (#4606).
 inline bool ownsSharedWidgets(bool kiwiWaterfallControlMode)
 {
     return !kiwiWaterfallControlMode;

@@ -1,37 +1,14 @@
 #pragma once
 
-// ─── AudioOutputRouter ───────────────────────────────────────────────────────
-//
-// One registry for "playback sinks that must follow the user-selected output
-// device." Historically each such sink was wired by hand in MainWindow with its
-// own connect-to-outputDeviceChanged lambda, and every NEW sink had to remember
-// to add itself — the recurring "uncoupling" where a freshly-added sink kept
-// playing on the old/default endpoint after the user changed devices
-// (CW sidetone #2899, Aetherial/Pudu monitor + QSO playback #3361/#3378).
-//
-// This turns that into a single point: register a sink once with addFollower();
-// it is seeded immediately with the current device and re-seeded on every
-// change. Adding a future sink is one self-documenting line, so the class of
-// bug can't silently reappear. Part of the audio sink factory (issue #3306);
-// see docs/audio-sink-factory.md.
-//
-// Scope: this manages EXTERNAL playback sinks that own their own QAudioSink and
-// are meant to play to the user's main selected output (ClientPuduMonitor,
-// QsoRecorder, …). Deliberately NOT routed here:
-//   * AudioEngine-internal sinks (RX speaker, CW sidetone, Quindar) — they
-//     already follow the selection by being restarted inside
-//     setOutputDevice()/startRxStream().
-//   * The WFM demodulator's WaveOutWriter — it plays to its OWN device chosen
-//     separately in WfmDeviceDialog, by design, not the main output. Do not
-//     register it; following the main selection would be a regression.
-//
-// Threading: setCurrentDevice() runs the fan-out synchronously on the caller's
-// thread. The caller bridges AudioEngine::outputDeviceChanged (emitted on the
-// audio worker thread) with a QueuedConnection so followers are touched on the
-// GUI thread, matching the previous hand-wired behaviour.
-//
-// Depends only on Qt Core/Multimedia so the registry/fan-out logic is unit-
-// testable without instantiating the full AudioEngine.
+// Registry of external playback sinks that must follow the user-selected output
+// device (ClientPuduMonitor, QsoRecorder, ...): addFollower() seeds a sink with
+// the current device and re-seeds it on every change (#3306; see
+// docs/audio-sink-factory.md). Not routed here: AudioEngine-internal sinks (RX,
+// CW sidetone, Quindar), restarted in setOutputDevice()/startRxStream(); and the
+// WFM WaveOutWriter, which plays to its own WfmDeviceDialog device by design.
+// setCurrentDevice() fans out synchronously on the caller's thread; the caller
+// bridges AudioEngine::outputDeviceChanged (audio thread) with a QueuedConnection
+// so followers are touched on the GUI thread. Qt Core/Multimedia only.
 
 #include <QAudioDevice>
 #include <QObject>

@@ -6,23 +6,13 @@
 
 namespace AetherSDR {
 
-// Pre-filled GitHub issue body (#3705).
-//
-// buildIssueReport() renders the same headed-Markdown sections the AI-prompt
-// template uses (What happened / Expected / Steps / Radio / OS) with the
-// SupportBundle snapshot filled in and clear placeholders for the user's
-// prose.  When a log tail is supplied it is embedded as a fenced ```text
-// block; when it is empty a short "omitted — see support bundle" note is
-// substituted so the "graceful degrade" path still reads sensibly.
-//
-// Redaction guarantee: the log tail is passed through redactPii() here, at
-// the render boundary, before it can reach the body or the clipboard — the
-// same scrub applied to every on-disk log line (GHSA-ccrg-j8cp-qhc4).  The
-// on-disk tail is already redacted at capture; this second pass is
-// belt-and-suspenders so the guarantee holds no matter where the tail came
-// from.  Radio serial/IP are scrubbed too; callsign/model are public and
-// left intact.  This TU depends only on redactPii (no RadioModel), so the
-// redaction contract is unit-testable in isolation (issue_report_test).
+// Pre-filled GitHub issue body (#3705): the AI-prompt template's sections (What
+// happened / Expected / Steps / Radio / OS) with the SupportBundle snapshot and
+// placeholders. A log tail goes in a ```text block, or an "omitted, see support
+// bundle" note. The tail is passed through redactPii() here at the render
+// boundary even though on-disk lines are already redacted (GHSA-ccrg-j8cp-qhc4);
+// radio serial/IP are scrubbed, callsign/model kept. Depends only on redactPii,
+// so issue_report_test covers the contract.
 
 // Last N lines of the recent log to include in the issue body.
 inline constexpr int kIssueLogTailLines = 100;

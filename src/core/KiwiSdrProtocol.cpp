@@ -1682,32 +1682,16 @@ QString formatSoundTuneCommand(const QString& mode, int lowCutHz, int highCutHz,
     int tunedHighCutHz = highCutHz;
     double tunedFreqKhz = freqKhz;
     if (mode == QStringLiteral("cw") && cwPitchHz != 0) {
-        // Flex reports the CW passband symmetric about the carrier (e.g.
-        // low_cut=-400 high_cut=400) — the sidetone pitch is a DSP shift
-        // Flex applies AFTER that filter, not something baked into it. The
-        // Kiwi has no such post-filter shift: 'freq' is the BFO/mixdown
-        // point and low_cut/high_cut are an audio passband relative to it.
-        // Sending freq=carrier with the passband as reported puts the
-        // carrier at 0 Hz (audible only as a DC thump, not a tone) — #4423.
-        // Reproduce the Flex behavior by shifting the whole receive chain
-        // by the pitch: move the BFO so the carrier demodulates to
-        // +cwPitchHz (CWU) or -cwPitchHz (CWL), and slide the passband by
-        // the same signed amount so that frequency is still inside it. This
-        // mirrors which side of the carrier the Flex itself listens to, so
-        // adjacent-signal rejection matches instead of always landing on
-        // the USB side regardless of sideband.
+        // Flex reports the CW passband symmetric about the carrier and applies the pitch
+        // shift after the filter; Kiwi's 'freq' is the BFO and low_cut/high_cut are
+        // relative to it, so sending the carrier as-is demodulates it at 0 Hz (#4423).
+        // Move the BFO so the carrier lands at +cwPitchHz (CWU) / -cwPitchHz (CWL) and
+        // slide the passband by the same signed amount, listening on the same side as
+        // the Flex.
         const int sign = cwLowerSideband ? -1 : 1;
-        // Clamp the shift so the passband doesn't slide past the Kiwi's
-        // audio Nyquist — an unclamped shift at the top of the CW pitch
-        // range pushes the tone to the band edge and reproduces #4423's
-        // silence with a different root cause. maxAudioBandwidthHz is the
-        // caller's negotiated Nyquist (sampleRateHz / 2), not a fixed
-        // constant — the Kiwi's audio sample rate is negotiated per
-        // connection, not always ~12 kHz. Floor headroom at 0: if the
-        // passband is already outside Nyquist (a filter width wider than
-        // the negotiated rate allows), a negative headroom would otherwise
-        // flip the shift's sign and push the passband further out of range
-        // instead of leaving it alone.
+        // Clamp the shift so the passband stays below the negotiated audio Nyquist
+        // (maxAudioBandwidthHz = sampleRateHz / 2, per connection). Headroom is floored
+        // at 0 so an already out-of-range passband isn't pushed further out.
         const int headroomHz = std::max(0, cwLowerSideband
             ? maxAudioBandwidthHz + tunedLowCutHz
             : maxAudioBandwidthHz - tunedHighCutHz);

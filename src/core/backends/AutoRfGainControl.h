@@ -1,40 +1,15 @@
 #pragma once
 
-// A BACKEND'S OWN AUTOMATIC RECEIVE-GAIN CONTROL, as a seam vocabulary.
-//
-// Implementations live under `src/core/backends/<family>/`. Nothing here knows
-// how one talks to a radio, and nothing here is allowed to: this interface
-// carries no wire concept at all, because the moment it carries one it has
-// started to describe a particular front end.
-//
-// NO FAMILY NAME APPEARS ABOVE THE SEAM. A family that has such a control
-// returns one from `IRadioBackend::autoRfGainControl()`; a family that does not
-// returns nullptr and never learns the concept exists. Shared code asks the
-// backend for the pointer and never names a family — the shape
-// `OfflineHealthRegistry` established for a different capability and the same
-// reason (docs/HERMES.md, "keep bring-up inside the family backend").
-//
-// WHY THIS AND NOT A CAPABILITY BOOL. Two reasons, and the first is now
-// mechanical:
-//
-//   * `RadioCapabilities`' boolean population is FROZEN and shrink-only
-//     (#5262 M2, tools/check_capability_records.py, enforced by the required
-//     Static checks job). A new loose bool cannot land.
-//   * The rule behind that freeze applies here on its merits. A
-//     `hasAutoRfGain` bool would have fissioned immediately: the first GUI to
-//     draw the control needed the floor bound and the set of laws as well,
-//     and with a bool both had to be fetched from somewhere else — which in
-//     practice meant reading an untyped health row by string key. An
-//     interface carries the shape with the capability.
-//
-// BORROWED, NEVER OWNED, NEVER CACHED. The pointer belongs to the backend and
-// is valid only for the duration of the call that obtained it. A disconnect
-// destroys the backend, and a stored pointer would outlive it.
-//
-// DISPLAY-AND-COMMAND, NOT A DATA FEED. Nothing here reports levels. What the
-// control is observing, and how well, is the backend's business and reaches an
-// operator through the health snapshot; this interface is the switch, the
-// bound, and the choice of law.
+// A backend's own automatic receive-gain control, as a seam vocabulary with no
+// wire concept and no family name. A family that has one returns it from
+// IRadioBackend::autoRfGainControl(); others return nullptr (docs/HERMES.md,
+// "keep bring-up inside the family backend").
+// An interface rather than a capability bool: RadioCapabilities' bool population
+// is frozen (#5262 M2, tools/check_capability_records.py), and the control needs
+// its floor bound and laws alongside the switch.
+// BORROWED, NEVER OWNED, NEVER CACHED: valid only for the duration of the call
+// that obtained it; a disconnect destroys the backend. Switch, bound and law
+// only; observed levels reach the operator through the health snapshot.
 
 #include <QString>
 #include <QStringList>
@@ -45,38 +20,18 @@ class IAutoRfGainControl {
 public:
     virtual ~IAutoRfGainControl() = default;
 
-    // Arm or disarm. RADIO-WIDE rather than per-pan, like setPanRfGain's target
-    // on a single-converter radio: there is one front end.
-    //
-    // DISARMING MUST RESTORE THE OPERATOR'S OWN GAIN TO THE HARDWARE IN ONE
-    // ACTION, from whatever state the control was in. A control that left the
-    // radio attenuated after its switch was turned off would be one that does
-    // not undo itself.
-    //
-    // A backend may DECLINE to arm — the HL2 refuses above a baseline where its
-    // gain axis is not trustworthy — so a caller must read `isArmed()` back
-    // rather than assuming the request took.
-    //
-    // AND THE BACKEND MUST EMIT IRadioBackend::autoRfGainArmSettled after every
-    // outcome, refusal included. A reader that polls isArmed() only after its
-    // own click never learns about an arm settled elsewhere -- the backend's
-    // own connect-time restore, a bridge verb -- and reports a control as off
-    // while it holds the operator's gain down (#5817).
+    // Arm or disarm, RADIO-WIDE (there is one front end). Disarming restores the
+    // operator's own gain to the hardware in one action, from any state. A backend
+    // may decline to arm (the HL2 refuses above a baseline where its gain axis is
+    // untrustworthy), so callers read isArmed() back. The backend emits
+    // IRadioBackend::autoRfGainArmSettled after EVERY outcome, refusal included,
+    // so a view learns of arms settled elsewhere (connect-time restore, bridge).
     virtual void setArmed(bool on) = 0;
     [[nodiscard]] virtual bool isArmed() const = 0;
 
-    // WHY IT DECLINED, in a sentence meant for the operator rather than a log.
-    //
-    // Reading `isArmed()` back tells a caller THAT the request did not take.
-    // It cannot tell them why, and without the why the operator sees a checkbox
-    // spring back to unticked with no explanation -- which on the HL2 is what
-    // every fresh install does on its first tick of Auto, because a stored gain
-    // is absent and the constructed baseline sits above the ceiling that gates
-    // arming (#5817).
-    //
-    // Empty when the last attempt succeeded, or when a backend has no reason to
-    // give. A caller shows it only after a readback has already shown the
-    // request failed; it is not a status line.
+    // Why the last arm request was refused, in a sentence for the operator. Empty
+    // after success or when the backend gives no reason. Shown only after an
+    // isArmed() readback already showed the refusal; not a status line. (#5817)
     [[nodiscard]] virtual QString lastArmRefusalReason() const { return {}; }
 
     // How far below the operator's own gain the control may go, in dB. The

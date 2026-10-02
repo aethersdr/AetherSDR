@@ -10,29 +10,11 @@ namespace AetherSDR {
 
 class HGauge;
 
-// Dedicated applet for a TelePost LP-100A digital vector RF wattmeter — a
-// sibling of AcomApplet/SpeApplet/VkampApplet, not a variant of any of them,
-// and deliberately NOT an extension of CrossNeedleMeterApplet. See
-// docs/architecture/lp-100a-wattmeter-design.md.
-//
-// Two gauges rather than the amplifier family's three: the LP-100A reports
-// power and SWR, and does NOT report reflected power. The protocol authority
-// does not resolve whether field 0 is forward or net power. Reflected could
-// be derived from the pair, but the fields are not always mutually coherent
-// (see LpMeter::Reading::coherent), so nothing here cross-derives between
-// fields — every number displayed is one the meter actually sent.
-//
-// Two display rules this class exists to enforce, both from the protocol
-// rather than from taste:
-//
-//   1. Impedance is shown as |Z| and |phase|, NEVER as signed reactance or an
-//      R+jX form. The sign is not on the wire at all; the manual has the
-//      operator recover it by QSY-ing and watching the slope. Rendering a
-//      sign here would be inventing data.
-//   2. dBm is shown as the meter reports it, including negative values. The
-//      reference Node-RED flow converts to dBW and clamps at 0, which
-//      silently discards everything below 1 W — the QRP end where a dB
-//      readout earns its keep.
+// TelePost LP-100A wattmeter applet, a sibling of AcomApplet/SpeApplet, not a
+// CrossNeedleMeterApplet extension (docs/architecture/lp-100a-wattmeter-design.md).
+// Two gauges: power and SWR; reflected is not reported and is never derived
+// (fields are not always coherent). Impedance shows |Z| and |phase| only — the
+// sign is not on the wire. dBm is shown as reported, negatives included.
 class LpMeterApplet : public QWidget {
     Q_OBJECT
 

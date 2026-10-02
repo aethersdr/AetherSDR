@@ -8,18 +8,10 @@
 
 namespace AetherSDR::certmath {
 
-// The measurement primitives behind RadioCertification, in a header of their own
-// for ONE reason: both of the measurement bugs this branch has fixed landed
-// here, and neither was reachable by a test while these lived in an anonymous
-// namespace inside the .cpp.
-//
-// Both bugs were the same shape — the right correlator asked about the wrong
-// frequency, because the sample rate was assumed rather than read. Nothing in
-// tonePower() can detect that; it faithfully reports the power at whatever bin
-// the caller's `fs` implies. So the tests that matter here pin the property the
-// CALLER depends on: that a wrong `fs` moves the probe off the tone, which is
-// what makes "read the rate from the capture" a correctness requirement rather
-// than a style preference.
+// Measurement primitives for RadioCertification, in a header so they're
+// testable. tonePower() reports power at whatever bin the caller's `fs`
+// implies; tests pin that a wrong `fs` moves the probe off the tone, which is
+// why callers must read the rate from the capture.
 
 inline constexpr double kPi = 3.14159265358979323846;
 
@@ -56,19 +48,10 @@ inline double rms(const std::vector<float>& mono)
 
 inline double db(double v) { return 20.0 * std::log10(std::max(1e-12, v)); }
 
-// Strongest bin within +/- `spanHz` of `hz`. Use this instead of tonePower()
-// whenever the tone's exact frequency is not under our control.
-//
-// tonePower() integrates coherently over the whole buffer, so a 1.5 s capture
-// is a ~0.67 Hz bin. That is the right thing for our own test tone, whose
-// frequency we set. It is the WRONG thing for an off-air reference: WWV is
-// exact, but OUR dial is not, and a 1 ppm oscillator error at 10 MHz moves the
-// carrier ~10 Hz — fifteen bins away. The tone then reads as the noise floor in
-// every mode at once, which looks exactly like "the receiver is deaf" rather
-// than "the probe missed".
-//
-// That failure is indistinguishable from the §1.9 wrong-rate bug from the
-// outside, and it would be read the same wrong way.
+// Strongest bin within +/- `spanHz` of `hz`; use instead of tonePower() when
+// the tone's exact frequency isn't ours. tonePower() is coherent over the whole
+// buffer (1.5 s ≈ 0.67 Hz bins), so a 1 ppm dial error at 10 MHz (~10 Hz)
+// puts an off-air reference like WWV fifteen bins away and it reads as noise.
 inline double tonePowerNear(const std::vector<float>& mono, double hz,
                             double fs, double spanHz, double stepHz = 1.0)
 {

@@ -1,27 +1,12 @@
 #pragma once
 
-// When a receiver-ceiling move is a CAPABILITY REVISION worth announcing — as a
-// pure decision, so the guard is testable without a radio, a socket or a running
-// event loop (the layer #5358 asks for, same shape as Hl2DspSetupPolicy.h).
-//
-// WHY THERE IS A GUARD AT ALL. Hl2Backend reports receiverCeiling() as both
-// maxSlices and maxPanadapters, and that ceiling is min(board count, what the
-// EP6 link budget admits at the current span) — so it FALLS when the operator
-// zooms out. At 384 kHz a fourth receiver is ~89 Mbit/s on the HL2's 100BASE-T
-// and genuinely cannot be delivered, so the honest limit there is 3. That is a
-// real revision of the descriptor the aetherd control protocol serializes
-// (#3849 step 3), and until #5594 nothing announced it.
-//
-// But a zoom is a DRAG. setPanBandwidth is fed roughly every 33 ms during a
-// sweep and crosses several rates on the way, while the great majority of those
-// rate changes leave the ceiling exactly where it was. Announcing per rate
-// change rather than per CEILING change would turn one gesture into a
-// republish storm at every capability consumer. Hence: compare against the last
-// value actually announced, not against "did the rate move".
-//
-// -1 is the disconnected sentinel rather than 0 so that the first announcement
-// after a connect is driven by an explicit seed() and never by a sentinel that
-// happens to equal a real ceiling.
+// Decides when a receiver-ceiling change is a capability revision worth
+// announcing (pure, testable without a radio). receiverCeiling() is
+// min(board count, EP6 link budget at the current span), so it falls on zoom-out
+// (a 4th receiver at 384 kHz is ~89 Mbit/s, over 100BASE-T). A zoom drag feeds
+// setPanBandwidth every ~33 ms, so announce only when the ceiling differs from
+// the last value announced, never per rate change (#5594). -1 = disconnected,
+// so the first post-connect value comes from an explicit seed().
 
 namespace AetherSDR::hl2 {
 

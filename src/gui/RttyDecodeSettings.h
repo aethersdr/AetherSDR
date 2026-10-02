@@ -9,25 +9,12 @@
 
 namespace AetherSDR {
 
-// The RTTY decoder's owned configuration object (#5353).
-//
-// Stored as one nested JSON blob under AppSettings["RttyDecoder"], per the
-// nested-JSON-per-feature convention (constitution Principle V), and written
-// whole through a single setValue()+save() so a reader never observes a
-// half-updated object (Principle XIV).  The pane's older Mark/Shift/Baud/
-// Reverse keys stay grandfathered as flat keys until they are migrated as a
-// unit.
-//
-// `enabled` is the operator's explicit "I want this pane" state, and it is
-// deliberately NOT derived from the slice's mode.  Before this existed the
-// pane's visibility was recomputed from `slice->mode() == "RTTY"` on every
-// refresh, so dismissing it with the ✕ button lasted only until the next
-// slice switch, active-pan change, or rtty_mark status echo — a band change
-// alone was enough to bring it back, because the radio resets rtty_mark and
-// SliceModel re-emits rttyMarkChanged.  "The decoder is available for this
-// slice" and "the operator wants the window" are separate states; this field
-// is the second one.  It defaults to True so behavior is unchanged for
-// anyone who never closes the pane.
+// RTTY decoder settings (#5353): one nested JSON blob under
+// AppSettings["RttyDecoder"], written whole in one setValue()+save() so no
+// reader sees half an update. Older Mark/Shift/Baud/Reverse stay flat keys
+// until migrated together. `enabled` is the operator's "I want this pane",
+// separate from mode availability (otherwise any slice switch, pan change or
+// rtty_mark echo would reopen a dismissed pane). Defaults to True.
 class RttyDecodeSettings {
 public:
     static bool enabled() { return readObj().value("enabled").toString("True") == "True"; }

@@ -33,21 +33,13 @@ signals:
     void pcmReady(const QByteArray& pcm);
 };
 
-// ---------------------------------------------------------------------------
-// WfmDemodulator — device plumbing around WfmDsp.
-//
-// See WfmDsp.h for the DSP chain and the SkyRoof-parity rationale. This
-// class only owns the I/O:
-//
+// Device plumbing around WfmDsp (see WfmDsp.h for the DSP chain):
 //   IQ source (DAX IQ endpoint at its NATIVE rate, or VITA-49 DaxIqModel)
 //     → WfmDsp  (NCO mix-down → exactly 48 kHz → discriminator → FIR)
 //     → clamp + volume → Float32 stereo → WaveOutWriter (HiFi Cable / VAC)
-//
-// Doppler: MainWindow forwards sliceFreq − panCentre via setFreqOffsetHz().
-// The pan — and with it the DAX IQ centre — stays fixed during a pass and
-// is recentred only when the slice would leave the usable IQ window
-// (maxFreqOffsetHz()), mirroring SkyRoof's fixed-SDR-centre + NCO design.
-// ---------------------------------------------------------------------------
+// Doppler: MainWindow forwards sliceFreq − panCentre via setFreqOffsetHz(); the
+// pan stays fixed during a pass and recentres only when the slice would leave
+// maxFreqOffsetHz() (SkyRoof's fixed-centre + NCO design).
 class WfmDemodulator : public QObject
 {
     Q_OBJECT

@@ -39,6 +39,13 @@ public:
     static bool bypassAdc1Filters();
     static void setBypassAdc1Filters(bool on);
 
+    // Send demodulated RX audio back to the radio so its own codec and speaker
+    // reproduce it. Connect-time, like the ADC options above -- but DEFAULT OFF,
+    // unlike all of them, because it is the only one that makes the host
+    // originate a continuous outbound stream. See P2Client::Params.
+    static bool speakerAudioEnabled();
+    static void setSpeakerAudioEnabled(bool on);
+
     // Restore every field to its default.
     static void reset();
 

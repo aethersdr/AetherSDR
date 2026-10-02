@@ -54,7 +54,7 @@ PRs for anything labelled `aetherclaude-eligible`.
 Every change passes the same gate regardless of which tool — or human — produced
 it: branch protection enforces signed commits, green CI and CODEOWNERS review,
 and nothing reaches `main` without human review. The project's
-[Constitution](CONSTITUTION.md) (14 principles, structured per [Cisco's Foundry
+[Constitution](CONSTITUTION.md) (structured per [Cisco's Foundry
 Constitution](https://github.com/CiscoDevNet/foundry-security-spec) spec)
 codifies the conventions every contributor and every AI tool follows, and
 [`AGENTS.md`](AGENTS.md) is the canonical guide each assistant reads first.
@@ -167,14 +167,14 @@ corresponding features disabled.
 # Arch / CachyOS / Manjaro
 sudo pacman -S cmake ninja pkgconf autoconf automake libtool python curl git \
   fftw rtl-sdr portaudio hidapi \
-  libpulse libglvnd fontconfig wayland libxkbcommon-x11 \
+  libpulse libglvnd fontconfig wayland libxkbcommon-x11 pipewire \
   xcb-util-cursor xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm
 
 # Debian / Ubuntu / Linux Mint
 sudo apt install cmake ninja-build pkg-config autoconf automake libtool \
   python3 python3-venv curl git \
   libfftw3-dev librtlsdr-dev portaudio19-dev libhidapi-dev \
-  libgl1-mesa-dev libpulse-dev libasound2-dev libpipewire-0.3-dev \
+  libgl1-mesa-dev libpulse-dev libasound2-dev libpipewire-0.3-dev pipewire-bin \
   libdbus-1-dev libglib2.0-dev libfontconfig1-dev libfreetype6-dev \
   libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev \
   libxcb-cursor0 libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
