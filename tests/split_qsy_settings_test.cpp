@@ -169,6 +169,49 @@ void testPendingTuneEchoesAreSliceSpecificAndExpire()
           "expired tune expectations are discarded");
 }
 
+void testTwoOutstandingSwapEchoesDoNotCloseSplit()
+{
+    AetherSDR::SplitQsySettings settings;
+    settings.closeSplitOnQsy = true;
+    AetherSDR::PendingSliceFrequencyEchoes pendingTuneEchoes;
+    AetherSDR::SliceModel rx(0);
+    rx.applyChanges(frequencyObservation(14.000));
+
+    bool splitActive = true;
+    double referenceFrequencyMhz = rx.frequency();
+    int commandsIssued = 0;
+    QObject::connect(&rx, &AetherSDR::SliceModel::frequencyCommandIssued, &rx,
+                     [&](double frequencyMhz) {
+        ++commandsIssued;
+        pendingTuneEchoes.record(rx.sliceId(), frequencyMhz, 1000);
+    });
+    QObject::connect(&rx, &AetherSDR::SliceModel::frequencyStatusReported, &rx,
+                     [&](double frequencyMhz) {
+        if (pendingTuneEchoes.consume(rx.sliceId(), frequencyMhz, 1001)) {
+            referenceFrequencyMhz = frequencyMhz;
+            return;
+        }
+        if (AetherSDR::shouldCloseSplitOnQsyObservation(
+                settings, splitActive, true, frequencyMhz,
+                referenceFrequencyMhz)) {
+            splitActive = false;
+        }
+    });
+
+    // Two rapid SWAPs issue both RX tunes before either radio status arrives.
+    rx.setFrequency(14.005);
+    rx.setFrequency(14.000);
+    check(commandsIssued == 2 && !pendingTuneEchoes.empty(),
+          "two outstanding SWAP echoes are tracked before status arrives");
+
+    rx.applyChanges(frequencyObservation(14.005));
+    check(splitActive, "first delayed SWAP echo does not close split");
+    rx.applyChanges(frequencyObservation(14.000));
+    check(splitActive, "second delayed SWAP echo does not close split");
+    check(pendingTuneEchoes.empty(),
+          "both outstanding SWAP echoes are consumed");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -180,5 +223,6 @@ int main(int argc, char** argv)
     testQsyClosePolicy();
     testLocalTuneEchoAndIncrementalExternalQsy();
     testPendingTuneEchoesAreSliceSpecificAndExpire();
+    testTwoOutstandingSwapEchoesDoNotCloseSplit();
     return g_failures == 0 ? 0 : 1;
 }
