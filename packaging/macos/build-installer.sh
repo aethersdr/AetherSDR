@@ -11,8 +11,11 @@ VERSION=$(grep 'project(AetherSDR' CMakeLists.txt | grep -oE '[0-9]+\.[0-9]+\.[0
 
 echo "=== Building AetherSDR macOS installer v${VERSION} ==="
 
-# 1. Build app
-cmake -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+# 1. Build app with the same pinned native dependencies as the release DMG.
+export MACOS_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET:-14.0}"
+bash scripts/setup/setup-macos-deps.sh
+export PKG_CONFIG_PATH="$PWD/third_party/macos-deps/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+cmake -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_HD_FM=OFF -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" -DCMAKE_PREFIX_PATH="$PWD/third_party/macos-deps;${CMAKE_PREFIX_PATH:-}"
 cmake --build "${BUILD_DIR}" -j$(sysctl -n hw.ncpu)
 
 # 1b. Build HAL plugin (separate build because libASPL FetchContent conflicts with main Ninja build)
@@ -29,6 +32,11 @@ mkdir -p "${PKG_DIR}/app" "${PKG_DIR}/hal" "${PKG_DIR}/scripts"
 
 # Copy app bundle
 cp -R "${BUILD_DIR}/AetherSDR.app" "${PKG_DIR}/app/"
+QT_DEPLOY="$(sed -n 's|^Qt6_DIR:PATH=\(.*\)/lib/cmake/Qt6$|\1/bin/macdeployqt|p' "${BUILD_DIR}/CMakeCache.txt")"
+[ -x "$QT_DEPLOY" ] || { echo "Cannot locate matching macdeployqt" >&2; exit 1; }
+"$QT_DEPLOY" "${PKG_DIR}/app/AetherSDR.app" -always-overwrite
+cp -R third_party/macos-deps/share/aethersdr-rtl-sources "${PKG_DIR}/app/AetherSDR.app/Contents/Resources/"
+python3 tools/check_rtl_package.py "${PKG_DIR}/app/AetherSDR.app" --platform macos
 
 # Copy HAL plugin (check both possible build locations)
 if [ -d "${HAL_BUILD}/AetherSDRDAX.driver" ]; then

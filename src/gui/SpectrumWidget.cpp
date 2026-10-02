@@ -4378,6 +4378,7 @@ void SpectrumWidget::setWfLineDuration(int ms) {
 
 void SpectrumWidget::setSquelchLine(bool visible, int level)
 {
+    visible = visible && m_squelchSpectrumComparable;
     m_flexSquelchLineVisible = visible;
     m_flexSquelchLevel = std::clamp(level, 0, 100);
     markOverlayDirty();
@@ -4602,10 +4603,13 @@ void SpectrumWidget::setAutoSquelchEnable(bool on)
     }
 }
 
-void SpectrumWidget::setSquelchScale(double referenceDb, double stepDb, const QString& unit)
+void SpectrumWidget::setSquelchScale(double referenceDb, double stepDb, const QString& unit, bool spectrumComparable)
 {
     if (!std::isfinite(referenceDb) || !std::isfinite(stepDb) || stepDb <= 0) { return; }
-    if (m_squelchReferenceDb == referenceDb && m_squelchStepDb == stepDb && m_squelchUnit == unit) { return; }
+    if (m_squelchReferenceDb == referenceDb && m_squelchStepDb == stepDb && m_squelchUnit == unit
+        && m_squelchSpectrumComparable == spectrumComparable) { return; }
+    m_squelchSpectrumComparable = spectrumComparable;
+    if (!spectrumComparable) { m_flexSquelchLineVisible = false; }
     m_squelchReferenceDb = referenceDb; m_squelchStepDb = stepDb; m_squelchUnit = unit;
     m_sqlNoiseFloorDbm = -999.0f; m_lastAutoSquelchLevel = -1;
     markOverlayDirty();

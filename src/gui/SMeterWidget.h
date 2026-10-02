@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <limits>
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QPixmap>
@@ -31,8 +32,8 @@ public:
     QSize sizeHint() const override { return m_geometry.sizing.preferred; }
     QSize minimumSizeHint() const override { return m_geometry.sizing.minimum; }
 
-    // Current reading in dBm.
-    float levelDbm() const { return m_levelDbm; }
+    // Calibrated reading only; a relative RF reading has no dBm equivalent.
+    float levelDbm() const { return m_relativeLevel ? std::numeric_limits<float>::quiet_NaN() : m_levelDbm; }
 
     // Reading as S-units string (e.g. "S7", "S9+20").
     QString sUnitsText() const;
@@ -54,6 +55,8 @@ public:
 public slots:
     // Update the displayed RX level (S-meter dBm).
     void setLevel(float dbm);
+    void setRelativeLevel(std::optional<float> dbfs, int receiverId, const QString& unavailableReason = {});
+    bool relativeLevel() const { return m_relativeLevel; }
     void setReceiveMeterReading(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
 
@@ -87,6 +90,7 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    void updateReceiveLevel(float value);
     void updateNeedleTarget();
     void animateNeedle();
     void updatePeakHoldValue();
@@ -125,6 +129,10 @@ private:
     bool m_backgroundCacheValid{false};
     QTimer m_accessibilityTimer;
     QString m_lastAccessibleValue;
+    bool m_relativeLevel = false;
+    bool m_relativeValid = false;
+    QString m_relativeUnavailableReason;
+    int m_relativeReceiver = -1;
     float   m_levelDbm{0.0f};    // current RX reading; initialized from geometry
     float   m_peakDbm{0.0f};     // RX peak hold; initialized from geometry
     QString m_source{"S-Meter Peak"};

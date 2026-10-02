@@ -89,7 +89,7 @@ Write-Host "  MSVC + CMake + Ninja OK; Qt = $QtDir; jobs = $Jobs" -ForegroundCol
 # ---------------------------------------------------------------------------
 Write-Host "== Staging third_party deps ==" -ForegroundColor Cyan
 foreach ($s in @(
-        "setup-opus.ps1", "setup-fftw.ps1", "setup-hidapi.ps1",
+        "setup-opus.ps1", "setup-fftw.ps1", "setup-rtl-deps.ps1", "setup-hidapi.ps1",
         "setup-deepfilter.ps1", "setup-qtkeychain.ps1", "setup-onnxruntime.ps1",
         "setup-sherpa-onnx.ps1", "setup-vulkan-sdk.ps1")) {
     Write-Host "  -> $s" -ForegroundColor DarkCyan
@@ -113,6 +113,7 @@ Write-Host "  VULKAN_SDK = $env:VULKAN_SDK" -ForegroundColor Green
 Write-Host "== Configure ==" -ForegroundColor Cyan
 cmake -B build -G "Ninja" `
     -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+    -DENABLE_HD_FM=OFF -DENABLE_RTL=ON -DREQUIRE_RTL=ON `
     -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON `
     -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON `
     -DCMAKE_PREFIX_PATH="$QtDir;$env:VULKAN_SDK" `
@@ -159,6 +160,12 @@ Get-ChildItem build\*.dll -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Host "  bundling ASR runtime DLL: $($_.Name)" -ForegroundColor DarkCyan
     Copy-Item $_.FullName $deploy\ -Force
 }
+Copy-Item third_party\rtl-deps\bin\*.dll $deploy\ -Force
+New-Item -ItemType Directory -Force "$deploy\licenses" | Out-Null
+Copy-Item third_party\rtl-deps\share\aethersdr-rtl-sources "$deploy\licenses\rtl" -Recurse -Force
+Copy-Item third_party\fftw3\share\aethersdr-rtl-sources "$deploy\licenses\fftw" -Recurse -Force
+python tools/check_rtl_package.py $deploy --platform windows
+if ($LASTEXITCODE -ne 0) { throw "RTL payload validation failed" }
 # Vulkan loader (whisper GPU): the exe hard-links it, so it must ship. Its
 # location varies by SDK layout (runtime\x64 on newer SDKs, Bin on older) with a
 # driver copy in System32 -- take the first that exists.

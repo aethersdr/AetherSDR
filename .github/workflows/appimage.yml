@@ -112,7 +112,7 @@ jobs:
             libgstreamer-plugins-bad1.0-0 \
             libfuse2 file desktop-file-utils imagemagick \
             python3-pip autoconf automake libtool libasound2-dev \
-            libfftw3-dev libhidapi-dev portaudio19-dev
+            libfftw3-dev libudev-dev libhidapi-dev portaudio19-dev
 
       # glslc — the SPIR-V shader compiler whisper's Vulkan backend needs at
       # BUILD time (CMake resolves it via find_package(Vulkan COMPONENTS glslc),
@@ -249,6 +249,9 @@ jobs:
         # pure Qt-D-Bus backend talks to KDE Wallet / GNOME Keyring at runtime.
         run: bash scripts/setup/setup-qtkeychain.sh
 
+      - name: Build pinned RTL dependencies (including float FFTW)
+        run: bash scripts/setup/setup-rtl-deps.sh
+
       - name: Configure
         run: |
           # Without pipefail the step's exit status is tee's, so a cmake failure
@@ -256,8 +259,11 @@ jobs:
           # (which also implies -eo pipefail) so the guard is self-contained and
           # survives anyone editing the step's shell.
           set -o pipefail
+          export PKG_CONFIG_PATH="$PWD/third_party/rtl-deps/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_HD_FM=OFF \
+            -DENABLE_RTL=ON -DREQUIRE_RTL=ON \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
             -DREQUIRE_KEYCHAIN=ON \
@@ -267,7 +273,7 @@ jobs:
             -DAETHER_GPU_SPECTRUM=${{ matrix.gpu_spectrum }} \
             -DMQTT_TLS=OFF \
             -DENABLE_NVIDIA_AFX=ON \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT" 2>&1 | tee configure.log
+            -DCMAKE_PREFIX_PATH="$PWD/third_party/rtl-deps;$QT_ROOT" 2>&1 | tee configure.log
 
       # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake silently
       # flips it back OFF if Qt6GuiPrivate can't be located, and CMakeLists.txt
@@ -304,6 +310,8 @@ jobs:
           convert AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
             -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png
 
+          mkdir -p AppDir/usr/share/aethersdr
+          cp -R third_party/rtl-deps/share/aethersdr-rtl-sources AppDir/usr/share/aethersdr/
           # Bundle DeepFilterNet3 model for DFNR
           if [ -f third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz ]; then
             cp third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz \
@@ -408,13 +416,14 @@ jobs:
           # libsherpa-onnx-c-api.so, and libonnxruntime.so (the app links sherpa's
           # copy). Qt6 DBus, which the keychain backend needs at runtime, is pulled
           # in transitively.
-          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/qtkeychain/lib:${{ github.workspace }}/third_party/onnxruntime/lib:${{ github.workspace }}/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/rtl-deps/lib:${{ github.workspace }}/third_party/qtkeychain/lib:${{ github.workspace }}/third_party/onnxruntime/lib:${{ github.workspace }}/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
             --plugin qt \
             --desktop-file AppDir/usr/share/applications/AetherSDR.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
             --output appimage
+          python3 tools/check_rtl_package.py AppDir --platform linux
 
       # Nothing else in the build would notice these plugins going missing: Qt
       # dlopen()s them at runtime rather than linking them, so no dependency walk

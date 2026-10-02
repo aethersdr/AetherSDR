@@ -299,6 +299,7 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.receiveModeControl = std::nullopt;
     c.receiveFilterControl = std::nullopt;
     c.receiveAudioControl = std::nullopt;
+    c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.receivePanCenterControl = std::nullopt;
     c.receivePanBandwidthControl = std::nullopt;
 

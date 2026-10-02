@@ -454,6 +454,38 @@ int main(int argc, char** argv)
             && movedDocument.slices[5].audioGain == outside.audioGain
             && movedDocument.slices[5].audioPan == outside.audioPan,
             "drag persists the new capture center without changing saved slice RF or monitor settings");
+        const auto beforeMeters = rtl::RtlCaptureBackendTestAccess::state(live);
+        int meterResults = 0;
+        int meterErrors = 0;
+        QHash<int, QString> reasons;
+        QObject::connect(&live, &IRadioBackend::extensionResult, [&](quint64 id, const QVariant&) {
+            if (id >= 9100 && id <= 9102) { ++meterResults; }
+        });
+        QObject::connect(&live, &IRadioBackend::extensionError, [&](quint64 id, const QString&) {
+            if (id >= 9100 && id <= 9102) { ++meterErrors; }
+        });
+        QObject::connect(&live, &IRadioBackend::meterDefined, [&](const MeterDef& def) {
+            reasons[def.sourceIndex] = def.unavailableReason;
+        });
+        live.invokeExtension("rtl", "receive_meters.set", 9100, false);
+        check(meterResults == 1 && meterErrors == 0 && reasons.size() == 3
+            && !reasons[1].isEmpty() && !reasons[3].isEmpty() && !reasons[5].isEmpty()
+            && !RtlDeviceSettings(liveScope).load().values.receiveMetersEnabled,
+            "disabled meters publish reasons for sparse IDs and persist through the sole device owner");
+        const auto afterMeters = rtl::RtlCaptureBackendTestAccess::state(live);
+        check(beforeMeters && afterMeters && beforeMeters->token == afterMeters->token
+            && beforeMeters->hardware == afterMeters->hardware
+            && beforeMeters->receivers == afterMeters->receivers
+            && beforeMeters->receivingIds == afterMeters->receivingIds
+            && beforeMeters->dcSuppression == afterMeters->dcSuppression
+            && !rtl::RtlCaptureBackendTestAccess::busy(live),
+            "meter toggle does not restart capture or change receivers, squelch or audio settings");
+        live.invokeExtension("rtl", "receive_meters.set", 9101, QStringLiteral("true"));
+        check(meterErrors == 1 && meterResults == 1, "meter control rejects a string masquerading as boolean");
+        live.invokeExtension("rtl", "receive_meters.set", 9102, true);
+        check(meterResults == 2 && reasons[1].isEmpty() && reasons[3].isEmpty() && reasons[5].isEmpty()
+            && RtlDeviceSettings(liveScope).load().values.receiveMetersEnabled,
+            "re-enabled sparse meters clear unavailable reasons and save accepted state");
         live.disconnectRadio();
     }
     reconnectAtCaptureLimits();

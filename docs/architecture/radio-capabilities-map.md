@@ -68,6 +68,19 @@ are in [local receive control](../aetherd-local-receive-control.md#qualified-bac
 `control_receive_test` pins declarations and action-time admission; the optional
 RTL declaration check runs only when the RTL backend is built.
 
+### Native receive audio export
+
+`receiveAudioExport` describes the typed pre-monitor `sliceAudioFrameReady`
+formats and independent receiver capacity. RTL declares 24/48 kHz and, when its
+Digital decoder is built, 44.1 kHz. The other backends explicitly leave it absent.
+`DaxReceiveModel` admits only declared rates and live TCI receiver bindings;
+MainWindow offers the existing DAX audio bridge separately from radio-side DAX
+selectors and IQ. This record grants no TX or headless-control permission.
+Native DAX currently requires the optional WebSockets build component for the
+shared receiver map, but neither a listening TCI server nor an attached TCI
+client. Builds without it retain their existing Flex bridge and do not offer
+native DAX. See [native DAX receive routing](../native-dax-receive.md).
+
 ### Native squelch
 
 `receiveSquelchModel` describes native desktop squelch modes and the threshold's

@@ -225,7 +225,7 @@ public:
     // connected radio produces per-slice audio / per-pan IQ streams
     // (RadioCapabilities::hasDaxStreams). Same not-markHardwareConditional
     // reasoning as setProfilesVisible above.
-    void setDaxStreamsVisible(bool visible);
+    void setDaxStreamsVisible(bool visible, bool nativeReceive = false);
 
     // Show/hide the EQ button and applet — the radio's own 8-band hardware
     // equalizer (RadioCapabilities::hasRadioSideDsp). Deliberately does NOT

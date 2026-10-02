@@ -540,6 +540,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::sliceAdded, this, bindSlice);
         connect(m_model, &RadioModel::sliceRemoved, this,
                 [this] { refreshRxBindings(); });
+        // A session can create TCI after the backend restored its slices.
+        // Seed the sticky map before publishing any audio bindings; positional
+        // fallback would silently renumber survivors on the first removal.
+        for (SliceModel* slice : m_model->slices()) {
+            m_trxMap.acquire(slice->sliceId());
+        }
         for (SliceModel* slice : m_model->slices()) { bindSlice(slice); }
     }
     for (int ch = 1; ch <= 8; ++ch) { m_io->setRxGain(ch, m_rxChannelGain[ch - 1]); }
@@ -1123,14 +1129,12 @@ QJsonObject TciServer::routingSnapshot() const
 
     QJsonArray endpoints;
     if (m_model) {
-        const auto slices = m_model->slices();
-        for (int trx = 0; trx < slices.size(); ++trx) {
-            const SliceModel* slice = slices.at(trx);
+        for (const SliceModel* slice : m_model->slices()) {
             if (!slice) {
                 continue;
             }
             endpoints.append(QJsonObject{
-                {QStringLiteral("trx"), trx},
+                {QStringLiteral("trx"), m_trxMap.trxForSlice(m_model, slice)},
                 {QStringLiteral("sliceId"), slice->sliceId()},
                 {QStringLiteral("panId"), slice->panId()},
                 {QStringLiteral("frequencyHz"),
@@ -2670,6 +2674,15 @@ void TciServer::resetClientRx(ClientState& client)
     syncClient(client);
 }
 
+TciRxBinding TciServer::sliceRxBinding(int sliceId) const
+{
+    const quint64 key = TciIoWorker::rxRouteKey(false,sliceId);
+    const TciRxBinding binding = m_rxBindings.value(key);
+    const QPointer<SliceModel> owner = m_rxBindingOwners.value(key);
+    if (!m_model || !owner || m_model->slice(sliceId) != owner || !binding.current()) { return {}; }
+    return binding;
+}
+
 void TciServer::refreshRxBindings()
 {
     QHash<quint64, TciRxBinding> next;
@@ -2712,6 +2725,7 @@ void TciServer::refreshRxBindings()
     m_rxBindings = next;
     m_rxBindingOwners = owners;
     m_io->post([io = m_io.get(), next] { io->setRxBindings(next); });
+    emit rxBindingsChanged();
 }
 
 void TciServer::retireAllRxRoutes()
@@ -3100,18 +3114,31 @@ void TciServer::sendInitBurst(TciClient* client)
         << "TCI: receiver map"
         << (receiverMap.isEmpty() ? QStringLiteral("(none)") : receiverMap.join(QLatin1Char(' ')));
 
-    // TCI protocol requires one command per WebSocket message.
-    // Split the concatenated burst into individual messages.
-    QString burst = protocol->generateInitBurst();
-    const auto commands = burst.split(';', Qt::SkipEmptyParts);
-    for (const auto& cmd : commands) {
+    // Preserve one command per WebSocket message, but admit the bounded init
+    // snapshot as one worker job. Eight receivers times eight simultaneous
+    // clients otherwise exceed the 256-job mailbox during their handshakes.
+    const QString burst = protocol->generateInitBurst();
+    const QStringList commands = burst.split(';', Qt::SkipEmptyParts);
+    QStringList messages;
+    qsizetype bytes = 0;
+    for (const QString& cmd : commands) {
         // DIAG: log each init-burst command — the startup vfo:/dds: here is what
         // WSJT-X reconciles against on connect; a wrong/late one explains the
         // "TCI failed set rxfreq" some users hit right at WSJT-X startup.
         qCDebug(lcCat).noquote() << "TCI tx→init:" << (cmd + QLatin1Char(';'));
         const QString message = cmd + QLatin1Char(';');
-        sendClientText(client, message);
+        noteClientTextTx(client, message);
+        messages.append(message);
+        bytes += message.size() * sizeof(QChar);
     }
+    TciIoWorker* io = m_io.get();
+    const quint64 id = client->id();
+    io->post([io, id, messages = std::move(messages)] {
+        for (const QString& message : messages) {
+            // sendText rechecks client lifetime and socket backlog each time.
+            io->sendText(id, message);
+        }
+    }, bytes);
     qCDebug(lcCat) << "TCI: sent init burst," << commands.size() << "commands";
 }
 

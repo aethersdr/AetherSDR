@@ -190,7 +190,7 @@ jobs:
           # bakes in that nothing downstream can correct, so a 14.0 tree must
           # never restore into a 12.0 build — that would silently recreate the
           # bug this change exists to remove.
-          key: macos-deps-${{ matrix.label }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-macos-deps.sh') }}
+          key: macos-deps-${{ matrix.label }}-deploy${{ matrix.deploy_target }}-${{ hashFiles('scripts/setup/setup-macos-deps.sh', 'scripts/setup/setup-rtl-deps.sh', 'scripts/setup/rtl-dependencies.json') }}
 
       # ~8 min cold, then cached until the script or the target changes — the
       # same deal third_party/qtkeychain already has. That cost buys the DMG a
@@ -362,6 +362,8 @@ jobs:
           KEYCHAIN_FLAG="-DREQUIRE_KEYCHAIN=ON"
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_HD_FM=OFF \
+            -DENABLE_RTL=ON -DREQUIRE_RTL=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ matrix.deploy_target }}" \
@@ -466,6 +468,9 @@ jobs:
           "$DEPLOYQT" build/AetherSDR.app \
             -verbose=1 \
             -always-overwrite
+          mkdir -p build/AetherSDR.app/Contents/Resources
+          cp -R third_party/macos-deps/share/aethersdr-rtl-sources build/AetherSDR.app/Contents/Resources/
+          python3 tools/check_rtl_package.py build/AetherSDR.app --platform macos
 
       # The artifact-side half of the pin. Everything upstream of here asserts
       # what we *asked* for; this asserts what the DMG actually carries, which
