@@ -13,19 +13,9 @@ class ClientCompKnob;         // reused — generic rotary knob
 class ClientLevelMeter;
 class ClientTubeCurveWidget;
 
-// Floating editor for the client-side dynamic tube saturator.
-// Layout mirrors Ableton's Dynamic Tube device:
-//
-//   ┌─ bypass ──────────────────── × ┐
-//   │ ┌──────┐ ┌─────────┐ ┌──────┐ │
-//   │ │DryWet│ │  curve  │ │ ENV  │ │
-//   │ │      │ │         │ │      │ │
-//   │ │ Out  │ │         │ │ ATK  │ │
-//   │ │      │ │ [A B C] │ │      │ │
-//   │ │Drive │ │  Tone   │ │ REL  │ │
-//   │ │      │ │  Bias   │ │      │ │
-//   │ └──────┘ └─────────┘ └──────┘ │
-//   └────────────────────────────────┘
+// Floating editor for the client-side dynamic tube saturator, laid out like
+// Ableton's Dynamic Tube: Dry/Wet, Out, Drive on the left; curve with A/B/C
+// model, Tone and Bias in the middle; envelope, Attack, Release on the right.
 class ClientTubeEditor : public QWidget {
     Q_OBJECT
 
@@ -37,6 +27,7 @@ public:
 
     void showForTx();
     void showForRx();
+    bool isShowingTx() const { return isVisible() && m_side == Side::Tx; }
 
 signals:
     void bypassToggled(Side side, bool bypassed);

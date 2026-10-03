@@ -46,53 +46,24 @@ private:
 
     QVector<float> m_bins;
     double m_sampleRateHz{0.0};
-    // The displayed dB window. Fixed, not auto-ranged: an auto-range would make
-    // a quiet band and a band with a broadcast carrier in it look identical,
-    // which is the exact comparison this window exists to make possible.
-    //
-    // The top is 0 dBFS because that is the converter's rail and the gateware's
-    // own clip threshold. REACHABLE ONLY BECAUSE THE CALLER CORRECTS THE SCALE:
-    // ClientEqFftAnalyzer's own bins are 6.02 dB low (its 2/N normalisation
-    // does not remove the Hann window's coherent gain), so BandscopeDialog::
-    // onFrame() adds coherentGainCorrectionDb() before the bins arrive here. A
-    // caller that forgets is not drawing dBFS. `bandscope_analyzer_test` pins
-    // the helper; `bandscope_trace_render_test` pins the production readout.
-    //
-    // The bottom is -100 dB, which sits just under the analyzer's kFloorDb
-    // sentinel once that sentinel has been corrected (-100 + 6.02 = -93.98), so
-    // a record with no energy in it draws a flat line near the bottom of the
-    // plot rather than off the end of it.
+    // Fixed dB window, not auto-ranged, so a quiet band and one with a broadcast
+    // carrier look different. Top 0 dBFS = converter rail / gateware clip, reachable
+    // only because onFrame() adds coherentGainCorrectionDb() (the analyzer's bins
+    // are 6.02 dB low); pinned by bandscope_analyzer_test and
+    // bandscope_trace_render_test. Bottom -100 dB sits just under the corrected
+    // kFloorDb sentinel (-93.98), so an empty record draws near the bottom.
     static constexpr float kTopDb = 0.0f;
     static constexpr float kBottomDb = -100.0f;
 };
 
-// The wideband converter view, in its own window.
-//
-// WHAT IT IS FOR. The operator sees one slice, 48 to 384 kHz wide, and both the
-// waterfall and the S-meter are post-DDC. A broadcast station 20 MHz outside
-// that slice can drive the converter towards its rail while everything on the
-// main display looks calm. This window shows the converter's whole first
-// Nyquist zone so that condition is visible instead of inferred.
-//
-// TWO DESIGN DECISIONS, BOTH DELIBERATE:
-//
-//   * A SEPARATE WINDOW rather than a mode of the panadapter. The point is
-//     seeing both at once — a mode switch hides the comparison the feature
-//     exists to show — and a new window changes no existing surface.
-//   * ON DEMAND rather than continuous. A continuous consumer would be a second
-//     permanent load on the backend's I/O thread, and for the HL2 that thread
-//     already carries EP2 pacing, EP6 ingest, WDSP and the panadapter FFT. That
-//     cost has NEVER BEEN MEASURED. One frame when the window opens and one per
-//     Refresh avoids the question rather than guessing the answer.
-//
-// IT NAMES NO RADIO FAMILY. The window asks the connected backend for
-// RadioCapabilities::widebandConverterView and invokes the namespace and verb
-// that record carries. Today exactly one backend answers; this window does not
-// know or care which.
-//
-// WHAT IT DELIBERATELY DOES NOT HAVE: a waterfall, click-to-tune, markers, band
-// annotations, or any interaction with the panadapter. Each of those is a
-// separate design decision.
+// Wideband converter view: the converter's whole first Nyquist zone, so an
+// out-of-slice signal driving the ADC towards its rail is visible (the
+// waterfall and S-meter are post-DDC). A separate window, so both are visible
+// at once; on demand (one frame on open and per Refresh) because a continuous
+// consumer would load the backend I/O thread (on HL2: EP2 pacing, EP6, WDSP,
+// pan FFT) at an unmeasured cost. Names no radio family: it invokes whatever
+// RadioCapabilities::widebandConverterView advertises. No waterfall,
+// click-to-tune, markers or pan interaction by design.
 class BandscopeDialog : public PersistentDialog {
     Q_OBJECT
 

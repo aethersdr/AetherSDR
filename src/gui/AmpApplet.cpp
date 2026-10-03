@@ -59,25 +59,11 @@ QLabel* makeValueLabel(QWidget* parent)
     return lbl;
 }
 
-// ── Expanded panel design metrics ───────────────────────────────────────────
-//
-// The size at which every metric below is its literal value; the actual
-// metrics are that value times one scale derived from the room the panel has.
-// See AccessoryPanelWidgets.h for why the width is a constant and the height
-// is measured exactly once.
-//
-// What the widest row costs at scale 1.0: a port strip — letter, PTT lamp,
-// band and bias chips, the source radio's name and the state cell — plus the
-// readouts, the fan pull-down and the key below them, and the column's side
-// margins.
-//
-// Deliberately generous. The column's width is not exactly proportional to
-// the scale — a button's frame and the readout's minimum width are constants
-// inside it — so the contents cost roughly 265 * scale + 63 rather than a
-// clean multiple. Solving that against this divisor is what decides whether a
-// narrow panel merely cramps or actually clips: at 420 every panel from the
-// minimum scale upward has room to spare, while a divisor tight enough to hit
-// scale 1.0 at the contents' own 300px would clip anything under 540px wide.
+// Expanded-panel design width: metrics are their literal values at scale 1.0
+// and scale with the room available (see AccessoryPanelWidgets.h). Covers the
+// widest row (port strip, readouts, fan pull-down, key, margins). Deliberately
+// generous: contents cost ~265 * scale + 63, so 420 leaves room at every scale
+// from the minimum, while 300 would clip panels under 540 px.
 constexpr qreal kDesignWidth  = 420.0;
 // Only a first guess: applyDensity replaces it with the measured value as
 // soon as there is a laid-out column to measure.
@@ -293,17 +279,10 @@ void AmpApplet::buildUI()
     pwrRow->addWidget(m_fwdGauge, 1);
     vbox->addLayout(pwrRow);
 
-    // ── DRV row ──────────────────────────────────────────────────────────────
-    // Exciter power at the amplifier's input, directly under the output it
-    // produces: the pair is the amplifier's gain, and reading it off two
-    // stacked bars is the whole reason this row exists. A PGXL delivering
-    // 16 W for 11 W of drive is visibly broken here and invisible anywhere
-    // else in the application.
-    //
-    // Full scale is the meter's own declared ceiling — the radio publishes
-    // DRV as 10.0..50.0 dBm, and 50 dBm is 100 W. The amplifier reaches rated
-    // output well below that, so the top of the scale is a limit, not a
-    // target: yellow from 50 W, red from 75 W.
+    // DRV row: exciter power under the output it produces, so the amp's gain reads
+    // off two stacked bars (16 W out for 11 W drive is visibly broken). Full scale
+    // is the meter's declared ceiling (DRV 10..50 dBm; 50 dBm = 100 W): a limit,
+    // not a target; yellow from 50 W, red from 75 W.
     m_drvLabel = makeValueLabel(this);
     m_drvLabel->setText("DRV");
     m_drvGauge = new HGauge(0.0f, 100.0f, 75.0f, "", "",
@@ -410,7 +389,7 @@ void AmpApplet::buildUI()
     m_tempBtn->setCursor(Qt::PointingHandCursor);
     m_tempBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_tempBtn->setMinimumWidth(76);
-    m_tempBtn->setAccessibleDescription("Toggles amplifier temperature between Celsius and Fahrenheit");
+    m_tempBtn->setAccessibleDescription(tr("Toggles the PA heatsink and Harmonic Load heatsink temperatures between Celsius and Fahrenheit"));
     connect(m_tempBtn, &QPushButton::clicked, this, [this]() {
         m_tempFahrenheit = !m_tempFahrenheit;
         writeTempFahrenheit(m_tempFahrenheit);
@@ -444,16 +423,10 @@ void AmpApplet::buildUI()
     // it all first and leave the grid at its contents' width.
     btnRow->addWidget(m_telemetryBox, 1);
 
-    // Fan speed pull-down — surfaces all three modes instead of making the
-    // operator click through them blind (#3905). Item text via
-    // fanModeLabel(); uppercase mode stored as itemData so the
-    // fanModeChanged contract ("uppercase, ready for sendCommand") is
-    // unchanged. Hidden until a direct PGXL connection delivers the first
-    // fanmode status.
-    // GuardedComboBox (not plain QComboBox): this is a hardware control, so
-    // an accidental mouse-wheel scroll while just hovering over it must not
-    // silently change fan mode and send a command to the amp — it only
-    // responds to wheel input when its dropdown is actually open (#3905).
+    // Fan mode pull-down showing all three modes (#3905). Text via
+    // fanModeLabel(); itemData is the uppercase mode for fanModeChanged ("ready
+    // for sendCommand"). Hidden until a direct PGXL connection reports fanmode.
+    // GuardedComboBox so a hover wheel-scroll can't send a fan command to the amp.
     m_fanCombo = new GuardedComboBox;
     m_fanCombo->setObjectName(QStringLiteral("ampFanModeCombo"));
     for (const QString& mode : {QStringLiteral("STANDARD"), QStringLiteral("CONTEST"), QStringLiteral("BROADCAST")})
@@ -672,19 +645,10 @@ void AmpApplet::setFloating(bool floating)
     applyDensity();
     if (!m_floating || m_calibrationPasses > 0) return;
 
-    // Calibrate on the next turn of the event loop, not here.
-    //
-    // Almost all of this column's height is text, and the text's size comes
-    // from the style sheets applyDensity has just set — which Qt applies when
-    // it next delivers events, not on the call. Measured now, every label still
-    // carries the application's default font and the column reads far taller
-    // than it will ever be: 285px against the 221 it settles at, a third too
-    // much. That figure divides every later scale, so the panel starts
-    // shrinking its contents while there is still an inch of empty space under
-    // them — which is the opposite of the rule the bottom pad exists to keep.
-    //
-    // The measurement takes a few turns to settle; calibrateNaturalHeight
-    // re-schedules itself until it does.
+    // Calibrate on a later event-loop turn: the labels' style sheets (set by
+    // applyDensity) apply then, and measuring now reads ~a third too tall, which
+    // would shrink contents while space remains. calibrateNaturalHeight
+    // reschedules itself until the figure settles.
     QTimer::singleShot(0, this, [this]() {
         calibrateNaturalHeight();
         applyDensity();
@@ -812,24 +776,10 @@ void AmpApplet::applyDensityAtScale(qreal scale)
 
 void AmpApplet::calibrateNaturalHeight()
 {
-    // What the column costs at scale 1.0 — the figure every later scale is a
-    // multiple of.
-    //
-    // Always measured with the scale forced to 1.0 first. That is the rule
-    // that matters: re-deriving it from a SCALED layout feeds the scale back
-    // into its own input, and it does not settle — rounding and the widgets'
-    // own minimums stop the contents being exactly proportional, the leftover
-    // lands in the divisor, and the next scale reads larger every time.
-    //
-    // Re-running it at scale 1.0, by contrast, is just a better measurement of
-    // the same thing, and it takes more than one turn to get: almost all of
-    // this column is text, and the text's size arrives from style sheets Qt
-    // applies over the following turns of the event loop. Measured on the
-    // first turn the column reads 285px, on the second 243, and it settles at
-    // 221 — a third too much at the start, and that figure divides every later
-    // scale, so the panel shrinks its contents while there is still an inch of
-    // empty space under them. So it re-measures until the figure stops moving,
-    // and then stops for good.
+    // The column's height at scale 1.0, the divisor of every later scale. Always
+    // measured with the scale forced to 1.0: measuring a scaled layout feeds back
+    // and never settles. Style sheets apply over several event-loop turns (285 →
+    // 243 → 221 px), so re-measure until the figure stops moving, then stop.
     if (!m_vbox || m_calibrationPasses >= kMaxCalibrationPasses) return;
     applyDensityAtScale(1.0);
     m_vbox->activate();
@@ -1142,17 +1092,22 @@ void AmpApplet::setSwr(float swr)
     // Label text is updated by the 100 ms timer (updateValueLabels).
 }
 
-void AmpApplet::setTemp(float degC)
+void AmpApplet::setPaHeatsinkTemp(float degC)
 {
-    m_tempA = degC;
-    m_hasTempA = true;
+    m_paHeatsinkTemp = degC;
+    m_hasPaHeatsinkTemp = true;
     updateTempLabel();
 }
 
-void AmpApplet::setTempB(float degC)
+void AmpApplet::setHarmonicLoadHeatsinkTemp(float degC)
 {
-    m_tempB = degC;
-    m_hasTempB = true;
+    // Direct connection only, like Vdd and Vac: a late write after the
+    // connection drops must not put a stale value back on screen.
+    if (!m_directConnected) {
+        return;
+    }
+    m_harmonicLoadHeatsinkTemp = degC;
+    m_hasHarmonicLoadHeatsinkTemp = true;
     updateTempLabel();
 }
 
@@ -1162,39 +1117,50 @@ void AmpApplet::updateTempLabel()
         return;
     }
 
-    const QString tempA = m_hasTempA
-        ? formatTemp(m_tempA, m_tempFahrenheit)
+    const QString paText = m_hasPaHeatsinkTemp
+        ? formatTemp(m_paHeatsinkTemp, m_tempFahrenheit)
         : QStringLiteral("—");
     const QString unit = m_tempFahrenheit
         ? QStringLiteral("F")
         : QStringLiteral("C");
 
-    // Both sensors are named. The amplifier's own panel runs them unlabelled
-    // as "24.4/24.2 C", which is fine on hardware where the operator knows
-    // which is which and nothing else on screen is a temperature; here two
-    // bare numbers say nothing about what either one is measuring.
-    //
-    // HL is the wire's own name for the second (`hltemp`). PA is not — the
-    // first arrives as a bare `temp`, and PA is what an unqualified
-    // temperature on a power amplifier is. A one-line change if 4O3A ever
-    // says otherwise.
-    if (m_hasTempB) {
+    // The PGXL front panel shows both temperatures without labels, for
+    // example "24.4/24.2 C". The first is the PA heatsink and the second is
+    // the Harmonic Load heatsink (PowerGeniusXL User Guide v3.9.8, p. 55).
+    // We label them PA and HL so the operator knows which is which.
+    if (m_hasHarmonicLoadHeatsinkTemp) {
         m_tempBtn->setText(
             QStringLiteral("PA %1 / HL %2 %3")
-                .arg(pad(tempA))
-                .arg(pad(formatTemp(m_tempB, m_tempFahrenheit)))
+                .arg(pad(paText))
+                .arg(pad(formatTemp(m_harmonicLoadHeatsinkTemp, m_tempFahrenheit)))
                 .arg(unit));
     } else {
-        m_tempBtn->setText(QStringLiteral("PA %1 %2").arg(pad(tempA)).arg(unit));
+        m_tempBtn->setText(QStringLiteral("PA %1 %2").arg(pad(paText)).arg(unit));
     }
 
     const QString nextUnit = m_tempFahrenheit
         ? tr("Celsius")
         : tr("Fahrenheit");
-    m_tempBtn->setToolTip(
-        tr("Amplifier temperature\nClick to show degrees %1").arg(nextUnit));
-    m_tempBtn->setAccessibleName(
-        tr("Amplifier temperature %1").arg(m_tempBtn->text()));
+    // The tooltip explains only the labels on the button: HL is named only
+    // while an HL value is showing.
+    m_tempBtn->setToolTip(m_hasHarmonicLoadHeatsinkTemp
+        ? tr("PA: PA heatsink temperature\n"
+             "HL: Harmonic Load heatsink temperature\n"
+             "Click to show degrees %1").arg(nextUnit)
+        : tr("PA: PA heatsink temperature\n"
+             "Click to show degrees %1").arg(nextUnit));
+    // Spoken in words: before the first reading the visible dash becomes
+    // "not reported", which a screen reader says plainly.
+    const QString unitName = m_tempFahrenheit ? tr("Fahrenheit") : tr("Celsius");
+    const QString paSpoken = m_hasPaHeatsinkTemp
+        ? tr("PA heatsink %1 degrees %2").arg(paText, unitName)
+        : tr("PA heatsink not reported");
+    m_tempBtn->setAccessibleName(m_hasHarmonicLoadHeatsinkTemp
+        ? tr("%1, Harmonic Load heatsink %2 degrees %3")
+              .arg(paSpoken,
+                   formatTemp(m_harmonicLoadHeatsinkTemp, m_tempFahrenheit),
+                   unitName)
+        : paSpoken);
     if (QAccessible::isActive()) {
         QAccessibleEvent event(m_tempBtn, QAccessible::NameChanged);
         QAccessible::updateAccessibility(&event);
@@ -1234,17 +1200,9 @@ void AmpApplet::updateValueLabels()
 void AmpApplet::setDrainVoltage(float volts)
 {
     if (!m_directConnected) return;
-    // Reported as it arrives, including zero.
-    //
-    // A PGXL keeps its drain rail down while it is idle and only brings it up
-    // on entering OPERATE, so vdd=0.0 is the normal reading for most of the
-    // time the amplifier is switched on — not a fault, and not a missing
-    // value. This used to print a dash below 1 V, which reads as "nothing
-    // arrived": the operator sees an empty field on connect, toggles standby
-    // to make the reading appear, and concludes the client dropped the first
-    // frames. Zero volts is a true reading and says the rail is down; the
-    // dash is kept for the one case where we genuinely have nothing, which is
-    // no direct connection at all (see setDirectConnected).
+    // Shown as received, including zero: a PGXL keeps its drain rail down until
+    // OPERATE, so 0.0 V is a normal reading. The dash is reserved for no direct
+    // connection at all (see setDirectConnected).
     m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"),
                                      QString::number(volts, 'f', 1)));
 }
@@ -1448,6 +1406,11 @@ void AmpApplet::setDirectConnected(bool direct)
         // Vdd and Vac are not proxied by the radio — clear the stale values.
         m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"), QStringLiteral("—")));
         m_vacLabel->setText(voltsReadout(QStringLiteral("Vac"), QStringLiteral("—")));
+        // The radio relays only the PA heatsink temperature. Drop the Harmonic
+        // Load heatsink temperature so its last value does not stay on screen
+        // as if it were still live. It returns with the next direct reading.
+        m_hasHarmonicLoadHeatsinkTemp = false;
+        updateTempLabel();
         // Fan mode is only available via the direct PGXL protocol — drop it
         // until the amplifier is back rather than leaving a control up that
         // can no longer command anything.
@@ -1465,16 +1428,10 @@ void AmpApplet::setDirectConnected(bool direct)
 
 void AmpApplet::setMeff(const QString& meff)
 {
-    // The RELAYED MEffA state, off the radio's amplifier telemetry rather than
-    // the port-9008 socket. On a station with no direct socket this is the
-    // only place the state appears at all, so it reads out here — but it can
-    // never be WRITTEN from here: a `setup` write carries the whole
-    // configuration group and only the direct connection can read the rest of
-    // it. Hence settable=false; the control shows the state and stays inert.
-    //
-    // The socket path (AmpModel::meffaChanged) calls setMeffa directly with
-    // the real writability, and arrives on a connected station before this
-    // does, so it wins where both exist.
+    // The relayed MEffA state (radio amp telemetry, not the 9008 socket). Shown
+    // but never settable from here: a `setup` write carries the whole config group,
+    // which only the direct connection can read. The socket path
+    // (AmpModel::meffaChanged) sets real writability and wins where both exist.
     if (m_meffaSettable) return;   // the socket owns it; do not downgrade
     setMeffa(meff, false);
 }

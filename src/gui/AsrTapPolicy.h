@@ -9,24 +9,12 @@
 
 namespace AetherSDR {
 
-// The two decisions AsrAudioTap has to make about the RX audio it forwards to
-// the ASR engine: WHICH receiver's blocks to follow, and how to turn a post-DSP
-// stereo block into the mono float32 the engine expects.
-//
-// Split out of AsrAudioTap because that class is a QObject wired to a concrete
-// AudioEngine, and AudioEngine cannot be constructed in a headless test (it
-// needs a live QAudioSink). This is Qt-object-free and header-only so the logic
-// that can actually be wrong is unit-testable on its own; what is left in the
-// tap is a connect() and a call into here.
-//
-// ── Why a source lock exists at all ───────────────────────────────────────
-//
-// receivePresentationPostDspAudioReady is emitted from writeAudio(), which runs
-// once per RX source: the Flex, the applet Kiwi, and every external Kiwi
-// antenna. A consumer that takes all of them receives two or more receivers'
-// audio interleaved into one stream. For a waveform that is cosmetic; for a
-// speech recogniser it is noise. Copy Assist has no receiver selector of its
-// own (it follows "the RX audio"), so the tap picks one and stays with it.
+// AsrAudioTap's two decisions: which receiver's blocks to follow, and how to
+// turn a post-DSP block into mono float32. Qt-object-free and header-only so it
+// is testable without an AudioEngine (which needs a live QAudioSink).
+// Source lock: receivePresentationPostDspAudioReady fires once per RX source
+// (Flex, applet Kiwi, each external Kiwi), and interleaved receivers are noise
+// to a recogniser; Copy Assist has no selector, so the tap picks one and stays.
 class AsrTapPolicy {
 public:
     // A source that has stopped producing blocks for this long has released its
@@ -35,16 +23,9 @@ public:
     // source went away, not that nobody is talking.
     static constexpr qint64 kSourceReleaseMs = 2000;
 
-    // True when this block belongs to the receiver Copy Assist is following.
-    //
-    // The first block after a reset claims the lock, so a Flex-only station
-    // locks Flex and a Kiwi-only station locks Kiwi with no configuration. With
-    // both running the choice between them is arbitrary, but it is CONSISTENT,
-    // which is the property that matters — an arbitrary single receiver is
-    // transcribable and two interleaved ones are not.
-    //
-    // `nowMs` is passed in rather than read from a clock so the release window
-    // is testable without sleeping.
+    // True when this block belongs to the followed receiver. The first block after
+    // a reset claims the lock: arbitrary when several run, but consistent. `nowMs`
+    // is injected so the release window is testable without sleeping.
     bool accepts(const QString& source, const QString& sourceId, qint64 nowMs)
     {
         if (m_locked && (source != m_source || sourceId != m_sourceId)) {
@@ -80,21 +61,10 @@ public:
     QString lockedSource() const { return m_source; }
     QString lockedSourceId() const { return m_sourceId; }
 
-    // Collapse interleaved float32 audio to mono, matching what
-    // AudioEngine::emitRxPostChainScopeFromFloat32Stereo used to hand us —
-    // INCLUDING the non-finite guard. AsrEngine does not sanitise its input, and
-    // a single NaN reaching the resampler poisons every sample after it, so
-    // dropping that clamp when moving off the engine-side tap would trade a
-    // known bug for a worse one.
-    //
-    // `channels` is the caller's actual channel count (1 or 2), not a guess —
-    // receivePresentationPostDspAudioReady is documented stereo today, but
-    // inferring channel layout from the byte count's parity (#4489) silently
-    // mis-decodes the moment that stops being true: a mono block with an even
-    // sample count would be averaged pairwise into half as many frames while
-    // the caller kept treating it as full-rate audio. A block that isn't a
-    // whole number of frames for the given channel count is malformed, not a
-    // shape to guess at, so it is rejected rather than reinterpreted.
+    // Collapse interleaved float32 to mono, including the non-finite guard:
+    // AsrEngine doesn't sanitise, and one NaN poisons its resampler. `channels` is
+    // the caller's actual count (1 or 2), never inferred from byte-count parity
+    // (#4489); a block that isn't a whole number of frames is rejected.
     static QVector<float> toMono(const QByteArray& pcmFloat32, int channels)
     {
         if (channels != 1 && channels != 2) {

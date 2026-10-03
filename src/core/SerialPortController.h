@@ -21,24 +21,13 @@
 
 namespace AetherSDR {
 
-// Controls DTR/RTS lines on a USB-serial adapter for hardware PTT
-// and CW keying, and monitors CTS/DSR/DCD for external PTT and CW key/paddle input.
-//
-// Output: Assert DTR/RTS when transmitting (amplifier keying, sequencer)
-// Input:  Monitor CTS/DSR/DCD for foot switch PTT, straight key, or iambic paddle.
-//         DCD was added so accessories that wire to the FTDI chip's DCD# pin
-//         (such as Halibut Electronics' HaliKey Serial, where TRS Ring is
-//         wired to both DSR and DCD) work without requiring users to also
-//         have the DSR# pin physically connected.
-//
-// On Windows, uses Win32 WaitCommEvent directly — QSerialPort::pinoutSignals()
-// (backed by GetCommModemStatus) returns stale data on FTDI and similar drivers
-// unless called in the context of a WaitCommEvent completion.
-//
-// On Linux/macOS, polls QSerialPort::pinoutSignals() on a timer.
-//
-// Requires Qt6::SerialPort on non-Windows. Compiles to a no-op stub without
-// HAVE_SERIALPORT on non-Windows platforms.
+// DTR/RTS outputs for hardware PTT/CW keying; CTS/DSR/DCD inputs for foot
+// switch, straight key or paddle. DCD is monitored for accessories wired to
+// FTDI DCD# (e.g. HaliKey Serial wires TRS Ring to both DSR and DCD).
+// Windows uses Win32 WaitCommEvent directly: GetCommModemStatus returns stale
+// data on FTDI-like drivers outside a WaitCommEvent completion. Linux/macOS
+// poll pinoutSignals() on a timer and need Qt6::SerialPort (no-op stub
+// without HAVE_SERIALPORT).
 
 class SerialPortController : public QObject {
     Q_OBJECT

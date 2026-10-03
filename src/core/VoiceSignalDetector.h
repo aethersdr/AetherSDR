@@ -18,24 +18,14 @@ struct DetectedVoiceSignal {
 // (PHONE, SSB, USB, AM, FM/RPT).
 bool isVoiceSegmentLabel(const QString& label);
 
-// Scan FFT bins (in dBm) for contiguous regions ≥1.8 kHz wide and ≥6 dB above
-// the stable noise floor.  Each detected region is capped at 2.7 kHz (one SSB
-// channel); wider regions are split and the overflow is emitted as a second
-// marker only if it also has a qualifying peak.
-//
-// voiceRangesMhz: if non-empty, only scan bins whose frequency falls inside one
-// of these {lowMhz, highMhz} ranges (derived from the active band plan's voice
-// segments).  Pass an empty vector to scan the full pan bandwidth.
-//
-// rollingNoiseFloorDbm: caller-supplied stable noise floor (e.g. EMA across
-// recent frames).  When > -500 dBm it is used directly; otherwise the function
-// falls back to the per-frame 10th-percentile estimate.
-//
-// sliceMode: "USB" or "LSB" from the active slice.  When supplied, it overrides
-// the internal energy-asymmetry heuristic so markers always match the operator's
-// current mode.  Pass an empty string to use the heuristic (e.g. for AM/FM pans).
-//
-// Returns one entry per detected signal (primary + optional secondary per region).
+// Find contiguous regions ≥1.8 kHz wide and ≥6 dB above the noise floor in
+// FFT bins (dBm). Regions are capped at 2.7 kHz; overflow becomes a second
+// marker only if it has its own qualifying peak.
+//   voiceRangesMhz: limit the scan to these {lowMhz, highMhz} ranges (band-plan
+//     voice segments); empty = whole pan.
+//   rollingNoiseFloorDbm: used if > -500, else the per-frame 10th percentile.
+//   sliceMode: "USB"/"LSB" overrides the energy-asymmetry heuristic; empty
+//     uses the heuristic (e.g. AM/FM pans).
 QVector<DetectedVoiceSignal> detectVoiceSignals(
     const QVector<float>& binsDbm,
     double centerMhz,

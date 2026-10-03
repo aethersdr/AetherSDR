@@ -23,19 +23,10 @@ constexpr bool isDeclarable(const BandDef& def)
     return def.highMhz >= 1.0;
 }
 
-// Accepted alternate spellings for a band, mapping to the canonical kBands
-// name. AE's band vocabulary is internally inconsistent — the 70cm band is
-// named "440" — but a gateway (or a ham typing a profile) naturally spells it
-// "70cm". Rather than force every radio adapter to know AE's quirk, accept the
-// conventional name here and resolve it to the canonical one.
-//
-// SECURITY INVARIANT (Principle VII): an alias may ONLY map to a name that
-// already exists in kBands. It is a second *spelling* of a known band, never a
-// new band — so it cannot introduce anything the band UI doesn't already have,
-// and the resolved name still runs the isDeclarable + kBands allow-list below.
-// Kept deliberately minimal: only real-world mismatches that have actually been
-// observed from a gateway (currently just 70cm; the same class of mismatch was
-// patched per-adapter in Aether-gate PRs #14/#15/#16 — this fixes it once here).
+// Alternate spellings mapped to canonical kBands names (AE calls 70cm "440").
+// Invariant: an alias maps only to an existing kBands name, never a new band,
+// and the resolved name still passes isDeclarable + the allow-list. Keep it to
+// mismatches actually observed from gateways.
 struct BandAlias {
     const char* alias;
     const char* canonical;
@@ -61,20 +52,11 @@ constexpr bool ciEqualAscii(std::string_view a, std::string_view b)
     return true;
 }
 
-// Enforce the alias invariants at COMPILE TIME so Principle VII holds by
-// construction (an alias can only ever be a second spelling of a real,
-// renderable band) rather than by review. A future bad alias fails the build
-// instead of silently misbehaving. Three invariants, each with a concrete
-// failure mode if it were violated:
-//   (1) canonical exists in kBands — else the alias resolves to a name the
-//       allow-list drops (dead alias).
-//   (2) canonical is declarable — resolveAlias() runs before the isDeclarable
-//       gate, so an alias to a non-declarable band (2200m/630m) would also be
-//       a dead alias; require declarability up front so the failure is a build
-//       error, not a silent empty result.
-//   (3) the alias key does NOT collide with a real kBands name — resolveAlias()
-//       runs BEFORE the allow-list match, so a key equal to a real band would
-//       silently redirect (shadow) that legitimate band's token.
+// Compile-time alias invariants:
+//   (1) canonical exists in kBands (else the allow-list drops it);
+//   (2) canonical is declarable (resolveAlias() runs before isDeclarable);
+//   (3) the alias key is not a real kBands name (resolveAlias() runs before the
+//       allow-list match, so it would shadow that band).
 constexpr bool aliasesAreValid()
 {
     for (const auto& a : kBandAliases) {

@@ -279,17 +279,10 @@ void MidiControlManager::rtmidiCallback(double deltatime,
                                          std::vector<unsigned char>* message,
                                          void* userData)
 {
-    // Name the thread we are standing on, once (#2554). RtMidi delivers on a
-    // thread its backend created — CoreMIDI's MIDIInPortThread on macOS, ALSA's
-    // on Linux, WinMM's on Windows — so nothing in our source ever started it
-    // and Qt never named it. It showed as an unnamed row in the System Info
-    // thread table, which is the wrong row to leave anonymous: this is the MIDI
-    // input path the CW keyer timing work is measured through.
-    //
-    // A thread name can only be set from the thread itself, and this callback
-    // is the one moment we are running there. thread_local rather than a
-    // std::once_flag because a second input port would be a second thread, and
-    // each needs naming.
+    // Name this RtMidi backend thread once (#2554); it was created by CoreMIDI/ALSA/
+    // WinMM, not us, and is the MIDI input path CW keyer timing is measured through.
+    // A name can only be set from the thread itself; thread_local (not once_flag)
+    // because each input port has its own thread.
     thread_local bool named = false;
     if (!named) {
         named = true;
@@ -432,20 +425,12 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2,
         return;
     }
 
-    // ── Relative knob mode: decode delta and accumulate ────────────────
-    //
-    // Learned VFO bindings auto-detect the two common signed encodings from the
-    // first unit detent: 1/127 selects two's-complement, the distinctive 63/65
-    // pair selects center-64 (see decodeMidiRelativeCc). Other relative
-    // parameters retain the established two's-complement behavior.
-    //
-    // NOTE: MIDI Learn always marks a VFO CC binding relative (see startLearn),
-    // so the Tier-1/Tier-2 backward-compat paths below (guarded by
-    // !binding.relative) are reached only by legacy non-relative bindings, never
-    // by a freshly-learned one. A binary/Thetis (0/127) encoder learned on the
-    // VFO is therefore decoded here as two's-complement (127 → −1), NOT via
-    // Tier 1 — genuine binary support needs its own encoding, since 0/127 is
-    // ambiguous with two's-complement's own ±1 unit values (tracked in #4402).
+    // Relative knob mode: decode and accumulate. Learned VFO bindings auto-detect the
+    // encoding from the first unit detent (1/127 two's-complement, 63/65 center-64;
+    // see decodeMidiRelativeCc); other relative parameters use two's-complement.
+    // MIDI Learn always marks a VFO CC binding relative, so the Tier-1/Tier-2 paths
+    // below serve only legacy non-relative bindings; a binary 0/127 encoder learned
+    // on the VFO decodes as two's-complement (0/127 is ambiguous with its +/-1; #4402).
     if (binding.relative && msgType == MidiBinding::CC) {
         dispatchRelativeCc(binding, data2);
         return;

@@ -61,17 +61,11 @@ public:
     // on a Flex unplug.
     void setHasAudioPeakingFilter(bool has);
 
-    // Does THIS session's radio publish an ALCGAIN meter? Gates the ALC Gain
-    // gauge, which is otherwise a face that can never move: the HL2 is the
-    // only family in the tree that publishes the meter, and the shared Phone
-    // panel is also Flex's, Icom's and the sim's. Pushed from
-    // MainWindow::applyCapabilitiesToUi off MeterModel::hasAlcGainMeter(),
-    // and again on definition changes, because meters are DEFINED after
-    // capabilities are published on the connect edge.
-    //
-    // NOT permissive while disconnected, unlike the APF row above: this gauge
-    // is new, and "no radio attached" must render as the panel that shipped
-    // before it rather than as a gauge nothing can drive.
+    // Whether this session's radio publishes an ALCGAIN meter (only HL2 does);
+    // gates the ALC Gain gauge. Pushed from applyCapabilitiesToUi off
+    // MeterModel::hasAlcGainMeter() and again on meter-definition changes,
+    // since meters are defined after capabilities publish. Not permissive while
+    // disconnected.
     void setHasAlcGainMeter(bool has);
 
 signals:

@@ -32,17 +32,11 @@ class CityLightsItem;
 class WeatherRadarPlaybackItem;
 class WeatherRadarTileLayer;
 
-// Reusable OpenStreetMap slippy-map widget (#mapping-engine).
-//
-// Wraps the vendored QGeoView QGVMap with:
-//   * A policy-compliant OSM tile layer — shared QNetworkAccessManager with
-//     a QNetworkDiskCache (HTTP cache headers honored, OSM requires >= 7
-//     days) and an app-identifying User-Agent.
-//   * Keyboard navigation: arrow keys pan, +/- (and =) zoom, Home recenters
-//     on the home position (the radio's GPS fix for the PSK Reporter map).
-//   * A simple marker API (MapView::Marker) used by the PSK Reporter map
-//     and, in the future, the AetherModem APRS tab.
-//   * The mandatory "© OpenStreetMap contributors" attribution overlay.
+// Reusable OpenStreetMap slippy-map widget over the vendored QGeoView QGVMap:
+// an OSM-policy tile layer (shared QNAM + QNetworkDiskCache honoring HTTP cache
+// headers, OSM requires >= 7 days; app User-Agent), keyboard pan/zoom/Home,
+// a marker API (MapView::Marker), and the mandatory "© OpenStreetMap
+// contributors" attribution overlay.
 class MapView : public QWidget {
     Q_OBJECT
 

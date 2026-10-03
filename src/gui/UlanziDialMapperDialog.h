@@ -20,21 +20,11 @@ class MidiControlManager;
 class ShortcutManager;
 class UlanziDialCanvas;
 
-// Visual mapping editor for the Ulanzi Dial.  Renders a stylized
-// representation of the dial in the centre and "callout" pills radiating
-// outward to each physical control.  Each pill shows the AetherSDR
-// action it triggers and (after the user runs Learn mode) the captured
-// device-event signature that fires it.  See #3232 for the cross-platform
-// design.
-//
-// Workflow:
-//   1. Click a pill → enters Learn mode for that control.
-//   2. Press the corresponding physical button on the dial.
-//   3. The captured signature (e.g. "KEY_PLAYPAUSE", "Ctrl+V") is bound
-//      to that pill and persisted to AppSettings.
-//   4. From then on, when the dial fires that signature, the pill's
-//      AetherSDR action is dispatched.  (Dispatch wiring lands in a
-//      follow-up PR; this dialog only owns capture + persistence.)
+// Visual mapping editor for the Ulanzi Dial (#3232): the dial drawn centrally
+// with callout pills per physical control, each showing its action and learned
+// device-event signature. Click a pill to Learn, press the dial control, and the
+// signature (e.g. "KEY_PLAYPAUSE", "Ctrl+V") is persisted to AppSettings.
+// This dialog owns capture + persistence; MainWindow dispatches.
 class UlanziDialMapperDialog : public PersistentDialog {
     Q_OBJECT
 
@@ -73,7 +63,12 @@ public:
     // Bind an action to a pill and persist immediately.
     static void setActionForPill(const QString& pillId, const QString& actionId);
 
-    // Built-in default action for a pill (e.g. "shortcut:mox_toggle"),
+    // Re-derive the status line from the backend's current state and the
+    // enable setting. MainWindow calls it after the setting changes, so an
+    // open (or later reopened) dialog never keeps a stale line.
+    void refreshStatus();
+
+    // Built-in default action for a pill (e.g. "shortcut:rit_toggle"),
     // used by MainWindow's dispatcher as the AppSettings fallback so
     // bindings work on first launch even if the user has never opened
     // this dialog.  Returns "None" for unknown pillIds.
@@ -83,10 +78,16 @@ private slots:
     void onTuneSteps(int steps);
     void onButtonEvent(const QString& signature, int action);
     void onConnectionChanged(bool connected, const QString& name);
+    // Status line for a dial turned off in Radio Setup: without it the dialog
+    // reads "Disconnected" with nothing to say why.
+    void showDisabledStatus();
+    // Plain (untracked) status-line style; see the definition.
+    void setStatusStyle(const QString& css);
 #ifdef Q_OS_LINUX
     // Dial present but its evdev node isn't accessible — offer to install the
     // udev access rule via polkit.
     void onAccessRequired(const QString& deviceName);
+    void onAccessCleared();
     void onGrantAccessClicked();
 #endif
 

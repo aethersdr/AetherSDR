@@ -1120,16 +1120,9 @@ QString SmartCatProtocol::cmdZZDE(const QString& arg)
     return {};
 }
 
-// ── SL / SH — DSP filter low / high cutoff (Kenwood SSB/FM codes) ────────────
-//
-// Kenwood encodes filter edges as an index into a fixed Hz table rather than
-// raw Hz values.  We map from the slice's filterLow/filterHigh (signed Hz
-// relative to carrier) to the nearest table entry, then round-trip back on set.
-//
-// SL table (low-edge): 00=10, 01=50, 02=100, 03=200, 04=300, 05=400,
-//                      06=500, 07=600, 08=700, 09=800, 10=900, 11=1000 Hz
-// SH table (high-edge): 00=1400,01=1600,02=1800,03=2000,04=2200,05=2400,
-//                       06=2600,07=2800,08=3000,09=3400,10=4000,11=5000 Hz
+// SL / SH — DSP filter low/high cutoff (Kenwood). Kenwood sends an index into
+// a fixed Hz table; map the slice's signed filterLow/filterHigh to the nearest
+// entry and back on set.
 
 static const int kSLHz[] = { 10, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000 };
 static const int kSHHz[] = { 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3400, 4000, 5000 };

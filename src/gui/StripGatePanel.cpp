@@ -56,19 +56,10 @@ const QString kBypassStyle = QStringLiteral(
     "}"
     "QPushButton:checked:hover { background: #4a3a1e; }");
 
-// Flip (Expander/Gate) — two custom checked states instead of the
-// usual idle→active swap: Expander (unchecked) uses the SQL/MIC
-// green palette, Gate (checked) uses the amber palette that marks
-// more-aggressive settings elsewhere in the chain.  The colour
-// itself tells you which mode you're in without reading the label.
-// Unchecked is muted, checked is lit. The green-when-off styling this
-// inherited from the single Flip button was readable while only one of these
-// existed at a time; with both halves of a pair on screen it said that Level
-// and Curve were both on, and only the shade told you which.
-// Tokens, not literals: the unchecked half of each pair is the panel's own
-// ground and label colour, and the checked half is the transmit-amber the rest
-// of the app already uses to mark a more aggressive setting. Applied through
-// ThemeManager::applyStyleSheet() so the {{...}} resolve.
+// Flip pair styling: unchecked uses the panel's own ground and label colour,
+// checked the transmit-amber that marks more aggressive settings, so with both
+// halves on screen only the lit one reads as on. Tokens resolved through
+// ThemeManager::applyStyleSheet().
 const QString kFlipStyle = QStringLiteral(
     "QPushButton {"
     "  background: {{color.background.1}};"

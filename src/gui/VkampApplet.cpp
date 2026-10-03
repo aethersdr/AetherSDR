@@ -464,19 +464,11 @@ void VkampApplet::setVoltageLow(bool low)
 
 void VkampApplet::refreshVoltageButtons()
 {
-    // Neither button shows active while bypassed, and both are disabled (not
-    // just visually muted) for the entire time bypass is on. This is design
-    // doc Section 5's real-hardware finding, and that finding is the whole
-    // authority for it: bypass parks the supply at a standby reading (~6.3V)
-    // that is neither rail target, so "volts below the midpoint" would paint
-    // LOW as active when nobody selected it -- and commanding a rail change
-    // from that state was observed live pulling the supply toward ~0V.
-    // Gated on m_connected for the same reason the bypass button is: a
-    // disabled button carrying vkState="active" still paints in the full
-    // active colours, so without this a disconnected amp shows a bright,
-    // confident RAIL LOW next to a greyed-out BYPASS and a "—" status pill.
-    // m_voltageLow itself is untouched, so the selection repaints correctly
-    // the moment the amp reconnects and reports a rail.
+    // Neither rail button shows active or is enabled while bypassed (design doc
+    // Section 5): bypass parks the supply at a standby ~6.3 V that is neither rail,
+    // and commanding a rail change from there pulls the supply toward ~0 V. Also
+    // gated on m_connected, since a disabled button with vkState="active" still
+    // paints active. m_voltageLow is kept so the selection repaints on reconnect.
     const bool lowActive = m_voltageLow && !m_bypassed && m_connected;
     const bool highActive = !m_voltageLow && !m_bypassed && m_connected;
     setBtnState(m_voltLowBtn, lowActive ? "active" : QString());
