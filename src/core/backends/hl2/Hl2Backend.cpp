@@ -985,6 +985,10 @@ bool Hl2Backend::createPanadapter()
         seed.agcModeBeforeDigital = first.agcModeBeforeDigital;
         seed.agcThresholdDb = first.agcThresholdDb;
     }
+    // The AGC-off level is this receiver's own: the one remembered for its
+    // index, else the default. It is not copied from the first receiver.
+    if (const int level = rememberedAgcOffLevel(ddc); level >= 0)
+        seed.agcOffLevel = level;
     m_rx.push_back(seed);
 
     if (m_metis) {
@@ -3107,6 +3111,25 @@ void Hl2Backend::requestSliceAgc(int sliceId, const SliceAgcRequest& request)
     r->agcOffLevel = qBound(0, request.offLevel, 100);
     pushAgcOffLevel(*r);
     emitSliceState(ddc);
+    // Remembered per receiver and captured, as the AGC pair is.
+    rememberAgcOffLevel(ddc, r->agcOffLevel);
+    m_agcOffLevelsLive = true;
+    notifyOperatingStateChanged();
+}
+
+int Hl2Backend::rememberedAgcOffLevel(int receiverIndex) const
+{
+    return receiverIndex >= 0 && receiverIndex < m_agcOffLevels.size()
+               ? m_agcOffLevels.at(receiverIndex) : -1;
+}
+
+void Hl2Backend::rememberAgcOffLevel(int receiverIndex, int level)
+{
+    if (receiverIndex < 0 || receiverIndex >= kMaxReceivers)
+        return;
+    while (m_agcOffLevels.size() <= receiverIndex)
+        m_agcOffLevels.append(-1);
+    m_agcOffLevels[receiverIndex] = level;
 }
 
 void Hl2Backend::setSliceSquelch(int sliceId, bool on, int level)
@@ -6506,6 +6529,12 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         valid.agcMode = state.agcMode.trimmed().toLower();
     if (state.agcThreshold >= 0 && state.agcThreshold <= 100)
         valid.agcThreshold = state.agcThreshold;
+    // The AGC-off level per receiver. An entry outside 0..100 is dropped, not
+    // clamped, like the threshold; entries past the receiver ceiling are ignored.
+    for (qsizetype i = 0; i < state.agcOffLevels.size() && i < kMaxReceivers; ++i) {
+        const int level = state.agcOffLevels.at(i);
+        valid.agcOffLevels.append(level >= 0 && level <= 100 ? level : -1);
+    }
 
     // Per-band maps ride the typed extension's domain sub-objects
     // (RestoredRadioState.h). Values clamp to the hardware's own ranges.
@@ -6591,6 +6620,10 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_agcThresholdDb = m_restoredState.agcThreshold >= 0
                            ? m_restoredState.agcThreshold
                            : defaults.agcThresholdDb;
+    // The remembered AGC-off levels are this radio's document, for the same
+    // reason. The open receivers keep theirs until connectRadio() seeds them.
+    m_agcOffLevels = m_restoredState.agcOffLevels;
+    m_agcOffLevelsLive = false;
     qCInfo(lcHl2) << "HL2 restore: freq" << valid.rfFrequencyHz << "mode"
                   << valid.mode << "filter" << valid.filterLowHz << ".."
                   << valid.filterHighHz << "rate" << valid.sampleRateHz
@@ -6612,7 +6645,12 @@ void Hl2Backend::seedReceiverAgc()
         m_haveRestoredState && !m_restoredState.agcMode.isEmpty();
     const bool haveThreshold =
         m_haveRestoredState && m_restoredState.agcThreshold >= 0;
-    for (Receiver& r : m_rx) {
+    for (std::size_t i = 0; i < m_rx.size(); ++i) {
+        Receiver& r = m_rx[i];
+        // The AGC-off level is per receiver: the remembered one for this
+        // index, else the default. Pushed to the DSP with the AGC pair.
+        const int offLevel = rememberedAgcOffLevel(static_cast<int>(i));
+        r.agcOffLevel = offLevel >= 0 ? offLevel : defaults.agcOffLevel;
         r.agcMode = haveMode ? m_restoredState.agcMode : defaults.agcMode;
         r.agcThresholdDb = haveThreshold ? m_restoredState.agcThreshold
                                          : defaults.agcThresholdDb;
@@ -6630,6 +6668,7 @@ void Hl2Backend::seedReceiverAgc()
                         ? first.agcMode : first.agcModeBeforeDigital;
         m_agcThresholdDb = first.agcThresholdDb;
     }
+    m_agcOffLevelsLive = true;
 }
 
 RestoredRadioState Hl2Backend::currentOperatingState() const
@@ -6656,6 +6695,16 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         state.agcMode = txRx->agcModeBeforeDigital.isEmpty()
                             ? txRx->agcMode : txRx->agcModeBeforeDigital;
         state.agcThreshold = txRx->agcThresholdDb;
+    }
+    // The AGC-off level per receiver: the remembered list, with the open
+    // receivers' current levels over it once they hold this radio's values.
+    state.agcOffLevels = m_agcOffLevels;
+    if (m_agcOffLevelsLive) {
+        for (std::size_t i = 0; i < m_rx.size(); ++i) {
+            while (state.agcOffLevels.size() <= static_cast<qsizetype>(i))
+                state.agcOffLevels.append(-1);
+            state.agcOffLevels[static_cast<qsizetype>(i)] = m_rx[i].agcOffLevel;
+        }
     }
     state.sampleRateHz = m_sampleRateHz;
 

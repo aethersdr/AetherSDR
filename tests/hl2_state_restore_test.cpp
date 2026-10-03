@@ -7,8 +7,12 @@
 // validated on real HL2 + Radioberry hardware (nigelfenton, PR #4614 thread).
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/RadioSettingsScope.h"
+#include "core/RadioStateMemory.h"
+#include "core/backends/ReceiveCommand.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Bands.h"
+#include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
 #include "core/backends/SliceDelta.h"
@@ -22,6 +26,7 @@
 #include <QTimer>
 #include <QVariantMap>
 
+#include <cmath>
 #include <iostream>
 #include <map>
 
@@ -123,6 +128,51 @@ private:
     std::map<int, QString> m_mode;
     std::map<int, int> m_threshold;
 };
+
+// The AGC-off level per slice, read from sliceChanged like AgcWatcher.
+class OffLevelWatcher : public QObject {
+public:
+    explicit OffLevelWatcher(hl2::Hl2Backend& backend)
+    {
+        QObject::connect(&backend, &IRadioBackend::sliceChanged, this,
+                         [this](int id, const SliceDelta& d) {
+                             if (d.agcOffLevel.has_value())
+                                 m_level[id] = *d.agcOffLevel;
+                         });
+    }
+    void reemit(hl2::Hl2Backend& backend, int sliceId)
+    {
+        backend.setSliceFrequency(sliceId, 14'074'000.0 + 1'000.0 * sliceId);
+    }
+    int level(int sliceId) const { return m_level.count(sliceId) ? m_level.at(sliceId) : -1; }
+
+private:
+    std::map<int, int> m_level;
+};
+
+SliceAgcRequest offLevelRequest(int level)
+{
+    SliceAgcRequest request;
+    request.field = SliceAgcRequest::Field::OffLevel;
+    request.offLevel = level;
+    return request;
+}
+
+// The fixed gain the receiver's WDSP channel accepted, in dB; NaN if the
+// chain is absent. dspChains() answers behind the queued pushes.
+double chainFixedGainDb(const hl2::Hl2Backend& backend, int receiver)
+{
+    for (const QVariant& v : backend.dspChains()) {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("chain")).toString() == QLatin1String("rx-wdsp")
+            && m.value(QStringLiteral("receiver")).toInt() == receiver
+            && m.contains(QStringLiteral("agcFixedGainDb")))
+            return m.value(QStringLiteral("agcFixedGainDb")).toDouble();
+    }
+    return std::nan("");
+}
+
+bool nearDb(double got, double want) { return std::abs(got - want) < 1e-6; }
 
 } // namespace
 
@@ -1051,6 +1101,108 @@ int main(int argc, char** argv)
                     .toObject();
             check(tx.value(QStringLiteral("micLevel")).toInt(-1) == 70,
                   "an unreadable stored mic level leaves the live one alone");
+        }
+    }
+
+    // ---- the AGC-off level is remembered per receiver ----------------------
+    // Through the real pipeline: currentOperatingState() -> RadioStateMemory
+    // store/load on a radio_settings scope -> applyRestoredState() -> connect.
+    {
+        using Access = hl2::Hl2DspReadbackTestAccess;
+        const QString serial = QStringLiteral("AA:BB:CC:DD:EE:A1");
+        const RadioSettingsScope scope(QStringLiteral("hl2"), serial);
+        {
+            hl2::Hl2Backend backend;
+            int captureAsks = 0;
+            QObject::connect(&backend, &IRadioBackend::operatingStateChanged,
+                             &backend, [&captureAsks] { ++captureAsks; });
+            backend.applyRestoredState(RadioStateMemory::load(scope, backend.capabilities()));
+            backend.connectRadio(hl2Request(serial, 2));
+            settleConnect(backend);
+            captureAsks = 0;
+            backend.requestSliceAgc(0, offLevelRequest(37));
+            backend.requestSliceAgc(1, offLevelRequest(52));
+            check(captureAsks == 2, "an AGC-off level change asks for a capture");
+            const RestoredRadioState captured = backend.currentOperatingState();
+            check(captured.agcOffLevels == QList<int>({37, 52}),
+                  "the capture carries each receiver's AGC-off level");
+            check(RadioStateMemory::store(scope, backend.capabilities(), captured),
+                  "the captured state stores in this radio's document");
+            backend.disconnectRadio();
+        }
+        {
+            hl2::Hl2Backend backend;
+            OffLevelWatcher watch(backend);
+            backend.applyRestoredState(RadioStateMemory::load(scope, backend.capabilities()));
+            check(backend.currentOperatingState().agcOffLevels == QList<int>({37, 52}),
+                  "a capture before the connect keeps the remembered AGC-off levels");
+            backend.connectRadio(hl2Request(serial, 2));
+            settleConnect(backend);
+            Access::pushInitialState(backend);   // what the first linkUp runs
+            watch.reemit(backend, 0);
+            watch.reemit(backend, 1);
+            check(watch.level(0) == 37 && watch.level(1) == 52,
+                  "a new backend restores each receiver's own AGC-off level");
+            check(nearDb(chainFixedGainDb(backend, 0),
+                         hl2::Hl2RxDsp::agcFixedGainDbForOffLevel(37))
+                      && nearDb(chainFixedGainDb(backend, 1),
+                                hl2::Hl2RxDsp::agcFixedGainDbForOffLevel(52)),
+                  "and each WDSP channel accepted the restored fixed gain");
+            check(backend.currentOperatingState().agcOffLevels == QList<int>({37, 52}),
+                  "the restored AGC-off levels are captured again unchanged");
+            backend.disconnectRadio();
+
+            // A different radio with no memory starts every receiver on the default.
+            backend.applyRestoredState({});
+            backend.connectRadio(hl2Request(QStringLiteral("AA:BB:CC:DD:EE:A2"), 2));
+            settleConnect(backend);
+            watch.reemit(backend, 0);
+            watch.reemit(backend, 1);
+            check(watch.level(0) == hl2::Hl2RxDsp::kDefaultAgcOffLevel
+                      && watch.level(1) == hl2::Hl2RxDsp::kDefaultAgcOffLevel,
+                  "a radio swap does not carry the AGC-off levels across");
+            backend.disconnectRadio();
+        }
+        {
+            // A document written before the field existed.
+            const QString oldSerial = QStringLiteral("AA:BB:CC:DD:EE:A3");
+            const RadioSettingsScope oldScope(QStringLiteral("hl2"), oldSerial);
+            check(oldScope.setFeature(
+                      RadioStateMemory::featureName(), RadioStateMemory::kSchemaVersion,
+                      QJsonObject{{QStringLiteral("agcMode"), QStringLiteral("slow")},
+                                  {QStringLiteral("agcThreshold"), 40}}),
+                  "a document without AGC-off levels is planted");
+            hl2::Hl2Backend backend;
+            OffLevelWatcher watch(backend);
+            backend.applyRestoredState(
+                RadioStateMemory::load(oldScope, backend.capabilities()));
+            backend.connectRadio(hl2Request(oldSerial, 2));
+            settleConnect(backend);
+            Access::pushInitialState(backend);
+            watch.reemit(backend, 0);
+            watch.reemit(backend, 1);
+            check(watch.level(0) == 10 && watch.level(1) == 10,
+                  "a document without the field restores the default level of 10");
+            check(nearDb(chainFixedGainDb(backend, 0), 10.0),
+                  "and the WDSP channel runs the 10 dB default");
+            check(backend.currentOperatingState().agcMode == QStringLiteral("slow"),
+                  "the rest of that document still restores");
+            backend.disconnectRadio();
+        }
+        {
+            // The validation boundary: an out-of-range entry is dropped, not clamped.
+            hl2::Hl2Backend backend;
+            OffLevelWatcher watch(backend);
+            RestoredRadioState remembered;
+            remembered.agcOffLevels = {250, 44};
+            backend.applyRestoredState(remembered);
+            backend.connectRadio(hl2Request(QStringLiteral("AA:BB:CC:DD:EE:A4"), 2));
+            settleConnect(backend);
+            watch.reemit(backend, 0);
+            watch.reemit(backend, 1);
+            check(watch.level(0) == 10 && watch.level(1) == 44,
+                  "an out-of-range AGC-off level falls to the default; its neighbour holds");
+            backend.disconnectRadio();
         }
     }
 

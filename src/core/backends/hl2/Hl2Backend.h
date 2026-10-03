@@ -659,6 +659,14 @@ private:
     // Empty mode = untouched this session.
     QString m_agcMode;
     int     m_agcThresholdDb = 0;
+    // The remembered AGC-off level per receiver index; -1 = none. It seeds a
+    // receiver at connect and when a panadapter opens, and it keeps the level
+    // of a receiver that is not open. m_agcOffLevelsLive: the open receivers
+    // hold the current levels (set by the seed and by the operator).
+    QList<int> m_agcOffLevels;
+    bool       m_agcOffLevelsLive = false;
+    int  rememberedAgcOffLevel(int receiverIndex) const;
+    void rememberAgcOffLevel(int receiverIndex, int level);
     // The serial seedReceiverAgc() last ran for. A different radio is seeded; the
     // same radio reconnecting is not (buildReceivers() kept its live AGC). Empty
     // until the first connect.

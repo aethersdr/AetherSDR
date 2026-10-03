@@ -281,6 +281,30 @@ void aPanSeededInADataModeCarriesTheHeldAgc()
         [&] { return Access::lastReceiverDspChannel(backend) >= 0; });
 }
 
+// A receiver opened later takes the AGC-off level remembered for its own
+// index, not the first receiver's and not the default.
+void aNewPanTakesItsRememberedAgcOffLevel()
+{
+    Hl2Backend backend;
+    AetherSDR::RestoredRadioState remembered;
+    remembered.agcOffLevels = {20, 61};
+    backend.applyRestoredState(remembered);
+    if (!bringUp(backend)) {
+        return;
+    }
+    QHash<int, int> offLevel;
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                     [&offLevel](int id, const SliceDelta& d) {
+                         if (d.agcOffLevel) offLevel[id] = *d.agcOffLevel;
+                     });
+    check(backend.createPanadapter(), "a second receiver is admitted");
+    const int ui = Access::lastReceiverUi(backend);
+    check(offLevel.value(ui, -1) == 61,
+          "a new receiver opens on the AGC-off level remembered for its index");
+    AetherSDR::test::spinUntil(
+        [&] { return Access::lastReceiverDspChannel(backend) >= 0; });
+}
+
 void theGuiThreadIsNotHeld()
 {
     Hl2Backend backend;
@@ -826,6 +850,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     theGuiThreadIsNotHeld();
     aPanSeededInADataModeCarriesTheHeldAgc();
+    aNewPanTakesItsRememberedAgcOffLevel();
     theBuildRunsOnTheBuildThread();
     aStaleFailureDoesNotCloseTheReuser();
     aStaleSuccessIsNotWrittenOntoTheReuser();
