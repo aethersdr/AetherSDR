@@ -2977,7 +2977,12 @@ RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz
   level: 10 dB at the default level of 10, against a 39 dB AGC ceiling at the
   default threshold and LNA gain. DIGU/DIGL are therefore up to 29 dB quieter
   on the speaker and on the TCI level meter (arithmetic on the two settings,
-  not a measurement); #5629's AGC-off arm ran at that same 10 dB.
+  not a measurement); #5629's AGC-off arm ran at that same 10 dB. The
+  mechanism is `wcpAGC`'s, not the HL2's, and the default is HL2-only: ANAN-G2
+  runs the same AGC and keeps the operator's mode in DIGU/DIGL
+  (`AnanBackend::setSliceAgc`); RTL-SDR runs it at WDSP's medium, offers no
+  data mode and takes no AGC command (`RtlSdrBackend::setSliceAgc`). Neither
+  is measured or changed.
 - **`sliceId`** replaces the DAX channel number as the routing key. Flex maps
   slice → DAX channel internally and keeps its hold registry; HL2 maps slice →
   its single DDC. Consumers never learn which.
