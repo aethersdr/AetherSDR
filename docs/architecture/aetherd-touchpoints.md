@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 232 touchpoint headers (194 core, 38 models) — 232/232 tagged, 0/232 converted.
+**Totals:** 233 touchpoint headers (194 core, 39 models) — 233/233 tagged, 0/233 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
