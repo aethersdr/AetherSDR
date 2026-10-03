@@ -2132,6 +2132,7 @@ MainWindow::MainWindow(QWidget* parent)
     if (savedMute) {
         m_audio->setMuted(true);
     }
+    syncTitleBarOutput();
 
 
     // Meter wiring (S-Meter / Tuner / MTR / HLTH / TX applets) →
@@ -7407,6 +7408,8 @@ void MainWindow::showRecorderNotice(const QString& key,
 // the PC sink with PC Audio on, the radio's line out with it off.
 void MainWindow::syncTitleBarOutput()
 {
+    if (!m_titleBar || !m_audio)
+        return;
     const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
     if (pcAudio) {
         m_titleBar->setLineoutMuted(m_audio->isMuted());
