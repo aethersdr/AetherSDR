@@ -2068,6 +2068,7 @@ MainWindow::MainWindow(QWidget* parent)
                 audioStopTx();
             }
         }
+        syncTitleBarOutput();
     });
     // Master volume — title bar slider routes through applyMasterVolume()
     // so the TCI `volume:N;` command (#1764) can hit the same code path
@@ -2077,11 +2078,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
             &m_radioModel, &RadioModel::setHeadphoneGain);
     connect(m_titleBar, &TitleBar::lineoutMuteChanged, this, [this](bool muted) {
+        m_radioModel.setLineoutMute(muted);
         m_audio->setMuted(muted);
-        m_radioModel.sendCommand(QString("mixer lineout mute %1").arg(muted ? 1 : 0));
     });
     connect(m_audio, &AudioEngine::mutedChanged, this, [this](bool muted) {
-        m_titleBar->setLineoutMuted(muted);
+        syncTitleBarOutput();
         auto& s = AppSettings::instance();
         s.setValue("PcAudioMuted", muted ? "True" : "False");
         s.save();
@@ -2096,6 +2097,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel, &RadioModel::audioOutputChanged, this, [this]() {
         m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
         m_titleBar->setHeadphoneMuted(m_radioModel.headphoneMute());
+        syncTitleBarOutput();
     });
 
     // Multi-Flex: show when another client is transmitting
@@ -7399,6 +7401,20 @@ void MainWindow::showRecorderNotice(const QString& key,
     m_recorderNotice = box;
     m_recorderNoticeKey = key;
     box->open();   // NOT exec(): returns immediately, no nested event loop
+}
+
+// The title-bar speaker and master slider show the path the operator hears:
+// the PC sink with PC Audio on, the radio's line out with it off.
+void MainWindow::syncTitleBarOutput()
+{
+    const bool pcAudio = AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
+    if (pcAudio) {
+        m_titleBar->setLineoutMuted(m_audio->isMuted());
+        m_titleBar->setMasterVolume(qRound(m_audio->rxVolume() * 100.0f));
+    } else {
+        m_titleBar->setLineoutMuted(m_radioModel.lineoutMute());
+        m_titleBar->setMasterVolume(m_radioModel.lineoutGain());
+    }
 }
 
 void MainWindow::applyMasterVolume(int pct)
