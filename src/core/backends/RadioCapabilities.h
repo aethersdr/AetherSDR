@@ -70,6 +70,13 @@ struct ReceiveSquelchModel {
     double stepDb = 1.0;
     QString unit = QStringLiteral("dBm");
 };
+// Broadcast FM receiver controls, distinct from narrow-FM/repeater features.
+// Engaged only when setSliceWfmDeemphasis and observed stereo status work.
+struct BroadcastFmReceive {
+    QVector<int> deemphasisUs;
+    bool forceMonoControl = false;
+    bool receptionDiagnostics = false;
+};
 struct ReceivePanRangeControl {
     SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
     qint64 minimumHz{0};
@@ -296,6 +303,7 @@ struct RadioCapabilities {
     std::optional<ReceiveFilterControl> receiveFilterControl;
     std::optional<ReceiveAudioControl> receiveAudioControl;
     std::optional<ReceiveSquelchModel> receiveSquelchModel;
+    std::optional<BroadcastFmReceive> broadcastFmReceive;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
     // Engaged when the radio can deliver a wideband converter view; see the

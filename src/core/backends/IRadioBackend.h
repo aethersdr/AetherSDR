@@ -651,6 +651,14 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
+    // BroadcastFmReceive declares supported values; accepted state returns in
+    // SliceDelta only after the receiver adopts the requested configuration.
+    virtual void setSliceWfmForceMono(int sliceId, bool forceMono)
+    { Q_UNUSED(sliceId); Q_UNUSED(forceMono); }
+    virtual void setSliceWfmDeemphasis(int sliceId, int microseconds)
+    {
+        Q_UNUSED(sliceId); Q_UNUSED(microseconds);
+    }
     // CW audio peaking filter (capabilities().hasAudioPeakingFilter): the slice's
     // enable and 0..100 apf_level together; the backend owns the centre (its CW
     // pitch) and whether it runs in the current mode. Flex does not override it

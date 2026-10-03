@@ -14,15 +14,21 @@ bool isFmMode(const QString& mode)
 }
 
 namespace {
+QString canonicalFmMode(const QString& mode)
+{
+    if (mode == "NFM") { return QStringLiteral("FMN"); }
+    if (mode == "WBFM") { return QStringLiteral("WFM"); }
+    return mode;
+}
+
 const ReceiveFilterMode* fmControlFor(const QString& mode, const ReceiveFilterControl* control)
 {
     if (!control || !isFmMode(mode)) {
         return nullptr;
     }
-    const QString canonical = mode == "NFM" ? QStringLiteral("FMN") : mode;
+    const QString canonical = canonicalFmMode(mode);
     for (const ReceiveFilterMode& candidate : control->modes) {
-        const QString candidateMode = candidate.mode == "NFM"
-            ? QStringLiteral("FMN") : candidate.mode;
+        const QString candidateMode = canonicalFmMode(candidate.mode);
         if (candidateMode == canonical) {
             return &candidate;
         }
@@ -46,11 +52,16 @@ bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Ed
 
 QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* control)
 {
-    if (mode != "FM" && mode != "FMN" && mode != "NFM") {
+    if (!isFmMode(mode)) {
         return widthsForMode(mode);
     }
+    // Broadcast FM uses RF channel widths, not the narrow-FM audio ladder.
+    // These are choices only; observed and saved valid edges remain intact.
+    static const QVector<int> broadcast{100000, 120000, 140000, 160000, 180000, 200000};
+    const QVector<int>& candidates = canonicalFmMode(mode) == "WFM"
+        ? broadcast : widthsForMode(QStringLiteral("DFM"));
     QVector<int> widths;
-    for (int width : widthsForMode(QStringLiteral("DFM"))) {
+    for (int width : candidates) {
         if (acceptsFmEdges(mode, control, edgesForWidth(mode, width, {}))) {
             widths.append(width);
         }

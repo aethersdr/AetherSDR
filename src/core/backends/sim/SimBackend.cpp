@@ -248,6 +248,7 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    caps.broadcastFmReceive = std::nullopt;
     // Synthetic receiver: this is the API's bounded numeric domain, not an
     // advertised hardware tuning range. Off-scene signals simply become silent.
     caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,

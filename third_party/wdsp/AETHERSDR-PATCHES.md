@@ -994,3 +994,135 @@ mutex to the acquisition-side getter. Keep the discriminator/DC changes
 explicitly opt-in unless a separately reviewed upstream equivalent preserves
 both continuous-waveform response and low-frequency stereo phase. Regenerate
 the FIR from its polynomial and rerun analytic fixtures if its geometry changes.
+
+
+## Patch 17 — prepared WFM exchange headroom and output publication (RFC #5468)
+
+`upstream/channel.{h,c}` and `upstream/iobuffs.c` add an immutable prepared
+`exchangeDepth` per channel. `OpenChannelWithExchangeDepth()` rejects channel
+indices outside the table and depths outside 2..8 before modifying any state,
+then shares the existing construction body. Its other arguments retain the
+ordinary `OpenChannel()` contract. Every legacy `OpenChannel()` explicitly
+selects `DSP_MULT` (still 2), including a reused former WFM slot. Existing
+size/rate rebuilds retain the prepared field. Both creation and flush seed the
+same output prefix from `r2_active_buffsize - r2_size`.
+
+The facade selects 8 only for its opt-in nonblocking `WbfmReceive` recipe:
+384 kHz / 2048 IQ input, 192 kHz / 1024 DSP, 48 kHz / 256 paired output.
+Blocking WFM, legacy WBFM, other RX, and TX retain depth 2. Measured continuous
+8192-sample extraction callbacks realize a maximum of seven complete IQ
+exchanges at the lowest approved capture rates (225001 and 250000 Hz). The
+composed converter bound is seven; no wall-clock scheduler assumption is used
+to derive it. The tests-only RED against `2e44eb04` accepted two exchanges with
+the worker held after its first handoff, then reported the actual `Underrun`.
+Live first-fault telemetry had independently observed `Underrun` with continuous
+capture, so a missing capture packet is not needed to produce this failure.
+
+At this geometry the two rings occupy 288 KiB per depth-8 channel, versus
+72 KiB at depth 2: 216 KiB additional prepared memory. Seven seeded output
+blocks plus the existing previous-chain-output worker stage delay audio by
+2048 frames / 42.667 ms, exactly six blocks / 1536 frames / 32 ms more than
+blocking depth 2. These are exchange-stage costs only; RF filtering, rate
+conversion, decoder, mixer waiting and device buffering are additional. One
+callback's bound does not promise survival of arbitrary host starvation or
+multiple queued callbacks without worker progress. Depth 8 is not a relaxed
+mixer deadline and does not extend the existing 2048-frame hole-wait policy.
+
+For equal exchange/DSP transfers, S successful host calls and P worker
+handoffs satisfy S-P <= D-1. The worker has copied each input before publishing
+its corresponding credit. The next host write therefore cannot overwrite an
+unread input before the first failure. The failing call can occupy the final
+slot, so no further call is safe: every non-OK still withdraws that receiver,
+and repair prepares a new epoch off acquisition. No retries or substitute silence on underrun,
+callback allocations, new waits or new threads are introduced.
+
+A separate existing publication race incremented `r2_havesamps` before copying
+the output bytes. `dexchange()` now copies the output and advances its private
+write index first, then publishes credit under the existing count lock. The
+copy remains outside that lock. This shared correctness repair is not claimed
+as the established cause of the observed underrun.
+
+The default-inactive port rendezvous immediately before `copy_output_to_ring`
+copies bytes and the test/control-only locked output-count readback provide
+scheduler-independent regression barriers. A test-only `csDSP` rendezvous,
+after count readiness and before arming a hold, also lets the previous block's
+post-publication hook finish, so it cannot claim the next block's hold. The
+count query takes `csEXCH` then the count lock to cover asynchronous flush.
+Production calls none of these readiness helpers. Fixtures serialize the global
+holds, keep other workers idle, and release before teardown/reprepare.
+`wdsp_wbfm_test` compares nonzero paired output against the unchanged blocking
+reference through a warm eight-exchange held burst, wraparound, and release,
+with the exact six-block displacement removed. It checks repeated preparation,
+clocked flush, legacy slot reuse, bounded API refusal, and genuinely unpublished
+output: seven seeded calls succeed, the eighth must underrun while the copy is
+held. Moving publication before the helper must fail that assertion.
+`rtl_wfm_pipeline_test` acknowledges the first completed handoff, accepts eight
+calls total, then requires the ninth's actual underrun, one typed first fault,
+receiver withdrawal, no stale PCM, and a fresh nonzero stereo PCM repair epoch.
+These are socket-free deterministic DSP tests, not hardware latency proof.
+
+On upstream refresh, retain the explicit legacy depth reset, prepared field on
+all rebuilds, matching create/flush prefix, and bytes-before-credit edge unless
+upstream supplies equivalent semantics. Do not increase global `DSP_MULT`,
+weaken non-OK withdrawal, or move the test readiness query onto acquisition.
+
+
+## Patch 18 — selected WFM mono and bounded pilot reception snapshot
+
+Local changes to `upstream/wbfm.c`, `upstream/wbfm.h`, the public WDSP header,
+and the narrow `include/aether_wdsp.h` / `aether_wbfm_observation.h` facade,
+against the same pinned upstream 2.10 revision. This is an AetherSDR extension,
+not an upstream PLL or a calibrated signal-quality measurement.
+
+`SetRXAWBFMForceMono` selects the existing L+R-only matrix branch while leaving
+INDY and automatic squelch running. The default remains Auto Stereo. RTL sets
+this only while preparing an immutable receiver recipe; accepted state and
+persistence follow the matching receiver revision, including failure/rollback.
+A changed recipe retires both slice and speaker PCM epochs. Other WDSP owners
+retain the false default, and rebuilding a configured receiver reapplies its
+selection. Mono is real identical-channel audio, not merely a changed badge. Packet/model
+stereo status describes the actual selected output: forced mono remains Mono
+even when the independent reception diagnostics report an acquired pilot.
+
+`GetRXAWBFMReception` publishes one coherent latest-completed-block snapshot.
+The worker publishes a fixed sequence plus 17 interlocked 32-bit payload words;
+each exact double is copied into two words, never read nonatomically across
+threads. A reader makes at most four attempts and returns unavailable on a
+collision. No DSP mutex, wait, allocation, wall clock or logging enters the
+acquisition path. Both publication and reading use the port's existing
+sequentially consistent interlocked operations. The sequence advances only on
+completed blocks or an explicitly invalidating reset, allowing backend freshness
+to reject repeated cached observations while exchange credits are consumed.
+
+The amplitude is INDY's actual `sqrt(filtIstable^2 + filtQstable^2)` after the
+19 kHz filter and before pilot AGC, in FM-discriminator units normalized to
+75 kHz peak deviation. It is not RF power, dBm, dBFS, SNR, a quality percentage,
+or PLL phase/frequency/lock. Exact low/high thresholds and consecutive-low/high
+block counters plus their configured off/on block counts are included. At
+192 kHz / 1,024 frames those thresholds are 0.03/0.06 and the integer hysteresis
+counts are 187/93; readback uses the actual fields rather than duplicated UI
+constants. Absent pilot is ordinary mono fallback.
+
+Lock duration, observation duration and time since either indicator transition
+are computed from processed DSP samples. The recent stable duration is capped
+at 5,000 ms. Loss and reacquisition counts cover every completed block between
+UI updates; the first acquisition is excluded from reacquisitions. Durations
+and counts saturate at `INT32_MAX`. Construction, flush, rate/size rebuild and
+new receiver lifetimes invalidate/reset the measurements. These durations do
+not include audio-ring/device latency or assert wall-clock continuity.
+
+The RTL owner publishes diagnostics at most four times per second plus actual
+indicator transitions/invalidation, under the accepted PCM session/revision.
+Only a new valid decoder sequence refreshes its 500 ms freshness clock. Retune,
+park, mode/session changes and expiry clear the model's reception claim; raw
+measurements are never persisted. Processing health remains a separate surface.
+
+Generated `wdsp_wbfm_test` vectors cover exact nonzero paired Mono output with
+an honestly retained pilot, Auto Stereo restoration, measured hysteresis,
+loss/reacquisition and flush reset. `rtl_wfm_pipeline_test` checks both the
+independent tap and speaker with new epochs. Settings/model fixtures cover
+request-versus-adoption, strict boolean decoding, old-document defaults, replay
+freshness and retired observations. These tests are added validation obligations;
+their results must come from a subsequent exact-source Nobara run. On upstream
+refresh retain this extension unless equivalent typed, bounded, race-free
+semantics replace it, and do not label INDY as a PLL.
