@@ -112,8 +112,8 @@ constexpr const char* kFaultStyle =
 // the row reads as a set whichever mix of them is showing.
 constexpr int kRailControlHeight = 22;
 // Operating: the amplifier's "working" green, from the same tokens as a lit
-// MEffA key so the two read as one palette. Resolved per theme; a hardcoded
-// green under the light theme's near-black text was unreadable (#5903).
+// MEffA key so the two read as one palette. Resolved per theme so the text
+// stays legible under the light theme's near-black text (#5903).
 constexpr const char* kOperateStyle =
     "QPushButton { background: {{color.accessory.key.meffa.active.background}}; "
     "border: 1px solid {{color.accessory.key.meffa.active.border}}; "
@@ -220,21 +220,15 @@ QString formatTemp(float degC, bool fahrenheit)
 // temperature in Fahrenheit.
 constexpr int kValueFieldChars = 5;
 
-QString pad(const QString& value)
-{
-    return value.rightJustified(kValueFieldChars);
-}
-
-// "PA 106.8 F", "Vac 121 V": label, value, unit. One length whatever the
-// value, so the grid column it sits in never changes width and the column
-// beside it never shifts. The spare spaces go at the end, not in front of the
-// number, where they would open a visible gap ("HL  89.8"). The cost is that
-// the unit letter, not the number, shifts by a column as the value gains a
-// digit; the cell is pinned to its widest reading, so nothing beside it moves.
+// "PA 106.8 F", "Vac 121 V": label, value, unit. Only the value is
+// right-justified in a field of kValueFieldChars, so the number's right edge
+// and the unit stay where they are as the value gains or loses a digit, and
+// each readout keeps one length whatever it says. The grid column it sits in
+// is pinned to its widest reading, so nothing beside it moves.
 QString readout(const QString& label, const QString& value, const QString& unit)
 {
-    const int fixedLength = label.length() + 1 + kValueFieldChars + 1 + unit.length();
-    return QStringLiteral("%1 %2 %3").arg(label, value, unit).leftJustified(fixedLength);
+    return label + QLatin1Char(' ') + value.rightJustified(kValueFieldChars)
+           + QLatin1Char(' ') + unit;
 }
 
 // The state cell on a port strip. It speaks only when it has something to
@@ -457,6 +451,7 @@ void AmpApplet::buildUI()
     // Readouts are one row in the expanded panel and stacked in the rail.
     // The connection indicator has its own bottom-right row, like TGXL.
     m_telemetryBox = new QWidget;
+    m_telemetryBox->setObjectName(QStringLiteral("ampTelemetryBox"));
     m_telemetryGrid = new QGridLayout(m_telemetryBox);
     m_telemetryGrid->setContentsMargins(0, 0, 0, 0);
     m_telemetryGrid->setVerticalSpacing(0);
@@ -472,7 +467,7 @@ void AmpApplet::buildUI()
     // operator click through them blind (#3905). Item text via
     // fanModeLabel(); uppercase mode stored as itemData so the
     // fanModeChanged contract ("uppercase, ready for sendCommand") is
-    // unchanged. Hidden until a direct PGXL connection delivers the first
+    // unchanged. Disabled until a direct PGXL connection delivers the first
     // fanmode status.
     // GuardedComboBox (not plain QComboBox): this is a hardware control, so
     // an accidental mouse-wheel scroll while just hovering over it must not
@@ -501,8 +496,8 @@ void AmpApplet::buildUI()
     m_fanCombo->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_fanCombo->setFocusPolicy(Qt::TabFocus);
     m_fanCombo->setToolTip("Fan Speed\nSelect STANDARD / CONTEST / BROADCAST");
-    m_fanCombo->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
-    m_fanCombo->setAccessibleDescription("Selects STANDARD, CONTEST, or BROADCAST fan mode");
+    m_fanCombo->setAccessibleName(tr("Fan speed: %1").arg(m_fanMode));
+    m_fanCombo->setAccessibleDescription(tr("Selects STANDARD, CONTEST, or BROADCAST fan mode"));
     m_fanCombo->hide();
     connect(m_fanCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
         m_fanMode = m_fanCombo->itemData(index).toString();
@@ -603,6 +598,12 @@ void AmpApplet::placeReadings()
     // temperatures read. Docked, the indicator ends the second row; floating,
     // it keeps its own line at the bottom of the column. Same widgets either
     // way; only the indicator's place changes.
+    // Density passes, including calibration, call this far more often than
+    // the presentation changes.
+    if (m_readingsPlacedFloating == (m_floating ? 1 : 0)) {
+        return;
+    }
+    m_readingsPlacedFloating = m_floating ? 1 : 0;
     for (QWidget* cell : std::initializer_list<QWidget*>{m_tempBtn, m_hlTempBtn,
                                                           m_vacLabel, m_vddLabel}) {
         m_telemetryGrid->removeWidget(cell);
@@ -864,9 +865,8 @@ void AmpApplet::applyDensityAtScale(qreal scale)
     m_meffaKey->setFont(meffaFont);
     applyKeySize(f ? s : 1.0);
 
-    // Only one of each pair is ever up, and neither is shown before the
-    // amplifier has reported a state — a control that cannot say what it is
-    // set to is worse than none.
+    // Only one of each pair is ever up. Before the amplifier reports a state
+    // the rail controls are shown disabled; the panel keys stay hidden.
     applyStateToControls();
     applyFanControls();
 
@@ -1321,8 +1321,7 @@ void AmpApplet::updateTempLabel()
     // We label them PA and HL so the operator knows which is which.
     //
     // Each readout keeps one length whatever its value, so nothing beside it
-    // shifts. The spare spaces go at the END rather than in front of the
-    // number, where they would open a visible gap ("HL  89.8").
+    // shifts; see readout().
     const QString hlText = m_hasHarmonicLoadHeatsinkTemp
         ? formatTemp(m_harmonicLoadHeatsinkTemp, m_tempFahrenheit)
         : QStringLiteral("—");
@@ -1340,15 +1339,23 @@ void AmpApplet::updateTempLabel()
         tr("PA heatsink temperature\nClick to show degrees %1").arg(nextUnit));
     m_hlTempBtn->setToolTip(
         tr("Harmonic Load heatsink temperature\nClick to show degrees %1").arg(nextUnit));
-    // Spoken in words: the visible dash becomes "not reported".
-    m_tempBtn->setAccessibleName(m_hasPaHeatsinkTemp
+    // Spoken in words: the visible dash becomes "not reported". The relayed
+    // sample arrives about 20 times a second, so a name is announced only
+    // when its text actually changes.
+    const QString paName = m_hasPaHeatsinkTemp
         ? tr("PA heatsink %1 degrees %2").arg(paText, unitName)
-        : tr("PA heatsink not reported"));
-    m_hlTempBtn->setAccessibleName(m_hasHarmonicLoadHeatsinkTemp
+        : tr("PA heatsink not reported");
+    const QString hlName = m_hasHarmonicLoadHeatsinkTemp
         ? tr("Harmonic Load heatsink %1 degrees %2").arg(hlText, unitName)
-        : tr("Harmonic Load heatsink not reported"));
-    if (QAccessible::isActive()) {
-        for (QPushButton* btn : {m_tempBtn, m_hlTempBtn}) {
+        : tr("Harmonic Load heatsink not reported");
+    const std::pair<QPushButton*, QString> names[] = {{m_tempBtn, paName},
+                                                      {m_hlTempBtn, hlName}};
+    for (const auto& [btn, name] : names) {
+        if (btn->accessibleName() == name) {
+            continue;
+        }
+        btn->setAccessibleName(name);
+        if (QAccessible::isActive()) {
             QAccessibleEvent event(btn, QAccessible::NameChanged);
             QAccessible::updateAccessibility(&event);
         }
@@ -1419,12 +1426,10 @@ void AmpApplet::setDrainVoltage(float volts)
     // A PGXL keeps its drain rail down while it is idle and only brings it up
     // on entering OPERATE, so vdd=0.0 is the normal reading for most of the
     // time the amplifier is switched on — not a fault, and not a missing
-    // value. This used to print a dash below 1 V, which reads as "nothing
-    // arrived": the operator sees an empty field on connect, toggles standby
-    // to make the reading appear, and concludes the client dropped the first
-    // frames. Zero volts is a true reading and says the rail is down; the
-    // dash is kept for the one case where we genuinely have nothing, which is
-    // no direct connection at all (see setDirectConnected).
+    // value. Zero volts is a true reading and says the rail is down; a dash
+    // would read as "nothing arrived". The dash is kept for the one case where
+    // there is genuinely nothing: no direct connection (see
+    // setDirectConnected).
     m_drainVoltsText = QString::number(volts, 'f', 1);
     updateVoltsLabel();
 }
@@ -1441,8 +1446,13 @@ void AmpApplet::updateVoltsLabel()
 {
     m_vacLabel->setText(readout(QStringLiteral("Vac"), m_mainsVoltsText, QStringLiteral("V")));
     m_vddLabel->setText(readout(QStringLiteral("Vdd"), m_drainVoltsText, QStringLiteral("V")));
-    m_vacLabel->setAccessibleName(tr("Mains voltage %1 volts").arg(m_mainsVoltsText));
-    m_vddLabel->setAccessibleName(tr("Drain voltage %1 volts").arg(m_drainVoltsText));
+    const QString dash = QStringLiteral("—");
+    m_vacLabel->setAccessibleName(m_mainsVoltsText == dash
+        ? tr("Mains voltage not reported")
+        : tr("Mains voltage %1 volts").arg(m_mainsVoltsText));
+    m_vddLabel->setAccessibleName(m_drainVoltsText == dash
+        ? tr("Drain voltage not reported")
+        : tr("Drain voltage %1 volts").arg(m_drainVoltsText));
 }
 
 void AmpApplet::setFanMode(const QString& mode)
@@ -1479,8 +1489,14 @@ void AmpApplet::applyFanControls()
     }
     m_fanCombo->setEnabled(m_haveFanMode);
     m_fanCombo->setAccessibleName(m_haveFanMode
-        ? QString("Fan speed: %1").arg(m_fanMode)
+        ? tr("Fan speed: %1").arg(m_fanMode)
         : tr("Fan speed: not reported yet"));
+    // The relay never carries fanmode, so without the direct connection the
+    // mode cannot become known.
+    m_fanCombo->setAccessibleDescription(
+        m_haveFanMode || m_directConnected
+            ? tr("Selects STANDARD, CONTEST, or BROADCAST fan mode")
+            : tr("Fan speed needs a direct PGXL connection."));
 
     m_fanKey->setText(fanModeLetter(m_fanMode));
     m_fanKey->setToolTip(tr("Fan speed: %1\nClick to cycle standard, contest, broadcast")
@@ -1535,7 +1551,9 @@ void AmpApplet::applyMeffaControls()
                        "apply in class AAB, which SSB and AM use. Disables it.")
         : active  ? tr("Maximum Efficiency Algorithm is optimising the "
                        "amplifier. Disables it.")
-                  : tr("Maximum Efficiency Algorithm state is not known yet.");
+        : !m_directConnected
+            ? tr("Maximum Efficiency Algorithm state needs a direct PGXL connection.")
+            : tr("Maximum Efficiency Algorithm state is not known yet.");
 
     const char* style = active  ? kPanelKeyMeffaActiveStyle
                       : standby ? kPanelKeyMeffaStandbyStyle
@@ -1641,6 +1659,8 @@ void AmpApplet::applyStateToControls()
                                    : tr("The amplifier has not reported its state yet."));
     m_operateBtn->setAccessibleName(known ? m_operateBtn->text()
                                           : tr("Amplifier state not reported"));
+    m_operateBtn->setAccessibleDescription(
+        known ? QString() : tr("The amplifier has not reported its state yet."));
     theme.applyStyleSheet(m_stbyKey, m_standby ? kPanelKeyStandbyStyle
                                                : kPanelKeyIdleStyle);
     m_stbyKey->setAccessibleDescription(
@@ -1673,8 +1693,11 @@ void AmpApplet::setDirectConnected(bool direct)
         // until the amplifier is back rather than leaving a control up that
         // can no longer command anything.
         m_haveFanMode = false;
-        applyFanControls();
     }
+    // The fan and MEffA descriptions say whether a direct connection is
+    // still needed.
+    applyFanControls();
+    applyMeffaControls();
     updatePortRows();
 }
 

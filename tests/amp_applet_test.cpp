@@ -1,5 +1,6 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 #include "gui/AmpApplet.h"
 #include "models/AmpModel.h"
 #include "core/backends/AmpDelta.h"
@@ -13,12 +14,18 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QFontInfo>
+#include <QFontMetrics>
+#include <QGridLayout>
+#include <QStyle>
+#include <QStyleOptionComboBox>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <cstdio>
 #include <limits>
 
@@ -73,7 +80,7 @@ void testDefaultPlaceholder()
     if (!button) return;
 
     report("default placeholder uses Celsius",
-           button->text() == QStringLiteral("PA \u2014 C    "),
+           button->text() == QStringLiteral("PA     \u2014 C"),
            button->text());
     // Spoken in words, not as the visible dash.
     report("placeholder is spoken as not reported",
@@ -82,10 +89,43 @@ void testDefaultPlaceholder()
 
     // The placeholder is drawn like Vdd and Vac without a connection: in the
     // disabled tone. The first reading switches it to the normal one.
-    const QString placeholderStyle = button->styleSheet();
+    auto& theme = AetherSDR::ThemeManager::instance();
+    const QString disabledTone = theme.color(QStringLiteral("color.text.disabled")).name();
+    report("the placeholder is drawn in the disabled tone",
+           button->styleSheet().contains(disabledTone, Qt::CaseInsensitive),
+           disabledTone);
     applet.setPaHeatsinkTemp(34.7f);
     report("the first PA reading leaves the placeholder tone",
-           !placeholderStyle.isEmpty() && button->styleSheet() != placeholderStyle);
+           !button->styleSheet().contains(disabledTone, Qt::CaseInsensitive));
+}
+
+// Without the direct connection the relay never carries MEffA or fanmode, so
+// their descriptions say a direct connection is needed, and Vac/Vdd are
+// spoken as not reported.
+void testRelayOnlyDescriptionsAndNames()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* meffa = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+    auto* fan = fanCombo(applet);
+    auto* vac = applet.findChild<QLabel*>(QStringLiteral("ampMainsVoltage"));
+    auto* vdd = applet.findChild<QLabel*>(QStringLiteral("ampDrainVoltage"));
+    report("relay-only controls exist", meffa && fan && vac && vdd);
+    if (!meffa || !fan || !vac || !vdd) return;
+    report("MEffA says it needs a direct connection",
+           meffa->accessibleDescription().contains(QStringLiteral("direct PGXL connection")),
+           meffa->accessibleDescription());
+    report("the fan pull-down says it needs a direct connection",
+           fan->accessibleDescription().contains(QStringLiteral("direct PGXL connection")),
+           fan->accessibleDescription());
+    report("Vac and Vdd are spoken as not reported before connection",
+           vac->accessibleName().contains(QStringLiteral("not reported"))
+               && vdd->accessibleName().contains(QStringLiteral("not reported")),
+           vac->accessibleName() + QStringLiteral("|") + vdd->accessibleName());
+    applet.setDirectConnected(true);
+    report("with the direct connection MEffA is merely not known yet",
+           meffa->accessibleDescription().contains(QStringLiteral("not known yet")),
+           meffa->accessibleDescription());
 }
 
 void testConnectionSourceIndicator()
@@ -141,17 +181,17 @@ void testSingleSensorToggle()
 
     applet.setPaHeatsinkTemp(34.7f);
     report("single sensor displays Celsius",
-           button->text() == QStringLiteral("PA 34.7 C "),
+           button->text() == QStringLiteral("PA  34.7 C"),
            button->text());
 
     button->click();
     report("single sensor toggles to Fahrenheit",
-           button->text() == QStringLiteral("PA 94.5 F "),
+           button->text() == QStringLiteral("PA  94.5 F"),
            button->text());
 
     button->click();
     report("single sensor toggles back to Celsius",
-           button->text() == QStringLiteral("PA 34.7 C "),
+           button->text() == QStringLiteral("PA  34.7 C"),
            button->text());
 }
 
@@ -170,22 +210,22 @@ void testDualSensorToggle()
     // HL (Harmonic Load heatsink), one readout each. HL comes only over a
     // direct connection.
     report("HL keeps its place with a dash before a reading",
-           hl->text() == QStringLiteral("HL \u2014 C    "), hl->text());
+           hl->text() == QStringLiteral("HL     \u2014 C"), hl->text());
     applet.setDirectConnected(true);
     applet.setPaHeatsinkTemp(34.7f);
     applet.setHarmonicLoadHeatsinkTemp(28.4f);
     report("dual sensor displays Celsius pair",
-           pa->text() == QStringLiteral("PA 34.7 C ") && hl->text() == QStringLiteral("HL 28.4 C "),
+           pa->text() == QStringLiteral("PA  34.7 C") && hl->text() == QStringLiteral("HL  28.4 C"),
            pa->text() + QStringLiteral("|") + hl->text());
 
     // Either readout toggles both.
     pa->click();
     report("a click on PA shows both in Fahrenheit",
-           pa->text() == QStringLiteral("PA 94.5 F ") && hl->text() == QStringLiteral("HL 83.1 F "),
+           pa->text() == QStringLiteral("PA  94.5 F") && hl->text() == QStringLiteral("HL  83.1 F"),
            pa->text() + QStringLiteral("|") + hl->text());
     hl->click();
     report("a click on HL shows both in Celsius again",
-           pa->text() == QStringLiteral("PA 34.7 C ") && hl->text() == QStringLiteral("HL 28.4 C "),
+           pa->text() == QStringLiteral("PA  34.7 C") && hl->text() == QStringLiteral("HL  28.4 C"),
            pa->text() + QStringLiteral("|") + hl->text());
     // The unit chosen from HL is saved like one chosen from PA: a new applet
     // opens in it.
@@ -193,7 +233,7 @@ void testDualSensorToggle()
     AmpApplet reopened;
     auto* reopenedHl = reopened.findChild<QPushButton*>(QStringLiteral("ampHlTempButton"));
     report("the unit chosen from HL is saved",
-           reopenedHl && reopenedHl->text().endsWith(QStringLiteral("F    ")),
+           reopenedHl && reopenedHl->text().endsWith(QStringLiteral(" F")),
            reopenedHl ? reopenedHl->text() : QString());
 }
 
@@ -215,6 +255,47 @@ void testVoltagesStayAlignedWithTheTemperatures()
         QCoreApplication::processEvents();
         return w->mapTo(&applet, QPoint(0, 0)).x();
     };
+    // The pin exists for faces where "9.9" and "106.8" differ in width, and
+    // the CI face is fixed-width, so the proportional case is forced here:
+    // the grid's column 0 must already be as wide as the widest reading in
+    // the face the buttons were polished with (plus the 4 px border and
+    // padding), and must hold it after the buttons take a proportional face.
+    auto* temp = tempButton(applet);
+    auto* hl = applet.findChild<QPushButton*>(QStringLiteral("ampHlTempButton"));
+    auto* box = applet.findChild<QWidget*>(QStringLiteral("ampTelemetryBox"));
+    auto* grid = box ? qobject_cast<QGridLayout*>(box->layout()) : nullptr;
+    report("temperature buttons and telemetry grid exist", temp && hl && grid);
+    if (!temp || !hl || !grid) return;
+    temp->ensurePolished();
+    const QFontMetrics polished(temp->font());
+    int widest = 0;
+    for (const char* label : {"PA", "HL"}) {
+        for (const char* value : {"888.8", "-88.8", "\u2014"}) {
+            for (const char* unit : {"C", "F"}) {
+                widest = std::max(widest, polished.horizontalAdvance(
+                    QStringLiteral("%1 %2 %3").arg(QString::fromLatin1(label),
+                        QString::fromUtf8(value).rightJustified(5), QString::fromLatin1(unit))));
+            }
+        }
+    }
+    report("column 0 is pinned to the widest reading",
+           grid->columnMinimumWidth(0) >= widest + 4,
+           QStringLiteral("%1 < %2").arg(grid->columnMinimumWidth(0)).arg(widest + 4));
+    // A reading re-applies the themed sheet, so the proportional face is
+    // laid over it again after every update.
+    auto forceProportional = [&]() {
+        for (QPushButton* btn : {temp, hl}) {
+            btn->setStyleSheet(btn->styleSheet()
+                + QStringLiteral(" QPushButton { font-family: 'DejaVu Sans', sans-serif; }"));
+            btn->ensurePolished();
+        }
+    };
+    applet.setPaHeatsinkTemp(9.9f);
+    applet.setHarmonicLoadHeatsinkTemp(9.9f);
+    forceProportional();
+    report("the temperature buttons are drawn in a proportional face",
+           !QFontInfo(temp->font()).fixedPitch(), temp->font().family());
+
     const int start = x(vac);
     bool aligned = x(vac) == x(vdd);
     bool steady = true;
@@ -222,6 +303,7 @@ void testVoltagesStayAlignedWithTheTemperatures()
     for (const auto& t : temps) {
         applet.setPaHeatsinkTemp(t[0]);
         applet.setHarmonicLoadHeatsinkTemp(t[1]);
+        forceProportional();
         aligned = aligned && x(vac) == x(vdd);
         steady = steady && x(vac) == start;
     }
@@ -245,7 +327,7 @@ void testRadioFallbackDropsHarmonicLoadTemp()
     applet.setPaHeatsinkTemp(34.7f);
     applet.setHarmonicLoadHeatsinkTemp(28.4f);
     report("direct connection shows both heatsinks",
-           pa->text() == QStringLiteral("PA 34.7 C ") && hl->text() == QStringLiteral("HL 28.4 C "),
+           pa->text() == QStringLiteral("PA  34.7 C") && hl->text() == QStringLiteral("HL  28.4 C"),
            pa->text() + QStringLiteral("|") + hl->text());
     report("the HL readout explains HL in its tooltip",
            hl->toolTip().contains(QStringLiteral("Harmonic Load heatsink")), hl->toolTip());
@@ -255,27 +337,30 @@ void testRadioFallbackDropsHarmonicLoadTemp()
     // A FlexRadio relays only the PA heatsink temperature, so the HL value
     // must not stay on screen after the direct connection drops: HL goes back
     // to its dash, holding its place.
-    const QString liveHlStyle = hl->styleSheet();
+    const QString disabledTone = AetherSDR::ThemeManager::instance()
+        .color(QStringLiteral("color.text.disabled")).name();
+    report("a live HL reading is not in the disabled tone",
+           !hl->styleSheet().contains(disabledTone, Qt::CaseInsensitive));
     applet.setDirectConnected(false);
     report("radio fallback drops the Harmonic Load heatsink",
-           hl->text() == QStringLiteral("HL \u2014 C    ") && pa->text() == QStringLiteral("PA 34.7 C "),
+           hl->text() == QStringLiteral("HL     \u2014 C") && pa->text() == QStringLiteral("PA  34.7 C"),
            pa->text() + QStringLiteral("|") + hl->text());
     report("the dropped HL returns to the placeholder tone",
-           hl->styleSheet() != liveHlStyle);
+           hl->styleSheet().contains(disabledTone, Qt::CaseInsensitive));
 
     // A late HL write after the drop must not bring the stale value back.
     applet.setHarmonicLoadHeatsinkTemp(28.5f);
     report("a late Harmonic Load write after the drop stays hidden",
-           hl->text() == QStringLiteral("HL \u2014 C    "), hl->text());
+           hl->text() == QStringLiteral("HL     \u2014 C"), hl->text());
 
     applet.setPaHeatsinkTemp(36.0f);
     report("radio fallback keeps updating the PA heatsink",
-           pa->text() == QStringLiteral("PA 36.0 C "), pa->text());
+           pa->text() == QStringLiteral("PA  36.0 C"), pa->text());
 
     applet.setDirectConnected(true);
     applet.setHarmonicLoadHeatsinkTemp(29.0f);
     report("direct reconnection restores the Harmonic Load heatsink",
-           pa->text() == QStringLiteral("PA 36.0 C ") && hl->text() == QStringLiteral("HL 29.0 C "),
+           pa->text() == QStringLiteral("PA  36.0 C") && hl->text() == QStringLiteral("HL  29.0 C"),
            pa->text() + QStringLiteral("|") + hl->text());
 }
 
@@ -301,12 +386,12 @@ void testPreferenceReload()
     if (!button) return;
 
     report("reloaded placeholder uses Fahrenheit",
-           button->text() == QStringLiteral("PA \u2014 F    "),
+           button->text() == QStringLiteral("PA     \u2014 F"),
            button->text());
 
     restored.setPaHeatsinkTemp(0.0f);
     report("reloaded value displays Fahrenheit",
-           button->text() == QStringLiteral("PA 32.0 F "),
+           button->text() == QStringLiteral("PA  32.0 F"),
            button->text());
 }
 
@@ -506,7 +591,7 @@ void testRadioVitalsWinOverTheDeviceWhileFresh()
     report("the PGXL's drain current applies with no radio meter",
            qFuzzyCompare(gaugeValue(applet, QStringLiteral("Drain current")), 4.3f));
     report("the PGXL's PA heatsink temperature applies with no radio meter",
-           button->text() == QStringLiteral("PA 43.6 C "), button->text());
+           button->text() == QStringLiteral("PA  43.6 C"), button->text());
 
     // The radio's meters arrive and win while fresh.
     applet.setRadioDrainCurrent(19.2f, true);
@@ -516,7 +601,7 @@ void testRadioVitalsWinOverTheDeviceWhileFresh()
     report("the radio's drain current wins while fresh",
            qFuzzyCompare(gaugeValue(applet, QStringLiteral("Drain current")), 19.2f));
     report("the radio's PA heatsink temperature wins while fresh",
-           button->text() == QStringLiteral("PA 47.9 C "), button->text());
+           button->text() == QStringLiteral("PA  47.9 C"), button->text());
 
     // The radio's meters are withdrawn: the PGXL takes over at once.
     applet.setRadioDrainCurrent(0.0f, false);
@@ -528,7 +613,7 @@ void testRadioVitalsWinOverTheDeviceWhileFresh()
     report("the PGXL's drain current applies once the radio meter is gone",
            qFuzzyCompare(gaugeValue(applet, QStringLiteral("Drain current")), 5.0f));
     report("the PGXL's PA heatsink temperature applies once the radio meter is gone",
-           button->text() == QStringLiteral("PA 48.9 C "), button->text());
+           button->text() == QStringLiteral("PA  48.9 C"), button->text());
 }
 
 void testDeviceMetersDriveTheGaugesWithoutARelay()
@@ -788,7 +873,7 @@ void testReadoutWidthIsStable()
     report("zero drain voltage is reported literally",
            vdd->text().contains(QStringLiteral("0.0")), vdd->text());
     report("zero drain voltage is not a placeholder",
-           vdd->text().startsWith(QStringLiteral("Vdd 0.0 ")), vdd->text());
+           vdd->text().endsWith(QStringLiteral(" 0.0 V")), vdd->text());
     report("zero drain voltage keeps the row's width",
            vdd->text().length() == vddReading, vdd->text());
 
@@ -900,10 +985,19 @@ void testDockedCaptionsFitTheRail()
         }
         // A combo's sizeHint uses minimumContentsLength, not the item text, so
         // the caption itself is measured too (#4885).
-        if (fan && !fan->currentText().isEmpty()
-            && fan->fontMetrics().horizontalAdvance(fan->currentText()) > fan->width()) {
-            fits = false;
-            detail += QStringLiteral(" | fan caption wider than combo");
+        // against the edit-field rect, which is what the arrow and padding
+        // leave of the combo's width.
+        if (fan && !fan->currentText().isEmpty()) {
+            QStyleOptionComboBox opt;
+            opt.initFrom(fan);
+            opt.editable = fan->isEditable();
+            opt.currentText = fan->currentText();
+            const QRect field = fan->style()->subControlRect(
+                QStyle::CC_ComboBox, &opt, QStyle::SC_ComboBoxEditField, fan);
+            if (fan->fontMetrics().horizontalAdvance(fan->currentText()) > field.width()) {
+                fits = false;
+                detail += QStringLiteral(" | fan caption wider than its text area");
+            }
         }
         if (operate) detail += QStringLiteral(" | operate=") + operate->text();
         if (fan) detail += QStringLiteral(" | fan=") + fan->currentText();
@@ -959,6 +1053,7 @@ int main(int argc, char** argv)
     std::printf("AmpApplet temperature unit test harness\n\n");
 
     testDefaultPlaceholder();
+    testRelayOnlyDescriptionsAndNames();
     testConnectionSourceIndicator();
     testSingleSensorToggle();
     testDualSensorToggle();

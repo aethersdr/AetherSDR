@@ -497,10 +497,10 @@ int main(int argc, char** argv)
 
     // ── The readouts reflow with the presentation ─────────────────────
     //
-    // One row in both presentations, on its own line between the controls
-    // and the connection indicator. In the 260 px rail the readings used to
-    // stack beside the controls, and the two squeezed each other until both
-    // clipped. Same widgets either way; nothing is reparented.
+    // A 2x2 grid in both presentations: temperatures in the first column,
+    // voltages in the second. Docked, the connection indicator ends the
+    // second row; floating, it is the column's last line. The grid cells are
+    // the same widgets in both presentations.
     {
         QPushButton* temp = applet.findChild<QPushButton*>(QStringLiteral("ampTempUnitButton"));
         QPushButton* hl = applet.findChild<QPushButton*>(QStringLiteral("ampHlTempButton"));

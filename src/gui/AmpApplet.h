@@ -227,13 +227,15 @@ private:
 
     QWidget*     m_telemetryBox{nullptr};
     QGridLayout* m_telemetryGrid{nullptr};
+    // The presentation the readings were last placed for; -1 before the first.
+    int          m_readingsPlacedFloating{-1};
 
     QComboBox*   m_fanCombo{nullptr};
     QPushButton* m_operateBtn{nullptr};
     QString      m_fanMode{"STANDARD"};
-    // Neither fan control is shown before the amplifier has reported a mode:
-    // only the direct connection carries fanmode, and a control that cannot
-    // say what it is set to is worse than none.
+    // Until the amplifier reports a mode the rail's pull-down is disabled and
+    // the panel's fan key is hidden. Only the direct connection carries
+    // fanmode.
     bool         m_haveFanMode{false};
 
     // ── Expanded (floating / canvas) presentation ───────────────────────
