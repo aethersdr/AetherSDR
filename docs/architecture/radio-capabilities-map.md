@@ -539,17 +539,21 @@ stay on the echo alone. HL2, ANAN and RTL-SDR declare `binsAbsolute = true`,
 each quoting the expression that produces its bins; ANAN is the one whose loop
 this turned back on.
 
-**It has a second consumer: the unit of a waterfall row.** A backend with
-absolute bins has no waterfall plane of its own, so
-`RadioModel::onBackendSpectrumFrame` reuses the pan frame as the row and the row
-is the pan's absolute dB (dBFS under a dBm label), where a Flex tile is
-intensity (about 96..120). The manual Black Level
-(button on Off) is a threshold in the row's unit, so
-`SpectrumWidget::intensityToWaterfallLevel` passes the same flag to
-`WaterfallLevelMap::level` as `rowsAreAbsoluteDb`: false keeps the tile law
-`160 - level`, true takes `-60 dB - level`. Before that the tile threshold was
-applied to absolute rows and Off blanked the waterfall at every slider position. SW
-and HW do not read the flag.
+**It has a second consumer: the unit of a waterfall row.** A backend with no
+waterfall plane of its own sends its pan frame on as the row
+(`RadioModel::onBackendSpectrumFrame`), so the row is the pan's absolute dB
+(dBFS under a dBm label), where a Flex tile is intensity (about 96..120). The
+manual Black Level (button on Off) is a threshold in the row's unit. The widget
+holds no record of where a row came from, so
+`SpectrumWidget::intensityToWaterfallLevel` reads `binsAbsolute` as a proxy for
+it and passes it to `WaterfallLevelMap::level` as `rowsAreAbsoluteDb`: false
+keeps the tile law `160 - level`, true takes `-60 dB - level`. SW and HW do not
+read the flag.
+
+The proxy holds for HL2, ANAN and RTL-SDR. It does not hold for the Demo:
+`SimBackend` sends dB rows down the same path (`SimSignalSource`, floor -120)
+and declares no `panAmplitude` record, so Off on the Demo keeps the tile law and
+draws every row black.
 
 **THE HL2 KEEPS THE PERMISSIVE DEFAULT, and that is deliberate rather than an
 omission.** `Hl2Backend::capabilities()` never assigns the field and says why at
