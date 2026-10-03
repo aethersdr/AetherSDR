@@ -3,6 +3,7 @@
 // discovery or MetisClient::start(). Thread holds force each tested ordering.
 // See docs/HERMES.md §22.4 for the production contract.
 
+#include "core/backends/SliceDelta.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
@@ -243,6 +244,35 @@ bool bringUp(Hl2Backend& backend)
           "the ceiling leaves room for the receiver this test adds");
     check(Access::transportIdle(backend), "setup opens no transport socket");
     return backend.isConnected();
+}
+
+// A receiver seeded from the first while that one is in DIGU/DIGL copies its
+// mode and its AGC off, so it needs the held AGC too or it can never leave
+// off (#5629).
+void aPanSeededInADataModeCarriesTheHeldAgc()
+{
+    Hl2Backend backend;
+    if (!bringUp(backend)) {
+        return;
+    }
+    QHash<int, QString> agc;
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                     [&agc](int id, const SliceDelta& d) {
+                         if (d.agcMode) agc[id] = *d.agcMode;
+                     });
+    backend.setSliceAgc(0, QStringLiteral("slow"), 65);
+    backend.setSliceMode(0, QStringLiteral("DIGU"));
+    check(backend.createPanadapter(), "a receiver is admitted beside a DIGU one");
+    const int ui = Access::lastReceiverUi(backend);
+    check(agc.value(ui) == QStringLiteral("off"),
+          "a receiver seeded from a DIGU one opens with AGC off");
+    backend.setSliceMode(ui, QStringLiteral("USB"));
+    check(agc.value(ui) == QStringLiteral("slow"),
+          "and returns to the first receiver's held AGC on leaving DIGU");
+    check(agc.value(0) == QStringLiteral("off"),
+          "the first receiver stays in its data mode's off");
+    AetherSDR::test::spinUntil(
+        [&] { return Access::lastReceiverDspChannel(backend) >= 0; });
 }
 
 void theGuiThreadIsNotHeld()
@@ -660,6 +690,7 @@ int main(int argc, char** argv)
     }
     QCoreApplication app(argc, argv);
     theGuiThreadIsNotHeld();
+    aPanSeededInADataModeCarriesTheHeldAgc();
     theBuildRunsOnTheBuildThread();
     aStaleFailureDoesNotCloseTheReuser();
     aStaleSuccessIsNotWrittenOntoTheReuser();

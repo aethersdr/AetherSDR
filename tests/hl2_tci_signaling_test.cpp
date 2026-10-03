@@ -581,6 +581,15 @@ static void testModeDefaultPassband()
 // open with AGC off, and the receiver's own AGC returns on leaving them.
 static void testDigitalModeDefaultAgc()
 {
+    // Before the operator has set an AGC, capture falls back to the receiver,
+    // and must read the mode held behind a data mode's off.
+    {
+        hl2::Hl2Backend fresh;
+        fresh.setSliceMode(0, QStringLiteral("DIGU"));
+        check(fresh.currentOperatingState().agcMode == QStringLiteral("med"),
+              "with no AGC set yet, capture reads the held mode, not the off");
+    }
+
     hl2::Hl2Backend backend;
 
     QString agc;
@@ -605,6 +614,7 @@ static void testDigitalModeDefaultAgc()
     check(agc == QStringLiteral("slow"),
           "leaving the data modes restores the AGC held before them");
 
+    agc.clear();   // so the check cannot pass on the earlier publish
     backend.setSliceMode(0, QStringLiteral("CWU"));
     check(agc == QStringLiteral("slow"), "a non-data mode change leaves AGC alone");
 

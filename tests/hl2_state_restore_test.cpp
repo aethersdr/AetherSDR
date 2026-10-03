@@ -25,6 +25,15 @@
 #include <iostream>
 #include <map>
 
+namespace AetherSDR::hl2 {
+
+// Runs the link-up push without a radio: connectRadio() here never links.
+struct Hl2DspReadbackTestAccess {
+    static void pushInitialState(Hl2Backend& backend) { backend.pushInitialState(); }
+};
+
+}  // namespace AetherSDR::hl2
+
 using namespace AetherSDR;
 
 namespace {
@@ -297,6 +306,77 @@ int main(int argc, char** argv)
         check(watch.mode(0) == QStringLiteral("med") && watch.threshold(0) == 65,
               "the swap resets the RECEIVER too, not just the capture member");
         backend.disconnectRadio();
+    }
+
+    // A receiver that comes up in DIGU/DIGL runs AGC off (#5629).
+    // The connect-time restore writes the mode without setSliceMode(), so it
+    // needs the data modes' AGC default itself. The remembered AGC stays the
+    // operator's: the off must not reach the capture, or SSB returns with it.
+    {
+        using Access = hl2::Hl2DspReadbackTestAccess;
+        const auto restoreIntoDigu = [](hl2::Hl2Backend& backend) {
+            RestoredRadioState remembered;
+            remembered.mode = QStringLiteral("DIGU");
+            remembered.agcMode = QStringLiteral("slow");
+            remembered.agcThreshold = 40;
+            backend.applyRestoredState(remembered);
+            backend.connectRadio(hl2Request(QStringLiteral("AA:BB:CC:DD:EE:FF")));
+            settleConnect(backend);
+            Access::pushInitialState(backend);   // what the first linkUp runs
+        };
+        {
+            hl2::Hl2Backend backend;
+            AgcWatcher watch(backend);
+            restoreIntoDigu(backend);
+            watch.reemit(backend, 0);
+            check(backend.currentOperatingState().mode == QStringLiteral("DIGU"),
+                  "the restore brings the receiver up in DIGU");
+            check(watch.mode(0) == QStringLiteral("off"),
+                  "a restore into DIGU opens the receiver with AGC off");
+            check(backend.currentOperatingState().agcMode == QStringLiteral("slow"),
+                  "a restore into DIGU keeps the remembered AGC out of the off");
+            backend.setSliceMode(0, QStringLiteral("USB"));
+            check(watch.mode(0) == QStringLiteral("slow"),
+                  "leaving DIGU after a restore returns the remembered AGC");
+            check(backend.currentOperatingState().agcMode == QStringLiteral("slow"),
+                  "and the remembered AGC is still the operator's");
+            backend.disconnectRadio();
+        }
+        {
+            // MetisClient re-emits linkUp after EP6 silence; the default must
+            // not be replayed over an AGC the operator chose in the data mode.
+            hl2::Hl2Backend backend;
+            AgcWatcher watch(backend);
+            restoreIntoDigu(backend);
+            backend.setSliceAgc(0, QStringLiteral("fast"), 40);
+            Access::pushInitialState(backend);
+            watch.reemit(backend, 0);
+            check(watch.mode(0) == QStringLiteral("fast"),
+                  "a later link-up leaves an operator AGC choice in DIGU alone");
+            backend.disconnectRadio();
+        }
+        {
+            // The seed, on a receiver already in a data mode when it runs: the
+            // mode arrived before connect, and the restore carries no mode.
+            hl2::Hl2Backend backend;
+            AgcWatcher watch(backend);
+            backend.setSliceMode(0, QStringLiteral("DIGL"));
+            RestoredRadioState remembered;
+            remembered.agcMode = QStringLiteral("slow");
+            remembered.agcThreshold = 40;
+            backend.applyRestoredState(remembered);
+            backend.connectRadio(hl2Request(QStringLiteral("AA:BB:CC:DD:EE:FF")));
+            settleConnect(backend);
+            watch.reemit(backend, 0);
+            check(watch.mode(0) == QStringLiteral("off"),
+                  "seeding a receiver that is in DIGL leaves its AGC off");
+            check(backend.currentOperatingState().agcMode == QStringLiteral("slow"),
+                  "seeding in DIGL primes the capture with the remembered AGC");
+            backend.setSliceMode(0, QStringLiteral("LSB"));
+            check(watch.mode(0) == QStringLiteral("slow"),
+                  "leaving DIGL after the seed returns the remembered AGC");
+            backend.disconnectRadio();
+        }
     }
 
     // ---- restored state seeds the session at connect ----------------------

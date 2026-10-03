@@ -968,6 +968,7 @@ bool Hl2Backend::createPanadapter()
         seed.filterLowHz = first.filterLowHz;
         seed.filterHighHz = first.filterHighHz;
         seed.agcMode = first.agcMode;
+        seed.agcModeBeforeDigital = first.agcModeBeforeDigital;
         seed.agcThresholdDb = first.agcThresholdDb;
     }
     m_rx.push_back(seed);
@@ -2868,6 +2869,27 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     notifyOperatingStateChanged();
 }
 
+// DIGU/DIGL run AGC off: medium AGC raises the noise between FT8 frames,
+// which inflates the decoder's noise reference and costs weak decodes beside
+// a strong signal (#5629). The held AGC returns on leaving them. Never
+// re-imposed inside a data mode, so an operator's own AGC choice stands.
+bool Hl2Backend::followModeAgc(Receiver& r, const QString& previousMode)
+{
+    const bool wasDigital = isDigitalDataMode(previousMode);
+    const bool isDigital = isDigitalDataMode(r.mode);
+    if (isDigital && !wasDigital) {
+        r.agcModeBeforeDigital = r.agcMode;
+        r.agcMode = QStringLiteral("off");
+        return true;
+    }
+    if (wasDigital && !isDigital && !r.agcModeBeforeDigital.isEmpty()) {
+        r.agcMode = r.agcModeBeforeDigital;
+        r.agcModeBeforeDigital.clear();
+        return true;
+    }
+    return false;
+}
+
 void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
 {
     const int ddc = ddcForSlice(sliceId);
@@ -2901,23 +2923,7 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& requested)
         r->filterHighHz = hi;
     }
 
-    // DIGU/DIGL run AGC off: medium AGC raises the noise between FT8 frames,
-    // which inflates the decoder's noise reference and costs weak decodes
-    // beside a strong signal (#5629). Adopted on entering them, like the
-    // passband; leaving them restores the AGC the receiver had before.
-    const bool wasDigital = isDigitalDataMode(previous);
-    const bool isDigital = isDigitalDataMode(mode);
-    bool agcChanged = false;
-    if (!previous.isEmpty() && isDigital && !wasDigital) {
-        r->agcModeBeforeDigital = r->agcMode;
-        r->agcMode = QStringLiteral("off");
-        agcChanged = true;
-    } else if (wasDigital && !isDigital && !r->agcModeBeforeDigital.isEmpty()) {
-        r->agcMode = r->agcModeBeforeDigital;
-        r->agcModeBeforeDigital.clear();
-        agcChanged = true;
-    }
-    if (agcChanged && r->dsp) {
+    if (followModeAgc(*r, previous) && r->dsp) {
         QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgcMode(r->agcMode)),
             Q_ARG(double, m_dbRef.agcCeilingDb(r->agcThresholdDb)));
@@ -6531,13 +6537,18 @@ void Hl2Backend::seedReceiverAgc()
         r.agcThresholdDb = haveThreshold ? m_restoredState.agcThreshold
                                          : defaults.agcThresholdDb;
         r.agcModeBeforeDigital.clear();
+        // A receiver already in DIGU/DIGL runs AGC off over the seeded mode.
+        followModeAgc(r, QString());
     }
     // Prime the remembered pair from what was just seeded, so a capture taken
     // before the operator touches the control records the restored value rather
-    // than falling back through an empty member.
+    // than falling back through an empty member. The seeded mode, not a data
+    // mode's off.
     if (!m_rx.empty()) {
-        m_agcMode = m_rx.front().agcMode;
-        m_agcThresholdDb = m_rx.front().agcThresholdDb;
+        const Receiver& first = m_rx.front();
+        m_agcMode = first.agcModeBeforeDigital.isEmpty()
+                        ? first.agcMode : first.agcModeBeforeDigital;
+        m_agcThresholdDb = first.agcThresholdDb;
     }
 }
 
@@ -7099,7 +7110,11 @@ void Hl2Backend::pushInitialState()
         if (m_haveRestoredState) {
             if (Receiver* txRx = rx(m_txDdc)) {
                 if (!m_restoredState.mode.isEmpty()) {
+                    // A restore into DIGU/DIGL runs AGC off, as a mode click
+                    // does; the loop below pushes it to the DSP.
+                    const QString previousMode = txRx->mode;
                     txRx->mode = m_restoredState.mode;
+                    followModeAgc(*txRx, previousMode);
                     const auto [pbLowHz, pbHighHz] =
                         defaultPassbandForMode(txRx->mode);
                     txRx->filterLowHz = pbLowHz;

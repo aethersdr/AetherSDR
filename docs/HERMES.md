@@ -1564,7 +1564,7 @@ radio. See §18 for the full audit and the proposed seam.
 | 27 | AetherClock off DAX-channel identity onto slice identity | §18.6, gap 17 | WWV/WWVB decode. Depends on 26 | S |
 | 28 | `hasDaxAudio` / `hasDaxIq` / tap kinds / `rxAudioSampleRateHz` capabilities | §18.5 | Lets features decline honestly instead of binding to nothing. Depends on 26. On HL2 the tap-kinds answer is `Demod` only (item 30) | S |
 | 29 | Retire the `kiwi : "flex"` source-tag ternary | §18.2, gap 19 | Blocks a third concurrent family; `AsrTapPolicy` cannot disambiguate. Fold into 26 | XS |
-| ~~30~~ | ~~Measure whether TCI's post-AGC feed costs WSJT-X decodes~~ **DONE (#5629)** | §18.5 | Measured offline against WSJT-X's FT8 decoder: no measurable loss alone or beside a +10/+20 dB signal, 32 of 82 weak decodes lost beside +30 dB and 58 of 76 beside +40 dB. `agcMode = "off"` recovers them, so no `Wideband` tap is built; DIGU/DIGL open with AGC off instead | — |
+| ~~30~~ | ~~Measure whether TCI's post-AGC feed costs WSJT-X decodes~~ **DONE (#5629)** | §18.5 | Measured offline against WSJT-X's FT8 decoder: no measurable loss alone or beside a +10/+20 dB signal, 32 of 82 weak decodes lost beside +30 dB and 58 of 76 beside +40 dB. `agcMode = "off"` recovers them, so no `Wideband` tap is built; DIGU/DIGL open with AGC off instead, up to 29 dB quieter (§18.5) | — |
 
 ### Tier 4 — deliberate divergences, do NOT "fix" by reflex
 
@@ -2970,8 +2970,14 @@ RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz
   reference by 18.25 dB. That costs decodes only beside a signal +30 dB or
   stronger, and no AGC time constant avoids it. WDSP has no pre-AGC tap
   (`wcpAGC` works in place), so the HL2 has no `Wideband` feed and does not
-  need one: AGC off on the slice is that feed, and `Hl2Backend::setSliceMode`
-  selects it on entering DIGU/DIGL.
+  need one: AGC off on the slice is that feed, and `Hl2Backend::followModeAgc`
+  selects it whenever a receiver enters DIGU/DIGL or comes up in one (mode
+  click, connect-time restore, a receiver seeded from another). The off is
+  never written to the remembered AGC. With AGC off the gain is the AGC-off
+  level: 10 dB at the default level of 10, against a 39 dB AGC ceiling at the
+  default threshold and LNA gain. DIGU/DIGL are therefore up to 29 dB quieter
+  on the speaker and on the TCI level meter (arithmetic on the two settings,
+  not a measurement); #5629's AGC-off arm ran at that same 10 dB.
 - **`sliceId`** replaces the DAX channel number as the routing key. Flex maps
   slice → DAX channel internally and keeps its hold registry; HL2 maps slice →
   its single DDC. Consumers never learn which.
