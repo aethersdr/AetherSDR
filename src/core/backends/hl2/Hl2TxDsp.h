@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/backends/hl2/Hl2TxAlc.h"
 #include "core/dsp/WdspChannel.h"
 #include "core/TxCoordinator.h"
 
@@ -62,8 +63,8 @@ public:
         // over-level input is limited rather than flat-topped by the clamp.
         bool alcEnabled = true;
         double alcTargetPeak = 0.85;   // leave headroom below clipping
-        // No attack constant: reduction is instantaneous (processAudioBlock),
-        // so nothing overshoots into the hard clamp.
+        // No attack constant: each sample that needs the reduction has it
+        // (Hl2TxAlc.h), so nothing overshoots into the hard clamp.
         double alcReleaseSec = 0.500;  // slow enough not to pump between words
     };
 
@@ -174,7 +175,7 @@ private:
     TxAudioSource m_lastSource = TxAudioSource::Microphone;
     bool m_sourceChangeWarned = false;   // one warning per transmission
     int m_upsample = 2;
-    double m_alcGain = 1.0;      // current ALC gain, carried across blocks
+    Hl2TxAlc m_alc;              // level chain; its gain carries across blocks
 
     std::vector<float> m_inBuffer;      // pending input audio
     // Levelled audio for one call: the hand-off point between the shared level
