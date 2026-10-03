@@ -8047,6 +8047,7 @@ void RadioModel::onDisconnected()
     m_lineoutMute = false;
     m_headphoneMute = false;
     m_frontSpeakerMute = false;
+    emit audioOutputChanged();
 
     stopNetworkMonitor();
     // stop() must run on the network thread (socket lives there). (#561)
