@@ -108,6 +108,15 @@ struct Hl2TxGateTestAccess {
             MetisClientTestAccess::setStreaming(*metis);
         }, Qt::BlockingQueuedConnection);
     }
+    // The radio's transmit tail after an unkey (Hl2Backend::kTxTailHoldMs):
+    // parked so it cannot end on its own, and expired here by hand.
+    static void parkTxTail(Hl2Backend& b) { b.m_txTailHoldMs = 60 * 60 * 1000; }
+    static bool txTailPending(const Hl2Backend& b) { return b.m_txTailPending; }
+    static void expireTxTail(Hl2Backend& b)
+    {
+        b.m_txTailTimer->stop();
+        b.finishTxTail();
+    }
     // The last drive level carried by the EP2 packets MetisClient would send
     // next, after every queued call has landed; -1 when none carries one.
     static int wireDrive(Hl2Backend& b)
@@ -325,6 +334,7 @@ static void tunePowerAndRestore()
     Hl2Backend b;
     const auto reg = [&b] { return health(b, "txDriveRegister").toInt(); };
     Access::startSession(b);
+    Access::parkTxTail(b);
 
     b.setTxPower(100);
     check(reg() == driveFor(100) && Access::wireDrive(b) == driveFor(100),
@@ -332,14 +342,22 @@ static void tunePowerAndRestore()
     b.setTune(true, 10, authority.operation);
     check(reg() == driveFor(10) && Access::wireDrive(b) == driveFor(10),
           "#4549: TUNE drives at tune power, not the RF power slider");
+    // The radio still radiates the tune tone for its transmit tail after the
+    // MOX-off, so RF power comes back only when the tail ends (#6104).
     b.setKeying(false, authority.operation);
+    check(Access::txTailPending(b) && reg() == driveFor(10) && Access::wireDrive(b) == -1,
+          "#4549: an unkey that bypasses setTune() holds the tune drive through the tail");
+    Access::expireTxTail(b);
     check(reg() == driveFor(100) && Access::wireDrive(b) == driveFor(100),
-          "#4549: an unkey that bypasses setTune() still restores RF power");
+          "#4549: an unkey that bypasses setTune() still restores RF power after the tail");
 
     b.setTune(true, 10, authority.operation);
     b.setTune(false, 10, authority.operation);
+    check(Access::txTailPending(b) && reg() == driveFor(10) && Access::wireDrive(b) == driveFor(10),
+          "#4549: releasing TUNE holds the tune drive through the tail");
+    Access::expireTxTail(b);
     check(reg() == driveFor(100) && Access::wireDrive(b) == driveFor(100),
-          "#4549: releasing TUNE restores RF power");
+          "#4549: releasing TUNE restores RF power after the tail");
 
     b.setTune(true, 10, authority.operation);
     Access::wireDrive(b);
@@ -347,8 +365,11 @@ static void tunePowerAndRestore()
     check(reg() == driveFor(10) && Access::wireDrive(b) == -1,
           "#4549: a mid-tune power change leaves the tune carrier alone");
     b.setTune(false, 10, authority.operation);
+    check(reg() == driveFor(10) && Access::wireDrive(b) == -1,
+          "#4549: the power set during the tune waits for the tail");
+    Access::expireTxTail(b);
     check(reg() == driveFor(40) && Access::wireDrive(b) == driveFor(40),
-          "#4549: the unkey applies the power set during the tune");
+          "#4549: the tail's end applies the power set during the tune");
 
     // #4912: requested vs written, in a TX-capable session.
     b.setTxPower(60);
@@ -357,6 +378,18 @@ static void tunePowerAndRestore()
           "#4912: health reports the register the wire carries");
     check(health(b, "txDriveGated").isValid() && !health(b, "txDriveGated").toBool(),
           "#4912: drive is not reported gated in a TX-capable session");
+
+    // #4912 inside a tail: the request moves, the register and wire do not.
+    b.setTune(true, 10, authority.operation);
+    b.setTune(false, 10, authority.operation);
+    Access::wireDrive(b);
+    b.setTxPower(70);
+    check(health(b, "rfPowerPercent").toInt() == 70 && reg() == driveFor(10)
+              && Access::wireDrive(b) == -1,
+          "#4912: during the tail, health reports the tune register the wire still carries");
+    Access::expireTxTail(b);
+    check(reg() == driveFor(70) && Access::wireDrive(b) == reg(),
+          "#4912: after the tail, health reports the restored register the wire carries");
 }
 
 static void driveGateHealthRows()

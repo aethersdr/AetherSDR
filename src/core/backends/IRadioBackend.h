@@ -549,8 +549,9 @@ public:
     // "transmit tune N" as text, so FlexBackend ignores this. A backend generating
     // its own carrier needs tunePowerPercent: otherwise it can only key at the RF
     // Power level setTxPower() last pushed. Without a command plane, declaring
-    // canTransmit and transmitDriveControl promises tunePowerPercent is honoured:
-    // RadioModel then withholds the "transmit set tunepower=" drop notice.
+    // canTransmit and transmitDriveControl promises tunePowerPercent is honoured,
+    // and tunePowerAppliesLive promises setTunePower(): RadioModel then withholds
+    // the "transmit set tunepower=" drop notice (while keyed, only with the latter).
     virtual void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(on);
@@ -567,6 +568,13 @@ public:
     // canTransmit and transmitDriveControl: RadioModel then withholds the
     // rfpower drop notice.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
+
+    // TUNE power (0..100) changed while the TUNE carrier may be up. NEVER keys:
+    // a backend generating its own carrier re-applies drive to one in progress
+    // and otherwise does nothing, since the next setTune() carries the value.
+    // Owner thread, like setTxPower(). Declaring
+    // TransmitDriveControl::tunePowerAppliesLive promises it is implemented.
+    virtual void setTunePower(int percent) { Q_UNUSED(percent); }
 
     // The operator's CW pitch, in Hz (TransmitModel's range: 100..6000). A
     // host-demodulating backend needs it to place its passband: the marker sits on
