@@ -142,8 +142,8 @@ Message types:
 | Type | Name | Direction | Payload | Meaning |
 | --- | --- | --- | --- | --- |
 | `0x00` | DATA | both | 1-512 bytes | Radio TCP bytes, unchanged |
-| `0x01` | HELLO | device -> host | none | Start or restart the link |
-| `0x02` | READY | host -> device | none | Radio connection is open; DATA may flow |
+| `0x01` | HELLO | both | none | Host: "are you there?" (sent on Start, repeated until answered). Device: "restart the link" |
+| `0x02` | READY | both | none | Device: "here, ready" (the answer to HELLO). Host: "radio connection is open; DATA may flow" |
 | `0x03` | CLOSED | both | none | The radio connection has ended |
 | `0x04` | DATAGRAM | both | 3-1474 bytes | One UDP datagram: radio UDP port (2 bytes, MSB first), then 1-1472 datagram bytes |
 
@@ -158,34 +158,47 @@ are preserved; datagrams over 1472 bytes are not carried.
 Control messages (HELLO, READY, CLOSED) are always a single header report
 with packet count 1 and payload count 0. A receiver accepts a control
 message with any counter and expects the next DATA to carry that counter + 1;
-this is how both sides resynchronize. A sender starts its counter at 0 with
-the message that starts a link: HELLO from the device, READY from the host.
+this is how both sides resynchronize. A sender resets its counter to 0 each
+time it sends HELLO or READY.
 
 ### Link flow
 
+The operator presses Start in AetherSDR; nothing needs pressing on the CTR2.
+
 ```text
 CTR2                                   AetherSDR                    Radio
-  | -- HELLO (counter 0) ------------->  |                            |
+  | <-------------------------- HELLO -  |  (Start; repeated ~1 s     |
+  |                                      |   until answered)          |
+  | -- READY ------------------------->  |                            |
   |                                      | -- new TCP connection ---> |
-  | <------------ READY (counter 0) ---  |  (connected)               |
+  | <-------------------------- READY -  |  (connected)               |
   | -- DATA "C1|..." ----------------->  | -- bytes ----------------> |
   | <-------------------------- DATA --  | <-- replies / status ----- |
   |              ...                     |              ...           |
   | <------------------------- CLOSED -  | <-- radio closed --------- |
-  | -- HELLO --------------------------> |  (start again)             |
+  | <-------------------------- HELLO -  |  (calling again)           |
 ```
 
-Treat READY exactly like the Wi-Fi TCP socket connecting and CLOSED exactly
-like it disconnecting. Every HELLO gets a **fresh** radio connection, so the
-CTR2's normal registration and binding sequence runs again.
+Treat the host's READY exactly like the Wi-Fi TCP socket connecting and
+CLOSED exactly like it disconnecting. Every link gets a **fresh** radio
+connection, so the CTR2's normal registration and binding sequence runs
+again. Plug order does not matter, and a CTR2 that resets simply answers the
+next HELLO.
 
 Host behavior:
 
-- **HELLO received:** close any existing radio connection, discard all link
-  state, including every report still queued for the device, and open a
-  new radio connection (10 s timeout). On success send READY
-  and start forwarding, including any radio output that arrived first. On
-  failure send CLOSED.
+- **Start pressed, or no link up:** send HELLO, and repeat it about once a
+  second until the device answers, or every 5 s after a radio connection
+  failed. Never queue a HELLO while earlier output to the device is still
+  undelivered, so a device that is not reading cannot accumulate them.
+- **READY received while no link is up** (the answer to HELLO), **or HELLO
+  received at any time** (the device asking for a restart): close any
+  existing radio connection, discard all link state, including every report
+  still queued for the device, and open a new radio connection (10 s
+  timeout). On success send READY and start forwarding, including any radio
+  output that arrived first. On failure send CLOSED.
+- **READY received during a link:** a late answer to an earlier HELLO;
+  ignored.
 - **DATA received:** forward the payload to the radio.
 - **DATAGRAM received:** send the datagram bytes to the radio's IP on the
   given UDP port, from one UDP socket the host opens for this link.
@@ -197,11 +210,11 @@ Host behavior:
   radio connection. No reply is sent.
 - **Radio connection closes:** forward the radio's remaining bytes, then send
   CLOSED.
-- **Framing error, DATA or DATAGRAM with no radio connection, READY from the
-  device during a link, or a message still incomplete 1 s after it began:**
-  close the radio connection, discard queued output, send CLOSED, and wait
-  for HELLO. A link gets at most one CLOSED; anything else the device sends
-  before its next HELLO, including READY, is ignored.
+- **Framing error, DATA or DATAGRAM with no radio connection, or a message
+  still incomplete 1 s after it began:** close the radio connection, discard
+  queued output, send CLOSED, and call the device again with HELLO. A link
+  gets at most one CLOSED; DATA the device sends before answering is
+  ignored.
 - **USB device removed, or Stop pressed:** close the radio connection (and
   send CLOSED if the device is still there).
 - **AetherSDR disconnects from the radio or switches radios:** stop the
@@ -211,12 +224,14 @@ Host behavior:
 
 Device behavior:
 
-- On entering USB mode, reset the counter and send HELLO. Until READY or
-  CLOSED arrives, ignore every received report that is not a header
-  (byte 0 `0xFF`) of type READY or CLOSED, then reset the receiver and
-  process that header. Data reports never start with `0xFF`, so this skips
-  the tail of anything sent before the HELLO without misreading it.
-- Send DATA only after READY, and only until CLOSED.
+- **On HELLO from the host:** reset the counter and answer READY. Then,
+  until the host's READY or CLOSED arrives, ignore every received report
+  that is not a header (byte 0 `0xFF`) of type READY, CLOSED or HELLO; reset
+  the receiver and process that header. (A further HELLO means the host is
+  still calling: answer READY again.) Data reports never start with `0xFF`,
+  so this skips the tail of anything sent earlier without misreading it.
+- **Host READY:** the radio connection is open, exactly like the Wi-Fi socket
+  connecting. Send DATA only after it, and only until CLOSED.
 - **Payload is a byte stream.** The host splits radio output at arbitrary
   points, so a DATA message may end mid-line and one line may span several
   messages. Feed received payload into the same parser the Wi-Fi TCP path
@@ -229,9 +244,11 @@ Device behavior:
   `client udpport` command: the host cannot see that command, and the
   port it names would be on the PC, possibly AetherSDR's own. Datagrams
   from the radio arrive as DATAGRAM messages, one per datagram.
-- On CLOSED, behave as when the Wi-Fi socket drops; send HELLO to reconnect.
-- On a framing error in what it receives, send HELLO to restart the link
-  (and resynchronize as above).
+- On CLOSED, behave as when the Wi-Fi socket drops, then wait: the host
+  calls again with HELLO.
+- On a framing error in what it receives, or to force a restart, send HELLO
+  and resynchronize as above; the host answers with a fresh radio connection
+  and READY (or CLOSED).
 
 ### Test vectors
 

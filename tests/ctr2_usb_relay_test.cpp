@@ -159,12 +159,13 @@ struct Device {
     {
         for (; decoded < port->sent.size(); ++decoded) {
             const Report& r = port->sent[decoded];
-            // Spec: after HELLO the device skips reports until a READY or CLOSED
-            // header, and starts its receiver fresh there.
+            // Spec: after sending HELLO or READY the device skips reports until
+            // a READY, CLOSED or HELLO header, and starts its receiver fresh there.
             if (awaitingReady) {
                 const bool answer = r[0] == kMarker
                     && (r[3] == static_cast<std::uint8_t>(MessageType::Ready)
-                        || r[3] == static_cast<std::uint8_t>(MessageType::Closed));
+                        || r[3] == static_cast<std::uint8_t>(MessageType::Closed)
+                        || r[3] == static_cast<std::uint8_t>(MessageType::Hello));
                 if (!answer) {
                     ++ignoredBeforeReady;
                     continue;
@@ -208,6 +209,16 @@ struct Device {
         tx.reset();
         std::vector<Report> r;
         tx.encodeControl(MessageType::Hello, &r);
+        port->deliver(r);
+    }
+    // The CTR2's answer to the host's HELLO.
+    void answer()
+    {
+        pump();
+        awaitingReady = true;
+        tx.reset();
+        std::vector<Report> r;
+        tx.encodeControl(MessageType::Ready, &r);
         port->deliver(r);
     }
     void closed()
@@ -312,16 +323,24 @@ void testRelayBothWays()
 {
     const QByteArray greeting = randomBytes(900, 1) + QByteArray("\r\n\0\xff", 4);
     Rig rig(greeting);
-    check(rig.start() && rig.relay.state() == State::Listening, "starts waiting for HELLO");
-    check(rig.radio.conns.empty(), "no radio connection before HELLO");
-    check(rig.port->sent.empty(), "nothing is sent to the CTR2 before HELLO");
+    check(rig.start() && rig.relay.state() == State::Listening, "starts calling the CTR2");
+    check(rig.radio.conns.empty(), "no radio connection before the CTR2 answers");
+    rig.dev.pump();
+    check(rig.dev.messages.size() == 1 && rig.dev.messages.front().type == MessageType::Hello
+              && rig.port->sent.front()[2] == 0,
+          "Start calls the CTR2 with HELLO (counter 0) and nothing else");
     check(rig.linkUp(), "HELLO opens a radio connection and READY follows");
     check(rig.radio.conns.size() == 1, "exactly one radio connection");
     check(rig.relay.state() == State::Relaying, "state is Relaying");
     rig.dev.pump();
-    check(!rig.dev.messages.empty() && rig.dev.messages.front().type == MessageType::Ready,
-          "READY is the first message to the CTR2");
-    check(rig.port->sent.front()[2] == 0, "READY starts the host counter at 0");
+    const Report* readyReport = nullptr;
+    for (const Report& r : rig.port->sent) {
+        if (r[0] == kMarker && r[3] == static_cast<std::uint8_t>(MessageType::Ready)) {
+            readyReport = &r;
+            break;
+        }
+    }
+    check(readyReport && (*readyReport)[2] == 0, "READY starts the host counter at 0");
     check(waitUntil([&] { rig.dev.pump(); return rig.dev.data.size() >= greeting.size(); }),
           "radio output that arrived before READY follows it");
 
@@ -368,7 +387,7 @@ void testRadioCloseDrainsThenClosed()
     rig.dev.pump();
     check(rig.dev.data == tail && rig.dev.last() == MessageType::Closed,
           "every radio byte arrives, and CLOSED comes after the last one");
-    check(waitUntil([&] { return rig.relay.state() == State::Listening; }), "back to waiting for HELLO");
+    check(waitUntil([&] { return rig.relay.state() == State::Listening; }), "back to calling the CTR2");
     check(rig.relay.lastError().isEmpty(), "an orderly radio close is not an error");
     rig.dev.send(QByteArray("sent before CTR2 saw CLOSED\n"));
     spin(50);
@@ -388,7 +407,7 @@ void testDeviceCloseDrainsToRadio()
     check(waitUntil([&] { return rig.radio.conns[0]->disconnected; }), "radio connection closes after device CLOSED");
     check(rig.radio.conns[0]->received == last, "bytes sent before CLOSED reach the radio");
     check(rig.dev.count(MessageType::Closed) == 0, "no CLOSED is echoed back to the CTR2");
-    check(waitUntil([&] { return rig.relay.state() == State::Listening; }), "waiting for HELLO");
+    check(waitUntil([&] { return rig.relay.state() == State::Listening; }), "calling the CTR2 again");
 }
 
 void testHelloRestartsWithFreshConnection()
@@ -422,7 +441,7 @@ void testFramingFaultClosesRadio()
     check(waitUntil([&] { return rig.dev.count(MessageType::Closed) == 1; }), "framing fault sends CLOSED");
     check(waitUntil([&] { return rig.radio.conns[0]->disconnected; }), "framing fault closes the radio connection");
     check(rig.relay.lastError().contains(QStringLiteral("framing")), "fault is reported locally");
-    check(rig.relay.state() == State::Listening, "waiting for HELLO");
+    check(rig.relay.state() == State::Listening, "calling the CTR2 again");
     rig.dev.send(QByteArray("in flight\n"));
     spin(50);
     check(rig.dev.count(MessageType::Closed) == 1 && rig.radio.conns.size() == 1,
@@ -448,7 +467,10 @@ void testProtocolViolations()
         std::vector<Report> r;
         rig.dev.tx.encodeControl(MessageType::Ready, &r);
         rig.port->deliver(r);
-        check(waitUntil([&] { return rig.dev.count(MessageType::Closed) == 1; }), "READY from the CTR2 is a fault");
+        spin(100);
+        check(rig.dev.count(MessageType::Closed) == 0 && rig.radio.conns.size() == 1
+                  && rig.relay.state() == State::Relaying,
+              "READY from the CTR2 during a link is a late answer and is ignored");
     }
 }
 
@@ -471,7 +493,7 @@ void testRadioUnavailableAndTimeout()
         check(waitUntil([&] { return dev.count(MessageType::Closed) == 1; }), "refused radio sends CLOSED");
         check(dev.count(MessageType::Ready) == 0, "no READY without a radio connection");
         check(relay.lastError().contains(QStringLiteral("Radio connection failed")), "refusal reported");
-        check(relay.state() == State::Listening, "still waiting for HELLO");
+        check(relay.state() == State::Listening, "still calling the CTR2");
     }
     {
         Ctr2UsbRelay::Tuning t;
@@ -759,23 +781,21 @@ void testEachMessageGetsItsOwnDeadline()
 
 void testControlOutputBoundedWhileWaiting()
 {
-    Rig rig;
+    Ctr2UsbRelay::Tuning fast;
+    fast.helloIntervalMs = 20;
+    Rig rig({}, fast);
     rig.port->autoAck = false;
     rig.start();
-    std::vector<Report> ready;
-    rig.dev.tx.encodeControl(MessageType::Ready, &ready);
-    for (int i = 0; i < 1000; ++i) {
-        rig.port->deliver(ready);
-    }
-    check(rig.port->pending() == 0 && rig.relay.lastError().isEmpty(),
-          "READY from the CTR2 while no link is up is ignored, not answered");
+    spin(300);
+    check(rig.port->pending() == 1, "HELLO retries never stack up on a CTR2 that is not reading");
     check(linkUpHeld(rig), "link up");
     const int before = rig.port->pending();
     for (int i = 0; i < 1000; ++i) {
         rig.port->deliver({Report{0x12, 1, 2, 3, 4, 5, 6, 7}});
-        rig.port->deliver(ready);
     }
     check(rig.port->pending() == before + 1, "repeated faults queue a single CLOSED");
+    spin(200);
+    check(rig.port->pending() == before + 1, "no HELLO is queued behind an undelivered CLOSED");
 
     // A refused radio sends CLOSED; a message the CTR2 already had in flight
     // then times out half-received. That second fault must not add a CLOSED.
@@ -803,6 +823,62 @@ void testControlOutputBoundedWhileWaiting()
     check(dev.count(MessageType::Closed) == 1, "a later fault in the same episode sends no second CLOSED");
 }
 
+void testHostCallsAndDeviceAnswers()
+{
+    Ctr2UsbRelay::Tuning t;
+    t.helloIntervalMs = 30;
+    Rig rig(QByteArray("greeting\n"), t);
+    rig.start();
+    spin(200);
+    const int hellos = rig.dev.count(MessageType::Hello);
+    check(hellos >= 3, "HELLO is repeated until the CTR2 answers");
+    rig.dev.answer();
+    check(waitUntil([&] { return rig.dev.count(MessageType::Ready) == 1; }),
+          "the CTR2's READY opens the radio connection and the host answers READY");
+    check(rig.radio.conns.size() == 1 && rig.relay.state() == State::Relaying, "relaying");
+    check(waitUntil([&] { rig.dev.pump(); return rig.dev.data == "greeting\n"; }),
+          "radio output follows the host's READY");
+    rig.dev.send(QByteArray("C1|info\n"));
+    check(waitUntil([&] { return rig.radio.conns[0]->received == "C1|info\n"; }), "commands reach the radio");
+    const int hellosAtLink = rig.dev.count(MessageType::Hello);
+    spin(200);
+    check(rig.dev.count(MessageType::Hello) == hellosAtLink, "no HELLO while the link is up");
+
+    rig.dev.answer();  // a late answer to an earlier HELLO
+    spin(100);
+    check(rig.radio.conns.size() == 1 && rig.relay.state() == State::Relaying
+              && rig.dev.count(MessageType::Closed) == 0 && !rig.radio.conns[0]->disconnected,
+          "a late READY during a link changes nothing");
+}
+
+void testRetryBacksOffAfterRadioFailure()
+{
+    quint16 dead = 0;
+    {
+        QTcpServer probe;
+        if (!probe.listen(QHostAddress::LocalHost, 0)) {
+            std::exit(kSkip);
+        }
+        dead = probe.serverPort();
+    }
+    Ctr2UsbRelay::Tuning t;
+    t.helloIntervalMs = 30;
+    t.helloRetryAfterFailureMs = 400;
+    Ctr2UsbRelay relay;
+    relay.setTuning(t);
+    auto* port = new FakePort;
+    Device dev{port};
+    relay.start(port, QHostAddress::LocalHost, dead);
+    check(waitUntil([&] { return dev.count(MessageType::Hello) >= 1; }), "called");
+    dev.answer();
+    check(waitUntil([&] { return dev.count(MessageType::Closed) == 1; }), "unreachable radio: CLOSED");
+    const int hellos = dev.count(MessageType::Hello);
+    spin(250);
+    check(dev.count(MessageType::Hello) == hellos, "no HELLO right after a radio failure");
+    check(waitUntil([&] { return dev.count(MessageType::Hello) > hellos; }, 1000),
+          "HELLO resumes after the back-off");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -825,6 +901,8 @@ int main(int argc, char** argv)
     testRestartDiscardsQueuedOutput();
     testEachMessageGetsItsOwnDeadline();
     testControlOutputBoundedWhileWaiting();
+    testHostCallsAndDeviceAnswers();
+    testRetryBacksOffAfterRadioFailure();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

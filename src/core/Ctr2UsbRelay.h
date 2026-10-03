@@ -17,8 +17,9 @@ namespace AetherSDR {
 class Ctr2HidPort;
 
 // CTR2 USB mode: one HID link (Ctr2HidPort) relayed opaquely to a dedicated
-// radio TCP connection. Every HELLO from the device gets a fresh radio
-// connection; READY and CLOSED tell the device when the radio connection
+// radio TCP connection. While no link is up the host calls the device with
+// HELLO; the device's READY (or its own HELLO, a restart request) gets a fresh
+// radio connection, and READY and CLOSED tell the device when that connection
 // opens and ends. Link faults close the radio connection and send CLOSED;
 // nothing is ever injected into either byte stream.
 // Specification: docs/ctr2-usb-relay-design.md ("USB link specification").
@@ -26,13 +27,17 @@ class Ctr2UsbRelay : public QObject {
     Q_OBJECT
 
 public:
-    // Listening means "waiting for HELLO" in USB mode.
+    // Listening means "calling the CTR2 and waiting for its answer" in USB mode.
     using State = TcpByteProxy::State;
     using Stats = TcpByteProxy::Stats;
 
     struct Tuning {
         int connectTimeoutMs{10000};
         int incompleteMessageTimeoutMs{1000};
+        // While no link is up the host calls the CTR2 with HELLO this often,
+        // and less often right after a radio connection failed.
+        int helloIntervalMs{1000};
+        int helloRetryAfterFailureMs{5000};
         qint64 deviceInboxLimitBytes{256 * 1024};
         qint64 socketReadBufferBytes{256 * 1024};
         // UDP waiting for the HID link; beyond this, radio datagrams are
@@ -76,7 +81,9 @@ private:
     void onReportsSent(int count);
     void onPortFailed(const QString& message);
     void onMessage(const ctr2hid::Message& message);
-    void onHello();
+    void onDeviceStart();
+    void sendHello();
+    void scheduleHello(int delayMs);
     void linkFault(const QString& message);
 
     void sendControl(ctr2hid::MessageType type);
@@ -108,7 +115,8 @@ private:
     qint64 m_unsentDatagramBytes{0};
     Session* m_session{nullptr};
     QTimer* m_incompleteTimer{nullptr};
-    bool m_awaitingHello{true};
+    QTimer* m_helloTimer{nullptr};
+    bool m_awaitingDevice{true};
     bool m_closedSent{false};  // CLOSED already queued for this link
     static constexpr int kMaxQueuedReports = 8192;
     quint64 m_generation{0};
