@@ -14,16 +14,10 @@
 
 namespace AetherSDR {
 
-// Peripheral transport for an ACOM S-series amplifier (500S/600S/700S/1200S/
-// 2020S) — a standalone RS-232 device with no FlexRadio awareness at all, so
-// this is a peripheral(acom) accessory alongside PgxlConnection/TgxlConnection,
-// not an IRadioBackend implementor. See
-// docs/architecture/acom-600s-amplifier-design.md for the full design note.
-//
-// The wire protocol is binary and transport-agnostic — the exact same bytes
-// flow whether the peer is a local COM port or a raw-mode ser2net TCP proxy —
-// so a single Acom::FrameParser instance decodes either transport. Only one
-// transport is active at a time, selected by which connect method is called.
+// Transport for an ACOM S-series amplifier (500S..2020S), a standalone RS-232
+// peripheral, not an IRadioBackend. Design: docs/architecture/acom-600s-amplifier-design.md.
+// The binary protocol is identical over a local COM port or raw-mode ser2net TCP,
+// so one Acom::FrameParser serves either; one transport is active at a time.
 class AcomConnection : public QObject {
     Q_OBJECT
 

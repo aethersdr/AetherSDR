@@ -12,21 +12,16 @@ class QTimer;
 
 namespace AetherSDR {
 
-// A single-connection AX.25 v2.0 connected-mode (LAPB) data-link state machine,
-// mod-8 sequence space. It handles exactly one peer at a time, which is all the
-// Personal Mailbox System needs (one simultaneous caller).
-//
-// Responsibilities:
+// Single-connection AX.25 v2.0 connected-mode (LAPB) state machine, mod-8,
+// one peer at a time:
 //  - Accept an inbound SABM (connect request) and reply UA.
 //  - Track V(S)/V(R)/V(A), acknowledge received I-frames with RR.
-//  - Segment outbound application data into I-frames (<= paclen) and retransmit
-//    unacknowledged I-frames on the T1 timeout, up to N2 retries.
-//  - Honour RR/RNR/REJ, poll/final, and tear down on DISC or N2 exhaustion.
-//
-// It is transport-agnostic: it consumes already-decoded ax25::Frame objects and
-// emits raw frames (address..info, no FCS) for the caller to key on the air via
-// AetherAx25LibmodemShim::buildTransmitAudioFromFrame(). Timers run on the
-// owning (GUI) thread. This class is reusable by the future AX.25 node/digipeater.
+//  - Segment outbound data into I-frames (<= paclen); retransmit on T1, up to
+//    N2 retries.
+//  - Honour RR/RNR/REJ, poll/final; tear down on DISC or N2 exhaustion.
+// Consumes decoded ax25::Frame objects and emits raw frames (address..info, no
+// FCS) for AetherAx25LibmodemShim::buildTransmitAudioFromFrame(). Timers run
+// on the owning (GUI) thread.
 class Ax25Connection : public QObject {
     Q_OBJECT
 

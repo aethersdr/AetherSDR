@@ -9,18 +9,10 @@ struct pw_stream;
 
 namespace AetherSDR {
 
-// One PipeWire native virtual source (Audio/Source) per DAX RX channel.
-// Replaces module-pipe-source on Linux when libpipewire-0.3 dev headers are
-// present at build time.  Avoids both the kernel FIFO and the pulse-compat
-// translation, and lets us properly request a small node quantum via
-// PW_KEY_NODE_LATENCY so PipeWire's graph negotiates lower client buffers.
-//
-// Threading:
-//   - feedAudio() is called from the Qt main thread (radio audio path).
-//   - on_process() runs on PipeWire's real-time loop thread.
-//   - The two communicate via a fixed-size SPSC float ring buffer with
-//     std::atomic head/tail indices — no locks, no allocations on the
-//     real-time path.
+// One PipeWire native Audio/Source per DAX RX channel (Linux, libpipewire-0.3).
+// Requests a small quantum via PW_KEY_NODE_LATENCY. feedAudio() runs on the Qt
+// main thread and on_process() on PipeWire's RT loop; they share a lock-free,
+// allocation-free SPSC float ring with atomic head/tail.
 class PipeWireNativeRxSource {
 public:
     explicit PipeWireNativeRxSource(int channel);

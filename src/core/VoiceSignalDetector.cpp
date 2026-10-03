@@ -187,20 +187,11 @@ QVector<DetectedVoiceSignal> detectVoiceSignals(
                 // anywhere and kHz snapping would misplace them.
                 fMhz = rawFreqMhz;
             } else {
-                // Voice-width: snap toward the carrier side.
-                // USB carriers are to the LEFT (lower frequency) of the energy
-                // peak, so we floor to the kHz below; LSB carriers are to the
-                // RIGHT, so we ceil.  Ham operators operate on round kHz values,
-                // and the peak typically sits 300–1200 Hz inside the passband,
-                // so the 1200 Hz guard catches the common case correctly.
-                //
-                // Known limitation: if peak energy lands >1000 Hz above a
-                // kHz-aligned USB carrier (e.g. wide TX EQ, peak at +1500 Hz),
-                // floor snaps to the kHz just below the peak rather than the
-                // carrier's kHz, and the 500 Hz snapOff passes the guard —
-                // resulting in a 1 kHz high report.  A passband-bias approach
-                // fixes that range but breaks peaks <700 Hz from the carrier,
-                // which is the more common case on typical SSB audio.
+                // Voice-width: snap toward the carrier (USB floors to the kHz below the peak,
+                // LSB ceils), since operators sit on round kHz and peaks are typically
+                // 300–1200 Hz inside the passband. Known limitation: a USB peak >1000 Hz above
+                // its carrier reports 1 kHz high; a passband-bias fix would break the more
+                // common <700 Hz case.
                 const double snapped = isUsb
                     ? std::floor(rawFreqMhz * 1000.0) / 1000.0
                     : std::ceil (rawFreqMhz * 1000.0) / 1000.0;

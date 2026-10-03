@@ -160,6 +160,11 @@ tests/                       @aethersdr/reviewers
 # where it started. Keep this line even if the directory only holds .md today.
 .claude/commands/            @aethersdr/infrastructure
 
+# AGENTS.md's path-scoped sub-docs are part of the same agent guide, so they
+# take its tier. Without this line the `docs/` rule above would route them to
+# Tier 3.
+docs/agents/                 @aethersdr/infrastructure
+
 # Release skills. /release-prep edits the six release files (all of them
 # *.md or CMakeLists.txt — Tier 2) and lands the prep PR; /tag-release tags
 # the merged commit, publishes the release, watches the signing and Store

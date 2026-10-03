@@ -11,7 +11,7 @@ namespace AetherSDR {
 
 namespace {
 
-// Single nested-JSON key holding all MQTT settings (Principle V).  Shape:
+// All MQTT settings in one nested-JSON key. Shape:
 //   {
 //     "host":     "localhost",
 //     "port":     1883,
@@ -22,15 +22,9 @@ namespace {
 //     "buttons":  [{"label": "...", "topic": "...", "payload": "..."}, ...],
 //     "enabled":  false
 //   }
-//
-// On first save after upgrade, the eight legacy flat keys (kMqttHostKey
-// through kMqttEnabledKey) are removed from AppSettings — the migration
-// is one-shot.  Loading falls back to the legacy keys when the nested
-// JSON key is absent, so existing users' settings carry over transparently.
-//
-// The password is *not* part of this object — it lives in the system
-// keychain (mqttKeychainService / mqttKeychainKey) with a legacy fallback
-// at kLegacyPasswordKey.
+// Loading falls back to the eight legacy flat keys when absent; the first save
+// removes them. The password lives in the keychain (mqttKeychainService /
+// mqttKeychainKey), legacy fallback kLegacyPasswordKey.
 constexpr const char* kMqttSettingsKey = "MqttSettings";
 
 // Legacy flat keys (pre-#3051 schema).  Read for one-shot migration on

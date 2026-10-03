@@ -1,14 +1,15 @@
 ---
 name: pr-review
-description: Full adversarial PR review for AetherSDR — red-teams the PR against its linked issue, tests every claim in the body, audits scope creep and undisclosed changes, checks governance and code quality, posts one GitHub review with inline comments, and reports blockers/nits/recommendation as markdown. Use when asked to review a PR (e.g. "/pr-review 4609").
+description: Full adversarial PR review for AetherSDR — red-teams the PR against its linked issue, tests every claim in the body, audits scope creep and undisclosed changes, checks governance and code quality, posts one GitHub review with every finding in its body, and reports blockers/nits/recommendation as markdown. Use when asked to review a PR (e.g. "/pr-review 4609").
 ---
 
 # PR Review (issue-fit + governance + quality)
 
 Review the PR given in `$ARGUMENTS` (a PR number, or a full PR URL; if absent,
 use the PR for the current branch via `gh pr view`). The deliverables are
-**one posted GitHub review** (step 9 — inline comments, suggestions, and the
-right review event) and **a markdown report to the operator** (step 10).
+**one posted GitHub review** (step 9 — every finding in the review body,
+located by `file:line`, with the right review event; no inline comments) and
+**a markdown report to the operator** (step 10).
 Post nothing else to GitHub — no labels, no extra comments, no merges.
 
 After step 0 passes, work in parallel where the remaining steps are
@@ -90,7 +91,7 @@ Complete this preflight before building or running any test. It overrides the
 parallel-work instruction below, and it gates *executing* a socket-owning
 target — it does not suspend the requirement to finish and post the review.
 
-Read `AGENTS.md`'s "Test-layer boundary". Fetch the PR's own sources before
+Read "Test-layer boundary" in `docs/agents/tests-ci.md`. Fetch the PR's own sources before
 inspecting anything — `gh pr diff <PR>`, or `git fetch origin pull/<PR>/head`
 then `git show FETCH_HEAD:<path>`; never read the working tree, which is the
 base branch and will pass this preflight vacuously on a PR that does add a
@@ -244,13 +245,14 @@ What to look for:
   call — name it as one (step 5's GOVERNANCE.md framing) rather than either
   waving it through or calling it a violation.
 - **Deleted behavior, not just added code.** Read the `-` lines as carefully
-  as the `+` lines. A removed guard, early return, confirmation, or comment
-  citing a fixed issue means a previously-fixed bug may be back. Grep the
-  removed side for it:
-  `gh pr diff <PR> | grep '^-' | grep -iE 'guard|#[0-9]{3,}|return|if \(' `
-  When a removal deletes a comment that *names a symptom*, quote that comment
-  back and ask what now prevents it. If the replacement code still concedes
-  the same precondition, the guard's removal is a regression, not a cleanup.
+  as the `+` lines. A removed guard, early return, or confirmation means a
+  previously-fixed bug may be back. Grep the removed side for it:
+  `gh pr diff <PR> | grep '^-' | grep -iE 'guard|return|if \(' `
+  The finding is the removed **code**, not the removed prose. Deleting or
+  shortening a comment while its guard and test stay is cleanup the project
+  wants (AGENTS.md §"Comments") — do not flag it. When the guard itself is
+  gone, check the PR's `-` side and `git log -S` for what it protected, and
+  ask what now prevents it.
 - **Sibling implementations left behind.** If the fix touches one of several
   parallel copies (one of N plugins, one of N backends, one of N call sites),
   grep for the others and say which remain broken. That is a completeness
@@ -273,7 +275,8 @@ Verdicts — apply these consistently:
 | Unrelated to the issue and to the stated fix | **Blocker.** Ask to unbundle: drop the commit, open its own PR |
 | Explained by the issue *thread* but absent from the PR body | Not a blocker on its own — but name it, and ask for the body to be updated so it is reviewable and searchable later |
 | New public/protocol surface | **Needs maintainer decision**, flagged to the maintainer by name |
-| A removed guard whose symptom can recur | **Blocker** (a regression), with the deleted comment quoted as evidence |
+| A removed guard whose symptom can recur | **Blocker** (a regression), naming the symptom and what used to prevent it |
+| A comment that narrates history (bug retelling, "used to", review attribution) or runs past ~5 lines | Nit — ask to move the history to the commit/PR body (AGENTS.md §"Comments") |
 | User-visible default changed, correct but undisclosed | Nit — plus a request to state it in the body |
 
 Distinguish this from step 6. Scope is about *whether the change belongs in
@@ -321,7 +324,7 @@ Read the diff against each of these; cite the specific rule when flagging:
 - **CMake contract** — any target compiling `AppSettings.cpp` uses
   `${AETHER_SETTINGS_SOURCES}` and joins `AETHER_SETTINGS_CONSUMERS`; tests
   isolate via `TestSettingsProfile.h` (`AETHER_SETTINGS_DIR`).
-- **AGENTS.md § "In-flight: aetherd engine/UI decoupling"** — the migration
+- **`docs/agents/backends.md`** (the aetherd / engine-boundary sub-doc of AGENTS.md) — the migration
   ratchets, which the settings and capability rules above do not reach:
   EB1/EB2/EB3 (`tools/check_engine_boundary.py`), the capability-record and
   command-plane freezes, the build-target link rules (`aethercore` never
@@ -430,7 +433,8 @@ thread; AppSettings is thread-safe but `save()` does I/O — never on the
 render callback), Qt object lifetime (`QPointer`/`WA_DeleteOnClose`,
 parenting), error handling per house style (no exceptions; check returns;
 `qWarning` with category), silent failure modes (unchecked writes, swallowed
-errors), and whether comments explain *why* (constraints), not *what*.
+errors), and whether comments explain *why* (constraints), not *what*, and
+state the current invariant rather than its history (AGENTS.md §"Comments").
 
 Read hostilely: for each non-trivial hunk, spend a moment constructing the
 input, ordering, or lifecycle event that makes it misbehave before you accept
@@ -612,42 +616,38 @@ finding reported as unverified is honest; one reported as observed is not.
 
 ## 9. Post the review to the PR
 
-Post exactly ONE review carrying the findings as **inline comments anchored
-to the diff lines they concern**, with GitHub suggestion blocks wherever the
-fix is a concrete small edit:
+Post exactly ONE review, with every finding in its **body**, each located by
+`file:line`. **Do not post inline comments.** `main` requires every
+conversation to be resolved before merge, so each inline thread is a merge
+blocker that someone has to answer and resolve, which costs the author a
+round trip even for a nit. One body is read once and answered once.
 
-- Build the review via the API (the `gh pr review` command cannot attach
-  inline comments). Assemble the payload as JSON and pass it with `--input`
-  rather than repeated `-f` flags — bodies contain newlines, backticks and
-  code fences that do not survive shell quoting:
-  `gh api repos/{owner}/{repo}/pulls/<PR>/reviews --input review.json`
-  where the JSON is `{event, body, comments: [{path, line, side: "RIGHT",
-  body}, …]}` (use `start_line`+`line` for multi-line anchors). Anchor to
-  lines that are IN the diff; a finding about untouched code goes in the
-  review body instead, with a `file:line` reference.
-- For mechanical fixes, embed a fenced ` ```suggestion ` block in the inline
-  comment so the author can one-click apply. Suggestions must be drop-in
-  correct — matching indentation, compiling in context — never pseudocode.
+- Post with `gh pr review <PR> --request-changes|--comment --body-file
+  review.md`. A body file survives the newlines, backticks and code fences
+  that shell quoting does not.
+- Locate every finding as `path/to/file.cpp:123` (or a line range). That
+  includes findings about untouched code and out-of-scope files.
+- For a mechanical fix, put the replacement in a fenced code block under the
+  finding, drop-in correct (matching indentation, compiling in context, never
+  pseudocode), so the author can paste it.
+- **The one exception:** an inline comment is acceptable only when a finding
+  cannot be understood from a `file:line` reference plus a quoted snippet.
+  That is rare. Never for nits, suggestions or anything the body already
+  says. If you post one, say why in the body.
 - **Review event:** any blocker → `REQUEST_CHANGES`. No blockers →
-  `COMMENT` (nits inline, verdict in the body) — approval stays the
-  operator's call unless they have said otherwise for this PR.
+  `COMMENT` (verdict and nits in the body). Approval stays the operator's
+  call unless they have said otherwise for this PR.
 - The review body, in this order: the issue-fit verdict (one short
   paragraph), the **scope table** from step 3 (always — write "everything in
   the diff is explained by the issue" and move on when it is clean), the
-  numbered blockers (each cross-referencing its inline comment), then nits
-  marked explicitly non-blocking. State what was verified empirically vs.
-  read, and — briefly — what you tried to break that held up, so the author
-  can see the review was adversarial rather than cursory, and can correct you
-  if you attacked the wrong thing. Where a finding came from driving the app,
-  paste the bridge evidence with it: the state JSON, the log line, or the
-  `grab_widget` PNG (attach images by URL in the comment body). A reproduced
-  finding with app output attached rarely gets argued with. Anchor each
-  out-of-scope finding inline on the file it concerns — line 1 of an added
-  file is a valid anchor — so the author sees it where the change is, not only
-  in the summary.
-- If the posting API call fails (e.g. an anchor line is not in the diff),
-  fix the anchors and retry once; if it still fails, fall back to
-  `gh pr review` with the full markdown body and say so in the report.
+  numbered blockers (each with its `file:line`), then nits marked explicitly
+  non-blocking. State what was verified empirically vs. read, and — briefly —
+  what you tried to break that held up, so the author can see the review was
+  adversarial rather than cursory, and can correct you if you attacked the
+  wrong thing. Where a finding came from driving the app, paste the bridge
+  evidence with it: the state JSON, the log line, or the `grab_widget` PNG
+  (attach images by URL). A reproduced finding with app output attached
+  rarely gets argued with.
 - Branch protection has `dismiss_stale_reviews` enabled: **any push dismisses
   an existing approval.** If you are also pushing commits, approve *after*
   the last push, and re-approve after any later merge-from-main. Check

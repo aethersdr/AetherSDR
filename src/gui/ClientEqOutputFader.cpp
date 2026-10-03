@@ -333,22 +333,14 @@ void ClientEqOutputFader::paintEvent(QPaintEvent*)
     }
 }
 
-// Left to right under the graph, in the SmartMTR control's clothes: a recessed
-// hole with rounded ends, the level as a red bar from the hole's left edge with
-// a bright line at its head, scale ticks above, and the peak/trough sweep
-// markers hanging inside the hole. Colours, proportions and the marker shape
-// come from SmartMtrStyle.h, so this reads as the same instrument as the meter
-// in the VFO flag.
-//
-// Everything is positioned in hole-local UNITS and mapped to pixels here, the
-// way SmartMtrGeometry does it -- but with a separate scale per axis. The
-// vertical keeps the design's proportions; the horizontal stretches to the
-// panel's width, which a uniform fit would letterbox away, and that width is
-// the whole reason this meter moved down here.
-// The hole, in pixels. SmartMTR budgets 20 units above it for the scale labels
-// and ticks; whatever that budget does not spend is dead space, and half of it
-// is moved below the meter so the control sits nearer the middle of its band
-// instead of riding high in it.
+// Drawn in SmartMTR style (SmartMtrStyle.h): recessed rounded hole, red level
+// bar with a bright head line, ticks above, peak/trough markers inside the hole.
+// Positions are in hole-local units mapped to pixels with a separate scale per
+// axis: vertical keeps the design proportions, horizontal stretches to the
+// panel width.
+// The hole, in pixels. SmartMTR budgets 20 units above it for scale labels and
+// ticks; half of whatever that budget leaves unused moves below the meter so the
+// control sits nearer the middle of its band.
 QRectF ClientEqOutputFader::holeRect() const
 {
     using namespace SmartMtrUnits;

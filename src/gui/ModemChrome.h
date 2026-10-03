@@ -5,39 +5,13 @@
 
 namespace AetherSDR::ModemChrome {
 
-// The AetherModem window's visual language, factored out so a second window can
-// wear it without copying the sheet.
-//
-// The palette is deliberately literal rather than theme-token driven: this is
-// one specific chrome — near-black navy ground, gradient panels at 7 px radius,
-// a single green accent — not the app's general surface styling, and a theme
-// switch that recoloured it would make the two windows stop matching. The
-// source of truth is kAetherModemStyle in Ax25HfPacketDecodeDialog.cpp; the
-// values below were lifted from it unchanged, and the modem still carries its
-// own copy (folding it onto this header is a separate, mechanical change).
-//
-// Structural object names the sheet styles, so a page reads the same way here
-// as it does in the modem:
-//
-//   QFrame#ControlsFrame   a group of controls, gradient panel
-//   QFrame#StatusFrame     the status strip at the foot of the window
-//   QFrame#ControlCell     one labelled column inside a ControlsFrame
-//   QLabel#SectionLabel    the 11 px all-caps heading above a cell's controls
-//   QLabel#StatusValue     a status strip reading
-//   QLabel#StatusDot       the 12 px round health indicator
-//   QPushButton[chrome="tab"]  one tab in the top strip; checked draws green
-//   QPushButton#IconButton a square, flat, icon-only button
-//
-// Every colour is a ThemeManager token placeholder, not a literal, so the
-// chrome follows the loaded theme instead of pinning one palette. The sheet
-// therefore has to be applied through ThemeManager::applyStyleSheet(), which
-// resolves the {{...}} and re-resolves them when the theme changes; plain
-// setStyleSheet() would install the placeholders verbatim and paint nothing.
-//
-// These were literals until the hardcoded-colour ratchet caught them, and the
-// migration is why the panels read slightly differently: close variants
-// collapse onto one token, which is the point — three greens a hover apart
-// were three more unique colours for no gain the eye could find.
+// AetherModem window chrome, shared so other windows can match it: navy ground,
+// gradient panels at 7 px radius, one green accent. Colours are ThemeManager
+// token placeholders, so apply via ThemeManager::applyStyleSheet() (plain
+// setStyleSheet() would paint nothing). Styled names: QFrame#ControlsFrame
+// (gradient control group), #StatusFrame (foot strip), #ControlCell (labelled
+// column); QLabel#SectionLabel (11 px caps heading), #StatusValue, #StatusDot
+// (12 px health dot); QPushButton[chrome="tab"] (checked = green), #IconButton.
 namespace Colour {
 inline constexpr const char* Background   = "{{color.background.0}}";
 inline constexpr const char* PanelTop     = "{{color.background.1}}";

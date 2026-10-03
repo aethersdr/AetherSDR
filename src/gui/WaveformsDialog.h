@@ -17,17 +17,11 @@ namespace AetherSDR {
 class RadioModel;
 class WaveformInstaller;
 
-// Non-modal dialog for WFP status and waveform management (Tools → Waveforms).
-// Mirrors the SmartSDR File → Waveforms panel (its home in FlexRadio's
-// client, unchanged by our own menu move): shows WFP power/ready/IP at the
-// top and one row per installed waveform with Restart and Remove/Uninstall
-// buttons.  The install menu supports legacy .ssdr_waveform packages and
-// Docker waveform images via WaveformInstaller; Docker install is gated by the
-// radio's WFP license-feature status plus live WFP power/ready state.
-//
-// Takes RadioModel* so it can construct WaveformInstaller (which needs
-// sendCmdPublic and radioAddress()) while still connecting to FlexWaveformModel
-// signals for live list updates.
+// Non-modal WFP status and waveform management (Tools -> Waveforms), mirroring
+// SmartSDR's File -> Waveforms: WFP power/ready/IP, one row per installed
+// waveform with Restart and Remove. Installs .ssdr_waveform packages and Docker
+// images via WaveformInstaller; Docker install is gated by live WFP state
+// (WaveformInstallGate.h). Takes RadioModel* to construct WaveformInstaller.
 class WaveformsDialog : public PersistentDialog {
     Q_OBJECT
 
