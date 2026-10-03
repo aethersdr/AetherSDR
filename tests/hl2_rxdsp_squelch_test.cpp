@@ -70,7 +70,7 @@ int main(int argc, char** argv)
     check(!dsp.appliedSquelch().has_value(), "no channel, nothing applied");
 
     // 1. Held before configure.
-    dsp.setSquelch(true, 40);
+    dsp.setSquelch(true, 40, 0.0);
     check(dsp.squelchEnabled() && dsp.squelchLevel() == 40, "request is held without a channel");
     std::string err;
     check(dsp.configure(cfg, &err), "configure");
@@ -85,13 +85,13 @@ int main(int argc, char** argv)
     dsp.setMode(WdspChannel::Mode::Cwu);
     check(applied(dsp, Stage::None, false, 0.0), "CW runs no squelch stage");
     dsp.setMode(WdspChannel::Mode::Am);
-    dsp.setSquelch(true, 70);
+    dsp.setSquelch(true, 70, 0.0);
     check(applied(dsp, Stage::Level, true, -140.0 + 0.7 * 70), "a level change reaches amsq");
-    dsp.setSquelch(true, 0);
+    dsp.setSquelch(true, 0, 0.0);
     check(applied(dsp, Stage::Level, false, -140.0), "level 0 stops amsq (open)");
-    dsp.setSquelch(false, 70);
+    dsp.setSquelch(false, 70, 0.0);
     check(applied(dsp, Stage::Level, false, -140.0 + 0.7 * 70), "off stops amsq");
-    dsp.setSquelch(true, 70);
+    dsp.setSquelch(true, 70, 0.0);
 
     // 3. configure() replaces Config; the Config handed in here knows nothing
     //    about squelch and carries USB, exactly like a caller's default would.
@@ -100,6 +100,14 @@ int main(int argc, char** argv)
     check(dsp.configure(wider, &err), "reconfigure at 96 kHz");
     check(applied(dsp, Stage::Level, true, -140.0 + 0.7 * 70),
           "configure() keeps the squelch and routes it for the new Config's mode");
+    // The LNA referral rides with the pair and survives configure() (#6092).
+    dsp.setSquelch(true, 70, 32.0);
+    check(applied(dsp, Stage::Level, true, -140.0 + 0.7 * 70 + 32.0),
+          "the level offset reaches amsq");
+    check(dsp.configure(wider, &err)
+              && applied(dsp, Stage::Level, true, -140.0 + 0.7 * 70 + 32.0),
+          "configure() keeps the level offset");
+    dsp.setSquelch(true, 70, 0.0);
 
     // 4. Asynchronous rebuild with changes made mid-build.
     Hl2RxDsp::Config fast = cfg;
@@ -108,7 +116,7 @@ int main(int argc, char** argv)
     dsp.beginRebuild(fast);
     const unsigned before = dsp.appliedSquelch()->applications;
     dsp.setMode(WdspChannel::Mode::Fm);
-    dsp.setSquelch(true, 90);
+    dsp.setSquelch(true, 90, 0.0);
     check(dsp.appliedSquelch()->applications == before,
           "nothing is pushed at the old channel while a rebuild runs");
     auto result = Hl2RxDsp::buildChannel(fast, false, 50);
@@ -118,12 +126,12 @@ int main(int argc, char** argv)
           "the swap applies the squelch set during the build, on the mode set during it");
 
     // 5. Refused, then converges on the next IQ block.
-    dsp.setSquelch(true, 30);
+    dsp.setSquelch(true, 30, 0.0);
     check(applied(dsp, Stage::Fm, true, std::pow(10.0, -0.6)) && !dsp.squelchPending(),
           "baseline FM/30 applied");
     const unsigned beforeRefusal = dsp.appliedSquelch()->applications;
     dsp.refuseChannelControlForTest(1);
-    dsp.setSquelch(true, 60);
+    dsp.setSquelch(true, 60, 0.0);
     check(dsp.squelchPending(), "a refused squelch is marked pending");
     check(dsp.appliedSquelch()->applications == beforeRefusal
               && applied(dsp, Stage::Fm, true, std::pow(10.0, -0.6)),
@@ -135,7 +143,7 @@ int main(int argc, char** argv)
           "the next IQ block applies the refused request (FM/60)");
     // A refusal that persists keeps retrying until the channel takes it.
     dsp.refuseChannelControlForTest(3);
-    dsp.setSquelch(false, 60);
+    dsp.setSquelch(false, 60, 0.0);
     dsp.processIqBlock(std::vector<std::complex<float>>(126));
     dsp.processIqBlock(std::vector<std::complex<float>>(126));
     check(dsp.squelchPending(), "still pending while the channel keeps refusing");

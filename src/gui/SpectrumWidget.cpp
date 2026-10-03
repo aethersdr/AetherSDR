@@ -4509,9 +4509,18 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
     p.drawText(specRect.right() - p.fontMetrics().horizontalAdvance(lbl) - 4, y - 2, lbl);
 }
 
+void SpectrumWidget::setSquelchScale(std::optional<SquelchLevelScale> scale)
+{
+    if (m_squelchScale == scale) {
+        return;
+    }
+    m_squelchScale = std::move(scale);
+    m_lastAutoSquelchLevel = -1;
+    markOverlayDirty();
+}
+
 void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
 {
-    constexpr float kSqlMinDbm = -160.0f;
     float squelchDbm = 0.0f;
     float pinnedDisplayNorm = 0.0f;
     bool usePinnedDisplayNorm = false;
@@ -4542,10 +4551,10 @@ void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
                                             : QString())
             .arg(m_kiwiSdrSquelchLevel);
     } else {
-        if (!m_flexSquelchLineVisible || m_flexSquelchLevel <= 0) {
+        if (!m_flexSquelchLineVisible || m_flexSquelchLevel <= 0 || !m_squelchScale) {
             return;
         }
-        squelchDbm = kSqlMinDbm + static_cast<float>(m_flexSquelchLevel);
+        squelchDbm = static_cast<float>(m_squelchScale->thresholdDb(m_flexSquelchLevel));
         label = QStringLiteral("SQL %1").arg(m_flexSquelchLevel);
     }
 
@@ -4605,6 +4614,10 @@ void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
         return;
     }
 
+    if (!autoSquelchAvailable(m_squelchScale)) {
+        return;
+    }
+
     float sum1 = 0.0f;
     int cnt1 = 0;
     for (int j = 0; j < binsDbm.size(); j += 4) {
@@ -4631,11 +4644,9 @@ void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
             ? frameFloor
             : 0.1f * frameFloor + 0.9f * m_sqlNoiseFloorDbm;
 
-    constexpr float kSqlMinDbm = -160.0f;
     const float targetDbm =
         m_sqlNoiseFloorDbm + static_cast<float>(m_autoSqlMarginDb);
-    const int level = std::clamp(
-        static_cast<int>(targetDbm - kSqlMinDbm + 0.5f), 1, 100);
+    const int level = m_squelchScale->levelForThresholdDb(targetDbm);
     if (level != m_lastAutoSquelchLevel) {
         m_lastAutoSquelchLevel = level;
         emit autoSquelchLevelSuggested(level);

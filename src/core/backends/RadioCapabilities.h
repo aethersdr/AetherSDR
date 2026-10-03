@@ -8,6 +8,8 @@
 #include <QVariantMap>
 #include <optional>
 
+#include "core/backends/SquelchLevelScale.h"
+
 namespace AetherSDR {
 
 struct TxPowerBand {
@@ -554,6 +556,8 @@ struct RadioCapabilities {
     // The radio accepts manual SQL in CW/data modes and owns its persistence.
     // False preserves the existing mode-specific client squelch policy.
     bool hasModeIndependentSquelch = false;
+    // The squelch level's place on the pan axis. Absent: no SQL line, no Auto SQL.
+    std::optional<SquelchLevelScale> squelchLevelScale;
     bool hasAmCarrierLevel = false;
     bool hasVoxDelay = false;
 

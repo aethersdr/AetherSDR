@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutoBlackMode.h"
+#include "core/backends/SquelchLevelScale.h"
 #include "RfGainPresentation.h"
 
 #include <limits>
@@ -361,6 +362,11 @@ public:
     // noiseFloorAutoAdjustAllowed() and RadioCapabilities::panBinsAbsolute().
     void setPanBinsAbsolute(bool on) { m_panBinsAbsolute = on; }
     bool panBinsAbsolute() const { return m_panBinsAbsolute; }
+    // The active slice's squelch mapping (RadioCapabilities::squelchLevelScale,
+    // filtered by mode), pushed in like the two flags above. nullopt: no SQL
+    // line and no Auto SQL level, except on Kiwi's own path.
+    void setSquelchScale(std::optional<SquelchLevelScale> scale);
+    const std::optional<SquelchLevelScale>& squelchScale() const { return m_squelchScale; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Width of the frequency canvas, in logical pixels: the widget width minus
@@ -1589,6 +1595,7 @@ private:
     // state because they can be controlled from different receive surfaces.
     bool  m_flexSquelchLineVisible{false};
     int   m_flexSquelchLevel{0};
+    std::optional<SquelchLevelScale> m_squelchScale;
     bool  m_kiwiSdrSquelchLineVisible{false};
     int   m_kiwiSdrSquelchLevel{0};
     bool  m_kiwiSdrSquelchLineFloorRelative{false};

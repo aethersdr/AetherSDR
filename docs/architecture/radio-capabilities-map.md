@@ -525,6 +525,17 @@ and conflating them would hide one of them.
 | `radioOwnsDbmScale` | ✅ (default) | ⚠️ **✅ (default)** | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
+| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | absent | absent | Where does squelch level L open, on this axis? |
+
+**`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
+Absent, or the active slice's mode not listed: no line, and the SQL button
+skips Auto with the reason on its accessible description. The HL2 offset is
+amsq's −140 + 0.7·L dBFS map, referred to the LNA at −12 dB
+(`Hl2DbReference::levelSquelchOffsetDb`), plus the pan's LNA offset, plus the
++6.02 dB a steady carrier reads on `Hl2Spectrum`; the LNA terms cancel. Auto
+SQL stays off on the HL2 because amsq reads passband-limited magnitude before
+the AGC (`RXA.c` `xamsqcap` after `xnbp(nbp0)`), while the pan floor is per
+bin: a pan-derived floor would need both the filter width and the bin width.
 
 **`panBinsAbsolute()` is consumed too, and it is the second term of ONE gate.**
 `noiseFloorAutoAdjustAllowed(radioOwnsDbmScale, panBinsAbsolute)` in

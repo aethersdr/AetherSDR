@@ -1292,13 +1292,7 @@ void RxApplet::buildUI()
     m_panSlider->setAccessibleName("Audio pan");
     m_panSlider->setAccessibleDescription("Stereo audio pan, left to right");
     m_sqlBtn->setAccessibleName("Squelch mode");
-    m_sqlBtn->setAccessibleDescription(
-        "Cycle squelch through Off, Manual, and Auto modes");
-    m_sqlBtn->setToolTip(
-        "Click to cycle:\n"
-        "  Off — squelch open, all audio passes\n"
-        "  SQL — manual threshold via the slider\n"
-        "  AUTO — algorithm tracks the noise floor automatically");
+    applySqlButtonDescription();
     m_sqlSlider->setAccessibleName("Squelch threshold");
     m_sqlSlider->setAccessibleDescription("Signal level below which audio is muted");
     m_agcCombo->setAccessibleName("AGC mode");
@@ -1418,13 +1412,70 @@ void RxApplet::applySqlModeVisuals()
         m_sqlSlider->style()->polish(m_sqlSlider);
         m_sqlSlider->update();
     }
+    applySqlButtonDescription();
+}
+
+void RxApplet::applySqlButtonDescription()
+{
+    if (!m_sqlBtn) {
+        return;
+    }
+    m_sqlBtn->setAccessibleDescription(sqlButtonAccessibleDescription());
+    if (autoSqlAvailable()) {
+        m_sqlBtn->setToolTip(QStringLiteral(
+            "Click to cycle:\n"
+            "  Off — squelch open, all audio passes\n"
+            "  SQL — manual threshold via the slider\n"
+            "  AUTO — algorithm tracks the noise floor automatically"));
+        return;
+    }
+    m_sqlBtn->setToolTip(QStringLiteral(
+        "Click to cycle:\n"
+        "  Off — squelch open, all audio passes\n"
+        "  SQL — manual threshold via the slider\n"
+        "AUTO unavailable: %1").arg(autoSqlUnavailableReason()));
+}
+
+QString RxApplet::sqlButtonAccessibleDescription() const
+{
+    if (autoSqlAvailable()) {
+        return QStringLiteral("Cycle squelch through Off, Manual, and Auto modes");
+    }
+    return QStringLiteral("Cycle squelch between Off and Manual. Auto is unavailable: %1")
+        .arg(autoSqlUnavailableReason());
+}
+
+bool RxApplet::autoSqlAvailable() const
+{
+    return usingExternalReceiveSquelch() || m_autoSqlAvailable;
+}
+
+QString RxApplet::autoSqlUnavailableReason() const
+{
+    return autoSqlAvailable() ? QString() : m_autoSqlUnavailableReason;
+}
+
+void RxApplet::setAutoSqlAvailability(bool available, const QString& reason)
+{
+    const QString why = available ? QString() : reason;
+    if (available == m_autoSqlAvailable && why == m_autoSqlUnavailableReason) {
+        return;
+    }
+    m_autoSqlAvailable = available;
+    m_autoSqlUnavailableReason = why;
+    if (m_sqlMode == SqlMode::Auto && !autoSqlAvailable()) {
+        // Squelch stays on, at the operator's manual threshold.
+        setSqlMode(SqlMode::Manual, /*propagateToRadio=*/true);
+    }
+    applySqlButtonDescription();
+    emit sqlAutoAvailabilityChanged();
 }
 
 void RxApplet::cycleSqlMode()
 {
     const SqlMode next =
         (m_sqlMode == SqlMode::Off)    ? SqlMode::Manual :
-        (m_sqlMode == SqlMode::Manual) ? SqlMode::Auto   :
+        (m_sqlMode == SqlMode::Manual && autoSqlAvailable()) ? SqlMode::Auto :
                                           SqlMode::Off;
     setSqlMode(next, /*propagateToRadio=*/true);
 }
@@ -1594,6 +1645,10 @@ void RxApplet::saveClientSquelchIntent()
 
 void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
 {
+    // Every route into Auto (cycle, restore, slice switch) passes here.
+    if (m == SqlMode::Auto && !autoSqlAvailable()) {
+        m = SqlMode::Manual;
+    }
     if (propagateToRadio) {
         m_clientSqlAwaitingReport = false;
     }

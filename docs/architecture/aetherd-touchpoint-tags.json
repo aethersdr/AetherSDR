@@ -1415,6 +1415,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/SquelchLevelScale.h": {
+  "tag": "universal",
+  "note": "Where a slice's squelch level sits on the panadapter's vertical axis, as a backend-published record (RadioCapabilities::squelchLevelScale) plus the mode filter and Auto-SQL predicate both the widget and MainWindow read, so the SQL line and Auto SQL share one gate. No family name or wire concept; each backend declares its own map or leaves it absent (#6092).",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/NoiseFloorAutoAdjustGate.h": {
   "tag": "universal",
   "note": "The ONE predicate deciding whether the noise-floor auto-adjust may move the display reference level, as an OR over two backend-neutral properties (a real dBm-range echo, or absolute spectrum bins). Deliberately free of Qt and of RadioCapabilities so the widget and its test read the same function rather than two copies; the UI reaching it is the seam working, not coupling. Family backends populate the capability it is called with.",

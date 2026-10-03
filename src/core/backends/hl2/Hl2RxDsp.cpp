@@ -382,10 +382,11 @@ void Hl2RxDsp::setNoiseBlanker(bool on, int level)
     m_nbAppliedLevel.store(m_nbLevel, std::memory_order_relaxed);
 }
 
-void Hl2RxDsp::setSquelch(bool on, int level)
+void Hl2RxDsp::setSquelch(bool on, int level, double levelOffsetDb)
 {
     m_squelchOn = on;
     m_squelchLevel = std::clamp(level, 0, 100);
+    m_squelchOffsetDb = levelOffsetDb;
     if (!canPushToChannel())
         return;   // held; installChannel() applies it at the swap
     pushSquelchToChannel();
@@ -393,7 +394,7 @@ void Hl2RxDsp::setSquelch(bool on, int level)
 
 void Hl2RxDsp::pushSquelchToChannel()
 {
-    if (m_channel->setSquelch(m_squelchOn, m_squelchLevel)) {
+    if (m_channel->setSquelch(m_squelchOn, m_squelchLevel, m_squelchOffsetDb)) {
         m_squelchPending = false;
         return;
     }

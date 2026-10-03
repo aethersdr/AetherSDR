@@ -236,10 +236,13 @@ public:
     // the blanker, and re-applied by installChannel(). A change the channel
     // refuses (a control operation in flight) is marked pending and retried at
     // the top of each processIqBlock() until it is taken; see squelchPending().
-    Q_INVOKABLE void setSquelch(bool on, int level);
+    // `levelOffsetDb` refers the level map to the LNA:
+    // Hl2DbReference::levelSquelchOffsetDb().
+    Q_INVOKABLE void setSquelch(bool on, int level, double levelOffsetDb);
     [[nodiscard]] bool squelchPending() const noexcept { return m_squelchPending; }
     [[nodiscard]] bool squelchEnabled() const noexcept { return m_squelchOn; }
     [[nodiscard]] int squelchLevel() const noexcept { return m_squelchLevel; }
+    [[nodiscard]] double squelchLevelOffsetDb() const noexcept { return m_squelchOffsetDb; }
     // What the channel last WROTE to WDSP (stage, run flags, threshold), or
     // nullopt before configure(). Forwarded, not mirrored, for the reason
     // channelConfig() gives below. The record itself is a by-value snapshot
@@ -569,6 +572,7 @@ private:
     // Squelch request — see setSquelch(). Defaults mirror SliceModel's.
     bool m_squelchOn = false;
     int  m_squelchLevel = 20;
+    double m_squelchOffsetDb = 0.0;
     // True while the channel has refused the current request; see setSquelch().
     bool m_squelchPending = false;
     std::atomic<bool> m_nbAppliedOn {false};

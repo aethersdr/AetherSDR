@@ -1882,6 +1882,24 @@ RadioCapabilities Hl2Backend::capabilities() const
     // data modes have no stage, so this is false, stated explicitly: the client
     // then disables SQL there instead of showing a button wired to nothing.
     c.hasModeIndependentSquelch = false;
+    // amsq's gate on the pan axis. Every term is a dB offset from the same IQ:
+    // the LNA referral and the pan's LNA offset cancel, leaving a constant. FM
+    // (fmsq, a noise-quieting gate) has no dB place, so only amsq's modes are
+    // listed. No Auto SQL: amsq reads the passband, the pan per-bin noise.
+    {
+        SquelchLevelScale sql;
+        sql.dbPerStep = WdspChannel::kLevelSquelchDbPerStep;
+        sql.offsetDb = WdspChannel::kLevelSquelchBaseDbfs + m_dbRef.levelSquelchOffsetDb()
+                       + m_dbRef.offsetDb() + Hl2Spectrum::kToneGainDb;
+        for (const QString& mode : publishedModeStrings()) {
+            if (WdspChannel::squelchStageFor(modeFromString(mode))
+                == WdspChannel::SquelchStage::Level) {
+                sql.modes << mode;
+            }
+        }
+        sql.autoSquelch = false;
+        c.squelchLevelScale = sql;
+    }
     // The 76.8 MHz NCO scale is a localparam in the bitstream and nothing in the
     // HPSDR map can be told the crystal's real error — so the correction is ours
     // or it does not happen. See Hl2FreqCal for the derivation.
@@ -3271,7 +3289,8 @@ void Hl2Backend::pushSquelch(const Receiver& r)
         return;
     // Sent even when OFF — see pushNoiseBlanker().
     QMetaObject::invokeMethod(r.dsp, "setSquelch", Qt::QueuedConnection,
-        Q_ARG(bool, r.squelchOn), Q_ARG(int, r.squelchLevel));
+        Q_ARG(bool, r.squelchOn), Q_ARG(int, r.squelchLevel),
+        Q_ARG(double, m_dbRef.levelSquelchOffsetDb()));
 }
 
 void Hl2Backend::seedNotches(const Receiver& r)
@@ -7020,6 +7039,8 @@ void Hl2Backend::pushEffectiveLnaGain()
         QMetaObject::invokeMethod(r.dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgcMode(r.agcMode)),
             Q_ARG(double, m_dbRef.agcCeilingDb(r.agcThresholdDb)));
+        // The squelch gate is referred to the LNA the same way.
+        pushSquelch(r);
     }
     // Echo what the hardware actually took, to every pan — a slider that
     // asked for something outside the register's range finds out here, and so
