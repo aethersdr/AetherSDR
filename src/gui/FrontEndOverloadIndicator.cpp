@@ -98,19 +98,10 @@ void FrontEndOverloadIndicator::announceIfWorthIt(FrontEndLevel before)
     if (!QAccessible::isActive()) {
         return;
     }
-    // AN ANNOUNCEMENT, NOT A VALUE CHANGE, and not gated on focus.
-    //
-    // Every other announcing widget in this tree (RangeSlider, HGauge) speaks
-    // only while focused, because they are reporting what the operator is
-    // DOING. This one reports what the RADIO is doing, to an operator who is
-    // most likely looking at the panadapter -- and a blind operator has no
-    // panadapter to look at, so a focus-gated announcement would mean the one
-    // user who most needs to hear about a clipping front end is the one who
-    // never does. That is the gap #4896 exists to close.
-    //
-    // Politeness, not assertiveness: it must not interrupt an announcement the
-    // operator asked for. shouldAnnounce() is what keeps this from becoming
-    // chatter -- only starting, stopping and hitting the floor speak at all.
+    // An announcement, not gated on focus: it reports what the radio is doing,
+    // and a blind operator has no panadapter to glance at (#4896). Polite so it
+    // never interrupts speech the operator asked for; shouldAnnounce() limits it
+    // to start, stop and hitting the floor.
     QAccessibleAnnouncementEvent ev(this, AetherSDR::gui::accessibleText(m_state));
     ev.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
     QAccessible::updateAccessibility(&ev);

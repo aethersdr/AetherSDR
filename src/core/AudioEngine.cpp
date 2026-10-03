@@ -2445,17 +2445,10 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes)
     if (len > 0)
     {
         QByteArray chunk;
-        // While the transmit gate silences every Kiwi source, pause the
-        // receive-presentation feed on BOTH sides (Flex and Kiwi), like
-        // the pre-warm-pipeline mute froze both correlator buffers. A
-        // TX-gated source's ramp-zeroed chunks (or a one-sided Flex feed
-        // against them) would pollute the GCC-PHAT delay estimate and
-        // drop the auto-assist confidence on every over. A source's gate
-        // stays held through its pending post-unkey resume hold ("Resume
-        // audio after TX delay"), so the pause must cover that window
-        // too; it lifts as soon as any source is audible through the
-        // gate (keepAudioDuringTx during TX, or a source with no pending
-        // hold after unkey).
+        // While the TX gate silences every Kiwi source, pause the receive-presentation
+        // feed on both sides so ramp-zeroed chunks don't pollute the GCC-PHAT delay
+        // estimate. A gate stays held through its post-unkey resume hold, so the pause
+        // covers that too; it lifts once any source is audible through its gate.
         const bool kiwiTxGateEngaged = kiwiSdrAudioTransmitMuted();
         bool anyKiwiGateHeld = false;
         bool anyKiwiAudibleThroughGate = false;
@@ -4444,18 +4437,11 @@ bool AudioEngine::startSidetoneStream()
     }
 
     m_sidetoneSink = makeSidetoneBackend(this);
-    // When the effective selection is the system default, hand the PortAudio
-    // backend a null device so it resolves its own default output instead of
-    // name-matching Qt's description against PortAudio's device names — on
-    // Linux those come from different audio APIs (PulseAudio/PipeWire vs ALSA)
-    // and cannot coincide for analog/USB descriptions, which stranded boxes
-    // with no saved output selection on the QAudioSink fallback (#4978); a
-    // saved-but-unmatchable selection still falls back, pending the
-    // escape-hatch setting. The QAudioSink attempts keep the concrete device:
-    // that backend resolves a null itself but flags it as a fallback, which a
-    // deliberate default selection is not. The decision table lives in
-    // CwSidetoneStartPolicy.h, where it is pinned by
-    // tests/cw_sidetone_start_policy_test.cpp.
+    // For a system-default selection, hand PortAudio a null device so it resolves its
+    // own default: Qt and PortAudio device names come from different Linux APIs and
+    // can't be name-matched (#4978). QAudioSink attempts keep the concrete device,
+    // since that backend flags a null as a fallback. Decision table:
+    // CwSidetoneStartPolicy.h, pinned by tests/cw_sidetone_start_policy_test.cpp.
     const bool sidetoneOnPortAudio =
         qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0;
     const QAudioDevice startDev =
@@ -4843,15 +4829,10 @@ bool AudioEngine::retireInvalidPcmSources()
 void AudioEngine::setRxDeviceRate(int rate)
 {
     // Called only after successful output negotiation. The producer rate is
-    // unchanged; old device-format bytes and every converter history expire.
-    //
-    // The optional NR chain is deliberately NOT rebuilt here. startRxStream()
-    // reaches this on every sink open — including the #1361 zombie-sink and
-    // #1411 liveness watchdogs, which fire on real hardware and run on the GUI
-    // thread — and those filters belong to the producer domain, which this call
-    // does not touch. Rebuilding them anyway put a model load on each of those
-    // recovery paths, freezing the UI at the exact moment the user is already
-    // hearing a glitch.
+    // unchanged; old device-format bytes and converter history expire. The NR chain
+    // is deliberately not rebuilt: this runs on every sink open, including the
+    // #1361/#1411 watchdog recoveries on the GUI thread, and NR belongs to the
+    // producer domain; a model load here would freeze the UI.
     std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     m_rxOutputRate.store(rate);
     resetMainPcmState(m_rxProducerRate.load(), /*rebuildDsp=*/false);
@@ -5552,31 +5533,12 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         ClientPudu* pudu = auxiliaryEffects ? &auxiliaryEffects->pudu() : m_clientPuduRx.get();
 
 
-        // Client-side parametric EQ runs at this source's producer rate, after
-        // any NR chain, before device-rate conversion and soft boost. Copy-then-
-        // process because the caller owns `data`. Skip when disabled or
-        // during TX (matches the NR-chain TX bypass policy) — except for
-        // managed Kiwi sources, whose input stays live signal during TX.
-        // The RX chain, in the order the operator arranged it.
-        //
-        // This used to be five hardcoded blocks running EQ → Gate → Comp →
-        // Tube → Pudu whatever the stored order said, so dragging a row in
-        // AetherRX (or a tile on the chain strip, which has had drag-reorder
-        // since it shipped) changed the window and the saved profile and left
-        // the audio alone. The order-aware dispatcher that was meant to do
-        // this — applyClientRxDspFloat32 — had TODO-only branches and no call
-        // sites. Even the default order disagreed: defaultRxChain() leads with
-        // Gate, the fixed path led with EQ.
-        //
-        // The walk lives in runRxChain() so a test can drive it with real PCM
-        // and real modules; an assertion on the stored vector cannot show that
-        // the samples changed. Read the packed order straight from the atomic
-        // rather than through rxChainStages(), which builds a QVector — this
-        // is the audio thread.
-        //
-        // There is no RX de-esser: sibilance is a transmit problem, and the
-        // stage only ever existed on this side because the RX chain was built
-        // by mirroring the TX one.
+        // The RX chain, in the operator's stored order. Runs at the source's producer
+        // rate after NR, before device-rate conversion and soft boost; skipped when
+        // disabled or during TX, except managed Kiwi sources (live during TX). The walk
+        // lives in runRxChain() so tests can drive real PCM through real modules. Read
+        // the packed order from the atomic, not rxChainStages() (allocates; audio
+        // thread). There is no RX de-esser.
         RxChainModules chainModules;
         chainModules.eq = eq;
         chainModules.gate = gate;
@@ -5688,20 +5650,10 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         }
     };
 
-    // How much the noise reduction is removing, measured once for whichever
-    // method the chain below picks. Ratio of post-NR to pre-NR block RMS on the
-    // main RX path only: the Kiwi and external sources run their own filter
-    // instances, and letting them publish here would make the reading flicker
-    // between unrelated signals. A block too quiet to divide by reports the
-    // previous gain rather than a meaningless 1.0.
-    //
-    // The ratio is against the RMS of the CURRENT input block, while an
-    // overlap-add method such as NR2 emits a block delayed by its own
-    // latency. On a speech onset the numerator and denominator are therefore
-    // not the same audio and the reading twitches for a block or two. It is a
-    // meter, the clamp keeps it bounded, and correcting it would mean
-    // carrying a per-method delay line for a cosmetic strip — so this is
-    // noted rather than fixed.
+    // NR gain reading: post-NR / pre-NR block RMS, main RX path only (Kiwi and
+    // external sources run their own filter instances). A block too quiet to divide
+    // by reports the previous gain. Overlap-add methods (NR2) emit delayed audio, so
+    // the meter twitches for a block or two on onsets; accepted for a meter.
     const bool publishNrGain = (source == RxDspSource::Main) && !externalSource;
     // Computed on first use, not up front: the idle path below never reads it,
     // and for an operator running no NR at all that was a full-buffer RMS pass
@@ -5795,16 +5747,9 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = nnr->process(pcm);
-            // process() applies a pending model switch on this thread, so this
-            // is the first point the selected slot is knowable. Republish it so
-            // nnrModel() converges instead of reporting whatever was live when
-            // setNnrModel() returned. Main RX only — the Kiwi and external
-            // filters are separate instances that do not own this property.
-            // Convergence is therefore bounded by RX audio actually flowing:
-            // with the radio disconnected, or no block reaching this filter,
-            // the previously published slot persists exactly as it used to.
-            // Nothing is emitted here either — a UI that samples nnrModel()
-            // only on nnrEnabledChanged still has to re-read to see the move.
+            // process() applies a pending model switch on this thread, so republish the slot
+            // here for nnrModel() to converge. Main RX only. Convergence needs RX audio
+            // flowing; nothing is emitted, so a UI must re-read nnrModel().
             if (!externalSource && source != RxDspSource::KiwiSdr) {
                 m_nnrModel.store(nnr->modelSlot(), std::memory_order_relaxed);
             }
@@ -8724,26 +8669,12 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     // migrating its mono-clamp onto the wrapper is a separate, soakable step.
     constexpr int preferredTxRate = 48000;
     fmt.setSampleRate(48000);
-    // Ask WASAPI for its own currency. The shared-mode mix is float32 by
-    // construction, so Int16 here makes the engine quantize on the way to us
-    // and TxVoiceProcessor widen it straight back. Probe-at-open applies as
-    // ever: if Float is refused, the fallback ladder below walks Int16.
-    //
-    // Rate, format and channel count all come from ONE ordered cursor
-    // (AudioFormatNegotiator::TxOpenCursor). It used to be two sequences: this
-    // (format, channels) recovery ladder at 48 kHz, plus a separate
-    // rate x channels x format loop further down entered only when
-    // QAudioSource::start() returned null. They could interleave into a
-    // permanently silent mic — at the recovery ladder's last stage a null open
-    // dropped into the other loop, which restarted at 48 kHz Float stereo, a
-    // tuple already observed silent, and accepted it with no watchdog budget
-    // left (round-3 review of PR #5017).
-    //
-    // Stage 0 is the normal open and records the maximumChannelCount() clamp
-    // the rest of the ladder derives from. BOTH failure shapes now advance the
-    // same cursor: a null open advances it inline (below), a non-null/no-data
-    // open advances it from the watchdog. The cursor only moves forward, so a
-    // tuple already observed silent can never be reached again.
+    // Ask WASAPI for Float, its shared-mode currency; if refused, the ladder walks
+    // Int16. Rate, format and channel count come from one forward-only cursor
+    // (AudioFormatNegotiator::TxOpenCursor): stage 0 is the normal open and records
+    // the maximumChannelCount() clamp; a null open advances it inline below and a
+    // non-null/no-data open advances it from the watchdog, so a tuple observed
+    // silent is never retried.
     const int maxCh = dev.maximumChannelCount();
     if (!isWatchdogRetry) {
         m_txSilentOpenInitialChannels = (maxCh > 0 && maxCh < 2) ? 1 : 2;
@@ -9019,24 +8950,10 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     connect(m_micDevice, &QIODevice::readyRead, this, &AudioEngine::onTxAudioReady);
 
 #ifdef Q_OS_WIN
-    // WASAPI silent-open watchdog (#2929): some USB PnP mics report their
-    // native mono format but Qt's QAudioSource::start() returns a non-null
-    // QIODevice for an unsupported stereo open, then delivers zero bytes.
-    // The null-open fallback ladder above never sees this case (start did
-    // not return null). Retry along the recovery ladder if no bytes arrive
-    // in 1.5 s, and arm only while the ladder has somewhere left to go.
-    //
-    // Recovery walks channel count AND sample format. Forcing Float-first
-    // capture made the format a way to open successfully and receive nothing,
-    // exactly as an unsupported stereo open already was: an Int16-capable
-    // endpoint that accepts a Float open must still reach Int16 rather than
-    // being left permanently silent (review of PR #5017).
-    //
-    // The cursor answers "is there anywhere left to go", and it is the SAME
-    // question the null-open walk above answers with advance(). Whichever path
-    // opened the device, the cursor is on the rung that is actually open, so
-    // the watchdog can no longer be told it is sitting on a rung the fallback
-    // walk moved off.
+    // WASAPI silent-open watchdog (#2929): some USB mics accept an unsupported open
+    // (stereo, or Float on an Int16 endpoint) and then deliver zero bytes. If no
+    // bytes arrive in 1.5 s, advance the same TxOpenCursor the null-open walk uses;
+    // armed only while the cursor has a next rung.
     if (txOpenCursor.hasNext()) {
         const quint64 watchdogGen = m_txLifecycleGeneration;
         const QHostAddress watchdogAddr = m_txAddress;
@@ -9197,16 +9114,10 @@ void AudioEngine::setCwKeyDown(bool down, std::chrono::steady_clock::time_point 
             m_cwOverHadTx.store(true, std::memory_order_release);
         }
     }
-    // Stamp BOTH edges. The over ends a fixed number of dit units after the last
-    // edge; timing that from key-down alone would add the element's own duration
-    // (up to 3 units for a dah) to every measurement and hold the over open that
-    // much longer, which costs receive audio (#4281). Stamp the SCHEDULED
-    // instant, not wall-clock delivery: both sidetone generators render this
-    // edge at `when` (#4890), so under GUI/audio-thread load — #3623's exact
-    // condition — a wake-time stamp lands late and silently stretches the hang
-    // past its 8-unit budget while the audio follows the schedule. Unscheduled
-    // callers default `when` to now() at the call site (see the declaration),
-    // so nothing changes for them.
+    // Stamp both edges: the over ends a fixed number of dit units after the LAST
+    // edge, not key-down (#4281). Stamp the scheduled `when` that both sidetone
+    // generators render at (#4890), not wall-clock delivery, so load can't stretch
+    // the hang past its 8-unit budget. Unscheduled callers pass now().
     m_cwLastKeyEdgeNs.store(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             when.time_since_epoch()).count(),
@@ -9230,20 +9141,11 @@ void AudioEngine::startCwRecordPump()
 
 void AudioEngine::onCwRecordPump()
 {
-    // Active only when WE are sending CW: the radio is keyed AND our keyer has
-    // fired this over. Whether the PC mic capture stream is open is deliberately
-    // not part of this — it stays up across mode changes whenever mic_selection
-    // is "PC", so gating on it kept the pump off for the whole CW over (#4281).
-    // Age the CW-over latch: the over is finished once no element has been keyed
-    // for the over-hang AND no transmission of OURS is still up. The stopwatch
-    // runs on the pump's free-running tick rather than on the interlock edge
-    // because under break-in that edge falls in every inter-element gap (see
-    // setRadioTransmitting). The our-TX term — cwOverTxActive: attributed to
-    // us and not a tune carrier — stops the stopwatch ending the over while
-    // the radio still holds OUR TX (break-in off, or a break-in delay longer
-    // than the hang), which handed the slot to the mic tap mid-over. A foreign
-    // or tune transmission raised inside the hang no longer holds the over
-    // open. The rule and its residual are stated at cwLatchShouldAge (#4281).
+    // Active only when WE are sending CW: radio keyed AND our keyer fired this over
+    // (not whether PC mic capture is open; #4281). The over ends once no element has
+    // been keyed for the over-hang AND cwOverTxActive (our TX, not tune) is false.
+    // The stopwatch runs on the pump tick because under break-in the interlock edge
+    // falls in every inter-element gap. Rule and residual: cwLatchShouldAge.
     if (m_cwKeyedThisOver.load(std::memory_order_acquire)) {
         const int64_t lastNs = m_cwLastKeyEdgeNs.load(std::memory_order_acquire);
         const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -9358,18 +9260,9 @@ void AudioEngine::onTxAudioReady()
                                                    txInputBytesPerSample());
             if (drained.deliveredBytes()) {
                 m_txCaptureHealth.recordMicRead(txCaptureNowMs());
-                // These bytes are thrown away, and they are still proof the
-                // endpoint works -- which is the only question the WASAPI
-                // silent-open watchdog asks (#2929). Without this, a mic that
-                // is delivering normally reads as silent for as long as TCI
-                // owns TX audio: the watchdog walks the recovery ladder off a
-                // rung that was never broken, reopening a valid device up to
-                // 15 times and leaving local capture at the terminal
-                // 16 kHz/Int16/mono rung once TCI stops. On that terminal rung
-                // it also logs "capture is silent, no retry left", which would
-                // be just as wrong. Before this PR the same oversight could
-                // only trigger the single mono retry; the full ladder makes it
-                // materially worse (round-4 review of PR #5017).
+                // Discarded bytes still prove the endpoint works, which is all the WASAPI
+                // silent-open watchdog (#2929) asks; otherwise a working mic reads silent while
+                // TCI owns TX audio and the ladder is walked off a good rung.
                 m_txReceivedAnyBytes = true;
             }
             if (drained.discardedBytes > 0) {
@@ -9626,17 +9519,11 @@ void AudioEngine::onTxAudioReady()
     // authority. Retain the capture's context through buffering and pacing.
     const TxCoordinator::Context context = m_hostModulation
         ? m_hostMicrophoneContext : m_microphoneContext;
-    // The fence is absolute: no stamp, no transport delivery. There IS a
-    // window where a block can arrive unstamped — wireTxAudioAuthority posts
-    // setHostMicrophoneContext to this thread when localTransmitEngaged fires
-    // — but it is bounded to at most one block, and it is bounded by Qt's
-    // event ordering rather than by timing luck: that post and onTxAudioReady
-    // (a timer callback) are both events on THIS thread, delivered FIFO
-    // through one event loop. So every block after the install sees the stamp,
-    // and the only blocks that can miss it are those already queued ahead of
-    // it: one dspBlockSize, ~21 ms at 24 kHz, inside HL2 keying latency.
-    // Relaxing this would mean relaxing all five gates down to MetisClient's
-    // wire queue, which is not worth one block. (#5659 review)
+    // The fence is absolute: no stamp, no transport delivery. At most one block can
+    // arrive unstamped: setHostMicrophoneContext and onTxAudioReady are both events
+    // on this thread, delivered FIFO, so only a block already queued ahead of the
+    // install misses it (one dspBlockSize, ~21 ms at 24 kHz, within HL2 keying
+    // latency). (#5659)
     if (!selectTxContext(context)) {
         return;
     }
@@ -9874,19 +9761,10 @@ void AudioEngine::setRadeMode(bool on)
         return;
     }
     if (on) {
-        // Voice no longer advances RADE's 24 kHz SRC, so discard any history
-        // retained from the previous RADE session before publishing the new
-        // mode. The resampler belongs to the audio thread; run the reset there,
-        // between callbacks, and preserve setRadeMode()'s synchronous contract.
-        //
-        // This reset is best-effort cleanup, never a precondition. Returning
-        // early on a failure here would leave m_radeMode false while
-        // activateRADE() carries on wiring txRawPcmReady, switching the slice
-        // to DIGU/DIGL and driving dax=1 — so onTxAudioReady() would take the
-        // SSB voice branch and put mic audio on remote_audio_tx while the
-        // radio modulates from dax_tx, i.e. key up to no waveform with the UI
-        // insisting RADE is running. A stale resampler tail is a click; a
-        // mode flag that disagrees with the rest of the app is a dead QSO.
+        // Voice no longer advances RADE's 24 kHz SRC, so discard its history on the audio
+        // thread between callbacks, keeping setRadeMode() synchronous. Best-effort only:
+        // never return early on failure, or m_radeMode would disagree with the
+        // DIGU/dax=1 setup activateRADE() continues with, keying up with no waveform.
         QThread* const ownerThread = thread();
         if (ownerThread && ownerThread != QThread::currentThread()) {
             if (!ownerThread->isRunning()) {
@@ -9912,17 +9790,11 @@ void AudioEngine::setRadeMode(bool on)
         }
     }
     m_radeMode.store(on, std::memory_order_release);
-    // RADE TX: onTxAudioReady() emits txRawPcmReady (float32) then returns
-    // early — the Opus voice TX path never runs. RADEEngine receives the
-    // raw PCM, encodes it to a modem waveform, and emits it via
-    // sendModemTxAudio() → buildVitaTxPacket() → dax_tx VITA-49 stream.
-    // The radio routes that stream to the TX modulator only when dax=1.
-    // activateRADE() sets the slice to DIGU/DIGL, which fires
-    // updateDaxTxMode() → setDax(true) → transmit set dax=1 before PTT.
-    // Do NOT emit daxRouteRequested(0) here — dax=0 tells the radio to
-    // use the physical mic and discard every dax_tx packet, producing no
-    // TX waveform. feedDaxTxAudio/m_daxTxUseRadioRoute are irrelevant:
-    // RADE bypasses feedDaxTxAudio entirely.
+    // RADE TX: onTxAudioReady() emits txRawPcmReady and returns; RADEEngine encodes
+    // and sends via sendModemTxAudio() -> buildVitaTxPacket() -> dax_tx. The radio
+    // modulates dax_tx only when dax=1 (set by activateRADE() via DIGU/DIGL ->
+    // updateDaxTxMode()). Do NOT emit daxRouteRequested(0) here: dax=0 selects the
+    // physical mic and discards every dax_tx packet.
     if (!on) {
         m_radeRxBuffer.clear();
     }
@@ -9931,36 +9803,17 @@ void AudioEngine::setRadeMode(bool on)
 
 void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context)
 {
-    // A host-modulating backend (HL2) runs the modulator on THIS host and has
-    // no Flex TX stream id — the AFSK belongs in the final-monitor tap, not in
-    // VITA-49 packets aimed at a Flex. Gating on m_txStreamId here silently
-    // discarded every AX.25 frame on such a radio, the same class of bug that
-    // made WSJT-X key the rig and transmit silence (see setHostModulation()
-    // and feedDaxTxAudioInternal()).
-    //
-    // forceRadioDaxRoute is irrelevant on this arm — the host-modulation branch
-    // returns before the route choice — but it is passed for symmetry with the
-    // WSPR pump, which feeds the same entry point with pre-shaped tones.
-    //
-    // No PTT gate here: Hl2Backend::submitTxAudio drops audio unless keyed, so
-    // the gate lives with the consumer. m_transmitting is decoded from Flex
-    // interlock status a host-modulating radio never sends, so testing it would
-    // discard everything.
+    // A host-modulating backend (HL2) has no Flex TX stream id; the AFSK goes to the
+    // final-monitor tap, so don't gate on m_txStreamId (see setHostModulation() and
+    // feedDaxTxAudioInternal()). forceRadioDaxRoute is unused on this arm, passed for
+    // symmetry with the WSPR pump. No PTT gate: Hl2Backend::submitTxAudio drops
+    // unkeyed audio, and m_transmitting comes from Flex interlock status.
     if (m_hostModulation) {
-        // Microphone, NOT EngineGenerated, and the distinction is a transmit
-        // level rather than a label. The only generator that reaches this
-        // branch on a host-modulating radio is the AX.25 modem — RADE needs DAX
-        // audio and activateRADE() refuses any radio that cannot provide it, so
-        // it is Flex-only and a Flex modulates on its own side.
-        //
-        // The AFSK amplitude is a compile-time constant (kTxAfskAmplitude =
-        // 0.35, -9.12 dBFS in AetherAx25LibmodemShim.cpp) and the packet dialog
-        // has no level control at all, so the mic slider is the ONLY thing in
-        // the product that can move an AX.25 frame. Tagging it EngineGenerated
-        // bypasses that slider and pins HF packet 7.71 dB under the ALC target
-        // (0.85, -1.41 dBFS) with nothing able to raise it. The beacon argument
-        // does not reach this far: the WSPR pump is the unattended source, it
-        // feeds from its own call site below, and #5651 sets its default.
+        // Microphone, not EngineGenerated: the tag sets transmit level. Only the AX.25
+        // modem reaches here on a host-modulating radio (RADE is Flex-only). The AFSK
+        // amplitude is fixed (kTxAfskAmplitude = 0.35, -9.12 dBFS) and the packet dialog
+        // has no level control, so the mic slider is its only level; EngineGenerated
+        // would bypass it and pin packet 7.71 dB under the 0.85 (-1.41 dBFS) ALC target.
         feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
                                /*forceRadioDaxRoute=*/true,
                                TxAudioSource::Microphone, context);
@@ -9997,16 +9850,11 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordin
 
 void AudioEngine::finishModemTxAudio(quint64 token, const TxCoordinator::Context& context)
 {
-    // This method is queued onto the AudioEngine thread after every modem PCM
-    // block. Emitting from here creates an ordered barrier: cross-thread
-    // txFinalMonitorPcmReady deliveries are already ahead of this event.
-    // NOT fenced on permitsDispatch. This is a completion barrier, not a
-    // transmit command: it carries no audio and keys nothing. It is also the
-    // ONLY path that arms the AX.25 unkey timer
-    // (Ax25HfPacketDecodeDialog::handleTxAudioFinished), and there is no
-    // watchdog behind it — so fencing it here could leave PTT asserted with
-    // m_txAwaitingAudioFinish stuck true. The receiver already rejects a stale
-    // barrier by token, which is the check that actually belongs on it.
+    // Queued onto this thread after every modem PCM block, so it is an ordered
+    // barrier behind the txFinalMonitorPcmReady deliveries. Deliberately not fenced
+    // on permitsDispatch: it carries no audio, and it is the only path that arms the
+    // AX.25 unkey timer (Ax25HfPacketDecodeDialog::handleTxAudioFinished), so fencing
+    // could leave PTT asserted. The receiver rejects stale barriers by token.
     emit modemTxAudioFinished(token, context);
 }
 
@@ -10154,27 +10002,12 @@ void AudioEngine::setRadioTransmitting(bool tx, bool ownedByUs)
     // after the last key edge AND with this interlock down — the falling edge
     // is necessary for the over to end, never sufficient (cwLatchShouldAge).
 
-    // TX→RX edge: NR2 is bypassed entirely during TX (see the RX DSP chain
-    // ~line 1512: raw PCM goes straight to writeAudio so the filter doesn't
-    // adapt its internal state to TX silence, #367/#1505). But that leaves NR2
-    // holding pre-TX state when RX resumes: a stale overlap-add ring (read out
-    // as a faint whistle, #3340) and a maxed-out startup-ramp counter, so
-    // suppression slams to full-wet the instant RX resumes. resetTransient()
-    // flushes exactly that — the OA ring, the gain masks, the AGC common-mode
-    // references — and re-arms the ~1s dry→wet ramp, while RETAINING the
-    // converged noise estimate. The full reset() used here previously also
-    // re-seeded the noise floor, forcing a fresh multi-second estimator
-    // convergence on every over, heard as un-suppressed band noise after
-    // unkey (#3821); with the profile retained, suppression is back at full
-    // depth as the ramp completes. If the band or the AGC level moved during
-    // TX the estimator adapts from the retained floor — quickly downward,
-    // and upward over the following minimum-statistics windows: measured
-    // settled by ~2.5 s in nr2_tx_rx_reset_test, no slower than the full
-    // convergence it replaced.
-    //
-    // Scoped to NR2 for now: it's the reported filter and this keeps testing
-    // localized. RN2/NR4/DFNR/MNR share the same bypass + stale-state path and
-    // can get the same flush as a follow-up once this is validated in the field.
+    // TX->RX edge: NR2 is bypassed during TX (#367/#1505), so on RX resume it holds a
+    // stale overlap-add ring (#3340) and a maxed startup ramp. resetTransient()
+    // flushes the OA ring, gain masks and AGC references and re-arms the ~1 s
+    // dry->wet ramp while keeping the converged noise estimate (a full reset forces
+    // multi-second reconvergence, #3821; nr2_tx_rx_reset_test measures settling by
+    // ~2.5 s). Only NR2 so far; RN2/NR4/DFNR/MNR share the stale-state path.
     if (previous && !tx) {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
         if (m_nr2Enabled && m_nr2) m_nr2->resetTransient();
@@ -10268,23 +10101,11 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         emitScopeFromFloat32Stereo(float32pcm, DEFAULT_SAMPLE_RATE, true);
     }
 
-    // ── Host-modulated backend (HL2): no VITA-49 plane ──────────────────
-    // Both routes below packetize for a Flex radio that modulates on its own
-    // side. A host-modulating backend has no TX stream and no radio-side
-    // modulator; its transmit audio arrives through the SAME final-monitor tap
-    // the microphone uses, which MainWindow routes to
-    // RadioModel::submitTxAudio() (and to the QSO recorder).
-    //
-    // Still a DSP bypass, for the reason stated above: this path carries
-    // pre-shaped digital tones from TCI/DAX, so no compressor, EQ, Quindar or
-    // brickwall limiter runs on it — only the TCI gain/overflow stage the
-    // caller already applied.
-    //
-    // No TX-state gate here. m_radioTransmitting is decoded from Flex interlock
-    // status, which a host-modulating backend never sends, so testing it would
-    // discard every frame. Both consumers of the signal gate themselves:
-    // Hl2Backend::submitTxAudio drops audio unless keyed, and QsoRecorder gates
-    // on MOX.
+    // Host-modulated backend (HL2): no VITA-49 plane. Transmit audio goes through the
+    // same final-monitor tap as the mic, which MainWindow routes to
+    // RadioModel::submitTxAudio() and the QSO recorder. Still a DSP bypass (pre-shaped
+    // digital tones). No TX-state gate: m_radioTransmitting comes from Flex interlock
+    // status; Hl2Backend::submitTxAudio and QsoRecorder gate themselves.
     if (m_hostModulation) {
         const auto* src = reinterpret_cast<const float*>(float32pcm.constData());
         const int samples = static_cast<int>(float32pcm.size() / sizeof(float));
@@ -10295,22 +10116,9 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
             dst[i] = static_cast<qint16>(
                 std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
         }
-        // THE SPLIT THIS TAP NEEDS IS THREE-WAY, AND THE CALLER DECIDES IT.
-        //
-        // The tag used to be derived here, as `markExternalSource ?
-        // ClientLeveled : EngineGenerated`, which made "not a TCI client" mean
-        // "an unattended beacon" — and swept the AX.25 modem in with the WSPR
-        // pump. It is passed in now, so each entry point states its own origin
-        // and a reader does not have to reason backwards from a flag that
-        // means something else. See TxAudioSource.h.
-        //
-        // What rides on it: the HL2 backend bypasses the mic slider for
-        // EngineGenerated alone. That matters because the ALC's 40 dB of makeup
-        // is gone (#5646) — it used to normalise any generated level onto the
-        // modulator's target, so a beacon came out right whatever level it was
-        // generated at. Without it, a beacon generated at -20 dBFS transmits at
-        // -20 dBFS, and the mic slider was moving it by up to 40 dB. Measured:
-        // 18.58 dB down, a factor of 72 in power.
+        // The caller supplies the source tag (see TxAudioSource.h). The HL2 backend
+        // bypasses the mic slider for EngineGenerated alone; with no ALC makeup (#5646)
+        // a beacon transmits at the level it was generated, so the tag must be right.
         emit txFinalMonitorPcmReady(out, source);
         if (selectTxContext(context)) {
             emit txTransportPcmReady(out, source, context);

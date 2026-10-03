@@ -16,35 +16,13 @@ class ClientCompLimiterButton;
 class ClientCompMeter;
 class ClientCompThresholdFader;
 
-// Floating editor for the Pro-XL-style TX compressor.  One instance
-// lives on MainWindow; calling showForTx() raises the window and
-// binds it to AudioEngine::clientCompTx().  Geometry persists via
-// AppSettings (`StripCompPanelGeometry` key).
-//
-// Layout, matching the gate editor's: a toolbar of switches along the
-// top, the display filling everything under it, and every knob in one
-// row at the foot.
-//   ┌─ Limiter: [ON] ──────────── Ceiling: ──●── -1.0 dB ─┐
-//   │ │Th│        [transfer curve + live ball]      │GR│Out│
-//   │ │  │                                          │  │◄─│ makeup
-//   ├──────────────────────────────────────────────────────┤
-//   │ (Ratio) (Attack) (Release) (Knee) …                  │
-//   └──────────────────────────────────────────────────────┘
-//
-// Makeup is not a knob: it is a fader on the Out meter, -12 dB at the
-// foot of the bar through a 0 dB detent to +24 dB at the top, with its
-// own tick scale in the left gutter.  It is an output-side gain, so it
-// belongs where the output level is read, and the foot row was too full
-// to hold it legibly.
-//
-// The canvas (center) owns the threshold chevron + curve + live ball.
-// Meter strips and limiter controls are separate child widgets wired to
-// the same ClientComp via signals.
-//
-// Drive and Phase (#2887) close the foot row on TX only.  They are
-// pre-compressor PAPR conditioning for the transmit path — there is no
-// power amplifier downstream of the RX chain to protect — so showForRx()
-// hides them and forces both to bypass on the RX ClientComp.
+// Floating editor for the TX compressor; showForTx() binds it to
+// AudioEngine::clientCompTx(). Geometry persists in `StripCompPanelGeometry`.
+// Layout like the gate editor: limiter switches on top, threshold canvas
+// (chevron, curve, live ball) with GR/Out meters, knobs in one foot row.
+// Makeup is a fader on the Out meter (-12 dB to +24 dB, 0 dB detent).
+// Drive and Phase (#2887) are TX-only PAPR conditioning; showForRx() hides them
+// and forces both to bypass on the RX ClientComp.
 class StripCompPanel : public QWidget {
     Q_OBJECT
 

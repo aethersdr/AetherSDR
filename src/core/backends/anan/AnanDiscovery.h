@@ -14,22 +14,11 @@ class QUdpSocket;
 
 namespace AetherSDR::anan {
 
-// openHPSDR Protocol 2 discovery, shaped to feed the same picker as Flex and
-// HL2 discovery: it emits RadioInfo with family="anan" so ConnectionPanel's
-// existing onRadioDiscovered/onRadioUpdated/onRadioLost slots consume it
-// unchanged once wired up (a later commit).
-//
-// Asynchronous by construction, mirroring Hl2Discovery: broadcast one
-// discovery datagram per sweep, collect replies until the next sweep, age
-// out radios that stop answering. Filters replies to isSaturn() only --
-// this project supports the G2 bring-up radio and no other P2 board (RFC
-// §2.11) -- which is a discovery-time PICKER decision, distinct from (and
-// not to be confused with) the RFC's caution that board type must not gate
-// BACKEND behaviour once connected.
-//
-// A radio that is streaming to somebody else answers with status byte 0x03;
-// that surfaces as RadioInfo::status "In_Use" rather than being hidden, so
-// the operator can see the radio exists but is taken -- same as Hl2Discovery.
+// openHPSDR Protocol 2 discovery. Emits RadioInfo with family="anan" for the
+// shared radio picker; sweeps periodically and ages out radios that stop
+// answering, like Hl2Discovery. Only isSaturn() replies are listed (RFC §2.11):
+// a picker decision only -- board type must not gate backend behaviour once
+// connected. Status byte 0x03 (streaming to another client) surfaces as "In_Use".
 class AnanDiscovery : public QObject {
     Q_OBJECT
 
@@ -45,22 +34,16 @@ public:
 
     [[nodiscard]] bool isRunning() const noexcept;
 
-    // Canonical "AA:BB:CC:DD:EE:FF" rendering of a discovery reply's MAC,
-    // which IS RadioInfo::serial for this family. Public (promoted from a
-    // file-local helper -- this is precisely the scenario the original
-    // comment here flagged: a directed unicast probe now needs
-    // byte-identical identity to a broadcast sweep). Mirrors
-    // Hl2Discovery::macToSerial exactly; they must agree, since the serial
-    // is both the auto-reconnect key and the client-side nickname key.
+    // Canonical "AA:BB:CC:DD:EE:FF" rendering of a discovery reply's MAC, which IS
+    // RadioInfo::serial for this family. Must match Hl2Discovery::macToSerial and be
+    // byte-identical between broadcast sweeps and directed probes: the serial is the
+    // auto-reconnect key and the nickname key.
     static QString macToSerial(const std::array<std::uint8_t, 6>& mac);
 
-    // The nickname to show for this radio: the operator's custom name, or
-    // `fallback` when none is set. An ANAN-G2 has no on-radio name store,
-    // so the custom name is persisted client-side, keyed by serial (the
-    // MAC string) -- the same (family, radioId, "Identity") feature
-    // document Hl2Discovery::effectiveNickname uses, but with NO
-    // legacy-flat-key migration step: this family never had one to
-    // migrate from, unlike HL2's pre-RFC-#4603 history.
+    // The operator's custom name, or `fallback`. ANAN-G2 has no on-radio name
+    // store, so the name is persisted client-side by serial in the same
+    // (family, radioId, "Identity") document Hl2Discovery uses (no legacy-key
+    // migration for this family).
     static QString effectiveNickname(const QString& family, const QString& serial,
                                      const QString& fallback);
     // Store (or clear, with an empty name) the client-side nickname.

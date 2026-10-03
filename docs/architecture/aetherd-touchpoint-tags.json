@@ -287,6 +287,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/QtAudioBackendGuard.h": {
+  "tag": "ui-support",
+  "note": "Pre-QApplication probe that keeps Qt 6.12's QtMultimedia off a PipeWire backend that would crash; client startup plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/GreenHeronProtocol.h": {
   "tag": "peripheral(greenheron)",
   "note": "Pure framing/parsing/encoding for the Green Heron Everyware wire protocol — the antenna switches and the rotator both, which share one TCP connection. No sockets, no timers, so the parser can be tested against verbatim captured bytes. Peripheral accessory transport, NOT radio-family wire and NOT behind the IRadioBackend radio seam. See docs/green-heron-everyware.md.",
@@ -881,6 +887,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/Ctr2ProxyModel.h": {
+  "tag": "peripheral(ctr2)",
+  "note": "CTR2-Max controller relay: an operator-enabled opaque byte relay between the controller (TCP listener in Wi-Fi mode, USB HID link in USB mode) and a dedicated radio TCP connection. The CTR2 is an independent radio client; nothing passes RadioModel, a backend socket or IRadioBackend. A peripheral accessory transport, NOT behind the radio seam. See docs/ctr2-tcp-proxy-design.md and docs/ctr2-usb-relay-design.md (RFC #6091).",
+  "split": "",
+  "confidence": "high"
+ },
  "models/GreenHeronModel.h": {
   "tag": "peripheral(greenheron)",
   "note": "Green Heron \"Everyware\" client — antenna switches and rotator on one connection to a standalone accessory served by a PC-side Everyware server over direct TCP (default port 10000), reached by an operator-entered address with no discovery and no radio awareness at all; works with any radio or none. Same precedent as models/AntennaGeniusModel.h and core/AcomConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. Protocol determined by observing traffic on the wire (Principle IV); see docs/green-heron-everyware.md.",
@@ -1279,7 +1291,7 @@
  },
  "core/backends/hl2/Hl2HardwareOptions.h": {
   "tag": "vendor(hl2)",
-  "note": "Which HL2-compatible board is on the other end \u2014 local audio codec, what the dither bit switches on each board, companion filter board, gateware ATU. Protocol 1 reports none of it, so it is an operator declaration; every rule in it is an HL2 gateware quirk with no generic half to split out.",
+  "note": "Which HL2-compatible board is on the other end \u2014 local audio codec, what the dither bit switches on each board, companion filter board, CL1 reference, gateware ATU. Protocol 1 reports none of it, so it is an operator declaration; every rule in it is an HL2 gateware quirk with no generic half to split out.",
   "split": "",
   "confidence": "high"
  },
@@ -1437,6 +1449,12 @@
   "tag": "mixed(flex)",
   "note": "Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry.",
   "split": "Core: receiver selection, epochs, bounded backlog, rate conversion and decoder resets. Flex compatibility: DAX channel selection and central consumer holds; no wire commands are generated here.",
+  "confidence": "high"
+ },
+ "models/ReceiverSlotCount.h": {
+  "tag": "universal",
+  "note": "How many receiver letters (A, B, C, ...) the UI offers — the RX applet's slice tabs and the CAT applet's VFO targets — tracked from the connection/capability/slice edges. Family-agnostic: the backend's declared ceiling, floored by the slots live receivers occupy (#5775, #5776).",
+  "split": "",
   "confidence": "high"
  }
 }

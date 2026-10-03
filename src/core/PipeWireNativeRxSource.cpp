@@ -81,31 +81,17 @@ bool PipeWireNativeRxSource::open()
     const QByteArray nodeDesc = QString("AetherSDR DAX %1").arg(m_channel).toUtf8();
 
     // Latency strategy:
-     //   node.latency       — the *request*: 256-sample quantum (~5.3 ms @ 48 kHz)
-     //   node.force-quantum — *forces* the graph cycle to 256 samples while our
-     //                         node is active.  Without this, any other client
-     //                         (e.g. WSJT-X's Qt PulseAudio backend) requesting
-     //                         a longer buffer drags the negotiated graph
-     //                         quantum up, undoing our latency hint.
-     //   node.force-rate    — pin graph rate to 48 kHz so it can't fall back to
-     //                         a slower clock during negotiation.
-     //   node.always-process— keep draining the ring even when no client is
-     //                         connected, so we don't accumulate backlog
-     //                         between "DAX enabled" and "WSJT-X connected".
-     //   pulse.min.{req,frag,quantum}
-     //                      — clamp the PipeWire pulse-compat fragment pool
-     //                         that PulseAudio-API clients sit behind.  This
-     //                         is the hidden ~200 ms buffer Qt's PulseAudio
-     //                         backend negotiates by default (4–8 fragments
-     //                         × 50 ms each).  PipeWire's pulse module reads
-     //                         these source-side properties when sizing each
-     //                         capturing pulse client's ring, so any client
-     //                         (WSJT-X, fldigi, …) connecting to us inherits
-     //                         the small 256-sample fragment cap regardless
-     //                         of what its own backend requested.  Confirmed
-     //                         via pw-cat (native PipeWire client at 5.3 ms)
-     //                         vs QtPulseAudio:<pid> (50 ms quantum + 200 ms
-     //                         pulse fragment buffer).
+    //   node.latency       256-sample quantum request (~5.3 ms @ 48 kHz)
+    //   node.force-quantum force the graph to 256 while we're active, so a client
+    //                      asking for a longer buffer (WSJT-X's Qt Pulse backend)
+    //                      can't drag it up
+    //   node.force-rate    pin the graph to 48 kHz
+    //   node.always-process keep draining with no client connected (no backlog)
+    //   pulse.min.{req,frag,quantum}
+    //                      cap pulse-compat fragments for Pulse-API clients, which
+    //                      otherwise get ~200 ms (4-8 x 50 ms); PipeWire's pulse
+    //                      module applies these source-side, so every capturing
+    //                      client inherits the 256-sample cap.
     pw_properties* props = pw_properties_new(
         PW_KEY_MEDIA_TYPE,           "Audio",
         PW_KEY_MEDIA_CATEGORY,       "Playback",  // we play audio INTO the graph; clients capture from us

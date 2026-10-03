@@ -21,20 +21,13 @@ enum class DisplayPresence {
     Unknown     // no connectors, or every connector reports "unknown"
 };
 
-// Scan the DRM connector status files under `drmRoot`. Returns:
-//   Connected — some connector's status is exactly "connected";
-//   Headless  — at least one connector is "disconnected" and none is connected
-//               (e.g. a Pi over wayvnc with HDMI unplugged);
-//   Unknown   — no connector directories were found (no /sys/class/drm, an
-//               unusual driver, a container), OR every connector reports
-//               "unknown" — the caller should not assume headless in that case.
-// "unknown" is not only writeback/virtual connectors: a connector that cannot do
-// hotplug detection (DPI, composite TV-out, some fixed DSI panels) also reports
-// "unknown" while a panel is physically attached. Requiring an explicit
-// "disconnected" before claiming Headless keeps such a display off XWayland,
-// matching the tri-state rule: do not assume headless when we cannot tell.
-// `drmRoot` is a parameter (not hard-coded) so the logic is testable against a
-// fake sysfs tree; it defaults to the real path.
+// Scan DRM connector status files under `drmRoot`:
+//   Connected - some connector is exactly "connected";
+//   Headless  - at least one "disconnected" and none connected;
+//   Unknown   - no connectors found, or all "unknown".
+// Connectors without hotplug detection (DPI, composite, some DSI) report
+// "unknown" with a panel attached, so Headless needs an explicit "disconnected".
+// `drmRoot` is a parameter for testing against a fake sysfs tree.
 inline DisplayPresence detectDisplayPresence(
     const QString& drmRoot = QStringLiteral("/sys/class/drm"))
 {

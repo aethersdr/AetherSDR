@@ -245,30 +245,15 @@ BandscopeDialog::BandscopeDialog(RadioModel* model, QWidget* parent)
         releaseRequest();
         if (m_refresh)
             m_refresh->setEnabled(true);
-        // The trace is LEFT ALONE. An unanswered request says nothing about the
-        // frame already on screen, and blanking it would destroy a reading the
-        // operator may still be looking at. The status line carries the news.
-        //
-        // AN ANSWER ARRIVING AFTER THIS IS DROPPED, not drawn: releaseRequest()
-        // has already torn down the lambdas that would have matched its id.
-        // That is the safe direction — a frame the operator stopped waiting
-        // for must not appear as the answer to their next press — and the
-        // recovery is a press of Refresh, which either succeeds or is refused
-        // by the backend with "already pending", which is itself the truth.
+        // Leave the trace alone: an unanswered request says nothing about the frame on
+        // screen. A late answer is dropped (releaseRequest() removed its handlers) so it
+        // can't masquerade as the reply to the next press; Refresh recovers.
         showStatus(tr("The radio did not answer. Press Refresh to ask again."));
     });
 
-    // THE LINK GOING AWAY. Without this the window is the one surface in this
-    // change that can keep showing a dead radio's picture, with a peak readout,
-    // for as long as it is left open — every other surface the bandscope work
-    // touches (the health rows, resetBandscopeMirrors()) was built so a stale
-    // value goes ABSENT rather than stale. capabilitiesChanged is the single
-    // connection RadioModel documents for "the capability picture is now
-    // different, re-read it", and it fires on every connect/disconnect edge.
-    //
-    // Only the ABSENT case acts. A republication that still carries the record
-    // is a live radio revising something else, and wiping a good frame for that
-    // would be its own bug.
+    // On link loss, clear the window so a dead radio's picture doesn't linger.
+    // capabilitiesChanged fires on every connect/disconnect edge; act only when the
+    // widebandConverterView record is absent, not on unrelated republications.
     if (m_model) {
         connect(m_model, &RadioModel::capabilitiesChanged, this,
                 [this](bool connected, const RadioCapabilities& caps) {
@@ -415,30 +400,13 @@ void BandscopeDialog::onFrame(const QVariant& reply)
     analyzer.reset();
     analyzer.update(samples.constData(), int(samples.size()));
 
-    // THE ANALYZER'S SCALE IS 6.02 dB LOW AND THIS WINDOW IS WHERE THAT STOPS
-    // BEING A DETAIL. ClientEqFftAnalyzer normalises by 2/N, the single-sided
-    // normalisation for an UNWINDOWED transform, and never removes the Hann
-    // window's 0.5 coherent gain — so on its raw scale a converter sitting on
-    // its rail reads -6, kTopDb = 0 is unreachable by any sine, and this
-    // window's "Peak … dBFS" would disagree by 6 dB with the ADC-peak row in
-    // Radio Health, which is a true time-domain peak of the same block in the
-    // same units. The one comparison this window exists to enable is against
-    // the clip threshold, so that error is the whole feature.
-    //
-    // Corrected HERE and not in the analyzer on purpose: the EQ editor has
-    // drawn the uncorrected scale since it shipped and reads it only as a
-    // shape. See ClientEqFftAnalyzer::coherentGainCorrectionDb().
-    //
-    // WHAT THIS DOES AND DOES NOT BUY. After it, a single sinusoid's bin is its
-    // own amplitude in dBFS and agrees with the time-domain peak. A broadband
-    // signal still does not: its energy is spread over many bins, so the peak
-    // BIN sits below the peak SAMPLE by however wide the signal is. The two
-    // readouts are on the same scale now; they are not the same measurement.
-    //
-    // ARITHMETIC, NOT A MEASUREMENT. No radio has answered this verb, so the
-    // correction has never been checked against a converter driven to a known
-    // level. What is checked is that it is the exact inverse of the window this
-    // analyzer builds (`bandscope_analyzer_test`).
+    // ClientEqFftAnalyzer normalises by 2/N without removing the Hann window's 0.5
+    // coherent gain, so its bins read 6.02 dB low; corrected here (not in the
+    // analyzer, whose EQ editor uses the raw scale as a shape) so "Peak … dBFS"
+    // matches Radio Health's ADC peak and 0 dBFS is reachable. A sinusoid's bin then
+    // equals its amplitude; broadband signals still peak lower per bin than per
+    // sample. Arithmetic, not hardware-verified; bandscope_analyzer_test checks it
+    // is the exact inverse of the analyzer's window.
     const float corrDb = analyzer.coherentGainCorrectionDb();
     const std::vector<float>& db = analyzer.magnitudesDb();
     QVector<float> bins;
@@ -447,16 +415,9 @@ void BandscopeDialog::onFrame(const QVariant& reply)
         bins.push_back(v + corrDb);
     m_trace->setFrame(bins, sampleRateHz);
 
-    // The peak and where it is: the one number an operator reads this window
-    // for. Stated as uncalibrated every time it is stated at all.
-    //
-    // BIN 0 IS EXCLUDED. It is DC, and a direct-sampling converter's DC offset
-    // lands there whether or not anything is on the antenna, so a peak readout
-    // that included it could report the converter's own bias as the strongest
-    // signal on the band. The TRACE still draws it — hiding a bin the transform
-    // produced would be a different kind of dishonesty — but the readout does
-    // not name it. Nothing here has been run against a radio, so how large that
-    // bin actually is on this hardware is NOT KNOWN.
+    // The peak readout (always labelled uncalibrated). Bin 0 (DC) is excluded
+    // because a direct-sampling converter's DC offset lands there regardless of
+    // antenna signal; the trace still draws it.
     qsizetype peakBin = 1;
     for (qsizetype i = 2; i < bins.size(); ++i) {
         if (bins.at(i) > bins.at(peakBin))

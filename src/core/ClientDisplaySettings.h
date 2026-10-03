@@ -10,32 +10,11 @@
 
 namespace AetherSDR {
 
-// Client-shaped display state, scoped to radio and pan slot, in the schema-1
-// `ClientDisplay` feature document. Radio-owned display publications and
-// transient adaptive caps must never write this store.
-//
-// What lives here, and for which radio:
-//
-//   waterfallRates   the waterfall rate, 1..100
-//   fftFps           FFT FPS, the Display panel's 5..60
-//   dbmRanges        the pan's dBm scale, {"min": .., "max": ..}
-//
-// Each is a table keyed by pan slot. All three are values a Flex stores itself
-// and reports back, which is why the client deliberately keeps no copy of them
-// there (#2465, #4126, #4261). A radio whose display the ENGINE shapes has no
-// radio-side display state at all, so nothing gave them back after a restart:
-// FFT FPS returned to the widget default and the dBm scale to the pan model's
-// -130..-40.
-//
-// `shapedLocally` is RadioModel::shapesDisplayRatesLocally(). False means the
-// radio owns the value: nothing is read and nothing is written. The dBm range
-// needs one more term, clientOwnsDbmRange() below.
-//
-// The two tables after waterfallRates were added without a schema bump, on
-// purpose. They are optional and independent: a build that predates them reads
-// its own table and, because every writer here is read-modify-write on the
-// whole document, keeps theirs intact. A bump would have made that older build
-// refuse the waterfall rate it can read perfectly well.
+// Client-shaped display state (waterfallRates, fftFps, dbmRanges), each a table
+// keyed by pan slot in the schema-1 `ClientDisplay` document. Only for a radio
+// whose display this engine shapes (`shapedLocally`); a Flex stores and reports
+// these itself (#2465, #4126). Radio publications and adaptive caps never write
+// here. Tables are optional and every writer is read-modify-write: no bump.
 class ClientDisplaySettings {
 public:
     // The Display panel's own FFT FPS slider bounds (SpectrumOverlayMenu). A
@@ -48,26 +27,19 @@ public:
         float maxDbm{0.0f};
     };
 
-    // May the client store and restore this pan's dBm range?
-    //
-    // Only where the scale is nothing but a view on this host: the engine
-    // shapes the display AND the bins are absolute levels computed here
-    // (RadioCapabilities::panBinsAbsolute()). A Flex adopts a range and echoes
-    // it (not shaped locally). An Icom shapes locally but its backend publishes
-    // the range from the scope calibration (bins not absolute), and a stored
-    // copy would fight that the way a stored copy fought a Flex.
+    // May the client store and restore this pan's dBm range? Only where the
+    // engine shapes the display AND the bins are absolute levels computed here
+    // (panBinsAbsolute): a Flex echoes its range, and an Icom's backend
+    // publishes one from scope calibration that a stored copy would fight.
     static constexpr bool clientOwnsDbmRange(bool shapedLocally,
                                              bool panBinsAbsolute) noexcept
     {
         return shapedLocally && panBinsAbsolute;
     }
 
-    // The key a caller hands DeferredSettingsWrites for one pending edit: one
-    // per (radio, pan slot, FIELD). The scope is in it so a radio switch cannot
-    // overwrite a pending edit. The field is in it because that queue keeps the
-    // LAST write per key: the waterfall rate and the FFT FPS of one pan, both
-    // changed inside its 250 ms, would otherwise replace each other and only
-    // one would reach the store.
+    // DeferredSettingsWrites key for one pending edit, per (radio, pan slot,
+    // field): that queue keeps the last write per key, so the waterfall rate and
+    // FFT FPS of one pan changed together must not share a key.
     static QString pendingWriteKey(const RadioSettingsScope& scope, int panIndex,
                                    const char* field)
     {

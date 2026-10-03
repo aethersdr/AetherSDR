@@ -22,16 +22,10 @@ class QTimer;
 namespace AetherSDR::icom {
 
 // The RS-BA1 session: login, authentication, token renewal, and the three
-// streams it brings up.
-//
-// This is the layer that knows the ORDER things must happen in, which is the
-// part of the protocol with no documentation and the most ways to get subtly
-// wrong. Everything below it (IcomStream, IcomProtocol) is mechanism.
-//
-// Deliberately knows nothing about AetherSDR's seam: it emits parsed CI-V
-// frames and decoded audio, and IcomCivBackend turns those into model deltas.
-// That split is what lets the whole session be tested against a fake radio on
-// localhost without constructing a backend.
+// streams it brings up — the layer that owns the protocol's ORDERING.
+// IcomStream/IcomProtocol below it are mechanism. Knows nothing of the seam: it
+// emits parsed CI-V frames and decoded audio for IcomCivBackend, so it can be
+// tested against a fake radio on localhost.
 class IcomSession : public QObject {
     Q_OBJECT
 
@@ -85,18 +79,10 @@ public:
     [[nodiscard]] const RadioId& radioId() const noexcept { return m_radioId; }
     [[nodiscard]] std::uint8_t civAddress() const noexcept { return m_params.civAddress; }
 
-    // RETARGET the session at a different CI-V address, mid-session.
-    //
-    // The address the session opened with is a seed from settings. The source
-    // address of the radio's 19 00 reply corrects it independently of the model
-    // ID carried in the payload. Without a setter the correction had
-    // nowhere to land: Params::civAddress is baked at start() and read through a
-    // const getter, so an IC-9700 seeded at the IC-705's 0xA4 went on being
-    // addressed at 0xA4 for the whole session and answered nothing.
-    //
-    // The echo filter in onSerialPayload() reads this same value, which is why
-    // retargeting BEFORE the connect-edge read burst is the correct order: the
-    // burst then goes to the new address and its echoes are recognised as ours.
+    // RETARGET the session at a different CI-V address mid-session. The opening
+    // address is a seed from settings; the source address of the radio's 19 00
+    // reply corrects it. The echo filter in onSerialPayload() reads this value, so
+    // retarget BEFORE the connect-edge read burst so its echoes are recognised.
     void setCivAddress(std::uint8_t address) noexcept { m_params.civAddress = address; }
 
     // Send one CI-V frame. Frames are built by CivCodec's cmd* helpers.

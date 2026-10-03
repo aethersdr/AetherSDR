@@ -282,21 +282,11 @@ float WsprBeacon::nextFrameSample() noexcept
                            * kToneSpacingHz;
     m_phaseIncrement = kTwoPi * tone / m_sampleRate;
 
-    // Phase is continuous across symbol boundaries (m_phase is never reset),
-    // so the ONLY discontinuities in the whole frame are its two ends — which
-    // is what the envelope below is for. The ramp-up keys off frames emitted
-    // and the tail off position within the message: on a late start those
-    // differ, and the ramp has to follow the audio, not the symbol clock.
-    //
-    // The tail is tested FIRST so that it always wins. A messageSkipFrames deep
-    // enough to land inside the tail region would otherwise ramp UP over the
-    // few frames left and then stop dead at whatever level it reached — a step
-    // discontinuity, i.e. the exact click this taper exists to prevent. Letting
-    // the tail win leaves such a frame decaying from the seed envelope, so it
-    // ends silent instead. Unreachable from updateBeaconState(), where the skip
-    // is bounded by kBeaconMaxSlotLatenessMs, but start() is public and clamps
-    // only to kMessageFrames - 1. The ordering costs nothing on the reachable
-    // path: there the ramp runs ~24000 frames in, nowhere near the tail region.
+    // Phase is continuous across symbols, so the frame's only discontinuities are
+    // its ends, which the envelope tapers. Ramp-up keys off frames emitted, the
+    // tail off message position (they differ on a late start). The tail is tested
+    // first so a deep messageSkipFrames (possible via public start(), not via
+    // updateBeaconState()) decays to silence instead of stopping mid-ramp.
     const int64_t framePos =
         static_cast<int64_t>(m_symbolIndex) * kFramesPerSymbol
         + m_framesIntoSymbol;

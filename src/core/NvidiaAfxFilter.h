@@ -13,20 +13,13 @@ namespace AetherSDR {
 
 class Resampler;
 
-// Optional GPU noise removal using the NVIDIA Maxine Audio Effects SDK
-// (the "denoiser"/BNR effect). The AFX runtime (libnv_audiofx + the bundled
-// CUDA/TensorRT libs) is NOT linked at build time — it is dlopen'd at runtime
-// from a downloaded/cached "pack" so the shipped app carries none of the
-// ~2 GB GPU runtime. Requires an NVIDIA RTX/GeForce GPU (Turing+).
-//
-// The immutable input/output domain is 24 or 48 kHz stereo float32. Legacy24
-// retains its SRC pairs; native48 reaches the model without SRC. Each channel
-// runs its own denoiser effect, as RN2 runs one RNNoise state per channel, so
-// the two sides of a diversity pair are denoised against their own noise.
-//
-// Thread-safe parameter setters (GUI thread writes atomics, audio thread reads).
-// dlopen + TensorRT engine build happen in the constructor (call OFF the audio
-// thread); process() is the only audio-thread entry point.
+// Optional GPU noise removal via the NVIDIA Maxine Audio Effects SDK (BNR). The
+// AFX runtime (libnv_audiofx + CUDA/TensorRT) is not linked: it is dlopen'd from
+// a downloaded "pack", so the app ships none of the ~2 GB. Needs an RTX/GeForce
+// GPU (Turing+). I/O is 24 or 48 kHz stereo float32 (Legacy24 via SRC, native48
+// direct), one effect per channel. Setters: GUI writes atomics, audio thread
+// reads. dlopen and the TensorRT build run in the constructor (call OFF the audio
+// thread); process() is the only audio-thread entry.
 
 class NvidiaAfxFilter {
 public:

@@ -10,16 +10,11 @@
 
 namespace AetherSDR {
 
-// macOS backend for the Ulanzi Dial using IOKit HID Manager.  Mirrors
-// the Linux evdev / Windows hidapi backends' Qt signal contract.
-//
-// Key advantage over Windows: IOHIDManagerOpen with kIOHIDOptionsTypeSeizeDevice
-// is the documented exclusive-claim mechanism on Darwin.  When seized,
-// the dial's input is delivered only to AetherSDR — the OS keyboard
-// stack stops receiving it — so the dial's media keys don't leak to the
-// focused window. If macOS specifically denies the exclusive claim, the
-// manager reopens the same matched device in shared mode and temporarily
-// suppresses that service's system key mapping instead.
+// macOS Ulanzi Dial backend (IOKit HID Manager), same signal contract as the
+// Linux evdev / Windows hidapi backends. Seizes the device
+// (kIOHIDOptionsTypeSeizeDevice) so media keys don't reach the focused window;
+// if the exclusive claim is denied, reopens shared and temporarily suppresses
+// that service's system key mapping.
 class UlanziDialMacOSManager : public QObject {
     Q_OBJECT
 public:
@@ -28,6 +23,11 @@ public:
 
     void start();
     void stop();
+    // Re-announce the current state through stateReported() for the mapper
+    // dialog, which opens long after the edges it would otherwise have heard.
+    // Deliberately NOT connectionChanged(): that edge also drives the dial's
+    // TX disconnect fence, and a re-report must never look like a detach.
+    void reportState();
 
     bool isConnected() const { return m_anyOpen; }
     QString deviceName() const { return m_deviceName; }
@@ -37,8 +37,12 @@ signals:
     void tuneSteps(int steps);
     void buttonEvent(const QString& signature, int action);
     void connectionChanged(bool connected, const QString& name);
+    // Current state, emitted only from reportState(). Not an edge.
+    void stateReported(bool connected, const QString& name);
 
 private:
+    friend struct UlanziDialMacOSManagerTestAccess;
+
     enum class AccessMode {
         None,
         Exclusive,
@@ -50,6 +54,8 @@ private:
     void onHidValue(int usagePage, int usage, int value);
     void onDeviceMatching(const QString& productName);
     void onDeviceRemoval();
+    void startPresenceWatch();
+    void stopPresenceWatch();
 
     // Chord assembly state — same logic as the other two backends.
     void emitKeyTransition(int linuxKey, int value);
@@ -58,6 +64,9 @@ private:
     void restoreSystemEventSuppression();
     void discardSystemEventSuppression();
 
+    // Unopened probe manager whose matching callback announces a dial that
+    // arrives after start(); start() then claims it. Null once claimed.
+    void* m_presenceManager{nullptr};   // IOHIDManagerRef
     void* m_manager{nullptr};   // IOHIDManagerRef
     void* m_eventSystemClient{nullptr}; // IOHIDEventSystemClientRef
     void* m_suppressedService{nullptr}; // IOHIDServiceClientRef
@@ -83,6 +92,7 @@ private:
     static void hidValueCb(void* ctx, int /*result*/, void* /*sender*/, void* value);
     static void devMatchedCb(void* ctx, int /*result*/, void* /*sender*/, void* device);
     static void devRemovedCb(void* ctx, int /*result*/, void* /*sender*/, void* device);
+    static void presenceMatchedCb(void* ctx, int /*result*/, void* /*sender*/, void* device);
 };
 
 } // namespace AetherSDR

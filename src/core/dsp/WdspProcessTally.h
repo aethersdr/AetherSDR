@@ -5,43 +5,15 @@
 #include <atomic>
 #include <cstdint>
 
-// One counter per WdspChannel::ProcessResult outcome, for the receive stages
-// that drive processIq() from an I/O thread and are read from the GUI thread.
-//
-// WHY THIS EXISTS. WdspChannel::processIq() distinguishes six outcomes and
-// goes to real trouble to do it — a whole allocation-sequence guard around
-// fexchange2 exists only to produce AllocationViolation. Both consumers
-// (Hl2RxDsp::processIqBlock, AnanRxDsp::processIqBlock) then collapsed all
-// five non-Ok outcomes into one unannotated `continue`, so the detection
-// machinery was discarded one frame above the code that built it. A radio that
-// had stopped producing audio because WDSP was returning EngineError on every
-// block was indistinguishable, from outside, from a radio whose pipeline was
-// still filling.
-//
-// WHY A SHARED TYPE RATHER THAN A COUNTER IN EACH STAGE. Hl2RxDsp and
-// AnanRxDsp are two copies of the same stage and have already diverged in six
-// places; each fix applied to one and not the other adds a seventh. The
-// counting rule — which outcomes are faults, which one is normal, what each is
-// called — is the part that must not drift between them, so it lives once.
-//
-// UNDERRUN IS NOT A FAULT and is deliberately not summed with the others.
-// fexchange2 returns -2 whenever the asynchronous output side has nothing
-// ready yet, which is the NORMAL state for the first blocks through a freshly
-// opened channel and, with blockForOutput false, an ordinary occurrence
-// whenever the input side runs ahead. Folding it into a fault total would put
-// a large non-zero number in front of a reader on every healthy connect and
-// train them to ignore the row — which is the failure mode this counter
-// exists to prevent, arrived at from the other direction.
-//
-// RELAXED ATOMICS, for the same reason Hl2RxDsp's m_adcPeakDbfs is atomic:
-// these are written on the DSP thread and read by a poll from the GUI thread.
-// They are independent monotonic scalars and nothing is ordered against them,
-// so a snapshot() taken across a concurrent record() may miss the very last
-// increment. That is the correct trade — the alternative is a lock on the
-// real-time path to make a display row one block fresher.
-//
-// COST ON THE REAL-TIME PATH: one relaxed fetch_add per processed block, at
-// 47 blocks/second/receiver at 48 kHz. No allocation, no lock, no syscall.
+// One counter per WdspChannel::ProcessResult outcome for RX stages that call
+// processIq() on an I/O thread and are read from the GUI, so a stage stuck on
+// EngineError is distinguishable from one still filling. Shared by Hl2RxDsp
+// and AnanRxDsp so the counting rule can't drift.
+// Underrun is not a fault and not summed: fexchange2 returns -2 whenever
+// output isn't ready yet, normal on every fresh channel.
+// Relaxed atomics: written on the DSP thread, polled from the GUI; a snapshot
+// may miss the latest increment. One relaxed fetch_add per block (~47/s per
+// receiver at 48 kHz); no lock or allocation.
 class WdspProcessTally final
 {
 public:

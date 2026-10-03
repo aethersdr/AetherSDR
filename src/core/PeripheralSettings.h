@@ -10,19 +10,11 @@
 
 namespace AetherSDR {
 
-// Peripherals feature settings live in one nested AppSettings JSON blob per
-// constitution Principle V. The temporary flat key from PR #3321 is migrated
-// so testers of the PR branch keep their selected behavior.
-//
-// The manual connection settings (ManualIp/ManualPort/SerialPort/
-// ConnectionMode) of the ACOM S-series and the SPE Expert amplifiers use the
-// generic per-device accessors below, nested under obj["Acom"] and
-// obj["SpeExpert"] — neither has ever shipped with flat keys in a released
-// build, so there's no legacy data to migrate; new installs write directly
-// into the nested shape. TGXL/PGXL/Antenna Genius/ShackSwitch still use their
-// original flat AppSettings keys directly (not through this class) —
-// migrating those is legitimate follow-up work, scoped to its own PR rather
-// than bundled with the ACOM feature that motivated adding these accessors.
+// Peripherals settings in one nested AppSettings JSON blob; the old flat key from
+// #3321 is migrated. ACOM and SPE Expert manual-connection settings
+// (ManualIp/ManualPort/SerialPort/ConnectionMode) nest under obj["Acom"] /
+// obj["SpeExpert"] (no legacy keys). TGXL/PGXL/Antenna Genius/ShackSwitch still
+// use their own flat keys, not this class.
 class PeripheralSettings {
 public:
     static bool autoReconnect()
