@@ -457,12 +457,11 @@ void AmpApplet::buildUI()
         QSignalBlocker blocker(m_fanCombo);
         m_fanCombo->setCurrentIndex(-1);
     }
-    // Let the widest item ("Fan: Broadcast") drive the combo's width instead
-    // of leaving it pinned to whatever the stylesheet happens to compute
-    // (#4731) — matches the pattern used by every other combo in the app,
-    // e.g. ProfileSwitcherApplet, AdaptiveFilterControls.
-    m_fanCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    m_fanCombo->setMinimumContentsLength(14);
+    // The widest item ("Fan: Broadcast"), measured in the font that draws it,
+    // sets the combo's width (#4731). A character-count estimate overstates it
+    // in a wide face such as DejaVu Sans, and the 260 px rail then cannot hold
+    // the row (#5903).
+    m_fanCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     // Belt-and-braces: if a future label ever outgrows the combo anyway,
     // fail visibly (clipped) rather than silently mislabelling the mode.
     m_fanCombo->view()->setTextElideMode(Qt::ElideNone);

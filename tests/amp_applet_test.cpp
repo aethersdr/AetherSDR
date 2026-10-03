@@ -469,19 +469,23 @@ void testFanModePulldown()
         }
     }
 
-    // The popup must fit its longest item at any default UI font (#4731).
-    // Geometry is not trustworthy in this offscreen, unlaid-out harness, so
-    // guard the properties that guarantee it: the widest item drives the
-    // combo's width, and any overflow clips visibly instead of mid-eliding.
-    report("fan combo sizes to its widest item, not a pinned width",
-           combo->sizeAdjustPolicy() == QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    int longestItem = 0;
+    // The popup must fit its longest item at any default UI font (#4731), and
+    // the combo must ask for that width rather than a character-count estimate,
+    // which a wide face such as DejaVu Sans inflates past the 260 px rail
+    // (#5903; the rail-fit check below sees it only where that face is the
+    // default). Geometry is not trustworthy in this offscreen, unlaid-out
+    // harness, so guard the properties that guarantee it.
+    report("fan combo sizes to its widest item, not a character estimate",
+           combo->sizeAdjustPolicy() == QComboBox::AdjustToContents
+               && combo->minimumContentsLength() == 0);
+    int widestItem = 0;
     for (int i = 0; i < combo->count(); ++i) {
-        longestItem = std::max(longestItem, static_cast<int>(combo->itemText(i).length()));
+        widestItem = std::max(widestItem,
+                              combo->fontMetrics().horizontalAdvance(combo->itemText(i)));
     }
     report("fan combo reserves room for its longest item",
-           combo->minimumContentsLength() >= longestItem,
-           QString::number(combo->minimumContentsLength()));
+           combo->sizeHint().width() >= widestItem,
+           QStringLiteral("%1 < %2").arg(combo->sizeHint().width()).arg(widestItem));
     report("fan combo popup does not silently mid-elide overflow",
            combo->view()->textElideMode() == Qt::ElideNone);
 }
