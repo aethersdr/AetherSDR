@@ -13,6 +13,21 @@ Q_LOGGING_CATEGORY(lcHl2RxDsp, "aether.hl2.rxdsp")
 
 namespace AetherSDR::hl2 {
 
+namespace {
+
+// WdspChannel refuses a length that is not a whole number of DSP blocks
+// (filterTapsArePartitionable). Every length the policy picks is a power of
+// two, as is every block Hl2RxDsp builds, so doubling reaches a legal one; at
+// the HL2's rates the block is at most 1024 and this never fires.
+int tapsForBlock(int taps, std::size_t dspBlockSize)
+{
+    while (static_cast<std::size_t>(taps) < dspBlockSize && taps < Hl2RxDsp::kRxFilterTaps)
+        taps *= 2;
+    return taps;
+}
+
+} // namespace
+
 Hl2RxDsp::Hl2RxDsp(QObject* parent) : QObject(parent)
 {
     // Registered so audioReady/spectrumReady can cross a thread boundary once
@@ -135,7 +150,12 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(const Config& config,
     // heterodyne wants ~50 Hz, which needs 8192. That is what pihpsdr runs
     // (receiver.c), and the cost is filter-delay, not CPU — a cost minimum
     // phase removes outside CW; see rxMinimumPhaseFor().
-    wc.filterTaps = kRxFilterTaps;
+    // The length follows mode and passband (rxFilterTapsFor). A static build
+    // does not know the notch set, so it opens for none; installChannel()
+    // settles the length before it replays any notch.
+    wc.filterTaps = tapsForBlock(
+        rxFilterTapsFor(config.mode, config.filterLowHz, config.filterHighHz, 0),
+        wc.dspBlockSize);
     // Opened in the phase its mode wants (rxMinimumPhaseFor). installChannel()
     // re-applies the phase for the mode in force at the swap, and that is what
     // makes it CORRECT; this makes that re-apply a no-op in the usual case, so
@@ -217,6 +237,7 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     // After the build, never before: the old channel keeps audio flowing during
     // a background build, and a failed synchronous create() leaves it in place.
     // This runs on the DSP thread, so no block reaches it before destruction.
+    const int outgoingFilterTaps = m_channel ? m_channel->config().filterTaps : 0;
     if (m_channel && !m_channel->setRunning(false)) {
         qCWarning(lcHl2RxDsp)
             << "could not stop the outgoing WDSP channel before the swap: a "
@@ -283,6 +304,10 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     // a phantom that every later index is measured from. It also stops at the
     // first refusal, because an index that skips one is an index that addresses
     // the wrong notch.
+    // The filter length first, once for the set about to be replayed; this
+    // also covers a mode or passband that moved during a background build, and
+    // keeps the width hysteresis of the chain being replaced.
+    applyFilterTaps(static_cast<int>(m_notches.size()), outgoingFilterTaps);
     std::vector<Notch> pending;
     pending.swap(m_notches);
     for (std::size_t index = 0; index < pending.size(); ++index) {
@@ -388,7 +413,31 @@ void Hl2RxDsp::setMode(WdspChannel::Mode mode)
     if (canPushToChannel()) {
         m_channel->setMode(mode);
         applyMinimumPhaseForMode();
+        applyFilterTaps(static_cast<int>(m_notches.size()));
     }
+}
+
+bool Hl2RxDsp::applyFilterTaps(int notchCount, int hysteresisFromTaps)
+{
+    // A change is one filter refill (setFilterTaps keeps notches and shift,
+    // re-plans six FIR cores under the FFTW lock), only ever at a moment the
+    // operator caused: a mode change, a filter edge across the threshold, the
+    // first notch or the last one gone. Unchanged costs nothing.
+    const int current = m_channel->config().filterTaps;
+    const int basis = hysteresisFromTaps > 0 ? hysteresisFromTaps : current;
+    const int wanted = tapsForBlock(rxFilterTapsFor(m_config.mode, m_config.filterLowHz,
+                                                    m_config.filterHighHz, notchCount,
+                                                    basis),
+                                    m_channel->config().dspBlockSize);
+    if (wanted == current)
+        return true;
+    if (m_refuseFilterTapsForTest || !m_channel->setFilterTaps(wanted)) {
+        qCWarning(lcHl2RxDsp) << "could not change the RX filter length" << current
+                              << "->" << wanted << "taps; it stays at" << current
+                              << "until the next mode, filter or notch change";
+        return false;
+    }
+    return true;
 }
 
 void Hl2RxDsp::applyMinimumPhaseForMode()
@@ -414,8 +463,10 @@ void Hl2RxDsp::setFilter(double lowHz, double highHz)
 {
     m_config.filterLowHz = lowHz;
     m_config.filterHighHz = highHz;
-    if (canPushToChannel())
+    if (canPushToChannel()) {
         m_channel->setFilter(lowHz, highHz);
+        applyFilterTaps(static_cast<int>(m_notches.size()));
+    }
 }
 
 void Hl2RxDsp::setAgc(int agcMode, double maximumGainDb)
@@ -501,6 +552,16 @@ void Hl2RxDsp::addNotch(int index, double centerHz, double widthHz, bool active)
     // refused entry would put every higher index out of step. With no channel
     // or a rebuild in flight only the mirror takes it and the swap replays it
     // (pushing then would block on the build's setup mutex).
+    // The length goes up first, and is checked: on the 4096-tap filter WDSP
+    // would widen a 50 Hz notch to 100 Hz, wider than the one drawn. A raise
+    // that did not land refuses the notch like a WDSP refusal; the next notch,
+    // mode or filter change retries it.
+    if (canPushToChannel() && !applyFilterTaps(static_cast<int>(m_notches.size()) + 1)) {
+        qCWarning(lcHl2RxDsp) << "notch at" << centerHz << "Hz not applied: the RX filter"
+                              << "could not be lengthened to the" << kRxFilterTaps
+                              << "taps its" << widthHz << "Hz width needs";
+        return;
+    }
     if (canPushToChannel() && !m_channel->addNotch(index, centerHz, widthHz, active))
         return;
     m_notches.insert(m_notches.begin() + index, Notch {centerHz, widthHz, active});
@@ -539,18 +600,37 @@ void Hl2RxDsp::removeNotch(int index)
     if (canPushToChannel() && !m_channel->removeNotch(index))
         return;   // see addNotch(): the mirror must not lose what WDSP kept
     m_notches.erase(m_notches.begin() + index);
+    // The last notch gone gives the length back, after the removal.
+    if (canPushToChannel())
+        applyFilterTaps(static_cast<int>(m_notches.size()));
 }
 
 void Hl2RxDsp::setNotchesEnabled(bool on)
 {
     m_notchesEnabled = on;
-    if (canPushToChannel())
+    if (canPushToChannel()) {
         m_channel->setNotchesEnabled(on);
+        // clearNotches() keeps the length: it is the first half of
+        // Hl2Backend::seedNotches(), which replays the set and always ends
+        // here, so this is where an emptied set returns it. A disabled set
+        // still holds the long filter, so re-enabling never has to raise it.
+        applyFilterTaps(static_cast<int>(m_notches.size()));
+    }
 }
 
 int Hl2RxDsp::notchCount() const
 {
     return static_cast<int>(m_notches.size());
+}
+
+int Hl2RxDsp::rxFilterTapsInForce() const
+{
+    return m_channel ? m_channel->config().filterTaps : 0;
+}
+
+double Hl2RxDsp::minimumNotchWidthInForceHz() const
+{
+    return m_channel ? m_channel->minimumNotchWidthHz() : 0.0;
 }
 
 int Hl2RxDsp::wdspNotchCount() const
