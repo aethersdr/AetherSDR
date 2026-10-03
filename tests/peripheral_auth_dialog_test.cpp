@@ -9,6 +9,8 @@
 #include "core/AppSettings.h"
 #include "core/PeripheralSettings.h"
 #include "gui/RadioSetupDialog.h"
+#include "gui/AntennaGeniusApplet.h"
+#include "gui/ShackSwitchApplet.h"
 #include "gui/PeripheralAuthStore.h"
 #include "core/PeripheralRemovalGuard.h"
 #include "gui/PeripheralAuthConnectFlow.h"
@@ -19,6 +21,7 @@
 #include "PeripheralAuthStoreFake.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QPointer>
 #include <QByteArray>
 #include <QComboBox>
@@ -63,6 +66,13 @@ struct AntennaGeniusModelTestAccess {
 using namespace AetherSDR;
 
 namespace {
+// Remove stores no suppression of its own; the retired dismissal key never appears.
+bool storesDismissal()
+{
+    return AppSettings::instance().value(QStringLiteral("Peripherals")).toString()
+        .contains(QStringLiteral("DiscoveryDismissed"));
+}
+
 bool checkDiscoveredAuthRecovery(bool savedEmptyList, bool blockedBeforeOpening)
 {
     AppSettings::instance().remove(QStringLiteral("Peripherals"));
@@ -206,6 +216,8 @@ bool checkDiscoveredAuthRecovery(bool savedEmptyList, bool blockedBeforeOpening)
         && PeripheralSettings::visibleDeviceIds().value_or(QStringList{}) == QStringList{QStringLiteral("tgxl")};
 }
 
+// Remove clears the row and its configuration and stores no suppression of its
+// own; discovery that reports the device again brings the recovery row back.
 bool checkRemovedDiscovery()
 {
     for (const QString& id : {QStringLiteral("tgxl"), QStringLiteral("pgxl")}) {
@@ -235,15 +247,17 @@ bool checkRemovedDiscovery()
         FakePeripheralAuthStore::setNextClearResult(false);
         remove->click();
         QCoreApplication::processEvents();
-        if (list->count() != 1 || PeripheralSettings::discoveredTarget(id, host) != host) {
+        if (list->count() != 1) {
             return false;
         }
         remove->click();
         QCoreApplication::processEvents();
-        if (list->count() != 0 || !PeripheralSettings::discoveredTarget(id, host).isEmpty()) {
+        if (list->count() != 0 || !PeripheralSettings::autoConnect(id)
+            || AppSettings::instance().value(QStringLiteral("Peripherals")).toString()
+                   .contains(QStringLiteral("DiscoveryDismissed"))) {
             return false;
         }
-        // Even a late blocked-state notification cannot resurface a removed row.
+        // A blocked device the radio reports again brings its recovery row back.
         QObject* connection = id == QStringLiteral("tgxl")
             ? static_cast<QObject*>(&tgxl) : static_cast<QObject*>(&pgxl);
         if (!QMetaObject::invokeMethod(connection, "beginAttemptAt", Qt::DirectConnection,
@@ -259,16 +273,8 @@ bool checkRemovedDiscovery()
         RadioSetupDialog reopened(&model, nullptr, &tgxl, &pgxl);
         reopened.selectTab(QStringLiteral("Peripherals"));
         auto* reopenedList = reopened.findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"));
-        if (list->count() != 0 || !reopenedList || reopenedList->count() != 0
-            || !PeripheralSettings::discoveredTarget(id, QStringLiteral("192.0.2.56")).isEmpty()) {
-            return false;
-        }
-        for (QAction* action : add->menu()->actions()) {
-            if (action->data().toString() == id) {
-                action->trigger();
-            }
-        }
-        if (list->count() != 1 || PeripheralSettings::discoveredTarget(id, host) != host) {
+        if (list->count() != 1 || !reopenedList || reopenedList->count() != 1
+            || !PeripheralSettings::autoConnect(id)) {
             return false;
         }
     }
@@ -380,7 +386,7 @@ bool checkPendingRemoval()
                 ag.connectToDevice(discovered); // shared model's ShackSwitch path
                 ag.connectToAddress(QHostAddress(host), port);
             }
-            if (reconnects || PeripheralSettings::discoveryDismissed(id)) {
+            if (reconnects || storesDismissal()) {
                 std::fprintf(stderr, "Pending removal allowed reconnect or persisted transient state\n");
                 return false;
             }
@@ -406,7 +412,7 @@ bool checkPendingRemoval()
             }
             if (list->count() != (deletionSucceeds ? 0 : 1)
                 || settings.value(ipKey, QString()).toString() != (deletionSucceeds ? QString() : host)
-                || (id != "ag" && PeripheralSettings::discoveryDismissed(id) != deletionSucceeds)
+                || storesDismissal()
                 || (!deletionSucceeds && !remove->isEnabled())
                 || (deletionSucceeds && !remove->accessibleDescription().contains("Select"))) {
                 std::fprintf(stderr, "Pending removal completion did not preserve success/failure semantics\n");
@@ -519,7 +525,7 @@ bool checkRemovalTimeout()
                 QCoreApplication::processEvents();
                 reconnect();
                 if (connects != 1 || settings.value(ipKey).toString() != "192.0.2.91"
-                    || PeripheralSettings::discoveryDismissed(id)
+                    || storesDismissal()
                     || PeripheralSettings::visibleDeviceIds() != std::optional<QStringList>({id})) {
                     std::fprintf(stderr, "Late removal changed newer settings or retained lease\n");
                     return false;
@@ -601,7 +607,7 @@ bool checkNeverConfiguredRemovalKeepsDiscovery()
         list->setCurrentRow(0);
         remove->click();
         QCoreApplication::processEvents();
-        if (list->count() != 0 || PeripheralSettings::discoveryDismissed(id)) {
+        if (list->count() != 0 || storesDismissal()) {
             std::fprintf(stderr, "Removing a never-configured %s dismissed discovery\n",
                          qPrintable(id));
             return false;
@@ -802,7 +808,7 @@ bool checkRemovalOwnerTeardown()
             owner.reset(); // Parent destruction bypasses closeEvent/done entirely.
             QCoreApplication::processEvents();
             settings.load(); // Read persisted data, not just the in-memory snapshot.
-            if (dialog || !readDelivered || PeripheralSettings::discoveryDismissed(id)
+            if (dialog || !readDelivered || storesDismissal()
                 || settings.value(ipKey).toString() != "192.0.2.90"
                 || PeripheralSettings::visibleDeviceIds() != std::optional<QStringList>({id})) {
                 return false;
@@ -814,7 +820,7 @@ bool checkRemovalOwnerTeardown()
             FakePeripheralAuthStore::finishClear();
             QCoreApplication::processEvents();
             reconnect();
-            if (reconnects != 1 || PeripheralSettings::discoveryDismissed(id)
+            if (reconnects != 1 || storesDismissal()
                 || settings.value(ipKey).toString() != "192.0.2.90") {
                 return false;
             }
@@ -1328,6 +1334,197 @@ bool checkFieldDescriptions()
 }
 } // namespace
 
+// The per-device "Connect automatically" toggle: default on, stored under
+// Peripherals.<id>.AutoConnect, reset by Remove, never changed by Connect.
+bool checkConnectAutomaticallyToggle()
+{
+    for (const QString& id : {QStringLiteral("tgxl"), QStringLiteral("pgxl"),
+                              QStringLiteral("ag"), QStringLiteral("shackswitch")}) {
+        AppSettings::instance().remove(QStringLiteral("Peripherals"));
+        AppSettings::instance().setValue("AG_ManualIp", QString());
+        AppSettings::instance().setValue("SS_ManualIp", QString());
+        PeripheralSettings::setVisibleDeviceIds({});
+        RadioModel model;
+        TgxlConnection tgxl;
+        PgxlConnection pgxl;
+        AntennaGeniusModel ag;
+        RadioSetupDialog dialog(&model, nullptr, &tgxl, &pgxl, &ag);
+        dialog.selectTab(QStringLiteral("Peripherals"));
+        auto* list = dialog.findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"));
+        auto* add = dialog.findChild<QPushButton*>(QStringLiteral("peripheralAddButton"));
+        auto* remove = dialog.findChild<QPushButton*>(QStringLiteral("peripheralRemoveButton"));
+        if (!list || !add || !add->menu() || !remove) {
+            return false;
+        }
+        const QString before = AppSettings::instance().value(QStringLiteral("Peripherals")).toString();
+        for (QAction* action : add->menu()->actions()) {
+            if (action->data().toString() == id) {
+                action->trigger();
+            }
+        }
+        // Add creates and selects the row and changes nothing else.
+        auto* toggle = dialog.findChild<QCheckBox*>(QStringLiteral("peripheralAutoConnect_%1").arg(id));
+        if (list->count() != 1 || list->currentRow() != 0 || !toggle || !toggle->isChecked()
+            || toggle->text() != QStringLiteral("Connect automatically")
+            || toggle->accessibleName().isEmpty() || toggle->accessibleDescription().isEmpty()
+            || !PeripheralSettings::autoConnect(id) || storesDismissal()
+            || AppSettings::instance().value(QStringLiteral("Peripherals")).toString().contains(
+                   QStringLiteral("AutoConnect"))
+            || AppSettings::instance().value(QStringLiteral("Peripherals")).toString().size()
+                   != QString(before).replace(QStringLiteral("[]"),
+                          QStringLiteral("[\"%1\"]").arg(id)).size()) {
+            std::fprintf(stderr, "Add did more than create the row, or the toggle lacks its default (%s)\n",
+                         qPrintable(id));
+            return false;
+        }
+        toggle->setChecked(false);
+        if (PeripheralSettings::autoConnect(id)) {
+            return false;
+        }
+        for (const QString& other : {QStringLiteral("tgxl"), QStringLiteral("pgxl"),
+                                     QStringLiteral("ag"), QStringLiteral("shackswitch")}) {
+            if (other != id && !PeripheralSettings::autoConnect(other)) {
+                return false; // The toggle is per device.
+            }
+        }
+        // Remove asks first; Cancel changes nothing.
+        QString asked;
+        int confirmations = 0;
+        RadioSetupDialog::setRemovalConfirmationHookForTest(
+            [&](const QString&, const QString& text) { ++confirmations; asked = text; return false; });
+        const auto restore = qScopeGuard([] {
+            RadioSetupDialog::setRemovalConfirmationHookForTest(
+                [](const QString&, const QString&) { return true; });
+        });
+        AppSettings::instance().setValue(id == "ag" ? "AG_ManualIp" : id == "shackswitch" ? "SS_ManualIp"
+            : id == "tgxl" ? "TGXL_ManualIp" : "PGXL_ManualIp", QStringLiteral("192.0.2.77"));
+        remove->click();
+        QCoreApplication::processEvents();
+        if (confirmations != 1 || list->count() != 1 || toggle->isChecked()
+            || PeripheralSettings::autoConnect(id)
+            || !asked.contains(QStringLiteral("Connect automatically"))
+            || !asked.contains(QStringLiteral("connect again"))
+            || remove->isEnabled() == false || !dialog.isEnabled()) {
+            std::fprintf(stderr, "Cancel changed state or the confirmation lacks its text (%s)\n",
+                         qPrintable(id));
+            return false;
+        }
+        // OK removes the row and returns the toggle to its default, with no
+        // suppression key left behind.
+        RadioSetupDialog::setRemovalConfirmationHookForTest(
+            [&](const QString&, const QString&) { ++confirmations; return true; });
+        remove->click();
+        QCoreApplication::processEvents();
+        if (confirmations != 2 || list->count() != 0 || !PeripheralSettings::autoConnect(id)
+            || !toggle->isChecked() || storesDismissal()
+            || AppSettings::instance().value(QStringLiteral("Peripherals")).toString().contains(
+                   QStringLiteral("AutoConnect"))) {
+            std::fprintf(stderr, "Remove did not reset the toggle (%s)\n", qPrintable(id));
+            return false;
+        }
+    }
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    return true;
+}
+
+// Off blocks automatic reconnect and discovery connects; an explicit Connect
+// still connects and leaves the toggle alone.
+bool checkConnectAutomaticallyGates()
+{
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    const QString host = QStringLiteral("192.0.2.88");
+    for (bool on : {false, true}) {
+        for (const QString& id : {QStringLiteral("tgxl"), QStringLiteral("pgxl")}) {
+            PeripheralSettings::setAutoConnect(id, on);
+            TgxlConnection tgxl;
+            PgxlConnection pgxl;
+            int opened = 0;
+            PeripheralConnectionTestAccess::injectConnect(tgxl, opened);
+            PeripheralConnectionTestAccess::injectConnect(pgxl, opened);
+            tgxl.setAutoReconnect(true);
+            pgxl.setAutoReconnect(true);
+            QObject* connection = id == "tgxl" ? static_cast<QObject*>(&tgxl) : static_cast<QObject*>(&pgxl);
+            auto* retry = connection->findChild<QTimer*>(id + QStringLiteral("ReconnectTimer"));
+            if (!retry) {
+                return false;
+            }
+            if (id == "tgxl") {
+                tgxl.autoConnectToTgxl(host, 9010);
+            } else {
+                pgxl.autoConnectToPgxl(host, 9008);
+            }
+            opened = 0;
+            QMetaObject::invokeMethod(connection, "onError", Qt::DirectConnection,
+                Q_ARG(QAbstractSocket::SocketError, QAbstractSocket::ConnectionRefusedError));
+            retry->stop();
+            QMetaObject::invokeMethod(retry, "timeout", Qt::DirectConnection);
+            if (opened != (on ? 1 : 0)) {
+                std::fprintf(stderr, "Reconnect ignored the toggle (%s, %d)\n", qPrintable(id), on);
+                return false;
+            }
+            // Explicit Connect always connects and never writes the toggle.
+            opened = 0;
+            if (id == "tgxl") {
+                tgxl.connectToTgxl(host, 9010);
+            } else {
+                pgxl.connectToPgxl(host, 9008);
+            }
+            retry->stop();
+            if (opened != 1 || PeripheralSettings::autoConnect(id) != on) {
+                return false;
+            }
+        }
+        // The shared AG model follows the toggle of the device it is on.
+        for (const QString& id : {QStringLiteral("ag"), QStringLiteral("shackswitch")}) {
+            PeripheralSettings::setAutoConnect(id, on);
+            AntennaGeniusModel ag;
+            int opened = 0;
+            PeripheralConnectionTestAccess::injectConnect(ag, opened);
+            ag.setAutoReconnect(true);
+            AgDeviceInfo info;
+            info.ip = QHostAddress(host);
+            info.port = 9007;
+            info.name = id == "ag" ? QStringLiteral("Antenna Genius") : QStringLiteral("ShackSwitch");
+            ag.connectToDevice(info);
+            opened = 0;
+            auto* retry = ag.findChild<QTimer*>(QStringLiteral("agReconnectTimer"));
+            if (!retry) {
+                return false;
+            }
+            retry->stop();
+            QMetaObject::invokeMethod(retry, "timeout", Qt::DirectConnection);
+            if (opened != (on ? 1 : 0)) {
+                std::fprintf(stderr, "AG reconnect ignored the toggle (%s, %d)\n", qPrintable(id), on);
+                return false;
+            }
+        }
+        // Discovery connects honour the toggle: the AG applet for an AG, the
+        // ShackSwitch applet for a ShackSwitch.
+        for (const QString& id : {QStringLiteral("ag"), QStringLiteral("shackswitch")}) {
+            PeripheralSettings::setAutoConnect(id, on);
+            AntennaGeniusModel ag;
+            int opened = 0;
+            PeripheralConnectionTestAccess::injectConnect(ag, opened);
+            AgDeviceInfo info;
+            info.ip = QHostAddress(host);
+            info.port = 9007;
+            info.serial = QStringLiteral("serial-%1").arg(id);
+            info.name = id == "ag" ? QStringLiteral("Antenna Genius") : QStringLiteral("ShackSwitch");
+            AntennaGeniusApplet agApplet;
+            ShackSwitchApplet ssApplet;
+            agApplet.setModel(&ag);
+            ssApplet.setModel(&ag);
+            emit ag.deviceDiscovered(info);
+            if (opened != (on ? 1 : 0)) {
+                std::fprintf(stderr, "Discovery ignored the toggle (%s, %d)\n", qPrintable(id), on);
+                return false;
+            }
+        }
+    }
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    return true;
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("peripheral-auth-dialog-test"));
@@ -1336,6 +1533,14 @@ int main(int argc, char** argv)
     }
     QApplication app(argc, argv);
     AppSettings::instance().load();
+    // Remove asks first; the lifecycle checks below confirm it. The confirmation
+    // itself is covered by checkRemovalConfirmation.
+    RadioSetupDialog::setRemovalConfirmationHookForTest(
+        [](const QString&, const QString&) { return true; });
+    if (!checkConnectAutomaticallyToggle() || !checkConnectAutomaticallyGates()) {
+        std::fprintf(stderr, "Connect automatically regressed\n");
+        return 1;
+    }
     if (!checkSharedCredentialRemoval() || !checkRemovalWithFailedVaultRead() || !checkNeverConfiguredRemovalKeepsDiscovery() || !checkRemovalSignalAndPendingNotice() || !checkRemovalTimeout() || !checkSharedModelRemovalIsolation()
         || !checkPendingRemoval() || !checkRemovalOwnerTeardown()
         || !checkShackSwitchRetryDuringRemoval() || !checkOneShotShackSwitchDuringRemoval()) {

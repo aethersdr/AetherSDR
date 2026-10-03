@@ -15,16 +15,18 @@
 namespace AetherSDR {
 
 // Peripherals settings in one nested AppSettings JSON blob; the old flat key from
-// #3321 is migrated. ACOM and SPE Expert manual-connection settings
-// (ManualIp/ManualPort/SerialPort/ConnectionMode) nest under obj["Acom"] /
-// obj["SpeExpert"] (no legacy keys). TGXL/PGXL/Antenna Genius/ShackSwitch still
-// use their own flat keys, not this class.
+// #3321 is migrated. The blob holds the Setup Peripherals list (VisibleDevices),
+// the global AutoReconnect, per-device preferences ("Connect automatically",
+// obj[<id>]["AutoConnect"]), and the ACOM and SPE Expert manual-connection
+// settings (ManualIp/ManualPort/SerialPort/ConnectionMode), which nest under
+// obj["Acom"] / obj["SpeExpert"]. The TGXL/PGXL/Antenna Genius/ShackSwitch
+// endpoints stay in their own flat keys; only their list membership and
+// AutoConnect preference live here.
 class PeripheralSettings {
 public:
     // VisibleDevices uses stable lowercase UI identifiers, not the legacy
     // connection-object names (Acom/SpeExpert/Vkamp/Lp100a). Keep these namespaces
     // distinct: changing their spelling would require a settings migration.
-    // DiscoveryDismissed is currently used only for lowercase tgxl/pgxl.
     // nullopt means this installation predates the list UI: the dialog can
     // seed it from already configured manual targets without losing them.
     static std::optional<QStringList> visibleDeviceIds()
@@ -55,21 +57,37 @@ public:
         write(root);
     }
 
-    // Remove is explicit intent to stop automatic discovery connections. Keep
-    // that intent across status updates and restarts; Add re-enables discovery.
-    static void setDiscoveryDismissed(const QString& id, bool dismissed)
+    // "Connect automatically" for the network devices tgxl, pgxl, ag and
+    // shackswitch. Default on: with no key stored, startup, discovery, alternate
+    // and reconnect attempts behave as they always have. Off blocks every
+    // automatic attempt for that device; an explicit Connect still works and
+    // never changes this value.
+    static bool autoConnect(const QString& id)
     {
-        setDeviceField(id, QStringLiteral("DiscoveryDismissed"), dismissed);
+        const QJsonValue value = deviceObj(id).value(QStringLiteral("AutoConnect"));
+        if (value.isBool()) {
+            return value.toBool();
+        }
+        if (value.isString()) {
+            return value.toString().compare(QStringLiteral("False"), Qt::CaseInsensitive) != 0;
+        }
+        return true;
     }
 
-    static bool discoveryDismissed(const QString& id)
+    static void setAutoConnect(const QString& id, bool on)
     {
-        return deviceObj(id).value(QStringLiteral("DiscoveryDismissed")).toBool();
+        setDeviceField(id, QStringLiteral("AutoConnect"),
+                       QJsonValue(on ? QStringLiteral("True") : QStringLiteral("False")));
+        clearDeviceField(id, QStringLiteral("DiscoveryDismissed"));
     }
 
-    static QString discoveredTarget(const QString& id, const QString& host)
+    // Remove returns the device to its default: the toggle is cleared, so a row
+    // that is no longer listed never carries a hidden "do not connect". The
+    // retired DiscoveryDismissed key (branch builds only) is dropped with it.
+    static void resetAutoConnect(const QString& id)
     {
-        return discoveryDismissed(id) ? QString() : host;
+        clearDeviceField(id, QStringLiteral("AutoConnect"));
+        clearDeviceField(id, QStringLiteral("DiscoveryDismissed"));
     }
 
     static bool autoReconnect()

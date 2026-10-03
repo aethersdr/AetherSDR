@@ -149,6 +149,8 @@ private:
     QString    m_attemptHost;
     bool       m_authCloseReported{false};
     bool       m_autoReconnect{false};
+    // Global "Reconnect automatically" and this device's "Connect automatically".
+    bool reconnectAllowed() const;
     bool       m_deliberateDisconnect{false};
     bool       m_tcpReached{false};       // this attempt's socket connected
     bool       m_attemptAutomatic{false}; // see autoConnectTo…

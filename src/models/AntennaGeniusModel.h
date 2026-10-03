@@ -257,6 +257,9 @@ private:
 
     // Auto-reconnect
     bool    m_autoReconnect{false};
+    // Global "Reconnect automatically" and the connected device's "Connect
+    // automatically" (ShackSwitch and Antenna Genius keep separate toggles).
+    bool reconnectAllowed() const;
     bool    m_deliberateDisconnect{false};
     QTimer* m_reconnectTimer{nullptr};
     std::optional<AgDeviceInfo> m_deferredShackSwitch;

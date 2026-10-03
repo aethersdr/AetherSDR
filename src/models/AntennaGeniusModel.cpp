@@ -1,6 +1,7 @@
 #include "core/PeripheralRemovalGuard.h"
 #include "AntennaGeniusModel.h"
 #include "core/PeripheralAuthCode.h"
+#include "core/PeripheralSettings.h"
 
 #include <QUdpSocket>
 #include <QTcpSocket>
@@ -61,7 +62,7 @@ AntennaGeniusModel::AntennaGeniusModel(QObject* parent)
             }
             return;
         }
-        if (!m_connected && !isAuthBlocked() && m_device.port > 0
+        if (!m_connected && !isAuthBlocked() && m_device.port > 0 && reconnectAllowed()
             && (!m_device.ip.isNull() || !m_device.host.isEmpty())) {
             if (PeripheralRemovalGuard::pending(PeripheralRemovalGuard::Device::AntennaGenius)) {
                 // An AG removal leaves the shared model's ShackSwitch alone.
@@ -522,12 +523,18 @@ void AntennaGeniusModel::onTcpDisconnected()
     if (m_keepAlive) {
         m_keepAlive->stop();
     }
-    if (!m_deliberateDisconnect && !isAuthBlocked() && m_autoReconnect
+    if (!m_deliberateDisconnect && !isAuthBlocked() && reconnectAllowed()
         && (wasConnected || rejectedDuringAuth)
         && m_device.port > 0 && (!m_device.ip.isNull() || !m_device.host.isEmpty())) {
         m_reconnectTimer->start();
     }
     m_deliberateDisconnect = false;
+}
+
+bool AntennaGeniusModel::reconnectAllowed() const
+{
+    return m_autoReconnect && PeripheralSettings::autoConnect(
+        isShackSwitch(m_device) ? QStringLiteral("shackswitch") : QStringLiteral("ag"));
 }
 
 void AntennaGeniusModel::onTcpError()
@@ -542,7 +549,7 @@ void AntennaGeniusModel::onTcpError()
     // the socket never reached ConnectedState. Re-arm so we keep retrying until
     // the device returns or the user disconnects. isActive() prevents double-arm
     // when a live drop emits both errorOccurred and disconnected.
-    if (!m_deliberateDisconnect && !isAuthBlocked() && !m_authPending && m_autoReconnect && !m_connected
+    if (!m_deliberateDisconnect && !isAuthBlocked() && !m_authPending && reconnectAllowed() && !m_connected
             && m_device.port > 0 && (!m_device.ip.isNull() || !m_device.host.isEmpty())
             && m_reconnectTimer && !m_reconnectTimer->isActive()) {
         m_reconnectTimer->start();
@@ -750,7 +757,7 @@ void AntennaGeniusModel::failAuthentication(const QString& reason, bool blockRec
     if (m_tcpSocket) {
         m_tcpSocket->abort();
     }
-    if (!isAuthBlocked() && m_autoReconnect && m_device.port > 0
+    if (!isAuthBlocked() && reconnectAllowed() && m_device.port > 0
         && (!m_device.ip.isNull() || !m_device.host.isEmpty())
         && !m_reconnectTimer->isActive()) {
         m_reconnectTimer->start();

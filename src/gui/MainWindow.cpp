@@ -6603,14 +6603,16 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
             // Auto-connect peripherals with manual IPs (#914)
             QString tgxlIp = cs.value("TGXL_ManualIp", "").toString();
-            if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()) {
+            if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("tgxl"))) {
                 quint16 tgxlPort = static_cast<quint16>(cs.value("TGXL_ManualPort", "9010").toInt());
                 if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
                     m_tgxlConn.autoConnectToTgxl(tgxlIp, tgxlPort);
                 }
             }
             QString pgxlIp = cs.value("PGXL_ManualIp", "").toString();
-            if (!pgxlIp.isEmpty() && !m_pgxlConn.isConnected()) {
+            if (!pgxlIp.isEmpty() && !m_pgxlConn.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("pgxl"))) {
                 quint16 pgxlPort = static_cast<quint16>(cs.value("PGXL_ManualPort", "9008").toInt());
                 if (!m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()) {
                     m_pgxlConn.autoConnectToPgxl(pgxlIp, pgxlPort);
@@ -6621,6 +6623,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             // This bypasses the UDP discovery race condition entirely.
             QString ssIp = cs.value("SS_ManualIp", "").toString();
             if (!ssIp.isEmpty() && !m_antennaGenius.isConnected()
+                && PeripheralSettings::autoConnect(QStringLiteral("shackswitch"))
                 && !m_antennaGenius.isConnecting()
                 && !m_antennaGenius.isAuthBlockedFor(ssIp, 9007)) {
                 AgDeviceInfo ssInfo;
@@ -6636,7 +6639,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             // If ShackSwitch already connected above, isConnected() = true → skips.
             // A real AG (no UDP broadcast, no SS_ManualIp) still connects after delay.
             QString agIp = cs.value("AG_ManualIp", "").toString();
-            if (!agIp.isEmpty()) {
+            if (!agIp.isEmpty() && PeripheralSettings::autoConnect(QStringLiteral("ag"))) {
                 quint16 agPort = static_cast<quint16>(cs.value("AG_ManualPort", "9007").toInt());
                 if (m_agManualConnectTimer) {
                     m_agManualConnectTimer->stop();
@@ -6649,6 +6652,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                     m_agManualConnectTimer = nullptr;
                     if (m_radioModel.isConnected() && !m_antennaGenius.isConnected()
                         && !m_antennaGenius.isConnecting()
+                        && PeripheralSettings::autoConnect(QStringLiteral("ag"))
                         && !m_antennaGenius.isAuthBlockedFor(agIp, agPort)) {
                         m_antennaGenius.connectToAddress(agIp, agPort);
                     }

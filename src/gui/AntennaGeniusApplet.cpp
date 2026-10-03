@@ -1,4 +1,5 @@
 #include "AntennaGeniusApplet.h"
+#include "core/PeripheralSettings.h"
 #include "GuardedSlider.h"
 #include "models/AntennaGeniusModel.h"
 
@@ -327,7 +328,8 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
         m_statusLabel->setText("Device found");
 
         // Auto-connect to first discovered device — but not ShackSwitch (handled by SS applet).
-        if (!AntennaGeniusModel::isShackSwitch(info) && !m_model->isConnected() && m_deviceCombo->count() == 1) {
+        if (!AntennaGeniusModel::isShackSwitch(info) && !m_model->isConnected() && m_deviceCombo->count() == 1
+            && PeripheralSettings::autoConnect(QStringLiteral("ag"))) {
             attemptDirectConnection(info);
         }
     });

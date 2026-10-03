@@ -8857,6 +8857,43 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
 // ─── Peripherals tab — manual IP connect for TGXL, PGXL, AG (#914) ───────────
 
+namespace {
+std::function<bool(const QString&, const QString&)>& removalConfirmationHook()
+{
+    static std::function<bool(const QString&, const QString&)> hook;
+    return hook;
+}
+} // namespace
+
+void RadioSetupDialog::setRemovalConfirmationHookForTest(
+    std::function<bool(const QString&, const QString&)> hook)
+{
+    removalConfirmationHook() = std::move(hook);
+}
+
+bool RadioSetupDialog::confirmPeripheralRemoval(const QString& label)
+{
+    const QString text = tr(
+        "Remove %1?\n\n"
+        "This disconnects it and clears its saved connection settings and any stored "
+        "authorization code. \"Connect automatically\" returns to its default (on).\n\n"
+        "Remove does not stop discovery: a device the radio or your network reports may "
+        "connect again. To keep a device from connecting by itself, leave it in the list "
+        "and turn off Connect automatically instead.").arg(label);
+    if (const auto& hook = removalConfirmationHook()) {
+        return hook(label, text);
+    }
+    const QPointer<RadioSetupDialog> self(this);
+    ScopedChildWidget<QMessageBox> boxOwner(
+        QMessageBox::Warning, tr("Remove %1").arg(label), text,
+        QMessageBox::Ok | QMessageBox::Cancel, this);
+    boxOwner.get()->setObjectName(QStringLiteral("peripheralRemoveConfirmation"));
+    boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+    boxOwner.get()->button(QMessageBox::Ok)->setText(tr("Remove"));
+    const int ret = boxOwner.get()->exec();
+    return self && boxOwner && ret == QMessageBox::Ok;
+}
+
 QWidget* RadioSetupDialog::buildPeripheralsTab()
 {
     auto* page = new QWidget;
@@ -9018,10 +9055,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     return;
                 }
                 int port = portSpin->value();
-                if (row == 1 || row == 2) {
-                    PeripheralSettings::setDiscoveryDismissed(
-                        row == 1 ? QStringLiteral("tgxl") : QStringLiteral("pgxl"), false);
-                }
                 statusLbl->setText(tr("Connecting…"));
                 statusLbl->setProperty("peripheralConnecting", true);
                 markDiscovery(row, ipEdit);
@@ -10591,6 +10624,24 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
         settingsGroup->setMaximumWidth(760);
         detailLayout->addWidget(settingsGroup, 0, Qt::AlignTop);
+        if (device.row >= 1 && device.row <= 4) {
+            auto* autoConnect = new QCheckBox(tr("Connect automatically"), detail);
+            autoConnect->setObjectName(QStringLiteral("peripheralAutoConnect_%1").arg(device.id));
+            autoConnect->setAccessibleName(tr("%1 connect automatically").arg(device.label));
+            autoConnect->setAccessibleDescription(tr(
+                "Connect to %1 on startup, when the radio or discovery reports it, and after a "
+                "drop. Turn off to connect only when you click Connect.").arg(device.label));
+            ThemeManager::instance().applyStyleSheet(autoConnect,
+                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
+                + kCheckBoxIndicator);
+            autoConnect->setChecked(PeripheralSettings::autoConnect(device.id));
+            // Written at once. The connections read it when they decide to
+            // reconnect, so nothing needs to be pushed to them here.
+            connect(autoConnect, &QCheckBox::toggled, this, [id = device.id](bool on) {
+                PeripheralSettings::setAutoConnect(id, on);
+            });
+            detailLayout->addWidget(autoConnect);
+        }
 
         auto* buttonRow = new QHBoxLayout;
         QWidget* connectButton = widgetAt(device.row, 3);
@@ -10729,9 +10780,6 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         action->setData(device.id);
         connect(action, &QAction::triggered, this,
                 [device, activeIds, configuredIds, refreshList, findItem, addMenu, addButton]() {
-            if (device.row == 1 || device.row == 2) {
-                PeripheralSettings::setDiscoveryDismissed(device.id, false);
-            }
             if (!configuredIds->contains(device.id)) {
                 configuredIds->append(device.id);
                 PeripheralSettings::setVisibleDeviceIds(*configuredIds);
@@ -10778,15 +10826,17 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     };
     connect(addMenu, &QMenu::aboutToShow, this, updateAddMenu);
     auto finishRemoval = [this, activeIds, configuredIds, deviceList, refreshList, updateAddMenu,
-                          widgetAt](const DeviceSpec& device, bool dismissDiscovery = false) {
+                          widgetAt](const DeviceSpec& device) {
         const int row = device.row;
-        // Set before disconnect: model signals may synchronously trigger another
-        // radio presence/status update during teardown. A device the operator
-        // never configured or connected has no discovery intent to dismiss.
-        if ((row == 1 || row == 2) && dismissDiscovery) {
-            PeripheralSettings::setDiscoveryDismissed(device.id, true);
-        }
         if (row >= 1 && row <= 4) {
+            // Remove resets the device to its defaults, "Connect automatically"
+            // included; a hidden row never keeps a silent "do not connect".
+            PeripheralSettings::resetAutoConnect(device.id);
+            if (auto* autoConnect = findChild<QCheckBox*>(
+                    QStringLiteral("peripheralAutoConnect_%1").arg(device.id))) {
+                const QSignalBlocker blocked(autoConnect);
+                autoConnect->setChecked(true);
+            }
             static const char* kIpKeys[] = {
                 "", "TGXL_ManualIp", "PGXL_ManualIp", "AG_ManualIp", "SS_ManualIp"};
             static const char* kPortKeys[] = {
@@ -10913,19 +10963,11 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                         .arg(device.label));
                     return;
                 }
-                // Captured before disconnect: only a device the operator saved or
-                // connected has discovery intent to dismiss.
-                bool hadConnectionIntent = false;
-                if (device.row == 1) {
-                    hadConnectionIntent = !AppSettings::instance().value("TGXL_ManualIp").toString().trimmed().isEmpty()
-                        || m_tgxl->isConnected() || m_tgxl->isConnecting();
-                } else if (device.row == 2) {
-                    hadConnectionIntent = !AppSettings::instance().value("PGXL_ManualIp").toString().trimmed().isEmpty()
-                        || m_pgxl->isConnected() || m_pgxl->isConnecting();
+                if (!confirmPeripheralRemoval(device.label)) {
+                    return;
                 }
                 // Acquire before disconnect: model signals can synchronously
                 // request another manual or discovered connection during teardown.
-                // Keep this transient; only finishRemoval persists dismissal.
                 auto removal = std::make_shared<PeripheralRemovalGuard>(authDevice);
                 m_peripheralRemovalPending = true;
                 QString removalEndpoint;
@@ -10986,7 +11028,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     content->setAccessibleDescription(message);
                 });
                 deadline->start(kRemovalWaitMs);
-                const auto completed = [self = QPointer<RadioSetupDialog>(this), removal, device, finishRemoval, hadConnectionIntent,
+                const auto completed = [self = QPointer<RadioSetupDialog>(this), removal, device, finishRemoval,
                      timedOut, deadline = QPointer<QTimer>(deadline),
                      widgetAt, removalNotice, content](PeripheralAuthStore::ClearResult result) {
                     if (deadline) {
@@ -11001,7 +11043,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     removalNotice->hide();
                     if (result == PeripheralAuthStore::ClearResult::Cleared
                         || result == PeripheralAuthStore::ClearResult::SessionCleared) {
-                        finishRemoval(device, hadConnectionIntent);
+                        finishRemoval(device);
                         if (result == PeripheralAuthStore::ClearResult::SessionCleared) {
                             const QString message = RadioSetupDialog::tr(
                                 "%1 removed. Keychain unavailable; stored-code deletion unconfirmed.").arg(device.label);
@@ -11032,6 +11074,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     PeripheralAuthStore::clear(authDevice, qApp, completed);
                 }
             } else {
+                if (!confirmPeripheralRemoval(device.label)) {
+                    return;
+                }
                 finishRemoval(device);
             }
             break;
@@ -11105,7 +11150,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 continue;
             }
             const QString host = device.row == 1 ? m_tgxl->reconnectHost() : m_pgxl->reconnectHost();
-            if (PeripheralSettings::discoveredTarget(device.id, host).isEmpty()) {
+            if (host.isEmpty()) {
                 continue;
             }
             // A radio-discovered device may never have been manually added.

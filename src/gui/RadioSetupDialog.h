@@ -104,6 +104,13 @@ signals:
     // Emitted after a peripheral row has been removed and its settings cleared.
     void peripheralRemoved(const QString& id);
 
+public:
+    // Test seam: answers the Remove confirmation without a modal box. Receives
+    // the device label and the confirmation text; return true to confirm. Pass
+    // an empty function to restore the real box.
+    static void setRemovalConfirmationHookForTest(
+        std::function<bool(const QString& label, const QString& text)> hook);
+
 protected:
     void closeEvent(QCloseEvent* event) override;
     void showEvent(QShowEvent* event) override;
@@ -180,6 +187,7 @@ private:
     QTableWidget* m_pinnedCertsTable{nullptr};
 
     bool m_peripheralRemovalPending{false};
+    bool confirmPeripheralRemoval(const QString& label);
     RadioModel*  m_model;
     AudioEngine* m_audio{nullptr};
     TgxlConnection*    m_tgxl{nullptr};

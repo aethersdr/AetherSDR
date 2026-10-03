@@ -4168,6 +4168,8 @@ add_executable(peripheral_auth_dialog_test
     tests/fakes/PeripheralAuthStoreFake.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/AntennaGeniusApplet.cpp
+    src/gui/ShackSwitchApplet.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
