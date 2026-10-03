@@ -48,6 +48,8 @@ public:
     // 200 Hz, wide enough to swallow a CW signal next to the carrier being
     // notched. Keep kMinNotchWidthHz in step if this changes — the UI offers
     // widths from it.
+    // This is the LONG length (rxFilterTapsFor): whenever a notch exists it is
+    // in force, so the advertised notch floor derives from it.
     static constexpr int kRxFilterTaps = 8192;
     static constexpr double kMinNotchWidthHz =
         1600.0 / (static_cast<double>(kRxFilterTaps) / 256.0)
@@ -61,9 +63,32 @@ public:
     // linear by the ruling linked in the WDSP patch ledger. Minimum
     // phase costs ~14 ms per filter edit on hl2-io; patch 14 frees its design
     // scratch. See third_party/wdsp/AETHERSDR-PATCHES.md for the measurements.
+    // CW's latency is cut by length instead: rxFilterTapsFor().
     [[nodiscard]] static constexpr bool rxMinimumPhaseFor(WdspChannel::Mode mode) noexcept
     {
         return mode != WdspChannel::Mode::Cwl && mode != WdspChannel::Mode::Cwu;
+    }
+
+    // RX filter length (#5578). Outside CW minimum phase already removed the
+    // delay, so length buys nothing there. In CW the length is the latency, so
+    // it runs kRxShortFilterTaps unless a notch needs the long filter's floor or
+    // the passband is under kRxShortTapsMinWidthHz; 2048 would leave a -33 dB
+    // skirt 50 Hz out (hl2_rxdsp_adaptive_taps_test measures each length).
+    // Shortening needs kRxTapsHysteresisHz of margin; currentTaps <= 0 = none.
+    static constexpr int kRxShortFilterTaps = 4096;
+    static constexpr double kRxShortTapsMinWidthHz = 100.0;
+    static constexpr double kRxTapsHysteresisHz = 20.0;
+    [[nodiscard]] static constexpr int rxFilterTapsFor(WdspChannel::Mode mode, double lowHz,
+                                                       double highHz, int notchCount,
+                                                       int currentTaps = 0) noexcept
+    {
+        if (rxMinimumPhaseFor(mode) || notchCount > 0)
+            return kRxFilterTaps;
+        const double width = highHz >= lowHz ? highHz - lowHz : lowHz - highHz;
+        const bool shortening = currentTaps <= 0 || currentTaps > kRxShortFilterTaps;
+        const double needed = kRxShortTapsMinWidthHz
+                              + (shortening && currentTaps > 0 ? kRxTapsHysteresisHz : 0.0);
+        return width >= needed ? kRxShortFilterTaps : kRxFilterTaps;
     }
 
     struct Config {
@@ -315,6 +340,15 @@ public:
     // index map depends on it — so both are exposed for the test that pins it.
     [[nodiscard]] int notchCount() const;
     [[nodiscard]] int wdspNotchCount() const;
+    // The RX filter length and notch-width floor the live channel is running
+    // (0 without one). Read back from the channel, not from the policy, so a
+    // test of the wiring cannot agree with itself.
+    [[nodiscard]] int rxFilterTapsInForce() const;
+    [[nodiscard]] double minimumNotchWidthInForceHz() const;
+    // TEST ONLY: treat every filter-length change as refused, as setFilterTaps()
+    // refuses one that loses beginControlOperation(). That race cannot be built
+    // on one thread, and refusing at WdspChannel would refuse the notch too.
+    void setRefuseFilterTapsChangesForTest(bool on) noexcept { m_refuseFilterTapsForTest = on; }
 
     // Mute the demodulator while transmitting. The spectrum keeps running on
     // real IQ, but the audio channel is clocked with silence so WDSP's buffers
@@ -430,6 +464,12 @@ private:
     // Pushes rxMinimumPhaseFor(m_config.mode) to the live channel. Only
     // called where the control verbs may reach it (setMode, installChannel).
     void applyMinimumPhaseForMode();
+    // Pushes rxFilterTapsFor(mode, passband, notchCount) to the live channel;
+    // notchCount is passed so addNotch() can raise for the notch it is about to
+    // add. hysteresisFromTaps (> 0) is the length the hysteresis is measured
+    // from, for a fresh channel replacing one; 0 means the length in force.
+    // Returns whether the wanted length is in force afterwards.
+    bool applyFilterTaps(int notchCount, int hysteresisFromTaps = 0);
     // One attempt to put the squelch request on the channel; marks it pending
     // on refusal. Caller has checked canPushToChannel().
     void pushSquelchToChannel();
@@ -499,6 +539,7 @@ private:
         bool active = true;
     };
     std::vector<Notch> m_notches;
+    bool m_refuseFilterTapsForTest = false;
     bool m_notchesEnabled = true;
     double m_notchTuneHz = 0.0;
 
