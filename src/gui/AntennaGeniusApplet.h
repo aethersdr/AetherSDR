@@ -11,6 +11,7 @@ class QLineEdit;
 namespace AetherSDR {
 
 class AntennaGeniusModel;
+struct AgDeviceInfo;
 
 // Antenna Genius applet — controls a 4O3A Antenna Genius switch.
 //
@@ -21,6 +22,7 @@ class AntennaGeniusModel;
 //  - Port A section: band label, RX/TX antenna, antenna grid buttons
 //  - Port B section: same layout
 //  - AUTO toggle per port
+//  - Bottom-right direct connection indicator (OFFLINE when disconnected)
 class AntennaGeniusApplet : public QWidget {
     Q_OBJECT
 
@@ -32,6 +34,8 @@ public:
 private:
     void buildUI();
     void tryManualConnect();
+    void attemptDirectConnection(const AgDeviceInfo& info, bool force = false);
+    void setConnectionSource(bool connected);
     void syncFromModel();
     void rebuildAntennaButtons();
     void updatePortDisplay(int portId);
@@ -43,6 +47,7 @@ private:
     QComboBox*   m_deviceCombo{nullptr};
     QPushButton* m_connectBtn{nullptr};
     QLabel*      m_statusLabel{nullptr};
+    QLabel*      m_sourceLabel{nullptr};
 
     // Manual IP entry (for remote connections without UDP discovery)
     QLineEdit*   m_manualIpEdit{nullptr};
