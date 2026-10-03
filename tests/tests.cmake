@@ -3247,6 +3247,7 @@ add_executable(radio_setup_max_power_field_test
     tests/radio_setup_max_power_field_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -3270,6 +3271,7 @@ add_executable(radio_setup_recording_mode_dim_test
     tests/radio_setup_recording_mode_dim_test.cpp
     src/gui/DragValuePopup.cpp
     src/gui/RadioSetupDialog.cpp
+    src/gui/RtlReceiverSettingsWidget.cpp
     src/gui/PersistentDialog.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
