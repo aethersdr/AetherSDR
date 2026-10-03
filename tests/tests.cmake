@@ -1396,11 +1396,11 @@ add_test(NAME hl2_noise_blanker_test COMMAND hl2_noise_blanker_test)
 
 # Receive squelch from Hl2RxDsp to the WDSP channel: held before configure,
 # moved by mode, kept across configure() and the asynchronous rebuild (#5678
-# row 1.5). The stage/threshold maps and the audible gate are in
-# wdsp_channel_test.
+# row 1.5), and re-pushed by an Hl2Backend LNA change (#6092). The
+# stage/threshold maps and the audible gate are in wdsp_channel_test.
 add_executable(hl2_rxdsp_squelch_test tests/hl2_rxdsp_squelch_test.cpp)
 target_include_directories(hl2_rxdsp_squelch_test PRIVATE src)
-target_link_libraries(hl2_rxdsp_squelch_test PRIVATE aethercore Qt6::Core)
+target_link_libraries(hl2_rxdsp_squelch_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rxdsp_squelch_test COMMAND hl2_rxdsp_squelch_test)
 
 # HL2 host-side CW audio peaking filter and AGC-off level (G2 of the silent

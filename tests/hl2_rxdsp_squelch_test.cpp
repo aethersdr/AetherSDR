@@ -16,9 +16,13 @@
 //      runs is not pushed at the old channel, and lands on the new one at the
 //      swap, on the mode that was set during the build too.
 //   6. A non-finite level offset is dropped, not retried at the block rate.
+//   7. THE BACKEND HALF. An LNA change on Hl2Backend re-pushes the squelch on
+//      the I/O thread, so the gate moves dB for dB with the LNA (#6092).
 //
 // Offline: no socket, no radio. Builds real WDSP channels.
 
+#include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
 
 #include <QCoreApplication>
@@ -28,7 +32,31 @@
 #include <vector>
 #include <cstdio>
 #include <string>
+#include <optional>
 #include <utility>
+
+namespace AetherSDR::hl2 {
+
+// Receiver 0 gets a configured chain on the backend's I/O thread, as
+// hl2_apf_agc_off_test does, so the push travels its production queued path.
+struct Hl2SquelchTestAccess {
+    static Hl2RxDsp* attachChain(Hl2Backend& backend, const Hl2RxDsp::Config& cfg)
+    {
+        auto* dsp = new Hl2RxDsp();
+        std::string err;
+        if (!dsp->configure(cfg, &err)) {
+            delete dsp;
+            return nullptr;
+        }
+        dsp->moveToThread(backend.m_ioThread);
+        backend.m_rx[0].dsp = dsp;
+        backend.publishIoDsps();
+        return dsp;
+    }
+    static void tearDown(Hl2Backend& backend) { backend.tearDownReceivers(); }
+};
+
+}  // namespace AetherSDR::hl2
 
 using namespace AetherSDR::hl2;
 using Stage = WdspChannel::SquelchStage;
@@ -160,6 +188,42 @@ int main(int argc, char** argv)
     check(!dsp.squelchPending() && dsp.squelchLevelOffsetDb() == 32.0
               && applied(dsp, Stage::Level, true, -140.0 + 0.7 * 60 + 32.0),
           "a NaN offset keeps the last good offset and is not retried");
+
+    // 7. Through Hl2Backend: an LNA change re-pushes the squelch offset.
+    {
+        Hl2Backend backend;
+        Hl2RxDsp* chain = Hl2SquelchTestAccess::attachChain(backend, cfg);
+        check(chain != nullptr, "receiver 0 has a configured chain on the I/O thread");
+        // Read on the chain's thread; the blocking call also drains the
+        // queued pushes ahead of it.
+        const auto onChain = [chain]() {
+            std::optional<WdspChannel::AppliedSquelch> a;
+            QMetaObject::invokeMethod(chain, [&]() { a = chain->appliedSquelch(); },
+                                      Qt::BlockingQueuedConnection);
+            return a;
+        };
+        const auto gateAt = [](int lnaDb, int level) {
+            Hl2DbReference ref;
+            ref.setLnaGainDb(lnaDb);
+            return -140.0 + 0.7 * level + ref.levelSquelchOffsetDb();
+        };
+        const int lna = backend.lnaEffectiveDb();
+        backend.setSliceSquelch(0, true, 50);
+        auto a = onChain();
+        check(a && a->stage == Stage::Level && a->amRun
+                  && std::abs(a->threshold - gateAt(lna, 50)) < 1e-9,
+              "the slice's squelch lands on amsq at the current LNA's offset");
+        backend.setLnaAutoOffsetDb(10);
+        check(backend.lnaEffectiveDb() == lna - 10, "the automatic offset lowers the LNA 10 dB");
+        a = onChain();
+        check(a && a->amRun && std::abs(a->threshold - (gateAt(lna, 50) - 10.0)) < 1e-9,
+              "an LNA change re-pushes the squelch: the gate moves with it");
+        backend.setLnaAutoOffsetDb(0);
+        a = onChain();
+        check(a && std::abs(a->threshold - gateAt(lna, 50)) < 1e-9,
+              "and moves back when the LNA is restored");
+        Hl2SquelchTestAccess::tearDown(backend);
+    }
 
     std::printf(g_failures == 0 ? "hl2_rxdsp_squelch_test: all passed\n"
                                 : "hl2_rxdsp_squelch_test: %d failure(s)\n", g_failures);
