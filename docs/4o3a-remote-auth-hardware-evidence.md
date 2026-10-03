@@ -298,16 +298,26 @@ again. Registration, manifest, engine-boundary, capability-record,
 command-plane, colour-ratchet, and whitespace checks found no new blocker.
 No additional live-hardware, OS-vault, or TX verification was performed.
 
-## Manual-address fallback (manual verification)
+## Manual-address fallback
 
-No injected seam reaches the MainWindow wiring that connects to a saved
-`TGXL_ManualIp` / `PGXL_ManualIp`, so the retry is covered by the pure
-`peripheralFallbackHost` test plus this manual check:
+When an automatic connect (discovery, presence, startup, or their reconnects)
+to a saved `TGXL_ManualIp` / `PGXL_ManualIp` never reaches the device over
+TCP, the app tries the radio-reported address once, on the default port
+(9010 / 9008), as an alternate attempt. Reconnects keep aiming at the saved
+manual host. A code saved for the manual host is not sent to the alternate
+address; if the device there asks for one, that try fails without blocking
+reconnects. An explicit Setup -> Connect, a deliberate disconnect, and an
+attempt whose socket connected never trigger the fallback.
+
+`peripheral_auth_handshake_test` (`checkUnreachableAndAlternate`) pins those
+connection-level rules and `peripheralFallbackHost` pins the address choice.
+The queued MainWindow wiring between them has no injected seam. Manual check:
 
 1. Save an unused address as the TGXL (or PGXL) manual IP while the radio
-   reports the device.
-2. Connect the radio. The first attempt fails at the socket level; the
-   connection then retries once at the radio-reported address on the default
-   port (9010 / 9008) and comes up.
-3. With a wrong saved code, the rejected-code path stays blocked and no
-   fallback attempt is made.
+   reports a device with authorization disabled.
+2. Connect the radio. The first attempt fails at the socket level, the
+   alternate attempt at the radio-reported address comes up, and after a
+   later drop the reconnect timer retries the saved manual address first.
+3. With authorization enabled and a code saved only for the manual host, the
+   alternate attempt reports "Authorization code required" and reconnects to
+   the manual host continue.

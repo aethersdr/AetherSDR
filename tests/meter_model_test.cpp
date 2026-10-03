@@ -1855,6 +1855,65 @@ void testAmpAndTunerMetersSplitByHandleAfterALateHandle()
            nearlyEqual(ampAmps, 19.2f) && nearlyEqual(ampDegC, 44.1f));
 }
 
+// With a second amplifier on the radio, the PGXL's meters are the ones whose
+// source index is its handle (FlexLib Radio.FindMetersByAmplifier). The other
+// amplifier's are defined last here, so "not the tuner" alone would let them win.
+void testOnlyTheAmplifiersOwnMetersReachIt()
+{
+    constexpr int kOtherAmpHandle = 0x2A7D11C3;
+    float ampFwd = -1.0f, ampAmps = -1.0f, ampDegC = -1.0f;
+    auto watch = [&](MeterModel& model) {
+        QObject::connect(&model, &MeterModel::ampVitalsChanged,
+                         [&](float a, bool av, bool, float t, bool tv, bool) {
+                             if (av) ampAmps = a;
+                             if (tv) ampDegC = t;
+                         });
+        QObject::connect(&model, &MeterModel::ampMetersChanged,
+                         [&](float f, float, float, float, bool) { ampFwd = f; });
+    };
+    auto defineBoth = [](MeterModel& model) {
+        model.defineMeter(ampMeter(12, kPgxlHandle, "FWD", "dBm", 30.0, 63.0));
+        model.defineMeter(ampMeter(15, kPgxlHandle, "ID", "Amps", 0.0, 70.0));
+        model.defineMeter(ampMeter(16, kPgxlHandle, "TEMP", "degC", 0.0, 100.0));
+        model.defineMeter(ampMeter(21, kOtherAmpHandle, "FWD", "dBm", 30.0, 63.0));
+        model.defineMeter(ampMeter(22, kOtherAmpHandle, "ID", "Amps", 0.0, 70.0));
+        model.defineMeter(ampMeter(23, kOtherAmpHandle, "TEMP", "degC", 0.0, 100.0));
+    };
+    auto feed = [](MeterModel& model) {
+        // PGXL: 1000 W, 19.2 A, 44.1 degC. The other amplifier: 501 W, 5 A, 30 degC.
+        model.updateValues({12, 15, 16, 21, 22, 23},
+                           {rawDb(60.0f), qint16(19.2f * 256.0f), qint16(44.1f * 64.0f),
+                            rawDb(57.0f), qint16(5.0f * 256.0f), qint16(30.0f * 64.0f)});
+    };
+
+    MeterModel known;   // handle reported before the manifest
+    watch(known);
+    known.setAmpHandle(kPgxlHandle);
+    defineBoth(known);
+    feed(known);
+    report("a second amplifier's meters do not reach the PGXL",
+           nearlyEqual(ampFwd, 1000.0f) && nearlyEqual(ampAmps, 19.2f)
+               && nearlyEqual(ampDegC, 44.1f));
+    bool withdrawn = false;
+    QObject::connect(&known, &MeterModel::ampVitalsChanged,
+                     [&](float, bool av, bool, float, bool tv, bool) {
+                         withdrawn = !av && !tv;
+                     });
+    known.setAmpHandle(kOtherAmpHandle);   // re-route: the old readings go
+    report("a re-route withdraws the amplifier's readings until the next sample",
+           withdrawn);
+
+    ampFwd = ampAmps = ampDegC = -1.0f;
+    MeterModel late;    // manifest first, handle afterwards: the rescan applies it
+    watch(late);
+    defineBoth(late);
+    late.setAmpHandle(kPgxlHandle);
+    feed(late);
+    report("the amplifier's handle re-routes meters defined before it",
+           nearlyEqual(ampFwd, 1000.0f) && nearlyEqual(ampAmps, 19.2f)
+               && nearlyEqual(ampDegC, 44.1f));
+}
+
 // The drive meter follows the same handle rule as FWD and RL. Only the PGXL
 // publishes DRV today; a tuner-handle DRV must not reach the amplifier panel.
 void testTunerHandleDriveDoesNotReachTheAmplifier()
@@ -2055,6 +2114,7 @@ int main(int argc, char** argv)
     testTunerDrainCurrentIsNotRoutedToTheAmplifier();
     testTunerTemperatureIsNotRoutedToTheAmplifier();
     testAmpAndTunerMetersSplitByHandleAfterALateHandle();
+    testOnlyTheAmplifiersOwnMetersReachIt();
     testTunerHandleDriveDoesNotReachTheAmplifier();
     testAmpPowerFlagTracksOnlyPowerMeters();
     testWithdrawingAnAmpMeterAnnouncesItself();

@@ -74,10 +74,32 @@ void MeterModel::setTgxlHandle(quint32 handle)
 {
     if (m_tgxlHandle == handle) return;
     m_tgxlHandle = handle;
+    rescanAmpMeters();
+}
 
-    // Re-scan existing AMP meter definitions to reassign TGXL vs PGXL.
-    // Meter definitions may arrive before the TGXL handle is known,
-    // causing all AMP meters to be routed to the PGXL slot (#600).
+void MeterModel::setAmpHandle(quint32 handle)
+{
+    if (m_ampHandle == handle) return;
+    m_ampHandle = handle;
+    rescanAmpMeters();
+}
+
+bool MeterModel::isTgxlMeter(int sourceIndex) const
+{
+    return m_tgxlHandle != 0 && sourceIndex == static_cast<int>(m_tgxlHandle);
+}
+
+bool MeterModel::isAmpMeter(int sourceIndex) const
+{
+    if (isTgxlMeter(sourceIndex)) return false;
+    return m_ampHandle == 0 || sourceIndex == static_cast<int>(m_ampHandle);
+}
+
+void MeterModel::rescanAmpMeters()
+{
+    // Meter definitions may arrive before either handle is known, routing
+    // every AMP meter to the PGXL slot until then (#600).
+    const bool hadAmpVital = m_hasAmpDrainCurrentValue || m_hasAmpTempValue;
     m_tgxlFwdIdx = -1;
     m_tgxlSwrIdx = -1;
     m_tgxlFwdPwr = 0.0f;
@@ -100,31 +122,36 @@ void MeterModel::setTgxlHandle(quint32 handle)
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const auto& def = *it;
         if (def.source == "AMP" && def.name == "FWD" && def.unit == "dBm") {
-            if (handle != 0 && def.sourceIndex == static_cast<int>(handle))
+            if (isTgxlMeter(def.sourceIndex))
                 m_tgxlFwdIdx = def.index;
-            else
+            else if (isAmpMeter(def.sourceIndex))
                 m_ampFwdPwrIdx = def.index;
         } else if (def.source == "AMP" && def.name == "RL") {
-            if (handle != 0 && def.sourceIndex == static_cast<int>(handle))
+            if (isTgxlMeter(def.sourceIndex))
                 m_tgxlSwrIdx = def.index;
-            else
+            else if (isAmpMeter(def.sourceIndex))
                 m_ampSwrIdx = def.index;
         } else if (def.source == "AMP" && def.name == "DRV" && def.unit == "dBm") {
             // Handle-matched like FWD and RL even though only the PGXL
             // publishes DRV today: the routing rule is "which device is this
             // meter about", and answering it per-name would put a tuner's
             // drive meter on the amplifier's panel the day one appears.
-            if (handle == 0 || def.sourceIndex != static_cast<int>(handle))
+            if (isAmpMeter(def.sourceIndex))
                 m_ampDrvIdx = def.index;
         } else if (def.source == "AMP" && def.name == "TEMP") {
             // Handle-matched for the same reason as DRV and ID.
-            if (handle == 0 || def.sourceIndex != static_cast<int>(handle))
+            if (isAmpMeter(def.sourceIndex))
                 m_ampTempIdx = def.index;
         } else if (def.source == "AMP" && def.name == "ID" && def.unit == "Amps") {
             // Handle-matched for the same reason as DRV.
-            if (handle == 0 || def.sourceIndex != static_cast<int>(handle))
+            if (isAmpMeter(def.sourceIndex))
                 m_ampIdIdx = def.index;
         }
+    }
+    // The readings start again from the next sample; until then consumers
+    // fall back to their other source.
+    if (hadAmpVital) {
+        emit ampVitalsChanged(m_ampDrainCurrent, false, false, m_ampTemp, false, false);
     }
 }
 
@@ -221,35 +248,35 @@ void MeterModel::defineMeter(const MeterDef& def)
     // Multiple FWD/RL meters exist — one per amplifier handle.
     // TGXL meters go to TunerApplet (m_tgxlFwd/SwrIdx).
     // PGXL meters go to AmpApplet (m_ampFwdPwrIdx/SwrIdx/TempIdx).
-    // Distinguish by matching def.sourceIndex against the known TGXL handle.
+    // Distinguish by matching def.sourceIndex against the known handles.
     else if (def.source == "AMP" && def.name == "FWD" && def.unit == "dBm") {
-        if (m_tgxlHandle != 0 && def.sourceIndex == static_cast<int>(m_tgxlHandle))
+        if (isTgxlMeter(def.sourceIndex))
             m_tgxlFwdIdx = def.index;
-        else
+        else if (isAmpMeter(def.sourceIndex))
             m_ampFwdPwrIdx = def.index;
     }
     else if (def.source == "AMP" && def.name == "RL") {
-        if (m_tgxlHandle != 0 && def.sourceIndex == static_cast<int>(m_tgxlHandle))
+        if (isTgxlMeter(def.sourceIndex))
             m_tgxlSwrIdx = def.index;
-        else
+        else if (isAmpMeter(def.sourceIndex))
             m_ampSwrIdx = def.index;
     }
     else if (def.source == "AMP" && def.name == "DRV" && def.unit == "dBm") {
-        // Exciter power measured at the amplifier's input. See setTgxlHandle
+        // Exciter power measured at the amplifier's input. See rescanAmpMeters
         // for why this is handle-matched rather than name-matched.
-        if (m_tgxlHandle == 0 || def.sourceIndex != static_cast<int>(m_tgxlHandle))
+        if (isAmpMeter(def.sourceIndex))
             m_ampDrvIdx = def.index;
     }
     else if (def.source == "AMP" && def.name == "TEMP") {
         // The PGXL's PA heatsink. Handle-matched for the same reason as DRV:
         // a tuner's TEMP, should one appear, must not land on the amplifier,
         // where it would also hold off the PGXL's own reading.
-        if (m_tgxlHandle == 0 || def.sourceIndex != static_cast<int>(m_tgxlHandle))
+        if (isAmpMeter(def.sourceIndex))
             m_ampTempIdx = def.index;
     }
     else if (def.source == "AMP" && def.name == "ID" && def.unit == "Amps") {
         // The PGXL's drain current. Handle-matched for the same reason as DRV.
-        if (m_tgxlHandle == 0 || def.sourceIndex != static_cast<int>(m_tgxlHandle))
+        if (isAmpMeter(def.sourceIndex))
             m_ampIdIdx = def.index;
     }
 
@@ -566,6 +593,7 @@ void MeterModel::clear()
     m_tgxlFwdIdx = -1;
     m_tgxlSwrIdx = -1;
     m_tgxlHandle = 0;
+    m_ampHandle = 0;
     m_tgxlFwdPwr = 0.0f;
     m_tgxlSwr = 1.0f;
     m_lastTgxlFwdPowerUpdateMs = 0;

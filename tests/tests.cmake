@@ -5556,6 +5556,13 @@ target_include_directories(radio_capacity_declaration_test PRIVATE src)
 target_link_libraries(radio_capacity_declaration_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME radio_capacity_declaration_test COMMAND radio_capacity_declaration_test)
 
+# RadioModel passes the power amplifier's handle to MeterModel, so only that
+# amplifier's AMP meters reach the PGXL panel.
+add_executable(radiomodel_amp_meter_routing_test tests/radiomodel_amp_meter_routing_test.cpp)
+target_include_directories(radiomodel_amp_meter_routing_test PRIVATE src)
+target_link_libraries(radiomodel_amp_meter_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_amp_meter_routing_test COMMAND radiomodel_amp_meter_routing_test)
+
 add_executable(radiomodel_tnf_removal_status_test tests/radiomodel_tnf_removal_status_test.cpp)
 target_include_directories(radiomodel_tnf_removal_status_test PRIVATE src)
 target_link_libraries(radiomodel_tnf_removal_status_test PRIVATE aethercore Qt6::Core Qt6::Test)

@@ -6589,14 +6589,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
             if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()) {
                 quint16 tgxlPort = static_cast<quint16>(cs.value("TGXL_ManualPort", "9010").toInt());
                 if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
-                    m_tgxlConn.connectToTgxl(tgxlIp, tgxlPort);
+                    m_tgxlConn.autoConnectToTgxl(tgxlIp, tgxlPort);
                 }
             }
             QString pgxlIp = cs.value("PGXL_ManualIp", "").toString();
             if (!pgxlIp.isEmpty() && !m_pgxlConn.isConnected()) {
                 quint16 pgxlPort = static_cast<quint16>(cs.value("PGXL_ManualPort", "9008").toInt());
                 if (!m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()) {
-                    m_pgxlConn.connectToPgxl(pgxlIp, pgxlPort);
+                    m_pgxlConn.autoConnectToPgxl(pgxlIp, pgxlPort);
                 }
             }
             // If SS_ManualIp is set, connect to ShackSwitch immediately using a
