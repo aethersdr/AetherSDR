@@ -549,7 +549,8 @@ private:
     quint64 m_agcModeIntentRevision{0};
     quint64 m_agcThresholdIntentRevision{0};
     quint64 m_agcOffLevelIntentRevision{0};
-    std::array<std::array<quint64, 2>, 11> m_dspIntentRevisions{};
+    std::array<std::array<quint64, 2>,
+        static_cast<std::size_t>(SliceDspRequest::Feature::Anft) + 1> m_dspIntentRevisions{};
     std::array<quint64, 3> m_audioIntentRevisions{};
     quint64 m_squelchIntentRevision{0};
     bool m_squelchEnableIntentPending{false};

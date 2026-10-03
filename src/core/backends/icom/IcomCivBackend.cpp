@@ -4355,7 +4355,8 @@ ReceiveDispatch IcomCivBackend::requestSliceRxAntenna(int sliceId, const QString
 {
     if (!m_connected || !m_session || sliceId != 0 || !m_model || !profileFor(*m_model).rxAntenna
         || !profileFor(*m_model).rxAntenna->selectable
-        || (antenna != QLatin1String("ANT1") && antenna != QLatin1String("RX-ANT"))) {
+        || (antenna.compare(QLatin1String("ANT1"), Qt::CaseInsensitive) != 0
+            && antenna.compare(QLatin1String("RX-ANT"), Qt::CaseInsensitive) != 0)) {
         return ReceiveDispatch::Unsupported;
     }
     setSliceRxAntenna(sliceId, antenna);

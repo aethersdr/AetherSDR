@@ -57,7 +57,7 @@ struct SplitAudioProfile {
 };
 
 // Marks an audio write as the operator's own while in scope. SliceModel emits
-// audiotyped operator audio intents for every setter caller (TCI, SmartCAT, rigctld, Mute All,
+// typed audio intents for every setter caller (TCI, SmartCAT, rigctld, Mute All,
 // RADE, memory recall...); only operator edits are preferences, so the recorder
 // notes changes only while a scope is live. GUI thread only: remote paths reach
 // the setters via queued invocations, outside any scope.
@@ -74,7 +74,7 @@ private:
 };
 
 // What the operator did to the two slices during one split. MainWindow forwards
-// typed operator audio intents into the note* methods and stores merge()'s result. It must
+// typed audio intents into the note* methods and stores merge()'s result. It must
 // outlive the TX slice: when the radio removes it, onSliceRemoved runs after the
 // model object is destroyed, so this recorder is the only record.
 class SplitAudioRecorder {

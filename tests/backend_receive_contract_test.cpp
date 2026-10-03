@@ -421,8 +421,8 @@ void receiveControlContracts()
         // retains the fixture's A4 address; dialect and destination are separate.
         IcomCivBackendTestAccess::selectModel(backend, *modelForId(0xB6));
         QSignalSpy observations(&backend, &IRadioBackend::sliceChanged);
-        check(backend.requestSliceRxAntenna(0, QStringLiteral("RX-ANT")) == ReceiveDispatch::Dispatched,
-              "Icom selectable RX antenna accepts the canonical port name");
+        check(backend.requestSliceRxAntenna(0, QStringLiteral("rx-ant")) == ReceiveDispatch::Dispatched,
+              "Icom selectable RX antenna retains case-insensitive port admission");
         IcomCivBackendTestAccess::pump(backend);
         check(IcomCivBackendTestAccess::firstDispatched(backend) == QStringLiteral("fe fe a4 e0 12 00 01 fd")
                   && observations.isEmpty(),
@@ -447,8 +447,9 @@ void receiveControlContracts()
         std::unique_ptr<IRadioBackend> backend = family.make();
         if (QLatin1String(family.name) != QLatin1String("flex")) {
             check(backend->requestSliceDsp(0, {SliceDspRequest::Feature::Apf, SliceDspRequest::Field::Level, true, 40})
-                      == ReceiveDispatch::Unsupported,
-                  "non-Flex APF request refuses explicitly without inventing a backend feature");
+                      == (QLatin1String(family.name) == QLatin1String("hl2")
+                          ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported),
+                  "HL2 retains cold APF configuration; other non-Flex families refuse it");
         }
         if (QLatin1String(family.name) == QLatin1String("sim")) {
             check(backend->requestSliceAudio(0, {SliceAudioRequest::Field::Gain, 40}) == ReceiveDispatch::Unsupported
@@ -630,12 +631,43 @@ void hl2WorkerDispatch()
     backend.requestSliceAgc(0, {SliceAgcRequest::Field::OffLevel, QStringLiteral("off"), 100, 90});
     applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
     check(applied.agcMode == 4 && std::abs(applied.maximumAgcGainDb - 24.0) < 1e-9,
-          "threshold preserves fast AGC; unsupported off-level cannot alter the worker");
+          "off-level preserves fast AGC and its independently configured gain ceiling");
+    check(std::abs(applied.agcFixedGainDb - hl2::Hl2RxDsp::agcFixedGainDbForOffLevel(90)) < 1e-9,
+          "typed HL2 AGC off-level reaches the existing worker gain configuration");
     check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Level, true, 71})
-              == ReceiveDispatch::Dispatched, "HL2 accepts its implemented blanker only");
+              == ReceiveDispatch::Dispatched, "HL2 accepts its implemented blanker");
     applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
     check(applied.noiseBlankerEnabled && applied.noiseBlankerLevel == 71,
           "HL2 typed blanker configures the actual DSP worker");
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Apf,
+              SliceDspRequest::Field::Enabled, true, 75}) == ReceiveDispatch::Dispatched,
+          "HL2 accepts its existing CW APF through the typed DSP adapter");
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.apfEnabled && std::abs(applied.apfBandwidthHz
+              - hl2::Hl2RxDsp::apfBandwidthHzForLevel(75)) < 1e-9,
+          "typed HL2 APF enable and level reach the actual WDSP channel");
+    backend.requestSliceDsp(0, {SliceDspRequest::Feature::Apf,
+        SliceDspRequest::Field::Level, true, 25});
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.apfEnabled && std::abs(applied.apfBandwidthHz
+              - hl2::Hl2RxDsp::apfBandwidthHzForLevel(25)) < 1e-9,
+          "typed HL2 APF level edit preserves enable in the actual channel");
+    backend.setSliceMode(0, QStringLiteral("FM"));
+    check(backend.requestSliceSquelch(0, {true, 38, true, true}) == ReceiveDispatch::Dispatched,
+          "HL2 accepts its existing squelch through the typed adapter");
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.squelchEnabled && applied.squelchLevel == 38 && !applied.apfEnabled,
+          "HL2 squelch reaches the actual channel while APF is held out of FM");
+    backend.requestSliceSquelch(0, {false, 63, true, true});
+    backend.setSliceMode(0, QStringLiteral("CW"));
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(!applied.squelchEnabled && applied.squelchLevel == 63 && applied.apfEnabled,
+          "typed squelch disable persists while APF returns on CW mode");
+    check(backend.requestSliceSquelch(0, {true, 101, true, true}) == ReceiveDispatch::Unsupported
+              && backend.requestSliceSquelch(99, {true, 50, true, true}) == ReceiveDispatch::Unsupported
+              && backend.requestSliceDsp(99, {SliceDspRequest::Feature::Apf,
+                  SliceDspRequest::Field::Enabled, true, 50}) == ReceiveDispatch::Unsupported,
+          "invalid HL2 squelch levels and receiver identities are refused");
     backend.requestSliceAudio(0, {SliceAudioRequest::Field::Gain, 43});
     backend.requestSliceAudio(0, {SliceAudioRequest::Field::Mute, 1});
     backend.requestSliceAudio(0, {SliceAudioRequest::Field::Pan, 77});

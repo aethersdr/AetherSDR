@@ -1644,7 +1644,7 @@ void RadioModel::wireBackendReceiverState()
                 m_backend->setXitOffset(hz);
             });
 
-            wireSliceAudioIntentsToBackend(s);
+            wireSliceObservationsAndTxIntentToBackend(s);
             m_slices.append(s);
             s->applyChanges(mapped);
             m_meterModel.setActiveTxSlice(activeTxSliceNum());
@@ -4167,10 +4167,9 @@ bool RadioModel::radioSideNoiseReductionAvailable() const
 
 bool RadioModel::radioSideAutoNotchAvailable() const
 {
-    // A command plane carries `slice set <n> anf=` somewhere that answers it:
-    // a Flex, or the Demo radio's synthetic connection, which turns it into the
-    // generator's audible notch (SimBackend::setDemoAnf) although the Demo
-    // declares no radio-side DSP. Only a radio with neither has no ANF.
+    // Flex and radio-side DSP use their backend ANF adapters. Demo also accepts
+    // ANF via SimBackend::requestSliceDsp, which controls its real generator,
+    // although it declares no radio-side DSP.
     return hasCommandPlane() || radioSideNoiseReductionAvailable();
 }
 
@@ -9937,7 +9936,7 @@ void RadioModel::dispatchSliceLock(bool locked)
     }
 }
 
-void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
+void RadioModel::wireSliceObservationsAndTxIntentToBackend(SliceModel* s)
 {
     if (!s)
         return;
@@ -11959,9 +11958,9 @@ void RadioModel::handleSliceStatus(int id,
             connect(s, &SliceModel::commandReady, this, [this, s](const QString& cmd){
                 sendSliceCommand(s, cmd);
             });
-            // The per-slice audio and TX-slice intents, wired at EVERY
+            // Initial lock observation and selection intents, wired at EVERY
             // construction site rather than only the backend-materialising one.
-            wireSliceAudioIntentsToBackend(s);
+            wireSliceObservationsAndTxIntentToBackend(s);
             wireSliceReceiveIntentsToBackend(s);
             connect(s, &SliceModel::digitalVoiceSliceDisplaced,
                     this, [this](int sliceId, const QString& previousMode) {

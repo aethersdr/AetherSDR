@@ -15,6 +15,7 @@
 #include <QThread>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <numbers>
@@ -38,6 +39,18 @@ namespace AetherSDR::rtl {
 struct RtlSdrBackendTestAccess {
     static void connectWith(RtlSdrBackend& backend, RtlSdrWorker* worker)
     {
+        using T = RtlCaptureTransaction;
+        backend.m_capture.beginSession();
+        T::Desired desired;
+        desired.receivers = {{{0, 95'200'000, -100'000, 100'000, 0, 0, 0}, T::Mode::Wfm}};
+        const auto submitted = backend.m_capture.submit(desired);
+        const auto work = backend.m_capture.takeWork();
+        if (!submitted || !work) { std::abort(); }
+        backend.m_capture.complete({work->token, T::ResultCode::Applied, work->target, work->operation});
+        backend.m_published = work->token;
+        backend.m_viewport = RtlViewport::fit(work->target.capture, RtlSdrDdc::kSpectrumBinCount,
+            work->target.capture.centerHz, work->target.capture.achievedSampleRateHz);
+        workerToken = work->token;
         backend.m_worker.reset(worker);
         backend.wireWorker();
         worker->start();
@@ -50,6 +63,7 @@ struct RtlSdrBackendTestAccess {
         backend.wireWorker();
         worker->start();
     }
+    static inline RtlCaptureTransaction::Token workerToken;
 };
 
 }  // namespace AetherSDR::rtl
@@ -77,7 +91,9 @@ protected:
             }
             while (framesToEmit.load() > 0) {
                 --framesToEmit;
-                emit ddc()->spectrumFrameReady(0, QByteArray(16, '\x01'));
+                const auto token = rtl::RtlSdrBackendTestAccess::workerToken;
+                emit spectrumFrameReady(token.session, token.revision, 0,
+                    QByteArray(rtl::RtlSdrDdc::kSpectrumBinCount * int(sizeof(float)), '\x01'));
             }
             QThread::msleep(5);
         }
@@ -261,9 +277,11 @@ int main(int argc, char** argv)
         // A read failure posted to the backend just before the operator
         // disconnects is delivered after disconnected(); it must not surface.
         worker->failRead = true;
-        while (!worker->readFailed.load()) {
+        QDeadlineTimer errorDeadline(2000);
+        while (!worker->readFailed.load() && !errorDeadline.hasExpired()) {
             QThread::msleep(1);
         }
+        check(worker->readFailed.load(), "the worker queues the read error within the deadline");
 
         stranding.disconnectRadio();   // stopReading() gives up after ~5 s
         check(alive && worker->isRunning(), "the stuck worker was stranded, not joined");

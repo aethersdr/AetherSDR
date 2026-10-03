@@ -7398,7 +7398,7 @@ void MainWindow::applySplitOffsetKHz(double offsetKHz, int rxSliceId)
 
 // The split audio arrangement is learned from what the operator does (TX
 // unmute, pans, TX gain) and replayed next split; nothing is configured.
-// Learned only from the typed operator audio intents signals: the *Changed signals also fire
+// Learned only from the typed audio intent signals: the *Changed signals also fire
 // on radio status (see SliceModel.h), so they would record radio state, other
 // clients or profile loads as the operator's preference.
 

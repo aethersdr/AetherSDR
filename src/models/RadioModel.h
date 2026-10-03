@@ -1736,7 +1736,7 @@ private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
     // Remaining selection bindings and initial global lock observation.
     // Both helpers must be called at every SliceModel construction site.
-    void wireSliceAudioIntentsToBackend(SliceModel* s);
+    void wireSliceObservationsAndTxIntentToBackend(SliceModel* s);
     void wireSliceReceiveIntentsToBackend(SliceModel* s);
     bool m_stagingReceiveModels{false};
     SliceModel* receiveCommandSource() const;
