@@ -983,6 +983,7 @@ void IcomCivBackend::disconnectRadio()
     m_civDetectAttempts = 0;
     m_scopeStarted = false;
     m_tuning = false;
+    m_tuneOperation = {};
     m_cwBreakInMode = 1;
     m_preTuneTxPowerPercent = -1;
     if (m_connected) {
@@ -1527,6 +1528,7 @@ void IcomCivBackend::onSessionDisconnected(const QString& reason)
 {
     m_tuneTimer->stop();
     m_tuning = false;
+    m_tuneOperation = {};
     m_preTuneTxPowerPercent = -1;
     const bool was = m_connected;
     if (was && !reason.isEmpty()) {
@@ -3277,6 +3279,7 @@ int IcomCivBackend::stopTuneProducer()
     }
 
     m_tuning = false;
+    m_tuneOperation = {};
     const int restore = m_preTuneTxPowerPercent;
     m_preTuneTxPowerPercent = -1;
     return restore;
@@ -4936,6 +4939,7 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxC
             || refuseKeyingInReceiveOnlyMode()) {
             return;
         }
+        m_tuneOperation = operation;
         if (m_tuning) {
             if (tunePowerPercent >= 0) {
                 writeTxPowerLevel(tunePowerPercent);
@@ -4976,9 +4980,11 @@ void IcomCivBackend::setTxPower(int percent)
     writeTxPowerLevel(percent);
 }
 
+// A carrier whose admission has lapsed takes no drive change.
 void IcomCivBackend::setTunePower(int percent)
 {
-    if (!m_tuning) {
+    if (!m_tuning
+        || !TxCoordinator::Command{m_tuneOperation, true}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
     writeTxPowerLevel(percent);

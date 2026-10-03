@@ -244,6 +244,22 @@ static void tunePowerChangedWhileKeyedAppliesLive()
           "after TUNE is released: no setTunePower() reaches the backend");
 }
 
+// A tune state decoded off the radio is not a TUNE this client admitted: with
+// no live Tune activity, a tune power change is not forwarded live.
+static void tunePowerNotForwardedWithoutTuneActivity()
+{
+    Fixture f(hostModulatingTransmitter(true));
+    check(f.installTxSlice(), "premise: a TX slice is installed");
+    TransmitDelta reported;
+    reported.tune = true;
+    f.radio.transmitModel().applyChanges(reported);
+    check(f.radio.transmitModel().isTuning(), "premise: the decoded state reads as tuning");
+    check(f.backend->tunes.isEmpty(), "premise: this client never keyed TUNE");
+    f.radio.transmitModel().setTunePower(30);
+    check(f.backend->tunePowers.isEmpty(),
+          "tuning without a live Tune activity: no setTunePower() reaches the backend");
+}
+
 // Without tunePowerAppliesLive, a change while TUNE is keyed reaches no seam
 // setter, so its text is a real drop.
 static void tunePowerChangedWhileKeyedKeepsDropNotice()
@@ -394,6 +410,7 @@ int main(int argc, char** argv)
     cwPitchReachesSeamWithoutDropNotice();
     tunePowerDeliveredAtKeyTimeWithoutDropNotice();
     tunePowerChangedWhileKeyedAppliesLive();
+    tunePowerNotForwardedWithoutTuneActivity();
     tunePowerChangedWhileKeyedKeepsDropNotice();
     cwPitchNeverHandedToBackendKeepsDropNotice();
     cwPitchHandedToPreviousBackendKeepsDropNotice();

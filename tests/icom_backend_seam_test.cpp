@@ -96,6 +96,10 @@ struct IcomCivBackendTestAccess {
         return b.m_tuneTimer && b.m_tuneTimer->isActive();
     }
     static int preTunePower(const IcomCivBackend& b) { return b.m_preTuneTxPowerPercent; }
+    static const TxCoordinator::Operation& tuneOperation(const IcomCivBackend& b)
+    {
+        return b.m_tuneOperation;
+    }
     static void setMode(IcomCivBackend& b, CivMode mode, bool data = false)
     {
         b.m_mode = mode;
@@ -493,14 +497,34 @@ void testTunePowerAppliesLive()
         Access::forget(backend);
     }
 
+    check(Access::tuneOperation(backend).permitsCleanup(),
+          "premise: the TUNE operation is held while tuning");
     backend.setTune(false, 15, authority.operation);
     check(powerWrites(Access::issued(backend)) == std::vector<int>{percentToLevelRaw(50)},
           "TUNE release restores the RF power set during TUNE (50%)");
+    check(!Access::tuneOperation(backend).permitsCleanup(),
+          "TUNE release drops the TUNE operation");
     Access::settle(backend);
     Access::forget(backend);
     backend.setTunePower(30);
     check(powerWrites(Access::issued(backend)).empty(),
           "tune power after TUNE is released writes nothing");
+
+    {
+        // A TUNE whose admission was revoked takes no drive change.
+        TxTestAuthority revoked;
+        IcomCivBackend stopped;
+        stopped.setTransmitContext(revoked.context);
+        Access::prepare(stopped, "IC-705");
+        stopped.setTune(true, 10, revoked.operation);
+        Access::settle(stopped);
+        Access::forget(stopped);
+        check(Access::tuning(stopped), "premise: TUNE keyed under the revocable operation");
+        revoked.coordinator.emergencyStop();
+        stopped.setTunePower(60);
+        check(powerWrites(Access::issued(stopped)).empty(),
+              "tune power after the TUNE operation was stopped writes nothing");
+    }
 }
 
 // WFM receives only: no key and no TUNE, but an unkey still goes out.

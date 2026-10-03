@@ -562,6 +562,7 @@ private:
     // The operator's RF power while TUNE holds the drive register; the unkey
     // writes it back. setTxPower() during TUNE updates this, not the register.
     int m_preTuneTxPowerPercent = -1;
+    TxCoordinator::Operation m_tuneOperation;   // the TUNE carrier's admission
     double m_tunePhase = 0.0;
     static constexpr double kTuneToneHz = 1500.0;
     static constexpr int kTuneToneFrameMs = 20;

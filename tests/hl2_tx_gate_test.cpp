@@ -96,6 +96,10 @@ struct Hl2TxGateTestAccess {
     }
 
     static MetisClient* metis(Hl2Backend& backend) { return backend.m_metis; }
+    static const TxCoordinator::Operation& tuneOperation(const Hl2Backend& backend)
+    {
+        return backend.m_tuneOperation;
+    }
 
     static void expireHang(Hl2Backend& backend)
     {
@@ -363,7 +367,11 @@ static void testTunePowerAppliesLiveWhileTuning(TxTestAuthority& authority)
         backend.setTunePower(-5);
         check(driveIs(drain(backend), 0, false), "tune power below 0% clamps to 0, PA off");
 
+        check(Hl2TxGateTestAccess::tuneOperation(backend).permitsCleanup(),
+              "premise: the TUNE operation is held while tuning");
         backend.setTune(false, 10, authority.operation, {});
+        check(!Hl2TxGateTestAccess::tuneOperation(backend).permitsCleanup(),
+              "TUNE release drops the TUNE operation");
         const Drained released = drain(backend);
         check(driveIs(released, 102, true),
               "TUNE release restores the operator's 40% RF drive, not the live tune drive");

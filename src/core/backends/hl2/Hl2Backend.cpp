@@ -4041,6 +4041,7 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         // disconnect reset all call setKeying(false) directly.
         wasTuning = m_tuning;
         m_tuning = false;
+        m_tuneOperation = {};
         // Cleared on EVERY unkey, not only a tuning one, and unconditionally
         // rather than behind `wasTuning`: this is the single point every unkey
         // path converges on (the comment above enumerates them), and a tune
@@ -7009,6 +7010,7 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission.
     m_keyed = false;
     m_tuning = false;
+    m_tuneOperation = {};
     // BELT AND BRACES, and named as such rather than dressed up: the bit lives
     // in MetisClient, which clears it in start(), so on the path that matters
     // this is redundant. It is here because this function is the one place that
