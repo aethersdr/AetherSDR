@@ -199,6 +199,9 @@ void PgxlConnection::onError(QAbstractSocket::SocketError error)
     if (!m_authPending && !m_authCloseReported) {
         emit connectionFailed(m_socket.errorString());
     }
+    if (!m_connected && !m_authPending && !m_authCloseReported && !m_authBlocked) {
+        emit unreachable(m_attemptHost);
+    }
     // A failed reconnect attempt arrives here (not via onDisconnected) because
     // the socket never reached ConnectedState. Re-arm so we keep retrying until
     // the device returns or the user disconnects. isActive() prevents double-arm
@@ -472,7 +475,11 @@ quint32 PgxlConnection::sendCommand(const QString& cmd)
 {
     quint32 seq = ++m_seq;
     QString line = QString("C%1|%2\n").arg(seq).arg(cmd);
-    m_socket.write(line.toUtf8());
+    if (m_commandWriter) {
+        m_commandWriter(line.toUtf8());
+    } else {
+        m_socket.write(line.toUtf8());
+    }
     // Setup writes carry the device's authcode even when the operator only
     // changed fan mode or MEffA. Never copy that credential into support logs.
     qCDebug(lcTuner) << "PgxlConnection: sent"

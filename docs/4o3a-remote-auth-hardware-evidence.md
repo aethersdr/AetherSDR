@@ -37,6 +37,13 @@ the command using sequence `1`, so a TGXL implementation must not require an
 devices at the firmware versions shown; it does not establish behavior for
 other firmware versions or Antenna Genius.
 
+A PGXL on firmware 3.9.8 with authorization enabled answers `setup read` with
+`authcode=<digits>` and refuses a `setup` command that carries that key, with
+`R4|50000013|` (bad parameter). The same `setup` without `authcode` is
+accepted and leaves the stored code unchanged. With no code set, `setup read`
+reports `authcode=` empty, and the empty key is sent back as the vendor
+utility does (probed 2026-09-29).
+
 The [vendor TGXL API document](https://github.com/user-attachments/files/27611828/TG.XL.API.Commands.pdf)
 lists `R1|0|Unauthorized` for a rejected code. Because its numeric result is
 also zero, the client must check the reply body. This rejection was documented
@@ -290,3 +297,17 @@ clipping. After restoring the fixes and rebuilding, all eight tests passed
 again. Registration, manifest, engine-boundary, capability-record,
 command-plane, colour-ratchet, and whitespace checks found no new blocker.
 No additional live-hardware, OS-vault, or TX verification was performed.
+
+## Manual-address fallback (manual verification)
+
+No injected seam reaches the MainWindow wiring that connects to a saved
+`TGXL_ManualIp` / `PGXL_ManualIp`, so the retry is covered by the pure
+`peripheralFallbackHost` test plus this manual check:
+
+1. Save an unused address as the TGXL (or PGXL) manual IP while the radio
+   reports the device.
+2. Connect the radio. The first attempt fails at the socket level; the
+   connection then retries once at the radio-reported address on the default
+   port (9010 / 9008) and comes up.
+3. With a wrong saved code, the rejected-code path stays blocked and no
+   fallback attempt is made.

@@ -58,6 +58,7 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
+#include "core/PeripheralEndpointFallback.h"
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
 #include "SliceLabel.h"
@@ -6582,6 +6583,41 @@ void MainWindow::wireMeters()
     connect(&m_tgxlConn, &TgxlConnection::connected, this, [this]() {
         m_appletPanel->tunerApplet()->setDirectFailureReason(QString());
     });
+    // A saved manual address can go stale while the radio still reports the
+    // device. When a connect to it fails at the socket level, try the
+    // radio-reported address once, on the default port.
+    {
+        auto tgxlFallbackTried = std::make_shared<bool>(false);
+        auto pgxlFallbackTried = std::make_shared<bool>(false);
+        connect(&m_tgxlConn, &TgxlConnection::connected, this,
+                [tgxlFallbackTried]() { *tgxlFallbackTried = false; });
+        connect(&m_pgxlConn, &PgxlConnection::connected, this,
+                [pgxlFallbackTried]() { *pgxlFallbackTried = false; });
+        connect(&m_tgxlConn, &TgxlConnection::unreachable, this,
+                [this, tgxlFallbackTried](const QString& attemptedHost) {
+            const QString host = peripheralFallbackHost(
+                attemptedHost,
+                AppSettings::instance().value("TGXL_ManualIp", "").toString(),
+                m_radioModel.tunerModel().tgxlIp(),
+                m_tgxlConn.isAuthBlocked(), *tgxlFallbackTried);
+            if (!host.isEmpty() && m_radioModel.tunerModel().isPresent()) {
+                *tgxlFallbackTried = true;
+                m_tgxlConn.connectToTgxl(host, 9010);
+            }
+        });
+        connect(&m_pgxlConn, &PgxlConnection::unreachable, this,
+                [this, pgxlFallbackTried](const QString& attemptedHost) {
+            const QString host = peripheralFallbackHost(
+                attemptedHost,
+                AppSettings::instance().value("PGXL_ManualIp", "").toString(),
+                m_radioModel.amplifier().ip(),
+                m_pgxlConn.isAuthBlocked(), *pgxlFallbackTried);
+            if (!host.isEmpty() && m_radioModel.amplifier().present()) {
+                *pgxlFallbackTried = true;
+                m_pgxlConn.connectToPgxl(host, 9008);
+            }
+        });
+    }
     // Same for the PGXL: the per-port block, the state word and the alert
     // channel live in the model rather than being decoded into the applet
     // here, so the applet has one source for them whichever path they arrive
@@ -6635,7 +6671,11 @@ void MainWindow::wireMeters()
     });
     // PGXL status → AmpApplet (direct telemetry: vac, vdd, id, temp, hltemp, state, etc.)
     connect(&m_pgxlConn, &PgxlConnection::statusUpdated, this, [this](const QMap<QString, QString>& kvs) {
-        qCDebug(lcTuner) << "PGXL status:" << kvs;
+        QMap<QString, QString> logged = kvs;
+        if (logged.contains("authcode")) {
+            logged["authcode"] = QStringLiteral("<redacted>");
+        }
+        qCDebug(lcTuner) << "PGXL status:" << logged;
         auto* amp = m_appletPanel->ampApplet();
         // Heatsink temperatures, in degrees Celsius:
         //   `temp` is the PA heatsink.

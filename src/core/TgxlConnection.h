@@ -81,6 +81,9 @@ signals:
     void connected();
     void disconnected();
     void connectionFailed(const QString& errorString);
+    // The socket never reached the device (not an auth failure); carries the
+    // host the attempt asked for.
+    void unreachable(const QString& attemptedHost);
     void authCodeRequired(quint64 attempt);
     void authCodeAccepted(const QString& code);
     void enteredAuthCodeDiscarded();

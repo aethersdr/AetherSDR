@@ -3942,6 +3942,7 @@ add_executable(peripheral_auth_handshake_test
     src/core/TgxlConnection.cpp
     src/core/PgxlConnection.cpp
     src/models/AntennaGeniusModel.cpp
+    src/models/AmpModel.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
     ${AETHER_SETTINGS_SOURCES}

@@ -7,6 +7,8 @@
 #include <QMap>
 #include <QString>
 
+#include <functional>
+
 namespace AetherSDR {
 
 // Direct TCP connection to a 4O3A Power Genius XL on port 9008.
@@ -15,6 +17,7 @@ namespace AetherSDR {
 // temperature, mains voltage, band, bias mode, fan mode.
 class PgxlConnection : public QObject {
     Q_OBJECT
+    friend struct PgxlConnectionTestAccess;
 
 public:
     explicit PgxlConnection(QObject* parent = nullptr);
@@ -67,6 +70,9 @@ signals:
     void connected();
     void disconnected();
     void connectionFailed(const QString& errorString);
+    // The socket never reached the device (not an auth failure); carries the
+    // host the attempt asked for.
+    void unreachable(const QString& attemptedHost);
     void authCodeRequired(quint64 attempt);
     void authCodeAccepted(const QString& code);
     void enteredAuthCodeDiscarded();
@@ -119,6 +125,9 @@ private:
     void sendAuthentication();
     void failAuthentication(const QString& reason, bool blockReconnect = true);
 
+    // Test seam: when set, sendCommand() hands each framed line here instead
+    // of writing to the socket.
+    std::function<void(const QByteArray&)> m_commandWriter;
     QTcpSocket m_socket;
     QTimer     m_pollTimer;
     bool       m_transmitting{false};

@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 232 touchpoint headers (195 core, 37 models) — 232/232 tagged, 0/232 converted.
+**Totals:** 233 touchpoint headers (196 core, 37 models) — 233/233 tagged, 0/233 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -105,6 +105,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/NvidiaBnrSettings.h` | 1 | ui-support — AppSettings-backed JSON store for Maxine BNR intensity + licence acceptance; persistence, not radio state | unconverted |
 | `core/PerfTelemetry.h` | 3 | ui-support — Singleton perf-instrumentation logger for client render/UDP/input timing; diagnostics, not radio state. | unconverted |
 | `core/PeripheralAuthCodeValidation.h` | 1 | peripheral(4o3a) — Stateless validation of authorization codes before constructing line-oriented TGXL, PGXL and Antenna Genius peripheral commands; no radio-family wire or UI state. | unconverted |
+| `core/PeripheralEndpointFallback.h` | 1 | peripheral(4o3a) — Stateless choice of the radio-reported address to retry once after a saved manual TGXL or PGXL address fails at the socket level; no radio-family wire or UI state. | unconverted |
 | `core/PeripheralSettings.h` | 4 | ui-support — Client settings blob (AutoReconnect + legacy-key migration) for peripheral devices atop AppSettings; no radio state. | unconverted |
 | `core/PgxlConnection.h` | 2 | peripheral(4o3a) — Direct TCP client (port 9008) for the external 4O3A Power Genius XL (PGXL) amplifier — TELEMETRY-ONLY (statusUpdated: state/power/SWR/current/temp/…); it has no operate/standby command. PGXL operate/standby is relayed through the radio (RadioModel::setAmpOperate → 'amplifier set <handle> operate=…'), which is also the only path for remote/SmartLink. So this header is a genuine local direct-transport peripheral(4o3a); the amp's radio-relay control lives in RadioModel (radio-side) and should split into a generic AmpModel + Flex relay behind FlexBackend — see #4094. | unconverted |
 | `core/PipeWireAudioBridge.h` | 3 | mixed(flex) — Linux virtual-audio bridge to WSJT-X etc.; audio routing is core, DAX channel model/rates are flex | unconverted |

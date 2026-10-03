@@ -485,6 +485,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/PeripheralEndpointFallback.h": {
+  "tag": "peripheral(4o3a)",
+  "note": "Stateless choice of the radio-reported address to retry once after a saved manual TGXL or PGXL address fails at the socket level; no radio-family wire or UI state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/PeripheralAuthCodeValidation.h": {
   "tag": "peripheral(4o3a)",
   "note": "Stateless validation of authorization codes before constructing line-oriented TGXL, PGXL and Antenna Genius peripheral commands; no radio-family wire or UI state.",

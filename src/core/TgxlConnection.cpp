@@ -202,6 +202,9 @@ void TgxlConnection::onError(QAbstractSocket::SocketError error)
     if (!m_authPending && !m_authCloseReported) {
         emit connectionFailed(m_socket.errorString());
     }
+    if (!m_connected && !m_authPending && !m_authCloseReported && !m_authBlocked) {
+        emit unreachable(m_attemptHost);
+    }
     // A failed reconnect attempt arrives here (not via onDisconnected) because
     // the socket never reached ConnectedState. Re-arm so we keep retrying until
     // the device returns or the user disconnects. isActive() prevents double-arm

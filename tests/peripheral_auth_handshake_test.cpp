@@ -5,12 +5,16 @@
 #include "models/AntennaGeniusModel.h"
 #include "gui/PeripheralAuthStore.h"
 #include "core/PeripheralAuthCode.h"
+#include "core/PeripheralEndpointFallback.h"
 #include "core/AppSettings.h"
 #include "TestSettingsProfile.h"
+#include "models/AmpModel.h"
 
 #include <QCoreApplication>
+#include <QMap>
 #include <QMetaObject>
 #include <QSignalSpy>
+#include <QStringList>
 #include <QEventLoop>
 #include <QTimer>
 #include <cstdio>
@@ -24,6 +28,17 @@ struct AntennaGeniusModelTestAccess {
                              std::function<void(const QByteArray&)> writer = [](const QByteArray&) {})
     {
         model.m_authCommandWriter = std::move(writer);
+    }
+};
+
+// Inject only the command writer and the connected flag, never a live peer.
+struct PgxlConnectionTestAccess {
+    static void captureCommands(PgxlConnection& connection, QStringList& lines)
+    {
+        connection.m_commandWriter = [&lines](const QByteArray& line) {
+            lines.append(QString::fromUtf8(line));
+        };
+        connection.m_connected = true;
     }
 };
 }
@@ -119,6 +134,32 @@ void checkKeychainOutageKeepsReconnect(const QString& timerName, const char* gre
     }
 }
 
+// `setup` writes: the authcode key follows what `setup read` reported.
+void checkSetupAuthcode(const QMap<QString, QString>& setupRead, const QString& expectedTail,
+                        bool mustNotLeak)
+{
+    PgxlConnection connection;
+    AmpModel model;
+    model.setDirectConnection(&connection);
+    QStringList sent;
+    PgxlConnectionTestAccess::captureCommands(connection, sent);
+    emit connection.statusUpdated({{QStringLiteral("meffa"), QStringLiteral("STANDBY")},
+                                   {QStringLiteral("fanmode"), QStringLiteral("STANDARD")}});
+    emit connection.setupRead(setupRead);
+    model.setFanMode(QStringLiteral("broadcast"));
+    CHECK(sent.size() == 1);
+    if (sent.isEmpty()) {
+        return;
+    }
+    CHECK(sent.constFirst().contains(QStringLiteral("|setup nickname=PGXL-HOME meffa=AUTO"
+                                                    " ledintens=74 fanmode=BROADCAST")));
+    CHECK(sent.constFirst().trimmed().endsWith(expectedTail));
+    CHECK(sent.constFirst().contains(QStringLiteral("authcode=")) == (expectedTail == QLatin1String("authcode=")));
+    if (mustNotLeak) {
+        CHECK(!sent.constFirst().contains(QStringLiteral("1234")));
+    }
+}
+
 void prepareAg(AntennaGeniusModel& connection,
                const QString& host = QStringLiteral("192.0.2.10"),
                quint16 port = 9007)
@@ -149,6 +190,34 @@ int main(int argc, char** argv)
         "V1.2.17 AUTH", 9010);
     checkKeychainOutageKeepsReconnect<PgxlConnection>(QStringLiteral("pgxlReconnectTimer"),
         "V3.9.1 AUTH", 9008);
+    // A code set on the amplifier is never sent back; an empty one is sent as
+    // the vendor utility does; a reply that omits the key gets none.
+    checkSetupAuthcode({{QStringLiteral("ledintens"), QStringLiteral("74")},
+                        {QStringLiteral("nickname"), QStringLiteral("PGXL-HOME")},
+                        {QStringLiteral("authcode"), QStringLiteral("1234")}},
+                       QStringLiteral("fanmode=BROADCAST"), true);
+    checkSetupAuthcode({{QStringLiteral("ledintens"), QStringLiteral("74")},
+                        {QStringLiteral("nickname"), QStringLiteral("PGXL-HOME")},
+                        {QStringLiteral("authcode"), QString()}},
+                       QStringLiteral("authcode="), false);
+    checkSetupAuthcode({{QStringLiteral("ledintens"), QStringLiteral("74")},
+                        {QStringLiteral("nickname"), QStringLiteral("PGXL-HOME")}},
+                       QStringLiteral("fanmode=BROADCAST"), false);
+    {
+        // The radio-reported address is tried once, only after the saved
+        // manual address failed, and never when auth is blocked.
+        const QString manual = QStringLiteral("192.0.2.10");
+        const QString reported = QStringLiteral("192.0.2.20");
+        CHECK(peripheralFallbackHost(manual, manual, reported, false, false) == reported);
+        CHECK(peripheralFallbackHost(QStringLiteral(" 192.0.2.10 "), manual, reported, false, false) == reported);
+        CHECK(peripheralFallbackHost(manual, manual, reported, true, false).isEmpty());
+        CHECK(peripheralFallbackHost(manual, manual, reported, false, true).isEmpty());
+        CHECK(peripheralFallbackHost(manual, manual, manual, false, false).isEmpty());
+        CHECK(peripheralFallbackHost(manual, manual, QString(), false, false).isEmpty());
+        CHECK(peripheralFallbackHost(manual, QString(), reported, false, false).isEmpty());
+        // A failed attempt at the radio-reported address is not retried.
+        CHECK(peripheralFallbackHost(reported, manual, reported, false, false).isEmpty());
+    }
     int strikes = 0;
     CHECK(recordPeripheralAuthFailure(strikes) < 3);
     CHECK(recordPeripheralAuthFailure(strikes) < 3);
