@@ -15,11 +15,13 @@
 #include "gui/HGauge.h"
 #include "gui/TunerApplet.h"
 #include "models/TunerModel.h"
+#include "core/TgxlConnection.h"
 #include "core/backends/TunerDelta.h"
 
 #include <QApplication>
 #include <QDeadlineTimer>
 #include <QLabel>
+#include <QMetaObject>
 #include <QFontMetrics>
 #include <QPushButton>
 
@@ -89,6 +91,38 @@ int main(int argc, char** argv)
     settle();
 
     CHECK(!applet.isFloating());
+
+    // The indicator follows the direct connection's authenticated state,
+    // while the radio relay can keep the rest of the tuner panel live.
+    QLabel* source = applet.findChild<QLabel*>(QStringLiteral("tunerConnectionSource"));
+    CHECK(source != nullptr);
+    if (source) {
+        CHECK(source->text() == QStringLiteral("● OFFLINE"));
+        applet.setRadioConnected(true);
+        CHECK(source->text() == QStringLiteral("● RADIO"));
+        model.setHandle(QString());
+        CHECK(source->text() == QStringLiteral("● OFFLINE"));
+        model.setHandle(QStringLiteral("0x2000"));
+        CHECK(source->text() == QStringLiteral("● RADIO"));
+        applet.setDirectFailureReason(QStringLiteral("Authorization code rejected"));
+        CHECK(source->accessibleDescription().contains(QStringLiteral("Authorization code rejected")));
+        CHECK(source->toolTip() == QStringLiteral("Authorization code rejected"));
+        CHECK(source->isVisible());
+        TgxlConnection direct;
+        model.setDirectConnection(&direct);
+        CHECK(QMetaObject::invokeMethod(&direct, "processLine", Qt::DirectConnection,
+                                        Q_ARG(QString, QStringLiteral("V1.2.17"))));
+        CHECK(source->text() == QStringLiteral("● DIRECT"));
+        CHECK(source->toolTip().isEmpty());
+        CHECK(source->accessibleName().contains(QStringLiteral("DIRECT")));
+        CHECK(QMetaObject::invokeMethod(&direct, "onDisconnected", Qt::DirectConnection));
+        CHECK(source->text() == QStringLiteral("● RADIO"));
+        CHECK(source->accessibleName().contains(QStringLiteral("RADIO")));
+        applet.setRadioConnected(false);
+        CHECK(source->text() == QStringLiteral("● OFFLINE"));
+        CHECK(source->accessibleName().contains(QStringLiteral("OFFLINE")));
+        model.setDirectConnection(nullptr);
+    }
 
     // ── The TUNE key becomes STOP while tuning ────────────────────────────
     // The caption and the action are driven by one flag, so a rail key that
