@@ -1286,6 +1286,16 @@ target_include_directories(hl2_rxdsp_unmute_return_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_unmute_return_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_rxdsp_unmute_return_test COMMAND hl2_rxdsp_unmute_return_test)
 
+# #5578 / #5678 row 4.1: the RX bandpass length follows mode, passband and
+# notch count, so CW opens short and buys 8192 taps only when a notch or a
+# narrow filter needs them. Measures the magnitude response and onset latency
+# at each length through a real WdspChannel, then the policy and the live
+# switch through a real Hl2RxDsp; socket-free.
+add_executable(hl2_rxdsp_adaptive_taps_test tests/hl2_rxdsp_adaptive_taps_test.cpp)
+target_include_directories(hl2_rxdsp_adaptive_taps_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_adaptive_taps_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_rxdsp_adaptive_taps_test COMMAND hl2_rxdsp_adaptive_taps_test)
+
 # WDSP patch 14 (#5954): a minimum-phase FIR core frees its design workspace
 # after each design, so a minimum-phase RX channel holds no more WDSP
 # allocations than a linear one, before or after filter changes. Counts the
@@ -5166,6 +5176,14 @@ target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
 
+# #5386: RIT shifts the transmit receiver's receive path, XIT the TX NCO register,
+# each without touching the other. Constructed backend only — no socket, no
+# DSP, nothing keyed.
+add_executable(hl2_rit_xit_test tests/hl2_rit_xit_test.cpp)
+target_include_directories(hl2_rit_xit_test PRIVATE src tests)
+target_link_libraries(hl2_rit_xit_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_rit_xit_test COMMAND hl2_rit_xit_test)
+
 # #5497: the unkey unmute waits for the radio's T/R, and the MOX-off is queued
 # ahead of it. An ordering test with a clock in it — no WDSP, no socket.
 add_executable(hl2_unkey_hold_test tests/hl2_unkey_hold_test.cpp)
@@ -7126,6 +7144,7 @@ set(AETHER_SETTINGS_CONSUMERS
     automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test
+    hl2_rit_xit_test
     hl2_tx_gate_test
     hl2_pan_limits_declaration_test
     hl2_fm_controls_declaration_test
