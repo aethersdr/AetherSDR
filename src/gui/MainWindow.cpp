@@ -7514,9 +7514,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        // Absent (or disconnected): the default record, PROC 0..2.
+        const RadioCapabilities::SpeechProcessorControl proc =
+            (connected ? caps.speechProcessorControl : std::nullopt)
+                .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
-            connected ? caps.speechProcessorLabel : QStringLiteral("PROC"),
-            connected ? caps.speechProcessorLevelMaximum : 2);
+            proc.label, proc.levelMaximum);
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
@@ -7541,7 +7544,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
-            phone->setVoxDelayAvailable(!connected || caps.hasVoxDelay);
+            phone->setVoxDelayAvailable(
+                !connected || (caps.voxControl && caps.voxControl->hasDelay));
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }

@@ -426,10 +426,15 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // it, 16 57 picks one of three widths. Not a TNF and not the auto notch —
     // see the capability's own note.
     c.hasManualNotch = true;
-    c.speechProcessorLevelMaximum = profile.speechProcessorLevelMaximum;
-    c.speechProcessorLabel = QString::fromUtf8(
-        profile.speechProcessorLabel.data(),
-        static_cast<qsizetype>(profile.speechProcessorLabel.size()));
+    if (m.hasTransmit) {
+        c.speechProcessorControl = RadioCapabilities::SpeechProcessorControl{
+            profile.speechProcessorLevelMaximum,
+            QString::fromUtf8(
+                profile.speechProcessorLabel.data(),
+                static_cast<qsizetype>(profile.speechProcessorLabel.size()))};
+    } else {
+        c.speechProcessorControl = std::nullopt;
+    }
     // Publish the momentary UI only when the active model profile attests both
     // the XFC command family and the FM facet's release contract. An address is
     // identity, not evidence that a command shape is supported.
@@ -508,7 +513,13 @@ RadioCapabilities IcomCivBackend::capabilities() const
     // CI-V route for a two-tone selection on any profiled model.
     c.twoToneGenerator = std::nullopt;
     c.hasAmCarrierLevel = false; // RF power is separate; no AM carrier setter.
-    c.hasVoxDelay = false; // setVox implements enable/gain only.
+    // setVox implements enable/gain only; setTxMonitor writes MON and its level.
+    c.voxControl = m.hasTransmit
+        ? std::optional(RadioCapabilities::VoxControl{/*hasDelay*/ false})
+        : std::nullopt;
+    c.txMonitorControl = m.hasTransmit
+        ? std::optional(RadioCapabilities::TxMonitorControl{})
+        : std::nullopt;
 
     // THREE, and only three — and WHICH three depends on the mode. FIL1 is
     // 3.0 kHz in SSB, 1.2 kHz in CW, 9 kHz in AM and 15 kHz in FM, so a single

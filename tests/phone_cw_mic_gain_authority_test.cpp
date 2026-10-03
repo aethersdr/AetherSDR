@@ -152,9 +152,8 @@ int main(int argc, char** argv)
           "processor presentation test can inspect the shipping capability fan-out");
     const QByteArray mainWindowText = mainWindowSource.readAll();
     check(mainWindowText.contains(
-              "connected ? caps.speechProcessorLabel : QStringLiteral(\"PROC\")")
-              && mainWindowText.contains(
-                  "connected ? caps.speechProcessorLevelMaximum : 2"),
+              "(connected ? caps.speechProcessorControl : std::nullopt)")
+              && mainWindowText.contains("proc.label, proc.levelMaximum"),
           "MainWindow forwards the normalized processor label and range to P/CW");
 
     QSignalSpy clientGain(&applet, &PhoneCwApplet::micLevelChanged);
