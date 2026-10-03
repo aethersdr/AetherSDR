@@ -6962,6 +6962,14 @@ add_executable(hl2_tx_level_policy_test
 target_include_directories(hl2_tx_level_policy_test PRIVATE src)
 add_test(NAME hl2_tx_level_policy_test COMMAND hl2_tx_level_policy_test)
 
+# Pure and sample-counted: links nothing, so it cannot starve like the
+# modulator cases in hl2_txdsp_test.
+add_executable(hl2_tx_alc_test
+    tests/hl2_tx_alc_test.cpp
+)
+target_include_directories(hl2_tx_alc_test PRIVATE src)
+add_test(NAME hl2_tx_alc_test COMMAND hl2_tx_alc_test)
+
 add_executable(hl2_dsp_readback_test
     tests/hl2_dsp_readback_test.cpp
 )

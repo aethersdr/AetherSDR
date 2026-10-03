@@ -618,7 +618,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     m_iq.reserve(consumed * static_cast<std::size_t>(m_upsample));
     if (m_levelled.size() < consumed)
         m_levelled.resize(consumed);
-    // ALC, protection only: peak tracking, instantaneous reduction, smoothed
+    // ALC, protection only: peak tracking, no attack constant, smoothed
     // release, unity ceiling on every path, then a hard limit below full scale.
     // No makeup gain and no hold: the operator's mic gain (+40 dB,
     // Hl2TxLevelPolicy.h) closes the speech gap, as WDSP's create_txa runs
@@ -628,7 +628,8 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     const double micGain =
         (source == TxAudioSource::EngineGenerated) ? 1.0 : m_micGain;
 
-    // One decision per call; the stage itself is Hl2TxAlc.h.
+    // One decision per call, applied as a path inside it (Hl2TxAlc.h) so a
+    // moving gain does not step at the block rate (#5912).
     Hl2TxAlc::Settings alc;
     alc.enabled = m_config.alcEnabled;
     alc.targetPeak = m_config.alcTargetPeak;
