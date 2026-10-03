@@ -131,7 +131,9 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.twoToneGenerator = std::nullopt;  // receive only; there is no transmitter.
     c.panZoomModes = std::nullopt;      // no command plane, no per-pan zoom flags.
     c.hasAmCarrierLevel = false;
-    c.hasVoxDelay = false;
+    c.voxControl = std::nullopt;  // receive only
+    c.speechProcessorControl = std::nullopt;
+    c.txMonitorControl = std::nullopt;
     c.hasAgcThreshold = false;
     c.hasModeIndependentSquelch = false;
     c.agcModes = {QStringLiteral("off"), QStringLiteral("slow"),

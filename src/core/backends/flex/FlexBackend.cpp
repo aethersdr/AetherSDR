@@ -312,7 +312,8 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasDownwardExpander = true;
     caps.hasAgcThreshold = true;
     caps.hasAmCarrierLevel = true;
-    caps.hasVoxDelay = true;
+    caps.voxControl = RadioCapabilities::VoxControl{/*hasDelay*/ true};
+    caps.txMonitorControl = RadioCapabilities::TxMonitorControl{};
 
     // FALSE, and stated rather than left to the default. A Flex modulates on
     // the radio AND takes its transmit audio over DAX/VITA-49, so it is the one
@@ -399,8 +400,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // FLEX PACURRENT is known to clip below real full-power draw, so it is not
     // an honest substitute for the calibrated PA-temperature instrument.
     caps.hasPaCurrentTelemetry = false;
-    caps.speechProcessorLevelMaximum = 2;
-    caps.speechProcessorLabel = QStringLiteral("PROC");
+    caps.speechProcessorControl = RadioCapabilities::SpeechProcessorControl{
+        2, QStringLiteral("PROC")};
     caps.hasMainFanTelemetry = true;
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/

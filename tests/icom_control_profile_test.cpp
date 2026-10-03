@@ -176,8 +176,13 @@ int main(int argc, char** argv)
         FlexBackend flex;
         const RadioCapabilities caps = flex.capabilities();
         check(caps.canCreateSlices, "Flex retains independent ordinary slice creation");
-        check(caps.hasAgcThreshold && caps.hasAmCarrierLevel && caps.hasVoxDelay,
+        check(caps.hasAgcThreshold && caps.hasAmCarrierLevel && caps.voxControl
+                  && caps.voxControl->hasDelay,
               "Flex retains AGC threshold, AM carrier, and VOX delay");
+        check(caps.txMonitorControl && caps.speechProcessorControl
+                  && caps.speechProcessorControl->levelMaximum == 2
+                  && caps.speechProcessorControl->label == QStringLiteral("PROC"),
+              "Flex declares its monitor and its NOR/DX/DX+ PROC");
         check(!caps.hasModeIndependentSquelch, "Flex retains its mode-specific SQL policy");
         check(caps.cwSpeedMinWpm == 5 && caps.cwSpeedMaxWpm == 100
                   && caps.cwPitchMinHz == 100 && caps.cwPitchMaxHz == 6000
@@ -187,6 +192,10 @@ int main(int argc, char** argv)
         check(!hl2Backend.capabilities().canCreateSlices,
               "HL2 paired receiver/pan topology does not expose independent creation");
         check(hl2Backend.capabilities().hasAgcThreshold, "HL2 retains host AGC threshold");
+        check(!hl2Backend.capabilities().speechProcessorControl
+                  && !hl2Backend.capabilities().voxControl
+                  && !hl2Backend.capabilities().txMonitorControl,
+              "HL2 declares no radio-side PROC, VOX or monitor (its PROC is ClientComp)");
     }
     {
         const IcomModel* ic705 = modelForName("IC-705");
@@ -227,8 +236,12 @@ int main(int argc, char** argv)
             check(caps.txPowerBands.isEmpty()
                       && caps.txPowerMaxWattsAt(14'200'000.0) == 100.0,
                   "IC-7300MK2 retains its unbanded 100 W capability path");
-            check(!caps.hasAgcThreshold && !caps.hasAmCarrierLevel && !caps.hasVoxDelay,
+            check(!caps.hasAgcThreshold && !caps.hasAmCarrierLevel && caps.voxControl
+                      && !caps.voxControl->hasDelay,
                   "IC-7300MK2 declares unimplemented controls unavailable");
+            check(caps.txMonitorControl && caps.speechProcessorControl
+                      && caps.speechProcessorControl->levelMaximum == 2,
+                  "IC-7300MK2 declares its VOX, monitor and three-position PROC");
             IcomCivBackendTestAccess::prepareSession(backend, *ic7300Mk2);
             const auto queued = IcomCivBackendTestAccess::queuedRequestCount(backend);
             backend.setSliceAgc(0, QStringLiteral("off"), 0);
@@ -350,6 +363,23 @@ int main(int argc, char** argv)
             check(IcomCivBackendTestAccess::lastOutboundCiv(backend).isEmpty(),
                   "malformed antenna reply cannot cause a default antenna write");
         }
+    }
+    {
+        const IcomModel* ic9700 = modelForName("IC-9700");
+        check(ic9700 != nullptr, "the IC-9700 resolves from the Icom model table");
+        if (ic9700) {
+            IcomCivBackend backend;
+            IcomCivBackendTestAccess::selectModel(backend, *ic9700);
+            const auto proc = backend.capabilities().speechProcessorControl;
+            check(proc && proc->levelMaximum == 100 && proc->label == QStringLiteral("COMP"),
+                  "IC-9700 publishes its continuous COMP through the PROC record");
+        }
+        IcomCivBackend unknown;
+        IcomCivBackendTestAccess::selectModel(unknown, unknownModel());
+        const RadioCapabilities caps = unknown.capabilities();
+        check(!caps.canTransmit && !caps.speechProcessorControl && !caps.voxControl
+                  && !caps.txMonitorControl,
+              "an unidentified (receive-only) Icom declares no PROC, VOX or monitor");
     }
     for (const char* name : {"IC-7300MK2", "IC-705", "IC-9700"}) {
         const auto* model = modelForName(name);
