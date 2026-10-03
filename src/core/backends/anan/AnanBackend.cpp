@@ -385,6 +385,8 @@ RadioCapabilities AnanBackend::capabilities() const
     // the display reference level, and the auto-floor loop converges.
     amplitude.binsAbsolute = true;
     c.panAmplitude = amplitude;
+    // No measured squelch map; the SQL line and Auto SQL keep Flex's scale.
+    c.squelchLevelScale = legacyDbmSquelchScale();
 
     // Span follows the sample rate: it snaps by ratio to one of the six DDC0 rates
     // (no continuous zoom); panBandwidthLimitsChanged clamps to that list's ends.

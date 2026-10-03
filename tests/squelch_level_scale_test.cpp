@@ -6,7 +6,7 @@
 //      carrier brackets on every LNA row he ran (+20, +8, -4, -12).
 //   2. Each backend's RadioCapabilities::squelchLevelScale: Flex -160 + 1*L in
 //      every mode with Auto SQL; HL2 its exact pan-axis map in amsq's modes
-//      only, without Auto SQL; every other family absent.
+//      only, without Auto SQL; Icom, demo, ANAN and RTL keep Flex's scale.
 //   3. The line: a carrier exactly at the amsq gate reads on the HL2 pan at
 //      the record's threshold, at any LNA gain. Flex's line and Auto SQL level
 //      are what the old -160 + level code produced.
@@ -134,12 +134,18 @@ void recordsPerBackend()
               "HL2: the pan-axis offset does not move with the LNA");
     }
 
-    check(!icom::IcomCivBackend().capabilities().squelchLevelScale,
-          "Icom: absent (0..255 percent, no published dB mapping)");
-    check(!SimBackend().capabilities().squelchLevelScale, "Demo: absent (no squelch)");
-    check(!anan::AnanBackend().capabilities().squelchLevelScale, "ANAN: absent");
+    // No measured map of their own: Flex's scale, so nothing changes for them.
+    const SquelchLevelScale legacy{-160.0, 1.0, {}, true};
+    check(legacyDbmSquelchScale() == legacy, "the legacy scale is -160 + 1*level with Auto SQL");
+    check(icom::IcomCivBackend().capabilities().squelchLevelScale == legacy,
+          "Icom: Flex's -160 + 1*level, every mode, with Auto SQL");
+    check(SimBackend().capabilities().squelchLevelScale == legacy,
+          "Demo: Flex's -160 + 1*level, every mode, with Auto SQL");
+    check(anan::AnanBackend().capabilities().squelchLevelScale == legacy,
+          "ANAN: Flex's -160 + 1*level, every mode, with Auto SQL");
 #ifdef AETHER_BACKEND_RTL
-    check(!rtl::RtlSdrBackend().capabilities().squelchLevelScale, "RTL-SDR: absent");
+    check(rtl::RtlSdrBackend().capabilities().squelchLevelScale == legacy,
+          "RTL-SDR: Flex's -160 + 1*level, every mode, with Auto SQL");
 #endif
 }
 

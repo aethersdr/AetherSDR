@@ -46,6 +46,14 @@ struct SquelchLevelScale {
     }
 };
 
+// Flex's squelch_level map: -160 + level dBm on the pan axis, every mode, with
+// Auto SQL. Families with no measured map of their own publish it too, so their
+// line and Auto SQL keep the behaviour they always had (#6127).
+[[nodiscard]] inline SquelchLevelScale legacyDbmSquelchScale()
+{
+    return SquelchLevelScale{-160.0, 1.0, {}, true};
+}
+
 // The published record as it applies to a slice in `mode`: nullopt when the
 // backend published none or the mode is not covered. The line and Auto SQL
 // both read this, so neither can outlive the other's gate.

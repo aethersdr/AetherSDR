@@ -227,7 +227,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.fmDtcsCodes = {};
     // squelch_level 0..100 is dBm above -160 on the calibrated pan axis, in
     // every mode, so the pan floor plus a margin is the level to send.
-    caps.squelchLevelScale = SquelchLevelScale{-160.0, 1.0, {}, true};
+    caps.squelchLevelScale = legacyDbmSquelchScale();
 
     // Seed from the FlexLib-sourced platform table (Principle I). This is the
     // derived-from-name truth used to *seed* the reported capabilities; a fuller

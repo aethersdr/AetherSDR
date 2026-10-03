@@ -134,6 +134,8 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.hasVoxDelay = false;
     c.hasAgcThreshold = false;
     c.hasModeIndependentSquelch = false;
+    // No measured squelch map; the SQL line and Auto SQL keep Flex's scale.
+    c.squelchLevelScale = legacyDbmSquelchScale();
     c.agcModes = {QStringLiteral("off"), QStringLiteral("slow"),
                   QStringLiteral("med"), QStringLiteral("fast")};
     // Unused TX presentation retains the shared legacy shape; canTransmit

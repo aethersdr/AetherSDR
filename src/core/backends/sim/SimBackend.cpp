@@ -327,6 +327,8 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasSelectableMicInputs = false;
     caps.hasDownwardExpander = false;
     caps.hasAgcThreshold = true;
+    // The demo shows Flex's SQL line and Auto SQL, as it always has.
+    caps.squelchLevelScale = legacyDbmSquelchScale();
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;

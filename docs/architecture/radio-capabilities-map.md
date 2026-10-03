@@ -525,10 +525,10 @@ and conflating them would hide one of them.
 | `radioOwnsDbmScale` | ✅ (default) | ⚠️ **✅ (default)** | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 | `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
-| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | absent | absent | Where does squelch level L open, on this axis? |
+| `squelchLevelScale` | −160 + 1·L, all modes, Auto SQL | −119 + 0.7·L, AM/SAM/DSB/LSB/USB, no Auto SQL | Flex's (no measured map) | Flex's (no measured map) | Where does squelch level L open, on this axis? |
 
 **`squelchLevelScale` draws the SQL line and drives Auto SQL** (#6092).
-Absent, or the active slice's mode not listed: no line, and the SQL button
+The demo and RTL-SDR also keep Flex's scale. Absent, or the active slice's mode not listed: no line, and the SQL button
 skips Auto with the reason on its accessible description. The HL2 offset is
 amsq's −140 + 0.7·L dBFS map, referred to the LNA at −12 dB
 (`Hl2DbReference::levelSquelchOffsetDb`), plus the pan's LNA offset, plus the
