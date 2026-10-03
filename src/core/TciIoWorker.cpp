@@ -808,16 +808,12 @@ void TciIoWorker::receiveBinary(quint64 id, const QByteArray& data)
     double sumSq = 0.0;
     float peak = 0.0f;
     qint64 clipSamples = 0;
-    // Three overflow regimes selectable via right-click on the TCI TX slider:
-    //   Clip     — saturating clamp at ±1.0; cheap defensive limiter,
-    //              introduces harmonics on overshoots but protects the
-    //              radio float→int16 stage from out-of-range input.
-    //   NaNGuard — pass everything except NaN/Inf (which the radio can't
-    //              digest); preserves bit-exact tones for well-formed
-    //              digital clients, accepts that a malformed >1.0 client
-    //              will reach the radio.
-    //   Measure  — pure bypass: count overshoots for telemetry but never
-    //              touch sample data.  100% client-side passthrough.
+    // Overflow modes (right-click the TCI TX slider):
+    //   Clip     — saturate to ±1.0; protects the radio's float→int16 stage at
+    //              the cost of harmonics on overshoot.
+    //   NaNGuard — replace only NaN/Inf; bit-exact for well-formed clients, lets
+    //              >1.0 through.
+    //   Measure  — pure bypass; count overshoots for telemetry only.
     switch (m_overflowMode) {
     case OverflowMode::Clip:
         for (int i = 0; i < outputSamples; ++i) {

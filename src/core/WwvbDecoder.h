@@ -1,26 +1,13 @@
 #pragma once
 
-// WWVB 60 kHz legacy AM/PWM time-code decoder. Format facts per the NIST
-// WWVB time-code description (NIST SP 250-67): one bit per second, carrier
-// power reduced 17 dB at each second start for 0.2 s (binary 0), 0.5 s
-// (binary 1), or 0.8 s (marker); markers at seconds 0, 9, 19, 29, 39, 49,
-// 59 — two consecutive markers (s59 -> s0) mark the minute boundary.
-//
-// Input contract: 24 kHz mono float32 from a slice tuned USB at 0.059 MHz —
-// the 60 kHz carrier appears as a ~1000 Hz audio tone whose amplitude
-// carries the PWM.
-//
-// Chain: FFT-refined tone search 800-1200 Hz once at acquisition -> complex
-// mix at f0 -> LPF -> 100 Hz envelope series -> seconds edge = the AM drop
-// (NEVER a phase edge: WWVB's 2012 BPSK layer flips phase +100 ms after the
-// second and amplitude receivers are immune by design — INV-8) -> per-second
-// PWM matched-filter classify (0.2/0.5/0.8 s low-power durations; margin =
-// confidence; threshold adapts between the 10th/90th envelope percentiles)
-// -> double-marker minute sync -> NIST WWVB BCD field map (MSB-first
-// weights) -> TimeFrameVoter (shared with WwvDecoder).
-//
-// Pure DSP — no Qt (EB1/EB2). Streaming: process() accumulates internally,
-// no whole-file transforms.
+// WWVB 60 kHz legacy AM/PWM time-code decoder (NIST SP 250-67): one bit per
+// second; carrier power -17 dB at each second start for 0.2 s (0), 0.5 s (1)
+// or 0.8 s (marker); markers at 0, 9, 19, 29, 39, 49, 59; s59 -> s0 marks the
+// minute. Input: 24 kHz mono float32 from a slice tuned USB at 0.059 MHz, so
+// the carrier is a ~1000 Hz tone. Second edges come from the AM drop, NEVER
+// phase (the BPSK layer flips +100 ms after the second; INV-8). The PWM
+// threshold adapts between the 10th/90th envelope percentiles. Feeds the
+// shared TimeFrameVoter. Pure DSP, no Qt (EB1/EB2); process() streams.
 
 #include "TimeFrameVoter.h"
 

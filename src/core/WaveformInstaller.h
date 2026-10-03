@@ -17,24 +17,20 @@ class RadioModel;
 
 // Installs radio waveform packages via the Flex file upload protocol.
 //
-// Legacy protocol (FlexLib Radio.cs SendSSDRWaveformFile):
+// Legacy (FlexLib Radio.cs SendSSDRWaveformFile):
 //   1. Client -> Radio: "file filename <filename>"
 //   2. Client -> Radio: "file upload <size> new_waveform"
 //   3. Radio  -> Client: R<seq>|0|<port>
 //   4. Client connects TCP to radio:<port> and streams raw .ssdr_waveform bytes
 //
-// Docker protocol (confirmed by pcap 4.2.18-waveform-install.pcapng, frame 4496):
+// Docker (pcap 4.2.18-waveform-install.pcapng, frame 4496); the filename is in
+// the upload command, with no "file filename" step:
 //   1. Client → Radio: "file upload <size> waveform_docker_image <filename>"
 //   2. Radio  → Client: R<seq>|0|<port>   (radio opens TCP server on <port>)
 //   3. Radio  → Client: S0|file server active
 //   4. Client connects TCP to radio:<port> and streams raw .tar.gz bytes
 //   5. Radio  → Client: S0|waveform container name=<name> version=<ver>
-//      (handled by FlexWaveformModel::handleContainerStatus — no action needed here)
-//
-// Note: unlike FirmwareUploader, there is NO "file filename <name>" step.
-// The filename is embedded directly in the "file upload" command (per pcap).
-//
-// Mirrors the FirmwareUploader class structure.
+//      (handled by FlexWaveformModel::handleContainerStatus)
 class WaveformInstaller : public QObject {
     Q_OBJECT
 

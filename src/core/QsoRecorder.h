@@ -32,32 +32,17 @@ class QsoRecorderWriteErrorTestAccess;
 class QsoRecorderRatesTestAccess;
 class QsoRecorderPlaybackTestAccess;
 
-// Records QSO audio (both RX and TX sides) to WAV files.
-//
-// Usage:
-//   - Connect feedRxFrame() (typed RX) to RadioModel::rxDemodAudioReady
-//   - Connect feedTxAudio() (int16 post-limiter TX monitor) to
-//     AudioEngine::txFinalMonitorPcmReady — the source that carries SSB/phone TX
-//     (txRawPcmReady is RADE-only and would leave SSB recordings silent, #3556)
-//   - Connect onMoxChanged() to TransmitModel::moxChanged()
-//   - Set the active slice for frequency/mode metadata via setSlice()
-//
-// While transmitting, the radio mutes the RX stream, so feedRxAudio() would
-// otherwise write full-length silence. Writes are MOX-gated: RX is written only
-// while receiving, the TX monitor only while transmitting, producing a single
-// time-interleaved RX/TX file that matches Radio-Side recording (#3556).
-//
-// Recording triggers:
-//   - Auto: starts when MOX goes true (first TX), stops after idle timeout
-//   - Manual: startRecording() / stopRecording()
-//
-// A start can be REFUSED — see QsoRecordStartPolicy.h. startRecording() then
-// emits recordingBlocked() and creates no file at all. Callers must not assume
-// a start succeeded; check isRecording() (this class lives below the UI seam
-// and cannot show a dialog itself, so the GUI owns the operator-facing message).
-//
-// Output: immutable PCM16 stereo WAV, 24/48 kHz from current RX metadata at
-// start; legacy24 when none is available. Voice/CW remain fixed24 inputs.
+// Records QSO audio (RX and TX) to WAV files.
+//   - feedRxFrame() <- RadioModel::rxDemodAudioReady
+//   - feedTxAudio() <- AudioEngine::txFinalMonitorPcmReady (post-limiter; carries
+//     SSB TX, unlike RADE-only txRawPcmReady, #3556)
+//   - onMoxChanged() <- TransmitModel::moxChanged; setSlice() for metadata
+// Writes are MOX-gated (RX while receiving, TX monitor while transmitting) into
+// one interleaved file, matching Radio-Side recording (#3556). Auto mode starts
+// on first MOX and stops after an idle timeout. A start can be refused (see
+// QsoRecordStartPolicy.h): recordingBlocked() is emitted and no file created,
+// so check isRecording(). Output: PCM16 stereo WAV at 24/48 kHz from RX
+// metadata at start (legacy24 if none); Voice/CW inputs are fixed 24 kHz.
 
 class QsoRecorder : public QObject {
     Q_OBJECT
@@ -122,6 +107,22 @@ public:
     {
         m_backendOwnsRxAudio = std::move(provider);
     }
+
+    // Answers "can the radio record on its own side?"
+    // (RadioModel::radioSideRecordingReachable). Read live on every start. With
+    // Radio-Side selected on a radio that cannot record, this recorder records
+    // (recordsOnClient() in QsoRecordStartPolicy.h). Unset reads as true, which
+    // keeps the operator's Radio-Side choice binding.
+    void setRadioSideRecordingReachableProvider(std::function<bool()> provider)
+    {
+        m_radioSideRecordingReachable = std::move(provider);
+    }
+    // recordsOnClient() over the live "RecordingMode" setting and the provider
+    // above: is THIS recorder the one the operator's REC/PLAY reaches? Every
+    // routing surface asks this, so none can disagree with the start policy.
+    // While a recording or playback is live it answers true regardless, so a
+    // flip of either input mid-recording cannot send the stop elsewhere.
+    bool recordsOnClientNow() const;
 
     // Would startRecording() be allowed right now? Reads the same live settings
     // and the same provider startRecording() does, so callers that want to ask
@@ -320,6 +321,8 @@ private:
     // See setBackendOwnsRxAudioProvider(). Null until MainWindow installs it,
     // and null reads as false — the Flex answer, and the safe one.
     std::function<bool()> m_backendOwnsRxAudio;
+    // See setRadioSideRecordingReachableProvider(). Null reads as true.
+    std::function<bool()> m_radioSideRecordingReachable;
 
     static constexpr int WAV_HEADER_SIZE = 44;
 };

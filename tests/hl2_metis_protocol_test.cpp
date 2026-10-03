@@ -746,6 +746,27 @@ int main()
         check(t.reversePowerRaw.value_or(-1) == 100, "reverse power from DATA[31:16]");
         check(t.biasCurrentRaw.value_or(-1) == 42, "bias current from DATA[15:0]");
 
+        // Forward power: the window keeps the loudest non-ACK RADDR 1, not the
+        // last. The peak lands mid-window and the window ends on a trough; a
+        // RADDR 2 word or an ACK's echo is not forward power.
+        {
+            ForwardPowerWindow w;
+            check(!w.peak.has_value() && w.samples == 0,
+                  "an empty window has no peak, not a zero");
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 300u).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 3200u).data()));
+            w.observe(*parseEp6Response(frame(0x10, (4000u << 16) | 4000u).data()));
+            w.observe(*parseEp6Response(frame(0x80 | (0x01 << 1), 0x0FFFu).data()));
+            w.observe(*parseEp6Response(frame(0x08, (1234u << 16) | 450u).data()));
+            check(w.peak.value_or(-1) == 3200,
+                  "window peak is the loudest RADDR 1 sample, not the last (450)");
+            check(w.samples == 3,
+                  "only non-ACK RADDR 1 counts toward the denominator");
+            w.clear();
+            check(!w.peak.has_value() && w.samples == 0,
+                  "clear() leaves no stale peak for the next window");
+        }
+
         // ---- TX FIFO status: RADDR 0, DATA[15:8] ----
         //
         // This is the check MetisProtocol.cpp's own comment above txFifoCount

@@ -93,19 +93,10 @@ RtlSdrBackend::~RtlSdrBackend()
 
 RadioCapabilities RtlSdrBackend::capabilities() const
 {
-    // #5594 (M1) item 4: this backend deliberately never emits
-    // capabilitiesChanged, and that is the honest answer rather than a gap.
-    //
-    // Every field below is either a compile-time constant for the R820T/RTL2832U
-    // pair or comes from the USB descriptor strings (m_vendor, m_product /
-    // m_modelName, and m_serial), read during connectRadio() before connected()
-    // and cleared on disconnect or a configuration failure before connection.
-    // The declaration is fixed for the whole session: no mid-session revision, and
-    // a synthetic emission would be noise dressed up as a contract.
-    //
-    // If a future tuner-dependent field is added here (a per-tuner gain table,
-    // a direct-sampling range that depends on the IC), it becomes revisable and
-    // this comment stops being true.
+    // Never emits capabilitiesChanged (#5594 M1 item 4): every field is a
+    // compile-time constant for the R820T/RTL2832U pair or comes from the USB
+    // descriptor strings read in connectRadio() before connected(). Adding a
+    // tuner-dependent field makes this revisable and requires an emission.
     RadioCapabilities c;
     // THE dBm AXIS IS UNCALIBRATED, and on this backend that is not a nuance:
     // RtlSdrDdc's FFT path computes `20 * log10(mag / kFftSize)` on raw ADC
@@ -118,16 +109,11 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // another station's report, or used as an absolute threshold.
     PanAmplitudeModel amplitude;
     amplitude.calibratedDbm = false;
-    // The spectrum bins are computed on THIS host from raw ADC magnitudes and
-    // carry no reference level: RtlSdrDdc::processSpectrum takes the FFT output,
-    // forms `mag = sqrt(re*re + im*im) / kFftSize` and emits
-    // `20 * log10(max(mag, 1e-6))` straight into the frame. Nothing in that
-    // expression can move when the display reference level moves, so the
-    // noise-floor auto-adjust has a fixed target and terminates — see
-    // PanAmplitudeModel::binsAbsolute. radioOwnsDbmScale is deliberately
-    // left at its permissive default here and NOT flipped in the same change:
-    // this radio has no range command, but correcting that declaration is a
-    // separate question from this one and belongs with its own reasoning.
+    // Bins are computed on this host with no reference level (RtlSdrDdc::
+    // processSpectrum emits 20*log10(max(sqrt(re²+im²)/kFftSize, 1e-6))), so they
+    // cannot move with the display reference and the noise-floor auto-adjust
+    // terminates (PanAmplitudeModel::binsAbsolute). radioOwnsDbmScale is left at its
+    // default; this radio has no range command, but that is a separate declaration.
     amplitude.binsAbsolute = true;
     c.panAmplitude = amplitude;
     c.family = QStringLiteral("rtl");

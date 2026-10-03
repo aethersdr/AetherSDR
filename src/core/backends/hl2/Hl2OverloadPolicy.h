@@ -2,25 +2,10 @@
 
 // When the ADC-overload warning may be emitted, as a pure decision.
 //
-// The AD9866's overload flag is a per-frame sample of a level comparator, not
-// an event. On a strong band it chatters, so nearly every telemetry sample is a
-// rising edge and one message repeats at the full telemetry cadence. An edge
-// gate alone is necessary and never sufficient.
-//
-// Two properties make this worth a seam rather than an inline condition, and
-// both are timing-dependent in a way that is otherwise only reachable by
-// running a radio for ten seconds:
-//
-//   * THE FLUSH IS NOT ON AN EDGE. A burst that stops must still report its
-//     tally. Deciding only when the flag next asserts would hold the count
-//     until the band goes loud again -- which may be hours away, or never.
-//   * THE FIRST ASSERTION IS IMMEDIATE. A limiter that made the operator wait
-//     out a window before the first warning would be silent during exactly the
-//     interval when the front end is being slammed and nobody knows yet.
-//
-// Hl2Backend evaluates these functions rather than its own copy, so what the
-// suite exercises is what the radio runs -- the reasoning Hl2TxLevelPolicy.h
-// states, and the same reason it applies here.
+// The AD9866 overload flag is a per-frame comparator sample that chatters on a
+// strong band, so an edge gate alone is not enough. The first assertion warns
+// immediately; the tally of a burst that stops is flushed on a timer, not on the
+// next edge (which may never come). Hl2Backend calls these, not a copy.
 
 #include <cstdint>
 

@@ -7,36 +7,15 @@
 
 namespace AetherSDR {
 
-// Apollo-era Quindar tones for MOX/PTT engage and disengage events
-// (#2262).  When enabled and the active TX slice is on a phone mode,
-// this stage:
-//
-//   - inserts a short tone (or Morse "K") at the start of every
-//     transmission ("Engaging" phase),
-//   - inserts a short tone (or Morse "BK") at the end of every
-//     transmission ("Disengaging" phase) and defers the actual
-//     `xmit 0` command until the outro finishes.
-//
-// Two stylistic flavours selected at runtime:
-//
-//   Tone:  2525 Hz / 2475 Hz sine, 250 ms each, 5 ms cos² envelope.
-//          The classic NASA Mission Control sound.
-//   Morse: pre-rendered "K" (intro) and "BK" (outro) at 45 WPM with a
-//          configurable carrier pitch.  Ham-radio convention — K =
-//          "go ahead", BK = "back to you".
-//
-// Inserted in the TX path AFTER the user's DSP chain and PC mic gain
-// but BEFORE the final brickwall limiter, so the tone is unprocessed
-// by Comp/EQ but still bounded by the configured ceiling.  During
-// Engaging/Disengaging the stage REPLACES interleaved samples with
-// the generated audio (it does not sum with mic input).
-//
-// Threading mirrors ClientFinalLimiter / ClientTxTestTone: UI thread
-// writes std::atomic parameters and bumps a version counter; audio
-// thread reads the version once per block and recaches.  No locks,
-// no allocations, no exceptions in the audio path.  Phase transitions
-// (Idle → Engaging → Live → Disengaging → Idle) are atomic so the
-// coordinator on the GUI thread can drive them without races.
+// Apollo-style Quindar tones on MOX/PTT (#2262). On a phone-mode TX slice: an
+// intro tone (or Morse "K") at the start of every transmission (Engaging), and an
+// outro tone (or "BK") at the end (Disengaging), deferring `xmit 0` until it
+// finishes. Styles: Tone = 2525 / 2475 Hz sine, 250 ms each, 5 ms cos^2
+// envelope; Morse = pre-rendered K / BK at 45 WPM, configurable pitch. Runs after
+// the user DSP chain and PC mic gain, before the final limiter, and REPLACES
+// samples (no mic sum) while active. UI thread writes atomics + bumps a version;
+// the audio thread recaches per block. Phase transitions (Idle -> Engaging ->
+// Live -> Disengaging -> Idle) are atomic so the GUI coordinator can drive them.
 class ClientQuindarTone {
 public:
     enum class Style : uint8_t { Tone = 0, Morse = 1 };

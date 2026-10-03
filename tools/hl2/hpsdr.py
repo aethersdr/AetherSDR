@@ -115,8 +115,23 @@ def ep6_seq(pkt: bytes):
     return struct.unpack(">I", pkt[4:8])[0]
 
 
+def analytic(i: int, q: int) -> complex:
+    """One wire (I, Q) pair as a complex sample in the analytic convention.
+
+    The HPSDR wire is the CONJUGATE of the analytic convention: a signal above
+    the NCO arrives at a negative baseband frequency (docs/HERMES.md, "Receive
+    handedness and tuning"; aethersdr/AetherSDR#4265). `I + jQ` straight off the
+    wire therefore draws a spectrum mirrored about the tuned frequency. Anything
+    that puts a frequency axis on these samples must go through here.
+
+    A carrier at exactly the tuned frequency cannot show the difference: zero
+    offset is its own mirror image. Check handedness off-centre."""
+    return complex(i, -q)
+
+
 def iq_samples(pkt: bytes):
-    """Yield (I, Q) tuples from an EP6 packet — for FFT/spectrum use."""
+    """Yield (I, Q) tuples from an EP6 packet, exactly as the wire carries them.
+    For a spectrum, convert each pair with analytic()."""
     if len(pkt) < 1032 or pkt[0] != 0xEF or pkt[1] != 0xFE or pkt[2] != 0x01 or pkt[3] != 0x06:
         return
     for fstart in (8, 520):

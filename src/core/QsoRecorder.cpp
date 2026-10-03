@@ -107,14 +107,32 @@ int QsoRecorder::recordingDurationSecs() const
 
 // ── Manual control ──────────────────────────────────────────────────────────
 
+bool QsoRecorder::recordsOnClientNow() const
+{
+    // Latched for the life of one recording or playback. Both inputs below can
+    // move mid-recording (reachability on connect and disconnect, the setting
+    // in Radio Setup), and every surface re-asks this per click. Re-derived, a
+    // REC-off could go to the slice and leave this recorder writing behind a
+    // dark button. So the stop always lands on the recorder that started.
+    if (m_recording.load(std::memory_order_acquire)
+        || m_writeFailurePending.load(std::memory_order_acquire)
+        || m_playing) {
+        return true;
+    }
+    const bool radioSideReachable =
+        !m_radioSideRecordingReachable || m_radioSideRecordingReachable();
+    return recordsOnClient(
+        AppSettings::instance().value("RecordingMode", "Client").toString() == "Client",
+        radioSideReachable);
+}
+
 // Live read of every policy input — the two settings plus the backend's own
 // answer about whether it feeds us over the seam. Nothing is cached, so a
 // backend swap or a settings change between two starts is picked up for free.
 RecordStartDecision QsoRecorder::evaluateStart() const
 {
     auto& s = AppSettings::instance();
-    const bool clientSide =
-        s.value("RecordingMode", "Client").toString() == "Client";
+    const bool clientSide = recordsOnClientNow();
     const bool pcAudio =
         s.value("PcAudioEnabled", "True").toString() == "True";
     // No provider installed (unit tests, no radio) reads as false: the Flex
@@ -412,8 +430,9 @@ void QsoRecorder::onMoxChanged(bool mox)
 // ends. A CW over needs exactly this and must NOT touch m_transmitting (#4281).
 void QsoRecorder::applyOverBookkeeping(bool overActive)
 {
-    // Only auto-record when in client-side recording mode
-    bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+    // Only auto-record when this client is the recorder -- including Radio-Side
+    // selected on a radio with no radio-side recorder (recordsOnClient()).
+    const bool clientSide = recordsOnClientNow();
     if (overActive) {
         // TX started — begin recording if auto-record is on and not already
         // recording. Auto trigger: a standing refusal is reported once, not on
@@ -631,20 +650,10 @@ int QsoRecorder::finalizeFile(FinalizeReport report)
         return durationSecs;
     }
 
-    // A recording that captured NOTHING is the #4629 symptom, and until now it
-    // was reported to the operator exactly like a good one — the file exists,
-    // it is named correctly, and it holds a 44-byte header and no audio. The
-    // start guard above catches the known cause (PC Audio off), so reaching
-    // here means something else stranded the feed mid-session: the radio
-    // dropped, the stream was torn down by another client, the backend swapped.
-    // Whatever it was, say so rather than let a silent file pass for success.
-    // The >= 1s floor keeps a deliberate instant start/stop from being reported
-    // as a fault: under one second the recorder may legitimately not have seen a
-    // single audio block yet, and an error dialog for "you stopped it
-    // immediately" is noise. The tradeoff is a real blind spot — a sub-second
-    // recording that captured nothing is silently accepted — but that case
-    // yields no usable audio either way, whereas a false alarm on every quick
-    // tap trains the operator to dismiss this dialog unread.
+    // An empty recording means the feed stalled mid-session (the PC Audio cause is
+    // refused at start), so report it (#4629). The >= 1s floor avoids alarming on
+    // an instant start/stop that may not have seen a block yet; a sub-second empty
+    // recording is accepted silently.
     if (dataBytes == 0 && elapsedSecs >= 1 && report == FinalizeReport::Diagnose) {
         qCWarning(lcAudio) << "QsoRecorder: recording captured no audio:" << filePath;
         emit recordingError(
@@ -965,17 +974,10 @@ void QsoRecorder::releasePlaybackSink(bool stop)
             m_playSink->stop();
         }
         m_playSink->disconnect(this);
-        // deleteLater(), NOT a direct delete, and it must stay that way:
-        // onPlaybackSinkState() is a DIRECT connection from
-        // QAudioSink::stateChanged, so a natural end-of-file arrives here with
-        // the sink's own emission still on the stack. Destroying it there frees
-        // the sender mid-emit; disconnect(this) severs the connection but does
-        // not unwind that frame.
-        //
-        // The cost is that ~QsoRecorder cannot run the deferred delete, so the
-        // sink falls to ~QObject instead -- after m_playBuffer and m_playPcm
-        // have gone as members. That is safe because stop() above has already
-        // halted the pull, and it stays safe only while this order holds.
+        // Must be deleteLater(): onPlaybackSinkState() is a direct connection from
+        // QAudioSink::stateChanged, so end-of-file arrives with the sink's emit on the
+        // stack. The sink then outlives m_playBuffer/m_playPcm until ~QObject, which
+        // is safe only because stop() above has already halted the pull.
         m_playSink->deleteLater();
         m_playSink = nullptr;
     }

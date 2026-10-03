@@ -1,14 +1,7 @@
 #include "WwvDecoder.h"
 
-// WWV/WWVH 100 Hz-subcarrier BCD time-code decoder — streaming implementation.
-//
-// Ports the MATH of the gate-passed AetherClock reference chain
-// (research/wwv_decode_proto.py) to a sample-streaming front-end: the
-// prototype's whole-file FFT stages become biquad cascades + running mixers +
-// decimated per-second work, per the NIST WWV/WWVH time-code table (NIST
-// SP 432) and the AetherClock reference chain documented in WwvDecoder.h.
-//
-// Chain (identical intent to the prototype, streaming realization):
+// WWV/WWVH 100 Hz-subcarrier BCD time-code decoder, streaming port of the
+// AetherClock reference chain (research/wwv_decode_proto.py; NIST SP 432):
 //   analytic bandpass 700-1300 Hz (biquad cascade) -> rectify+LPF envelope
 //   -> coherent 100 Hz demod (running quadrature mixer, 25 Hz LPF both rails,
 //      magnitude) -> decimate to a 200 Hz amplitude series a[]

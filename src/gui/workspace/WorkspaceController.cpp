@@ -2618,21 +2618,11 @@ bool WorkspaceController::switchWorkspaceInternal(const QString& id, bool force)
             }
         }
     }
-    // The recall universe is the APPLET CATALOG, never allContainers()
-    // (red-team B1): the manager also registers composite children (the
-    // Channel Strip's thirteen sub-containers) and the root sidebar, none
-    // of which any workspace item can name — iterating them closed every
-    // one permanently, with no UI path back.  The catalog is exactly the
-    // set the operator can address.  The whole loop runs inside the
-    // recall guard so the panel's preference dual-write stays silent
-    // (red-team B2) — workspace recall is not the operator editing their
-    // Classic preferences.
-    // Hardware availability (m_widgetAvailable) is deliberately NOT
-    // consulted here: the document is the operator's own recorded intent,
-    // and detection can lag connect by seconds — gating recall on it
-    // would make a switch racy and recall workspaces incomplete.  Recall
-    // outranks availability; only ADDING via the palette is gated
-    // (#4968 red-team M2, ruled by the maintainer).
+    // Iterate the applet catalog, never allContainers(): the manager also holds
+    // composite children (Channel Strip sub-containers) and the root sidebar, which
+    // no workspace item can name, so closing them would be permanent. The recall
+    // guard keeps the panel's preference dual-write silent. Hardware availability
+    // is not consulted (detection lags connect); only palette adds are gated (#4968).
     if (m_panHost.recallGuard) m_panHost.recallGuard(true);
     for (const WidgetCatalogEntry& entry : m_widgetCatalog) {
         ContainerWidget* c = containerForApplet(entry.id);

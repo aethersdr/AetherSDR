@@ -12,17 +12,12 @@ class QFont;
 
 namespace AetherSDR {
 
-// Editable geometry for the PWR applet's cross-needle power/SWR face.
-//
-// The shipping values live in resources/meterfaces/cross-needle-v12.json.
-// This class validates that resource and owns the mechanical mappings used by
-// both the painter and tests: non-linear scale interpolation, concealed-pivot
-// needle rays, constant-SWR curves, and their intersection.
-//
-// BEFORE changing the response model, contour construction, or label placement,
-// read docs/cross-needle-meter-math.md. It is the authoritative model + decision
-// record: which geometry choices are settled and why. Reshaping the physics
-// without updating that doc (and the tests) is how this component churns.
+// Editable geometry for the PWR applet's cross-needle power/SWR face. Shipping
+// values live in resources/meterfaces/cross-needle-v12.json. Owns the mappings
+// shared by painter and tests: scale interpolation, concealed-pivot needle
+// rays, constant-SWR curves and their intersection. Read
+// docs/cross-needle-meter-math.md before changing the response model, contours
+// or label placement.
 class CrossNeedleMeterGeometry {
   public:
     struct Frame {
@@ -182,18 +177,13 @@ class CrossNeedleMeterGeometry {
         // needles, and SWR construction.
         QVector<double> anglesRadians;
         QVector<double> referenceAnglesRadians;
-        // A normalized degree-5 Bernstein response maps normalized power
-        // [0, 1] to needle deflection [0, 1]. Its non-decreasing, concave
-        // control polygon gives natural square-root-like compression (a real
-        // D'Arsonval movement + sqrt watt scale) while forbidding repeated
-        // acceleration, so calibration noise cannot knot the SWR contours.
-        // The response starts at the ANGLED printed-zero rest position
-        // (responseStartRadians == the "0" tick angle == startRadians): at
-        // zero power each needle parks on its printed 0 mark, pointing up into
-        // the dial exactly like a real cross-needle meter, so the low-SWR
-        // contours stay visible and rise at a shallow angle. One response
-        // drives printed ticks, live needles, inverse readings, and every SWR
-        // contour. See docs/cross-needle-meter-math.md, Decision D1.
+        // Normalized degree-5 Bernstein response, power [0,1] → deflection
+        // [0,1]. A non-decreasing concave control polygon gives sqrt-like
+        // compression without re-acceleration, so calibration noise cannot knot
+        // the SWR contours. Starts at the angled printed-zero rest position
+        // (responseStartRadians == "0" tick == startRadians). One response drives
+        // ticks, needles, inverse readings and contours. See
+        // docs/cross-needle-meter-math.md, Decision D1.
         QString responseModel{QStringLiteral("concave_bernstein_v1")};
         double responseStartRadians{0.0};
         double responseEndRadians{0.0};

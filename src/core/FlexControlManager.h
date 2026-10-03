@@ -11,20 +11,13 @@
 
 namespace AetherSDR {
 
-// FlexControl USB tuning knob driver.
-//
-// The FlexControl is a USB serial device (VID 0x2192, PID 0x0010) at
-// 9600 8N1 that sends semicolon-delimited ASCII commands:
-//   D;      — rotate CW (tune up 1 step)
-//   D02;–D06; — rotate CW with acceleration (2–6 steps)
-//   U;      — rotate CCW (tune down 1 step)
-//   U02;–U06; — rotate CCW with acceleration
-//   X1S;    — button 1 tap (S=tap, C=double, L=hold)
-//   X2S;    — button 2 tap
-//   X3S;    — button 3 tap
-//   X4S;    — knob button tap
-//   I100;   — host sets Aux1 LED on (Ixyz; = Aux1/Aux2/Aux3)
-//   F0304;  — device init/reset
+// FlexControl USB tuning knob: USB serial (VID 0x2192, PID 0x0010), 9600 8N1,
+// semicolon-delimited ASCII:
+//   D; / D02;-D06;  rotate CW 1 / 2-6 steps (acceleration)
+//   U; / U02;-U06;  rotate CCW
+//   X1S;..X3S;      buttons 1-3, X4S; knob button (S=tap, C=double, L=hold)
+//   I100;           host sets Aux1 LED on (Ixyz; = Aux1/Aux2/Aux3)
+//   F0304;          device init/reset
 class FlexControlManager : public QObject {
     Q_OBJECT
 

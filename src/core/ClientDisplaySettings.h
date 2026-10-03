@@ -33,12 +33,9 @@ public:
         return rate;
     }
 
-    // "Show TX in Waterfall", for a radio whose waterfall rows are made on
-    // this host. One flag per radio, not per pan: it is one setting on a Flex
-    // too (`transmit set show_tx_in_waterfall`), which stores it and reports
-    // it back. `shapedLocally` false means exactly that radio: nothing is read
-    // and nothing is written, so the client never holds a copy that could
-    // fight the radio's.
+    // "Show TX in Waterfall" where the waterfall rows are made on this host,
+    // one flag per radio as on a Flex. `shapedLocally` false (the radio stores
+    // it) reads and writes nothing, so no copy can fight the radio's.
     static std::optional<bool> showTxInWaterfall(const RadioSettingsScope& scope,
                                                  bool shapedLocally)
     {

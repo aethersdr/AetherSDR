@@ -15,30 +15,13 @@ namespace AetherSDR {
 class HGauge;
 class SpeLcdWidget;
 
-// Dedicated applet for an SPE Expert linear amplifier (1.3K-FA/1.5K-FA/
-// 2K-FA) — a sibling of AcomApplet and AmpApplet (PGXL), not a variant of
-// either, per the dedicated-applet-per-peripheral lesson recorded in
-// docs/architecture/acom-600s-amplifier-design.md §2. See
-// docs/architecture/spe-expert-amplifier-design.md for this applet's own
-// design note.
-//
-// The SPE's Status string reports output power, antenna-side SWR, AND
-// ATU-input-side SWR as independently real fields, so all three get a
-// permanent gauge row (same all-real-fields-get-gauges reasoning as
-// AcomApplet's Power/Reflected/SWR). Supply voltage/current and the
-// heatsink temperatures are text readouts — the protocol defines no
-// nominal/max scale to size an axis against.
-//
-// Buttons mirror the amplifier's own front panel keys (every remote command
-// IS a keystroke in this protocol): OPER/STBY toggle, power-level cycle
-// (the button label shows the CURRENT level, LOW/MID/HIGH), TUNE, OFF,
-// INPUT, ANT, and the ▲/▼ arrow keys — which on the Expert adjust the
-// drive power the amplifier requests from the radio over CAT. Band keys
-// are not exposed: the amp follows the radio's band via CAT/RF sensing.
-// SET/DISPLAY menu navigation and manual L/C tuning are deliberately not
-// exposed — SPE reserves complex operations for their own KTerm
-// application, and blind menu navigation without the amp's display is a
-// foot-gun.
+// Dedicated applet for SPE Expert amplifiers (1.3K/1.5K/2K-FA), a sibling of
+// AcomApplet and AmpApplet; see docs/architecture/spe-expert-amplifier-design.md.
+// Power, antenna SWR and ATU-input SWR are independent Status fields, so each
+// gets a gauge; supply and temperatures are text (protocol defines no scale).
+// Buttons are the amp's front-panel keys (each remote command is a keystroke);
+// ▲/▼ adjust the drive the amp requests over CAT. Band keys, SET/DISPLAY menus
+// and manual L/C tuning are not exposed: blind menu navigation is unsafe.
 class SpeApplet : public QWidget {
     Q_OBJECT
 

@@ -87,7 +87,7 @@ int main(int argc, char** argv)
     // widget, so without a backend the widget is CORRECT to stay silent and
     // every expectation below fails as `got []`. That is a property of the
     // environment, not a defect in the code under test — so SKIP rather than
-    // fail, the same way crdv_quarantined_test does (ctest SKIP_RETURN_CODE 77).
+    // fail (ctest SKIP_RETURN_CODE 77).
     //
     // This is what took the ASan+UBSan sanitizer job red from 2026-07-20 (see
     // issue #4360): that job is the only CI job that runs these tests at all,

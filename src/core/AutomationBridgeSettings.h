@@ -9,19 +9,15 @@ class QObject;
 
 namespace AetherSDR {
 
-// Owned configuration for the agent automation bridge (#3646), per
-// Constitution Principle V: one nested JSON object under a single root key
-// ("AutomationBridge"), read/written atomically, with a one-shot migration
-// from the earlier flat keys. The secret token is NOT stored here — it lives
-// in the OS secret store via QtKeychain (service/key below), mirroring the
-// MQTT-password pattern (GHSA-mmqp-cm4w-cvpp). The non-secret bools are:
-//
-//   enabled    — the bridge runs at launch (Radio Setup → Network toggle)
-//   txAllowed  — an MCP client may key the transmitter (the TX guard)
-//   txAck      — the operator has acknowledged the TX warning at least once
-//   readOnly   — observe-only: the bridge refuses every mutating verb (#4188)
-//
-// All accessors go through AppSettings and are process-wide.
+// Configuration for the agent automation bridge (#3646): one JSON object under
+// "AutomationBridge", read/written atomically, migrated once from flat keys. The
+// token lives in the OS secret store via QtKeychain (service/key below), never
+// here. Bools:
+//   enabled    - bridge runs at launch (Radio Setup -> Network)
+//   txAllowed  - an MCP client may key the transmitter (the TX guard)
+//   txAck      - operator has acknowledged the TX warning once
+//   readOnly   - bridge refuses every mutating verb (#4188)
+// Accessors go through AppSettings and are process-wide.
 class AutomationBridgeSettings {
 public:
     static bool enabled();

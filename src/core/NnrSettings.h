@@ -11,18 +11,9 @@
 
 namespace AetherSDR {
 
-// Per-feature configuration for NNR (WDSP 2.10 neural noise reduction), stored
-// as a single nested-JSON object under AppSettings["Nnr"] rather than as loose
-// flat keys — Principle V, each feature owns its configuration as one
-// self-contained object. Mirrors NvidiaBnrSettings.
-//
-// The six older NR methods keep their flat keys (ClientRn2Enabled and
-// friends); those are shipped data and migrating them is not this feature's
-// business. NNR is new, so it starts in the right shape.
-//
-// Defaults come from NnrControls.h rather than being repeated here, so the
-// value a fresh install starts at is the same value the tab draws its marker
-// at. There is exactly one place to change either.
+// NNR configuration as one nested-JSON object under AppSettings["Nnr"] (mirrors
+// NvidiaBnrSettings); the older NR methods keep their flat keys. Defaults come
+// from NnrControls.h so a fresh install matches the tab's markers.
 class NnrSettings {
 public:
     // Whether NNR was the selected ADSP method when the session ended.

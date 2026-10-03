@@ -1685,17 +1685,11 @@ int MainWindow::kiwiSdrResumeHoldMsForProfile(
         return 0;
     }
 
-    // Prefer the receive-sync measurement of the Kiwi's ingest lag —
-    // but only for the profile it was actually measured against, and
-    // only while it maintains the same lock the sync engine itself
-    // requires before acting on it. Everything else falls back to
-    // baseLatencyMs as an ingest-lag proxy — and when Receive Sync is
-    // off entirely, that value was never applied to anything, so it is
-    // a rough stand-in with no measured tie to this Kiwi's chain, kept
-    // sane by the clamp in kiwiSdrResumeHoldMs. The engine-side
-    // presentation holdback for this source delays playback beyond
-    // arrival, so it is added on top; kiwiSdrResumeHoldMs adds the
-    // guard for what none of these can see.
+    // Prefer the receive-sync measurement of the Kiwi's ingest lag, but only
+    // for the profile it was measured against and while the sync engine holds
+    // its lock; otherwise use baseLatencyMs as a rough proxy (clamped in
+    // kiwiSdrResumeHoldMs). The engine's presentation holdback is added on top;
+    // kiwiSdrResumeHoldMs adds the remaining guard.
     const ReceivePresentationSettings& sync = context.sync;
     AetherSDR::KiwiSdrResumeHoldSyncInputs inputs;
     inputs.isSyncTarget = profile.id == context.syncTargetProfileId;
