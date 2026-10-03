@@ -748,7 +748,9 @@ void SliceModel::setRit(bool on, int hz)
     m_ritFreq = hz;
     sendCommand(QString("slice set %1 rit_on=%2 rit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
+    m_ritCommandInFlight = true;
     emit ritCommandIssued(on, hz);
+    m_ritCommandInFlight = false;
     // The members, not the arguments: a backend that answers synchronously
     // (HL2's clamp) has already corrected them.
     emit ritChanged(m_ritOn, m_ritFreq);
@@ -760,7 +762,9 @@ void SliceModel::setXit(bool on, int hz)
     m_xitFreq = hz;
     sendCommand(QString("slice set %1 xit_on=%2 xit_freq=%3")
                     .arg(m_id).arg(on ? 1 : 0).arg(hz));
+    m_xitCommandInFlight = true;
     emit xitCommandIssued(on, hz);
+    m_xitCommandInFlight = false;
     emit xitChanged(m_xitOn, m_xitFreq);
 }
 
@@ -1647,13 +1651,14 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }
     // Guarded like the AGC pair: HL2 publishes RIT/XIT on every emitSliceState().
+    // Inside setRit()/setXit() the value is adopted and announced there, once.
     if (d.ritOn.has_value() || d.ritFreq.has_value()) {
         const bool on = d.ritOn.value_or(m_ritOn);
         const int hz = d.ritFreq.value_or(m_ritFreq);
         if (on != m_ritOn || hz != m_ritFreq) {
             m_ritOn = on;
             m_ritFreq = hz;
-            emit ritChanged(m_ritOn, m_ritFreq);
+            if (!m_ritCommandInFlight) emit ritChanged(m_ritOn, m_ritFreq);
         }
     }
     if (d.xitOn.has_value() || d.xitFreq.has_value()) {
@@ -1662,7 +1667,7 @@ void SliceModel::applyChanges(const SliceDelta& d)
         if (on != m_xitOn || hz != m_xitFreq) {
             m_xitOn = on;
             m_xitFreq = hz;
-            emit xitChanged(m_xitOn, m_xitFreq);
+            if (!m_xitCommandInFlight) emit xitChanged(m_xitOn, m_xitFreq);
         }
     }
     if (d.daxChannel.has_value()) {

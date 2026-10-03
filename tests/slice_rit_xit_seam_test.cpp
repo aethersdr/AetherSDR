@@ -9,6 +9,8 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QList>
+#include <QPair>
 #include <QStringList>
 
 #include <cstdio>
@@ -29,6 +31,11 @@ public:
     RadioCapabilities caps;
     QStringList calls;
     bool clampRit = false;
+    // Publish the held RIT/XIT from the ENABLE verb too, as HL2 does: the
+    // offset has not arrived yet, so this step carries the old one.
+    bool echoEnable = false;
+    int heldRitHz = 0;
+    int heldXitHz = 0;
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return true; }
     void connectRadio(const RadioConnectRequest&) override {}
@@ -41,7 +48,16 @@ public:
     void setKeying(bool, const AetherSDR::TxCoordinator::Operation&,
                    const AetherSDR::TxCoordinator::Completion&) override {}
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
-    void setSliceRitEnabled(int id, bool on) override { log("ritOn", id, on); }
+    void setSliceRitEnabled(int id, bool on) override
+    {
+        log("ritOn", id, on);
+        if (echoEnable) {
+            SliceDelta d;
+            d.ritOn = on;
+            d.ritFreq = heldRitHz;
+            emit sliceChanged(id, d);
+        }
+    }
     void setSliceRitOffset(int id, int hz) override
     {
         log("ritHz", id, hz);
@@ -50,10 +66,33 @@ public:
             SliceDelta d;
             d.ritFreq = 9999;
             emit sliceChanged(id, d);
+        } else if (echoEnable) {
+            heldRitHz = hz;
+            SliceDelta d;
+            d.ritFreq = hz;
+            emit sliceChanged(id, d);
         }
     }
-    void setSliceXitEnabled(int id, bool on) override { log("xitOn", id, on); }
-    void setSliceXitOffset(int id, int hz) override { log("xitHz", id, hz); }
+    void setSliceXitEnabled(int id, bool on) override
+    {
+        log("xitOn", id, on);
+        if (echoEnable) {
+            SliceDelta d;
+            d.xitOn = on;
+            d.xitFreq = heldXitHz;
+            emit sliceChanged(id, d);
+        }
+    }
+    void setSliceXitOffset(int id, int hz) override
+    {
+        log("xitHz", id, hz);
+        if (echoEnable) {
+            heldXitHz = hz;
+            SliceDelta d;
+            d.xitFreq = hz;
+            emit sliceChanged(id, d);
+        }
+    }
     void log(const char* what, int id, int v)
     {
         calls << QStringLiteral("%1 %2 %3").arg(QLatin1String(what)).arg(id).arg(v);
@@ -136,6 +175,57 @@ int main(int argc, char** argv)
     b->setRit(true, 20000);
     check(lastHz == 9999 && b->ritFreq() == 9999,
           "setRit() ends on the backend's clamped offset, not the requested one");
+
+    backend->clampRit = false;
+
+    // ---- enable-then-offset from a backend that publishes each step ----
+    // The enable verb publishes the OLD offset before the offset verb lands.
+    // setRit() announces once, with the final value, never the stale step.
+    backend->echoEnable = true;
+    backend->heldRitHz = 300;
+    b->setRit(false, 300);
+    QList<QPair<bool, int>> ritSeen;
+    QObject::connect(b, &SliceModel::ritChanged, &radio,
+                     [&](bool on, int hz) { ritSeen.append({on, hz}); });
+    b->setRit(true, 500);
+    check(ritSeen == QList<QPair<bool, int>>({{true, 500}}),
+          "setRit(true, 500) over a held 300: one ritChanged(true, 500), no stale (true, 300)");
+    check(b->ritOn() && b->ritFreq() == 500, "RIT ends on (true, 500)");
+    backend->heldXitHz = 0;
+    a->setXit(false, 0);
+    QList<QPair<bool, int>> xitSeen;
+    QObject::connect(a, &SliceModel::xitChanged, &radio,
+                     [&](bool on, int hz) { xitSeen.append({on, hz}); });
+    a->setXit(true, -250);
+    check(xitSeen == QList<QPair<bool, int>>({{true, -250}}),
+          "setXit(true, -250) over a held 0: one xitChanged(true, -250), no stale (true, 0)");
+    backend->echoEnable = false;
+
+    // ---- Flex shape: no synchronous echo; status arrives later ----
+    // A backend-less slice (Flex's path) emits the command text and one
+    // ritChanged with the requested value; the radio's later status echo of the
+    // same value emits nothing, and a partial echo keeps the other field.
+    SliceModel flex(3);
+    QStringList flexWire;
+    QList<QPair<bool, int>> flexSeen;
+    QObject::connect(&flex, &SliceModel::commandReady, &radio,
+                     [&](const QString& cmd) { flexWire << cmd; });
+    QObject::connect(&flex, &SliceModel::ritChanged, &radio,
+                     [&](bool on, int hz) { flexSeen.append({on, hz}); });
+    flex.setRit(true, 500);
+    check(flexWire == QStringList({"slice set 3 rit_on=1 rit_freq=500"})
+              && flexSeen == QList<QPair<bool, int>>({{true, 500}}),
+          "Flex: setRit sends the slice-set text and announces (true, 500) once");
+    SliceDelta status;
+    status.ritOn = true;
+    status.ritFreq = 500;
+    flex.applyChanges(status);
+    check(flexSeen.size() == 1, "Flex: the radio's matching status echo emits nothing");
+    SliceDelta partial;
+    partial.ritFreq = 750;
+    flex.applyChanges(partial);
+    check(flexSeen.size() == 2 && flexSeen.last() == qMakePair(true, 750) && flex.ritOn(),
+          "Flex: a status carrying only rit_freq keeps rit_on and announces once");
 
     std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
                 failures == 1 ? "" : "s");

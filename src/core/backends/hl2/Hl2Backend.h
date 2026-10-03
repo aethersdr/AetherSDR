@@ -582,6 +582,8 @@ private:
     void retuneReceiver(int ddc);
     // The offset clamped to kRitXitMaxHz, logging when the clamp bites.
     [[nodiscard]] static int clampRitXit(const char* what, int hz);
+    // qCInfo naming the receiver and slice an RIT/XIT change landed on.
+    void logRitXit(const char* what, int ddc, bool on, int hz) const;
     // SmartCatProtocol's kRitMaxHz. Only SmartCAT clamps to it: SliceModel::
     // setRit() and the VFO's RIT/XIT steppers do not, so an offset past it can
     // reach the setters, and they log when this clamp bites.

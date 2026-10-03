@@ -50,6 +50,13 @@ struct Hl2RitXitTestAccess {
     static double ncoHz(const Hl2Backend& b, int ddc) { return b.rx(ddc)->ncoHz; }
     static double sliceHz(const Hl2Backend& b, int ddc) { return b.rx(ddc)->sliceFreqHz; }
     static QString panIdOf(const Hl2Backend& b, int ddc) { return b.m_ids.byDdc(ddc)->panId; }
+    static void buildReceivers(Hl2Backend& b, int count) { b.buildReceivers(count); }
+    static int receiverCount(const Hl2Backend& b) { return static_cast<int>(b.m_rx.size()); }
+    static bool ritOn(const Hl2Backend& b, int ddc) { return b.rx(ddc)->ritOn; }
+    static int ritHz(const Hl2Backend& b, int ddc) { return b.rx(ddc)->ritHz; }
+    static bool xitOn(const Hl2Backend& b, int ddc) { return b.rx(ddc)->xitOn; }
+    static int xitHz(const Hl2Backend& b, int ddc) { return b.rx(ddc)->xitHz; }
+    static bool ncoMovedForRit(const Hl2Backend& b, int ddc) { return b.rx(ddc)->ncoMovedForRit; }
 
     // Drain the queued register writes on the I/O thread, then read.
     template <typename F>
@@ -200,9 +207,8 @@ int main(int argc, char** argv)
     check(A::txRegisterHz(backend) == 7'074'200u,
           "TX moved to receiver 1: TX register takes receiver 1's own XIT +200");
     backend.setSliceXitEnabled(1, false);
-    backend.setTxSlice(1);
     check(A::txRegisterHz(backend) == 7'074'000u,
-          "receiver 1 XIT off: TX register on receiver 1's dial");
+          "XIT off on the transmitting receiver 1: the setter rewrites the TX register to its dial");
     backend.setTxSlice(0);
     check(A::txRegisterHz(backend) == 14'073'700u,
           "TX back on receiver 0: its XIT -300 applies again");
@@ -297,6 +303,50 @@ int main(int argc, char** argv)
     backend.setSliceRitOffset(0, 0);
 
     check(!A::mox(backend), "nothing keyed: MOX never set");
+
+    // ---- closing receiver 0 renumbers receiver 1 to DDC 0; its RIT goes with it ----
+    {
+        Hl2Backend closing;
+        A::twoReceivers(closing);
+        closing.setSliceFrequency(0, kDial0);
+        closing.setSliceFrequency(1, kDial1);
+        closing.setSliceRitEnabled(0, true);
+        closing.setSliceRitOffset(0, 300);
+        closing.setSliceRitEnabled(1, true);
+        closing.setSliceRitOffset(1, -700);
+        const double shift1 = A::shiftHz(closing, 1);
+        check(closing.removePanadapter(A::panIdOf(closing, 0)), "receiver 0 closes");
+        check(A::receiverCount(closing) == 1 && A::ritOn(closing, 0) && A::ritHz(closing, 0) == -700,
+              "receiver 0 closed: slice 1, now DDC 0, keeps its own RIT -700, not slice 0's +300");
+        check(near(A::shiftHz(closing, 0), shift1),
+              "receiver 0 closed: slice 1's receive shift is unchanged");
+        check(!A::mox(closing), "closing case: MOX never set");
+    }
+
+    // ---- a receiver a (re)connect adds starts with RIT/XIT off ----
+    // buildReceivers() carries existing receivers' state and seeds a new one
+    // from receiver 0; the seed must not carry receiver 0's RIT/XIT.
+    {
+        Hl2Backend growing;
+        growing.setSliceFrequency(0, kDial0);
+        growing.setSliceRitEnabled(0, true);
+        growing.setSliceFrequency(0, A::ncoHz(growing, 0) + 19'000.0);
+        growing.setSliceRitOffset(0, 400);
+        growing.setSliceXitEnabled(0, true);
+        growing.setSliceXitOffset(0, -200);
+        check(A::ncoMovedForRit(growing, 0), "build: receiver 0's RIT moved its NCO");
+        A::buildReceivers(growing, 2);
+        check(A::receiverCount(growing) == 2, "build: two receivers");
+        check(A::ritOn(growing, 0) && A::ritHz(growing, 0) == 400 && A::xitOn(growing, 0)
+                  && A::xitHz(growing, 0) == -200,
+              "build: receiver 0 keeps its RIT +400 / XIT -200 across the rebuild");
+        check(!A::ritOn(growing, 1) && A::ritHz(growing, 1) == 0 && !A::xitOn(growing, 1)
+                  && A::xitHz(growing, 1) == 0,
+              "build: the added receiver starts with RIT and XIT off, not receiver 0's");
+        check(!A::ncoMovedForRit(growing, 1),
+              "build: the added receiver does not inherit receiver 0's RIT-moved-NCO flag");
+        check(!A::mox(growing), "build case: MOX never set");
+    }
 
     std::printf("\n  %s (%d failure%s)\n", g_failures ? "FAILED" : "PASSED",
                 g_failures, g_failures == 1 ? "" : "s");
