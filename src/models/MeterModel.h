@@ -110,6 +110,8 @@ public:
     // (Flex: the manifest's `num`; HL2: the receiver number; Icom: 0), so
     // RigctlProtocol can pass slice->sliceId().
     std::optional<float> sLevelForSlice(int sliceIndex) const;
+    // ADC-relative RF only. Never usable as calibrated dBm/S units.
+    std::optional<float> relativeLevelForSlice(int sliceIndex) const;
 
     // The radio-wide S-meter reading — what `get meters` publishes as a scalar
     // — WHEN THERE IS ONE. Exactly one slice declaring a LEVEL meter is the

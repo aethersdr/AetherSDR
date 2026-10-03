@@ -6,8 +6,13 @@
 #include "core/TciRxConverter.h"
 #include "core/backends/IRadioBackend.h"
 #include "models/RadioModel.h"
+#include "models/DaxReceiveModel.h"
 #include "models/SliceModel.h"
 #include <QCoreApplication>
+#include <QEventLoop>
+#include <QTimer>
+#include <QSemaphore>
+#include <QJsonArray>
 #include <QStringList>
 #include "core/TciClient.h"
 #include <array>
@@ -76,7 +81,12 @@ double energy(const QVector<float>& samples, int channel)
 }
 class InjectedBackend final : public IRadioBackend {
 public:
-    RadioCapabilities capabilities() const override { return {}; }
+    RadioCapabilities capabilities() const override {
+        RadioCapabilities caps;
+        if (exportAvailable) { caps.receiveAudioExport = ReceiveAudioExport{{24000,48000},8}; }
+        return caps;
+    }
+    bool exportAvailable = true;
     bool ownsRxAudio() const override { return true; }
     void connectRadio(const RadioConnectRequest&) override {} // no transport
     void disconnectRadio() override { retirePcmStreams(); emit disconnected(); }
@@ -795,8 +805,246 @@ public:
         check(true, "copied network ingress remains inert after concurrent controller destruction");
     }
 
+    static void eightNativeDaxConsumers()
+    {
+        const std::array<int,8> ids{3,17,29,41,57,63,80,99};
+        const std::array<int,8> rates{8000,12000,24000,48000,8000,12000,24000,48000};
+        for (int sourceRate : {24000,48000}) {
+            Fixture f;
+            DaxReceiveModel dax(f.model, f.server);
+            std::array<QByteArray,8> received;
+            std::array<int,8> resets{};
+            std::array<PcmProducer,8> producers;
+            std::array<TciClient*,8> clients{};
+            QObject::connect(&dax, &DaxReceiveModel::audioReady, &dax,
+                [&](int channel, const QByteArray& pcm) {
+                    check(channel >= 1 && channel <= 8 && !pcm.isEmpty()
+                              && pcm.size() <= 1024*2*int(sizeof(float))
+                              && pcm.size() % (2*sizeof(float)) == 0,
+                          "DAX emits bounded float stereo24 blocks on channels one through eight");
+                    if (channel >= 1 && channel <= 8) { received[channel-1].append(pcm); }
+                });
+            QObject::connect(&dax, &DaxReceiveModel::channelReset, &dax,
+                [&](int channel) { ++resets[channel-1]; });
+            for (int i = 0; i < 8; ++i) {
+                f.backend->add(ids[i]);
+                check(producers[i].start(PcmPurpose::Slice,ids[i],{sourceRate,PcmLayout::Stereo}),
+                      "start eight distinct native receiver producers");
+                clients[i] = f.client(24000,i);
+                SliceDelta mute; mute.audioMute = true; mute.audioGain = 0;
+                emit f.backend->sliceChanged(ids[i],mute);
+            }
+            dax.setEnabled(true);
+            std::array<PcmFrame,8> frames;
+            for (int i = 0; i < 8; ++i) {
+                frames[i] = frame(producers[i],sourceRate,float(i+1)/16.0f,-float(i+1)/32.0f);
+                f.feed(ids[i],frames[i]);
+            }
+            for (int i = 0; i < 8; ++i) {
+                headers(f.packets[clients[i]],24000,i,2,3);
+                check(std::abs(floats(f.packets[clients[i]]).size()/2-24000) <= 24000*256/sourceRate+1,
+                      "eight independent TCI consumers retain negotiated rate and receiver identity");
+                QByteArray comparison;
+                for (const QByteArray& packet : f.packets[clients[i]]) { comparison.append(packet.mid(64)); }
+                check(!received[i].isEmpty() && received[i] == comparison,
+                      "each DAX channel is exactly the same independently converted PCM as its live TCI24 route");
+                const int count = received[i].size()/int(2*sizeof(float));
+                check(std::abs(count-24000) <= 256*24000/sourceRate+1,
+                      "DAX duration follows the producer descriptor rather than relabeling its sample rate");
+                float pair[2]{};
+                if (received[i].size() >= int(sizeof(pair))) {
+                    std::memcpy(pair,received[i].constData()+received[i].size()-sizeof(pair),sizeof(pair));
+                }
+                check(std::abs(pair[0]-float(i+1)/16.0f)<0.001f
+                          && std::abs(pair[1]+float(i+1)/32.0f)<0.001f,
+                      "eight muted receivers preserve their distinct stereo channel signatures in DAX");
+                const qsizetype size = received[i].size();
+                f.feed(ids[i],frames[i]);
+                check(received[i].size()==size,"DAX replay guard rejects a repeated frame independently of TCI");
+            }
+            f.packets.clear();
+            for (int i = 0; i < 8; ++i) {
+                f.command(clients[i],QStringLiteral("audio_samplerate:%1;").arg(rates[i]));
+                f.feed(ids[i],frame(producers[i],sourceRate,float(i+1)/16.0f,-float(i+1)/32.0f));
+                headers(f.packets[clients[i]],rates[i],i,2,3);
+                check(std::abs(floats(f.packets[clients[i]]).size()/2-rates[i]) <= rates[i]*256/sourceRate+1,
+                      "eight live clients independently renegotiate supported TCI rates while DAX continues");
+            }
+            const qsizetype beforeStop=received[7].size();
+            dax.setEnabled(false);
+            f.feed(ids[7],frame(producers[7],512));
+            check(received[7].size()==beforeStop,"disabled DAX does not feed while TCI remains live");
+            dax.setEnabled(true);
+            f.feed(ids[7],frame(producers[7],4096));
+            check(received[7].size()>beforeStop,"DAX resumes a live producer after its own stop without restarting TCI");
+            const PcmFrame stale=frame(producers[0],4096);
+            const qsizetype beforeRemoval=received[0].size();
+            f.backend->remove(ids[0]);
+            f.feed(ids[0],stale);
+            f.backend->add(ids[0]);
+            f.feed(ids[0],stale);
+            check(received[0].size()==beforeRemoval,"removal and same-id recreation cannot admit the old live producer");
+            producers[0].invalidate();
+            producers[0].start(PcmPurpose::Slice,ids[0],{sourceRate,PcmLayout::Stereo});
+            f.feed(ids[0],frame(producers[0],4096));
+            check(received[0].size()>beforeRemoval,"new receiver epoch resumes its original DAX channel");
+            const qsizetype survivor=received[6].size();
+            f.feed(ids[6],frame(producers[6],4096));
+            check(received[6].size()>survivor,"recreating an earlier slice never renumbers a surviving DAX receiver");
+            f.backend->remove(ids[0]);
+            QEventLoop settle;
+            QTimer::singleShot(550,&settle,&QEventLoop::quit);
+            settle.exec();
+            f.backend->add(123);
+            PcmProducer replacement;
+            replacement.start(PcmPurpose::Slice,123,{sourceRate,PcmLayout::Stereo});
+            const qsizetype beforeReuse=received[0].size();
+            f.feed(123,frame(replacement,4096));
+            check(received[0].size()>beforeReuse,
+                  "a genuinely closed receiver's settled TCI index is reused by the same DAX input");
+            const qsizetype survivorAfterReuse=received[7].size();
+            f.feed(ids[7],frame(producers[7],4096));
+            check(received[7].size()>survivorAfterReuse,
+                  "reusing a sparse hole does not move the eighth surviving receiver");
+            const qsizetype beforeListenerStop=received[7].size();
+            f.server.stop();
+            f.feed(ids[7],frame(producers[7],4096));
+            check(!f.server.isRunning() && received[7].size()>beforeListenerStop,
+                  "DAX continues independently when the TCI listener and clients are stopped");
+            for (int reset : resets) { check(reset>0,"all eight DAX channels establish a reset boundary"); }
+        }
+    }
+    static void nativeDaxEpochBoundaries()
+    {
+        Fixture f; f.backend->add(17);
+        DaxReceiveModel dax(f.model,f.server);
+        QByteArray audio;
+        int resets=0;
+        QObject::connect(&dax,&DaxReceiveModel::audioReady,&dax,
+            [&](int,const QByteArray& pcm) { audio.append(pcm); });
+        QObject::connect(&dax,&DaxReceiveModel::channelReset,&dax,[&](int) { ++resets; });
+        dax.setEnabled(true);
+        PcmProducer producer,competing;
+        producer.start(PcmPurpose::Slice,17,{48000,PcmLayout::Stereo});
+        f.feed(17,frame(producer,128,0.8f,0.8f));
+        check(audio.isEmpty(),"DAX conversion retains a bounded partial source block");
+        const PcmFrame stale=frame(producer,128,0.8f,0.8f);
+        producer.setFormat({24000,PcmLayout::Stereo});
+        f.feed(17,stale);
+        check(audio.isEmpty(),"revoked queued epoch cannot complete old DAX converter staging");
+        f.feed(17,frame(producer,4096,0,0));
+        check(!audio.isEmpty() && std::all_of(audio.cbegin(),audio.cend(),[](char byte) {return byte==0;}),
+              "24k epoch starts silent with no retained 48k signal history");
+        const qsizetype beforeCompeting=audio.size();
+        competing.start(PcmPurpose::Slice,17,{24000,PcmLayout::Stereo});
+        f.feed(17,frame(competing,4096));
+        check(audio.size()==beforeCompeting,"a competing live producer cannot replace a pinned native DAX source");
+        audio.clear();
+        producer.setFormat({24000,PcmLayout::Mono});
+        const auto mono=producer.produce({0.125f,-0.25f});
+        f.feed(17,*mono);
+        float samples[4]{};
+        if(audio.size()==int(sizeof(samples))) {std::memcpy(samples,audio.constData(),sizeof(samples));}
+        check(audio.size()==int(sizeof(samples)) && samples[0]==0.125f && samples[1]==0.125f
+                  && samples[2]==-0.25f && samples[3]==-0.25f,
+              "native mono is deliberately duplicated into the bridge stereo ABI");
+        audio.clear();
+        const auto stillLive=producer.produce({0.5f,0.5f});
+        f.replaceBackend(); f.backend->add(17);
+        f.feed(17,*stillLive);
+        check(audio.isEmpty(),"backend replacement retires old native DAX route even with a still-live producer");
+        producer.invalidate(); producer.start(PcmPurpose::Slice,17);
+        f.feed(17,frame(producer,16));
+        check(!audio.isEmpty() && resets>=4,"new backend route resumes after independent lifecycle resets");
+        audio.clear();
+        f.backend->exportAvailable=false;
+        emit f.model.capabilitiesChanged(f.model.isConnected(),f.backend->capabilities());
+        f.feed(17,frame(producer,16));
+        check(audio.isEmpty(),"withdrawing native export capability immediately refuses further DAX audio");
+        f.backend->exportAvailable=true;
+        emit f.model.capabilitiesChanged(f.model.isConnected(),f.backend->capabilities());
+        f.feed(17,frame(producer,16));
+        check(!audio.isEmpty(),"redeclared native export resumes with a reset converter");
+        audio.clear();
+        bool revoke=true;
+        QObject::connect(&dax,&DaxReceiveModel::audioReady,&dax,[&](int,const QByteArray&) {
+            if(revoke) {revoke=false; producer.invalidate();}
+        });
+        f.feed(17,frame(producer,4096));
+        check(audio.size()==int(1024*2*sizeof(float)),
+              "revocation from a consumer callback prevents every remaining block of the same DAX input");
+    }
+
+    static void serverConstructedAfterReceiverRestore()
+    {
+        RadioModel model;
+        auto backend = std::make_unique<InjectedBackend>();
+        InjectedBackend* source = backend.get();
+        model.setBackendForTest(std::move(backend), QStringLiteral("rtl"));
+        for (int id = 0; id < 8; ++id) { source->add(id); }
+        // MainWindow can construct the session's TCI server after the radio
+        // restored its slices. Their sliceAdded signals have already fired.
+        TciServer server(&model);
+        source->remove(3);
+        QEventLoop settle;
+        QTimer::singleShot(550, &settle, &QEventLoop::quit);
+        settle.exec();
+        for (int id : {0, 1, 2, 4, 5, 6, 7}) {
+            const auto binding = server.sliceRxBinding(id);
+            check(binding.current() && binding.trx == id,
+                  "late-constructed TCI server preserves surviving receiver assignments");
+        }
+        for (const QJsonValue& value : server.routingSnapshot().value(QStringLiteral("endpoints")).toArray()) {
+            const QJsonObject endpoint = value.toObject();
+            const int id = endpoint.value(QStringLiteral("sliceId")).toInt();
+            check(endpoint.value(QStringLiteral("trx")).toInt() == server.sliceRxBinding(id).trx,
+                  "routing diagnostics report the same stable receiver assignment as audio");
+        }
+        source->add(99);
+        const auto replacement = server.sliceRxBinding(99);
+        check(replacement.current() && replacement.trx == 3,
+              "late-constructed TCI server reuses the actual removed receiver slot");
+    }
+
+    static void simultaneousEightReceiverHandshakes()
+    {
+        Fixture f;
+        for (int id = 0; id < 8; ++id) { f.backend->add(id); }
+        // Exercise the production mailbox with its existing worker paused.
+        // No server/socket is opened and no firmware peer is simulated.
+        QSemaphore paused;
+        QSemaphore resume;
+        f.server.m_io->m_accepting = true;
+        f.server.m_ioThread = std::make_unique<QThread>();
+        f.server.m_io->moveToThread(f.server.m_ioThread.get());
+        f.server.m_ioThread->start();
+        QMetaObject::invokeMethod(f.server.m_io.get(), [&] {
+            paused.release();
+            resume.acquire();
+        }, Qt::QueuedConnection);
+        paused.acquire();
+        f.server.m_running.store(true);
+        for (int id = 0; id < 8; ++id) {
+            f.server.onClientOpened(std::make_shared<TciClientLifetime>(),
+                                    QHostAddress(QStringLiteral("192.0.2.1")), 50000 + id);
+        }
+        {
+            QMutexLocker lock(&f.server.m_io->m_mailboxMutex);
+            check(!f.server.m_io->m_overloaded,
+                  "eight full receiver handshakes fit the unchanged bounded worker mailbox");
+            check(f.server.m_io->m_mailboxBytes > 0,
+                  "handshake payload bytes remain charged to the mailbox bound");
+        }
+        check(f.server.m_clients.size() == 8, "eight simultaneous clients remain registered");
+        resume.release();
+        f.server.stop();
+    }
+
     static int run()
     {
+        serverConstructedAfterReceiverRestore();
+        simultaneousEightReceiverHandshakes();
+        eightNativeDaxConsumers(); nativeDaxEpochBoundaries();
         ingressOutlivesController(); rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding();
         replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
         staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); pressureAndReplacement();

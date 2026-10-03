@@ -112,7 +112,7 @@ jobs:
             libgstreamer-plugins-bad1.0-0 \
             libfuse2 file desktop-file-utils imagemagick \
             python3-pip autoconf automake libtool libasound2-dev \
-            libfftw3-dev libhidapi-dev portaudio19-dev
+            libfftw3-dev libudev-dev libhidapi-dev portaudio19-dev
 
       # glslc — the SPIR-V shader compiler whisper's Vulkan backend needs at
       # BUILD time (CMake resolves it via find_package(Vulkan COMPONENTS glslc),
@@ -179,21 +179,11 @@ jobs:
       - name: Install Qt 6.12.0 LTS via aqtinstall
         run: |
           pip3 install "aqtinstall==${AQTINSTALL_VERSION}"
-          # No qtwayland entry, deliberately: it rides in the BASE package.
-          # qt.qt6.<ver>.<arch>'s DownloadableArchives lists qtwayland-Linux-...7z
-          # next to qtbase, so this install already lays down
-          # plugins/platforms/libqwayland-generic.so, libqwayland-egl.so and the
-          # three wayland-* integration dirs. There is no "qtwayland" module in
-          # the desktop repository — only qtwaylandcompositor — and aqt
-          # hard-errors on an unknown module ("The packages ['qtwayland'] were
-          # not found"), so naming one here fails the whole release build.
-          #
-          # #1389 — QT_QPA_PLATFORM=wayland aborting with "no Qt platform plugin
-          # could be initialized" — was therefore never a missing module. The
-          # plugin was in this tree and simply never DEPLOYED:
-          # linuxdeploy-plugin-qt copies platforms/libqxcb.so and nothing else
-          # unless EXTRA_PLATFORM_PLUGINS says otherwise. That is fixed in the
-          # AppImage steps below.
+          # Qt 6.12's base installation includes WaylandClient and the unified
+          # platforms/libqwayland.so plugin. Do not request a separate
+          # qtwayland module or the retired generic/egl platform filenames.
+          # linuxdeploy only copies libqxcb.so automatically; the Wayland
+          # platform is explicitly selected in the AppImage step below.
           aqt install-qt ${{ matrix.qt_host }} desktop "$QT_VERSION" ${{ matrix.qt_arch }} \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir ${{ github.workspace }}/Qt
@@ -249,6 +239,9 @@ jobs:
         # pure Qt-D-Bus backend talks to KDE Wallet / GNOME Keyring at runtime.
         run: bash scripts/setup/setup-qtkeychain.sh
 
+      - name: Build pinned RTL dependencies (including float FFTW)
+        run: bash scripts/setup/setup-rtl-deps.sh
+
       - name: Configure
         run: |
           # Without pipefail the step's exit status is tee's, so a cmake failure
@@ -256,8 +249,11 @@ jobs:
           # (which also implies -eo pipefail) so the guard is self-contained and
           # survives anyone editing the step's shell.
           set -o pipefail
+          export PKG_CONFIG_PATH="$PWD/third_party/rtl-deps/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_HD_FM=OFF \
+            -DENABLE_RTL=ON -DREQUIRE_RTL=ON \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
             -DREQUIRE_KEYCHAIN=ON \
@@ -267,7 +263,7 @@ jobs:
             -DAETHER_GPU_SPECTRUM=${{ matrix.gpu_spectrum }} \
             -DMQTT_TLS=OFF \
             -DENABLE_NVIDIA_AFX=ON \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT" 2>&1 | tee configure.log
+            -DCMAKE_PREFIX_PATH="$PWD/third_party/rtl-deps;$QT_ROOT" 2>&1 | tee configure.log
 
       # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake silently
       # flips it back OFF if Qt6GuiPrivate can't be located, and CMakeLists.txt
@@ -304,6 +300,8 @@ jobs:
           convert AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
             -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png
 
+          mkdir -p AppDir/usr/share/aethersdr
+          cp -R third_party/rtl-deps/share/aethersdr-rtl-sources AppDir/usr/share/aethersdr/
           # Bundle DeepFilterNet3 model for DFNR
           if [ -f third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz ]; then
             cp third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz \
@@ -320,14 +318,9 @@ jobs:
           # are missing, that is a broken release and the job should say so.
           cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/
 
-          # Bundle the Wayland client buffer integration. QT_QPA_PLATFORM=wayland
-          # resolves to platforms/libqwayland-generic.so (qwayland-generic.json
-          # declares Keys: ["wayland"]; the EGL *platform* plugin's key is
-          # "wayland-egl", so that name never selects it), and the generic plugin
-          # obtains OpenGL only through a client buffer integration plugin loaded
-          # from this directory — libqt-plugin-wayland-egl.so. Without it native
-          # Wayland comes up with no GL at all, which matters because both legs
-          # ship AETHER_GPU_SPECTRUM=ON.
+          # Qt 6.12's libqwayland.so handles both wayland and wayland-egl.
+          # Its OpenGL client buffer integration remains a separate plugin,
+          # libqt-plugin-wayland-egl.so. Both legs need it for the GPU spectrum.
           #
           # It is staged by hand because no linuxdeploy variable reaches this
           # directory: EXTRA_PLATFORM_PLUGINS covers platforms/ and makes
@@ -389,7 +382,7 @@ jobs:
           # wayland-decoration-client and wayland-shell-integration on its own —
           # only wayland-graphics-integration-client has to be staged by hand,
           # which the "Install to AppDir" step above does.
-          EXTRA_PLATFORM_PLUGINS: libqwayland-generic.so;libqwayland-egl.so
+          EXTRA_PLATFORM_PLUGINS: libqwayland.so
         run: |
           # Sanitize the ref for the output filename: a workflow_dispatch on a
           # branch like "ci/appimage-qtkeychain" puts a '/' in github.ref_name,
@@ -408,13 +401,14 @@ jobs:
           # libsherpa-onnx-c-api.so, and libonnxruntime.so (the app links sherpa's
           # copy). Qt6 DBus, which the keychain backend needs at runtime, is pulled
           # in transitively.
-          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/qtkeychain/lib:${{ github.workspace }}/third_party/onnxruntime/lib:${{ github.workspace }}/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/rtl-deps/lib:${{ github.workspace }}/third_party/qtkeychain/lib:${{ github.workspace }}/third_party/onnxruntime/lib:${{ github.workspace }}/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
             --plugin qt \
             --desktop-file AppDir/usr/share/applications/AetherSDR.desktop \
             --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
             --output appimage
+          python3 tools/check_rtl_package.py AppDir --platform linux
 
       # Nothing else in the build would notice these plugins going missing: Qt
       # dlopen()s them at runtime rather than linking them, so no dependency walk

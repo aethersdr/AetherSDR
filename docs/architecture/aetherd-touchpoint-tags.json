@@ -899,6 +899,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/DaxReceiveModel.h": {
+  "tag": "universal",
+  "note": "Owner-thread adapter from typed native receive PCM and stable TCI receiver bindings to the existing 24 kHz virtual audio bridges; no radio wire protocol.",
+  "split": "",
+  "confidence": "high"
+ },
  "models/MeterModel.h": {
   "tag": "mixed(flex)",
   "note": "Meter registry+values are core-profile; VITA-49 raw scaling, TGXL/PGXL amp routing, COMPPEAK quirks are Flex",
@@ -1443,6 +1449,12 @@
   "tag": "mixed(flex)",
   "note": "Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry.",
   "split": "Core: receiver selection, epochs, bounded backlog, rate conversion and decoder resets. Flex compatibility: DAX channel selection and central consumer holds; no wire commands are generated here.",
+  "confidence": "high"
+ },
+ "models/Ax25ReceiveModel.h": {
+  "tag": "universal",
+  "note": "Selected AX.25 receive model over the existing typed decoder route; continuous mono24 conversion and bounded modem worker results retain source leases and generation retirement. Existing transmit ownership is separate.",
+  "split": "",
   "confidence": "high"
  },
  "models/ReceiverSlotCount.h": {

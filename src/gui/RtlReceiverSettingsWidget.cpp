@@ -47,8 +47,9 @@ bool supportsSettings(const RadioCapabilities& caps)
 RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget* parent)
     : QWidget(parent), m_model(model),
       m_availability(new ControlAvailabilityRegistry(model, this)),
-      m_controls(new QGroupBox(tr("Receiver corrections"), this)),
+      m_controls(new QGroupBox(tr("Receiver settings"), this)),
       m_ppm(new RtlPpmSpinBox(m_controls)), m_ppmTimer(new QTimer(this)), m_dc(new QCheckBox(tr("Suppress IQ DC"), m_controls)),
+      m_meters(new QCheckBox(tr("Enable receive meters"), m_controls)),
       m_applied(new QLabel(this)), m_status(new QLabel(this)), m_identity(new QLabel(this))
 {
     setObjectName(QStringLiteral("rtlReceiverSettings"));
@@ -69,6 +70,9 @@ RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget*
     form->addRow(apply);
     m_dc->setObjectName(QStringLiteral("rtlDcSuppression"));
     form->addRow(m_dc);
+    m_meters->setObjectName(QStringLiteral("rtlReceiveMeters"));
+    m_meters->setAccessibleDescription(tr("Turn off to reduce display CPU use. Reception, squelch and audio continue."));
+    form->addRow(m_meters);
     layout->addWidget(m_controls);
     m_applied->setObjectName(QStringLiteral("rtlCorrectionsApplied"));
     m_status->setObjectName(QStringLiteral("rtlCorrectionsStatus"));
@@ -89,8 +93,9 @@ RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget*
         "with a 5 Hz high-pass response. Signals at capture center are also affected, especially an AM or CW carrier. "
         "Keep wanted signals away from capture center. After a capture change or enable, allow about 0.3 seconds to settle. "
         "The squelch measurement stays unchanged.\n\n"
-        "Accepted corrections are saved per reported device serial. Dongles reporting the same serial share settings; "
-        "devices without a serial use corrections for this session only."), this);
+        "Receive meters can be disabled to reduce CPU use; RF levels then show unavailable. Reception, squelch and audio continue.\n\n"
+        "Accepted settings are saved per reported device serial. Dongles reporting the same serial share settings; "
+        "devices without a serial use settings for this session only."), this);
     explanation->setWordWrap(true);
     layout->addWidget(explanation);
     layout->addStretch();
@@ -104,6 +109,17 @@ RtlReceiverSettingsWidget::RtlReceiverSettingsWidget(RadioModel& model, QWidget*
     m_availability->registerWidget(m_dc,
         tr("The connected radio does not provide RTL receiver corrections."), available,
         [this] { return m_haveState && m_confirmed.value(QStringLiteral("dcSuppression")).toBool(); });
+    m_availability->registerWidget(m_meters,
+        tr("The connected radio does not provide a receive-meter switch."),
+        [available](bool connected, const RadioCapabilities& caps) {
+            return available(connected, caps) && caps.extensions.value(QStringLiteral("rtl")).toMap()
+                .value(QStringLiteral("receiveMetersControl")).toBool();
+        }, [this] { return m_haveState && m_confirmed.value(QStringLiteral("receiveMetersEnabled"), true).toBool(); });
+    connect(m_meters, &QCheckBox::clicked, this, [this](bool requested) {
+        const QSignalBlocker block(m_meters);
+        m_meters->setChecked(m_confirmed.value(QStringLiteral("receiveMetersEnabled"), true).toBool());
+        submit(QStringLiteral("receive_meters.set"), requested, m_metersRequest);
+    });
     connect(m_ppm, &QSpinBox::valueChanged, this, [this] {
         if (!isVisible() || !m_haveState) { return; }
         m_ppmEdited = true;
@@ -131,12 +147,12 @@ void RtlReceiverSettingsWidget::bindBackend()
     disconnect(m_statusConnection); disconnect(m_resultConnection); disconnect(m_errorConnection);
     m_backend = m_model.backend();
     const quint64 generation = ++m_bindingGeneration;
-    m_queryRequest = m_ppmRequest = m_dcRequest = 0;
+    m_queryRequest = m_ppmRequest = m_dcRequest = m_metersRequest = 0;
     m_haveState = false; m_ppmEdited = false;
     m_confirmed.clear(); m_error.clear();
     {
-        const QSignalBlocker ppmBlock(m_ppm), dcBlock(m_dc);
-        m_ppm->setValue(0); m_dc->setChecked(false);
+        const QSignalBlocker ppmBlock(m_ppm), dcBlock(m_dc), metersBlock(m_meters);
+        m_ppm->setValue(0); m_dc->setChecked(false); m_meters->setChecked(true);
     }
     renderStatus();
     if (!m_model.isConnected() || !m_backend || !supportsSettings(m_model.backendCapabilities())) { return; }
@@ -152,20 +168,21 @@ void RtlReceiverSettingsWidget::bindBackend()
             if (generation != m_bindingGeneration || !source || source != m_model.backend()) { return; }
             if (id == m_queryRequest && id) {
                 m_queryRequest = 0; acceptStatus(value.toMap());
-            } else if (id && (id == m_ppmRequest || id == m_dcRequest)) {
+            } else if (id && (id == m_ppmRequest || id == m_dcRequest || id == m_metersRequest)) {
                 if (id == m_ppmRequest) {
                     m_ppmRequest = 0;
                     // Preserve a newer edit that the operator has not submitted.
                     m_ppmEdited = m_ppm->value() != value.toInt();
                 }
                 if (id == m_dcRequest) { m_dcRequest = 0; }
+                if (id == m_metersRequest) { m_metersRequest = 0; }
                 queryStatus();
             }
         });
     m_errorConnection = connect(source, &IRadioBackend::extensionError, this,
         [this, source, generation](quint64 id, const QString& reason) {
             if (generation != m_bindingGeneration || !source || source != m_model.backend() || !id
-                || (id != m_queryRequest && id != m_ppmRequest && id != m_dcRequest)) { return; }
+                || (id != m_queryRequest && id != m_ppmRequest && id != m_dcRequest && id != m_metersRequest)) { return; }
             const bool queryFailed = id == m_queryRequest;
             if (queryFailed) { m_queryRequest = 0; }
             if (id == m_ppmRequest) {
@@ -175,6 +192,7 @@ void RtlReceiverSettingsWidget::bindBackend()
                 if (m_ppm->value() == m_submittedPpm) { m_ppmTimer->stop(); }
             }
             if (id == m_dcRequest) { m_dcRequest = 0; }
+            if (id == m_metersRequest) { m_metersRequest = 0; }
             m_error = tr("Request refused: %1").arg(reason);
             if (!queryFailed) { queryStatus(); }
             renderStatus();
@@ -195,9 +213,10 @@ void RtlReceiverSettingsWidget::acceptStatus(const QVariantMap& status)
     if (!status.value(QStringLiteral("applied")).toBool()) { return; }
     m_haveState = true;
     m_confirmed = status;
-    const QSignalBlocker ppmBlock(m_ppm), dcBlock(m_dc);
+    const QSignalBlocker ppmBlock(m_ppm), dcBlock(m_dc), metersBlock(m_meters);
     if (!m_ppmEdited) { m_ppm->setValue(status.value(QStringLiteral("ppm")).toInt()); }
     m_dc->setChecked(status.value(QStringLiteral("dcSuppression")).toBool());
+    m_meters->setChecked(status.value(QStringLiteral("receiveMetersEnabled"), true).toBool());
     m_availability->refreshEngaged();
     renderStatus();
 }
@@ -256,11 +275,11 @@ void RtlReceiverSettingsWidget::renderStatus()
     if (!usable) { lines << tr("Waiting for a connected receiver's confirmed settings."); }
     else {
         if (m_ppmTimer->isActive()) { lines << tr("Frequency correction will apply after this adjustment."); }
-        if (m_ppmRequest || m_dcRequest || m_confirmed.value(QStringLiteral("pending")).toBool()) {
+        if (m_ppmRequest || m_dcRequest || m_metersRequest || m_confirmed.value(QStringLiteral("pending")).toBool()) {
             lines << tr("Applying request; the applied values above remain in use until confirmation.");
         }
         lines << (m_confirmed.value(QStringLiteral("saved")).toBool()
-            ? tr("Applied corrections saved for this device.")
+            ? tr("Applied settings saved for this device.")
             : m_confirmed.value(QStringLiteral("saveReason"), tr("Applied for this session; not saved.")).toString());
     }
     if (!m_error.isEmpty()) { lines << m_error; }

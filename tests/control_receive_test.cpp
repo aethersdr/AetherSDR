@@ -13,6 +13,7 @@
 #include "core/backends/sim/SimBackend.h"
 #ifdef AETHER_BACKEND_RTL
 #include "core/backends/rtl/RtlSdrBackend.h"
+#include "core/backends/rtl/RtlReceivePipeline.h"
 #endif
 
 #include <QCoreApplication>
@@ -641,17 +642,30 @@ void productionCapabilityContracts()
         && rtlCaps.receivePanCenterControl && rtlCaps.receivePanBandwidthControl
         && rtlCaps.panSpanModel && !rtlCaps.panSpanModel->followsSampleRate,
         "RTL exposes independent display center/span alongside implemented FM filter and mixer controls");
-    check(rtlCaps.receiveFilterControl && rtlCaps.receiveFilterControl->modes.size() == 2
+    const int expectedFilterModes = rtl::RtlReceivePipeline::kQualifiedWfmEnabled ? 3 : 2;
+    check(rtlCaps.receiveFilterControl && rtlCaps.receiveFilterControl->modes.size() == expectedFilterModes
         && rtlCaps.receiveFilterControl->modes[0].mode == QStringLiteral("FM")
         && rtlCaps.receiveFilterControl->modes[1].mode == QStringLiteral("FMN")
         && rtlCaps.receiveFilterControl->modes[0].minimumLowHz == -21600
         && rtlCaps.receiveFilterControl->modes[1].maximumHighHz == 21600,
-        "RTL adjustable filter qualification excludes legacy WFM");
+        "RTL filter contract retains FM/FM-N and admits qualified WFM only");
+    if constexpr (rtl::RtlReceivePipeline::kQualifiedWfmEnabled) {
+        check(rtlCaps.broadcastFmReceive && rtlCaps.receiveFilterControl
+            && rtlCaps.receiveFilterControl->modes.size() == 3
+            && rtlCaps.receiveFilterControl->modes[2].mode == QStringLiteral("WFM")
+            && rtlCaps.receiveFilterControl->modes[2].minimumLowHz == -100000
+            && rtlCaps.receiveFilterControl->modes[2].maximumHighHz == 100000
+            && rtlCaps.receiveFilterControl->modes[2].minimumWidthHz == 30000
+            && rtlCaps.receiveFilterControl->modes[2].maximumWidthHz == 200000,
+            "Qualified WFM declares the implemented 30-200 kHz filter range");
+    } else {
+        check(!rtlCaps.broadcastFmReceive, "Legacy WFM exposes no broadcast stereo contract");
+    }
     check(rtlCaps.receiveSquelchModel
         && rtlCaps.receiveSquelchModel->modes == QStringList{"FM", "FMN"}
         && rtlCaps.receiveSquelchModel->referenceDb == -120
         && rtlCaps.receiveSquelchModel->stepDb == 1.2
-        && rtlCaps.receiveSquelchModel->unit == QStringLiteral("dBFS/bin"),
+        && rtlCaps.receiveSquelchModel->unit == QStringLiteral("dBFS/2048-bin"),
         "RTL desktop squelch declares the implemented detector's modes and units");
 #endif
 }

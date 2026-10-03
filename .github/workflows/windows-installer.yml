@@ -128,11 +128,22 @@ jobs:
         id: cache-fftw
         with:
           path: third_party/fftw3
-          key: fftw-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-fftw.ps1') }}
+          key: fftw-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-fftw.ps1', 'scripts/setup/rtl-dependencies.json') }}
 
       - name: Setup FFTW3 float (NR4 dependency)
         if: steps.cache-fftw.outputs.cache-hit != 'true'
         run: .\scripts\setup\setup-fftw.ps1
+
+      - name: Cache RTL-SDR and libusb
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-rtl
+        with:
+          path: third_party/rtl-deps
+          key: rtl-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-rtl-deps.ps1', 'scripts/setup/rtl-dependencies.json') }}
+
+      - name: Setup RTL-SDR and libusb
+        if: steps.cache-rtl.outputs.cache-hit != 'true'
+        run: .\scripts\setup\setup-rtl-deps.ps1
 
       - name: Cache hidapi
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -248,7 +259,7 @@ jobs:
           # native command), so a configure failure still fails this step —
           # the reason the bash legs need `set -o pipefail` and this one does
           # not.
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" | Tee-Object -FilePath configure.log
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_HD_FM=OFF -DENABLE_RTL=ON -DREQUIRE_RTL=ON -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DAETHER_GPU_SPECTRUM=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" | Tee-Object -FilePath configure.log
 
       # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake flips it
       # back OFF without failing when Qt6GuiPrivate can't be located, and
@@ -399,6 +410,12 @@ jobs:
             Write-Host "Bundling ASR runtime DLL: $($_.Name)"
             Copy-Item $_.FullName deploy\ -Force
           }
+          Copy-Item third_party\rtl-deps\bin\*.dll deploy\
+          New-Item -ItemType Directory -Force deploy\licenses\rtl | Out-Null
+          Copy-Item third_party\rtl-deps\share\aethersdr-rtl-sources deploy\licenses\rtl\ -Recurse
+          Copy-Item third_party\fftw3\share\aethersdr-rtl-sources deploy\licenses\fftw -Recurse
+          python tools/check_rtl_package.py deploy --platform windows
+          if ($LASTEXITCODE -ne 0) { throw "RTL payload validation failed" }
           # Vulkan loader for the whisper GPU backend. ggml-vulkan hard-links
           # vulkan-1, so the DLL must ship or the exe fails to start even on
           # CPU-only machines (the loader then enumerates zero devices and ggml

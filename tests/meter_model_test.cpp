@@ -1948,5 +1948,41 @@ int main(int argc, char** argv)
     testAmpPowerFlagTracksOnlyPowerMeters();
     testWithdrawingAnAmpMeterAnnouncesItself();
 
+    {
+        MeterModel model;
+        int absoluteReadings = 0;
+        QObject::connect(&model, &MeterModel::sLevelChanged, &model,
+            [&](int, float) { ++absoluteReadings; });
+        MeterDef relative = slcMeter(700, 7);
+        relative.unit = "dBFS";
+        model.defineMeter(relative);
+        model.updateValueByName("SLC", "LEVEL", -35.0f, 7);
+        report("relative RF never emits calibrated dBm", absoluteReadings == 0);
+        report("relative RF never enters absolute lookup", !model.sLevelForSlice(7));
+        report("relative RF is available with its own reference", model.relativeLevelForSlice(7) == -35.0f);
+        model.removeMeter(700);
+        model.defineMeter(relative);
+        report("recreated receiver cannot inherit the old reading", !model.relativeLevelForSlice(7));
+        for (int id = 0; id < 8; ++id) {
+            relative.index = 700 + id; relative.sourceIndex = id;
+            model.defineMeter(relative);
+            model.updateValueByName("SLC", "LEVEL", -20.0f - id, id);
+        }
+        model.removeMeter(703);
+        for (int id = 0; id < 8; ++id) {
+            report("relative RF stays associated with stable receiver ID",
+                id == 3 ? !model.relativeLevelForSlice(id)
+                        : model.relativeLevelForSlice(id) == -20.0f - id);
+        }
+        report("unselected receiver cannot fall back to first meter", !model.relativeLevelForSlice(-1));
+        relative.unit = "dBm";
+        model.defineMeter(relative);
+        report("unit change cannot reinterpret an old relative sample", !model.sLevelForSlice(7));
+        model.updateValueByName("SLC", "LEVEL", -73, 7);
+        report("calibrated meter still publishes dBm", model.sLevelForSlice(7) == -73 && absoluteReadings == 1);
+        model.clear();
+        report("disconnect clears relative RF", !model.relativeLevelForSlice(7));
+    }
+
     return g_failed == 0 ? 0 : 1;
 }

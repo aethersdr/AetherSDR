@@ -1385,7 +1385,8 @@ bool MainWindow::autoSquelchShouldRunOnSpectrum(
     }
 
     const auto sql = m_radioModel.backendCapabilities().receiveSquelchModel;
-    if (sql && (!sql->modes.contains(s->mode()) || panId != s->panId())) { return false; }
+    if (sql && (sql->automaticInEngine || !sql->modes.contains(s->mode())
+                || panId != s->panId())) { return false; }
 
     return kiwiSdrProfileForPan(panId).isEmpty()
         && (!spectrum || !spectrum->kiwiSdrWaterfallActive());
@@ -1505,6 +1506,16 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
         return;
     }
 
+    auto* relativeTimer = new QTimer(vfo);
+    relativeTimer->setInterval(100);
+    connect(relativeTimer, &QTimer::timeout, vfo, [this, vfo, id = s->sliceId()] {
+        const auto& meters = m_radioModel.meterModel();
+        const MeterDef* def = meters.meterDef(meters.findMeter("SLC", "LEVEL", id));
+        if ((def && def->unit == "dBFS") || vfo->relativeSignalLevel()) {
+            vfo->setRelativeSignalLevel(meters.relativeLevelForSlice(id), def ? def->unavailableReason : QString());
+        }
+    });
+    relativeTimer->start();
     // Feed S-meter per-slice — only this VFO's slice level
     const int sid = s->sliceId();
     const QPointer<VfoWidget> vfoPtr(vfo);
@@ -1817,6 +1828,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // toggle that flag on slice-mode transitions (e.g. band-stack restore)
     // because doing so parks DAX2's TX Stream in Busy. (#2315)
     auto updateDaxTxMode = [this]() {
+        if (!m_radioModel.backendCapabilities().canTransmit) { return; }
         bool isDigital = false;
         int txSliceId = -1;
         for (auto* sl : m_radioModel.slices()) {
@@ -3011,7 +3023,7 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
 #endif
 
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
-    if (m_daxBridge) {
+    if (m_daxBridge && m_radioModel.backendCapabilities().hasDaxStreams) {
         auto* panStream = m_radioModel.panStream();
         bool txSliceIsDigital = false;
 
@@ -3967,7 +3979,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         const auto sql = m_radioModel.isConnected()
             ? m_radioModel.backendCapabilities().receiveSquelchModel : std::nullopt;
         sw->setSquelchScale(sql ? sql->referenceDb : -160.0,
-            sql ? sql->stepDb : 1.0, sql ? sql->unit : QString());
+            sql ? sql->stepDb : 1.0, sql ? sql->unit : QString(),
+                !sql || sql->spectrumComparable);
 
         wirePanDisplayStatus(applet, pan);
     }
@@ -6170,6 +6183,19 @@ void MainWindow::applyAmpTxMeters(float watts, float swr, bool fromRelay)
 
 void MainWindow::wireMeters()
 {
+    auto* relativeTimer = new QTimer(this);
+    relativeTimer->setInterval(100);
+    connect(relativeTimer, &QTimer::timeout, this, [this] {
+        if (!m_appletPanel) { return; }
+        auto* meter = m_appletPanel->sMeterWidget();
+        const auto& meters = m_radioModel.meterModel();
+        const MeterDef* def = meters.meterDef(meters.findMeter("SLC", "LEVEL", m_activeSliceId));
+        if ((def && def->unit == "dBFS") || meter->relativeLevel()) {
+            meter->setRelativeLevel(meters.relativeLevelForSlice(m_activeSliceId), m_activeSliceId,
+                def ? def->unavailableReason : QString());
+        }
+    });
+    relativeTimer->start();
     // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
     connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
             this, [this](int sliceIndex, float dbm) {

@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 233 touchpoint headers (194 core, 39 models) — 233/233 tagged, 0/233 converted.
+**Totals:** 234 touchpoint headers (193 core, 41 models) — 234/234 tagged, 0/234 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -144,7 +144,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SystemInventory.h` | 1 | ui-support — Startup and support-bundle inventory of host CPU, SIMD and RAM capabilities. Process diagnostics, not radio state. | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 2 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 159 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 160 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 14 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
@@ -193,7 +193,6 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/backends/sim/NoiseMixer.h` | 1 | vendor(sim) — Demo-mode synthetic AUDIO engine (RFC #4288 Phase 2b) — additive HF-noise and signal channels feeding SimBackend's audioFrameReady. Backend-internal generator reached from DemoApplet.cpp; family-specific below-seam code, frozen into the EB3 baseline. Demo-mode controls should reach it through an extension namespace, not the concrete type. | unconverted |
 | `core/backends/sim/SimBackend.h` | 3 | vendor(sim) — The synthetic demo backend (#4473) — a concrete IRadioBackend implementor that generates its own audio and spectrum, RX-only by construction (Principle VI). Reached today from ConnectionPanel.cpp, MainWindow.cpp and MainWindow_Session.cpp; pre-existing coupling, frozen into the EB3 baseline. The UI should select it through RadioModel::makeBackend()'s family string, never the concrete type. | unconverted |
 | `core/pms/PmsMailbox.h` | 1 | universal — Packet personal-message-system mailbox store/logic; radio-agnostic operating feature. | unconverted |
-| `core/tnc/AetherAx25LibmodemShim.h` | 1 | universal — AX.25 modem shim bridging the client AFSK/libmodem demod to the TNC; radio-agnostic DSP glue. | unconverted |
 | `core/tnc/Ax25.h` | 1 | universal — AX.25 frame data types/constants; radio-agnostic protocol layer. | unconverted |
 | `core/tnc/Ax25AudioCapture.h` | 1 | universal — AX.25 Capture 3m diagnostics: capture-id/path naming and the shared float32 WAV writer for the RX, generated-TX and post-resample stages; radio-agnostic diagnostic I/O (#5311). | unconverted |
 | `core/tnc/Ax25Connection.h` | 1 | universal — Single-peer AX.25 v2.0 connected-mode (LAPB) data-link state machine, mod-8 sequence space, backing the Personal Mailbox System. Radio-agnostic packet layer above whatever modem or backend carries the audio. | unconverted |
@@ -206,6 +205,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/AmpModel.h` | 1 | mixed(flex) — Power-amplifier state model (PGXL / any non-TGXL amp the radio proxies), extracted from RadioModel (#4094). Like TunerModel: universal amp state (presence/operate/telemetry) fused with a Flex relay — the radio-proxied 'amplifier set … operate=' command (the only path that works remote/SmartLink; the direct PgxlConnection is telemetry-only). | unconverted |
 | `models/AntennaGeniusModel.h` | 4 | peripheral(4o3a) — 4O3A Antenna Genius switch client — standalone accessory with its own UDP-broadcast discovery (port 9007) + direct TCP; connects by device IP/port independent of the radio, works with any radio. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
 | `models/AprsDigipeaterModel.h` | 1 | universal — Session-local APRS fill-in policy and bounded modem queue; no backend-specific commands or transport ownership. | unconverted |
+| `models/Ax25ReceiveModel.h` | 1 | universal — Selected AX.25 receive model over the existing typed decoder route; continuous mono24 conversion and bounded modem worker results retain source leases and generation retirement. Existing transmit ownership is separate. | unconverted |
 | `models/BandDefs.h` | 5 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 9 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 6 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |
@@ -215,6 +215,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/CwxModel.h` | 1 | universal — CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name. | unconverted |
 | `models/DStarModel.h` | 1 | universal — D-STAR configuration and session state (callsigns, RPT1/RPT2 routing, modem/serial paths). Digital-voice state any backend carrying DV would present. | unconverted |
 | `models/DaxIqModel.h` | 1 | vendor(flex) — Flex DAX IQ streams: dax_iq stream create/rate cmds, 4-ch DAX model, pipes to SDR apps — DAX is Flex-only | unconverted |
+| `models/DaxReceiveModel.h` | 1 | universal — Owner-thread adapter from typed native receive PCM and stable TCI receiver bindings to the existing 24 kHz virtual audio bridges; no radio wire protocol. | unconverted |
 | `models/DecoderAudioModel.h` | 1 | mixed(flex) — Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry. | unconverted |
 | `models/DigitalVoiceWaveformHistory.h` | 1 | mixed(flex) — Rolling health history for the DV waveform path (sample rate, turnaround, deficits). Generic rate/latency telemetry fused with Flex VITA sequence-gap counters. | unconverted |
 | `models/DvkModel.h` | 1 | mixed(flex) — Voice keyer slots/commands are core-profile; status parsing + FlexLib SsdrErrors mapping are flex. | unconverted |

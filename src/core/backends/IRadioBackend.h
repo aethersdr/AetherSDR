@@ -651,6 +651,8 @@ public:
     {
         Q_UNUSED(sliceId); Q_UNUSED(on); Q_UNUSED(level);
     }
+    virtual void setSliceAutoSquelch(int sliceId, bool enabled, int marginDb)
+    { Q_UNUSED(sliceId); Q_UNUSED(enabled); Q_UNUSED(marginDb); }
     // BroadcastFmReceive declares supported values; accepted state returns in
     // SliceDelta only after the receiver adopts the requested configuration.
     virtual void setSliceWfmForceMono(int sliceId, bool forceMono)

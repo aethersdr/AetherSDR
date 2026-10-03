@@ -158,6 +158,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: RTL release requirement combinations
+        run: python tools/test_require_rtl.py
+
       # ── aetherd-migration ratchet (docs/aetherd-headless-engine-design.md §10)
       #   EB1/EB2 — the engine (src/core/ + src/models/) must never depend on
       #             the UI: no gui/ header includes, no QtWidgets.
