@@ -2150,8 +2150,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             const bool revealed = edit->echoMode() == QLineEdit::Normal;
             ui.showButton->setText(revealed ? tr("Hide") : tr("Show"));
             ui.showButton->setAccessibleName(revealed
-                ? tr("%1 hide authorization code").arg(ui.label)
-                : tr("%1 show authorization code").arg(ui.label));
+                ? tr("%1 hide authorization code").arg(ui.shortName)
+                : tr("%1 show authorization code").arg(ui.shortName));
             const auto saved = PeripheralAuthStore::cachedStatus(ui.authDevice, endpoint);
             const bool hasCode = saved && saved->status == PeripheralAuthStore::LoadStatus::Found;
             edit->setPlaceholderText(hasCode ? QStringLiteral("****") : tr("Code blank"));
