@@ -424,25 +424,42 @@ int main(int argc, char** argv)
         const QKeyEvent tRepeat(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier,
                                 QString(), /*autorep=*/true);
         const QKeyEvent tRelease(QEvent::KeyRelease, Qt::Key_T, Qt::NoModifier);
-        const bool bound = refusal.operatingActionForKey(
-            AetherSDR::shortcutSequenceFromKeyEvent(&tPress)) != nullptr;
+        const ShortcutManager::Action* bound = refusal.operatingActionForKey(
+            AetherSDR::shortcutSequenceFromKeyEvent(&tPress));
 
         AetherSDR::ShortcutRefusalNotice notice;
         expect(!notice.take(&tPress, /*shortcutsEnabled=*/true, false, bound),
                "refusal: no notice while shortcuts are on");
         expect(!notice.take(&tPress, false, /*inputCaptured=*/true, bound),
                "refusal: no notice while a text field or slider holds the keys");
-        expect(!notice.take(&tPress, false, false, /*bound=*/false),
+        const ShortcutManager::Action* unbound = nullptr;
+        expect(!notice.take(&tPress, false, false, unbound),
                "refusal: no notice for an unbound key");
         expect(!notice.take(&tRelease, false, false, bound),
                "refusal: no notice on a key release");
         expect(!notice.take(&tRepeat, false, false, bound),
                "refusal: no notice on auto-repeat");
         expect(!notice.given(), "refusal: nothing given before a refused press");
-        expect(notice.take(&tPress, false, false, bound),
-               "refusal: the first bound press with shortcuts off is noticed");
+        const ShortcutManager::Action* refused =
+            notice.take(&tPress, false, false, bound);
+        expect(bound && refused == bound
+                   && refused->displayName == QLatin1String("MOX Toggle"),
+               "refusal: the first bound press hands back the action it refused");
         expect(notice.given() && !notice.take(&tPress, false, false, bound),
                "refusal: the notice is given once per session");
+
+        // The capture test follows the action: a hold key yields to text entry
+        // only, as its handler does; a QShortcut action to every capture.
+        using AetherSDR::shortcutRefusalInputCaptured;
+        expect(!shortcutRefusalInputCaptured(/*holdKeyAction=*/true,
+                   /*textEntryCaptured=*/false, /*shortcutInputCaptured=*/true),
+               "refusal: a hold key is noticed over a combo or a slider lease");
+        expect(shortcutRefusalInputCaptured(true, true, true),
+               "refusal: a hold key typed into a text field is not noticed");
+        expect(shortcutRefusalInputCaptured(false, false, true),
+               "refusal: a QShortcut key under a combo or lease is not noticed");
+        expect(!shortcutRefusalInputCaptured(false, false, false),
+               "refusal: a QShortcut key with nothing capturing is noticed");
     }
     return failures == 0 ? 0 : 1;
 }

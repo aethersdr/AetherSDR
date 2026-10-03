@@ -8,6 +8,7 @@
 #include "TxInputKeyEvent.h"
 #include "TxKeyActivationGuard.h"
 #include "PttHoldKeyStep.h"
+#include "ShortcutRefusalNotice.h"
 #include "core/IambicKeyer.h"
 
 #include <QApplication>
@@ -64,6 +65,17 @@ namespace {
 // Slider keeps the keyboard-shortcut lease this long after the last
 // interaction (#745); moved with its only users from MainWindow.cpp.
 constexpr int kSliderShortcutLeaseMs = 2000;
+
+// The actions eventFilter() drives itself, because QShortcut has no release:
+// handleCwMomentaryShortcut, handlePttHoldShortcut, handleSplitMonitorShortcut.
+bool isHoldKeyActionId(const QString& id)
+{
+    return id == QLatin1String(kPttHoldActionId)
+        || id == QLatin1String(kCwStraightKeyActionId)
+        || id == QLatin1String(kCwLeftPaddleActionId)
+        || id == QLatin1String(kCwRightPaddleActionId)
+        || id == QLatin1String(kSplitMonitorActionId);
+}
 } // namespace
 
 // ─── Shortcut state (definitions — declared in MainWindowShortcutState.h) ───
@@ -338,12 +350,17 @@ void MainWindow::noticeRefusedShortcut(QObject* receiver, QKeyEvent* keyEvent)
         return;
     const auto* action = m_shortcutManager.operatingActionForKey(
         shortcutSequenceFromKeyEvent(keyEvent));
-    if (!m_shortcutRefusalNotice.take(keyEvent, m_keyboardShortcutsEnabled,
-                                      shortcutInputCaptured(), action != nullptr))
+    // The capture test this action would have met with shortcuts on.
+    const bool captured = shortcutRefusalInputCaptured(
+        action && isHoldKeyActionId(action->id), textEntryCaptured(),
+        shortcutInputCaptured());
+    const auto* refused = m_shortcutRefusalNotice.take(
+        keyEvent, m_keyboardShortcutsEnabled, captured, action);
+    if (!refused)
         return;
 
-    qCInfo(lcGui).noquote() << "Keyboard shortcuts are off:" << action->displayName
-                            << "(" + action->currentKey.toString() + ") not run;"
+    qCInfo(lcGui).noquote() << "Keyboard shortcuts are off:" << refused->displayName
+                            << "(" + refused->currentKey.toString() + ") not run;"
                             << "Settings > Keyboard Shortcuts turns them on";
     const QString notice = tr("Keyboard shortcuts are off — Settings → Keyboard Shortcuts "
                               "turns them on.");
