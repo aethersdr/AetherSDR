@@ -44,6 +44,28 @@ void fexchange2(int channel, float* inputI, float* inputQ,
 // must pace a burst of input blocks against the worker.
 int GetChannelOutputReady(int channel);
 void SetRXAMode(int channel, int mode);
+// Broadcast decoder controls, WDSP Guide section 5.3.10. The local patch
+// applies deemphasis to both live filters; indicator readback is an atomic
+// latest-completed-block observation. The caller must own channel lifetime.
+// Opt-in 192 kHz phase-difference response correction and paired post-matrix
+// DC removal. Existing owners default off and keep legacy MPX DC placement.
+void SetRXAWBFMDiscriminatorCompensation(int channel, int enabled);
+void SetRXAWBFMdmph(int channel, int run, int continent);
+int GetRXAWBFMStereoIndicator(int channel);
+
+// Host-owned WFM RF prefilter. WBFM intentionally disables RXA's internal
+// RF filters, so this existing overlap-save stage runs at the input rate
+// BEFORE the channel's decimator. Prepare/destroy/setFreqs only under the
+// planner/control fence. xbps allocates and locks nothing. Input is `size`
+// interleaved-double complex frames; output must hold 2*size complex frames,
+// of which the first size are valid. The host keeps a fixed unity gain.
+typedef struct _bps* AetherWdspBandpass;
+AetherWdspBandpass create_bps(int run, int position, int size, double* in,
+    double* out, double lowHz, double highHz, int sampleRate, int window, double gain);
+void destroy_bps(AetherWdspBandpass filter);
+void flush_bps(AetherWdspBandpass filter);
+void xbps(AetherWdspBandpass filter, int position);
+void setFreqs_bps(AetherWdspBandpass filter, double lowHz, double highHz);
 // Receive FM construction/control only: these take WDSP's DSP lock and the
 // limiter gain setter rebuilds its state. Never call from acquisition/audio.
 void SetRXAFMDeviation(int channel, double deviationHz);
