@@ -326,6 +326,8 @@ AnanBackend::AnanBackend(QObject* parent)
         publishLegacyAudio(bytes);
         sendSpeakerAudioToRadio(bytes);
     });
+    // Ungated by design: m_dsp emits on m_ioThread, the thread that emits linkDown,
+    // so every frame is delivered before disconnected() (contract rule 6).
     connect(m_dsp, &AnanRxDsp::spectrumReady, this, [this](const std::vector<float>& binsDbfs) {
         std::vector<float> dbm(binsDbfs.size());
         // Attenuation added back, as deskHPSDR does for its panadapter: a

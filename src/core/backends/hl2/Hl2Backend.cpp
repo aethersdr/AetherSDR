@@ -838,6 +838,10 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     // the UI number never changes (Hl2ReceiverMap::remove).
     const int ui = ids->uiNumber;
 
+    // Rule 6 holds by ordering, not by this gate: the DSP emits on m_ioThread,
+    // the thread that emits linkDown, so no frame is delivered after disconnected().
+    // Unlike audioReady below, there is no producer check: a frame queued by a
+    // closed receiver's DSP publishes if its UI number was reopened before delivery.
     connect(dsp, &Hl2RxDsp::spectrumReady, this,
             [this, ui](const std::vector<float>& bins) {
         if (!m_ids.byUi(ui))
