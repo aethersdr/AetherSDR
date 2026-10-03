@@ -3569,6 +3569,14 @@ add_test(NAME passive_spots_policy_test COMMAND passive_spots_policy_test)
 # Right-click on a client-side spot label offers Remove Spot and removes it
 # locally, never as `spot remove` wire text (#6037). Header-only helpers;
 # offscreen QMenu, socket-free.
+# MainWindow raises the unsupported-control notice when a TGXL reached by IP
+# refuses OPERATE / STANDBY / BYPASS. Source pin: MainWindow has no test seam.
+add_executable(tgxl_refused_notice_wiring_test tests/tgxl_refused_notice_wiring_test.cpp)
+target_compile_definitions(tgxl_refused_notice_wiring_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(tgxl_refused_notice_wiring_test PRIVATE Qt6::Core)
+add_test(NAME tgxl_refused_notice_wiring_test COMMAND tgxl_refused_notice_wiring_test)
+
 add_executable(spot_label_menu_test tests/spot_label_menu_test.cpp)
 target_include_directories(spot_label_menu_test PRIVATE src)
 target_compile_definitions(spot_label_menu_test PRIVATE
