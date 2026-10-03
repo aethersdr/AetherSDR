@@ -69,6 +69,7 @@ void AmpModel::setDirectConnection(PgxlConnection* conn)
         m_setupNickname.clear();
         m_setupLedIntens.clear();
         m_setupAuthCode.clear();
+        m_setupHasAuthKey = false;
         m_fanMode.clear();
         if (!m_meffa.isEmpty()) {
             m_meffa.clear();
@@ -207,6 +208,7 @@ void AmpModel::applySetupGroup(const QMap<QString, QString>& kvs)
     // the value to send back — value() returning a default here is correct.
     // A non-empty code is never sent back; see writeSetupGroup().
     m_setupAuthCode  = kvs.value(QStringLiteral("authcode"));
+    m_setupHasAuthKey = kvs.contains(QStringLiteral("authcode"));
     const bool becameWritable = !m_haveSetupGroup;
     m_haveSetupGroup = true;
     // Re-announce MEffA. Its VALUE has not moved, but whether it can be
@@ -238,16 +240,14 @@ void AmpModel::writeSetupGroup(const QString& meffa, const QString& fanMode)
     // toggle is a run-time choice, not an edit to the amplifier's stored
     // configuration.
     //
-    // Except the auth code, once one is set. Firmware 3.9.8 with authorization
-    // enabled refuses any `setup` that carries `authcode=<code>` with 50000013
-    // (bad parameter), so every fan-mode change and MEffA toggle failed. The
-    // same group without `authcode` is accepted and leaves the stored code
-    // unchanged, and so does `setup fanmode=` on its own (probed 2026-09-29).
-    // With no code set the key stays, empty, exactly as the vendor sends it.
+    // Firmware 3.9.8 with authorization enabled refuses a `setup` that carries
+    // `authcode=<code>` (50000013); the same group without it is accepted and
+    // leaves the stored code unchanged. The key is sent, empty, only when
+    // `setup read` reported it empty.
     QString command =
         QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4")
             .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode);
-    if (m_setupAuthCode.isEmpty()) {
+    if (m_setupHasAuthKey && m_setupAuthCode.isEmpty()) {
         command += QStringLiteral(" authcode=");
     }
     m_directConn->sendCommand(command);
