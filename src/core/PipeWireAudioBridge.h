@@ -69,6 +69,7 @@ signals:
 
 private:
     bool loadPipeSource(int index);
+    bool openRxDrain(int index, const QString& pipePath);
     bool loadPipeSink();
     void unloadModules();
 

@@ -307,22 +307,27 @@ bool PipeWireAudioBridge::loadPipeSource(int index)
     if (actual < 0) {
         qCDebug(lcDax) << "PipeWireAudioBridge: F_SETPIPE_SZ failed (non-fatal):" << strerror(errno);
     }
-    // An idle read descriptor lets a route boundary discard our own retained
-    // FIFO bytes. It never reads during normal delivery.
-    const int drainFd = ::open(pipePath.toUtf8().constData(),O_RDONLY|O_NONBLOCK|O_CLOEXEC);
-    if (drainFd < 0) {
+    if (!openRxDrain(index, pipePath)) {
         ::close(fd);
         runPactl({"unload-module",QString::number(modIdx)});
         ::unlink(pipePath.toUtf8().constData());
         return false;
     }
-    m_rx[index].drainFd = drainFd;
     m_rx[index].fd = fd;
     m_rx[index].moduleIndex = modIdx;
     m_rx[index].pipePath = pipePath;
 
     qCDebug(lcDax) << "PipeWireAudioBridge: RX" << (index + 1) << "pipe source loaded, module" << modIdx;
     return true;
+}
+
+bool PipeWireAudioBridge::openRxDrain(int index, const QString& pipePath)
+{
+    // Receive-only route changes discard retained FIFO bytes. Flex has no
+    // route-reset consumer and must retain its sole-reader/EPIPE behavior.
+    if (!m_receiveOnly) { return true; }
+    m_rx[index].drainFd = ::open(pipePath.toUtf8().constData(), O_RDONLY|O_NONBLOCK|O_CLOEXEC);
+    return m_rx[index].drainFd >= 0;
 }
 
 bool PipeWireAudioBridge::loadPipeSink()

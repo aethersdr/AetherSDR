@@ -346,6 +346,11 @@ Q_SIGNALS:
     void sliceActivationRequested(int sliceId);
     void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
     void flexRxAntennaSelected(int sliceId);
+    // The radio published no antenna port to choose and there is no virtual
+    // (Kiwi) receiver on offer, so the RX (tx=false) or TX (tx=true) antenna
+    // pick was refused rather than offering invented ANT1/ANT2
+    // (AntennaChoiceGate.h). MainWindow announces it.
+    void antennaChoiceRefused(bool tx);
     void autoSqlMarginDbChanged(int dB);
     // Emitted when the wheel tunes by step so MainWindow can apply the shared
     // tuning/reveal policy.

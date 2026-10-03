@@ -80,6 +80,20 @@ public:
         // so whether the EP2 audio slot may carry samples at all. FALSE is not
         // "no audio", it is "that slot is EADDR" — see ep2WriteTxAudio().
         bool hasCodec = false;
+
+        // Whether the VersaClock should be locked to an external 10 MHz
+        // reference at CL1. Carried here so start() can re-send the sequence:
+        // the radio boots on its crystal, so every connect is a change.
+        bool cl1RefClock = false;
+
+        // WHICH radio this session is for, by serial. Carried for exactly one
+        // reason: the CL1 latch below is per-radio and this object is not. A
+        // MetisClient is built once in Hl2Backend's constructor and destroyed
+        // in its destructor, so it outlives every connect AND every swap
+        // between two HL2s — a latch without an identity on it would follow
+        // the operator from one radio to the next. Empty when the serial is
+        // not known yet, which the latch treats as "do not act".
+        QString radioSerial;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -217,6 +231,11 @@ public:
 
     // Discard samples captured before the operator silenced the radio speaker.
     Q_INVOKABLE void clearSpeakerAudio();
+
+    // Lock the VersaClock to an external 10 MHz reference at CL1, or return it
+    // to the onboard crystal. Queues the twenty-four-bank reprogramming
+    // sequence; see versaClockCl1Banks().
+    Q_INVOKABLE void setCl1RefClock(bool externalRef);
 
     // Raise or clear the gateware's ATU tune request (0x09[20]). Rides the
     // drive-level bank, so this restates the current drive rather than being a
@@ -450,6 +469,12 @@ private slots:
 
 private:
     void sendControlPacket();           // one round-robin EP2 C&C packet
+    // Append `bank` to m_oneShot only while a session is running -- the gate
+    // for the live-control setters that queue a single bank (#4579). It keeps
+    // a bank out of the queue while stopped; what an ended session left
+    // undrained is stop()'s to discard or keep.
+    // setIoBoardTxFrequencyHz() refuses at its top instead, for its own dedupe.
+    void queueOneShotIfRunning(const Cc& bank);
     // One datagram off this socket, whatever endpoint it came from: the EP6/EP4
     // branch, the sequence accounting, telemetry and the IQ decode. Split out of
     // onReadyRead's drain loop so the whole ingest path can be driven from
@@ -510,7 +535,38 @@ private:
     // metis-start so the DDC latches sample rate / NCO / receiver count from a
     // real C&C frame; a stream started before any C&C has landed emits ADC-idle
     // samples (Q pinned to zero) until one does.
+    // Blocking (two msleep(10)), so only start() may call it, before the EP2
+    // pacer and the EP6 stream exist. A restart on a live stream is spaced by
+    // advanceReceiverCountRestart() instead.
     void sendPrimingBurst(int countPerBank);
+    // One bank of the priming burst: countPerBank C&C frames, back to back.
+    void sendPrimingBank(int countPerBank);
+    // A 64-byte run/stop datagram to the radio (unicast, m_host:m_port), through
+    // m_commandSinkForTest when a test installed one. Used by the receiver-count
+    // restart and the bandscope run byte; start(), stop() and the start retry
+    // still write the socket directly.
+    qint64 sendCommandDatagram(const std::array<std::uint8_t, 64>& cmd);
+    bool hasCommandTransport() const noexcept
+    {
+        return m_socket != nullptr || static_cast<bool>(m_commandSinkForTest);
+    }
+    // setReceiverCount()'s stop -> prime -> start -> prime sequence, driven by
+    // m_restartTimer instead of msleep so the EP2 pacer keeps feeding the radio
+    // and EP6 keeps draining. Each call performs the next step once at least
+    // kPrimingBankSpacingMs has passed since the previous one.
+    void advanceReceiverCountRestart();
+    // Arm the timer for the step after this one, measuring from now.
+    void scheduleReceiverCountRestartStep();
+    // Abandon a restart in flight (stop(), or a newer setReceiverCount()).
+    void cancelReceiverCountRestart() noexcept;
+    // True between a restart's metis-stop and its metis-start: every datagram
+    // that reaches the socket then is in the OLD payload layout, and no run byte
+    // may go out, because any run byte with bit 0 set IS a start.
+    bool restartAwaitingStart() const noexcept
+    {
+        return m_restartStep == RestartStep::PrimeBeforeStart
+            || m_restartStep == RestartStep::Start;
+    }
     // Seed the start-retry budget and start its timer. The datagram itself is
     // NOT sent here: the three callers put different bytes on the wire --
     // start() and setReceiverCount() send metisStart(), onWatchdogTick()'s
@@ -588,6 +644,23 @@ private:
     QTimer* m_connectWatchdog = nullptr;  // single-shot: first-EP6 deadline
     QTimer* m_startRetryTimer = nullptr;  // re-sends metis-start until EP6 flows
     int     m_startAttempts = 0;          // start datagrams sent this connect
+    // The receiver-count restart in flight, if any. The step names what the
+    // NEXT timeout does. See advanceReceiverCountRestart().
+    enum class RestartStep : std::uint8_t {
+        Idle,              // no restart in flight
+        PrimeBeforeStart,  // send the second pre-start priming bank
+        Start,             // discard stale EP6, send metis-start, first post-start bank
+        PrimeAfterStart,   // send the second post-start bank
+        Finish,            // arm the start retry, re-apply the bandscope gate
+    };
+    // The spacing the two msleep(10) calls in sendPrimingBurst() gave each bank.
+    // A FLOOR: a step that fires early is re-armed for the remainder.
+    static constexpr int kPrimingBankSpacingMs = 10;
+    static constexpr int kPrimingFramesPerBank = 3;
+    QTimer* m_restartTimer = nullptr;     // single-shot: the next restart step
+    QElapsedTimer m_restartStepClock;     // since the previous restart step
+    RestartStep m_restartStep = RestartStep::Idle;
+    int m_restartStalePackets = 0;        // old-layout datagrams discarded this restart
     QElapsedTimer m_ep2Clock;             // pacer reference clock
     QElapsedTimer m_sinceLastEp6;         // silence detection
     // A recovery is in flight for the CURRENT silence. Set when the watchdog
@@ -620,6 +693,49 @@ private:
     // array of banks rather than one bank with a varying payload.
     std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
+    // Queue (or re-queue) the twenty-four VersaClock banks, and remove any
+    // still waiting. Private because the ORDER and the replace-don't-append
+    // rule are part of the contract and a caller outside this class cannot
+    // honour them; setCl1RefClock() is the way in.
+    void queueCl1Sequence(bool externalRef);
+    void dropQueuedCl1Banks();
+    // True for a bank this class queued as part of a VersaClock sequence. One
+    // predicate, because three sites ask the question — the drop, the drain and
+    // the send confirmation — and a fourth spelling of it is how they diverge.
+    [[nodiscard]] static bool isCl1Bank(const Cc& bank) noexcept;
+    // THE RECOVERY RULE, named once. True when start() must send the OFF table
+    // for this radio even though the setting is clear: this process switched it
+    // on and never confirmed switching it back. start() reads it, and it is the
+    // property hl2_cl1_reference_test asserts — the condition is the whole of
+    // the fix for #5923's first blocker, so it is worth a name rather than an
+    // expression buried in a 200-line function.
+    [[nodiscard]] bool cl1RecoveryPending() const noexcept
+    {
+        return cl1RecoveryPendingFor(m_params.radioSerial);
+    }
+    // Process-owned recovery survives backend recreation on a family switch.
+    // Registry operations run only on the control plane, never in audio callbacks.
+    [[nodiscard]] static bool cl1RecoveryPendingFor(const QString& serial) noexcept;
+    // The sequence currently draining out of m_oneShot: whose it is, whether it
+    // is the OFF table, and how many of its banks have not yet been CONFIRMED
+    // SENT. Only when the last one is confirmed does its radio leave
+    // the process recovery registry.
+    //
+    // WHY CONFIRMED AND NOT MERELY QUEUED. queueCl1Sequence() used to clear the
+    // record the instant the OFF table was queued, before any of its twenty-four
+    // writes reached the transport. A disconnect in that window had stop() drop
+    // the remainder AND left start() with nothing to recover from, so a radio
+    // that was still powered stayed on the external reference for good. Counting
+    // confirmations instead means an interrupted sequence simply never finishes
+    // its countdown, the record stands, and the next connect re-sends the whole
+    // table — which is the behaviour stop()'s own comment already claimed.
+    QString m_cl1SequenceRadio;
+    bool    m_cl1SequenceIsOff = false;
+    int     m_cl1BanksUnsent = 0;
+    // Mirrors m_requestOnBuiltPacket: the packet just built carried a CL1 bank,
+    // and onControlPacketSent() decides whether it counts.
+    bool    m_cl1BankOnBuiltPacket = false;
+
     Cc m_ccTxDrive{};
     // The ATU tune request's standing state, held because it shares 0x09 with
     // the drive level: setTxDriveLevel() has to re-assert it or a drive change
@@ -684,6 +800,7 @@ private:
     // rotation to come back around.
     friend struct MetisClientTestAccess; // socket-free transport-state injection
     std::function<qint64(const std::array<std::uint8_t, kUsbPacketSize>&)> m_packetSinkForTest;
+    std::function<qint64(const std::array<std::uint8_t, 64>&)> m_commandSinkForTest;
     std::deque<Cc> m_oneShot;           // which register pair to send next
     // The single RQST slot. Drained AFTER m_oneShot, never before: a one-shot is
     // a write the operator asked for, and letting a read-back overtake it would
@@ -795,6 +912,9 @@ private:
     // rate exists: downstream sees a ~10 Hz emit of a bit cycling up to ~190 times/s.
     int m_adcWindowSamples = 0;
     int m_adcWindowOverload = 0;
+    // Forward-power maximum for the same window; see
+    // Hl2Telemetry::forwardPowerPeakRaw for why the last value is not enough.
+    ForwardPowerWindow m_fwdWindow;
 
     // ---- transport counters (see LinkCounters) ----
     LinkCounters  m_link;

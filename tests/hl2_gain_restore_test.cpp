@@ -398,45 +398,41 @@ int main(int argc, char** argv)
         check(backend.currentOperatingState().extension == state.extension,
               "legacy display restore leaves both ANAN ADC values intact");
     }
-    // A REFUSED ARM MUST NOT SWALLOW THE OPERATOR'S LATER "OFF" (#5828).
+    // THE OPERATOR'S "OFF" MUST REACH THE PROFILE (#5828).
     //
-    // setAutoRfGain's opening guard compares against the RUNNING flag, and a
-    // declined arm leaves the loop off with the wish recorded -- so an explicit
-    // "off" from there used to match the guard and return before the disarm
-    // branch that clears the wish. The profile kept `autoEnabled: true` and the
-    // next connect from a baseline the loop trusts armed a control the operator
-    // had switched off.
-    //
-    // THE SHIPPED DEFAULT IS WHAT MAKES THIS THE COMMON PATH: the constructed
-    // LNA default is kLnaDefaultGainDb (+20 dB) and kAutoRfGainMaxBaselineDb is
-    // +19, so the first tick on a radio nobody has retuned lands in the refusal.
+    // The ceiling is the top of the native range (kLnaGainMaxDb), so the setter
+    // cannot produce a baseline that declines. This leg arms from the shipped
+    // default and switches off: the withdrawal has to reach the profile, clear
+    // the reason, and settle.
     //
     // Asserted on the persisted document rather than on a flag, because the
     // harm is not the flag -- it is the next session, which leg three shows.
     {
         constexpr int kCeiling = hl2::Hl2Backend::kAutoRfGainMaxBaselineDb;
-        constexpr int kUntrusted = kCeiling + 1;  // +20 dB: the shipped default
-        constexpr int kTrusted = kCeiling;        // +19 dB: the highest it takes
+        static_assert(kCeiling == hl2::kLnaGainMaxDb,
+                      "the arming ceiling is the top of the native range");
+        constexpr int kShippedDefault = hl2::kLnaDefaultGainDb;  // +20 dB
+        constexpr int kTrusted = kCeiling;                       // +48 dB
         {
             GainSession session(autoGainProfile(false));
             SettledLog settled(session.backend);
-            session.backend.setPanRfGain(session.panId, kUntrusted);
+            session.backend.setPanRfGain(session.panId, kShippedDefault);
             check(!autoGainWanted(session.backend.currentOperatingState()),
                   "nothing is wanted before the operator asks");
             session.backend.setAutoRfGain(true);
-            check(!session.backend.autoRfGainEnabled(),
-                  "the radio declines to arm from the shipped default baseline");
-            check(settled.settles() == 1 && !settled.lastArmed(),
-                  "the refusal settles as not armed, as IRadioBackend requires of every outcome");
-            check(!session.backend.lastArmRefusalReason().isEmpty(),
-                  "and it keeps the sentence the checkbox explains itself with");
+            check(session.backend.autoRfGainEnabled(),
+                  "the radio arms from the shipped default baseline");
+            check(settled.settles() == 1 && settled.lastArmed(),
+                  "the arm settles as armed, as IRadioBackend requires of every outcome");
+            check(session.backend.lastArmRefusalReason().isEmpty(),
+                  "and there is no refusal sentence to keep");
             check(autoGainWanted(session.backend.currentOperatingState()),
-                  "and the asking survives the refusal, which is the documented intent");
+                  "and the asking is recorded");
             session.backend.setAutoRfGain(false);
             check(!session.backend.autoRfGainEnabled(),
-                  "the switch still reports itself off after the withdrawal");
+                  "the switch reports itself off after the withdrawal");
             check(!autoGainWanted(session.backend.currentOperatingState()),
-                  "the withdrawal after a refusal reaches the profile");
+                  "the withdrawal reaches the profile");
             // THE OTHER TWO THINGS A SUCCESSFUL OFF OWES, and the reason the
             // withdrawal now goes through the one disarm branch rather than a
             // hand-copied subset of it. IAutoRfGainControl defines the reason as
@@ -471,10 +467,22 @@ int main(int argc, char** argv)
             check(!autoGainWanted(session.backend.currentOperatingState()),
                   "positive control: the withdrawal reaches the profile by this path");
         }
+        // WANTED BUT NOT RUNNING, reached by restore. A saved `autoEnabled: true`
+        // sets the wish; the loop arms only on linkUp, which GainSession never
+        // fires. An off in that window must still clear the wish (#5828).
+        {
+            GainSession session(autoGainProfile(true));
+            check(!session.backend.autoRfGainEnabled()
+                      && autoGainWanted(session.backend.currentOperatingState()),
+                  "precondition: a restored wish with the loop not yet running");
+            session.backend.setAutoRfGain(false);
+            check(!autoGainWanted(session.backend.currentOperatingState()),
+                  "an off before the connect-time arm reaches the profile");
+        }
         // WHY THE FIRST LEG IS A DEFECT AND NOT BOOKKEEPING. A stranded `true`
         // is what the next connect reads, and the linkUp handler arms on it.
         // Arming from a restored preference is correct in itself; it is the
-        // harm only when leg one is what put the `true` there.
+        // harm only when an off the operator gave failed to remove the `true`.
         //
         // ILLUSTRATIVE, NOT DISCRIMINATING, AND SAYING SO IS THE POINT. This leg
         // does NOT exercise that connect-time arm and cannot. The handler is a
@@ -505,7 +513,7 @@ int main(int argc, char** argv)
         // operatingStateChanged on none of them, so the withdrawal reached the
         // document only for a caller that thought to ask. RadioModel never asks.
         //
-        // BOTH HALVES ARE ASSERTED AND NEITHER IS OPTIONAL. Without the refusal's
+        // BOTH HALVES ARE ASSERTED AND NEITHER IS OPTIONAL. Without the arm's
         // own emit the mirror never records the `true`, and the withdrawal
         // assertion then passes against a document that never said anything at all
         // -- green, on a backend where the withdrawal does not work.
@@ -516,7 +524,7 @@ int main(int argc, char** argv)
             // ASSUMED TO DIFFER FROM IT. setPanRfGain notifies on
             // `moved || endedPin || recordedBand`, and this leg is here to prove
             // the MIRROR is wired -- so it has to fire the term it claims to.
-            // Setting kUntrusted first would not: the connect baseline is
+            // Setting kShippedDefault first would not: the connect baseline is
             // already the shipped default, so `moved` would be false and the
             // save would come from `recordedBand`, the band having had no memory
             // entry. Green today and red on any harness that ever seeds
@@ -535,14 +543,14 @@ int main(int argc, char** argv)
             // document and the false ones would pass for nothing.
             check(baselineDb != aRealMove && mirror.saves() > 0 && !mirror.storedAutoGain(),
                   "push: a gain move does reach the profile, and nothing is wanted yet");
-            // AND NOW THE BASELINE THE GUARD REFUSES. Also a move, aRealMove
-            // being below the ceiling by construction and kUntrusted above it.
-            session.backend.setPanRfGain(session.panId, kUntrusted);
+            // AND NOW THE SHIPPED DEFAULT. Also a move: aRealMove is the
+            // ceiling or one below it, never +20.
+            session.backend.setPanRfGain(session.panId, kShippedDefault);
             session.backend.setAutoRfGain(true);
-            check(!session.backend.autoRfGainEnabled(),
-                  "push: the radio still declines from the shipped default baseline");
+            check(session.backend.autoRfGainEnabled(),
+                  "push: the radio arms from the shipped default baseline");
             check(mirror.storedAutoGain(),
-                  "push: the refusal's surviving ask reaches the PROFILE, not just memory");
+                  "push: the ask reaches the PROFILE, not just memory");
             session.backend.setAutoRfGain(false);
             check(!mirror.storedAutoGain(),
                   "push: and the profile the next connect reads now records the operator's off");

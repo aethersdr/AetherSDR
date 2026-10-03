@@ -123,7 +123,8 @@ int main(int argc, char** argv)
         && original.receivers.front().passband.filterLowHz == -6500
         && original.receivers.front().passband.filterHighHz == 7500
         && original.receivers.front().audioGain == 37 && original.receivers.front().audioPan == 68
-        && original.receivers.front().audioMute && original.hardware.centerHz == original.capture.centerHz
+        && original.receivers.front().audioMute && original.receivers.front().squelchEnabled
+        && original.receivers.front().squelchLevel == 43 && original.hardware.centerHz == original.capture.centerHz
         && original.capture.centerHz != original.receivers.front().passband.carrierHz
         && originalView.centerHz != original.capture.centerHz
         && originalView.centerHz != original.receivers.front().passband.carrierHz

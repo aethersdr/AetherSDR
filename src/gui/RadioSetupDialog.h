@@ -133,7 +133,7 @@ private:
     // the family; a m_droopReseed lambda re-synced the same two ways).
     QWidget* buildDroopCalibrationTab();
     // Which Hermes-Lite 2 variant is attached: codec, the dither bit's three
-    // meanings, companion filter board, gateware ATU. Protocol 1 exposes none of
+    // meanings, companion filter board, CL1 reference, gateware ATU. Protocol 1 exposes none of
     // it, so these are operator settings (Hl2HardwareOptions). Gated on the
     // backend's declared extension namespace; every control writes through the
     // hl2 extension, which refuses anything else.
@@ -291,6 +291,15 @@ private:
     // later would otherwise be shown — and written — with the first one's
     // hardware options.
     std::function<void()>     m_hl2HardwareReseed;
+    // Whether the connected HL2 is locked to an external 10 MHz reference at
+    // CL1. Cached from the HL2 Hardware page's hw.get reply because the control
+    // it gates — the manual ppb spin box — lives on the CALIBRATION page, which
+    // reads its own value straight out of the settings scope and has no reason
+    // to issue an hl2 extension call of its own. §4 of
+    // docs/architecture/hl2-frequency-calibration.md requires that control to
+    // be disabled under a locked reference; the backend refuses the verb too,
+    // so a stale cache dims the wrong thing at worst and never writes one.
+    bool                      m_hl2ExternalRefLocked = false;
     // Same reason as m_calibrationReseed above, for the Droop Correction page.
     std::function<void()>     m_droopReseed;
     // Re-fills the Audio page's PC Input/Output combos from a LIVE device

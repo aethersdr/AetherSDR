@@ -3,6 +3,10 @@
 #include "core/PipeWireAudioBridge.h"
 #include <QCoreApplication>
 #include <QScopeGuard>
+#include <QTemporaryDir>
+#include <sys/stat.h>
+#include <cerrno>
+#include <csignal>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -20,6 +24,37 @@ public:
             if (!ok) { ++failures; std::fprintf(stderr,"FAIL: %s\n",name); }
         };
         PipeWireAudioBridge bridge;
+        // Exercise the same descriptor-opening path as loadPipeSource, without
+        // launching pactl. A Flex writer must see EPIPE after its reader leaves.
+        QTemporaryDir directory;
+        if (!directory.isValid()) { return 1; }
+        const QString fifo = directory.filePath(QStringLiteral("rx"));
+        if (::mkfifo(fifo.toUtf8().constData(), 0600) != 0) { return 1; }
+        check(bridge.openRxDrain(0, fifo) && bridge.m_rx[0].drainFd == -1,
+            "legacy Flex path creates no drain reader");
+        const int reader = ::open(fifo.toUtf8().constData(), O_RDONLY|O_NONBLOCK|O_CLOEXEC);
+        const int writer = ::open(fifo.toUtf8().constData(), O_WRONLY|O_NONBLOCK|O_CLOEXEC);
+        if (reader < 0 || writer < 0) { return 1; }
+        const auto closeWriter = qScopeGuard([&] { ::close(writer); });
+        ::close(reader);
+        const auto previousSignal = std::signal(SIGPIPE, SIG_IGN);
+        const auto restoreSignal = qScopeGuard([&] { std::signal(SIGPIPE, previousSignal); });
+        const char byte = 0;
+        check(::write(writer, &byte, 1) == -1 && errno == EPIPE,
+            "loss of Flex pipe reader still produces EPIPE");
+        bridge.m_receiveOnly = true;
+        check(bridge.openRxDrain(0, fifo) && bridge.m_rx[0].drainFd >= 0,
+            "receive-only path creates its route-reset reader");
+        check(::write(writer, &byte, 1) == 1,
+            "receive-only drain reader owns buffered route data");
+        ::close(bridge.m_rx[0].drainFd);
+        bridge.m_rx[0].drainFd = -1;
+        check(!bridge.openRxDrain(0, directory.filePath(QStringLiteral("missing"))),
+            "receive-only drain open failure is reported");
+        bridge.m_receiveOnly = false;
+        check(bridge.openRxDrain(0, directory.filePath(QStringLiteral("missing"))),
+            "legacy Flex never depends on opening a drain path");
+        bridge.m_receiveOnly = true;
         std::array<int,8> readers{};
         readers.fill(-1);
         const auto closeReaders = qScopeGuard([&] {
