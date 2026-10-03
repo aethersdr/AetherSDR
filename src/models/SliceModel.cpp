@@ -460,6 +460,7 @@ void SliceModel::setApf(bool on)
     m_apf = on;
     sendCommand(QString("slice set %1 apf=%2").arg(m_id).arg(on ? 1 : 0));
     emit apfChanged(on);
+    emit apfCommandIssued(m_apf, m_apfLevel);
 }
 
 void SliceModel::setApfLevel(int v)
@@ -469,6 +470,7 @@ void SliceModel::setApfLevel(int v)
     m_apfLevel = v;
     sendCommand(QString("slice set %1 apf_level=%2").arg(m_id).arg(v));
     emit apfLevelChanged(v);
+    emit apfCommandIssued(m_apf, m_apfLevel);
 }
 
 void SliceModel::setNbLevel(int v)
@@ -1615,9 +1617,12 @@ void SliceModel::applyChanges(const SliceDelta& d)
         const int v = *d.agcThreshold;
         if (m_agcThreshold != v) { m_agcThreshold = v; emit agcThresholdChanged(v); }
     }
+    // Guarded for the same reason as the pair above: HL2 now publishes the
+    // off-level on every emitSliceState() too, and AgcCalibrationDialog wires
+    // agcOffLevelChanged to the calibrator exactly as it wires the threshold.
     if (d.agcOffLevel.has_value()) {
-        m_agcOffLevel = *d.agcOffLevel;
-        emit agcOffLevelChanged(m_agcOffLevel);
+        const int v = *d.agcOffLevel;
+        if (m_agcOffLevel != v) { m_agcOffLevel = v; emit agcOffLevelChanged(v); }
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
         m_squelchOnKnown |= d.squelchOn.has_value();

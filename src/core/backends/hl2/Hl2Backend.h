@@ -94,6 +94,11 @@ public:
     // ANF are deliberately not implemented and stay hidden.
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
+    // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
+    void setSliceApf(int sliceId, bool on, int level) override;
+    // Handles SliceAgcRequest::Field::OffLevel (the WDSP fixed gain); every
+    // other field goes to the base, i.e. setSliceAgc().
+    void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
     void setSliceAudioMute(int sliceId, bool mute) override;
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
@@ -273,6 +278,9 @@ private:
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
+    // Hands receiver 0 a configured Hl2RxDsp so the APF and AGC-off verbs can
+    // be followed from the seam into WDSP without a socket.
+    friend struct Hl2ApfAgcOffTestAccess;
     // Delivers one bandscope block through MetisClient's signal and ages the mirror,
     // so converter-row expiry is testable without a radio.
     friend struct Hl2HealthBlockTestAccess;
@@ -504,6 +512,13 @@ private:
         bool nbOn = false;
         int  nbLevel = 50;
 
+        // APF request and AGC-off level, held like the blanker: nothing echoes
+        // them and a fresh chain must be told again. Literal defaults match
+        // Hl2RxDsp::kDefaultApfLevel / kDefaultAgcOffLevel (the test pins it).
+        bool apfOn = false;
+        int  apfLevel = 50;
+        int  agcOffLevel = 10;
+
         // The operator's panadapter averaging, held for the same reason: a
         // chain built on reconnect or for an added pan starts at none.
         // panAverage is the operator's 0..100; see averageTimeMsForStep().
@@ -611,6 +626,9 @@ private:
     // This receiver's NCO just moved: the averaged bins describe the old
     // frequency axis. Called beside pushNotchTune() at the two retune sites.
     void dropPanAverage(const Receiver& r);
+    // Same, for the APF (centred on the current CW pitch) and the AGC-off level.
+    void pushApf(const Receiver& r);
+    void pushAgcOffLevel(const Receiver& r);
 
     // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC. Never m_rx,
     // whose push_back/erase can move storage under the fan-out. Rebuilt by

@@ -31,6 +31,10 @@
 #include "PanadapterMessageOverlay.h"
 #include "TitleBar.h"
 #include "models/SliceModel.h"
+#include "Ctr2ProxyApplet.h"
+#include "models/Ctr2ProxyModel.h"
+
+#include <QHostAddress>
 
 #include <QColor>
 #include <QPainter>
@@ -1997,12 +2001,27 @@ void MainWindow::registerMidiParams()
         },
         [this]() -> float { auto* s = activeSlice(); return s && s->adaptiveFilterEnabled() ? 1 : 0; });
 
+    // The RADIO's own NR and ANF, refused where the radio has none (HL2,
+    // ANAN, RTL: the VFO hides these buttons). The host modules (NR2, RN2,
+    // NR4, DFNR) have their own parameters below.
     reg("rx.nrEnable", "Noise Reduction", "RX", P::Toggle, 0, 1,
-        [this](float v) { if (auto* s = activeSlice()) s->setNr(v > 0.5f); },
+        [this](float v) {
+            if (auto* s = activeSlice()) {
+                if (!m_radioModel.requestRadioNoiseReduction(s, v > 0.5f)) {
+                    showUnsupportedControlNotice();
+                }
+            }
+        },
         [this]() -> float { auto* s = activeSlice(); return s && s->nrOn() ? 1 : 0; });
 
     reg("rx.anfEnable", "Auto Notch", "RX", P::Toggle, 0, 1,
-        [this](float v) { if (auto* s = activeSlice()) s->setAnf(v > 0.5f); },
+        [this](float v) {
+            if (auto* s = activeSlice()) {
+                if (!m_radioModel.requestRadioAutoNotch(s, v > 0.5f)) {
+                    showUnsupportedControlNotice();
+                }
+            }
+        },
         [this]() -> float { auto* s = activeSlice(); return s && s->anfOn() ? 1 : 0; });
 
     reg("rx.squelchEnable", "Squelch Enable", "RX", P::Toggle, 0, 1,
@@ -2155,8 +2174,14 @@ void MainWindow::registerMidiParams()
         [this](float v) { m_radioModel.transmitModel().setVoxLevel(static_cast<int>(v)); },
         [this]() -> float { return m_radioModel.transmitModel().voxLevel(); });
 
+    // Gated on the same capability that dims the Phone applet's AM carrier
+    // slider: `transmit set am_carrier=` reaches only a radio that declares it.
     reg("phone.amCarrier", "AM Carrier", "Phone/CW", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.transmitModel().setAmCarrierLevel(static_cast<int>(v)); },
+        [this](float v) {
+            if (!m_radioModel.requestAmCarrierLevel(static_cast<int>(v))) {
+                showUnsupportedControlNotice();
+            }
+        },
         [this]() -> float { return m_radioModel.transmitModel().amCarrierLevel(); });
 
     reg("cw.speed", "CW Speed", "Phone/CW", P::Slider, 5, 100,
@@ -2540,8 +2565,52 @@ void MainWindow::registerMidiParams()
 // thread (#502), FlexControl / MIDI / HID manager construction and signal
 // routing, and the RC-28 deferred press/hold logic (#3323).
 
+void MainWindow::setupCtr2Proxy()
+{
+    // The relay targets the radio AetherSDR is connected to. The model only
+    // receives this; it captures the destination at Start, so switching
+    // radios here never retargets a running relay.
+    m_ctr2ProxyModel = new Ctr2ProxyModel(this);
+    const auto pushRadio = [this] {
+        if (!m_radioModel.isConnected()) {
+            m_ctr2ProxyModel->setAetherRadio({}, 0, {}, tr("Connect AetherSDR to a radio first"));
+            return;
+        }
+        if (m_radioModel.isWan()) {
+            m_ctr2ProxyModel->setAetherRadio(
+                {}, 0, {}, tr("AetherSDR is connected through SmartLink; the CTR2 relay "
+                              "needs a direct LAN or VPN connection to the radio"));
+            return;
+        }
+        if (!m_radioModel.backendCapabilities().hasMultiClientSessions) {
+            m_ctr2ProxyModel->setAetherRadio(
+                {}, 0, {}, tr("This radio does not accept another client alongside AetherSDR"));
+            return;
+        }
+        const QHostAddress address = m_radioModel.radioAddress();
+        const quint16 port = m_radioModel.lastRadioInfo().port;
+        QString label = m_radioModel.model();
+        if (!m_radioModel.name().isEmpty() && m_radioModel.name() != label) {
+            label += QStringLiteral(" \"%1\"").arg(m_radioModel.name());
+        }
+        label += QStringLiteral("  %1").arg(address.toString());
+        m_ctr2ProxyModel->setAetherRadio(address, port, label.trimmed(), {});
+    };
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, m_ctr2ProxyModel,
+            [pushRadio](bool) { pushRadio(); });
+    connect(&m_radioModel, &RadioModel::infoChanged, m_ctr2ProxyModel, pushRadio);
+    pushRadio();
+    if (m_appletPanel) {
+        if (auto* applet = m_appletPanel->ctr2ProxyApplet()) {
+            applet->setModel(m_ctr2ProxyModel);
+        }
+    }
+}
+
 void MainWindow::wireExternalControllers()
 {
+    setupCtr2Proxy();
+
     // ── External controllers run on a dedicated worker thread (#502) ────
     // FlexControl, SerialPort, and MIDI controllers are created on the
     // worker thread so their I/O (serial port, RtMidi callbacks, poll timers)

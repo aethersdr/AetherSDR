@@ -197,6 +197,16 @@ void SetRXAAGCDecay(int channel, int decayMs);
 void SetRXAAGCHang(int channel, int hangMs);
 void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 
+// CW audio peaking filter (apfshadow.c): routes to one of RXA.c's four
+// built-in peaking stages by `selection` (0 = double-pole). They run after the
+// AGC, so the centre is an audio frequency; `gain` is linear. Control-path
+// calls (csDSP); the double-pole redesigns only when a parameter changes.
+void SetRXASPCWSelection(int channel, int selection);
+void SetRXASPCWRun(int channel, int run);
+void SetRXASPCWFreq(int channel, double centerHz);
+void SetRXASPCWBandwidth(int channel, double bandwidthHz);
+void SetRXASPCWGain(int channel, double gain);
+
 // ── FM demodulator deviation ──────────────────────────────────────────────
 //
 // NO VENDORED PATCH IS INVOLVED, and that is worth saying plainly because the

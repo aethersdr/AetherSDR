@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -267,6 +268,55 @@ public:
         return m_nbAppliedLevel.load(std::memory_order_relaxed);
     }
 
+    // AGC-off level and CW APF: held outside Config (configure() replaces it)
+    // and re-applied by installChannel(), pushed only when canPushToChannel().
+    //
+    // AGC-off level 0..100 -> WDSP fixed gain: 10 + 0.6 * (level - 10) dB, so
+    // the default level 10 is exactly WDSP's 10 dB channel default, and the
+    // slope matches the AGC-T threshold's 0.6 dB/unit. Not referred to the LNA
+    // gain: with AGC off the operator rides RF gain against overload.
+    static constexpr double kAgcFixedGainDbPerUnit = 0.6;
+    static constexpr int kDefaultAgcOffLevel = 10;           // SliceModel::m_agcOffLevel
+    static constexpr double kDefaultAgcFixedGainDb = 10.0;   // WdspChannel::Config
+    [[nodiscard]] static double agcFixedGainDbForOffLevel(int level) noexcept
+    {
+        return kDefaultAgcFixedGainDb
+               + static_cast<double>(std::clamp(level, 0, 100) - kDefaultAgcOffLevel)
+                     * kAgcFixedGainDbPerUnit;
+    }
+    // WDSP applies the fixed gain only in AGC mode 0 (wcpAGC.c xwcpagc), so
+    // this is safe in any mode and audible exactly when AGC is Off.
+    Q_INVOKABLE void setAgcOffLevel(int level);
+    [[nodiscard]] int agcOffLevel() const noexcept { return m_agcOffLevel; }
+
+    // APF level 0..100 -> the peak's bandwidth (the UI labels it "APF
+    // bandwidth", higher = narrower): 200 Hz at 0 halving every 50 units, so
+    // the default 50 is RXA.c's own 100 Hz. Gain stays at RXA.c's linear 2.0,
+    // so the slider changes selectivity, not loudness.
+    static constexpr double kApfWidestBandwidthHz = 200.0;
+    static constexpr double kApfGain = 2.0;          // RXA.c create_apfshadow
+    static constexpr int kDefaultApfLevel = 50;      // SliceModel::m_apfLevel
+    [[nodiscard]] static double apfBandwidthHzForLevel(int level) noexcept
+    {
+        const double units = static_cast<double>(std::clamp(level, 0, 100));
+        return kApfWidestBandwidthHz * std::pow(2.0, -units / 50.0);
+    }
+    [[nodiscard]] static constexpr bool isCwMode(WdspChannel::Mode mode) noexcept
+    {
+        return mode == WdspChannel::Mode::Cwl || mode == WdspChannel::Mode::Cwu;
+    }
+    // centerHz is the CW pitch in audio Hz (the backend owns it). The stage
+    // runs only in CWL/CWU; the request is held through other modes and
+    // setMode() re-evaluates it.
+    Q_INVOKABLE void setApf(bool on, int level, double centerHz);
+    [[nodiscard]] bool apfRequested() const noexcept { return m_apfOn; }
+    [[nodiscard]] int apfLevel() const noexcept { return m_apfLevel; }
+    [[nodiscard]] double apfCenterHz() const noexcept { return m_apfCenterHz; }
+    [[nodiscard]] bool apfInCircuit() const noexcept
+    {
+        return m_apfOn && isCwMode(m_config.mode);
+    }
+
     // Post-DDC half of the ADC pairing (docs/HERMES.md §13 item 16;
     // Hl2AdcPairing.h). WDSP's RXA_ADC_PK in dB re wire full scale, not
     // calibrated to the antenna. adcmeter runs first in xrxa, after the shift
@@ -473,15 +523,21 @@ private:
     // One attempt to put the squelch request on the channel; marks it pending
     // on refusal. Caller has checked canPushToChannel().
     void pushSquelchToChannel();
+    // Push the held APF request / AGC-off level at the live channel. Callers
+    // check canPushToChannel() first. Refusals are logged and the request is
+    // kept, so the next install re-applies it.
+    void applyApf();
+    void applyAgcOffLevel();
     // True when the next panadapter frame may be computed. Stays true until one
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
 
     // The shared install step: resize the scratch buffers, recompute the DC
     // blocker, re-apply everything Config does not carry (shift, the notch set,
-    // the noise blanker, the blanker hold, the squelch) and take ownership of the
-    // new channel/spectrum. configure() and installRebuiltChannel() both end here
-    // so a second copy of that list cannot drift and lose one of them.
+    // the noise blanker, the blanker hold, the squelch, the AGC-off level, the
+    // APF) and take ownership of the new channel/spectrum. configure() and
+    // installRebuiltChannel() both end here so a second copy of that list
+    // cannot drift and lose one of them.
     void installChannel(RebuildResult result);
     // Arm m_meterTap from the current geometry. One site for the arithmetic,
     // called on the mute's release edge and on a channel install so the two
@@ -517,6 +573,12 @@ private:
     bool m_squelchPending = false;
     std::atomic<bool> m_nbAppliedOn {false};
     std::atomic<int>  m_nbAppliedLevel {50};
+    // AGC-off level and APF, kept out of m_config for the same reason; see
+    // setAgcOffLevel()/setApf(). Requests, in the slice model's units.
+    int m_agcOffLevel = kDefaultAgcOffLevel;
+    bool m_apfOn = false;
+    int m_apfLevel = kDefaultApfLevel;
+    double m_apfCenterHz = 600.0;
     // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and
     // 0 are the "never observed" sentinels, which is why neither is a value the
     // accessors can return. A steady_clock stamp rather than a QElapsedTimer

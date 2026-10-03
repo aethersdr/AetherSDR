@@ -168,14 +168,17 @@ void MainWindow::tuneToNet(const NetEntry& entry)
     // radio-side memory slot to "memory apply").
     if (!entry.preset.mode.isEmpty())
         slice->setMode(entry.preset.mode);
+    // Through SliceModel, so the filter reaches every backend, not only a
+    // command plane.
     if (entry.preset.rxFilterLow != entry.preset.rxFilterHigh) {
-        m_radioModel.sendCommand(QString("filt %1 %2 %3")
-                                     .arg(sliceId)
-                                     .arg(entry.preset.rxFilterLow)
-                                     .arg(entry.preset.rxFilterHigh));
+        slice->setFilterWidth(entry.preset.rxFilterLow, entry.preset.rxFilterHigh);
     }
-    if (entry.preset.step > 0)
+    // The step is the radio's where there is a command plane, the client's
+    // where there is not (RadioModel::applyClientOwnedSliceStep).
+    if (entry.preset.step > 0
+        && !m_radioModel.applyClientOwnedSliceStep(sliceId, entry.preset.step)) {
         m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(sliceId).arg(entry.preset.step));
+    }
     const QString fixup = buildMemoryRecallSliceFixupCommand(sliceId, entry.preset);
     if (!fixup.isEmpty())
         m_radioModel.sendCommand(fixup);
