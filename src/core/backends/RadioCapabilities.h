@@ -316,6 +316,9 @@ struct RadioCapabilities {
     struct TransmitDriveControl {
         SliceFrequencyControl::Authority authority{
             SliceFrequencyControl::Authority::Unknown};
+        // IRadioBackend::setTunePower() re-applies drive to a TUNE carrier in
+        // progress. False: tune power reaches the backend only at key-down.
+        bool tunePowerAppliesLive = false;
     };
     std::optional<TransmitDriveControl> transmitDriveControl;
 
