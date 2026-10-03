@@ -83,7 +83,16 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: ghcr.io/aethersdr/aethersdr-ci:latest
+    # The full RelWithDebInfo tree plus ccache outgrows the hosted runner's
+    # free disk. Host toolchains this container never uses are mounted so the
+    # first step can delete them; the build tree stays where AUTOMOC expects it.
+    container:
+      image: ghcr.io/aethersdr/aethersdr-ci:latest
+      volumes:
+        - /usr/local/lib/android:/host-unused/android
+        - /usr/share/dotnet:/host-unused/dotnet
+        - /opt/ghc:/host-unused/ghc
+        - /opt/hostedtoolcache/CodeQL:/host-unused/codeql
 
     # Explicit CCACHE_DIR: the job runs as root inside a container, so `~`
     # resolves to /root and an actions/cache `path:` of `~/.cache/ccache` would
@@ -161,6 +170,12 @@ jobs:
       CCACHE_MAXSIZE: 1500M
 
     steps:
+      - name: Free runner disk
+        run: |
+          df -h /__w
+          find /host-unused -mindepth 2 -maxdepth 2 -exec rm -rf {} +
+          df -h /__w
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # ccache is in .github/docker/Dockerfile as of #4655, but this job pins

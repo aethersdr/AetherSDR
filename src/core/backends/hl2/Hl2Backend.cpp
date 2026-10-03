@@ -1866,7 +1866,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // The panadapter is averaged here, in Hl2Spectrum, per the operator's FFT
     // AVG (setPanAverage). SpectrumWidget skips its own fixed SMOOTH_ALPHA EMA
     // while this is set, so the two never stack (RFC #5782).
-    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep};
+    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}};
     // No band/segment zoom: this backend vends no command plane at all, so
     // `display pan set ... band_zoom=` is dropped inside RadioModel::sendCmd.
     // Declaring absence is what makes the control refuse rather than lie.
