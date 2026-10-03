@@ -97,11 +97,17 @@ RUN git clone --depth 1 --branch "${QT_GIT_TAG}" "${QT_GIT}/qtbase.git" /tmp/qtb
 # Qt 6.12 hangs there: the child exits and qsb waits on its pipe forever, so
 # the image build sat at QtMultimedia's [2/300] until the job timed out. The
 # tools need no instrumentation; the libraries still get it (checked below).
-RUN for m in qtshadertools qtwebsockets qtserialport qtmultimedia; do \
+# QT_HOST_ROOT pins the plain Qt before QT_ROOT is re-pointed further down.
+# The checks read each binary's own DT_NEEDED entries: ldd lists libtsan for
+# anything linked against the TSan QtCore, instrumented or not.
+ENV QT_HOST_ROOT=${QT_ROOT}
+RUN test -x "${QT_HOST_ROOT}/bin/qsb" \
+    && ! readelf -d "${QT_HOST_ROOT}/bin/qsb" | grep -q 'NEEDED.*libtsan' \
+    && for m in qtshadertools qtwebsockets qtserialport qtmultimedia; do \
         git clone --depth 1 --branch "${QT_GIT_TAG}" "${QT_GIT}/${m}.git" "/tmp/${m}-src" \
         && host_tools="" \
         && if [ "$m" = qtmultimedia ]; then \
-               host_tools="-DQT_HOST_PATH=${QT_ROOT} -DQT_FORCE_FIND_TOOLS=ON"; \
+               host_tools="-DQT_HOST_PATH=${QT_HOST_ROOT} -DQT_FORCE_FIND_TOOLS=ON"; \
            fi \
         && "${QT_TSAN_ROOT}/bin/qt-configure-module" "/tmp/${m}-src" -- \
             -B "/tmp/${m}-build" \
@@ -117,8 +123,9 @@ RUN for m in qtshadertools qtwebsockets qtserialport qtmultimedia; do \
     && for m in Multimedia WebSockets SerialPort ShaderTools; do \
            test -f "${QT_TSAN_ROOT}/lib/cmake/Qt6${m}/Qt6${m}Config.cmake" \
            || { echo "Qt6${m} did not install"; exit 1; }; \
-       done \
-    && ldd "${QT_TSAN_ROOT}/lib/libQt6Multimedia.so.6" | grep -q libtsan
+           readelf -d "${QT_TSAN_ROOT}/lib/libQt6${m}.so.6" | grep -q 'NEEDED.*libtsan' \
+           || { echo "Qt6${m} is not TSan-instrumented"; exit 1; }; \
+       done
 
 # qtkeychain against THAT Qt, itself instrumented, same pin as the base image.
 ENV QTKEYCHAIN_TSAN_ROOT=/opt/qtkeychain-tsan
