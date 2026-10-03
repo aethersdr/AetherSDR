@@ -1,7 +1,8 @@
 // #5637 §1: a TransmitModel control whose value already crossed the
 // IRadioBackend seam must not ALSO be reported as dropped.
 //
-// TransmitModel emits two things for RF power, mic level and the TX passband
+// TransmitModel emits two things for RF power, mic level, the TX passband and
+// (on a radio-side keyer, #6086) CW speed and break-in
 // (tune power is the exception: its value reaches the backend as setTune()'s
 // argument at key time, not through a setter of its own):
 // a typed intent (rfPowerCommandIssued / micLevelCommandIssued /
@@ -18,7 +19,8 @@
 //   1. a routed verb reaches the backend and raises no commandDropped;
 //   2. an unrouted verb (VOX here, which this backend does not implement) and a
 //      routed verb on a backend that does not declare the capability behind it
-//      still raise commandDropped — the alarm is narrowed, not silenced.
+//      still raise commandDropped — the alarm is narrowed, not silenced. So
+//      does `cw break_in_delay`, which no seam setter carries.
 //
 // Socket-free: an injected backend records the seam calls. No radio, no peer.
 
@@ -51,6 +53,8 @@ public:
     QList<QPair<int, int>> txFilters;
     QList<int> cwPitches;
     QList<QPair<bool, int>> tunes;  // (on, tunePowerPercent) per setTune()
+    QList<int> cwSpeeds;
+    QList<bool> cwBreakIns;
     bool connected{true};
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return connected; }
@@ -67,6 +71,8 @@ public:
     void setMicGain(int level) override { micGains << level; }
     void setTxFilter(int lowHz, int highHz) override { txFilters << qMakePair(lowHz, highHz); }
     void setCwPitch(int hz) override { cwPitches << hz; }
+    void setCwSpeed(int wpm) override { cwSpeeds << wpm; }
+    void setCwBreakIn(bool on) override { cwBreakIns << on; }
     // Honours tunePowerPercent the way Hl2Backend::setTune does (drive set
     // from TUNE power at key time, PR #4551): records it rather than applying.
     void setTune(bool on, int tunePowerPercent, const TxCoordinator::Operation&,
@@ -89,6 +95,18 @@ RadioCapabilities hostModulatingTransmitter()
     c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
         SliceFrequencyControl::Authority::Engine};
     c.hasTxFilterControls = true;
+    return c;
+}
+
+// A radio-side CW keyer with no command plane and no host modulation: the
+// IC-705 / IC-7300MK2 answers (IcomCivBackend sets hasRadioSideCwKeyer from
+// the profile's text keyer).
+RadioCapabilities radioSideKeyerTransmitter()
+{
+    RadioCapabilities c;
+    c.family = QStringLiteral("icom");
+    c.canTransmit = true;
+    c.hasRadioSideCwKeyer = true;
     return c;
 }
 
@@ -290,6 +308,51 @@ static void cwPitchRepeatOfHandedValueStaysQuiet()
           "cw pitch: a repeat of the value the backend holds raises no notice");
 }
 
+static void cwSpeedReachesSeamWithoutDropNotice()
+{
+    Fixture f(radioSideKeyerTransmitter());
+    f.radio.transmitModel().setCwSpeed(25);
+    check(f.backend->cwSpeeds == QList<int>{25},
+          "cw wpm: setCwSpeed(25) reached the radio-side keyer once");
+    check(!f.droppedStartingWith(QStringLiteral("cw wpm ")),
+          "cw wpm: no commandDropped for a speed the backend applied");
+}
+
+static void cwBreakInReachesSeamWithoutDropNotice()
+{
+    Fixture f(radioSideKeyerTransmitter());
+    f.radio.transmitModel().setCwBreakIn(true);
+    check(f.backend->cwBreakIns == QList<bool>{true},
+          "cw break_in: setCwBreakIn(true) reached the radio-side keyer once");
+    check(!f.droppedStartingWith(QStringLiteral("cw break_in ")),
+          "cw break_in: no commandDropped for break-in the backend applied");
+}
+
+// No seam setter carries the break-in delay, so its text is a real drop even
+// on the backend that takes `cw break_in` (the prefix must not swallow it).
+static void cwBreakInDelayKeepsDropNoticeOnKeyerBackend()
+{
+    Fixture f(radioSideKeyerTransmitter());
+    f.radio.transmitModel().setCwDelay(300);
+    check(f.droppedStartingWith(QStringLiteral("cw break_in_delay ")),
+          "cw break_in_delay: no seam setter, the drop notice stands");
+}
+
+// Without a radio-side keyer the seam connections hand the backend nothing,
+// so the speed and break-in text are real drops.
+static void cwSpeedAndBreakInWithoutKeyerKeepDropNotice()
+{
+    Fixture f(hostModulatingTransmitter());
+    f.radio.transmitModel().setCwSpeed(25);
+    f.radio.transmitModel().setCwBreakIn(true);
+    check(f.backend->cwSpeeds.isEmpty() && f.backend->cwBreakIns.isEmpty(),
+          "premise: no radio-side keyer, no CW speed or break-in reaches the seam");
+    check(f.droppedStartingWith(QStringLiteral("cw wpm ")),
+          "no radio-side keyer: cw wpm still raises commandDropped");
+    check(f.droppedStartingWith(QStringLiteral("cw break_in ")),
+          "no radio-side keyer: cw break_in still raises commandDropped");
+}
+
 // The negative control that keeps the first four honest: the same backend,
 // the same model, a verb nothing behind the seam implements. If the fix had
 // gated the whole commandReady forward, this is what would go quiet.
@@ -358,6 +421,10 @@ int main(int argc, char** argv)
     cwPitchHandedToPreviousBackendKeepsDropNotice();
     cwPitchDifferentFromHandedValueKeepsDropNotice();
     cwPitchRepeatOfHandedValueStaysQuiet();
+    cwSpeedReachesSeamWithoutDropNotice();
+    cwBreakInReachesSeamWithoutDropNotice();
+    cwBreakInDelayKeepsDropNoticeOnKeyerBackend();
+    cwSpeedAndBreakInWithoutKeyerKeepDropNotice();
     unroutedVerbStillRaisesDropNotice();
     undeclaredCapabilityKeepsDropNotice();
     tunePowerWithoutDriveOwnershipKeepsDropNotice();

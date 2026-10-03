@@ -1898,9 +1898,9 @@ namespace {
 //   filter_low/_high      hasTxFilterControls (setTxFilter)
 //   cw pitch N            N is the pitch last handed to THIS backend, because
 //                         the host-modulating connection is change-gated
-// vox, mon, speech_processor, cw wpm and cw break_in are not routed: no
-// capability proves their setters real, so they keep the notice even where one
-// is (an Icom implements setVox, setSpeechProcessor, setCwSpeed, setCwBreakIn).
+//   cw wpm, cw break_in   hasRadioSideCwKeyer (setCwSpeed, setCwBreakIn)
+// cw break_in_delay has no seam setter. vox, mon and speech_processor are not
+// routed: no capability proves their setters real (an Icom implements them).
 bool transmitCommandDeliveredThroughSeam(const QString& command,
                                          const RadioCapabilities& caps,
                                          int cwPitchHandedToBackend,
@@ -1911,6 +1911,11 @@ bool transmitCommandDeliveredThroughSeam(const QString& command,
         bool ok = false;
         const int hz = command.mid(kCwPitch.size()).trimmed().toInt(&ok);
         return ok && cwPitchHandedToBackend >= 0 && hz == cwPitchHandedToBackend;
+    }
+    // Trailing space: `cw break_in_delay N` must not match.
+    if (command.startsWith(QLatin1String("cw wpm "))
+        || command.startsWith(QLatin1String("cw break_in "))) {
+        return caps.hasRadioSideCwKeyer;
     }
 
     static const QString kTransmitSet = QStringLiteral("transmit set ");
