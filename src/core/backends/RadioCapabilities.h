@@ -525,6 +525,28 @@ struct RadioCapabilities {
     // because some radios define PACURRENT with an unusable/clipped range.
     bool hasPaCurrentTelemetry = false;
 
+    // A PROTOCOL audit of the PA telemetry the radio's wire format can carry at
+    // all, as distinct from the three flags above, which report what a session
+    // has so far RECEIVED. Engaged means the payload was read field by field and
+    // the absence is a property of the protocol rather than of a radio that has
+    // simply not sent one yet -- so a readout may be WITHDRAWN instead of left
+    // printing a placeholder that can never resolve.
+    //
+    // std::nullopt (the default) means NOT AUDITED, and every consumer keeps its
+    // historical presentation. That is deliberate: it holds a family that has
+    // made no such claim at its existing behaviour instead of quietly
+    // reclassifying a default `false` above as "proven absent" -- the
+    // all-defaults-false trap check_capability_records.py was written to stop.
+    //
+    // A record rather than another bool because RadioCapabilities is AT its
+    // frozen boolean count and shrink-only (#5262 M2); per-feature records are
+    // the sanctioned shape for a new capability.
+    struct PaTelemetryAudit {
+        // The protocol defines no PA temperature field anywhere in its payload.
+        bool temperatureAbsent = false;
+    };
+    std::optional<PaTelemetryAudit> paTelemetryAudit;
+
     // The radio reports main-fan speed as live telemetry. False means the
     // Radio Vitals applet omits the fan gauge instead of presenting an
     // instrument that can never receive a sample. This is independent of PA

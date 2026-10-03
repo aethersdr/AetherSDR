@@ -237,8 +237,8 @@ std::array<std::uint8_t, kSpeakerPacketBytes> buildSpeakerAudio(
     std::uint32_t sequence, std::span<const std::int16_t> interleavedLr) noexcept;
 
 // ---- High Priority Status, radio -> PC (spec p.47) ----
-// 60 bytes: 4-byte BE sequence, then hardware state. Only the two speaker-stream
-// fields are decoded. Arrives on the same socket as DDC0 IQ (see
+// 60 bytes: 4-byte BE sequence, then hardware state. The two speaker-stream
+// fields and the supply rail are decoded. Arrives on the same socket as DDC0 IQ (see
 // kDdc0DefaultPort); parseDdcFrame() rejects it.
 inline constexpr std::size_t kHighPriorityStatusBytes = 60;
 
@@ -251,6 +251,21 @@ struct HighPriorityStatus {
     // "2 samples per location" doubling never reaches the send, OutHighPriority.c).
     // Not comparable to kSpeakerFramesPerPacket; use as a trend.
     std::uint16_t speakerFifoLevel = 0;
+    // Bytes 49-50: the PA supply rail, AIN6, in RAW 12-bit ADC counts (0-4095).
+    // The only analog field here a receive-only client could use -- the other
+    // five (forward/reverse/exciter power, two user analogs) are transmit-side
+    // or unassigned, and there is NO TEMPERATURE anywhere in the payload, which
+    // is why no client can populate a PA temperature readout for this radio.
+    //
+    // DECODED BUT NOT YET CONSUMED, deliberately. Counts become volts only
+    // against the RF board's ADC reference, and nothing the radio reports
+    // identifies it: board type is a p2app launch option, not a hardware fact
+    // (see DiscoveryReply::isSaturn()). Publishing a scaled value would mean
+    // picking a reference at a 1.5x spread -- 21 V shown for a 13.8 V rail if
+    // wrong. The decode is pinned here so the wire format is recorded and
+    // tested; the reference has to come from the operator or from a
+    // load-bearing field before a reading can be offered.
+    std::uint16_t supplyVoltageRaw = 0;
 };
 
 // Decode, or nullopt if this is not a status packet. Bounds-checked
