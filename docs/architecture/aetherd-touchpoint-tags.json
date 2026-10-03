@@ -65,6 +65,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/AudioOutputVolumePolicy.h": {
+  "tag": "ui-support",
+  "note": "Which stored level the master slider reads and writes, and its default, for the PC sink versus the radio's own output; client settings plumbing like ClientDisplaySettings, pure selectors over AppSettings keys with the callers doing the I/O. One family predicate, because only a radio whose receive audio this client originates has an output level the client must remember",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AutomationServer.h": {
   "tag": "ui-support",
   "note": "QLocalServer GUI-automation/test bridge (dumpTree/grab/invoke on QWidgets); dev tooling, stays in gui shell",
@@ -121,7 +127,7 @@
  },
  "core/ClientDisplaySettings.h": {
   "tag": "ui-support",
-  "note": "Radio-scoped client persistence for locally shaped waterfall cadence under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state.",
+  "note": "Radio-scoped client persistence for locally shaped display state under the ClientDisplay feature document \u2014 waterfall cadence, FFT averaging and the panadapter dBm range; UI settings plumbing, not radio-owned display state.",
   "split": "",
   "confidence": "high"
  },

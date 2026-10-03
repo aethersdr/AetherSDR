@@ -1760,6 +1760,7 @@ void MainWindow::wirePanLifecycle()
             // flat gain key only seeds it when nothing has been written yet.
             sw->loadDisplay3DSettings(
                 s.value(sw->settingsKey("Display3DGain"), "70").toInt());
+
         }
     });
     // NOTE: panadapterLevelChanged → spectrum()::setDbmRange has been removed.

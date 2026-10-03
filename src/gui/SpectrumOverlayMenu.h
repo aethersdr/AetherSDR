@@ -160,6 +160,12 @@ public:
     // the SW estimate is untouched and stays available on every family.
     void setRadioSideAutoBlackAvailable(bool available);
     void syncWnbState(bool on, int level, bool updating);
+    // Show a restored FFT averaging state WITHOUT re-emitting it. The restore
+    // path applies the value to the widget and the backend itself; a signal
+    // here would make a reload look like an operator action and apply it twice.
+    void setFftAverage(int frames);
+    void setFftWeightedAverage(bool on);
+
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step,
                        const QString& unitSuffix = QStringLiteral(" dB"));

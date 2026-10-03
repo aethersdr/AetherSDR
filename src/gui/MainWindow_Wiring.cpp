@@ -50,10 +50,12 @@
 #include "SliceLabel.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
+#include "TitleBar.h"
 #include "core/AdaptiveFilterEngine.h"
 #include "VfoWidget.h"
 #include "core/BandStackSettings.h"
 #include "core/AppSettings.h"
+#include "core/AudioOutputVolumePolicy.h"
 #include "core/NnrSettings.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/WaterfallRate.h"
@@ -1795,6 +1797,23 @@ void MainWindow::onSliceAdded(SliceModel* s)
         }
     }
 
+    // Seed the client-owned tuning step from last session. Without this the
+    // saved step was applied to the widgets at startup and then overwritten
+    // the moment a slice became active: setActiveSlice() syncs the widget FROM
+    // SliceModel::stepHz(), whose constructed default is 100 Hz, so the
+    // restored value survived only until the first slice arrived.
+    //
+    // applyClientOwnedSliceStep() carries the predicate: it returns false and
+    // does nothing on a radio that owns the step over its command plane, where
+    // the radio's own status is authoritative and this would be a client
+    // writing over it.
+    {
+        const int savedStep =
+            AppSettings::instance().value("TuningStepSize", "100").toInt();
+        if (savedStep > 0)
+            m_radioModel.applyClientOwnedSliceStep(s->sliceId(), savedStep);
+    }
+
     // Re-claim TX assignment after profile load or slice recreation (#145).
     // The radio sets tx=1 on the slice but tx_client_handle may be 0x00000000
     // if the slice was destroyed and recreated (e.g. by profile global load).
@@ -2993,6 +3012,7 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
         audioStartRx();
     }
 
+
 #ifdef HAVE_WEBSOCKETS
     if (resetDaxRxStreams && tciServer() && !profileLoadRadioStateWritesHeld()) {
         tciServer()->rearmDaxForProfileLoad();
@@ -3157,11 +3177,42 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         }
         m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
                                             sw->wfLineDuration());
+        // Seed the WIDGET from the store BEFORE the pushes below, which send
+        // whatever it currently holds. Restoring anywhere later is a race this
+        // bench run actually lost: the push sent the constructed default, the
+        // backend echoed it through averageReported, and the echo painted the
+        // restored value back to zero. Gated on the capability that says the
+        // BACKEND does the averaging -- a radio that reports its own is the
+        // thing that remembers it.
+        if (m_radioModel.backendCapabilities().backendPanAveraging.has_value()) {
+            if (const auto savedAvg = ClientDisplaySettings::fftAverage(
+                    m_radioModel.settingsScope(), sw->panIndex())) {
+                sw->setFftAverage(*savedAvg);
+                if (auto* om = sw->overlayMenu())
+                    om->setFftAverage(*savedAvg);
+            }
+            if (const auto savedWeighted = ClientDisplaySettings::fftWeightedAverage(
+                    m_radioModel.settingsScope(), sw->panIndex())) {
+                sw->setFftWeightedAvg(*savedWeighted);
+                if (auto* om = sw->overlayMenu())
+                    om->setFftWeightedAverage(*savedWeighted);
+            }
+        }
         // Same for the averaging controls: without these the backend runs at
         // its built-in averaging until the operator touches a slider, whatever
         // the saved setting says.
         m_radioModel.requestPanAverage(panId, sw->fftAverage());
         m_radioModel.requestLocalPanWeightedAverage(panId, sw->fftWeightedAvg());
+    }
+    // The dBm range is the client's only where the radio does not echo a
+    // commanded one; where it does, the radio plays its own back and this must
+    // not fight it. Seeded here with the averaging so every restored display
+    // value lands before the first status echo can overwrite it.
+    if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {
+        if (const auto savedRange = ClientDisplaySettings::dbmRange(
+                m_radioModel.settingsScope(), sw->panIndex())) {
+            sw->setDbmRange(savedRange->minDbm, savedRange->maxDbm);
+        }
     }
 
     // Reclaimed pans already hold their latest status and do not necessarily
@@ -4153,6 +4204,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!m_radioModel.backendCapabilities().radioOwnsDbmScale) {
             sw->setDbmRange(minDbm, maxDbm);
             setStreamDbmRange(minDbm, maxDbm, true);
+            // Nobody else remembers this. A radio that owns the scale plays its
+            // own range back on the next connect; one that does not left the
+            // panadapter opening at m_refLevel's built-in -50 dBm every launch.
+            // Persisted from the DRAG-FINISHED signal only, so a gesture writes
+            // once and the auto-floor's continuous movement never does.
+            ClientDisplaySettings::saveDbmRange(
+                m_radioModel.settingsScope(), sw->panIndex(), minDbm, maxDbm);
             return;
         }
 
@@ -4477,6 +4535,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, applet, sw](int v) {
         sw->setFftAverage(v);
         m_radioModel.requestPanAverage(applet->panId(), v);
+        // Per RADIO, not per widget: the other display keys are global, and a
+        // level that suits one receiver is wrong on the next.
+        if (m_radioModel.backendCapabilities().backendPanAveraging.has_value()) {
+            ClientDisplaySettings::saveFftAverage(
+                m_radioModel.settingsScope(), sw->panIndex(), v);
+        }
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
             this, [this, applet, sw](int v) {
@@ -4495,7 +4559,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!m_radioModel.requestLocalPanWeightedAverage(applet->panId(), on)) {
             m_radioModel.sendCommand(
                 QString("display pan set %1 weighted_average=%2").arg(applet->panId()).arg(on ? 1 : 0));
+            return;   // the radio took it, and the radio remembers it
         }
+        ClientDisplaySettings::saveFftWeightedAverage(
+            m_radioModel.settingsScope(), sw->panIndex(), on);
     });
     connect(menu, &SpectrumOverlayMenu::wfColorSchemeChanged,
             sw, &SpectrumWidget::setWfColorScheme,

@@ -5647,6 +5647,14 @@ target_include_directories(anan_settings_test PRIVATE src tests)
 target_link_libraries(anan_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_settings_test COMMAND anan_settings_test)
 
+# Which stored level the master slider moves, and where a profile with nothing
+# stored starts it. Pure selectors, so no settings store and no GUI: the
+# callers do the AppSettings I/O. See src/core/AudioOutputVolumePolicy.h.
+add_executable(audio_output_volume_policy_test tests/audio_output_volume_policy_test.cpp)
+target_include_directories(audio_output_volume_policy_test PRIVATE src tests)
+target_link_libraries(audio_output_volume_policy_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_output_volume_policy_test COMMAND audio_output_volume_policy_test)
+
 add_executable(icom_family_test tests/icom_family_test.cpp)
 target_include_directories(icom_family_test PRIVATE src)
 target_link_libraries(icom_family_test PRIVATE aethercore Qt6::Core Qt6::Test)
