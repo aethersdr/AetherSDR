@@ -22,6 +22,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <optional>
 #include <string>
 
 namespace AetherSDR::hl2 {
@@ -73,6 +74,8 @@ struct Hl2TxGateTestAccess {
     static bool panWeighted(const Hl2Backend& b) { return b.m_rx[0].panWeightedAverage; }
     static int receiverCeiling(const Hl2Backend& b) { return b.receiverCeiling(); }
     static bool keyed(const Hl2Backend& b) { return b.m_keyed; }
+    static void setKeyedFlag(Hl2Backend& b, bool keyed) { b.m_keyed = keyed; }
+    static void publish(Hl2Backend& b, const Hl2Telemetry& t) { b.publishTelemetry(t); }
     static bool hangArmed(const Hl2Backend& b) { return b.m_cwHangTimer->isActive(); }
     // Stops the timer first, so this proves what the callback decides, not
     // whether the timer was stopped.
@@ -401,6 +404,40 @@ static void notchIdsAreNeverReused()
     check(changed.isEmpty() && removed.isEmpty(), "#4780: a retired id addresses nothing");
 }
 
+// TX:FWDPWR takes the window peak only while keyed; unkeyed it keeps the last
+// value. Only the m_keyed flag is set: no transmitter exists here.
+static void forwardPowerWindowPeakWhileKeyed()
+{
+    Hl2Backend b;
+    QSignalSpy meters(&b, &IRadioBackend::meterUpdate);
+    auto fwdDbm = [&](bool keyed, int last, std::optional<int> peak) {
+        Access::setKeyedFlag(b, keyed);
+        hl2::Hl2Telemetry t;
+        t.forwardPowerRaw = last;
+        t.forwardPowerPeakRaw = peak;
+        meters.clear();
+        Access::publish(b, t);
+        for (const auto& args : meters) {
+            if (args.at(0).toString() == QStringLiteral("TX:FWDPWR"))
+                return args.at(1).toDouble();
+        }
+        return std::nan("");
+    };
+    const double loud = fwdDbm(false, 3000, std::nullopt);
+    const double quiet = fwdDbm(false, 100, std::nullopt);
+    check(std::isfinite(loud) && std::isfinite(quiet) && loud > quiet,
+          "fwd power: 3000 counts reads above 100 counts");
+    check(fwdDbm(false, 100, 3000) == quiet,
+          "fwd power unkeyed: the last value, not the window peak");
+    check(fwdDbm(true, 100, 3000) == loud,
+          "fwd power keyed: the window peak (3000), not the last value (100)");
+    Access::setKeyedFlag(b, false);
+    fwdDbm(false, 100, std::nullopt);
+    check(fwdDbm(true, 100, std::nullopt) == quiet,
+          "fwd power keyed with no RADDR 1 in the window: falls back to the last value");
+    Access::setKeyedFlag(b, false);
+}
+
 static void panAveragingSeam()
 {
     // FFT AVG through the seam verbs RadioModel calls (RFC #5782 q2): stored
@@ -453,6 +490,7 @@ int main(int argc, char** argv)
     tunePowerAndRestore();
     driveGateHealthRows();
     notchIdsAreNeverReused();
+    forwardPowerWindowPeakWhileKeyed();
     panAveragingSeam();
 
     std::fprintf(stderr, "hl2_backend_seam_test: %s\n",

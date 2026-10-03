@@ -7110,10 +7110,16 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     }
     // Forward/reverse power through directionalWatts()'s uncalibrated reference
     // curve; raw counts are logged too, for future per-unit calibration.
-    // MetisClient already paces telemetry at 10 Hz (kTelemetryMinIntervalMs).
-    // Published through the peak hold; see kFwdPeakReleaseAlpha.
+    // MetisClient paces telemetry at kTelemetryMinIntervalMs. Forward power is
+    // published through the peak hold; see kFwdPeakReleaseAlpha.
     if (t.forwardPowerRaw) {
-        const double instantW = directionalWatts(*t.forwardPowerRaw);
+        // Keyed: the window's loudest RADDR-1 sample, since the radio reports
+        // ~190 a second and the last one misses speech peaks. Unkeyed: the
+        // last value, because a maximum of noise samples would sit above the
+        // no-carrier floor MeterModel snaps to zero on.
+        const int fwdRaw = (m_keyed && t.forwardPowerPeakRaw)
+            ? *t.forwardPowerPeakRaw : *t.forwardPowerRaw;
+        const double instantW = directionalWatts(fwdRaw);
         // The hold applies only while keyed. Unkeyed, the reading must fall to
         // zero on the same schedule REFPWR does — MeterModel snaps its own
         // forward-power filter to zero the moment a no-carrier sample arrives,
@@ -7128,10 +7134,16 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          wattsToDbm(directionalWatts(*t.reversePowerRaw)));
     if (t.forwardPowerRaw && (*t.forwardPowerRaw != m_lastFwdRaw)) {
         m_lastFwdRaw = *t.forwardPowerRaw;
+        // The sample count shows whether the RADDR-1 stream itself is thin
+        // (~19 per 100 ms is healthy at 48 kHz); adcWindowMs is stamped at the
+        // same emit, so it is this window's real length.
         qCDebug(lcHl2Tx) << "HL2 directional: fwd" << *t.forwardPowerRaw
                          << "rev" << t.reversePowerRaw.value_or(-1)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
-                         << "(uncalibrated reference curve)";
+                         << "(uncalibrated reference curve);"
+                         << "window peak" << t.forwardPowerPeakRaw.value_or(-1)
+                         << "of" << t.forwardPowerSamples << "RADDR-1 samples in"
+                         << t.adcWindowMs << "ms";
     }
     // The radio's TX IQ FIFO: `fill` is the top 7 bits of the gateware's DSIQ
     // level (0-127, not a sample count); `pacingFault` is the one flag for both
