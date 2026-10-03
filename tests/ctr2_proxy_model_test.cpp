@@ -29,18 +29,24 @@ void check(bool condition, const char* message)
 
 struct PortLog {
     int opened{0};
+    int shutdowns{0};
+    bool openOnCreate{true};
     bool closedWithClosed{false};
 };
 
 // Injected HID port: records whether the relay told the CTR2 CLOSED on close.
 class FakePort : public AetherSDR::Ctr2HidPort {
 public:
-    explicit FakePort(std::shared_ptr<PortLog> log) : m_log(std::move(log)) { ++m_log->opened; }
+    explicit FakePort(std::shared_ptr<PortLog> log) : m_log(std::move(log)), m_open(m_log->openOnCreate)
+    {
+        ++m_log->opened;
+    }
     bool isOpen() const override { return m_open; }
     void send(const std::vector<AetherSDR::ctr2hid::Report>&) override {}
     void discardQueued() override {}
     void shutdown(const std::vector<AetherSDR::ctr2hid::Report>& final) override
     {
+        ++m_log->shutdowns;
         m_log->closedWithClosed = final.size() == 1
             && final[0][3] == static_cast<std::uint8_t>(AetherSDR::ctr2hid::MessageType::Closed);
         m_open = false;
@@ -97,6 +103,13 @@ void testRelayFollowsAetherSdrsRadio()
     check(model.start(), "restart after reconnect");
     model.stop();
     check(!model.isRunning() && model.lastError().isEmpty(), "a manual Stop leaves no error behind");
+
+    // A port the relay refuses is shut down, never deleted in place: deleting
+    // waits on its I/O thread, which may still be waiting for the last port.
+    log->openOnCreate = false;
+    const int shutdownsBefore = log->shutdowns;
+    check(!model.start() && log->shutdowns == shutdownsBefore + 1,
+          "a refused port is handed back with shutdown(), which never blocks");
     QCoreApplication::processEvents();
 }
 
