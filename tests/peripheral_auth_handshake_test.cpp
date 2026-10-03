@@ -87,6 +87,38 @@ void checkReconnectSuppression(const QString& timerName, const char* greeting,
     }
 }
 
+// A keychain outage ("unavailable") fails the attempt without blocking, so the
+// reconnect timer is armed; an empty code with a working keychain blocks.
+template<typename Connection>
+void checkKeychainOutageKeepsReconnect(const QString& timerName, const char* greeting,
+                                       quint16 port)
+{
+    for (const bool unavailable : {true, false}) {
+        Connection connection;
+        connection.setAutoReconnect(true);
+        QTimer* retry = connection.template findChild<QTimer*>(timerName);
+        CHECK(retry != nullptr);
+        if (!retry) {
+            continue;
+        }
+        QSignalSpy required(&connection, &Connection::authCodeRequired);
+        QSignalSpy failed(&connection, &Connection::connectionFailed);
+        CHECK(QMetaObject::invokeMethod(&connection, "beginAttemptAt", Qt::DirectConnection,
+            Q_ARG(QString, QStringLiteral("192.0.2.10")), Q_ARG(quint16, port)));
+        feed(connection, greeting);
+        CHECK(required.size() == 1);
+        if (required.isEmpty()) {
+            continue;
+        }
+        connection.setAuthCodeForAttempt(required.last().at(0).toULongLong(), QString(),
+                                         unavailable);
+        CHECK(failed.size() == 1);
+        CHECK(connection.isAuthBlocked() == !unavailable);
+        CHECK(retry->isActive() == unavailable);
+        retry->stop(); // Never allow a timer to connect to a synthetic peer.
+    }
+}
+
 void prepareAg(AntennaGeniusModel& connection,
                const QString& host = QStringLiteral("192.0.2.10"),
                quint16 port = 9007)
@@ -113,6 +145,10 @@ int main(int argc, char** argv)
         "V1.2.17 AUTH", "R1|0|Unauthorized", 9010);
     checkReconnectSuppression<PgxlConnection>(QStringLiteral("pgxlReconnectTimer"),
         "V3.9.1 AUTH", "R1|FF|Denied", 9008);
+    checkKeychainOutageKeepsReconnect<TgxlConnection>(QStringLiteral("tgxlReconnectTimer"),
+        "V1.2.17 AUTH", 9010);
+    checkKeychainOutageKeepsReconnect<PgxlConnection>(QStringLiteral("pgxlReconnectTimer"),
+        "V3.9.1 AUTH", 9008);
     int strikes = 0;
     CHECK(recordPeripheralAuthFailure(strikes) < 3);
     CHECK(recordPeripheralAuthFailure(strikes) < 3);
@@ -772,7 +808,7 @@ int main(int argc, char** argv)
         connection.setAuthCodeForAttempt(required.at(0).at(0).toULongLong(), QString(), true);
         CHECK(failed.size() == 1);
         CHECK(failed.at(0).at(0).toString() == QStringLiteral("Stored authorization code unavailable"));
-        CHECK(connection.isAuthBlocked());
+        CHECK(!connection.isAuthBlocked()); // a keychain outage must not block reconnect
     }
     {
         // The no-keychain build keeps accepted codes only in the process

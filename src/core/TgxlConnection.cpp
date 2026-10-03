@@ -62,8 +62,11 @@ void TgxlConnection::setAuthCodeForAttempt(quint64 attempt, const QString& code,
 {
     if (m_waitingForAuthCode && attempt == m_authAttempt) {
         if (code.isEmpty()) {
+            // A keychain outage says nothing about the saved code, so
+            // auto-reconnect stays available once the keychain returns.
             failAuthentication(credentialStoreUnavailable
-                ? "Stored authorization code unavailable" : "Authorization code required");
+                ? "Stored authorization code unavailable" : "Authorization code required",
+                !credentialStoreUnavailable);
             return;
         }
         // Restoring the same saved code on a reconnect must not replenish the
