@@ -2717,13 +2717,16 @@ QString RadioModel::connectState() const
 
 bool RadioModel::isConnected() const
 {
-    // Whoever carries the link reports its state: the RadioConnection when one exists
-    // (Flex, the demo's synthetic wire), else the backend (HL2). Mirrors
-    // connectToRadio()'s dispatch and setupBackend()'s lifecycle wiring. Do not key
-    // on m_flexBackend: teardownBackend() nulls it before destroying the backend, so
-    // a status slot during teardown would reach a half-destroyed backend.
-    if (m_connection)
-        return m_connection->isConnected() || (m_wanConn && m_wanConn->isConnected());
+    // WAN sessions leave the backend's LAN connection undialed. Check each
+    // link independently, including backends without a RadioConnection.
+    // Do not key on m_flexBackend: teardown clears it before destroying the
+    // backend, while the connection alias still carries the link state.
+    if (m_connection && m_connection->isConnected()) {
+        return true;
+    }
+    if (m_wanConn && m_wanConn->isConnected()) {
+        return true;
+    }
     return m_backend && m_backend->isConnected();
 }
 
@@ -9805,8 +9808,16 @@ SliceModel* RadioModel::receiveCommandSource() const
     SliceModel* source = qobject_cast<SliceModel*>(sender());
     // A retired object must not control a new slice reusing its id. Resolve
     // the current backend only after checking exact active object identity.
-    if (!source || m_stagingReceiveModels || slice(source->sliceId()) != source || !m_backend
-        || !m_backend->isConnected()) {
+    if (!source || m_stagingReceiveModels || slice(source->sliceId()) != source || !m_backend) {
+        return nullptr;
+    }
+    // WAN never dials FlexBackend's LAN connection, so the model's combined
+    // connectivity determines whether a receive intent can be dispatched.
+    // Log disconnected drops without the unsupported-control UI notice.
+    if (!isConnected()) {
+        qCWarning(lcProtocol).noquote()
+            << "RadioModel: not connected, dropping slice" << source->sliceId()
+            << "receive intent";
         return nullptr;
     }
     return source;
