@@ -564,9 +564,10 @@ void AmpApplet::buildExpandedUI()
         m_fanCombo->setCurrentIndex((m_fanCombo->currentIndex() + 1) % m_fanCombo->count());
     });
 
-    // "ME" rather than "MEffA": one key's width, and the tooltip carries the
-    // full name and the state it is actually in.
-    m_meffaKey = new PanelKey(QStringLiteral("ME"), this);
+    // "MEffA", the same caption the rail button carries (#5940): the name fits
+    // inside the letterbox the key already takes, so abbreviating it bought no
+    // width. The tooltip carries the state it is actually in.
+    m_meffaKey = new PanelKey(QStringLiteral("MEffA"), this);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_meffaKey, kPanelKeyIdleStyle);
     m_meffaKey->hide();
     connect(m_meffaKey, &QPushButton::clicked, this, [this]() {
@@ -582,10 +583,16 @@ void AmpApplet::buildExpandedUI()
     m_stbyKey->hide();
 
     // Seed size: the widest caption at the design font, measured now, while
-    // the key still has its natural size hint.
+    // the key still has its natural size hint. Both letterbox keys take this
+    // width, so it is measured over both captions. Nothing binds today: the
+    // 16:9 floor off kKeyDesignHeight is wider than either caption. This keeps
+    // that true if the font or the aspect is retuned — a PanelKey never grows
+    // to fit its text, so a caption wider than its box would elide.
     QFont seedFont = m_stbyKey->font();
     seedFont.setPixelSize(kKeyFontDesignPx);
-    m_keySeedWidth = QFontMetrics(seedFont).horizontalAdvance(m_stbyKey->text())
+    const QFontMetrics seedMetrics(seedFont);
+    m_keySeedWidth = qMax(seedMetrics.horizontalAdvance(m_stbyKey->text()),
+                          seedMetrics.horizontalAdvance(m_meffaKey->text()))
                      + kKeyPaddingDesignPx;
 }
 
@@ -758,7 +765,7 @@ void AmpApplet::applyDensityAtScale(qreal scale)
     QFont fanFont = m_fanKey->font();
     fanFont.setPixelSize(px(kFanKeyFontDesignPx));
     m_fanKey->setFont(fanFont);
-    // Two glyphs, so it takes the caption face rather than the fan key's
+    // A word, so it takes the caption face rather than the fan key's
     // single-glyph one.
     QFont meffaFont = m_meffaKey->font();
     meffaFont.setPixelSize(px(kKeyFontDesignPx));
@@ -827,7 +834,7 @@ void AmpApplet::applyKeySize(qreal scale)
     // 1:1. The letterbox width exists to hold a word; this key holds a letter,
     // and a square reads as the toggle it is rather than as a second STBY.
     m_fanKey->setTargetSize(QSize(h, h));
-    // "ME" is a caption, not a glyph, so it takes the letterbox the standby
+    // "MEffA" is a caption, not a glyph, so it takes the letterbox the standby
     // key takes — the two read as peers, which is what they are.
     m_meffaKey->setTargetSize(panelKeySize(h, m_keySeedWidth, scale));
 }

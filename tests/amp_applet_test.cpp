@@ -1,6 +1,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/AmpApplet.h"
+#include "gui/AccessoryPanelWidgets.h"
 #include <QDateTime>
 #include <QtTest>
 #include "gui/HGauge.h"
@@ -498,6 +499,26 @@ void testMeffaIsInertUntilTheSetupGroupIsKnown()
     report("control becomes live once the group is known", btn->isEnabled());
 }
 
+// The panel key and the rail button are two faces of one control, so they
+// carry one caption (#5940).
+void testMeffaKeyCarriesTheFullName()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* btn = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+    PanelKey* key = nullptr;
+    applet.setMeffa(QStringLiteral("STANDBY"), true);
+    for (PanelKey* k : applet.findChildren<PanelKey*>()) {
+        // By name: the fan and STBY keys share the row.
+        if (k->accessibleName().startsWith(QStringLiteral("MEffA"))) key = k;
+    }
+    if (!btn || !key) { report("MEffA key caption", false); return; }
+
+    report("the panel key reads MEffA, as the rail button does",
+           key->text() == QStringLiteral("MEffA") && key->text() == btn->text(),
+           key->text());
+}
+
 // A relay update that carried no forward power must not lock out the
 // amplifier's own socket. ampMetersChanged also fires for TEMP and DRV, so on
 // a station whose relayed FWD/RL never arrive the handler would otherwise
@@ -739,6 +760,7 @@ int main(int argc, char** argv)
     testMeffaShowsThreeStates();
     testMeffaToggleSendsTheOperatorsBit();
     testMeffaIsInertUntilTheSetupGroupIsKnown();
+    testMeffaKeyCarriesTheFullName();
     testDeviceMetersSurviveARelayWithNoPower();
     testWithdrawnDriveHidesTheRow();
     testFanControlStaysOperableWithoutTheSetupGroup();
