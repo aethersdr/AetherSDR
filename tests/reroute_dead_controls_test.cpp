@@ -122,10 +122,14 @@ public:
     {
         agc.push_back({s, mode, threshold});
     }
-    void setSliceNoiseBlanker(int s, AetherSDR::NoiseBlankerKind kind, int level,
-                              AetherSDR::NoiseBlankerFill) override
+    // Records the kind as the bool every other consumer of this seam reads:
+    // anything but Off is on. These rows assert the intent reaches the backend,
+    // not which of the two blankers it picked.
+    void setSliceNoiseBlanker(int s, NoiseBlankerKind kind, int level,
+                              NoiseBlankerFill fill) override
     {
-        nb.push_back({s, kind != AetherSDR::NoiseBlankerKind::Off, level});
+        Q_UNUSED(fill);
+        nb.push_back({s, kind != NoiseBlankerKind::Off, level});
     }
     void setSliceNoiseReduction(int s, bool on, int level) override { nr.push_back({s, on, level}); }
     void setSliceAutoNotch(int s, bool on) override { anf.push_back({s, on, 0}); }
