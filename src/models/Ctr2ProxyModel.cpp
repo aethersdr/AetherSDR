@@ -318,7 +318,7 @@ bool Ctr2ProxyModel::start()
         } else {
             ok = m_usb->start(hid, m_aetherRadioAddress, m_aetherRadioPort);
             if (!ok) {
-                delete hid;
+                hid->shutdown({});  // never blocks; the port deletes itself
             }
         }
     } else {

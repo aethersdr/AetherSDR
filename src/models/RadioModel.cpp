@@ -1895,26 +1895,39 @@ namespace {
 // Every key must be routed, and each only under the capability that says its
 // setter is real (setters default to no-ops):
 //   rfpower, tunepower    canTransmit + transmitDriveControl (setTxPower;
-//                         tunepower rides setTune()'s tunePowerPercent, so
-//                         only while TUNE is not keyed: the next key-down
-//                         carries it, and nothing re-applies it mid-carrier)
+//                         tunepower rides setTune()'s tunePowerPercent at
+//                         key-down; while TUNE is keyed it is routed only to a
+//                         live carrier (tuneCarrierLive()) whose backend
+//                         declares tunePowerAppliesLive)
 //   miclevel              canTransmit (setMicGain)
 //   filter_low/_high      hasTxFilterControls (setTxFilter)
 //   cw pitch N            N is the pitch last handed to THIS backend, because
 //                         the host-modulating connection is change-gated
-// vox, mon, speech_processor, cw wpm and cw break_in are not routed: no
-// capability proves their setters real, so they keep the notice even where one
-// is (an Icom implements setVox, setSpeechProcessor, setCwSpeed, setCwBreakIn).
+//   cw wpm, cw break_in   hasRadioSideCwKeyer (setCwSpeed, setCwBreakIn)
+//   vox_enable/_level     voxControl (setVox); vox_delay only if hasDelay
+//   mon, mon_gain_sb      txMonitorControl (setTxMonitor)
+//   speech_processor_*    speechProcessorControl (setSpeechProcessor), or a
+//                         host-modulating transmitter's ClientComp
+// cw break_in_delay, mon_gain_cw and mon_pan_cw have no seam setter of their
+// own. A host-keyed backend (Hl2Backend) reads break-in and its delay from
+// setCwKeying() at key time, which this gate does not model, so both keep the
+// notice there.
 bool transmitCommandDeliveredThroughSeam(const QString& command,
                                          const RadioCapabilities& caps,
                                          int cwPitchHandedToBackend,
-                                         bool tuneKeyed)
+                                         bool tuneKeyed,
+                                         bool tuneCarrierLive)
 {
     static const QString kCwPitch = QStringLiteral("cw pitch ");
     if (command.startsWith(kCwPitch)) {
         bool ok = false;
         const int hz = command.mid(kCwPitch.size()).trimmed().toInt(&ok);
         return ok && cwPitchHandedToBackend >= 0 && hz == cwPitchHandedToBackend;
+    }
+    // Trailing space: `cw break_in_delay N` must not match.
+    if (command.startsWith(QLatin1String("cw wpm "))
+        || command.startsWith(QLatin1String("cw break_in "))) {
+        return caps.hasRadioSideCwKeyer;
     }
 
     static const QString kTransmitSet = QStringLiteral("transmit set ");
@@ -1933,12 +1946,25 @@ bool transmitCommandDeliveredThroughSeam(const QString& command,
             routed = caps.canTransmit && caps.transmitDriveControl.has_value();
         } else if (key == QLatin1String("tunepower")) {
             routed = caps.canTransmit && caps.transmitDriveControl.has_value()
-                && !tuneKeyed;
+                && (!tuneKeyed
+                    || (tuneCarrierLive && caps.transmitDriveControl->tunePowerAppliesLive));
         } else if (key == QLatin1String("miclevel")) {
             routed = caps.canTransmit;
         } else if (key == QLatin1String("filter_low")
                    || key == QLatin1String("filter_high")) {
             routed = caps.hasTxFilterControls;
+        } else if (key == QLatin1String("vox_enable")
+                   || key == QLatin1String("vox_level")) {
+            routed = caps.voxControl.has_value();
+        } else if (key == QLatin1String("vox_delay")) {
+            routed = caps.voxControl && caps.voxControl->hasDelay;
+        } else if (key == QLatin1String("mon")
+                   || key == QLatin1String("mon_gain_sb")) {
+            routed = caps.txMonitorControl.has_value();
+        } else if (key == QLatin1String("speech_processor_enable")
+                   || key == QLatin1String("speech_processor_level")) {
+            routed = caps.speechProcessorControl.has_value()
+                || (caps.hostModulates && caps.canTransmit);
         }
         if (!routed) {
             return false;
@@ -2129,6 +2155,19 @@ RadioModel::RadioModel(QObject* parent)
             m_backend->setTxPower(percent);
     });
 
+    // TUNE power to a carrier already up, on a backend that declares it live.
+    // Not keyed: setTune() carries the value at the next key-down.
+    connect(&m_transmitModel, &TransmitModel::tunePowerCommandIssued, this,
+            [this](int percent) {
+        if (!m_backend || !tuneCarrierLive()) {
+            return;
+        }
+        const RadioCapabilities caps = backendCapabilities();
+        if (caps.transmitDriveControl && caps.transmitDriveControl->tunePowerAppliesLive) {
+            m_backend->setTunePower(percent);
+        }
+    });
+
     // The CW pitch to a backend that demodulates on this host, where the pitch is
     // the receiver's BFO offset (IRadioBackend::setCwPitch()). cwPitchChanged, not
     // phoneStateChanged, which fires on every TX edit and would rebuild every CW
@@ -2186,19 +2225,19 @@ RadioModel::RadioModel(QObject* parent)
         }
     });
 
-    // The speech processor to a backend that owns its own compressor. Here, not in
-    // setupBackend(): m_transmitModel outlives every backend (#4599). Operator intent
-    // only (speechProcessorCommandIssued, never micStateChanged), or the radio's echo
-    // would come back as a command. Flex and host-modulating backends ignore it.
-    // VOX and the ATU: their wire text is a Flex command, so the intent has to cross
-    // the seam for other families.
+    // The speech processor, VOX and MON to a backend that declares its own (the
+    // record says so; Flex declares them and its setters are no-ops, the wire
+    // text carries them). Here, not in setupBackend(): m_transmitModel outlives
+    // every backend (#4599). Operator intent only, never micStateChanged, or the
+    // radio's echo would come back as a command.
     connect(&m_transmitModel, &TransmitModel::voxCommandIssued, this,
             [this](bool on, int level, int delayMs) {
-        if (m_backend) m_backend->setVox(on, level, delayMs);
+        if (m_backend && backendCapabilities().voxControl)
+            m_backend->setVox(on, level, delayMs);
     });
     connect(&m_transmitModel, &TransmitModel::monitorCommandIssued, this,
             [this](bool on, int level) {
-        if (m_backend && !usesFlexCommandPlane())
+        if (m_backend && backendCapabilities().txMonitorControl)
             m_backend->setTxMonitor(on, level);
     });
     // Primary keying intents have one typed route on every backend. Admission
@@ -2211,7 +2250,7 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(&m_transmitModel, &TransmitModel::speechProcessorCommandIssued, this,
             [this](bool on, int level) {
-        if (m_backend && !m_flexBackend)
+        if (m_backend && backendCapabilities().speechProcessorControl)
             m_backend->setSpeechProcessor(on, level);
     });
 
@@ -2354,7 +2393,8 @@ RadioModel::RadioModel(QObject* parent)
         if (!hasCommandPlane() && m_backend
             && transmitCommandDeliveredThroughSeam(trimmed, m_backend->capabilities(),
                                                    m_cwPitchHandedToBackend,
-                                                   m_transmitModel.isTuning())) {
+                                                   m_transmitModel.isTuning(),
+                                                   tuneCarrierLive())) {
             qCDebug(lcProtocol).noquote()
                 << "RadioModel: no command plane; value already delivered through the seam:"
                 << cmd;
@@ -4461,7 +4501,9 @@ void RadioModel::publishCapabilities(bool connected)
     m_transmitModel.setHasTuner(!connected || caps.hasTuner);
     m_transmitModel.setHasTunerMemories(!connected || caps.hasTunerMemories);
     m_transmitModel.setSpeechProcessorLevelMaximum(
-        connected ? caps.speechProcessorLevelMaximum : 2);
+        (connected ? caps.speechProcessorControl : std::nullopt)
+            .value_or(RadioCapabilities::SpeechProcessorControl{})
+            .levelMaximum);
     refreshTxPowerLimit();
 
     emit capabilitiesChanged(connected, caps);
