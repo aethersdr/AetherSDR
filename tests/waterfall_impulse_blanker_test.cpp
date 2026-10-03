@@ -1,21 +1,7 @@
-// Waterfall "NB Blank" impulse test (#277) on both row kinds — header-only,
-// pure logic, no Qt.
-//
-// The defect pinned here shipped because the detection was inline in
-// SpectrumWidget, which links into no test. The blanker compared a row's mean
-// with `baseline * threshold` behind a `baseline > 0` guard. A Flex tile is a
-// positive intensity and passes; a host-computed pan frame reused as the row
-// (HL2, ANAN, RTL-SDR) is negative dBm and never does, so the control was
-// enabled, persisted and inert. On an HL2 a 35 to 37 dB step in the floor went
-// through with NB Blank on at 1.05 and at 1.95 exactly as with it off.
-//
-// Four blocks:
-//   1. dBm rows: the decisions the operator would see.
-//   2. dBm rows through the widget's own ring: a level that stays does not
-//      freeze the waterfall, and a poisoned ring recovers.
-//   3. Tile rows: the same decisions as before, against the original
-//      expression and against hand-computed cases.
-//   4. The call site, read as text, because the widget cannot be linked.
+// Waterfall "NB Blank" impulse test (#277) on both row kinds: header-only, no
+// Qt. Pins the dBm decisions, the dBm decisions through the widget's ring (a
+// level that stays must not freeze the waterfall), and the tile decisions
+// against the original expression. The last block is a source-text pin.
 
 #include "gui/WaterfallImpulseBlanker.h"
 
@@ -116,8 +102,7 @@ int main()
     constexpr float kLowest = 1.05f;    // slider 5
     constexpr float kHighest = 1.95f;   // slider 95
 
-    // ── 1. dBm rows ────────────────────────────────────────────────────────
-    // The floor d170 measured on an HL2 on a dummy load at LNA +30 dB.
+    // dBm rows. The floor is one HL2's on a dummy load at LNA +30 dB.
     constexpr float kFloor = -147.0f;
 
     {
@@ -166,9 +151,8 @@ int main()
         {kLowest, 4.0f, false},  {kLowest, 6.0f, true},
         {kDefault, 14.0f, false}, {kDefault, 16.0f, true},
         {kHighest, 94.0f, false}, {kHighest, 96.0f, true},
-        // d170's stimulus: a 36 dB step. Caught at the low end and at the
-        // default, let through at the top, which keeps that run's negative
-        // control.
+        // A 36 dB step: caught at the low end and at the default, let
+        // through at the top.
         {kLowest, 36.0f, true},  {kDefault, 36.0f, true},
         {kHighest, 36.0f, false},
     };
@@ -201,7 +185,7 @@ int main()
     report("dBm: the decision does not depend on the absolute level",
            levelIndependent);
 
-    // ── 2. dBm rows through the ring ───────────────────────────────────────
+    // dBm rows through the ring.
     {
         // A strong band from the first row on: nothing to stand out against.
         Ring ring;
@@ -229,8 +213,8 @@ int main()
         report("dBm: the rows after it are not blanked", later == 0);
     }
     for (float threshold : {kLowest, kDefault}) {
-        // The band comes up 36 dB and STAYS (d170's LNA step). The blanker
-        // holds the last good row while the baseline climbs, then lets go.
+        // The band comes up 36 dB and stays (an LNA step). The blanker holds
+        // the last good row while the baseline climbs, then lets go.
         Ring ring;
         for (int i = 0; i < 40; ++i)
             ring.feed(RowKind::Dbm, kFloor, threshold);
@@ -245,8 +229,8 @@ int main()
         }
         std::printf("      threshold %.2f: %d rows held, last at row %d\n",
                     static_cast<double>(threshold), blanked, lastBlanked);
-        // 50 rows is the 2.00 s d170 waited before its grab, at 25 rows/s.
-        report("dBm: a 36 dB step is held for more than d170's 50 rows",
+        // 50 rows is 2.00 s at 25 rows/s.
+        report("dBm: a 36 dB step is held for more than 50 rows",
                blanked > 50 && blanked == lastBlanked + 1);
         report("dBm: and the waterfall is released, it does not freeze",
                lastBlanked < 300);
@@ -298,7 +282,7 @@ int main()
                ring.feed(RowKind::Dbm, kFloor + 25.0f, kDefault));
     }
 
-    // ── 3. Tile rows: unchanged ────────────────────────────────────────────
+    // Tile rows: unchanged.
     {
         // Hand-computed, so the table does not merely agree with a copy of
         // the expression. 108 * 1.15 = 124.2; 108 * 1.05 = 113.4.
@@ -389,7 +373,10 @@ int main()
                                   kDefault).impulse);
     }
 
-    // ── 4. The call site ───────────────────────────────────────────────────
+    // Source-text pin. The claim: SpectrumWidget takes the row kind from its
+    // m_panBinsAbsolute, writes the helper's value to the ring and keeps no
+    // inline ratio test. No behavioural seam reaches it, because SpectrumWidget
+    // links into no test target. It shows how the call is written.
     {
         std::ifstream in(AETHER_SOURCE_DIR "/src/gui/SpectrumWidget.cpp");
         std::stringstream buffer;
