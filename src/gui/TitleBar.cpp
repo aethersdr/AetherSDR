@@ -4,6 +4,7 @@
 #include "GuardedSlider.h"
 #include "PersistentDialog.h"
 #include "core/AppSettings.h"
+#include "core/AudioOutputVolumePolicy.h"
 
 #include <QFrame>
 #include <QHBoxLayout>
@@ -329,6 +330,9 @@ TitleBar::TitleBar(QWidget* parent)
         auto& ss = AppSettings::instance();
         ss.setValue("PcAudioEnabled", on ? "True" : "False");
         ss.save();
+        // The level for the NEW destination is pushed back by MainWindow's
+        // pcAudioToggled handler, which is the only side that knows the radio
+        // family -- and so which of the two stored levels now applies.
         emit pcAudioToggled(on);
     });
     m_hbox->addWidget(m_pcBtn);
@@ -353,7 +357,12 @@ TitleBar::TitleBar(QWidget* parent)
 
     m_masterSlider = new GuardedSlider(Qt::Horizontal);
     m_masterSlider->setRange(0, 100);
-    int savedVol = s.value("MasterVolume", "100").toInt();
+    // The PC sink's level, which is all this widget can know at construction:
+    // there is no radio yet, and on a radio that keeps its output level
+    // separately MainWindow pushes that one in at connect.
+    int savedVol = AppSettings::instance()
+                       .value(AudioOutputVolumePolicy::pcAudioKey(),
+                              AudioOutputVolumePolicy::pcAudioDefault()).toInt();
     m_masterSlider->setValue(savedVol);
     m_masterSlider->setFixedWidth(80);
     m_masterSlider->setFixedHeight(16);

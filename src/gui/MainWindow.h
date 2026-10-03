@@ -374,6 +374,15 @@ private slots:
     // See issue #1764.
     void applyMasterVolume(int pct);
 
+    // Tuning step — single entry point for a DELIBERATE operator step change,
+    // for the same reason applyMasterVolume() is one: the radio push (or the
+    // client-side apply where there is no command plane), the persisted value
+    // and the toast have to move together no matter which control moved. The
+    // STEP buttons reach it through RxApplet::stepSizeChangedByUser; the
+    // cycle shortcuts call it directly. Radio-driven syncs must NOT come
+    // here — see the connect site for why.
+    void applyOperatorTuningStep(int stepHz);
+
 private:
     enum class TuneIntent {
         IncrementalTune,

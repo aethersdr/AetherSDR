@@ -3080,6 +3080,24 @@ void SpectrumOverlayMenu::syncWnbState(bool on, int level, bool updating)
     m_wnbLabel->setText(QString::number(level));
 }
 
+void SpectrumOverlayMenu::setFftAverage(int frames)
+{
+    if (!m_avgSlider)
+        return;
+    QSignalBlocker block(m_avgSlider);
+    m_avgSlider->setValue(frames);
+    if (m_avgLabel)
+        m_avgLabel->setText(QString::number(m_avgSlider->value()));
+}
+
+void SpectrumOverlayMenu::setFftWeightedAverage(bool on)
+{
+    if (!m_weightedAvgBtn)
+        return;
+    QSignalBlocker block(m_weightedAvgBtn);
+    m_weightedAvgBtn->setChecked(on);
+}
+
 void SpectrumOverlayMenu::setRfGain(int gain)
 {
     QSignalBlocker b(m_rfGainSlider);

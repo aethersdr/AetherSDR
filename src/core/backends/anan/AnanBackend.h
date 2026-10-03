@@ -106,6 +106,28 @@ public:
     // Vocabulary matches modeFromString's.
     [[nodiscard]] static std::pair<int, int> defaultPassbandForMode(const QString& mode) noexcept;
 
+    // Every spelling modeFromString() genuinely maps, aliases included. The
+    // restore boundary needs this because modeFromString() falls back to USB
+    // rather than failing: without it a corrupt or hand-edited document would
+    // be accepted as a mode and demodulate as SSB with no sign anything was
+    // wrong. Case-insensitive, like modeFromString() itself.
+    [[nodiscard]] static bool isKnownModeString(const QString& mode) noexcept;
+
+    // Where a session starts when this radio has no remembered state: 20 m
+    // phone, the operator's choice (the earlier default was 10 MHz WWV, a
+    // known carrier for verifying the receive path rather than a place to
+    // listen). Only reached on a first connect; see applyRestoredState().
+    static constexpr double kFirstConnectFrequencyHz = 14'175'000.0;
+    static constexpr const char* kFirstConnectMode = "USB";
+
+    // A restored frequency has to clear the arithmetic that encodes it, not a
+    // front-end range: capabilities() reports tuningMinHz/MaxHz as zero
+    // ("not reported"), so there is no verified band edge to clamp to.
+    // phaseWord() maps Hz onto a 32-bit DDS accumulator at kDspClockHz, so
+    // anything at or above Nyquist aliases rather than tuning. Reject, do not
+    // clamp: a document that says 200 MHz is wrong, not nearly right.
+    [[nodiscard]] static bool isRestorableFrequencyHz(double hz) noexcept;
+
     // The CW BFO offset (HERMES.md §5: "CW has no BFO unless you build one").
     // +pitchHz for CWU/CW, -pitchHz for CWL, 0 for every other mode -- zero
     // for non-CW is why every mode routes through this rather than only the
@@ -136,6 +158,13 @@ public:
     // *ForTest convention as the four above: read-only, not part of the seam.
     [[nodiscard]] int lineoutGainPercentForTest() const noexcept { return m_lineoutGainPercent; }
     [[nodiscard]] bool lineoutMutedForTest() const noexcept { return m_lineoutMuted; }
+    // What applyRestoredState() ACCEPTED, which is not observable any other
+    // way: currentOperatingState() reports the live dial, and connectRadio()
+    // (where these are consumed) needs a socket. Without them a document that
+    // is silently rejected looks exactly like one that was never written.
+    [[nodiscard]] double restoredFrequencyHzForTest() const noexcept { return m_restoredFreqHz; }
+    [[nodiscard]] QString restoredModeForTest() const { return m_restoredMode; }
+    [[nodiscard]] int restoredRateKspsForTest() const noexcept { return m_restoredRateKsps; }
     // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
     // smoothing and publish tick can be tested without a live radio.
     void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
@@ -300,6 +329,21 @@ private:
     int m_filterHighHz = 2900;
     int m_cwPitchHz = 600;
     double m_sliceFreqHz = 0.0;
+
+    // What applyRestoredState() accepted, held until connectRadio() reads it.
+    // Separate from m_sliceFreqHz/m_mode on purpose: those are LIVE state that
+    // a still-connected session owns, and the restore handoff happens before
+    // the connect that will own them. Zero / empty means "nothing restored",
+    // which is also what a rejected value leaves behind -- so a document that
+    // fails validation lands on the first-connect defaults rather than on
+    // whatever the previous radio was doing.
+    double m_restoredFreqHz = 0.0;
+    QString m_restoredMode;
+    // Zoom. The DDC0 rate IS the panadapter span on this radio, and a live zoom
+    // only ever moved m_pendingParams -- AnanSettings holds the connect-time
+    // preference and nothing wrote the operator's actual span back, so every
+    // reconnect dropped to it. Zero means nothing restored.
+    int m_restoredRateKsps = 0;
     // Live AGC state, so beginRateChange() rebuilds the DSP config from CURRENT
     // state rather than connect-time defaults (which these match).
     int m_agcMode = 3;

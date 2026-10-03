@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QMetaObject>
+#include <QStringList>
 #include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
@@ -75,6 +76,31 @@ WdspChannel::Mode AnanBackend::modeFromString(const QString& mode) noexcept
     if (u == QLatin1String("DRM"))  return WdspChannel::Mode::Drm;
     if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) return WdspChannel::Mode::Wbfm;
     return WdspChannel::Mode::Usb;   // unknown mode: same fallback as Hl2Backend's
+}
+
+bool AnanBackend::isKnownModeString(const QString& mode) noexcept
+{
+    // Every branch of modeFromString() above, aliases included. Adding a
+    // spelling there without adding it here silently narrows what survives a
+    // reconnect, which anan_mode_vocabulary_test exists to catch.
+    static const QStringList kKnown = {
+        QStringLiteral("LSB"),  QStringLiteral("USB"),  QStringLiteral("DSB"),
+        QStringLiteral("CWU"),  QStringLiteral("CW"),   QStringLiteral("CWL"),
+        QStringLiteral("FM"),   QStringLiteral("NFM"),  QStringLiteral("AM"),
+        QStringLiteral("DIGU"), QStringLiteral("DIGL"), QStringLiteral("RTTY"),
+        QStringLiteral("SAM"),  QStringLiteral("DRM"),  QStringLiteral("WBFM"),
+        QStringLiteral("WFM"),
+    };
+    return kKnown.contains(mode.toUpper());
+}
+
+bool AnanBackend::isRestorableFrequencyHz(double hz) noexcept
+{
+    // Strictly inside (0, Nyquist). Zero is the "not restored" sentinel, and
+    // at or above kDspClockHz/2 phaseWord() wraps the accumulator rather than
+    // tuning -- see the declaration for why this is not a band-edge clamp.
+    return std::isfinite(hz) && hz > 0.0
+           && hz < static_cast<double>(kDspClockHz) / 2.0;
 }
 
 std::pair<int, int> AnanBackend::defaultPassbandForMode(const QString& mode) noexcept
@@ -447,7 +473,13 @@ RadioCapabilities AnanBackend::capabilities() const
     // No band/segment zoom: the protocol carries no per-pan zoom flag.
     c.panZoomModes = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly
-    c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::RfGain;
+    // Tuning joins RfGain: this radio reports no frequency or mode of its own
+    // and the engine owns both (sliceFrequencyControl is Engine authority
+    // above), so the client is the only thing that can remember where the
+    // operator left it. Scoped per radio by RadioSettingsScope, not globally.
+    c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::RfGain
+                              | RadioCapabilities::ClientSettingsDomain::Tuning
+                              | RadioCapabilities::ClientSettingsDomain::SpanRate;
     c.hostDroopCalibration = true; // AnanDroopCorrection.h -- real DDC0 roll-off,
                                     // corrected client-side via AnanDroopCalibrator
     c.extensionNamespaces = {QStringLiteral("anan")};  // "droop.apply" -- see invokeExtension()
@@ -476,11 +508,41 @@ void AnanBackend::applyRestoredState(const RestoredRadioState& state)
         gain.value(QStringLiteral("adc1AttenuationDb")).toInt(0), 0, kMaxStepAttenuationDb);
     m_attenuationDb = m_pendingParams.ddc0AdcIndex == 1
         ? m_pendingParams.adc1AttenuationDb : m_pendingParams.adc0AttenuationDb;
+
+    // Tuning. Both fields are validated here rather than at connect, so an
+    // unusable document leaves the sentinels and connectRadio() falls to the
+    // first-connect defaults -- the same path a radio with no document takes.
+    // Unconditional, like the ADC values above: an empty state is the reset
+    // that stops a same-family backend reuse carrying radio A's dial onto
+    // radio B.
+    m_restoredFreqHz = isRestorableFrequencyHz(state.rfFrequencyHz)
+        ? state.rfFrequencyHz : 0.0;
+    m_restoredMode = isKnownModeString(state.mode) ? state.mode.toUpper() : QString();
+    // SpanRate. Accepted only if it IS one of the six rates -- not snapped.
+    // nearestDdc0RateKsps() exists to absorb an operator's zoom gesture, where
+    // any value is a reasonable request; a stored value that is not a rate this
+    // radio has is a corrupt document, and snapping it would silently invent a
+    // span nobody chose.
+    const int restoredKsps = state.sampleRateHz / 1000;
+    m_restoredRateKsps =
+        (state.sampleRateHz > 0 && state.sampleRateHz % 1000 == 0
+         && std::find(kDdc0RatesKsps.begin(), kDdc0RatesKsps.end(), restoredKsps)
+                != kDdc0RatesKsps.end())
+            ? restoredKsps : 0;
 }
 
 RestoredRadioState AnanBackend::currentOperatingState() const
 {
     RestoredRadioState state;
+    // The live dial, not m_restoredFreqHz: this is the capture half, and what
+    // it reports is where the operator actually is. A session that never tuned
+    // reports the frequency connectRadio() started it on, which is what should
+    // come back next time.
+    state.rfFrequencyHz = m_sliceFreqHz;
+    state.mode = m_mode;
+    // The LIVE span, which a zoom moves through beginRateChange() -- the whole
+    // point, since AnanSettings only ever held the connect-time preference.
+    state.sampleRateHz = m_pendingParams.ddc0RateKsps * 1000;
     state.extensionSchemaVersion = 1;
     state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
         {QStringLiteral("adc0AttenuationDb"), m_pendingParams.adc0AttenuationDb},
@@ -546,8 +608,18 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     }
 
     m_pendingParams.host = request.host;
+    // The span this radio was last left at wins over the param, which is the
+    // OPPOSITE of the tuning precedence below, and deliberately so: nothing
+    // sets anan.rxFrequencyHz, but populateFamilyParams() always inserts
+    // anan.ddc0RateKsps from AnanSettings, so the param here is a global
+    // connect-time PREFERENCE rather than a per-connect request. Honouring it
+    // ahead of the memory would mean a live zoom never survived a reconnect,
+    // which is the bug this restores. The picker still decides the span for a
+    // radio with no stored one -- a first connect, or after a settings reset.
     m_pendingParams.ddc0RateKsps =
-        request.params.value(QStringLiteral("anan.ddc0RateKsps"), 48).toInt();
+        m_restoredRateKsps > 0
+            ? m_restoredRateKsps
+            : request.params.value(QStringLiteral("anan.ddc0RateKsps"), 48).toInt();
     // Connect-time-only ADC options -- see P2Client::Params' own comment
     // for why none of these have a live setter. Defaults match
     // AnanSettings' own defaults, so a caller that never populated these
@@ -574,11 +646,33 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         ? m_pendingParams.adc1AttenuationDb
         : m_pendingParams.adc0AttenuationDb;
 
-    // Tuning is not a declared persistence domain. Keep the explicit
-    // connect frequency, or start at WWV (10 MHz) on a first connect.
-    m_sliceFreqHz = request.params.contains(QStringLiteral("anan.rxFrequencyHz"))
-        ? request.params.value(QStringLiteral("anan.rxFrequencyHz")).toDouble()
-        : 10'000'000.0;
+    // Tuning, in precedence order: an explicit connect frequency, then what
+    // applyRestoredState() accepted for THIS radio, then the first-connect
+    // default. The param stays ahead of the memory so a caller that asks for a
+    // frequency still gets it; nothing populates it today.
+    if (request.params.contains(QStringLiteral("anan.rxFrequencyHz"))) {
+        m_sliceFreqHz = request.params.value(QStringLiteral("anan.rxFrequencyHz")).toDouble();
+    } else if (m_restoredFreqHz > 0.0) {
+        m_sliceFreqHz = m_restoredFreqHz;
+    } else {
+        m_sliceFreqHz = kFirstConnectFrequencyHz;
+    }
+    // Mode must land BEFORE m_pendingDspConfig is built below -- that reads
+    // m_mode, and the passband derives from it. No restored mode means the
+    // first-connect default, NOT whatever m_mode happens to hold: on a
+    // same-process swap to a second radio that is the previous radio's mode,
+    // and leaking it here is the same bug applyRestoredState() resets the ADC
+    // values to avoid. Passband follows only an actual mode CHANGE, matching
+    // setSliceMode()'s idempotence rule -- a reconnect on the same mode must
+    // not discard an operator's widened filter.
+    const QString mode = m_restoredMode.isEmpty()
+        ? QString::fromLatin1(kFirstConnectMode) : m_restoredMode;
+    if (mode.compare(m_mode, Qt::CaseInsensitive) != 0) {
+        const auto [lo, hi] = defaultPassbandForMode(mode);
+        m_filterLowHz = lo;
+        m_filterHighHz = hi;
+    }
+    m_mode = mode;
 
     m_speakerAudioEnabled = m_pendingParams.speakerAudioEnabled;
     m_pendingDspConfig = AnanRxDsp::Config{};
@@ -790,7 +884,10 @@ void AnanBackend::setSliceFrequency(int sliceId, double hz)
     // frequency, always") -- so unthrottled, EVERY one of those events would
     // retune the actual DDC0 hardware and re-broadcast the pan's geometry.
     scheduleTuneApply();
-    // Tuning is not part of this backend's declared persistence domains.
+    // The Tuning-domain capture rides that same throttle -- see
+    // applyTuneToRadioAndPan(). Emitting here instead would fire
+    // operatingStateChanged() per mouse-move; RadioModel would coalesce it,
+    // but the signal is the wrong place to rely on someone else's debounce.
 }
 
 void AnanBackend::setSliceMode(int sliceId, const QString& mode)
@@ -807,6 +904,10 @@ void AnanBackend::setSliceMode(int sliceId, const QString& mode)
     m_mode = mode;
     pushModeFilterShift();   // HERMES §16.7: mode changes re-push the passband, every time
     emitSliceState();
+    // Tuning domain. Unthrottled, unlike the frequency: a mode change is a
+    // discrete operator action, not a gesture that fires per mouse-move, and
+    // RadioModel debounces the store write either way.
+    emit operatingStateChanged();
 }
 
 void AnanBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
@@ -1561,6 +1662,11 @@ void AnanBackend::applyTuneToRadioAndPan()
                                   Qt::QueuedConnection);
     }
     emitPanState();
+    // Tuning domain: one capture per settled gesture rather than one per
+    // mouse-move. Outside the m_client/m_connected guard above on purpose --
+    // where the dial ended up is worth remembering even if the session was
+    // already going down when it got there.
+    emit operatingStateChanged();
 }
 
 }  // namespace AetherSDR::anan

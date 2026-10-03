@@ -64,6 +64,11 @@ int main(int argc, char** argv)
         check(gain.value(QStringLiteral("adc0AttenuationDb")).toInt() == 12
                   && gain.value(QStringLiteral("adc1AttenuationDb")).toInt() == 20,
               "both ADC attenuations survive a process boundary");
+        check(backend.restoredFrequencyHzForTest() == 7'074'000.0,
+              "the dial survives a process boundary -- this is the whole point of the "
+              "Tuning domain: a relaunch comes back where the operator left it");
+        check(backend.restoredModeForTest() == QStringLiteral("DIGU"),
+              "the mode survives a process boundary too");
         return g_failures == 0 ? 0 : 1;
     }
 
@@ -87,6 +92,43 @@ int main(int argc, char** argv)
               "radiocert tune's mode-map stage falling through to the USB fallback below");
         check(AnanBackend::modeFromString("bogus") == WdspChannel::Mode::Usb,
               "unknown mode falls back to USB, not silently undefined behaviour");
+    }
+
+    // ---- restore-boundary vocabulary ----
+    // modeFromString() answers USB for anything it does not know, so the
+    // restore path cannot use it to decide whether a stored mode is real.
+    {
+        for (const char* m : {"LSB", "USB", "DSB", "CWU", "CW", "CWL", "FM", "NFM",
+                              "AM", "DIGU", "DIGL", "RTTY", "SAM", "DRM", "WBFM", "WFM"}) {
+            check(AnanBackend::isKnownModeString(QString::fromLatin1(m)),
+                  "every spelling modeFromString() maps is accepted at restore");
+        }
+        check(AnanBackend::isKnownModeString("usb"), "the accept test is case-insensitive");
+        check(!AnanBackend::isKnownModeString("bogus"),
+              "a mode modeFromString() does not map is REFUSED, not silently demodulated as SSB");
+        check(!AnanBackend::isKnownModeString(""), "an empty mode is not a mode");
+    }
+
+    // ---- restorable frequency ----
+    // No verified tuning range exists (tuningMinHz/MaxHz are zero), so the
+    // bound is the one the encoding itself imposes: phaseWord() maps Hz onto a
+    // 32-bit accumulator at kDspClockHz, and at or above Nyquist it aliases.
+    {
+        check(AnanBackend::isRestorableFrequencyHz(14'175'000.0), "20 m phone is restorable");
+        check(AnanBackend::isRestorableFrequencyHz(1.0), "just above zero is restorable");
+        check(!AnanBackend::isRestorableFrequencyHz(0.0),
+              "zero is the not-restored sentinel, never a frequency");
+        check(!AnanBackend::isRestorableFrequencyHz(-1.0), "a negative frequency is refused");
+        check(!AnanBackend::isRestorableFrequencyHz(kDspClockHz / 2.0),
+              "Nyquist itself is refused -- it aliases rather than tuning");
+        check(!AnanBackend::isRestorableFrequencyHz(200'000'000.0),
+              "far past Nyquist is refused, NOT clamped: the document is wrong, not nearly right");
+        check(!AnanBackend::isRestorableFrequencyHz(
+                  std::numeric_limits<double>::quiet_NaN()),
+              "NaN is refused");
+        check(!AnanBackend::isRestorableFrequencyHz(
+                  std::numeric_limits<double>::infinity()),
+              "infinity is refused");
     }
 
     // ---- default passbands ----
@@ -136,8 +178,12 @@ int main(int argc, char** argv)
               "backendPanAveraging engaged, 10 ms per FFT AVG step -- the WDSP analyzer averages");
         check(c.tuningMinHz == 0.0 && c.tuningMaxHz == 0.0,
               "tuning range not reported -- no verified G2 range yet, not a guess");
-        check(c.clientSettingsDomains == RadioCapabilities::ClientSettingsDomain::RfGain,
-              "only RF gain restore is declared");
+        check(c.clientSettingsDomains
+                  == (RadioCapabilities::ClientSettingsDomain::RfGain
+                      | RadioCapabilities::ClientSettingsDomain::Tuning
+                      | RadioCapabilities::ClientSettingsDomain::SpanRate),
+              "RF gain, tuning AND span restore are declared -- this radio reports "
+              "no frequency, mode or span, so the client is its only memory");
         check(c.sampleRatesHz.size() == 6, "six DDC rates advertised");
         check(c.hasHostNoiseBlanker,
               "hasHostNoiseBlanker true -- WDSP ANB runs in AnanRxDsp, so the "
@@ -371,6 +417,13 @@ int main(int argc, char** argv)
             {QStringLiteral("adc1AttenuationDb"), 20}}}};
         backend.applyRestoredState(state);
         backend.setPanRfGain(QStringLiteral("anan-0"), -12);
+        // Tuning rides the same document. Set the dial BEFORE radio A's store
+        // so the child process below reads it back off disk.
+        backend.setSliceFrequency(0, 7'074'000.0);
+        backend.setSliceMode(0, QStringLiteral("DIGU"));
+        check(backend.currentOperatingState().rfFrequencyHz == 7'074'000.0
+                  && backend.currentOperatingState().mode == QStringLiteral("DIGU"),
+              "capture reports the LIVE dial, not the restored one");
         check(RadioStateMemory::store(radioA, caps, backend.currentOperatingState()),
               "ANAN capture persists through OperatingState");
         backend.applyRestoredState(RadioStateMemory::load(radioB, caps));
@@ -379,6 +432,10 @@ int main(int argc, char** argv)
         check(emptyGain.value(QStringLiteral("adc0AttenuationDb")).toInt() == 0
                   && emptyGain.value(QStringLiteral("adc1AttenuationDb")).toInt() == 0,
               "a radio with no document resets both ADCs rather than inheriting radio A");
+        check(backend.restoredFrequencyHzForTest() == 0.0
+                  && backend.restoredModeForTest().isEmpty(),
+              "a radio with no document clears the restored dial too -- radio A's "
+              "frequency must not be carried onto radio B by a reused backend");
         backend.setPanRfGain(QStringLiteral("anan-0"), -5);
         check(RadioStateMemory::store(radioB, caps, backend.currentOperatingState()),
               "radio B gets its own operating-state document");
@@ -407,6 +464,51 @@ int main(int argc, char** argv)
         check(clamped.value(QStringLiteral("adc0AttenuationDb")).toInt() == 31
                   && clamped.value(QStringLiteral("adc1AttenuationDb")).toInt() == 0,
               "restored attenuation is clamped at both protocol bounds");
+        // Tuning is REFUSED, not clamped, and each field independently: an
+        // unusable value has to leave the sentinel so connectRadio() falls to
+        // the first-connect default instead of tuning somewhere arbitrary.
+        {
+            RestoredRadioState bad;
+            bad.rfFrequencyHz = 900'000'000.0;
+            bad.mode = QStringLiteral("bogus");
+            backend.applyRestoredState(bad);
+            check(backend.restoredFrequencyHzForTest() == 0.0,
+                  "an out-of-range stored frequency is dropped, not clamped to Nyquist");
+            check(backend.restoredModeForTest().isEmpty(),
+                  "an unmappable stored mode is dropped rather than demodulating as SSB");
+            RestoredRadioState half;
+            half.rfFrequencyHz = 10'000'000.0;
+            half.mode = QStringLiteral("nonsense");
+            backend.applyRestoredState(half);
+            check(backend.restoredFrequencyHzForTest() == 10'000'000.0
+                      && backend.restoredModeForTest().isEmpty(),
+                  "a bad mode does not take a good frequency down with it");
+            RestoredRadioState cased;
+            cased.rfFrequencyHz = 14'175'000.0;
+            cased.mode = QStringLiteral("digu");
+            backend.applyRestoredState(cased);
+            check(backend.restoredModeForTest() == QStringLiteral("DIGU"),
+                  "an accepted mode is normalised to the spelling the rest of the backend uses");
+
+            // SpanRate. The six rates are the ONLY acceptable values: an
+            // operator's zoom gesture is snapped by nearestDdc0RateKsps(),
+            // but a stored span that is not a real rate is a corrupt
+            // document, and snapping it would invent a span nobody chose.
+            RestoredRadioState span;
+            span.sampleRateHz = 768'000;
+            backend.applyRestoredState(span);
+            check(backend.restoredRateKspsForTest() == 768, "a real DDC0 rate is restored");
+            span.sampleRateHz = 140'000;   // nearestDdc0RateKsps() would say 192
+            backend.applyRestoredState(span);
+            check(backend.restoredRateKspsForTest() == 0,
+                  "a span that is not one of the six rates is REFUSED, not snapped");
+            span.sampleRateHz = 0;
+            backend.applyRestoredState(span);
+            check(backend.restoredRateKspsForTest() == 0, "zero span is the not-restored sentinel");
+            span.sampleRateHz = 48'500;    // not a whole number of ksps
+            backend.applyRestoredState(span);
+            check(backend.restoredRateKspsForTest() == 0, "a sub-ksps span is refused");
+        }
         state.extension = QJsonObject{{QStringLiteral("rfGain"), QJsonObject{
             {QStringLiteral("adc0AttenuationDb"), QStringLiteral("bad")},
             {QStringLiteral("adc1AttenuationDb"), 1e30}}}};

@@ -1,6 +1,7 @@
 #ifdef HAVE_WEBSOCKETS
 #include "TciProtocol.h"
 #include "AppSettings.h"
+#include "AudioOutputVolumePolicy.h"
 #include "LogManager.h"
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
@@ -406,7 +407,8 @@ QString TciProtocol::generateInitBurst()
         // gain steppers).
         burst += QStringLiteral("volume:%1;")
                      .arg(volumeDbFromPercent(
-                         AppSettings::instance().value("MasterVolume", "100").toInt()));
+                         AudioOutputVolumePolicy::storedVolumePercent(
+                             m_model ? m_model->family() : QString())));
 
         // Which slice holds GUI focus (#4160) — AetherSDR extension. Without
         // it a control surface learns focus only from the next change event,
@@ -1190,8 +1192,8 @@ QString TciProtocol::cmdVolume(const QStringList& args, bool /*isSet*/)
     if (args.isEmpty()) {
         // GET — current master volume from saved settings (the same value
         // the title bar slider reads on startup), reported in dB.
-        int pct = AppSettings::instance()
-                      .value("MasterVolume", "100").toInt();
+        int pct = AudioOutputVolumePolicy::storedVolumePercent(
+            m_model ? m_model->family() : QString());
         return QStringLiteral("volume:%1;").arg(volumeDbFromPercent(pct));
     }
 
