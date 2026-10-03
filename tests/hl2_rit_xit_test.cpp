@@ -48,6 +48,7 @@ struct Hl2RitXitTestAccess {
     static double shiftHz(const Hl2Backend& b, int ddc) { return b.rxShiftHz(*b.rx(ddc)); }
     static double ncoHz(const Hl2Backend& b, int ddc) { return b.rx(ddc)->ncoHz; }
     static double sliceHz(const Hl2Backend& b, int ddc) { return b.rx(ddc)->sliceFreqHz; }
+    static QString panIdOf(const Hl2Backend& b, int ddc) { return b.m_ids.byDdc(ddc)->panId; }
 
     // Drain the queued register writes on the I/O thread, then read.
     template <typename F>
@@ -213,6 +214,23 @@ int main(int argc, char** argv)
     check(A::txRegisterHz(backend) == 10'001u, "dial 20 kHz: XIT -9999 applies again");
     backend.setXitEnabled(false);
     backend.setXitOffset(0);
+
+    // ---- closing the transmit receiver hands TX and RIT to DDC 0 ----
+    // Receiver 1 owns transmit. Park DDC 0's dial near its window edge so RIT
+    // must move its NCO, then close receiver 1.
+    const double ncoA = A::ncoHz(backend, 0);
+    const double dialA = ncoA + 19'000.0;
+    backend.setSliceFrequency(0, dialA);
+    backend.setRitEnabled(true);
+    backend.setRitOffset(800);
+    check(near(A::ncoHz(backend, 0), ncoA), "RIT on receiver 1 leaves DDC 0's NCO alone");
+    check(backend.removePanadapter(A::panIdOf(backend, 1)), "transmit receiver closes");
+    check(A::txRegisterHz(backend) == static_cast<std::uint32_t>(dialA),
+          "TX receiver closed: the TX register follows DDC 0's dial");
+    check(A::rx0RegisterHz(backend) == static_cast<std::uint32_t>(dialA + 800.0),
+          "TX receiver closed: RIT reaches DDC 0's NCO register");
+    backend.setRitEnabled(false);
+    backend.setRitOffset(0);
 
     check(!A::mox(backend), "nothing keyed: MOX never set");
 

@@ -1156,6 +1156,9 @@ void Hl2Backend::finishReceiverDspBuild(int uiNumber, quint64 generation, bool o
                 Q_ARG(int, static_cast<int>(m_rx.size())));
         }
         publishIoDsps();
+        if (txWasHere) {
+            retuneReceiver(m_txDdc);
+        }
         emit sliceLifecycleFailed(QStringLiteral("create"), removedUi,
                                   QString::fromStdString(error));
         emit sliceRemoved(removedUi);
@@ -1235,7 +1238,8 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // m_txDdc and the active DDC are indices, and removal renumbers every
     // index after the closed one. A role on the closing receiver must move; a
     // role after it must shift down, or it names the wrong receiver.
-    if (ddc == m_txDdc) {
+    const bool txMoved = (ddc == m_txDdc);
+    if (txMoved) {
         // Move transmit to DDC 0 in post-removal numbering (always exists,
         // since closing the last receiver is refused), or txSlice() goes null.
         qCInfo(lcHl2) << "HL2: transmit moves from DDC" << ddc
@@ -1318,6 +1322,11 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // Closing one can take the set back onto a single band.
     applyBandFilter("close receiver");
     publishWideState();
+    // Transmit moved: re-run the new owner's tune, as setTxSlice() does, so the
+    // TX register and RIT follow it instead of staying on the closed receiver.
+    if (txMoved) {
+        retuneReceiver(m_txDdc);
+    }
     // The TX slice may have moved; republish so the indicator follows.
     emitAllSliceState();
     return true;
