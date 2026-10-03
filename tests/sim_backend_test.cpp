@@ -352,6 +352,25 @@ void testDisconnectFaultRepliesBeforeDisconnected()
     report("sim disconnect leaves the backend disconnected", !sim.isConnected());
 }
 
+// The bridge dispatches `sim` with requestId 0 (doSimFault): no reply is
+// emitted, and the queued teardown still lands.
+void testDisconnectFaultWithoutReplyStillDisconnects()
+{
+    SimBackend sim;
+    sim.connectRadio({});
+    QSignalSpy resultSpy(&sim, &SimBackend::extensionResult);
+    QSignalSpy errorSpy(&sim, &SimBackend::extensionError);
+    QSignalSpy disconnectedSpy(&sim, &SimBackend::disconnected);
+
+    sim.invokeExtension(QStringLiteral("sim"), QStringLiteral("disconnect"), 0, {});
+    QCoreApplication::processEvents();
+
+    report("sim disconnect with requestId 0 emits no reply",
+           resultSpy.isEmpty() && errorSpy.isEmpty());
+    report("sim disconnect with requestId 0 still disconnects",
+           disconnectedSpy.count() == 1 && !sim.isConnected());
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -377,6 +396,7 @@ int main(int argc, char** argv)
     testConnectedIsAnnouncedWithTheGateOpen();
     testFirstSpectrumRowAfterWireConnectIsForwarded();
     testDisconnectFaultRepliesBeforeDisconnected();
+    testDisconnectFaultWithoutReplyStillDisconnects();
 
     if (g_failed == 0) {
         std::printf("All SimBackend lifecycle checks passed\n");

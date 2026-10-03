@@ -94,14 +94,12 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
             [this](const QString& mode) { setSliceMode(0, mode); },
             Qt::QueuedConnection);
 
-    // RadioModel decodes Flex wire pan/slice status only through FlexBackend, null
-    // in demo mode, so re-emit it as normalized seam deltas (radioChanged /
-    // panCenterBandwidthChanged / sliceChanged; RFC #4288). Queued (worker thread)
-    // and delayed 150 ms so RadioModel has created the SliceModel and claimed the pan
-    // (~50 ms); sliceChanged applies only to an existing slice. m_connected gates
-    // onAudioTick(). One handler opens the gate, announces connected(), then
-    // starts the worker (#6095): the base class bumps pcmSession() on connected(),
-    // so the capture must follow the emit or every row of the session is dropped.
+    // RadioModel decodes Flex wire status only through FlexBackend (null in demo),
+    // so the initial state goes out as seam deltas (RFC #4288), 150 ms later so
+    // RadioModel has created the SliceModel and claimed the pan (~50 ms). One
+    // ordered handler (#6095): the base class bumps pcmSession() on connected(), so
+    // the emit must precede the startSession() capture, which is the order that
+    // matters here; the pan bookkeeping only feeds queued calls.
     connect(m_connection, &RadioConnection::connected, this, [this]() {
         m_connected = true;
         emit connected();
@@ -738,10 +736,10 @@ bool SimBackend::applyFault(const QString& fault, const QVariant& arg)
         return true;
     }
     if (f == QLatin1String("disconnect")) {
-        // Force a mid-operation disconnect to exercise AE's session-teardown /
-        // reconnect path. Route through disconnectRadio() so state + timers unwind
-        // exactly as a user-initiated disconnect would. Queued, so the caller's
-        // extensionResult precedes disconnected() on the bare path too (rule 6).
+        // Mid-operation disconnect through disconnectRadio(), as a user's would be.
+        // Queued, so the caller's extensionResult precedes disconnected() on the
+        // bare path too (rule 6). Until it lands isConnected() stays true: a sim
+        // verb in the same turn passes the gate, a same-turn connectRadio() no-ops.
         QMetaObject::invokeMethod(this, &SimBackend::disconnectRadio, Qt::QueuedConnection);
         return true;
     }
