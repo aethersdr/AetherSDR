@@ -48,11 +48,8 @@ public:
     // 200 Hz, wide enough to swallow a CW signal next to the carrier being
     // notched. Keep kMinNotchWidthHz in step if this changes — the UI offers
     // widths from it.
-    //
-    // This is the LONG length: every mode outside CW, and CW whenever a notch
-    // exists or the passband is narrow -- see rxFilterTapsFor() below. The
-    // notch floor (and so the capability Hl2Backend advertises) is derived
-    // from it because whenever a notch exists, this is the length in force.
+    // This is the LONG length (rxFilterTapsFor): whenever a notch exists it is
+    // in force, so the advertised notch floor derives from it.
     static constexpr int kRxFilterTaps = 8192;
     static constexpr double kMinNotchWidthHz =
         1600.0 / (static_cast<double>(kRxFilterTaps) / 256.0)
@@ -72,39 +69,12 @@ public:
         return mode != WdspChannel::Mode::Cwl && mode != WdspChannel::Mode::Cwu;
     }
 
-    // RX filter LENGTH, per mode, passband and notch set (#5578, #5678 row
-    // 4.1). Every mode outside CW keeps kRxFilterTaps: minimum phase already
-    // took the delay out there (#5954), and measured, a shorter filter would
-    // buy nothing -- USB 150-3000 Hz at minimum phase onsets in 44.19 ms at
-    // 8192 taps and 43.92 ms at 2048. CW keeps LINEAR phase (the ruling
-    // above), so there the length IS the latency, (taps-1)/2 samples. What the
-    // 8192 buys is two things, and CW without a notch usually needs neither:
-    //
-    //   * the notch floor, 1600/(taps/256) Hz. ANY notch in the set therefore
-    //     selects kRxFilterTaps, and addNotch() raises the length BEFORE WDSP
-    //     sees the notch, so a 50 Hz request is never handed to a
-    //     shorter-floor filter and silently widened;
-    //   * the skirt of a narrow passband. The bandpass is a 4-term
-    //     Blackman-Harris windowed sinc whose skirt is ~4 bins of fs/taps per
-    //     side. MEASURED through a real WdspChannel (hl2_rxdsp_adaptive_taps_
-    //     test, which asserts these numbers): 50 Hz outside the passband edges
-    //     8192 taps is -114 dB, 4096 is -109 dB, and 2048 is only -33 dB --
-    //     for every CW width, because the skirt is a width in Hz, not a
-    //     fraction of the passband. That is why the short length is 4096 and
-    //     NOT the 2048 #5678 row 4.1 proposed: 2048 would hand a CW operator a
-    //     signal 50 Hz off the filter edge 80 dB louder than today. And at a
-    //     50 Hz passband 4096 loses 0.4 dB at the centre, so below
-    //     kRxShortTapsMinWidthHz the long filter stays.
-    //
-    // CW onset, measured the same way (#5578's method: noise-primed, half the
-    // settled amplitude, 1024-sample blocks, AGC off): 128.00 ms at 8192,
-    // 85.33 ms at 4096 -- the (8192-4096)/2 = 2048-sample delta exactly.
-    //
-    // Thresholds are passband WIDTHS (highHz - lowHz), independent of where
-    // the pitch puts the passband. Shortening from the length in force needs
-    // kRxTapsHysteresisHz of margin beyond the threshold, so a filter edge
-    // dragged across it does not refill the filter on every step;
-    // `currentTaps` <= 0 means nothing is in force yet (open).
+    // RX filter length (#5578). Outside CW minimum phase already removed the
+    // delay, so length buys nothing there. In CW the length is the latency, so
+    // it runs kRxShortFilterTaps unless a notch needs the long filter's floor or
+    // the passband is under kRxShortTapsMinWidthHz; 2048 would leave a -33 dB
+    // skirt 50 Hz out (hl2_rxdsp_adaptive_taps_test measures each length).
+    // Shortening needs kRxTapsHysteresisHz of margin; currentTaps <= 0 = none.
     static constexpr int kRxShortFilterTaps = 4096;
     static constexpr double kRxShortTapsMinWidthHz = 100.0;
     static constexpr double kRxTapsHysteresisHz = 20.0;
@@ -375,13 +345,9 @@ public:
     // test of the wiring cannot agree with itself.
     [[nodiscard]] int rxFilterTapsInForce() const;
     [[nodiscard]] double minimumNotchWidthInForceHz() const;
-    // TEST ONLY: every filter-length change is treated as refused, as
-    // WdspChannel::setFilterTaps() refuses one that loses
-    // beginControlOperation() to a concurrent control call. That race cannot
-    // be constructed from Hl2RxDsp's single thread, and every other control
-    // verb shares the same fence, so refusing at the WdspChannel would refuse
-    // the notch too and prove nothing. This is the smallest hook that lets a
-    // test pin what addNotch() does when only the raise fails.
+    // TEST ONLY: treat every filter-length change as refused, as setFilterTaps()
+    // refuses one that loses beginControlOperation(). That race cannot be built
+    // on one thread, and refusing at WdspChannel would refuse the notch too.
     void setRefuseFilterTapsChangesForTest(bool on) noexcept { m_refuseFilterTapsForTest = on; }
 
     // Mute the demodulator while transmitting. The spectrum keeps running on
@@ -498,13 +464,12 @@ private:
     // Pushes rxMinimumPhaseFor(m_config.mode) to the live channel. Only
     // called where the control verbs may reach it (setMode, installChannel).
     void applyMinimumPhaseForMode();
-    // Pushes rxFilterTapsFor(mode, passband, notchCount) to the live channel.
-    // `notchCount` is passed rather than read so addNotch() can raise the
-    // length for the notch it is ABOUT to add. Same call sites as the phase,
-    // plus the notch verbs and setFilter.
-    // Returns whether the wanted length is in force afterwards; addNotch()
-    // refuses a notch the filter cannot realise when it is not.
-    bool applyFilterTaps(int notchCount);
+    // Pushes rxFilterTapsFor(mode, passband, notchCount) to the live channel;
+    // notchCount is passed so addNotch() can raise for the notch it is about to
+    // add. hysteresisFromTaps (> 0) is the length the hysteresis is measured
+    // from, for a fresh channel replacing one; 0 means the length in force.
+    // Returns whether the wanted length is in force afterwards.
+    bool applyFilterTaps(int notchCount, int hysteresisFromTaps = 0);
     // One attempt to put the squelch request on the channel; marks it pending
     // on refusal. Caller has checked canPushToChannel().
     void pushSquelchToChannel();

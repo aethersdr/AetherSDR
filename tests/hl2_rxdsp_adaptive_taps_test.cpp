@@ -528,8 +528,6 @@ int main(int argc, char** argv)
         // Rebuild with NO notches, where the mode moved while the build ran:
         // the chain is built for the Config it was handed, so only
         // installChannel()'s own applyFilterTaps() can correct its length.
-        // (Pinned both ways, per review of #5981; deleting that line turns
-        // both red.)
         const Hl2RxDsp::Config cwCfg = dspConfig(M::Cwu, 550.0, 850.0);
         const Hl2RxDsp::Config usbCfg = dspConfig(M::Usb, 150.0, 3000.0);
         {
@@ -557,11 +555,30 @@ int main(int argc, char** argv)
         }
     }
     {
-        // A RAISE THAT FAILS REFUSES THE NOTCH (review of #5981). With the
-        // length change refused, the first notch must not land on the 4096
-        // filter, where WDSP would widen it to 100 Hz: neither WDSP nor the
-        // mirror may hold it. Once the raise works again, the next notch lands
-        // long.
+        // A rebuild keeps the width hysteresis: a 110 Hz CW passband held long
+        // (it was narrowed to 99 Hz first) stays long on the fresh chain, which
+        // buildChannel() opened short because it has no length to compare to.
+        Hl2RxDsp dsp;
+        std::string err;
+        check(dsp.configure(dspConfig(M::Cwu, 550.0, 850.0), &err), "rebuild hysteresis: configures");
+        dsp.setFilter(650.0, 749.0);
+        dsp.setFilter(645.0, 755.0);
+        check(dsp.rxFilterTapsInForce() == kLong,
+              "rebuild hysteresis: 110 Hz after 99 Hz is held long");
+        const Hl2RxDsp::Config cfg = dspConfig(M::Cwu, 645.0, 755.0);
+        dsp.beginRebuild(cfg);
+        check(dsp.installRebuiltChannel(Hl2RxDsp::buildChannel(cfg, false, 0)),
+              "rebuild hysteresis: installs");
+        check(dsp.rxFilterTapsInForce() == kLong,
+              "rebuild hysteresis: the fresh chain keeps the long length the old one held");
+        dsp.setFilter(550.0, 850.0);
+        check(dsp.rxFilterTapsInForce() == kShort,
+              "rebuild hysteresis: a 300 Hz passband still shortens after it");
+    }
+    {
+        // A raise that fails refuses the notch: on the 4096 filter WDSP would
+        // widen it to 100 Hz, so neither WDSP nor the mirror may hold it. Once
+        // the raise works again, the next notch lands long.
         Hl2RxDsp dsp;
         std::string err;
         check(dsp.configure(dspConfig(M::Cwu, 550.0, 850.0), &err), "refused raise: configures");
