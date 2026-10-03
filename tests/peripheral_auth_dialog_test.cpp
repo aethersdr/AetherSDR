@@ -64,8 +64,16 @@ struct AntennaGeniusModelTestAccess {
 }
 
 using namespace AetherSDR;
+using Attention = PeripheralDeviceStatus::Attention;
 
 namespace {
+// Presentation refreshes on the signals that change it. Tests poke it with a
+// real one: the radio model's connection-state change.
+void pokeRefresh(RadioModel& model)
+{
+    emit model.connectionStateChanged(model.isConnected());
+}
+
 // Remove stores no suppression of its own; the retired dismissal key never appears.
 bool storesDismissal()
 {
@@ -115,14 +123,13 @@ bool checkDiscoveredAuthRecovery(bool savedEmptyList, bool blockedBeforeOpening)
     RadioSetupDialog dialog(&model, nullptr, &tgxl, &pgxl, &ag);
     dialog.selectTab(QStringLiteral("Peripherals"));
     auto* list = dialog.findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"));
-    auto* timer = dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"));
-    if (!list || !timer) {
+    if (!list) {
         return false;
     }
     if (!blockedBeforeOpening && (list->count() != 0 || !blockDevices())) {
         return false;
     }
-    QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection);
+    pokeRefresh(model);
     if (list->count() != 2 || list->currentRow() < 0) {
         return false;
     }
@@ -231,8 +238,7 @@ bool checkRemovedDiscovery()
         auto* remove = dialog.findChild<QPushButton*>(QStringLiteral("peripheralRemoveButton"));
         auto* list = dialog.findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"));
         auto* add = dialog.findChild<QPushButton*>(QStringLiteral("peripheralAddButton"));
-        auto* timer = dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"));
-        if (!remove || !list || !add || !timer) {
+        if (!remove || !list || !add) {
             return false;
         }
         const QString host = QStringLiteral("192.0.2.55");
@@ -269,7 +275,7 @@ bool checkRemovedDiscovery()
             || !QMetaObject::invokeMethod(connection, "onAuthTimeout", Qt::DirectConnection)) {
             return false;
         }
-        QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection);
+        pokeRefresh(model);
         RadioSetupDialog reopened(&model, nullptr, &tgxl, &pgxl);
         reopened.selectTab(QStringLiteral("Peripherals"));
         auto* reopenedList = reopened.findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"));
@@ -1144,11 +1150,7 @@ bool checkExternalAgConfiguration()
                 prefill->insert(QStringLiteral("192.0.2.62")); // Actual operator edit.
             }
             AppSettings::instance().setValue("AG_ManualIp", QStringLiteral("192.0.2.60"));
-            auto* timer = dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"));
-            if (!timer) {
-                return false;
-            }
-            QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection);
+            pokeRefresh(model);
         }
         auto* list = dialog.findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"));
         auto* address = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralAddress_ag"));
@@ -1192,9 +1194,8 @@ bool checkAgCloseAfterExternalConfiguration()
         dialog.show();
         auto* address = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralAddress_ag"));
         auto* port = dialog.findChild<QSpinBox*>(QStringLiteral("peripheralPort_ag"));
-        auto* timer = dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"));
         auto* list = dialog.findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"));
-        if (!address || !port || !timer || !list) {
+        if (!address || !port || !list) {
             return false;
         }
         if (scenario == 0) {
@@ -1241,7 +1242,7 @@ bool checkAgCloseAfterExternalConfiguration()
             return false;
         }
         if (scenario != 3 && scenario != 7) {
-            QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection);
+            pokeRefresh(model);
         }
         if (scenario <= 2 && (address->text() != newHost || port->value() != 9007
                              || list->count() != 1)) {
@@ -1252,7 +1253,7 @@ bool checkAgCloseAfterExternalConfiguration()
             // Subsequent applet edits also refresh an already configured row.
             settings.setValue("AG_ManualIp", oldHost);
             settings.setValue("AG_ManualPort", 19007);
-            QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection);
+            pokeRefresh(model);
             if (address->text() != oldHost || port->value() != 19007) {
                 return false;
             }
@@ -1319,12 +1320,11 @@ bool checkFieldDescriptions()
     dialog.selectTab(QStringLiteral("Peripherals"));
     auto* address = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralAddress_vkamp"));
     auto* port = dialog.findChild<QSpinBox*>(QStringLiteral("peripheralPort_vkamp"));
-    auto* timer = dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"));
-    if (!address || !port || !timer) {
+    if (!address || !port) {
         return false;
     }
     for (int i = 0; i < 3; ++i) {
-        QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection);
+        pokeRefresh(model);
         if (address->accessibleDescription() != QStringLiteral("IP address or host name of the VK3AMP amplifier")
             || port->accessibleDescription() != QStringLiteral("TCP control port, 1 to 65535, default 5005")) {
             return false;
@@ -1534,6 +1534,73 @@ bool checkConnectAutomaticallyGates()
     return true;
 }
 
+// What Setup shows follows the device's explicit status, never text, and the
+// page is signal-driven (no presentation timer).
+bool checkStatusPresentation()
+{
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    PeripheralSettings::setVisibleDeviceIds({QStringLiteral("tgxl")});
+    RadioModel model;
+    TgxlConnection tgxl;
+    PgxlConnection pgxl;
+    RadioSetupDialog dialog(&model, nullptr, &tgxl, &pgxl);
+    dialog.selectTab(QStringLiteral("Peripherals"));
+    dialog.show();
+    auto* list = dialog.findChild<QListWidget*>(QStringLiteral("peripheralDeviceList"));
+    auto* status = dialog.findChild<QLabel*>(QStringLiteral("peripheralStatus_tgxl"));
+    auto* add = dialog.findChild<QPushButton*>(QStringLiteral("peripheralAddButton"));
+    if (!list || !status || !add || !add->menu() || list->count() != 1
+        || dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"))) {
+        return false;
+    }
+    // The detail status is always visible and carries the accessible state.
+    if (!status->isVisible() || status->text() != QStringLiteral("Not connected")
+        || status->accessibleName().isEmpty()
+        || status->accessibleDescription() != status->text()
+        || !list->item(0)->text().contains(QStringLiteral("OFFLINE"))
+        || list->item(0)->text().contains(QStringLiteral("Needs attention"))) {
+        std::fprintf(stderr, "Idle status not shown on the detail page\n");
+        return false;
+    }
+    // A message that happens to start with "Error:" or hold a dash changes nothing
+    // by itself; only the explicit attention does.
+    dialog.editPeripheralStatusForTest(QStringLiteral("tgxl"), [](PeripheralDeviceStatus& state) {
+        state.note = QStringLiteral("Error: looks like one — but is only a note");
+    });
+    pokeRefresh(model);
+    if (list->item(0)->text().contains(QStringLiteral("Needs attention"))) {
+        return false;
+    }
+    dialog.editPeripheralStatusForTest(QStringLiteral("tgxl"), [](PeripheralDeviceStatus& state) {
+        state = PeripheralDeviceStatus{};
+        state.attention = Attention::CredentialError;
+        state.message = QStringLiteral("Stored code needs your attention");
+    });
+    const QString nameBefore = status->accessibleName();
+    pokeRefresh(model);
+    if (!list->item(0)->text().contains(QStringLiteral("Needs attention"))
+        || status->text() != QStringLiteral("Stored code needs your attention")
+        || status->accessibleName() == nameBefore
+        || !status->accessibleName().contains(QStringLiteral("needs attention"))) {
+        std::fprintf(stderr, "Attention was not carried to the list and detail status\n");
+        return false;
+    }
+    // A disabled Add entry shows and speaks why.
+    bool sawDisabled = false;
+    for (QAction* action : add->menu()->actions()) {
+        QMetaObject::invokeMethod(add->menu(), "aboutToShow");
+        if (action->data().toString() == QStringLiteral("tgxl")) {
+            sawDisabled = !action->isEnabled()
+                && action->text().contains(QStringLiteral("already added"))
+                && !action->statusTip().isEmpty();
+        } else if (action->isEnabled() && action->text().contains(QStringLiteral("already added"))) {
+            return false;
+        }
+    }
+    AppSettings::instance().remove(QStringLiteral("Peripherals"));
+    return sawDisabled;
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile profile(QStringLiteral("peripheral-auth-dialog-test"));
@@ -1546,7 +1613,8 @@ int main(int argc, char** argv)
     // itself is covered by checkConnectAutomaticallyToggle.
     RadioSetupDialog::setRemovalConfirmationHookForTest(
         [](const QString&, const QString&) { return true; });
-    if (!checkConnectAutomaticallyToggle() || !checkConnectAutomaticallyGates()) {
+    if (!checkConnectAutomaticallyToggle() || !checkConnectAutomaticallyGates()
+        || !checkStatusPresentation()) {
         std::fprintf(stderr, "Connect automatically regressed\n");
         return 1;
     }
@@ -1640,6 +1708,16 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // What Setup shows for a device, read from its explicit status.
+    auto snap = [&dialog](const char* id) {
+        return dialog.peripheralStatusForTest(QString::fromLatin1(id));
+    };
+    auto edit = [&dialog](const char* id, const std::function<void(PeripheralDeviceStatus&)>& change) {
+        dialog.editPeripheralStatusForTest(QString::fromLatin1(id), change);
+    };
+    auto setPending = [&edit](const char* id, bool pending) {
+        edit(id, [pending](PeripheralDeviceStatus& state) { state.pendingAuthCode = pending; });
+    };
     QLineEdit* code = dialog.findChild<QLineEdit*>(QStringLiteral("peripheralAuth_tgxl_4"));
     QLabel* status = dialog.findChild<QLabel*>(QStringLiteral("peripheralStatus_tgxl"));
     QPushButton* show = dialog.findChild<QPushButton*>(QStringLiteral("peripheralAuth_tgxl_5"));
@@ -1704,7 +1782,8 @@ int main(int argc, char** argv)
     ip->setText(QStringLiteral("192.0.2.10"));
     code->setText(QStringLiteral("bad code"));
     connectButton->click();
-    if (!status->text().contains(QStringLiteral("invalid authorization code"))
+    if (snap("tgxl").attention != PeripheralDeviceStatus::Attention::InvalidCode
+        || !status->text().contains(QStringLiteral("authorization code"), Qt::CaseInsensitive)
         || tgxl.isConnecting()) {
         std::fprintf(stderr, "Connect button did not reject invalid code\n");
         return 1;
@@ -1741,16 +1820,13 @@ int main(int argc, char** argv)
     FakePeripheralAuthStore::setNextClearResult(false);
     clearButton->click();
     QCoreApplication::processEvents();
-    if (!status->text().contains(QStringLiteral("saved code remains in keychain"))) {
+    if (snap("tgxl").attention != PeripheralDeviceStatus::Attention::CredentialError
+        || !status->text().contains(QStringLiteral("saved code remains in keychain"), Qt::CaseInsensitive)) {
         std::fprintf(stderr, "Clear code failure was not shown\n");
         return 1;
     }
 
-    QTimer* errorPresentation = dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"));
-    if (!errorPresentation
-        || !QMetaObject::invokeMethod(errorPresentation, "timeout", Qt::DirectConnection)) {
-        return 1;
-    }
+    pokeRefresh(model);
     QCoreApplication::processEvents();
     if (!status->isVisible() || !fitsViewport(clearButton)
         || !fitsViewport(status) || !status->wordWrap()) {
@@ -1784,33 +1860,33 @@ int main(int argc, char** argv)
     QCoreApplication::processEvents();
     QString replayedCode = QStringLiteral("not-called");
     bool connectCalled = false;
-    connectPeripheralWithCode(code, status, QStringLiteral("192.0.2.10"), 9010,
+    PeripheralDeviceStatus shownCodeStatus;
+    connectPeripheralWithCode(code, shownCodeStatus, QStringLiteral("192.0.2.10"), 9010,
         [&connectCalled](const QString&, quint16) { connectCalled = true; },
         [&replayedCode](const QString& value) { replayedCode = value; });
     if (!connectCalled || !replayedCode.isEmpty() || !code->text().isEmpty()
-        || status->property("pendingAuthCode").toBool()) {
+        || shownCodeStatus.pendingAuthCode) {
         std::fprintf(stderr, "Showing a saved code converted it to a new connection credential\n");
         return 1;
     }
 
     // Simulate the state reached after a newly entered code meets a LAN
     // greeting without AUTH. The status must say why the code was not saved.
-    status->setProperty("pendingAuthCode", true);
+    setPending("tgxl", true);
     tgxl.setAuthCode(QStringLiteral("sample"));
     if (!QMetaObject::invokeMethod(&tgxl, "processLine", Qt::DirectConnection,
                                    Q_ARG(QString, QStringLiteral("V1.2.17")))) {
         return 1;
     }
     if (!status->text().contains(QStringLiteral("code not saved"))
-        || status->property("pendingAuthCode").toBool()) {
+        || snap("tgxl").pendingAuthCode) {
         std::fprintf(stderr, "unchallenged connection did not explain unsaved code\n");
         return 1;
     }
 
-    QTimer* presentation = dialog.findChild<QTimer*>(QStringLiteral("peripheralPresentationTimer"));
-    if (!presentation || !QMetaObject::invokeMethod(presentation, "timeout", Qt::DirectConnection)
-        || ip->isEnabled() || !ip->accessibleDescription().contains(QStringLiteral("Disconnect"))
-        || !deviceList->item(0)->text().contains(QStringLiteral("Connected"))) {
+    pokeRefresh(model);
+    if (ip->isEnabled() || !ip->accessibleDescription().contains(QStringLiteral("Disconnect"))
+        || !deviceList->item(0)->text().contains(QStringLiteral("DIRECT"))) {
         std::fprintf(stderr, "Connected device did not lock its address or update its list status\n");
         return 1;
     }
@@ -1818,13 +1894,13 @@ int main(int argc, char** argv)
     // Recovery retires the prior error; a subsequent disconnect must show
     // the actual offline state instead of leaving "Connected" on screen.
     tgxl.connectionFailed(QStringLiteral("temporary connection failure"));
-    if (!status->property("credentialError").toBool()) {
+    if (snap("tgxl").attention != Attention::ConnectError
+        || !deviceList->item(0)->text().contains(QStringLiteral("Needs attention"))) {
         std::fprintf(stderr, "connection failure was not marked\n");
         return 1;
     }
     tgxl.connected();
-    if (status->property("credentialError").toBool()
-        || status->text() != QStringLiteral("Connected")) {
+    if (snap("tgxl").needsAttention() || status->text() != QStringLiteral("Connected")) {
         std::fprintf(stderr, "recovery retained a stale error\n");
         return 1;
     }
@@ -1834,19 +1910,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    QMetaObject::invokeMethod(presentation, "timeout", Qt::DirectConnection);
-    if (!ip->isEnabled() || !deviceList->item(0)->text().contains(QStringLiteral("Offline"))) {
+    pokeRefresh(model);
+    if (!ip->isEnabled() || !deviceList->item(0)->text().contains(QStringLiteral("OFFLINE"))) {
         std::fprintf(stderr, "Disconnected device did not unlock its address or update its list status\n");
         return 1;
     }
     ip->setText(QStringLiteral("192.0.2.10"));
-    QMetaObject::invokeMethod(presentation, "timeout", Qt::DirectConnection);
+    pokeRefresh(model);
     if (code->placeholderText() != QStringLiteral("****") || !code->text().isEmpty()) {
         std::fprintf(stderr, "Cached credential availability was not shown\n");
         return 1;
     }
     ip->setText(QStringLiteral("192.0.2.11"));
-    QMetaObject::invokeMethod(presentation, "timeout", Qt::DirectConnection);
+    pokeRefresh(model);
     if (code->placeholderText() != QStringLiteral("Code blank")) {
         std::fprintf(stderr, "Credential availability followed the wrong endpoint\n");
         return 1;
@@ -1861,9 +1937,9 @@ int main(int argc, char** argv)
 
     // A rejected typed code cannot make a later authenticated connection
     // look like a connection that never requested authentication.
-    status->setProperty("pendingAuthCode", true);
+    setPending("tgxl", true);
     tgxl.connectionFailed(QStringLiteral("temporary socket failure"));
-    if (!status->property("pendingAuthCode").toBool()) {
+    if (!snap("tgxl").pendingAuthCode) {
         std::fprintf(stderr, "transient failure discarded pending code state\n");
         return 1;
     }
@@ -1877,7 +1953,7 @@ int main(int argc, char** argv)
                                       Q_ARG(QString, QStringLiteral("R1|0|Unauthorized")))) {
         return 1;
     }
-    if (status->property("pendingAuthCode").toBool()) {
+    if (snap("tgxl").pendingAuthCode) {
         std::fprintf(stderr, "failed attempt retained pending code state\n");
         return 1;
     }
@@ -1893,7 +1969,7 @@ int main(int argc, char** argv)
     if (!pgxlStatus) {
         return 1;
     }
-    pgxlStatus->setProperty("pendingAuthCode", true);
+    setPending("pgxl", true);
     pgxl.setAuthCode(QStringLiteral("rejected-code"));
     if (!QMetaObject::invokeMethod(&pgxl, "processLine", Qt::DirectConnection,
                                    Q_ARG(QString, QStringLiteral("V3.9.1 AUTH")))
@@ -1901,7 +1977,7 @@ int main(int argc, char** argv)
                                       Q_ARG(QString, QStringLiteral("R1|FF|Denied")))) {
         return 1;
     }
-    if (pgxlStatus->property("pendingAuthCode").toBool()) {
+    if (snap("pgxl").pendingAuthCode) {
         std::fprintf(stderr, "PGXL failure retained pending code state\n");
         return 1;
     }
@@ -1909,9 +1985,11 @@ int main(int argc, char** argv)
     // greeting must not claim that this old code was merely unchallenged.
     for (const auto& item : {std::pair<QLabel*, QObject*>{status, &tgxl},
                              std::pair<QLabel*, QObject*>{pgxlStatus, &pgxl}}) {
-        item.first->setProperty("credentialError", false);
-        item.first->clear();
-        item.first->setProperty("pendingAuthCode", true);
+        const char* const id = item.second == &tgxl ? "tgxl" : "pgxl";
+        edit(id, [](PeripheralDeviceStatus& state) {
+            state = PeripheralDeviceStatus{};
+            state.pendingAuthCode = true;
+        });
         if (item.second == &tgxl) {
             tgxl.setAuthCode(QStringLiteral("interrupted-code"));
             tgxl.disconnect();
@@ -1919,13 +1997,11 @@ int main(int argc, char** argv)
             pgxl.setAuthCode(QStringLiteral("interrupted-code"));
             pgxl.disconnect();
         }
-        if (item.first->property("pendingAuthCode").toBool()
-            || !item.first->property("discardedAuthCode").toBool()
+        if (snap(id).pendingAuthCode || !snap(id).discardedAuthCode
             || !item.first->text().contains(QStringLiteral("discarded before verification"))) {
             std::fprintf(stderr, "discarded TGXL/PGXL code was not explained: %s pending=%d discarded=%d\n",
                          item.first->text().toUtf8().constData(),
-                         item.first->property("pendingAuthCode").toBool(),
-                         item.first->property("discardedAuthCode").toBool());
+                         snap(id).pendingAuthCode, snap(id).discardedAuthCode);
             return 1;
         }
     }
@@ -1947,7 +2023,7 @@ int main(int argc, char** argv)
         return 1;
     }
     attempt.name = QStringLiteral("Antenna Genius");
-    agStatus->setProperty("pendingAuthCode", true);
+    setPending("ag", true);
     if (!QMetaObject::invokeMethod(&ag, "beginAttemptAt", Qt::DirectConnection,
                                    Q_ARG(QString, QStringLiteral("192.0.2.10")), Q_ARG(quint16, 9007))) {
         return 1;
@@ -1959,13 +2035,14 @@ int main(int argc, char** argv)
     }
     if (!agStatus->text().contains(QStringLiteral("Connection closed before authorization command"))
         || shackSwitchStatus->text().contains(QStringLiteral("Connection closed before authorization command"))
-        || agStatus->property("pendingAuthCode").toBool()) {
+        || snap("ag").pendingAuthCode) {
         std::fprintf(stderr, "Antenna Genius error routing or pending code state failed\n");
         return 1;
     }
-    agStatus->setProperty("credentialError", false);
-    agStatus->clear();
-    agStatus->setProperty("pendingAuthCode", true);
+    edit("ag", [](PeripheralDeviceStatus& state) {
+        state = PeripheralDeviceStatus{};
+        state.pendingAuthCode = true;
+    });
     if (!QMetaObject::invokeMethod(&ag, "beginAttemptAt", Qt::DirectConnection,
                                    Q_ARG(QString, QStringLiteral("192.0.2.10")), Q_ARG(quint16, 9007))) {
         return 1;
@@ -1973,8 +2050,7 @@ int main(int argc, char** argv)
     ag.setAuthCode(QStringLiteral("interrupted-ag-code"));
     if (!QMetaObject::invokeMethod(&ag, "beginAttemptAt", Qt::DirectConnection,
                                    Q_ARG(QString, QStringLiteral("192.0.2.11")), Q_ARG(quint16, 9007))
-        || agStatus->property("pendingAuthCode").toBool()
-        || !agStatus->property("discardedAuthCode").toBool()
+        || snap("ag").pendingAuthCode || !snap("ag").discardedAuthCode
         || !agStatus->text().contains(QStringLiteral("discarded before verification"))) {
         std::fprintf(stderr, "discarded AG code was not explained\n");
         return 1;
@@ -2008,22 +2084,22 @@ int main(int argc, char** argv)
     // Inject a synchronous target-switch discard at the same seam used by
     // each Connect row. This pins ordering without opening a TCP socket.
     QLineEdit replacement;
-    QLabel replacementStatus;
+    PeripheralDeviceStatus replacementStatus;
     replacement.setText(QStringLiteral("replacement-code"));
-    replacementStatus.setProperty("pendingAuthCode", true);
+    replacementStatus.pendingAuthCode = true;
     QString appliedCode;
     bool stalePendingObserved = false;
-    connectPeripheralWithCode(&replacement, &replacementStatus,
+    connectPeripheralWithCode(&replacement, replacementStatus,
         QStringLiteral("192.0.2.11"), 9010,
         [&replacementStatus, &stalePendingObserved](const QString&, quint16) {
-            stalePendingObserved = replacementStatus.property("pendingAuthCode").toBool();
+            stalePendingObserved = replacementStatus.pendingAuthCode;
             if (stalePendingObserved) {
-                replacementStatus.setProperty("discardedAuthCode", true);
+                replacementStatus.discardedAuthCode = true;
             }
         },
         [&appliedCode](const QString& value) { appliedCode = value; });
-    if (stalePendingObserved || !replacementStatus.property("pendingAuthCode").toBool()
-        || replacementStatus.property("discardedAuthCode").toBool()
+    if (stalePendingObserved || !replacementStatus.pendingAuthCode
+        || replacementStatus.discardedAuthCode
         || appliedCode != QStringLiteral("replacement-code")) {
         std::fprintf(stderr, "replacement code was discarded during target switch\n");
         return 1;
@@ -2034,8 +2110,8 @@ int main(int argc, char** argv)
     FakePeripheralAuthStore::setNextClearResult(false);
     removeButton->click();
     QCoreApplication::processEvents();
-    if (deviceList->count() != 1
-        || !status->text().contains(QStringLiteral("saved code remains in keychain"))) {
+    if (deviceList->count() != 1 || snap("tgxl").attention != Attention::CredentialError
+        || !status->text().contains(QStringLiteral("saved code remains in keychain"), Qt::CaseInsensitive)) {
         std::fprintf(stderr, "Remove hid a device after Keychain deletion failed\n");
         return 1;
     }

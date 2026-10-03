@@ -1,4 +1,5 @@
 #include "AntennaGeniusApplet.h"
+#include "PeripheralConnectionSource.h"
 #include "core/PeripheralSettings.h"
 #include "GuardedSlider.h"
 #include "models/AntennaGeniusModel.h"
@@ -295,14 +296,12 @@ void AntennaGeniusApplet::attemptDirectConnection(const AgDeviceInfo& info, bool
 
 void AntennaGeniusApplet::setConnectionSource(bool connected)
 {
-    m_sourceLabel->setText(connected ? QStringLiteral("● DIRECT")
-                                     : QStringLiteral("● OFFLINE"));
-    m_sourceLabel->setAccessibleName(connected
-        ? tr("Antenna Genius DIRECT connection")
-        : tr("Antenna Genius OFFLINE"));
-    m_sourceLabel->setAccessibleDescription(connected
-        ? tr("Connected directly to Antenna Genius.")
-        : tr("No direct Antenna Genius connection."));
+    using PeripheralConnectionSource::Source;
+    const auto text = PeripheralConnectionSource::describe(
+        connected ? Source::Direct : Source::Offline, QStringLiteral("Antenna Genius"), true);
+    m_sourceLabel->setText(text.indicator);
+    m_sourceLabel->setAccessibleName(text.accessibleName);
+    m_sourceLabel->setAccessibleDescription(text.description);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_sourceLabel,
         QStringLiteral("QLabel { color: %1; font-size: 9px; }")
             .arg(connected ? QStringLiteral("{{color.accent.success}}")
