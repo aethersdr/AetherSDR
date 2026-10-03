@@ -3544,6 +3544,9 @@ void TciServer::onDaxStreamUnregistered(int channel, quint32 /*streamId*/)
     m_io->post([io = m_io.get(), bindings = m_rxBindings] { io->setRxBindings(bindings); });
     m_channelTrx.remove(channel);
     m_channelSlice.remove(channel);
+    // A slice that keeps its DAX channel emits nothing when the stream comes
+    // back, so the binding is rebuilt from the live slice list here (#6006).
+    refreshRxBindings();
 }
 
 void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate)
