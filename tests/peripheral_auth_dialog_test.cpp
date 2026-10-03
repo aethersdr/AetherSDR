@@ -1279,6 +1279,44 @@ bool checkAgCloseAfterExternalConfiguration()
     return true;
 }
 
+// UnknownOwner: a stored code exists but the selected row has no endpoint to
+// match it against. Configuration is kept and the operator is told how to recover.
+bool checkRemovalWithUnknownOwner()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.remove("Peripherals");
+    settings.remove("AG_ManualIp");
+    PeripheralSettings::setVisibleDeviceIds({QStringLiteral("ag")});
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius,
+        PeripheralAuthStore::configuredEndpoint(QStringLiteral("192.0.2.113"), 9007),
+        QStringLiteral("saved-code"), qApp);
+    QCoreApplication::processEvents();
+    RadioModel radio;
+    AntennaGeniusModel ag;
+    RadioSetupDialog dialog(&radio, nullptr, nullptr, nullptr, &ag);
+    dialog.selectTab("Peripherals");
+    auto* remove = dialog.findChild<QPushButton*>("peripheralRemoveButton");
+    auto* list = dialog.findChild<QListWidget*>("peripheralDeviceList");
+    auto* notice = dialog.findChild<QLabel*>("peripheralRemovalNotice");
+    if (!remove || !list || !notice || list->count() != 1) {
+        return false;
+    }
+    list->setCurrentRow(0);
+    remove->click();
+    QCoreApplication::processEvents();
+    const bool kept = list->count() == 1
+        && PeripheralSettings::visibleDeviceIds() == std::optional<QStringList>({QStringLiteral("ag")})
+        && !notice->isHidden() && notice->text().contains("ownership is unknown")
+        && dialog.peripheralStatusForTest(QStringLiteral("ag")).attention == Attention::CredentialError;
+    settings.remove("Peripherals");
+    PeripheralAuthStore::save(PeripheralAuthStore::Device::AntennaGenius, QString(), QString(), qApp);
+    QCoreApplication::processEvents();
+    if (!kept) {
+        std::fprintf(stderr, "UnknownOwner removal did not keep the row and explain recovery\n");
+    }
+    return kept;
+}
+
 bool checkUnavailableKeychainRemoval()
 {
     PeripheralSettings::setVisibleDeviceIds({QStringLiteral("tgxl")});
@@ -1613,7 +1651,7 @@ int main(int argc, char** argv)
     // itself is covered by checkConnectAutomaticallyToggle.
     RadioSetupDialog::setRemovalConfirmationHookForTest(
         [](const QString&, const QString&) { return true; });
-    if (!checkConnectAutomaticallyToggle() || !checkConnectAutomaticallyGates()
+    if (!checkRemovalWithUnknownOwner() || !checkConnectAutomaticallyToggle() || !checkConnectAutomaticallyGates()
         || !checkStatusPresentation()) {
         std::fprintf(stderr, "Connect automatically regressed\n");
         return 1;

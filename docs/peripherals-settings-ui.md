@@ -1,42 +1,106 @@
-# Peripherals settings UI
+# Peripherals settings
 
-This UI/UX follow-up depends on authentication PR [#6008](https://github.com/aethersdr/AetherSDR/pull/6008) and must merge after it. The layout and workflow are proposed pending maintainer approval of the new RFC. Authentication protocol support is supplied by #6008.
+**Radio Setup → Peripherals** configures the accessories AetherSDR talks to
+directly: Tuner Genius XL (TGXL), Power Genius XL (PGXL), Antenna Genius (AG),
+ShackSwitch, ACOM and SPE Expert amplifiers, VK3AMP, and the LP-100A meter.
 
-## Configuring a device
+## Layout
 
-Open **Radio Setup → Peripherals**. Select **Add**, choose a device type, and select its row to see its connection settings. Supported pages are Tuner Genius XL, Power Genius XL, Antenna Genius, ShackSwitch, ACOM, SPE Expert, VK3AMP and LP-100A Meter. Adding a row does not itself connect the device. Enter the appropriate endpoint and use **Connect**.
+A device list sits on the left and the selected device's settings on the right.
+The list shows, for each device, its name, its address, and where its data
+comes from:
 
-The device list persists across restarts. Existing manual configurations seed the list when the list setting has not yet been created. Antenna Genius configuration made through its applet is reconciled into Setup. Untouched fields follow current saved values; closing an older Setup view must not overwrite a newer external endpoint.
+| Word | Meaning |
+|---|---|
+| `● DIRECT` | Connected directly to the device. |
+| `● RADIO` | Not connected directly, but the radio relays the device (TGXL and PGXL only). |
+| `● OFFLINE` | No connection. |
+| `Connecting…` | A connection attempt is in progress. |
 
-A discovered TGXL/PGXL that needs authentication can appear as a temporary recovery row. Retrying its unchanged discovered endpoint does not save a manual override; editing the endpoint explicitly selects a manual target. A revealed saved credential is display-only and is not replayed as newly entered text on Connect. Endpoint-bound credential loading continues to use the authentication implementation from #6008.
+These are the same words and tones the TGXL, PGXL and Antenna Genius applets
+use. A device that needs the operator (a rejected code, a failed connection, a
+credential problem) also shows **Needs attention**.
+
+The detail page repeats the state in a status line that is always visible. It is
+the device's accessible state: its name and description follow what it shows,
+and assistive technology is told when they change.
+
+## Adding a device
+
+Choose **Add** and pick a device type. Add creates the list entry and selects
+it. It does not connect the device and changes nothing else. A type that is
+already in the list stays in the menu, disabled, with "(already added)" in its
+text.
+
+Enter the address and use **Connect**. The list persists across restarts.
+Existing manual configurations seed the list the first time it is shown, and a
+target saved from the Antenna Genius applet appears in Setup.
+
+A TGXL or PGXL that the radio reports and that needs authorization can appear as
+a temporary recovery row. Retrying its unchanged reported address does not save
+it as a manual target; editing the address or port does.
+
+## Connect automatically
+
+TGXL, PGXL, Antenna Genius and ShackSwitch each have a **Connect automatically**
+toggle, on by default. When it is off, nothing connects that device by itself:
+not startup, not discovery or the radio reporting it, not the alternate-address
+attempt, and not reconnect after a drop. **Connect** always works and does not
+change the toggle.
+
+To keep a discovered device from connecting, keep its row and turn the toggle
+off. The setting is stored as `Peripherals.<id>.AutoConnect` (`True` or
+`False`) with the ids `tgxl`, `pgxl`, `ag` and `shackswitch`.
 
 ## Removing a device
 
-Select a row and choose **Remove**. For an authenticated peripheral, removal stops its connection attempt and waits for credential deletion. Setup displays the pending state and prevents editing or closing for up to 15 seconds while waiting for completion. A transient connection guard prevents discovery or another connection entry point from reconnecting that device during deletion.
+**Remove** asks for confirmation first; Cancel changes nothing. Confirming
+disconnects the device and clears its saved connection settings and stored
+authorization code, and returns **Connect automatically** to its default. Remove
+does not stop discovery: a device the radio or the network reports may connect
+again. A removed device that is blocked on authorization and reported again
+brings its recovery row back.
 
-Successful removal clears its connection settings and list entry. Removing TGXL or PGXL also persists discovery dismissal until **Add** or explicit **Connect** re-enables it. This dismissal policy does not extend to AG. Removing AG does not tear down an unrelated active ShackSwitch using the shared model; a deferred ShackSwitch request or retry survives the temporary guard. Explicit disconnect cancels that request, and a newer connection supersedes it.
+For an authenticated device, Setup waits for the credential deletion and shows
+that it is pending. A transient guard stops every route to a connection for that
+device while it waits: explicit, automatic, alternate and the reconnect timer.
+After 15 seconds Setup reports the deletion as unconfirmed and can be closed;
+the guard is held until the keychain request returns, and a late completion
+changes no row or newer setting.
 
-If credential deletion fails, configuration remains and Setup displays an explanation so removal can be retried. The canceled connection does not automatically resume as part of the failed Remove action; ordinary subsequent reconnect events may connect again once the temporary guard is released. When the credential backend is unavailable, the UI distinguishes session cleanup from confirmed persistent deletion.
+Antenna Genius and ShackSwitch share one credential slot. Remove checks the
+selected device's peer endpoint before deleting, and a record for the other
+endpoint is kept. If an offline host name cannot be matched to the stored peer,
+removal stops: connect the device to establish its address, then retry. Removing
+Antenna Genius leaves a ShackSwitch using the shared model alone.
 
-If deletion has not completed after 15 seconds, Setup reports that deletion is unconfirmed and allows closing. Configuration and discovery policy are retained; closing does not save the abandoned row’s field edits; unrelated rows retain their pending edits. The Peripherals page stays disabled for that dialog. The outstanding vault request still owns the reconnect guard because its cancellation cannot be guaranteed. A late completion releases the guard but does not remove the row or overwrite newer settings. Close and reopen Setup to retry after completion; restart the app if the backend never returns.
+### Outcomes
 
-## Settings compatibility
+| Outcome | Configuration | Credential | Reconnection | Recovery |
+|---|---|---|---|---|
+| Success | Settings and row removed; toggle back to default | Stored code deleted | Guard released; discovery may connect the device again unless its row is kept with Connect automatically off | **Add** re-creates the row |
+| Failed (denied or error) | Kept; row stays | Saved code remains; error shown on the row | Connection stopped, guard released; normal reconnect events may connect it again | Retry **Remove** |
+| Unconfirmed (15 s timeout), then late completion | Kept; the row's pending field edits are not saved | Deletion unconfirmed | Guard held until the request returns, then released; a late completion changes no row or newer setting | Close Setup and reopen it to retry; restart the app if the backend never returns |
+| No credential backend | Same as success | Session copy cleared; stored-code deletion unconfirmed, with a notice saying so | Same as success | Remove the code from the OS vault once it is available |
+| Unknown owner (Antenna Genius, ShackSwitch) | Kept | Untouched; the owning endpoint is not known | Connection stopped, guard released | **Connect** the device to establish its address, then retry **Remove** |
+| An earlier removal still pending | Unchanged | Unchanged; the earlier request owns the slot | **Remove** and **Connect** are refused with a notice | Retry after the keychain request finishes |
 
-This UI follow-up does **not** migrate the existing TGXL, PGXL, AG or ShackSwitch flat endpoint keys. They continue to be read and written in their existing format. Only the new device-list and discovery-dismissal preferences live in the existing nested Peripherals document. A one-way endpoint migration is separate work requiring its own data-compatibility review; this PR neither claims nor performs it. Adding a row preserves the existing explicit-Connect requirement.
+## Settings
 
-## Implementation and validation boundary
+The TGXL, PGXL, Antenna Genius and ShackSwitch endpoints stay in their own flat
+keys (`TGXL_ManualIp` and so on). The device list, the global
+**Reconnect automatically**, each device's **Connect automatically**, and the
+ACOM, SPE Expert, VK3AMP and LP-100A connection settings live in the nested
+`Peripherals` document. Lowercase list ids and the case-sensitive
+connection-object names are separate namespaces; their spelling is fixed.
+Credentials stay in the OS credential store.
 
-The follow-up changes the Peripherals UI and the persistence/removal behavior needed to support it. It includes credential-store completion/status handling and TGXL/PGXL/AG connection guards; it is not a claim that only widget files change. It introduces no new authentication wire protocol, radio family, dependency, thread, or TX command.
+## Accessibility
 
-UI preferences remain in the existing Peripherals settings document. Credentials remain in the existing OS credential store. The new core removal guard has no GUI dependency and exists only for a pending removal operation.
-
-Local macOS validation includes a desktop build, eight focused tests, failure-producing regression mutations, and an isolated offscreen demo check in which Add and Remove each survived a process restart. These do not establish live peripheral firmware convergence, actual OS-vault behavior, Windows/Linux runtime behavior, or native accessibility. Detailed evidence is recorded in [the peripheral evidence document](4o3a-remote-auth-hardware-evidence.md).
-
-AG and ShackSwitch share a credential slot. Remove checks the selected row’s
-peer endpoint before deleting that slot; a record for the other endpoint is
-preserved. Both rows use the reconnect lease and bounded deletion workflow.
-If an offline hostname cannot be matched to the stored peer IP, removal fails
-closed: connect the selected device to establish its peer identity, then retry.
-No assumption is made that ShackSwitch firmware does or does not request AUTH.
-Lowercase UI device IDs and the existing case-sensitive connection-object names
-are separate persisted namespaces; their spelling is retained for compatibility.
+- The detail status line is always visible; its name and description follow the
+  state and change events are sent.
+- A disabled Add entry carries its reason in its text.
+- Every control has an accessible name; fields locked while connected say so in
+  their description.
+- A saved code is shown only on **Show**, is never exposed to the automation
+  bridge, and is concealed again when the page changes.
