@@ -565,6 +565,15 @@ unsigned RadioModel::activeTxActivities() const
     return m_txCoordinator.activeActivities(m_txOperation);
 }
 
+// A TUNE this client admitted and still holds. A tune state decoded off the
+// radio alone is not one, so live tune power neither reaches it nor hides its
+// drop notice.
+bool RadioModel::tuneCarrierLive() const
+{
+    return m_transmitModel.isTuning()
+        && (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) != 0;
+}
+
 bool RadioModel::hasOtherPttHolds(const TxCoordinator::Operation& operation,
                                  const TxCoordinator::Intent& excluded) const
 {

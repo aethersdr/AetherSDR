@@ -6,8 +6,13 @@
 #include <QThread>
 #include <QTimer>
 
+#include <QHash>
+
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <future>
+#include <mutex>
 #include <utility>
 
 namespace AetherSDR {
@@ -17,6 +22,24 @@ namespace {
 constexpr int kPollIntervalMs = 1;
 constexpr int kMaxReadsPerTick = 64;
 constexpr int kMaxWritesPerTick = 16;
+constexpr auto kPreviousReleaseWait = std::chrono::seconds(1);
+
+// When the latest port opened for each device lets go of it. One entry per
+// device path ever opened; a finished entry is a ready future.
+std::mutex g_releaseLock;
+QHash<QString, std::shared_future<void>> g_lastRelease;
+
+// Registers a new port's release for deviceKey; returns the previous port's.
+std::shared_future<void> claimDevice(const QString& deviceKey, std::shared_future<void> release)
+{
+    if (deviceKey.isEmpty()) {
+        return {};
+    }
+    std::lock_guard<std::mutex> g(g_releaseLock);
+    std::shared_future<void> previous = g_lastRelease.value(deviceKey);
+    g_lastRelease.insert(deviceKey, std::move(release));
+    return previous;
+}
 
 QByteArray toBytes(const std::vector<ctr2hid::Report>& reports)
 {
@@ -37,17 +60,24 @@ class Ctr2HidIoWorker : public QObject {
 public:
     Ctr2HidIoWorker(Ctr2HidDeviceIo io, Ctr2HidThreadPort* port,
                     std::shared_ptr<std::atomic<quint64>> generation,
-                    std::shared_ptr<std::atomic<bool>> cancelled)
+                    std::shared_ptr<std::atomic<bool>> cancelled, const QString& deviceKey)
         : m_io(std::move(io))
         , m_port(port)
         , m_sharedGeneration(std::move(generation))
         , m_cancelled(std::move(cancelled))
         , m_generation(m_sharedGeneration->load())
+        , m_previousRelease(claimDevice(deviceKey, m_release.get_future().share()))
     {
     }
+    ~Ctr2HidIoWorker() override { release(); }
 
     void start()
     {
+        // Before any read or write: the previous port for this device has
+        // finished with it, or is stuck and given up on.
+        if (m_previousRelease.valid()) {
+            m_previousRelease.wait_for(kPreviousReleaseWait);
+        }
         m_timer = new QTimer(this);
         m_timer->setTimerType(Qt::PreciseTimer);
         m_timer->setInterval(kPollIntervalMs);
@@ -163,6 +193,15 @@ private:
                 m_io.close();
             }
         }
+        release();
+    }
+
+    void release()
+    {
+        if (!m_released) {
+            m_released = true;
+            m_release.set_value();
+        }
     }
 
     void fail(const QString& message)
@@ -185,11 +224,15 @@ private:
     QTimer* m_timer{nullptr};
     QByteArray m_outbox;
     bool m_open{true};
+    std::promise<void> m_release;
+    bool m_released{false};
+    std::shared_future<void> m_previousRelease;
 };
 
 } // namespace detail
 
-Ctr2HidThreadPort::Ctr2HidThreadPort(Ctr2HidDeviceIo io, const QString& description, QObject* parent)
+Ctr2HidThreadPort::Ctr2HidThreadPort(Ctr2HidDeviceIo io, const QString& description,
+                                     const QString& deviceKey, QObject* parent)
     : Ctr2HidPort(parent)
     , m_generation(std::make_shared<std::atomic<quint64>>(0))
     , m_cancelled(std::make_shared<std::atomic<bool>>(false))
@@ -197,7 +240,7 @@ Ctr2HidThreadPort::Ctr2HidThreadPort(Ctr2HidDeviceIo io, const QString& descript
 {
     m_thread = new QThread(this);
     m_thread->setObjectName(QStringLiteral("Ctr2HidIo"));
-    m_worker = new detail::Ctr2HidIoWorker(std::move(io), this, m_generation, m_cancelled);
+    m_worker = new detail::Ctr2HidIoWorker(std::move(io), this, m_generation, m_cancelled, deviceKey);
     m_worker->moveToThread(m_thread);
     connect(m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
     m_thread->start();

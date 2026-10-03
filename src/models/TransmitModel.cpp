@@ -389,6 +389,7 @@ void TransmitModel::setTunePower(int power)
         emit stateChanged();
     }
     emit commandReady(QString("transmit set tunepower=%1").arg(power));
+    emit tunePowerCommandIssued(power);
 }
 
 void TransmitModel::setTuneMode(const QString& mode)
