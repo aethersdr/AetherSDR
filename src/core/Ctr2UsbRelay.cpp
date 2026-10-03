@@ -574,9 +574,11 @@ void Ctr2UsbRelay::linkFault(const QString& message)
     qCWarning(lcDevices) << "CTR2 USB:" << message;
     setLastError(message);
     if (m_port) {
-        discardOutput();
-        // One CLOSED per link: further faults before the next HELLO add nothing.
-        sendClosedOnce();
+        // Preserve the one CLOSED while it is still queued on a stalled port.
+        if (!m_closedSent) {
+            discardOutput();
+            sendClosedOnce();
+        }
         setState(State::Listening);
     }
     emit endpointsChanged();

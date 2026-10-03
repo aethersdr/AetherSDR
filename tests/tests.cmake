@@ -344,6 +344,13 @@ target_include_directories(ctr2_proxy_model_test PRIVATE src)
 target_link_libraries(ctr2_proxy_model_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME ctr2_proxy_model_test COMMAND ctr2_proxy_model_test)
 
+# Socket-free CLOSED retention: injected HID output and an inert QTcpSocket
+# whose connectToHost() only queues an injected refusal; no socket is opened.
+add_executable(ctr2_usb_closed_retention_test tests/ctr2_usb_closed_retention_test.cpp)
+target_include_directories(ctr2_usb_closed_retention_test PRIVATE src)
+target_link_libraries(ctr2_usb_closed_retention_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME ctr2_usb_closed_retention_test COMMAND ctr2_usb_closed_retention_test)
+
 # CTR2 USB link codec (wire format v0): published known-answer vectors, round
 # trips and fail-closed reassembly over in-memory 8-byte reports. No device,
 # no sockets.
