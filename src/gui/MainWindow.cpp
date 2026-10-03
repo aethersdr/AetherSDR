@@ -6588,18 +6588,24 @@ void MainWindow::onConnectionStateChanged(bool connected)
             QString tgxlIp = cs.value("TGXL_ManualIp", "").toString();
             if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()) {
                 quint16 tgxlPort = static_cast<quint16>(cs.value("TGXL_ManualPort", "9010").toInt());
-                m_tgxlConn.connectToTgxl(tgxlIp, tgxlPort);
+                if (!m_tgxlConn.isConnecting() && !m_tgxlConn.isAuthBlocked()) {
+                    m_tgxlConn.autoConnectToTgxl(tgxlIp, tgxlPort);
+                }
             }
             QString pgxlIp = cs.value("PGXL_ManualIp", "").toString();
             if (!pgxlIp.isEmpty() && !m_pgxlConn.isConnected()) {
                 quint16 pgxlPort = static_cast<quint16>(cs.value("PGXL_ManualPort", "9008").toInt());
-                m_pgxlConn.connectToPgxl(pgxlIp, pgxlPort);
+                if (!m_pgxlConn.isConnecting() && !m_pgxlConn.isAuthBlocked()) {
+                    m_pgxlConn.autoConnectToPgxl(pgxlIp, pgxlPort);
+                }
             }
             // If SS_ManualIp is set, connect to ShackSwitch immediately using a
             // synthetic serial so device-type detection works from the start.
             // This bypasses the UDP discovery race condition entirely.
             QString ssIp = cs.value("SS_ManualIp", "").toString();
-            if (!ssIp.isEmpty() && !m_antennaGenius.isConnected()) {
+            if (!ssIp.isEmpty() && !m_antennaGenius.isConnected()
+                && !m_antennaGenius.isConnecting()
+                && !m_antennaGenius.isAuthBlockedFor(ssIp, 9007)) {
                 AgDeviceInfo ssInfo;
                 ssInfo.ip         = QHostAddress(ssIp);
                 ssInfo.port       = 9007;
@@ -6624,8 +6630,11 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 m_agManualConnectTimer->setSingleShot(true);
                 connect(m_agManualConnectTimer, &QTimer::timeout, this, [this, agIp, agPort]() {
                     m_agManualConnectTimer = nullptr;
-                    if (!m_antennaGenius.isConnected())
-                        m_antennaGenius.connectToAddress(QHostAddress(agIp), agPort);
+                    if (m_radioModel.isConnected() && !m_antennaGenius.isConnected()
+                        && !m_antennaGenius.isConnecting()
+                        && !m_antennaGenius.isAuthBlockedFor(agIp, agPort)) {
+                        m_antennaGenius.connectToAddress(agIp, agPort);
+                    }
                 });
                 m_agManualConnectTimer->start(7000);
             }
@@ -7514,9 +7523,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Mic sources: MIC / BAL / LINE / ACC are Flex connectors ────────────
     // A radio that cannot have its input chosen by a client collapses to PC.
     if (m_appletPanel) {
+        // Absent (or disconnected): the default record, PROC 0..2.
+        const RadioCapabilities::SpeechProcessorControl proc =
+            (connected ? caps.speechProcessorControl : std::nullopt)
+                .value_or(RadioCapabilities::SpeechProcessorControl{});
         m_appletPanel->phoneCwApplet()->setSpeechProcessorPresentation(
-            connected ? caps.speechProcessorLabel : QStringLiteral("PROC"),
-            connected ? caps.speechProcessorLevelMaximum : 2);
+            proc.label, proc.levelMaximum);
         m_appletPanel->meterApplet()->setMainFanTelemetryState(
             connected, caps.hasMainFanTelemetry);
         m_appletPanel->setSelectableMicInputs(!connected || caps.hasSelectableMicInputs);
@@ -7541,7 +7553,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
             phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
-            phone->setVoxDelayAvailable(!connected || caps.hasVoxDelay);
+            phone->setVoxDelayAvailable(
+                !connected || (caps.voxControl && caps.voxControl->hasDelay));
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }

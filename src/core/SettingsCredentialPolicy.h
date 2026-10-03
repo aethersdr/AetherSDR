@@ -22,6 +22,16 @@ inline constexpr FlatCredential kFlatCredentials[] = {
     {"AutomationBridgeToken", "automation_bridge_token"},
     {"MqttPass",              "mqtt_password"},
     {"AsrRemoteApiKey",       "asr_remote_api_key"},
+    // Reserved names: AppSettings diverts imported plaintext values into its
+    // session vault, rejects direct setValue() writes, and omits them on export.
+    // These new peripheral codes have no trusted endpoint in old imports, so
+    // the desktop vault never sends an imported unbound code automatically.
+    {"tgxl_auth_code",        "tgxl_auth_code"},
+    {"TGXL_AuthCode",         "tgxl_auth_code"},
+    {"pgxl_auth_code",        "pgxl_auth_code"},
+    {"PGXL_AuthCode",         "pgxl_auth_code"},
+    {"antenna_genius_auth_code", "antenna_genius_auth_code"},
+    {"AG_AuthCode",           "antenna_genius_auth_code"},
 };
 
 // Credential-bearing FIELDS inside feature-owned JSON document values.

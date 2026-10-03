@@ -1815,6 +1815,7 @@ private:
                          const TxCoordinator::Request* request, bool alreadyClosing = false);
     void endLocalTxActivity(const TxCoordinator::Intent& intent);
     unsigned activeTxActivities() const;
+    bool tuneCarrierLive() const;
     bool hasOtherPttHolds(const TxCoordinator::Operation& operation,
                           const TxCoordinator::Intent& excluded) const;
     void completeLocalTxIfDrained();

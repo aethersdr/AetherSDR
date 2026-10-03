@@ -81,7 +81,7 @@ Ctr2HidPort* Ctr2HidapiPort::open(const Ctr2HidPort::DeviceInfo& device, QString
     };
     io.close = [handle] { hid_close(handle); };
     io.lastError = [handle] { return fromWide(hid_error(handle)); };
-    return new Ctr2HidThreadPort(std::move(io), device.label(), parent);
+    return new Ctr2HidThreadPort(std::move(io), device.label(), device.path, parent);
 }
 
 } // namespace AetherSDR
