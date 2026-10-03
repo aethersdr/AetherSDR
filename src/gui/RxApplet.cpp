@@ -3163,8 +3163,12 @@ void RxApplet::updateModeSettings(const QString& mode)
         m_filterCustomHi.fill(INT_MIN, m_filterWidths.size());
     }
     rebuildFilterButtons();
+    // An adjustable FM passband without presets keeps the row hidden, as
+    // before; a refused one shows the "Filter unavailable" placeholder.
     m_filterContainer->setVisible(!effectiveFilterWidths().isEmpty()
-                                  || ModeFilters::isFmMode(mode));
+        || !ModeFilters::fmFilterAdjustable(mode,
+               m_receiveFilterControl ? &*m_receiveFilterControl : nullptr,
+               !m_radioFilterWidths.isEmpty()));
     if (m_filterAvailability) {
         m_filterAvailability->refreshEngaged();
     }
