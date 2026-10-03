@@ -2691,12 +2691,18 @@ QString RadioModel::connectState() const
 bool RadioModel::isConnected() const
 {
     // Whoever carries the link reports its state: the RadioConnection when one exists
-    // (Flex, the demo's synthetic wire), else the backend (HL2). Mirrors
+    // (Flex, the demo's synthetic wire), the WAN tunnel, else the backend (HL2).
+    // m_wanConn is checked unconditionally rather than nested inside the m_connection
+    // branch: connectViaWan() performs no family switch, so a session that selected
+    // a non-Flex family earlier leaves m_connection null while m_wanConn is the live
+    // link, and the old nesting made that combination unreachable (#6121). Mirrors
     // connectToRadio()'s dispatch and setupBackend()'s lifecycle wiring. Do not key
     // on m_flexBackend: teardownBackend() nulls it before destroying the backend, so
     // a status slot during teardown would reach a half-destroyed backend.
-    if (m_connection)
-        return m_connection->isConnected() || (m_wanConn && m_wanConn->isConnected());
+    if (m_connection && m_connection->isConnected())
+        return true;
+    if (m_wanConn && m_wanConn->isConnected())
+        return true;
     return m_backend && m_backend->isConnected();
 }
 
@@ -9768,7 +9774,7 @@ void RadioModel::wireSliceReceiveIntentsToBackend(SliceModel* s)
             this, &RadioModel::dispatchSliceAgc, type);
 }
 
-SliceModel* RadioModel::receiveCommandSource() const
+SliceModel* RadioModel::receiveCommandSource()
 {
     if (QThread::currentThread() != thread()) {
         return nullptr;
@@ -9776,8 +9782,28 @@ SliceModel* RadioModel::receiveCommandSource() const
     SliceModel* source = qobject_cast<SliceModel*>(sender());
     // A retired object must not control a new slice reusing its id. Resolve
     // the current backend only after checking exact active object identity.
-    if (!source || m_stagingReceiveModels || slice(source->sliceId()) != source || !m_backend
-        || !m_backend->isConnected()) {
+    // Thread mismatch, mid-reconnect staging and a stale sender are all
+    // ordinary transients a live session passes through; none of them is a
+    // dropped operator command, so none of them warrants the loud drop below.
+    if (!source || m_stagingReceiveModels || slice(source->sliceId()) != source || !m_backend) {
+        return nullptr;
+    }
+    // isConnected() carries every link type (LAN RadioConnection, the WAN
+    // tunnel, or the backend's own state for HL2) and mirrors
+    // connectToRadio()'s dispatch. m_backend->isConnected() alone does not:
+    // for Flex it reports only on FlexBackend's own LAN-only RadioConnection,
+    // which connectViaWan() never dials, so every slice intent (tune, mode,
+    // filter, AGC) died here silently for the whole lifetime of any
+    // WAN/SmartLink session (#6121). This is exactly the dead-control shape
+    // sendCmd()'s hasCommandPlane() guard already warns about — loud here for
+    // the same reason: silent, this is unreportable without a bisect; loud,
+    // it is caught the first time an operator hits it.
+    if (!isConnected()) {
+        qCWarning(lcProtocol).noquote()
+            << "RadioModel: not connected, dropping slice" << source->sliceId()
+            << "receive intent";
+        emit commandDropped(
+            QStringLiteral("slice %1 receive intent").arg(source->sliceId()));
         return nullptr;
     }
     return source;

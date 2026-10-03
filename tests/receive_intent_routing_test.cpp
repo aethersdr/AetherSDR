@@ -1,6 +1,11 @@
 // #5904: the production model bindings, not a second implementation of them.
 // Injected state/dispatch only: no sockets, firmware peer, hardware or keying.
+// The #6121 fixture below is the one exception: it constructs a real
+// WanConnection to exercise RadioModel::isConnected()'s actual WAN branch,
+// but never calls connectToRadio() on it, so no socket is ever opened — only
+// its already-private m_connected flag is set directly, through a friend.
 #include "TestSettingsProfile.h"
+#include "core/backends/flex/WanConnection.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -17,6 +22,24 @@ public:
     static void wire(RadioModel& radio, SliceModel* slice)
     {
         radio.wireSliceReceiveIntentsToBackend(slice);
+    }
+    // #6121: the production field RadioModel::isConnected() reads. Setting it
+    // directly (rather than driving a real connectViaWan()) is what keeps
+    // this fixture socket-free.
+    static void setWanConnection(RadioModel& radio, WanConnection* wan)
+    {
+        radio.m_wanConn = wan;
+    }
+};
+// #6121: WanConnection's m_connected is private and only ever set from deep
+// inside the real TLS handshake (onTlsConnected() -> ... -> validate response).
+// This flips it directly so the test can assert the WAN-connected shape
+// without performing one.
+class WanConnectionTestAccess {
+public:
+    static void setConnected(WanConnection& wan, bool connected)
+    {
+        wan.m_connected = connected;
     }
 };
 }
@@ -311,6 +334,43 @@ void lifetimeAndReentrancy()
           "a reentrant edit to the same AGC field supersedes the older request");
     QObject::disconnect(connection);
 }
+
+// #6121: a WAN/SmartLink session never dials FlexBackend's own (LAN-only)
+// RadioConnection, so m_backend->isConnected() reports false for the whole
+// session even though the radio is genuinely connected via m_wanConn.
+// receiveCommandSource() gating on the backend alone dropped every slice
+// intent silently; it must gate on RadioModel::isConnected(), which knows
+// about both links.
+void wanFallback()
+{
+    Fixture f;
+    SliceModel* s = f.slice();
+    WanConnection wan;   // never connectToRadio()'d: no socket is ever opened
+    RadioModelSliceLifecycleTestAccess::setWanConnection(f.radio, &wan);
+
+    // The shape #6121 reported: the backend's own link is down, but the
+    // session is live over WAN. Every intent must still reach the backend.
+    f.backend->connected = false;
+    WanConnectionTestAccess::setConnected(wan, true);
+    s->setFrequency(14.21);
+    // USB -> LSB also dispatches one ModeNormalization filter edit (see
+    // creationPaths() above) in addition to the explicit setFilterWidth()
+    // below — two filter dispatches is the correct count here, not a miscount.
+    s->setMode(QStringLiteral("LSB"));
+    s->setFilterWidth(-2400, -100);
+    s->setAgcMode(QStringLiteral("slow"));
+    check(f.backend->tunes.size() == 1 && f.backend->modes.size() == 1
+              && f.backend->filters.size() == 2 && f.backend->agcs.size() == 1,
+          "a live WAN link dispatches every receive intent even though the backend's own link is down");
+
+    // Sanity check the other direction: neither link connected still refuses,
+    // so the fix is not just "always dispatch".
+    WanConnectionTestAccess::setConnected(wan, false);
+    s->setFrequency(14.22);
+    check(f.backend->tunes.size() == 1, "neither link connected still refuses the intent");
+
+    RadioModelSliceLifecycleTestAccess::setWanConnection(f.radio, nullptr);
+}
 }
 
 int main(int argc, char** argv)
@@ -323,5 +383,6 @@ int main(int argc, char** argv)
     synchronousObservations();
     modeReentrancy();
     lifetimeAndReentrancy();
+    wanFallback();
     return failures == 0 ? 0 : 1;
 }
