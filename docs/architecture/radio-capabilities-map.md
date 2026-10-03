@@ -533,7 +533,11 @@ The demo and RTL-SDR also keep Flex's scale. Absent, or the active slice's mode 
 skips Auto with the reason on its accessible description. The HL2 offset is
 amsq's −140 + 0.7·L dBFS map, referred to the LNA at −12 dB
 (`Hl2DbReference::levelSquelchOffsetDb`), plus the pan's LNA offset, plus the
-+6.02 dB a steady carrier reads on `Hl2Spectrum`; the LNA terms cancel. Auto
++6.02 dB a steady carrier reads on `Hl2Spectrum`; the LNA terms cancel. At the
+default +20 dB LNA the gate is −108 + 0.7·L dBFS: on8st's no-signal input held
+it open up to level 49 and his test carrier up to level 54, so at that gain the
+working range is a few steps around 50. Lower opens on noise; higher needs a
+stronger signal than his carrier. Auto
 SQL stays off on the HL2 because amsq reads passband-limited magnitude before
 the AGC (`RXA.c` `xamsqcap` after `xnbp(nbp0)`), while the pan floor is per
 bin: a pan-derived floor would need both the filter width and the bin width.

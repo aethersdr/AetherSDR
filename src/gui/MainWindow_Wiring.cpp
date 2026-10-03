@@ -1377,15 +1377,16 @@ void MainWindow::syncSquelchScaleToUi()
     if (!rx) {
         return;
     }
-    // Permissive while disconnected, like every capability gate.
+    // Permissive while disconnected or before a slice is active, like every
+    // capability gate: there is no mode yet to judge the scale against.
     QString reason;
-    if (m_radioModel.isConnected() && !autoSquelchAvailable(scale)) {
-        const SliceModel* s = activeSlice();
+    const SliceModel* s = activeSlice();
+    if (m_radioModel.isConnected() && s && !autoSquelchAvailable(scale)) {
         const auto& published = m_radioModel.backendCapabilities().squelchLevelScale;
         if (!published) {
             reason = tr("this radio does not publish where its squelch level "
                         "sits on the panadapter scale.");
-        } else if (s && !published->appliesTo(s->mode())) {
+        } else if (!published->appliesTo(s->mode())) {
             reason = tr("this radio's squelch in %1 has no panadapter level.")
                          .arg(s->mode());
         } else {

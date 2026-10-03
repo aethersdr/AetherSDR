@@ -15,6 +15,7 @@
 //   4. The asynchronous rebuild: a squelch change made WHILE a background build
 //      runs is not pushed at the old channel, and lands on the new one at the
 //      swap, on the mode that was set during the build too.
+//   6. A non-finite level offset is dropped, not retried at the block rate.
 //
 // Offline: no socket, no radio. Builds real WDSP channels.
 
@@ -150,6 +151,15 @@ int main(int argc, char** argv)
     dsp.processIqBlock(std::vector<std::complex<float>>(126));
     check(!dsp.squelchPending() && applied(dsp, Stage::Fm, false, std::pow(10.0, -1.2)),
           "converges once the channel accepts (squelch off)");
+
+    // 6. A non-finite offset is invalid, not busy: the rest of the request
+    //    lands at the last good offset and nothing is left pending.
+    dsp.setMode(WdspChannel::Mode::Usb);
+    dsp.setSquelch(true, 50, 32.0);
+    dsp.setSquelch(true, 60, std::nan(""));
+    check(!dsp.squelchPending() && dsp.squelchLevelOffsetDb() == 32.0
+              && applied(dsp, Stage::Level, true, -140.0 + 0.7 * 60 + 32.0),
+          "a NaN offset keeps the last good offset and is not retried");
 
     std::printf(g_failures == 0 ? "hl2_rxdsp_squelch_test: all passed\n"
                                 : "hl2_rxdsp_squelch_test: %d failure(s)\n", g_failures);

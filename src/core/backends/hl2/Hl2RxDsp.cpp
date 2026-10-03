@@ -386,7 +386,14 @@ void Hl2RxDsp::setSquelch(bool on, int level, double levelOffsetDb)
 {
     m_squelchOn = on;
     m_squelchLevel = std::clamp(level, 0, 100);
-    m_squelchOffsetDb = levelOffsetDb;
+    // The channel refuses a non-finite offset, and pending means busy, so an
+    // invalid one would retry every block. Keep the last good offset instead.
+    if (std::isfinite(levelOffsetDb)) {
+        m_squelchOffsetDb = levelOffsetDb;
+    } else {
+        qCWarning(lcHl2RxDsp) << "squelch level offset" << levelOffsetDb
+                              << "is not finite; keeping" << m_squelchOffsetDb << "dB";
+    }
     if (!canPushToChannel())
         return;   // held; installChannel() applies it at the swap
     pushSquelchToChannel();

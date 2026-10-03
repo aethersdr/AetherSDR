@@ -1422,14 +1422,14 @@ void RxApplet::applySqlButtonDescription()
     }
     m_sqlBtn->setAccessibleDescription(sqlButtonAccessibleDescription());
     if (autoSqlAvailable()) {
-        m_sqlBtn->setToolTip(QStringLiteral(
+        m_sqlBtn->setToolTip(tr(
             "Click to cycle:\n"
             "  Off — squelch open, all audio passes\n"
             "  SQL — manual threshold via the slider\n"
             "  AUTO — algorithm tracks the noise floor automatically"));
         return;
     }
-    m_sqlBtn->setToolTip(QStringLiteral(
+    m_sqlBtn->setToolTip(tr(
         "Click to cycle:\n"
         "  Off — squelch open, all audio passes\n"
         "  SQL — manual threshold via the slider\n"
@@ -1439,9 +1439,9 @@ void RxApplet::applySqlButtonDescription()
 QString RxApplet::sqlButtonAccessibleDescription() const
 {
     if (autoSqlAvailable()) {
-        return QStringLiteral("Cycle squelch through Off, Manual, and Auto modes");
+        return tr("Cycle squelch through Off, Manual, and Auto modes");
     }
-    return QStringLiteral("Cycle squelch between Off and Manual. Auto is unavailable: %1")
+    return tr("Cycle squelch between Off and Manual. Auto is unavailable: %1")
         .arg(autoSqlUnavailableReason());
 }
 

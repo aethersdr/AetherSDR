@@ -123,9 +123,12 @@ void recordsPerBackend()
               "HL2: offset is amsq base + LNA referral + pan offset + tone gain");
         check(nearly(s.offsetDb, -125.0 + hl2::Hl2Spectrum::kToneGainDb),
               "HL2: offset is -125 dB + the carrier term with a +3 dBm full scale");
-        check(s.modes == QStringList({QStringLiteral("LSB"), QStringLiteral("USB"),
-                                      QStringLiteral("DSB"), QStringLiteral("AM"),
-                                      QStringLiteral("SAM")}),
+        // Set membership is the contract (appliesTo() uses contains()).
+        QStringList modes = s.modes;
+        modes.sort();
+        check(modes == QStringList({QStringLiteral("AM"), QStringLiteral("DSB"),
+                                    QStringLiteral("LSB"), QStringLiteral("SAM"),
+                                    QStringLiteral("USB")}),
               "HL2: amsq's modes only (no FM, CW or data)");
         check(!s.autoSquelch, "HL2: no Auto SQL");
     }
