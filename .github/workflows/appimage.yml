@@ -444,7 +444,7 @@ jobs:
             echo "Wayland platform plugin(s):"
             echo "$platform"
           fi
-          # The generic platform plugin gets OpenGL only through this one, and no
+          # The Wayland platform plugin gets OpenGL only through this one, and no
           # linuxdeploy variable deploys it — the "Install to AppDir" step stages
           # it by hand, so a typo there is silent without this check.
           if [ ! -f "$plugins/wayland-graphics-integration-client/libqt-plugin-wayland-egl.so" ]; then
