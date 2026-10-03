@@ -443,7 +443,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasHostNoiseBlanker = true;  // WDSP ANB on the raw IQ, in AnanRxDsp
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
-    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep}; // AnanPanAnalyzer
+    c.backendPanAveraging = BackendPanAveraging{kMsPerAverageStep, false, {}, {}}; // AnanPanAnalyzer
     // No band/segment zoom: the protocol carries no per-pan zoom flag.
     c.panZoomModes = std::nullopt;
     c.persistsMemories = false;    // default; stated explicitly
@@ -847,6 +847,18 @@ void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     emitSliceState();
 }
 
+ReceiveDispatch AnanBackend::requestSliceDsp(int sliceId, const SliceDspRequest& request)
+{
+    // #5824 already owns the worker and NB readback. The typed desktop route
+    // must consume that implementation, not replace it or invent other DSP.
+    if (sliceId != kSliceId || !request.valid()
+        || request.feature != SliceDspRequest::Feature::Nb) {
+        return ReceiveDispatch::Unsupported;
+    }
+    setSliceNoiseBlanker(sliceId, request.enabled, request.level);
+    return ReceiveDispatch::Dispatched;
+}
+
 void AnanBackend::setSliceNoiseBlanker(int sliceId, bool on, int level)
 {
     Q_UNUSED(sliceId);   // one slice in this phase
@@ -856,6 +868,20 @@ void AnanBackend::setSliceNoiseBlanker(int sliceId, bool on, int level)
         QMetaObject::invokeMethod(m_dsp, "setNoiseBlanker", Qt::QueuedConnection,
             Q_ARG(bool, m_nbOn), Q_ARG(int, m_nbLevel));
     }
+}
+
+ReceiveDispatch AnanBackend::requestSliceAudio(int sliceId, const SliceAudioRequest& request)
+{
+    if (sliceId != kSliceId || !request.valid()
+        || request.origin != SliceAudioRequest::Origin::Operator) {
+        return ReceiveDispatch::Unsupported;
+    }
+    switch (request.field) {
+    case SliceAudioRequest::Field::Gain: setSliceAudioGain(sliceId, request.value); break;
+    case SliceAudioRequest::Field::Mute: setSliceAudioMute(sliceId, request.value != 0); break;
+    case SliceAudioRequest::Field::Pan: setSliceAudioPan(sliceId, request.value); break;
+    }
+    return ReceiveDispatch::Dispatched;
 }
 
 void AnanBackend::setSliceAudioMute(int sliceId, bool mute)

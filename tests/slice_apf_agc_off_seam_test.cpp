@@ -1,8 +1,8 @@
 // APF and AGC-off level reach the backend seam. Socket-free: a recording
 // IRadioBackend installed through RadioModel's production receiver bindings.
-//   1. Flex's APF wire text from SliceModel is unchanged.
-//   2. setApf/setApfLevel emit apfCommandIssued with enable and level together.
-//   3. RadioModel routes the APF to setSliceApf and the off level (also via the
+//   1. Flex's APF wire text from its typed adapter is unchanged.
+//   2. setApf/setApfLevel emit receiveDspRequested with enable and level together.
+//   3. RadioModel routes the APF to requestSliceDsp and the off level (also via the
 //      AGC-T knob and the calibrator) to requestSliceAgc(Field::OffLevel).
 //   4. A backend echo never comes back as a command (Principle II).
 //   5. The base verbs emit nothing and the base drops OffLevel.
@@ -10,6 +10,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AgcTCalibrator.h"
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -63,9 +64,13 @@ public:
     struct OffLevel { int slice; int level; };
     std::vector<Apf> apf;
     std::vector<OffLevel> offLevel;
-    void setSliceApf(int sliceId, bool on, int level) override
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override
     {
-        apf.push_back({sliceId, on, level});
+        if (!request.valid() || request.feature != SliceDspRequest::Feature::Apf) {
+            return ReceiveDispatch::Unsupported;
+        }
+        apf.push_back({sliceId, request.enabled, request.level});
+        return ReceiveDispatch::Dispatched;
     }
     void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override
     {
@@ -90,7 +95,11 @@ void testFlexWireTextUnchanged()
 {
     std::printf("\n  1. Flex wire text\n");
     SliceModel s(3);
+    FlexBackend backend;
     QStringList sent;
+    backend.setSliceCommandSink([&sent](const QString& cmd) { sent << cmd; });
+    QObject::connect(&s, &SliceModel::receiveDspRequested, &s,
+                     [&](const SliceDspRequest& request) { backend.requestSliceDsp(3, request); });
     QObject::connect(&s, &SliceModel::commandReady, &s,
                      [&sent](const QString& cmd) { sent << cmd; });
     s.setApf(true);
@@ -106,13 +115,19 @@ void testIntentsCarryBothHalves()
 {
     std::printf("\n  2. Typed intents\n");
     SliceModel s(0);
-    QSignalSpy apf(&s, &SliceModel::apfCommandIssued);
+    QSignalSpy apf(&s, &SliceModel::receiveDspRequested);
     s.setApfLevel(70);
-    check(apf.size() == 1 && apf.last().at(0).toBool() == false
-              && apf.last().at(1).toInt() == 70,
+    check(apf.size() == 1
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).feature == SliceDspRequest::Feature::Apf
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).field == SliceDspRequest::Field::Level
+              && !qvariant_cast<SliceDspRequest>(apf.last().at(0)).enabled
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).level == 70,
           "a level change carries the current enable with it");
     s.setApf(true);
-    check(apf.size() == 2 && apf.last().at(0).toBool() && apf.last().at(1).toInt() == 70,
+    check(apf.size() == 2
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).field == SliceDspRequest::Field::Enabled
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).enabled
+              && qvariant_cast<SliceDspRequest>(apf.last().at(0)).level == 70,
           "an enable carries the current level with it");
     s.setApfLevel(70);
     check(apf.size() == 2, "an unchanged level is not re-issued");

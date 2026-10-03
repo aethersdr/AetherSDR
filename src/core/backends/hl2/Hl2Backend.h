@@ -93,6 +93,9 @@ public:
     // Impulse noise blanker, run in host WDSP (the HL2 has no firmware DSP). NR and
     // ANF are deliberately not implemented and stay hidden.
     void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
+    ReceiveDispatch requestSliceDsp(int sliceId, const SliceDspRequest& request) override;
+    ReceiveDispatch requestSliceAudio(int sliceId, const SliceAudioRequest& request) override;
+    ReceiveDispatch requestSliceSquelch(int sliceId, const SliceSquelchRequest& request) override;
     void setSliceSquelch(int sliceId, bool on, int level) override;
     // Host-side CW APF and AGC-off level, per receiver; see Hl2RxDsp.
     void setSliceApf(int sliceId, bool on, int level) override;

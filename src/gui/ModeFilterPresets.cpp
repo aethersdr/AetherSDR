@@ -1,10 +1,102 @@
 #include "ModeFilterPresets.h"
 
 #include "VoiceModeGate.h"   // isCwMode
+#include "core/backends/RadioCapabilities.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace AetherSDR::ModeFilters {
+
+bool isFmMode(const QString& mode)
+{
+    return mode == "FM" || mode == "NFM" || mode == "FMN"
+        || mode == "WFM" || mode == "WBFM";
+}
+
+namespace {
+const ReceiveFilterMode* fmControlFor(const QString& mode, const ReceiveFilterControl* control)
+{
+    if (!control || !isFmMode(mode)) {
+        return nullptr;
+    }
+    const QString canonical = mode == "NFM" ? QStringLiteral("FMN") : mode;
+    for (const ReceiveFilterMode& candidate : control->modes) {
+        const QString candidateMode = candidate.mode == "NFM"
+            ? QStringLiteral("FMN") : candidate.mode;
+        if (candidateMode == canonical) {
+            return &candidate;
+        }
+    }
+    return nullptr;
+}
+} // namespace
+
+bool acceptsFmEdges(const QString& mode, const ReceiveFilterControl* control, Edges edges)
+{
+    const ReceiveFilterMode* range = fmControlFor(mode, control);
+    if (!range) {
+        return false;
+    }
+    const qint64 width = qint64(edges.hi) - edges.lo;
+    return edges.lo < edges.hi
+        && edges.lo >= range->minimumLowHz && edges.lo <= range->maximumLowHz
+        && edges.hi >= range->minimumHighHz && edges.hi <= range->maximumHighHz
+        && width >= range->minimumWidthHz && width <= range->maximumWidthHz;
+}
+
+bool fmFilterAdjustable(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths)
+{
+    if (!isFmMode(mode) || radioPublishesWidths || fmControlFor(mode, control)) {
+        return true;
+    }
+    if (!control) {
+        return true;
+    }
+    // Declared FM rows enumerate the adjustable FM modes. Without any, FlexLib
+    // Slice.cs refuses FM edits on a radio-owned filter, while a host-DSP
+    // receiver keeps its existing adjustable passband.
+    const bool declaresFm = std::any_of(control->modes.cbegin(), control->modes.cend(),
+        [](const ReceiveFilterMode& row) { return isFmMode(row.mode); });
+    return !declaresFm && control->authority != SliceFrequencyControl::Authority::Radio;
+}
+
+bool acceptsFilterEdges(const QString& mode, const ReceiveFilterControl* control,
+                        bool radioPublishesWidths, Edges edges)
+{
+    if (!isFmMode(mode) || radioPublishesWidths) {
+        return true;
+    }
+    return fmControlFor(mode, control) ? acceptsFmEdges(mode, control, edges)
+                                       : fmFilterAdjustable(mode, control, false);
+}
+
+bool squelchAvailableInMode(const QString& mode, const ReceiveSquelchModel* model,
+                            bool modeIndependentSquelch, bool externalReplacement)
+{
+    if (model && !externalReplacement) {
+        return model->modes.contains(mode);
+    }
+    // Digital/RTTY feed decoders and SQL gates weak FSK (#2504); a radio holds
+    // CW squelch itself. Only an all-mode radio squelch lifts that rule.
+    return (modeIndependentSquelch && !externalReplacement)
+        || !(mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY" || isCwMode(mode));
+}
+
+QVector<int> widthsForMode(const QString& mode, const ReceiveFilterControl* control)
+{
+    if (mode != "FM" && mode != "FMN" && mode != "NFM") {
+        return widthsForMode(mode);
+    }
+    QVector<int> widths;
+    for (int width : widthsForMode(QStringLiteral("DFM"))) {
+        if (acceptsFmEdges(mode, control, edgesForWidth(mode, width, {}))) {
+            widths.append(width);
+        }
+    }
+    return widths;
+}
 
 const QVector<int>& widthsForMode(const QString& mode)
 {
@@ -23,7 +115,9 @@ const QVector<int>& widthsForMode(const QString& mode)
     if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return dig;
     if (mode == "RTTY") return rtty;
     if (mode == "DFM") return dfm;
-    if (mode == "FM" || mode == "NFM") return fm;
+    if (isFmMode(mode)) {
+        return fm;
+    }
     return usb;
 }
 
@@ -90,7 +184,7 @@ Edges edgesForWidth(const QString& mode, int widthHz, const SliceContext& ctx)
         lo = -widthHz / 2;
         hi =  widthHz / 2;
     } else if (mode == "AM" || mode == "SAM" || mode == "DSB"
-               || mode == "FM" || mode == "NFM" || mode == "DFM") {
+               || isFmMode(mode) || mode == "DFM") {
         lo = -(widthHz / 2); hi = (widthHz / 2);
     } else if (mode == "FDVL") {
         lo = -widthHz; hi = -95;

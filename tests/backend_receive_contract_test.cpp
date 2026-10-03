@@ -10,6 +10,7 @@
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/anan/AnanBackend.h"
 #include "core/backends/sim/SimBackend.h"
+#include "core/backends/sim/SimSignalSource.h"
 #ifdef AETHER_BACKEND_RTL
 #include "core/backends/rtl/RtlSdrBackend.h"
 #endif
@@ -26,6 +27,11 @@ namespace AetherSDR::hl2 {
 // Reuse the existing friend to open only a production RX worker/channel.
 // No connectRadio(), Metis start, network peer, TX DSP configure or samples.
 struct Hl2DspReadbackTestAccess {
+    static std::array<double, 3> audio(Hl2Backend& backend)
+    {
+        const Hl2Backend::Receiver* receiver = backend.rx(0);
+        return {double(receiver->audioMuted), receiver->audioGain, double(receiver->audioPanPercent)};
+    }
     static bool prepare(Hl2Backend& backend)
     {
         std::string error;
@@ -55,6 +61,34 @@ struct Hl2DspReadbackTestAccess {
 }
 
 using namespace AetherSDR;
+namespace AetherSDR {
+struct SimReceiveContractTestAccess {
+    static bool blanker(SimBackend& backend)
+    {
+        bool enabled = false;
+        QMetaObject::invokeMethod(backend.m_signalSource, [&] {
+            enabled = backend.m_signalSource->m_audio.noiseBlank();
+        }, Qt::BlockingQueuedConnection);
+        return enabled;
+    }
+    static double toneEnergy(SimBackend& backend)
+    {
+        double energy = 0;
+        QMetaObject::invokeMethod(backend.m_signalSource, [&] {
+            // The real generator, on its own thread. Settle the notch before
+            // measuring, without a clock, sound device or synthetic peer.
+            NoiseMixer& mixer = backend.m_signalSource->m_audio;
+            for (int frame = 0; frame < 100; ++frame) {
+                const QVector<float> samples = mixer.mixFrame();
+                if (frame >= 50) {
+                    for (float sample : samples) { energy += double(sample) * sample; }
+                }
+            }
+        }, Qt::BlockingQueuedConnection);
+        return energy;
+    }
+};
+}
 namespace {
 int failures = 0;
 void check(bool condition, const char* description)
@@ -99,9 +133,9 @@ const std::array kFamilies{
     Family{"anan", make<anan::AnanBackend>, false, false, "pre-connect receiver configuration (not DSP completion)"},
     Family{"sim", make<SimBackend>, true, false, "production Demo session state (not hardware/filter DSP)"},
 #ifdef AETHER_BACKEND_RTL
-    Family{"rtl", make<rtl::RtlSdrBackend>, true, false, "cold refusal only; USB/DDC dispatch not covered"},
+    Family{"rtl", make<rtl::RtlSdrBackend>, true, true, "cold refusal only; USB/DDC dispatch not covered"},
 #else
-    Family{"rtl", nullptr, true, false, "NOT BUILT: optional librtlsdr unavailable"},
+    Family{"rtl", nullptr, true, true, "NOT BUILT: optional librtlsdr unavailable"},
 #endif
 };
 
@@ -286,6 +320,152 @@ void intentVariants()
           "new AGC adapter preserves Icom's refusal of AGC off");
 }
 
+void receiveControlContracts()
+{
+    FlexBackend flex;
+    QStringList commands;
+    int generic = 0;
+    flex.setSliceCommandSink([&](const QString& command) { commands.append(command); });
+    flex.setCommandSink([&](const QString&) { ++generic; });
+    QSignalSpy observations(&flex, &IRadioBackend::sliceChanged);
+    const std::array keys{"nb", "nr", "anf", "", "apf", "lms_nr", "speex_nr",
+                          "rnnoise", "nrf", "lms_anf", "anft"};
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        const auto feature = static_cast<SliceDspRequest::Feature>(i);
+        for (const auto field : {SliceDspRequest::Field::Enabled, SliceDspRequest::Field::Level}) {
+            commands.clear();
+            const bool supported = feature != SliceDspRequest::Feature::Mn
+                && (field == SliceDspRequest::Field::Enabled
+                    || (feature != SliceDspRequest::Feature::Rnn && feature != SliceDspRequest::Feature::Anft));
+            const ReceiveDispatch result = flex.requestSliceDsp(3, {feature, field, true, 47});
+            check(result == (supported ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported),
+                  "Flex DSP accepts only implemented feature/field combinations");
+            const QString key = QString::fromLatin1(keys[i])
+                + (field == SliceDspRequest::Field::Level ? QStringLiteral("_level") : QString());
+            check(commands == (supported ? QStringList{QStringLiteral("slice set 3 %1=%2").arg(key)
+                                    .arg(field == SliceDspRequest::Field::Enabled ? 1 : 47)} : QStringList{}),
+                  "Flex DSP preserves exact enable/level encoding without inventing manual notch");
+        }
+    }
+    commands.clear();
+    check(!flex.capabilities().receiveAudioControl && !flex.capabilities().hasRadioDialLock,
+          "Flex desktop audio and slice lock do not grow daemon or global-lock capabilities");
+    flex.requestSliceAudio(3, {SliceAudioRequest::Field::Gain, 37});
+    flex.requestSliceAudio(3, {SliceAudioRequest::Field::Mute, 1,
+                             SliceAudioRequest::Origin::ExternalReceiveSuppression});
+    flex.requestSliceAudio(3, {SliceAudioRequest::Field::Pan, 64});
+    flex.requestSliceSquelch(3, {true, 25, true, true});
+    flex.requestSliceSquelch(3, {false, 80, false, false});
+    flex.requestSliceRxAntenna(3, QStringLiteral("RX_A"));
+    flex.requestSliceLock(3, true);
+    flex.requestSliceLock(3, false);
+    check(commands == QStringList{"slice set 3 audio_level=37", "slice set 3 audio_mute=1",
+              "slice set 3 audio_pan=64", "slice set 3 squelch=1", "slice set 3 squelch_level=25",
+              "slice set 3 rxant=RX_A", "slice lock 3", "slice unlock 3"} && generic == 0,
+          "Flex routes all controls through guarded slice sink; squelch uses separate changed fields");
+    check(observations.isEmpty(), "dispatch does not manufacture Flex radio observations");
+    flex.decodeSliceStatus(3, {{"audio_level", "29"}, {"audio_mute", "0"}, {"audio_pan", "20"},
+        {"nb", "0"}, {"nb_level", "33"}, {"squelch", "0"}, {"squelch_level", "18"},
+        {"rxant", "ANT1"}, {"lock", "1"}});
+    const SliceDelta truth = last(observations);
+    check(truth.audioGain == 29 && truth.audioMute == false && truth.audioPan == 20
+              && truth.nb == false && truth.nbLevel == 33 && truth.squelchOn == false
+              && truth.squelchLevel == 18 && truth.rxAntenna == QStringLiteral("ANT1")
+              && truth.locked == true && commands.size() == 8,
+          "independent Flex status corrects every migrated control group without writeback");
+    commands.clear();
+    check(flex.requestSliceAudio(0, {SliceAudioRequest::Field::Mute, 2}) == ReceiveDispatch::Unsupported
+              && flex.requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Level, true, -1}) == ReceiveDispatch::Unsupported
+              && flex.requestSliceRxAntenna(0, QStringLiteral("ANT1\nslice set 0 tx=1")) == ReceiveDispatch::Unsupported
+              && flex.requestSliceLock(-1, true) == ReceiveDispatch::Unsupported && commands.isEmpty(),
+          "invalid receive inputs cannot become Flex commands");
+
+    // Icom acceptance proves scheduler output, not a radio ACK. Paired NB/NR
+    // and MN may generate multiple frames; a single intent is not one frame.
+    using namespace icom;
+    struct IcomCase { SliceDspRequest request; QString first; };
+    const std::array icomCases{
+        IcomCase{{SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled, true, 45}, "fe fe a4 e0 16 22 01 fd"},
+        IcomCase{{SliceDspRequest::Feature::Nr, SliceDspRequest::Field::Level, true, 45}, "fe fe a4 e0 16 40 01 fd"},
+        IcomCase{{SliceDspRequest::Feature::Anf, SliceDspRequest::Field::Enabled, true, 45}, "fe fe a4 e0 16 41 01 fd"},
+        IcomCase{{SliceDspRequest::Feature::Mn, SliceDspRequest::Field::Level, false, 45}, "fe fe a4 e0 16 48 00 fd"}};
+    for (const IcomCase& test : icomCases) {
+        IcomCivBackend backend;
+        IcomCivBackendTestAccess::prepare(backend);
+        check(backend.requestSliceDsp(0, test.request) == ReceiveDispatch::Dispatched,
+              "Icom accepts existing paired DSP operations");
+        IcomCivBackendTestAccess::pump(backend);
+        check(IcomCivBackendTestAccess::firstDispatched(backend) == test.first,
+              "typed Icom DSP dispatch reaches the documented CI-V function");
+    }
+    for (int operation = 0; operation < 3; ++operation) {
+        IcomCivBackend backend;
+        IcomCivBackendTestAccess::prepare(backend);
+        const ReceiveDispatch result = operation == 0
+            ? backend.requestSliceAudio(0, {SliceAudioRequest::Field::Gain, 40})
+            : operation == 1 ? backend.requestSliceSquelch(0, {false, 76, true, false})
+                             : backend.requestSliceLock(0, true);
+        IcomCivBackendTestAccess::pump(backend);
+        const std::array expected{QStringLiteral("fe fe a4 e0 14 01 01 02 fd"),
+            QStringLiteral("fe fe a4 e0 14 03 00 00 fd"), QStringLiteral("fe fe a4 e0 16 50 01 fd")};
+        check(result == ReceiveDispatch::Dispatched
+                  && IcomCivBackendTestAccess::firstDispatched(backend) == expected[operation],
+              "Icom AF gain, squelch-off threshold and global lock retain native encoding");
+    }
+    {
+        IcomCivBackend backend;
+        IcomCivBackendTestAccess::prepare(backend);
+        check(backend.requestSliceRxAntenna(0, QStringLiteral("RX-ANT")) == ReceiveDispatch::Unsupported,
+              "Icom profile without a selectable RX antenna refuses the intent");
+        // Select the evidenced MK2 dialect. The unstarted session deliberately
+        // retains the fixture's A4 address; dialect and destination are separate.
+        IcomCivBackendTestAccess::selectModel(backend, *modelForId(0xB6));
+        QSignalSpy observations(&backend, &IRadioBackend::sliceChanged);
+        check(backend.requestSliceRxAntenna(0, QStringLiteral("rx-ant")) == ReceiveDispatch::Dispatched,
+              "Icom selectable RX antenna retains case-insensitive port admission");
+        IcomCivBackendTestAccess::pump(backend);
+        check(IcomCivBackendTestAccess::firstDispatched(backend) == QStringLiteral("fe fe a4 e0 12 00 01 fd")
+                  && observations.isEmpty(),
+              "Icom RX antenna retains native encoding without manufacturing readback");
+        const std::uint64_t queued = IcomCivBackendTestAccess::queuedCount(backend);
+        check(backend.requestSliceRxAntenna(0, QStringLiteral("ANT2")) == ReceiveDispatch::Unsupported
+                  && backend.requestSliceRxAntenna(1, QStringLiteral("ANT1")) == ReceiveDispatch::Unsupported
+                  && IcomCivBackendTestAccess::queuedCount(backend) == queued,
+              "unsupported Icom ports and slice identities enqueue no RX antenna command");
+        CivFrame antenna;
+        antenna.cmd = 0x12;
+        antenna.hasSub = true;
+        antenna.sub = 0;
+        antenna.data = {0};
+        IcomCivBackendTestAccess::observe(backend, antenna);
+        check(last(observations).rxAntenna == QStringLiteral("ANT1")
+                  && IcomCivBackendTestAccess::queuedCount(backend) == queued,
+              "independent Icom antenna readback corrects the requested port without echo");
+    }
+    for (const Family& family : kFamilies) {
+        if (!family.make) { continue; }
+        std::unique_ptr<IRadioBackend> backend = family.make();
+        if (QLatin1String(family.name) != QLatin1String("flex")) {
+            check(backend->requestSliceDsp(0, {SliceDspRequest::Feature::Apf, SliceDspRequest::Field::Level, true, 40})
+                      == (QLatin1String(family.name) == QLatin1String("hl2")
+                          ? ReceiveDispatch::Dispatched : ReceiveDispatch::Unsupported),
+                  "HL2 retains cold APF configuration; other non-Flex families refuse it");
+        }
+        if (QLatin1String(family.name) == QLatin1String("sim")) {
+            check(backend->requestSliceAudio(0, {SliceAudioRequest::Field::Gain, 40}) == ReceiveDispatch::Unsupported
+                      && backend->requestSliceLock(0, true) == ReceiveDispatch::LocalOnly,
+                  "no independent mixer is invented; client-only slice lock remains available");
+        }
+        if (QLatin1String(family.name) == QLatin1String("icom")) {
+            check(backend->requestSliceAudio(0, {SliceAudioRequest::Field::Gain, 40}) == ReceiveDispatch::Unsupported
+                      && backend->requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled, true, 50})
+                          == ReceiveDispatch::Unsupported
+                      && backend->requestSliceSquelch(0, {true, 40, true, true}) == ReceiveDispatch::Unsupported,
+                  "cold Icom cannot claim a dispatch without a connected session/profile");
+        }
+    }
+}
+
 void hostConfiguration()
 {
     // These cold backends have configuration state but no configured receive
@@ -345,8 +525,32 @@ void demoAndColdRefusal()
     request(backend, Operation::Agc);
     check(last(observations).agcMode == QStringLiteral("fast") && last(observations).agcThreshold == 50,
           "Demo AGC is explicitly synthetic state, not hardware gain control");
+    for (NoiseMixer::Channel channel : NoiseMixer::allChannels()) {
+        backend.setDemoNoiseEnabled(NoiseMixer::name(channel), false);
+    }
+    backend.setDemoNoiseEnabled(QStringLiteral("birdie"), true);
+    backend.setDemoNoiseKnob(QStringLiteral("birdie"), QStringLiteral("hz"), 1200);
+    backend.setDemoNoiseLevel(QStringLiteral("birdie"), -12);
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled, true, 50})
+              == ReceiveDispatch::Dispatched && SimReceiveContractTestAccess::blanker(backend),
+          "Demo typed NB reaches the real signal worker's blanker state");
+    backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled, false, 50});
+    check(!SimReceiveContractTestAccess::blanker(backend), "Demo disabling NB reaches the worker too");
+    const double beforeNotch = SimReceiveContractTestAccess::toneEnergy(backend);
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Anf, SliceDspRequest::Field::Enabled, true, 50})
+              == ReceiveDispatch::Dispatched && last(observations).anf == true,
+          "Demo typed ANF retains its supported synthetic observation");
+    const double afterNotch = SimReceiveContractTestAccess::toneEnergy(backend);
+    check(beforeNotch > 1 && afterNotch < beforeNotch * 0.1,
+          "Demo ANF changes actual generator samples, not only a copied status flag");
+    backend.requestSliceDsp(0, {SliceDspRequest::Feature::Anf, SliceDspRequest::Field::Enabled, false, 50});
+    check(SimReceiveContractTestAccess::toneEnergy(backend) > beforeNotch * 0.9,
+          "Demo disabling ANF restores the real generator tone");
     backend.disconnectRadio();
     observations.clear();
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Enabled, false, 50})
+              == ReceiveDispatch::Unsupported,
+          "Demo refuses typed DSP requests after disconnect");
     for (Operation op : kOperations) {
         request(backend, op);
     }
@@ -362,6 +566,40 @@ void demoAndColdRefusal()
     }
     check(rtlObservations.isEmpty(), "cold RTL refuses receive requests without opening USB");
 #endif
+}
+
+void ananNoiseBlankerDispatch()
+{
+    anan::AnanBackend backend;
+    QSignalSpy audio(&backend, &IRadioBackend::sliceChanged);
+    check(backend.requestSliceAudio(0, {SliceAudioRequest::Field::Gain, 43})
+              == ReceiveDispatch::Dispatched && last(audio).audioGain == 43,
+          "typed ANAN audio retains the existing slice mixer gain and observation");
+    check(backend.requestSliceAudio(0, {SliceAudioRequest::Field::Mute, 1})
+              == ReceiveDispatch::Dispatched && last(audio).audioMute == true,
+          "typed ANAN audio retains the existing slice mixer mute and observation");
+    check(backend.requestSliceAudio(0, {SliceAudioRequest::Field::Pan, 77})
+              == ReceiveDispatch::Dispatched
+              && backend.requestSliceAudio(1, {SliceAudioRequest::Field::Gain, 23})
+                  == ReceiveDispatch::Unsupported
+              && backend.requestSliceLock(0, true) == ReceiveDispatch::LocalOnly,
+          "ANAN preserves mixer balance, single-slice identity and client-only lock");
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
+              SliceDspRequest::Field::Enabled, true, 71}) == ReceiveDispatch::Dispatched
+              && backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 71,
+          "typed ANAN blanker intent reaches the existing backend implementation");
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
+              SliceDspRequest::Field::Level, false, 35}) == ReceiveDispatch::Dispatched
+              && !backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 35,
+          "typed ANAN blanker preserves the enable/level pair for either edited field");
+    check(backend.requestSliceDsp(1, {SliceDspRequest::Feature::Nb,
+              SliceDspRequest::Field::Enabled, true, 90}) == ReceiveDispatch::Unsupported
+              && backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nr,
+                  SliceDspRequest::Field::Enabled, true, 90}) == ReceiveDispatch::Unsupported
+              && backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
+                  SliceDspRequest::Field::Level, true, 101}) == ReceiveDispatch::Unsupported
+              && !backend.noiseBlankerOnForTest() && backend.noiseBlankerLevelForTest() == 35,
+          "invalid identities, unsupported DSP and invalid levels cannot alter ANAN NB state");
 }
 
 void hl2WorkerDispatch()
@@ -393,7 +631,49 @@ void hl2WorkerDispatch()
     backend.requestSliceAgc(0, {SliceAgcRequest::Field::OffLevel, QStringLiteral("off"), 100, 90});
     applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
     check(applied.agcMode == 4 && std::abs(applied.maximumAgcGainDb - 24.0) < 1e-9,
-          "threshold preserves fast AGC; unsupported off-level cannot alter the worker");
+          "off-level preserves fast AGC and its independently configured gain ceiling");
+    check(std::abs(applied.agcFixedGainDb - hl2::Hl2RxDsp::agcFixedGainDbForOffLevel(90)) < 1e-9,
+          "typed HL2 AGC off-level reaches the existing worker gain configuration");
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Nb, SliceDspRequest::Field::Level, true, 71})
+              == ReceiveDispatch::Dispatched, "HL2 accepts its implemented blanker");
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.noiseBlankerEnabled && applied.noiseBlankerLevel == 71,
+          "HL2 typed blanker configures the actual DSP worker");
+    check(backend.requestSliceDsp(0, {SliceDspRequest::Feature::Apf,
+              SliceDspRequest::Field::Enabled, true, 75}) == ReceiveDispatch::Dispatched,
+          "HL2 accepts its existing CW APF through the typed DSP adapter");
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.apfEnabled && std::abs(applied.apfBandwidthHz
+              - hl2::Hl2RxDsp::apfBandwidthHzForLevel(75)) < 1e-9,
+          "typed HL2 APF enable and level reach the actual WDSP channel");
+    backend.requestSliceDsp(0, {SliceDspRequest::Feature::Apf,
+        SliceDspRequest::Field::Level, true, 25});
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.apfEnabled && std::abs(applied.apfBandwidthHz
+              - hl2::Hl2RxDsp::apfBandwidthHzForLevel(25)) < 1e-9,
+          "typed HL2 APF level edit preserves enable in the actual channel");
+    backend.setSliceMode(0, QStringLiteral("FM"));
+    check(backend.requestSliceSquelch(0, {true, 38, true, true}) == ReceiveDispatch::Dispatched,
+          "HL2 accepts its existing squelch through the typed adapter");
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.squelchEnabled && applied.squelchLevel == 38 && !applied.apfEnabled,
+          "HL2 squelch reaches the actual channel while APF is held out of FM");
+    backend.requestSliceSquelch(0, {false, 63, true, true});
+    backend.setSliceMode(0, QStringLiteral("CW"));
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(!applied.squelchEnabled && applied.squelchLevel == 63 && applied.apfEnabled,
+          "typed squelch disable persists while APF returns on CW mode");
+    check(backend.requestSliceSquelch(0, {true, 101, true, true}) == ReceiveDispatch::Unsupported
+              && backend.requestSliceSquelch(99, {true, 50, true, true}) == ReceiveDispatch::Unsupported
+              && backend.requestSliceDsp(99, {SliceDspRequest::Feature::Apf,
+                  SliceDspRequest::Field::Enabled, true, 50}) == ReceiveDispatch::Unsupported,
+          "invalid HL2 squelch levels and receiver identities are refused");
+    backend.requestSliceAudio(0, {SliceAudioRequest::Field::Gain, 43});
+    backend.requestSliceAudio(0, {SliceAudioRequest::Field::Mute, 1});
+    backend.requestSliceAudio(0, {SliceAudioRequest::Field::Pan, 77});
+    const auto audio = hl2::Hl2DspReadbackTestAccess::audio(backend);
+    check(audio[0] == 1 && std::abs(audio[1] - 0.43) < 1e-6 && audio[2] == 77,
+          "HL2 audio adapters configure the existing receiver mixer fields");
 }
 }
 
@@ -409,8 +689,10 @@ int main(int argc, char** argv)
     declarations();
     flexCommandsAndObservations();
     intentVariants();
+    receiveControlContracts();
     icomCommandsAndObservations();
     hostConfiguration();
+    ananNoiseBlankerDispatch();
     hl2WorkerDispatch();
     demoAndColdRefusal();
     return failures == 0 ? 0 : 1;

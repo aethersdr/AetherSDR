@@ -139,6 +139,17 @@ public:
         IRadioBackend::requestSliceAgc(s, r);
     }
     std::unique_ptr<FlexBackend> flex;
+    ReceiveDispatch requestSliceDsp(int s, const SliceDspRequest& r) override
+    {
+        if (flex) { return flex->requestSliceDsp(s, r); }
+        switch (r.feature) {
+        case SliceDspRequest::Feature::Nb: setSliceNoiseBlanker(s, r.enabled, r.level); break;
+        case SliceDspRequest::Feature::Nr: setSliceNoiseReduction(s, r.enabled, r.level); break;
+        case SliceDspRequest::Feature::Anf: setSliceAutoNotch(s, r.enabled); break;
+        default: return ReceiveDispatch::Unsupported;
+        }
+        return ReceiveDispatch::Dispatched;
+    }
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     void setKeying(bool, const TxCoordinator::Operation&,
                    const TxCoordinator::Completion&) override {}
@@ -299,17 +310,19 @@ void testRadioNrAndAnfRouteWhereTheRadioHasThem()
 
 void testAnfStillReachesTheDemoCommandPlane()
 {
-    // The Demo radio's shape: a (synthetic) command plane and no radio-side
-    // DSP. Its connection answers `anf=` with the generator's audible notch,
-    // so ANF must not be refused there; it has no NR, which still is.
+    // Demo's shape retains ANF availability without radio-side NR. The intent
+    // reaches the typed adapter; the receive-contract test pins its generator.
     Fixture f;
     RadioConnection unopened;
     RerouteDeadControlsTestAccess::useCommandPlane(f.radio, &unopened);
-    QSignalSpy wire(f.slice, &SliceModel::commandReady);
+    QSignalSpy intent(f.slice, &SliceModel::receiveDspRequested);
     check(f.radio.requestRadioAutoNotch(f.slice, true),
-          "ANF/demo: accepted where a command plane carries `anf=`");
-    check(wireOf(wire) == QStringList{QStringLiteral("slice set 0 anf=1")},
-          "ANF/demo: the same wire text as before");
+          "ANF/demo: remains available");
+    check(intent.size() == 1
+              && qvariant_cast<SliceDspRequest>(intent.first().at(0)).feature == SliceDspRequest::Feature::Anf
+              && qvariant_cast<SliceDspRequest>(intent.first().at(0)).enabled
+              && f.backend->anf.size() == 1 && f.backend->anf.back().on,
+          "ANF/demo: typed enable reaches the backend without a legacy wire path");
     check(!f.radio.requestRadioNoiseReduction(f.slice, true) && !f.slice->nrOn(),
           "NR/demo: still refused, no phantom");
     RerouteDeadControlsTestAccess::useCommandPlane(f.radio, nullptr);

@@ -15,8 +15,11 @@
 #include <QThread>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <memory>
+#include <numbers>
+#include <cmath>
 
 using namespace AetherSDR;
 
@@ -36,6 +39,18 @@ namespace AetherSDR::rtl {
 struct RtlSdrBackendTestAccess {
     static void connectWith(RtlSdrBackend& backend, RtlSdrWorker* worker)
     {
+        using T = RtlCaptureTransaction;
+        backend.m_capture.beginSession();
+        T::Desired desired;
+        desired.receivers = {{{0, 95'200'000, -100'000, 100'000, 0, 0, 0}, T::Mode::Wfm}};
+        const auto submitted = backend.m_capture.submit(desired);
+        const auto work = backend.m_capture.takeWork();
+        if (!submitted || !work) { std::abort(); }
+        backend.m_capture.complete({work->token, T::ResultCode::Applied, work->target, work->operation});
+        backend.m_published = work->token;
+        backend.m_viewport = RtlViewport::fit(work->target.capture, RtlSdrDdc::kSpectrumBinCount,
+            work->target.capture.centerHz, work->target.capture.achievedSampleRateHz);
+        workerToken = work->token;
         backend.m_worker.reset(worker);
         backend.wireWorker();
         worker->start();
@@ -44,10 +59,10 @@ struct RtlSdrBackendTestAccess {
     // The same wiring with the connected flag still false.
     static void wireOnly(RtlSdrBackend& backend, RtlSdrWorker* worker)
     {
-        backend.m_worker.reset(worker);
-        backend.wireWorker();
-        worker->start();
+        connectWith(backend, worker);
+        backend.m_connected = false;
     }
+    static inline RtlCaptureTransaction::Token workerToken;
 };
 
 }  // namespace AetherSDR::rtl
@@ -56,7 +71,7 @@ namespace {
 
 // A USB reader that ignores cancellation, as a wedged libusb stack does, so
 // stopReading() gives up and disconnectRadio() strands it. It emits spectrum
-// from its own thread through the DDC, the production path.
+// from its own thread through the production worker-to-backend binding.
 class StuckWorker : public rtl::RtlSdrWorker {
 public:
     StuckWorker() : RtlSdrWorker(nullptr) {}
@@ -75,7 +90,9 @@ protected:
             }
             while (framesToEmit.load() > 0) {
                 --framesToEmit;
-                emit ddc()->spectrumFrameReady(0, QByteArray(16, '\x01'));
+                const auto token = rtl::RtlSdrBackendTestAccess::workerToken;
+                emit spectrumFrameReady(token.session, token.revision, 0,
+                    QByteArray(rtl::RtlSdrDdc::kSpectrumBinCount * int(sizeof(float)), '\x01'));
             }
             QThread::msleep(5);
         }
@@ -171,10 +188,37 @@ int main(int argc, char** argv)
 
     // Feed 4096 synthetic complex float IQ samples
     QVector<std::complex<float>> syntheticSamples(4096, std::complex<float>(0.5f, 0.5f));
-    ddc.processIqData(syntheticSamples);
+    // A display frame now requires a complete continuous observation.
+    for (int i = 0; i < rtl::RtlSdrDdc::kSpectrumBinCount / syntheticSamples.size(); ++i) {
+        ddc.processIqData(syntheticSamples);
+    }
 
     check(spectrumEmitted, "RtlSdrDdc emitted spectrumFrameReady");
     check(audioEmitted, "RtlSdrDdc emitted audioFrameReady");
+
+    // WFM keeps its existing demodulation. Its independent tap must remain
+    // identical while monitor mute clocks silence at the same 24 kHz rate.
+    {
+        rtl::RtlSdrDdc audible, muted;
+        muted.setAudioMute(true); muted.setAudioGain(0);
+        QByteArray reference, tap, silent;
+        QObject::connect(&audible, &rtl::RtlSdrDdc::audioFrameReady,
+            [&](const QByteArray&, const QByteArray& preMonitor) { reference.append(preMonitor); });
+        QObject::connect(&muted, &rtl::RtlSdrDdc::audioFrameReady,
+            [&](const QByteArray& monitor, const QByteArray& preMonitor) { silent.append(monitor); tap.append(preMonitor); });
+        QVector<std::complex<float>> samples(8192);
+        for (int block = 0; block < 32; ++block) {
+            for (int i = 0; i < samples.size(); ++i) {
+                const double t = (block * samples.size() + i) / 2400000.0;
+                const double phase = 50 * std::sin(2 * std::numbers::pi * 1000 * t);
+                samples[i] = {float(0.5 * std::cos(phase)), float(0.5 * std::sin(phase))};
+            }
+            audible.processIqData(samples); muted.processIqData(samples);
+        }
+        check(!reference.isEmpty() && reference == tap, "WFM pre-monitor samples unchanged by mute/gain");
+        check(silent.size() == tap.size(), "muted WFM keeps truthful PCM duration");
+        check(std::ranges::all_of(silent, [](char byte) { return byte == 0; }), "muted WFM monitor is silence");
+    }
 
     // 5. Test direct sampling mode persistence contract
     RestoredRadioState hfState;
@@ -232,9 +276,11 @@ int main(int argc, char** argv)
         // A read failure posted to the backend just before the operator
         // disconnects is delivered after disconnected(); it must not surface.
         worker->failRead = true;
-        while (!worker->readFailed.load()) {
+        QDeadlineTimer errorDeadline(2000);
+        while (!worker->readFailed.load() && !errorDeadline.hasExpired()) {
             QThread::msleep(1);
         }
+        check(worker->readFailed.load(), "the worker queues the read error within the deadline");
 
         stranding.disconnectRadio();   // stopReading() gives up after ~5 s
         check(alive && worker->isRunning(), "the stuck worker was stranded, not joined");

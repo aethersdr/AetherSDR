@@ -136,7 +136,9 @@ void testReadback()
     QJsonObject state = receiver(server);
     check(!state.value("hasChain").toBool() && !state.value("on").toBool(),
           "a cold DSP object does not claim an installed blanker");
-    backend->setSliceNoiseBlanker(0, true, 80);
+    check(backend->requestSliceDsp(0, {SliceDspRequest::Feature::Nb,
+              SliceDspRequest::Field::Enabled, true, 80}) == ReceiveDispatch::Dispatched,
+          "typed desktop NB dispatch uses the existing ANAN worker");
     check(AnanNoiseBlankerTestAccess::onDsp(*backend, [](AnanRxDsp&) {}), "drain the queued request");
     state = receiver(server);
     check(state.value("requestedOn").toBool() && state.value("requestedLevel").toInt() == 80

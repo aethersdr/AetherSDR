@@ -41,6 +41,15 @@ public:
         Wbfm
     };
 
+    // Opt-in receive FM recipe. Other channel owners retain their existing
+    // settings. The FM limiter and unity output panel normalize demodulated
+    // audio before it reaches a speaker mixer or an independent receiver tap.
+    struct FmReceive
+    {
+        // Deviation has one owner: Config::fmDeviationHz, including runtime setters.
+        bool operator==(const FmReceive&) const = default;
+    };
+
     struct Config
     {
         Direction direction = Direction::Receive;
@@ -50,6 +59,7 @@ public:
         int dspSampleRate = 48000;
         int outputSampleRate = 48000;
         Mode mode = Mode::Usb;
+        std::optional<FmReceive> fmReceive;
         double filterLowHz = 150.0;
         double filterHighHz = 3000.0;
         int agcMode = 3;
@@ -116,6 +126,7 @@ public:
         // the seam's 0..100 (SliceModel's), and 20 is SliceModel's default.
         bool squelchEnabled = false;
         int squelchLevel = 20;
+        bool operator==(const Config&) const = default;
     };
 
     // Which WDSP squelch stage a mode uses — see squelchStageFor().

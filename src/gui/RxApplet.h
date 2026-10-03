@@ -29,6 +29,7 @@ namespace AetherSDR {
 
 class SliceModel;
 class RadioModel;
+class ControlAvailabilityRegistry;
 class KiwiSdrManager;
 
 // RX Applet: controls for one receive slice (antenna, filter presets, AGC,
@@ -178,6 +179,8 @@ private:
     void updateModeSettings(const QString& mode);
     bool squelchAvailableInMode(const QString& mode) const;
     void rebuildFilterButtons();
+    QVector<int> defaultFilterWidths(const QString& mode) const;
+    bool acceptsFilterEdges(int low, int high) const;
 public:
     // Narrow the filter buttons to the widths a radio can actually reach.
     // An EMPTY list restores the operator's own configurable set, so this is
@@ -209,6 +212,10 @@ private:
     SliceModel* m_slice{nullptr};
     TransmitModel* m_txModel{nullptr};
     RadioModel* m_radioModel{nullptr};
+    ControlAvailabilityRegistry* m_filterAvailability{nullptr};
+    std::optional<ReceiveFilterControl> m_receiveFilterControl;
+    std::optional<ReceiveSquelchModel> m_receiveSquelchModel;
+    QPushButton* m_filterUnavailable{nullptr};
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
     QStringList m_antList{"ANT1", "ANT2"};   // populated from ant_list key
 
@@ -319,6 +326,7 @@ private:
     // Icom has no separate SQL enable register: Off writes threshold zero.
     // Only client intent is retained, never a live threshold to replay at attach.
     RadioSettingsScope m_clientSquelchScope;
+    QString m_clientSquelchFeature{QStringLiteral("SquelchIntent")};
     std::optional<int> m_clientManualSqlLevel;
     bool m_restoreAutoSql{false};
     bool m_clientSqlAwaitingReport{false};
