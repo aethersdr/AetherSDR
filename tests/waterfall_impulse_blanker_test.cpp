@@ -1,5 +1,5 @@
 // Waterfall "NB Blank" impulse test (#277) on both row kinds: header-only, no
-// Qt. Pins the dBm decisions, the dBm decisions through the widget's ring (a
+// Qt. Pins the absolute-dB decisions, the same through the widget's ring (a
 // level that stays must not freeze the waterfall), and the tile decisions
 // against the original expression. The last block is a source-text pin.
 
@@ -16,6 +16,7 @@
 
 namespace WB = AetherSDR::WaterfallImpulseBlanker;
 using WB::RowKind;
+constexpr RowKind kAbsDb = RowKind::AbsoluteDb;
 
 static int g_total = 0;
 static int g_failed = 0;
@@ -31,10 +32,11 @@ static void report(const char* name, bool ok)
     }
 }
 
-// The widget's ring, as updateWaterfallRow keeps it: WF_BLANKER_N = 32 row
-// means, the baseline is the mean of the entries filled so far.
+// The widget's ring, as updateWaterfallRow keeps it: WF_BLANKER_N row means
+// (a static_assert there holds it to kRingRows), the baseline is the mean of
+// the entries filled so far.
 struct Ring {
-    static constexpr int kN = 32;
+    static constexpr int kN = WB::kRingRows;
     float values[kN]{};
     int idx = 0;
     int count = 0;
@@ -102,39 +104,39 @@ int main()
     constexpr float kLowest = 1.05f;    // slider 5
     constexpr float kHighest = 1.95f;   // slider 95
 
-    // dBm rows. The floor is one HL2's on a dummy load at LNA +30 dB.
+    // Absolute dB rows. The floor is one HL2's on a dummy load at LNA +30 dB.
     constexpr float kFloor = -147.0f;
 
     {
         const WB::Decision d =
-            WB::decide(RowKind::Dbm, 32, kFloor, kFloor + 20.0f, kDefault);
-        report("dBm: a row 20 dB over the floor is an impulse at the default",
+            WB::decide(kAbsDb, 32, kFloor, kFloor + 20.0f, kDefault);
+        report("abs dB: 20 dB over the floor is an impulse at the default",
                d.impulse);
-        report("dBm: the rejected row enters the ring 5 dB over the baseline",
+        report("abs dB: a rejected row enters the ring 5 dB over the baseline",
                near(d.ringValue, kFloor + 5.0f, 1e-3f));
     }
     {
         const WB::Decision d =
-            WB::decide(RowKind::Dbm, 32, kFloor, kFloor + 0.5f, kDefault);
-        report("dBm: an ordinary row is not an impulse", !d.impulse);
-        report("dBm: an ordinary row enters the ring as it is",
+            WB::decide(kAbsDb, 32, kFloor, kFloor + 0.5f, kDefault);
+        report("abs dB: an ordinary row is not an impulse", !d.impulse);
+        report("abs dB: an ordinary row enters the ring as it is",
                sameFloat(d.ringValue, kFloor + 0.5f));
     }
-    report("dBm: a row AT the baseline is not an impulse (the dropped-guard "
+    report("abs dB: a row AT the baseline is not an impulse (the dropped-guard "
            "freeze)",
-           !WB::decide(RowKind::Dbm, 32, kFloor, kFloor, kDefault).impulse);
-    report("dBm: a row below the baseline is not an impulse",
-           !WB::decide(RowKind::Dbm, 32, kFloor, kFloor - 30.0f, kDefault)
+           !WB::decide(kAbsDb, 32, kFloor, kFloor, kDefault).impulse);
+    report("abs dB: a row below the baseline is not an impulse",
+           !WB::decide(kAbsDb, 32, kFloor, kFloor - 30.0f, kDefault)
                 .impulse);
 
-    report("dBm: 7 rows of history is not enough",
-           !WB::decide(RowKind::Dbm, 7, kFloor, kFloor + 20.0f, kDefault)
+    report("abs dB: 7 rows of history is not enough",
+           !WB::decide(kAbsDb, 7, kFloor, kFloor + 20.0f, kDefault)
                 .impulse);
-    report("dBm: 8 rows of history is",
-           WB::decide(RowKind::Dbm, 8, kFloor, kFloor + 20.0f, kDefault)
+    report("abs dB: 8 rows of history is",
+           WB::decide(kAbsDb, 8, kFloor, kFloor + 20.0f, kDefault)
                .impulse);
-    report("dBm: no history, no impulse",
-           !WB::decide(RowKind::Dbm, 0, 0.0f, kFloor, kDefault).impulse);
+    report("abs dB: no history, no impulse",
+           !WB::decide(kAbsDb, 0, 0.0f, kFloor, kDefault).impulse);
 
     // The operator's control: one dB per step, 5 / 15 / 95 dB.
     report("margin is 5 dB at 1.05", near(WB::dbMargin(kLowest), 5.0f, 1e-3f));
@@ -158,7 +160,7 @@ int main()
     };
     bool marginsOk = true;
     for (const MarginCase& c : margins) {
-        if (WB::decide(RowKind::Dbm, 32, kFloor, kFloor + c.excessDb,
+        if (WB::decide(kAbsDb, 32, kFloor, kFloor + c.excessDb,
                        c.threshold).impulse != c.impulse) {
             marginsOk = false;
             std::printf("      threshold %.2f excess %.1f dB\n",
@@ -166,63 +168,63 @@ int main()
                         static_cast<double>(c.excessDb));
         }
     }
-    report("dBm: the margin follows the operator's threshold", marginsOk);
+    report("abs dB: the margin follows the operator's threshold", marginsOk);
 
     // A dB difference does not care where the zero of the scale is: the same
     // excess gives the same answer on a quiet band, a loud one, and a
-    // baseline above 0 dBm.
+    // baseline above 0 dB.
     bool levelIndependent = true;
     for (float baseline : {-148.0f, -111.0f, -60.0f, -20.0f, 0.0f, 10.0f}) {
-        if (WB::decide(RowKind::Dbm, 32, baseline, baseline + 14.0f, kDefault)
+        if (WB::decide(kAbsDb, 32, baseline, baseline + 14.0f, kDefault)
                 .impulse
-            || !WB::decide(RowKind::Dbm, 32, baseline, baseline + 16.0f,
+            || !WB::decide(kAbsDb, 32, baseline, baseline + 16.0f,
                            kDefault).impulse) {
             levelIndependent = false;
-            std::printf("      baseline %.0f dBm\n",
+            std::printf("      baseline %.0f dB\n",
                         static_cast<double>(baseline));
         }
     }
-    report("dBm: the decision does not depend on the absolute level",
+    report("abs dB: the decision does not depend on the absolute level",
            levelIndependent);
 
-    // dBm rows through the ring.
+    // Absolute dB rows through the ring.
     {
         // A strong band from the first row on: nothing to stand out against.
         Ring ring;
         int blanked = 0;
         for (int i = 0; i < 400; ++i) {
-            // +-1 dB of row-to-row movement around -60 dBm.
+            // +-1 dB of row-to-row movement around -60 dB.
             const float jitter = static_cast<float>((i * 7) % 5 - 2) * 0.5f;
-            blanked += ring.feed(RowKind::Dbm, -60.0f + jitter, kLowest);
+            blanked += ring.feed(kAbsDb, -60.0f + jitter, kLowest);
         }
-        report("dBm: a steady strong band is never blanked", blanked == 0);
+        report("abs dB: a steady strong band is never blanked", blanked == 0);
     }
     {
         // One impulse row in a quiet band.
         Ring ring;
         for (int i = 0; i < 40; ++i)
-            ring.feed(RowKind::Dbm, kFloor, kDefault);
-        const bool hit = ring.feed(RowKind::Dbm, kFloor + 25.0f, kDefault);
+            ring.feed(kAbsDb, kFloor, kDefault);
+        const bool hit = ring.feed(kAbsDb, kFloor + 25.0f, kDefault);
         const float after = ring.baseline();
         int later = 0;
         for (int i = 0; i < 100; ++i)
-            later += ring.feed(RowKind::Dbm, kFloor, kDefault);
-        report("dBm: a single impulse row is replaced", hit);
-        report("dBm: it moves the baseline by 5/32 dB, not by 25/32",
+            later += ring.feed(kAbsDb, kFloor, kDefault);
+        report("abs dB: a single impulse row is replaced", hit);
+        report("abs dB: it moves the baseline by 5/32 dB, not by 25/32",
                near(after - kFloor, 5.0f / 32.0f, 1e-2f));
-        report("dBm: the rows after it are not blanked", later == 0);
+        report("abs dB: the rows after it are not blanked", later == 0);
     }
     for (float threshold : {kLowest, kDefault}) {
         // The band comes up 36 dB and stays (an LNA step). The blanker holds
         // the last good row while the baseline climbs, then lets go.
         Ring ring;
         for (int i = 0; i < 40; ++i)
-            ring.feed(RowKind::Dbm, kFloor, threshold);
+            ring.feed(kAbsDb, kFloor, threshold);
         int blanked = 0;
         int lastBlanked = -1;
         const int kRows = 2000;
         for (int i = 0; i < kRows; ++i) {
-            if (ring.feed(RowKind::Dbm, kFloor + 36.0f, threshold)) {
+            if (ring.feed(kAbsDb, kFloor + 36.0f, threshold)) {
                 ++blanked;
                 lastBlanked = i;
             }
@@ -230,56 +232,57 @@ int main()
         std::printf("      threshold %.2f: %d rows held, last at row %d\n",
                     static_cast<double>(threshold), blanked, lastBlanked);
         // 50 rows is 2.00 s at 25 rows/s.
-        report("dBm: a 36 dB step is held for more than 50 rows",
+        report("abs dB: a 36 dB step is held for more than 50 rows",
                blanked > 50 && blanked == lastBlanked + 1);
-        report("dBm: and the waterfall is released, it does not freeze",
+        report("abs dB: and the waterfall is released, it does not freeze",
                lastBlanked < 300);
-        report("dBm: the baseline has reached the new level",
+        report("abs dB: the baseline has reached the new level",
                near(ring.baseline(), kFloor + 36.0f, 1e-2f));
     }
     {
         // Same step with the control at the top: 36 dB is under 95 dB.
         Ring ring;
         for (int i = 0; i < 40; ++i)
-            ring.feed(RowKind::Dbm, kFloor, kHighest);
+            ring.feed(kAbsDb, kFloor, kHighest);
         int blanked = 0;
         for (int i = 0; i < 200; ++i)
-            blanked += ring.feed(RowKind::Dbm, kFloor + 36.0f, kHighest);
-        report("dBm: at 1.95 a 36 dB step passes untouched", blanked == 0);
+            blanked += ring.feed(kAbsDb, kFloor + 36.0f, kHighest);
+        report("abs dB: at 1.95 a 36 dB step passes untouched", blanked == 0);
     }
     {
         // The band goes quiet. A falling level is never an impulse.
         Ring ring;
         for (int i = 0; i < 40; ++i)
-            ring.feed(RowKind::Dbm, -60.0f, kLowest);
+            ring.feed(kAbsDb, -60.0f, kLowest);
         int blanked = 0;
         for (int i = 0; i < 100; ++i)
-            blanked += ring.feed(RowKind::Dbm, kFloor, kLowest);
-        report("dBm: a falling level is never blanked", blanked == 0);
+            blanked += ring.feed(kAbsDb, kFloor, kLowest);
+        report("abs dB: a falling level is never blanked", blanked == 0);
     }
     {
         // One row of -inf (an empty bin). Without the finite-baseline guard
         // every later row is an impulse and writes -inf back: a permanent
         // freeze. With it the ring refills and the blanker works again.
         const float inf = std::numeric_limits<float>::infinity();
-        report("dBm: a -inf baseline fails open",
-               !WB::decide(RowKind::Dbm, 32, -inf, kFloor, kDefault).impulse);
-        report("dBm: a NaN baseline fails open",
-               !WB::decide(RowKind::Dbm, 32,
+        report("abs dB: a -inf baseline fails open",
+               !WB::decide(kAbsDb, 32, -inf, kFloor, kDefault).impulse);
+        report("abs dB: a NaN baseline fails open",
+               !WB::decide(kAbsDb, 32,
                            std::numeric_limits<float>::quiet_NaN(), kFloor,
                            kDefault).impulse);
         Ring ring;
         for (int i = 0; i < 40; ++i)
-            ring.feed(RowKind::Dbm, kFloor, kDefault);
-        ring.feed(RowKind::Dbm, -inf, kDefault);
+            ring.feed(kAbsDb, kFloor, kDefault);
+        ring.feed(kAbsDb, -inf, kDefault);
         int blanked = 0;
         for (int i = 0; i < 64; ++i)
-            blanked += ring.feed(RowKind::Dbm, kFloor, kDefault);
-        report("dBm: a -inf row does not freeze the waterfall", blanked == 0);
-        report("dBm: and the ring is finite again 32 rows later",
+            blanked += ring.feed(kAbsDb, kFloor, kDefault);
+        report("abs dB: a -inf row does not freeze the waterfall",
+               blanked == 0);
+        report("abs dB: and the ring is finite again 32 rows later",
                std::isfinite(ring.baseline()));
-        report("dBm: after which an impulse is caught again",
-               ring.feed(RowKind::Dbm, kFloor + 25.0f, kDefault));
+        report("abs dB: after which an impulse is caught again",
+               ring.feed(kAbsDb, kFloor + 25.0f, kDefault));
     }
 
     // Tile rows: unchanged.
@@ -368,15 +371,16 @@ int main()
         // The two kinds really are different laws: the same numbers, read as
         // a tile, do what they always did.
         report("the kind is what selects the law",
-               WB::decide(RowKind::Dbm, 32, 108.0f, 124.0f, kDefault).impulse
+               WB::decide(kAbsDb, 32, 108.0f, 124.0f, kDefault).impulse
                    && !WB::decide(RowKind::TileIntensity, 32, 108.0f, 124.0f,
                                   kDefault).impulse);
     }
 
     // Source-text pin. The claim: SpectrumWidget takes the row kind from its
-    // m_panBinsAbsolute, writes the helper's value to the ring and keeps no
-    // inline ratio test. No behavioural seam reaches it, because SpectrumWidget
-    // links into no test target. It shows how the call is written.
+    // m_panBinsAbsolute, writes the helper's value to the ring, keeps no inline
+    // ratio test and asserts its ring size. SpectrumWidget links into
+    // no test target, so this pins how the code is written: whitespace is
+    // collapsed, any other reformat of those lines turns it red.
     {
         std::ifstream in(AETHER_SOURCE_DIR "/src/gui/SpectrumWidget.cpp");
         std::stringstream buffer;
@@ -385,7 +389,7 @@ int main()
         report("call site: SpectrumWidget.cpp is readable", !source.empty());
         report("call site: the row kind comes from the declared capability",
                source.find("WaterfallImpulseBlanker::decide( m_panBinsAbsolute "
-                           "? WaterfallImpulseBlanker::RowKind::Dbm "
+                           "? WaterfallImpulseBlanker::RowKind::AbsoluteDb "
                            ": WaterfallImpulseBlanker::RowKind::TileIntensity, "
                            "m_wfBlankerRingCount, baseline, rowMean, "
                            "m_wfBlankerThreshold);")
@@ -397,6 +401,10 @@ int main()
         report("call site: the inline ratio test is gone",
                source.find("rowMean > baseline * m_wfBlankerThreshold")
                    == std::string::npos);
+        report("call site: the widget's ring size is asserted to be kRingRows",
+               source.find("static_assert(WF_BLANKER_N == "
+                           "WaterfallImpulseBlanker::kRingRows,")
+                   != std::string::npos);
     }
 
     std::printf("\n%d checks, %d failed\n", g_total, g_failed);

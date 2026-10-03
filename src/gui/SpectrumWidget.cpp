@@ -8638,13 +8638,13 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
             baseline /= m_wfBlankerRingCount;
 
         // Detect impulse (need ≥8 rows of history). The test depends on the
-        // row's unit: a ratio for a tile, a dB difference for a dBm row. The
-        // unit is the declared capability, not the sign of the data — see
-        // WaterfallImpulseBlanker.h.
+        // row's unit: a ratio for a tile, a dB difference for an absolute dB
+        // row. The unit is the declared capability, not the sign of the data —
+        // see WaterfallImpulseBlanker.h.
         const WaterfallImpulseBlanker::Decision blankerDecision =
             WaterfallImpulseBlanker::decide(
                 m_panBinsAbsolute
-                    ? WaterfallImpulseBlanker::RowKind::Dbm
+                    ? WaterfallImpulseBlanker::RowKind::AbsoluteDb
                     : WaterfallImpulseBlanker::RowKind::TileIntensity,
                 m_wfBlankerRingCount, baseline, rowMean, m_wfBlankerThreshold);
         if (blankerDecision.impulse) {
@@ -8675,6 +8675,8 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
             m_wfLastGoodSupplementalLevels = supplementalLevels;
             m_wfLastGoodFrames = incomingFrames;
         }
+        static_assert(WF_BLANKER_N == WaterfallImpulseBlanker::kRingRows,
+                      "the blanker test models a ring of kRingRows rows");
         m_wfBlankerRing[m_wfBlankerRingIdx] = blankerDecision.ringValue;
         m_wfBlankerRingIdx = (m_wfBlankerRingIdx + 1) % WF_BLANKER_N;
         if (m_wfBlankerRingCount < WF_BLANKER_N)

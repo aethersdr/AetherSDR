@@ -3367,8 +3367,8 @@ target_include_directories(spectrum_preview_logic_test PRIVATE src)
 target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
 add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
 
-# Waterfall NB Blank impulse test on tile and dBm rows (#277) — header-only
-# pure logic, no Qt. AETHER_SOURCE_DIR because the last block reads
+# Waterfall NB Blank impulse test on tile and absolute dB rows (#277):
+# header-only pure logic, no Qt. AETHER_SOURCE_DIR because the last block reads
 # SpectrumWidget.cpp as text: the widget links into no test, so that block
 # pins how the call is written.
 add_executable(waterfall_impulse_blanker_test

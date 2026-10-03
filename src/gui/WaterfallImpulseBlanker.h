@@ -5,16 +5,21 @@
 
 // The waterfall "NB Blank" impulse test (#277), as a pure function, since
 // SpectrumWidget links into no test. On a Flex tile (positive intensity) it is
-// a ratio over the ring's mean; on a host-computed dBm row it is a dB margin,
-// because a dBm baseline is negative. The unit is the declared capability
+// a ratio over the ring's mean; on an absolute dB row (dBFS under a dBm label,
+// negative) it is a dB margin. The unit is the declared capability
 // RadioCapabilities::panBinsAbsolute(), never the sign of the data.
 
 namespace AetherSDR::WaterfallImpulseBlanker {
 
 enum class RowKind {
     TileIntensity,  // native waterfall tile, int16(raw) / 128
-    Dbm,            // host-computed pan frame reused as the row
+    AbsoluteDb,     // host-computed pan frame reused as the row
 };
+
+// Row means the baseline ring holds; SpectrumWidget asserts its ring is this.
+// The ring holds one unit at a time: the row kind changes only across a
+// disconnect, and SpectrumWidget::clearDisplay empties the ring there.
+inline constexpr int kRingRows = 32;
 
 // Rows of history the ring needs before any row may be called an impulse.
 inline constexpr int kMinHistoryRows = 8;
@@ -25,11 +30,11 @@ inline constexpr int kMinHistoryRows = 8;
 // move the baseline by its full height.
 inline constexpr float kRejectedRowCapThreshold = 1.05f;
 
-// dB above the baseline per unit of (threshold - 1) on a dBm row: one dB per
-// step of the 5..95 control (5 dB lowest, 15 dB at the default 1.15). One dB is
-// taken as one tile intensity unit, since both row kinds share one colour range
-// width; 10*log10(t) would be a fraction of a dB, below the movement of an
-// ordinary row's mean, and would freeze the waterfall.
+// dB above the baseline per unit of (threshold - 1) on an absolute row: one dB
+// per step of the 5..95 control (5 dB lowest, 15 dB at the default 1.15). One
+// dB is taken as one tile intensity unit, since both row kinds share one colour
+// range width; 10*log10(t) would be a fraction of a dB, below the movement of
+// an ordinary row's mean, and would freeze the waterfall.
 inline constexpr float kDbPerThresholdUnit = 100.0f;
 
 inline float dbMargin(float threshold)
@@ -48,15 +53,16 @@ struct Decision {
 inline Decision decide(RowKind kind, int historyRows, float baseline,
                        float rowMean, float threshold)
 {
-    if (kind == RowKind::Dbm) {
+    if (kind == RowKind::AbsoluteDb) {
         // A baseline that is not finite fails OPEN. A -inf in the ring (one
         // empty bin in one frame) would otherwise make every later row an
         // impulse and write -inf back, and the waterfall would never move
         // again; this way the ring refills from accepted rows.
         if (historyRows >= kMinHistoryRows && std::isfinite(baseline)
                 && rowMean - baseline > dbMargin(threshold)) {
-            return {true, std::min(rowMean,
-                                   baseline + dbMargin(kRejectedRowCapThreshold))};
+            return {true,
+                    std::min(rowMean,
+                             baseline + dbMargin(kRejectedRowCapThreshold))};
         }
         return {false, rowMean};
     }
