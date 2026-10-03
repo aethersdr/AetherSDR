@@ -14,17 +14,10 @@ namespace AetherSDR {
 class AudioEngine;
 class ClientCompKnob;
 
-// "Final Output Stage" panel — the very last tile in the channel
-// strip, sitting after PUDU / Reverb.  Houses:
-//   - A horizontal level meter showing the audio AS THE RADIO WILL
-//     RECEIVE IT (i.e. tapped at the post-final-limiter point in
-//     AudioEngine, after every chain stage AND after PC mic gain).
-//   - An Enable toggle + Ceiling knob for the dedicated final-stage
-//     brickwall limiter (ClientFinalLimiter), which sits at the tail
-//     of the chain to ensure no sample escapes louder than the
-//     configured ceiling.
-//   - A "LIMIT" indicator that glows amber while the limiter is
-//     actively clamping.
+// "Final Output Stage", the last strip tile (after PUDU / Reverb): a level meter
+// tapped post-final-limiter in AudioEngine (after every stage and PC mic gain,
+// i.e. what the radio receives), Enable + Ceiling for the ClientFinalLimiter
+// brickwall, and a LIMIT indicator lit while clamping.
 class StripFinalOutputPanel : public QWidget {
     Q_OBJECT
 

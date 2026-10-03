@@ -8,19 +8,11 @@ class QLineEdit;
 
 namespace AetherSDR {
 
-// Shared rotary knob for the compressor editor.  Click-drag vertical to
-// change the value, wheel for fine adjustment, double-click to reset to
-// the configured default.  Value mapping is user-supplied so the knob
-// can be linear (Makeup), exponential (Ratio/Attack/Release), or
-// anything else a caller needs.
-//
-// Value semantics:
-//   - Internal state is "normalized" in [0, 1].
-//   - setValueFunc/toValueFunc convert between the normalized 0..1 and
-//     the caller-facing physical unit.
-//   - valueLabelFunc formats the caller-facing value for display.
-//   - valueChanged(float) emits the physical value whenever the user
-//     moves the knob.
+// Rotary knob for the compressor editor: vertical drag, wheel for fine steps,
+// double-click resets to default. State is normalized [0, 1];
+// setValueFunc/toValueFunc map to the physical unit (linear, exponential,
+// ...), valueLabelFunc formats it, and valueChanged(float) emits the physical
+// value.
 class ClientCompKnob : public QWidget {
     Q_OBJECT
 

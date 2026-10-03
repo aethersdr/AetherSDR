@@ -76,24 +76,13 @@ public:
     // TciServer directly (same pattern as pendingMasterVolume).
     int pendingTxGain() const { return m_pendingTxGain; }
 
-    // Which TCI TRX currently holds GUI focus (#4160). TciServer owns this
-    // value and pushes it in — it cannot be derived reliably by scanning
-    // slices for isActive(): SliceModel::setActive() sets the new slice's
-    // flag optimistically (SliceModel.cpp, #3854 review) while the outgoing
-    // slice keeps its flag until the radio echoes active=0, so for one round
-    // trip TWO slices report active and a scan returns whichever comes first
-    // in slice order. -1 = not yet known, in which case the scan is used as
-    // the startup fallback (before any focus change has been observed).
-    // The letter is sanitized here, not just at the TciServer call site: this
-    // is the boundary the value crosses on its way to the wire, and a raw
-    // radio-supplied ',' or ';' would corrupt TCI framing for every client on
-    // the socket. Enforcing it in the setter keeps the invariant independent of
-    // any caller remembering (Principle VII). Sanitizing is idempotent, so the
-    // server sanitizing first costs nothing.
-    // The IQ sample rate is shared server state (TciServer owns it across all
-    // clients and all four channels), but it is announced in this client's init
-    // burst — so the server seeds it here rather than the burst hardcoding a
-    // default a later SET has already moved off.
+    // GUI-focused TRX (#4160), pushed in by TciServer: scanning isActive() is
+    // unreliable because two slices report active for one round trip after a
+    // focus change. -1 = unknown; the scan is then the startup fallback. The
+    // letter is sanitized here (the wire boundary) since a ',' or ';' would break
+    // TCI framing; sanitizing is idempotent.
+    // The IQ sample rate is server-wide state, seeded here because it's announced
+    // in this client's init burst.
     void setIqSampleRate(int rate) { m_iqSampleRate = rate; }
 
     void setActiveSlice(int trx, const QString& letter)

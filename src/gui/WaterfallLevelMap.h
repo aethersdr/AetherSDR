@@ -3,34 +3,11 @@
 #include <algorithm>
 #include <cmath>
 
-// The waterfall's value-to-level law, as pure functions.
-//
-// SpectrumWidget::intensityToWaterfallLevel turns one sample of a waterfall
-// row into a 0..1 colour level. It has three black-point sources: the radio's
-// per-tile level (HW), this client's noise-floor estimate (SW), and the manual
-// Black Level slider (Off). The arithmetic lives here because SpectrumWidget
-// links into no test, and the defect this file fixes shipped through every
-// green run for that reason.
-//
-// THE DEFECT. A row arrives in one of two units and the manual branch knew
-// only one of them:
-//
-//   * A Flex sends waterfall TILES: int16(raw) / 128, about 96..120 on HF.
-//     Manual black is `160 - level`, 160 down to 60 across the slider.
-//   * A radio whose spectrum is computed on this host (HL2, ANAN, RTL-SDR)
-//     has no waterfall plane. RadioModel::onBackendSpectrumFrame reuses the
-//     pan frame as the row, so the row is dBm: negative numbers.
-//
-// A threshold of +60..+160 against a row of -148..-111 puts every sample
-// below black at every slider position. The SW branch never had the problem,
-// because its black point is measured from the row itself and is therefore in
-// the row's own unit.
-//
-// The unit is not guessed from the data. It is the declared capability
-// RadioCapabilities::panBinsAbsolute(), which SpectrumWidget already holds as
-// m_panBinsAbsolute for the noise-floor gate: true exactly where the bins are
-// host-computed absolute levels. A Flex leaves it false and takes the tile law
-// unchanged.
+// The waterfall's value-to-level law, as pure functions (SpectrumWidget links
+// into no test). A row is either Flex tile intensity (int16 raw / 128, ~96..120)
+// or, where the spectrum is computed on this host, dBm (negative); the manual
+// black point must be in the row's unit. The unit is the declared capability
+// RadioCapabilities::panBinsAbsolute(), never guessed from the data.
 
 namespace AetherSDR::WaterfallLevelMap {
 
@@ -38,16 +15,10 @@ namespace AetherSDR::WaterfallLevelMap {
 // 0..100 at one unit a step, so the black point spans 160 down to 60.
 inline constexpr float kManualBlackAtZeroTile = 160.0f;
 
-// Manual black point at slider 0 for a dBm row. One dB a step, so the black
-// point spans -60 dBm down to -160 dBm.
-//
-// CHOSEN HERE, and the reasoning is the whole of its authority. The span has
-// to reach below the lowest floor this path produces and stay above ordinary
-// signals at the top. On one HL2 on a dummy load the displayed floor ran from
-// -111 dBm (LNA -12 dB) to -148 dBm (LNA +40 dB) at the 384 kHz span, 375 Hz a
-// bin; the 48 kHz span has bins eight times narrower, 9 dB lower. -160 dBm
-// clears that, and -60 dBm at the other end leaves only strong signals lit,
-// which is what slider 0 does on a Flex ("well above noise").
+// Manual black point at slider 0 for a dBm row, one dB a step: -60 down to
+// -160 dBm. It must reach below the lowest host-computed floor (about -148 dBm
+// at 384 kHz on an HL2 at +40 dB LNA, ~9 dB lower at 48 kHz) and leave only
+// strong signals lit at slider 0, as on a Flex.
 inline constexpr float kManualBlackAtZeroDbm = -60.0f;
 
 // qBound's exact comparison order, without Qt: a NaN sample comes out as `lo`
@@ -110,14 +81,10 @@ struct Params {
 // One row sample to a 0..1 colour level.
 inline float level(float value, const Params& p)
 {
-    // Two auto-black paths (a tile arrives as raw_uint16 / 128):
-    //  * Radio-authoritative: the radio's per-tile black level is the low/black
-    //    point; the white point follows the cubic colour-gain curve
-    //    (highThresholdRaw). Reproduces the radio's evenly-levelled floor.
-    //  * Fallback (no radio auto-black yet, or auto-black off): the client-side
-    //    noise-floor estimate, or the manual black level.
-    // The auto-black offset slider biases the black point: 50 = no bias,
-    // <50 darker, >50 lighter.
+    // Radio-authoritative auto black: the radio's per-tile level is the black
+    // point and the white point follows highThresholdRaw. Otherwise the client's
+    // noise-floor estimate or the manual level. The offset slider biases the
+    // black point: 50 = none, <50 darker, >50 lighter.
     float blackThresh = 0.0f;   // low point  (row unit)
     float rangeWidth = 1.0f;    // high - low (row unit)
     if (p.autoBlack && p.radioSideAutoBlack && p.radioAutoBlackRaw > 0.0f) {

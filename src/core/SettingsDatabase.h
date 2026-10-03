@@ -8,28 +8,19 @@ struct sqlite3;
 
 namespace AetherSDR {
 
-// Thin RAII wrapper around the vendored SQLite amalgamation for the client
-// settings store (RFC #4603). This is the ONLY translation unit in the tree
-// permitted to include sqlite3.h — everything else goes through AppSettings
-// or this class, so the compile-option surface and any future engine swap
-// stay single-point.
+// RAII wrapper around the vendored SQLite for the client settings store (RFC
+// #4603). The only TU allowed to include sqlite3.h.
 //
-// Schema v1 (all tables created up front so the file format is stable from
-// the first release, even though radio_settings is consumed starting PR 2):
-//
+// Schema v1:
 //   meta             (key TEXT PRIMARY KEY, value TEXT NOT NULL)
 //   app_settings     (key TEXT PRIMARY KEY, value TEXT NOT NULL)
 //   station_settings (station, key, value; PRIMARY KEY (station, key))
 //   radio_settings   (family, radio_id, feature, schema_version, value;
 //                     PRIMARY KEY (family, radio_id, feature))
 //
-// Concurrency: SQLITE_THREADSAFE=1 (serialized) makes individual calls safe
-// from any thread, but callers own transaction composition — AppSettings
-// serializes its save path with its own mutex.
-//
-// Error handling: no exceptions (project style). Every method returns
-// success/failure and logs via qWarning(); lastError() carries the most
-// recent sqlite message for callers that surface errors to the user.
+// SQLITE_THREADSAFE=1 makes single calls thread-safe; callers own transaction
+// composition (AppSettings serializes saves with its own mutex). No
+// exceptions: methods return success, log via qWarning(), set lastError().
 class SettingsDatabase {
 public:
     static constexpr int kSchemaVersion = 1;

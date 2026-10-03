@@ -147,7 +147,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasDaxStreams` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | DAX + DAX-IQ applets, Autostart DAX |
 | `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row |
 | `hasLmsNoiseFilters` | ✅ | ❌ | ❌ | `RadioModel::hasLmsNoiseFilters()` → `VfoWidget::setHasLmsNoiseFilters` | NRL / ANFL / ANFT alone — the WDSP LMS/FFT family, a THIRD tier under `hasRadioSideDsp`. Icom: ❌ (it has NR, NB and both notches, and no register these three could reach). Keeps `hasRadioSideDsp`'s permissive-on-disconnect rule |
-| `hasAudioPeakingFilter` | ✅ | ❌ | ❌ | `RadioModel::hasAudioPeakingFilter()` → `PhoneCwApplet::setHasAudioPeakingFilter` | CW audio peaking filter on the P/CW CW face (`slice set <n> apf=`). A FOURTH tier under `hasRadioSideDsp`: Icom declares that flag for NR/NB/notch and has no APF register. Permissive on disconnect so a Flex unplug does not blink the row |
+| `hasAudioPeakingFilter` | ✅ | ✅ | ❌ | `RadioModel::hasAudioPeakingFilter()` → `PhoneCwApplet::setHasAudioPeakingFilter` | CW audio peaking filter on the P/CW CW face. Flex: the radio's own APF (`slice set <n> apf=`/`apf_level=`). HL2: **THIS HOST** runs it — WDSP's SPCW double-pole, centred on the CW pitch and in circuit only in CW, reached through `IRadioBackend::setSliceApf`; the HL2 has no firmware DSP (`hasRadioSideDsp` ❌), so like `hasHostNoiseBlanker` this is an exception to that tier, not a tier under it. Icom: ❌ (declares `hasRadioSideDsp` for NR/NB/notch and has no APF register). The P/CW gate reads this flag alone. Permissive on disconnect so a Flex unplug does not blink the row |
 | `hasManualNotch` | ❌ | ❌ | ❌ | `RadioModel::hasManualNotch()` → `VfoWidget::setHasManualNotch` | The MN button and the shared level slider re-targeted to notch POSITION. Icom: ✅ (`16 48` enable, `14 0D` position, `16 57` width). **Not** permissive on disconnect — a new button must not appear on a radio that has not claimed it. Distinct from the TNFs, which are pinned to absolute frequencies, and from the auto notch, which finds its own tone |
 | `speechProcessorLevelMaximum` | `2` | `2` | `2` | `RadioModel::publishCapabilities`, `MainWindow::applyCapabilitiesToUi` | Defines the speech-processor level shape without a GUI model-name check. Flex/HL2/Sim retain NOR/DX/DX+ (`0..2`). Icom defaults to `2`; only the IC-9700 profile declares its evidenced continuous `0..100` COMP level. |
 | `speechProcessorLabel` | `PROC` | `PROC` | `PROC` | `MainWindow::applyCapabilitiesToUi` | Radio-native label for the shared speech-processing control. Only the IC-9700 profile declares `COMP`; unidentified and sibling Icom models retain `PROC`. |
@@ -158,7 +158,7 @@ the production dialog and checks its displayed peak level and frequency.
 | `hasHostNoiseBlanker` | ❌ | ✅ | ❌ | `RadioModel::hasHostNoiseBlanker()` → `VfoWidget::setHasHostNoiseBlanker` | **THIS HOST** blanks impulse noise in the radio's IQ (WDSP ANB, ahead of the demodulator). OR'd with `hasRadioSideDsp` at the NB button, so a direct-sampling radio gets NB without claiming firmware DSP it does not have — the same exception the manual notch makes. Requires an IQ path this host demodulates: a backend fed finished audio has nothing to blank. Icom: ❌ (the radio's own blanker, under `hasRadioSideDsp`). ANAN: ✅ — the same WDSP ANB, in `AnanRxDsp`. **Not** permissive on disconnect — it can only ADD the button |
 | `hasAutoRfGain` | ❌ | ✅ | ❌ | `RadioModel::hasAutoRfGain()` → `SpectrumOverlayMenu::setAutoRfGainAvailable`, and `IRadioBackend::setAutoRfGain` | The backend drives its own **receive RF gain** from an ADC-overload observation, and offers an on/off switch for it. NOT the audio AGC: this is gain ahead of every DDC, driven by converter saturation across the whole receive span, which an audio meter in one slice cannot see. HL2: ✅ — one AD9866 behind every DDC, and its overload flag rides the EP6 C&C bytes. **Off by default** — RFC #5535 approved it armed, but the shipped LNA default of +20 dB sits one dB above the baseline the loop will arm from, so default-on would refuse on every fresh connect; it waits on a trustworthy gain axis at that default. Arming in the default `bandscope` law starts the wideband gate — about 0.11 Mbit/s on the same 100BASE-T link the EP6 receivers share, which is the sort of thing this table is read for. The flag itself says only that the switch exists. **Not** permissive on disconnect — it can only ADD the Auto checkbox beside the ANT panel's RF Gain slider. Also reachable headlessly as `pan autorfgain on\|off`, because that checkbox lives in a popup the bridge's `invoke` refuses to drive while hidden |
 | `hasDdcPanEdgeRolloff` | ❌ | ❌ | ❌ | `MainWindow::onConnectionStateChanged()` → `SpectrumWidget::setPanEdgeTaperEnabled()` | Real, bench-measured attenuation baked into the sampled data itself toward the extreme edges of the panadapter bandwidth — not a display artifact. True only for ANAN-G2, the first (and so far only) DDC-based backend; Flex/HL2/Sim report false since none of their receive chains have this shape. A capability flag rather than a family-string check, so a future DDC backend gets the same display-only edge crop automatically. Icom: ❌ (CI-V ships finished audio, not a decimated IQ stream with an edge to taper) |
-| `backendPanAveraging` (record) | absent | absent | absent | `MainWindow::onConnectionStateChanged()` → `SpectrumWidget::setClientFftSmoothingEnabled()` | The backend already averages the panadapter per the operator's FFT AVG before the frame leaves it, so the widget skips its fixed client-side EMA (`SMOOTH_ALPHA`) instead of averaging twice. Engaged only by ANAN (WDSP's display analyzer, `AnanPanAnalyzer`); `msPerAverageStep` is what one FFT AVG step means (10 ms). Icom: absent |
+| `backendPanAveraging` (record) | absent | **10 ms** | absent | `MainWindow::onConnectionStateChanged()` → `SpectrumWidget::setClientFftSmoothingEnabled()` | The backend already averages the panadapter per the operator's FFT AVG before the frame leaves it, so the widget skips its fixed client-side EMA (`SMOOTH_ALPHA`) instead of averaging twice. Engaged by ANAN (WDSP's display analyzer, `AnanPanAnalyzer`) and HL2 (`Hl2Spectrum`'s time-constant average, power domain unless the weighted toggle selects log-recursive); `msPerAverageStep` is what one FFT AVG step means (10 ms on both). Icom: absent |
 | `panZoomModes` (record) | ✅ engaged | — (absent) | — (absent) | `MainWindow::onConnectionStateChanged()` and the `PanadapterStack::panAdded` lambda → `SpectrumWidget::setBandSegmentZoomAvailable()`; `MainWindow::togglePanZoomModeForPan` and `MainWindow::setPanZoomMode` → `gui/PanZoomModeGate.h` | Per-pan band/segment zoom (`display pan set <pan> band_zoom=`/`segment_zoom=`). ENGAGED means the radio answers that wire text; ABSENT means undeclared and the gate REFUSES — the write would otherwise be dropped inside `RadioModel::sendCmd` while the control moved anyway. One predicate serves both the B/S button enable and all six command surfaces (shortcuts, MIDI, FlexControl, the RC28/Stream Deck/T-Mate2 chain, the wheel, the automation bridge), so "the button is grey" and "the keystroke is refused" cannot drift apart. A refusal on this rung logs and calls `MainWindow::showUnsupportedControlNotice()`, because a gate refuses before the send and `commandDropped()` never fires. A record and not a bool per #5262 M2 — the two zoom modes are separate wire keys — and a record and not a family string per the standing #5554 notice. Icom/ANAN/RTL: absent |
 | `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
 | `hasRadioSideCwKeyer` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideCwKeyer()` | Status-bar text-keyer indicator and every text-send entry point. Icom: ✅ only for the verified IC-705 / IC-7300MK2 command-17 profiles |
@@ -222,6 +222,11 @@ The shared RX/VFO/Phone/CW surfaces consume these declarations through
   and an undeclared backend reads as "not declared" rather than a confident no.
 - `hasModeIndependentSquelch` keeps MK2 squelch usable in CW/data. Other
   profiles keep their existing mode rules.
+  HL2 declares it FALSE explicitly: its squelch is host-side WDSP, routed by
+  mode family (FM → `fmsq` on pihpsdr's map; AM/SAM/DSB/LSB/USB → the level
+  squelch `amsq`, -140 + 0.7·level dBFS, measured on the radio; level 0 runs
+  nothing) and CW/data have no stage, so the existing client rule
+  that disables SQL there is the honest face (`WdspChannel::setSquelch`).
 - `hasFmRepeaterOffset` dims offset magnitude and direction when absent.
   MK2 has split operation, but not CI-V repeater commands 0C/0D or 0F 10–12;
   its profile suppresses those reads and writes. IC-705/9700 retain them.
@@ -309,7 +314,7 @@ So the claim is now tiered, and each tier has its own disconnected rule:
 |---|---|---|
 | `hasRadioSideDsp` | the radio runs its own RX DSP at all | permissive (assume present) |
 | `hasLmsNoiseFilters` | ...and it has the WDSP LMS/FFT family | permissive — NRL/ANFL/ANFT predate the flag, and hiding them on a Flex the moment it disconnects would be a regression, not an honesty gain |
-| `hasAudioPeakingFilter` | ...and it has a CW audio peaking filter (`slice set <n> apf=`) | permissive — APF already ships on the DSP tab; hiding the P/CW row on a Flex unplug would blink a control the operator still has |
+| `hasAudioPeakingFilter` | it has a CW audio peaking filter — the radio's (Flex `slice set <n> apf=`) or this host's (HL2, WDSP) | permissive — APF already ships on the DSP tab; hiding the P/CW row on a Flex unplug would blink a control the operator still has |
 | `hasManualNotch` | it has one operator-placed in-passband notch | **not** permissive — MN is a new button, and a permissive default would show it on every radio in the window before a backend reports, including the Flexes that notch with TNFs instead |
 | `hasHostNoiseBlanker` | **this host** blanks impulses in the radio's IQ, whatever the radio's own DSP does | **not** permissive — it only ever ADDs the NB button, so a permissive default would show NB on a radio claiming neither capability |
 | `hasAutoRfGain` | the backend drives its own RF gain from converter saturation | **not** permissive — same rule: it only ever ADDs the Auto checkbox, and a control that moves the operator's gain must not appear on a family that never claimed it |
@@ -640,10 +645,18 @@ Both live in one `std::optional<PanSpanModel> panSpanModel`. Absent is *not* a
 pair of `false`s: it means no backend has been read, and a client that needs the
 distinction checks `has_value()` before the fields.
 
-Both are declared and nothing reads them yet — the behaviour they describe is
-already implemented, by `Hl2Backend::applyPanBandwidth` snapping through
-`nearestIqSampleRateHz` and by `panBandwidthLimitsChanged` clamping the zoom
-control. What was missing was the **claim**, so a client had no way to ask.
+`followsSampleRate` is declared and nothing reads it yet — the behaviour it
+describes is already implemented, by `Hl2Backend::applyPanBandwidth` snapping
+through `nearestIqSampleRateHz` and by `panBandwidthLimitsChanged` clamping the
+zoom control. What was missing was the **claim**, so a client had no way to ask.
+
+`radioWide` has one consumer (#5750): `MainWindow::syncPanSpanControlPlacement`
+keeps the −/+ span pair **live** on one pane when it is true — the pane holding
+the TX slice, else the first docked pane in layout order — saying the span is
+shared, and **dims** it on every other pane with the reason in the tooltip and
+the accessible description (dimmed, never hidden). It leaves every pane its own
+live pair when it is false or the record is absent. The decision is `gui/PanSpanControlGate.h`, pinned in
+`tests/hl2_pan_limits_declaration_test.cpp` against the HL2's own declaration.
 
 On the HL2 the pan span *is* the DDC sample rate, so `sampleRatesHz` is not a
 list of stream rates that happens to exist alongside a span control: it is every
@@ -690,7 +703,6 @@ backend side the whole time.
 |---|:--:|:--:|:--:|---|
 | `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists. On the HL2 it is also the complete span set — see `panSpanModel` below |
 | `panSpanModel->followsSampleRate` | — (absent) | ✅ | — (absent) | The span IS the rate, so `sampleRatesHz` is every deliverable span and its first entry is a floor |
-| `panSpanModel->radioWide` | — (absent) | ✅ | — (absent) | One DDC rate for the board; a span change moves every receiver |
 | `dbmAxisIsCalibrated()` | — (absent ⇒ ✅) | ❌ | — (absent ⇒ ✅) | Whether the dBm axis is absolute. HL2 reads it off `Hl2DbReference::isCalibrated()` |
 | `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Global fallback ceiling; Flex still omits it despite transmitting, which remains wrong but inert while `txPowerBands` is empty |
 | `hasAmplifier` | — (❌) | ❌ | ❌ | The AMP applet is driven by `TunerModel::presenceChanged`, not by this |

@@ -6,20 +6,11 @@ class QLabel;
 
 namespace AetherSDR {
 
-// Reusable 20 px-tall title bar for the PooDoo Audio editor windows
-// (parametric EQ, compressor, gate, tube, PUDU, reverb, de-esser).
-// Each editor sets Qt::FramelessWindowHint at construction and adds
-// this widget at the very top of its layout.  Behaviour:
-//
-//  - Press-and-drag anywhere on the bar moves the window.  macOS uses
-//    a manual move path because repeated QWindow::startSystemMove()
-//    calls can be refused for several seconds after a move completes.
-//  - Double-click toggles maximize.
-//  - The trio at the right (— □ ✕) wires to showMinimized /
-//    showMaximized / close on the host window via an installed event
-//    filter on each glyph QLabel.
-//  - setTitleText() drives the heading on the left so the host editor
-//    can flip the label when its Side / Path changes.
+// 20 px title bar for the frameless PooDoo Audio editor windows. Drag moves
+// the window (macOS uses a manual move: repeated startSystemMove() can be
+// refused for seconds after a move). Double-click toggles maximize. The — □ ✕
+// labels map to showMinimized / showMaximized / close via event filters.
+// setTitleText() lets the host relabel on Side/Path change.
 class EditorFramelessTitleBar : public QWidget {
 public:
     explicit EditorFramelessTitleBar(QWidget* parent = nullptr);

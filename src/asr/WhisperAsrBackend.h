@@ -111,18 +111,11 @@ int asrResolveDefaultGpuIndex(const std::vector<AsrGpuDevice>& devices);
 void asrMarkGpuDeviceFailed(int index);
 bool asrGpuDeviceFailed(int index);
 
-// After compute-device resolution, which model tier should be running. The
-// GPU-default tier is heavy enough that it only makes sense on a usable GPU:
-//  - raise to it only while the GPU default is wanted (no explicit operator
-//    model choice yet) AND resolution landed on a usable GPU;
-//  - walk it back to the base default when it is selected only because an
-//    earlier resolution auto-raised it (`gpuDefaultActive`) and resolution has
-//    since fallen off the GPU — the heaviest model cannot keep up on CPU,
-//    which is the "backlog climbing, no text" shape of #4502;
-//  - never touch a tier the operator picked explicitly.
-// Returns the tier to run plus the updated auto-raise state. Header-inline and
-// whisper-free for the same reason as asrLanguageOrDefault below: unit
-// testable without linking the vendored library.
+// After device resolution, which tier should run. Raise to the GPU-default tier
+// only when no explicit operator choice exists and a usable GPU was resolved;
+// walk an auto-raised tier (`gpuDefaultActive`) back to the base default when
+// resolution falls off the GPU (it can't keep up on CPU, #4502); never touch an
+// operator-picked tier. Whisper-free for unit tests.
 struct AsrTierResolution {
     QString tierId;
     bool gpuDefaultActive = false;
@@ -149,21 +142,12 @@ inline AsrTierResolution asrReconcileDefaultTier(const QString& currentTier,
     return {currentTier, false};
 }
 
-// whisper.cpp and ggml report through one log callback, which by default writes
-// to stderr — so nothing they say reaches the log file or a support bundle.
-// AsrLibLogAssembler is the policy for routing that stream into the log file:
-// WARN and ERROR are forwarded, INFO and DEBUG are dropped (a single model load
-// prints dozens of INFO lines), and text arrives one callback per printf, so it
-// is split into whole lines. GGML_LOG_LEVEL_CONT ("continue the previous
-// message") is honoured by joining, though nothing in the vendored whisper/ggml
-// emits it — multi-part messages there repeat the level instead, and so stay
-// separate lines; the CONT branch is for a system libwhisper that does. Header-inline and
-// whisper-free, like the helpers above, so it is unit testable without linking
-// the vendored library; the level constants mirror ggml_log_level and the .cpp
-// static_asserts that they still match.
-//
-// Not thread-safe: the caller serialises feed() (whisper logs from the ASR
-// worker thread, discovery from a pool thread).
+// Routes the whisper/ggml log callback (stderr by default) into the log file:
+// WARN/ERROR forwarded, INFO/DEBUG dropped, printf-sized chunks joined into whole
+// lines, GGML_LOG_LEVEL_CONT joined to the previous message (for a system
+// libwhisper; vendored code never emits it). Level constants mirror
+// ggml_log_level, static_asserted in the .cpp. Not thread-safe: caller serialises
+// feed().
 class AsrLibLogAssembler {
 public:
     static constexpr int kLevelWarn = 3;  // GGML_LOG_LEVEL_WARN
@@ -229,44 +213,19 @@ private:
     QString m_pending;
 };
 
-// Route whisper/ggml WARN + ERROR into the log file (category
-// aether.asr.whisper) while leaving their stderr output as it was (see the
-// callback for the one subtlety: DEBUG lines stop after the first model load,
-// as they did before).
-// Called by the application, not from inside this library: a test or tool that
-// wants ggml's log for itself (asr_gpu_probe_test does) must keep it. Forwarded
-// lines are flushed to disk only while an AsrStageTrace is open — the window in
-// which a crash would otherwise lose them; decode-path warnings ride the
-// writer's normal timer. NOT reached by this: ggml-vulkan reports most of its
-// failures on std::cerr directly (e.g. "Device memory allocation of size N
-// failed"), which no log callback sees.
+// Route whisper/ggml WARN + ERROR into aether.asr.whisper, leaving stderr output
+// unchanged. Called by the application only, so tests (asr_gpu_probe_test) keep
+// ggml's log. Lines are flushed synchronously only while an AsrStageTrace is
+// open. ggml-vulkan's direct std::cerr output is not captured.
 void asrInstallLogRouting();
 
-// Whether a model tier of `tierSizeBytes` (the weights file) can be expected to
-// load on a device reporting this much memory. Gates only the AUTOMATIC raise
-// to the GPU-default tier: "a GPU exists" says nothing about room, and a 1.6 GB
-// model auto-selected for a 2 GB card is #4972. An explicit operator choice is
-// never refused here — that stays the operator's call.
-//
-// The headroom is what whisper allocates beyond the weights (KV caches and
-// compute buffers). MEASURED (#4972 bench, RTX 5060 Laptop, ggml-vulkan,
-// 2026-09-16): large-v3-turbo occupies 1818 MiB against a 1549 MiB file
-// (+268 MiB), base 293 MiB against 141 MiB (+152 MiB); whisper's own load log
-// sums to the same figure. 300 MiB covers the larger of the two.
-//
-// The free figure is not always free memory: ggml-vulkan reports free == total
-// for a device without VK_EXT_memory_budget (ggml_backend_vk_get_device_memory),
-// so the free check alone can be handed the whole heap. The total must therefore
-// clear the same need plus a reserve for the desktop and AetherSDR's own
-// rendering on that card, which makes the answer independent of the reporting
-// mode. The reserve is a chosen margin, not a measurement; for scale, MEASURED
-// total minus free at the startup probe was 367 MiB (#5730 reporter log, GTX
-// 1050, 1809 of 2176 MB free) and 791 MiB (#4972 bench, 7360 of 8151 MB free).
-//
-// Both figures 0 means the device could not be asked (AsrGpuDevice) — unknown
-// is not "too small", so it keeps the previous behaviour. Integrated GPUs
-// report shared system memory and pass on their own numbers. Header-inline and
-// whisper-free, like asrReconcileDefaultTier above.
+// Whether a tier of `tierSizeBytes` should load on a device with this much memory.
+// Gates only the AUTOMATIC raise to the GPU-default tier (#4972); an explicit
+// operator choice is never refused. Headroom = whisper's KV caches + compute
+// buffers: measured large-v3-turbo +268 MiB, base +152 MiB (RTX 5060, ggml-vulkan),
+// so 300 MiB. ggml-vulkan reports free == total without VK_EXT_memory_budget, so
+// total must also clear the need plus a chosen 512 MiB desktop reserve (observed
+// total-free: 367 and 791 MiB). Both figures 0 = unknown, allowed.
 inline constexpr quint64 kAsrTierVramHeadroomBytes = 300ull * 1024ull * 1024ull;
 inline constexpr quint64 kAsrTierVramDesktopReserveBytes = 512ull * 1024ull * 1024ull;
 

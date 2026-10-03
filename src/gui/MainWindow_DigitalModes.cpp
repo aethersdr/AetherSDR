@@ -1,18 +1,7 @@
-// MainWindow_DigitalModes.cpp — digital-mode subsystems of MainWindow.
-//
-// Part of the #3351 monolith decomposition (Phase 1e). Holds the
-// activation/deactivation and routing for every digital-mode surface:
-//
-//   • RADE digital voice: activateRADE / deactivateRADE / slice-mode watch
-//   • Classic FreeDV (FDVU/FDVL): display activation + meter routing +
-//     the FreeDV Reporter window and spot reporting
-//   • DAX: startDax / stopDax / per-slice channel wiring
-//   • AX.25 / AetherModem: decode dialog + KISS TNC startup
-//   • RTTY: decoder output routing
-//   • WFM software FM demod: activateWFM / deactivateWFM with NCO-Doppler
-//     tracking + reflectWfmButtons UI state sync (DAX IQ input, #3407)
-//
-// Pure code motion from MainWindow.cpp — same class, no header changes.
+// MainWindow_DigitalModes.cpp — digital-mode subsystems: RADE, classic FreeDV
+// (FDVU/FDVL) display/meters/Reporter, DAX start/stop and per-slice channels,
+// AX.25 / AetherModem with KISS TNC, RTTY decoder routing, WFM software demod
+// with NCO-Doppler tracking (DAX IQ, #3407).
 
 #include "MainWindow.h"
 #include "DStarAvailabilityGate.h"
@@ -371,17 +360,9 @@ void MainWindow::onRttyPanelCloseRequested()
 void MainWindow::refreshRttyDecodeState()
 {
     auto* s = activeSlice();
-    // Only auto-activate for explicit RTTY mode.  DIGL is a general LSB-data
-    // mode used for PSK31, FT8, SSTV, etc. — showing a Baudot decoder on
-    // those signals would be confusing.  Users who do FSK on DIGL can open
-    // the panel manually via the slice context menu (future work).
-    //
-    // Mode availability and operator intent are separate gates. The CW
-    // decoder also has enable gates, but does not persist pane dismissal.
-    // an RTTY slice makes the decoder *available*, the persisted enable
-    // flag decides whether the operator actually wants it (#5353).  The
-    // flag defaults to True, so a session that never closes the pane
-    // behaves as before.
+    // Auto-activate only for RTTY mode; DIGL carries PSK31, FT8, SSTV etc.
+    // Mode makes the decoder available; the persisted enable flag (default
+    // True) records whether the operator wants it (#5353).
     const bool isRtty = s && s->mode() == "RTTY";
     const bool wanted = isRtty && RttyDecodeSettings::enabled();
 
@@ -428,24 +409,11 @@ void MainWindow::activateRADE(int sliceId)
     auto* s = m_radioModel.slice(sliceId);
     if (!s) return;
 
-    // RADE's receive path is DAX channel audio (PanadapterStream::daxPcmReady),
-    // and only a Flex backend owns a PanadapterStream — RadioModel leaves
-    // panStream() null for every other family. The connect() further down
-    // dereferenced it bare, so selecting RADE on a Hermes-Lite 2 was a SEGFAULT,
-    // not a decline. Same shape as the null-deref that crashed every HL2 connect
-    // three seconds in (docs/HERMES.md §6 gap 1) and as the startDax() guard, which
-    // this deliberately mirrors.
-    //
-    // Checked HERE rather than at the connect: everything between this point and
-    // there mutates real station state — it moves the TX-slice badge, installs a
-    // PTT-off hook on TransmitModel, calls setRadeMode() and opens mic capture.
-    // Guarding only the connect would leave a radio that is half in RADE mode
-    // with no receive path and an intercepted unkey, which is worse than the
-    // crash because it looks like it worked.
-    //
-    // Declining is the honest answer, not merely the safe one. A backend that
-    // demodulates in-process could carry RADE over the seam one day, but nothing
-    // routes modem audio there today, so there is no path to take.
+    // RADE receives DAX channel audio (PanadapterStream::daxPcmReady), and only
+    // a Flex backend has a PanadapterStream. Decline before anything below
+    // mutates station state (TX badge, PTT-off hook, setRadeMode(), mic
+    // capture), which would otherwise leave a half-RADE radio. Mirrors
+    // startDax()'s guard.
     if (!m_radioModel.panStream()) {
         qCWarning(lcRade) << "MainWindow: RADE needs DAX audio, which this radio"
                           << "does not provide — refusing to activate on slice"
@@ -1188,21 +1156,9 @@ void MainWindow::showFreeDvReporter()
                 return;
             applyTuneRequest(sl, freqMhz, TuneIntent::AbsoluteJump, "freedv-reporter");
 #ifdef HAVE_RADE
-            // Without HAVE_RADE the build can't run the modem, so there is
-            // no activateRADE() to call — same reasoning as the FreeDV
-            // spot-click path in MainWindow_Wiring.cpp (#1846).
-            //
-            // Only a family with a PanadapterStream (Flex) can actually run
-            // RADE; activateRADE() otherwise declines with a blocking
-            // QMessageBox::warning, which would pop on every double-click
-            // here even though the gesture has nothing to do with RADE.
-            // Skip the call on those families instead of surfacing that
-            // modal (#4125 review).
-            //
-            // Reuse the same auto-switch gate DX Cluster uses for its
-            // CW/SSB mode-follow (#2298), so one setting controls "does
-            // double-click-to-tune also change what the radio is doing"
-            // everywhere (#4125).
+            // activateRADE() needs HAVE_RADE and a PanadapterStream (Flex);
+            // elsewhere it would pop a blocking warning on every double-click, so
+            // skip it. Uses the DX Cluster SpotAutoSwitchMode gate (#2298, #4125).
             if (m_radioModel.panStream()
                     && AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True")
                 activateRADE(sl->sliceId());
@@ -1461,24 +1417,13 @@ void MainWindow::wireDaxSlice(SliceModel* slice)
     }));
 }
 
-// Handle a slice's DAX channel transitioning. daxChannelChanged only fires on
-// an actual value change (SliceModel guards equality), and arrives from both
-// the local UI setter and the radio status echo.
-//
-// #3305/#4009: this reconciler translates slice→channel transitions into
-// refcounted acquire/release on PanadapterStream and NOTHING ELSE. It must
-// never send commands itself: the radio answers a re-assert of a live binding
-// with a transient unbind/rebind dax=0/dax=<ch> status pair
-// (state-machines.md §7.4), so any command emitted from this echo path feeds
-// a self-sustaining storm — the ~12-15 Hz `slice set dax` loop of #4009 and
-// the create/remove churn of #3626. Acquire/release are idempotent and the
-// manager's grace window absorbs the transient pair, so this path is
-// loop-free by construction. The #1439 dax_clients re-assert still exists in
-// RadioModel::handleDaxRxStreamRegistry; it fires from the dax_rx status echo,
-// but a per-stream one-shot (m_nudgedDaxStreams, cleared only on `stream
-// remove`) gates it to fire at most once per create so the radio's own
-// transient unbind echo cannot re-trigger it — see #4383 (which reopened #4009
-// because that gate was originally missing).
+// Reconcile a slice's DAX channel change (fires on real changes from both the
+// UI setter and the radio echo) into refcounted acquire/release on
+// PanadapterStream, and NOTHING ELSE (#3305, #4009). The radio answers a
+// re-assert with a transient dax=0/dax=<ch> pair (state-machines.md §7.4), so
+// sending commands from this echo path loops. The #1439 re-assert in
+// RadioModel::handleDaxRxStreamRegistry is one-shot per stream via
+// m_nudgedDaxStreams (#4383).
 void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
 {
     if (!slice || !m_daxBridge) return;
@@ -1524,6 +1469,17 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
 void MainWindow::activateWFM(int sliceId)
 {
     if (m_wfmSliceId == sliceId) return;
+    // WFM demodulates the pan's DAX IQ stream, which only a radio with a DAX
+    // plane produces; on any other the demodulator starts on a stream nobody
+    // feeds and its create command is dropped. The DAX panel holding the
+    // button is hidden there, but refuse here too -- every entry point asks
+    // the same question -- and say so instead of lighting a dead button.
+    if (!m_radioModel.hasDaxStreams()) {
+        qCWarning(lcDevices) << "WFM refused: this radio has no DAX IQ stream";
+        showUnsupportedControlNotice();
+        reflectWfmButtons(false, sliceId);   // un-stick the button that triggered us
+        return;
+    }
     deactivateWFM();
 
     m_wfmCooldown = true;

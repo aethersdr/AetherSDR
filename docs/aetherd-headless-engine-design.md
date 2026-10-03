@@ -517,11 +517,12 @@ The reasons are structural, not preference:
 
 **Agent-guide discipline.** AetherSDR's contributors are predominantly AI
 agents that read `AGENTS.md` before every change, so each milestone PR above
-must update `AGENTS.md` **in the same PR** — the routing rules, ratchets, and
+must update the agent guide (`docs/agents/backends.md`, the backends sub-doc of
+`AGENTS.md`) **in the same PR** — the routing rules, ratchets, and
 claim/verification recipes for each step are pre-drafted in
 [`docs/aetherd-agents-md-staging.md`](aetherd-agents-md-staging.md) and land
 atomically with their step. A milestone PR that changes structure without its
-`AGENTS.md` block is incomplete.
+agent-guide block is incomplete.
 
 The natural fracture line for future splits is the **protocol, not the
 process**: once protocol v1 is stable, far-side clients with different
@@ -566,3 +567,98 @@ in `packaging/`, not a repo split.
    does v1 ship single-session with the namespacing reserved in the protocol?
 6. Should the core-profile / vendor-extension split (§2, §5.5) be ratified as
    part of protocol v1, or grown incrementally as the second backend lands?
+
+## Appendix — implementation status (steps 3–4)
+
+The running record of what has landed. The rules agents must follow live in
+[`docs/agents/backends.md`](agents/backends.md); this is the descriptive state.
+
+Step 3 is in progress: the normative v1 envelope contract, bounded codec,
+observe-only local handshake/capability service, and a QtWidgets-free
+`aetherd` skeleton have landed. The typed observe-only `server`,
+`radioSession`, `slice`, and `panadapter` resources now publish through
+`RadioResourceAdapter`; `resource.get` plus atomic snapshot/event
+`resource.subscribe`/`resource.unsubscribe`, per-resource revisions, bounded
+coalescing/session resync, and an independent local-socket hard disconnect cap
+are live over the current-user local transport.
+The headless daemon also owns a bounded, observe-only `radioCatalogue` through
+the normalized `RadioDiscoverySource` seam. Native discovery adapters stay under
+`src/core/backends/`; desktop discovery/autoconnect is unchanged. Discovery is
+passive by default: `--discover-local` opts into Flex/HL2/ANAN LAN discovery and
+available RTL-SDR USB enumeration; `--discover-sim` publishes only demo metadata.
+Neither option connects a radio. Icom manual setup, SmartLink and external
+directories are excluded. Catalogue fields and lifecycle are specified in
+`docs/aetherd-control-resource-v1-catalogue.md`.
+Sessions require explicit trusted authorization; the local transport defaults
+to observe permission, and reads/subscriptions enforce it. The daemon's explicit
+`--allow-local-control` flag additionally grants non-TX control to current-user
+local clients. Typed catalogue-selected `radio.connect` / `radio.disconnect`
+are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
+revision checks and limits. Clients cannot supply arbitrary endpoints or
+credentials. Every negotiated session, observer or controller, now shares a
+per-client request budget (100/s, burst 200, advertised in `limits`); exceeding
+it is terminal for that connection. Terminal session cleanup discards pending
+observations and synchronously retires bound authority before deferred socket
+cleanup; unrecoverable output failure also revokes the session. Local input
+processing yields after a bounded batch so a busy client cannot monopolize the
+engine thread. There is no wire credential-provisioning or revocation method.
+Explicit offline OS-vault setup and optional `--credential-authority` verification
+are implemented; credential roles do not arm or key a radio. Provisioning and
+serving share an authority reservation, and unavailable secure storage has no
+plaintext fallback. See `docs/aetherd-stage4-client-grants.md` for the current
+credential/lifetime contract. `--allow-local-tx` explicitly composes independent
+grants, private TX/admin methods and operation-bound stop proof; it requires the
+credential authority and local control, and starts disarmed. Initial backend
+support covers compatible Flex LAN software PTT on SmartSDR TCP API 1.4 with
+complete live interlock evidence, not a model/firmware-build allowlist. Hardware
+coverage is FLEX-6700 firmware 4.2.18.41174; do not claim other models were tested.
+See `docs/aetherd-flex-ptt-stop-evidence.md` for the shared protocol contract and
+the separate hardware evidence record. Unsupported backends and
+activities cannot issue a grant. Receive mutations also refuse retained TX
+ownership, including acquired-but-not-keyed leases and unconfirmed cleanup.
+`slice.setFrequency` now dispatches a bounded, revision-checked intent for an
+existing owned slice, with explicit backend observation provenance and fail-closed
+TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
+not optimistically update the model. Unknown coverage/readback remains unavailable.
+The receive-control milestone adds typed mode/filter/gain/mute and pan
+center/bandwidth intents for qualified existing owned resources, separate
+backend receive observations, bounded latest-value `meter` resources and a
+read-only `transmitState`; see `docs/aetherd-local-receive-control.md` for the
+per-backend support matrix and remaining no-op, geometry and TX-idle limits.
+This is not all-backend feature parity: unavailable operations remain absent.
+The desktop adapter has not landed; UI code still consumes models directly, and that
+remains correct. New resource fields belong in the adapter and the versioned
+catalogue, never in a transport or via QObject reflection. No protocol TX
+method is advertised before the step-4 arbiter exists.
+
+Step 4 has one engine-owned `TxCoordinator`, independent grant-bound actors,
+and a transitional desktop actor. Flex primary keying and CWX text
+carry operation/batch fences to the original TCP writer. A queue-consumed
+callback ends local handoff only, never proves radio idle. Preserve normal
+operator reengagement, but use `finishLocalIntent()` rather than asserting a
+qualified stop: the coordinator retains that actor until matching stop evidence
+arrives. Uncorrelated RX status must not clear this handoff barrier. Preserve
+short key-down/key-up sequences, Quindar/RADE release tails, and held MOX when
+cancelling a CWX batch. Do not enable independent-client handoff or daemon TX
+until independent trusted grants and the qualified stop/recovery contract
+are complete. See `docs/aetherd-stage4-tx-coordinator.md`. This work does not
+widen `welcome`/capability serialization or replace #5598's RX PCM seam work.
+The bridge watchdog tracks its authorization-lifetime producer's original
+contributions with a monotonic, non-renewable deadline. A boolean keyed sample alone cannot establish ownership
+(CWX has QSK gaps); repeated commands must not renew that deadline. Deferred
+TX widget invocations retain the original input before queueing and
+claim only after admission. These are producer-isolation safeguards, not
+per-socket actor grants or qualified radio-idle evidence.
+
+Local producer contributions now use opaque `TxCoordinator::Intent` handles,
+not activity bits as ownership. Repeat admission reuses a producer's live
+handle. Mark release before callbacks/queueing, retain the captured handle
+until its normal tail is consumed, and end that handle only. Reengagement gets
+a distinct handle so an earlier completion cannot release it. The coordinator
+refuses local operation completion while any contribution remains. The six
+legacy desktop entry points retain compatibility slots, while `TxController`
+binds converted UI, device and bridge inputs to their actual producer. Capture
+before the first queued hop; derive scheduled elements from the original root,
+never from callback-time authority. Device close, authorization changes and
+reconnect fence stale work. Keep TX audio context through backend queues and
+retries. Producer identity still does not confer an independent actor grant.

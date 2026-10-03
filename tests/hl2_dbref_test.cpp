@@ -17,6 +17,25 @@
 
 using AetherSDR::hl2::Hl2DbReference;
 
+// THE AGC REFERENCE IS A CONSTANT, NOT A SETTING (#5625 follow-up). A
+// setReferenceLnaGainDb() stood here with no caller anywhere, so the
+// "reference" was the shipped default behind a setter nothing reached. It was
+// removed rather than wired -- see Hl2DbReference::kReferenceLnaGainDb for why
+// there is nothing it would be right to wire it to. These two lines are what
+// keep it that way: the reference is the SAME constant the band memory falls
+// back to (production's, not a retyped 20), and no instance can move it.
+// Both fail to compile against the header before the removal; the runtime
+// loop at the end of main() does not, and says so. The concept names the old
+// setter, so a setter under a new name would pass it -- review catches that
+// one, not this file.
+template <typename T>
+concept CanMoveAgcReference = requires(T& r) { r.setReferenceLnaGainDb(0.0); };
+static_assert(!CanMoveAgcReference<Hl2DbReference>,
+              "the AGC reference gain has no per-instance setter");
+static_assert(Hl2DbReference::kReferenceLnaGainDb
+                  == static_cast<double>(AetherSDR::hl2::kLnaDefaultGainDb),
+              "the AGC reference is the shipped LNA default");
+
 static int g_failures = 0;
 static void check(bool ok, const char* what)
 {
@@ -46,9 +65,7 @@ int main()
     // draft SUBTRACTED the 2 dB of transformer and filter-board insertion loss
     // instead of adding it, and then quoted DL1YCF's "-34 dBm clipping at
     // +33 dB" as agreeing with the result to the digit. The agreement was the
-    // tell, not the evidence: that figure also assumes +33 dB was delivered,
-    // and IF the gain folds -- which #5752 left unresolved against the native
-    // bit-6-selected RTL path -- a commanded +33 would apply as +1.
+    // tell, not the evidence: that figure also assumes +33 dB was delivered.
     //
     // If this block ever fails again, the question to ask is not "has the
     // arithmetic drifted" but "has the DERIVATION been falsified" -- and the
@@ -255,6 +272,31 @@ int main()
         check(near(after.offsetDb() - (20.0 - stored),
                    Hl2DbReference::kFullScaleDbmAtZeroGain - 20.0),
               "and moves it by the same -17 dB at every stored gain");
+    }
+
+    // A CHARACTERIZATION PIN, NOT THE GUARD. The LNA term the AGC undoes is
+    // (shipped default - commanded) across the whole native range, read
+    // straight from lnaOffsetDb() rather than through agcCeilingDb()'s clamp.
+    //
+    // What it does NOT prove: this loop passes unchanged against the code
+    // before the setter was removed -- the old member defaulted to the same
+    // value and nothing reassigned it. It never seeds an object, so a setter
+    // put back and called from a connect path, a band's memory or the
+    // auto-gain baseline would pass here too. And it compares against the
+    // same kLnaDefaultGainDb the reference is built from, so a change to the
+    // shipped default moves both sides and passes as well.
+    //
+    // What it does catch: lnaOffsetDb() drifting from that formula -- a sign
+    // flip, or a reference decoupled from the default. The guard against a
+    // movable reference is the pair of static_asserts at the top of this
+    // file, which fail to compile against the pre-removal header.
+    for (int g = AetherSDR::hl2::kLnaGainMinDb;
+         g <= AetherSDR::hl2::kLnaGainMaxDb; ++g) {
+        Hl2DbReference fresh;
+        fresh.setLnaGainDb(g);
+        check(near(fresh.lnaOffsetDb(),
+                   static_cast<double>(AetherSDR::hl2::kLnaDefaultGainDb) - g),
+              "the AGC's LNA term is (shipped default - commanded) at every gain");
     }
 
     if (g_failures == 0)

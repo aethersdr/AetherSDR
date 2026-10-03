@@ -1,21 +1,10 @@
 #pragma once
 
-// HOW THE FRONT-END STATE IS SAID, in three registers: a lamp, a line of text,
-// and what a screen reader is told.
-//
-// SEPARATED FROM THE WIDGET SO IT CAN BE TESTED. Everything here is a pure
-// function of AetherSDR::FrontEndOverload -- no Qt widgets, no painting, no
-// clock. The widget draws what these return and owns no rules of its own. That
-// division is what lets front_end_overload_presentation_test assert the
-// behaviour RFC #5535 made a merge condition without instantiating a GUI.
-//
-// MODELLED ON THE RADIO'S OWN LEDS, which is #5535's wording and not a
-// decoration: an operator watching an HL2 already reads clipping off the board,
-// so the indicator that replaces that glance should not require learning a new
-// vocabulary. Dark when there is nothing to say, green when clean, amber when it
-// is starting, red when it is bad -- and red LATCHES BRIEFLY, because a
-// converter that rails for 200 ms and recovers is exactly the event a glance
-// would miss.
+// How front-end state is presented: lamp colour, text line and screen-reader
+// text, as pure functions of FrontEndOverload so
+// front_end_overload_presentation_test covers RFC #5535 without a GUI. Modelled
+// on the radio's own LEDs: dark (nothing to say), green (clean), amber
+// (starting), red (bad); red latches briefly so a 200 ms rail is not missed.
 
 #include "core/backends/FrontEndOverload.h"
 

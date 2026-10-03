@@ -19,18 +19,11 @@ QJsonObject buildMqttRadioStatePayload(const MqttRadioStateInputs& in)
     obj[QStringLiteral("tx")]        = in.transmitting;
     obj[QStringLiteral("connected")] = in.connected;
 
-    // Power is RADIO-level, so it survives the slice gate above — but not the
-    // "has the radio actually said anything" gate. Before the first transmit
-    // status of a session, TransmitModel still holds its 100 default, which is
-    // byte-identical to a radio genuinely running full drive; publishing it would
-    // hand an interlock a phantom. Omission makes a consumer that requires the
-    // field fail loudly instead.
-    // AND `connected`, for the same reason the slice fields are gated: the
-    // disconnect publish runs from radioTransmittingChanged(false), which
-    // RadioModel::onDisconnected() emits TEN LINES BEFORE it calls
-    // TransmitModel::resetState() — so the latches are still set and the dead
-    // radio's drive would go out carrying drive_confirmed:true, which is the one
-    // message an amplifier interlock must never see (#5733 review).
+    // Power is radio-level, so it survives the slice gate, but is omitted until the
+    // radio has sent transmit status (TransmitModel's default 100 is
+    // indistinguishable from real full drive) and while disconnected: the disconnect
+    // publish runs before TransmitModel::resetState(), so a dead radio's drive must
+    // never go out with drive_confirmed:true.
     if (in.connected && in.haveTransmitStatus) {
         obj[QStringLiteral("drive")] = in.drive;
         // Whether `drive` IN THIS MESSAGE is what the RADIO reports or what the

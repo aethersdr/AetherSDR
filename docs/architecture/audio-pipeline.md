@@ -146,7 +146,14 @@ but the live RX speaker strip is the explicit order inside `writeAudio()`.
 ### Pan handling
 
 Radio speaker audio enters as stereo with the radio's per-slice pan already
-applied. Every client NR method denoises L and R independently, preserving
+applied. For a backend that demodulates on this host there is no radio to do
+that, so the backend applies it: `applySliceAudioInPlace()` is the ANAN
+receiver's mute, AF gain and balance stage, and it runs on the demodulated block
+before the speaker feed is published. The per-slice tap (`sliceAudioFrameReady`,
+which feeds TCI receiver channels and decoders) is published first, pre-mute and
+pre-gain, as the seam contract requires. It uses the same balance law as `applyRxPanInPlace()`
+below -- attenuate the opposite channel, never boost either -- so the same
+setting is the same loudness whichever kind of receiver it is applied to. Every client NR method denoises L and R independently, preserving
 channel separation but not the balance of a signal present in both channels
 (see step 2 above). The RX strip and the RX upsampler described below preserve
 their input balance. The only client pan stage is `applyRxPanInPlace()` in
@@ -180,9 +187,28 @@ RADE decoded speech is logically mono duplicated to stereo before that point.
 - RX boost is optional and applies `tanh(2*x)` after any 24 kHz to 48 kHz
   resampling.
 - RX output trim is a dB gain stage applied after RX boost.
-- `m_rxBufferCapMs` defaults to 200 ms and is clamped to 50..1000 ms. The
-  speaker timer drops the oldest samples when the normal RX buffer or RADE RX
-  buffer exceeds the cap.
+- `m_rxBufferCapMs` defaults to 100 ms (`#3193` lowered it from 200 ms) and is
+  clamped to 50..1000 ms by `setRxBufferCapMs()`. This is a **backlog cap**:
+  queued RX audio above the effective bound is trimmed oldest-first. This
+  setting is not a prefill target or a latency floor; it does not make the
+  receiver wait for the backlog to reach the cap. Separate presentation-delay
+  and KiwiSDR jitter prebuffering can hold audio before playback.
+- The configured value is a lower bound on the effective cap. `drainRxAudio()`
+  uses the maximum of the configured value, `kKiwiSdrBufferCapMs` (1000 ms)
+  when KiwiSDR audio is active, and the largest applicable receive presentation
+  delay plus 100 ms when that delay is positive.
+- `processRxAudioData()` instead includes the target buffer's presentation
+  delay plus 100 ms even when the delay is zero, and applies the 1000 ms Kiwi
+  floor for a Kiwi target or active Kiwi audio. With Kiwi inactive and no
+  presentation delay, settings below 100 ms therefore produce different
+  drain-side and enqueue-side bounds.
+- Trimming occurs on both drain and producer paths. `drainRxAudio()` trims
+  normal, legacy KiwiSDR, and external Kiwi receive queues, plus RADE speech
+  separately. `processRxAudioData()` trims the NR2 packet queue or the raw
+  main/Kiwi buffer, depending on the path. `queueLegacyKiwiAudioData()` and
+  `queueKiwiAudioData()` also enforce producer-side limits, and
+  `setReceivePresentationDelays()` trims queued audio when delays decrease.
+  Producer-side caps also bound backlog when the speaker drain is stopped.
 - The speaker drain timer runs every 10 ms, writes only full float32 samples, and
   respects `QAudioSink::bytesFree()`.
 - If decoded RADE speech is pending, the speaker timer mixes `m_radeRxBuffer`
@@ -869,6 +895,8 @@ Radio-provided taps:
 | Radio speaker decode, narrow | `PanadapterStream::decodeNarrowAudio()` | VITA PCC `0x03E3`, big-endian float32 stereo | native float32 stereo | 24 kHz | 2 | Emits `audioDataReady()` for normal RX or `daxAudioReady()` for DAX streams |
 | Radio speaker decode, reduced | `PanadapterStream::decodeReducedBwAudio()` | VITA PCC `0x0123`, big-endian Int16 mono | float32 stereo | 24 kHz | 1 -> 2 | Duplicates mono to L/R |
 | Radio Opus RX decode | `PanadapterStream::decodeOpusAudio()` | VITA PCC `0x8005`, Opus | float32 stereo | 24 kHz | 2 | Decodes Opus to Int16 stereo, then converts to float32 |
+| ANAN receiver audio stage | `AnanSliceAudio.h`, `applySliceAudioInPlace()` | float32 stereo | float32 stereo | 24 kHz | 2 | Per-receiver mute, dB AF gain and L/R balance on the speaker and radio-speaker feeds; the per-slice tap is published before it |
+| ANAN radio speaker send | `AnanBackend::sendSpeakerAudioToRadio()` -> `P2Client::enqueueSpeakerAudio()` | float32 stereo | big-endian Int16 stereo, UDP | 24 kHz -> 48 kHz | 2 | Separate L/R resamplers; 64-frame packets to the radio's own codec, credit-paced |
 | RX NR entry | `AudioEngine::feedAudioData()` | float32 stereo | float32 stereo | 24 kHz | 2 | Optional NR; bypassed while radio is transmitting |
 | RX NR2 | `AudioEngine::processNr2()` | float32 stereo | float32 stereo | producer rate | 2 | One `SpectralNR` estimate and mask per channel |
 | RX BNR | `NvidiaAfxFilter::process()` | float32 stereo | float32 stereo | 24 kHz -> 48 kHz -> 24 kHz, or native 48 kHz | 2 | One AFX denoiser effect per channel |

@@ -324,20 +324,9 @@ std::optional<CivMode> modeFromNeutral(const std::string& neutral, bool& dataMod
     // microphone while the operator is running FT8.
     if (u == "DIGU") { dataModeOut = true; return CivMode::Usb; }
     if (u == "DIGL") { dataModeOut = true; return CivMode::Lsb; }
-    // DFM is FM with the same DATA flag, and it was missing here. Two costs,
-    // and the second is the expensive one:
-    //
-    //   1. DFM fell through to nullopt, so setSliceMode() took the "no
-    //      equivalent" path and re-asserted the radio's current mode. Selecting
-    //      DFM in the UI simply reverted — indistinguishable from the control
-    //      being ignored.
-    //   2. Worse, a radio the operator had put into FM-D from the front panel
-    //      reported back as plain FM (modeToNeutral was lossy the same way), so
-    //      the next mode write cleared the DATA flag and transmit audio came
-    //      from the MICROPHONE rather than the WLAN modulator — exactly the
-    //      failure the DIGU/DIGL comment above describes, but for packet
-    //      instead of FT8. A 2 m AX.25 frame keyed the radio and put room noise
-    //      on the air.
+    // DFM is FM with the DATA flag. Mapping it is TX-safety, not cosmetics: if FM-D
+    // read back as plain FM, the next mode write would clear DATA and transmit audio
+    // would come from the microphone instead of the WLAN modulator.
     if (u == "DFM")  { dataModeOut = true; return CivMode::Fm; }
     if (u == "RTTY") return CivMode::Rtty;
 
@@ -1147,16 +1136,10 @@ int adjacentScopeSpanHz(int spanHz, int direction) noexcept
 
 std::vector<std::uint8_t> cmdScopeSpan(std::uint8_t to, int spanHz)
 {
-    // SIX data bytes: a LEADING FIXED 0x00, then the span as a 5-byte
-    // little-endian BCD frequency.
-    //
-    // That leading byte is the whole command. Without it the radio simply
-    // IGNORES the frame — no NG, no error, the scope just stays where it was —
-    // which reads as "zoom does nothing" and sends you hunting through the UI.
-    // Icom's own diagram for 27 15 numbers six boxes and labels the first two
-    // digits "0 (Fixed)"; the same leading byte appears on 27 00 (where this
-    // decoder already honours it when PARSING) and on 27 19. Building without
-    // it while parsing with it is the asymmetry that hid this.
+    // SIX data bytes: a leading fixed 0x00, then the span as 5-byte little-endian
+    // BCD. Without the 0x00 the radio silently ignores the frame (no NG). Icom's
+    // diagram for 27 15 labels the first byte "0 (Fixed)"; 27 00 and 27 19 carry the
+    // same leading byte.
     std::vector<std::uint8_t> body;
     body.reserve(1 + kFreqBytes);
     body.push_back(0x00);

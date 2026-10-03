@@ -37,6 +37,7 @@ class AcomApplet;
 class SpeApplet;
 class VkampApplet;
 class LpMeterApplet;
+class Ctr2ProxyApplet;
 class TxApplet;
 class PhoneCwApplet;
 enum class MicMeterSessionState;
@@ -108,6 +109,7 @@ public:
     SpeApplet*    speApplet()     { return m_speApplet; }
     VkampApplet*  vkampApplet()   { return m_vkampApplet; }
     LpMeterApplet* lpMeterApplet() { return m_lpMeterApplet; }
+    Ctr2ProxyApplet* ctr2ProxyApplet() { return m_ctr2ProxyApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -189,17 +191,10 @@ public:
     // VK3AMP all present at once, each fully independent hardware.
     void setVkampVisible(bool visible);
 
-    // Show/hide the LP100 button and applet based on a direct LP-100A
-    // wattmeter connection. Independent of every amplifier applet: the
-    // LP-100A is an instrument, not an amplifier, and a station may have any
-    // combination of the two.
-    //
-    // Gated on the CONNECTION, matching ACOM/SPE/VKAMP. The "configured but
-    // powered off shows no tile" objection (#4944) does not bite here the way
-    // it does for those three, because LpMeterConnection deliberately does
-    // NOT drop the link when the meter stops answering — a wedged meter keeps
-    // its tile and shows NO DATA in it. Only a genuinely absent transport
-    // hides the tile.
+    // Show/hide the LP100 button and applet from the direct LP-100A connection,
+    // independent of any amplifier applet. Gated on the connection like
+    // ACOM/SPE/VKAMP; LpMeterConnection keeps the link when the meter stops
+    // answering (the tile shows NO DATA), so only an absent transport hides it.
     void setLpMeterVisible(bool visible);
 
     // Show/hide the AG button and applet based on Antenna Genius presence.
@@ -261,6 +256,7 @@ public:
     // hide entirely on RX.
     enum class PooDooSide { Tx, Rx };
     void setPooDooActiveSide(PooDooSide side);
+    void setTxAudioPathBlocked(bool blocked);
 
     // Reorder the TX DSP sub-containers inside the "tx_dsp" parent to
     // mirror the CHAIN's current stage order.  Call whenever the user
@@ -338,17 +334,12 @@ private:
     int dropIndexFromY(int localY) const;
     void setScrollHandleActive(bool active);
 
-    // ── Button-bar (active + drawer + hidden) ────────────────────────────────
-    //
-    // Bar model — three buckets, all driven by m_buttonOrder + m_hiddenButtons:
-    //
-    //   * Active (top kFavoriteCount entries of m_buttonOrder that aren't in
-    //     m_hiddenButtons) → favorites row
-    //   * Drawer (remaining shown entries, in m_buttonOrder order) → grid below
-    //   * Hidden (m_hiddenButtons) → not in the bar at all; their applets
-    //     are forced off (Applet_<id>=False) when first moved here
-    //
-    // Reordering in the picker updates m_buttonOrder; the drawer follows.
+    // Button bar buckets, driven by m_buttonOrder + m_hiddenButtons:
+    //   * Active: first kFavoriteCount shown entries → favourites row
+    //   * Drawer: remaining shown entries, in order → grid below
+    //   * Hidden: not in the bar; applets forced off (Applet_<id>=False) when
+    //     first moved here
+    // Picker reordering updates m_buttonOrder; the drawer follows.
     struct BarButton {
         QString      id;     // canonical persistence id (e.g. "P/CW")
         QString      label;  // bar label (e.g. "P/CW", "VUDU")
@@ -416,6 +407,7 @@ private:
     QPushButton* m_speBtn{nullptr};
     VkampApplet* m_vkampApplet{nullptr};
     LpMeterApplet* m_lpMeterApplet{nullptr};
+    Ctr2ProxyApplet* m_ctr2ProxyApplet{nullptr};
     QPushButton* m_vkampBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};
@@ -438,6 +430,7 @@ private:
     ClientReverbApplet* m_clientReverbApplet{nullptr};
     ClientRxDspApplet*  m_clientRxDspApplet{nullptr};
     ClientChainApplet* m_clientChainApplet{nullptr};
+    bool m_txAudioPathBlocked{false};
     CatControlApplet* m_catControlApplet{nullptr};
     DaxApplet*     m_daxApplet{nullptr};
     TciApplet*     m_tciApplet{nullptr};

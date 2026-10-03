@@ -357,11 +357,6 @@ int memoryIndexFromSpotId(int spotIndex)
     return -spotIndex - kMemorySpotIdBase;
 }
 
-bool isPassiveLocalSpotId(int spotIndex)
-{
-    return spotIndex <= -kPassiveSpotIdBase;
-}
-
 QString memorySpotLabel(const MemoryEntry& memory)
 {
     if (!memory.name.trimmed().isEmpty())
@@ -526,19 +521,6 @@ QPixmap buildBandStackIndicatorPixmap(bool active)
     painter.drawEllipse(2, 8, 6, 6);
     painter.drawEllipse(2, 15, 6, 6);
     return pixmap;
-}
-
-QKeySequence shortcutSequenceFromKeyEvent(const QKeyEvent* ev)
-{
-    if (!ev || ev->key() == Qt::Key_unknown)
-        return {};
-
-    const Qt::KeyboardModifiers modifiers =
-        ev->modifiers() & (Qt::ShiftModifier
-                           | Qt::ControlModifier
-                           | Qt::AltModifier
-                           | Qt::MetaModifier);
-    return QKeySequence(static_cast<int>(modifiers) | ev->key());
 }
 
 // ─── Client connection parsing (discovery / multiFLEX) ──────────────────────
