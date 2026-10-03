@@ -92,6 +92,13 @@ public:
         static constexpr double kMinFmDeviationHz = 100.0;
         static constexpr double kMaxFmDeviationHz = 100000.0;
         double fmDeviationHz = 5000.0;
+        // Transmit-only: TXA's AM carrier level (ammod c_level, [0, 1]) and FM
+        // peak deviation for unit audio (fmmod; bounded by kMin/kMaxFmDeviationHz).
+        // Separate from fmDeviationHz above, which is the RXA detector's. open()
+        // pushes both on every transmit open; each is inert outside its mode.
+        // The defaults are create_txa()'s own.
+        double txAmCarrierLevel = 0.5;
+        double txFmDeviationHz = 5000.0;
         bool blockForOutput = false;
         // Impulse noise blanker — see the setNoiseBlanker() block below. Kept
         // in Config, not just as a runtime setter, so that reconfigure() (a

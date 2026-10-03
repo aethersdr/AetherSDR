@@ -77,13 +77,14 @@ bool Hl2TxDsp::buildModulator(std::string* error)
     // fexchange2's underrun report unreachable; fix underruns by pacing.
     c.blockForOutput = false;
 
-    // Signed, from the mode. See applyModeAndFilter().
-    const double lo = std::min(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    const double hi = std::max(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    c.filterLowHz = isLowerSideband() ? -hi : lo;
-    c.filterHighHz = isLowerSideband() ? -lo : hi;
+    // Signed, from the mode. See txaPassband().
+    const auto [signedLow, signedHigh] =
+        txaPassband(m_config.mode, m_config.filterLowHz, m_config.filterHighHz);
+    c.filterLowHz = signedLow;
+    c.filterHighHz = signedHigh;
+    // WdspChannel::open() pushes both, and turns TXA's default-on CTCSS off.
+    c.txAmCarrierLevel = m_config.amCarrierLevel;
+    c.txFmDeviationHz = m_config.fmDeviationHz;
 
     std::string err;
     m_channel = WdspChannel::create(c, &err);
@@ -117,12 +118,8 @@ void Hl2TxDsp::applyModeAndFilter()
     }
     // Both calls, every time: SetTXAMode does not pick an SSB sideband (the
     // passband sign does), so a mode-only USB->LSB change would stay on USB.
-    const double lo = std::min(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    const double hi = std::max(std::abs(m_config.filterLowHz),
-                               std::abs(m_config.filterHighHz));
-    const double lowHz = isLowerSideband() ? -hi : lo;
-    const double highHz = isLowerSideband() ? -lo : hi;
+    const auto [lowHz, highHz] =
+        txaPassband(m_config.mode, m_config.filterLowHz, m_config.filterHighHz);
 
     if (!m_channel->setMode(m_config.mode)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: mode change refused";
@@ -468,6 +465,18 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
     }
 }
 
+bool Hl2TxDsp::isLowerSideband() const
+{
+    switch (m_config.mode) {
+    case WdspChannel::Mode::Lsb:
+    case WdspChannel::Mode::Cwl:
+    case WdspChannel::Mode::Digl:
+        return true;
+    default:
+        return false;
+    }
+}
+
 const char* Hl2TxDsp::modulatorName() noexcept { return "phasing"; }
 int Hl2TxDsp::wdspChannelId() const noexcept { return -1; }
 const WdspChannel::Config* Hl2TxDsp::channelConfig() const noexcept { return nullptr; }
@@ -556,15 +565,26 @@ void Hl2TxDsp::reset()
     resetModulatorState();
 }
 
-bool Hl2TxDsp::isLowerSideband() const
+std::pair<double, double> Hl2TxDsp::txaPassband(WdspChannel::Mode mode,
+                                                double lowHz,
+                                                double highHz) noexcept
 {
-    switch (m_config.mode) {
+    const double lo = std::min(std::abs(lowHz), std::abs(highHz));
+    const double hi = std::max(std::abs(lowHz), std::abs(highHz));
+    switch (mode) {
     case WdspChannel::Mode::Lsb:
     case WdspChannel::Mode::Cwl:
     case WdspChannel::Mode::Digl:
-        return true;
+        return {-hi, -lo};
+    // TXASetupBPFilters runs bp0 on these edges before the modulator, so they
+    // are an audio low-pass and must straddle zero. See the header.
+    case WdspChannel::Mode::Am:
+    case WdspChannel::Mode::Sam:
+    case WdspChannel::Mode::Dsb:
+    case WdspChannel::Mode::Fm:
+        return {-hi, hi};
     default:
-        return false;
+        return {lo, hi};
     }
 }
 
