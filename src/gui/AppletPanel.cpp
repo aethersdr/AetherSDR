@@ -16,6 +16,7 @@
 #include "SpeApplet.h"
 #include "VkampApplet.h"
 #include "LpMeterApplet.h"
+#include "Ctr2ProxyApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -895,6 +896,13 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_waveApplet = new WaveApplet;
     m_appletOrder.append(makeEntry("WAVE", "Waveform", m_waveApplet, true, m_drawer, m_drawerLayout, "WAV"));
 
+    // CTR2 Proxy — prototype opaque TCP relay for a CTR2 controller; off by
+    // default and outside kDefaultOrder. The proxy itself is off on every
+    // launch regardless of this tile's visibility.
+    m_ctr2ProxyApplet = new Ctr2ProxyApplet;
+    m_appletOrder.append(makeEntry("CTR2", "CTR2 Proxy", m_ctr2ProxyApplet, false,
+                                   m_drawer, m_drawerLayout));
+
     m_aetherClockApplet = new AetherClockApplet;
     m_appletOrder.append(makeEntry("CLOCK", "AetherClock", m_aetherClockApplet, false, m_drawer, m_drawerLayout, "CLK"));
 
@@ -1397,6 +1405,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("TCI"),   QStringLiteral("Integration")},
         {QStringLiteral("MQTT"),  QStringLiteral("Integration")},
         {QStringLiteral("RADE"),  QStringLiteral("Integration")},
+        {QStringLiteral("CTR2"),  QStringLiteral("Integration")},
         {QStringLiteral("CLOCK"), QStringLiteral("Station")},
         {QStringLiteral("PROF"),  QStringLiteral("Station")},
     };

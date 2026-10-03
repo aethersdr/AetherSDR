@@ -187,9 +187,28 @@ RADE decoded speech is logically mono duplicated to stereo before that point.
 - RX boost is optional and applies `tanh(2*x)` after any 24 kHz to 48 kHz
   resampling.
 - RX output trim is a dB gain stage applied after RX boost.
-- `m_rxBufferCapMs` defaults to 200 ms and is clamped to 50..1000 ms. The
-  speaker timer drops the oldest samples when the normal RX buffer or RADE RX
-  buffer exceeds the cap.
+- `m_rxBufferCapMs` defaults to 100 ms (`#3193` lowered it from 200 ms) and is
+  clamped to 50..1000 ms by `setRxBufferCapMs()`. This is a **backlog cap**:
+  queued RX audio above the effective bound is trimmed oldest-first. This
+  setting is not a prefill target or a latency floor; it does not make the
+  receiver wait for the backlog to reach the cap. Separate presentation-delay
+  and KiwiSDR jitter prebuffering can hold audio before playback.
+- The configured value is a lower bound on the effective cap. `drainRxAudio()`
+  uses the maximum of the configured value, `kKiwiSdrBufferCapMs` (1000 ms)
+  when KiwiSDR audio is active, and the largest applicable receive presentation
+  delay plus 100 ms when that delay is positive.
+- `processRxAudioData()` instead includes the target buffer's presentation
+  delay plus 100 ms even when the delay is zero, and applies the 1000 ms Kiwi
+  floor for a Kiwi target or active Kiwi audio. With Kiwi inactive and no
+  presentation delay, settings below 100 ms therefore produce different
+  drain-side and enqueue-side bounds.
+- Trimming occurs on both drain and producer paths. `drainRxAudio()` trims
+  normal, legacy KiwiSDR, and external Kiwi receive queues, plus RADE speech
+  separately. `processRxAudioData()` trims the NR2 packet queue or the raw
+  main/Kiwi buffer, depending on the path. `queueLegacyKiwiAudioData()` and
+  `queueKiwiAudioData()` also enforce producer-side limits, and
+  `setReceivePresentationDelays()` trims queued audio when delays decrease.
+  Producer-side caps also bound backlog when the speaker drain is stopped.
 - The speaker drain timer runs every 10 ms, writes only full float32 samples, and
   respects `QAudioSink::bytesFree()`.
 - If decoded RADE speech is pending, the speaker timer mixes `m_radeRxBuffer`

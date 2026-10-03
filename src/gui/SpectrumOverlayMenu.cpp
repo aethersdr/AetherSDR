@@ -1,6 +1,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "FrontEndOverloadIndicator.h"
 #include "core/TxKeyingMarker.h"
+#include "AntennaChoiceGate.h"
 #include "DeclaredBandMenuPolicy.h"
 #include "DisplaySettings.h"
 #include "DspParamPopup.h"
@@ -645,6 +646,26 @@ void SpectrumOverlayMenu::buildAntPanel()
             }
             updateLoopButtonVisibility();
             return;
+        }
+        // A radio port the radio never published (the invented ANT1/ANT2
+        // placeholder, refreshAntennaCombo()) with no Kiwi receiver on offer:
+        // refuse visibly and put the combo back, rather than moving the label
+        // while nothing moves (AntennaChoiceGate.h).
+        {
+            const bool connected = m_radioModel && m_radioModel->isConnected();
+            const bool published =
+                (targetSlice && !targetSlice->rxAntennaList().isEmpty())
+                || (m_radioModel && !m_radioModel->antennaList().isEmpty());
+            const bool virtualAntennas = m_kiwiSdrManager
+                && !m_kiwiSdrManager->virtualAntennaTokens().isEmpty();
+            if (rxAntennaChoiceRefused(connected, published, virtualAntennas)) {
+                emit antennaChoiceRefused(false);
+                // Queued: this runs inside the combo's own index signal, and
+                // the refresh clears and refills that combo.
+                QMetaObject::invokeMethod(this, [this] { refreshAntennaCombo(); },
+                                          Qt::QueuedConnection);
+                return;
+            }
         }
         if (targetSlice) {
             emit flexRxAntennaSelected(targetSlice->sliceId());
@@ -1571,7 +1592,18 @@ void SpectrumOverlayMenu::updateLayout()
         // A button the radio cannot back stays hidden even when expanded, and
         // the ones below it close the gap — a blank slot would read as a
         // rendering fault rather than an absent feature.
-        const bool available = (idx != kBtnAddTnf) || m_notchesSupported;
+        //
+        // EVERY capability-hidden button has to be named here. This loop runs
+        // on every expand/collapse and sets each button's visibility outright,
+        // so a hide applied anywhere else is undone by the next toggle — which
+        // is how the DAX button (hidden by setDaxStreamsAvailable() on a radio
+        // with no DAX plane) came back on a Hermes-Lite 2 the first time the
+        // operator collapsed and reopened the menu, offering WFM on a stream
+        // nothing feeds.
+        const bool available =
+            (idx == kBtnAddTnf) ? m_notchesSupported
+            : (idx == kBtnDax)  ? m_daxStreamsAvailable
+                                : true;
         btn->setVisible(m_expanded && available);
         if (m_expanded && available) {
             btn->move(pad, y);
@@ -2895,24 +2927,40 @@ void SpectrumOverlayMenu::applyAutoRfGainToSlider(bool autoOn)
     }
     const bool armed = autoOn && m_autoRfGainCheck && m_autoRfGainCheck->isVisible();
     m_rfGainSlider->setEnabled(!armed);
-    // THE REASON ON THE ACCESSIBLE CHANNEL FIRST, then the tooltip. A disabled
-    // control is exactly where an operator most needs to be told WHY, and a
-    // tooltip is the one channel a screen-reader user never gets (#5262 M3a
-    // doctrine, #4896). tools/check_a11y.py enforces the pairing within 12
-    // lines, which the two multi-line calls only satisfy in this order.
+    if (!armed) {
+        applyRfGainRangeText();
+        return;
+    }
+    // THE REASON ON THE ACCESSIBLE CHANNEL FIRST, then the tooltip: a tooltip
+    // never reaches a screen reader (#5262 M3a doctrine, #4896), and
+    // tools/check_a11y.py enforces the pairing within 12 lines.
     m_rfGainSlider->setAccessibleDescription(
-        armed ? tr("Read-only while automatic RF gain is on. Shows what the "
-                   "radio is running: your setting minus whatever the "
-                   "automatic loop is holding down. Untick Auto to change it.")
-              : tr("RF gain, minus 8 to plus 32 dB in 8 dB steps."));
+        tr("Read-only while automatic RF gain is on. Shows what the radio is "
+           "running: your setting minus whatever the automatic loop is holding "
+           "down. Untick Auto to change it."));
+    m_rfGainSlider->setToolTip(QStringLiteral(
+        "RF Gain — read-only while Auto is on.\n"
+        "This shows what the radio is running: your setting minus "
+        "whatever Auto is holding down.\n"
+        "Untick Auto to change it."));
+}
+
+// Both channels describe the range the backend published (setRfGainRange), so a
+// radio whose range is not Flex's is not described as Flex's (#5943).
+void SpectrumOverlayMenu::applyRfGainRangeText()
+{
+    const int low = m_rfGainSlider->minimum();
+    const int high = m_rfGainSlider->maximum();
+    const int step = m_rfGainSlider->singleStep();
+    const QString unitWord = m_rfGainUnitSuffix.trimmed().isEmpty()
+        ? QStringLiteral("step") : m_rfGainUnitSuffix.trimmed();
+    m_rfGainSlider->setAccessibleDescription(
+        tr("RF gain, %1 to %2 %3, in steps of %4.")
+            .arg(low).arg(high).arg(unitWord).arg(step));
     m_rfGainSlider->setToolTip(
-        armed ? QStringLiteral(
-                    "RF Gain — read-only while Auto is on.\n"
-                    "This shows what the radio is running: your setting minus "
-                    "whatever Auto is holding down.\n"
-                    "Untick Auto to change it.")
-              : QStringLiteral("RF Gain: −8 to +32 dB (8 dB steps)\n"
-                               "Step size is determined by radio hardware."));
+        QString("RF Gain: %1%2 to %3%4%2 (%5%2 steps)\n"
+                "Range and step are reported by the radio.")
+            .arg(low).arg(unitWord).arg(high > 0 ? "+" : "").arg(high).arg(step));
 }
 
 void SpectrumOverlayMenu::setAutoRfGainAvailable(bool available)
@@ -2988,9 +3036,9 @@ void SpectrumOverlayMenu::setAutoRfGainEnabled(bool on)
         applyAutoRfGainToSlider(on);
         return;
     }
-    // A backend may DECLINE to arm (an RF Gain baseline in the region where
-    // this radio's gain axis is not trusted). The checkbox has to be able to
-    // come back down without that looking like the operator unticking it, so
+    // A backend may DECLINE to arm (an RF Gain baseline above its arming
+    // ceiling). The checkbox has to be able to come back down without that
+    // looking like the operator unticking it, so
     // this path must not emit.
     QSignalBlocker b(m_autoRfGainCheck);
     m_autoRfGainCheck->setChecked(on);
@@ -3022,18 +3070,20 @@ void SpectrumOverlayMenu::setDaxStreamsAvailable(bool available)
     // The button lives in the menu row and the panel is a popup off it, so both
     // have to go — hiding only the button would leave the panel reachable if it
     // were already open when the capability changed.
-    if (m_menuBtns.size() > kBtnDax && m_menuBtns[kBtnDax]) {
-        m_menuBtns[kBtnDax]->setVisible(available);
+    // Through the layout rather than a bare setVisible, for the reason
+    // setNotchesSupported() gives: updateLayout() re-applies every button's
+    // visibility on each expand/collapse, so a direct hide here was undone by
+    // the next toggle — and a direct SHOW put the DAX button on a collapsed
+    // menu with every other button hidden.
+    const bool changed = m_daxStreamsAvailable != available;
+    m_daxStreamsAvailable = available;
+    if (changed) {
+        updateLayout();
     }
     if (!available && m_daxPanel) {
         m_daxPanel->hide();
         m_daxPanelVisible = false;
     }
-}
-
-void SpectrumOverlayMenu::setWnbState(bool on, int level)
-{
-    syncWnbState(on, level, false);
 }
 
 void SpectrumOverlayMenu::syncWnbState(bool on, int level, bool updating)
@@ -3063,14 +3113,11 @@ void SpectrumOverlayMenu::setRfGainRange(int low, int high, int step,
     m_rfGainSlider->setSingleStep(step);
     m_rfGainSlider->setPageStep(step);
     m_rfGainSlider->setTickInterval(step);
-    // The unit comes from the backend, so the tooltip cannot hardcode "dB"
-    // either — it said "dB" over a control that was three preamp positions.
-    const QString unitWord = unitSuffix.trimmed().isEmpty()
-        ? QStringLiteral("step") : unitSuffix.trimmed();
-    m_rfGainSlider->setToolTip(
-        QString("RF Gain: %1%2 to %3%4%2 (%5%2 steps)\n"
-                "Range and step are reported by the radio.")
-            .arg(low).arg(unitWord).arg(high > 0 ? "+" : "").arg(high).arg(step));
+    // The unit comes from the backend, so the text cannot hardcode "dB" either.
+    // While Auto is armed the slider carries the read-only reason instead.
+    if (m_rfGainSlider->isEnabled()) {
+        applyRfGainRangeText();
+    }
     // Re-render the readout in the new unit, or the number keeps the previous
     // radio's suffix until the operator next moves the slider.
     if (m_rfGainLabel) {

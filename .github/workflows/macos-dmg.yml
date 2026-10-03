@@ -651,6 +651,12 @@ jobs:
 
           echo "DAX driver PKG v${APP_VERSION} built and signed"
 
+      - name: Name DMG artifact
+        run: |
+          # Branch dispatches contain slashes; preserve release tag filenames.
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          echo "DMG_FILENAME=AetherSDR-${SAFE_REF}-macOS-${{ matrix.label }}.dmg" >> "$GITHUB_ENV"
+
       - name: Create DMG
         run: |
           mkdir -p dmg-stage
@@ -676,7 +682,7 @@ jobs:
             --hide-extension "AetherSDR.app" \
             --app-drop-link 450 120 \
             --icon "AetherSDR DAX Drivers.pkg" 450 290 \
-            "AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg" \
+            "$DMG_FILENAME" \
             "dmg-stage/" \
           || true
 
@@ -689,7 +695,7 @@ jobs:
           # no DMG on disk, and we surface that immediately instead of
           # letting Sign DMG fail confusingly one step later. See the v26.6.1
           # release-build chain for the exact symptom this guard catches.
-          DMG="AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg"
+          DMG="$DMG_FILENAME"
           if [ ! -f "$DMG" ]; then
             echo "::error::create-dmg did not produce $DMG"
             exit 1
@@ -701,7 +707,7 @@ jobs:
         run: |
           codesign --force --timestamp \
             --sign "Developer ID Application" \
-            AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg
+            "$DMG_FILENAME"
 
       - name: Notarize DMG
         env:
@@ -710,7 +716,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           xcrun notarytool submit \
-            AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg \
+            "$DMG_FILENAME" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
@@ -728,7 +734,7 @@ jobs:
           fi
 
           xcrun stapler staple \
-            AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg
+            "$DMG_FILENAME"
           echo "Notarization and stapling complete"
 
       - name: Upload artifact

@@ -68,6 +68,9 @@ public:
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
+    void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
+    void requestSliceFilter(int sliceId, const SliceFilterRequest& request) override;
+    void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
@@ -185,6 +188,7 @@ private:
     void send(const QString& cmd);
     void sendTx(const QString& cmd, const TxCoordinator::Command& command);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
+    void sendSliceTune(int sliceId, const SliceTuneRequest& request);
 
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)

@@ -442,6 +442,45 @@ public:
         }
     }
 
+    // Say whether this pane's -/+ span pair is live, and why not (#5750).
+    // On a radio whose span is one register for the whole board
+    // (RadioCapabilities::panSpanModel->radioWide), MainWindow keeps the pair
+    // LIVE on one pane only -- see PanSpanControlGate.h -- and DIMS it on the
+    // others, never hides it (AGENTS.md: "Dim it, never hide it"). A dimmed
+    // pair states its reason in the tooltip (shown on a disabled button by
+    // eventFilter()) and in the accessible description, which is what a
+    // screen reader announces; the live pair says the span is shared.
+    // `live = true, radioWide = false` is the per-pan default and restores
+    // exactly what the constructor built: enabled, no tooltip, no description.
+    void setSpanControlPlacement(bool live, bool radioWide)
+    {
+        QString outTip;
+        QString inTip;
+        QString desc;
+        if (radioWide && live) {
+            outTip = tr("Zoom out. The span is shared: this changes every panadapter on this radio.");
+            inTip = tr("Zoom in. The span is shared: this changes every panadapter on this radio.");
+            desc = tr("This radio has one span for all panadapters, so this control changes every panadapter.");
+        } else if (radioWide) {
+            desc = tr("Span buttons unavailable here: this radio has one span for all "
+                      "panadapters, so its −/+ buttons are on one pane only (the one "
+                      "holding the transmit slice, or the first panadapter). A span "
+                      "change from any pane changes them all.");
+            outTip = desc;
+            inTip = desc;
+        }
+        if (m_zoomOutBtn) {
+            m_zoomOutBtn->setEnabled(live);
+            m_zoomOutBtn->setToolTip(outTip);
+            m_zoomOutBtn->setAccessibleDescription(desc);
+        }
+        if (m_zoomInBtn) {
+            m_zoomInBtn->setEnabled(live);
+            m_zoomInBtn->setToolTip(inTip);
+            m_zoomInBtn->setAccessibleDescription(desc);
+        }
+    }
+
     // Set the per-mode filter limits (Hz). Called when mode changes.
     void setFilterLimits(int minHz, int maxHz) { m_filterMinHz = minHz; m_filterMaxHz = maxHz; }
 

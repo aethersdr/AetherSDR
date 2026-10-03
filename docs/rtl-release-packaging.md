@@ -25,7 +25,10 @@ No setup script installs a USB driver, changes udev rules, or opens a radio.
 `tools/check_rtl_package.py` checks that the app imports RTL and float FFTW,
 that RTL imports libusb, and that those libraries exist in the payload. Mac
 checks reject external non-system load paths; Windows requires these DLLs
-beside the executable and also runs the existing complete deployment audit.
+beside the executable and recursively resolves their normal and delay DLL
+imports from that same directory or Windows system libraries. A dependency
+hidden elsewhere in the staging tree or available only on a build-tool PATH
+does not satisfy the check. The existing complete deployment audit also runs.
 This is packaging evidence, not physical USB or RF qualification. CI builds
 and tests that only upload logs are not release producers and keep optional
 RTL behavior. Dependency-only build workflows do not build AetherSDR.

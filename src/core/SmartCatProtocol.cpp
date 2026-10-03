@@ -1088,6 +1088,9 @@ QString SmartCatProtocol::cmdZZNR(const QString& arg)
     if (arg.isEmpty())
         return QString("ZZNR%1;").arg(a->nrOn() ? 1 : 0);
     if (arg != "0" && arg != "1") return "?;";
+    // No radio-side NR (HL2, ANAN): ON is refused like any unsupported set.
+    if (arg == "1" && m_model && !m_model->radioSideNoiseReductionAvailable())
+        return "?;";
     a->setNr(arg == "1");
     return {};
 }
@@ -1231,6 +1234,8 @@ QString SmartCatProtocol::cmdNR(const QString& arg)
     if (arg.isEmpty())
         return QString("NR%1;").arg(a->nrOn() ? 1 : 0);
     if (arg != "0" && arg != "1" && arg != "2") return "?;";
+    if (arg != "0" && m_model && !m_model->radioSideNoiseReductionAvailable())
+        return "?;";   // no radio-side NR, as ZZNR
     a->setNr(arg != "0");
     return {};
 }
@@ -1268,6 +1273,8 @@ QString SmartCatProtocol::cmdNT(const QString& arg)
     if (arg.isEmpty())
         return QString("NT%1;").arg(a->anfOn() ? 1 : 0);
     if (arg != "0" && arg != "1") return "?;";
+    if (arg == "1" && m_model && !m_model->radioSideAutoNotchAvailable())
+        return "?;";   // no auto notch on this radio
     a->setAnf(arg == "1");
     return {};
 }
