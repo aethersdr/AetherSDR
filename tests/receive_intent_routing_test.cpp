@@ -1,17 +1,17 @@
 // #5904: the production model bindings, not a second implementation of them.
 // Injected state/dispatch only: no sockets, firmware peer, hardware or keying.
-// The #6121 fixture below is the one exception: it constructs a real
-// WanConnection to exercise RadioModel::isConnected()'s actual WAN branch,
-// but never calls connectToRadio() on it, so no socket is ever opened — only
-// its already-private m_connected flag is set directly, through a friend.
+// WAN fixtures inject connected state without opening the TLS socket.
 #include "TestSettingsProfile.h"
 #include "core/backends/flex/WanConnection.h"
+#include "core/backends/flex/FlexBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QEvent>
 #include <QSignalSpy>
+#include <QStringList>
+#include <QtLogging>
 #include <cstdio>
 #include <functional>
 #include <thread>
@@ -23,18 +23,12 @@ public:
     {
         radio.wireSliceReceiveIntentsToBackend(slice);
     }
-    // #6121: the production field RadioModel::isConnected() reads. Setting it
-    // directly (rather than driving a real connectViaWan()) is what keeps
-    // this fixture socket-free.
+    // Bypass the live handshake; exercise the production WAN predicate.
     static void setWanConnection(RadioModel& radio, WanConnection* wan)
     {
         radio.m_wanConn = wan;
     }
 };
-// #6121: WanConnection's m_connected is private and only ever set from deep
-// inside the real TLS handshake (onTlsConnected() -> ... -> validate response).
-// This flips it directly so the test can assert the WAN-connected shape
-// without performing one.
 class WanConnectionTestAccess {
 public:
     static void setConnected(WanConnection& wan, bool connected)
@@ -47,6 +41,7 @@ public:
 using namespace AetherSDR;
 namespace {
 int failures = 0;
+thread_local QStringList warningMessages;
 void check(bool ok, const char* message)
 {
     std::printf("[%s] %s\n", ok ? "PASS" : "FAIL", message);
@@ -335,12 +330,7 @@ void lifetimeAndReentrancy()
     QObject::disconnect(connection);
 }
 
-// #6121: a WAN/SmartLink session never dials FlexBackend's own (LAN-only)
-// RadioConnection, so m_backend->isConnected() reports false for the whole
-// session even though the radio is genuinely connected via m_wanConn.
-// receiveCommandSource() gating on the backend alone dropped every slice
-// intent silently; it must gate on RadioModel::isConnected(), which knows
-// about both links.
+// A backend without a RadioConnection can still have an active WAN link.
 void wanFallback()
 {
     Fixture f;
@@ -348,8 +338,7 @@ void wanFallback()
     WanConnection wan;   // never connectToRadio()'d: no socket is ever opened
     RadioModelSliceLifecycleTestAccess::setWanConnection(f.radio, &wan);
 
-    // The shape #6121 reported: the backend's own link is down, but the
-    // session is live over WAN. Every intent must still reach the backend.
+    // Every receive intent reaches the backend while only WAN is connected.
     f.backend->connected = false;
     WanConnectionTestAccess::setConnected(wan, true);
     s->setFrequency(14.21);
@@ -372,20 +361,61 @@ void wanFallback()
     RadioModelSliceLifecycleTestAccess::setWanConnection(f.radio, nullptr);
 }
 
-// #6121's actual shape: a real FlexBackend whose own RadioConnection is never
-// dialed, not the null-m_connection case wanFallback() above covers. Built
-// socket-free the same way tx_operation_integration_test.cpp's
-// rebuildBackendForTest() cases are.
+// Real Flex encoding with an undialed LAN link and injected WAN connectivity.
 void wanOverUndialedFlexConnection()
 {
+    QStringList commands;
     RadioModel radio;
     check(radio.rebuildBackendForTest(QStringLiteral("flex")), "RadioModel builds a FlexBackend");
+    auto* backend = qobject_cast<FlexBackend*>(radio.backend());
+    check(backend != nullptr, "the WAN fixture uses the production Flex backend");
+    if (!backend) {
+        return;
+    }
+    backend->setSliceCommandSink([&commands](const QString& command) { commands.append(command); });
+    check(radio.automationApplySliceFixture(0, QStringLiteral("A")), "WAN fixture creates slice zero");
+    SliceModel* slice = radio.slice(0);
+    check(slice != nullptr, "WAN fixture has an active slice");
+    if (!slice) {
+        return;
+    }
+    QSignalSpy dropped(&radio, &RadioModel::commandDropped);
     WanConnection wan;
     RadioModelSliceLifecycleTestAccess::setWanConnection(radio, &wan);
     WanConnectionTestAccess::setConnected(wan, true);
     check(radio.backend() && !radio.backend()->isConnected(), "the FlexBackend's own link is down");
     check(radio.isConnected(), "a live WAN link connects the model despite the undialed LAN link");
+    commands.clear();
+    slice->setFrequency(14.21);
+    slice->setMode(QStringLiteral("LSB"));
+    slice->setFilterWidth(-2400, -100);
+    slice->setAgcMode(QStringLiteral("slow"));
+    slice->setAgcThreshold(42);
+    slice->setAgcOffLevel(31);
+    check(commands == QStringList{"slice tune 0 14.210000 autopan=0",
+                                  "slice set 0 mode=LSB", "filt 0 -2400 -100",
+                                  "slice set 0 agc_mode=slow", "slice set 0 agc_threshold=42",
+                                  "slice set 0 agc_off_level=31"},
+          "WAN receive edits reach the real Flex command sink exactly once with correct values");
     WanConnectionTestAccess::setConnected(wan, false);
+    commands.clear();
+    warningMessages.clear();
+    const QtMessageHandler previousHandler = qInstallMessageHandler(
+        [](QtMsgType type, const QMessageLogContext& context, const QString& message) {
+            if (type == QtWarningMsg && QString::fromUtf8(context.category) == QStringLiteral("aether.protocol")) {
+                warningMessages.append(message);
+            }
+        });
+    slice->setFrequency(14.22);
+    qInstallMessageHandler(previousHandler);
+    check(warningMessages == QStringList{"RadioModel: not connected, dropping slice 0 receive intent"},
+          "a disconnected receive edit emits a protocol warning");
+    slice->setMode(QStringLiteral("USB"));
+    slice->setFilterWidth(200, 2600);
+    slice->setAgcMode(QStringLiteral("fast"));
+    check(!radio.isConnected() && commands.isEmpty(),
+          "both links down refuses every receive intent at the real Flex sink");
+    check(dropped.isEmpty(), "disconnected receive edits never emit an unsupported-control notice");
     RadioModelSliceLifecycleTestAccess::setWanConnection(radio, nullptr);
 }
 }
