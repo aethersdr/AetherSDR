@@ -286,6 +286,13 @@ public:
     std::vector<std::shared_ptr<Conn>> conns;
 };
 
+// Connects normally but never accepts a written byte, so a drain toward the
+// radio cannot finish until the relay's drain timeout.
+class StalledWriteSocket : public QTcpSocket {
+protected:
+    qint64 writeData(const char*, qint64) override { return 0; }
+};
+
 class HangingSocket : public QTcpSocket {
 public:
     using QTcpSocket::connectToHost;
@@ -879,6 +886,29 @@ void testRetryBacksOffAfterRadioFailure()
           "HELLO resumes after the back-off");
 }
 
+void testNoHelloWhileDraining()
+{
+    Ctr2UsbRelay::Tuning t;
+    t.helloIntervalMs = 20;
+    t.helloRetryAfterFailureMs = 100;
+    t.relay.drainTimeoutMs = 600;
+    Rig rig({}, t);
+    rig.relay.setRadioSocketFactory([] { return new StalledWriteSocket; });
+    rig.start();
+    check(rig.linkUp(), "link up");
+    const int hellos = rig.dev.count(MessageType::Hello);
+    rig.dev.send(QByteArray("last command\n"));
+    rig.dev.closed();  // the CTR2 ends the link with bytes still bound for the radio
+    spin(300);
+    check(rig.dev.count(MessageType::Hello) == hellos,
+          "no HELLO while the previous session is still draining to the radio");
+    check(rig.relay.state() == State::Closing, "the session is draining");
+    check(waitUntil([&] { return rig.relay.state() == State::Listening; }, 2000),
+          "the drain ends at its own timeout");
+    check(waitUntil([&] { return rig.dev.count(MessageType::Hello) > hellos; }, 2000),
+          "HELLO resumes once the session has ended");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -903,6 +933,7 @@ int main(int argc, char** argv)
     testControlOutputBoundedWhileWaiting();
     testHostCallsAndDeviceAnswers();
     testRetryBacksOffAfterRadioFailure();
+    testNoHelloWhileDraining();
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);
         return 1;

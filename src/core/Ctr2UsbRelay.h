@@ -118,6 +118,9 @@ private:
     QTimer* m_helloTimer{nullptr};
     bool m_awaitingDevice{true};
     bool m_closedSent{false};  // CLOSED already queued for this link
+    // A HELLO has gone out since the last link ended, so a device READY is an
+    // answer to it. False during failure back-off and while CLOSED is pending.
+    bool m_helloSent{false};
     static constexpr int kMaxQueuedReports = 8192;
     quint64 m_generation{0};
     State m_state{State::Stopped};

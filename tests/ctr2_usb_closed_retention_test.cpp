@@ -127,12 +127,66 @@ void testClosedSurvivesAnotherFault()
     relay.stop();
 }
 
+// A READY that answers a HELLO sent before a radio refusal arrives while the
+// resulting CLOSED is still undelivered and the back-off is running. It must
+// neither discard that CLOSED nor open another radio connection.
+void testLateReadyKeepsClosedAndBackoff()
+{
+    Ctr2UsbRelay relay;
+    Ctr2UsbRelay::Tuning tuning;
+    tuning.helloIntervalMs = 20;
+    tuning.helloRetryAfterFailureMs = 60000;
+    relay.setTuning(tuning);
+    int connections = 0;
+    relay.setRadioSocketFactory([&connections] {
+        ++connections;
+        return new RefusedSocket;
+    });
+    auto* port = new StalledPort;
+    check(relay.start(port, QHostAddress(QStringLiteral("192.0.2.10")), 4992), "relay starts");
+    check(port->pending.size() == 1
+              && port->pending.front()[3] == static_cast<std::uint8_t>(MessageType::Hello),
+          "Start queues one HELLO");
+    port->acknowledge();
+
+    FrameEncoder device;
+    std::vector<Report> ready;
+    device.encodeControl(MessageType::Ready, &ready);
+    port->deliver(ready.front());
+    check(waitUntil([&] { return port->pending.size() == 1
+                                 && port->pending.front()[3]
+                                        == static_cast<std::uint8_t>(MessageType::Closed); }),
+          "the answer opens one connection, whose refusal queues CLOSED");
+    check(connections == 1, "one connection attempt");
+
+    port->deliver(ready.front());  // late answer to the earlier HELLO
+    QCoreApplication::processEvents();
+    check(connections == 1, "a late READY does not open another connection");
+    check(port->pending.size() == 1
+              && port->pending.front()[3] == static_cast<std::uint8_t>(MessageType::Closed),
+          "a late READY does not discard the undelivered CLOSED");
+
+    port->acknowledge();
+    port->deliver(ready.front());
+    QCoreApplication::processEvents();
+    check(connections == 1 && port->pending.empty(),
+          "during the back-off, with no new HELLO sent, READY still changes nothing");
+
+    std::vector<Report> hello;
+    device.encodeControl(MessageType::Hello, &hello);
+    port->deliver(hello.front());
+    check(waitUntil([&] { return connections == 2; }),
+          "a device HELLO still forces a restart during the back-off");
+    relay.stop();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     testClosedSurvivesAnotherFault();
+    testLateReadyKeepsClosedAndBackoff();
     if (g_failures) {
         return 1;
     }

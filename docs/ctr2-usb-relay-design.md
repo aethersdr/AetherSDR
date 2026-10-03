@@ -191,14 +191,16 @@ Host behavior:
   second until the device answers, or every 5 s after a radio connection
   failed. Never queue a HELLO while earlier output to the device is still
   undelivered, so a device that is not reading cannot accumulate them.
-- **READY received while no link is up** (the answer to HELLO), **or HELLO
-  received at any time** (the device asking for a restart): close any
+- **READY received while no link is up and after a HELLO the host has sent
+  since the last link ended** (the answer to that HELLO), **or HELLO received
+  at any time** (the device asking for a restart): close any
   existing radio connection, discard all link state, including every report
   still queued for the device, and open a new radio connection (10 s
   timeout). On success send READY and start forwarding, including any radio
   output that arrived first. On failure send CLOSED.
-- **READY received during a link:** a late answer to an earlier HELLO;
-  ignored.
+- **Any other READY** (during a link, during the back-off after a failure, or
+  while a CLOSED is still undelivered): a late answer to an earlier HELLO;
+  ignored. It never discards a pending CLOSED or skips the back-off.
 - **DATA received:** forward the payload to the radio.
 - **DATAGRAM received:** send the datagram bytes to the radio's IP on the
   given UDP port, from one UDP socket the host opens for this link.
@@ -207,7 +209,8 @@ Host behavior:
   delays the TCP stream: if more than about 3 KB of datagrams are already
   waiting on the USB link, newer ones are dropped and counted, as UDP allows.
 - **CLOSED received:** forward any DATA that came before it, then close the
-  radio connection. No reply is sent.
+  radio connection. No reply is sent. The next HELLO waits until that drain
+  has finished.
 - **Radio connection closes:** forward the radio's remaining bytes, then send
   CLOSED.
 - **Framing error, DATA or DATAGRAM with no radio connection, or a message

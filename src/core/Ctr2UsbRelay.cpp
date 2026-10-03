@@ -404,6 +404,7 @@ bool Ctr2UsbRelay::start(Ctr2HidPort* port, const QHostAddress& radioAddress, qu
     m_unsentDatagramBytes = 0;
     m_awaitingDevice = true;
     m_closedSent = false;
+    m_helloSent = false;
     m_lastSessionStats = {};
     ++m_generation;
     setLastError({});
@@ -426,6 +427,7 @@ void Ctr2UsbRelay::sendHello()
     }
     m_tx.reset();
     sendControl(MessageType::Hello);
+    m_helloSent = true;
 }
 
 void Ctr2UsbRelay::scheduleHello(int delayMs)
@@ -557,15 +559,20 @@ void Ctr2UsbRelay::onMessage(const Message& message)
         return;
     case MessageType::Closed:
         m_awaitingDevice = true;
+        m_helloSent = false;
         if (m_session) {
+            // The session may still be draining the device's last bytes to the
+            // radio; its end schedules the next HELLO.
             m_session->deviceClosed();
+        } else {
+            scheduleHello(m_tuning.helloIntervalMs);
         }
-        scheduleHello(m_tuning.helloIntervalMs);
         return;
     case MessageType::Ready:
-        // The CTR2's answer to HELLO. A READY arriving during a link is a late
-        // answer to an earlier HELLO and changes nothing.
-        if (m_awaitingDevice) {
+        // The CTR2's answer to a HELLO sent since the last link ended. Any
+        // other READY is a late answer to an earlier HELLO and changes nothing:
+        // it must not discard a pending CLOSED or skip the failure back-off.
+        if (m_awaitingDevice && m_helloSent && !m_session) {
             onDeviceStart();
         }
         return;
@@ -582,6 +589,7 @@ void Ctr2UsbRelay::onDeviceStart()
     // Nothing from the previous link may reach the device after it restarted.
     discardOutput();
     m_closedSent = false;
+    m_helloSent = false;
     m_awaitingDevice = false;
     ++m_generation;
     m_lastSessionStats = {};
@@ -602,6 +610,7 @@ void Ctr2UsbRelay::linkFault(const QString& message)
     m_incompleteTimer->stop();
     m_rx.reset();
     m_awaitingDevice = true;
+    m_helloSent = false;
     qCWarning(lcDevices) << "CTR2 USB:" << message;
     setLastError(message);
     if (m_port) {
@@ -736,6 +745,7 @@ void Ctr2UsbRelay::sessionEnded(quint64 generation, const QString& message, bool
     QObject::disconnect(session, nullptr, this, nullptr);
     session->deleteLater();
     m_awaitingDevice = true;
+    m_helloSent = false;
     if (sendClosed) {
         discardOutput();
         sendClosedOnce();
