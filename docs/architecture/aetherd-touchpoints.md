@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 235 touchpoint headers (196 core, 39 models) — 235/235 tagged, 0/235 converted.
+**Totals:** 236 touchpoint headers (197 core, 39 models) — 236/236 tagged, 0/236 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -20,6 +20,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/AppSettings.h` | 105 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
 | `core/AudioEngine.h` | 47 | mixed(flex) — Client audio I/O + full RX/TX DSP chain (universal) fused with Flex VITA-49/DAX/Opus TX and Kiwi buffering | unconverted |
 | `core/AudioOutputRouter.h` | 1 | ui-support — Registry fanning the user-selected QAudioDevice to local playback sinks; OS device plumbing, no radio state | unconverted |
+| `core/AudioOutputVolumePolicy.h` | 5 | ui-support — Which stored level the master slider reads and writes, and its default, for the PC sink versus the radio's own output; client settings plumbing like ClientDisplaySettings, pure selectors over AppSettings keys with the callers doing the I/O. One family predicate, because only a radio whose receive audio this client originates has an output level the client must remember | unconverted |
 | `core/AutomationBridgeSettings.h` | 3 | ui-support — Owned configuration for the agent automation bridge (enabled / txAllowed / txAck / readOnly) under one nested key; the secret token lives in the OS keychain, not here. Dev and test tooling — same home decision as core/AutomationServer.h. NOTE for RFC §6: txAllowed() is read as a TX-guard input by BOTH AutomationServer and Hl2Backend, so this header is a step-4 consolidation target. | unconverted |
 | `core/AutomationServer.h` | 3 | ui-support — QLocalServer GUI-automation/test bridge (dumpTree/grab/invoke on QWidgets); dev tooling, stays in gui shell | unconverted |
 | `core/BandStackSettings.h` | 4 | universal — Per-radio band-stack memories (freq/mode/filter/AGC/NB-NR) — canonical radio state; only the XML store is client-side | unconverted |
@@ -29,7 +30,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/CatPort.h` | 2 | ui-support — CAT server (TCP+PTY, rigctld/TS-2000/FlexCAT dialects) for external apps; desktop integration, needs a home | unconverted |
 | `core/ClientComp.h` | 13 | universal — Client-side TX dynamics DSP (compressor/limiter/drive/phase rotator + GR meters); radio-agnostic engine DSP. | unconverted |
 | `core/ClientDeEss.h` | 9 | universal — Client TX DSP de-esser (sidechain bandpass + dynamics, meters); radio-agnostic engine DSP chain stage | unconverted |
-| `core/ClientDisplaySettings.h` | 1 | ui-support — Radio-scoped client persistence for locally shaped waterfall cadence under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state. | unconverted |
+| `core/ClientDisplaySettings.h` | 1 | ui-support — Radio-scoped client persistence for locally shaped display state under the ClientDisplay feature document — waterfall cadence, FFT averaging and the panadapter dBm range; UI settings plumbing, not radio-owned display state. | unconverted |
 | `core/ClientEq.h` | 15 | universal — Client-side parametric EQ DSP in AudioEngine (RX/TX paths); radio-agnostic engine DSP, no vendor protocol ties. | unconverted |
 | `core/ClientFinalLimiter.h` | 1 | universal — Final-stage brickwall limiter in client TX DSP chain (ceiling/trim/DC-block + meters); radio-agnostic DSP. | unconverted |
 | `core/ClientGate.h` | 12 | universal — Client TX-chain downward expander/noise gate DSP (thresh/ratio/hold + meters) — radio-agnostic engine DSP. | unconverted |
