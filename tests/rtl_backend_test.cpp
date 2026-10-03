@@ -41,6 +41,13 @@ struct RtlSdrBackendTestAccess {
         worker->start();
         backend.m_connected = true;
     }
+    // The same wiring with the connected flag still false.
+    static void wireOnly(RtlSdrBackend& backend, RtlSdrWorker* worker)
+    {
+        backend.m_worker.reset(worker);
+        backend.wireWorker();
+        worker->start();
+    }
 };
 
 }  // namespace AetherSDR::rtl
@@ -245,6 +252,29 @@ int main(int argc, char** argv)
         worker->release = true;
         check(spinUntil([&] { return alive.isNull(); }, 2000),
               "the stranded worker deletes itself once its thread finishes");
+    }
+
+    // 8. The connected flag gates on its own: a current worker's output is
+    // dropped while the backend is not connected.
+    {
+        rtl::RtlSdrBackend unconnected;
+        test::SeamThreadAffinityProbe probe(&unconnected);
+        test::attachAllSeamSignals(probe);
+        auto* worker = new StuckWorker;
+        rtl::RtlSdrBackendTestAccess::wireOnly(unconnected, worker);
+
+        worker->framesToEmit = 1;
+        worker->failRead = true;
+        spinUntil([&] { return worker->readFailed.load() && worker->framesToEmit.load() == 0; },
+                  2000);
+        spinUntil([] { return false; }, 200);   // deliver whatever was queued
+        check(probe.count("spectrumFrameReady") == 0,
+              "a current worker's spectrum is dropped while not connected");
+        check(probe.count("connectionError") == 0,
+              "a current worker's read error is dropped while not connected");
+
+        worker->release = true;
+        check(worker->wait(2000), "the unconnected worker's thread finishes");
     }
 #else
 
