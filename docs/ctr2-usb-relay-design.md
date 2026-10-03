@@ -1,8 +1,11 @@
 # CTR2 USB HID relay design
 
 Status: link format v0 agreed with Lynn; host side implemented in PR #6090
-under approved RFC #6091. The CTR2 USB firmware is in progress; end-to-end
-USB operation has not been verified. Jeremy reports the TCP relay working with a
+under approved RFC #6091. The CTR2 USB firmware is in progress. First
+hardware result, reported by Lynn with a test build of this branch: the
+radio's status stream reaches the CTR2 over USB (HELLO, READY and DATA
+framing working, radio to CTR2 only). CTR2-to-radio commands, UDP, and
+restart/CLOSED handling have not been exercised on hardware yet. Jeremy reports the TCP relay working with a
 stock CTR2.
 
 ## Goal
@@ -344,9 +347,11 @@ while it is keying.
 
 1. Lynn adds USB mode beneath the controller's existing Wi-Fi radio logic
    (in progress).
-2. Bench the link with the reference vectors and AetherSDR's USB mode:
-   startup, radio greeting, controls, display updates, MultiFlex binding,
-   unplug and replug. Verify AetherSDR's existing RX operation remains intact.
+2. Bench the link with the reference vectors and AetherSDR's USB mode.
+   Done, as reported by Lynn: startup and the radio's status stream
+   arriving at the CTR2. Still to do: controls (CTR2 to radio), display
+   updates, MultiFlex binding, UDP, unplug and replug, and a CTR2 restart
+   mid-session. Verify AetherSDR's existing RX operation remains intact.
 3. With the operator's transmit authorization and test setup, verify paddle
    keying, local sidetone, latency under load, and what the radio does when
    the link drops mid-transmission.
