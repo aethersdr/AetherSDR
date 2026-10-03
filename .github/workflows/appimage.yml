@@ -179,21 +179,11 @@ jobs:
       - name: Install Qt 6.12.0 LTS via aqtinstall
         run: |
           pip3 install "aqtinstall==${AQTINSTALL_VERSION}"
-          # No qtwayland entry, deliberately: it rides in the BASE package.
-          # qt.qt6.<ver>.<arch>'s DownloadableArchives lists qtwayland-Linux-...7z
-          # next to qtbase, so this install already lays down
-          # plugins/platforms/libqwayland-generic.so, libqwayland-egl.so and the
-          # three wayland-* integration dirs. There is no "qtwayland" module in
-          # the desktop repository — only qtwaylandcompositor — and aqt
-          # hard-errors on an unknown module ("The packages ['qtwayland'] were
-          # not found"), so naming one here fails the whole release build.
-          #
-          # #1389 — QT_QPA_PLATFORM=wayland aborting with "no Qt platform plugin
-          # could be initialized" — was therefore never a missing module. The
-          # plugin was in this tree and simply never DEPLOYED:
-          # linuxdeploy-plugin-qt copies platforms/libqxcb.so and nothing else
-          # unless EXTRA_PLATFORM_PLUGINS says otherwise. That is fixed in the
-          # AppImage steps below.
+          # Qt 6.12's base installation includes WaylandClient and the unified
+          # platforms/libqwayland.so plugin. Do not request a separate
+          # qtwayland module or the retired generic/egl platform filenames.
+          # linuxdeploy only copies libqxcb.so automatically; the Wayland
+          # platform is explicitly selected in the AppImage step below.
           aqt install-qt ${{ matrix.qt_host }} desktop "$QT_VERSION" ${{ matrix.qt_arch }} \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir ${{ github.workspace }}/Qt
@@ -328,14 +318,9 @@ jobs:
           # are missing, that is a broken release and the job should say so.
           cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/
 
-          # Bundle the Wayland client buffer integration. QT_QPA_PLATFORM=wayland
-          # resolves to platforms/libqwayland-generic.so (qwayland-generic.json
-          # declares Keys: ["wayland"]; the EGL *platform* plugin's key is
-          # "wayland-egl", so that name never selects it), and the generic plugin
-          # obtains OpenGL only through a client buffer integration plugin loaded
-          # from this directory — libqt-plugin-wayland-egl.so. Without it native
-          # Wayland comes up with no GL at all, which matters because both legs
-          # ship AETHER_GPU_SPECTRUM=ON.
+          # Qt 6.12's libqwayland.so handles both wayland and wayland-egl.
+          # Its OpenGL client buffer integration remains a separate plugin,
+          # libqt-plugin-wayland-egl.so. Both legs need it for the GPU spectrum.
           #
           # It is staged by hand because no linuxdeploy variable reaches this
           # directory: EXTRA_PLATFORM_PLUGINS covers platforms/ and makes
@@ -397,7 +382,7 @@ jobs:
           # wayland-decoration-client and wayland-shell-integration on its own —
           # only wayland-graphics-integration-client has to be staged by hand,
           # which the "Install to AppDir" step above does.
-          EXTRA_PLATFORM_PLUGINS: libqwayland-generic.so;libqwayland-egl.so
+          EXTRA_PLATFORM_PLUGINS: libqwayland.so
         run: |
           # Sanitize the ref for the output filename: a workflow_dispatch on a
           # branch like "ci/appimage-qtkeychain" puts a '/' in github.ref_name,
