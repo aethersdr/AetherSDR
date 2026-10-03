@@ -74,10 +74,8 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
     m_connThread->start();
 
-    // Re-emit wire lifecycle as the interface's own signals (as FlexBackend does).
-    connect(m_connection, &RadioConnection::connected,
-            this, &IRadioBackend::connected);
-    // disconnected is re-emitted by the ordered handler below, not here.
+    // Re-emit wire errors as the interface's own signal (as FlexBackend does).
+    // connected and disconnected are re-emitted by the ordered handlers below.
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
 
@@ -101,9 +99,12 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // panCenterBandwidthChanged / sliceChanged; RFC #4288). Queued (worker thread)
     // and delayed 150 ms so RadioModel has created the SliceModel and claimed the pan
     // (~50 ms); sliceChanged applies only to an existing slice. m_connected gates
-    // onAudioTick().
+    // onAudioTick(). One handler opens the gate, announces connected(), then
+    // starts the worker (#6095): the base class bumps pcmSession() on connected(),
+    // so the capture must follow the emit or every row of the session is dropped.
     connect(m_connection, &RadioConnection::connected, this, [this]() {
         m_connected = true;
+        emit connected();
         // The wire script claims pan 0; dynamic creates append (#4887 ph 4).
         m_wirePanIds = QStringList{wirePanIdFor(0)};
         m_pansAwaitingGeometry.clear();
@@ -739,8 +740,9 @@ bool SimBackend::applyFault(const QString& fault, const QVariant& arg)
     if (f == QLatin1String("disconnect")) {
         // Force a mid-operation disconnect to exercise AE's session-teardown /
         // reconnect path. Route through disconnectRadio() so state + timers unwind
-        // exactly as a user-initiated disconnect would.
-        disconnectRadio();
+        // exactly as a user-initiated disconnect would. Queued, so the caller's
+        // extensionResult precedes disconnected() on the bare path too (rule 6).
+        QMetaObject::invokeMethod(this, &SimBackend::disconnectRadio, Qt::QueuedConnection);
         return true;
     }
     if (f == QLatin1String("malformed")) {

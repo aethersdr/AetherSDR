@@ -290,6 +290,68 @@ void testStaleSessionSpectrumIsDropped()
     report("the live session's spectrum row is forwarded", spectrumSpy.count() == 1);
 }
 
+// The connect-side mirror (#6095): on the RadioModel path, the gate is open
+// before connected() is announced, so a connected() handler sees
+// isConnected(). Emitting from this thread runs the handler direct.
+void testConnectedIsAnnouncedWithTheGateOpen()
+{
+    SimBackend sim;
+    bool connectedDuringAnnouncement = false;
+    QObject::connect(&sim, &SimBackend::connected, &sim, [&sim, &connectedDuringAnnouncement] {
+        connectedDuringAnnouncement = sim.isConnected();
+    }, Qt::DirectConnection);
+
+    emit sim.connection()->connected();
+
+    report("the gate is open before connected() is announced", connectedDuringAnnouncement);
+    sim.disconnectRadio();
+    QCoreApplication::processEvents();
+}
+
+// The worker must be started with the session connected() just opened; a
+// stale stamp would drop every spectrum row of the session with no error.
+void testFirstSpectrumRowAfterWireConnectIsForwarded()
+{
+    SimBackend sim;
+    QSignalSpy spectrumSpy(&sim, &SimBackend::spectrumFrameReady);
+    emit sim.connection()->connected();
+
+    QEventLoop loop;
+    QTimer poll;
+    QObject::connect(&poll, &QTimer::timeout, &loop, [&] {
+        if (spectrumSpy.count() > 0) loop.quit();
+    });
+    QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+    poll.start(5);
+    loop.exec();
+
+    report("a spectrum row after a wire connect is forwarded", spectrumSpy.count() > 0);
+    sim.disconnectRadio();
+    QCoreApplication::processEvents();
+}
+
+// Rule 6 on the bare path (#6095): the `sim disconnect` fault's reply must
+// precede disconnected(), as it already does on the RadioModel path.
+void testDisconnectFaultRepliesBeforeDisconnected()
+{
+    SimBackend sim;
+    sim.connectRadio({});
+    QStringList order;
+    QObject::connect(&sim, &SimBackend::extensionResult, &sim,
+                     [&order](quint64, const QVariant&) { order << QStringLiteral("result"); },
+                     Qt::DirectConnection);
+    QObject::connect(&sim, &SimBackend::disconnected, &sim,
+                     [&order] { order << QStringLiteral("disconnected"); },
+                     Qt::DirectConnection);
+
+    sim.invokeExtension(QStringLiteral("sim"), QStringLiteral("disconnect"), 7, {});
+    QCoreApplication::processEvents();
+
+    report("sim disconnect replies, then disconnects",
+           order == QStringList{QStringLiteral("result"), QStringLiteral("disconnected")});
+    report("sim disconnect leaves the backend disconnected", !sim.isConnected());
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -312,6 +374,9 @@ int main(int argc, char** argv)
     testDisconnectStopsAudio();
     testNoSpectrumForwardedOnceDisconnectedIsAnnounced();
     testStaleSessionSpectrumIsDropped();
+    testConnectedIsAnnouncedWithTheGateOpen();
+    testFirstSpectrumRowAfterWireConnectIsForwarded();
+    testDisconnectFaultRepliesBeforeDisconnected();
 
     if (g_failed == 0) {
         std::printf("All SimBackend lifecycle checks passed\n");
