@@ -38,6 +38,8 @@ public:
     bool isRunning() const { return m_running; }
     QString status() const { return m_status; }
     static QString modelDirectory();
+    // The parameters the application runs DeepFist with (the default constructors use them).
+    static DeepFistStream::Parameters appParameters();
 signals:
     void textDecoded(const QString& text);
     void statusChanged(const QString& status);

@@ -18,6 +18,7 @@
 #include <QStringList>
 #include <cstdio>
 #include <limits>
+#include <random>
 
 using namespace AetherSDR;
 namespace {
@@ -232,9 +233,80 @@ bool carrierRegression(const QByteArray& directory)
             if (stream.failed()) { return false; }
         }
     }
-    std::fprintf(stderr, "carrier guard disabled: '%s'; enabled: '%s'\n",
-        qPrintable(outputs[0].simplified()), qPrintable(outputs[1].simplified()));
-    return outputs[0].simplified() == "9" && outputs[1].simplified().isEmpty();
+    // The application's parameters (activityThreshold 3, #5950) must still hold the carrier off.
+    QString appOutput;
+    {
+        DeepFistStream stream(DeepFistCwModel::appParameters());
+        Resampler resampler(24000, 3200, 4096);
+        for (int offset = 0; offset < 240000; offset += 240) {
+            float audio[240];
+            for (int i = 0; i < 240; ++i) {
+                audio[i] = 0.3f * std::sin(2.0 * 3.141592653589793 * 680.0 * (offset+i) / 24000.0);
+            }
+            const QByteArray bytes = resampler.process(audio, 240);
+            std::vector<float> mono(bytes.size()/4);
+            std::memcpy(mono.data(), bytes.constData(), bytes.size());
+            appOutput += stream.process(mono.data(), mono.size(), model);
+            if (stream.failed()) { return false; }
+        }
+    }
+    std::fprintf(stderr, "carrier guard disabled: '%s'; enabled: '%s'; app parameters: '%s'\n",
+        qPrintable(outputs[0].simplified()), qPrintable(outputs[1].simplified()),
+        qPrintable(appOutput.simplified()));
+    return outputs[0].simplified() == "9" && outputs[1].simplified().isEmpty()
+        && appOutput.simplified().isEmpty();
+}
+// #5950: off-air CW whose keying ratio falls between dead air and a strong signal was gated
+// out at activityThreshold 12. CONSTRUCTED fixture: the CQ TEST CQ tone plus in-band noise
+// (40 fixed random-phase tones, 550-650 Hz, seed 5950) — it exercises the gate only and does
+// not stand for any measured signal; the field evidence is the recordings attached to #5950.
+QString weakSignalDecode(lyra::dsp::DeepFistModel& model, DeepFistStream::Parameters parameters)
+{
+    constexpr int rate = 3200;
+    // In-band noise RMS: from 0.06 to 0.13 the final CQ decodes only with the app's parameters
+    // (0.05: both thresholds decode it all); 0.09 sits in the middle.
+    constexpr double noiseRms = 0.09;
+    const QVector<float> clean = testAudio(rate);
+    // std::mt19937's output sequence is fixed by the standard; the distribution classes are
+    // not, so the uniform values come straight from the engine to keep this fixture identical
+    // on every standard library.
+    std::mt19937 generator(5950);
+    const auto unit = [&generator] { return static_cast<double>(generator()) / 4294967296.0; };
+    double frequency[40];
+    double phase[40];
+    for (int k = 0; k < 40; ++k) {
+        frequency[k] = 550.0 + 100.0 * unit();
+        phase[k] = 2.0 * 3.141592653589793 * unit();
+    }
+    std::vector<float> audio(clean.size());
+    for (qsizetype i = 0; i < clean.size(); ++i) {
+        double noise = 0.0;
+        for (int k = 0; k < 40; ++k) {
+            noise += std::sin(2.0 * 3.141592653589793 * frequency[k] * i / rate + phase[k]);
+        }
+        audio[i] = static_cast<float>(clean[i] + noiseRms * noise / std::sqrt(20.0));
+    }
+    DeepFistStream stream(parameters);
+    QString text;
+    for (size_t offset = 0; offset < audio.size(); offset += 320) {
+        const int count = static_cast<int>(std::min<size_t>(320, audio.size() - offset));
+        text += stream.process(audio.data() + offset, count, model);
+        if (stream.failed()) { return QStringLiteral("<failed>"); }
+    }
+    return text.simplified();
+}
+bool weakSignal(const QByteArray& directory)
+{
+    lyra::dsp::DeepFistModel model;
+    if (!model.load(directory.toStdString())) { return false; }
+    const QString app = weakSignalDecode(model, DeepFistCwModel::appParameters());
+    DeepFistStream::Parameters strict = DeepFistCwModel::appParameters();
+    strict.activityThreshold = 12.f;
+    const QString previous = weakSignalDecode(model, strict);
+    std::fprintf(stderr, "weak signal: app parameters '%s'; threshold 12 '%s'\n",
+        qPrintable(app), qPrintable(previous));
+    // The gate effect: the fading final CQ survives only with the app's parameters.
+    return app.endsWith(QStringLiteral(" CQ")) && !previous.endsWith(QStringLiteral("CQ"));
 }
 bool churn()
 {
@@ -336,6 +408,10 @@ int main(int argc, char** argv)
     if (argc > 1 && QString::fromLocal8Bit(argv[1]) == "--carrier") {
         if (directory.isEmpty()) { return 77; }
         return carrierRegression(directory) ? 0 : 1;
+    }
+    if (argc > 1 && QString::fromLocal8Bit(argv[1]) == "--weak") {
+        if (directory.isEmpty()) { return 77; }
+        return weakSignal(directory) ? 0 : 1;
     }
     if (argc > 1 && QString::fromLocal8Bit(argv[1]) == "--churn") {
         if (directory.isEmpty()) { return 77; }
