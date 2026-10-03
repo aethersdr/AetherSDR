@@ -92,6 +92,9 @@ public:
         static constexpr double kMinFmDeviationHz = 100.0;
         static constexpr double kMaxFmDeviationHz = 100000.0;
         double fmDeviationHz = 5000.0;
+        // true: fexchange waits for each output block. The r1/r2 buffer phase is
+        // still set per channel open (flush_iobuffs() drains with a 1 ms timed
+        // wait), so two opens fed the same burst can differ (#5629).
         bool blockForOutput = false;
         // Impulse noise blanker — see the setNoiseBlanker() block below. Kept
         // in Config, not just as a runtime setter, so that reconfigure() (a

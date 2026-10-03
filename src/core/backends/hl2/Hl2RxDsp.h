@@ -116,7 +116,9 @@ public:
         double maximumAgcGainDb = 39.0;   // = slice default 65 * 0.6
         // false (live): processIq is non-blocking — real-time input paces WDSP's
         // async worker and audio flows with ~1 block latency. true: processIq
-        // waits for each output block (deterministic for a burst/offline feed).
+        // waits for each output block. That does not make a burst feed
+        // reproducible: flush_iobuffs() drains with a 1 ms timed wait, so the
+        // r1/r2 phase is fixed per channel open, not per run (#5629).
         bool blockForOutput = false;
     };
 

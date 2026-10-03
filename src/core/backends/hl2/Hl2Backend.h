@@ -505,6 +505,10 @@ private:
         // so the first sliceChanged reports what WDSP was actually opened with.
         QString agcMode = QStringLiteral("med");
         int agcThresholdDb = 65;
+        // The AGC mode held when setSliceMode() entered DIGU/DIGL and turned
+        // AGC off; restored on leaving them unless the operator set AGC since.
+        // Empty when nothing is waiting to be restored.
+        QString agcModeBeforeDigital;
 
         // Authoritative noise-blanker state: nothing echoes it, and a rebuilt receiver
         // must be told again. Defaults mirror SliceModel's (off, level 50).

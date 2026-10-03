@@ -575,6 +575,63 @@ static void testModeDefaultPassband()
           "re-selecting the SAME mode leaves an operator filter edit alone");
 }
 
+// ── DIGU/DIGL default AGC (#5629) ─────────────────────────────────────────
+// Medium AGC lifts the noise between FT8 frames into WSJT-X's noise reference,
+// which costs weak decodes beside a strong neighbour. The data modes therefore
+// open with AGC off, and the receiver's own AGC returns on leaving them.
+static void testDigitalModeDefaultAgc()
+{
+    hl2::Hl2Backend backend;
+
+    QString agc;
+    QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                     [&](int, const SliceDelta& d) {
+        if (d.agcMode) agc = *d.agcMode;
+    });
+
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    backend.setSliceAgc(0, QStringLiteral("slow"), 65);
+    check(agc == QStringLiteral("slow"), "the operator's AGC is in force in LSB");
+
+    backend.setSliceMode(0, QStringLiteral("DIGU"));
+    check(agc == QStringLiteral("off"), "entering DIGU turns AGC off");
+    check(backend.currentOperatingState().agcMode == QStringLiteral("slow"),
+          "the data mode's off is not captured as the operator's AGC");
+
+    backend.setSliceMode(0, QStringLiteral("DIGL"));
+    check(agc == QStringLiteral("off"), "DIGU to DIGL keeps AGC off");
+
+    backend.setSliceMode(0, QStringLiteral("USB"));
+    check(agc == QStringLiteral("slow"),
+          "leaving the data modes restores the AGC held before them");
+
+    backend.setSliceMode(0, QStringLiteral("CWU"));
+    check(agc == QStringLiteral("slow"), "a non-data mode change leaves AGC alone");
+
+    // An operator's own AGC choice inside a data mode survives re-selecting
+    // the mode, and is theirs to keep on leaving it.
+    backend.setSliceMode(0, QStringLiteral("DIGL"));
+    check(agc == QStringLiteral("off"), "entering DIGL turns AGC off");
+    backend.setSliceAgc(0, QStringLiteral("fast"), 65);
+    backend.setSliceMode(0, QStringLiteral("DIGL"));
+    check(agc == QStringLiteral("fast"),
+          "re-selecting the same data mode leaves an operator AGC choice alone");
+    backend.setSliceMode(0, QStringLiteral("USB"));
+    check(agc == QStringLiteral("fast"),
+          "an AGC the operator set inside a data mode is kept on leaving it");
+
+    // A threshold change inside a data mode must not persist the off. It
+    // arrives with no mode, or with the slice's current mode repeated.
+    backend.setSliceMode(0, QStringLiteral("DIGU"));
+    backend.setSliceAgc(0, QString(), 40);
+    backend.setSliceAgc(0, QStringLiteral("off"), 45);
+    check(agc == QStringLiteral("off"), "a threshold change keeps the data mode's off");
+    check(backend.currentOperatingState().agcMode == QStringLiteral("fast"),
+          "a threshold change in a data mode does not capture off");
+    backend.setSliceMode(0, QStringLiteral("USB"));
+    check(agc == QStringLiteral("fast"), "and the held AGC still returns afterwards");
+}
+
 }  // namespace AetherSDR
 
 int main(int argc, char** argv)
@@ -596,6 +653,7 @@ int main(int argc, char** argv)
 #endif
     AetherSDR::testHostModulatedTxAudio();
     AetherSDR::testModeDefaultPassband();
+    AetherSDR::testDigitalModeDefaultAgc();
     // Last: it closes the HL2 transmit gate through the environment, and every
     // test above needs it open.
     AetherSDR::testRefusedKeyPublishesNoTransmitEdge();
