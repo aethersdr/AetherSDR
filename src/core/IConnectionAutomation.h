@@ -9,17 +9,10 @@ class QObject;
 
 namespace AetherSDR {
 
-// Engine-side interface for the automation bridge's connect/disconnect verbs.
-//
-// AutomationServer lives in libaethercore (aetherd RFC step 1) and must not
-// include any gui/ header, but the connect/disconnect/dialog verbs still need
-// to drive the real connection UI so automation exercises the same
-// MainWindow/RadioModel path a human does. The GUI's ConnectionPanel
-// implements this interface; the engine holds only an IConnectionAutomation*.
-//
-// Lifetime: the implementor is a QObject (ConnectionPanel is a QWidget). Verbs
-// that defer work onto the GUI event loop guard against destruction with
-// QPointer<QObject>(asQObject()) — hence asQObject().
+// Engine-side interface for the bridge's connect/disconnect/dialog verbs.
+// AutomationServer (libaethercore) can't include gui/ headers but must drive the
+// real connection UI; ConnectionPanel implements this. The implementor is a
+// QObject: deferred verbs guard with QPointer<QObject>(asQObject()).
 class IConnectionAutomation {
 public:
     virtual ~IConnectionAutomation() = default;

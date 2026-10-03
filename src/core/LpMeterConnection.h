@@ -14,34 +14,17 @@
 
 namespace AetherSDR {
 
-// Peripheral transport for a TelePost LP-100A digital vector RF wattmeter —
-// a standalone RS-232 instrument with no FlexRadio awareness at all, so this
-// is a peripheral(lp100a) accessory alongside AcomConnection/SpeConnection/
-// VkampConnection/PgxlConnection, not an IRadioBackend implementor. See
-// docs/architecture/lp-100a-wattmeter-design.md for the full design note.
-//
-// The wire protocol is transport-agnostic — the same ASCII records arrive
-// whether the peer is a local COM port or a raw-mode ser2net TCP proxy — so
-// one LpMeter::ResponseParser decodes either. Only one transport is active
-// at a time, selected by which connect method is called.
-//
-// Three things make this different from its peers, all measured rather than
-// assumed (design note §Phase 0):
-//
-//   1. The meter NEVER pushes. Unlike the ACOM (which streams once enabled)
-//      it answers 'P' and nothing else, so this class owns a poll loop.
-//   2. The wire is commonly SHARED. Other clients — a Node-RED flow,
-//      TelePost's own VCP — are often already polling through the same
-//      ser2net port, and a second connection receives their replies. So the
-//      poll loop is gated (LpMeter::PollGate): ride along when someone else
-//      is polling, poll when the wire is quiet.
-//   3. `connected` does not imply `working`. The meter can wedge with the
-//      transport perfectly healthy — observed on real hardware: TCP up,
-//      ser2net serving its banner, and zero records until the meter was
-//      power-cycled. dataFlowingChanged() exists for exactly that state, and
-//      it deliberately does NOT drop the link (contrast
-//      VkampConnection's dead-link watchdog, which aborts the socket and so
-//      makes its applet tile vanish at the moment the operator most needs it).
+// Transport for a TelePost LP-100A RF wattmeter, a standalone RS-232 peripheral
+// (not an IRadioBackend); design: docs/architecture/lp-100a-wattmeter-design.md.
+// The ASCII records are identical over a COM port or raw ser2net TCP, so one
+// LpMeter::ResponseParser serves either; one transport at a time. Measured
+// differences from its peers:
+//   1. The meter never pushes; it answers 'P', so this class owns a poll loop.
+//   2. The wire is often SHARED (Node-RED, TelePost VCP via ser2net), so polling
+//      is gated by LpMeter::PollGate: ride along, or poll when quiet.
+//   3. Connected != working: the meter can wedge with TCP healthy.
+//      dataFlowingChanged() reports it without dropping the link, so the applet
+//      tile stays up.
 class LpMeterConnection : public QObject {
     Q_OBJECT
 

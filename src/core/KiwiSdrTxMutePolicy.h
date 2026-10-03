@@ -3,19 +3,13 @@
 #include <algorithm>
 #include <cstdint>
 
-// KiwiSDR transmit-mute latch (fork feature: warm Kiwi audio through TX).
-//
-// The Kiwi transmit gate should release on this client's optimistic local
-// unkey (TransmitModel::setMox(false) fires immediately) instead of waiting
-// out the radio's interlock round trip and hang timers — but transmissions
-// this client never keyed (VOX, CAT, hardware PTT, other clients) must still
-// gate on the radio-reported interlock state, which is the only signal that
-// exists for them.
-//
-// The latch distinguishes the two: while a radio-reported TRANSMITTING state
-// is only the tail of a transmission this client already ended locally,
-// radioTermMasked() is true and the caller ignores the radio term in its
-// mute predicate. The latch clears on the interlock's falling edge.
+// KiwiSDR transmit-mute latch. The Kiwi TX gate releases on this client's
+// optimistic local unkey (TransmitModel::setMox(false)) rather than waiting out
+// the radio's interlock round trip, but transmissions we didn't key (VOX, CAT,
+// hardware PTT, other clients) still gate on the radio interlock. While radio
+// TRANSMITTING is only the tail of a TX we already ended, radioTermMasked() is
+// true and the caller ignores the radio term. Clears on the interlock's falling
+// edge.
 
 namespace AetherSDR {
 

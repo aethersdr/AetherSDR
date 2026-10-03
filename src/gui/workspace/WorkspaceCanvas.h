@@ -1,23 +1,9 @@
 #pragma once
 
-// The workspace canvas surface (RFC #4887, phase 1).
-//
-// A QWidget that hosts freely-placed child widgets, positioned from a
-// CanvasLayout.  Deliberately thin: every decision that can be got wrong
-// (clamping, hit testing, stacking) lives in the widget-free model, and this
-// class only applies the answers to real geometry.  If a change here needs a
-// new rule rather than a new call, the rule belongs in CanvasLayout where it
-// can be tested headless.
-//
-// PHASE 1 SCOPE — what is deliberately absent, and where it lands:
-//   * snapping, alignment guides, resize handles, tidy, keyboard nudge — phase 5
-//   * persistence and the workspace document                          — phase 2
-//   * mounting into MainWindow, and any theme tokens for item chrome   — phase 3
-//   * automation bridge verbs                                          — phase 4
-//
-// Nothing in this file touches MainWindow, TitleBar, AutomationServer or the
-// theme seed: those are RFC #4764's files, and phase 1 runs in parallel with
-// it precisely because it stays out of them.
+// The workspace canvas surface (RFC #4887): a QWidget hosting freely placed
+// children positioned from a CanvasLayout. Deliberately thin: clamping,
+// hit-testing and stacking rules belong in the widget-free CanvasLayout where
+// they are tested headless; this class only applies the answers.
 
 #include "gui/workspace/CanvasInteraction.h"
 #include "gui/workspace/CanvasLayout.h"
@@ -147,19 +133,10 @@ public:
     void setGridSnapEnabled(bool on) { m_gridSnapEnabled = on; }
     bool isGridSnapEnabled() const { return m_gridSnapEnabled; }
 
-    // ── Edit mode (8600 field request) ───────────────────────────────────
-    //
-    // A locked canvas is for OPERATING: no click-to-select, no frame, no
-    // title-strip drags, no drops, no nudge keys, no grid dots — presses go
-    // to the applet content and nothing arms placement.  Edit mode is the
-    // arranging posture: everything above comes back.  The BARE widget
-    // defaults to editing (a canvas with no controller is an editor — the
-    // phase-1 tests and any future preview use it that way); the
-    // controller imposes the locked operating posture at enable().
-    //
-    // Deliberately NOT gated here: setItemRect/restoreItems (lifecycle
-    // placement — reopen-restore, pan arrival, dock-return and the
-    // automation bridge are not operator edits), and the context-menu
+    // Edit mode. Locked (operating): no select, frame, title-strip drag, drop,
+    // nudge keys or grid dots; presses go to the applet. The bare widget defaults
+    // to editing; the controller locks it at enable(). Not gated: setItemRect /
+    // restoreItems (lifecycle placement, not operator edits) and the context-menu
     // signal (the controller builds a mode-aware menu).
     void setEditMode(bool on);
     bool isEditMode() const { return m_editMode; }
@@ -207,16 +184,10 @@ signals:
     // bare canvas.  Policy lives with the controller.
     void contextMenuRequested(const QString& id, const QPoint& globalPos);
 
-    // Emitted when an item's STORED rect changes — placement gestures only.
-    // A canvas resize emits nothing: stored rects are canvas-independent,
-    // and the squeeze a small window forces on the view is display-time
-    // compromise (applyGeometryFor), never an edit.  Growing the window
-    // therefore restores the arrangement exactly, and a transient size at
-    // startup can no longer rewrite the document (the phase 3 field report).
-    //
-    // Both of these are edits: phase 2's auto-commit turns each into a
-    // whole-document write, so neither fires for an operation that changed
-    // nothing — raising an already-frontmost item is silent too.
+    // Emitted only when a stored rect changes by a placement gesture. Canvas
+    // resizes emit nothing (stored rects are canvas-independent; squeezing is
+    // display-time, applyGeometryFor), so a transient startup size can't rewrite the
+    // document. Each auto-commits the whole document, so no-ops never emit.
     void itemRectChanged(const QString& id, const NormRect& rect);
     void itemStackingChanged(const QString& id);
     void itemAdded(const QString& id);

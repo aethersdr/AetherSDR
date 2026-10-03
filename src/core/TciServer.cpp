@@ -247,9 +247,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // than to 0.0 (which is out of the meter's domain).
             m_cachedSwr = swrValid ? swr : 1.0f;
         });
+        // tx_sensors' mic field is the same "transmit level" the S-meter's
+        // Level face shows: MICPEAK where the radio publishes no MIC (HL2).
         connect(&m_model->meterModel(), &MeterModel::micMetersChanged,
-                this, [this](float micLevel, float, float, float) {
-            m_cachedMicLevel = micLevel;
+                this, [this](float micLevel, float, float micPeak, float) {
+            m_cachedMicLevel =
+                m_model->meterModel().transmitLevelFaceValue(micLevel, micPeak);
         });
         connect(&m_model->meterModel(), &MeterModel::swAlcChanged,
                 this, [this](float dbfs) {
@@ -280,16 +283,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // subscription is made by MainWindow's stream-sink helper (not here) so it
         // is re-established after a backend/family swap destroys the stream (#4448).
 
-        // Re-trigger DAX setup when the radio (re)connects or a slice
-        // is added AFTER a TCI client has already requested audio.  Without
-        // this, a client that races the radio connect — WSJT-X started
-        // before AetherSDR finishes its handshake, or before any slice
-        // exists — sets `audioEnabled=true` but ensureDaxForTci()
-        // silently no-ops on `!isConnected()` / empty slices, and never
-        // gets a second chance.  Result: CAT and TX audio look fine
-        // (text channel is alive) but no DAX RX stream is ever created,
-        // so the radio sends no audio frames and WSJT-X RX stays silent.
-        // (#3270)
+        // Re-run DAX setup on (re)connect or slice add: a client that requested audio
+        // before the radio was connected or had slices got a silent no-op from
+        // ensureDaxForTci() and would otherwise never get an RX stream (#3270).
         connect(m_model, &RadioModel::connectionStateChanged,
                 this, [this](bool connected) {
             if (!connected) {
@@ -338,23 +334,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         });
         connect(m_model, &RadioModel::sliceAdded,
                 this, [this](SliceModel* s) {
-            // #4567: bind the receiver number FIRST, before anything below
-            // (or any later-connected handler) derives a trx for this slice.
-            // A recreate (same Flex slice id, removal < 500 ms ago) reuses
-            // its existing binding; a genuinely new slice gets the lowest
-            // free number.
-            //
-            // Bind by walking EVERY live slice in list order, not just the
-            // new one (#4577 review): after a reconnect the previous
-            // session's slices are reclaimed by the status replay without
-            // sliceAdded (RadioModel's !reclaimed guard) while the map was
-            // cleared at disconnect — live slices with no binding. Acquiring
-            // only the new slice would hand it trx 0 on top of a slice the
-            // fallback resolves positionally to 0. The walk is idempotent
-            // (acquire reuses existing bindings) and on an empty map
-            // reproduces exactly the positional numbering, restoring the
-            // invariant that every live slice is bound. The added slice is
-            // already in the list here (append precedes the emit).
+            // Bind receiver numbers first, before anything derives a trx (#4567). Walk
+            // every live slice in list order, not just the new one: after a reconnect the
+            // status replay reclaims slices without sliceAdded while the map was cleared.
+            // acquire() is idempotent (a recreate reuses its binding, new slices get the
+            // lowest free number) and on an empty map reproduces positional numbering.
+            // The added slice is already in the list here.
             if (s) {
                 for (SliceModel* live : m_model->slices()) {
                     if (live)
@@ -398,19 +383,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // move off the dead index.
             publishActiveTrx();
 
-            // m_lastTxTrx caches the last TX slice's trx so a power change
-            // during the band-change slice-recreation gap still labels
-            // drive:/tune_drive: correctly (the recreated slice exists but has
-            // not regained its TX flag yet). A TX slice that is *closed* —
-            // removed with no recreation — would instead leave the cache
-            // pointing at a trx no live slice carries, mislabelling a later
-            // power change with a dead index. Tell the two apart by deferring
-            // past the ~340 ms settle window: a band change re-adds the slice
-            // (same id) well within it, so the cache still resolves to a live
-            // slice and this is a no-op; a genuine close leaves nothing carrying
-            // that trx and resets the cache to the burst's historical default.
-            // (A renumber that leaves another live slice at that trx also
-            // no-ops; a surviving TX slice refreshes the cache in broadcastPower.)
+            // m_lastTxTrx survives the band-change recreate gap so drive:/tune_drive: stay
+            // labelled. Defer past the ~340 ms settle: a band change re-adds the same
+            // slice id in time (no-op); a genuine close leaves the trx dead and the cache
+            // resets to the burst default.
             if (!m_trxMap.trxHasLiveSlice(m_model, m_lastTxTrx)) {
                 QTimer::singleShot(500, this, [this]() {
                     if (m_model && !m_trxMap.trxHasLiveSlice(m_model, m_lastTxTrx)) {
@@ -744,21 +720,11 @@ void TciServer::broadcastPower()
     }
 }
 
-// Recompute the focused TRX and tell clients if it moved (#4160).
-//
-// Called both when focus changes and when a slice is removed. The removal
-// case is the non-obvious one: trx is a positional index, so removing a
-// slice renumbers every later slice, but the focused slice itself emits
-// nothing — it never lost focus. Without this the tracked trx (and every
-// client seeded from it) silently points at the wrong slice.
-//
-// Unlike vfo:/modulation:, active_slice has no follow-up event that would
-// self-correct: once only one slice remains the operator cannot switch
-// focus at all, so a stale value would persist indefinitely.
-//
-// Runs even with no clients connected — focus and slice count both change
-// freely before anyone connects, and m_activeTrx seeds each new client's
-// init burst.
+// Recompute the focused TRX and tell clients if it moved (#4160). Also called
+// on slice removal: trx is positional, so removal renumbers later slices
+// without the focused slice emitting anything, and nothing else would
+// self-correct. Runs with no clients too, since m_activeTrx seeds each new
+// client's init burst.
 void TciServer::publishActiveTrx()
 {
     int trx = -1;
@@ -1616,29 +1582,11 @@ SliceModel* TciServer::sliceForTrxStrict(int trx) const
 
 int TciServer::effectiveTrx(TciClient* client, int requestedTrx) const
 {
-    // Every WSJT-X instance in TCI/ESDR3 mode addresses trx 0, so with two
-    // instances on two slices the wire request carries nothing that tells them
-    // apart and both resolve to the same receiver (#4547). The one per-client
-    // signal that does exist is the receiver declared in `audio_start:<n>` —
-    // already parsed and stored per socket — so an instance that started audio
-    // on receiver 1 is operating receiver 1 whatever index it puts on the wire.
-    //
-    // Thetis scopes RX-audio enabled-receiver sets per client while radio state
-    // stays global, so reading the declared receiver as the client's identity
-    // follows the reference implementation. A client that declares no receiver
-    // (`audio_start` with no argument, or control-only) keeps the wire index.
-    // Replies still echo the trx the client sent — the binding changes which
-    // slice is addressed, never the wire shape.
-    //
-    // ONLY trx 0 is redirected. Thetis keeps radio state global and scopes only
-    // the audio set per client, so the declared receiver is evidence of intent,
-    // not an address that outranks one. It is good evidence exactly where the
-    // wire has none: every WSJT-X instance addresses trx 0 whatever receiver it
-    // operates, so trx 0 carries no client intent to override. A non-zero trx is
-    // a deliberate address — a client that declared audio on receiver 0 and then
-    // asks for trx 1 means trx 1, and honouring the declaration there would key
-    // a slice the client never asked for, on that slice's band and antenna.
-    // That is the #4547 defect class, re-entered through its own fix.
+    // Every WSJT-X instance addresses trx 0, so two instances on two slices are
+    // indistinguishable on the wire (#4547). A client's `audio_start:<n>` receiver
+    // is used as its identity, as Thetis scopes RX audio per client. Only trx 0 is
+    // redirected: a non-zero trx is a deliberate address and must not be
+    // overridden. Replies still echo the trx the client sent.
     for (const auto& cs : m_clients) {
         if (cs.socket == client) {
             if (cs.audioReceiver < 0 || requestedTrx != 0) {
@@ -1765,60 +1713,22 @@ void TciServer::tuneSliceAndConfirm(
         inSpan = pan->spanContainsMhz(mhz);
     }
 
-    // TUNE THROUGH THE MODEL, ON EVERY COMMAND PLANE (#4500, #4493).
-    //
-    // This was briefly a raw `slice tune` written at the connection, with the
-    // radio's command reply used as a barrier to read the settled frequency back
-    // out of SliceModel. Both halves of that were wrong on a Flex:
-    //
-    //   - the raw command bypasses SliceModel, so nothing updates m_frequency;
-    //   - the radio does not answer `slice tune` with an RF_frequency status
-    //     either (measured: 89 tunes, 0 frequency statuses in one session).
-    //
-    // So the read-back could only ever observe the PRE-TUNE value, and every
-    // confirmation echoed the frequency the slice had already left. WSJT-X's
-    // do_frequency() waits on that echo, concluded the radio had not moved, and
-    // reported rig-control failure on every band change — while the radio was in
-    // fact sitting on the new band, which is how transmissions went out of band.
-    //
-    // The setter is the command path, not an addition to it: setFrequency()
-    // sends the byte-identical "slice tune <id> <mhz> autopan=0" this used to
-    // open-code, and additionally updates the model, honours a locked slice, and
-    // emits frequencyChanged. There is no second command and no double-tune.
-    //
-    // The model is the authority here BECAUSE the radio declines to be: with no
-    // status to wait for, an optimistic update is the only thing that can make a
-    // TCI client's mirror converge. (That the radio never confirms a tune is an
-    // older gap than the regression above and wants its own fix; until then this
-    // is what masks it, which is exactly why removing it broke so much.)
+    // Tune through SliceModel on every command plane (#4500, #4493). A Flex does
+    // not answer `slice tune` with an RF_frequency status, so the model's
+    // optimistic update is what lets TCI clients (WSJT-X do_frequency() waits on
+    // the echo) converge. setFrequency() sends the same "slice tune <id> <mhz>
+    // autopan=0", honours locks and emits frequencyChanged; no double tune.
     if (inSpan)
         slice->setFrequency(mhz);
     else
         slice->tuneAndRecenter(mhz);
 
-    // Confirm what the model ACCEPTED, never what the client asked for.
-    //
-    // A locked slice refuses the tune outright and a no-op leaves the frequency
-    // where it was; in both cases the honest answer is the value the model
-    // holds, or a client's mirror drifts away from the radio.
-    //
-    // A successful tune also reaches clients via frequencyChanged →
-    // broadcastSliceFrequencies(), fired synchronously inside setFrequency()/
-    // tuneAndRecenter() above (their own qFuzzyCompare guard skips the emit on
-    // a genuine no-op). For channel 0 that sends an identical vfo:<trx>,0,<hz>;
-    // frame BEFORE this line ever runs, so confirming again here produced two
-    // near-simultaneous vfo: frames for the same value — suspected of racing a
-    // TCI client's own frequency-restore scheduler (#5086: intermittent RX
-    // frequency drift on WSJT-X "Fake It" split, after a TX/RX cycle). Detect
-    // that case by comparing the pre-tune and post-tune Hz value: if it moved,
-    // channel 0 is already covered and this broadcast would be the duplicate.
-    // A genuine no-op (locked slice, or the request matched what was already
-    // there) never emits frequencyChanged, so channel 0 still needs this
-    // explicit confirmation — otherwise a client is left with none and hangs
-    // for its full rig-control timeout. Channel 1 keeps its unconditional
-    // confirmation regardless of whether the frequency moved: the automatic
-    // path only covers it when the routing state happens to track this slice
-    // as TX, so it cannot be assumed sent.
+    // Confirm what the model accepted, not what was asked (locked slice or no-op
+    // leaves it unchanged). If the frequency moved, frequencyChanged already sent
+    // channel 0's vfo: synchronously, so skip the duplicate (#5086). A no-op emits
+    // nothing, so channel 0 still needs this or the client waits out its timeout.
+    // Channel 1 always confirms: the automatic path covers it only when routing
+    // tracks this slice as TX.
     const long long acceptedHz = TciProtocol::mhzToHz(slice->frequency());
     const bool channelZeroAlreadyBroadcast = (channel == 0 && acceptedHz != beforeHz);
     if (acceptedHz > 0 && !channelZeroAlreadyBroadcast) {
@@ -1842,20 +1752,10 @@ void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)>
         return;
     }
 
-    // Seam backend (HL2): `slice set N tx=1` is Flex text with no counterpart on
-    // this plane, so the sendCmdPublic below would be swallowed AND this
-    // continuation would never run. Every caller opens a route transition around
-    // it, so a silent drop leaks m_routeTransitionInFlight forever and wedges
-    // TCI keying for the rest of the connection.
-    //
-    // There IS a seam verb now. This used to refuse outright, correctly, because
-    // such a radio had exactly one slice and it was already the transmitter —
-    // so the only way to reach here was a route that could not be built. With
-    // several receivers the request is meaningful: it moves the transmitter.
-    //
-    // Synchronous, unlike the Flex round trip below: the backend either owns the
-    // move or it does not, and there is no radio to wait for. The continuation
-    // is invoked either way, which is what keeps the route transition closed.
+    // Seam backend (HL2): `slice set N tx=1` is Flex text, so a sendCmdPublic
+    // would be swallowed and the continuation never run, leaking
+    // m_routeTransitionInFlight and wedging TCI keying. Move TX via the seam
+    // instead; it's synchronous and the continuation runs on every path.
     if (!m_model->usesFlexCommandPlane()) {
         SliceModel* target = m_model->slice(sliceId);
         if (!target) {
@@ -1904,37 +1804,15 @@ void TciServer::createTxSliceForVfoB(TciClient* client,
         return;
     }
 
-    // Seam backend (HL2): `slice create` is Flex text this radio does not speak.
-    // The command below would be swallowed and its completion callback would
-    // never run, so the route transition opened just after it could never be
-    // closed -- and handleTrxRequest() defers every subsequent trx:true into
-    // m_pendingTrxRequest while a transition is in flight, so WSJT-X could not
-    // transmit again for the rest of the connection. That is the failure this
-    // guard exists to prevent. (When the guard landed, the capacity test below
-    // could not catch it — maxSlices() then read the model-string Flex table,
-    // so a single-slice HL2 looked like it had room. #4545 made maxSlices()
-    // backend-authoritative, but the guard stays: it refuses for the right
-    // reason and does not depend on capacity arithmetic staying in sync.)
-    //
-    // Refusing is also the honest answer, not merely the safe one: WSJT-X's
-    // "Split = Rig/Fake It" reaches exactly here, and reportVfoBRouteFailure
-    // sends split_enable:...,false; plus the authoritative channel-1 VFO, which
-    // is what makes it fall back to single-VFO operation instead of waiting.
-    // Seam backend (HL2): `slice create` is Flex text this radio does not speak,
-    // and this used to refuse outright — correctly, while such a radio had one
-    // receiver and could not make a second.
-    //
-    // It can now. createPanadapter() brings up another DDC together with its
-    // slice, which is exactly what VFO B needs, so split becomes available up to
-    // whatever the board and the link budget allow.
-    //
-    // The shape is different enough from the Flex path below to be written out
-    // rather than shared: the seam create is SYNCHRONOUS — the backend either
-    // owns the request or it does not, and there is no radio to wait for — so
-    // there is no reply to parse, no window in which the requester can leave,
-    // and no pending-create record to reconcile. What IS shared is the
-    // discipline: one route transition, closed on every exit, and teardown of a
-    // slice that gets created but cannot be used.
+    // Seam backend (HL2): `slice create` is Flex text that would be swallowed,
+    // leaving the route transition open and every later trx:true deferred forever.
+    // Instead createPanadapter() brings up another DDC with its slice for VFO B,
+    // up to maxSlices() (backend-authoritative, #4545). It is synchronous: no
+    // reply to parse or pending create to reconcile. Shared with the Flex path:
+    // one route transition closed on every exit, and teardown of a created slice
+    // that can't be used. A refusal via reportVfoBRouteFailure sends
+    // split_enable:...,false plus the channel-1 VFO, so WSJT-X Split=Rig/Fake It
+    // falls back to single-VFO.
     if (!m_model->usesFlexCommandPlane()) {
         if (m_model->slices().size() >= m_model->maxSlices()) {
             reportVfoBRouteFailure(client, request,
@@ -2544,17 +2422,10 @@ void TciServer::handleTrxRequest(TciClient* client, const TciProtocol::TrxReques
     const char* const cachedOwner = txRouteOwnerName(m_routingState.owner());
     const int txSliceId = m_routingState.resolvePttSlice(rxSlice->sliceId(), endpoints);
 
-    // Why did transmit land where it did?  Every TCI routing fault reported so
-    // far reduces to one of three things, and all three are invisible without
-    // this line: the requested trx resolved away, a cached route outliving the
-    // live TX assignment, or two clients addressing the same trx.  Log the
-    // whole decision - request, live state, cached state, result - so a report
-    // can be diagnosed from a log instead of a reproduction.
-    //
-    // source= is client-supplied and goes out last. simplified() collapses any
-    // embedded newline, because .noquote() means whatever a client puts in that
-    // field lands in the log verbatim — and a forged "TCI PTT route:" line in
-    // the evidence a reporter attaches is a worse failure than no line at all.
+    // Log the whole PTT routing decision (request, live state, cached route,
+    // result) so routing faults can be diagnosed from a log. source= is
+    // client-supplied, so it goes last and is simplified() to strip newlines that
+    // could forge a "TCI PTT route:" line under .noquote().
     qCInfo(lcCat).nospace().noquote()
         << "TCI PTT route: trx=" << request.trx
         << (m_trxMap.trxForSlice(m_model, rxSlice) == request.trx ? "" : " [trx fallback]")
@@ -3014,18 +2885,10 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
                       .arg(trx).arg(locked ? "true" : "false"));
     });
 
-    // GUI focus → `active_slice:trx;` broadcast (#4160). Control surfaces
-    // (Elgato / StreamController / Ulanzi) otherwise hardcode trx 0 and every
-    // dial keeps addressing slice A no matter what the operator selected.
-    //
-    // Only the true edge is relayed. A slice losing focus also emits
-    // activeChanged(false), and the gaining slice's true edge is the
-    // authoritative event — relaying the false edge would emit a second,
-    // wrong active_slice for the outgoing trx.
-    //
-    // The focused slice is remembered by identity, not by trx: trx is
-    // positional, so a later slice removal renumbers it (see
-    // publishActiveTrx()).
+    // GUI focus → `active_slice:trx;` broadcast (#4160) so control surfaces follow
+    // the operator. Only the true edge is relayed (the gaining slice's edge is
+    // authoritative). Focus is remembered by slice identity, since trx is
+    // positional (see publishActiveTrx()).
     connect(slice, &SliceModel::activeChanged, this, [this, slice](bool active) {
         if (!active) return;
         m_activeSlice = slice;
@@ -3061,40 +2924,15 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
                       .arg(trx).arg(static_cast<int>(gain)));
     });
 
-    // DSP / squelch / RIT / XIT flags → per-slice broadcasts (#4161). These
-    // had no signal wiring at all, so a flag toggled in AetherSDR's own GUI
-    // was invisible to every TCI client, and the client that sent the SET was
-    // never told the radio accepted it (the command-echo path excludes the
-    // sender).
-    //
-    // Each relay is a change handler that de-dups repeats, plus a seed that
-    // announces the current state after a (re)wire. Both share one baseline
-    // (`last`, starting "unsent") so a value is never announced twice. The
-    // de-dup is needed because SliceModel's emit discipline is uneven —
-    // nb/nr/anf/squelch/rit/xit re-emit on every status refresh whether or not
-    // the value moved, while apf/audioMute guard — and squelchChanged/
-    // ritChanged/xitChanged carry (flag, value), so spinning a RIT offset would
-    // otherwise re-announce an unchanged rit_enable on every step. The trailing
-    // int on those three signals is simply dropped: Qt binds a 1-arg slot to a
-    // 2-arg signal, so one helper serves both shapes (#4161 is scoped to the
-    // *_enable family; sql_level/rit_offset/xit_offset are out of scope).
-    //
-    // The seed is DEFERRED ~400 ms and reads the *settled* value, exactly like
-    // the frequency push below and for the same reason: a Flex band change
-    // recreates the slice, and RadioModel decodes the radio's slice status
-    // BEFORE it emits sliceAdded (the signal that triggers this wiring), so at
-    // wire time the recreated slice still holds pre-settle DSP state. An
-    // immediate seed would broadcast that stale value, then the radio's restore
-    // (~250-340 ms later) would broadcast the corrected one — flapping every
-    // flag on every band change. Deferring past the settle window announces
-    // exactly the settled value: if a restore edge lands inside the window the
-    // handler announces it and the seed de-dups; if the new band's value equals
-    // the recreated default no edge fires and the seed is what announces it (the
-    // per-flag analog of the #2824 vfo: case handled by the frequency push).
-    //
-    // The seed no-ops before any client connects (slices are wired at startup);
-    // a client connecting later gets this state from the init burst. QPointer
-    // guards a rapid band change that destroys the slice before the timer fires.
+    // DSP / squelch / RIT / XIT *_enable flags → per-slice broadcasts (#4161),
+    // including to the client that sent the SET (command echo skips the sender).
+    // Each relay de-dups against a shared `last` baseline, because SliceModel
+    // re-emits nb/nr/anf/squelch/rit/xit on every status refresh and
+    // squelch/rit/xitChanged carry (flag, value); the value arg is dropped.
+    // The seed is deferred ~400 ms past the Flex band-change recreate settle
+    // (~250-340 ms), so only the settled value is announced (cf. #2824). It
+    // no-ops with no clients (the init burst covers late joiners); QPointer guards
+    // a slice destroyed before the timer fires.
     auto emitFlag = [this](SliceModel* s, const char* cmd, bool on) {
         if (m_clients.isEmpty()) {
             return;
@@ -3139,34 +2977,19 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     wireFlag(&SliceModel::apfChanged,       "rx_apf_enable", [slice]{ return slice->apfOn(); });
     wireFlag(&SliceModel::audioMuteChanged, "mute",          [slice]{ return slice->audioMute(); });
 
-    // squelch/rit/xit emit (flag, value); the value is dropped (see above).
-    // sql_enable keeps a known KiwiSDR-only quirk: three squelch sources are in
-    // play and diverge ONLY when m_externalReceiveAudioReplacement is set — the
-    // init burst and this seed report receiveSquelchOn() (effective), while
-    // squelchChanged carries squelchOn() (Flex-side). In that mode the seed and
-    // the first edge can disagree, producing one spurious sql_enable edge on
-    // connect; in normal mode all three are equal. Left as-is deliberately: a
-    // real fix aligns all three sources and can only be verified with a KiwiSDR
-    // RX source, out of this change's *_enable scope. (The band-change transient
-    // that used to compound this is gone now the seed is deferred and settled.)
+    // Known KiwiSDR quirk: with m_externalReceiveAudioReplacement set, the burst
+    // and seed report receiveSquelchOn() while squelchChanged carries squelchOn(),
+    // so one spurious sql_enable edge can appear on connect. Fixing it means
+    // aligning all three sources, verifiable only with a KiwiSDR RX source.
     wireFlag(&SliceModel::squelchChanged, "sql_enable", [slice]{ return slice->receiveSquelchOn(); });
     wireFlag(&SliceModel::ritChanged,     "rit_enable", [slice]{ return slice->ritOn(); });
     wireFlag(&SliceModel::xitChanged,     "xit_enable", [slice]{ return slice->xitOn(); });
 
-    // State sync on (re)wire, deferred. A Flex band change (display pan set
-    // band=) tears down and recreates the slice, so wireSlice() runs again for
-    // the new slice. The handlers above only fire on *subsequent* changes; if
-    // the radio's restored band frequency equals the recreated slice's init
-    // value no frequencyChanged fires and the new band's vfo: is never
-    // announced to TCI clients (silent for 160/80/60/17/10m; #2824).
-    //
-    // Pushing immediately is wrong: the recreated slice briefly holds an
-    // intermediate frequency before the radio restores the band-stack value
-    // (slices settle in ~250-340 ms observed), so an immediate push emits a
-    // transient wrong vfo:. Defer ~400 ms and read the *settled* frequency so
-    // every band announces exactly one correct vfo:. QPointer guards rapid
-    // band changes that destroy the slice before the timer fires (the new
-    // slice schedules its own deferred push, so the final band still wins).
+    // Deferred state sync on (re)wire: a Flex band change recreates the slice, and
+    // if the restored frequency equals the init value no frequencyChanged fires,
+    // so vfo: would never be announced (#2824). Push ~400 ms later, after the
+    // ~250-340 ms settle, so each band announces one correct vfo:. QPointer guards
+    // rapid band changes (the new slice schedules its own push).
     QPointer<SliceModel> guard(slice);
     QTimer::singleShot(400, this, [this, guard]() {
         if (!guard || m_clients.isEmpty()) return;
@@ -4103,17 +3926,11 @@ void TciServer::ensureDaxForTci()
         }
     }
 
-    // Acquire the needed channels from the centralized manager (#3305). It
-    // creates the radio-side stream only when the channel gains its FIRST
-    // holder — never a duplicate subscription (duplicate streams made
-    // daxPcmReady fire twice per period, doubling apparent audio speed) —
-    // and reuses anything the DAX bridge or a previous arm already created.
-    // Acquire is idempotent, so re-arm paths can call this freely.
-    //
-    // The #1439 dax_clients re-assert is a one-shot in RadioModel tied to the
-    // actual `stream create`. The unconditional re-assert that used to live
-    // here re-asserted LIVE bindings, which the radio answers with a transient
-    // unbind/rebind dax=0/dax=<ch> pair — the seed of the #4009 storm.
+    // Acquire channels from the central manager (#3305): it creates the radio
+    // stream only for a channel's first holder (duplicates double daxPcmReady)
+    // and reuses existing ones; acquire is idempotent. Don't re-assert dax_clients
+    // here: re-asserting live bindings triggers dax=0/dax=<ch> churn (#4009); the
+    // #1439 re-assert is a one-shot in RadioModel on `stream create`.
     if (m_model->panStream()) {
         for (int ch : channelsNeeded) {
             m_model->panStream()->acquireDaxChannel(

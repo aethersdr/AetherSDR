@@ -3,18 +3,11 @@
 #include <QString>
 #include <QStringList>
 
-// Canonical value lists and text sanitization for memory-channel fields.
-//
-// These mirror the constrained value sets FlexLib uses for slices and
-// memories (see FlexLib Slice.cs / Memory.cs):
-//   - demod modes:  Slice.cs filter switch-statements
-//   - FMTXOffsetDirection enum:  simplex / up / down
-//   - FMToneMode enum:  off / ctcss_tx  (ctcss_txrx is reserved, not exposed)
-//
-// Everything here is wire-agnostic at the type level: the *display* form is
-// upper-case (what the operator reads/picks), the *wire* form matches what the
-// radio expects (modes upper-case, offset/tone lower-case). Helpers convert
-// between the two so the GUI, the radio I/O path, and CSV all agree.
+// Canonical value lists and sanitization for memory-channel fields, mirroring
+// FlexLib Slice.cs / Memory.cs: demod modes; FMTXOffsetDirection simplex/up/down;
+// FMToneMode off/ctcss_tx (ctcss_txrx reserved, not exposed). Display form is
+// upper-case; wire form is upper-case modes, lower-case offset/tone. Helpers
+// convert so GUI, radio I/O and CSV agree.
 namespace AetherSDR::MemoryFields {
 
 // Strip characters that corrupt the radio protocol and downstream tooling:

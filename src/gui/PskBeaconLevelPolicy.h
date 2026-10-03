@@ -1,17 +1,8 @@
 #pragma once
 
-// The WSPR beacon's generated audio level, as pure decisions.
-//
-// This is the level the beacon generator is asked for, not RF power: it is the
-// amplitude of the audio handed to the transmit chain, and what happens to it
-// afterwards is the difference the two constants below encode.
-//
-// It lives in a header, evaluated by PskReporterMapDialog rather than copied
-// into it, so the suite exercises the SAME expressions the dialog runs. A test
-// against a re-typed copy of a mapping proves only that two copies agree.
-//
-// See PskReporterMapDialog's beacon-level block for WHY each answer is shaped
-// this way; this header is the decision only.
+// WSPR beacon audio level (generator amplitude, not RF power) as pure
+// decisions, evaluated by PskReporterMapDialog so tests run the same
+// expressions. The reasoning lives in the dialog's beacon-level block.
 
 #include <optional>
 
@@ -43,17 +34,9 @@ inline constexpr int kBeaconLevelRadioModulatedDbFs = -20;
 }
 
 // What the level control should read, or nothing when it must be left alone.
-//
-// ARMED IS THE FIRST TEST AND IT IS ABSOLUTE. Once a beacon is armed the level
-// it was armed with is the level that goes out; a radio status change arriving
-// mid-slot must not move it (Principle VI — the operator's intent to transmit
-// is the level they saw when they pressed the button).
-//
-// A stored level is a deliberate choice and outranks the default. It is stored
-// PER RADIO, so "the operator set this" means they set it for THIS radio; a
-// level chosen on a Flex is not an instruction about the HL2 that is now
-// connected. That is the whole reason this takes an optional rather than
-// reading one app-global key.
+// Armed comes first and is absolute: the armed level is what transmits, and no
+// mid-slot status may move it. A stored level outranks the default and is
+// stored per radio, hence the optional.
 [[nodiscard]] constexpr std::optional<int> beaconLevelToApplyDbFs(
     bool beaconArmed, std::optional<int> storedDbFs, bool hostModulates) noexcept
 {
@@ -66,18 +49,10 @@ inline constexpr int kBeaconLevelRadioModulatedDbFs = -20;
     return beaconLevelDefaultDbFs(hostModulates);
 }
 
-// Whether a legacy app-global level may be claimed into THIS radio's document.
-//
-// The old key was one value for every radio, and on a host-modulating backend
-// it never described an on-air level at all: while Hl2TxDsp's ALC still had its
-// makeup half it normalised anything from roughly -45 dBFS up onto
-// alcTargetPeak, so the control was inert and whatever sits in that key was
-// never a choice ABOUT the air. Importing it into an HL2's document would
-// freeze a non-choice into the one place that now decides an unattended
-// transmit level.
-//
-// Where the radio modulates, the same key DID reach the air through the
-// radio's own mic gain, so it is a real setting and is carried across.
+// Whether the legacy app-global level may be claimed into this radio's
+// document. On a host-modulating backend it never set an on-air level (the old
+// ALC makeup normalised it to alcTargetPeak), so it is not imported; where the
+// radio modulates it reached the air via mic gain and is carried across.
 [[nodiscard]] constexpr bool legacyBeaconLevelAppliesTo(bool hostModulates) noexcept
 {
     return !hostModulates;

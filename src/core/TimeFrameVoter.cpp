@@ -5,20 +5,13 @@
 #include <utility>
 #include <vector>
 
-// Cross-frame confidence-weighted voting per the AetherClock reference decoder:
-// a bit's vote is the sum of its per-frame matched-filter margins (floored at
-// 0.01), with older frames discounted by agingFactor^age. Markers and Unknown
-// symbols never vote. The timestamp vote is NORMALIZE-then-COHERENCE-GATED-
-// per-bit: every frame is first extrapolated to the newest epoch (removing the
-// epoch skew that makes a stale hour dangerous), then each field is composed from
-// its bits ONLY when every bit is coherent (its confidence-winner agrees with its
-// aging-only count majority); an incoherent field — where sibling bits are carried
-// by different frame camps — falls back to the top value some frame actually held,
-// so per-bit voting can never assemble a phantom value. Quality is computed in the
-// same pass (computeResolution) as the min across fields of per-bit trust
-// (margin x participation) or the held-value margin, so value and quality can
-// never disagree. Lock gates on consecutive +1 minute increments plus
-// self-consistent static fields.
+// Cross-frame confidence-weighted voting (AetherClock reference decoder). A
+// bit's vote sums per-frame matched-filter margins (floor 0.01) times
+// agingFactor^age; Markers/Unknown never vote. Frames are extrapolated to the
+// newest epoch, then each field is composed per-bit only if every bit is
+// coherent, else falls back to the top held value (see votedField() in the
+// header). Value and quality come from one pass (computeResolution). Lock
+// needs consecutive +1 minute increments plus self-consistent static fields.
 
 namespace AetherSDR {
 
@@ -170,16 +163,10 @@ TimeFrameVoter::buildNormalizedFrames() const {
         raw.doy    = decodeField(f, FieldDoy);
         raw.year2  = decodeField(f, FieldYear);
 
-        // Whole-frame range gate — a frame decoding outside valid broadcast
-        // ranges votes nothing and holds nothing (same spirit as excluding
-        // Marker/Unknown from a bit vote; also guards the calendar arithmetic
-        // below). It is NOT dropped from the window (WS-4.5): it keeps its slot
-        // and its real per-second confidences count against participation, so a
-        // run of garbage frames drags quality down instead of letting the
-        // surviving stale frames dead-reckon at undiminished quality.
-        // doy 366 is only ever broadcast in a leap year — accepting it in a
-        // non-leap year would let advanceMinutes wrap a corrupt frame into
-        // January of the next year, polluting the vote with an off-air date.
+        // Range gate: an out-of-range frame votes and holds nothing (also protects the
+        // calendar arithmetic), but keeps its window slot (WS-4.5) so its confidences
+        // count against participation and garbage drags quality down. doy 366 is only
+        // valid in leap years, else advanceMinutes would wrap into next January.
         const bool rangeValid =
             raw.minute >= 0 && raw.minute <= 59 &&
             raw.hour   >= 0 && raw.hour   <= 23 &&
@@ -233,17 +220,11 @@ TimeFrameVoter::buildNormalizedFrames() const {
             dst.resize(map.size());
 
             if (extByField[fld] == rawByField[fld]) {
-                // Extrapolation left this field unchanged (the common case away
-                // from a boundary): vote its ORIGINAL symbols with their ORIGINAL
-                // per-second confidences — a faded bit carries a low matched-
-                // filter margin and loses the cross-frame vote. This is the
-                // reference model that rescues single-bit fades in noisy corpora.
-                // Note (WS-4.5): noise-grade margins still VOTE here — silencing
-                // them flips coherence verdicts and vote topology on real
-                // corpora (measured 2026-07-20 on the live WWV corpus). Their
-                // honesty cost is charged in TRUST instead: a bit whose winning
-                // side has no confident support scores zero trust
-                // (computeResolution), which is what refuses the lock.
+                // Field unchanged by extrapolation: vote original symbols at original
+                // per-second confidences, so a faded bit loses (the single-bit fade rescue).
+                // Noise-grade margins still vote (silencing them changes vote topology on
+                // real corpora, WS-4.5); their cost is charged as zero trust in
+                // computeResolution, which refuses the lock.
                 for (std::size_t k = 0; k < map.size(); ++k) {
                     const int sec = map[k].second;
                     const bool inRange = sec >= 0 && sec < 60;
@@ -251,17 +232,10 @@ TimeFrameVoter::buildNormalizedFrames() const {
                     dst[k].confidence = inRange ? f.confidence[sec] : 0.0f;
                 }
             } else {
-                // Extrapolation moved this field across a carry: re-encode the
-                // NORMALIZED value and weight every bit by the field-MIN original
-                // confidence, so a value whose weakest bit faded votes at that
-                // faded margin. Blending is thus confined to normalized space,
-                // where the frames are supposed to agree. The eligibility floor
-                // deliberately does NOT apply here: the field-MIN weighting
-                // already discounts a faded frame to near-zero, and silencing it
-                // outright guts the fade rescue on minutes (every frame takes
-                // this path for minutes) — measured on the 2026-07-19 live WWV
-                // corpus, where the floor flipped the voted minute to the
-                // newest frame's corrupt raw value.
+                // Field crossed a carry: re-encode the normalized value and weight each bit
+                // by the field-MIN original confidence. The eligibility floor deliberately
+                // doesn't apply here: field-MIN already discounts faded frames, and minutes
+                // always take this path, where the floor would defeat the fade rescue.
                 const std::vector<ClockSymbol> bits = encodeField(map, extByField[fld]);
                 const float w = fieldMinConf(f, static_cast<FieldIndex>(fld));
                 for (std::size_t k = 0; k < map.size(); ++k) {
@@ -605,17 +579,9 @@ TimeFrameVoter::LockVerdict TimeFrameVoter::lockVerdict() const {
 }
 
 float TimeFrameVoter::lockConfidence() const {
-    // Quality is the resolution's own quality (computed WITH the value in
-    // computeResolution, so the two can never disagree) x frame-count saturation.
-    // That quality is the MIN across fields of each field's contribution: for a
-    // coherent field the minimum per-bit TRUST (normalized margin x participation
-    // — participation demotes a bit only one frame actually voted); for an
-    // incoherent field the held-value margin capped by the coherent bits' trust;
-    // and 0 outright when the compose fell out of range. Per-bit statistics alone
-    // (mean OR min) cannot certify a multi-bit BCD value — sibling bits can be
-    // carried by different frame camps — so quality reflects the weakest CERTIFIED
-    // link, not the weakest bit. Clean/clean-rollover windows: every bit coherent
-    // at full participation and margin ~1.0 -> quality ~1.0, tracking saturation.
+    // Quality = the resolution's quality (computed with the value in
+    // computeResolution) x frame-count saturation; see Resolution in the header.
+    // Clean windows, rollovers included, read ~1.0.
     const int n = static_cast<int>(m_frames.size());
     if (n < m_cfg.minFramesForLock) {
         return 0.0f;

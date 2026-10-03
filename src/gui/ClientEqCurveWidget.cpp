@@ -109,16 +109,9 @@ void ClientEqCurveWidget::setFftBinsDb(const std::vector<float>& binsDb,
     m_fftBinsDb = binsDb;
     m_fftSampleRate = sampleRate > 0.0 ? sampleRate : 24000.0;
 
-    // Peak-hold trail: per-bin running max, decaying so recent resonances
-    // stay visible without permanent clutter. Frozen mode skips decay so the
-    // trace sticks at the max.  Operates on raw bins so peak-detection is
-    // sample-accurate; visual smoothing of the peak trace happens in
-    // applySmoothing() below.
-    //
-    // Per second, not per update. It used to be a flat 0.5 dB a call, which
-    // made the rate a property of whichever timer happened to be driving the
-    // widget — 12.5 dB/s from the 25 Hz hosts it was written against, and two
-    // and a half times that the moment one of them sped up.
+    // Peak-hold trail: per-bin running max on raw bins, decaying (except when
+    // frozen) so recent resonances stay visible; display smoothing happens in
+    // applySmoothing(). Decay is per second, independent of the host's timer rate.
     constexpr float kPeakDecayDbPerSec = 12.5f;
     constexpr float kPeakFloorDb = -100.0f;
     // First frame, or a gap while the page was hidden: decay one nominal
