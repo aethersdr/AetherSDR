@@ -97,16 +97,16 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // RadioModel decodes Flex wire status only through FlexBackend (null in demo),
     // so the initial state goes out as seam deltas (RFC #4288), 150 ms later so
     // RadioModel has created the SliceModel and claimed the pan (~50 ms). One
-    // ordered handler (#6095): the base class bumps pcmSession() on connected(), so
-    // the emit must precede the startSession() capture, which is the order that
-    // matters here; the pan bookkeeping only feeds queued calls.
+    // ordered handler (#6095): gate and pan list are set before connected(), so a
+    // slot sees isConnected() and a pan it creates is not reset; the base class
+    // bumps pcmSession() on connected(), so the startSession() capture follows it.
     connect(m_connection, &RadioConnection::connected, this, [this]() {
         m_connected = true;
-        emit connected();
         // The wire script claims pan 0; dynamic creates append (#4887 ph 4).
         m_wirePanIds = QStringList{wirePanIdFor(0)};
         m_pansAwaitingGeometry.clear();
         pushPanIndicesToSource();
+        emit connected();
         QMetaObject::invokeMethod(m_signalSource, [source = m_signalSource, session = pcmSession()] {
             source->startSession(session);
         },

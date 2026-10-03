@@ -308,6 +308,25 @@ void testConnectedIsAnnouncedWithTheGateOpen()
     QCoreApplication::processEvents();
 }
 
+// A connected() slot sees the session's pan list already reset (#6095): a pan
+// it creates is minted after pan 0 and survives the announcement.
+void testPanCreatedInsideConnectedSurvives()
+{
+    SimBackend sim;
+    bool created = false;
+    QObject::connect(&sim, &SimBackend::connected, &sim, [&sim, &created] {
+        created = sim.createPanadapter();
+    }, Qt::DirectConnection);
+
+    emit sim.connection()->connected();
+
+    report("a connected() slot can create a pan", created);
+    report("the pan a connected() slot created keeps its id",
+           sim.removePanadapter(QStringLiteral("0x40000001")));
+    sim.disconnectRadio();
+    QCoreApplication::processEvents();
+}
+
 // The worker must be started with the session connected() just opened; a
 // stale stamp would drop every spectrum row of the session with no error.
 void testFirstSpectrumRowAfterWireConnectIsForwarded()
@@ -394,6 +413,7 @@ int main(int argc, char** argv)
     testNoSpectrumForwardedOnceDisconnectedIsAnnounced();
     testStaleSessionSpectrumIsDropped();
     testConnectedIsAnnouncedWithTheGateOpen();
+    testPanCreatedInsideConnectedSurvives();
     testFirstSpectrumRowAfterWireConnectIsForwarded();
     testDisconnectFaultRepliesBeforeDisconnected();
     testDisconnectFaultWithoutReplyStillDisconnects();
