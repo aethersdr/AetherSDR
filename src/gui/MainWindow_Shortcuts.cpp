@@ -350,12 +350,16 @@ void MainWindow::noticeRefusedShortcut(QObject* receiver, QKeyEvent* keyEvent)
         return;
     const auto* action = m_shortcutManager.operatingActionForKey(
         shortcutSequenceFromKeyEvent(keyEvent));
+    if (!action)
+        return;
     // The capture test this action would have met with shortcuts on.
     const bool captured = shortcutRefusalInputCaptured(
-        action && isHoldKeyActionId(action->id), textEntryCaptured(),
+        isHoldKeyActionId(action->id), textEntryCaptured(),
         shortcutInputCaptured());
+    // Minimal mode hides the status bar; the notice waits until it shows.
     const auto* refused = m_shortcutRefusalNotice.take(
-        keyEvent, m_keyboardShortcutsEnabled, captured, action);
+        keyEvent, m_keyboardShortcutsEnabled, captured,
+        statusBar()->isVisible(), action);
     if (!refused)
         return;
 

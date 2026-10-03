@@ -18,14 +18,18 @@ inline bool shortcutRefusalInputCaptured(bool holdKeyAction, bool textEntryCaptu
 // tell "off" from "unbound" (#5483). take() returns the refused action for the
 // first refused press in a session only, else nullptr: a key press, not
 // auto-repeat, bound to an operating action, with the master switch off and
-// nothing capturing the key. A template, so this header stays Qt-only.
+// nothing capturing the key. A notice that cannot be shown (the status bar is
+// hidden in minimal mode) is not taken, so it is still there to give later.
+// A template, so this header stays Qt-only.
 class ShortcutRefusalNotice {
 public:
     template <typename Action>
     const Action* take(const QKeyEvent* ev, bool shortcutsEnabled,
-                       bool inputCaptured, const Action* operatingAction)
+                       bool inputCaptured, bool noticeVisible,
+                       const Action* operatingAction)
     {
-        if (m_given || shortcutsEnabled || inputCaptured || !operatingAction)
+        if (m_given || shortcutsEnabled || inputCaptured || !noticeVisible
+                || !operatingAction)
             return nullptr;
         if (!ev || ev->type() != QEvent::KeyPress || ev->isAutoRepeat())
             return nullptr;

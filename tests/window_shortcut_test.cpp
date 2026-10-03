@@ -428,24 +428,28 @@ int main(int argc, char** argv)
             AetherSDR::shortcutSequenceFromKeyEvent(&tPress));
 
         AetherSDR::ShortcutRefusalNotice notice;
-        expect(!notice.take(&tPress, /*shortcutsEnabled=*/true, false, bound),
-               "refusal: no notice while shortcuts are on");
-        expect(!notice.take(&tPress, false, /*inputCaptured=*/true, bound),
-               "refusal: no notice while a text field or slider holds the keys");
         const ShortcutManager::Action* unbound = nullptr;
-        expect(!notice.take(&tPress, false, false, unbound),
+        // take(event, shortcutsEnabled, inputCaptured, noticeVisible, action)
+        expect(!notice.take(&tPress, /*shortcutsEnabled=*/true, false, true, bound),
+               "refusal: no notice while shortcuts are on");
+        expect(!notice.take(&tPress, false, /*inputCaptured=*/true, true, bound),
+               "refusal: no notice while a text field or slider holds the keys");
+        expect(!notice.take(&tPress, false, false, true, unbound),
                "refusal: no notice for an unbound key");
-        expect(!notice.take(&tRelease, false, false, bound),
+        expect(!notice.take(&tRelease, false, false, true, bound),
                "refusal: no notice on a key release");
-        expect(!notice.take(&tRepeat, false, false, bound),
+        expect(!notice.take(&tRepeat, false, false, true, bound),
                "refusal: no notice on auto-repeat");
+        expect(!notice.take(&tPress, false, false, /*noticeVisible=*/false, bound)
+                   && !notice.given(),
+               "refusal: a notice that cannot be shown is not spent");
         expect(!notice.given(), "refusal: nothing given before a refused press");
         const ShortcutManager::Action* refused =
-            notice.take(&tPress, false, false, bound);
+            notice.take(&tPress, false, false, true, bound);
         expect(bound && refused == bound
                    && refused->displayName == QLatin1String("MOX Toggle"),
                "refusal: the first bound press hands back the action it refused");
-        expect(notice.given() && !notice.take(&tPress, false, false, bound),
+        expect(notice.given() && !notice.take(&tPress, false, false, true, bound),
                "refusal: the notice is given once per session");
 
         // The capture test follows the action: a hold key yields to text entry
