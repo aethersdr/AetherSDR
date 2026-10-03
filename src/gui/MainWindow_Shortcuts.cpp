@@ -39,6 +39,8 @@
 #include "workspace/WorkspaceController.h"
 
 #include <QAbstractSlider>
+#include <QAccessible>
+#include <QAccessibleEvent>
 #include <QJsonObject>
 #include <QToolTip>
 #include <QApplication>
@@ -325,6 +327,33 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
         return true;
     }
     return true;
+}
+
+
+void MainWindow::noticeRefusedShortcut(QObject* receiver, QKeyEvent* keyEvent)
+{
+    // Keys for another top-level window are not MainWindow's shortcuts.
+    auto* widget = qobject_cast<QWidget*>(receiver);
+    if (!keyEvent || !widget || widget->window() != this)
+        return;
+    const auto* action = m_shortcutManager.operatingActionForKey(
+        shortcutSequenceFromKeyEvent(keyEvent));
+    if (!m_shortcutRefusalNotice.take(keyEvent, m_keyboardShortcutsEnabled,
+                                      shortcutInputCaptured(), action != nullptr))
+        return;
+
+    qCInfo(lcGui).noquote() << "Keyboard shortcuts are off:" << action->displayName
+                            << "(" + action->currentKey.toString() + ") not run;"
+                            << "Settings > Keyboard Shortcuts turns them on";
+    const QString notice = tr("Keyboard shortcuts are off — Settings → Keyboard Shortcuts "
+                              "turns them on.");
+    statusBar()->showMessage(notice, 10000);
+    // A status-bar message is not read out; announce it as well (#4896).
+    if (QAccessible::isActive()) {
+        QAccessibleAnnouncementEvent ev(statusBar(), notice);
+        ev.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
+        QAccessible::updateAccessibility(&ev);
+    }
 }
 
 
@@ -683,6 +712,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         // same missing-released-signal reason.
         if (handleSplitMonitorShortcut(ke, event->type()))
             return true;
+
+        noticeRefusedShortcut(obj, ke);
 
         // After every hold handler, so a hold's release always ends it. With
         // shortcuts off a bound key reaches the focused widget, but never a

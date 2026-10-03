@@ -1,6 +1,7 @@
 #include "TestSettingsProfile.h"
 #include "core/ShortcutManager.h"
 #include "gui/PttHoldKeyStep.h"
+#include "gui/ShortcutRefusalNotice.h"
 #include "gui/TxKeyActivationGuard.h"
 
 #include <QAccessible>
@@ -396,6 +397,52 @@ int main(int argc, char** argv)
                "shortcuts off: a button inside a marked TX control is refused (parent chain)");
 
         app.removeEventFilter(&route);
+    }
+
+    // #5483 item 2: with shortcuts off, the first refused bound key in a
+    // session is announced once. Window-management keys are not refused.
+    {
+        ShortcutManager refusal;
+        refusal.registerAction("mox_toggle", "MOX Toggle", "TX",
+            QKeySequence(Qt::Key_T), [] {}, false, true);
+        refusal.registerAction("window_fullscreen", "Full screen", "Display",
+            QKeySequence(Qt::Key_F11), [] {}, false, false,
+            ShortcutManager::ShortcutPolicy::WindowManagement);
+        refusal.registerAction("keying_wm", "Keying asks for WM", "TX",
+            QKeySequence(Qt::Key_F9), [] {}, false, true,
+            ShortcutManager::ShortcutPolicy::WindowManagement);
+        expect(refusal.operatingActionForKey(QKeySequence(Qt::Key_T)) != nullptr,
+               "refusal: an operating binding resolves");
+        expect(refusal.operatingActionForKey(QKeySequence(Qt::Key_F11)) == nullptr,
+               "refusal: a window-management binding is not governed by the switch");
+        expect(refusal.operatingActionForKey(QKeySequence(Qt::Key_F9)) != nullptr,
+               "refusal: a keying action asking for window management stays operating");
+        expect(refusal.operatingActionForKey(QKeySequence(Qt::Key_Q)) == nullptr,
+               "refusal: an unbound key resolves to nothing");
+
+        const QKeyEvent tPress(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier);
+        const QKeyEvent tRepeat(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier,
+                                QString(), /*autorep=*/true);
+        const QKeyEvent tRelease(QEvent::KeyRelease, Qt::Key_T, Qt::NoModifier);
+        const bool bound = refusal.operatingActionForKey(
+            AetherSDR::shortcutSequenceFromKeyEvent(&tPress)) != nullptr;
+
+        AetherSDR::ShortcutRefusalNotice notice;
+        expect(!notice.take(&tPress, /*shortcutsEnabled=*/true, false, bound),
+               "refusal: no notice while shortcuts are on");
+        expect(!notice.take(&tPress, false, /*inputCaptured=*/true, bound),
+               "refusal: no notice while a text field or slider holds the keys");
+        expect(!notice.take(&tPress, false, false, /*bound=*/false),
+               "refusal: no notice for an unbound key");
+        expect(!notice.take(&tRelease, false, false, bound),
+               "refusal: no notice on a key release");
+        expect(!notice.take(&tRepeat, false, false, bound),
+               "refusal: no notice on auto-repeat");
+        expect(!notice.given(), "refusal: nothing given before a refused press");
+        expect(notice.take(&tPress, false, false, bound),
+               "refusal: the first bound press with shortcuts off is noticed");
+        expect(notice.given() && !notice.take(&tPress, false, false, bound),
+               "refusal: the notice is given once per session");
     }
     return failures == 0 ? 0 : 1;
 }
