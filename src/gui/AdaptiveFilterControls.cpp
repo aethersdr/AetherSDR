@@ -269,17 +269,11 @@ void AdaptiveFilterControls::loadPrefs(SliceModel* slice)
     slice->setAdaptiveResponse(o.value("response").toInt(1));  // default Normal
     slice->setAdaptiveSplatter(o.value("splatter").toInt(1));  // default Normal
     slice->setAdaptiveHetReject(o.value("hetReject").toBool(false));  // opt-in, off
-    // Session-scoped by design: the adaptive filter always starts DISABLED and
-    // the operator enables it explicitly each session. Only the config above
-    // persists; the saved "enabled" value is deliberately not restored.
-    //
-    // Force-disable only on the FIRST load of a slice this session. loadPrefs
-    // also runs on every re-bind — e.g. a pan migration destroys and rebuilds
-    // the host widget, re-running setSlice — and re-disabling there would switch
-    // the feature off just because the operator dragged the slice to another
-    // panadapter. The set is shared across both host controls (VFO flag + RX
-    // applet), so the second control binding the same slice won't re-disable
-    // either. (#3945 review)
+    // The adaptive filter starts DISABLED every session; only its config
+    // persists. Force-disable only on a slice's first load this session:
+    // loadPrefs also runs on every re-bind (e.g. pan migration rebuilds the host),
+    // which must not switch it off. The set is shared by both host controls (VFO
+    // flag + RX applet) (#3945).
     static QSet<int> s_sessionLoaded;
     if (!s_sessionLoaded.contains(slice->sliceId())) {
         s_sessionLoaded.insert(slice->sliceId());

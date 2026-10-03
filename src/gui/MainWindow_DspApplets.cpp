@@ -1,19 +1,8 @@
-// MainWindow_DspApplets.cpp — client-DSP applet wiring for MainWindow.
-//
-// Part of the #3351 monolith decomposition (Phase 2d). Holds
-// wirePooDooTiles() and wireDspApplets(), extracted verbatim from the
-// constructor (two methods because constructor chrome wiring sits
-// between them in initialization order — see the call sequence there):
-//
-//   • PooDoo RX chain status tiles
-//   • P/CW applet (mic/ALC/compression meters), PHNE, EQ
-//   • Client DSP applet family: EQ / Compressor / Gate / De-esser /
-//     Tube / Reverb / AetherDSP / PUDU — TX and RX tiles
-//   • TX signal-chain applet + PUDU monitor wiring
-//   • RX chain edit + bypass
-//
-// Window-side wiring (applets ↔ AudioEngine) — not session-scoped.
-// Runs once at construction, at the original constructor position.
+// MainWindow_DspApplets.cpp — client-DSP applet wiring: wirePooDooTiles() and
+// wireDspApplets() (two methods because constructor chrome wiring runs between
+// them). Covers PooDoo RX chain tiles, P/CW and PHNE applets, the client DSP
+// applet family (TX and RX), TX chain + PUDU monitor, and RX chain edit/bypass.
+// Window-side, runs once at construction.
 
 #include "MainWindow.h"
 
@@ -349,9 +338,14 @@ void MainWindow::wireDspApplets()
     {
         connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
                 this, [this](float micLevel, float compLevel, float micPeak, float compPeak) {
-            // Mic level: hardware mic uses radio meters, PC uses client-side
+            // Mic level: hardware mic uses radio meters, PC uses client-side.
+            // The Level gauge shows what the S-meter's Level face shows
+            // (MeterModel::transmitLevelFaceValue): MICPEAK where the radio
+            // publishes no MIC meter (HL2).
             if (m_radioModel.transmitModel().micSelection() != "PC")
-                m_appletPanel->phoneCwApplet()->updateMeters(micLevel, compLevel, micPeak, 0.0f);
+                m_appletPanel->phoneCwApplet()->updateMeters(
+                    m_radioModel.meterModel().transmitLevelFaceValue(micLevel, micPeak),
+                    compLevel, micPeak, 0.0f);
 
             // Compression has no useful meaning in RX; FLEX-8000 radios can
             // publish quiescent TX-chain meters there that look fully pegged.
@@ -375,32 +369,11 @@ void MainWindow::wireDspApplets()
             m_appletPanel->phoneCwApplet()->resetAlc();
         }
     });
-    // The ALC's applied GAIN, beside the ALC's output level above. Gated the
-    // same way and additionally on the model having a SAMPLE: unity gain and
-    // "nothing has said what the ALC is doing" are the same 0 dB on the face,
-    // so without hasAlcGainValue() a cleared meter would render as a confident
-    // "the ALC is holding at unity" — the fabricated-reading failure §1.8
-    // describes, where a dead meter and a real reading of nothing look alike.
-    // WHETHER THE ROW EXISTS IS A DEFINITION QUESTION, and it is answered on
-    // the definition signals — never on the arrival of a value.
-    //
-    // It was answered inside the alcGainChanged handler below, and that is a
-    // value signal: submitTxAudio() returns early on !m_keyed, so alcGain never
-    // fires outside TX. The gauge was therefore absent during exactly the
-    // pre-transmission mic-gain setup it exists to inform, inserted itself into
-    // the panel mid-over, and in CW-only operation never appeared at all. The
-    // regime the meter earns its place in is the quiet-mic one — the ALC hits
-    // its makeup ceiling near -41.4 dBFS, below the Level gauge's -40 floor, so
-    // both existing gauges are pinned there and only this one can show the
-    // difference. Gating on a value hid it precisely there.
-    //
-    // applyCapabilitiesToUi() alone cannot cover it either: Hl2Backend calls
-    // defineMeters() from inside its own connected handler, AFTER RadioModel
-    // has published capabilities, so at the moment the panel is configured the
-    // meter does not exist yet. These three are the model's own account of
-    // which meters exist -- defined, removed, and the disconnect that drops
-    // them all (clear() emits only metersCleared, never a meterRemoved per
-    // index). Idempotent: setHasAlcGainMeter() early-returns on no change.
+    // ALC applied-gain row. Shown only with a sample (hasAlcGainValue()), since
+    // a cleared meter would otherwise read as "holding at unity". Whether the
+    // row exists is decided on the meter-definition signals, not on values:
+    // alcGain fires only while keyed, and Hl2Backend defines meters after
+    // capabilities are published. clear() emits only metersCleared. Idempotent.
     {
         auto syncAlcGainRow = [this] {
             m_appletPanel->phoneCwApplet()->setHasAlcGainMeter(
@@ -807,24 +780,12 @@ void MainWindow::wireDspApplets()
     });
 }
 
-// ── The speech processor on a host-modulating backend ───────────────────────
-//
-// PROC and its NOR/DX/DX+ level are Flex-shaped controls: TransmitModel turns
-// them into `transmit set speech_processor_enable=` / `_level=`, which reach
-// nothing on a radio with no Flex command plane. On a backend that modulates
-// here, the compressor those controls are asking for is the one already running
-// in AudioEngine's TX chain — the mic path applies it before the audio ever
-// reaches submitTxAudio — so this binds the controls to it rather than adding a
-// second compressor behind the same button.
-//
-// IT IS THE SAME ClientComp THE AETHERIAL STRIP EDITS, deliberately. That means
-// the two surfaces are two views of one object: moving the PROC slider rewrites
-// the strip's threshold/ratio/makeup, and toggling the compressor in the strip
-// lights PROC. Chosen over a private second instance so an operator cannot end
-// up with two compressors in series without either UI admitting it. The cost is
-// that the level presets below overwrite whatever the strip was set to, which
-// is why they are applied only on a level CHANGE or an off->on transition and
-// not on every state push.
+// Speech processor on a host-modulating backend. PROC and NOR/DX/DX+ map to
+// `transmit set speech_processor_*`, which reach nothing without a Flex command
+// plane, so they drive the ClientComp already in AudioEngine's TX chain — the
+// same instance the Aetherial strip edits, so two compressors never run in
+// series. Level presets overwrite the strip's settings, so they apply only on
+// a level change or off→on.
 
 bool MainWindow::hostModulatesTxAudio() const
 {
@@ -846,16 +807,10 @@ void MainWindow::applySpeechProcessorToClientComp(bool operatorIntent)
     const bool on = tx.speechProcessorEnable();
     const int level = qBound(0, tx.speechProcessorLevel(), 2);
 
-    // THE PRESET IS WRITTEN ONLY FOR OPERATOR INTENT — a PROC or NOR/DX/DX+ move
-    // the operator actually made — and never for state merely observed.
-    //
-    // The compressor is shared with the Aetherial strip, so writing the preset
-    // replaces the threshold/ratio/makeup the operator may have dialled in
-    // there. Gating on "did the state change" instead of "did the operator ask"
-    // gets this exactly backwards: the 20 Hz mirror below reports a
-    // strip-originated enable back into TransmitModel, which would arrive here
-    // as an off->on transition and overwrite the operator's settings as a direct
-    // result of them switching their own compressor on. (#4609 review)
+    // The preset is written only for operator intent. The compressor is shared
+    // with the Aetherial strip, and the 20 Hz mirror reports a strip-originated
+    // enable back as an off→on transition, which must not overwrite the
+    // operator's strip settings.
     const bool levelChanged = level != m_lastAppliedProcLevel;
     const bool switchedOn = on && !m_lastAppliedProcEnable;
     if (operatorIntent && on && (levelChanged || switchedOn)) {
@@ -904,24 +859,11 @@ void MainWindow::applySpeechProcessorToClientComp(bool operatorIntent)
         m_appletPanel->clientCompTxApplet()->refreshEnableFromEngine();
 }
 
-// ── The 8-band graphic EQ on a host-modulating backend ──────────────────────
-//
-// EqualizerModel emits `eq TXsc 63Hz=…` / `eq RXsc …`, which a radio with no
-// Flex command plane never receives. The equalizer those sliders are asking for
-// is ClientEq, already in both audio paths — TX through
-// TxVoiceProcessor, RX through AudioEngine::processMixedRxAudioData.
-//
-// THE OCTAVE BANDS OCCUPY ClientEq SLOTS 0..7, which are the same slots the
-// Aetherial strip's editor uses, because these are the same ClientEq objects the
-// strip edits. Writing them replaces whatever layout the strip had there —
-// including its high-pass and shelves — with eight fixed peaking filters. That
-// is inherent in the two surfaces sharing one equalizer, and it is why this only
-// writes on an actual EQ-applet change rather than continuously: an operator who
-// never touches the graphic EQ keeps the strip's layout untouched.
-//
-// Q of 1.4 is one octave between -3 dB points, which matches the 63/125/250/…
-// octave spacing. A higher Q leaves gaps between the bands where the response
-// returns to flat; a lower one makes adjacent sliders fight.
+// 8-band graphic EQ on a host-modulating backend: drives ClientEq (TX via
+// TxVoiceProcessor, RX via processMixedRxAudioData) since `eq TXsc/RXsc` has no
+// receiver. Bands use ClientEq slots 0..7, shared with the Aetherial strip, so
+// this writes only on an actual EQ-applet change. Q 1.4 = one octave between
+// -3 dB points, matching the 63/125/250… spacing.
 void MainWindow::applyGraphicEqToClientEq(bool transmit)
 {
     // Flex is excluded: there the sliders reach the radio's own 8-band hardware
@@ -1010,24 +952,12 @@ void MainWindow::wireHostModulatedVoiceChain()
         const bool hostModulates = hostModulatesTxAudio();
 
         if (connected && hostModulates) {
-            // Re-push on connect: the capability is unknown until a backend
-            // attaches, so anything the operator set before that was dropped by
-            // the guard inside each apply.
-            //
-            // ONLY WHAT THE OPERATOR ACTUALLY MOVED — hostVoiceChainRepushAllowed
-            // is what makes that true, and the reasoning is in
-            // core/HostVoiceChainPolicy.h. Neither EqualizerModel nor
-            // TransmitModel persists, so on a host-modulating backend both sit at
-            // their construction defaults here (eight bands at 0 dB, both enables
-            // false, processor off) while ClientEq and ClientComp DO persist.
-            // Pushing unconditionally therefore writes defaults over the
-            // operator's saved Aetherial strip layout at every connect, for
-            // someone who has never opened either applet. (#4609 review)
-            //
-            // The cache is reset first so the preset is genuinely re-applied
-            // rather than skipped as unchanged from a previous session's radio,
-            // and this counts as operator intent because the state being pushed
-            // IS the operator's own choice.
+            // Re-push on connect, since the capability was unknown before. Only
+            // what the operator moved (hostVoiceChainRepushAllowed; see
+            // core/HostVoiceChainPolicy.h): EqualizerModel/TransmitModel do not
+            // persist, ClientEq/ClientComp do, so an unconditional push would
+            // overwrite the saved strip with defaults. The cache is reset so the
+            // preset re-applies.
             if (hostVoiceChainRepushAllowed(connected, hostModulates,
                                             m_hostVoiceChainOwned)) {
                 m_lastAppliedProcLevel = -1;
@@ -1042,34 +972,13 @@ void MainWindow::wireHostModulatedVoiceChain()
 
         m_hostVoiceChainTimer.stop();
 
-        // UNWIND ON A FAMILY SWAP, or the Flex exclusion holds per-call and
-        // leaks across sessions.
-        //
-        // Move the graphic EQ on an HL2, disconnect, then connect a Flex in the
-        // same process: every apply now returns early because the family uses
-        // the Flex command plane, but ClientEq still holds the eight peaking
-        // filters and is still ENABLED — so the radio's hardware EQ and ours
-        // both apply. That is the double-equalization the design note says
-        // cannot happen, displaced in time rather than in one slider movement.
-        // Same shape for ClientComp and PROC. (#4609 review)
-        //
-        // Bounded to that case by the ownership term. hostModulates is false for
-        // a Flex, so a plain Flex connect — and every Flex disconnect — reaches
-        // here too, and unbounded this switched off the operator's own Aetherial
-        // RX EQ, TX EQ and compressor on a session that never went near an HL2.
-        //
-        // Bypass, not clear: the operator's bands and the strip's compressor
-        // settings stay exactly as they were. Disabling is what takes them out
-        // of circuit; erasing them would lose work.
-        //
-        // Ownership is dropped with them, so this fires ONCE per HL2->Flex
-        // transition. The invariant is discharged at that point, and an operator
-        // who deliberately switches the strip back on mid-Flex-session must not
-        // find it switched off again on the next connection edge — the tiles are
-        // theirs, and fighting them over it would be worse than the double-EQ
-        // this guards. The cost is that a later HL2 reconnect does not re-apply
-        // the graphic EQ until a slider moves, which is where it was before any
-        // of this existed.
+        // Unwind on a family swap: after host-modulated EQ/PROC on an HL2, a
+        // later Flex session's applies all return early, but ClientEq/ClientComp
+        // stay ENABLED, double-equalizing with the radio's hardware EQ. Bounded
+        // by ownership (m_hostVoiceChainOwned) so a plain Flex session never
+        // loses the operator's strip. Bypass, not clear, so settings survive.
+        // Fires once per HL2→Flex transition; a deliberate re-enable mid-Flex
+        // session is left alone.
         if (m_audio
             && hostVoiceChainUnwindRequired(connected, hostModulates,
                                             m_radioModel.usesFlexCommandPlane(),

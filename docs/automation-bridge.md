@@ -78,6 +78,25 @@ sets the station label shown to other Multi-Flex clients; the legacy
 `AETHER_AUTOMATION_STATION` and then `AETHER_AUTOMATION_LABEL` are fallbacks,
 followed by the neutral default `Automation`. The agent name is display-only
 and is never used as the UUID because several worktrees may use the same LLM.
+
+The identity also decides what the radio gives back. A FlexRadio restores
+per-client panadapter state (WNB on/off and level, for one) keyed by the GUI
+client UUID, so a run under an automation identity gets that identity's last
+state, not the operator's. To check that a radio-owned setting survives an
+AetherSDR restart *for the operator*, first close any other AetherSDR instance
+using the same settings store, then launch without `AETHER_AUTOMATION` and
+enable the bridge from Radio Setup → Network instead. The app uses the
+persistent `GUIClientID` when it can acquire the identity lock; otherwise it
+falls back to a transient UUID, which would invalidate this comparison. The
+same token works. If you do not normally run the bridge, disable it again
+afterwards: the Radio Setup setting is saved across launches, unlike the
+process-only `AETHER_AUTOMATION` override.
+
+Seen on a FLEX-8600 (firmware 4.2.20.41343) while proving #6070: the same
+radio restored WNB on (level 50) for the operator's identity and off (level
+90) for the automation identity, with no client WNB command sent in either
+fix-build run.
+
 Automation identities never overwrite the user's persistent `GUIClientID`.
 
 KiwiSDR compression can be forced for diagnostic runs by adding
@@ -1791,9 +1810,9 @@ re-poll `get slices`.
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
 | `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
-| `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, the operator-intent setter — so the edges reach `IRadioBackend::setSliceFilter` and not just the model. Necessary because a mode change mirrors the passband *inside* the model without emitting that intent, which can leave a backend that owns its own DSP chain running the pre-mirror passband while `get_state` reports the mirrored one. Assert the passband before measuring anything through the audio path. Returns both the requested edges and the post-normalization `filterLow`/`filterHigh` the model actually holds. Use `-4000 4000` for a carrier-straddling AM passband |
+| `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, which emits a typed `receiveFilterRequested` with Operator origin and reaches `IRadioBackend::requestSliceFilter`. Mode normalization emits a separately tagged request: host DSP applies it, while Flex preserves its radio-owned mode-filter memory. Assert the passband before measuring the audio path. Returns requested edges and post-normalization `filterLow`/`filterHigh`; desktop model readback alone does not prove hardware application. Use `-4000 4000` for a carrier-straddling AM passband |
 | `filterpreset` | `<FIL1\|FIL2\|FIL3>` | select a stable radio-owned RX filter slot without conflating it with a passband-width edit. Returns the requested slot; re-poll `get slice active filterPreset` and the filter edges for radio-authoritative readback |
-| `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set the active slice's receive AGC through `SliceModel`'s operator setters, so it emits `agcCommandIssued` and reaches `IRadioBackend::setSliceAgc`. Applies the threshold before the mode so a combined request arrives at the backend as one coherent pair. On a backend that owns its DSP chain (HL2) this maps to the WDSP RXA AGC mode and the AGC ceiling in dB; on Flex it is the firmware's own AGC. Use `off` with a low threshold to get a linear path for measurement |
+| `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set receive AGC through `SliceModel` operator setters and typed `receiveAgcRequested` requests. Applies threshold before mode; each changed field dispatches independently. Flex writes only that field; the default backend adapter passes the current mode/threshold pair to host DSP for either edit. HL2 maps this to WDSP RXA AGC mode and ceiling in dB. This is not an atomic paired command. Use `off` with a low threshold for a linear measurement path |
 | `dsp` | `<nr\|nb\|anf\|squelch> <on\|off> [level]` | drive the receive DSP controls an operator drives — noise blanker, noise reduction, auto-notch, and squelch (with an optional 0..100 level). `slice dsp squelch` is the squelch path; there is deliberately no separate squelch verb (#5102) |
 | `tone` | `<off\|ctcss_tx> [freq]` | set the FM CTCSS encode mode and tone. The value is applied before the mode, so enabling CTCSS never keys on the previous tone for a round trip. The mode pair is what a FlexRadio slice carries |
 | `offset` | `<simplex\|up\|down> [mhz]` | set repeater duplex. The magnitude is unsigned (0..100 MHz — the GUI spinboxes' own bound); the direction carries the sign. Writes all three radio fields — `repeater_offset_dir`, `fm_repeater_offset_freq` **and** the signed `tx_offset_freq` that actually moves the transmitter — then reports `txOffsetFreq` so the applied split can be asserted rather than assumed |
@@ -3606,14 +3625,20 @@ no stream-free source aimed, or a family that publishes no health rows. Check
 `connected` to tell those apart.
 
 **Where a row can expire, a companion age row tells you which silence it is.**
-The HL2's four converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcCrestDb` and
-`adcClippedPerBlock` — come from a gated sensor, and they go `null` once the
-newest block has stopped describing now, which includes the whole of any
-transmission longer than about three seconds. `adcObservedAgoMs` is deliberately
-**not** expired with them: a `null` beside an age of `46810` means *reported,
-then expired*, while a `null` beside a `null` age means *never reported*. A
-script that reads these must treat `null` as a refusal to answer rather than as
-a number it can coerce.
+The HL2's six converter rows — `adcPeakDbfs`, `adcRmsDbfs`, `adcDcDbfs`,
+`adcDcCodes`, `adcCrestDb` and `adcClippedPerBlock` — come from a gated sensor,
+and they go `null` once the newest block has stopped describing now, which
+includes the whole of any transmission longer than about three seconds. They
+are not all in one unit: `adcDcCodes` is the block's mean in signed converter
+codes, not dB, and `adcClippedPerBlock` is a count. `adcDcDbfs` is the same
+mean as a magnitude in dBFS, and it reads `-72.25` (`kEp4FloorDbfs`) for a mean
+of exactly zero, while a tiny non-zero mean computes *below* that rather than
+being clamped to it. Because a mean of about half a code also prints `-72.25`,
+read `adcDcCodes` (`0.00` against `0.50`) to tell a zero mean from a sub-code
+one. `adcObservedAgoMs` is deliberately **not** expired with them: a `null`
+beside an age of `46810` means *reported, then expired*, while a `null` beside a
+`null` age means *never reported*. A script that reads these must treat `null`
+as a refusal to answer rather than as a number it can coerce.
 
 **Reading `health` is itself a demand signal.** A stream-free source polls only
 while something is watching, so each read renews a 5 s demand window and keeps
@@ -3742,8 +3767,11 @@ record:
    "detail":"Client-Side recording requires PC Audio; no RX audio stream exists."}
 ```
 
-`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio`, so the radio
-is the recorder and this verb has nothing local to drive:
+`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio` and the radio
+can record on its own side, so the radio is the recorder and this verb has
+nothing local to drive. A radio with no command plane (HL2, ANAN, Icom, RTL) has
+no radio-side recorder, so there Radio Side falls back to this recorder and the
+start proceeds:
 
 ```json
 ← {"ok":false,"record":"start","recording":false,"path":"",

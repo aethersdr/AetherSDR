@@ -14,6 +14,7 @@
 // disarm in the chord-release branch and "Ctrl bounce" fails.
 
 #include "core/UlanziChordDecoder.h"
+#include "core/UlanziDialAccessState.h"
 
 #include <QString>
 
@@ -227,6 +228,23 @@ int main()
         ok &= expect(r.trace() == QStringLiteral("KEY_21:down KEY_21:up"),
                      "after reset the next press/release pair is clean");
         ok &= checkBalanced(r, "post-reset press/release is balanced");
+    }
+
+    // ── access state: a blocked dial is state the dialog can ask for ─────
+    // The dialog usually opens long after the launch scan. Keeping only a
+    // "reported once" flag (the old shape) left it nothing to ask, and never
+    // re-armed after the dial went away and came back blocked.
+    {
+        const QString dial = QStringLiteral("Ulanzi Dial Keyboard");
+        UlanziDialAccessState access;
+        ok &= expect(access.update(dial), "first blocked scan announces");
+        ok &= expect(!access.update(dial), "repeat blocked scans do not re-announce");
+        ok &= expect(access.blocked() && access.blockedName() == dial,
+                     "a later dialog can still read the blocked dial");
+        ok &= expect(!access.update(QString()) && !access.blocked(),
+                     "dial gone or opened clears the blocked state");
+        ok &= expect(access.update(dial),
+                     "the dial coming back blocked announces again");
     }
 
     std::cout << (ok ? "ALL PASS" : "FAILURES") << '\n';

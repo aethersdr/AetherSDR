@@ -3,29 +3,14 @@
 namespace AetherSDR {
 namespace Spe {
 
-// Deterministic, I/O-free scheduler for the LCD mirror's request pacing.
-// SpeConnection owns the QTimer and the transport; this class owns the one
-// decision PR #5542's review rounds found scattered across independent
-// timers: WHEN a 0x80 display request may be sent. Its invariant is that
-// requests are single-file — at most one in flight, and at most one timer
-// armed — so every trigger (idle cadence, keystroke ACK, corrupted-frame
-// retry, lost-reply fallback) flows through the same gate, and the
-// no-overlap property is provable in spe_protocol_test without a fake
-// amplifier: each event returns the complete effect (send or not, which
-// timer to arm) as a value.
-//
-// ONE documented exception, and it cannot be closed here. If the
-// lost-reply fallback fires on a request that was merely still arriving,
-// this class credits that late reply to the retry that replaced it, and
-// two requests stay on the wire until the next reset(). The protocol
-// carries no request id, so no amount of state in this class can tell
-// the two replies apart — see kLcdLostReplyMs in SpeConnection.h, whose
-// width is what makes the case implausible. Treat "at most one in
-// flight" as holding up to that misclassification, not past it.
-//
-// An Effect with arm == Timer::None leaves the currently armed timer
-// running — it never means "stop"; the owner stops its timer when it
-// calls reset() (polling disabled, or transport down).
+// I/O-free scheduler deciding WHEN a 0x80 display request may be sent;
+// SpeConnection owns the timer and transport. Invariant: at most one request
+// in flight and one timer armed; every trigger (idle cadence, keystroke ACK,
+// corrupt-frame retry, lost-reply fallback) returns its full Effect as a value,
+// tested in spe_protocol_test. Exception: a late reply after the lost-reply
+// fallback is credited to the retry (no request id; see kLcdLostReplyMs).
+// arm == Timer::None leaves the armed timer running; the owner stops it via
+// reset().
 class LcdScheduler {
 public:
     enum class Timer { None, IdleGap, LostReply, RejectRetry };

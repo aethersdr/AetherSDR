@@ -12,23 +12,11 @@ namespace AetherSDR {
 
 class AntennaGeniusModel;
 
-// ShackSwitch applet — compact antenna switcher panel for ShackSwitch devices.
-//
-// Detected by AG-protocol device name "ShackSwitch". Replaces the generic AG applet
-// layout with a single antenna list and compact Input A / Input B header cards.
-//
-// Layout (top to bottom):
-//  - Status row: device IP + version
-//  - INPUT A card: band + current antenna name (cyan)
-//  - INPUT B card: band + current antenna name (orange) — hidden on R4
-//  - Antenna rows: name + [A] [B] select buttons
-//  - Dummy load selector row
-//  - Settings button (opens web UI)
-//
-// Conflict detection: when both portA and portB are on the same antenna the B
-// button on that row blinks amber.  If a dummy load antenna is configured,
-// B is automatically routed there and the dummy load row blinks orange while
-// the intended row's B button blinks amber to show where B "wants" to be.
+// Compact antenna switcher for AG-protocol devices named "ShackSwitch",
+// replacing the generic AG applet layout. Input B card is hidden on R4.
+// Conflict display: when portA and portB share an antenna the B button blinks
+// amber; with a dummy load configured, B is routed there, the dummy row blinks
+// orange and the intended row's B button blinks amber.
 class ShackSwitchApplet : public QWidget {
     Q_OBJECT
 

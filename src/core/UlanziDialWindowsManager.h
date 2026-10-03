@@ -13,24 +13,15 @@ class QTimer;
 
 namespace AetherSDR {
 
-// Windows backend for the Ulanzi Dial using hidapi.  Mirrors the Linux
-// evdev backend's Qt signal contract:
+// Windows Ulanzi Dial backend (hidapi), same signal contract as Linux evdev:
 //   tuneSteps(int)               — rotary delta (+1 CW / -1 CCW)
 //   buttonEvent(sig, action)     — see EvdevEncoderManager for signature
 //   connectionChanged(bool, name)
-//
-// Implementation notes:
-// - The dial enumerates as multiple HID interfaces on Windows: a Keyboard
-//   page interface (Ctrl + chord keys), a Consumer Control page interface
-//   (PLAYPAUSE / MUTE / NEXTSONG / PREVIOUSSONG), and possibly Mouse.
-//   We open every matching device whose product_string contains
-//   "Ulanzi Dial" and read reports from each via a poll timer.
-// - Each report is diff-compared against the previous to detect press /
-//   release transitions, then fed into the same chord-assembly state
-//   machine the Linux backend uses.
-// - No EVIOCGRAB-equivalent: keystrokes still go to the focused window
-//   on Windows.  A follow-up could wire RawInput + RIDEV_NOLEGACY to
-//   intercept globally; see #3232 for the design notes.
+// The dial enumerates as several HID interfaces (Keyboard for Ctrl+chords,
+// Consumer Control for media keys, maybe Mouse); every device whose
+// product_string contains "Ulanzi Dial" is opened and polled, and report diffs
+// feed the shared chord decoder. No exclusive grab on Windows, so keystrokes
+// still reach the focused window (RawInput design: #3232).
 class UlanziDialWindowsManager : public QObject {
     Q_OBJECT
 public:
@@ -39,6 +30,11 @@ public:
 
     void start();
     void stop();
+    // Re-announce the current state through stateReported() for the mapper
+    // dialog, which opens long after the edges it would otherwise have heard.
+    // Deliberately NOT connectionChanged(): that edge also drives the dial's
+    // TX disconnect fence, and a re-report must never look like a detach.
+    void reportState();
 
     bool isConnected() const { return !m_devices.isEmpty(); }
     QString deviceName() const { return m_deviceName; }
@@ -47,6 +43,8 @@ signals:
     void tuneSteps(int steps);
     void buttonEvent(const QString& signature, int action);
     void connectionChanged(bool connected, const QString& name);
+    // Current state, emitted only from reportState(). Not an edge.
+    void stateReported(bool connected, const QString& name);
 
 private slots:
     void poll();

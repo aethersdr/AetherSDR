@@ -12,19 +12,11 @@ namespace AetherSDR {
 
 class HGauge;
 
-// Dedicated applet for an ACOM S-series amplifier (600S primary target) —
-// a sibling of AmpApplet (PGXL), not a variant of it. Split out after
-// discovering that bolting ACOM's richer telemetry onto AmpApplet's
-// PGXL-shaped 3-gauge layout (a) couldn't actually match the proposed
-// design, and (b) leaked a dead SWR/reflected-power toggle into PGXL's
-// panel. See docs/architecture/acom-600s-amplifier-design.md.
-//
-// Unlike AmpApplet's PWR/SWR/Id gauges (PGXL's own data shape), ACOM's
-// 0x2F telemetry frame reports forward power, reflected power, AND SWR as
-// independently real fields — no toggle needed, all three get a permanent
-// gauge row. PAM drain current (Id) has no protocol-defined scale to gauge
-// against, so it's a plain text readout instead, same treatment as
-// PA temperature already gets.
+// Applet for ACOM S-series amplifiers (600S primary), a sibling of AmpApplet
+// (PGXL) rather than a variant: ACOM's 0x2F telemetry reports forward power,
+// reflected power and SWR as independent fields, so all three get permanent
+// gauges. Drain current (Id) has no protocol-defined scale, so it is a text
+// readout like PA temperature. See docs/architecture/acom-600s-amplifier-design.md.
 class AcomApplet : public QWidget {
     Q_OBJECT
 

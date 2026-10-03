@@ -223,8 +223,7 @@ int main(int argc, char** argv)
     }
     // EngineGenerated has one producer, AudioEngine::startWsprPump(), and
     // reaching it here would need a prepared beacon and a timer tick for a
-    // 111.6 s frame. It is pinned at its call site by tx_audio_source_wiring_test
-    // instead, and that gap is named there rather than papered over.
+    // 111.6 s frame, so that tag has no behavioural test yet.
 
     IcomCivBackendTestAccess::connect(backend, "Desktop");
     IcomCivBackendTestAccess::timeout(backend);

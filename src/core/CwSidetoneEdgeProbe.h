@@ -10,16 +10,12 @@
 
 namespace AetherSDR {
 
-// Bench diagnostic: sample-exact envelope edge capture at the sink boundary.
-// Enabled only when AETHER_CW_EDGE_PROBE=1 is in the environment; otherwise a
-// single bool test per buffer. Both sidetone sinks feed their rendered float
-// buffers through scan(); positions are running SAMPLE indices, so the timing
-// this yields is the stream's own clock — no wall-clock jitter, no re-record.
-//
-// Detection: tone ON at the first sample whose |s| exceeds the threshold;
-// tone OFF at the first sample of a quiet run at least kQuietRunSamples long
-// (a 600 Hz tone crosses zero every ~40 samples at 48 kHz, so instantaneous
-// silence inside a cycle never counts as OFF).
+// Bench diagnostic: sample-exact envelope edge capture at the sink boundary,
+// enabled by AETHER_CW_EDGE_PROBE=1 (otherwise one bool test per buffer). Both
+// sinks feed rendered buffers through scan(); positions are running sample
+// indices, so timing is the stream's own clock. ON = first sample with |s| over
+// threshold; OFF = start of a quiet run >= kQuietRunSamples (a 600 Hz tone
+// crosses zero every ~40 samples at 48 kHz).
 class CwSidetoneEdgeProbe {
 public:
     // The 128 KB edge buffer is allocated ONLY when the probe is armed, so a

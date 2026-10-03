@@ -60,25 +60,11 @@ QLabel* makeValueLabel(QWidget* parent)
     return lbl;
 }
 
-// ── Expanded panel design metrics ───────────────────────────────────────────
-//
-// The size at which every metric below is its literal value; the actual
-// metrics are that value times one scale derived from the room the panel has.
-// See AccessoryPanelWidgets.h for why the width is a constant and the height
-// is measured exactly once.
-//
-// What the widest row costs at scale 1.0: a port strip — letter, PTT lamp,
-// band and bias chips, the source radio's name and the state cell — plus the
-// readouts, the fan pull-down and the key below them, and the column's side
-// margins.
-//
-// Deliberately generous. The column's width is not exactly proportional to
-// the scale — a button's frame and the readout's minimum width are constants
-// inside it — so the contents cost roughly 265 * scale + 63 rather than a
-// clean multiple. Solving that against this divisor is what decides whether a
-// narrow panel merely cramps or actually clips: at 420 every panel from the
-// minimum scale upward has room to spare, while a divisor tight enough to hit
-// scale 1.0 at the contents' own 300px would clip anything under 540px wide.
+// Expanded-panel design width: metrics are their literal values at scale 1.0
+// and scale with the room available (see AccessoryPanelWidgets.h). Covers the
+// widest row (port strip, readouts, fan pull-down, key, margins). Deliberately
+// generous: contents cost ~265 * scale + 63, so 420 leaves room at every scale
+// from the minimum, while 300 would clip panels under 540 px.
 constexpr qreal kDesignWidth  = 420.0;
 // Only a first guess: applyDensity replaces it with the measured value as
 // soon as there is a laid-out column to measure.
@@ -304,17 +290,10 @@ void AmpApplet::buildUI()
     pwrRow->addWidget(m_fwdGauge, 1);
     vbox->addLayout(pwrRow);
 
-    // ── DRV row ──────────────────────────────────────────────────────────────
-    // Exciter power at the amplifier's input, directly under the output it
-    // produces: the pair is the amplifier's gain, and reading it off two
-    // stacked bars is the whole reason this row exists. A PGXL delivering
-    // 16 W for 11 W of drive is visibly broken here and invisible anywhere
-    // else in the application.
-    //
-    // Full scale is the meter's own declared ceiling — the radio publishes
-    // DRV as 10.0..50.0 dBm, and 50 dBm is 100 W. The amplifier reaches rated
-    // output well below that, so the top of the scale is a limit, not a
-    // target: yellow from 50 W, red from 75 W.
+    // DRV row: exciter power under the output it produces, so the amp's gain reads
+    // off two stacked bars (16 W out for 11 W drive is visibly broken). Full scale
+    // is the meter's declared ceiling (DRV 10..50 dBm; 50 dBm = 100 W): a limit,
+    // not a target; yellow from 50 W, red from 75 W.
     m_drvLabel = makeValueLabel(this);
     m_drvLabel->setText("DRV");
     m_drvGauge = new HGauge(0.0f, 100.0f, 75.0f, "", "",
@@ -463,16 +442,10 @@ void AmpApplet::buildUI()
     btnRow->setContentsMargins(0, 0, 0, 0);
     btnRow->setSpacing(6);
 
-    // Fan speed pull-down — surfaces all three modes instead of making the
-    // operator click through them blind (#3905). Item text via
-    // fanModeLabel(); uppercase mode stored as itemData so the
-    // fanModeChanged contract ("uppercase, ready for sendCommand") is
-    // unchanged. Disabled until a direct PGXL connection delivers the first
-    // fanmode status.
-    // GuardedComboBox (not plain QComboBox): this is a hardware control, so
-    // an accidental mouse-wheel scroll while just hovering over it must not
-    // silently change fan mode and send a command to the amp — it only
-    // responds to wheel input when its dropdown is actually open (#3905).
+    // Fan mode pull-down showing all three modes (#3905). Text via
+    // fanModeLabel(); itemData is the uppercase mode for fanModeChanged ("ready
+    // for sendCommand"). Hidden until a direct PGXL connection reports fanmode.
+    // GuardedComboBox so a hover wheel-scroll can't send a fan command to the amp.
     m_fanCombo = new GuardedComboBox;
     m_fanCombo->setObjectName(QStringLiteral("ampFanModeCombo"));
     for (const QString& mode : {QStringLiteral("STANDARD"), QStringLiteral("CONTEST"), QStringLiteral("BROADCAST")})
@@ -730,19 +703,10 @@ void AmpApplet::setFloating(bool floating)
     applyDensity();
     if (!m_floating || m_calibrationPasses > 0) return;
 
-    // Calibrate on the next turn of the event loop, not here.
-    //
-    // Almost all of this column's height is text, and the text's size comes
-    // from the style sheets applyDensity has just set — which Qt applies when
-    // it next delivers events, not on the call. Measured now, every label still
-    // carries the application's default font and the column reads far taller
-    // than it will ever be: 285px against the 221 it settles at, a third too
-    // much. That figure divides every later scale, so the panel starts
-    // shrinking its contents while there is still an inch of empty space under
-    // them — which is the opposite of the rule the bottom pad exists to keep.
-    //
-    // The measurement takes a few turns to settle; calibrateNaturalHeight
-    // re-schedules itself until it does.
+    // Calibrate on a later event-loop turn: the labels' style sheets (set by
+    // applyDensity) apply then, and measuring now reads ~a third too tall, which
+    // would shrink contents while space remains. calibrateNaturalHeight
+    // reschedules itself until the figure settles.
     QTimer::singleShot(0, this, [this]() {
         calibrateNaturalHeight();
         applyDensity();
@@ -875,24 +839,10 @@ void AmpApplet::applyDensityAtScale(qreal scale)
 
 void AmpApplet::calibrateNaturalHeight()
 {
-    // What the column costs at scale 1.0 — the figure every later scale is a
-    // multiple of.
-    //
-    // Always measured with the scale forced to 1.0 first. That is the rule
-    // that matters: re-deriving it from a SCALED layout feeds the scale back
-    // into its own input, and it does not settle — rounding and the widgets'
-    // own minimums stop the contents being exactly proportional, the leftover
-    // lands in the divisor, and the next scale reads larger every time.
-    //
-    // Re-running it at scale 1.0, by contrast, is just a better measurement of
-    // the same thing, and it takes more than one turn to get: almost all of
-    // this column is text, and the text's size arrives from style sheets Qt
-    // applies over the following turns of the event loop. Measured on the
-    // first turn the column reads 285px, on the second 243, and it settles at
-    // 221 — a third too much at the start, and that figure divides every later
-    // scale, so the panel shrinks its contents while there is still an inch of
-    // empty space under them. So it re-measures until the figure stops moving,
-    // and then stops for good.
+    // The column's height at scale 1.0, the divisor of every later scale. Always
+    // measured with the scale forced to 1.0: measuring a scaled layout feeds back
+    // and never settles. Style sheets apply over several event-loop turns (285 →
+    // 243 → 221 px), so re-measure until the figure stops moving, then stop.
     if (!m_vbox || m_calibrationPasses >= kMaxCalibrationPasses) return;
     applyDensityAtScale(1.0);
     m_vbox->activate();
@@ -1421,15 +1371,9 @@ void AmpApplet::updateValueLabels()
 void AmpApplet::setDrainVoltage(float volts)
 {
     if (!m_directConnected) return;
-    // Reported as it arrives, including zero.
-    //
-    // A PGXL keeps its drain rail down while it is idle and only brings it up
-    // on entering OPERATE, so vdd=0.0 is the normal reading for most of the
-    // time the amplifier is switched on — not a fault, and not a missing
-    // value. Zero volts is a true reading and says the rail is down; a dash
-    // would read as "nothing arrived". The dash is kept for the one case where
-    // there is genuinely nothing: no direct connection (see
-    // setDirectConnected).
+    // Shown as received, including zero: a PGXL keeps its drain rail down until
+    // OPERATE, so 0.0 V is a normal reading. The dash is reserved for no direct
+    // connection at all (see setDirectConnected).
     m_drainVoltsText = QString::number(volts, 'f', 1);
     updateVoltsLabel();
 }

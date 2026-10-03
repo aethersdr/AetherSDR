@@ -100,7 +100,6 @@ public:
     // Use the active regional plan when mapping the slice frequency to a
     // native band button. The manager is owned by MainWindow.
     void setBandPlanManager(BandPlanManager* manager);
-    void setWnbState(bool on, int level);
     // Show/hide the whole WNB row (button + level slider + readout) based on
     // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
     void setRadioSideDspAvailable(bool available);
@@ -139,6 +138,8 @@ private:
     // The RF Gain slider is a readout while the loop owns the gain. See the
     // definition for why leaving it live is not a cosmetic question.
     void applyAutoRfGainToSlider(bool autoOn);
+    // The range text, from the slider's published range and unit.
+    void applyRfGainRangeText();
 
 public:
     // Whether this radio has DAX audio/IQ channels at all
@@ -289,6 +290,11 @@ signals:
     void swrSweepSaveCsvRequested();
     void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
     void flexRxAntennaSelected(int sliceId);
+    // The radio published no antenna port to choose and there is no virtual
+    // (Kiwi) receiver on offer, so the RX (tx=false) or TX (tx=true) antenna
+    // pick was refused rather than offering invented ANT1/ANT2
+    // (AntennaChoiceGate.h). MainWindow announces it.
+    void antennaChoiceRefused(bool tx);
     // NB Waterfall Blanker (#277)
     void wfBlankerEnabledChanged(bool on);
     void wfBlankerThresholdChanged(float threshold);
@@ -377,6 +383,9 @@ private:
     // True until a connected backend says otherwise, so a disconnected session
     // keeps the button rather than having it appear on connect.
     bool m_notchesSupported{true};
+    // Mirrors setDaxStreamsAvailable(). updateLayout() owns every menu
+    // button's visibility, so the capability has to live where it can see it.
+    bool m_daxStreamsAvailable{true};
     void applyTuningRangeToBandButtons();
     void updateActiveBandHighlight();
 

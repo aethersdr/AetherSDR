@@ -22,41 +22,16 @@ class QUdpSocket;
 
 namespace AetherSDR::anan {
 
-// Owns the ANAN-G2 UDP wire (openHPSDR Ethernet Protocol 2): session setup
-// (General + DDC-Specific + High Priority with run=1), the keepalive that
-// keeps the radio in RUN state, and DDC0 IQ ingest into normalized blocks.
-// Below the seam; the future AnanBackend owns one P2Client plus an AnanRxDsp.
-//
-// Lives on AnanBackend's dedicated I/O thread, not the GUI thread -- the
-// same shape MetisClient uses for the Hermes-Lite 2, and for the same
-// reason: this class is what keeps the radio's own watchdog fed, so it must
-// not be at the mercy of a GUI stall.
-//
-// RX-ONLY: there is no PTT parameter anywhere in this class, because there
-// is none in P2Protocol::buildHighPriority() -- the capability to key does
-// not exist yet, not merely a guard that could be bypassed. TX is RFC §2.11
-// Phase 3, a separate future addition.
-//
-// Does NOT redo discovery to IDENTIFY the radio -- by the time start() is
-// called, a caller has already resolved a host to connect to via
-// AnanDiscovery's broadcast sweep or a manual probe, the same division of
-// responsibility MetisClient::start() uses.
-//
-// It DOES send its own Discovery packet as the first thing start() does,
-// for an entirely different, ANAN-specific reason that has no Protocol-1
-// analogue: Phase 1a measured every radio->PC stream (DDC0 IQ included)
-// arriving at "the Source Port of the Host that initiated the Discovery
-// Packet" (spec p.43, p.51, p.54), literally -- not at whatever port later
-// sent the General/DDC-Specific/High-Priority session-setup packets. A
-// caller's manual-connect probe (ConnectionPanel::probeAnan()) already sent
-// one, but from ITS OWN throwaway socket, which is closed by the time this
-// object opens a new one -- so without repeating the Discovery send here,
-// on THIS socket, the radio has no reason to route DDC0 IQ anywhere this
-// object is listening. Sending it is not WAITED for -- session setup
-// proceeds immediately after -- but a reply that does arrive on this same
-// socket (see discoveryInfoReceived()) is opportunistically parsed for the
-// gateware version / DDC count / board id, since nothing else in this
-// class's own session ever learns those otherwise.
+// Owns the ANAN-G2 Protocol 2 UDP wire: session setup (General + DDC-Specific +
+// High Priority with run=1), the keepalive that holds the radio in RUN, and DDC
+// IQ ingest. Lives on AnanBackend's I/O thread (like MetisClient for HL2) so a
+// GUI stall cannot starve the radio's watchdog.
+// RX-ONLY: no PTT exists here or in buildHighPriority() (TX is RFC §2.11 Phase 3).
+// The caller resolves the host (AnanDiscovery or a manual probe), but start()
+// still sends its own Discovery first: every radio->PC stream goes to "the Source
+// Port of the Host that initiated the Discovery Packet" (spec p.43, p.51, p.54),
+// so it must come from THIS socket. The reply is not awaited; if it arrives it is
+// parsed for gateware version, DDC count and board id (discoveryInfoReceived()).
 class P2Client : public QObject {
     Q_OBJECT
 
@@ -71,11 +46,7 @@ public:
         // reject or clamp one, and it does neither yet; an invalid value is
         // simply sent as-is and the radio's own reaction is the feedback.
         int ddc0RateKsps = 48;
-        // Connect-time-only hardware options -- not operator controls an
-        // engineering bench session changes mid-QSO, so unlike frequency
-        // there is no live setter for any of these; a change takes a
-        // reconnect. See buildDdcSpecific()/buildHighPriority()'s own
-        // comments for the exact spec citations.
+        // Connect-time-only options: no live setter; a change takes a reconnect.
         bool ditherEnabled = true;
         bool randomEnabled = true;
         int ddc0AdcIndex = 0;          // 0 = ADC0, 1 = ADC1/RX2
@@ -87,44 +58,21 @@ public:
         int adc0AttenuationDb = 0;
         int adc1AttenuationDb = 0;
 
-        // Send demodulated RX audio back to the radio so its own codec and
-        // speaker reproduce it (DDC Audio, kSpeakerAudioPort).
-        //
-        // DEFAULT OFF, unlike every other option here, and deliberately so: this
-        // is the one field that makes the client originate a continuous outbound
-        // stream -- 750 packets a second for as long as the session lasts. A
-        // radio that was silent before an upgrade should not start making noise
-        // because of one, and a host that was sending nothing should not start
-        // sending 260 kB/s, so this waits to be asked for.
+        // Send demodulated RX audio to the radio's own speaker (DDC Audio,
+        // kSpeakerAudioPort). DEFAULT OFF: it is the one option that originates a
+        // continuous outbound stream (750 packets/s, ~260 kB/s).
         bool speakerAudioEnabled = false;
 
-        // Multi-DDC session. EMPTY (the default) means "single DDC0
-        // session", built from ddc0RateKsps/ddc0AdcIndex above -- so every
-        // existing caller keeps the exact bench-validated single-DDC
-        // behaviour without naming this field at all.
-        //
-        // When non-empty this is authoritative and the two shorthand fields
-        // are ignored: entry n configures DDC n. Capped at
-        // P2Protocol's kMaxDdcs by the packet builders.
-        //
-        // Deliberately not merged into the shorthand fields: a caller that
-        // sets BOTH would otherwise have two disagreeing sources of truth
-        // for DDC0's rate, and silently picking one is exactly the kind of
-        // thing that reads as a radio fault on the bench.
+        // Multi-DDC session. EMPTY (default) = single DDC0 built from ddc0RateKsps/
+        // ddc0AdcIndex. Non-empty is authoritative and those two fields are ignored;
+        // entry n configures DDC n, capped at kMaxDdcs by the packet builders.
         std::vector<DdcConfig> activeDdcs;
     };
 
-    // start()/stop() and setDdc0FrequencyHz() MUST execute on this object's
-    // own thread: start() constructs the QUdpSocket, and a socket takes the
-    // affinity of the thread that creates it. They are Q_INVOKABLE so a
-    // future AnanBackend's I/O thread can marshal them the way Hl2Backend
-    // does for MetisClient.
-    // connectTimeoutMs overrides kConnectTimeoutMs's default -- see
-    // AnanBackend::beginRateChange()'s own comment for why a rate-change
-    // restart (start() called on a session the radio was JUST told to stop,
-    // possibly after configure() held this thread for seconds of FFTW
-    // planning) legitimately needs more grace than a first-ever connect: the
-    // radio has real re-settling work to do that a fresh connect does not.
+    // start()/stop()/setters MUST run on this object's thread: start() creates the
+    // QUdpSocket, which takes that thread's affinity. connectTimeoutMs exceeds the
+    // default for a rate-change restart, where the radio is still re-settling from
+    // the stop (AnanBackend::kRateChangeConnectTimeoutMs).
     Q_INVOKABLE bool start(const Params& params, int connectTimeoutMs = kConnectTimeoutMs);
     Q_INVOKABLE void stop();
 
@@ -143,25 +91,15 @@ public:
     // tick. An out-of-range adcIndex is ignored.
     Q_INVOKABLE void setStepAttenuationDb(int adcIndex, int db);
 
-    // Hand over demodulated receiver audio for the radio's own speaker (DDC
-    // Audio, kSpeakerAudioPort). `interleavedInt16` is L,R,L,R... signed 16-bit
-    // in HOST order at kSpeakerSampleRateHz; the big-endian conversion is
-    // buildSpeakerAudio()'s job, not the caller's.
-    //
-    // ONE CALL PER DSP BLOCK, not per packet. The queue, the pacing and the
-    // sends all live on this object's thread, so a block of audio crosses the
-    // thread boundary about once every 20 ms instead of 750 times a second.
-    //
-    // Does nothing unless the session was started with speakerAudioEnabled.
+    // Hand over demodulated receiver audio for the radio's speaker: L,R,... int16 in
+    // HOST order at kSpeakerSampleRateHz (buildSpeakerAudio() byte-swaps). One call
+    // per DSP block (~20 ms); queueing and pacing run on this object's thread. No-op
+    // unless started with speakerAudioEnabled.
     Q_INVOKABLE void enqueueSpeakerAudio(const QByteArray& interleavedInt16);
 
-    // How many status packets reported the radio's speaker FIFO running dry, and
-    // the level the last one carried. The underflow count is THE verdict on the
-    // send pacing: a healthy stream reports zero for the life of the session.
-    //
-    // Readable rather than logged-only so a bench run has a number to quote and a
-    // test has something to assert. The level is in FIFO locations, not samples --
-    // see HighPriorityStatus::speakerFifoLevel.
+    // Status packets that reported a speaker-FIFO underflow (healthy = zero for the
+    // session), and the last reported level in FIFO locations (see
+    // HighPriorityStatus::speakerFifoLevel).
     [[nodiscard]] int speakerUnderflowReports() const noexcept
     {
         return m_speakerUnderflowReports;
@@ -171,32 +109,13 @@ public:
         return m_lastSpeakerFifoLevel;
     }
 
-    // Change one DDC's sample rate on a LIVE session -- no stop, no restart,
-    // no reconnect. Returns false (sending nothing) if the session is not
-    // running or ddcIndex is not one this session enabled. A matching rate
-    // still sends: the packet is fire-and-forget UDP and the caller retries
-    // across the settle window, so skipping an unchanged slot would drop
-    // those retransmits.
-    //
-    // Supported by the radio, verified in p2app's own source rather than
-    // assumed: IncomingDDCSpecific.c services DDC-Specific packets in a
-    // continuous thread loop and, on any change, calls
-    // WriteP2DDCRateRegister(), which is a direct
-    // RegisterWrite(VADDRDDCRATES, ...) to the FPGA. Its companion
-    // "something changed" hook, HandlerCheckDDCSettings(), is an EMPTY
-    // function -- p2app writes the rate register and keeps streaming. There
-    // is no teardown on the radio side to mirror.
-    //
-    // This answers the question AnanBackend::beginRateChange()'s own comment
-    // left open ("whether the radio would accept a live rate change without
-    // a session restart at all is a separate, unverified protocol
-    // question"). The caller still has to rebuild ITS OWN WdspChannel, whose
-    // input sample rate really did change -- that part is unavoidable and is
-    // why AnanBackend builds the new channel in the background first.
-    //
-    // Resends the whole DDC-Specific packet, not a partial one: the packet
-    // carries the enable bitmap and every DDC's row, so a partial resend
-    // would disable the others.
+    // Change one DDC's rate on a LIVE session, no restart. Returns false (sending
+    // nothing) if not running or ddcIndex is not enabled. An unchanged rate still
+    // sends: the caller retries across the settle window. p2app supports this:
+    // IncomingDDCSpecific.c loops on DDC-Specific packets and calls
+    // WriteP2DDCRateRegister() (RegisterWrite(VADDRDDCRATES)) with no teardown. The
+    // caller still rebuilds its WdspChannel. Resends the whole packet, since it
+    // carries the enable bitmap and every DDC's row.
     Q_INVOKABLE bool setDdcRateLive(int ddcIndex, int rateKsps);
 
     [[nodiscard]] bool isRunning() const noexcept { return m_running; }
@@ -226,13 +145,9 @@ signals:
     // handleDatagram() call so direct consumers can clear partial FFTs first.
     // Other DDCs have independent sequence counters and are unaffected.
     void ddcSequenceGap(int ddcIndex);
-    // This session's own Discovery reply -- the SAME radio start() already
-    // sent a Discovery packet to, on this socket, per the class comment.
-    // Emitted at most once per start(), whenever it happens to arrive
-    // (before or after linkUp() -- no ordering relative to it). AnanBackend
-    // uses this to report real capabilities instead of hardcoded ones; see
-    // its capabilities() and the DiscoveryReply fields' own comments in
-    // P2Protocol.h for what each means.
+    // This session's own Discovery reply (see the class comment). At most once per
+    // start(), unordered relative to linkUp(); AnanBackend reports capabilities from
+    // it (field meanings: P2Protocol.h's DiscoveryReply).
     void discoveryInfoReceived(quint8 boardId, quint8 firmwareVer, quint8 numDdc);
 
 private slots:
@@ -246,16 +161,9 @@ private:
     void handleDatagram(std::span<const std::uint8_t> bytes, quint16 senderPort);
     void noteSpeakerFifoStatus(const HighPriorityStatus& status);
 
-    // p.8: "a Command & Control packet must be sent at least every second
-    // (every 100 mS is recommended). Should a C&C packet not be received,
-    // and the hardware is in the RUN state, then the hardware will switch
-    // out of the RUN state into standby." Matches anan/spike/phase1a.py's
-    // CC_KEEPALIVE_INTERVAL, the exact cadence already validated against
-    // real hardware -- without it the radio's own watchdog (which
-    // buildGeneral() leaves enabled on purpose) drops the session
-    // mid-stream, which looks exactly like a radio anomaly and is not one.
-    // That is precisely what the spike's first run did before this fix
-    // existed.
+    // p.8: a C&C packet must arrive at least every second (100 ms recommended) or a
+    // radio in RUN drops to standby; buildGeneral() leaves that watchdog enabled.
+    // Same cadence as anan/spike/phase1a.py's CC_KEEPALIVE_INTERVAL.
     static constexpr int kKeepaliveMs = 100;
     // No packet ever arrived from a genuine DDC0 frame within this long of
     // start() -- mirrors MetisClient's kConnectTimeoutMs.

@@ -67,6 +67,7 @@
 #include <QCheckBox>
 #include <QDesktopServices>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeySequence>
@@ -77,6 +78,7 @@
 #include <QNetworkRequest>
 #include <QPointer>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QShortcut>
@@ -292,16 +294,10 @@ void MainWindow::buildMenuBar()
 
     // ── Settings menu ──────────────────────────────────────────────────────
     auto* settingsMenu = menuBar()->addMenu("&Settings");
-    // Qt has suppressed per-action tooltips since 5.1 unless the menu opts in,
-    // and the opt-in has to be on the menu the item is drawn in — including for
-    // a submenu's menuAction(), which renders on the PARENT.  Without this, the
-    // tr("Not supported by this radio") reason applyCapabilitiesToUi() sets on
-    // the greyed TX Band and Inhibit-during-TUNE entries is written and thrown
-    // away, and a disabled QAction does not highlight on hover either, so the
-    // entry reads as broken rather than unavailable (#5546, same shape as
-    // #5510).  Entries with no explicit tooltip stay silent: QMenu shows the
-    // action's set tooltip, not QAction::toolTip()'s fall-back to its own
-    // label, so opting a large menu in costs nothing.
+    // QMenu shows per-action tooltips only when the menu opts in, and a
+    // submenu's menuAction() renders on the PARENT, so opt in here too. Needed
+    // for the "Not supported by this radio" reasons on greyed entries (#5546).
+    // Entries without an explicit tooltip stay silent, so this costs nothing.
     settingsMenu->setToolTipsVisible(true);
 
     auto* radioSetup = settingsMenu->addAction("Radio Setup...");
@@ -566,6 +562,7 @@ void MainWindow::buildMenuBar()
     connect(kbAct, &QAction::toggled, this, [this](bool on) {
         m_keyboardShortcutsEnabled = on;
         s_keyboardShortcutsEnabled = on;
+        syncOperatingShortcutsEnabled();
         AppSettings::instance().setValue("KeyboardShortcutsEnabled", on ? "True" : "False");
         AppSettings::instance().save();
     });
@@ -1020,16 +1017,11 @@ void MainWindow::buildMenuBar()
     auto* viewMenu = menuBar()->addMenu("&View");
     viewMenu->setToolTipsVisible(true);  // see settingsMenu above (#5546)
 
-    // Workspace canvas (RFC #4887 phase 3) — opt-in, reversible.  The check
-    // state persists inside the workspace document itself (Principle V), not
-    // in a settings key: wireWorkspaceCanvas() re-applies it at startup and
-    // enabledChanged keeps the action honest if enabling fails.
-    //
-    // Two postures since the edit-mode field request: Enabled turns the
-    // canvas shell on, Edit Layout arms placement (select/drag/resize/
-    // drops/nudges/dots).  Enabled-but-locked is the OPERATING posture —
-    // interacting with an applet just uses it.  Edit state is session-
-    // transient by design; wireWorkspaceCanvas() syncs both directions.
+    // Workspace canvas (RFC #4887). The Enabled state persists in the workspace
+    // document, not a settings key; wireWorkspaceCanvas() re-applies it at
+    // startup and enabledChanged corrects the action if enabling fails. Edit
+    // Layout arms placement and is session-transient; enabled-but-locked is the
+    // operating posture.
     QMenu* wsMenu = viewMenu->addMenu("Workspace &Canvas");
     m_workspaceCanvasAction = wsMenu->addAction("&Enabled");
     m_workspaceCanvasAction->setCheckable(true);
@@ -1522,32 +1514,11 @@ void MainWindow::buildMenuBar()
     toolsMenu->addAction(memoryAction);
     toolsMenu->addAction(waveformsAct);
 
-    // The wideband converter view — docs/HERMES.md §13 item 18. ADDITIVE: a new
-    // entry that opens a new window. Nothing existing changes behaviour, and no
-    // other entry in this menu is touched.
-    //
-    // IN TOOLS, BESIDE RADIO HEALTH, not in View. #5595 sorted the menu bar
-    // Tools-first: Tools holds the instrument windows (Add Panadapter, Radio
-    // Health, GPS Dashboard, Runtime Monitor, SWR Scan) and View keeps the
-    // presentation settings (themes, marker size, UI scale, band plan). A
-    // window showing the converter is an instrument. Created on toolsMenu
-    // directly rather than through the removeAction/addAction shim above,
-    // which exists to MIGRATE actions that used to live in View.
-    //
-    // GATED ON THE CAPABILITY AND NOT ON A FAMILY. The action starts disabled
-    // and follows RadioCapabilities::widebandConverterView, which today exactly
-    // one backend engages. Disabled rather than hidden, and rather than the
-    // permissive-on-disconnect convention the other capability gates use: this
-    // is not a control a connected radio might be shy about reporting — with no
-    // radio there is no converter to look at, so an enabled entry would open a
-    // window that could only say so.
-    //
-    // AND IT SAYS WHY IT IS GREYED. The tooltip describes what the entry is;
-    // nothing there tells an operator looking at a disabled row what would
-    // change it. A QAction has no accessibleDescription, so a screen reader
-    // gets the text and nothing else — the status tip is the one string Qt
-    // announces for an action, and it is cleared again when the entry is live
-    // so the reason cannot outlive the condition that produced it.
+    // Wideband converter view (docs/HERMES.md §13 item 18), in Tools with the
+    // other instrument windows. Gated on RadioCapabilities::widebandConverterView,
+    // disabled (not hidden, and not permissive while disconnected: no radio, no
+    // converter). QAction has no accessibleDescription, so the reason goes in
+    // the status tip, cleared again when the entry is live.
     auto* bandscopeAct = toolsMenu->addAction("Wideband Bandscope...");
     bandscopeAct->setMenuRole(QAction::NoRole);
     bandscopeAct->setToolTip(
@@ -1951,6 +1922,7 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     // for a disabled QAction where a tooltip is never read.
     const QString blocker = paired ? QString() : splitEntryBlocker(sliceId);
 
+    const QJsonObject initialQsySettings = m_splitQsySettings.toJson();
     QMenu menu(this);
 
     // ── One-touch pileup offsets (#311) ──────────────────────────────────
@@ -1963,6 +1935,51 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
         connect(a, &QAction::triggered, this,
                 [this, khz, sliceId]() { applySplitOffsetKHz(khz, sliceId); });
     }
+
+    // Keep client-side split-on-QSY policy beside the other split actions.
+    menu.addSeparator();
+    QMenu* splitQsyMenu = menu.addMenu(tr("Split QSY Option"));
+
+    auto* closeSplitCheck = new QCheckBox(
+        tr("Close split on QSY"), splitQsyMenu);
+    closeSplitCheck->setObjectName(QStringLiteral("splitCloseOnQsy"));
+    closeSplitCheck->setAccessibleName(tr("Close split on QSY"));
+    closeSplitCheck->setChecked(m_splitQsySettings.closeSplitOnQsy);
+    auto* closeSplitAction = new QWidgetAction(splitQsyMenu);
+    closeSplitAction->setDefaultWidget(closeSplitCheck);
+    splitQsyMenu->addAction(closeSplitAction);
+
+    QWidget* thresholdRow = new QWidget(splitQsyMenu);
+    auto* thresholdLayout = new QHBoxLayout(thresholdRow);
+    thresholdLayout->setContentsMargins(12, 4, 12, 4);
+    auto* thresholdLabel = new QLabel(
+        tr("QSY change threshold to close split:"), thresholdRow);
+    auto* thresholdSpin = new QSpinBox(thresholdRow);
+    thresholdLabel->setBuddy(thresholdSpin);
+    thresholdLayout->addWidget(thresholdLabel);
+    thresholdSpin->setObjectName(QStringLiteral("splitQsyThresholdHz"));
+    thresholdSpin->setRange(AetherSDR::SplitQsySettings::kMinimumThresholdHz,
+                            AetherSDR::SplitQsySettings::kMaximumThresholdHz);
+    thresholdSpin->setValue(m_splitQsySettings.thresholdHz);
+    thresholdSpin->setSuffix(tr(" Hz"));
+    thresholdSpin->setAccessibleName(
+        tr("QSY change threshold to close split"));
+    thresholdSpin->setAccessibleDescription(
+        tr("Enter a frequency change from 1 to 200000 Hz."));
+    thresholdLayout->addWidget(thresholdSpin);
+    auto* thresholdAction = new QWidgetAction(splitQsyMenu);
+    thresholdAction->setDefaultWidget(thresholdRow);
+    splitQsyMenu->addAction(thresholdAction);
+    thresholdSpin->setEnabled(m_splitQsySettings.closeSplitOnQsy);
+
+    connect(closeSplitCheck, &QCheckBox::toggled, this, [this, thresholdSpin](bool enabled) {
+        m_splitQsySettings.closeSplitOnQsy = enabled;
+        thresholdSpin->setEnabled(enabled);
+    });
+    connect(thresholdSpin, qOverload<int>(&QSpinBox::valueChanged), this,
+            [this](int thresholdHz) {
+        m_splitQsySettings.thresholdHz = thresholdHz;
+    });
 
     // ── Monitor TX ───────────────────────────────────────────────────────
     menu.addSeparator();
@@ -2046,6 +2063,10 @@ void MainWindow::showSplitBadgeMenu(int sliceId, const QPoint& globalPos)
     });
 
     menu.exec(globalPos);
+    // Keep edits live while the menu is open, but commit the document once.
+    if (m_splitQsySettings.toJson() != initialQsySettings) {
+        m_splitQsySettings.save();
+    }
 }
 
 } // namespace AetherSDR

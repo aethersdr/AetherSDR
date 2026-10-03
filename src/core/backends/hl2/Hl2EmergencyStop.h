@@ -9,34 +9,13 @@ class QHostAddress;
 
 namespace AetherSDR::hl2 {
 
-// Release the radio from inside a signal handler.
-//
-// WHY THIS EXISTS. The Hermes-Lite 2 must be told to stop streaming. When it is
-// not, it keeps sending EP6 at a host that is gone and then stops answering
-// discovery — alive at the network layer, invisible to every client, and
-// requiring a physical power cycle. Reproduced three times: `kill <pid>` on a
-// connected AetherSDR wedges the radio every time.
-//
-// Hl2Backend's destructor already sends the stop, and that covers a normal
-// quit. It does not run on a signal: Qt tears nothing down for SIGTERM, so the
-// process simply vanishes mid-stream. The gateware watchdog is documented as
-// the anti-wedge mechanism for exactly this case (MetisProtocol.h,
-// kRunWatchdogDisable) and did NOT recover it in practice — which is why this
-// belt exists alongside that brace rather than instead of it.
-//
-// WHY IT IS NOT A SELF-PIPE. The textbook Qt answer is to write to a pipe from
-// the handler and do the real work back on the event loop. That would be
-// useless here: an unresponsive event loop is one of the main reasons anyone
-// reaches for kill in the first place, so the fix must not depend on the thing
-// that may already be stuck. fire() therefore does the whole job in the
-// handler, using nothing but sendto() on an address resolved in advance.
-//
-// EVERYTHING IS PRE-COMPUTED so that fire() is async-signal-safe: the socket
-// descriptor, the destination sockaddr and the 64-byte stop datagram are all
-// built by arm(), on a normal thread, while the link is coming up.
-//
-// SIGKILL cannot be caught, so `kill -9` still wedges the radio. Nothing in a
-// process can change that.
+// Release the radio from inside a signal handler. An HL2 never told to stop
+// keeps streaming EP6 at a dead host and stops answering discovery until power
+// cycled; Hl2Backend's destructor does not run on a signal, and the gateware
+// watchdog (MetisProtocol.h, kRunWatchdogDisable) does not recover it in
+// practice. Not a self-pipe: a stuck event loop is why people reach for kill.
+// arm() precomputes fd, sockaddr and the 64-byte stop datagram so fire() is
+// async-signal-safe. SIGKILL cannot be caught.
 
 // Publish the parameters needed to stop the radio. Called by MetisClient once
 // its socket is bound and the destination is known. Passing an invalid fd
@@ -55,17 +34,10 @@ void disarmEmergencyStop() noexcept;
 // cost of a lost one is a radio the operator has to walk over to and unplug.
 void fireEmergencyStop() noexcept;
 
-// Install handlers for the TERMINATING signals (SIGTERM/SIGINT/SIGHUP/SIGQUIT)
-// so fireEmergencyStop() runs before the process dies. Each handler restores
-// the default disposition and re-raises, so the exit status is unchanged.
-//
-// A signal already inherited as SIG_IGN is left ignored — see the
-// implementation for why that matters more than it looks.
-//
-// Crash signals are deliberately NOT taken over; they belong to the platform's
-// crash reporting.
-//
-// Call once, early in main(). Safe to call when no radio is connected.
+// Install handlers for SIGTERM/SIGINT/SIGHUP/SIGQUIT that fire the stop, restore
+// the default disposition and re-raise (exit status unchanged). An inherited
+// SIG_IGN stays ignored; crash signals are left to crash reporting. Call once,
+// early in main(); safe with no radio connected.
 void installEmergencyStopSignalHandlers() noexcept;
 
 }  // namespace AetherSDR::hl2

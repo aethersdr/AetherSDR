@@ -6,12 +6,6 @@
 // the mode is RTTY. The operator sees a mode they chose and hears a mode they
 // did not, and nothing in the path disagrees with them.
 //
-// WHY THIS TARGET IS SEPARATE. The natural home for a seam assertion is the
-// fake-radio fixture in hl2_backend_test.cpp — which is RETIRED inside a
-// commented block in tests/tests.cmake, so an assertion written there would be
-// compiled by nothing and green forever. tests.cmake already states the rule
-// beside hl2_pan_limits_declaration_test: "a declaration must not be pinned
-// only inside something that does not build." Same reasoning, same shape.
 //
 // WHAT IS AND IS NOT PINNED HERE. The lists and the relations between them are,
 // against the SAME accessors production reads rather than a retyped copy — a
@@ -49,6 +43,8 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2ModeVocabulary.h"
 #include "core/backends/RestoredRadioState.h"
+#include "core/backends/SliceDelta.h"
+#include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QSet>
@@ -255,6 +251,105 @@ int main(int argc, char** argv)
               QStringLiteral("a document holding %1 restores as %2, which the "
                              "menu can display (or is a named residual)")
                   .arg(m, restored));
+    }
+
+    // The run-time setter holds the same boundary as the restore (#5580).
+    // Every mode route (rigctl, SmartCAT, TCI, memory recall, shortcuts, MIDI)
+    // ends at setSliceMode(); a mode modeFromString() does not map is refused
+    // and the slice re-published unchanged, so it never reads RTTY while
+    // demodulating USB.
+    {
+        hl2::Hl2Backend backend;
+        QString lastMode;
+        int lastLow = 0, lastHigh = 0;
+        QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
+                         [&](int, const SliceDelta& d) {
+            if (d.mode)       lastMode = *d.mode;
+            if (d.filterLow)  lastLow  = *d.filterLow;
+            if (d.filterHigh) lastHigh = *d.filterHigh;
+        });
+
+        backend.setSliceMode(0, QStringLiteral("LSB"));
+        const QString baseMode = lastMode;
+        const int baseLow = lastLow, baseHigh = lastHigh;
+        check(baseMode == QLatin1String("LSB"),
+              QStringLiteral("setup: the slice is in LSB — got \"%1\"").arg(baseMode));
+
+        for (const QString& rejected : {QStringLiteral("RTTY"), QStringLiteral("DFM"),
+                                        QStringLiteral("DSTR"), QStringLiteral("NONSENSE")}) {
+            lastMode.clear();
+            backend.setSliceMode(0, rejected);
+            check(lastMode == baseMode,
+                  QStringLiteral("%1 is refused at run time and the slice is "
+                                 "re-published as %2 — got \"%3\"")
+                      .arg(rejected, baseMode, lastMode));
+            check(lastLow == baseLow && lastHigh == baseHigh,
+                  QStringLiteral("%1 leaves the passband at %2..%3 — got %4..%5")
+                      .arg(rejected).arg(baseLow).arg(baseHigh)
+                      .arg(lastLow).arg(lastHigh));
+        }
+
+        // Positive control: the refusal is not wider than the vocabulary. Every
+        // spelling modeFromString() maps is still applied, in its offered form.
+        for (const QString& m : std::as_const(accepted)) {
+            lastMode.clear();
+            backend.setSliceMode(0, m);
+            check(lastMode == hl2::canonicalOfferedMode(m),
+                  QStringLiteral("%1 is still applied at run time, as %2 — got "
+                                 "\"%3\"").arg(m, hl2::canonicalOfferedMode(m),
+                                               lastMode));
+        }
+    }
+
+    // What the operator sees: wired as RadioModel wires it (both connections
+    // direct), the correction lands inside SliceModel::setMode(), and the LAST
+    // modeChanged, which VfoWidget paints the mode tab from, must not be the
+    // refused mode. FDV is refused here but USB-family for filter polarity, so
+    // it also pins that the LSB passband is not flipped.
+    {
+        hl2::Hl2Backend backend;
+        SliceModel slice(0);
+        QObject::connect(&slice, &SliceModel::modeChangeRequested, &backend,
+                         [&backend](const QString& m) { backend.setSliceMode(0, m); });
+        QObject::connect(&backend, &IRadioBackend::sliceChanged, &slice,
+                         [&slice](int, const SliceDelta& d) { slice.applyChanges(d); });
+        QString lastAnnounced;
+        QObject::connect(&slice, &SliceModel::modeChanged, &slice,
+                         [&lastAnnounced](const QString& m) { lastAnnounced = m; });
+
+        slice.setMode(QStringLiteral("LSB"));
+        const int baseLow = slice.filterLow(), baseHigh = slice.filterHigh();
+        check(slice.mode() == QLatin1String("LSB") && baseHigh <= 0,
+              QStringLiteral("setup: SliceModel in LSB with an LSB passband — got "
+                             "%1 %2..%3").arg(slice.mode()).arg(baseLow).arg(baseHigh));
+
+        for (const QString& rejected : {QStringLiteral("RTTY"), QStringLiteral("DFM"),
+                                        QStringLiteral("DSTR"), QStringLiteral("FDV")}) {
+            lastAnnounced.clear();
+            slice.setMode(rejected);
+            check(slice.mode() == QLatin1String("LSB"),
+                  QStringLiteral("SliceModel refused %1 and holds LSB — got \"%2\"")
+                      .arg(rejected, slice.mode()));
+            // Empty is allowed: SliceModel may refuse on its own before the
+            // backend is asked (DSTR without D-STAR support), and then nothing
+            // is announced at all. What must never be announced LAST is the
+            // refused mode.
+            check(lastAnnounced.isEmpty() || lastAnnounced == QLatin1String("LSB"),
+                  QStringLiteral("the LAST modeChanged after refusing %1 says LSB "
+                                 "(or nothing), which is what a widget paints — got "
+                                 "\"%2\"").arg(rejected, lastAnnounced));
+            check(slice.filterLow() == baseLow && slice.filterHigh() == baseHigh,
+                  QStringLiteral("refusing %1 leaves the LSB passband %2..%3 alone "
+                                 "— got %4..%5").arg(rejected).arg(baseLow)
+                      .arg(baseHigh).arg(slice.filterLow()).arg(slice.filterHigh()));
+        }
+
+        // Control: an accepted change is still announced exactly as requested.
+        lastAnnounced.clear();
+        slice.setMode(QStringLiteral("USB"));
+        check(slice.mode() == QLatin1String("USB") && lastAnnounced == QLatin1String("USB"),
+              QStringLiteral("an accepted USB is applied and announced — got %1 / %2")
+                  .arg(slice.mode(), lastAnnounced));
     }
 
     if (failures == 0) {

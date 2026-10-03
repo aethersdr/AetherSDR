@@ -303,18 +303,11 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
     std::vector<AsrSegmenter::ClosedSegment> segments =
         m_segmenter.feed(pcm16k.data(), static_cast<int>(pcm16k.size()));
 
-    // A real pause (long idle silence) flushes any carried ASR context so a
-    // noisy/garbled prior can't keep conditioning later utterances and never
-    // recover. Consume the one-shot now (it must clear even on a feed that
-    // produced no segment, so a gap spanning several silent buffers isn't held
-    // pending), but apply the flush AFTER decoding this feed's own segments
-    // below: a segment that closed BEFORE the gap should still be decoded with
-    // the previous context — the flush protects only what comes after the pause.
-    //
-    // Caller constraint: this relies on a single feed() never both closing an
-    // utterance and crossing longGapMs of idle silence. AsrAudioTap delivers
-    // chunks far shorter than longGapMs (2.5 s), so a close and a long gap never
-    // share one feed; a much larger buffer would break that and want revisiting.
+    // A long idle gap flushes carried ASR context so a garbled prior can't condition
+    // later utterances. Consume the one-shot now (even with no segment) but apply it
+    // after decoding this feed's segments, which closed before the gap. Assumes one
+    // feed() never both closes an utterance and spans longGapMs (2.5 s); AsrAudioTap
+    // chunks are far shorter.
     const bool longGap = m_segmenter.consumeLongGap();
 
     if (segments.empty()) {

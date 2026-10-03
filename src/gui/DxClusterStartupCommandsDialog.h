@@ -6,16 +6,10 @@ class QPlainTextEdit;
 
 namespace AetherSDR {
 
-// Modal editor for the per-instance startup-commands list (#2683).  One
-// command per line; the backend (DxClusterClient::sendStartupCommands)
-// replays the list after every login, including reconnects.
-//
-// Use the static edit() helper at the call site — it constructs the
-// dialog with the right AppSettings key and runs the modal exec()
-// loop.  Two keys exist in practice: "DxClusterStartupCommands" for
-// the main cluster tab and "RbnStartupCommands" for the Reverse Beacon
-// Network tab, kept independent so operators can configure each
-// cluster service separately.
+// Modal editor for a startup-commands list (#2683), one command per line;
+// DxClusterClient::sendStartupCommands replays it after every login. Use
+// edit(), which picks the AppSettings key: "DxClusterStartupCommands" (cluster
+// tab) or "RbnStartupCommands" (RBN tab), kept independent.
 class DxClusterStartupCommandsDialog : public PersistentDialog {
     Q_OBJECT
 

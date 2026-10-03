@@ -227,17 +227,10 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     body->addWidget(m_pcAudioNotice);
     m_pcAudioNotice->hide();
 
-    // The transmit chain, one stage to a page, with the column down the left
-    // standing in for the horizontal chain strip this window used to carry.
-    // Same component AetherRX uses — the two windows are the same idea
-    // pointed in opposite directions, so a second copy of the column would
-    // have been two places to fix every tab-bar bug.
-    //
-    // The live controls sit at the foot of the column: REC and PLAY on one
-    // row, BYPASS and the Settings gear on the next. All three are what you
-    // reach for mid-QSO, so none of them is behind a modal; only the profile
-    // library lives behind the gear. ClientChainApplet carries its own copy
-    // of all three on the docked panel.
+    // The TX chain one stage per page, with the shared tab column on the left
+    // (same component as AetherRX). REC/PLAY and BYPASS/Settings sit at the foot
+    // of the column, unmodal for mid-QSO use; only the profile library is behind
+    // the gear. ClientChainApplet carries its own copies on the docked panel.
     auto* row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(8);
@@ -487,21 +480,11 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
             this, &AetherialAudioStrip::cutoffsDragRequested);
 
 
-    // Hide the min / max / close trio on each embedded panel's title bar
-    // — the strip owns the window controls, so each panel just needs its
-    // name plate.  dynamic_cast (rather than findChild) because
-    // EditorFramelessTitleBar has no Q_OBJECT macro; RTTI works fine and
-    // we don't need to reach into every Strip*Panel to expose its title
-    // bar member.
-    //
-    // Same pass also rewrites each panel's own QSS so the legacy
-    // `#08121d` band colour (inherited from when the panels were
-    // duplicated from the floating-editor sources) becomes `#0f0f1a` to
-    // match SMeterWidget / applet-panel chrome.  Qt always lets a
-    // child's own stylesheet win over a parent's, regardless of selector
-    // specificity, so a strip-level override doesn't reach these — the
-    // only way to override without editing every Strip*Panel source is
-    // to rewrite their stylesheets in place at construction.
+    // Hide each embedded panel's min/max/close (the strip owns window controls);
+    // dynamic_cast because EditorFramelessTitleBar has no Q_OBJECT. Also rewrite
+    // each panel's own QSS from `#08121d` to `#0f0f1a` to match SMeterWidget /
+    // applet chrome: a child's stylesheet always beats a parent's, so a strip-level
+    // override can't reach them.
     auto recolour = [](QWidget* w) {
         QString s = w->styleSheet();
         if (s.contains("#08121d")) {
@@ -843,18 +826,13 @@ void AetherialAudioStrip::onBypassToggled(bool checked)
     m_audio->setTxBypassed(checked);
 }
 
-// ──────────────────────────────────────────────────────────────────
-// Preset combo box
-// ──────────────────────────────────────────────────────────────────
-//
-// Items laid out as:
+// Preset combo items:
 //   0..N-1      stored preset names (alphabetic)
 //   N           "──────────"  (disabled separator)
 //   N+1         "Import\xe2\x80\xa6"
 //   N+2         "Export\xe2\x80\xa6"
-//
-// We deliberately use index sentinels (UserRole) rather than text
-// matching so localising the action labels later is safe.
+// Actions are identified by UserRole sentinels, not text, so labels can be
+// localised.
 
 namespace {
 constexpr int kRolePresetName       = Qt::UserRole + 1;

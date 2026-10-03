@@ -1,29 +1,14 @@
 #pragma once
 
-// Spot ID space and the spot-label right-click decisions (#6037).
-//
-// Spot IDs are not all radio-owned, and the sign of an ID does not say which
-// it is. SpotModel is keyed by a plain int shared by four kinds of producer:
-//
-//   radio spots          the radio's own non-negative indices
-//   TCI-injected spots   client-side, but POSITIVE: TciProtocol::cmdSpot
-//                        allocates them from 10000 upward (source "TCI"), so
-//                        nothing keeps them apart from a radio index >= 10000
+// Spot ID space and spot-label right-click decisions (#6037). SpotModel IDs:
+//   radio spots          radio's non-negative indices
+//   TCI-injected         positive, from 10000 up (TciProtocol::cmdSpot, source "TCI")
 //   memory markers       -(kMemorySpotIdBase + memoryIndex)
-//   passive-local spots  m_nextPassiveSpotId-- from -kPassiveSpotIdBase down
-//                        (DX cluster / RBN / WSJT-X / POTA / manual spots in
-//                        Passive mode or on a client-side-spots backend such
-//                        as HL2 and Icom, plus N1MM and EiBi)
-//
-// Only the two negative ranges are disjoint from the radio's by construction.
-// Where a decision needs "does the radio own this spot?", it reads the spot's
-// source as well as its ID (removeRoute below; spotTriggered does the same).
-//
-// The right-click menu once decided "was a label hit?" from the SIGN of the
-// hit marker's ID (`hitSpotIdx >= 0`), so negative-ID client-side labels fell
-// through to the general-area menu: no Remove Spot for a local spot, and the
-// Apply Memory branch was unreachable. Presence is now decided by whether a
-// label rect with a valid marker index matched, independent of the ID space.
+//   passive-local        m_nextPassiveSpotId-- from -kPassiveSpotIdBase (cluster/
+//                        RBN/WSJT-X/POTA/manual in Passive mode or client-side-spots
+//                        backends like HL2/Icom, plus N1MM and EiBi)
+// ID sign doesn't imply ownership: "radio-owned?" reads the source too. Label
+// hit is decided by a matched label rect with a valid marker index, not the ID.
 
 #include <QMenu>
 #include <QObject>
@@ -164,16 +149,11 @@ inline bool isTciSpotSource(const QString& source)
     return source.compare(QLatin1String("TCI"), Qt::CaseInsensitive) == 0;
 }
 
-// `source` is the spot's SpotModel source, empty when the spot is no longer
-// in the model. Only a radio-owned spot is ever written to the radio:
-//  - a passive-local ID has no radio-side counterpart, and on HL2 there is no
-//    command plane to receive one;
-//  - a TCI-injected spot has a positive ID the radio never assigned, so
-//    `spot remove <id>` would name a spot the radio does not know, or one it
-//    does under the same number. TciProtocol::cmdSpotDelete already removes
-//    these from the model directly; Remove Spot does the same.
-// Both are removed from the model here. A memory marker is not removable
-// through Remove Spot (menuFor never offers it one).
+// `source` is the spot's SpotModel source (empty if gone). Only radio-owned
+// spots are sent `spot remove`: passive-local IDs have no radio counterpart (and
+// HL2 has no command plane), and TCI-injected IDs were never assigned by the
+// radio. Both are removed from the model directly, as
+// TciProtocol::cmdSpotDelete does. Memory markers are never offered Remove Spot.
 inline RemoveRoute removeRoute(int spotIndex, const QString& source)
 {
     if (source == QLatin1String("Memory")) {
