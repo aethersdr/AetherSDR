@@ -17,8 +17,9 @@ enum class RowKind {
 };
 
 // Row means the baseline ring holds; SpectrumWidget asserts its ring is this.
-// The ring holds one unit at a time: the row kind changes only across a
-// disconnect, and SpectrumWidget::clearDisplay empties the ring there.
+// The ring holds one unit at a time: absolute-dB residue read under the tile
+// law holds a tile waterfall for seconds, so SpectrumWidget::setPanBinsAbsolute
+// empties the ring when the row kind changes.
 inline constexpr int kRingRows = 32;
 
 // Rows of history the ring needs before any row may be called an impulse.

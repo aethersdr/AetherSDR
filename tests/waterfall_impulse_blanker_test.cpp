@@ -285,6 +285,36 @@ int main()
                ring.feed(kAbsDb, kFloor + 25.0f, kDefault));
     }
 
+    {
+        // A ring is not a baseline in the other unit, which is why the widget
+        // empties it when the row kind changes. Absolute-dB residue under the
+        // tile law: the mean turns small and positive, every tile row is an
+        // impulse. Tile residue under the dB law fails open.
+        Ring ring;
+        for (int i = 0; i < 40; ++i)
+            ring.feed(kAbsDb, kFloor, kDefault);
+        int held = 0;
+        for (int i = 0; i < 2000; ++i)
+            held += ring.feed(RowKind::TileIntensity, 108.0f, kDefault);
+        std::printf("      residue: %d tile rows held\n", held);
+        report("kind change: dB residue holds a tile waterfall over 100 rows",
+               held > 100);
+        Ring other;
+        for (int i = 0; i < 40; ++i)
+            other.feed(RowKind::TileIntensity, 108.0f, kDefault);
+        int heldDb = 0;
+        for (int i = 0; i < 2000; ++i)
+            heldDb += other.feed(kAbsDb, kFloor, kDefault);
+        report("kind change: tile residue holds no dB row", heldDb == 0);
+        Ring emptied;
+        int heldEmptied = 0;
+        for (int i = 0; i < 2000; ++i)
+            heldEmptied +=
+                emptied.feed(RowKind::TileIntensity, 108.0f, kDefault);
+        report("kind change: an emptied ring holds no tile row",
+               heldEmptied == 0);
+    }
+
     // Tile rows: unchanged.
     {
         // Hand-computed, so the table does not merely agree with a copy of
@@ -378,9 +408,10 @@ int main()
 
     // Source-text pin. The claim: SpectrumWidget takes the row kind from its
     // m_panBinsAbsolute, writes the helper's value to the ring, keeps no inline
-    // ratio test and asserts its ring size. SpectrumWidget links into
-    // no test target, so this pins how the code is written: whitespace is
-    // collapsed, any other reformat of those lines turns it red.
+    // ratio test, asserts its ring size and empties the ring when the row kind
+    // changes. SpectrumWidget links into no test target, so this pins how the
+    // code is written: whitespace is collapsed, any other reformat of those
+    // lines turns it red.
     {
         std::ifstream in(AETHER_SOURCE_DIR "/src/gui/SpectrumWidget.cpp");
         std::stringstream buffer;
@@ -404,6 +435,18 @@ int main()
         report("call site: the widget's ring size is asserted to be kRingRows",
                source.find("static_assert(WF_BLANKER_N == "
                            "WaterfallImpulseBlanker::kRingRows,")
+                   != std::string::npos);
+    }
+
+    {
+        std::ifstream in(AETHER_SOURCE_DIR "/src/gui/SpectrumWidget.h");
+        std::stringstream buffer;
+        buffer << in.rdbuf();
+        const std::string header = collapseWhitespace(buffer.str());
+        report("kind change: setPanBinsAbsolute empties the ring on a change",
+               header.find("void setPanBinsAbsolute(bool on) { "
+                           "if (m_panBinsAbsolute != on) "
+                           "resetWfBlankerState();")
                    != std::string::npos);
     }
 

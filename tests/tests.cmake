@@ -3369,8 +3369,8 @@ add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
 
 # Waterfall NB Blank impulse test on tile and absolute dB rows (#277):
 # header-only pure logic, no Qt. AETHER_SOURCE_DIR because the last block reads
-# SpectrumWidget.cpp as text: the widget links into no test, so that block
-# pins how the call is written.
+# SpectrumWidget.cpp and .h as text: the widget links into no test, so that
+# block pins how the call is written.
 add_executable(waterfall_impulse_blanker_test
     tests/waterfall_impulse_blanker_test.cpp
 )
