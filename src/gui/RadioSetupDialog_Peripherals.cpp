@@ -1051,6 +1051,7 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
         if (mode == "Network") {
             const QString ip = netIpEdit->text().trimmed();
             if (ip.isEmpty()) {
+                refresh();
                 return;
             }
             const int port = netPortSpin->value();
@@ -1066,6 +1067,7 @@ void RadioSetupDialog::buildSerialNetworkDevice(PeripheralDeviceUi& ui, QWidget*
                 port = serialCustomEdit->text().trimmed();
             }
             if (port.isEmpty()) {
+                refresh();
                 return;
             }
             PeripheralSettings::setDeviceString(group, "SerialPort", port);
@@ -1140,6 +1142,7 @@ void RadioSetupDialog::buildVkampDevice(PeripheralDeviceUi& ui, QWidget* stackPa
         u->state.message.clear();
         const QString ip = u->addressEdit->text().trimmed();
         if (ip.isEmpty()) {
+            refresh();
             return;
         }
         const int port = u->portSpin->value();
@@ -2283,11 +2286,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     }
     if (m_spe) {
         wireLinkDevice(QStringLiteral("spe"), m_spe);
-        connect(m_spe, &SpeConnection::respondingChanged, this, refresh);
     }
     if (m_vkamp) {
         wireLinkDevice(QStringLiteral("vkamp"), m_vkamp);
-        connect(m_vkamp, &VkampConnection::telemetryStalled, this, refresh);
     }
     if (m_lpMeter) {
         wireLinkDevice(QStringLiteral("lp100a"), m_lpMeter);

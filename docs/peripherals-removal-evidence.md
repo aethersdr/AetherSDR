@@ -23,18 +23,10 @@ store. No device, socket or OS vault is involved.
 | An unrelated ShackSwitch keeps its retry through an AG removal | `checkShackSwitchRetryDuringRemoval`, `checkOneShotShackSwitchDuringRemoval` |
 | AG targets configured through the applet reconcile into an open Setup without overwriting edits in progress | `checkExternalAgConfiguration` |
 
-A regression test counts only if it fails without the code it covers. These
-mutations each failed their test and were restored:
-
-- removing the removal guard from the connection's socket-opening path
-  (`peripheral_auth_handshake_test` and the dialog test);
-- removing the Connect automatically gate from ShackSwitch discovery;
-- removing the toggle reset from Remove.
-
-The removal lifecycle tests (retry deferral, close and done guards, the early
-disconnect in each device's Remove, endpoint ownership) were mutation-checked
-when they were written; they were not re-mutated for the Connect automatically
-work.
+The handshake test also fails if the removal guard is taken out of the
+connection's socket-opening path, and the dialog test fails if the Connect
+automatically gate is taken out of ShackSwitch discovery or Remove stops
+resetting the toggle.
 
 ## What this does not show
 

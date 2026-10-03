@@ -20,8 +20,9 @@ struct Text {
 };
 
 // `device` is the short name used in sentences ("TGXL", "PGXL", "Antenna
-// Genius"). `directOnly` is for devices with no radio relay, which describe
-// the offline state as the missing direct connection.
+// Genius"). `directOnly` is for devices with no radio relay (Antenna Genius):
+// they read "directly to Antenna Genius" and describe the offline state as the
+// missing direct connection.
 inline Text describe(Source source, const QString& device, bool directOnly = false)
 {
     auto tr = [](const char* text) {
@@ -32,7 +33,8 @@ inline Text describe(Source source, const QString& device, bool directOnly = fal
     case Source::Direct:
         out.word = QStringLiteral("DIRECT");
         out.accessibleName = tr("%1 DIRECT connection").arg(device);
-        out.description = tr("Connected directly to the %1.").arg(device);
+        out.description = (directOnly ? tr("Connected directly to %1.")
+                                      : tr("Connected directly to the %1.")).arg(device);
         break;
     case Source::Radio:
         out.word = QStringLiteral("RADIO");

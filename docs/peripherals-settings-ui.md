@@ -17,8 +17,7 @@ comes from:
 | `● OFFLINE` | No connection. |
 | `Connecting…` | A connection attempt is in progress. |
 
-These are the same words and tones the TGXL, PGXL and Antenna Genius applets
-use. A device that needs the operator (a rejected code, a failed connection, a
+These are the same words the TGXL, PGXL and Antenna Genius applets use. A device that needs the operator (a rejected code, a failed connection, a
 credential problem) also shows **Needs attention**.
 
 The detail page repeats the state in a status line that is always visible. It is
